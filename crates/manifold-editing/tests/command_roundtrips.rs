@@ -994,17 +994,12 @@ fn make_driver() -> ParameterDriver {
 }
 
 fn make_envelope() -> ParamEnvelope {
-    ParamEnvelope {
-        target_effect_type: EffectTypeId::TRANSFORM,
-        param_index: 0,
-        enabled: true,
-        attack_beats: 0.25,
-        decay_beats: 0.25,
-        sustain_level: 1.0,
-        release_beats: 0.25,
-        target_normalized: 1.0,
-        current_level: 0.0,
-    }
+    let mut env = ParamEnvelope::new_for_gen(0);
+    env.attack_beats = 0.25;
+    env.decay_beats = 0.25;
+    env.sustain_level = 1.0;
+    env.release_beats = 0.25;
+    env
 }
 
 // ─── Undo-blind fix commands (invariant audit 2026-03-23) ───

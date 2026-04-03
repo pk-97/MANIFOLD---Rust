@@ -190,6 +190,8 @@ pub fn dispatch(
         | PanelAction::EffectTargetCommit(..)
         | PanelAction::EffectEnvParamSnapshot(..)
         | PanelAction::EffectEnvParamCommit(..)
+        | PanelAction::EffectEnvModeToggle(..)
+        | PanelAction::EffectEnvRandomJumpToggle(..)
         | PanelAction::AddEffectClicked(_)
         | PanelAction::BrowserSearchClicked
         | PanelAction::RemoveEffect(_)
@@ -213,6 +215,8 @@ pub fn dispatch(
         | PanelAction::GenTargetCommit(_)
         | PanelAction::GenEnvParamSnapshot(_)
         | PanelAction::GenEnvParamCommit(_)
+        | PanelAction::GenEnvModeToggle(_)
+        | PanelAction::GenEnvRandomJumpToggle(_)
         | PanelAction::GenStringParamClicked(_)
         | PanelAction::GenCollapseToggle
         | PanelAction::GenCardClicked

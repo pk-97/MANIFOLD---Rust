@@ -74,6 +74,10 @@ pub struct EffectCardConfig {
     pub env_decay: Vec<f32>,
     pub env_sustain: Vec<f32>,
     pub env_release: Vec<f32>,
+    /// Per-param envelope mode (ADSR or Random).
+    pub env_mode: Vec<EnvelopeMode>,
+    /// Per-param random_jump flag.
+    pub env_random_jump: Vec<bool>,
     /// Per-param driver beat division button index (0-10). -1 if no driver.
     pub driver_beat_div_idx: Vec<i32>,
     /// Per-param driver waveform index (0-4). -1 if no driver.
@@ -152,6 +156,7 @@ pub struct EffectCardPanel {
     envelope_btn_ids: Vec<i32>,
     driver_config_ids: Vec<Option<DriverConfigIds>>,
     envelope_config_ids: Vec<Option<EnvelopeConfigIds>>,
+    envelope_random_config_ids: Vec<Option<EnvelopeRandomConfigIds>>,
     trim_ids: Vec<Option<TrimHandleIds>>,
     target_ids: Vec<Option<EnvelopeTargetIds>>,
 
@@ -205,6 +210,7 @@ impl EffectCardPanel {
             envelope_btn_ids: Vec::new(),
             driver_config_ids: Vec::new(),
             envelope_config_ids: Vec::new(),
+            envelope_random_config_ids: Vec::new(),
             trim_ids: Vec::new(),
             target_ids: Vec::new(),
             osc_addresses: Vec::new(),
@@ -246,6 +252,8 @@ impl EffectCardPanel {
             &config.env_decay,
             &config.env_sustain,
             &config.env_release,
+            &config.env_mode,
+            &config.env_random_jump,
             &config.driver_beat_div_idx,
             &config.driver_waveform_idx,
             &config.driver_reversed,
@@ -265,6 +273,8 @@ impl EffectCardPanel {
         self.driver_config_ids.resize_with(n, || None);
         self.envelope_config_ids = Vec::new();
         self.envelope_config_ids.resize_with(n, || None);
+        self.envelope_random_config_ids = Vec::new();
+        self.envelope_random_config_ids.resize_with(n, || None);
         self.trim_ids = Vec::new();
         self.trim_ids.resize_with(n, || None);
         self.target_ids = Vec::new();
@@ -766,16 +776,38 @@ impl EffectCardPanel {
                 .copied()
                 .unwrap_or(false)
             {
-                self.envelope_config_ids[i] = Some(build_envelope_config(
-                    tree,
-                    parent,
-                    x + PADDING,
-                    cy,
-                    config_w,
-                    &self.state.mod_state,
-                    i,
-                ));
-                cy += ENV_CONFIG_HEIGHT;
+                let env_mode = self
+                    .state
+                    .mod_state
+                    .env_mode
+                    .get(i)
+                    .copied()
+                    .unwrap_or(EnvelopeMode::Adsr);
+                // Always build the random config buttons (mode toggle + jump toggle)
+                self.envelope_random_config_ids[i] =
+                    Some(build_envelope_random_config(
+                        tree,
+                        parent,
+                        x + PADDING,
+                        cy,
+                        config_w,
+                        &self.state.mod_state,
+                        i,
+                    ));
+                cy += ENV_RANDOM_CONFIG_HEIGHT;
+                // Only show ADSR sliders when in ADSR mode
+                if env_mode == EnvelopeMode::Adsr {
+                    self.envelope_config_ids[i] = Some(build_envelope_config(
+                        tree,
+                        parent,
+                        x + PADDING,
+                        cy,
+                        config_w,
+                        &self.state.mod_state,
+                        i,
+                    ));
+                    cy += ENV_CONFIG_HEIGHT;
+                }
             }
 
             // Driver config drawer
@@ -918,6 +950,18 @@ impl EffectCardPanel {
                 DriverClickResult::Reverse => DriverConfigAction::Reverse,
             };
             return vec![PanelAction::EffectDriverConfig(ei, pi, action)];
+        }
+
+        // Envelope random config buttons (mode toggle, jump toggle)
+        for (pi, cfg) in self.envelope_random_config_ids.iter().enumerate() {
+            if let Some(c) = cfg {
+                if id == c.mode_btn_id {
+                    return vec![PanelAction::EffectEnvModeToggle(ei, pi)];
+                }
+                if id == c.jump_btn_id {
+                    return vec![PanelAction::EffectEnvRandomJumpToggle(ei, pi)];
+                }
+            }
         }
 
         // Param label click → copy OSC address to clipboard
@@ -1383,6 +1427,8 @@ mod tests {
             env_decay: vec![0.0; n],
             env_sustain: vec![0.0; n],
             env_release: vec![0.0; n],
+            env_mode: vec![EnvelopeMode::Adsr; n],
+            env_random_jump: vec![false; n],
             driver_beat_div_idx: vec![-1; n],
             driver_waveform_idx: vec![-1; n],
             driver_reversed: vec![false; n],

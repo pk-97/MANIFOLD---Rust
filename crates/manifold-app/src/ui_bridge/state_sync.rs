@@ -1111,6 +1111,9 @@ fn effects_to_configs(
             let mut env_decay = vec![0.0f32; n];
             let mut env_sustain = vec![0.0f32; n];
             let mut env_release = vec![0.0f32; n];
+            let mut env_mode =
+                vec![manifold_core::effects::EnvelopeMode::Adsr; n];
+            let mut env_random_jump = vec![false; n];
             for env in envelopes {
                 if env.target_effect_type == *fx.effect_type() && env.enabled {
                     let pi = env.param_index as usize;
@@ -1122,6 +1125,8 @@ fn effects_to_configs(
                         env_decay[pi] = env.decay_beats;
                         env_sustain[pi] = env.sustain_level;
                         env_release[pi] = env.release_beats;
+                        env_mode[pi] = env.mode;
+                        env_random_jump[pi] = env.random_jump;
                     }
                 }
             }
@@ -1146,6 +1151,8 @@ fn effects_to_configs(
                 env_decay,
                 env_sustain,
                 env_release,
+                env_mode,
+                env_random_jump,
                 driver_beat_div_idx,
                 driver_waveform_idx,
                 driver_reversed,
@@ -1196,6 +1203,8 @@ fn gen_params_to_config(
                 env_decay: vec![],
                 env_sustain: vec![],
                 env_release: vec![],
+                env_mode: vec![],
+                env_random_jump: vec![],
                 driver_beat_div_idx: vec![],
                 driver_waveform_idx: vec![],
                 driver_reversed: vec![],
@@ -1264,6 +1273,9 @@ fn gen_params_to_config(
     let mut env_decay = vec![0.0f32; n];
     let mut env_sustain = vec![0.0f32; n];
     let mut env_release = vec![0.0f32; n];
+    let mut env_mode =
+        vec![manifold_core::effects::EnvelopeMode::Adsr; n];
+    let mut env_random_jump = vec![false; n];
     if let Some(ref envelopes) = gp.envelopes {
         for env in envelopes {
             if env.enabled {
@@ -1275,6 +1287,8 @@ fn gen_params_to_config(
                     env_decay[pi] = env.decay_beats;
                     env_sustain[pi] = env.sustain_level;
                     env_release[pi] = env.release_beats;
+                    env_mode[pi] = env.mode;
+                    env_random_jump[pi] = env.random_jump;
                 }
             }
         }
@@ -1311,6 +1325,8 @@ fn gen_params_to_config(
         env_decay,
         env_sustain,
         env_release,
+        env_mode,
+        env_random_jump,
         driver_beat_div_idx,
         driver_waveform_idx,
         driver_reversed,

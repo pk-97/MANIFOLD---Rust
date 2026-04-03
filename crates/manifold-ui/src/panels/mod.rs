@@ -163,6 +163,10 @@ pub enum PanelAction {
     EffectEnvParamSnapshot(usize, usize),
     /// Commit ADSR drag (record undo command). Unity: onEnvConfigCommit.
     EffectEnvParamCommit(usize, usize),
+    /// Toggle envelope mode between ADSR and Random.
+    EffectEnvModeToggle(usize, usize),
+    /// Toggle random_jump flag on a Random-mode envelope.
+    EffectEnvRandomJumpToggle(usize, usize),
     EffectTrimChanged(usize, usize, f32, f32),
     /// Snapshot trim state before drag (for undo). Unity: onTrimSnapshot.
     EffectTrimSnapshot(usize, usize),
@@ -194,6 +198,10 @@ pub enum PanelAction {
     GenEnvParamSnapshot(usize),
     /// Commit ADSR drag (record undo command). Unity: onEnvConfigCommit.
     GenEnvParamCommit(usize),
+    /// Toggle envelope mode between ADSR and Random.
+    GenEnvModeToggle(usize),
+    /// Toggle random_jump flag on a Random-mode envelope.
+    GenEnvRandomJumpToggle(usize),
     GenTrimChanged(usize, f32, f32),
     /// Snapshot trim state before drag (for undo). Unity: onTrimSnapshot.
     GenTrimSnapshot(usize),

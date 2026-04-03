@@ -755,17 +755,7 @@ pub(super) fn dispatch_inspector(
                     if let Some(idx) = env_idx {
                         envs[idx].enabled = !envs[idx].enabled;
                     } else {
-                        envs.push(ParamEnvelope {
-                            target_effect_type: et,
-                            param_index: pi2,
-                            enabled: true,
-                            attack_beats: 0.0,
-                            decay_beats: 0.0,
-                            sustain_level: 0.0,
-                            release_beats: 0.0,
-                            target_normalized: 1.0,
-                            current_level: 0.0,
-                        });
+                        envs.push(ParamEnvelope::new_for_effect(et, pi2));
                     }
                 }
                 // Sync to content thread so the next snapshot doesn't overwrite
@@ -782,17 +772,7 @@ pub(super) fn dispatch_inspector(
                             if let Some(idx) = env_idx {
                                 envs[idx].enabled = !envs[idx].enabled;
                             } else {
-                                envs.push(ParamEnvelope {
-                                    target_effect_type: et2,
-                                    param_index: pi2,
-                                    enabled: true,
-                                    attack_beats: 0.0,
-                                    decay_beats: 0.0,
-                                    sustain_level: 0.0,
-                                    release_beats: 0.0,
-                                    target_normalized: 1.0,
-                                    current_level: 0.0,
-                                });
+                                envs.push(ParamEnvelope::new_for_effect(et2, pi2));
                             }
                         }
                     })),
@@ -1296,6 +1276,109 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
 
+        // ── Envelope mode toggles ──────────────────────────────────
+        PanelAction::EffectEnvModeToggle(ei, pi) => {
+            let tab = ui.inspector.last_effect_tab();
+            let effect_type = {
+                let effects = resolve_effects_ref(tab, project, active_layer, selection);
+                effects
+                    .and_then(|e| e.get(*ei))
+                    .map(|fx| fx.effect_type().clone())
+            };
+            if let Some(ref et) = effect_type {
+                let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
+                    InspectorTab::Layer => super::resolve_active_layer_index(active_layer, project)
+                        .and_then(|idx| {
+                            project
+                                .timeline
+                                .layers
+                                .get_mut(idx)
+                                .map(|l| l.envelopes_mut())
+                        }),
+                    InspectorTab::Clip | InspectorTab::Master => None,
+                };
+                if let Some(envs) = envs
+                    && let Some(env) = envs
+                        .iter_mut()
+                        .find(|e| e.target_effect_type == *et && e.param_index == *pi as i32)
+                {
+                    use manifold_core::effects::EnvelopeMode;
+                    env.mode = match env.mode {
+                        EnvelopeMode::Adsr => EnvelopeMode::Random,
+                        EnvelopeMode::Random => EnvelopeMode::Adsr,
+                    };
+                    let new_mode = env.mode;
+                    // Sync to content thread
+                    let et2 = et.clone();
+                    let pi2 = *pi as i32;
+                    let layer_id = active_layer.clone().unwrap_or_default();
+                    ContentCommand::send(
+                        content_tx,
+                        ContentCommand::MutateProject(Box::new(move |p| {
+                            if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id) {
+                                let envs = layer.envelopes_mut();
+                                if let Some(env) = envs
+                                    .iter_mut()
+                                    .find(|e| e.target_effect_type == et2 && e.param_index == pi2)
+                                {
+                                    env.mode = new_mode;
+                                }
+                            }
+                        })),
+                    );
+                }
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::EffectEnvRandomJumpToggle(ei, pi) => {
+            let tab = ui.inspector.last_effect_tab();
+            let effect_type = {
+                let effects = resolve_effects_ref(tab, project, active_layer, selection);
+                effects
+                    .and_then(|e| e.get(*ei))
+                    .map(|fx| fx.effect_type().clone())
+            };
+            if let Some(ref et) = effect_type {
+                let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
+                    InspectorTab::Layer => super::resolve_active_layer_index(active_layer, project)
+                        .and_then(|idx| {
+                            project
+                                .timeline
+                                .layers
+                                .get_mut(idx)
+                                .map(|l| l.envelopes_mut())
+                        }),
+                    InspectorTab::Clip | InspectorTab::Master => None,
+                };
+                if let Some(envs) = envs
+                    && let Some(env) = envs
+                        .iter_mut()
+                        .find(|e| e.target_effect_type == *et && e.param_index == *pi as i32)
+                {
+                    env.random_jump = !env.random_jump;
+                    let new_jump = env.random_jump;
+                    let et2 = et.clone();
+                    let pi2 = *pi as i32;
+                    let layer_id = active_layer.clone().unwrap_or_default();
+                    ContentCommand::send(
+                        content_tx,
+                        ContentCommand::MutateProject(Box::new(move |p| {
+                            if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id) {
+                                let envs = layer.envelopes_mut();
+                                if let Some(env) = envs
+                                    .iter_mut()
+                                    .find(|e| e.target_effect_type == et2 && e.param_index == pi2)
+                                {
+                                    env.random_jump = new_jump;
+                                }
+                            }
+                        })),
+                    );
+                }
+            }
+            DispatchResult::structural()
+        }
+
         // ── Effect management ──────────────────────────────────────
         PanelAction::AddEffectClicked(_tab) => DispatchResult::handled(),
         PanelAction::BrowserSearchClicked => DispatchResult::handled(),
@@ -1614,17 +1697,7 @@ pub(super) fn dispatch_inspector(
                 if let Some(idx) = env_idx {
                     envs[idx].enabled = !envs[idx].enabled;
                 } else {
-                    envs.push(ParamEnvelope {
-                        target_effect_type: Default::default(),
-                        param_index: *pi as i32,
-                        enabled: true,
-                        attack_beats: 0.0,
-                        decay_beats: 0.0,
-                        sustain_level: 0.0,
-                        release_beats: 0.0,
-                        target_normalized: 1.0,
-                        current_level: 0.0,
-                    });
+                    envs.push(ParamEnvelope::new_for_gen(*pi as i32));
                 }
             }
             // Sync to content thread so the next snapshot doesn't overwrite
@@ -1641,17 +1714,7 @@ pub(super) fn dispatch_inspector(
                         if let Some(idx) = env_idx {
                             envs[idx].enabled = !envs[idx].enabled;
                         } else {
-                            envs.push(ParamEnvelope {
-                                target_effect_type: Default::default(),
-                                param_index: pi2,
-                                enabled: true,
-                                attack_beats: 0.0,
-                                decay_beats: 0.0,
-                                sustain_level: 0.0,
-                                release_beats: 0.0,
-                                target_normalized: 1.0,
-                                current_level: 0.0,
-                            });
+                            envs.push(ParamEnvelope::new_for_gen(pi2));
                         }
                     }
                 })),
@@ -1999,6 +2062,73 @@ pub(super) fn dispatch_inspector(
             }
             *active_inspector_drag = None;
             DispatchResult::handled()
+        }
+
+        PanelAction::GenEnvModeToggle(pi) => {
+            let layer_idx = super::resolve_active_layer_index(active_layer, project);
+            if let Some(idx) = layer_idx
+                && let Some(layer) = project.timeline.layers.get_mut(idx)
+                && let Some(gp) = layer.gen_params_mut()
+                && let Some(envs) = &mut gp.envelopes
+                && let Some(env) = envs
+                    .iter_mut()
+                    .find(|e| e.param_index == *pi as i32 && e.enabled)
+            {
+                use manifold_core::effects::EnvelopeMode;
+                env.mode = match env.mode {
+                    EnvelopeMode::Adsr => EnvelopeMode::Random,
+                    EnvelopeMode::Random => EnvelopeMode::Adsr,
+                };
+                let new_mode = env.mode;
+                let pi2 = *pi as i32;
+                let layer_id = active_layer.clone().unwrap_or_default();
+                ContentCommand::send(
+                    content_tx,
+                    ContentCommand::MutateProject(Box::new(move |p| {
+                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
+                            && let Some(gp) = layer.gen_params_mut()
+                            && let Some(envs) = &mut gp.envelopes
+                            && let Some(env) = envs
+                                .iter_mut()
+                                .find(|e| e.param_index == pi2 && e.enabled)
+                        {
+                            env.mode = new_mode;
+                        }
+                    })),
+                );
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::GenEnvRandomJumpToggle(pi) => {
+            let layer_idx = super::resolve_active_layer_index(active_layer, project);
+            if let Some(idx) = layer_idx
+                && let Some(layer) = project.timeline.layers.get_mut(idx)
+                && let Some(gp) = layer.gen_params_mut()
+                && let Some(envs) = &mut gp.envelopes
+                && let Some(env) = envs
+                    .iter_mut()
+                    .find(|e| e.param_index == *pi as i32 && e.enabled)
+            {
+                env.random_jump = !env.random_jump;
+                let new_jump = env.random_jump;
+                let pi2 = *pi as i32;
+                let layer_id = active_layer.clone().unwrap_or_default();
+                ContentCommand::send(
+                    content_tx,
+                    ContentCommand::MutateProject(Box::new(move |p| {
+                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
+                            && let Some(gp) = layer.gen_params_mut()
+                            && let Some(envs) = &mut gp.envelopes
+                            && let Some(env) = envs
+                                .iter_mut()
+                                .find(|e| e.param_index == pi2 && e.enabled)
+                        {
+                            env.random_jump = new_jump;
+                        }
+                    })),
+                );
+            }
+            DispatchResult::structural()
         }
 
         PanelAction::AddEffect(tab, effect_type_idx) => {

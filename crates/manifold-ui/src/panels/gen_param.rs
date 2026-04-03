@@ -62,6 +62,8 @@ pub struct GenParamConfig {
     pub env_decay: Vec<f32>,
     pub env_sustain: Vec<f32>,
     pub env_release: Vec<f32>,
+    pub env_mode: Vec<EnvelopeMode>,
+    pub env_random_jump: Vec<bool>,
     pub driver_beat_div_idx: Vec<i32>,
     pub driver_waveform_idx: Vec<i32>,
     pub driver_reversed: Vec<bool>,
@@ -120,6 +122,7 @@ pub struct GenParamPanel {
     envelope_btn_ids: Vec<i32>,
     driver_config_ids: Vec<Option<DriverConfigIds>>,
     envelope_config_ids: Vec<Option<EnvelopeConfigIds>>,
+    envelope_random_config_ids: Vec<Option<EnvelopeRandomConfigIds>>,
     trim_ids: Vec<Option<TrimHandleIds>>,
     target_ids: Vec<Option<EnvelopeTargetIds>>,
 
@@ -165,6 +168,7 @@ impl GenParamPanel {
             envelope_btn_ids: Vec::new(),
             driver_config_ids: Vec::new(),
             envelope_config_ids: Vec::new(),
+            envelope_random_config_ids: Vec::new(),
             trim_ids: Vec::new(),
             target_ids: Vec::new(),
             string_param_info: Vec::new(),
@@ -196,6 +200,8 @@ impl GenParamPanel {
             &config.env_decay,
             &config.env_sustain,
             &config.env_release,
+            &config.env_mode,
+            &config.env_random_jump,
             &config.driver_beat_div_idx,
             &config.driver_waveform_idx,
             &config.driver_reversed,
@@ -219,6 +225,8 @@ impl GenParamPanel {
         self.driver_config_ids.resize_with(n, || None);
         self.envelope_config_ids = Vec::new();
         self.envelope_config_ids.resize_with(n, || None);
+        self.envelope_random_config_ids = Vec::new();
+        self.envelope_random_config_ids.resize_with(n, || None);
         self.trim_ids = Vec::new();
         self.trim_ids.resize_with(n, || None);
         self.target_ids = Vec::new();
@@ -602,16 +610,38 @@ impl GenParamPanel {
                         .copied()
                         .unwrap_or(false)
                     {
-                        self.envelope_config_ids[i] = Some(build_envelope_config(
-                            tree,
-                            -1,
-                            cx,
-                            cy,
-                            config_w,
-                            &self.state.mod_state,
-                            i,
-                        ));
-                        cy += ENV_CONFIG_HEIGHT;
+                        let env_mode = self
+                            .state
+                            .mod_state
+                            .env_mode
+                            .get(i)
+                            .copied()
+                            .unwrap_or(EnvelopeMode::Adsr);
+                        // Always build the random config buttons
+                        self.envelope_random_config_ids[i] =
+                            Some(build_envelope_random_config(
+                                tree,
+                                -1,
+                                cx,
+                                cy,
+                                config_w,
+                                &self.state.mod_state,
+                                i,
+                            ));
+                        cy += ENV_RANDOM_CONFIG_HEIGHT;
+                        // Only show ADSR sliders when in ADSR mode
+                        if env_mode == EnvelopeMode::Adsr {
+                            self.envelope_config_ids[i] = Some(build_envelope_config(
+                                tree,
+                                -1,
+                                cx,
+                                cy,
+                                config_w,
+                                &self.state.mod_state,
+                                i,
+                            ));
+                            cy += ENV_CONFIG_HEIGHT;
+                        }
                     }
 
                     // Driver config
@@ -866,6 +896,18 @@ impl GenParamPanel {
                 DriverClickResult::Reverse => DriverConfigAction::Reverse,
             };
             return vec![PanelAction::GenDriverConfig(pi, action)];
+        }
+
+        // Envelope random config buttons (mode toggle, jump toggle)
+        for (pi, cfg) in self.envelope_random_config_ids.iter().enumerate() {
+            if let Some(c) = cfg {
+                if id == c.mode_btn_id {
+                    return vec![PanelAction::GenEnvModeToggle(pi)];
+                }
+                if id == c.jump_btn_id {
+                    return vec![PanelAction::GenEnvRandomJumpToggle(pi)];
+                }
+            }
         }
 
         // String param buttons → open text input
@@ -1208,6 +1250,8 @@ mod tests {
             env_decay: vec![0.0; 3],
             env_sustain: vec![0.0; 3],
             env_release: vec![0.0; 3],
+            env_mode: vec![EnvelopeMode::Adsr; 3],
+            env_random_jump: vec![false; 3],
             driver_beat_div_idx: vec![-1; 3],
             driver_waveform_idx: vec![-1; 3],
             driver_reversed: vec![false; 3],

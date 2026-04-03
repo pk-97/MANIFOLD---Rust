@@ -8,6 +8,7 @@ use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
 use crate::tree::UITree;
+pub use manifold_core::effects::EnvelopeMode;
 
 // ── Shared layout constants ─────────────────────────────────────
 
@@ -68,6 +69,12 @@ pub(crate) struct EnvelopeConfigIds {
     pub(crate) release_slider: SliderNodeIds,
 }
 
+pub(crate) struct EnvelopeRandomConfigIds {
+    pub(crate) _container_id: i32,
+    pub(crate) mode_btn_id: i32,
+    pub(crate) jump_btn_id: i32,
+}
+
 pub(crate) struct TrimHandleIds {
     pub(crate) fill_id: i32,
     pub(crate) min_bar_id: i32,
@@ -93,6 +100,8 @@ pub struct ParamModState {
     pub env_decay: Vec<f32>,
     pub env_sustain: Vec<f32>,
     pub env_release: Vec<f32>,
+    pub env_mode: Vec<EnvelopeMode>,
+    pub env_random_jump: Vec<bool>,
     pub driver_beat_div_idx: Vec<i32>,
     pub driver_waveform_idx: Vec<i32>,
     pub driver_reversed: Vec<bool>,
@@ -112,6 +121,8 @@ impl ParamModState {
             env_decay: vec![0.0; param_count],
             env_sustain: vec![0.0; param_count],
             env_release: vec![0.0; param_count],
+            env_mode: vec![EnvelopeMode::Adsr; param_count],
+            env_random_jump: vec![false; param_count],
             driver_beat_div_idx: vec![-1; param_count],
             driver_waveform_idx: vec![-1; param_count],
             driver_reversed: vec![false; param_count],
@@ -122,6 +133,7 @@ impl ParamModState {
 
     /// Sync driver/envelope/trim/target/ADSR state from config vectors.
     /// `n` is the param count. Reads from config slices with fallback defaults.
+    #[allow(clippy::too_many_arguments)]
     pub fn sync_from_config(
         &mut self,
         n: usize,
@@ -134,6 +146,8 @@ impl ParamModState {
         env_decay: &[f32],
         env_sustain: &[f32],
         env_release: &[f32],
+        env_mode: &[EnvelopeMode],
+        env_random_jump: &[bool],
         driver_beat_div_idx: &[i32],
         driver_waveform_idx: &[i32],
         driver_reversed: &[bool],
@@ -150,6 +164,8 @@ impl ParamModState {
             self.env_decay[i] = env_decay.get(i).copied().unwrap_or(0.0);
             self.env_sustain[i] = env_sustain.get(i).copied().unwrap_or(0.0);
             self.env_release[i] = env_release.get(i).copied().unwrap_or(0.0);
+            self.env_mode[i] = env_mode.get(i).copied().unwrap_or(EnvelopeMode::Adsr);
+            self.env_random_jump[i] = env_random_jump.get(i).copied().unwrap_or(false);
             self.driver_beat_div_idx[i] = driver_beat_div_idx.get(i).copied().unwrap_or(-1);
             self.driver_waveform_idx[i] = driver_waveform_idx.get(i).copied().unwrap_or(-1);
             self.driver_reversed[i] = driver_reversed.get(i).copied().unwrap_or(false);
@@ -531,6 +547,78 @@ pub(crate) fn build_envelope_config(
         decay_slider,
         sustain_slider,
         release_slider,
+    }
+}
+
+/// Height for the random envelope config panel (single row with mode + jump buttons).
+pub(crate) const ENV_RANDOM_CONFIG_HEIGHT: f32 = 30.0;
+
+pub(crate) fn build_envelope_random_config(
+    tree: &mut UITree,
+    parent: i32,
+    x: f32,
+    y: f32,
+    w: f32,
+    mod_state: &ParamModState,
+    param_idx: usize,
+) -> EnvelopeRandomConfigIds {
+    let container_id = tree.add_panel(
+        parent,
+        x,
+        y,
+        w,
+        ENV_RANDOM_CONFIG_HEIGHT,
+        UIStyle {
+            bg_color: color::CONFIG_BG_C32,
+            corner_radius: 2.0,
+            ..UIStyle::default()
+        },
+    ) as i32;
+
+    let is_random = mod_state
+        .env_mode
+        .get(param_idx)
+        .copied()
+        .unwrap_or(EnvelopeMode::Adsr)
+        == EnvelopeMode::Random;
+    let is_jump = mod_state
+        .env_random_jump
+        .get(param_idx)
+        .copied()
+        .unwrap_or(false);
+
+    let sx = x + ENV_PAD_H;
+    let btn_y = y + 4.0;
+    let btn_h = ENV_ROW_HEIGHT;
+    let btn_w = 50.0;
+    let btn_gap = 4.0;
+
+    // "RND" button — toggles envelope mode between ADSR and Random
+    let mode_btn_id = tree.add_button(
+        container_id,
+        sx,
+        btn_y,
+        btn_w,
+        btn_h,
+        config_btn_style(is_random, color::FONT_CAPTION),
+        "RND",
+    ) as i32;
+
+    // "JUMP" button — toggles random_jump (only meaningful when mode=Random)
+    let jump_btn_id = tree.add_button(
+        container_id,
+        sx + btn_w + btn_gap,
+        btn_y,
+        btn_w,
+        btn_h,
+        config_btn_style(is_random && is_jump, color::FONT_CAPTION),
+        "JUMP",
+    ) as i32;
+
+    EnvelopeRandomConfigIds {
+        _container_id: container_id,
+        mode_btn_id,
+        jump_btn_id,
     }
 }
 

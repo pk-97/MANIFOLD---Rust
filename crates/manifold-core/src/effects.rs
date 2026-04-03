@@ -605,6 +605,17 @@ pub mod beat_division_helper {
 
 // ─── Param Envelope (ADSR modulation) ───
 
+/// Envelope evaluation mode.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EnvelopeMode {
+    /// Classic ADSR envelope shape driven by clip timing.
+    #[default]
+    Adsr,
+    /// Random value on each clip rising edge (walk or jump).
+    Random,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParamEnvelope {
@@ -625,9 +636,21 @@ pub struct ParamEnvelope {
     pub release_beats: f32,
     #[serde(default = "default_one")]
     pub target_normalized: f32,
+    /// Envelope evaluation mode (ADSR or Random).
+    #[serde(default)]
+    pub mode: EnvelopeMode,
+    /// When mode=Random: true = jump to fully random value, false = walk by step.
+    #[serde(default)]
+    pub random_jump: bool,
     /// Cached ADSR output (0-1) for UI display. Not serialized.
     #[serde(skip)]
     pub current_level: f32,
+    /// Current random walk position (normalized 0-1). Runtime only.
+    #[serde(skip)]
+    pub walk_value: f32,
+    /// Rising edge detection: was a clip active on the previous frame?
+    #[serde(skip)]
+    pub was_clip_active: bool,
 }
 
 impl ParamEnvelope {
@@ -642,7 +665,11 @@ impl ParamEnvelope {
             sustain_level: 0.0,
             release_beats: 0.0,
             target_normalized: 1.0,
+            mode: EnvelopeMode::Adsr,
+            random_jump: false,
             current_level: 0.0,
+            walk_value: 0.5,
+            was_clip_active: false,
         }
     }
 
@@ -657,7 +684,11 @@ impl ParamEnvelope {
             sustain_level: 0.0,
             release_beats: 0.0,
             target_normalized: 1.0,
+            mode: EnvelopeMode::Adsr,
+            random_jump: false,
             current_level: 0.0,
+            walk_value: 0.5,
+            was_clip_active: false,
         }
     }
 
