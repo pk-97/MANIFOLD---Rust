@@ -567,19 +567,21 @@ impl MidiClockSyncController {
             is_playing,
         );
 
-        // Suppress local deltaTime only when MIDI Clock is the selected authority
-        // AND MANIFOLD didn't initiate this play session.
+        // Suppress local deltaTime when CLK is active and playing.
+        // CLK is ALWAYS the position authority when receiving — no ownership
+        // or cooldown gates. If the engine advances time internally while CLK
+        // is nudging, they fight and the playhead jitters.
         arbiter.set_external_time_sync(
             ClockAuthority::MidiClock,
             authority,
             arb_target,
-            has_recent_clock_activity
-                && is_playing
-                && !manifold_owns
-                && !arbiter.is_seek_cooldown_active(now),
+            has_recent_clock_activity && is_playing,
         );
 
-        // Transport sync — gated by manifold_owns (Manifold initiated transport).
+        // Transport sync — gated by manifold_owns to prevent echo loops.
+        // manifold_owns is set when SYNC sends /manifold/play to Ableton.
+        // Without this gate, CLK would see "playing" and re-send play(),
+        // which OscPositionSender would echo back → infinite loop.
         if !manifold_owns {
             let playing = has_recent_clock_activity && is_playing;
             if playing {
@@ -589,26 +591,27 @@ impl MidiClockSyncController {
                         log::info!("[MidiClockSync] Transport: PLAY");
                     }
                 }
-            } else {
-                if sync_target.is_playing() {
-                    arbiter.pause(ClockAuthority::MidiClock, authority, arb_target, false);
-                    if playing != self.last_is_playing {
-                        log::info!("[MidiClockSync] Transport: PAUSE");
-                    }
+            } else if sync_target.is_playing() {
+                arbiter.pause(ClockAuthority::MidiClock, authority, arb_target, false);
+                if playing != self.last_is_playing {
+                    log::info!("[MidiClockSync] Transport: PAUSE");
                 }
             }
             self.last_is_playing = playing;
         }
 
-        // Clear MANIFOLD ownership deterministically: when MIDI Clock confirms
-        // the expected transport state (stopped/no activity), Manifold's
-        // transport echo is fully resolved — no timer needed.
+        // Clear MANIFOLD ownership when CLK confirms the expected state.
+        // This lets CLK regain transport control after the SYNC echo resolves.
         if manifold_owns && (!has_recent_clock_activity || !is_playing) {
             arbiter.clear_ownership();
         }
 
-        // Position sync — gated by arbiter authority check.
-        if has_recent_clock_activity && !manifold_owns && !arbiter.is_seek_cooldown_active(now) {
+        // Position sync — ALWAYS when CLK is receiving.
+        // CLK is the authoritative position source. No ownership gate, no
+        // cooldown gate. During a Manifold→Ableton handoff, CLK may briefly
+        // report a stale position (10-50ms until M4L deferred seek lands),
+        // but that's correct — we follow what Ableton is actually doing.
+        if has_recent_clock_activity {
             self.current_position_sixteenths = pos_sixteenths;
             self.update_position_display(pos_sixteenths);
             self.sync_position_to_playback(
