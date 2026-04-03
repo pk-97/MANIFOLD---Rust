@@ -101,17 +101,18 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         uv.y / u.noise_scale,
         u.time * u.noise_speed,
     );
-    // Noise returns [-1, 1], remap to [0, 1]
-    let noise_val = simplex3d(noise_pos) * 0.3 + 0.5;
+    // Noise returns [-1, 1], remap to [0, 1] with full amplitude
+    let noise_val = simplex3d(noise_pos) * 0.5 + 0.5;
 
     // Read previous frame's feedback value
     let prev = textureLoad(feedback_prev, vec2<i32>(gid.xy), 0);
 
-    // Absolute difference (Negate blend mode)
+    // TD Composite: Negate blend with opacity.
+    // result = prev * (1 - opacity) + |noise - prev| * opacity
+    // The (1-opacity) persistence term is what allows patterns to accumulate.
+    let opacity = u.feedback_decay;
     let diff = abs(vec4<f32>(noise_val) - prev);
-
-    // Apply decay
-    let result = diff * u.feedback_decay;
+    let result = prev * (1.0 - opacity) + diff * opacity;
 
     textureStore(output_tex, vec2<i32>(gid.xy), result);
 }
