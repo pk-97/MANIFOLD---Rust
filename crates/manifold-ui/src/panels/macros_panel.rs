@@ -164,11 +164,20 @@ impl MacrosPanel {
         Vec::new()
     }
 
-    /// Handle right-click — reset to 0.
+    /// Handle right-click.
+    /// Track right-click → reset to 0 (direct, like effect param slider).
+    /// Label right-click → open dropdown showing mapped params.
     pub fn handle_right_click(&self, node_id: u32) -> Vec<PanelAction> {
         for (i, s) in self.sliders.iter().enumerate() {
+            // Right-click slider track → direct reset to 0
             if s.track_id() == Some(node_id) {
                 return vec![PanelAction::MacroRightClick(i)];
+            }
+            // Right-click label → open mappings dropdown
+            if let Some(ids) = s.ids()
+                && ids.label >= 0 && node_id == ids.label as u32
+            {
+                return vec![PanelAction::MacroLabelRightClick(i)];
             }
         }
         Vec::new()

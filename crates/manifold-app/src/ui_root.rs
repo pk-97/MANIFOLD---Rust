@@ -105,8 +105,8 @@ pub struct UIRoot {
 
     /// Cached macro slot labels for context menu display.
     pub macro_labels: [String; manifold_core::MACRO_COUNT],
-    /// Cached macro mapping counts for context menu display.
-    pub macro_mapping_counts: [usize; manifold_core::MACRO_COUNT],
+    /// Cached macro mapping descriptions per slot (for context menu).
+    pub macro_mapping_descs: [Vec<String>; manifold_core::MACRO_COUNT],
 
     /// Node ID for the video/timeline split handle (color feedback on hover/drag).
     /// From Unity PanelResizeHandle.cs — idle/hover/drag color states.
@@ -157,7 +157,7 @@ impl UIRoot {
             viewport_events: Vec::new(),
             last_right_click_pos: Vec2::new(0.0, 0.0),
             macro_labels: std::array::from_fn(|_| String::new()),
-            macro_mapping_counts: [0; manifold_core::MACRO_COUNT],
+            macro_mapping_descs: std::array::from_fn(|_| Vec::new()),
             split_handle_id: -1,
             inspector_handle_id: -1,
             overlay_drag_active: false,
@@ -927,18 +927,28 @@ impl UIRoot {
                 self.dropdown.open_context(items, right_click_pos, &mut self.tree);
                 true
             }
-            PanelAction::MacroRightClick(macro_idx) => {
-                let mut items = vec![
-                    DropdownItem::new("Reset to 0"),
-                ];
-                // Check if macro has mappings
-                let has_mappings = self.macro_mapping_counts[*macro_idx] > 0;
-                if has_mappings {
-                    items[0].separator_after = true;
-                    items.push(DropdownItem::new("Clear All Mappings"));
+            PanelAction::MacroLabelRightClick(macro_idx) => {
+                let descs = &self.macro_mapping_descs[*macro_idx];
+                if descs.is_empty() {
+                    // No mappings — show a disabled "No mappings" item
+                    let mut item = DropdownItem::new("No mappings");
+                    item.enabled = false;
+                    self.dropdown_context = Some(DropdownContext::MacroSlotContext(*macro_idx));
+                    self.dropdown.open_context(vec![item], right_click_pos, &mut self.tree);
+                } else {
+                    // List each mapping with a "Remove" prefix
+                    let mut items: Vec<DropdownItem> = descs.iter()
+                        .map(|desc| DropdownItem::new(desc))
+                        .collect();
+                    if items.len() > 1 {
+                        if let Some(last) = items.last_mut() {
+                            last.separator_after = true;
+                        }
+                        items.push(DropdownItem::new("Clear All"));
+                    }
+                    self.dropdown_context = Some(DropdownContext::MacroSlotContext(*macro_idx));
+                    self.dropdown.open_context(items, right_click_pos, &mut self.tree);
                 }
-                self.dropdown_context = Some(DropdownContext::MacroSlotContext(*macro_idx));
-                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
                 true
             }
             PanelAction::GenCardRightClicked => {
@@ -1042,10 +1052,17 @@ impl UIRoot {
                 }
             }
             DropdownContext::MacroSlotContext(macro_idx) => {
-                match index {
-                    0 => Some(PanelAction::MacroReset(macro_idx)),
-                    1 => Some(PanelAction::ClearMacroMappings(macro_idx)),
-                    _ => None,
+                let mapping_count = self.macro_mapping_descs[macro_idx].len();
+                if mapping_count == 0 {
+                    None // "No mappings" item — disabled, shouldn't fire
+                } else if mapping_count > 1 && index == mapping_count {
+                    // "Clear All" item (after all mappings + separator)
+                    Some(PanelAction::ClearMacroMappings(macro_idx))
+                } else if index < mapping_count {
+                    // Remove specific mapping
+                    Some(PanelAction::UnmapMacro(macro_idx, index))
+                } else {
+                    None
                 }
             }
             DropdownContext::MasterExitPath => {

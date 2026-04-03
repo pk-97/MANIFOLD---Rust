@@ -219,10 +219,12 @@ pub enum PanelAction {
     MacroChanged(usize, f32),
     MacroCommit(usize),
     MacroRightClick(usize),
+    MacroLabelRightClick(usize),       // macro_index — opens mappings dropdown
 
     // Macro mapping (from context menu on param right-click)
     MapEffectParamToMacro(InspectorTab, usize, usize, usize), // tab, fx_idx, param_idx, macro_idx
     MapGenParamToMacro(usize, usize),                          // param_idx, macro_idx
+    UnmapMacro(usize, usize),                                  // macro_idx, mapping_idx
     ClearMacroMappings(usize),                                 // macro_idx
 
     // Param label right-click → opens "Map to Macro" context menu

@@ -1773,6 +1773,26 @@ pub(super) fn dispatch_inspector(
                 }
             DispatchResult::handled()
         }
+        // Label right-click consumed by try_open_dropdown — shouldn't reach here
+        PanelAction::MacroLabelRightClick(_) => DispatchResult::handled(),
+
+        PanelAction::UnmapMacro(macro_idx, mapping_idx) => {
+            let macro_idx = *macro_idx;
+            let mapping_idx = *mapping_idx;
+            if macro_idx < manifold_core::MACRO_COUNT {
+                let slot = &mut project.settings.macro_bank.slots[macro_idx];
+                if mapping_idx < slot.mappings.len() {
+                    slot.mappings.remove(mapping_idx);
+                    ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
+                        let slot = &mut p.settings.macro_bank.slots[macro_idx];
+                        if mapping_idx < slot.mappings.len() {
+                            slot.mappings.remove(mapping_idx);
+                        }
+                    })));
+                }
+            }
+            DispatchResult::handled()
+        }
         PanelAction::ClearMacroMappings(macro_idx) => {
             let macro_idx = *macro_idx;
             if macro_idx < manifold_core::MACRO_COUNT {
