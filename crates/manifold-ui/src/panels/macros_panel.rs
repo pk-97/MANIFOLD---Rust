@@ -3,6 +3,7 @@
 //! Positioned above the dual-column Master/Layer layout inside the inspector.
 //! Each slider controls a macro slot (0–1) that fans out to mapped parameters.
 
+use std::time::Instant;
 use manifold_core::macro_bank::MACRO_COUNT;
 use crate::color;
 use crate::node::*;
@@ -28,10 +29,14 @@ fn fmt_macro(v: f32) -> String { format!("{:.2}", v) }
 
 // ── MacrosPanel ────────────────────────────────────────────────────
 
+const FLASH_DURATION: f32 = 0.6;
+
 pub struct MacrosPanel {
     sliders: [SliderDragState; MACRO_COUNT],
     first_node: usize,
     node_count: usize,
+    /// "Copied" flash: (label_node_id, original_text, start_time).
+    copied_flash: Option<(u32, String, Instant)>,
 }
 
 impl Default for MacrosPanel {
@@ -44,6 +49,7 @@ impl MacrosPanel {
             sliders: std::array::from_fn(|_| SliderDragState::with_range(0.0, 1.0, false)),
             first_node: usize::MAX,
             node_count: 0,
+            copied_flash: None,
         }
     }
 
@@ -63,6 +69,36 @@ impl MacrosPanel {
 
     /// Sync cached macro values from project state.
     pub fn sync_values(&mut self, tree: &mut UITree, values: &[f32]) {
+        // "Copied" flash — show on first sync, revert after FLASH_DURATION
+        if let Some((label_id, ref original_text, start)) = self.copied_flash {
+            let elapsed = start.elapsed().as_secs_f32();
+            if original_text.is_empty() {
+                // First sync after click — apply the flash
+                let name = self.sliders.iter().enumerate().find_map(|(i, s)| {
+                    s.ids().filter(|ids| ids.label >= 0 && ids.label as u32 == label_id)
+                        .map(|_| format!("M{}", i + 1))
+                }).unwrap_or_default();
+                tree.set_text(label_id, "Copied");
+                tree.set_style(label_id, UIStyle {
+                    text_color: color::ACCENT_BLUE_C32,
+                    font_size: FONT_SIZE,
+                    text_align: TextAlign::Right,
+                    ..UIStyle::default()
+                });
+                self.copied_flash = Some((label_id, name, start));
+            } else if elapsed > FLASH_DURATION {
+                // Revert to original
+                tree.set_text(label_id, original_text);
+                tree.set_style(label_id, UIStyle {
+                    text_color: color::SLIDER_TEXT_C32,
+                    font_size: FONT_SIZE,
+                    text_align: TextAlign::Right,
+                    ..UIStyle::default()
+                });
+                self.copied_flash = None;
+            }
+        }
+
         for (i, s) in self.sliders.iter_mut().enumerate() {
             if let Some(&v) = values.get(i) {
                 s.sync(tree, v, &fmt_macro);
@@ -152,11 +188,13 @@ impl MacrosPanel {
     }
 
     /// Handle click — label click copies OSC address to clipboard.
-    pub fn handle_click(&self, node_id: u32) -> Vec<PanelAction> {
+    pub fn handle_click(&mut self, node_id: u32) -> Vec<PanelAction> {
         for (i, s) in self.sliders.iter().enumerate() {
             if let Some(ids) = s.ids()
                 && ids.label >= 0 && node_id == ids.label as u32
             {
+                // Schedule "Copied" flash — applied in sync_values() which has tree access
+                self.copied_flash = Some((ids.label as u32, String::new(), Instant::now()));
                 let addr = format!("/macro/{}", i + 1);
                 return vec![PanelAction::CopyOscAddress(addr)];
             }
