@@ -352,52 +352,67 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> boo
                 continue;
             }
 
-            if !clip_active {
-                if let Some(envs) = &mut layer.envelopes
-                    && let Some(env) = envs.get_mut(ei)
-                {
-                    env.was_clip_active = false;
-                }
-                continue;
-            }
-
-            // Random mode: on rising edge, pick a new target_norm via walk/jump.
-            // Then the normal ADSR envelope drives toward that randomized target.
-            let effective_target = if mode == EnvelopeMode::Random {
+            // ── Random mode: sample & hold ─────────────────────────
+            // On rising edge, latch a new value. Hold it every frame.
+            // No ADSR — the value IS the param value directly.
+            if mode == EnvelopeMode::Random {
                 let rising_edge = clip_active && !was_active;
 
-                // Seed walk from current target if uninitialized
+                let layer_effects = match &mut layer.effects {
+                    Some(effects) => effects,
+                    None => {
+                        if let Some(envs) = &mut layer.envelopes
+                            && let Some(env) = envs.get_mut(ei)
+                        {
+                            env.was_clip_active = clip_active;
+                        }
+                        continue;
+                    }
+                };
+                let target_fx = layer_effects
+                    .iter_mut()
+                    .find(|f| f.effect_type() == &target_effect_type && f.enabled);
+                let fx = match target_fx {
+                    Some(f) => f,
+                    None => {
+                        if let Some(envs) = &mut layer.envelopes
+                            && let Some(env) = envs.get_mut(ei)
+                        {
+                            env.was_clip_active = clip_active;
+                        }
+                        continue;
+                    }
+                };
+                let effect_def =
+                    match effect_definition_registry::try_get(fx.effect_type()) {
+                        Some(d) => d,
+                        None => continue,
+                    };
+                let idx = param_index as usize;
+                if idx >= effect_def.param_defs.len() || idx >= fx.param_values.len() {
+                    if let Some(envs) = &mut layer.envelopes
+                        && let Some(env) = envs.get_mut(ei)
+                    {
+                        env.was_clip_active = clip_active;
+                    }
+                    continue;
+                }
+                let pd = &effect_def.param_defs[idx];
+                let (min, max) = (pd.min, pd.max);
+                let whole = pd.whole_numbers || pd.value_labels.is_some();
+
+                // Seed from current param value if uninitialized
                 let seeded = if walk_value < 0.0 {
-                    target_norm.clamp(0.0, 1.0)
+                    if (max - min).abs() > f32::EPSILON {
+                        ((fx.param_values[idx] - min) / (max - min)).clamp(0.0, 1.0)
+                    } else {
+                        0.5
+                    }
                 } else {
                     walk_value
                 };
 
                 let new_walk = if rising_edge {
-                    // Need param def for discrete quantization
-                    let (whole, min, max) = layer
-                        .effects
-                        .as_ref()
-                        .and_then(|efx| {
-                            efx.iter()
-                                .find(|f| f.effect_type() == &target_effect_type && f.enabled)
-                        })
-                        .and_then(|fx| {
-                            effect_definition_registry::try_get(fx.effect_type())
-                                .and_then(|d| {
-                                    let idx = param_index as usize;
-                                    d.param_defs.get(idx).map(|pd| {
-                                        (
-                                            pd.whole_numbers
-                                                || pd.value_labels.is_some(),
-                                            pd.min,
-                                            pd.max,
-                                        )
-                                    })
-                                })
-                        })
-                        .unwrap_or((false, 0.0, 1.0));
-
                     compute_random_step(
                         seeded,
                         target_norm.clamp(0.0, 1.0),
@@ -410,18 +425,37 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> boo
                     seeded
                 };
 
+                // Sample & hold: write the latched value every frame
+                let held = min + (max - min) * new_walk;
+                let held = if whole {
+                    held.round().clamp(min, max)
+                } else {
+                    held.clamp(min, max)
+                };
+
                 if let Some(envs) = &mut layer.envelopes
                     && let Some(env) = envs.get_mut(ei)
                 {
                     env.walk_value = new_walk;
+                    env.current_level = new_walk;
+                    env.was_clip_active = clip_active;
                 }
 
-                new_walk
-            } else {
-                target_norm.clamp(0.0, 1.0)
-            };
+                fx.param_values[idx] = held;
+                any_modulated = true;
+                continue;
+            }
 
-            // ADSR evaluation — shared by both ADSR and Random modes
+            // ── ADSR mode ────────────────────────────────────────────
+            if !clip_active {
+                if let Some(envs) = &mut layer.envelopes
+                    && let Some(env) = envs.get_mut(ei)
+                {
+                    env.was_clip_active = false;
+                }
+                continue;
+            }
+
             let adsr_value = ParamEnvelope::calculate_adsr(
                 active_elapsed,
                 active_duration,
@@ -463,7 +497,7 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> boo
                 effect_def.param_defs[idx].max,
             );
             let current_value = fx.param_values[idx];
-            let target_value = min + (max - min) * effective_target;
+            let target_value = min + (max - min) * target_norm.clamp(0.0, 1.0);
             let offset = (target_value - current_value) * adsr_value;
             let final_value = (current_value + offset).clamp(min, max);
 
@@ -580,23 +614,17 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: Beats) 
             let pd = &gen_defs[idx];
             let (min, max) = (pd.min, pd.max);
 
-            if !clip_active {
-                if let Some(envs) = &mut gp.envelopes
-                    && let Some(env) = envs.get_mut(ei)
-                {
-                    env.was_clip_active = false;
-                }
-                continue;
-            }
-
-            // Random mode: on rising edge, pick a new target via walk/jump.
-            // Then the normal ADSR envelope drives toward that randomized target.
-            let effective_target = if mode == EnvelopeMode::Random {
+            // ── Random mode: sample & hold ─────────────────────────
+            if mode == EnvelopeMode::Random {
                 let rising_edge = clip_active && !was_active;
                 let whole = pd.whole_numbers || pd.value_labels.is_some();
 
                 let seeded = if walk_value < 0.0 {
-                    target_norm.clamp(0.0, 1.0)
+                    if (max - min).abs() > f32::EPSILON {
+                        ((gp.param_values[idx] - min) / (max - min)).clamp(0.0, 1.0)
+                    } else {
+                        0.5
+                    }
                 } else {
                     walk_value
                 };
@@ -614,18 +642,36 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: Beats) 
                     seeded
                 };
 
+                let held = min + (max - min) * new_walk;
+                let held = if whole {
+                    held.round().clamp(min, max)
+                } else {
+                    held.clamp(min, max)
+                };
+
                 if let Some(envs) = &mut gp.envelopes
                     && let Some(env) = envs.get_mut(ei)
                 {
                     env.walk_value = new_walk;
+                    env.current_level = new_walk;
+                    env.was_clip_active = clip_active;
                 }
 
-                new_walk
-            } else {
-                target_norm.clamp(0.0, 1.0)
-            };
+                gp.param_values[idx] = held;
+                any_modulated = true;
+                continue;
+            }
 
-            // ADSR evaluation — shared by both modes
+            // ── ADSR mode ────────────────────────────────────────────
+            if !clip_active {
+                if let Some(envs) = &mut gp.envelopes
+                    && let Some(env) = envs.get_mut(ei)
+                {
+                    env.was_clip_active = false;
+                }
+                continue;
+            }
+
             let adsr_level = ParamEnvelope::calculate_adsr(
                 active_elapsed,
                 active_duration,
@@ -643,7 +689,7 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: Beats) 
             }
 
             let current_value = gp.param_values[idx];
-            let target_value = min + (max - min) * effective_target;
+            let target_value = min + (max - min) * target_norm.clamp(0.0, 1.0);
             let offset = (target_value - current_value) * adsr_level;
             let final_value = (current_value + offset).clamp(min, max);
 
