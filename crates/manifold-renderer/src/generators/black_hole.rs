@@ -283,9 +283,14 @@ impl Generator for BlackHoleGenerator {
         // Ensure GPU resources
         self.ensure_deflection_map(gpu.device, ctx.width, ctx.height);
 
-        // TODO: particle system disabled for debugging — pipelines compile but
-        // dispatch causes GPU hang. Keeping compilation in new() to verify shader
-        // is valid. Will re-enable with small particle count for testing.
+        // ── Particle debugging: minimal seed dispatch (1K particles, no simulate) ──
+        self.ensure_particle_buffer(gpu.device);
+        if !self.particles_initialized {
+            self.active_count = 1000; // Tiny count to test shader dispatch
+            self.seed_particles(gpu, disk_inner, disk_outer);
+            self.particles_initialized = true;
+            log::info!("BlackHole: seeded {} particles", self.active_count);
+        }
         let _ = (particle_millions, turbulence, new_active);
 
         // ── Pass 1: Deflection Map (only on param change) ──
