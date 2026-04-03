@@ -1,8 +1,8 @@
-// Black Hole — Projected Particle Scatter
+// Black Hole — Polar Particle Scatter
 //
-// Projects 3D particle positions to 2D screen space and splatters
-// to a density accumulator at output resolution. Same pattern as
-// FluidSimulation3D's projected scatter.
+// Splatters particle positions onto a 2D polar-mapped density texture.
+//   X axis = angle (0..2π → 0..width)
+//   Y axis = radius (disk_inner..disk_outer → 0..height)
 
 struct Particle {
     position: vec3<f32>,
@@ -14,30 +14,13 @@ struct Particle {
 
 struct ScatterUniforms {
     active_count: u32,
-    disp_w: u32,
-    disp_h: u32,
+    tex_w: u32,
+    tex_h: u32,
     scaled_energy: u32,
-    // Camera vectors (precomputed on CPU)
-    cam_pos_x: f32,
-    cam_pos_y: f32,
-    cam_pos_z: f32,
+    disk_inner: f32,
+    disk_outer: f32,
     _pad0: f32,
-    cam_fwd_x: f32,
-    cam_fwd_y: f32,
-    cam_fwd_z: f32,
     _pad1: f32,
-    cam_right_x: f32,
-    cam_right_y: f32,
-    cam_right_z: f32,
-    _pad2: f32,
-    cam_up_x: f32,
-    cam_up_y: f32,
-    cam_up_z: f32,
-    fov_factor: f32,
-    aspect: f32,
-    _pad3: f32,
-    _pad4: f32,
-    _pad5: f32,
 };
 
 @group(0) @binding(0) var<storage, read> particles: array<Particle>;
@@ -55,41 +38,20 @@ fn splat(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Camera vectors
-    let cam_pos = vec3<f32>(params.cam_pos_x, params.cam_pos_y, params.cam_pos_z);
-    let cam_fwd = vec3<f32>(params.cam_fwd_x, params.cam_fwd_y, params.cam_fwd_z);
-    let cam_right = vec3<f32>(params.cam_right_x, params.cam_right_y, params.cam_right_z);
-    let cam_up = vec3<f32>(params.cam_up_x, params.cam_up_y, params.cam_up_z);
+    let pos = p.position;
+    let r = length(vec2<f32>(pos.x, pos.z));
 
-    // Project particle to camera space
-    let to_particle = p.position - cam_pos;
-    let depth = dot(to_particle, cam_fwd);
-
-    // Behind camera
-    if depth < 0.1 {
+    if r < params.disk_inner || r > params.disk_outer {
         return;
     }
 
-    // Perspective projection
-    let proj_x = dot(to_particle, cam_right) / (depth * params.fov_factor);
-    let proj_y = dot(to_particle, cam_up) / (depth * params.fov_factor);
+    let angle = atan2(pos.z, pos.x) + 3.14159265;
+    let angle_norm = angle / 6.28318530;
+    let r_norm = (r - params.disk_inner) / (params.disk_outer - params.disk_inner);
 
-    // NDC to pixel
-    let screen_x = (proj_x / params.aspect + 1.0) * 0.5 * f32(params.disp_w);
-    let screen_y = (-proj_y + 1.0) * 0.5 * f32(params.disp_h);
+    let px = u32(angle_norm * f32(params.tex_w)) % params.tex_w;
+    let py = u32(r_norm * f32(params.tex_h)) % params.tex_h;
+    let idx = py * params.tex_w + px;
 
-    let px = i32(screen_x);
-    let py = i32(screen_y);
-
-    if px < 0 || px >= i32(params.disp_w) || py < 0 || py >= i32(params.disp_h) {
-        return;
-    }
-
-    let idx = u32(py) * params.disp_w + u32(px);
-
-    // Encode color + density into accumulator
-    // Use particle color brightness as energy weight
-    let luma = 0.299 * p.color.r + 0.587 * p.color.g + 0.114 * p.color.b;
-    let energy = u32(f32(params.scaled_energy) * max(luma, 0.1));
-    atomicAdd(&accum[idx], energy);
+    atomicAdd(&accum[idx], params.scaled_energy);
 }
