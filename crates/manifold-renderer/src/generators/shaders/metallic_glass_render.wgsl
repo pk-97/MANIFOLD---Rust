@@ -17,7 +17,7 @@ struct Uniforms {
     light_pos: vec4<f32>,       // TD: X=-2, Y=2, Z=5
     light_color: vec4<f32>,     // rgb = color, a = intensity (TD: 3.5)
     material: vec4<f32>,        // x = metallic (1.0), y = roughness (0.05), z = displacement (0.2), w = unused
-    grid_info: vec4<f32>,       // x = grid_size (300), y = texel_size (1/tex_width)
+    grid_info: vec4<f32>,       // x = grid_size (300), y = texel_size (1/tex_width), z = aspect ratio
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -64,7 +64,8 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     let vy = quad_y + dy;
     let uv = vec2<f32>(f32(vx) / f32(quads), f32(vy) / f32(quads));
 
-    let world_x = uv.x * 2.0 - 1.0;
+    let aspect = u.grid_info.z;
+    let world_x = (uv.x * 2.0 - 1.0) * aspect;
     let world_z = uv.y * 2.0 - 1.0;
 
     let displacement = u.material.z;
@@ -150,12 +151,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let h_py = textureSampleLevel(height_tex, tex_sampler, in.uv + vec2(0.0, texel), 0.0).r;
     let h_ny = textureSampleLevel(height_tex, tex_sampler, in.uv - vec2(0.0, texel), 0.0).r;
 
-    // World-space tangent vectors (grid spans 2 units)
-    let dx_world = 2.0 * texel;
+    // World-space tangent vectors (grid spans 2*aspect in X, 2 in Z)
+    let aspect = u.grid_info.z;
+    let dx_world_x = 2.0 * aspect * texel;
+    let dx_world_z = 2.0 * texel;
     let dh_x = (h_px - h_nx) * displacement;
     let dh_z = (h_py - h_ny) * displacement;
-    let tangent_x = vec3<f32>(dx_world, dh_x, 0.0);
-    let tangent_z = vec3<f32>(0.0, dh_z, dx_world);
+    let tangent_x = vec3<f32>(dx_world_x, dh_x, 0.0);
+    let tangent_z = vec3<f32>(0.0, dh_z, dx_world_z);
     let N = normalize(cross(tangent_z, tangent_x));
 
     // Base color: neutral silver (metallic F0 = base_color)
