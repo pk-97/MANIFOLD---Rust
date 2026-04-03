@@ -100,20 +100,18 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let uv = vec2<f32>(f32(pos.x) / u.width, f32(pos.y) / u.height);
 
-    let mirrored_uv = mirror_uv(uv, u.mirror_angle);
-
-    let mirrored_pos = vec2<i32>(
-        clamp(i32(mirrored_uv.x * u.width), 0, w - 1),
-        clamp(i32(mirrored_uv.y * u.height), 0, h - 1),
-    );
-
-    // Height from feedback luma (continuous, non-zero everywhere)
-    let feedback = textureLoad(src_tex, mirrored_pos, 0);
+    // HEIGHT: unmirrored feedback luma — no fold seam in geometry
+    let feedback = textureLoad(src_tex, pos, 0);
     let feedback_luma = dot(feedback.rgb, vec3<f32>(0.299, 0.587, 0.114));
     let remapped = feedback_luma * 0.7 + 0.3;
     let height_val = levels_height(remapped);
 
-    // Metallic from edges (vein detail)
+    // METALLIC: mirrored edges — vein pattern with optional symmetry
+    let mirrored_uv = mirror_uv(uv, u.mirror_angle);
+    let mirrored_pos = vec2<i32>(
+        clamp(i32(mirrored_uv.x * u.width), 0, w - 1),
+        clamp(i32(mirrored_uv.y * u.height), 0, h - 1),
+    );
     let edge = sobel(mirrored_pos, w, h) * u.edge_strength;
     let edge_clamped = clamp(edge, 0.0, 1.0);
     let metallic_val = levels_metallic(edge_clamped);
