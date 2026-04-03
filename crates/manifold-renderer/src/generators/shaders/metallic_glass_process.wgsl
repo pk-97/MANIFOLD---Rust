@@ -113,23 +113,15 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         clamp(i32(mirrored_uv.y * u.height), 0, h - 1),
     );
 
-    // Step 2: Read raw feedback value at mirrored position
-    let raw = textureLoad(src_tex, mirrored_pos, 0);
-    let raw_luma = dot(raw.rgb, vec3<f32>(0.299, 0.587, 0.114));
-
-    // Step 3: Sobel edge detection at the mirrored position
+    // Step 2: Sobel edge detection at the mirrored position.
+    // This isolates the "veins" — boundaries between feedback regions.
     let edge = sobel(mirrored_pos, w, h) * u.edge_strength;
     let edge_clamped = clamp(edge, 0.0, 1.0);
 
-    // Step 4: Combine raw feedback + edges for height.
-    // Raw feedback provides the broad displacement surface.
-    // Edges add sharp vein detail on top.
-    let combined = clamp(raw_luma * 0.6 + edge_clamped * 0.6, 0.0, 1.0);
-
-    // Step 5: Apply level adjustments
-    let height_val = apply_levels_height(combined);
+    // Step 3: Apply level adjustments
+    let height_val = apply_levels_height(edge_clamped);
     let metallic_val = apply_levels_metallic(edge_clamped);
 
-    // Pack: R = height, G = metallic, B = raw feedback, A = 1
-    textureStore(dst_tex, pos, vec4<f32>(height_val, metallic_val, raw_luma, 1.0));
+    // Pack: R = height, G = metallic, B = edge, A = 1
+    textureStore(dst_tex, pos, vec4<f32>(height_val, metallic_val, edge_clamped, 1.0));
 }

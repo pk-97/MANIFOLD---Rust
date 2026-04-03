@@ -71,8 +71,9 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 
     let world_pos = vec3<f32>(world_x, h, world_z);
 
-    // Compute normal via finite differences on the height map
-    let eps = 1.0 / f32(quads);  // one grid cell
+    // Compute normal via finite differences on the height map.
+    // Use 2-cell epsilon for smoother normals (reduces faceting).
+    let eps = 2.0 / f32(quads);
     let h_px = sample_height(uv + vec2(eps, 0.0)) * displacement;
     let h_nx = sample_height(uv - vec2(eps, 0.0)) * displacement;
     let h_py = sample_height(uv + vec2(0.0, eps)) * displacement;
@@ -121,32 +122,42 @@ fn F_Schlick(cosTheta: f32, F0: vec3<f32>) -> vec3<f32> {
 }
 
 // ─── Procedural Environment ────────────────────────────────────────
-// Studio-like environment for metallic reflections.
-// Bright band near the horizon creates the characteristic chrome look.
+// HDR studio environment for chrome/mirror reflections.
+// High contrast between bright panels and dark gaps is critical —
+// metallic surfaces derive ALL their color from the environment.
 
 fn env_color(dir: vec3<f32>) -> vec3<f32> {
     let up = dir.y;
 
-    // Bright band near horizon (simulates studio windows/lights)
-    let horizon = exp(-12.0 * up * up) * 2.5;
+    // --- Dark base (studio backdrop) ---
+    var color = vec3<f32>(0.02, 0.02, 0.03);
 
-    // Secondary highlight band above (simulates overhead soft box)
-    let overhead = smoothstep(0.3, 0.6, up) * smoothstep(0.9, 0.6, up) * 1.8;
+    // --- Main horizon band (large studio window / cyclorama) ---
+    let horizon_mask = exp(-20.0 * up * up);
+    color += vec3(1.8, 1.7, 1.6) * horizon_mask;
 
-    // Ground bounce (subtle)
-    let ground = max(-up, 0.0) * 0.15;
+    // --- Overhead soft box (key light) ---
+    let overhead = smoothstep(0.4, 0.7, up) * smoothstep(1.0, 0.7, up);
+    color += vec3(3.0, 2.8, 2.6) * overhead;
 
-    // Sky gradient
-    let sky = max(up, 0.0) * 0.2;
+    // --- Floor reflection panel (fill from below) ---
+    let floor = smoothstep(-0.2, -0.5, up) * smoothstep(-0.9, -0.5, up);
+    color += vec3(0.4, 0.45, 0.5) * floor;
 
-    let intensity = horizon + overhead + ground + sky + 0.05;
+    // --- Accent strip lights (create metallic streaks) ---
+    // Two narrow bands at different angles for visual interest
+    let strip1 = exp(-200.0 * pow(up - 0.15, 2.0));
+    color += vec3(4.0, 3.5, 3.0) * strip1;
 
-    // Slight warm/cool color variation
-    return vec3<f32>(
-        intensity * 0.97,
-        intensity * 1.0,
-        intensity * 1.04,
-    );
+    let strip2 = exp(-200.0 * pow(up + 0.1, 2.0));
+    color += vec3(2.0, 2.5, 3.5) * strip2;
+
+    // --- Angular variation (break uniformity) ---
+    let azimuth = atan2(dir.z, dir.x);
+    let az_mod = sin(azimuth * 3.0) * 0.15 + 1.0;
+    color *= az_mod;
+
+    return color;
 }
 
 // ─── Fragment Shader ───────────────────────────────────────────────
