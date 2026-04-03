@@ -1,4 +1,5 @@
 use super::basic_shapes_snap::BasicShapesSnapGenerator;
+use super::black_hole::BlackHoleGenerator;
 use super::concentric_tunnel::ConcentricTunnelGenerator;
 use super::duocylinder::DuocylinderGenerator;
 use super::fluid_simulation::FluidSimulationGenerator;
@@ -44,6 +45,7 @@ impl GeneratorRegistry {
             GeneratorTypeId::FLUID_SIMULATION,
             GeneratorTypeId::FLUID_SIMULATION_3D,
             GeneratorTypeId::MRI_VOLUME,
+            GeneratorTypeId::BLACK_HOLE,
         ];
         log::info!("Pre-warming {} generator pipelines...", all_types.len());
         for gen_type in &all_types {
@@ -85,6 +87,8 @@ impl GeneratorRegistry {
             Some(Box::new(FluidSimulation3DGenerator::new(device)))
         } else if *gen_type == GeneratorTypeId::MRI_VOLUME {
             Some(Box::new(MriVolumeGenerator::new(device)))
+        } else if *gen_type == GeneratorTypeId::BLACK_HOLE {
+            Some(Box::new(BlackHoleGenerator::new(device)))
         } else {
             log::warn!("Generator type {:?} not yet implemented", gen_type);
             None

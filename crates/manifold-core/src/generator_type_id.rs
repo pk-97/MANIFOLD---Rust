@@ -60,6 +60,7 @@ impl GeneratorTypeId {
     pub const COMPUTE_STRANGE_ATTRACTOR: Self = Self(Cow::Borrowed("ComputeStrangeAttractor"));
     pub const FLUID_SIMULATION_3D: Self = Self(Cow::Borrowed("FluidSimulation3D"));
     pub const MRI_VOLUME: Self = Self(Cow::Borrowed("MriVolume"));
+    pub const BLACK_HOLE: Self = Self(Cow::Borrowed("BlackHole"));
 }
 
 // ── Legacy discriminant mapping ─────────────────────────────────────────
@@ -89,6 +90,7 @@ impl GeneratorTypeId {
             18 => Self::COMPUTE_STRANGE_ATTRACTOR,
             19 => Self::FLUID_SIMULATION_3D,
             20 => Self::MRI_VOLUME,
+            21 => Self::BLACK_HOLE,
             _ => Self::NONE,
         }
     }

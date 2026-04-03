@@ -576,6 +576,22 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         create_def("MRI Volume", false, "mriVolume", params),
     );
 
+    // ── BlackHole ──
+    let params = vec![
+        pd("Speed", 0.0, 2.0, 0.3, Some("F2"), "speed"),
+        pd("Cam Dist", 5.0, 50.0, 20.0, Some("F1"), "camDist"),
+        pd("Tilt", 0.0, 90.0, 75.0, Some("F0"), "tilt"),
+        pd_whole("Steps", 50.0, 500.0, 200.0, "steps"),
+        pd("Disk Inner", 2.0, 6.0, 3.0, Some("F1"), "diskInner"),
+        pd("Disk Outer", 5.0, 20.0, 10.0, Some("F1"), "diskOuter"),
+        pd("Disk Glow", 0.5, 5.0, 2.0, Some("F1"), "diskGlow"),
+        pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
+    ];
+    m.insert(
+        GeneratorTypeId::BLACK_HOLE,
+        create_def("Black Hole", false, "blackHole", params),
+    );
+
     m
 }
 

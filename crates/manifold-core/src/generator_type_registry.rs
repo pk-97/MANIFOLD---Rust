@@ -35,6 +35,7 @@ fn build_registry() -> Vec<GeneratorTypeRegistration> {
         reg(G::PARAMETRIC_SURFACE, "Parametric Surface", true),
         reg(G::MYCELIUM, "Mycelium", true),
         reg(G::MRI_VOLUME, "MRI Volume", true),
+        reg(G::BLACK_HOLE, "Black Hole", true),
     ]
 }
 

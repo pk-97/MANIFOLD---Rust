@@ -1,4 +1,5 @@
 pub mod basic_shapes_snap;
+pub mod black_hole;
 pub mod compute_common;
 pub mod concentric_tunnel;
 pub mod duocylinder;
