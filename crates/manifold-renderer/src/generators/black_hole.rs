@@ -283,15 +283,50 @@ impl Generator for BlackHoleGenerator {
         // Ensure GPU resources
         self.ensure_deflection_map(gpu.device, ctx.width, ctx.height);
 
-        // ── Particle debugging: minimal seed dispatch (1K particles, no simulate) ──
+        // ── Particle debugging: seed + simulate with 1K particles ──
         self.ensure_particle_buffer(gpu.device);
         if !self.particles_initialized {
-            self.active_count = 1000; // Tiny count to test shader dispatch
+            self.active_count = 1000;
             self.seed_particles(gpu, disk_inner, disk_outer);
             self.particles_initialized = true;
             log::info!("BlackHole: seeded {} particles", self.active_count);
         }
-        let _ = (particle_millions, turbulence, new_active);
+
+        // Simulate 1K particles
+        if let Some(ref buf) = self.particle_buffer {
+            let sim_uniforms = ParticleSimUniforms {
+                active_count: self.active_count,
+                frame_count: self.frame_count as u32,
+                disk_inner,
+                disk_outer,
+                speed,
+                turbulence,
+                time_val: ctx.time as f32,
+                dt: ctx.dt,
+                inject_burst: 0.0,
+                _pad0: 0.0,
+                _pad1: 0.0,
+                _pad2: 0.0,
+            };
+            gpu.native_enc.dispatch_compute(
+                &self.particle_sim_pipeline,
+                &[
+                    manifold_gpu::GpuBinding::Buffer {
+                        binding: 0,
+                        buffer: buf,
+                        offset: 0,
+                    },
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 1,
+                        data: bytemuck::bytes_of(&sim_uniforms),
+                    },
+                ],
+                [self.active_count.div_ceil(THREAD_GROUP_SIZE), 1, 1],
+                "BlackHole ParticleSim",
+            );
+            self.frame_count += 1;
+        }
+        let _ = (particle_millions, new_active);
 
         // ── Pass 1: Deflection Map (only on param change) ──
         if self.needs_rebake(cam_dist, tilt_rad, uv_scale, steps, disk_inner, disk_outer) {
