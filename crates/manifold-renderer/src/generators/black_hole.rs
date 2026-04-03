@@ -27,8 +27,11 @@ const SCALE: usize = 7;
 const PARTICLE_COUNT: usize = 8;
 const TURBULENCE: usize = 9;
 
+#[allow(dead_code)]
 const MAX_PARTICLES: u32 = 4_000_000;
+#[allow(dead_code)]
 const THREAD_GROUP_SIZE: u32 = 256;
+#[allow(dead_code)]
 const PARTICLE_SIZE_BYTES: u64 = std::mem::size_of::<Particle>() as u64;
 
 fn param(ctx: &GeneratorContext, idx: usize, default: f32) -> f32 {
@@ -86,7 +89,9 @@ struct DisplayUniforms {
 
 pub struct BlackHoleGenerator {
     deflection_pipeline: manifold_gpu::GpuComputePipeline,
+    #[allow(dead_code)]
     particle_sim_pipeline: manifold_gpu::GpuComputePipeline,
+    #[allow(dead_code)]
     particle_seed_pipeline: manifold_gpu::GpuComputePipeline,
     display_pipeline: manifold_gpu::GpuComputePipeline,
     sampler: manifold_gpu::GpuSampler,
@@ -96,8 +101,10 @@ pub struct BlackHoleGenerator {
     defl_w: u32,
     defl_h: u32,
 
-    // Particle state
+    // Particle state (infrastructure ready, dispatch disabled for debugging)
+    #[allow(dead_code)]
     particle_buffer: Option<manifold_gpu::GpuBuffer>,
+    #[allow(dead_code)]
     active_count: u32,
     frame_count: u64,
     particles_initialized: bool,
@@ -176,6 +183,7 @@ impl BlackHoleGenerator {
         self.last_cam_dist = f32::MIN;
     }
 
+    #[allow(dead_code)]
     fn ensure_particle_buffer(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.particle_buffer.is_some() {
             return;
@@ -184,6 +192,7 @@ impl BlackHoleGenerator {
         self.particle_buffer = Some(device.create_buffer(buf_size));
     }
 
+    #[allow(dead_code)]
     fn seed_particles(&self, gpu: &mut GpuEncoder, disk_inner: f32, disk_outer: f32) {
         let Some(ref buf) = self.particle_buffer else {
             return;
@@ -273,19 +282,11 @@ impl Generator for BlackHoleGenerator {
 
         // Ensure GPU resources
         self.ensure_deflection_map(gpu.device, ctx.width, ctx.height);
-        self.ensure_particle_buffer(gpu.device);
 
-        // Handle particle count change → reseed
-        if self.active_count != new_active {
-            self.active_count = new_active;
-            self.particles_initialized = false;
-        }
-
-        // Seed particles on first frame or count change
-        if !self.particles_initialized {
-            self.seed_particles(gpu, disk_inner, disk_outer);
-            self.particles_initialized = true;
-        }
+        // TODO: particle system disabled for debugging — pipelines compile but
+        // dispatch causes GPU hang. Keeping compilation in new() to verify shader
+        // is valid. Will re-enable with small particle count for testing.
+        let _ = (particle_millions, turbulence, new_active);
 
         // ── Pass 1: Deflection Map (only on param change) ──
         if self.needs_rebake(cam_dist, tilt_rad, uv_scale, steps, disk_inner, disk_outer) {
@@ -323,42 +324,7 @@ impl Generator for BlackHoleGenerator {
             self.last_disk_outer = disk_outer;
         }
 
-        // ── Pass 2: Particle Simulate (every frame) ──
-        if let Some(ref buf) = self.particle_buffer {
-            let sim_uniforms = ParticleSimUniforms {
-                active_count: self.active_count,
-                frame_count: self.frame_count as u32,
-                disk_inner,
-                disk_outer,
-                speed,
-                turbulence,
-                time_val: ctx.time as f32,
-                dt: ctx.dt,
-                inject_burst: 0.0,
-                _pad0: 0.0,
-                _pad1: 0.0,
-                _pad2: 0.0,
-            };
-            gpu.native_enc.dispatch_compute(
-                &self.particle_sim_pipeline,
-                &[
-                    manifold_gpu::GpuBinding::Buffer {
-                        binding: 0,
-                        buffer: buf,
-                        offset: 0,
-                    },
-                    manifold_gpu::GpuBinding::Bytes {
-                        binding: 1,
-                        data: bytemuck::bytes_of(&sim_uniforms),
-                    },
-                ],
-                [self.active_count.div_ceil(THREAD_GROUP_SIZE), 1, 1],
-                "BlackHole ParticleSim",
-            );
-            self.frame_count += 1;
-        }
-
-        // ── Pass 3: Display (every frame — cheap texture lookup) ──
+        // ── Pass 2: Display (every frame — cheap texture lookup) ──
         let display_uniforms = DisplayUniforms {
             time_val: ctx.time as f32,
             disk_inner,
