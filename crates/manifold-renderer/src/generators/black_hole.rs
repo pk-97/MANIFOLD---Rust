@@ -1,10 +1,8 @@
 // Schwarzschild black hole generator — cinematic Interstellar-style.
 //
 // Two-pass compute:
-//   1. Deflection map bake — geodesic trace, only on camera/param change.
-//      Stores ALL disk crossings (front + lensed back) per ray.
-//   2. Display — samples deflection map, applies volumetric disk shading
-//      with Doppler beaming, multi-octave noise, and depth.
+//   1. Deflection map bake — volumetric geodesic trace, only on camera/param change.
+//   2. Display — samples deflection map, applies cinematic disk shading.
 
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
@@ -14,11 +12,12 @@ use manifold_core::GeneratorTypeId;
 const SPEED: usize = 0;
 const CAM_DIST: usize = 1;
 const TILT: usize = 2;
-const STEPS: usize = 3;
-const DISK_INNER: usize = 4;
-const DISK_OUTER: usize = 5;
-const DISK_GLOW: usize = 6;
-const SCALE: usize = 7;
+const ROTATE: usize = 3;
+const STEPS: usize = 4;
+const DISK_INNER: usize = 5;
+const DISK_OUTER: usize = 6;
+const DISK_GLOW: usize = 7;
+const SCALE: usize = 8;
 
 fn param(ctx: &GeneratorContext, idx: usize, default: f32) -> f32 {
     if ctx.param_count > idx as u32 {
@@ -34,11 +33,11 @@ struct DeflectionUniforms {
     aspect: f32,
     cam_dist: f32,
     tilt_rad: f32,
+    rotate_rad: f32,
     steps: f32,
     disk_inner: f32,
     disk_outer: f32,
     uv_scale: f32,
-    _pad0: f32,
 }
 
 #[repr(C)]
@@ -60,13 +59,13 @@ pub struct BlackHoleGenerator {
     sampler: manifold_gpu::GpuSampler,
 
     deflection_map: Option<manifold_gpu::GpuTexture>,
-    // Second deflection map channel for secondary disk crossing
     deflection_map2: Option<manifold_gpu::GpuTexture>,
     defl_w: u32,
     defl_h: u32,
 
     last_cam_dist: f32,
     last_tilt: f32,
+    last_rotate: f32,
     last_scale: f32,
     last_steps: f32,
     last_disk_inner: f32,
@@ -97,6 +96,7 @@ impl BlackHoleGenerator {
             defl_h: 0,
             last_cam_dist: f32::MIN,
             last_tilt: f32::MIN,
+            last_rotate: f32::MIN,
             last_scale: f32::MIN,
             last_steps: f32::MIN,
             last_disk_inner: f32::MIN,
@@ -126,22 +126,15 @@ impl BlackHoleGenerator {
         self.last_cam_dist = f32::MIN;
     }
 
-    fn needs_rebake(
-        &self,
-        cam_dist: f32,
-        tilt: f32,
-        scale: f32,
-        steps: f32,
-        disk_inner: f32,
-        disk_outer: f32,
-    ) -> bool {
+    fn needs_rebake(&self, cd: f32, t: f32, r: f32, s: f32, st: f32, di: f32, do_: f32) -> bool {
         const EPS: f32 = 0.001;
-        (self.last_cam_dist - cam_dist).abs() > EPS
-            || (self.last_tilt - tilt).abs() > EPS
-            || (self.last_scale - scale).abs() > EPS
-            || (self.last_steps - steps).abs() > 0.5
-            || (self.last_disk_inner - disk_inner).abs() > EPS
-            || (self.last_disk_outer - disk_outer).abs() > EPS
+        (self.last_cam_dist - cd).abs() > EPS
+            || (self.last_tilt - t).abs() > EPS
+            || (self.last_rotate - r).abs() > EPS
+            || (self.last_scale - s).abs() > EPS
+            || (self.last_steps - st).abs() > 0.5
+            || (self.last_disk_inner - di).abs() > EPS
+            || (self.last_disk_outer - do_).abs() > EPS
     }
 }
 
@@ -163,6 +156,7 @@ impl Generator for BlackHoleGenerator {
         let speed = param(ctx, SPEED, 0.3);
         let cam_dist = param(ctx, CAM_DIST, 20.0);
         let tilt_deg = param(ctx, TILT, 75.0);
+        let rotate_deg = param(ctx, ROTATE, 0.0);
         let steps = param(ctx, STEPS, 200.0).round();
         let disk_inner = param(ctx, DISK_INNER, 3.0);
         let disk_outer = param(ctx, DISK_OUTER, 10.0);
@@ -171,21 +165,24 @@ impl Generator for BlackHoleGenerator {
 
         let uv_scale = if scale > 0.0 { 1.0 / scale } else { 1.0 };
         let tilt_rad = tilt_deg.to_radians();
+        let rotate_rad = rotate_deg.to_radians();
         let orbit_angle = ctx.time as f32 * speed * 0.3;
 
         self.ensure_deflection_maps(gpu.device, ctx.width, ctx.height);
 
         // ── Pass 1: Deflection Map (only on param change) ──
-        if self.needs_rebake(cam_dist, tilt_rad, uv_scale, steps, disk_inner, disk_outer) {
+        if self.needs_rebake(
+            cam_dist, tilt_rad, rotate_rad, uv_scale, steps, disk_inner, disk_outer,
+        ) {
             let defl_uniforms = DeflectionUniforms {
                 aspect: ctx.aspect,
                 cam_dist,
                 tilt_rad,
+                rotate_rad,
                 steps,
                 disk_inner,
                 disk_outer,
                 uv_scale,
-                _pad0: 0.0,
             };
             gpu.native_enc.dispatch_compute(
                 &self.deflection_pipeline,
@@ -208,6 +205,7 @@ impl Generator for BlackHoleGenerator {
             );
             self.last_cam_dist = cam_dist;
             self.last_tilt = tilt_rad;
+            self.last_rotate = rotate_rad;
             self.last_scale = uv_scale;
             self.last_steps = steps;
             self.last_disk_inner = disk_inner;

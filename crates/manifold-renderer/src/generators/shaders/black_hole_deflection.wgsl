@@ -6,18 +6,19 @@
 // Disk volume: |y| < thickness(r), where thickness increases with r.
 // Density profile: gaussian in y, concentrated at midplane.
 //
-// Output 1: (final_r, weighted_avg_r, weighted_avg_angle, total_density)
-// Output 2: reserved for future use
+// Output 1: (final_r, weighted_avg_r, total_density, 0)
+// Output 2: (cos_avg_angle, sin_avg_angle, 0, 0)
+// Storing cos/sin instead of raw angle avoids atan2 seam artifacts.
 
 struct Uniforms {
     aspect: f32,
     cam_dist: f32,
     tilt_rad: f32,
+    rotate_rad: f32,
     steps: f32,
     disk_inner: f32,
     disk_outer: f32,
     uv_scale: f32,
-    _pad0: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -65,8 +66,14 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let cos_tilt = cos(u.tilt_rad);
     let sin_tilt = sin(u.tilt_rad);
+    let cos_rot = cos(u.rotate_rad);
+    let sin_rot = sin(u.rotate_rad);
 
-    let cam_pos = vec3<f32>(u.cam_dist * cos_tilt, u.cam_dist * sin_tilt, 0.0);
+    let cam_pos = vec3<f32>(
+        u.cam_dist * cos_tilt * cos_rot,
+        u.cam_dist * sin_tilt,
+        u.cam_dist * cos_tilt * sin_rot,
+    );
     let fwd = normalize(-cam_pos);
     let world_up = vec3<f32>(0.0, 1.0, 0.0);
     let right = normalize(cross(fwd, world_up));
@@ -139,14 +146,19 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Compute weighted averages
     var avg_r = 0.0;
-    var avg_angle = 0.0;
+    var avg_cos = 0.0;
+    var avg_sin = 0.0;
     if total_density > 0.001 {
         avg_r = weighted_r / total_density;
-        avg_angle = atan2(weighted_sin_a, weighted_cos_a);
-        // Normalize density to useful range
+        // Normalize the sin/cos direction (don't divide by density — keep unit circle)
+        let a_len = length(vec2<f32>(weighted_cos_a, weighted_sin_a));
+        if a_len > 0.001 {
+            avg_cos = weighted_cos_a / a_len;
+            avg_sin = weighted_sin_a / a_len;
+        }
         total_density = min(total_density, 8.0);
     }
 
-    textureStore(output1, gid.xy, vec4<f32>(final_r, avg_r, avg_angle, total_density));
-    textureStore(output2, gid.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));
+    textureStore(output1, gid.xy, vec4<f32>(final_r, avg_r, total_density, 0.0));
+    textureStore(output2, gid.xy, vec4<f32>(avg_cos, avg_sin, 0.0, 0.0));
 }

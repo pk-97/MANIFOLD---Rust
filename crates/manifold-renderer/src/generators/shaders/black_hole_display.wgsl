@@ -37,18 +37,6 @@ fn noise2d(p: vec2<f32>) -> f32 {
     );
 }
 
-fn star_field(seed1: f32, seed2: f32) -> vec3<f32> {
-    let p = vec3<f32>(seed1 * 400.0, seed2 * 400.0, seed1 * seed2 * 200.0);
-    let cell = floor(p);
-    let f = fract(p) - 0.5;
-    let h = fract(sin(dot(cell, vec3<f32>(127.1, 311.7, 74.7))) * 43758.5453);
-    let star = step(0.985, h) * smoothstep(0.4, 0.0, length(f));
-    return vec3<f32>(h * h * star * 0.25) * vec3<f32>(
-        0.8 + 0.2 * fract(h * 13.7),
-        0.85 + 0.15 * fract(h * 27.3),
-        0.9 + 0.1 * fract(h * 41.1),
-    );
-}
 
 @compute @workgroup_size(16, 16)
 fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -61,11 +49,13 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         / vec2<f32>(f32(dims.x), f32(dims.y));
 
     let d1 = textureSampleLevel(deflection1, s_linear, uv, 0.0);
+    let d2 = textureSampleLevel(deflection2, s_linear, uv, 0.0);
 
     let final_r = d1.r;
     let avg_r = d1.g;
-    let avg_angle = d1.b + u.orbit_angle;
-    let density = d1.a;
+    let density = d1.b;
+    // Reconstruct angle from stored cos/sin (no atan2 seam)
+    let avg_angle = atan2(d2.g, d2.r) + u.orbit_angle;
 
     var color = vec3<f32>(0.0);
 
@@ -149,16 +139,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             * vol_emission;
     }
 
-    // Stars
-    let star_alpha = max(1.0 - density * 0.5, 0.0);
-    if final_r > 1.0 {
-        color += star_field(final_r * 0.01, d1.b + uv.x * 50.0) * star_alpha;
-    }
-
-    // Photon ring
-    if final_r > 1.0 && final_r < 5.0 {
-        let ring = exp(-(final_r - 1.5) * (final_r - 1.5) * 8.0) * 0.2;
-        color += vec3<f32>(0.8, 0.85, 1.0) * ring * star_alpha;
+    // Photon ring glow
+    if final_r > 1.0 && final_r < 5.0 && density < 0.5 {
+        let ring = exp(-(final_r - 1.5) * (final_r - 1.5) * 8.0) * 0.15;
+        color += vec3<f32>(0.8, 0.85, 1.0) * ring;
     }
 
     // ACES
