@@ -546,12 +546,6 @@ impl Application {
         }
     }
 
-    /// Get a reference to the primary window (for use as dialog parent, etc.).
-    pub(crate) fn primary_window(&self) -> Option<&winit::window::Window> {
-        self.primary_window_id
-            .and_then(|id| self.window_registry.get(&id))
-            .map(|ws| ws.window.as_ref())
-    }
 
     pub(crate) fn create_default_project() -> Project {
         let mut project = Project::default();
@@ -2220,10 +2214,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     // Port of Unity InputHandler.HandleKeyboardInput().
                     // All viewport access goes through the TimelineInputHost trait.
                     if !consumed {
-                        let primary_win = self
-                            .primary_window_id
-                            .and_then(|id| self.window_registry.get(&id))
-                            .map(|ws| ws.window.as_ref());
                         let mut host = crate::input_host::AppInputHost {
                             project: &mut self.local_project,
                             content_tx: self.content_tx.as_ref().unwrap(),
@@ -2239,7 +2229,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             pending_close_output: &mut self.pending_close_output,
                             pending_export: &mut self.pending_export,
                             effect_clipboard: &mut self.effect_clipboard,
-                            parent_window: primary_win,
                         };
                         if self.input_handler.handle_keyboard_input(
                             &logical_key,

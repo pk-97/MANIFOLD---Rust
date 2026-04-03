@@ -81,7 +81,6 @@ pub fn dispatch(
     target_snapshot: &mut Option<f32>,
     user_prefs: &mut UserPrefs,
     active_inspector_drag: &mut Option<crate::app::ActiveInspectorDrag>,
-    parent_window: Option<&winit::window::Window>,
 ) -> DispatchResult {
     match action {
         // ── Transport ──────────────────────────────────────────────
@@ -142,7 +141,6 @@ pub fn dispatch(
             selection,
             active_layer,
             user_prefs,
-            parent_window,
         ),
 
         // ── Inspector: chrome, effects, generators ────────────────
@@ -330,7 +328,6 @@ pub fn dispatch(
             selection,
             active_layer,
             user_prefs,
-            parent_window,
         ),
 
         // Handled in app_render.rs (Application-level intercept, never reaches dispatch)

@@ -21,7 +21,6 @@ pub(super) fn dispatch_project(
     _selection: &mut SelectionState,
     _active_layer: &mut Option<LayerId>,
     user_prefs: &mut UserPrefs,
-    parent_window: Option<&winit::window::Window>,
 ) -> DispatchResult {
     use crate::content_command::ContentCommand;
     match action {
@@ -48,9 +47,6 @@ pub(super) fn dispatch_project(
                         "wav", "mp3", "m4a", "aac", "flac", "ogg", "aif", "aiff", "wma", "json",
                     ],
                 );
-            if let Some(w) = parent_window {
-                dialog = dialog.set_parent(w);
-            }
             if !last_dir.is_empty() {
                 dialog = dialog.set_directory(&last_dir);
             }
@@ -246,9 +242,6 @@ pub(super) fn dispatch_project(
                         "wav", "mp3", "m4a", "aac", "flac", "ogg", "aif", "aiff", "wma", "json",
                     ],
                 );
-            if let Some(w) = parent_window {
-                dialog = dialog.set_parent(w);
-            }
             if !last_dir.is_empty() {
                 dialog = dialog.set_directory(&last_dir);
             }
