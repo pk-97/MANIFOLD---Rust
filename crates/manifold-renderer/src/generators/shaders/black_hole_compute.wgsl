@@ -15,15 +15,15 @@ struct Uniforms {
     disk_glow: f32,
     uv_scale: f32,
     orbit_angle: f32,
+    steps: f32,
     _pad0: f32,
-    _pad1: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var output: texture_storage_2d<rgba16float, write>;
 
 const PI: f32 = 3.14159265;
-const MAX_STEPS: i32 = 50;
+// Steps controlled by uniform — user trades quality vs perf
 
 // ── Noise ──
 fn hash21(p: vec2<f32>) -> f32 {
@@ -162,7 +162,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var crossing_count = 0;
     var absorbed = false;
 
-    for (var i = 0; i < MAX_STEPS; i++) {
+    let max_steps = i32(u.steps);
+    for (var i = 0; i < max_steps; i++) {
         let r = length(pos);
 
         if r < 1.0 {

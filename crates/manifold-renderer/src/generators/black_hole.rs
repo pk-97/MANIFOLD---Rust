@@ -41,8 +41,8 @@ struct Uniforms {
     disk_glow: f32,
     uv_scale: f32,
     orbit_angle: f32,
+    steps: f32,
     _pad0: f32,
-    _pad1: f32,
 }
 
 pub struct BlackHoleGenerator {
@@ -80,6 +80,7 @@ impl Generator for BlackHoleGenerator {
         let cam_dist = param(ctx, CAM_DIST, 20.0);
         let tilt_deg = param(ctx, TILT, 15.0);
         let rotate_deg = param(ctx, ROTATE, 0.0);
+        let steps = param(ctx, STEPS, 200.0).round();
         let disk_inner = param(ctx, DISK_INNER, 3.0);
         let disk_outer = param(ctx, DISK_OUTER, 10.0);
         let disk_glow = param(ctx, DISK_GLOW, 2.0);
@@ -96,8 +97,8 @@ impl Generator for BlackHoleGenerator {
             disk_glow,
             uv_scale: if scale > 0.0 { 1.0 / scale } else { 1.0 },
             orbit_angle: ctx.time as f32 * speed * 0.3,
+            steps,
             _pad0: 0.0,
-            _pad1: 0.0,
         };
 
         gpu.native_enc.dispatch_compute(
