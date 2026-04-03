@@ -105,22 +105,17 @@ impl BlackHoleGenerator {
     }
 
     fn ensure_deflection_maps(&mut self, device: &manifold_gpu::GpuDevice, w: u32, h: u32) {
-        // Deflection map at 1/4 resolution — lensing geometry is smooth,
-        // bilinear interpolation in display shader handles upscaling.
-        // This makes rebakes ~16x cheaper (dragging Tilt/CamDist is smooth).
-        let dw = (w / 4).max(128);
-        let dh = (h / 4).max(72);
-        if self.deflection_map.is_some() && self.defl_w == dw && self.defl_h == dh {
+        if self.deflection_map.is_some() && self.defl_w == w && self.defl_h == h {
             return;
         }
-        self.defl_w = dw;
-        self.defl_h = dh;
+        self.defl_w = w;
+        self.defl_h = h;
         let make = |label| {
             device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width: w,
                 height: h,
                 depth: 1,
-                format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+                format: manifold_gpu::GpuTextureFormat::Rgba32Float,
                 dimension: manifold_gpu::GpuTextureDimension::D2,
                 usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
                 label,
