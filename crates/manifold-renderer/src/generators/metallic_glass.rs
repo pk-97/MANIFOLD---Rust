@@ -63,6 +63,10 @@ struct ProcessUniforms {
     mirror_angle: f32,
     width: f32,
     height: f32,
+    temporal_blend: f32,  // 0.0 = frozen, 1.0 = no smoothing
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 #[repr(C)]
@@ -95,7 +99,9 @@ pub struct MetallicGlassGenerator {
 
     // Temporary textures
     blur_temp: Option<manifold_gpu::GpuTexture>,
-    processed: Option<manifold_gpu::GpuTexture>,
+    processed_a: Option<manifold_gpu::GpuTexture>,
+    processed_b: Option<manifold_gpu::GpuTexture>,
+    use_processed_a: bool,
     depth_texture: Option<manifold_gpu::GpuTexture>,
 
     // State
@@ -161,7 +167,9 @@ impl MetallicGlassGenerator {
             feedback_a: None,
             feedback_b: None,
             blur_temp: None,
-            processed: None,
+            processed_a: None,
+            processed_b: None,
+            use_processed_a: true,
             depth_texture: None,
             tex_width: 0,
             tex_height: 0,
@@ -190,7 +198,9 @@ impl MetallicGlassGenerator {
         self.feedback_a = Some(make_rw("MetallicGlass FeedbackA"));
         self.feedback_b = Some(make_rw("MetallicGlass FeedbackB"));
         self.blur_temp = Some(make_rw("MetallicGlass BlurTemp"));
-        self.processed = Some(make_rw("MetallicGlass Processed"));
+        self.processed_a = Some(make_rw("MetallicGlass ProcessedA"));
+        self.processed_b = Some(make_rw("MetallicGlass ProcessedB"));
+        self.use_processed_a = true;
 
         self.depth_texture = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
             width,
@@ -243,7 +253,20 @@ impl Generator for MetallicGlassGenerator {
         let fb_a = self.feedback_a.as_ref().unwrap();
         let fb_b = self.feedback_b.as_ref().unwrap();
         let blur_temp = self.blur_temp.as_ref().unwrap();
-        let processed = self.processed.as_ref().unwrap();
+
+        // Ping-pong processed textures for temporal smoothing.
+        // Write to one, read previous from the other, then swap.
+        let (proc_write, proc_read) = if self.use_processed_a {
+            (
+                self.processed_a.as_ref().unwrap(),
+                self.processed_b.as_ref().unwrap(),
+            )
+        } else {
+            (
+                self.processed_b.as_ref().unwrap(),
+                self.processed_a.as_ref().unwrap(),
+            )
+        };
 
         // ── Pass 1: Feedback blend ──
         // Read feedback_a (previous frame), write to feedback_b
@@ -336,12 +359,17 @@ impl Generator for MetallicGlassGenerator {
             "MetallicGlass BlurV",
         );
 
-        // ── Pass 4: Edge + mirror + levels (feedback_a → processed) ──
+        // ── Pass 4: Mirror + height/metallic + temporal blend ──
+        // Writes to proc_write, blends with proc_read (previous frame).
         let process_uniforms = ProcessUniforms {
             edge_strength: edge_str,
             mirror_angle,
             width: width as f32,
             height: height as f32,
+            temporal_blend: 0.15, // blend 15% new, 85% previous → stable
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -357,12 +385,19 @@ impl Generator for MetallicGlassGenerator {
                 },
                 manifold_gpu::GpuBinding::Texture {
                     binding: 2,
-                    texture: processed,
+                    texture: proc_write,
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 3,
+                    texture: proc_read,
                 },
             ],
             [wg_x, wg_y, 1],
             "MetallicGlass Process",
         );
+
+        // Swap processed ping-pong for next frame
+        self.use_processed_a = !self.use_processed_a;
 
         // ── Pass 5: Render displaced grid ──
         let target_pos = [0.0f32, look_y, 0.0];
@@ -403,7 +438,7 @@ impl Generator for MetallicGlassGenerator {
                 },
                 manifold_gpu::GpuBinding::Texture {
                     binding: 1,
-                    texture: processed,
+                    texture: proc_write,
                 },
                 manifold_gpu::GpuBinding::Sampler {
                     binding: 2,
@@ -428,6 +463,9 @@ impl Generator for MetallicGlassGenerator {
         // Force texture re-creation to clear feedback state
         self.feedback_a = None;
         self.feedback_b = None;
+        self.processed_a = None;
+        self.processed_b = None;
+        self.use_processed_a = true;
         self.tex_width = 0;
         self.tex_height = 0;
         self.frame_count = 0;

@@ -1,28 +1,24 @@
-// Metallic Glass — Pass 4: Mirror + Height/Metallic map generation.
+// Metallic Glass — Pass 4: Mirror + Height/Metallic + Temporal blend.
 //
-// Height map: Uses the mirrored FEEDBACK texture directly. The feedback
-// contains smooth, continuous values everywhere — distinct regions with
-// gradual transitions. This produces a smooth undulating surface.
-//
-// Metallic map: Uses Sobel edge detection on the mirrored feedback.
-// Edges isolate the "veins" between feedback regions, creating material
-// variation (shiny chrome between veins, different reflectivity at veins).
-//
-// TD chain replication:
-//   Mirror TOP: Rotate 45°, Pivot 0.5,0.5
-//   Level TOP 1 (Height): Brightness 1.2, Contrast 1.5, Gamma 0.8
-//   Level TOP 2 (Metallic): Invert On, Gamma 1.5
+// Height map: Mirrored feedback luma (smooth, continuous everywhere).
+// Metallic map: Sobel edges (vein detail for material variation).
+// Temporal blend: Mix new result with previous frame to eliminate jitter.
 
 struct Uniforms {
-    edge_strength: f32,   // Sobel multiplier for metallic vein detail
-    mirror_angle: f32,    // Mirror rotation in radians (default π/4 = 45°)
+    edge_strength: f32,
+    mirror_angle: f32,
     width: f32,
     height: f32,
+    temporal_blend: f32,  // 0 = frozen, 1 = no smoothing (default 0.15)
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var src_tex: texture_2d<f32>;
 @group(0) @binding(2) var dst_tex: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(3) var prev_tex: texture_2d<f32>;
 
 // ─── Sobel edge detection ──────────────────────────────────────────
 
@@ -48,7 +44,7 @@ fn sobel(pos: vec2<i32>, w: i32, h: i32) -> f32 {
     return sqrt(gx * gx + gy * gy);
 }
 
-// ─── Mirror (TD Mirror TOP) ───────────────────────────────────────
+// ─── Mirror ────────────────────────────────────────────────────────
 
 fn mirror_uv(uv: vec2<f32>, angle: f32) -> vec2<f32> {
     let centered = uv - vec2(0.5);
@@ -70,10 +66,9 @@ fn mirror_uv(uv: vec2<f32>, angle: f32) -> vec2<f32> {
     return fract(unrotated + vec2(0.5));
 }
 
-// ─── Levels (TD Level TOPs) ────────────────────────────────────────
+// ─── Levels ────────────────────────────────────────────────────────
 
 fn levels_height(v: f32) -> f32 {
-    // TD Level TOP 1: Brightness 1.2, Contrast 1.5, Gamma 0.8
     var val = v * 1.2;
     val = (val - 0.5) * 1.5 + 0.5;
     val = clamp(val, 0.0, 1.0);
@@ -82,7 +77,6 @@ fn levels_height(v: f32) -> f32 {
 }
 
 fn levels_metallic(v: f32) -> f32 {
-    // TD Level TOP 2: Invert On, Gamma 1.5
     var val = 1.0 - v;
     val = clamp(val, 0.0, 1.0);
     val = pow(val, 1.5);
@@ -100,7 +94,6 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let uv = vec2<f32>(f32(pos.x) / u.width, f32(pos.y) / u.height);
 
-    // Mirror UV
     let mirrored_uv = mirror_uv(uv, u.mirror_angle);
 
     let mirrored_pos = vec2<i32>(
@@ -108,23 +101,23 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         clamp(i32(mirrored_uv.y * u.height), 0, h - 1),
     );
 
-    // HEIGHT: Read feedback luma directly at mirrored position.
-    // The feedback texture is smooth and continuous — every pixel has a
-    // non-trivial value. This produces a smooth undulating surface.
+    // Height from feedback luma (continuous, non-zero everywhere)
     let feedback = textureLoad(src_tex, mirrored_pos, 0);
     let feedback_luma = dot(feedback.rgb, vec3<f32>(0.299, 0.587, 0.114));
-    // Remap luma from [0,1] to [0.3,1.0] so the contrast adjustment in
-    // levels_height never crushes values to zero. Prevents flat spots.
     let remapped = feedback_luma * 0.7 + 0.3;
     let height_val = levels_height(remapped);
 
-    // METALLIC: Sobel edges at mirrored position.
-    // Edges isolate the "veins" — boundaries between feedback regions.
-    // These drive material variation, not geometry.
+    // Metallic from edges (vein detail)
     let edge = sobel(mirrored_pos, w, h) * u.edge_strength;
     let edge_clamped = clamp(edge, 0.0, 1.0);
     let metallic_val = levels_metallic(edge_clamped);
 
-    // R = height (from feedback, continuous), G = metallic (from edges, veins)
-    textureStore(dst_tex, pos, vec4<f32>(height_val, metallic_val, edge_clamped, 1.0));
+    let new_val = vec4<f32>(height_val, metallic_val, edge_clamped, 1.0);
+
+    // Temporal blend with previous frame to eliminate jitter.
+    // Low blend (0.15) = very stable surface, slow evolution.
+    let old_val = textureLoad(prev_tex, pos, 0);
+    let blended = mix(old_val, new_val, vec4(u.temporal_blend));
+
+    textureStore(dst_tex, pos, blended);
 }
