@@ -261,9 +261,17 @@ unsafe extern "C" fn fullscreen_present_callback(
         return K_CV_RETURN_SUCCESS;
     }
     // Must present every vsync to maintain Direct Display lock.
+    let before = std::time::Instant::now();
     objc::rc::autoreleasepool(|| {
         ctx.presenter.present_frame(false);
     });
+    let elapsed = before.elapsed();
+    if elapsed.as_millis() > 50 {
+        log::warn!(
+            "[DisplayLink] Fullscreen present took {}ms — possible drawable stall",
+            elapsed.as_millis(),
+        );
+    }
     K_CV_RETURN_SUCCESS
 }
 
@@ -489,6 +497,12 @@ impl DisplayLinkPresenter {
     }
 
     /// Retarget the presenter if the window moved to a different display.
+    ///
+    /// For fullscreen (Direct Display) mode: set the stop flag so the callback
+    /// becomes a no-op, retarget in-place, then clear the flag. This prevents
+    /// the callback from blocking on `next_drawable()` while the CAMetalLayer
+    /// transitions between displays — which can deadlock indefinitely.
+    ///
     /// Returns `true` if the display actually changed (new display ID).
     pub fn retarget_if_needed(&mut self, window: &winit::window::Window) -> bool {
         let new_id = display_id_for_window(window);
@@ -496,7 +510,24 @@ impl DisplayLinkPresenter {
             return false;
         }
         unsafe {
+            // Gate the callback before changing the display target.
+            // In fullscreen mode the callback does a full GPU blit + present
+            // every vsync — next_drawable() can block forever if the
+            // CAMetalLayer's display target is in flux.
+            if let PresenterMode::Fullscreen { context } = &self.mode {
+                let ctx = &**context;
+                ctx.stop.store(true, Ordering::Release);
+                // SeqCst fence ensures the stop flag is visible to the
+                // callback thread before we change the display target.
+                std::sync::atomic::fence(Ordering::SeqCst);
+            }
+
             CVDisplayLinkSetCurrentCGDisplay(self.display_link, new_id);
+
+            if let PresenterMode::Fullscreen { context } = &self.mode {
+                let ctx = &**context;
+                ctx.stop.store(false, Ordering::Release);
+            }
         }
         log::info!(
             "[DisplayLink] Retargeted: display {} → {}",
