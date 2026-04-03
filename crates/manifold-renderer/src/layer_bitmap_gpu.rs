@@ -193,7 +193,11 @@ impl LayerBitmapGpu {
                 usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::CPU_UPLOAD,
                 label: &format!("Layer Bitmap {layer_index}"),
             });
-            self.textures[layer_index] = Some(LayerTexture { texture, width: tex_w, height: tex_h });
+            self.textures[layer_index] = Some(LayerTexture {
+                texture,
+                width: tex_w,
+                height: tex_h,
+            });
         }
 
         // Upload pixel data via replace_region (CPU_UPLOAD texture)
@@ -248,17 +252,25 @@ impl LayerBitmapGpu {
             let (x0, y0) = (rect.x, rect.y);
             let (x1, y1) = (rect.x + rect.width, rect.y + rect.height);
             let verts = [
-                BitmapVertex { position: [x0, y0], uv: [0.0, 0.0] },
-                BitmapVertex { position: [x1, y0], uv: [1.0, 0.0] },
-                BitmapVertex { position: [x1, y1], uv: [1.0, 1.0] },
-                BitmapVertex { position: [x0, y1], uv: [0.0, 1.0] },
+                BitmapVertex {
+                    position: [x0, y0],
+                    uv: [0.0, 0.0],
+                },
+                BitmapVertex {
+                    position: [x1, y0],
+                    uv: [1.0, 0.0],
+                },
+                BitmapVertex {
+                    position: [x1, y1],
+                    uv: [1.0, 1.0],
+                },
+                BitmapVertex {
+                    position: [x0, y1],
+                    uv: [0.0, 1.0],
+                },
             ];
             unsafe {
-                std::ptr::copy_nonoverlapping(
-                    verts.as_ptr(),
-                    ptr.add(quad_count * 4),
-                    4,
-                );
+                std::ptr::copy_nonoverlapping(verts.as_ptr(), ptr.add(quad_count * 4), 4);
             }
             self.draw_list.push((layer_idx, quad_count));
             quad_count += 1;
@@ -278,9 +290,18 @@ impl LayerBitmapGpu {
             encoder.draw_in_render_pass(
                 &self.pipeline,
                 &[
-                    GpuBinding::Bytes { binding: 0, data: globals_bytes },
-                    GpuBinding::Texture { binding: 1, texture: &lt.texture },
-                    GpuBinding::Sampler { binding: 2, sampler: &self.sampler },
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: globals_bytes,
+                    },
+                    GpuBinding::Texture {
+                        binding: 1,
+                        texture: &lt.texture,
+                    },
+                    GpuBinding::Sampler {
+                        binding: 2,
+                        sampler: &self.sampler,
+                    },
                 ],
                 vbuf,
                 vertex_offset,

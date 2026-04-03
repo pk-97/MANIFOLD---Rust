@@ -12,7 +12,10 @@ pub struct SetSelectionRegionCommand {
 
 impl SetSelectionRegionCommand {
     pub fn new(old_region: SelectionRegion, new_region: SelectionRegion) -> Self {
-        Self { old_region, new_region }
+        Self {
+            old_region,
+            new_region,
+        }
     }
 }
 
@@ -27,7 +30,9 @@ impl Command for SetSelectionRegionCommand {
         // Selection restore handled by EditingService reading old_region.
     }
 
-    fn description(&self) -> &str { "Set Selection" }
+    fn description(&self) -> &str {
+        "Set Selection"
+    }
 }
 
 impl SetSelectionRegionCommand {

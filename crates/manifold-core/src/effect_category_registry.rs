@@ -14,8 +14,10 @@ pub const GENERATORS: &str = "Generators";
 
 pub const ALL_CATEGORIES: &[&str] = &[SPATIAL, POST_PROCESS, FILMIC, SURVEILLANCE, GENERATORS];
 
-static EFFECT_CATEGORIES: LazyLock<HashMap<EffectTypeId, &'static str>> = LazyLock::new(build_effect_categories);
-static GENERATOR_CATEGORIES: LazyLock<HashMap<GeneratorTypeId, &'static str>> = LazyLock::new(build_generator_categories);
+static EFFECT_CATEGORIES: LazyLock<HashMap<EffectTypeId, &'static str>> =
+    LazyLock::new(build_effect_categories);
+static GENERATOR_CATEGORIES: LazyLock<HashMap<GeneratorTypeId, &'static str>> =
+    LazyLock::new(build_generator_categories);
 
 pub fn get_all_categories() -> &'static [&'static str] {
     ALL_CATEGORIES
@@ -23,7 +25,10 @@ pub fn get_all_categories() -> &'static [&'static str] {
 
 /// Get the category for an effect type. Returns PostProcess as fallback.
 pub fn get_category(effect_type: &EffectTypeId) -> &'static str {
-    EFFECT_CATEGORIES.get(effect_type).copied().unwrap_or(POST_PROCESS)
+    EFFECT_CATEGORIES
+        .get(effect_type)
+        .copied()
+        .unwrap_or(POST_PROCESS)
 }
 
 /// Get the category for a generator type. Always returns Generators.
@@ -33,7 +38,8 @@ pub fn get_category_for_generator(_gen_type: &GeneratorTypeId) -> &'static str {
 
 /// Get all effect types in a given category.
 pub fn get_effects_in_category(category: &str) -> Vec<EffectTypeId> {
-    EFFECT_CATEGORIES.iter()
+    EFFECT_CATEGORIES
+        .iter()
         .filter(|(_, cat)| **cat == category)
         .map(|(et, _)| et.clone())
         .collect()

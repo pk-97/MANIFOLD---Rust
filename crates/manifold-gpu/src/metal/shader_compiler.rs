@@ -5,9 +5,9 @@
 //! SPIRV-Cross compiles optimized SPIR-V to MSL with explicit resource binding indices
 //! matching the SlotMap assignments. Metal compiles MSL at runtime.
 
-use spirv_cross2::compile::msl;
-use spirv_cross2::Compiler;
 use super::*;
+use spirv_cross2::Compiler;
+use spirv_cross2::compile::msl;
 
 /// Parse WGSL, introspect bindings, compile to MSL for a compute entry point.
 /// Returns (slot_map, msl_source, msl_entry_name, workgroup_size).
@@ -140,10 +140,7 @@ fn build_slot_map(
     // Find which global variables are actually used by this entry point.
     // Multi-entry-point shaders (e.g. fluid_scatter.wgsl) reuse @binding(N)
     // for different types per entry point — we must only map the ones used.
-    let ep = module
-        .entry_points
-        .iter()
-        .find(|ep| ep.name == entry_point);
+    let ep = module.entry_points.iter().find(|ep| ep.name == entry_point);
 
     // Scan entry point AND all reachable functions for GlobalVariable references.
     // The entry point's function body may call helper functions that reference
@@ -188,15 +185,10 @@ fn build_slot_map(
             naga::AddressSpace::Uniform | naga::AddressSpace::Storage { .. }
         );
         let is_sampler = matches!(ty.inner, naga::TypeInner::Sampler { .. });
-        let is_texture = matches!(
-            ty.inner,
-            naga::TypeInner::Image { .. }
-        );
+        let is_texture = matches!(ty.inner, naga::TypeInner::Image { .. });
 
         let is_writable = match gv.space {
-            naga::AddressSpace::Storage { access } => {
-                access.contains(naga::StorageAccess::STORE)
-            }
+            naga::AddressSpace::Storage { access } => access.contains(naga::StorageAccess::STORE),
             _ => false,
         } || matches!(
             ty.inner,
@@ -213,32 +205,39 @@ fn build_slot_map(
             next_buffer += 1;
             bind_target.buffer = Some(idx as u8);
             bind_target.mutable = is_writable;
-            slot_map.insert(*binding_num, Slot {
-                kind: SlotKind::Buffer,
-                metal_index: idx,
-            });
+            slot_map.insert(
+                *binding_num,
+                Slot {
+                    kind: SlotKind::Buffer,
+                    metal_index: idx,
+                },
+            );
         } else if is_sampler {
             let idx = next_sampler;
             next_sampler += 1;
             bind_target.sampler = Some(msl::BindSamplerTarget::Resource(idx as u8));
-            slot_map.insert(*binding_num, Slot {
-                kind: SlotKind::Sampler,
-                metal_index: idx,
-            });
+            slot_map.insert(
+                *binding_num,
+                Slot {
+                    kind: SlotKind::Sampler,
+                    metal_index: idx,
+                },
+            );
         } else if is_texture {
             let idx = next_texture;
             next_texture += 1;
             bind_target.texture = Some(idx as u8);
             bind_target.mutable = is_writable;
-            slot_map.insert(*binding_num, Slot {
-                kind: SlotKind::Texture,
-                metal_index: idx,
-            });
+            slot_map.insert(
+                *binding_num,
+                Slot {
+                    kind: SlotKind::Texture,
+                    metal_index: idx,
+                },
+            );
         }
 
-        resources
-            .resources
-            .insert(*resource_binding, bind_target);
+        resources.resources.insert(*resource_binding, bind_target);
     }
 
     // Detect runtime-sized arrays in storage buffers.
@@ -250,18 +249,25 @@ fn build_slot_map(
             let ty = &module.types[gv.ty];
             match &ty.inner {
                 // Top-level runtime-sized array: var<storage> foo: array<T>
-                naga::TypeInner::Array { size: naga::ArraySize::Dynamic, .. } => true,
+                naga::TypeInner::Array {
+                    size: naga::ArraySize::Dynamic,
+                    ..
+                } => true,
                 // Struct with last member being a runtime-sized array
-                naga::TypeInner::Struct { members, .. } => {
-                    members.last().is_some_and(|m| {
-                        matches!(
-                            module.types[m.ty].inner,
-                            naga::TypeInner::Array { size: naga::ArraySize::Dynamic, .. }
-                        )
-                    })
-                }
+                naga::TypeInner::Struct { members, .. } => members.last().is_some_and(|m| {
+                    matches!(
+                        module.types[m.ty].inner,
+                        naga::TypeInner::Array {
+                            size: naga::ArraySize::Dynamic,
+                            ..
+                        }
+                    )
+                }),
                 // Binding array (runtime array of resources)
-                naga::TypeInner::BindingArray { size: naga::ArraySize::Dynamic, .. } => true,
+                naga::TypeInner::BindingArray {
+                    size: naga::ArraySize::Dynamic,
+                    ..
+                } => true,
                 _ => false,
             }
         }
@@ -271,10 +277,13 @@ fn build_slot_map(
         // Assign the sizes buffer to the next available buffer index.
         resources.sizes_buffer = Some(next_buffer as u8);
         // Store in slot map so dispatch can bind it.
-        slot_map.insert(SIZES_BUFFER_BINDING, Slot {
-            kind: SlotKind::Buffer,
-            metal_index: next_buffer,
-        });
+        slot_map.insert(
+            SIZES_BUFFER_BINDING,
+            Slot {
+                kind: SlotKind::Buffer,
+                metal_index: next_buffer,
+            },
+        );
         next_buffer += 1;
     }
 
@@ -291,7 +300,11 @@ fn build_slot_map_render(
     module: &naga::Module,
     vs_entry: &str,
     fs_entry: &str,
-) -> (SlotMap, naga::back::msl::EntryPointResources, naga::back::msl::EntryPointResources) {
+) -> (
+    SlotMap,
+    naga::back::msl::EntryPointResources,
+    naga::back::msl::EntryPointResources,
+) {
     use naga::back::msl;
 
     // Collect globals from both entry points
@@ -351,9 +364,7 @@ fn build_slot_map_render(
         let is_sampler = matches!(ty.inner, naga::TypeInner::Sampler { .. });
         let is_texture = matches!(ty.inner, naga::TypeInner::Image { .. });
         let is_writable = match gv.space {
-            naga::AddressSpace::Storage { access } => {
-                access.contains(naga::StorageAccess::STORE)
-            }
+            naga::AddressSpace::Storage { access } => access.contains(naga::StorageAccess::STORE),
             _ => false,
         } || matches!(
             ty.inner,
@@ -370,33 +381,46 @@ fn build_slot_map_render(
             next_buffer += 1;
             bind_target.buffer = Some(idx as u8);
             bind_target.mutable = is_writable;
-            slot_map.insert(*binding_num, Slot {
-                kind: SlotKind::Buffer,
-                metal_index: idx,
-            });
+            slot_map.insert(
+                *binding_num,
+                Slot {
+                    kind: SlotKind::Buffer,
+                    metal_index: idx,
+                },
+            );
         } else if is_sampler {
             let idx = next_sampler;
             next_sampler += 1;
             bind_target.sampler = Some(msl::BindSamplerTarget::Resource(idx as u8));
-            slot_map.insert(*binding_num, Slot {
-                kind: SlotKind::Sampler,
-                metal_index: idx,
-            });
+            slot_map.insert(
+                *binding_num,
+                Slot {
+                    kind: SlotKind::Sampler,
+                    metal_index: idx,
+                },
+            );
         } else if is_texture {
             let idx = next_texture;
             next_texture += 1;
             bind_target.texture = Some(idx as u8);
             bind_target.mutable = is_writable;
-            slot_map.insert(*binding_num, Slot {
-                kind: SlotKind::Texture,
-                metal_index: idx,
-            });
+            slot_map.insert(
+                *binding_num,
+                Slot {
+                    kind: SlotKind::Texture,
+                    metal_index: idx,
+                },
+            );
         }
 
         // Add to both entry points' resources — naga + fake_missing_bindings
         // handles the case where a binding is only used in one stage.
-        resources_vs.resources.insert(*resource_binding, bind_target.clone());
-        resources_fs.resources.insert(*resource_binding, bind_target);
+        resources_vs
+            .resources
+            .insert(*resource_binding, bind_target.clone());
+        resources_fs
+            .resources
+            .insert(*resource_binding, bind_target);
     }
 
     (slot_map, resources_vs, resources_fs)
@@ -474,17 +498,19 @@ fn optimize_spirv(spv_words: &[u32], label: &str, use_half: bool) -> Vec<u32> {
             .register_pass(opt::Passes::ConvertRelaxedToHalf);
     }
 
-    match optimizer.optimize(spv_words, &mut |msg| {
-        log::warn!("{label}: spirv-opt: {msg:?}");
-    }, None) {
+    match optimizer.optimize(
+        spv_words,
+        &mut |msg| {
+            log::warn!("{label}: spirv-opt: {msg:?}");
+        },
+        None,
+    ) {
         Ok(binary) => {
             // binary.as_words() gives us &[u32]
             binary.as_words().to_vec()
         }
         Err(e) => {
-            log::warn!(
-                "{label}: spirv-opt optimization failed ({e}), using unoptimized SPIR-V"
-            );
+            log::warn!("{label}: spirv-opt optimization failed ({e}), using unoptimized SPIR-V");
             spv_words.to_vec()
         }
     }
@@ -511,15 +537,14 @@ fn compile_spirv_entry_to_msl(
         .unwrap_or_else(|e| panic!("{label}: SPIRV-Cross compiler creation error: {e}"));
 
     // Set the active entry point
-    compiler.set_entry_point(entry_point, exec_model)
+    compiler
+        .set_entry_point(entry_point, exec_model)
         .unwrap_or_else(|e| {
             panic!("{label}: SPIRV-Cross set_entry_point('{entry_point}') error: {e}")
         });
 
     // Add explicit resource bindings matching our SlotMap.
-    add_resource_bindings_from_slot_map(
-        &mut compiler, naga_module, slot_map, exec_model, label,
-    );
+    add_resource_bindings_from_slot_map(&mut compiler, naga_module, slot_map, exec_model, label);
 
     // Configure MSL compiler options
     let mut options = <Msl as spirv_cross2::compile::CompilableTarget>::options();
@@ -527,10 +552,9 @@ fn compile_spirv_entry_to_msl(
     options.platform = msl::MetalPlatform::MacOS;
     options.force_native_arrays = true;
 
-    let artifact = compiler.compile(&options)
-        .unwrap_or_else(|e| {
-            panic!("{label}: SPIRV-Cross MSL compilation error: {e}")
-        });
+    let artifact = compiler
+        .compile(&options)
+        .unwrap_or_else(|e| panic!("{label}: SPIRV-Cross MSL compilation error: {e}"));
 
     artifact.to_string()
 }
@@ -573,12 +597,8 @@ fn add_resource_bindings_from_slot_map(
             SlotKind::Sampler => bind_target.sampler = slot.metal_index,
         }
 
-        if let Err(e) = compiler.add_resource_binding(
-            exec_model, resource_binding, &bind_target,
-        ) {
-            log::warn!(
-                "{label}: failed to set MSL binding for @binding({wgsl_binding}): {e}"
-            );
+        if let Err(e) = compiler.add_resource_binding(exec_model, resource_binding, &bind_target) {
+            log::warn!("{label}: failed to set MSL binding for @binding({wgsl_binding}): {e}");
         }
     }
 
@@ -591,12 +611,8 @@ fn add_resource_bindings_from_slot_map(
             sampler: 0,
             count: None,
         };
-        if let Err(e) = compiler.add_resource_binding(
-            exec_model, resource_binding, &bind_target,
-        ) {
-            log::warn!(
-                "{label}: failed to set MSL sizes buffer binding: {e}"
-            );
+        if let Err(e) = compiler.add_resource_binding(exec_model, resource_binding, &bind_target) {
+            log::warn!("{label}: failed to set MSL sizes buffer binding: {e}");
         }
     }
 }
@@ -646,7 +662,11 @@ fn collect_calls_from_block(
             naga::Statement::Block(ref inner) => {
                 collect_calls_from_block(inner, module, out);
             }
-            naga::Statement::If { ref accept, ref reject, .. } => {
+            naga::Statement::If {
+                ref accept,
+                ref reject,
+                ..
+            } => {
                 collect_calls_from_block(accept, module, out);
                 collect_calls_from_block(reject, module, out);
             }
@@ -655,7 +675,11 @@ fn collect_calls_from_block(
                     collect_calls_from_block(&case.body, module, out);
                 }
             }
-            naga::Statement::Loop { ref body, ref continuing, .. } => {
+            naga::Statement::Loop {
+                ref body,
+                ref continuing,
+                ..
+            } => {
                 collect_calls_from_block(body, module, out);
                 collect_calls_from_block(continuing, module, out);
             }
@@ -690,7 +714,5 @@ pub(super) fn find_entry_function(
             return f;
         }
     }
-    panic!(
-        "{label}: {stage} function '{entry_name}' not found. Available: {available:?}"
-    );
+    panic!("{label}: {stage} function '{entry_name}' not found. Available: {available:?}");
 }

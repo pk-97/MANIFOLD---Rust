@@ -11,7 +11,7 @@ use libloading::Library;
 
 // Raw FFI function signatures, loaded via libloading at runtime.
 // Matches BlobDetectorNative.cs extern signatures exactly.
-type FnCreate  = unsafe extern "C" fn(max_blobs: i32) -> *mut std::ffi::c_void;
+type FnCreate = unsafe extern "C" fn(max_blobs: i32) -> *mut std::ffi::c_void;
 type FnDestroy = unsafe extern "C" fn(ptr: *mut std::ffi::c_void);
 type FnProcess = unsafe extern "C" fn(
     ptr: *mut std::ffi::c_void,
@@ -48,12 +48,9 @@ impl FfiBlobDetector {
         let lib = unsafe { Library::new(&path) }.ok()?;
 
         let (fn_create, fn_destroy, fn_process) = unsafe {
-            let create: libloading::Symbol<FnCreate> =
-                lib.get(b"BlobDetector_Create\0").ok()?;
-            let destroy: libloading::Symbol<FnDestroy> =
-                lib.get(b"BlobDetector_Destroy\0").ok()?;
-            let process: libloading::Symbol<FnProcess> =
-                lib.get(b"BlobDetector_Process\0").ok()?;
+            let create: libloading::Symbol<FnCreate> = lib.get(b"BlobDetector_Create\0").ok()?;
+            let destroy: libloading::Symbol<FnDestroy> = lib.get(b"BlobDetector_Destroy\0").ok()?;
+            let process: libloading::Symbol<FnProcess> = lib.get(b"BlobDetector_Process\0").ok()?;
             // Transmute symbol lifetimes away — safe because _lib outlives them.
             (*create, *destroy, *process)
         };
@@ -68,7 +65,12 @@ impl FfiBlobDetector {
             path.display()
         );
 
-        Some(Self { _lib: lib, fn_destroy, fn_process, handle })
+        Some(Self {
+            _lib: lib,
+            fn_destroy,
+            fn_process,
+            handle,
+        })
     }
 }
 

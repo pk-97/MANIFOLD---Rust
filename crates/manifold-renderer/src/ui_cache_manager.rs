@@ -109,8 +109,7 @@ impl UICacheManager {
         if w == 0 || h == 0 {
             return;
         }
-        if self.atlas_physical_w == w && self.atlas_physical_h == h
-            && self.atlas_texture.is_some()
+        if self.atlas_physical_w == w && self.atlas_physical_h == h && self.atlas_texture.is_some()
         {
             return;
         }
@@ -173,9 +172,7 @@ impl UICacheManager {
             let idx = info.slot as usize;
 
             // Skip if panel region is valid and no nodes are dirty.
-            if self.panel_valid[idx]
-                && !tree.has_dirty_in_range(info.node_start, info.node_end)
-            {
+            if self.panel_valid[idx] && !tree.has_dirty_in_range(info.node_start, info.node_end) {
                 continue;
             }
 

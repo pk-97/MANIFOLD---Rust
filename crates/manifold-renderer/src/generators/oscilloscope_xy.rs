@@ -1,9 +1,9 @@
-use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
-use crate::gpu_encoder::GpuEncoder;
 use crate::generators::generator_math::{PROJ_SCALE, hash_beat};
-use crate::generators::line_pipeline::{LinePipeline, LineGeneratorHelper};
+use crate::generators::line_pipeline::{LineGeneratorHelper, LinePipeline};
+use crate::gpu_encoder::GpuEncoder;
+use manifold_core::GeneratorTypeId;
 
 // Parameter indices matching Unity's OscilloscopeXYGenerator.cs
 const LINE: usize = 0;
@@ -61,14 +61,42 @@ impl Generator for OscilloscopeXYGenerator {
         ctx: &GeneratorContext,
     ) -> f32 {
         // Unity defaults from LineGeneratorBase virtual properties
-        let line = if ctx.param_count > LINE as u32 { ctx.params[LINE] } else { 0.002 };
-        let show_verts = if ctx.param_count > VERTS as u32 { ctx.params[VERTS] > 0.5 } else { true };
-        let vert_size = if ctx.param_count > VSIZE as u32 { ctx.params[VSIZE] } else { 1.0 };
+        let line = if ctx.param_count > LINE as u32 {
+            ctx.params[LINE]
+        } else {
+            0.002
+        };
+        let show_verts = if ctx.param_count > VERTS as u32 {
+            ctx.params[VERTS] > 0.5
+        } else {
+            true
+        };
+        let vert_size = if ctx.param_count > VSIZE as u32 {
+            ctx.params[VSIZE]
+        } else {
+            1.0
+        };
         let animate = true; // Unity: AlwaysAnimate => true
-        let speed = if ctx.param_count > SPEED as u32 { ctx.params[SPEED] } else { 1.0 };
-        let window = if ctx.param_count > WINDOW as u32 { ctx.params[WINDOW] } else { 0.1 };
-        let wave_speed = if ctx.param_count > WAVE as u32 { ctx.params[WAVE] } else { 0.5 };
-        let scale = if ctx.param_count > SCALE as u32 { ctx.params[SCALE] } else { 1.0 };
+        let speed = if ctx.param_count > SPEED as u32 {
+            ctx.params[SPEED]
+        } else {
+            1.0
+        };
+        let window = if ctx.param_count > WINDOW as u32 {
+            ctx.params[WINDOW]
+        } else {
+            0.1
+        };
+        let wave_speed = if ctx.param_count > WAVE as u32 {
+            ctx.params[WAVE]
+        } else {
+            0.5
+        };
+        let scale = if ctx.param_count > SCALE as u32 {
+            ctx.params[SCALE]
+        } else {
+            1.0
+        };
         let snap = ctx.param_count > SNAP as u32 && ctx.params[SNAP] > 0.5;
 
         // Unity: Project() — lines 57-130
@@ -92,16 +120,20 @@ impl Generator for OscilloscopeXYGenerator {
             let seed1_next = hash_beat(beat_idx as f32 + 1.0);
             let ratio_idx1_next = ((seed1_next * RATIO_A.len() as f32) as usize) % RATIO_A.len();
 
-            a_main = RATIO_A[ratio_idx1] + (RATIO_A[ratio_idx1_next] - RATIO_A[ratio_idx1]) * beat_frac;
-            b_main = RATIO_B[ratio_idx1] + (RATIO_B[ratio_idx1_next] - RATIO_B[ratio_idx1]) * beat_frac;
+            a_main =
+                RATIO_A[ratio_idx1] + (RATIO_A[ratio_idx1_next] - RATIO_A[ratio_idx1]) * beat_frac;
+            b_main =
+                RATIO_B[ratio_idx1] + (RATIO_B[ratio_idx1_next] - RATIO_B[ratio_idx1]) * beat_frac;
 
             let seed2 = hash_beat(beat_idx as f32 + 73.0);
             let ratio_idx2 = ((seed2 * RATIO_A.len() as f32) as usize) % RATIO_A.len();
             let seed2_next = hash_beat(beat_idx as f32 + 1.0 + 73.0);
             let ratio_idx2_next = ((seed2_next * RATIO_A.len() as f32) as usize) % RATIO_A.len();
 
-            a_harm = RATIO_A[ratio_idx2] + (RATIO_A[ratio_idx2_next] - RATIO_A[ratio_idx2]) * beat_frac;
-            b_harm = RATIO_B[ratio_idx2] + (RATIO_B[ratio_idx2_next] - RATIO_B[ratio_idx2]) * beat_frac;
+            a_harm =
+                RATIO_A[ratio_idx2] + (RATIO_A[ratio_idx2_next] - RATIO_A[ratio_idx2]) * beat_frac;
+            b_harm =
+                RATIO_B[ratio_idx2] + (RATIO_B[ratio_idx2_next] - RATIO_B[ratio_idx2]) * beat_frac;
         }
 
         // Floor/ceil interpolation for smooth closed shapes (Unity lines 98-101)
@@ -163,10 +195,17 @@ impl Generator for OscilloscopeXYGenerator {
             );
 
         self.line_pipeline.draw(
-            gpu, target,
-            positions, instances, num_edges,
-            edge_half_thick, dot_half_thick,
-            ctx.beat as f32, "OscilloscopeXY", ctx.width, ctx.height,
+            gpu,
+            target,
+            positions,
+            instances,
+            num_edges,
+            edge_half_thick,
+            dot_half_thick,
+            ctx.beat as f32,
+            "OscilloscopeXY",
+            ctx.width,
+            ctx.height,
         );
         self.helper.anim_progress
     }

@@ -1,5 +1,4 @@
-use manifold_core::{Beats, ClipId, LayerId, MarkerId};
-use manifold_core::marker::TimelineMarker;
+use super::{Panel, PanelAction};
 use crate::color;
 use crate::coordinate_mapper::CoordinateMapper;
 use crate::input::UIEvent;
@@ -7,7 +6,8 @@ use crate::layout::ScreenLayout;
 use crate::node::*;
 use crate::snap;
 use crate::tree::UITree;
-use super::{Panel, PanelAction};
+use manifold_core::marker::TimelineMarker;
+use manifold_core::{Beats, ClipId, LayerId, MarkerId};
 
 // ── Layout constants ────────────────────────────────────────────
 
@@ -107,7 +107,7 @@ pub struct TimelineViewportPanel {
 
     // Track layout (kept in sync with mapper via set_tracks)
     tracks: Vec<TrackInfo>,
-    track_y_offsets: Vec<f32>,    // cumulative Y offsets from tracks
+    track_y_offsets: Vec<f32>, // cumulative Y offsets from tracks
     total_tracks_height: f32,
 
     // Clip data
@@ -254,17 +254,30 @@ impl TimelineViewportPanel {
     pub fn compute_fingerprint(&self) -> u64 {
         let (min_beat, max_beat) = self.visible_beat_range();
         let mut hash = self.clips.len() as u64;
-        hash = hash.wrapping_mul(31).wrapping_add(self.mapper.pixels_per_beat().to_bits() as u64);
-        hash = hash.wrapping_mul(31).wrapping_add(self.scroll_x_beats.as_f32().to_bits() as u64);
-        hash = hash.wrapping_mul(31).wrapping_add(self.scroll_y_px.to_bits() as u64);
+        hash = hash
+            .wrapping_mul(31)
+            .wrapping_add(self.mapper.pixels_per_beat().to_bits() as u64);
+        hash = hash
+            .wrapping_mul(31)
+            .wrapping_add(self.scroll_x_beats.as_f32().to_bits() as u64);
+        hash = hash
+            .wrapping_mul(31)
+            .wrapping_add(self.scroll_y_px.to_bits() as u64);
         hash = hash.wrapping_mul(31).wrapping_add(self.tracks.len() as u64);
-        hash = hash.wrapping_mul(31).wrapping_add(self.selected_clip_ids.len() as u64);
+        hash = hash
+            .wrapping_mul(31)
+            .wrapping_add(self.selected_clip_ids.len() as u64);
         hash = hash.wrapping_mul(31).wrapping_add(
-            self.hovered_clip_id.as_ref().map(|s| {
-                let mut h = 0u64;
-                for b in s.bytes() { h = h.wrapping_mul(31).wrapping_add(b as u64); }
-                h
-            }).unwrap_or(0)
+            self.hovered_clip_id
+                .as_ref()
+                .map(|s| {
+                    let mut h = 0u64;
+                    for b in s.bytes() {
+                        h = h.wrapping_mul(31).wrapping_add(b as u64);
+                    }
+                    h
+                })
+                .unwrap_or(0),
         );
         // Per-visible-clip fingerprint
         for clip in &self.clips {
@@ -272,8 +285,12 @@ impl TimelineViewportPanel {
             if clip_end <= min_beat || clip.start_beat.as_f32() >= max_beat {
                 continue;
             }
-            hash = hash.wrapping_mul(31).wrapping_add(clip.start_beat.as_f32().to_bits() as u64);
-            hash = hash.wrapping_mul(31).wrapping_add(clip_end.to_bits() as u64);
+            hash = hash
+                .wrapping_mul(31)
+                .wrapping_add(clip.start_beat.as_f32().to_bits() as u64);
+            hash = hash
+                .wrapping_mul(31)
+                .wrapping_add(clip_end.to_bits() as u64);
             hash = hash.wrapping_mul(31).wrapping_add(clip.is_muted as u64);
             hash = hash.wrapping_mul(31).wrapping_add(clip.is_locked as u64);
         }
@@ -310,14 +327,13 @@ impl TimelineViewportPanel {
             if track.is_group || track.height <= 0.0 {
                 self.bitmap_renderers.push(None);
             } else {
-                self.bitmap_renderers.push(Some(
-                    crate::bitmap_renderer::LayerBitmapRenderer::new(
+                self.bitmap_renderers
+                    .push(Some(crate::bitmap_renderer::LayerBitmapRenderer::new(
                         i,
                         self.render_scale,
                         track.height,
                         CLIP_VERTICAL_PAD,
-                    ),
-                ));
+                    )));
             }
         }
     }
@@ -394,10 +410,7 @@ impl TimelineViewportPanel {
 
     /// Repaint all dirty layer bitmaps (CPU pixel painting).
     /// Call once per frame before GPU upload.
-    pub fn repaint_dirty_layers(
-        &mut self,
-        state: &crate::bitmap_renderer::BitmapRepaintState,
-    ) {
+    pub fn repaint_dirty_layers(&mut self, state: &crate::bitmap_renderer::BitmapRepaintState) {
         let (min_beat, max_beat) = self.visible_beat_range();
         let viewport_width_px = self.tracks_rect.width;
         let time_sig = self.beats_per_bar;
@@ -425,16 +438,21 @@ impl TimelineViewportPanel {
 
     /// Iterate layer bitmaps that were repainted (for GPU upload).
     /// Yields (layer_index, pixels, tex_w, tex_h) for dirty layers.
-    pub fn dirty_layer_iter(&self) -> impl Iterator<Item = (usize, &[crate::node::Color32], usize, usize)> {
-        self.bitmap_renderers.iter().enumerate().filter_map(|(i, opt)| {
-            opt.as_ref().and_then(|r| {
-                if r.was_dirty() && r.tex_w() > 0 && r.tex_h() > 0 {
-                    Some((i, r.pixels(), r.tex_w(), r.tex_h()))
-                } else {
-                    None
-                }
+    pub fn dirty_layer_iter(
+        &self,
+    ) -> impl Iterator<Item = (usize, &[crate::node::Color32], usize, usize)> {
+        self.bitmap_renderers
+            .iter()
+            .enumerate()
+            .filter_map(|(i, opt)| {
+                opt.as_ref().and_then(|r| {
+                    if r.was_dirty() && r.tex_w() > 0 && r.tex_h() > 0 {
+                        Some((i, r.pixels(), r.tex_w(), r.tex_h()))
+                    } else {
+                        None
+                    }
+                })
             })
-        })
     }
 
     /// Get screen-space rects for each layer bitmap texture (for GPU rendering).
@@ -452,13 +470,12 @@ impl TimelineViewportPanel {
                 {
                     // Clamp to tracks rect bounds
                     let y = track_y.max(self.tracks_rect.y);
-                    let y_end = (track_y + track_h).min(self.tracks_rect.y + self.tracks_rect.height);
-                    rects.push((i, Rect::new(
-                        self.tracks_rect.x,
-                        y,
-                        self.tracks_rect.width,
-                        y_end - y,
-                    )));
+                    let y_end =
+                        (track_y + track_h).min(self.tracks_rect.y + self.tracks_rect.height);
+                    rects.push((
+                        i,
+                        Rect::new(self.tracks_rect.x, y, self.tracks_rect.width, y_end - y),
+                    ));
                 }
             }
         }
@@ -543,16 +560,29 @@ impl TimelineViewportPanel {
 
     // ── Accessors ─────────────────────────────────────────────────
 
-    pub fn pixels_per_beat(&self) -> f32 { self.mapper.pixels_per_beat() }
-    pub fn scroll_x_beats(&self) -> Beats { self.scroll_x_beats }
-    pub fn scroll_y_px(&self) -> f32 { self.scroll_y_px }
-    pub fn viewport_rect(&self) -> Rect { self.viewport_rect }
-    pub fn ruler_rect(&self) -> Rect { self.ruler_rect }
-    pub fn tracks_rect(&self) -> Rect { self.tracks_rect }
+    pub fn pixels_per_beat(&self) -> f32 {
+        self.mapper.pixels_per_beat()
+    }
+    pub fn scroll_x_beats(&self) -> Beats {
+        self.scroll_x_beats
+    }
+    pub fn scroll_y_px(&self) -> f32 {
+        self.scroll_y_px
+    }
+    pub fn viewport_rect(&self) -> Rect {
+        self.viewport_rect
+    }
+    pub fn ruler_rect(&self) -> Rect {
+        self.ruler_rect
+    }
+    pub fn tracks_rect(&self) -> Rect {
+        self.tracks_rect
+    }
 
     /// Max beat across all clips (for overview strip normalization).
     pub fn max_content_beat(&self) -> f32 {
-        self.clips.iter()
+        self.clips
+            .iter()
             .map(|c| c.start_beat.as_f32() + c.duration_beats.as_f32())
             .fold(0.0f32, f32::max)
     }
@@ -581,11 +611,17 @@ impl TimelineViewportPanel {
             Rect::ZERO
         }
     }
-    pub fn first_node(&self) -> usize { self.first_node }
-    pub fn node_count(&self) -> usize { self.node_count }
+    pub fn first_node(&self) -> usize {
+        self.first_node
+    }
+    pub fn node_count(&self) -> usize {
+        self.node_count
+    }
 
     /// Read-only access to the flat clip list (for hit testing and rendering).
-    pub fn clips(&self) -> &[ViewportClip] { &self.clips }
+    pub fn clips(&self) -> &[ViewportClip] {
+        &self.clips
+    }
 
     /// Whether a layer is a group track (not directly renderable).
     pub fn is_group_layer(&self, layer_index: usize) -> bool {
@@ -596,12 +632,16 @@ impl TimelineViewportPanel {
 
     /// Convert beat position to pixel X in the tracks area (screen-space).
     pub fn beat_to_pixel(&self, beat: Beats) -> f32 {
-        (beat.as_f32() - self.scroll_x_beats.as_f32()) * self.mapper.pixels_per_beat() + self.tracks_rect.x
+        (beat.as_f32() - self.scroll_x_beats.as_f32()) * self.mapper.pixels_per_beat()
+            + self.tracks_rect.x
     }
 
     /// Convert pixel X in the tracks area to beat position.
     pub fn pixel_to_beat(&self, px: f32) -> Beats {
-        Beats(((px - self.tracks_rect.x) / self.mapper.pixels_per_beat()) as f64 + self.scroll_x_beats.0)
+        Beats(
+            ((px - self.tracks_rect.x) / self.mapper.pixels_per_beat()) as f64
+                + self.scroll_x_beats.0,
+        )
     }
 
     /// Convert panel-local pixel X (0 = left edge of tracks area) to beat position.
@@ -625,10 +665,8 @@ impl TimelineViewportPanel {
         if self.mapper.pixels_per_beat() >= max_zoom - 0.001 {
             return beat.max(Beats::ZERO);
         }
-        let grid = snap::grid_interval_for_zoom(
-            self.mapper.pixels_per_beat(),
-            self.beats_per_bar as f32,
-        );
+        let grid =
+            snap::grid_interval_for_zoom(self.mapper.pixels_per_beat(), self.beats_per_bar as f32);
         snap::snap_beat_to_grid(beat, Beats::from_f32(grid)).max(Beats::ZERO)
     }
 
@@ -639,13 +677,18 @@ impl TimelineViewportPanel {
 
     /// Get Y position of a track (relative to tracks_rect top, before scroll).
     pub fn track_y(&self, layer_index: usize) -> f32 {
-        self.track_y_offsets.get(layer_index).copied().unwrap_or(0.0)
-            + self.tracks_rect.y - self.scroll_y_px
+        self.track_y_offsets
+            .get(layer_index)
+            .copied()
+            .unwrap_or(0.0)
+            + self.tracks_rect.y
+            - self.scroll_y_px
     }
 
     /// Get height of a track.
     pub fn track_height(&self, layer_index: usize) -> f32 {
-        self.tracks.get(layer_index)
+        self.tracks
+            .get(layer_index)
             .map(|t| t.height)
             .unwrap_or(color::TRACK_HEIGHT)
     }
@@ -693,9 +736,13 @@ impl TimelineViewportPanel {
             let clip_width_px = clip.duration_beats.as_f32() * self.mapper.pixels_per_beat();
             let local_px = (beat - clip_start_f32) * self.mapper.pixels_per_beat();
 
-            let region = if clip_width_px > color::TRIM_HANDLE_MIN_CLIP_WIDTH_PX && local_px < color::TRIM_HANDLE_THRESHOLD_PX {
+            let region = if clip_width_px > color::TRIM_HANDLE_MIN_CLIP_WIDTH_PX
+                && local_px < color::TRIM_HANDLE_THRESHOLD_PX
+            {
                 HitRegion::TrimLeft
-            } else if clip_width_px > color::TRIM_HANDLE_MIN_CLIP_WIDTH_PX && local_px > clip_width_px - color::TRIM_HANDLE_THRESHOLD_PX {
+            } else if clip_width_px > color::TRIM_HANDLE_MIN_CLIP_WIDTH_PX
+                && local_px > clip_width_px - color::TRIM_HANDLE_THRESHOLD_PX
+            {
                 HitRegion::TrimRight
             } else {
                 HitRegion::Body
@@ -792,8 +839,12 @@ impl TimelineViewportPanel {
         // Clip edges that are closer than the grid snap win — this lets you
         // align clip boundaries precisely even between grid lines.
         for clip in &self.clips {
-            if clip.layer_index != layer_index { continue; }
-            if ignore_ids.contains(&clip.clip_id) { continue; }
+            if clip.layer_index != layer_index {
+                continue;
+            }
+            if ignore_ids.contains(&clip.clip_id) {
+                continue;
+            }
 
             // Check start edge
             let dist_start = (clip.start_beat.0 - beat.0).abs();
@@ -813,7 +864,6 @@ impl TimelineViewportPanel {
 
         best_beat
     }
-
 
     /// Floor-snap a beat to the snap grid subdivision.
     /// Unlike `snap_to_grid` (rounds to nearest), this floors to the grid line
@@ -846,12 +896,7 @@ impl TimelineViewportPanel {
 
     pub fn clip_creation_step(&self) -> Beats {
         let ppb = self.mapper.pixels_per_beat();
-        let candidates: [f32; 4] = [
-            0.25,
-            0.5,
-            1.0,
-            self.beats_per_bar as f32,
-        ];
+        let candidates: [f32; 4] = [0.25, 0.5, 1.0, self.beats_per_bar as f32];
         let grid = self.snap_grid_step();
         for &step in &candidates {
             if step >= grid && step * ppb >= Self::MIN_CREATION_PX {
@@ -896,8 +941,12 @@ impl TimelineViewportPanel {
                 let marker_s = color::INSERT_CURSOR_RULER_MARKER_SIZE;
                 tree.set_bounds(
                     self.insert_cursor_ruler_id as u32,
-                    Rect::new(px - marker_s * 0.5, self.ruler_rect.y + self.ruler_rect.height - marker_s,
-                              marker_s, marker_s),
+                    Rect::new(
+                        px - marker_s * 0.5,
+                        self.ruler_rect.y + self.ruler_rect.height - marker_s,
+                        marker_s,
+                        marker_s,
+                    ),
                 );
             }
         }
@@ -936,7 +985,12 @@ impl Panel for TimelineViewportPanel {
         // will be vertically misaligned with their tracks.
         let header_h = layout.track_header_height();
         self.viewport_rect = Rect::new(body.x, body.y, tracks_w, body.height);
-        self.ruler_rect = Rect::new(body.x, body.y + color::OVERVIEW_STRIP_HEIGHT, tracks_w, RULER_HEIGHT);
+        self.ruler_rect = Rect::new(
+            body.x,
+            body.y + color::OVERVIEW_STRIP_HEIGHT,
+            tracks_w,
+            RULER_HEIGHT,
+        );
         self.tracks_rect = Rect::new(
             body.x,
             body.y + header_h,
@@ -946,9 +1000,15 @@ impl Panel for TimelineViewportPanel {
 
         // Background
         self.bg_panel_id = tree.add_panel(
-            -1, self.viewport_rect.x, self.viewport_rect.y,
-            self.viewport_rect.width, self.viewport_rect.height,
-            UIStyle { bg_color: color::DARK_BG, ..UIStyle::default() },
+            -1,
+            self.viewport_rect.x,
+            self.viewport_rect.y,
+            self.viewport_rect.width,
+            self.viewport_rect.height,
+            UIStyle {
+                bg_color: color::DARK_BG,
+                ..UIStyle::default()
+            },
         ) as i32;
 
         // Overview strip at top of viewport.
@@ -960,8 +1020,16 @@ impl Panel for TimelineViewportPanel {
         // Clip miniatures (non-interactive panels) are added on top but fall through
         // to this button on hit_test. Same pattern as the tracks area overlay.
         self.overview_btn_id = tree.add_button(
-            -1, overview_rect.x, overview_rect.y, overview_rect.width, overview_rect.height,
-            UIStyle { bg_color: color::OVERVIEW_BG, ..UIStyle::default() }, "",
+            -1,
+            overview_rect.x,
+            overview_rect.y,
+            overview_rect.width,
+            overview_rect.height,
+            UIStyle {
+                bg_color: color::OVERVIEW_BG,
+                ..UIStyle::default()
+            },
+            "",
         ) as i32;
 
         // Overview clip miniatures (from Unity OverviewStripPanel.BuildPanel lines 218-238)
@@ -969,9 +1037,15 @@ impl Panel for TimelineViewportPanel {
 
         // Ruler background — INTERACTIVE so clicks register for playhead scrubbing
         self.ruler_bg_id = tree.add_button(
-            -1, self.ruler_rect.x, self.ruler_rect.y,
-            self.ruler_rect.width, self.ruler_rect.height,
-            UIStyle { bg_color: color::HEADER_BG, ..UIStyle::default() },
+            -1,
+            self.ruler_rect.x,
+            self.ruler_rect.y,
+            self.ruler_rect.width,
+            self.ruler_rect.height,
+            UIStyle {
+                bg_color: color::HEADER_BG,
+                ..UIStyle::default()
+            },
             "",
         ) as i32;
 
@@ -980,9 +1054,15 @@ impl Panel for TimelineViewportPanel {
         // covering the tracks viewport). Without this, clicks on non-interactive
         // panel nodes (track backgrounds, grid lines) won't generate events.
         tree.add_button(
-            -1, self.tracks_rect.x, self.tracks_rect.y,
-            self.tracks_rect.width, self.tracks_rect.height,
-            UIStyle { bg_color: Color32::TRANSPARENT, ..UIStyle::default() },
+            -1,
+            self.tracks_rect.x,
+            self.tracks_rect.y,
+            self.tracks_rect.width,
+            self.tracks_rect.height,
+            UIStyle {
+                bg_color: Color32::TRANSPARENT,
+                ..UIStyle::default()
+            },
             "",
         );
 
@@ -1024,11 +1104,13 @@ impl Panel for TimelineViewportPanel {
                 // Marker flag hit-test (priority over ruler scrub)
                 if let Some(marker_id) = self.hit_test_marker_flag(*pos) {
                     return vec![PanelAction::MarkerClicked(
-                        marker_id.to_string(), *modifiers,
+                        marker_id.to_string(),
+                        *modifiers,
                     )];
                 }
                 if self.overview_rect.contains(*pos) {
-                    let norm = ((pos.x - self.overview_rect.x) / self.overview_rect.width).clamp(0.0, 1.0);
+                    let norm =
+                        ((pos.x - self.overview_rect.x) / self.overview_rect.width).clamp(0.0, 1.0);
                     return vec![PanelAction::OverviewScrub(norm)];
                 }
                 if self.ruler_rect.contains(*pos) {
@@ -1040,12 +1122,16 @@ impl Panel for TimelineViewportPanel {
             }
 
             // ── DragBegin: marker flag → ruler → overview scrub ──
-            UIEvent::DragBegin { origin, modifiers, .. } => {
+            UIEvent::DragBegin {
+                origin, modifiers, ..
+            } => {
                 // Marker flag drag (priority over ruler scrub)
                 if let Some(marker_id) = self.hit_test_marker_flag(*origin) {
                     self.drag_mode = ViewportDragMode::MarkerDrag;
                     // Store start beat for undo
-                    self.marker_drag_start_beat = self.markers.iter()
+                    self.marker_drag_start_beat = self
+                        .markers
+                        .iter()
                         .find(|m| m.id == marker_id)
                         .map(|m| m.beat)
                         .unwrap_or(Beats::ZERO);
@@ -1055,7 +1141,8 @@ impl Panel for TimelineViewportPanel {
                 if self.overview_rect.contains(*origin) {
                     self.drag_mode = ViewportDragMode::OverviewScrub;
                     self.scrub_free = false;
-                    let norm = ((origin.x - self.overview_rect.x) / self.overview_rect.width).clamp(0.0, 1.0);
+                    let norm = ((origin.x - self.overview_rect.x) / self.overview_rect.width)
+                        .clamp(0.0, 1.0);
                     return vec![PanelAction::OverviewScrub(norm)];
                 }
                 if self.ruler_rect.contains(*origin) {
@@ -1078,11 +1165,13 @@ impl Panel for TimelineViewportPanel {
                     let raw = self.pixel_to_beat(pos.x);
                     let beat = self.scrub_snap_beat(raw, false).max(Beats::ZERO);
                     return vec![PanelAction::MarkerDragMoved(
-                        marker_id.to_string(), beat.as_f32(),
+                        marker_id.to_string(),
+                        beat.as_f32(),
                     )];
                 }
                 if self.drag_mode == ViewportDragMode::OverviewScrub {
-                    let norm = ((pos.x - self.overview_rect.x) / self.overview_rect.width).clamp(0.0, 1.0);
+                    let norm =
+                        ((pos.x - self.overview_rect.x) / self.overview_rect.width).clamp(0.0, 1.0);
                     return vec![PanelAction::OverviewScrub(norm)];
                 }
                 if self.drag_mode == ViewportDragMode::RulerScrub {
@@ -1099,7 +1188,10 @@ impl Panel for TimelineViewportPanel {
                     let result = if let Some(marker_id) = self.marker_drag_id.take() {
                         let raw = self.pixel_to_beat(pos.x);
                         let beat = self.scrub_snap_beat(raw, false).max(Beats::ZERO);
-                        vec![PanelAction::MarkerDragEnded(marker_id.to_string(), beat.as_f32())]
+                        vec![PanelAction::MarkerDragEnded(
+                            marker_id.to_string(),
+                            beat.as_f32(),
+                        )]
                     } else {
                         Vec::new()
                     };
@@ -1130,12 +1222,16 @@ impl Panel for TimelineViewportPanel {
             }
 
             // All other events handled by InteractionOverlay — return empty.
-            _ => Vec::new()
+            _ => Vec::new(),
         }
     }
 
-    fn first_node(&self) -> usize { self.first_node }
-    fn node_count(&self) -> usize { self.node_count }
+    fn first_node(&self) -> usize {
+        self.first_node
+    }
+    fn node_count(&self) -> usize {
+        self.node_count
+    }
 }
 
 // ── Build helpers (private) ──────────────────────────────────────
@@ -1154,9 +1250,13 @@ impl TimelineViewportPanel {
         let mut max_beat = 0.0f32;
         for clip in &self.clips {
             let end = clip.start_beat.as_f32() + clip.duration_beats.as_f32();
-            if end > max_beat { max_beat = end; }
+            if end > max_beat {
+                max_beat = end;
+            }
         }
-        if max_beat <= 0.0 { return; }
+        if max_beat <= 0.0 {
+            return;
+        }
 
         let layer_count = self.tracks.len();
         let row_h = overview_rect.height / layer_count as f32;
@@ -1165,17 +1265,31 @@ impl TimelineViewportPanel {
         // At 1258 clips, uncapped overview creates 1258 panel nodes.
         const MAX_OVERVIEW_CLIPS: usize = 200;
         for (overview_count, clip) in self.clips.iter().enumerate() {
-            if overview_count >= MAX_OVERVIEW_CLIPS { break; }
+            if overview_count >= MAX_OVERVIEW_CLIPS {
+                break;
+            }
             let start_f32 = clip.start_beat.as_f32();
             let start_norm = start_f32 / max_beat;
             let end_norm = (start_f32 + clip.duration_beats.as_f32()) / max_beat;
             let x = overview_rect.x + start_norm * overview_rect.width;
             let w = ((end_norm - start_norm) * overview_rect.width).max(1.0);
             // Layer 0 at bottom, layer N-1 at top (matching Unity line 230)
-            let y = overview_rect.y + (layer_count.saturating_sub(1).saturating_sub(clip.layer_index)) as f32 * row_h;
+            let y = overview_rect.y
+                + (layer_count
+                    .saturating_sub(1)
+                    .saturating_sub(clip.layer_index)) as f32
+                    * row_h;
 
-            tree.add_panel(-1, x, y, w, row_h,
-                UIStyle { bg_color: clip.color, ..UIStyle::default() },
+            tree.add_panel(
+                -1,
+                x,
+                y,
+                w,
+                row_h,
+                UIStyle {
+                    bg_color: clip.color,
+                    ..UIStyle::default()
+                },
             );
         }
 
@@ -1187,16 +1301,33 @@ impl TimelineViewportPanel {
             let vp_width_norm = viewport_width_beats / max_beat;
             let vp_x = overview_rect.x + vp_start_norm * overview_rect.width;
             let vp_w = (vp_width_norm * overview_rect.width).min(overview_rect.width);
-            tree.add_panel(-1, vp_x, overview_rect.y, vp_w, overview_rect.height,
-                UIStyle { bg_color: color::OVERVIEW_VIEWPORT, ..UIStyle::default() },
+            tree.add_panel(
+                -1,
+                vp_x,
+                overview_rect.y,
+                vp_w,
+                overview_rect.height,
+                UIStyle {
+                    bg_color: color::OVERVIEW_VIEWPORT,
+                    ..UIStyle::default()
+                },
             );
         }
 
         // Playhead in overview
         let ph_norm = self.playhead_beat.as_f32() / max_beat;
-        let ph_x = overview_rect.x + (ph_norm * overview_rect.width).clamp(0.0, overview_rect.width);
-        tree.add_panel(-1, ph_x, overview_rect.y, 1.0, overview_rect.height,
-            UIStyle { bg_color: color::OVERVIEW_PLAYHEAD, ..UIStyle::default() },
+        let ph_x =
+            overview_rect.x + (ph_norm * overview_rect.width).clamp(0.0, overview_rect.width);
+        tree.add_panel(
+            -1,
+            ph_x,
+            overview_rect.y,
+            1.0,
+            overview_rect.height,
+            UIStyle {
+                bg_color: color::OVERVIEW_PLAYHEAD,
+                ..UIStyle::default()
+            },
         );
     }
 
@@ -1223,35 +1354,42 @@ impl TimelineViewportPanel {
                 continue;
             }
 
-            let bg_color = if i % 2 == 0 { color::TRACK_BG } else { color::TRACK_BG_ALT };
-            let mut style = UIStyle { bg_color, ..UIStyle::default() };
+            let bg_color = if i % 2 == 0 {
+                color::TRACK_BG
+            } else {
+                color::TRACK_BG_ALT
+            };
+            let mut style = UIStyle {
+                bg_color,
+                ..UIStyle::default()
+            };
 
             // Dim muted tracks
             if track.is_muted {
-                style.bg_color = Color32::new(
-                    bg_color.r / 2,
-                    bg_color.g / 2,
-                    bg_color.b / 2,
-                    bg_color.a,
-                );
+                style.bg_color =
+                    Color32::new(bg_color.r / 2, bg_color.g / 2, bg_color.b / 2, bg_color.a);
             }
 
-            let id = tree.add_panel(
-                -1, tr.x, clamped_y,
-                tr.width, clamped_h,
-                style,
-            ) as i32;
+            let id = tree.add_panel(-1, tr.x, clamped_y, tr.width, clamped_h, style) as i32;
             self.track_bg_ids.push(id);
 
             // Group accent bar (only if top is visible)
-            if track.is_group && y >= tr_top
-                && let Some(accent) = track.accent_color {
-                    tree.add_panel(
-                        -1, tr.x, clamped_y,
-                        color::GROUP_ACCENT_BAR_WIDTH, clamped_h,
-                        UIStyle { bg_color: accent, ..UIStyle::default() },
-                    );
-                }
+            if track.is_group
+                && y >= tr_top
+                && let Some(accent) = track.accent_color
+            {
+                tree.add_panel(
+                    -1,
+                    tr.x,
+                    clamped_y,
+                    color::GROUP_ACCENT_BAR_WIDTH,
+                    clamped_h,
+                    UIStyle {
+                        bg_color: accent,
+                        ..UIStyle::default()
+                    },
+                );
+            }
 
             // Collapsed group preview: miniature clip rects of child layers.
             // From Unity ViewportManager.GenerateCollapsedGroupTexture (lines 700-770).
@@ -1265,17 +1403,31 @@ impl TimelineViewportPanel {
 
                     // Render clips of this child layer as tiny rects
                     for clip in &self.clips {
-                        if clip.layer_index != child_idx { continue; }
+                        if clip.layer_index != child_idx {
+                            continue;
+                        }
                         let clip_start_f32 = clip.start_beat.as_f32();
                         let clip_end = clip_start_f32 + clip.duration_beats.as_f32();
-                        if clip_end < min_beat || clip_start_f32 > max_beat { continue; }
+                        if clip_end < min_beat || clip_start_f32 > max_beat {
+                            continue;
+                        }
 
                         let cx = self.beat_to_pixel(clip.start_beat).max(tr.x);
-                        let cx2 = self.beat_to_pixel(Beats::from_f32(clip_end)).min(tr.x + tr.width);
+                        let cx2 = self
+                            .beat_to_pixel(Beats::from_f32(clip_end))
+                            .min(tr.x + tr.width);
                         let cw = (cx2 - cx).max(1.0);
 
-                        tree.add_panel(-1, cx, child_y, cw, rows_per_child,
-                            UIStyle { bg_color: clip.color, ..UIStyle::default() },
+                        tree.add_panel(
+                            -1,
+                            cx,
+                            child_y,
+                            cw,
+                            rows_per_child,
+                            UIStyle {
+                                bg_color: clip.color,
+                                ..UIStyle::default()
+                            },
                         );
                     }
                 }
@@ -1285,9 +1437,15 @@ impl TimelineViewportPanel {
             let sep_y = y + h - 1.0;
             if sep_y >= tr_top && sep_y < tr_bottom {
                 tree.add_panel(
-                    -1, tr.x, sep_y,
-                    tr.width, 1.0,
-                    UIStyle { bg_color: color::SEPARATOR_COLOR, ..UIStyle::default() },
+                    -1,
+                    tr.x,
+                    sep_y,
+                    tr.width,
+                    1.0,
+                    UIStyle {
+                        bg_color: color::SEPARATOR_COLOR,
+                        ..UIStyle::default()
+                    },
                 );
             }
         }
@@ -1366,17 +1524,24 @@ impl TimelineViewportPanel {
 
                 // Tick mark (bottom-aligned)
                 let id = tree.add_panel(
-                    -1, px, ruler_bottom - tick_h,
-                    RULER_TICK_W, tick_h,
-                    UIStyle { bg_color: tick_color, ..UIStyle::default() },
+                    -1,
+                    px,
+                    ruler_bottom - tick_h,
+                    RULER_TICK_W,
+                    tick_h,
+                    UIStyle {
+                        bg_color: tick_color,
+                        ..UIStyle::default()
+                    },
                 ) as i32;
                 self.ruler_tick_ids.push(id);
 
                 // Label (only at label_step intervals to prevent overlap)
                 // Skip labels at beats where a marker exists — markers take priority.
-                let has_marker_at_beat = self.markers.iter().any(|m| {
-                    (m.beat.as_f32() - beat).abs() < 0.001 && !m.name.is_empty()
-                });
+                let has_marker_at_beat = self
+                    .markers
+                    .iter()
+                    .any(|m| (m.beat.as_f32() - beat).abs() < 0.001 && !m.name.is_empty());
                 if is_label_beat && !has_marker_at_beat {
                     let bar_num = (beat / bpb).floor() as i32 + 1;
                     let beat_in_bar = ((beat % bpb) + 0.001).floor() as i32 + 1;
@@ -1388,10 +1553,18 @@ impl TimelineViewportPanel {
 
                     let label_y = self.ruler_rect.y + 2.0;
                     let id = tree.add_label(
-                        -1, px + 2.0, label_y, RULER_LABEL_W, RULER_LABEL_H,
+                        -1,
+                        px + 2.0,
+                        label_y,
+                        RULER_LABEL_W,
+                        RULER_LABEL_H,
                         &label,
                         UIStyle {
-                            text_color: if is_bar { color::TEXT_NORMAL } else { color::TEXT_DIMMED },
+                            text_color: if is_bar {
+                                color::TEXT_NORMAL
+                            } else {
+                                color::TEXT_DIMMED
+                            },
                             font_size: RULER_FONT_SIZE,
                             text_align: TextAlign::Left,
                             ..UIStyle::default()
@@ -1431,9 +1604,15 @@ impl TimelineViewportPanel {
         let in_visible = in_px >= self.tracks_rect.x && in_px <= self.tracks_rect.x_max();
         if in_visible {
             self.export_in_marker_id = tree.add_panel(
-                -1, in_px - marker_w * 0.5, self.ruler_rect.y,
-                marker_w, self.ruler_rect.height + self.tracks_rect.height,
-                UIStyle { bg_color: color::EXPORT_MARKER_COLOR, ..UIStyle::default() },
+                -1,
+                in_px - marker_w * 0.5,
+                self.ruler_rect.y,
+                marker_w,
+                self.ruler_rect.height + self.tracks_rect.height,
+                UIStyle {
+                    bg_color: color::EXPORT_MARKER_COLOR,
+                    ..UIStyle::default()
+                },
             ) as i32;
         } else {
             self.export_in_marker_id = -1;
@@ -1447,9 +1626,15 @@ impl TimelineViewportPanel {
             let range_right = out_px.min(self.tracks_rect.x_max());
             if range_right > range_left {
                 self.export_range_id = tree.add_panel(
-                    -1, range_left, self.tracks_rect.y,
-                    range_right - range_left, self.tracks_rect.height,
-                    UIStyle { bg_color: color::EXPORT_RANGE_HIGHLIGHT, ..UIStyle::default() },
+                    -1,
+                    range_left,
+                    self.tracks_rect.y,
+                    range_right - range_left,
+                    self.tracks_rect.height,
+                    UIStyle {
+                        bg_color: color::EXPORT_RANGE_HIGHLIGHT,
+                        ..UIStyle::default()
+                    },
                 ) as i32;
             } else {
                 self.export_range_id = -1;
@@ -1459,9 +1644,15 @@ impl TimelineViewportPanel {
             let out_visible = out_px >= self.tracks_rect.x && out_px <= self.tracks_rect.x_max();
             if out_visible {
                 self.export_out_marker_id = tree.add_panel(
-                    -1, out_px - marker_w * 0.5, self.ruler_rect.y,
-                    marker_w, self.ruler_rect.height + self.tracks_rect.height,
-                    UIStyle { bg_color: color::EXPORT_MARKER_COLOR, ..UIStyle::default() },
+                    -1,
+                    out_px - marker_w * 0.5,
+                    self.ruler_rect.y,
+                    marker_w,
+                    self.ruler_rect.height + self.tracks_rect.height,
+                    UIStyle {
+                        bg_color: color::EXPORT_MARKER_COLOR,
+                        ..UIStyle::default()
+                    },
                 ) as i32;
             } else {
                 self.export_out_marker_id = -1;
@@ -1480,9 +1671,15 @@ impl TimelineViewportPanel {
 
         let marker_s = color::INSERT_CURSOR_RULER_MARKER_SIZE;
         self.insert_cursor_ruler_id = tree.add_panel(
-            -1, px - marker_s * 0.5, self.ruler_rect.y + self.ruler_rect.height - marker_s,
-            marker_s, marker_s,
-            UIStyle { bg_color: color::INSERT_CURSOR_BLUE, ..UIStyle::default() },
+            -1,
+            px - marker_s * 0.5,
+            self.ruler_rect.y + self.ruler_rect.height - marker_s,
+            marker_s,
+            marker_s,
+            UIStyle {
+                bg_color: color::INSERT_CURSOR_BLUE,
+                ..UIStyle::default()
+            },
         ) as i32;
         if !in_view {
             tree.set_visible(self.insert_cursor_ruler_id as u32, false);
@@ -1511,9 +1708,15 @@ impl TimelineViewportPanel {
             // Vertical line spanning ruler + tracks
             let line_color = Color32::new(mc.r, mc.g, mc.b, color::MARKER_LINE_ALPHA);
             let line_id = tree.add_panel(
-                -1, px - line_w * 0.5, self.ruler_rect.y,
-                line_w, total_line_h,
-                UIStyle { bg_color: line_color, ..UIStyle::default() },
+                -1,
+                px - line_w * 0.5,
+                self.ruler_rect.y,
+                line_w,
+                total_line_h,
+                UIStyle {
+                    bg_color: line_color,
+                    ..UIStyle::default()
+                },
             ) as i32;
             self.marker_node_ids.push(line_id);
 
@@ -1531,18 +1734,30 @@ impl TimelineViewportPanel {
                 mc
             };
             let flag_id = tree.add_panel(
-                -1, flag_x, flag_y,
-                flag_w, flag_h,
-                UIStyle { bg_color: flag_color, ..UIStyle::default() },
+                -1,
+                flag_x,
+                flag_y,
+                flag_w,
+                flag_h,
+                UIStyle {
+                    bg_color: flag_color,
+                    ..UIStyle::default()
+                },
             ) as i32;
             self.marker_node_ids.push(flag_id);
 
             // Selection outline
             if is_selected {
                 let outline_id = tree.add_panel(
-                    -1, flag_x - 1.0, flag_y - 1.0,
-                    flag_w + 2.0, flag_h + 2.0,
-                    UIStyle { bg_color: color::MARKER_SELECTED_OUTLINE, ..UIStyle::default() },
+                    -1,
+                    flag_x - 1.0,
+                    flag_y - 1.0,
+                    flag_w + 2.0,
+                    flag_h + 2.0,
+                    UIStyle {
+                        bg_color: color::MARKER_SELECTED_OUTLINE,
+                        ..UIStyle::default()
+                    },
                 ) as i32;
                 self.marker_node_ids.push(outline_id);
             }
@@ -1552,8 +1767,11 @@ impl TimelineViewportPanel {
                 let label_x = flag_x + flag_w + 2.0;
                 let label_y = flag_y + (flag_h - color::MARKER_LABEL_HEIGHT) * 0.5;
                 let label_id = tree.add_label(
-                    -1, label_x, label_y,
-                    color::MARKER_LABEL_WIDTH, color::MARKER_LABEL_HEIGHT,
+                    -1,
+                    label_x,
+                    label_y,
+                    color::MARKER_LABEL_WIDTH,
+                    color::MARKER_LABEL_HEIGHT,
                     &marker.name,
                     UIStyle {
                         bg_color: color::MARKER_LABEL_BG,
@@ -1567,29 +1785,28 @@ impl TimelineViewportPanel {
             }
 
             // Store flag rect for hit-testing
-            self.marker_flag_rects.push((
-                marker.id.clone(),
-                Rect::new(flag_x, flag_y, flag_w, flag_h),
-            ));
+            self.marker_flag_rects
+                .push((marker.id.clone(), Rect::new(flag_x, flag_y, flag_w, flag_h)));
         }
     }
 }
 
 impl Default for TimelineViewportPanel {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
-
 
 // ── Tests ────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tree::UITree;
-    use crate::layout::ScreenLayout;
     use crate::input::Modifiers;
+    use crate::layout::ScreenLayout;
+    use crate::tree::UITree;
 
     fn test_layout() -> ScreenLayout {
         ScreenLayout::new(1920.0, 1080.0)
@@ -1597,8 +1814,14 @@ mod tests {
 
     fn test_tracks() -> Vec<TrackInfo> {
         vec![
-            TrackInfo { height: 140.0, ..Default::default() },
-            TrackInfo { height: 140.0, ..Default::default() },
+            TrackInfo {
+                height: 140.0,
+                ..Default::default()
+            },
+            TrackInfo {
+                height: 140.0,
+                ..Default::default()
+            },
         ]
     }
 
@@ -1748,12 +1971,13 @@ mod tests {
         panel.build(&mut tree, &layout);
 
         // Click in ruler area
-        let ruler_pos = Vec2::new(
-            panel.ruler_rect.x + 100.0,
-            panel.ruler_rect.y + 5.0,
-        );
+        let ruler_pos = Vec2::new(panel.ruler_rect.x + 100.0, panel.ruler_rect.y + 5.0);
         let actions = panel.handle_event(
-            &UIEvent::Click { node_id: 0, pos: ruler_pos, modifiers: Modifiers::default() },
+            &UIEvent::Click {
+                node_id: 0,
+                pos: ruler_pos,
+                modifiers: Modifiers::default(),
+            },
             &tree,
         );
         assert_eq!(actions.len(), 1);
@@ -1770,15 +1994,19 @@ mod tests {
         panel.set_tracks(test_tracks());
         panel.build(&mut tree, &layout);
 
-        let tracks_pos = Vec2::new(
-            panel.tracks_rect.x + 100.0,
-            panel.tracks_rect.y + 50.0,
-        );
+        let tracks_pos = Vec2::new(panel.tracks_rect.x + 100.0, panel.tracks_rect.y + 50.0);
         let actions = panel.handle_event(
-            &UIEvent::Click { node_id: 0, pos: tracks_pos, modifiers: Modifiers::default() },
+            &UIEvent::Click {
+                node_id: 0,
+                pos: tracks_pos,
+                modifiers: Modifiers::default(),
+            },
             &tree,
         );
-        assert!(actions.is_empty(), "tracks clicks handled by overlay, not viewport");
+        assert!(
+            actions.is_empty(),
+            "tracks clicks handled by overlay, not viewport"
+        );
     }
 
     #[test]
@@ -1790,19 +2018,22 @@ mod tests {
         panel.set_tracks(test_tracks());
         panel.build(&mut tree, &layout);
 
-        let tracks_pos = Vec2::new(
-            panel.tracks_rect.x + 100.0,
-            panel.tracks_rect.y + 50.0,
-        );
+        let tracks_pos = Vec2::new(panel.tracks_rect.x + 100.0, panel.tracks_rect.y + 50.0);
         let actions = panel.handle_event(
             &UIEvent::Click {
                 node_id: 0,
                 pos: tracks_pos,
-                modifiers: Modifiers { shift: true, ..Modifiers::default() },
+                modifiers: Modifiers {
+                    shift: true,
+                    ..Modifiers::default()
+                },
             },
             &tree,
         );
-        assert!(actions.is_empty(), "tracks clicks handled by overlay, not viewport");
+        assert!(
+            actions.is_empty(),
+            "tracks clicks handled by overlay, not viewport"
+        );
     }
 
     #[test]
@@ -1813,19 +2044,17 @@ mod tests {
         panel.set_tracks(test_tracks());
 
         // Put clips far off-screen
-        panel.set_clips(vec![
-            ViewportClip {
-                clip_id: "clip_099".into(),
-                layer_index: 0,
-                start_beat: Beats::from_f32(1000.0),
-                duration_beats: Beats(4.0),
-                name: "Far".into(),
-                color: color::CLIP_NORMAL,
-                is_muted: false,
-                is_locked: false,
-                is_generator: false,
-            },
-        ]);
+        panel.set_clips(vec![ViewportClip {
+            clip_id: "clip_099".into(),
+            layer_index: 0,
+            start_beat: Beats::from_f32(1000.0),
+            duration_beats: Beats(4.0),
+            name: "Far".into(),
+            color: color::CLIP_NORMAL,
+            is_muted: false,
+            is_locked: false,
+            is_generator: false,
+        }]);
         panel.build(&mut tree, &layout);
 
         // Clips are now painted into bitmaps, not UITree nodes.

@@ -1,13 +1,13 @@
 use crate::command::Command;
 use manifold_core::Beats;
-use manifold_core::units::Bpm;
+use manifold_core::GeneratorTypeId;
 use manifold_core::LayerId;
-use manifold_core::project::Project;
+use manifold_core::effects::ParameterDriver;
 use manifold_core::math::BeatQuantizer;
+use manifold_core::project::Project;
 use manifold_core::tempo::TempoPoint;
 use manifold_core::types::{BlendMode, QuantizeMode, TempoPointSource};
-use manifold_core::GeneratorTypeId;
-use manifold_core::effects::ParameterDriver;
+use manifold_core::units::Bpm;
 
 /// Change project BPM with full tempo map support.
 /// Matches Unity's ChangeBpmCommand exactly:
@@ -73,9 +73,14 @@ impl ChangeBpmCommand {
 
         if !self.flatten_tempo_map {
             project.tempo_map.add_or_replace_point(
-                Beats::ZERO, applied_bpm, self.tempo_point_source, 0.001,
+                Beats::ZERO,
+                applied_bpm,
+                self.tempo_point_source,
+                0.001,
             );
-            project.tempo_map.ensure_default_at_beat_zero(applied_bpm, self.tempo_point_source);
+            project
+                .tempo_map
+                .ensure_default_at_beat_zero(applied_bpm, self.tempo_point_source);
             return;
         }
 
@@ -86,9 +91,14 @@ impl ChangeBpmCommand {
 
         project.tempo_map.clear();
         project.tempo_map.add_or_replace_point(
-            Beats::ZERO, applied_bpm, self.tempo_point_source, 0.001,
+            Beats::ZERO,
+            applied_bpm,
+            self.tempo_point_source,
+            0.001,
         );
-        project.tempo_map.ensure_default_at_beat_zero(applied_bpm, self.tempo_point_source);
+        project
+            .tempo_map
+            .ensure_default_at_beat_zero(applied_bpm, self.tempo_point_source);
     }
 
     fn restore_old_tempo_map(&self, project: &mut Project) {
@@ -98,20 +108,27 @@ impl ChangeBpmCommand {
             Some(points) if !points.is_empty() => {
                 for p in points {
                     project.tempo_map.add_or_replace_point_with_time(
-                        p.beat, p.bpm, p.source, 0.001, p.recorded_at_seconds,
+                        p.beat,
+                        p.bpm,
+                        p.source,
+                        0.001,
+                        p.recorded_at_seconds,
                     );
                 }
-                project.tempo_map.ensure_default_at_beat_zero(
-                    project.settings.bpm, self.tempo_point_source,
-                );
+                project
+                    .tempo_map
+                    .ensure_default_at_beat_zero(project.settings.bpm, self.tempo_point_source);
             }
             _ => {
                 project.tempo_map.add_or_replace_point(
-                    Beats::ZERO, self.old_bpm, self.tempo_point_source, 0.001,
+                    Beats::ZERO,
+                    self.old_bpm,
+                    self.tempo_point_source,
+                    0.001,
                 );
-                project.tempo_map.ensure_default_at_beat_zero(
-                    self.old_bpm, self.tempo_point_source,
-                );
+                project
+                    .tempo_map
+                    .ensure_default_at_beat_zero(self.old_bpm, self.tempo_point_source);
             }
         }
     }
@@ -126,7 +143,9 @@ impl Command for ChangeBpmCommand {
         self.apply_bpm(project, self.old_bpm, true);
     }
 
-    fn description(&self) -> &str { "Change BPM" }
+    fn description(&self) -> &str {
+        "Change BPM"
+    }
 }
 
 /// Change output resolution.
@@ -139,12 +158,22 @@ pub struct ChangeResolutionCommand {
 }
 
 impl ChangeResolutionCommand {
-    pub fn new(old_preset: manifold_core::ResolutionPreset, new_preset: manifold_core::ResolutionPreset) -> Self {
-        Self { old_preset, new_preset }
+    pub fn new(
+        old_preset: manifold_core::ResolutionPreset,
+        new_preset: manifold_core::ResolutionPreset,
+    ) -> Self {
+        Self {
+            old_preset,
+            new_preset,
+        }
     }
 
-    pub fn old_preset(&self) -> manifold_core::ResolutionPreset { self.old_preset }
-    pub fn new_preset(&self) -> manifold_core::ResolutionPreset { self.new_preset }
+    pub fn old_preset(&self) -> manifold_core::ResolutionPreset {
+        self.old_preset
+    }
+    pub fn new_preset(&self) -> manifold_core::ResolutionPreset {
+        self.new_preset
+    }
 }
 
 impl Command for ChangeResolutionCommand {
@@ -162,7 +191,9 @@ impl Command for ChangeResolutionCommand {
         project.settings.output_height = h;
     }
 
-    fn description(&self) -> &str { "Change Resolution" }
+    fn description(&self) -> &str {
+        "Change Resolution"
+    }
 }
 
 /// Change quantize mode.
@@ -187,7 +218,9 @@ impl Command for ChangeQuantizeModeCommand {
         project.settings.quantize_mode = self.old_mode;
     }
 
-    fn description(&self) -> &str { "Change Quantize Mode" }
+    fn description(&self) -> &str {
+        "Change Quantize Mode"
+    }
 }
 
 /// Change frame rate.
@@ -212,7 +245,9 @@ impl Command for ChangeFrameRateCommand {
         project.settings.frame_rate = self.old_rate;
     }
 
-    fn description(&self) -> &str { "Change Frame Rate" }
+    fn description(&self) -> &str {
+        "Change Frame Rate"
+    }
 }
 
 /// Change a layer's MIDI note assignment.
@@ -225,7 +260,11 @@ pub struct ChangeLayerMidiNoteCommand {
 
 impl ChangeLayerMidiNoteCommand {
     pub fn new(layer_id: LayerId, old_note: i32, new_note: i32) -> Self {
-        Self { layer_id, old_note, new_note }
+        Self {
+            layer_id,
+            old_note,
+            new_note,
+        }
     }
 }
 
@@ -242,7 +281,9 @@ impl Command for ChangeLayerMidiNoteCommand {
         }
     }
 
-    fn description(&self) -> &str { "Change MIDI Note" }
+    fn description(&self) -> &str {
+        "Change MIDI Note"
+    }
 }
 
 /// Change a layer's blend mode.
@@ -255,7 +296,11 @@ pub struct ChangeLayerBlendModeCommand {
 
 impl ChangeLayerBlendModeCommand {
     pub fn new(layer_id: LayerId, old_mode: BlendMode, new_mode: BlendMode) -> Self {
-        Self { layer_id, old_mode, new_mode }
+        Self {
+            layer_id,
+            old_mode,
+            new_mode,
+        }
     }
 }
 
@@ -272,7 +317,9 @@ impl Command for ChangeLayerBlendModeCommand {
         }
     }
 
-    fn description(&self) -> &str { "Change Blend Mode" }
+    fn description(&self) -> &str {
+        "Change Blend Mode"
+    }
 }
 
 /// Change a layer's opacity.
@@ -285,7 +332,11 @@ pub struct ChangeLayerOpacityCommand {
 
 impl ChangeLayerOpacityCommand {
     pub fn new(layer_id: LayerId, old_opacity: f32, new_opacity: f32) -> Self {
-        Self { layer_id, old_opacity, new_opacity }
+        Self {
+            layer_id,
+            old_opacity,
+            new_opacity,
+        }
     }
 }
 
@@ -302,7 +353,9 @@ impl Command for ChangeLayerOpacityCommand {
         }
     }
 
-    fn description(&self) -> &str { "Change Layer Opacity" }
+    fn description(&self) -> &str {
+        "Change Layer Opacity"
+    }
 }
 
 /// Change generator param values for a layer.
@@ -315,7 +368,11 @@ pub struct ChangeGeneratorParamsCommand {
 
 impl ChangeGeneratorParamsCommand {
     pub fn new(layer_id: LayerId, old_params: Vec<f32>, new_params: Vec<f32>) -> Self {
-        Self { layer_id, old_params, new_params }
+        Self {
+            layer_id,
+            old_params,
+            new_params,
+        }
     }
 
     fn apply_params(layer: &mut manifold_core::layer::Layer, params: &[f32]) {
@@ -338,7 +395,9 @@ impl Command for ChangeGeneratorParamsCommand {
         }
     }
 
-    fn description(&self) -> &str { "Change Generator Params" }
+    fn description(&self) -> &str {
+        "Change Generator Params"
+    }
 }
 
 /// Change generator type for a layer (snapshots and restores params/drivers/envelopes).
@@ -361,7 +420,14 @@ impl ChangeGeneratorTypeCommand {
         old_drivers: Option<Vec<ParameterDriver>>,
         old_envelopes: Option<Vec<manifold_core::effects::ParamEnvelope>>,
     ) -> Self {
-        Self { layer_id, old_type, new_type, old_params, old_drivers, old_envelopes }
+        Self {
+            layer_id,
+            old_type,
+            new_type,
+            old_params,
+            old_drivers,
+            old_envelopes,
+        }
     }
 }
 
@@ -383,7 +449,9 @@ impl Command for ChangeGeneratorTypeCommand {
         }
     }
 
-    fn description(&self) -> &str { "Change Generator Type" }
+    fn description(&self) -> &str {
+        "Change Generator Type"
+    }
 }
 
 /// Paste a generator setup onto a layer (replaces type + params + drivers + envelopes).
@@ -414,8 +482,14 @@ impl PasteGeneratorCommand {
     ) -> Self {
         Self {
             layer_id,
-            old_type, old_params, old_drivers, old_envelopes,
-            new_type, new_params, new_drivers, new_envelopes,
+            old_type,
+            old_params,
+            old_drivers,
+            old_envelopes,
+            new_type,
+            new_params,
+            new_drivers,
+            new_envelopes,
         }
     }
 }
@@ -443,7 +517,9 @@ impl Command for PasteGeneratorCommand {
         }
     }
 
-    fn description(&self) -> &str { "Paste Generator" }
+    fn description(&self) -> &str {
+        "Paste Generator"
+    }
 }
 
 /// Change master opacity.
@@ -455,7 +531,10 @@ pub struct ChangeMasterOpacityCommand {
 
 impl ChangeMasterOpacityCommand {
     pub fn new(old_opacity: f32, new_opacity: f32) -> Self {
-        Self { old_opacity, new_opacity }
+        Self {
+            old_opacity,
+            new_opacity,
+        }
     }
 }
 
@@ -468,7 +547,9 @@ impl Command for ChangeMasterOpacityCommand {
         project.settings.master_opacity = self.old_opacity;
     }
 
-    fn description(&self) -> &str { "Change Master Opacity" }
+    fn description(&self) -> &str {
+        "Change Master Opacity"
+    }
 }
 
 /// Change LED brightness.
@@ -480,7 +561,10 @@ pub struct ChangeLedBrightnessCommand {
 
 impl ChangeLedBrightnessCommand {
     pub fn new(old_brightness: f32, new_brightness: f32) -> Self {
-        Self { old_brightness, new_brightness }
+        Self {
+            old_brightness,
+            new_brightness,
+        }
     }
 }
 
@@ -493,7 +577,9 @@ impl Command for ChangeLedBrightnessCommand {
         project.settings.led_brightness = self.old_brightness;
     }
 
-    fn description(&self) -> &str { "Change LED Brightness" }
+    fn description(&self) -> &str {
+        "Change LED Brightness"
+    }
 }
 
 /// Toggle HDR export setting.
@@ -517,7 +603,9 @@ impl Command for ToggleExportHdrCommand {
         project.settings.export_hdr = self.old_hdr;
     }
 
-    fn description(&self) -> &str { "Toggle HDR Export" }
+    fn description(&self) -> &str {
+        "Toggle HDR Export"
+    }
 }
 
 /// Change a layer's MIDI channel assignment.
@@ -530,7 +618,11 @@ pub struct ChangeLayerMidiChannelCommand {
 
 impl ChangeLayerMidiChannelCommand {
     pub fn new(layer_id: LayerId, old_channel: i32, new_channel: i32) -> Self {
-        Self { layer_id, old_channel, new_channel }
+        Self {
+            layer_id,
+            old_channel,
+            new_channel,
+        }
     }
 }
 
@@ -547,7 +639,9 @@ impl Command for ChangeLayerMidiChannelCommand {
         }
     }
 
-    fn description(&self) -> &str { "Change MIDI Channel" }
+    fn description(&self) -> &str {
+        "Change MIDI Channel"
+    }
 }
 
 /// Change display resolution (direct width/height, not preset-based).
@@ -561,7 +655,12 @@ pub struct SetDisplayDimensionsCommand {
 
 impl SetDisplayDimensionsCommand {
     pub fn new(old_width: i32, old_height: i32, new_width: i32, new_height: i32) -> Self {
-        Self { old_width, old_height, new_width, new_height }
+        Self {
+            old_width,
+            old_height,
+            new_width,
+            new_height,
+        }
     }
 }
 
@@ -576,7 +675,9 @@ impl Command for SetDisplayDimensionsCommand {
         project.settings.output_height = self.old_height;
     }
 
-    fn description(&self) -> &str { "Set Display Resolution" }
+    fn description(&self) -> &str {
+        "Set Display Resolution"
+    }
 }
 
 /// Change render scale (0.5, 0.75, or 1.0 for FSR upscaling).
@@ -588,7 +689,10 @@ pub struct ChangeRenderScaleCommand {
 
 impl ChangeRenderScaleCommand {
     pub fn new(old_scale: f32, new_scale: f32) -> Self {
-        Self { old_scale, new_scale }
+        Self {
+            old_scale,
+            new_scale,
+        }
     }
 }
 
@@ -601,7 +705,9 @@ impl Command for ChangeRenderScaleCommand {
         project.settings.render_scale = self.old_scale;
     }
 
-    fn description(&self) -> &str { "Change Render Scale" }
+    fn description(&self) -> &str {
+        "Change Render Scale"
+    }
 }
 
 /// Change the tonemapping curve (project setting, undoable).
@@ -616,7 +722,10 @@ impl ChangeTonemapCurveCommand {
         old_curve: manifold_core::TonemapCurve,
         new_curve: manifold_core::TonemapCurve,
     ) -> Self {
-        Self { old_curve, new_curve }
+        Self {
+            old_curve,
+            new_curve,
+        }
     }
 }
 
@@ -629,7 +738,9 @@ impl Command for ChangeTonemapCurveCommand {
         project.settings.tonemap_curve = self.old_curve;
     }
 
-    fn description(&self) -> &str { "Change Tonemap Curve" }
+    fn description(&self) -> &str {
+        "Change Tonemap Curve"
+    }
 }
 
 /// Clear percussion import state (remove audio + stems).
@@ -653,7 +764,9 @@ impl Command for ClearPercussionCommand {
         project.percussion_import = self.old_state.take();
     }
 
-    fn description(&self) -> &str { "Remove Audio" }
+    fn description(&self) -> &str {
+        "Remove Audio"
+    }
 }
 
 /// Restore a recorded tempo lane.
@@ -667,7 +780,11 @@ pub struct RestoreRecordedTempoLaneCommand {
 
 impl RestoreRecordedTempoLaneCommand {
     pub fn new(old_bpm: Bpm, old_points: Vec<TempoPoint>, new_points: Vec<TempoPoint>) -> Self {
-        Self { old_bpm, old_points, new_points }
+        Self {
+            old_bpm,
+            old_points,
+            new_points,
+        }
     }
 
     fn apply_lane(project: &mut Project, lane: &[TempoPoint], fallback_bpm: Bpm) {
@@ -675,11 +792,17 @@ impl RestoreRecordedTempoLaneCommand {
 
         for point in lane {
             project.tempo_map.add_or_replace_point_with_time(
-                point.beat, point.bpm, point.source, 0.001, point.recorded_at_seconds,
+                point.beat,
+                point.bpm,
+                point.source,
+                0.001,
+                point.recorded_at_seconds,
             );
         }
 
-        project.tempo_map.ensure_default_at_beat_zero(fallback_bpm, TempoPointSource::Manual);
+        project
+            .tempo_map
+            .ensure_default_at_beat_zero(fallback_bpm, TempoPointSource::Manual);
 
         let bpm_at_zero = project.tempo_map.get_bpm_at_beat(Beats::ZERO, fallback_bpm);
         project.settings.bpm = bpm_at_zero;
@@ -695,7 +818,9 @@ impl Command for RestoreRecordedTempoLaneCommand {
         Self::apply_lane(project, &self.old_points.clone(), self.old_bpm);
     }
 
-    fn description(&self) -> &str { "Restore Tempo Lane" }
+    fn description(&self) -> &str {
+        "Restore Tempo Lane"
+    }
 }
 
 /// Clear the tempo map, flattening to current BPM.
@@ -708,7 +833,10 @@ pub struct ClearTempoMapCommand {
 
 impl ClearTempoMapCommand {
     pub fn new(old_points: Vec<TempoPoint>, current_bpm: Bpm) -> Self {
-        Self { old_points, current_bpm }
+        Self {
+            old_points,
+            current_bpm,
+        }
     }
 }
 
@@ -721,7 +849,9 @@ impl Command for ClearTempoMapCommand {
             TempoPointSource::Manual,
             0.001,
         );
-        project.tempo_map.ensure_default_at_beat_zero(self.current_bpm, TempoPointSource::Manual);
+        project
+            .tempo_map
+            .ensure_default_at_beat_zero(self.current_bpm, TempoPointSource::Manual);
     }
 
     fn undo(&mut self, project: &mut Project) {
@@ -730,15 +860,23 @@ impl Command for ClearTempoMapCommand {
         if !self.old_points.is_empty() {
             for p in &self.old_points {
                 project.tempo_map.add_or_replace_point_with_time(
-                    p.beat, p.bpm, p.source, 0.001, p.recorded_at_seconds,
+                    p.beat,
+                    p.bpm,
+                    p.source,
+                    0.001,
+                    p.recorded_at_seconds,
                 );
             }
         }
 
-        project.tempo_map.ensure_default_at_beat_zero(self.current_bpm, TempoPointSource::Manual);
+        project
+            .tempo_map
+            .ensure_default_at_beat_zero(self.current_bpm, TempoPointSource::Manual);
     }
 
-    fn description(&self) -> &str { "Clear Tempo Map" }
+    fn description(&self) -> &str {
+        "Clear Tempo Map"
+    }
 }
 
 /// Rescale all clip beat positions when BPM changes.
@@ -774,9 +912,15 @@ impl RescaleBeatsForBpmChangeCommand {
             }
         }
 
-        if clip_moves.is_empty() { return None; }
+        if clip_moves.is_empty() {
+            return None;
+        }
 
-        Some(Self { _old_bpm: old_bpm, _new_bpm: new_bpm, clip_moves })
+        Some(Self {
+            _old_bpm: old_bpm,
+            _new_bpm: new_bpm,
+            clip_moves,
+        })
     }
 }
 
@@ -784,22 +928,26 @@ impl Command for RescaleBeatsForBpmChangeCommand {
     fn execute(&mut self, project: &mut Project) {
         for &(li, ci, _, new_beat) in &self.clip_moves {
             if let Some(layer) = project.timeline.layers.get_mut(li)
-                && let Some(clip) = layer.clips.get_mut(ci) {
-                    clip.start_beat = new_beat;
-                }
+                && let Some(clip) = layer.clips.get_mut(ci)
+            {
+                clip.start_beat = new_beat;
+            }
         }
     }
 
     fn undo(&mut self, project: &mut Project) {
         for &(li, ci, old_beat, _) in &self.clip_moves {
             if let Some(layer) = project.timeline.layers.get_mut(li)
-                && let Some(clip) = layer.clips.get_mut(ci) {
-                    clip.start_beat = old_beat;
-                }
+                && let Some(clip) = layer.clips.get_mut(ci)
+            {
+                clip.start_beat = old_beat;
+            }
         }
     }
 
-    fn description(&self) -> &str { "Rescale beats for BPM change" }
+    fn description(&self) -> &str {
+        "Rescale beats for BPM change"
+    }
 }
 
 /// Undoable command for changing the imported audio start beat.
@@ -812,7 +960,10 @@ pub struct SetAudioStartBeatCommand {
 
 impl SetAudioStartBeatCommand {
     pub fn new(old_start_beat: Beats, new_start_beat: Beats) -> Self {
-        Self { old_start_beat, new_start_beat }
+        Self {
+            old_start_beat,
+            new_start_beat,
+        }
     }
 }
 
@@ -829,7 +980,9 @@ impl Command for SetAudioStartBeatCommand {
         }
     }
 
-    fn description(&self) -> &str { "Drag audio start beat" }
+    fn description(&self) -> &str {
+        "Drag audio start beat"
+    }
 }
 
 /// Change a macro slot value. Applies the macro fan-out on execute/undo.
@@ -842,22 +995,62 @@ pub struct ChangeMacroCommand {
 
 impl ChangeMacroCommand {
     pub fn new(index: usize, old_value: f32, new_value: f32) -> Self {
-        Self { index, old_value, new_value }
+        Self {
+            index,
+            old_value,
+            new_value,
+        }
     }
 }
 
 impl Command for ChangeMacroCommand {
     fn execute(&mut self, project: &mut Project) {
-        manifold_core::macro_bank::MacroBank::apply_macro(
-            project, self.index, self.new_value,
-        );
+        manifold_core::macro_bank::MacroBank::apply_macro(project, self.index, self.new_value);
     }
 
     fn undo(&mut self, project: &mut Project) {
-        manifold_core::macro_bank::MacroBank::apply_macro(
-            project, self.index, self.old_value,
-        );
+        manifold_core::macro_bank::MacroBank::apply_macro(project, self.index, self.old_value);
     }
 
-    fn description(&self) -> &str { "Change Macro" }
+    fn description(&self) -> &str {
+        "Change Macro"
+    }
+}
+
+/// Rename a macro slot label.
+#[derive(Debug)]
+pub struct RenameMacroLabelCommand {
+    index: usize,
+    old_label: String,
+    new_label: String,
+}
+
+impl RenameMacroLabelCommand {
+    pub fn new(index: usize, old_label: String, new_label: String) -> Self {
+        Self {
+            index,
+            old_label,
+            new_label,
+        }
+    }
+
+    fn apply_label(project: &mut Project, index: usize, label: &str) {
+        if let Some(slot) = project.settings.macro_bank.slots.get_mut(index) {
+            slot.label = label.to_string();
+        }
+    }
+}
+
+impl Command for RenameMacroLabelCommand {
+    fn execute(&mut self, project: &mut Project) {
+        Self::apply_label(project, self.index, &self.new_label);
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        Self::apply_label(project, self.index, &self.old_label);
+    }
+
+    fn description(&self) -> &str {
+        "Rename Macro Label"
+    }
 }

@@ -1,13 +1,13 @@
 use crate::command::{Command, CompositeCommand};
-use crate::undo::UndoRedoManager;
 use crate::commands::clip::*;
 use crate::commands::layer::DuplicateLayersCommand;
-use manifold_core::{Beats, ClipId, LayerId, Seconds};
+use crate::undo::UndoRedoManager;
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::selection::SelectionRegion;
 use manifold_core::types::LayerType;
+use manifold_core::{Beats, ClipId, LayerId, Seconds};
 use std::collections::{HashMap, HashSet};
 
 /// Host trait for EditingService — replaces C#'s UIState/CoordinateMapper/PlaybackController.
@@ -112,8 +112,12 @@ impl EditingService {
         }
     }
 
-    pub fn can_undo(&self) -> bool { self.undo_manager.can_undo() }
-    pub fn can_redo(&self) -> bool { self.undo_manager.can_redo() }
+    pub fn can_undo(&self) -> bool {
+        self.undo_manager.can_undo()
+    }
+    pub fn can_redo(&self) -> bool {
+        self.undo_manager.can_redo()
+    }
 
     /// Clear undo history (e.g., on project load).
     /// Bumps data_version (rather than resetting to 0) so the content thread's
@@ -136,22 +140,32 @@ impl EditingService {
         self.data_version != self.saved_at_version
     }
 
-    pub fn data_version(&self) -> u64 { self.data_version }
+    pub fn data_version(&self) -> u64 {
+        self.data_version
+    }
 
     // ─── Clip lookup ───
 
-    pub fn find_clip_by_id<'a>(&self, project: &'a mut Project, clip_id: &str) -> Option<&'a TimelineClip> {
+    pub fn find_clip_by_id<'a>(
+        &self,
+        project: &'a mut Project,
+        clip_id: &str,
+    ) -> Option<&'a TimelineClip> {
         project.timeline.find_clip_by_id(clip_id)
     }
 
     // ─── Selection helpers ───
 
     /// Get clips in a selection region.
-    pub fn get_clips_in_region(project: &Project, region: &SelectionRegion) -> Vec<(usize, ClipId)> {
+    pub fn get_clips_in_region(
+        project: &Project,
+        region: &SelectionRegion,
+    ) -> Vec<(usize, ClipId)> {
         if !region.is_active {
             return Vec::new();
         }
-        let (min_layer, max_layer) = region.layer_index_range(&project.timeline.layers)
+        let (min_layer, max_layer) = region
+            .layer_index_range(&project.timeline.layers)
             .unwrap_or((0, 0));
         let mut results = Vec::new();
 
@@ -207,7 +221,10 @@ impl EditingService {
 
             // Case 1: placed clip covers both start and end -> delete existing
             if placed_start <= clip_start && placed_end >= clip_end {
-                commands.push(Box::new(DeleteClipCommand::new(clip.clone(), layer.layer_id.clone())));
+                commands.push(Box::new(DeleteClipCommand::new(
+                    clip.clone(),
+                    layer.layer_id.clone(),
+                )));
                 continue;
             }
 
@@ -220,9 +237,12 @@ impl EditingService {
                 let new_duration = clip.duration_beats - trim_beats;
                 commands.push(Box::new(TrimClipCommand::new(
                     clip.id.clone(),
-                    clip.start_beat, new_start,
-                    clip.duration_beats, new_duration,
-                    clip.in_point, new_in_point,
+                    clip.start_beat,
+                    new_start,
+                    clip.duration_beats,
+                    new_duration,
+                    clip.in_point,
+                    new_in_point,
                 )));
                 continue;
             }
@@ -232,9 +252,12 @@ impl EditingService {
                 let new_duration = placed_start - clip_start;
                 commands.push(Box::new(TrimClipCommand::new(
                     clip.id.clone(),
-                    clip.start_beat, clip.start_beat,
-                    clip.duration_beats, new_duration,
-                    clip.in_point, clip.in_point,
+                    clip.start_beat,
+                    clip.start_beat,
+                    clip.duration_beats,
+                    new_duration,
+                    clip.in_point,
+                    clip.in_point,
                 )));
                 continue;
             }
@@ -251,9 +274,12 @@ impl EditingService {
 
                 commands.push(Box::new(TrimClipCommand::new(
                     clip.id.clone(),
-                    clip.start_beat, clip.start_beat,
-                    clip.duration_beats, new_duration,
-                    clip.in_point, clip.in_point,
+                    clip.start_beat,
+                    clip.start_beat,
+                    clip.duration_beats,
+                    new_duration,
+                    clip.in_point,
+                    clip.in_point,
                 )));
                 commands.push(Box::new(AddClipCommand::new(tail, layer.layer_id.clone())));
             }
@@ -280,42 +306,50 @@ impl EditingService {
 
         // Region mode: trim clips at boundaries, use region origin
         if let Some(region) = region
-            && region.is_active {
-                let region_start = region.start_beat;
-                let region_end = region.end_beat;
+            && region.is_active
+        {
+            let region_start = region.start_beat;
+            let region_end = region.end_beat;
 
-                // Find overlapping clips in region (matching Unity CopySelectedClips)
-                let overlapping: Vec<(&TimelineClip, usize)> = project.timeline.layers.iter()
-                    .enumerate()
-                    .flat_map(|(li, l)| l.clips.iter().map(move |c| (c, li)))
-                    .filter(|(c, _)| {
-                        c.start_beat < region_end
-                            && c.end_beat() > region_start
-                            && clip_ids.contains(&c.id)
-                    })
-                    .collect();
+            // Find overlapping clips in region (matching Unity CopySelectedClips)
+            let overlapping: Vec<(&TimelineClip, usize)> = project
+                .timeline
+                .layers
+                .iter()
+                .enumerate()
+                .flat_map(|(li, l)| l.clips.iter().map(move |c| (c, li)))
+                .filter(|(c, _)| {
+                    c.start_beat < region_end
+                        && c.end_beat() > region_start
+                        && clip_ids.contains(&c.id)
+                })
+                .collect();
 
-                if overlapping.is_empty() {
-                    return;
-                }
-
-                let origin_beat = region_start;
-                let (min_layer, _) = region.layer_index_range(&project.timeline.layers)
-                    .unwrap_or((0, 0));
-
-                for (clip, clip_layer_idx) in overlapping {
-                    let trimmed = Self::trim_clip_to_region(clip, region, spb);
-                    let is_gen = project.timeline.layers.get(clip_layer_idx)
-                        .is_some_and(|l| l.layer_type == LayerType::Generator);
-                    self.clipboard.push(ClipboardEntry {
-                        beat_offset: trimmed.start_beat - origin_beat,
-                        layer_offset: clip_layer_idx as i32 - min_layer as i32,
-                        source_clip: trimmed,
-                        is_generator: is_gen,
-                    });
-                }
+            if overlapping.is_empty() {
                 return;
             }
+
+            let origin_beat = region_start;
+            let (min_layer, _) = region
+                .layer_index_range(&project.timeline.layers)
+                .unwrap_or((0, 0));
+
+            for (clip, clip_layer_idx) in overlapping {
+                let trimmed = Self::trim_clip_to_region(clip, region, spb);
+                let is_gen = project
+                    .timeline
+                    .layers
+                    .get(clip_layer_idx)
+                    .is_some_and(|l| l.layer_type == LayerType::Generator);
+                self.clipboard.push(ClipboardEntry {
+                    beat_offset: trimmed.start_beat - origin_beat,
+                    layer_offset: clip_layer_idx as i32 - min_layer as i32,
+                    source_clip: trimmed,
+                    is_generator: is_gen,
+                });
+            }
+            return;
+        }
 
         // Individual mode: copy full clips, earliest-clip origin
         if clip_ids.is_empty() {
@@ -335,14 +369,21 @@ impl EditingService {
             return;
         }
 
-        let min_beat = clips_with_layer.iter().map(|(c, _)| c.start_beat).fold(Beats(f64::MAX), Beats::min);
-        let min_layer_idx = clips_with_layer.iter()
+        let min_beat = clips_with_layer
+            .iter()
+            .map(|(c, _)| c.start_beat)
+            .fold(Beats(f64::MAX), Beats::min);
+        let min_layer_idx = clips_with_layer
+            .iter()
             .map(|(_, li)| *li as i32)
             .min()
             .unwrap_or(0);
 
         for (clip, li) in clips_with_layer {
-            let is_gen = project.timeline.layers.get(li)
+            let is_gen = project
+                .timeline
+                .layers
+                .get(li)
                 .is_some_and(|l| l.layer_type == LayerType::Generator);
             self.clipboard.push(ClipboardEntry {
                 beat_offset: clip.start_beat - min_beat,
@@ -376,7 +417,10 @@ impl EditingService {
 
             let layer = match project.timeline.layers.get(paste_layer_idx) {
                 Some(l) => l,
-                None => { skipped += 1; continue; }
+                None => {
+                    skipped += 1;
+                    continue;
+                }
             };
 
             let clip_is_gen = entry.is_generator;
@@ -393,9 +437,8 @@ impl EditingService {
 
             // Enforce non-overlap for the new clip
             let empty_ignore = HashSet::new();
-            let overlap_cmds = Self::enforce_non_overlap(
-                project, &new_clip, paste_layer_idx, &empty_ignore, spb,
-            );
+            let overlap_cmds =
+                Self::enforce_non_overlap(project, &new_clip, paste_layer_idx, &empty_ignore, spb);
             commands.extend(overlap_cmds);
 
             let paste_layer_id = layer.layer_id.clone();
@@ -469,8 +512,14 @@ impl EditingService {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
 
         let layer_count = project.timeline.layers.len();
-        let (start_layer, end_layer) = region.layer_index_range(&project.timeline.layers)
-            .map(|(lo, hi)| (lo.min(layer_count.saturating_sub(1)), hi.min(layer_count.saturating_sub(1))))
+        let (start_layer, end_layer) = region
+            .layer_index_range(&project.timeline.layers)
+            .map(|(lo, hi)| {
+                (
+                    lo.min(layer_count.saturating_sub(1)),
+                    hi.min(layer_count.saturating_sub(1)),
+                )
+            })
             .unwrap_or((0, 0));
 
         let region_start = region.start_beat;
@@ -479,7 +528,10 @@ impl EditingService {
         for li in start_layer..=end_layer {
             // Snapshot clip IDs (splits add new clips)
             let clip_ids: Vec<ClipId> = project.timeline.layers[li]
-                .clips.iter().map(|c| c.id.clone()).collect();
+                .clips
+                .iter()
+                .map(|c| c.id.clone())
+                .collect();
 
             for clip_id in &clip_ids {
                 let clip = match project.timeline.layers[li].find_clip(clip_id) {
@@ -494,15 +546,17 @@ impl EditingService {
                 // Split at region end FIRST (so the original's EndBeat is still valid
                 // when we split at region start)
                 if clip.end_beat() > region_end
-                    && let Some(cmd) = Self::split_clip_at_beat(project, clip_id, region_end, spb) {
-                        commands.push(cmd);
-                    }
+                    && let Some(cmd) = Self::split_clip_at_beat(project, clip_id, region_end, spb)
+                {
+                    commands.push(cmd);
+                }
 
                 // Split at region start
                 if clip.start_beat < region_start
-                    && let Some(cmd) = Self::split_clip_at_beat(project, clip_id, region_start, spb) {
-                        commands.push(cmd);
-                    }
+                    && let Some(cmd) = Self::split_clip_at_beat(project, clip_id, region_start, spb)
+                {
+                    commands.push(cmd);
+                }
             }
         }
 
@@ -532,7 +586,8 @@ impl EditingService {
 
         // Adjust in_point for video clips
         if !clip.video_clip_id.is_empty() {
-            trimmed.in_point = clip.in_point + Seconds((new_start - clip.start_beat).0 * spb as f64);
+            trimmed.in_point =
+                clip.in_point + Seconds((new_start - clip.start_beat).0 * spb as f64);
         }
 
         trimmed
@@ -588,7 +643,8 @@ impl EditingService {
             let offset = region.duration_beats();
             let region_start = region.start_beat;
             let region_end = region.end_beat;
-            let (start_layer, end_layer) = region.layer_index_range(&project.timeline.layers)
+            let (start_layer, end_layer) = region
+                .layer_index_range(&project.timeline.layers)
                 .map(|(lo, hi)| (lo, hi.min(project.timeline.layers.len().saturating_sub(1))))
                 .unwrap_or((0, 0));
 
@@ -596,9 +652,7 @@ impl EditingService {
                 let layer = &project.timeline.layers[li];
                 for clip in &layer.clips {
                     // Overlap test: clip intersects region (Unity lines 182-183)
-                    if clip.end_beat() <= region_start
-                        || clip.start_beat >= region_end
-                    {
+                    if clip.end_beat() <= region_start || clip.start_beat >= region_end {
                         continue;
                     }
                     let trimmed = Self::trim_clip_to_region(clip, region, spb);
@@ -606,12 +660,12 @@ impl EditingService {
                     new_clip.start_beat += offset;
 
                     // Enforce non-overlap before adding the new clip
-                    let overlap_cmds = Self::enforce_non_overlap(
-                        project, &new_clip, li, &empty_ignore, spb,
-                    );
+                    let overlap_cmds =
+                        Self::enforce_non_overlap(project, &new_clip, li, &empty_ignore, spb);
                     commands.extend(overlap_cmds);
                     commands.push(Box::new(AddClipCommand::new(
-                        new_clip, layer.layer_id.clone(),
+                        new_clip,
+                        layer.layer_id.clone(),
                     )));
                 }
             }
@@ -627,7 +681,11 @@ impl EditingService {
                     }
                 }
             }
-            let shift = if max_end > min_beat { max_end - min_beat } else { Beats::ONE };
+            let shift = if max_end > min_beat {
+                max_end - min_beat
+            } else {
+                Beats::ONE
+            };
 
             for layer in &project.timeline.layers {
                 for clip in &layer.clips {
@@ -635,15 +693,17 @@ impl EditingService {
                         let mut new_clip = clip.clone_with_new_id();
                         new_clip.start_beat += shift;
 
-                        let li = project.timeline.layer_index_for_id(&layer.layer_id)
+                        let li = project
+                            .timeline
+                            .layer_index_for_id(&layer.layer_id)
                             .unwrap_or(0);
                         // Enforce non-overlap before adding the new clip
-                        let overlap_cmds = Self::enforce_non_overlap(
-                            project, &new_clip, li, &empty_ignore, spb,
-                        );
+                        let overlap_cmds =
+                            Self::enforce_non_overlap(project, &new_clip, li, &empty_ignore, spb);
                         commands.extend(overlap_cmds);
                         commands.push(Box::new(AddClipCommand::new(
-                            new_clip, layer.layer_id.clone(),
+                            new_clip,
+                            layer.layer_id.clone(),
                         )));
                     }
                 }
@@ -667,28 +727,32 @@ impl EditingService {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
 
         if let Some(region) = region
-            && region.is_active {
-                // Region mode: split at boundaries, then delete clips inside region
-                let split_cmds = Self::split_clips_at_region_boundaries(project, region, spb);
-                commands.extend(split_cmds);
+            && region.is_active
+        {
+            // Region mode: split at boundaries, then delete clips inside region
+            let split_cmds = Self::split_clips_at_region_boundaries(project, region, spb);
+            commands.extend(split_cmds);
 
-                // After splits, collect clips fully inside the region
-                let clips_in_region = Self::get_clips_in_region(project, region);
-                for (li, clip_id) in &clips_in_region {
-                    if let Some(clip) = project.timeline.layers[*li].find_clip(clip_id) {
-                        let lid = project.timeline.layers[*li].layer_id.clone();
-                        commands.push(Box::new(DeleteClipCommand::new(clip.clone(), lid)));
-                    }
+            // After splits, collect clips fully inside the region
+            let clips_in_region = Self::get_clips_in_region(project, region);
+            for (li, clip_id) in &clips_in_region {
+                if let Some(clip) = project.timeline.layers[*li].find_clip(clip_id) {
+                    let lid = project.timeline.layers[*li].layer_id.clone();
+                    commands.push(Box::new(DeleteClipCommand::new(clip.clone(), lid)));
                 }
-
-                return commands;
             }
+
+            return commands;
+        }
 
         // Individual selection path
         for layer in &project.timeline.layers {
             for clip in &layer.clips {
                 if clip_ids.contains(&clip.id) {
-                    commands.push(Box::new(DeleteClipCommand::new(clip.clone(), layer.layer_id.clone())));
+                    commands.push(Box::new(DeleteClipCommand::new(
+                        clip.clone(),
+                        layer.layer_id.clone(),
+                    )));
                 }
             }
         }
@@ -731,8 +795,10 @@ impl EditingService {
 
                 commands.push(Box::new(MoveClipCommand::new(
                     clip.id.clone(),
-                    old_start, new_start,
-                    layer.layer_id.clone(), layer.layer_id.clone(),
+                    old_start,
+                    new_start,
+                    layer.layer_id.clone(),
+                    layer.layer_id.clone(),
                 )));
                 nudged_ids.insert(clip.id.clone());
 
@@ -753,7 +819,11 @@ impl EditingService {
         // Enforce overlaps for each nudged clip, excluding other nudged clips
         for nudged in &nudged_clips {
             let overlap_cmds = Self::enforce_non_overlap(
-                project, &nudged.clip, nudged.layer_index, &nudged_ids, spb,
+                project,
+                &nudged.clip,
+                nudged.layer_index,
+                &nudged_ids,
+                spb,
             );
             commands.extend(overlap_cmds);
         }
@@ -806,9 +876,12 @@ impl EditingService {
 
                 commands.push(Box::new(TrimClipCommand::new(
                     clip.id.clone(),
-                    clip.start_beat, clip.start_beat,
-                    clip.duration_beats, new_duration,
-                    clip.in_point, clip.in_point,
+                    clip.start_beat,
+                    clip.start_beat,
+                    clip.duration_beats,
+                    new_duration,
+                    clip.in_point,
+                    clip.in_point,
                 )));
             }
         }
@@ -832,9 +905,12 @@ impl EditingService {
                     if (new_duration - clip.duration_beats).abs() > Beats(0.001) {
                         commands.push(Box::new(TrimClipCommand::new(
                             clip.id.clone(),
-                            clip.start_beat, clip.start_beat,
-                            clip.duration_beats, new_duration,
-                            clip.in_point, clip.in_point,
+                            clip.start_beat,
+                            clip.start_beat,
+                            clip.duration_beats,
+                            new_duration,
+                            clip.in_point,
+                            clip.in_point,
                         )));
                     }
                 }
@@ -880,8 +956,10 @@ impl EditingService {
                 // MoveClipCommand handles generator type adoption internally
                 return Some(Box::new(MoveClipCommand::new(
                     clip.id.clone(),
-                    clip.start_beat, clip.start_beat,
-                    layer.layer_id.clone(), target_layer_id,
+                    clip.start_beat,
+                    clip.start_beat,
+                    layer.layer_id.clone(),
+                    target_layer_id,
                 )));
             }
         }
@@ -917,12 +995,20 @@ impl EditingService {
         region: Option<&SelectionRegion>,
     ) -> Vec<&'a TimelineClip> {
         if let Some(region) = region
-            && region.is_active {
-                let clips_in_region = Self::get_clips_in_region(project, region);
-                return clips_in_region.iter().filter_map(|(li, id)| {
-                    project.timeline.layers.get(*li).and_then(|l| l.find_clip(id))
-                }).collect();
-            }
+            && region.is_active
+        {
+            let clips_in_region = Self::get_clips_in_region(project, region);
+            return clips_in_region
+                .iter()
+                .filter_map(|(li, id)| {
+                    project
+                        .timeline
+                        .layers
+                        .get(*li)
+                        .and_then(|l| l.find_clip(id))
+                })
+                .collect();
+        }
 
         let mut result = Vec::with_capacity(selected_clip_ids.len());
         for layer in &project.timeline.layers {
@@ -969,10 +1055,18 @@ impl EditingService {
                     continue;
                 }
                 let li = li as i32;
-                if clip.start_beat < min_beat { min_beat = clip.start_beat; }
-                if clip.end_beat() > max_beat { max_beat = clip.end_beat(); }
-                if li < min_layer { min_layer = li; }
-                if li > max_layer { max_layer = li; }
+                if clip.start_beat < min_beat {
+                    min_beat = clip.start_beat;
+                }
+                if clip.end_beat() > max_beat {
+                    max_beat = clip.end_beat();
+                }
+                if li < min_layer {
+                    min_layer = li;
+                }
+                if li > max_layer {
+                    max_layer = li;
+                }
             }
         }
 
@@ -1053,14 +1147,14 @@ impl EditingService {
 
     /// Toggle mute on selected clips.
     /// Port of C# EditingService.ToggleMuteSelectedClips (lines 418-449).
-    pub fn toggle_mute_clips(
-        project: &Project,
-        clip_ids: &[ClipId],
-    ) -> Vec<Box<dyn Command>> {
+    pub fn toggle_mute_clips(project: &Project, clip_ids: &[ClipId]) -> Vec<Box<dyn Command>> {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
 
         // Determine target state: mute all if any are unmuted
-        let any_unmuted = project.timeline.layers.iter()
+        let any_unmuted = project
+            .timeline
+            .layers
+            .iter()
             .flat_map(|l| l.clips.iter())
             .filter(|c| clip_ids.contains(&c.id))
             .any(|c| !c.is_muted);
@@ -1070,7 +1164,9 @@ impl EditingService {
             for clip in &layer.clips {
                 if clip_ids.contains(&clip.id) && clip.is_muted != new_muted {
                     commands.push(Box::new(MuteClipCommand::new(
-                        clip.id.clone(), clip.is_muted, new_muted,
+                        clip.id.clone(),
+                        clip.is_muted,
+                        new_muted,
                     )));
                 }
             }
@@ -1137,7 +1233,9 @@ impl EditingService {
         }
 
         // 2. Collect expanded set in timeline order; find the last index.
-        let expanded_in_order: Vec<(usize, &Layer)> = project.timeline.layers
+        let expanded_in_order: Vec<(usize, &Layer)> = project
+            .timeline
+            .layers
             .iter()
             .enumerate()
             .filter(|(_, l)| expanded_ids.contains(&l.layer_id))
@@ -1151,11 +1249,14 @@ impl EditingService {
 
         // 3. Clone each layer with fresh IDs; build old→new LayerId map for parent remapping.
         let mut id_map: HashMap<LayerId, LayerId> = HashMap::new();
-        let mut new_layers: Vec<Layer> = expanded_in_order.iter().map(|(_, l)| {
-            let cloned = l.clone_with_new_ids();
-            id_map.insert(l.layer_id.clone(), cloned.layer_id.clone());
-            cloned
-        }).collect();
+        let mut new_layers: Vec<Layer> = expanded_in_order
+            .iter()
+            .map(|(_, l)| {
+                let cloned = l.clone_with_new_ids();
+                id_map.insert(l.layer_id.clone(), cloned.layer_id.clone());
+                cloned
+            })
+            .collect();
 
         // 4. Remap parent_layer_id on cloned layers whose parent was also duplicated.
         for layer in &mut new_layers {
@@ -1166,7 +1267,10 @@ impl EditingService {
             }
         }
 
-        Some(Box::new(DuplicateLayersCommand::new(new_layers, insert_after_index)))
+        Some(Box::new(DuplicateLayersCommand::new(
+            new_layers,
+            insert_after_index,
+        )))
     }
 }
 

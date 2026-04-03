@@ -1,10 +1,10 @@
-use manifold_core::TonemapCurve;
+use super::{Panel, PanelAction};
 use crate::color;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
 use crate::node::*;
 use crate::tree::UITree;
-use super::{Panel, PanelAction};
+use manifold_core::TonemapCurve;
 
 // ── Layout constants (from FooterLayout.cs) ────────────────────────
 
@@ -199,29 +199,41 @@ impl FooterPanel {
 
     // ── Public accessors ───────────────────────────────────────────
 
-    pub fn fps_field_id(&self) -> i32 { self.fps_field_id }
-    pub fn resolution_button_id(&self) -> i32 { self.resolution_button_id }
+    pub fn fps_field_id(&self) -> i32 {
+        self.fps_field_id
+    }
+    pub fn resolution_button_id(&self) -> i32 {
+        self.resolution_button_id
+    }
 
     // ── Push-based setters ─────────────────────────────────────────
 
     pub fn set_selection_info(&mut self, tree: &mut UITree, text: &str) {
         self.selection_info = text.into();
-        if self.selection_info_id >= 0 { tree.set_text(self.selection_info_id as u32, text); }
+        if self.selection_info_id >= 0 {
+            tree.set_text(self.selection_info_id as u32, text);
+        }
     }
 
     pub fn set_quantize_text(&mut self, tree: &mut UITree, text: &str) {
         self.quantize_text = text.into();
-        if self.quantize_button_id >= 0 { tree.set_text(self.quantize_button_id as u32, text); }
+        if self.quantize_button_id >= 0 {
+            tree.set_text(self.quantize_button_id as u32, text);
+        }
     }
 
     pub fn set_resolution_text(&mut self, tree: &mut UITree, text: &str) {
         self.resolution_text = text.into();
-        if self.resolution_button_id >= 0 { tree.set_text(self.resolution_button_id as u32, text); }
+        if self.resolution_button_id >= 0 {
+            tree.set_text(self.resolution_button_id as u32, text);
+        }
     }
 
     pub fn set_fps_text(&mut self, tree: &mut UITree, text: &str) {
         self.fps_text = text.into();
-        if self.fps_field_id >= 0 { tree.set_text(self.fps_field_id as u32, text); }
+        if self.fps_field_id >= 0 {
+            tree.set_text(self.fps_field_id as u32, text);
+        }
     }
 
     /// Update VSync toggle state and actual resolved FPS display.
@@ -230,8 +242,11 @@ impl FooterPanel {
     /// - `active`: from content thread (whether vsync mode is actually running)
     /// - `actual_fps`: from content thread (display_hz / divisor when active)
     pub fn set_vsync_state(
-        &mut self, tree: &mut UITree,
-        enabled: bool, active: bool, actual_fps: f32,
+        &mut self,
+        tree: &mut UITree,
+        enabled: bool,
+        active: bool,
+        actual_fps: f32,
     ) {
         let enabled_changed = enabled != self.vsync_enabled;
         let active_changed = active != self.vsync_active;
@@ -258,14 +273,18 @@ impl FooterPanel {
 
     /// Highlight the active render scale button. No-op if scale unchanged.
     pub fn set_render_scale(&mut self, tree: &mut UITree, scale: f32) {
-        if (scale - self.current_render_scale).abs() < 0.01 { return; }
+        if (scale - self.current_render_scale).abs() < 0.01 {
+            return;
+        }
         self.current_render_scale = scale;
         self.refresh_scale_button_styles(tree);
     }
 
     /// Highlight the active tonemap curve button. No-op if curve unchanged.
     pub fn set_tonemap_curve(&mut self, tree: &mut UITree, curve: TonemapCurve) {
-        if curve == self.current_tonemap_curve { return; }
+        if curve == self.current_tonemap_curve {
+            return;
+        }
         self.current_tonemap_curve = curve;
         self.refresh_tonemap_button_styles(tree);
     }
@@ -274,22 +293,35 @@ impl FooterPanel {
         let ids = [
             (self.tonemap_aces_id, TonemapCurve::AcesNarkowicz),
             (self.tonemap_hill_id, TonemapCurve::AcesHill),
-            (self.tonemap_agx_id,  TonemapCurve::Agx),
+            (self.tonemap_agx_id, TonemapCurve::Agx),
         ];
         for (id, val) in ids {
-            if id < 0 { continue; }
+            if id < 0 {
+                continue;
+            }
             let active = val == self.current_tonemap_curve;
-            tree.set_style(id as u32, UIStyle {
-                bg_color: if active { FOOTER_SCALE_ACTIVE } else { color::BUTTON_INACTIVE_C32 },
-                ..Self::footer_button_style()
-            });
+            tree.set_style(
+                id as u32,
+                UIStyle {
+                    bg_color: if active {
+                        FOOTER_SCALE_ACTIVE
+                    } else {
+                        color::BUTTON_INACTIVE_C32
+                    },
+                    ..Self::footer_button_style()
+                },
+            );
         }
     }
 
     fn tonemap_button_style_for(&self, curve: TonemapCurve) -> UIStyle {
         let active = curve == self.current_tonemap_curve;
         UIStyle {
-            bg_color: if active { FOOTER_SCALE_ACTIVE } else { color::BUTTON_INACTIVE_C32 },
+            bg_color: if active {
+                FOOTER_SCALE_ACTIVE
+            } else {
+                color::BUTTON_INACTIVE_C32
+            },
             ..Self::footer_button_style()
         }
     }
@@ -297,16 +329,25 @@ impl FooterPanel {
     fn refresh_scale_button_styles(&self, tree: &mut UITree) {
         let ids = [
             (self.scale_100_id, 1.0f32),
-            (self.scale_75_id,  0.75),
-            (self.scale_50_id,  0.5),
+            (self.scale_75_id, 0.75),
+            (self.scale_50_id, 0.5),
         ];
         for (id, val) in ids {
-            if id < 0 { continue; }
+            if id < 0 {
+                continue;
+            }
             let active = (val - self.current_render_scale).abs() < 0.01;
-            tree.set_style(id as u32, UIStyle {
-                bg_color: if active { FOOTER_SCALE_ACTIVE } else { color::BUTTON_INACTIVE_C32 },
-                ..Self::footer_button_style()
-            });
+            tree.set_style(
+                id as u32,
+                UIStyle {
+                    bg_color: if active {
+                        FOOTER_SCALE_ACTIVE
+                    } else {
+                        color::BUTTON_INACTIVE_C32
+                    },
+                    ..Self::footer_button_style()
+                },
+            );
         }
     }
 
@@ -326,7 +367,11 @@ impl FooterPanel {
     fn scale_button_style_for(&self, scale: f32) -> UIStyle {
         let active = (scale - self.current_render_scale).abs() < 0.01;
         UIStyle {
-            bg_color: if active { FOOTER_SCALE_ACTIVE } else { color::BUTTON_INACTIVE_C32 },
+            bg_color: if active {
+                FOOTER_SCALE_ACTIVE
+            } else {
+                color::BUTTON_INACTIVE_C32
+            },
             ..Self::footer_button_style()
         }
     }
@@ -350,22 +395,44 @@ impl FooterPanel {
 
     fn handle_click(&self, node_id: u32) -> Vec<PanelAction> {
         let id = node_id as i32;
-        if id == self.quantize_button_id  { return vec![PanelAction::CycleQuantize]; }
-        if id == self.resolution_button_id { return vec![PanelAction::ResolutionClicked]; }
-        if id == self.fps_field_id         { return vec![PanelAction::FpsFieldClicked]; }
-        if id == self.vsync_btn_id         { return vec![PanelAction::ToggleVsync]; }
-        if id == self.scale_100_id         { return vec![PanelAction::SetRenderScale(1.0)]; }
-        if id == self.scale_75_id          { return vec![PanelAction::SetRenderScale(0.75)]; }
-        if id == self.scale_50_id          { return vec![PanelAction::SetRenderScale(0.5)]; }
-        if id == self.tonemap_aces_id      { return vec![PanelAction::SetTonemapCurve(TonemapCurve::AcesNarkowicz)]; }
-        if id == self.tonemap_hill_id      { return vec![PanelAction::SetTonemapCurve(TonemapCurve::AcesHill)]; }
-        if id == self.tonemap_agx_id       { return vec![PanelAction::SetTonemapCurve(TonemapCurve::Agx)]; }
+        if id == self.quantize_button_id {
+            return vec![PanelAction::CycleQuantize];
+        }
+        if id == self.resolution_button_id {
+            return vec![PanelAction::ResolutionClicked];
+        }
+        if id == self.fps_field_id {
+            return vec![PanelAction::FpsFieldClicked];
+        }
+        if id == self.vsync_btn_id {
+            return vec![PanelAction::ToggleVsync];
+        }
+        if id == self.scale_100_id {
+            return vec![PanelAction::SetRenderScale(1.0)];
+        }
+        if id == self.scale_75_id {
+            return vec![PanelAction::SetRenderScale(0.75)];
+        }
+        if id == self.scale_50_id {
+            return vec![PanelAction::SetRenderScale(0.5)];
+        }
+        if id == self.tonemap_aces_id {
+            return vec![PanelAction::SetTonemapCurve(TonemapCurve::AcesNarkowicz)];
+        }
+        if id == self.tonemap_hill_id {
+            return vec![PanelAction::SetTonemapCurve(TonemapCurve::AcesHill)];
+        }
+        if id == self.tonemap_agx_id {
+            return vec![PanelAction::SetTonemapCurve(TonemapCurve::Agx)];
+        }
         Vec::new()
     }
 }
 
 impl Default for FooterPanel {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Panel for FooterPanel {
@@ -381,140 +448,192 @@ impl Panel for FooterPanel {
         let fps_text = self.fps_text.clone();
 
         let bg = tree.add_panel(
-            -1, footer.x, footer.y, footer.width, footer.height,
-            UIStyle { bg_color: color::PANEL_BG_DARK, ..UIStyle::default() },
+            -1,
+            footer.x,
+            footer.y,
+            footer.width,
+            footer.height,
+            UIStyle {
+                bg_color: color::PANEL_BG_DARK,
+                ..UIStyle::default()
+            },
         ) as i32;
 
         // Selection info
         self.selection_info_id = tree.add_node(
-            bg, self.layout.selection_info, UINodeType::Label,
+            bg,
+            self.layout.selection_info,
+            UINodeType::Label,
             UIStyle {
                 text_color: color::TEXT_PRIMARY_C32,
                 font_size: FOOTER_FONT,
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
             },
-            Some(&selection_info), UIFlags::empty(),
+            Some(&selection_info),
+            UIFlags::empty(),
         ) as i32;
 
         // Quantize
         self.quantize_label_id = tree.add_node(
-            bg, self.layout.quantize_label, UINodeType::Label,
+            bg,
+            self.layout.quantize_label,
+            UINodeType::Label,
             UIStyle {
                 text_color: color::TEXT_DIMMED_C32,
                 font_size: FOOTER_FONT,
                 text_align: TextAlign::Right,
                 ..UIStyle::default()
             },
-            Some("Q:"), UIFlags::empty(),
+            Some("Q:"),
+            UIFlags::empty(),
         ) as i32;
 
         self.quantize_button_id = tree.add_button(
             bg,
-            self.layout.quantize_button.x, self.layout.quantize_button.y,
-            self.layout.quantize_button.width, self.layout.quantize_button.height,
-            Self::footer_button_style(), &quantize_text,
+            self.layout.quantize_button.x,
+            self.layout.quantize_button.y,
+            self.layout.quantize_button.width,
+            self.layout.quantize_button.height,
+            Self::footer_button_style(),
+            &quantize_text,
         ) as i32;
 
         // Resolution
         self.resolution_label_id = tree.add_node(
-            bg, self.layout.resolution_label, UINodeType::Label,
+            bg,
+            self.layout.resolution_label,
+            UINodeType::Label,
             UIStyle {
                 text_color: color::TEXT_DIMMED_C32,
                 font_size: FOOTER_FONT,
                 text_align: TextAlign::Right,
                 ..UIStyle::default()
             },
-            Some("RES:"), UIFlags::empty(),
+            Some("RES:"),
+            UIFlags::empty(),
         ) as i32;
 
         self.resolution_button_id = tree.add_button(
             bg,
-            self.layout.resolution_button.x, self.layout.resolution_button.y,
-            self.layout.resolution_button.width, self.layout.resolution_button.height,
-            Self::footer_button_style(), &resolution_text,
+            self.layout.resolution_button.x,
+            self.layout.resolution_button.y,
+            self.layout.resolution_button.width,
+            self.layout.resolution_button.height,
+            Self::footer_button_style(),
+            &resolution_text,
         ) as i32;
 
         // Render scale buttons: [1x] [75%] [50%]
         self.scale_100_id = tree.add_button(
             bg,
-            self.layout.scale_100.x, self.layout.scale_100.y,
-            self.layout.scale_100.width, self.layout.scale_100.height,
-            self.scale_button_style_for(1.0), "1×",
+            self.layout.scale_100.x,
+            self.layout.scale_100.y,
+            self.layout.scale_100.width,
+            self.layout.scale_100.height,
+            self.scale_button_style_for(1.0),
+            "1×",
         ) as i32;
 
         self.scale_75_id = tree.add_button(
             bg,
-            self.layout.scale_75.x, self.layout.scale_75.y,
-            self.layout.scale_75.width, self.layout.scale_75.height,
-            self.scale_button_style_for(0.75), "75%",
+            self.layout.scale_75.x,
+            self.layout.scale_75.y,
+            self.layout.scale_75.width,
+            self.layout.scale_75.height,
+            self.scale_button_style_for(0.75),
+            "75%",
         ) as i32;
 
         self.scale_50_id = tree.add_button(
             bg,
-            self.layout.scale_50.x, self.layout.scale_50.y,
-            self.layout.scale_50.width, self.layout.scale_50.height,
-            self.scale_button_style_for(0.5), "50%",
+            self.layout.scale_50.x,
+            self.layout.scale_50.y,
+            self.layout.scale_50.width,
+            self.layout.scale_50.height,
+            self.scale_button_style_for(0.5),
+            "50%",
         ) as i32;
 
         // Tonemap curve
         self.tonemap_label_id = tree.add_node(
-            bg, self.layout.tonemap_label, UINodeType::Label,
+            bg,
+            self.layout.tonemap_label,
+            UINodeType::Label,
             UIStyle {
                 text_color: color::TEXT_DIMMED_C32,
                 font_size: FOOTER_FONT,
                 text_align: TextAlign::Right,
                 ..UIStyle::default()
             },
-            Some("TM:"), UIFlags::empty(),
+            Some("TM:"),
+            UIFlags::empty(),
         ) as i32;
 
         self.tonemap_aces_id = tree.add_button(
             bg,
-            self.layout.tonemap_aces.x, self.layout.tonemap_aces.y,
-            self.layout.tonemap_aces.width, self.layout.tonemap_aces.height,
-            self.tonemap_button_style_for(TonemapCurve::AcesNarkowicz), "ACE",
+            self.layout.tonemap_aces.x,
+            self.layout.tonemap_aces.y,
+            self.layout.tonemap_aces.width,
+            self.layout.tonemap_aces.height,
+            self.tonemap_button_style_for(TonemapCurve::AcesNarkowicz),
+            "ACE",
         ) as i32;
 
         self.tonemap_hill_id = tree.add_button(
             bg,
-            self.layout.tonemap_hill.x, self.layout.tonemap_hill.y,
-            self.layout.tonemap_hill.width, self.layout.tonemap_hill.height,
-            self.tonemap_button_style_for(TonemapCurve::AcesHill), "Hill",
+            self.layout.tonemap_hill.x,
+            self.layout.tonemap_hill.y,
+            self.layout.tonemap_hill.width,
+            self.layout.tonemap_hill.height,
+            self.tonemap_button_style_for(TonemapCurve::AcesHill),
+            "Hill",
         ) as i32;
 
         self.tonemap_agx_id = tree.add_button(
             bg,
-            self.layout.tonemap_agx.x, self.layout.tonemap_agx.y,
-            self.layout.tonemap_agx.width, self.layout.tonemap_agx.height,
-            self.tonemap_button_style_for(TonemapCurve::Agx), "AgX",
+            self.layout.tonemap_agx.x,
+            self.layout.tonemap_agx.y,
+            self.layout.tonemap_agx.width,
+            self.layout.tonemap_agx.height,
+            self.tonemap_button_style_for(TonemapCurve::Agx),
+            "AgX",
         ) as i32;
 
         // FPS
         self.fps_label_id = tree.add_node(
-            bg, self.layout.fps_label, UINodeType::Label,
+            bg,
+            self.layout.fps_label,
+            UINodeType::Label,
             UIStyle {
                 text_color: color::TEXT_DIMMED_C32,
                 font_size: FOOTER_FONT,
                 text_align: TextAlign::Right,
                 ..UIStyle::default()
             },
-            Some("FPS:"), UIFlags::empty(),
+            Some("FPS:"),
+            UIFlags::empty(),
         ) as i32;
 
         self.fps_field_id = tree.add_button(
             bg,
-            self.layout.fps_field.x, self.layout.fps_field.y,
-            self.layout.fps_field.width, self.layout.fps_field.height,
-            Self::footer_button_style(), &fps_text,
+            self.layout.fps_field.x,
+            self.layout.fps_field.y,
+            self.layout.fps_field.width,
+            self.layout.fps_field.height,
+            Self::footer_button_style(),
+            &fps_text,
         ) as i32;
 
         // VSync toggle button
         self.vsync_btn_id = tree.add_button(
             bg,
-            self.layout.vsync_btn.x, self.layout.vsync_btn.y,
-            self.layout.vsync_btn.width, self.layout.vsync_btn.height,
-            self.vsync_btn_style(), "VSYNC",
+            self.layout.vsync_btn.x,
+            self.layout.vsync_btn.y,
+            self.layout.vsync_btn.width,
+            self.layout.vsync_btn.height,
+            self.vsync_btn_style(),
+            "VSYNC",
         ) as i32;
 
         // VSync actual FPS (shows resolved FPS when vsync is active)
@@ -524,14 +643,17 @@ impl Panel for FooterPanel {
             String::new()
         };
         self.vsync_actual_id = tree.add_node(
-            bg, self.layout.vsync_actual, UINodeType::Label,
+            bg,
+            self.layout.vsync_actual,
+            UINodeType::Label,
             UIStyle {
                 text_color: color::TEXT_DIMMED_C32,
                 font_size: FOOTER_FONT,
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
             },
-            Some(&vsync_text), UIFlags::empty(),
+            Some(&vsync_text),
+            UIFlags::empty(),
         ) as i32;
 
         self.cache_node_count = tree.count() - self.cache_first_node;
@@ -546,8 +668,12 @@ impl Panel for FooterPanel {
         }
     }
 
-    fn first_node(&self) -> usize { self.cache_first_node }
-    fn node_count(&self) -> usize { self.cache_node_count }
+    fn first_node(&self) -> usize {
+        self.cache_first_node
+    }
+    fn node_count(&self) -> usize {
+        self.cache_node_count
+    }
 }
 
 #[cfg(test)]

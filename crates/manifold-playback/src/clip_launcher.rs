@@ -1,10 +1,10 @@
 use manifold_core::ClipId;
 use std::collections::HashMap;
 
+use manifold_core::GeneratorTypeId;
 use manifold_core::midi::MidiNoteMapping;
 use manifold_core::project::Project;
 use manifold_core::tempo::TempoMapConverter;
-use manifold_core::GeneratorTypeId;
 use manifold_core::video::VideoClip;
 
 use crate::live_clip_manager::{LiveClipHost, LiveClipManager};
@@ -132,7 +132,11 @@ impl ClipLauncher {
         };
 
         // Fallback: if metadata hasn't been extracted yet, use a default duration
-        let clip_duration = if video_clip.duration > 0.0 { video_clip.duration } else { 30.0 };
+        let clip_duration = if video_clip.duration > 0.0 {
+            video_clip.duration
+        } else {
+            30.0
+        };
 
         // Calculate in-point
         let in_point = Self::compute_in_point(
@@ -181,13 +185,24 @@ impl ClipLauncher {
 
         let current_time = host.current_time();
         if let Some(cb) = &mut self.on_clip_launched {
-            cb(midi_note, video_clip_id, layer_index, current_time.as_f32(), in_point);
+            cb(
+                midi_note,
+                video_clip_id,
+                layer_index,
+                current_time.as_f32(),
+                in_point,
+            );
         }
 
         if self.show_debug_logs {
             log::debug!(
                 "[ClipLauncher] Note {} ch={} → {} on layer {} (inPoint={:.2}s, vel={:.2})",
-                midi_note, midi_channel, video_clip.file_name, layer_index, in_point, velocity
+                midi_note,
+                midi_channel,
+                video_clip.file_name,
+                layer_index,
+                in_point,
+                velocity
             );
         }
     }
@@ -232,7 +247,8 @@ impl ClipLauncher {
         // Deterministic stale NoteOff guard for native-sequenced events.
         // If NoteOn and an old NoteOff share a frame, sequence order cleanly
         // disambiguates them without real-time thresholds.
-        if event_sequence > 0 && tracking.creation_sequence > 0
+        if event_sequence > 0
+            && tracking.creation_sequence > 0
             && event_sequence <= tracking.creation_sequence
         {
             return;
@@ -262,7 +278,9 @@ impl ClipLauncher {
         if self.show_debug_logs {
             log::debug!(
                 "[ClipLauncher] NoteOff {} ch={} → committed layer {}",
-                midi_note, midi_channel, layer_index
+                midi_note,
+                midi_channel,
+                layer_index
             );
         }
     }
@@ -385,7 +403,11 @@ impl ClipLauncher {
                     .unwrap_or("");
                 log::debug!(
                     "[ClipLauncher] Note {} ch={} → generator {:?} on layer {} \"{}\"",
-                    midi_note, midi_channel, generator_type, layer_index, layer_name
+                    midi_note,
+                    midi_channel,
+                    generator_type,
+                    layer_index,
+                    layer_name
                 );
             }
 
@@ -426,7 +448,11 @@ impl ClipLauncher {
         };
 
         // Fallback: if metadata hasn't been extracted yet, use a default duration
-        let clip_duration = if video_clip.duration > 0.0 { video_clip.duration } else { 30.0 };
+        let clip_duration = if video_clip.duration > 0.0 {
+            video_clip.duration
+        } else {
+            30.0
+        };
 
         // Calculate in-point
         let in_point = Self::compute_in_point(
@@ -473,7 +499,13 @@ impl ClipLauncher {
 
         let current_time = host.current_time();
         if let Some(cb) = &mut self.on_clip_launched {
-            cb(midi_note, video_clip_id, layer_index, current_time.as_f32(), in_point);
+            cb(
+                midi_note,
+                video_clip_id,
+                layer_index,
+                current_time.as_f32(),
+                in_point,
+            );
         }
 
         if self.show_debug_logs {
@@ -485,7 +517,12 @@ impl ClipLauncher {
                 .unwrap_or("");
             log::debug!(
                 "[ClipLauncher] Note {} ch={} → {} on layer {} \"{}\" (inPoint={:.2}s)",
-                midi_note, midi_channel, video_clip.file_name, layer_index, layer_name, in_point
+                midi_note,
+                midi_channel,
+                video_clip.file_name,
+                layer_index,
+                layer_name,
+                in_point
             );
         }
 

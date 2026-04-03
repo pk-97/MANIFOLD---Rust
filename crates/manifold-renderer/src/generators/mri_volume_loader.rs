@@ -101,9 +101,7 @@ pub fn load_tiff_slice(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
 
     let data = match image {
         tiff::decoder::DecodingResult::U8(d) => d,
-        tiff::decoder::DecodingResult::U16(d) => {
-            d.iter().map(|&v| (v >> 8) as u8).collect()
-        }
+        tiff::decoder::DecodingResult::U16(d) => d.iter().map(|&v| (v >> 8) as u8).collect(),
         tiff::decoder::DecodingResult::F32(d) => d
             .iter()
             .map(|&v| (v.clamp(0.0, 1.0) * 255.0) as u8)

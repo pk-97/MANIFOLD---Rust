@@ -1,6 +1,6 @@
+use manifold_core::project::Project;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use manifold_core::project::Project;
 
 /// Result of path resolution during project load.
 /// Port of C# PathResolutionResult (PathResolver.cs lines 373-378).
@@ -103,25 +103,27 @@ impl PathResolver {
         if let Some(ref mut perc) = project.percussion_import {
             // Audio path
             if let Some(ref audio_path) = perc.audio_path.clone()
-                && !audio_path.is_empty() && !Path::new(audio_path).exists() {
-                    let resolved = Self::try_resolve(
-                        audio_path,
-                        perc.relative_audio_path.as_deref(),
-                        -1, // no size check for percussion audio
-                        &project_dir,
-                        &search_dirs,
-                    );
+                && !audio_path.is_empty()
+                && !Path::new(audio_path).exists()
+            {
+                let resolved = Self::try_resolve(
+                    audio_path,
+                    perc.relative_audio_path.as_deref(),
+                    -1, // no size check for percussion audio
+                    &project_dir,
+                    &search_dirs,
+                );
 
-                    if let Some(resolved_path) = resolved {
-                        let relative = Self::make_relative(&resolved_path, &project_dir);
-                        perc.audio_path = Some(resolved_path);
-                        perc.relative_audio_path = relative;
-                        result.resolved_count += 1;
-                    } else {
-                        result.unresolved_count += 1;
-                        result.unresolved.push(audio_path.clone());
-                    }
+                if let Some(resolved_path) = resolved {
+                    let relative = Self::make_relative(&resolved_path, &project_dir);
+                    perc.audio_path = Some(resolved_path);
+                    perc.relative_audio_path = relative;
+                    result.resolved_count += 1;
+                } else {
+                    result.unresolved_count += 1;
+                    result.unresolved.push(audio_path.clone());
                 }
+            }
 
             // Resolve stem paths
             if let Some(ref mut stem_paths) = perc.stem_paths.clone() {
@@ -139,9 +141,8 @@ impl PathResolver {
                         .and_then(|rs| rs.get(i))
                         .map(|s| s.as_str());
 
-                    let resolved = Self::try_resolve(
-                        stem_path, rel_stem, -1, &project_dir, &search_dirs,
-                    );
+                    let resolved =
+                        Self::try_resolve(stem_path, rel_stem, -1, &project_dir, &search_dirs);
 
                     if let Some(resolved_path) = resolved {
                         let relative = Self::make_relative(&resolved_path, &project_dir);
@@ -153,9 +154,10 @@ impl PathResolver {
                             rel_stems = Some(vec![String::new(); stem_paths.len()]);
                         }
                         if let Some(ref mut rs) = rel_stems
-                            && i < rs.len() {
-                                rs[i] = relative.unwrap_or_default();
-                            }
+                            && i < rs.len()
+                        {
+                            rs[i] = relative.unwrap_or_default();
+                        }
                         changed = true;
                         result.resolved_count += 1;
                     } else {
@@ -201,26 +203,28 @@ impl PathResolver {
         // Layer video folder paths
         for layer in &mut project.timeline.layers {
             if let Some(ref folder_path) = layer.video_folder_path
-                && !folder_path.is_empty() {
-                    layer.relative_video_folder_path =
-                        Self::make_relative(folder_path, project_dir);
-                }
+                && !folder_path.is_empty()
+            {
+                layer.relative_video_folder_path = Self::make_relative(folder_path, project_dir);
+            }
         }
 
         // Percussion
         if let Some(ref mut perc) = project.percussion_import {
             if let Some(ref audio_path) = perc.audio_path
-                && !audio_path.is_empty() {
-                    perc.relative_audio_path = Self::make_relative(audio_path, project_dir);
-                }
+                && !audio_path.is_empty()
+            {
+                perc.relative_audio_path = Self::make_relative(audio_path, project_dir);
+            }
 
             if let Some(ref stem_paths) = perc.stem_paths {
                 let mut rel_stems = vec![String::new(); stem_paths.len()];
                 for (i, stem_path) in stem_paths.iter().enumerate() {
                     if !stem_path.is_empty()
-                        && let Some(rel) = Self::make_relative(stem_path, project_dir) {
-                            rel_stems[i] = rel;
-                        }
+                        && let Some(rel) = Self::make_relative(stem_path, project_dir)
+                    {
+                        rel_stems[i] = rel;
+                    }
                 }
                 perc.relative_stem_paths = Some(rel_stems);
             }
@@ -244,16 +248,22 @@ impl PathResolver {
     ) -> Option<String> {
         // Step 1: Try relative path from project location
         if let Some(rel_path) = relative_path
-            && !rel_path.is_empty() && !project_dir.is_empty() {
-                let candidate = PathBuf::from(project_dir).join(rel_path);
-                if let Ok(canonical) = std::fs::canonicalize(&candidate)
-                    && canonical.exists() {
-                        return Some(canonical.to_string_lossy().to_string());
-                    }
+            && !rel_path.is_empty()
+            && !project_dir.is_empty()
+        {
+            let candidate = PathBuf::from(project_dir).join(rel_path);
+            if let Ok(canonical) = std::fs::canonicalize(&candidate)
+                && canonical.exists()
+            {
+                return Some(canonical.to_string_lossy().to_string());
             }
+        }
 
         // Step 2: Filename+size search in known directories
-        let file_name = Path::new(absolute_path).file_name()?.to_string_lossy().to_string();
+        let file_name = Path::new(absolute_path)
+            .file_name()?
+            .to_string_lossy()
+            .to_string();
         if file_name.is_empty() {
             return None;
         }
@@ -270,9 +280,10 @@ impl PathResolver {
                 }
 
                 if let Ok(metadata) = std::fs::metadata(&candidate)
-                    && metadata.len() as i64 == expected_file_size {
-                        return Some(candidate.to_string_lossy().to_string());
-                    }
+                    && metadata.len() as i64 == expected_file_size
+                {
+                    return Some(candidate.to_string_lossy().to_string());
+                }
             }
         }
 
@@ -289,19 +300,25 @@ impl PathResolver {
     ) -> Option<String> {
         // Step 1: Try relative path
         if let Some(rel_path) = relative_path
-            && !rel_path.is_empty() && !project_dir.is_empty() {
-                let candidate = PathBuf::from(project_dir).join(rel_path);
-                if let Ok(canonical) = std::fs::canonicalize(&candidate)
-                    && canonical.is_dir() {
-                        return Some(canonical.to_string_lossy().to_string());
-                    }
+            && !rel_path.is_empty()
+            && !project_dir.is_empty()
+        {
+            let candidate = PathBuf::from(project_dir).join(rel_path);
+            if let Ok(canonical) = std::fs::canonicalize(&candidate)
+                && canonical.is_dir()
+            {
+                return Some(canonical.to_string_lossy().to_string());
             }
+        }
 
         // Step 2: Search by folder name in known parent directories
         let trimmed = absolute_path
             .trim_end_matches(std::path::MAIN_SEPARATOR)
             .trim_end_matches('/');
-        let folder_name = Path::new(trimmed).file_name()?.to_string_lossy().to_string();
+        let folder_name = Path::new(trimmed)
+            .file_name()?
+            .to_string_lossy()
+            .to_string();
         if folder_name.is_empty() {
             return None;
         }
@@ -355,9 +372,10 @@ impl PathResolver {
                 if let Ok(entries) = std::fs::read_dir(parent_dir) {
                     for entry in entries.flatten() {
                         if let Ok(ft) = entry.file_type()
-                            && ft.is_dir() {
-                                dirs.insert(entry.path().to_string_lossy().to_string());
-                            }
+                            && ft.is_dir()
+                        {
+                            dirs.insert(entry.path().to_string_lossy().to_string());
+                        }
                     }
                 }
             }
@@ -386,12 +404,13 @@ impl PathResolver {
         // 4. Percussion audio directory
         if let Some(ref perc) = project.percussion_import
             && let Some(ref audio_path) = perc.audio_path
-                && let Some(audio_dir) = Path::new(audio_path).parent() {
-                    let dir_str = audio_dir.to_string_lossy().to_string();
-                    if !dir_str.is_empty() && audio_dir.is_dir() {
-                        dirs.insert(dir_str);
-                    }
-                }
+            && let Some(audio_dir) = Path::new(audio_path).parent()
+        {
+            let dir_str = audio_dir.to_string_lossy().to_string();
+            if !dir_str.is_empty() && audio_dir.is_dir() {
+                dirs.insert(dir_str);
+            }
+        }
 
         dirs
     }

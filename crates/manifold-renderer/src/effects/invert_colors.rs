@@ -1,8 +1,8 @@
-use manifold_core::EffectTypeId;
-use manifold_core::effects::EffectInstance;
+use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
-use super::compute_blit_helper::ComputeBlitHelper;
+use manifold_core::EffectTypeId;
+use manifold_core::effects::EffectInstance;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -49,10 +49,12 @@ impl PostProcessEffect for InvertColorsFX {
 
         self.helper.dispatch(
             gpu,
-            source, target,
+            source,
+            target,
             bytemuck::bytes_of(&uniforms),
             "InvertColors Pass",
-            ctx.width, ctx.height,
+            ctx.width,
+            ctx.height,
         );
     }
 }

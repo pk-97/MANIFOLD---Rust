@@ -1,7 +1,7 @@
-use manifold_core::LayerId;
 use crate::command::Command;
-use manifold_core::project::Project;
+use manifold_core::LayerId;
 use manifold_core::effects::ParamEnvelope;
+use manifold_core::project::Project;
 
 /// Add a layer envelope.
 #[derive(Debug)]
@@ -29,7 +29,9 @@ impl Command for AddLayerEnvelopeCommand {
         }
     }
 
-    fn description(&self) -> &str { "Add Layer Envelope" }
+    fn description(&self) -> &str {
+        "Add Layer Envelope"
+    }
 }
 
 /// Remove a layer envelope.
@@ -42,7 +44,11 @@ pub struct RemoveLayerEnvelopeCommand {
 
 impl RemoveLayerEnvelopeCommand {
     pub fn new(layer_id: LayerId, envelope: ParamEnvelope, removed_index: usize) -> Self {
-        Self { layer_id, envelope: Some(envelope), removed_index }
+        Self {
+            layer_id,
+            envelope: Some(envelope),
+            removed_index,
+        }
     }
 }
 
@@ -58,14 +64,17 @@ impl Command for RemoveLayerEnvelopeCommand {
 
     fn undo(&mut self, project: &mut Project) {
         if let Some(envelope) = &self.envelope
-            && let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
-                let envs = layer.envelopes_mut();
-                let idx = self.removed_index.min(envs.len());
-                envs.insert(idx, envelope.clone());
-            }
+            && let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id)
+        {
+            let envs = layer.envelopes_mut();
+            let idx = self.removed_index.min(envs.len());
+            envs.insert(idx, envelope.clone());
+        }
     }
 
-    fn description(&self) -> &str { "Remove Layer Envelope" }
+    fn description(&self) -> &str {
+        "Remove Layer Envelope"
+    }
 }
 
 /// Change ADSR values on a layer envelope.
@@ -88,13 +97,26 @@ impl ChangeLayerEnvelopeADSRCommand {
     pub fn new(
         layer_id: LayerId,
         env_index: usize,
-        old_attack: f32, old_decay: f32, old_sustain: f32, old_release: f32,
-        new_attack: f32, new_decay: f32, new_sustain: f32, new_release: f32,
+        old_attack: f32,
+        old_decay: f32,
+        old_sustain: f32,
+        old_release: f32,
+        new_attack: f32,
+        new_decay: f32,
+        new_sustain: f32,
+        new_release: f32,
     ) -> Self {
         Self {
-            layer_id, env_index,
-            old_attack, old_decay, old_sustain, old_release,
-            new_attack, new_decay, new_sustain, new_release,
+            layer_id,
+            env_index,
+            old_attack,
+            old_decay,
+            old_sustain,
+            old_release,
+            new_attack,
+            new_decay,
+            new_sustain,
+            new_release,
         }
     }
 
@@ -112,17 +134,33 @@ impl ChangeLayerEnvelopeADSRCommand {
 impl Command for ChangeLayerEnvelopeADSRCommand {
     fn execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
-            Self::apply(layer, self.env_index, self.new_attack, self.new_decay, self.new_sustain, self.new_release);
+            Self::apply(
+                layer,
+                self.env_index,
+                self.new_attack,
+                self.new_decay,
+                self.new_sustain,
+                self.new_release,
+            );
         }
     }
 
     fn undo(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
-            Self::apply(layer, self.env_index, self.old_attack, self.old_decay, self.old_sustain, self.old_release);
+            Self::apply(
+                layer,
+                self.env_index,
+                self.old_attack,
+                self.old_decay,
+                self.old_sustain,
+                self.old_release,
+            );
         }
     }
 
-    fn description(&self) -> &str { "Change Layer Envelope ADSR" }
+    fn description(&self) -> &str {
+        "Change Layer Envelope ADSR"
+    }
 }
 
 /// Change layer envelope target_normalized value.
@@ -136,7 +174,12 @@ pub struct ChangeLayerEnvelopeTargetCommand {
 
 impl ChangeLayerEnvelopeTargetCommand {
     pub fn new(layer_id: LayerId, env_index: usize, old_target: f32, new_target: f32) -> Self {
-        Self { layer_id, env_index, old_target, new_target }
+        Self {
+            layer_id,
+            env_index,
+            old_target,
+            new_target,
+        }
     }
 }
 
@@ -159,5 +202,7 @@ impl Command for ChangeLayerEnvelopeTargetCommand {
         }
     }
 
-    fn description(&self) -> &str { "Change Layer Envelope Target" }
+    fn description(&self) -> &str {
+        "Change Layer Envelope Target"
+    }
 }

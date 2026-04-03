@@ -3,11 +3,11 @@
 //! Wraps a `CAMetalLayer` for acquiring drawables and presenting them.
 //! Used by the UI thread for native Metal rendering directly to windows.
 
-use crate::types::GpuTextureFormat;
-use crate::metal::types::GpuTexture;
-use super::format::to_mtl_pixel_format;
-use super::{objc_retain, objc_release};
 use super::device::GpuDevice;
+use super::format::to_mtl_pixel_format;
+use super::{objc_release, objc_retain};
+use crate::metal::types::GpuTexture;
+use crate::types::GpuTextureFormat;
 
 use core_graphics_types::geometry::CGSize;
 
@@ -59,8 +59,8 @@ impl GpuDevice {
         format: GpuTextureFormat,
         vsync: bool,
     ) -> GpuSurface {
-        use raw_window_handle::RawWindowHandle;
         use metal::foreign_types::ForeignType;
+        use raw_window_handle::RawWindowHandle;
 
         let ns_view = match window.window_handle().unwrap().as_raw() {
             RawWindowHandle::AppKit(h) => h.ns_view.as_ptr() as *mut objc::runtime::Object,
@@ -112,14 +112,16 @@ impl GpuSurface {
     pub fn resize(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
-        self.layer_ref().set_drawable_size(CGSize::new(width as f64, height as f64));
+        self.layer_ref()
+            .set_drawable_size(CGSize::new(width as f64, height as f64));
     }
 
     /// Set the maximum number of drawables in the pool (2 or 3).
     /// 2 = lowest latency (blocks until previous present hits display).
     /// 3 = higher throughput, up to 2 frames queue-ahead.
     pub fn set_maximum_drawable_count(&self, count: u32) {
-        self.layer_ref().set_maximum_drawable_count(count.clamp(2, 3) as u64);
+        self.layer_ref()
+            .set_maximum_drawable_count(count.clamp(2, 3) as u64);
     }
 
     /// Acquire the next drawable from the surface.
@@ -128,7 +130,9 @@ impl GpuSurface {
         let drawable = self.layer_ref().next_drawable()?;
         // Retain the drawable so it outlives the autorelease pool.
         let ptr = drawable as *const metal::MetalDrawableRef as *mut std::ffi::c_void;
-        unsafe { objc_retain(ptr); }
+        unsafe {
+            objc_retain(ptr);
+        }
         Some(GpuDrawable { drawable_ptr: ptr })
     }
 
@@ -150,8 +154,7 @@ impl GpuSurface {
     pub fn set_contents_gravity_resize_aspect(&self) {
         unsafe {
             let layer = self.layer_ptr as *mut objc::runtime::Object;
-            let gravity: *const objc::runtime::Object =
-                msg_send![class!(NSString), stringWithUTF8String:
+            let gravity: *const objc::runtime::Object = msg_send![class!(NSString), stringWithUTF8String:
                     c"resizeAspect".as_ptr()];
             let _: () = msg_send![layer, setContentsGravity: gravity];
         }
@@ -183,7 +186,9 @@ impl GpuSurface {
 impl Drop for GpuSurface {
     fn drop(&mut self) {
         if !self.layer_ptr.is_null() {
-            unsafe { objc_release(self.layer_ptr); }
+            unsafe {
+                objc_release(self.layer_ptr);
+            }
         }
     }
 }
@@ -194,9 +199,7 @@ impl GpuDrawable {
     /// Get the drawable's backing texture as a raw pointer.
     /// The returned texture is valid as a render target for the current frame.
     pub fn texture(&self) -> &metal::TextureRef {
-        let drawable = unsafe {
-            &*(self.drawable_ptr as *const metal::MetalDrawableRef)
-        };
+        let drawable = unsafe { &*(self.drawable_ptr as *const metal::MetalDrawableRef) };
         drawable.texture()
     }
 
@@ -215,7 +218,9 @@ impl GpuDrawable {
         let h = tex_ref.height() as u32;
         // Retain: GpuTexture::drop will release, so we need our own +1
         let ptr = tex_ref.as_ptr() as *mut std::ffi::c_void;
-        unsafe { super::objc_retain(ptr); }
+        unsafe {
+            super::objc_retain(ptr);
+        }
         let mtl_texture = unsafe { metal::Texture::from_ptr(ptr as *mut _) };
         GpuTexture::from_raw(mtl_texture, w, h, 1, format)
     }
@@ -226,9 +231,7 @@ impl GpuDrawable {
     /// Core Animation transactions. The drawable is presented immediately
     /// and will be composited on the next WindowServer cycle.
     pub fn present_after_scheduled(&self) {
-        let drawable = unsafe {
-            &*(self.drawable_ptr as *const metal::MetalDrawableRef)
-        };
+        let drawable = unsafe { &*(self.drawable_ptr as *const metal::MetalDrawableRef) };
         use std::ops::Deref;
         drawable.deref().present();
     }
@@ -236,9 +239,7 @@ impl GpuDrawable {
     /// Present the drawable immediately.
     /// Consumes self — the drawable is scheduled for display at the next vsync.
     pub fn present(self) {
-        let drawable = unsafe {
-            &*(self.drawable_ptr as *const metal::MetalDrawableRef)
-        };
+        let drawable = unsafe { &*(self.drawable_ptr as *const metal::MetalDrawableRef) };
         // MetalDrawableRef derefs to DrawableRef which has present().
         use std::ops::Deref;
         drawable.deref().present();
@@ -250,7 +251,9 @@ impl GpuDrawable {
 impl Drop for GpuDrawable {
     fn drop(&mut self) {
         if !self.drawable_ptr.is_null() {
-            unsafe { objc_release(self.drawable_ptr); }
+            unsafe {
+                objc_release(self.drawable_ptr);
+            }
         }
     }
 }
@@ -347,10 +350,22 @@ mod tests {
             color: [f32; 4],
         }
         let vertices = [
-            Vertex { pos: [-1.0, -1.0], color: [1.0, 0.0, 0.0, 1.0] },
-            Vertex { pos: [1.0, -1.0], color: [1.0, 0.0, 0.0, 1.0] },
-            Vertex { pos: [1.0, 1.0], color: [1.0, 0.0, 0.0, 1.0] },
-            Vertex { pos: [-1.0, 1.0], color: [1.0, 0.0, 0.0, 1.0] },
+            Vertex {
+                pos: [-1.0, -1.0],
+                color: [1.0, 0.0, 0.0, 1.0],
+            },
+            Vertex {
+                pos: [1.0, -1.0],
+                color: [1.0, 0.0, 0.0, 1.0],
+            },
+            Vertex {
+                pos: [1.0, 1.0],
+                color: [1.0, 0.0, 0.0, 1.0],
+            },
+            Vertex {
+                pos: [-1.0, 1.0],
+                color: [1.0, 0.0, 0.0, 1.0],
+            },
         ];
         let vertex_data = unsafe {
             std::slice::from_raw_parts(
@@ -359,7 +374,9 @@ mod tests {
             )
         };
         let vertex_buffer = device.create_buffer_shared(vertex_data.len() as u64);
-        unsafe { vertex_buffer.write(0, vertex_data); }
+        unsafe {
+            vertex_buffer.write(0, vertex_data);
+        }
 
         // 6. Create index buffer (two triangles: 0,1,2 + 0,2,3)
         let indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
@@ -370,7 +387,9 @@ mod tests {
             )
         };
         let index_buffer = device.create_buffer_shared(index_data.len() as u64);
-        unsafe { index_buffer.write(0, index_data); }
+        unsafe {
+            index_buffer.write(0, index_data);
+        }
 
         // 7. Draw
         let mut encoder = device.create_encoder("test draw");

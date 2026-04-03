@@ -9,21 +9,21 @@
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Particle {
-    pub position: [f32; 3],   // UV-space position (0-1 range)
-    pub _pad0: f32,           // WGSL vec3 alignment padding
-    pub velocity: [f32; 3],   // per-frame velocity
-    pub life: f32,            // 0=dead, 1=alive (offset 28 — follows vec3 without padding)
-    pub age: f32,             // seconds since spawn
-    pub _pad1: [f32; 3],      // WGSL padding to align color vec4 to 16 bytes
-    pub color: [f32; 4],      // RGBA
+    pub position: [f32; 3], // UV-space position (0-1 range)
+    pub _pad0: f32,         // WGSL vec3 alignment padding
+    pub velocity: [f32; 3], // per-frame velocity
+    pub life: f32,          // 0=dead, 1=alive (offset 28 — follows vec3 without padding)
+    pub age: f32,           // seconds since spawn
+    pub _pad1: [f32; 3],    // WGSL padding to align color vec4 to 16 bytes
+    pub color: [f32; 4],    // RGBA
 }
 
 /// Mycelium agent struct (16 bytes = 4 floats).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PhysarumAgent {
-    pub pos: [f32; 2],        // UV-space position (0-1 range)
-    pub angle: f32,           // heading angle in radians
+    pub pos: [f32; 2], // UV-space position (0-1 range)
+    pub angle: f32,    // heading angle in radians
     pub _pad: f32,
 }
 

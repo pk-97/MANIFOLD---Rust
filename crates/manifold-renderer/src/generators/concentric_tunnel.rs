@@ -1,7 +1,7 @@
-use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
+use manifold_core::GeneratorTypeId;
 
 const SHAPE: usize = 0;
 const LINE: usize = 1;
@@ -62,15 +62,27 @@ impl Generator for ConcentricTunnelGenerator {
             return ctx.anim_progress;
         }
 
-        let line = if ctx.param_count > LINE as u32 { ctx.params[LINE] } else { 0.008 };
+        let line = if ctx.param_count > LINE as u32 {
+            ctx.params[LINE]
+        } else {
+            0.008
+        };
         let speed_idx = if ctx.param_count > SPEED as u32 {
             (ctx.params[SPEED].round() as usize).min(BEAT_VALUES.len() - 1)
-        } else { 2 };
-        let scale = if ctx.param_count > SCALE as u32 { ctx.params[SCALE] } else { 1.0 };
+        } else {
+            2
+        };
+        let scale = if ctx.param_count > SCALE as u32 {
+            ctx.params[SCALE]
+        } else {
+            1.0
+        };
         let snap_on = ctx.param_count > SNAP as u32 && ctx.params[SNAP] > 0.5;
         let mode = if ctx.param_count > SNAP_MODE as u32 {
             (ctx.params[SNAP_MODE].round() as i32).clamp(MODE_SHAPE, MODE_BOTH)
-        } else { MODE_SHAPE };
+        } else {
+            MODE_SHAPE
+        };
 
         let anim_speed = BEAT_VALUES[speed_idx];
 
@@ -84,10 +96,18 @@ impl Generator for ConcentricTunnelGenerator {
             if cycle_shape {
                 (ctx.trigger_count % SHAPE_COUNT) as f32
             } else {
-                if ctx.param_count > SHAPE as u32 { ctx.params[SHAPE].round() } else { 0.0 }
+                if ctx.param_count > SHAPE as u32 {
+                    ctx.params[SHAPE].round()
+                } else {
+                    0.0
+                }
             }
         } else {
-            if ctx.param_count > SHAPE as u32 { ctx.params[SHAPE].round() } else { 0.0 }
+            if ctx.param_count > SHAPE as u32 {
+                ctx.params[SHAPE].round()
+            } else {
+                0.0
+            }
         };
 
         let uniforms = ConcentricTunnelUniforms {

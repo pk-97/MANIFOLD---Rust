@@ -1,10 +1,10 @@
-use serde::{Deserialize, Serialize};
-use ahash::AHashMap;
-use crate::id::{ClipId, LayerId, MarkerId};
 use crate::clip::TimelineClip;
+use crate::id::{ClipId, LayerId, MarkerId};
 use crate::layer::Layer;
 use crate::marker::TimelineMarker;
 use crate::units::Beats;
+use ahash::AHashMap;
+use serde::{Deserialize, Serialize};
 
 /// The timeline containing all layers and clips.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -79,7 +79,9 @@ impl Timeline {
         self.ensure_lookup();
         if let Some(&(li, ci)) = self.clip_lookup.get(clip_id) {
             // Validate cache hit
-            if self.layers.get(li)
+            if self
+                .layers
+                .get(li)
                 .and_then(|l| l.clips.get(ci))
                 .is_some_and(|c| c.id == clip_id)
             {
@@ -117,8 +119,14 @@ impl Timeline {
     }
 
     /// Register a single clip in the lookup (incremental add).
-    pub fn register_clip_in_lookup(&mut self, clip_id: &str, layer_index: usize, clip_index: usize) {
-        self.clip_lookup.insert(ClipId::new(clip_id), (layer_index, clip_index));
+    pub fn register_clip_in_lookup(
+        &mut self,
+        clip_id: &str,
+        layer_index: usize,
+        clip_index: usize,
+    ) {
+        self.clip_lookup
+            .insert(ClipId::new(clip_id), (layer_index, clip_index));
     }
 
     /// Get total duration in beats (max clip EndBeat across all layers).
@@ -273,14 +281,16 @@ impl Timeline {
             }
 
             if self.layers[li].parent_layer_id.is_some() {
-                let parent_muted = self.find_group_parent(li)
+                let parent_muted = self
+                    .find_group_parent(li)
                     .map(|(_, p)| p.is_muted)
                     .unwrap_or(false);
                 if parent_muted {
                     continue;
                 }
 
-                let parent_solo = self.find_group_parent(li)
+                let parent_solo = self
+                    .find_group_parent(li)
                     .map(|(_, p)| p.is_solo)
                     .unwrap_or(false);
 
@@ -320,7 +330,10 @@ impl Timeline {
 
     /// Find layer by persistent ID. Unity Timeline.cs lines 225-234.
     pub fn find_layer_by_id(&self, layer_id: &str) -> Option<(usize, &Layer)> {
-        self.layers.iter().enumerate().find(|(_, l)| l.layer_id == layer_id)
+        self.layers
+            .iter()
+            .enumerate()
+            .find(|(_, l)| l.layer_id == layer_id)
     }
 
     /// Find layer index by persistent ID. Convenience wrapper.
@@ -330,7 +343,10 @@ impl Timeline {
 
     /// Find layer by persistent ID (mutable). Returns (index, &mut Layer).
     pub fn find_layer_by_id_mut(&mut self, layer_id: &str) -> Option<(usize, &mut Layer)> {
-        self.layers.iter_mut().enumerate().find(|(_, l)| l.layer_id == layer_id)
+        self.layers
+            .iter_mut()
+            .enumerate()
+            .find(|(_, l)| l.layer_id == layer_id)
     }
 
     /// Move layer from one index to another. Unity Timeline.cs lines 250-266.
@@ -374,15 +390,24 @@ impl Timeline {
                 }
             }
         }
-        if min_beat.0 >= f64::MAX / 2.0 { Beats::ZERO } else { min_beat }
+        if min_beat.0 >= f64::MAX / 2.0 {
+            Beats::ZERO
+        } else {
+            min_beat
+        }
     }
 
     // ── Markers ─────────────────────────────────────────────────────
 
     /// Add a marker, maintaining sorted order by beat.
     pub fn add_marker(&mut self, marker: TimelineMarker) {
-        let pos = self.markers
-            .binary_search_by(|m| m.beat.partial_cmp(&marker.beat).unwrap_or(std::cmp::Ordering::Equal))
+        let pos = self
+            .markers
+            .binary_search_by(|m| {
+                m.beat
+                    .partial_cmp(&marker.beat)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
             .unwrap_or_else(|i| i);
         self.markers.insert(pos, marker);
     }
@@ -405,6 +430,10 @@ impl Timeline {
 
     /// Re-sort markers after a beat change.
     pub fn sort_markers(&mut self) {
-        self.markers.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(std::cmp::Ordering::Equal));
+        self.markers.sort_by(|a, b| {
+            a.beat
+                .partial_cmp(&b.beat)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
 }

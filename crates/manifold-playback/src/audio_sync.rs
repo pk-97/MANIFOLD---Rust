@@ -2,15 +2,15 @@
 // Manages playback sync of an imported audio file against the timeline.
 // Uses kira for audio decoding + playback (replacing Unity AudioSource + AudioClip).
 
+use crate::engine::PlaybackEngine;
 use kira::{
     manager::{AudioManager, AudioManagerSettings, backend::DefaultBackend},
-    sound::static_sound::{StaticSoundData, StaticSoundHandle},
     sound::PlaybackState as KiraPlaybackState,
+    sound::static_sound::{StaticSoundData, StaticSoundHandle},
     tween::Tween,
 };
 use manifold_core::types::PlaybackState;
 use manifold_core::{Beats, Seconds};
-use crate::engine::PlaybackEngine;
 use std::path::Path;
 use std::process::Command;
 
@@ -55,11 +55,21 @@ impl ImportedAudioSyncController {
 
     // ─── Properties (port of C# public properties) ───
 
-    pub fn is_ready(&self) -> bool { self.is_ready }
-    pub fn start_beat(&self) -> Beats { self.start_beat }
-    pub fn encoder_delay_seconds(&self) -> Seconds { self.encoder_delay_seconds }
-    pub fn audio_path(&self) -> Option<&str> { self.audio_path.as_deref() }
-    pub fn clip_duration_seconds(&self) -> Seconds { self.clip_duration_seconds }
+    pub fn is_ready(&self) -> bool {
+        self.is_ready
+    }
+    pub fn start_beat(&self) -> Beats {
+        self.start_beat
+    }
+    pub fn encoder_delay_seconds(&self) -> Seconds {
+        self.encoder_delay_seconds
+    }
+    pub fn audio_path(&self) -> Option<&str> {
+        self.audio_path.as_deref()
+    }
+    pub fn clip_duration_seconds(&self) -> Seconds {
+        self.clip_duration_seconds
+    }
 
     pub fn set_on_clip_changed(&mut self, callback: Option<Box<dyn FnMut(bool) + Send>>) {
         self.on_clip_changed = callback;
@@ -86,11 +96,13 @@ impl ImportedAudioSyncController {
         self.is_ready = false;
 
         // Load and decode the audio file (equivalent to UnityWebRequestMultimedia.GetAudioClip).
-        let sound_data = StaticSoundData::from_file(path)
-            .map_err(|e| {
-                log::warn!("[ImportedAudioSyncController] Failed to load imported audio for playback: {}", e);
-                format!("Failed to load audio: {}", e)
-            })?;
+        let sound_data = StaticSoundData::from_file(path).map_err(|e| {
+            log::warn!(
+                "[ImportedAudioSyncController] Failed to load imported audio for playback: {}",
+                e
+            );
+            format!("Failed to load audio: {}", e)
+        })?;
 
         let clip_duration = sound_data.duration().as_secs_f32();
         if clip_duration <= 0.0 {
@@ -113,7 +125,9 @@ impl ImportedAudioSyncController {
 
         // Play the sound immediately paused (equivalent to audioSource.clip = audioClip).
         let data_clone = sound_data.clone();
-        let mut handle = self.audio_manager.play(data_clone)
+        let mut handle = self
+            .audio_manager
+            .play(data_clone)
             .map_err(|e| format!("Failed to play audio: {}", e))?;
         handle.pause(Tween::default());
         handle.seek_to(0.0);
@@ -130,13 +144,18 @@ impl ImportedAudioSyncController {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
         let delay_info = if self.encoder_delay_seconds > Seconds::ZERO {
-            format!(" encoderDelay={:.1}ms", self.encoder_delay_seconds.0 * 1000.0)
+            format!(
+                " encoderDelay={:.1}ms",
+                self.encoder_delay_seconds.0 * 1000.0
+            )
         } else {
             String::new()
         };
         log::info!(
             "[ImportedAudioSyncController] Imported audio attached for sync: '{}' startBeat={:.2}{}",
-            file_name, self.start_beat.0, delay_info
+            file_name,
+            self.start_beat.0,
+            delay_info
         );
 
         Ok(())
@@ -198,9 +217,13 @@ impl ImportedAudioSyncController {
         self.start_time_seconds = engine.beat_to_timeline_time(self.start_beat);
         // Offset by encoder delay so playback cursor skips past the
         // MP3 padding that ffmpeg strips during analysis decoding.
-        let expected_time = engine.current_time() - self.start_time_seconds + self.encoder_delay_seconds;
+        let expected_time =
+            engine.current_time() - self.start_time_seconds + self.encoder_delay_seconds;
         let in_range = expected_time >= Seconds::ZERO && expected_time < clip_length;
-        let clamped_expected = expected_time.clamp(Seconds::ZERO, (clip_length - Seconds(0.001)).max(Seconds::ZERO));
+        let clamped_expected = expected_time.clamp(
+            Seconds::ZERO,
+            (clip_length - Seconds(0.001)).max(Seconds::ZERO),
+        );
 
         let handle_state = self.sound_handle.as_ref().unwrap().state();
         let is_source_playing = handle_state == KiraPlaybackState::Playing;
@@ -228,7 +251,10 @@ impl ImportedAudioSyncController {
                                     self.sound_handle = Some(new_handle);
                                 }
                                 Err(e) => {
-                                    log::warn!("[ImportedAudioSyncController] Failed to restart stopped audio: {}", e);
+                                    log::warn!(
+                                        "[ImportedAudioSyncController] Failed to restart stopped audio: {}",
+                                        e
+                                    );
                                 }
                             }
                         }
@@ -254,7 +280,9 @@ impl ImportedAudioSyncController {
 
                 if in_range {
                     let current_pos = Seconds(handle.position());
-                    if (current_pos - clamped_expected).abs() > Seconds(SEEK_TOLERANCE_SECONDS as f64) {
+                    if (current_pos - clamped_expected).abs()
+                        > Seconds(SEEK_TOLERANCE_SECONDS as f64)
+                    {
                         handle.seek_to(clamped_expected.0);
                     }
                 }
@@ -290,7 +318,9 @@ impl ImportedAudioSyncController {
         }
 
         if self.clip_duration_seconds > Seconds::ZERO {
-            if source_seconds < Seconds(-0.0001) || source_seconds > self.clip_duration_seconds + Seconds(0.0001) {
+            if source_seconds < Seconds(-0.0001)
+                || source_seconds > self.clip_duration_seconds + Seconds(0.0001)
+            {
                 return None;
             }
             let clamped = source_seconds.clamp(Seconds::ZERO, self.clip_duration_seconds);
@@ -345,7 +375,9 @@ impl ImportedAudioSyncController {
 
         // Play the sound immediately paused (equivalent to audioSource.clip = audioClip).
         let data_clone = preloaded.sound_data.clone();
-        let mut handle = self.audio_manager.play(data_clone)
+        let mut handle = self
+            .audio_manager
+            .play(data_clone)
             .map_err(|e| format!("Failed to play audio: {}", e))?;
         handle.pause(Tween::default());
         handle.seek_to(0.0);
@@ -362,13 +394,18 @@ impl ImportedAudioSyncController {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
         let delay_info = if self.encoder_delay_seconds > Seconds::ZERO {
-            format!(" encoderDelay={:.1}ms", self.encoder_delay_seconds.0 * 1000.0)
+            format!(
+                " encoderDelay={:.1}ms",
+                self.encoder_delay_seconds.0 * 1000.0
+            )
         } else {
             String::new()
         };
         log::info!(
             "[ImportedAudioSyncController] Imported audio attached for sync: '{}' startBeat={:.2}{}",
-            file_name, self.start_beat.0, delay_info
+            file_name,
+            self.start_beat.0,
+            delay_info
         );
 
         Ok(())
@@ -391,8 +428,8 @@ pub struct PreloadedAudioData {
 /// Performs the expensive audio loading work (file I/O + decode + ffprobe).
 /// Safe to call from any thread — returns data to be applied on main thread.
 pub fn preload_audio(path: &str, start_beat_offset: Beats) -> Result<PreloadedAudioData, String> {
-    let sound_data = StaticSoundData::from_file(path)
-        .map_err(|e| format!("Failed to load audio: {}", e))?;
+    let sound_data =
+        StaticSoundData::from_file(path).map_err(|e| format!("Failed to load audio: {}", e))?;
 
     let clip_duration = sound_data.duration().as_secs_f64();
     if clip_duration <= 0.0 {
@@ -442,9 +479,11 @@ fn probe_encoder_delay_seconds(audio_path: &str) -> Seconds {
 
     let trimmed = output.trim();
     if let Ok(start_time) = trimmed.parse::<f32>()
-        && start_time > 0.0001 && start_time <= MAX_ENCODER_DELAY_SECONDS {
-            return Seconds(start_time as f64);
-        }
+        && start_time > 0.0001
+        && start_time <= MAX_ENCODER_DELAY_SECONDS
+    {
+        return Seconds(start_time as f64);
+    }
 
     Seconds::ZERO
 }
@@ -454,9 +493,12 @@ fn probe_encoder_delay_seconds(audio_path: &str) -> Seconds {
 fn run_ffprobe_query(ffprobe_path: &str, audio_path: &str) -> Option<String> {
     let output = Command::new(ffprobe_path)
         .args([
-            "-v", "quiet",
-            "-show_entries", "format=start_time",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "-v",
+            "quiet",
+            "-show_entries",
+            "format=start_time",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
             audio_path,
         ])
         .output()
@@ -479,17 +521,20 @@ fn run_ffprobe_query(ffprobe_path: &str, audio_path: &str) -> Option<String> {
 fn resolve_ffprobe_binary() -> Option<String> {
     // 1. Explicit env var.
     if let Ok(env_path) = std::env::var("FFPROBE_PATH")
-        && !env_path.is_empty() && Path::new(&env_path).exists() {
-            return Some(env_path);
-        }
+        && !env_path.is_empty()
+        && Path::new(&env_path).exists()
+    {
+        return Some(env_path);
+    }
 
     // 2. Derive from FFMPEG_PATH by replacing the binary name.
     if let Ok(ffmpeg_env) = std::env::var("FFMPEG_PATH")
         && !ffmpeg_env.is_empty()
-            && let Some(derived) = derive_ffprobe_from_ffmpeg_path(&ffmpeg_env)
-                && Path::new(&derived).exists() {
-                    return Some(derived);
-                }
+        && let Some(derived) = derive_ffprobe_from_ffmpeg_path(&ffmpeg_env)
+        && Path::new(&derived).exists()
+    {
+        return Some(derived);
+    }
 
     // 3. Common system paths.
     let candidates = [

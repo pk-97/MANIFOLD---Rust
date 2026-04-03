@@ -4,9 +4,9 @@
 //! Built-in generators use compile-time constants; future plugins can register
 //! their own IDs at runtime.
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Cow;
 use std::fmt;
-use serde::{Serialize, Serializer, Deserialize, Deserializer};
 
 /// Identifies a generator type by name.
 ///
@@ -57,8 +57,7 @@ impl GeneratorTypeId {
     pub const FLUID_SIMULATION: Self = Self(Cow::Borrowed("FluidSimulation"));
     pub const NUMBER_STATION: Self = Self(Cow::Borrowed("NumberStation"));
     pub const MYCELIUM: Self = Self(Cow::Borrowed("Mycelium"));
-    pub const COMPUTE_STRANGE_ATTRACTOR: Self =
-        Self(Cow::Borrowed("ComputeStrangeAttractor"));
+    pub const COMPUTE_STRANGE_ATTRACTOR: Self = Self(Cow::Borrowed("ComputeStrangeAttractor"));
     pub const FLUID_SIMULATION_3D: Self = Self(Cow::Borrowed("FluidSimulation3D"));
     pub const MRI_VOLUME: Self = Self(Cow::Borrowed("MriVolume"));
 }
@@ -154,10 +153,22 @@ mod tests {
 
     #[test]
     fn legacy_discriminant_roundtrip() {
-        assert_eq!(GeneratorTypeId::from_legacy_discriminant(0), GeneratorTypeId::NONE);
-        assert_eq!(GeneratorTypeId::from_legacy_discriminant(6), GeneratorTypeId::PLASMA);
-        assert_eq!(GeneratorTypeId::from_legacy_discriminant(20), GeneratorTypeId::MRI_VOLUME);
-        assert_eq!(GeneratorTypeId::from_legacy_discriminant(999), GeneratorTypeId::NONE);
+        assert_eq!(
+            GeneratorTypeId::from_legacy_discriminant(0),
+            GeneratorTypeId::NONE
+        );
+        assert_eq!(
+            GeneratorTypeId::from_legacy_discriminant(6),
+            GeneratorTypeId::PLASMA
+        );
+        assert_eq!(
+            GeneratorTypeId::from_legacy_discriminant(20),
+            GeneratorTypeId::MRI_VOLUME
+        );
+        assert_eq!(
+            GeneratorTypeId::from_legacy_discriminant(999),
+            GeneratorTypeId::NONE
+        );
     }
 
     #[test]

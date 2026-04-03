@@ -54,9 +54,7 @@ impl<'a> GpuEncoder<'a> {
     /// Caller must ensure no other mutable reference to the arena exists.
     #[inline]
     #[allow(clippy::mut_from_ref)]
-    pub unsafe fn uniform_arena_mut(
-        &self,
-    ) -> Option<&mut crate::uniform_arena::UniformArena> {
+    pub unsafe fn uniform_arena_mut(&self) -> Option<&mut crate::uniform_arena::UniformArena> {
         self.uniform_arena.map(|p| unsafe { &mut *p })
     }
 
@@ -70,7 +68,8 @@ impl<'a> GpuEncoder<'a> {
         width: u32,
         height: u32,
     ) {
-        self.native_enc.copy_texture_to_texture(src, dst, width, height, 1);
+        self.native_enc
+            .copy_texture_to_texture(src, dst, width, height, 1);
     }
 
     /// Clear a texture to a solid color via native Metal render pass.

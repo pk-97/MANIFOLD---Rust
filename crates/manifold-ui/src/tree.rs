@@ -380,8 +380,7 @@ impl UITree {
         for i in start..end {
             self.nodes[i].flags.remove(UIFlags::DIRTY);
         }
-        self.has_dirty = (0..self.count)
-            .any(|i| self.nodes[i].flags.contains(UIFlags::DIRTY));
+        self.has_dirty = (0..self.count).any(|i| self.nodes[i].flags.contains(UIFlags::DIRTY));
     }
 
     // ── Rendering traversal (recursive DFS) ─────────────────────────
@@ -424,13 +423,7 @@ impl UITree {
     ///
     /// When `dirty_only` is true, only emits `Node` events for dirty nodes,
     /// but always processes clip push/pop for correct clipping of dirty children.
-    pub fn traverse_flat_range<F>(
-        &self,
-        start: usize,
-        end: usize,
-        dirty_only: bool,
-        mut visitor: F,
-    )
+    pub fn traverse_flat_range<F>(&self, start: usize, end: usize, dirty_only: bool, mut visitor: F)
     where
         F: FnMut(TraversalEvent),
     {

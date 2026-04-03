@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use crate::generator_type_id::GeneratorTypeId;
 use crate::effects::ParamDef;
+use crate::generator_type_id::GeneratorTypeId;
 
 // ─── Generator Definition ───
 
@@ -29,17 +29,26 @@ pub struct GeneratorDef {
 
 // ─── Static Registry ───
 
-static DEFINITIONS: LazyLock<HashMap<GeneratorTypeId, GeneratorDef>> = LazyLock::new(build_definitions);
+static DEFINITIONS: LazyLock<HashMap<GeneratorTypeId, GeneratorDef>> =
+    LazyLock::new(build_definitions);
 
 static MAX_PARAM_COUNT: LazyLock<usize> = LazyLock::new(|| {
-    DEFINITIONS.values().map(|d| d.param_count).max().unwrap_or(0)
+    DEFINITIONS
+        .values()
+        .map(|d| d.param_count)
+        .max()
+        .unwrap_or(0)
 });
 
 // ─── Public API ───
 
 pub fn get(gen_type: &GeneratorTypeId) -> &'static GeneratorDef {
-    DEFINITIONS.get(gen_type)
-        .unwrap_or_else(|| panic!("GeneratorDefinitionRegistry: unknown GeneratorTypeId '{}'", gen_type))
+    DEFINITIONS.get(gen_type).unwrap_or_else(|| {
+        panic!(
+            "GeneratorDefinitionRegistry: unknown GeneratorTypeId '{}'",
+            gen_type
+        )
+    })
 }
 
 pub fn try_get(gen_type: &GeneratorTypeId) -> Option<&'static GeneratorDef> {
@@ -51,13 +60,19 @@ pub fn is_line_based(gen_type: &GeneratorTypeId) -> bool {
 }
 
 pub fn get_param_def(gen_type: &GeneratorTypeId, index: usize) -> ParamDef {
-    let Some(def) = DEFINITIONS.get(gen_type) else { return ParamDef::default() };
-    if index >= def.param_count { return ParamDef::default() }
+    let Some(def) = DEFINITIONS.get(gen_type) else {
+        return ParamDef::default();
+    };
+    if index >= def.param_count {
+        return ParamDef::default();
+    }
     def.param_defs[index].clone()
 }
 
 pub fn get_defaults(gen_type: &GeneratorTypeId) -> Vec<f32> {
-    let Some(def) = DEFINITIONS.get(gen_type) else { return Vec::new() };
+    let Some(def) = DEFINITIONS.get(gen_type) else {
+        return Vec::new();
+    };
     def.param_defs.iter().map(|p| p.default_value).collect()
 }
 
@@ -87,7 +102,9 @@ pub fn format_gen_value(gen_type: &GeneratorTypeId, index: usize, value: f32) ->
 pub fn get_osc_address(gen_type: &GeneratorTypeId, index: usize) -> Option<String> {
     let def = DEFINITIONS.get(gen_type)?;
     let prefix = def.osc_prefix.as_ref()?;
-    if index >= def.param_count { return None }
+    if index >= def.param_count {
+        return None;
+    }
 
     let suffix = def.param_defs[index].osc_suffix.as_ref()?;
     Some(format!("/{}/{}", prefix, suffix))
@@ -98,10 +115,14 @@ pub fn get_osc_address_for_layer(
     layer_id: &str,
     index: usize,
 ) -> Option<String> {
-    if layer_id.is_empty() { return None }
+    if layer_id.is_empty() {
+        return None;
+    }
     let def = DEFINITIONS.get(gen_type)?;
     let prefix = def.osc_prefix.as_ref()?;
-    if index >= def.param_count { return None }
+    if index >= def.param_count {
+        return None;
+    }
 
     let suffix = def.param_defs[index].osc_suffix.as_ref()?;
     Some(format!("/layer/{}/gen/{}/{}", layer_id, prefix, suffix))
@@ -109,14 +130,20 @@ pub fn get_osc_address_for_layer(
 
 pub fn try_get_gen_param_range(gen_type: &GeneratorTypeId, index: usize) -> Option<(f32, f32)> {
     let def = DEFINITIONS.get(gen_type)?;
-    if index >= def.param_count { return None }
+    if index >= def.param_count {
+        return None;
+    }
     let pd = &def.param_defs[index];
     Some((pd.min, pd.max))
 }
 
 pub fn clamp_param(gen_type: &GeneratorTypeId, index: usize, value: f32) -> f32 {
-    let Some(def) = DEFINITIONS.get(gen_type) else { return value };
-    if index >= def.param_count { return value }
+    let Some(def) = DEFINITIONS.get(gen_type) else {
+        return value;
+    };
+    if index >= def.param_count {
+        return value;
+    }
     let pd = &def.param_defs[index];
     value.clamp(pd.min, pd.max)
 }
@@ -140,14 +167,7 @@ fn format_float_with_format_string(value: f32, fmt: &str) -> String {
 
 // ─── ParamDef Helpers ───
 
-fn pd(
-    name: &str,
-    min: f32,
-    max: f32,
-    default: f32,
-    fmt: Option<&str>,
-    osc: &str,
-) -> ParamDef {
+fn pd(name: &str, min: f32, max: f32, default: f32, fmt: Option<&str>, osc: &str) -> ParamDef {
     ParamDef {
         name: name.to_string(),
         min,
@@ -161,13 +181,7 @@ fn pd(
     }
 }
 
-fn pd_toggle(
-    name: &str,
-    min: f32,
-    max: f32,
-    default: f32,
-    osc: &str,
-) -> ParamDef {
+fn pd_toggle(name: &str, min: f32, max: f32, default: f32, osc: &str) -> ParamDef {
     ParamDef {
         name: name.to_string(),
         min,
@@ -181,13 +195,7 @@ fn pd_toggle(
     }
 }
 
-fn pd_whole(
-    name: &str,
-    min: f32,
-    max: f32,
-    default: f32,
-    osc: &str,
-) -> ParamDef {
+fn pd_whole(name: &str, min: f32, max: f32, default: f32, osc: &str) -> ParamDef {
     ParamDef {
         name: name.to_string(),
         min,
@@ -228,14 +236,17 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
     let mut m = HashMap::new();
 
     // ── None ──
-    m.insert(GeneratorTypeId::NONE, GeneratorDef {
-        display_name: "None",
-        is_line_based: false,
-        param_count: 0,
-        param_defs: Vec::new(),
-        string_param_defs: Vec::new(),
-        osc_prefix: None,
-    });
+    m.insert(
+        GeneratorTypeId::NONE,
+        GeneratorDef {
+            display_name: "None",
+            is_line_based: false,
+            param_count: 0,
+            param_defs: Vec::new(),
+            string_param_defs: Vec::new(),
+            osc_prefix: None,
+        },
+    );
 
     // ── Tesseract ──
     let params = vec![
@@ -251,7 +262,10 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Window", 0.01, 1.0, 0.1, Some("F2"), "window"),
         pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
     ];
-    m.insert(GeneratorTypeId::TESSERACT, create_def("Tesseract", true, "tesseract", params));
+    m.insert(
+        GeneratorTypeId::TESSERACT,
+        create_def("Tesseract", true, "tesseract", params),
+    );
 
     // ── Duocylinder ──
     let params = vec![
@@ -267,7 +281,10 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Window", 0.01, 1.0, 0.1, Some("F2"), "window"),
         pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
     ];
-    m.insert(GeneratorTypeId::DUOCYLINDER, create_def("Duocylinder", true, "duocylinder", params));
+    m.insert(
+        GeneratorTypeId::DUOCYLINDER,
+        create_def("Duocylinder", true, "duocylinder", params),
+    );
 
     // ── Lissajous ──
     let params = vec![
@@ -283,7 +300,10 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Scale", 0.25, 3.0, 1.55, Some("F2"), "scale"),
         pd_toggle("Snap", 0.0, 1.0, 1.0, "snap"),
     ];
-    m.insert(GeneratorTypeId::LISSAJOUS, create_def("Lissajous", true, "lissajous", params));
+    m.insert(
+        GeneratorTypeId::LISSAJOUS,
+        create_def("Lissajous", true, "lissajous", params),
+    );
 
     // ── WireframeZoo ──
     let params = vec![
@@ -291,12 +311,22 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("ZW", 0.0, 2.0, 0.3, Some("F2"), "rotZW"),
         pd("XW", 0.0, 2.0, 0.2, Some("F2"), "rotXW"),
         pd("Line", 0.0005, 0.03, 0.003, Some("F4"), "line"),
-        pd_whole_labels("Shape", 0.0, 4.0, 0.0, &["Tetra", "Cube", "Octa", "Icosa", "Dodeca"], "shape"),
+        pd_whole_labels(
+            "Shape",
+            0.0,
+            4.0,
+            0.0,
+            &["Tetra", "Cube", "Octa", "Icosa", "Dodeca"],
+            "shape",
+        ),
         pd_toggle("Verts", 0.0, 1.0, 1.0, "verts"),
         pd("VSize", 0.1, 4.0, 1.0, Some("F1"), "vsize"),
         pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
     ];
-    m.insert(GeneratorTypeId::WIREFRAME_ZOO, create_def("Wireframe Zoo", true, "wireframeZoo", params));
+    m.insert(
+        GeneratorTypeId::WIREFRAME_ZOO,
+        create_def("Wireframe Zoo", true, "wireframeZoo", params),
+    );
 
     // ── OscilloscopeXY ──
     let params = vec![
@@ -310,48 +340,117 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Scale", 0.25, 3.0, 1.75, Some("F2"), "scale"),
         pd_toggle("Snap", 0.0, 1.0, 1.0, "snap"),
     ];
-    m.insert(GeneratorTypeId::OSCILLOSCOPE_XY, create_def("Oscilloscope XY", true, "oscilloscopeXY", params));
+    m.insert(
+        GeneratorTypeId::OSCILLOSCOPE_XY,
+        create_def("Oscilloscope XY", true, "oscilloscopeXY", params),
+    );
 
     // ── BasicShapesSnap ──
     let params = vec![
         pd("Line", 0.0005, 0.03, 0.015, Some("F4"), "line"),
-        pd_whole_labels("Shape", 0.0, 2.0, 0.0, &["Square", "Diamond", "Octagon"], "shape"),
+        pd_whole_labels(
+            "Shape",
+            0.0,
+            2.0,
+            0.0,
+            &["Square", "Diamond", "Octagon"],
+            "shape",
+        ),
         pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
-        pd_whole_labels("Fill", 0.0, 2.0, 1.0, &["Solid", "Mixed", "Wireframe"], "fill"),
+        pd_whole_labels(
+            "Fill",
+            0.0,
+            2.0,
+            1.0,
+            &["Solid", "Mixed", "Wireframe"],
+            "fill",
+        ),
     ];
-    m.insert(GeneratorTypeId::BASIC_SHAPES_SNAP, create_def("Basic Shapes Snap", false, "basicShapesSnap", params));
+    m.insert(
+        GeneratorTypeId::BASIC_SHAPES_SNAP,
+        create_def("Basic Shapes Snap", false, "basicShapesSnap", params),
+    );
 
     // ── ConcentricTunnel ──
     let params = vec![
-        pd_whole_labels("Shape", 0.0, 5.0, 0.0, &["Circle", "Triangle", "Square", "Pentagon", "Hexagon", "Star"], "shape"),
+        pd_whole_labels(
+            "Shape",
+            0.0,
+            5.0,
+            0.0,
+            &[
+                "Circle", "Triangle", "Square", "Pentagon", "Hexagon", "Star",
+            ],
+            "shape",
+        ),
         pd("Line", 0.0005, 0.03, 0.008, Some("F4"), "line"),
-        pd_whole_labels("Rate", 0.0, 4.0, 2.0, &["1/4", "1/2", "1", "2", "4"], "speed"),
+        pd_whole_labels(
+            "Rate",
+            0.0,
+            4.0,
+            2.0,
+            &["1/4", "1/2", "1", "2", "4"],
+            "speed",
+        ),
         pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
         pd_toggle("Snap", 0.0, 1.0, 0.0, "snap"),
-        pd_whole_labels("Snap Mode", 0.0, 2.0, 0.0, &["Shape", "Spawn", "Both"], "snapmode"),
+        pd_whole_labels(
+            "Snap Mode",
+            0.0,
+            2.0,
+            0.0,
+            &["Shape", "Spawn", "Both"],
+            "snapmode",
+        ),
     ];
-    m.insert(GeneratorTypeId::CONCENTRIC_TUNNEL, create_def("Concentric Tunnel", false, "concentricTunnel", params));
+    m.insert(
+        GeneratorTypeId::CONCENTRIC_TUNNEL,
+        create_def("Concentric Tunnel", false, "concentricTunnel", params),
+    );
 
     // ── Plasma ──
     let params = vec![
-        pd_whole_labels("Pattern", 0.0, 8.0, 0.0, &["Classic", "Rings", "Diamond", "Warp", "Cells", "Noise", "Pulse", "Fractal", "Lattice"], "pattern"),
+        pd_whole_labels(
+            "Pattern",
+            0.0,
+            8.0,
+            0.0,
+            &[
+                "Classic", "Rings", "Diamond", "Warp", "Cells", "Noise", "Pulse", "Fractal",
+                "Lattice",
+            ],
+            "pattern",
+        ),
         pd("Complexity", 0.0, 1.0, 0.5, Some("F2"), "complexity"),
         pd("Contrast", 0.0, 1.0, 0.63, Some("F2"), "contrast"),
         pd("Speed", 0.1, 5.0, 1.0, Some("F1"), "speed"),
         pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
         pd_toggle("Snap", 0.0, 1.0, 1.0, "snap"),
     ];
-    m.insert(GeneratorTypeId::PLASMA, create_def("Plasma", false, "plasma", params));
+    m.insert(
+        GeneratorTypeId::PLASMA,
+        create_def("Plasma", false, "plasma", params),
+    );
 
     // ── ParametricSurface ──
     let params = vec![
-        pd_whole_labels("Shape", 0.0, 4.0, 0.0, &["Gyroid", "Schwarz P", "Schwarz D", "Torus Knot", "Klein"], "shape"),
+        pd_whole_labels(
+            "Shape",
+            0.0,
+            4.0,
+            0.0,
+            &["Gyroid", "Schwarz P", "Schwarz D", "Torus Knot", "Klein"],
+            "shape",
+        ),
         pd("Morph", 0.0, 1.0, 0.0, Some("F2"), "morph"),
         pd("Speed", 0.1, 5.0, 1.0, Some("F1"), "speed"),
         pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
         pd_toggle("Snap", 0.0, 1.0, 1.0, "snap"),
     ];
-    m.insert(GeneratorTypeId::PARAMETRIC_SURFACE, create_def("Parametric Surface", false, "parametricSurface", params));
+    m.insert(
+        GeneratorTypeId::PARAMETRIC_SURFACE,
+        create_def("Parametric Surface", false, "parametricSurface", params),
+    );
 
     // ── FluidSimulation ──
     let params = vec![
@@ -364,12 +463,22 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
         pd("Count (M)", 0.1, 8.0, 2.0, Some("F1"), "count"),
         pd_toggle("Snap", 0.0, 1.0, 0.0, "snap"),
-        pd_whole_labels("Snap Mode", 0.0, 4.0, 0.0, &["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"], "snapMode"),
+        pd_whole_labels(
+            "Snap Mode",
+            0.0,
+            4.0,
+            0.0,
+            &["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"],
+            "snapMode",
+        ),
         pd("Size", 1.0, 8.0, 3.0, Some("F1"), "size"),
         pd("Anti-Clump", 0.0, 60.0, 20.0, Some("F0"), "antiClump"),
         pd("Force", 0.0, 0.1, 0.005, Some("F3"), "force"),
     ];
-    m.insert(GeneratorTypeId::FLUID_SIMULATION, create_def("Fluid Simulation", false, "fluidSimulation", params));
+    m.insert(
+        GeneratorTypeId::FLUID_SIMULATION,
+        create_def("Fluid Simulation", false, "fluidSimulation", params),
+    );
 
     // ── Mycelium ──
     let params = vec![
@@ -386,7 +495,10 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Scale", 0.1, 2.0, 1.0, Some("F2"), "scale"),
         pd_whole("Seeds", 1.0, 5.0, 1.0, "seeds"),
     ];
-    m.insert(GeneratorTypeId::MYCELIUM, create_def("Mycelium", false, "mycelium", params));
+    m.insert(
+        GeneratorTypeId::MYCELIUM,
+        create_def("Mycelium", false, "mycelium", params),
+    );
 
     // ── FluidSimulation3D ──
     let params = vec![
@@ -400,12 +512,26 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
         pd("Count (M)", 0.1, 8.0, 2.0, Some("F1"), "count"),
         pd_toggle("Snap", 0.0, 1.0, 0.0, "snap"),
-        pd_whole_labels("Snap Mode", 0.0, 4.0, 0.0, &["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"], "snapMode"),
+        pd_whole_labels(
+            "Snap Mode",
+            0.0,
+            4.0,
+            0.0,
+            &["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"],
+            "snapMode",
+        ),
         pd("Size", 1.0, 8.0, 3.0, Some("F1"), "size"),
         pd("Anti-Clump", 0.0, 60.0, 20.0, Some("F0"), "antiClump"),
         pd("Force", 0.0, 0.1, 0.005, Some("F3"), "force"),
         // 3D-specific params (indices 13-20)
-        pd_whole_labels("Container", 0.0, 3.0, 0.0, &["None", "Cube", "Sphere", "Torus"], "container"),
+        pd_whole_labels(
+            "Container",
+            0.0,
+            3.0,
+            0.0,
+            &["None", "Cube", "Sphere", "Torus"],
+            "container",
+        ),
         pd("Ctr Scale", 0.2, 1.0, 0.8, Some("F2"), "containerScale"),
         pd_whole_labels("Vol Res", 0.0, 2.0, 0.0, &["64", "128", "256"], "volumeRes"),
         pd("Cam Dist", 1.0, 8.0, 3.0, Some("F1"), "camDist"),
@@ -414,21 +540,41 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Rotate Z", -1.0, 1.0, 0.0, Some("F2"), "rotZ"),
         pd("Flatten", 0.0, 1.0, 0.0, Some("F2"), "flatten"),
     ];
-    m.insert(GeneratorTypeId::FLUID_SIMULATION_3D, create_def("Fluid Simulation 3D", false, "fluidSimulation3D", params));
+    m.insert(
+        GeneratorTypeId::FLUID_SIMULATION_3D,
+        create_def("Fluid Simulation 3D", false, "fluidSimulation3D", params),
+    );
 
     // ── MRI Volume ──
     let params = vec![
-        pd_whole_labels("Slice Axis", 0.0, 2.0, 0.0, &["Axial", "Sagittal", "Coronal"], "sliceAxis"),
+        pd_whole_labels(
+            "Slice Axis",
+            0.0,
+            2.0,
+            0.0,
+            &["Axial", "Sagittal", "Coronal"],
+            "sliceAxis",
+        ),
         pd("Slice Pos", 0.0, 1.0, 0.5, Some("F2"), "slicePos"),
         pd("Center", 0.0, 1.0, 0.5, Some("F2"), "center"),
         pd("Width", 0.01, 1.0, 0.8, Some("F2"), "width"),
         pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
         pd_toggle("Invert", 0.0, 1.0, 0.0, "invert"),
         pd("Sharpen", 0.0, 3.0, 1.0, Some("F1"), "sharpen"),
-        pd_whole_labels("Scan", 0.0, 2.0, 0.0, &["250μm 7T", "300μm HiRes", "Edlow 100μm"], "scan"),
+        pd_whole_labels(
+            "Scan",
+            0.0,
+            2.0,
+            0.0,
+            &["250μm 7T", "300μm HiRes", "Edlow 100μm"],
+            "scan",
+        ),
         pd_toggle("Snap", 0.0, 1.0, 0.0, "snap"),
     ];
-    m.insert(GeneratorTypeId::MRI_VOLUME, create_def("MRI Volume", false, "mriVolume", params));
+    m.insert(
+        GeneratorTypeId::MRI_VOLUME,
+        create_def("MRI Volume", false, "mriVolume", params),
+    );
 
     m
 }

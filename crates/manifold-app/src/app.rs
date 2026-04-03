@@ -6,15 +6,15 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, NamedKey};
 use winit::window::WindowId;
 
-use manifold_core::{Bpm, LayerId};
+use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
-use manifold_core::layer::Layer;
+use manifold_core::{Bpm, LayerId};
 use manifold_editing::service::EditingService;
-use manifold_playback::audio_sync::{ImportedAudioSyncController, PreloadedAudioData};
 use manifold_playback::audio_decoder::DecodedAudio;
-use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
+use manifold_playback::audio_sync::{ImportedAudioSyncController, PreloadedAudioData};
 use manifold_playback::engine::PlaybackEngine;
+use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
 #[cfg(not(target_os = "macos"))]
 use manifold_playback::renderer::StubRenderer;
 use manifold_renderer::generator_renderer::GeneratorRenderer;
@@ -53,11 +53,31 @@ pub type SelectionState = UIState;
 pub(crate) enum ActiveInspectorDrag {
     MasterOpacity(f32),
     LedBrightness(f32),
-    LayerOpacity { layer_id: LayerId, value: f32 },
-    ClipSlip { clip_id: manifold_core::ClipId, value: f32 },
-    ClipLoop { clip_id: manifold_core::ClipId, value: f32 },
-    EffectParam { tab: manifold_ui::InspectorTab, layer_id: LayerId, effect_idx: usize, param_idx: usize, value: f32, clip_id: Option<manifold_core::ClipId> },
-    GenParam { layer_id: LayerId, param_idx: usize, value: f32 },
+    LayerOpacity {
+        layer_id: LayerId,
+        value: f32,
+    },
+    ClipSlip {
+        clip_id: manifold_core::ClipId,
+        value: f32,
+    },
+    ClipLoop {
+        clip_id: manifold_core::ClipId,
+        value: f32,
+    },
+    EffectParam {
+        tab: manifold_ui::InspectorTab,
+        layer_id: LayerId,
+        effect_idx: usize,
+        param_idx: usize,
+        value: f32,
+        clip_id: Option<manifold_core::ClipId>,
+    },
+    GenParam {
+        layer_id: LayerId,
+        param_idx: usize,
+        value: f32,
+    },
 }
 
 impl ActiveInspectorDrag {
@@ -85,21 +105,26 @@ impl ActiveInspectorDrag {
                     clip.loop_duration_beats = manifold_core::Beats::from_f32(*value);
                 }
             }
-            Self::EffectParam { tab, layer_id, effect_idx, param_idx, value, clip_id } => {
+            Self::EffectParam {
+                tab,
+                layer_id,
+                effect_idx,
+                param_idx,
+                value,
+                clip_id,
+            } => {
                 let effects: Option<&mut Vec<manifold_core::effects::EffectInstance>> = match tab {
-                    manifold_ui::InspectorTab::Master => {
-                        Some(&mut project.settings.master_effects)
-                    }
-                    manifold_ui::InspectorTab::Layer => {
-                        project.timeline.find_layer_by_id_mut(layer_id)
-                            .and_then(|(_, l)| l.effects.as_mut())
-                    }
-                    manifold_ui::InspectorTab::Clip => {
-                        clip_id.as_ref().and_then(|cid| {
-                            project.timeline.find_clip_by_id_mut(cid)
-                                .map(|c| &mut c.effects)
-                        })
-                    }
+                    manifold_ui::InspectorTab::Master => Some(&mut project.settings.master_effects),
+                    manifold_ui::InspectorTab::Layer => project
+                        .timeline
+                        .find_layer_by_id_mut(layer_id)
+                        .and_then(|(_, l)| l.effects.as_mut()),
+                    manifold_ui::InspectorTab::Clip => clip_id.as_ref().and_then(|cid| {
+                        project
+                            .timeline
+                            .find_clip_by_id_mut(cid)
+                            .map(|c| &mut c.effects)
+                    }),
                 };
                 if let Some(effects) = effects
                     && let Some(effect) = effects.get_mut(*effect_idx)
@@ -108,7 +133,11 @@ impl ActiveInspectorDrag {
                     effect.param_values[*param_idx] = *value;
                 }
             }
-            Self::GenParam { layer_id, param_idx, value } => {
+            Self::GenParam {
+                layer_id,
+                param_idx,
+                value,
+            } => {
                 if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id)
                     && let Some(gp) = layer.gen_params_mut()
                     && *param_idx < gp.param_values.len()
@@ -192,10 +221,12 @@ pub struct Application {
     /// The UI reads from whichever surface the content thread has published
     /// via `bridge.front_index()`.
     #[cfg(target_os = "macos")]
-    pub(crate) ui_shared_textures: [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
+    pub(crate) ui_shared_textures:
+        [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
     /// UI-side textures imported from the workspace preview IOSurfaces.
     #[cfg(target_os = "macos")]
-    pub(crate) ui_preview_textures: [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
+    pub(crate) ui_preview_textures:
+        [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
     /// Last seen bridge generation — detects resize (not per-frame).
     #[cfg(target_os = "macos")]
     pub(crate) last_bridge_generation: u64,
@@ -546,13 +577,18 @@ impl Application {
         {
             use manifold_ui::interaction_overlay::DragMode;
             match self.overlay.drag_mode() {
-                DragMode::Move | DragMode::TrimLeft | DragMode::TrimRight | DragMode::RegionSelect => return,
+                DragMode::Move
+                | DragMode::TrimLeft
+                | DragMode::TrimRight
+                | DragMode::RegionSelect => return,
                 DragMode::None => {}
             }
         }
 
         // Priority 2: Inspector resize edge hover
-        if self.ui_root.inspector_resize_dragging || self.ui_root.is_near_inspector_edge(self.cursor_pos) {
+        if self.ui_root.inspector_resize_dragging
+            || self.ui_root.is_near_inspector_edge(self.cursor_pos)
+        {
             self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
             if self.ui_root.inspector_resize_dragging {
                 self.ui_root.set_inspector_handle_drag();
@@ -565,7 +601,8 @@ impl Application {
 
         // Priority 3: Video/timeline split handle hover
         // Use the same hit test as click detection (layout.split_handle rect).
-        let near_split = self.split_dragging || self.ui_root.layout.is_near_split_handle(self.cursor_pos);
+        let near_split =
+            self.split_dragging || self.ui_root.layout.is_near_split_handle(self.cursor_pos);
         if near_split {
             if !self.split_dragging {
                 self.ui_root.set_split_handle_hover();
@@ -581,15 +618,17 @@ impl Application {
         // Priority 4: Clip trim handle hover
         let tracks_rect = self.ui_root.viewport.tracks_rect();
         if tracks_rect.contains(self.cursor_pos)
-            && let Some(hit) = self.ui_root.viewport.hit_test_clip(self.cursor_pos) {
-                match hit.region {
-                    manifold_ui::panels::HitRegion::TrimLeft | manifold_ui::panels::HitRegion::TrimRight => {
-                        self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
-                        return;
-                    }
-                    _ => {}
+            && let Some(hit) = self.ui_root.viewport.hit_test_clip(self.cursor_pos)
+        {
+            match hit.region {
+                manifold_ui::panels::HitRegion::TrimLeft
+                | manifold_ui::panels::HitRegion::TrimRight => {
+                    self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
+                    return;
                 }
+                _ => {}
             }
+        }
 
         // Default: standard arrow
         self.cursor_manager.set_default();
@@ -597,63 +636,110 @@ impl Application {
 
     #[allow(dead_code)]
     fn navigate_cursor(&mut self, direction: manifold_ui::cursor_nav::Direction) {
-        use manifold_ui::cursor_nav::{navigate_cursor, NavResult, NavLayerInfo, NavClipInfo};
+        use manifold_ui::cursor_nav::{NavClipInfo, NavLayerInfo, NavResult, navigate_cursor};
 
-        let current_beat = self.selection.insert_cursor_beat.unwrap_or(self.content_state.current_beat).as_f32();
-        let active_idx = self.active_layer_id.as_ref()
+        let current_beat = self
+            .selection
+            .insert_cursor_beat
+            .unwrap_or(self.content_state.current_beat)
+            .as_f32();
+        let active_idx = self
+            .active_layer_id
+            .as_ref()
             .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
-        let insert_cursor_idx = self.selection.insert_cursor_layer_id.as_ref()
+        let insert_cursor_idx = self
+            .selection
+            .insert_cursor_layer_id
+            .as_ref()
             .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
-        let current_layer = insert_cursor_idx
-            .or(active_idx)
-            .unwrap_or(0);
+        let current_layer = insert_cursor_idx.or(active_idx).unwrap_or(0);
         let grid_interval = self.ui_root.viewport.grid_step();
 
         // Build layer info for navigation (skip collapsed layers)
         let layers: Vec<NavLayerInfo> = Some(&self.local_project)
-            .map(|p| p.timeline.layers.iter().enumerate().map(|(i, l)| {
-                NavLayerInfo {
-                    index: i,
-                    height: if l.is_collapsed { 0.0 } else { 140.0 },
-                }
-            }).collect())
+            .map(|p| {
+                p.timeline
+                    .layers
+                    .iter()
+                    .enumerate()
+                    .map(|(i, l)| NavLayerInfo {
+                        index: i,
+                        height: if l.is_collapsed { 0.0 } else { 140.0 },
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
 
         // Build clip info for auto-select
         let clips: Vec<NavClipInfo> = Some(&self.local_project)
-            .map(|p| p.timeline.layers.iter().enumerate().flat_map(|(li, l)| {
-                l.clips.iter().map(move |c| NavClipInfo {
-                    clip_id: c.id.clone(),
-                    layer_index: li,
-                    start_beat: c.start_beat.as_f32(),
-                    end_beat: (c.start_beat + c.duration_beats).as_f32(),
-                })
-            }).collect())
+            .map(|p| {
+                p.timeline
+                    .layers
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(li, l)| {
+                        l.clips.iter().map(move |c| NavClipInfo {
+                            clip_id: c.id.clone(),
+                            layer_index: li,
+                            start_beat: c.start_beat.as_f32(),
+                            end_beat: (c.start_beat + c.duration_beats).as_f32(),
+                        })
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
 
         match navigate_cursor(
-            direction, current_beat, current_layer, grid_interval,
-            self.modifiers.shift, &layers, &clips,
+            direction,
+            current_beat,
+            current_layer,
+            grid_interval,
+            self.modifiers.shift,
+            &layers,
+            &clips,
         ) {
             NavResult::SelectClip(clip_id) => {
                 // Find the clip's layer for proper UIState selection
-                let li = Some(&self.local_project)
-                    .and_then(|p| p.timeline.layers.iter().enumerate()
-                        .find_map(|(i, l)| l.clips.iter().any(|c| c.id == clip_id).then_some(i)))
-                    .unwrap_or(0);
-                let lid = self.local_project.timeline.layers.get(li)
-                    .map(|l| l.layer_id.clone()).unwrap_or_default();
+                let li =
+                    Some(&self.local_project)
+                        .and_then(|p| {
+                            p.timeline.layers.iter().enumerate().find_map(|(i, l)| {
+                                l.clips.iter().any(|c| c.id == clip_id).then_some(i)
+                            })
+                        })
+                        .unwrap_or(0);
+                let lid = self
+                    .local_project
+                    .timeline
+                    .layers
+                    .get(li)
+                    .map(|l| l.layer_id.clone())
+                    .unwrap_or_default();
                 self.selection.select_clip(clip_id, lid);
-                self.active_layer_id = self.local_project.timeline.layers
-                    .get(li).map(|l| l.layer_id.clone());
+                self.active_layer_id = self
+                    .local_project
+                    .timeline
+                    .layers
+                    .get(li)
+                    .map(|l| l.layer_id.clone());
                 self.needs_rebuild = true;
             }
             NavResult::SetCursor { beat, layer } => {
-                let lid = self.local_project.timeline.layers.get(layer)
-                    .map(|l| l.layer_id.clone()).unwrap_or_default();
-                self.selection.set_insert_cursor(manifold_core::Beats::from_f32(beat), lid);
-                self.active_layer_id = self.local_project.timeline.layers
-                    .get(layer).map(|l| l.layer_id.clone());
+                let lid = self
+                    .local_project
+                    .timeline
+                    .layers
+                    .get(layer)
+                    .map(|l| l.layer_id.clone())
+                    .unwrap_or_default();
+                self.selection
+                    .set_insert_cursor(manifold_core::Beats::from_f32(beat), lid);
+                self.active_layer_id = self
+                    .local_project
+                    .timeline
+                    .layers
+                    .get(layer)
+                    .map(|l| l.layer_id.clone());
                 self.needs_rebuild = true;
             }
             NavResult::NoChange => {}
@@ -682,7 +768,12 @@ impl Application {
                                 false,
                                 old_points,
                             );
-                            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); self.send_content_cmd(ContentCommand::Execute(boxed)); }
+                            {
+                                let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                                    Box::new(cmd);
+                                boxed.execute(project);
+                                self.send_content_cmd(ContentCommand::Execute(boxed));
+                            }
                         }
                     }
                     self.needs_rebuild = true;
@@ -693,9 +784,15 @@ impl Application {
                     let fps = fps.clamp(1.0, 240.0);
                     if let Some(project) = Some(&mut self.local_project) {
                         let cmd = manifold_editing::commands::settings::ChangeFrameRateCommand::new(
-                            project.settings.frame_rate, fps,
+                            project.settings.frame_rate,
+                            fps,
                         );
-                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); self.send_content_cmd(ContentCommand::Execute(boxed)); }
+                        {
+                            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                                Box::new(cmd);
+                            boxed.execute(project);
+                            self.send_content_cmd(ContentCommand::Execute(boxed));
+                        }
                     }
                     // Content thread renders at project FPS; UI always runs at display rate.
                     self.send_content_cmd(ContentCommand::SetFrameRate(fps as f64));
@@ -711,7 +808,8 @@ impl Application {
                         let cmd = manifold_editing::commands::layer::RenameLayerCommand::new(
                             layer_id, old_name, new_name,
                         );
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(cmd);
                         boxed.execute(&mut self.local_project);
                         self.send_content_cmd(ContentCommand::Execute(boxed));
                     }
@@ -722,9 +820,7 @@ impl Application {
                 // Unity: ClipInspector.OnBitmapBpmCommit
                 // "auto" or empty → 0 (use project BPM), otherwise parse + clamp [20, 300]
                 let trimmed = text.trim();
-                let new_bpm = if trimmed.is_empty()
-                    || trimmed.eq_ignore_ascii_case("auto")
-                {
+                let new_bpm = if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
                     0.0
                 } else if let Ok(v) = trimmed.parse::<f32>() {
                     if v > 0.0 { v.clamp(20.0, 300.0) } else { 0.0 }
@@ -734,15 +830,40 @@ impl Application {
                 if let Some(clip_id) = &self.selection.primary_selected_clip_id {
                     let clip_id = clip_id.clone();
                     if let Some(project) = Some(&mut self.local_project) {
-                        let old_bpm = project.timeline.find_clip_by_id(&clip_id)
+                        let old_bpm = project
+                            .timeline
+                            .find_clip_by_id(&clip_id)
                             .map(|c| c.recorded_bpm)
                             .unwrap_or(0.0);
                         if (old_bpm - new_bpm).abs() >= 0.01 {
-                            let cmd = manifold_editing::commands::clip::ChangeClipRecordedBpmCommand::new(
-                                clip_id, old_bpm, new_bpm,
-                            );
-                            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); self.send_content_cmd(ContentCommand::Execute(boxed)); }
+                            let cmd =
+                                manifold_editing::commands::clip::ChangeClipRecordedBpmCommand::new(
+                                    clip_id, old_bpm, new_bpm,
+                                );
+                            {
+                                let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                                    Box::new(cmd);
+                                boxed.execute(project);
+                                self.send_content_cmd(ContentCommand::Execute(boxed));
+                            }
                         }
+                    }
+                }
+                self.needs_rebuild = true;
+            }
+            TextInputField::MacroLabel(idx) => {
+                let new_label = text.trim().to_string();
+                if let Some(slot) = self.local_project.settings.macro_bank.slots.get(idx) {
+                    let old_label = slot.label.clone();
+                    if old_label != new_label {
+                        let cmd =
+                            manifold_editing::commands::settings::RenameMacroLabelCommand::new(
+                                idx, old_label, new_label,
+                            );
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(cmd);
+                        boxed.execute(&mut self.local_project);
+                        self.send_content_cmd(ContentCommand::Execute(boxed));
                     }
                 }
                 self.needs_rebuild = true;
@@ -752,44 +873,60 @@ impl Application {
                     let tab = self.ui_root.inspector.last_effect_tab();
                     // Resolve effect instance to get type + old value
                     let effect_info = match tab {
-                        manifold_ui::InspectorTab::Master => {
-                            self.local_project.settings.master_effects.get(effect_idx)
-                                .map(|fx| (fx.effect_type(), fx.get_base_param(param_idx)))
-                        }
-                        manifold_ui::InspectorTab::Layer => {
-                            self.active_layer_id.as_ref()
-                                .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
-                                .and_then(|(_, l)| l.effects.as_ref())
-                                .and_then(|e| e.get(effect_idx))
-                                .map(|fx| (fx.effect_type(), fx.get_base_param(param_idx)))
-                        }
-                        manifold_ui::InspectorTab::Clip => {
-                            self.selection.primary_selected_clip_id.as_ref()
-                                .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
-                                .and_then(|c| c.effects.get(effect_idx))
-                                .map(|fx| (fx.effect_type(), fx.get_base_param(param_idx)))
-                        }
+                        manifold_ui::InspectorTab::Master => self
+                            .local_project
+                            .settings
+                            .master_effects
+                            .get(effect_idx)
+                            .map(|fx| (fx.effect_type(), fx.get_base_param(param_idx))),
+                        manifold_ui::InspectorTab::Layer => self
+                            .active_layer_id
+                            .as_ref()
+                            .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
+                            .and_then(|(_, l)| l.effects.as_ref())
+                            .and_then(|e| e.get(effect_idx))
+                            .map(|fx| (fx.effect_type(), fx.get_base_param(param_idx))),
+                        manifold_ui::InspectorTab::Clip => self
+                            .selection
+                            .primary_selected_clip_id
+                            .as_ref()
+                            .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
+                            .and_then(|c| c.effects.get(effect_idx))
+                            .map(|fx| (fx.effect_type(), fx.get_base_param(param_idx))),
                     };
                     if let Some((effect_type, old_val)) = effect_info {
                         // Clamp to param range from registry
-                        let new_val = if let Some(def) = manifold_core::effect_definition_registry::try_get(effect_type) {
+                        let new_val = if let Some(def) =
+                            manifold_core::effect_definition_registry::try_get(effect_type)
+                        {
                             if let Some(pd) = def.param_defs.get(param_idx) {
                                 parsed.clamp(pd.min, pd.max)
-                            } else { parsed }
-                        } else { parsed };
+                            } else {
+                                parsed
+                            }
+                        } else {
+                            parsed
+                        };
                         if (old_val - new_val).abs() > f32::EPSILON {
                             let target = match tab {
-                                manifold_ui::InspectorTab::Master => manifold_editing::commands::effect_target::EffectTarget::Master,
-                                manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Clip => {
+                                manifold_ui::InspectorTab::Master => {
+                                    manifold_editing::commands::effect_target::EffectTarget::Master
+                                }
+                                manifold_ui::InspectorTab::Layer
+                                | manifold_ui::InspectorTab::Clip => {
                                     let layer_id = self.active_layer_id.clone().unwrap_or_default();
-                                    manifold_editing::commands::effect_target::EffectTarget::Layer { layer_id }
-                                },
+                                    manifold_editing::commands::effect_target::EffectTarget::Layer {
+                                        layer_id,
+                                    }
+                                }
                             };
-                            let cmd = manifold_editing::commands::effects::ChangeEffectParamCommand::new(
-                                target, effect_idx, param_idx, old_val, new_val,
-                            );
+                            let cmd =
+                                manifold_editing::commands::effects::ChangeEffectParamCommand::new(
+                                    target, effect_idx, param_idx, old_val, new_val,
+                                );
                             if let Some(project) = Some(&mut self.local_project) {
-                                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                                let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                                    Box::new(cmd);
                                 boxed.execute(project);
                                 self.send_content_cmd(ContentCommand::Execute(boxed));
                             }
@@ -800,50 +937,63 @@ impl Application {
             }
             TextInputField::GenParam(param_idx) => {
                 if let Ok(parsed) = text.parse::<f32>()
-                    && let Some(layer_idx) = self.active_layer_id.as_ref()
+                    && let Some(layer_idx) = self
+                        .active_layer_id
+                        .as_ref()
                         .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id))
-                        && let Some(layer) = self.local_project.timeline.layers.get(layer_idx) {
-                            let gen_type = layer.generator_type();
-                            // Clamp to param range from generator registry
-                            let new_val = if let Some(def) = manifold_core::generator_definition_registry::try_get(gen_type) {
-                                if let Some(pd) = def.param_defs.get(param_idx) {
-                                    parsed.clamp(pd.min, pd.max)
-                                } else { parsed }
-                            } else { parsed };
-                            if let Some(gp) = layer.gen_params() {
-                                let base = gp.base_param_values.as_ref().unwrap_or(&gp.param_values);
-                                let old_val = base.get(param_idx).copied().unwrap_or(0.0);
-                                if (old_val - new_val).abs() > f32::EPSILON {
-                                    let mut old_params = base.clone();
-                                    let mut new_params = base.clone();
-                                    if param_idx < new_params.len() {
-                                        new_params[param_idx] = new_val;
-                                    }
-                                    if param_idx < old_params.len() {
-                                        old_params[param_idx] = old_val;
-                                    }
-                                    let lid = layer.layer_id.clone();
-                                    let cmd = manifold_editing::commands::settings::ChangeGeneratorParamsCommand::new(
+                    && let Some(layer) = self.local_project.timeline.layers.get(layer_idx)
+                {
+                    let gen_type = layer.generator_type();
+                    // Clamp to param range from generator registry
+                    let new_val = if let Some(def) =
+                        manifold_core::generator_definition_registry::try_get(gen_type)
+                    {
+                        if let Some(pd) = def.param_defs.get(param_idx) {
+                            parsed.clamp(pd.min, pd.max)
+                        } else {
+                            parsed
+                        }
+                    } else {
+                        parsed
+                    };
+                    if let Some(gp) = layer.gen_params() {
+                        let base = gp.base_param_values.as_ref().unwrap_or(&gp.param_values);
+                        let old_val = base.get(param_idx).copied().unwrap_or(0.0);
+                        if (old_val - new_val).abs() > f32::EPSILON {
+                            let mut old_params = base.clone();
+                            let mut new_params = base.clone();
+                            if param_idx < new_params.len() {
+                                new_params[param_idx] = new_val;
+                            }
+                            if param_idx < old_params.len() {
+                                old_params[param_idx] = old_val;
+                            }
+                            let lid = layer.layer_id.clone();
+                            let cmd = manifold_editing::commands::settings::ChangeGeneratorParamsCommand::new(
                                         lid, old_params, new_params,
                                     );
-                                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                                    boxed.execute(&mut self.local_project);
-                                    self.send_content_cmd(ContentCommand::Execute(boxed));
-                                }
-                            }
+                            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                                Box::new(cmd);
+                            boxed.execute(&mut self.local_project);
+                            self.send_content_cmd(ContentCommand::Execute(boxed));
                         }
+                    }
+                }
                 self.needs_rebuild = true;
             }
             TextInputField::GenStringParam(sp_idx) => {
                 // Commit a generator string param change (e.g. text content).
                 // Look up the string_param_def key from the active layer's generator def,
                 // then find the active clip to get the old value.
-                if let Some(layer_idx) = self.active_layer_id.as_ref()
+                if let Some(layer_idx) = self
+                    .active_layer_id
+                    .as_ref()
                     .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id))
                     && let Some(layer) = self.local_project.timeline.layers.get(layer_idx)
                 {
                     let gen_type = layer.generator_type();
-                    if let Some(def) = manifold_core::generator_definition_registry::try_get(gen_type)
+                    if let Some(def) =
+                        manifold_core::generator_definition_registry::try_get(gen_type)
                         && let Some(sp_def) = def.string_param_defs.get(sp_idx)
                     {
                         let key = sp_def.key.to_string();
@@ -854,21 +1004,27 @@ impl Application {
                         };
 
                         // Find clip: selected clip on this layer, or first clip
-                        let clip = self.selection.primary_selected_clip_id.as_ref()
+                        let clip = self
+                            .selection
+                            .primary_selected_clip_id
+                            .as_ref()
                             .and_then(|sel_id| layer.clips.iter().find(|c| c.id == *sel_id))
                             .or_else(|| layer.clips.first());
-                        let (clip_id, old_value) = clip.map(|c| {
-                            let old = c.string_params.as_ref()
-                                .and_then(|m| m.get(&key))
-                                .cloned();
-                            (c.id.clone(), old)
-                        }).unwrap_or_default();
+                        let (clip_id, old_value) = clip
+                            .map(|c| {
+                                let old =
+                                    c.string_params.as_ref().and_then(|m| m.get(&key)).cloned();
+                                (c.id.clone(), old)
+                            })
+                            .unwrap_or_default();
 
                         if old_value != new_value {
-                            let cmd = manifold_editing::commands::clip::SetClipStringParamCommand::new(
-                                clip_id, key, old_value, new_value,
-                            );
-                            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                            let cmd =
+                                manifold_editing::commands::clip::SetClipStringParamCommand::new(
+                                    clip_id, key, old_value, new_value,
+                                );
+                            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                                Box::new(cmd);
                             boxed.execute(&mut self.local_project);
                             self.send_content_cmd(ContentCommand::Execute(boxed));
                         }
@@ -882,61 +1038,77 @@ impl Application {
                     let tab = self.ui_root.inspector.last_effect_tab();
                     // Find the group by index
                     let group_info = match tab {
-                        manifold_ui::InspectorTab::Master => {
-                            self.local_project.settings.master_effect_groups.as_ref()
-                                .and_then(|groups| groups.get(group_idx))
-                                .map(|g| (g.id.clone(), g.name.clone()))
-                        }
-                        manifold_ui::InspectorTab::Layer => {
-                            self.active_layer_id.as_ref()
-                                .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
-                                .and_then(|(_, l)| l.effect_groups.as_ref())
-                                .and_then(|g| g.get(group_idx))
-                                .map(|g| (g.id.clone(), g.name.clone()))
-                        }
-                        manifold_ui::InspectorTab::Clip => {
-                            self.selection.primary_selected_clip_id.as_ref()
-                                .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
-                                .and_then(|c| c.effect_groups.as_ref())
-                                .and_then(|g| g.get(group_idx))
-                                .map(|g| (g.id.clone(), g.name.clone()))
-                        }
+                        manifold_ui::InspectorTab::Master => self
+                            .local_project
+                            .settings
+                            .master_effect_groups
+                            .as_ref()
+                            .and_then(|groups| groups.get(group_idx))
+                            .map(|g| (g.id.clone(), g.name.clone())),
+                        manifold_ui::InspectorTab::Layer => self
+                            .active_layer_id
+                            .as_ref()
+                            .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
+                            .and_then(|(_, l)| l.effect_groups.as_ref())
+                            .and_then(|g| g.get(group_idx))
+                            .map(|g| (g.id.clone(), g.name.clone())),
+                        manifold_ui::InspectorTab::Clip => self
+                            .selection
+                            .primary_selected_clip_id
+                            .as_ref()
+                            .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
+                            .and_then(|c| c.effect_groups.as_ref())
+                            .and_then(|g| g.get(group_idx))
+                            .map(|g| (g.id.clone(), g.name.clone())),
                     };
                     if let Some((group_id, old_name)) = group_info
-                        && old_name != new_name {
-                            let target = match tab {
-                                manifold_ui::InspectorTab::Master => manifold_editing::commands::effect_target::EffectTarget::Master,
-                                manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Clip => {
-                                    let layer_id = self.active_layer_id.clone().unwrap_or_default();
-                                    manifold_editing::commands::effect_target::EffectTarget::Layer { layer_id }
-                                },
-                            };
-                            let cmd = manifold_editing::commands::effect_groups::RenameGroupCommand::new(
+                        && old_name != new_name
+                    {
+                        let target = match tab {
+                            manifold_ui::InspectorTab::Master => {
+                                manifold_editing::commands::effect_target::EffectTarget::Master
+                            }
+                            manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Clip => {
+                                let layer_id = self.active_layer_id.clone().unwrap_or_default();
+                                manifold_editing::commands::effect_target::EffectTarget::Layer {
+                                    layer_id,
+                                }
+                            }
+                        };
+                        let cmd =
+                            manifold_editing::commands::effect_groups::RenameGroupCommand::new(
                                 target, group_id, old_name, new_name,
                             );
-                            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                            boxed.execute(&mut self.local_project);
-                            self.send_content_cmd(ContentCommand::Execute(boxed));
-                        }
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(cmd);
+                        boxed.execute(&mut self.local_project);
+                        self.send_content_cmd(ContentCommand::Execute(boxed));
+                    }
                 }
                 self.needs_rebuild = true;
             }
             TextInputField::SearchFilter => {
                 // Update browser popup filter — no undo command
-                self.ui_root.browser_popup.set_filter(text.trim().to_string());
+                self.ui_root
+                    .browser_popup
+                    .set_filter(text.trim().to_string());
                 self.needs_rebuild = true;
             }
             TextInputField::MarkerName => {
                 if let Some(marker_id) = self.text_input.marker_id.take() {
                     let new_name = text.to_string();
-                    let old_name = self.local_project.timeline.find_marker(&marker_id)
+                    let old_name = self
+                        .local_project
+                        .timeline
+                        .find_marker(&marker_id)
                         .map(|m| m.name.clone())
                         .unwrap_or_default();
                     if old_name != new_name {
                         let cmd = manifold_editing::commands::marker::RenameMarkerCommand::new(
                             marker_id, old_name, new_name,
                         );
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(cmd);
                         boxed.execute(&mut self.local_project);
                         self.send_content_cmd(ContentCommand::Execute(boxed));
                     }
@@ -947,7 +1119,6 @@ impl Application {
     }
 
     // tick_and_render() and present_all_windows() moved to app_render.rs
-
 
     /// Convert a winit key to a manifold_ui Key.
     fn convert_key(logical_key: &Key) -> Option<manifold_ui::input::Key> {
@@ -1068,7 +1239,8 @@ impl ApplicationHandler for Application {
         self.display_resolutions.clear();
         for (i, monitor) in event_loop.available_monitors().enumerate() {
             // Find the native (highest) resolution from video modes
-            let native_size = monitor.video_modes()
+            let native_size = monitor
+                .video_modes()
                 .max_by_key(|vm| {
                     let s = vm.size();
                     (s.width as u64) * (s.height as u64)
@@ -1085,10 +1257,17 @@ impl ApplicationHandler for Application {
             };
 
             let scaled = monitor.size();
-            let label = monitor.name().unwrap_or_else(|| format!("Display {}", i + 1));
+            let label = monitor
+                .name()
+                .unwrap_or_else(|| format!("Display {}", i + 1));
             log::info!(
                 "Detected monitor: {} native={}x{} scaled={}x{} scale={:.2}",
-                label, w, h, scaled.width, scaled.height, monitor.scale_factor()
+                label,
+                w,
+                h,
+                scaled.width,
+                scaled.height,
+                monitor.scale_factor()
             );
 
             if w > 0 && h > 0 {
@@ -1151,12 +1330,9 @@ impl ApplicationHandler for Application {
             {
                 // Create content thread vsync signal targeting the primary window's
                 // display. Retargeted to output window when it opens.
-                self.content_vsync_signal = Some(
-                    manifold_gpu::GpuVsyncSignal::new(window_arc.as_ref()),
-                );
-                self.ui_display_link = Some(
-                    crate::display_link::UiDisplayLink::new(window_arc),
-                );
+                self.content_vsync_signal =
+                    Some(manifold_gpu::GpuVsyncSignal::new(window_arc.as_ref()));
+                self.ui_display_link = Some(crate::display_link::UiDisplayLink::new(window_arc));
             }
 
             // Blit pipeline (composite output → drawable with aspect-fit viewport)
@@ -1185,7 +1361,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
             self.blit_pipeline = Some(native_device.create_render_pipeline(
-                blit_shader, "vs_main", "fs_main",
+                blit_shader,
+                "vs_main",
+                "fs_main",
                 manifold_gpu::GpuTextureFormat::Bgra8Unorm,
                 None,
                 "Blit Pipeline",
@@ -1227,16 +1405,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 alpha_operation: manifold_gpu::GpuBlendOp::Add,
             };
             self.atlas_pipeline = Some(native_device.create_render_pipeline(
-                atlas_shader, "vs_main", "fs_main",
+                atlas_shader,
+                "vs_main",
+                "fs_main",
                 manifold_gpu::GpuTextureFormat::Bgra8Unorm,
                 Some(premultiplied_blend),
                 "Atlas Blit Pipeline",
             ));
-            self.atlas_sampler = Some(native_device.create_sampler(&manifold_gpu::GpuSamplerDesc {
-                min_filter: manifold_gpu::GpuFilterMode::Nearest,
-                mag_filter: manifold_gpu::GpuFilterMode::Nearest,
-                ..Default::default()
-            }));
+            self.atlas_sampler =
+                Some(native_device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+                    min_filter: manifold_gpu::GpuFilterMode::Nearest,
+                    mag_filter: manifold_gpu::GpuFilterMode::Nearest,
+                    ..Default::default()
+                }));
 
             // Create UI renderer using native Metal
             self.ui_renderer = Some(UIRenderer::new(
@@ -1245,12 +1426,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             ));
 
             // Create panel cache system
-            self.ui_cache_manager = Some(
-                manifold_renderer::ui_cache_manager::UICacheManager::new(
-                    manifold_gpu::GpuTextureFormat::Bgra8Unorm,
-                    scale,
-                ),
-            );
+            self.ui_cache_manager = Some(manifold_renderer::ui_cache_manager::UICacheManager::new(
+                manifold_gpu::GpuTextureFormat::Bgra8Unorm,
+                scale,
+            ));
 
             // Create layer bitmap GPU
             self.layer_bitmap_gpu = Some(manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu::new(
@@ -1260,7 +1439,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             self.scale_factor = scale;
 
-            GpuContext { device: native_device }
+            GpuContext {
+                device: native_device,
+            }
         };
 
         // Create initial offscreen UI render target.
@@ -1295,9 +1476,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // Triple-buffered: 3 surfaces allow 2 content frames in flight.
             #[cfg(target_os = "macos")]
             {
-                let bridge = crate::shared_texture::SharedTextureBridge::new(
-                    output_w, output_h,
-                );
+                let bridge = crate::shared_texture::SharedTextureBridge::new(output_w, output_h);
                 let bridge = Arc::new(bridge);
                 // Import all IOSurface textures on the UI device (triple-buffered).
                 let ui_textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT] =
@@ -1310,8 +1489,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     initial_preview_size.1,
                 );
                 let preview_bridge = Arc::new(preview_bridge);
-                let preview_textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT] =
-                    std::array::from_fn(|i| unsafe { preview_bridge.import_texture_native(&gpu.device, i) });
+                let preview_textures: [manifold_gpu::GpuTexture;
+                    crate::shared_texture::SURFACE_COUNT] = std::array::from_fn(|i| unsafe {
+                    preview_bridge.import_texture_native(&gpu.device, i)
+                });
                 self.ui_preview_textures = preview_textures.map(Some);
                 self.preview_texture_bridge = Some(Arc::clone(&preview_bridge));
             }
@@ -1324,17 +1505,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // Load pipeline binary archive — subsequent pipeline creation calls
             // automatically use it for near-instant cache hits.
             if let Ok(home) = std::env::var("HOME") {
-                let cache_dir = std::path::PathBuf::from(home)
-                    .join("Library/Caches/com.latentspace.manifold");
+                let cache_dir =
+                    std::path::PathBuf::from(home).join("Library/Caches/com.latentspace.manifold");
                 std::fs::create_dir_all(&cache_dir).ok();
-                native_device
-                    .load_pipeline_archive(&cache_dir.join("pipeline_cache.metallib"));
-                native_device
-                    .load_msl_cache(&cache_dir.join("msl_cache"));
+                native_device.load_pipeline_archive(&cache_dir.join("pipeline_cache.metallib"));
+                native_device.load_msl_cache(&cache_dir.join("msl_cache"));
             }
-            log::info!(
-                "[GPU] Content thread: native MTLCommandQueue (manifold-gpu)"
-            );
+            log::info!("[GPU] Content thread: native MTLCommandQueue (manifold-gpu)");
 
             let gen_format = manifold_gpu::GpuTextureFormat::Rgba16Float;
 
@@ -1360,9 +1537,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let mut engine = PlaybackEngine::new(renderers);
             engine.initialize(self.local_project.clone());
 
-            let mut content_pipeline = crate::content_pipeline::ContentPipeline::new(
-                Box::new(LayerCompositor::new(&native_device, output_w, output_h)),
-            );
+            let mut content_pipeline = crate::content_pipeline::ContentPipeline::new(Box::new(
+                LayerCompositor::new(&native_device, output_w, output_h),
+            ));
             content_pipeline.edr_headroom = self.edr_headroom;
             // Save pipeline archive after all pipelines have been created.
             native_device.save_pipeline_archive();
@@ -1374,14 +1551,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             #[cfg(target_os = "macos")]
             if let Some(ref bridge) = self.shared_texture_bridge {
                 let native_dev = content_pipeline.native_device().unwrap();
-                let content_textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT] =
+                let content_textures: [manifold_gpu::GpuTexture;
+                    crate::shared_texture::SURFACE_COUNT] =
                     std::array::from_fn(|i| unsafe { bridge.import_texture_native(native_dev, i) });
                 content_pipeline.set_shared_textures(content_textures, Arc::clone(bridge));
             }
             #[cfg(target_os = "macos")]
             if let Some(ref bridge) = self.preview_texture_bridge {
                 let native_dev = content_pipeline.native_device().unwrap();
-                let preview_textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT] =
+                let preview_textures: [manifold_gpu::GpuTexture;
+                    crate::shared_texture::SURFACE_COUNT] =
                     std::array::from_fn(|i| unsafe { bridge.import_texture_native(native_dev, i) });
                 content_pipeline.set_preview_textures(preview_textures, Arc::clone(bridge));
             }
@@ -1398,7 +1577,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let stem_audio = match manifold_playback::stem_audio::StemAudioController::new() {
                 Ok(ctrl) => Some(ctrl),
                 Err(e) => {
-                    log::warn!("[StemAudio] Failed to initialize stem audio controller: {}", e);
+                    log::warn!(
+                        "[StemAudio] Failed to initialize stem audio controller: {}",
+                        e
+                    );
                     None
                 }
             };
@@ -1419,7 +1601,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         .and_then(|p| p.parent().map(|d| d.to_string_lossy().into_owned()))
                         .unwrap_or_default(),
                 ),
-                transport_controller: manifold_playback::transport_controller::TransportController::new(),
+                transport_controller:
+                    manifold_playback::transport_controller::TransportController::new(),
                 gpu: GpuContext::new(),
                 frame_count: 0,
                 time_since_start: manifold_core::Seconds::ZERO,
@@ -1431,7 +1614,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     self.local_project.settings.frame_rate as f64,
                 ),
                 #[cfg(target_os = "macos")]
-                vsync_signal: self.content_vsync_signal.as_ref()
+                vsync_signal: self
+                    .content_vsync_signal
+                    .as_ref()
                     .map(|s| s.create_waiter()),
                 #[cfg(target_os = "macos")]
                 last_vsync_count: 0,
@@ -1471,7 +1656,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         self.gpu = Some(gpu);
 
         // Pass detected display resolutions to UI
-        self.ui_root.set_display_resolutions(self.display_resolutions.clone());
+        self.ui_root
+            .set_display_resolutions(self.display_resolutions.clone());
 
         // Build UI at initial window size (logical pixels)
         let logical_w = size.width as f32 / scale as f32;
@@ -1481,10 +1667,22 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         self.sync_workspace_preview_size();
 
         // Push initial project data (layers, tracks) and rebuild
-        let active_idx = self.active_layer_id.as_ref()
+        let active_idx = self
+            .active_layer_id
+            .as_ref()
             .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
-        crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.local_project, active_idx, &self.selection);
-        crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.local_project, active_idx, &self.selection);
+        crate::ui_bridge::sync_project_data(
+            &mut self.ui_root,
+            &self.local_project,
+            active_idx,
+            &self.selection,
+        );
+        crate::ui_bridge::sync_inspector_data(
+            &mut self.ui_root,
+            &self.local_project,
+            active_idx,
+            &self.selection,
+        );
 
         self.initialized = true;
 
@@ -1588,7 +1786,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             WindowEvent::CursorMoved { position, .. } => {
                 if is_primary {
                     // Convert to logical pixels
-                    let scale = self.window_registry.get(&window_id)
+                    let scale = self
+                        .window_registry
+                        .get(&window_id)
                         .map(|ws| ws.window.scale_factor())
                         .unwrap_or(1.0);
                     self.cursor_pos = Vec2::new(
@@ -1599,7 +1799,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     // Split handle drag takes highest priority
                     // From Unity PanelResizeHandle.OnDrag
                     if self.split_dragging {
-                        self.ui_root.layout.update_split_from_drag(self.cursor_pos.y);
+                        self.ui_root
+                            .layout
+                            .update_split_from_drag(self.cursor_pos.y);
                         self.cursor_manager.set(TimelineCursor::ResizeVertical);
                         self.needs_rebuild = true;
                     }
@@ -1647,17 +1849,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
                     // Apply cursor to window if changed
                     if self.cursor_manager.needs_update()
-                        && let Some(ws) = self.window_registry.get(&window_id) {
-                            let icon = match self.cursor_manager.pending_cursor_icon() {
-                                TimelineCursor::Default => winit::window::CursorIcon::Default,
-                                TimelineCursor::ResizeHorizontal => winit::window::CursorIcon::ColResize,
-                                TimelineCursor::ResizeVertical => winit::window::CursorIcon::RowResize,
-                                TimelineCursor::Move => winit::window::CursorIcon::Move,
-                                TimelineCursor::Blocked => winit::window::CursorIcon::NotAllowed,
-                            };
-                            ws.window.set_cursor(icon);
-                            self.cursor_manager.mark_applied();
-                        }
+                        && let Some(ws) = self.window_registry.get(&window_id)
+                    {
+                        let icon = match self.cursor_manager.pending_cursor_icon() {
+                            TimelineCursor::Default => winit::window::CursorIcon::Default,
+                            TimelineCursor::ResizeHorizontal => {
+                                winit::window::CursorIcon::ColResize
+                            }
+                            TimelineCursor::ResizeVertical => winit::window::CursorIcon::RowResize,
+                            TimelineCursor::Move => winit::window::CursorIcon::Move,
+                            TimelineCursor::Blocked => winit::window::CursorIcon::NotAllowed,
+                        };
+                        ws.window.set_cursor(icon);
+                        self.cursor_manager.mark_applied();
+                    }
                 }
             }
 
@@ -1689,7 +1894,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                     {
                                         self.ui_root.dropdown.close(&mut self.ui_root.tree);
                                         // Click is consumed by dismiss — do not forward.
-                                    } else if self.ui_root.layout.is_near_split_handle(self.cursor_pos) {
+                                    } else if self
+                                        .ui_root
+                                        .layout
+                                        .is_near_split_handle(self.cursor_pos)
+                                    {
                                         // Begin video/timeline split drag.
                                         // From Unity PanelResizeHandle.OnPointerDown.
                                         self.split_dragging = true;
@@ -1751,39 +1960,37 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     // existing titled window in place.
                     const DOUBLE_CLICK_MS: u128 = 300;
                     let now = std::time::Instant::now();
-                    let is_double = self.output_last_click
+                    let is_double = self
+                        .output_last_click
                         .map(|t| now.duration_since(t).as_millis() < DOUBLE_CLICK_MS)
                         .unwrap_or(false);
 
                     if is_double {
                         self.output_last_click = None;
-                        if let Some((name, presentation, current_monitor)) =
-                            self.window_registry
-                                .get(&window_id)
-                                .and_then(|ws| match &ws.role {
-                                    WindowRole::Output { name, presentation } => {
-                                        Some((
-                                            name.clone(),
-                                            *presentation,
-                                            ws.window.current_monitor(),
-                                        ))
-                                    }
-                                    _ => None,
-                                })
+                        if let Some((name, presentation, current_monitor)) = self
+                            .window_registry
+                            .get(&window_id)
+                            .and_then(|ws| match &ws.role {
+                                WindowRole::Output { name, presentation } => {
+                                    Some((name.clone(), *presentation, ws.window.current_monitor()))
+                                }
+                                _ => None,
+                            })
                         {
                             // Resolve display_index from the monitor the window
                             // is actually on right now (not the stale stored
                             // index) so fullscreen targets the correct display.
                             let display_index = current_monitor.and_then(|cur| {
-                                event_loop.available_monitors().enumerate().find_map(
-                                    |(i, m)| {
+                                event_loop
+                                    .available_monitors()
+                                    .enumerate()
+                                    .find_map(|(i, m)| {
                                         if m.name() == cur.name() {
                                             Some(i)
                                         } else {
                                             None
                                         }
-                                    },
-                                )
+                                    })
                             });
 
                             #[cfg(target_os = "macos")]
@@ -1815,7 +2022,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         winit::event::MouseScrollDelta::LineDelta(x, y) => {
                             (x * LINE_DELTA_PX, y * LINE_DELTA_PX)
                         }
-                        winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.x as f32, pos.y as f32),
+                        winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                            (pos.x as f32, pos.y as f32)
+                        }
                     };
 
                     let pos = self.cursor_pos;
@@ -1832,18 +2041,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             // Always anchor on the playhead, not the mouse cursor.
                             let playhead_beat = self.content_state.current_beat.as_f32();
                             let current_ppb = self.ui_root.viewport.pixels_per_beat();
-                            let playhead_px = self.ui_root.viewport.beat_to_pixel(
-                                manifold_core::Beats::from_f32(playhead_beat),
-                            );
-                            let anchor_x = (playhead_px - tracks_rect.x)
-                                .clamp(0.0, tracks_rect.width);
+                            let playhead_px = self
+                                .ui_root
+                                .viewport
+                                .beat_to_pixel(manifold_core::Beats::from_f32(playhead_beat));
+                            let anchor_x =
+                                (playhead_px - tracks_rect.x).clamp(0.0, tracks_rect.width);
                             let levels = &manifold_ui::color::ZOOM_LEVELS;
-                            let current_idx = levels.iter()
+                            let current_idx = levels
+                                .iter()
                                 .position(|&l| (l - current_ppb).abs() < 0.01)
                                 .unwrap_or_else(|| {
-                                    levels.iter().enumerate()
+                                    levels
+                                        .iter()
+                                        .enumerate()
                                         .min_by(|(_, a), (_, b)| {
-                                            (*a - current_ppb).abs().partial_cmp(&(*b - current_ppb).abs()).unwrap_or(std::cmp::Ordering::Equal)
+                                            (*a - current_ppb)
+                                                .abs()
+                                                .partial_cmp(&(*b - current_ppb).abs())
+                                                .unwrap_or(std::cmp::Ordering::Equal)
                                         })
                                         .map(|(i, _)| i)
                                         .unwrap_or(0)
@@ -1868,24 +2084,28 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             // Shift + scroll Y → horizontal pan
                             let ppb = self.ui_root.viewport.pixels_per_beat();
                             let beat_delta = dy * manifold_ui::color::SCROLL_SENSITIVITY / ppb;
-                            let new_x = (self.ui_root.viewport.scroll_x_beats().as_f32() - beat_delta).max(0.0);
-                            if self.ui_root.viewport.set_scroll(
-                                new_x,
-                                self.ui_root.viewport.scroll_y_px(),
-                            ) {
+                            let new_x = (self.ui_root.viewport.scroll_x_beats().as_f32()
+                                - beat_delta)
+                                .max(0.0);
+                            if self
+                                .ui_root
+                                .viewport
+                                .set_scroll(new_x, self.ui_root.viewport.scroll_y_px())
+                            {
                                 self.needs_scroll_rebuild = true;
                             }
                         } else {
                             // Plain scroll → vertical track scroll
                             let new_y = (self.ui_root.viewport.scroll_y_px() - dy).max(0.0);
-                            if self.ui_root.viewport.set_scroll(
-                                self.ui_root.viewport.scroll_x_beats().as_f32(),
-                                new_y,
-                            ) {
+                            if self
+                                .ui_root
+                                .viewport
+                                .set_scroll(self.ui_root.viewport.scroll_x_beats().as_f32(), new_y)
+                            {
                                 // Sync layer headers with viewport vertical scroll
-                                self.ui_root.layer_headers.set_scroll_y(
-                                    self.ui_root.viewport.scroll_y_px(),
-                                );
+                                self.ui_root
+                                    .layer_headers
+                                    .set_scroll_y(self.ui_root.viewport.scroll_y_px());
                                 self.needs_scroll_rebuild = true;
                             }
                         }
@@ -1893,11 +2113,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         if dx.abs() > 0.01 && !self.modifiers.alt {
                             let ppb = self.ui_root.viewport.pixels_per_beat();
                             let beat_delta = dx * manifold_ui::color::SCROLL_SENSITIVITY / ppb;
-                            let new_x = (self.ui_root.viewport.scroll_x_beats().as_f32() - beat_delta).max(0.0);
-                            if self.ui_root.viewport.set_scroll(
-                                new_x,
-                                self.ui_root.viewport.scroll_y_px(),
-                            ) {
+                            let new_x = (self.ui_root.viewport.scroll_x_beats().as_f32()
+                                - beat_delta)
+                                .max(0.0);
+                            if self
+                                .ui_root
+                                .viewport
+                                .set_scroll(new_x, self.ui_root.viewport.scroll_y_px())
+                            {
                                 self.needs_scroll_rebuild = true;
                             }
                         }
@@ -1974,7 +2197,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                 }
                                 consumed = true;
                             }
-                            _ => { consumed = true; } // Suppress all other keys
+                            _ => {
+                                consumed = true;
+                            } // Suppress all other keys
                         }
                         // Reactive search: push filter on every keystroke
                         if consumed
@@ -1995,7 +2220,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     // Port of Unity InputHandler.HandleKeyboardInput().
                     // All viewport access goes through the TimelineInputHost trait.
                     if !consumed {
-                        let primary_win = self.primary_window_id
+                        let primary_win = self
+                            .primary_window_id
                             .and_then(|id| self.window_registry.get(&id))
                             .map(|ws| ws.window.as_ref());
                         let mut host = crate::input_host::AppInputHost {
@@ -2016,7 +2242,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             parent_window: primary_win,
                         };
                         if self.input_handler.handle_keyboard_input(
-                            &logical_key, self.modifiers,
+                            &logical_key,
+                            self.modifiers,
                             &mut host,
                         ) {
                             consumed = true;
@@ -2027,41 +2254,47 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     // handles not available to AppInputHost. InputHandler returns false
                     // for these, so they fall through here.
                     if !consumed {
-                    let m = self.modifiers;
-                    match &logical_key {
-                        // ── Save: Cmd+S ──
-                        Key::Character(c) if c.as_str() == "s" && m.is_command_only() => {
-                            self.save_project();
-                            consumed = true;
-                        }
-                        // ── Open: Cmd+O ──
-                        Key::Character(c) if c.as_str() == "o" && m.is_command_only() => {
-                            self.open_project();
-                            consumed = true;
-                        }
-                        // ── Import Video: Cmd+I ──
-                        Key::Character(c) if c.as_str() == "i" && m.is_command_only() => {
-                            self.import_video_clip();
-                            consumed = true;
-                        }
-                        // ── New: Cmd+N ──
-                        Key::Character(c) if c.as_str() == "n" && m.is_command_only() => {
-                            let project = Self::create_default_project();
-                            self.local_project = project.clone();
-                            self.suppress_snapshot_until = self.content_state.data_version + 1;
-                            self.suppress_snapshot_set_at = self.frame_count;
-                            self.send_content_cmd(ContentCommand::LoadProject(Box::new(project)));
-                            self.send_content_cmd(ContentCommand::SetProject);
-                            self.selection.clear_selection();
-                            self.active_layer_id = self.local_project.timeline.layers
-                                .first().map(|l| l.layer_id.clone());
-                            self.needs_rebuild = true;
-                            log::info!("New project created");
-                            consumed = true;
-                        }
+                        let m = self.modifiers;
+                        match &logical_key {
+                            // ── Save: Cmd+S ──
+                            Key::Character(c) if c.as_str() == "s" && m.is_command_only() => {
+                                self.save_project();
+                                consumed = true;
+                            }
+                            // ── Open: Cmd+O ──
+                            Key::Character(c) if c.as_str() == "o" && m.is_command_only() => {
+                                self.open_project();
+                                consumed = true;
+                            }
+                            // ── Import Video: Cmd+I ──
+                            Key::Character(c) if c.as_str() == "i" && m.is_command_only() => {
+                                self.import_video_clip();
+                                consumed = true;
+                            }
+                            // ── New: Cmd+N ──
+                            Key::Character(c) if c.as_str() == "n" && m.is_command_only() => {
+                                let project = Self::create_default_project();
+                                self.local_project = project.clone();
+                                self.suppress_snapshot_until = self.content_state.data_version + 1;
+                                self.suppress_snapshot_set_at = self.frame_count;
+                                self.send_content_cmd(ContentCommand::LoadProject(Box::new(
+                                    project,
+                                )));
+                                self.send_content_cmd(ContentCommand::SetProject);
+                                self.selection.clear_selection();
+                                self.active_layer_id = self
+                                    .local_project
+                                    .timeline
+                                    .layers
+                                    .first()
+                                    .map(|l| l.layer_id.clone());
+                                self.needs_rebuild = true;
+                                log::info!("New project created");
+                                consumed = true;
+                            }
 
-                        _ => {}
-                    }
+                            _ => {}
+                        }
                     } // end if !consumed (file operations)
                 } // end if is_primary
 
@@ -2078,22 +2311,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 }
 
                 // Forward to UI input system (unless consumed by app shortcut)
-                if is_primary && !consumed
-                    && let Some(ui_key) = Self::convert_key(&logical_key) {
-                        self.ui_root.key_event(ui_key, self.modifiers);
-                    }
+                if is_primary
+                    && !consumed
+                    && let Some(ui_key) = Self::convert_key(&logical_key)
+                {
+                    self.ui_root.key_event(ui_key, self.modifiers);
+                }
 
                 // Output window management (only when key wasn't consumed by app shortcuts)
                 if !consumed
                     && let Key::Named(NamedKey::Escape) = &logical_key
-                        && !is_primary {
-                            #[cfg(target_os = "macos")]
-                            {
-                                self.output_saved_frame = None;
-                            }
-                            self.window_registry.remove(&window_id);
-                            log::info!("Closed output window");
-                        }
+                    && !is_primary
+                {
+                    #[cfg(target_os = "macos")]
+                    {
+                        self.output_saved_frame = None;
+                    }
+                    self.window_registry.remove(&window_id);
+                    log::info!("Closed output window");
+                }
             }
 
             // ── Cursor left window → cancel in-progress drags ────────
@@ -2154,7 +2390,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // From Unity FileDragDrop.cs — polls for OS-level file drops.
             // In winit, this is event-driven instead of polled.
             WindowEvent::DroppedFile(path) => {
-                let ext = path.extension()
+                let ext = path
+                    .extension()
                     .map(|e| e.to_string_lossy().to_lowercase())
                     .unwrap_or_default();
 
@@ -2164,7 +2401,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 } else if crate::project_io::is_supported_midi_extension(&path) {
                     // MIDI files → route through ProjectIOService
                     let drop_beat = self.content_state.current_beat.as_f32();
-                    let drop_layer = self.active_layer_id.as_ref()
+                    let drop_layer = self
+                        .active_layer_id
+                        .as_ref()
                         .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id))
                         .unwrap_or(0) as i32;
                     let spb = manifold_core::tempo::TempoMapConverter::seconds_per_beat_from_bpm(
@@ -2182,7 +2421,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     // Project files → load project
                     self.open_project_from_path(path.clone());
                 } else if matches!(ext.as_str(), "wav" | "mp3" | "flac" | "aiff" | "ogg") {
-                    log::info!("Audio file dropped: {} (audio import not yet implemented)", path.to_string_lossy());
+                    log::info!(
+                        "Audio file dropped: {} (audio import not yet implemented)",
+                        path.to_string_lossy()
+                    );
                 } else {
                     log::debug!("Unrecognized file type dropped: {}", path.to_string_lossy());
                 }
@@ -2220,7 +2462,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     signal.retarget(&*ws.window);
                 }
             }
-            let output_ids: Vec<_> = self.window_registry.iter()
+            let output_ids: Vec<_> = self
+                .window_registry
+                .iter()
                 .filter(|(_, ws)| matches!(ws.role, WindowRole::Output { .. }))
                 .map(|(id, _)| *id)
                 .collect();
@@ -2254,9 +2498,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 // it's alive on the new display. This prevents hard locks when
                 // GPU surfaces target stale displays (e.g., MacBook → 4K TV).
                 self.display_retarget_pending = true;
-                self.display_retarget_deadline = Some(
-                    std::time::Instant::now() + std::time::Duration::from_secs(2),
-                );
+                self.display_retarget_deadline =
+                    Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
                 log::info!(
                     "[Display] Retarget in flight — suspending surface ops \
                      until display link confirms"
@@ -2270,9 +2513,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // entirely), the 2s deadline clears the flag so we don't freeze forever.
         #[cfg(target_os = "macos")]
         if self.display_retarget_pending {
-            let link_alive = self.ui_display_link.as_ref()
+            let link_alive = self
+                .ui_display_link
+                .as_ref()
                 .is_some_and(|dl| dl.is_alive());
-            let deadline_expired = self.display_retarget_deadline
+            let deadline_expired = self
+                .display_retarget_deadline
                 .is_some_and(|d| std::time::Instant::now() >= d);
             if link_alive || deadline_expired {
                 log::info!(
@@ -2295,7 +2541,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let should_render = if in_display_transition {
             self.frame_timer.should_tick()
         } else {
-            self.ui_display_link.as_ref()
+            self.ui_display_link
+                .as_ref()
                 .map_or(self.frame_timer.should_tick(), |dl| dl.vsync_ready())
         };
         #[cfg(not(target_os = "macos"))]
@@ -2313,9 +2560,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // SKIP during display transitions — commit_and_wait_scheduled() can
         // block indefinitely when the surface targets a stale display.
         #[cfg(target_os = "macos")]
-        if !in_display_transition
-            && let Some(ref mut presenter) = self.output_presenter
-        {
+        if !in_display_transition && let Some(ref mut presenter) = self.output_presenter {
             presenter.present_if_ready();
         }
 
@@ -2354,7 +2599,9 @@ impl Application {
 
         // Query headroom for output window → update presenter directly.
         // Collect output window Arc first to avoid borrow conflict with output_presenter.
-        let output_window: Option<Arc<winit::window::Window>> = self.window_registry.iter()
+        let output_window: Option<Arc<winit::window::Window>> = self
+            .window_registry
+            .iter()
             .find(|(_, ws)| matches!(ws.role, WindowRole::Output { .. }))
             .map(|(_, ws)| Arc::clone(&ws.window));
 
@@ -2363,8 +2610,13 @@ impl Application {
             if (h - self.output_edr_headroom).abs() > 0.01 {
                 log::debug!(
                     "[EDR] Output: {:.2}x → {:.2}x (blit={})",
-                    self.output_edr_headroom, h,
-                    if h > 1.0 { "passthrough" } else { "ACES tonemap" },
+                    self.output_edr_headroom,
+                    h,
+                    if h > 1.0 {
+                        "passthrough"
+                    } else {
+                        "ACES tonemap"
+                    },
                 );
                 self.output_edr_headroom = h;
                 #[cfg(target_os = "macos")]
@@ -2465,17 +2717,17 @@ impl Application {
     /// Called on surface resize / scale factor change.
     pub(crate) fn resize_ui_offscreen(&mut self, width: u32, height: u32) {
         let Some(gpu) = &self.gpu else { return };
-        if width == 0 || height == 0 { return; }
-        self.ui_offscreen = Some(gpu.device.create_texture(
-            &manifold_gpu::GpuTextureDesc {
-                width,
-                height,
-                depth: 1,
-                format: manifold_gpu::GpuTextureFormat::Bgra8Unorm,
-                dimension: manifold_gpu::GpuTextureDimension::D2,
-                usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
-                label: "UI Offscreen",
-            },
-        ));
+        if width == 0 || height == 0 {
+            return;
+        }
+        self.ui_offscreen = Some(gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width,
+            height,
+            depth: 1,
+            format: manifold_gpu::GpuTextureFormat::Bgra8Unorm,
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+            label: "UI Offscreen",
+        }));
     }
 }

@@ -65,7 +65,11 @@ impl TransportController {
 
     /// Set clock authority and enforce exclusivity.
     /// Port of Unity TransportController.ApplyAuthorityExclusively.
-    pub fn apply_authority_exclusively(&mut self, engine: &mut PlaybackEngine, authority: ClockAuthority) {
+    pub fn apply_authority_exclusively(
+        &mut self,
+        engine: &mut PlaybackEngine,
+        authority: ClockAuthority,
+    ) {
         // Set authority on project settings
         if let Some(project) = engine.project_mut() {
             project.settings.clock_authority = authority;
@@ -83,7 +87,10 @@ impl TransportController {
                     project.settings.clock_authority = ClockAuthority::Internal;
                 }
                 self.disable_non_authority_sources(ClockAuthority::Internal);
-                log::warn!("[TransportController] Failed to enable {:?}; reverted to Internal.", authority);
+                log::warn!(
+                    "[TransportController] Failed to enable {:?}; reverted to Internal.",
+                    authority
+                );
             }
         }
 
@@ -101,7 +108,10 @@ impl TransportController {
             ClockAuthority::Link => {
                 // Disable MIDI Clock and OSC; keep Link
                 if let Some(ref mut clk) = self.midi_clock_sync
-                    && clk.is_midi_clock_enabled() { clk.disable_midi_clock(); }
+                    && clk.is_midi_clock_enabled()
+                {
+                    clk.disable_midi_clock();
+                }
                 self.osc_enabled = false;
             }
             ClockAuthority::MidiClock => {
@@ -111,12 +121,18 @@ impl TransportController {
             ClockAuthority::Osc => {
                 // Disable MIDI Clock; keep Link optional
                 if let Some(ref mut clk) = self.midi_clock_sync
-                    && clk.is_midi_clock_enabled() { clk.disable_midi_clock(); }
+                    && clk.is_midi_clock_enabled()
+                {
+                    clk.disable_midi_clock();
+                }
             }
             ClockAuthority::Internal => {
                 // Disable MIDI Clock and OSC; keep Link optional
                 if let Some(ref mut clk) = self.midi_clock_sync
-                    && clk.is_midi_clock_enabled() { clk.disable_midi_clock(); }
+                    && clk.is_midi_clock_enabled()
+                {
+                    clk.disable_midi_clock();
+                }
                 self.osc_enabled = false;
             }
         }
@@ -125,7 +141,10 @@ impl TransportController {
     fn is_authority_source_enabled(&self, authority: ClockAuthority) -> bool {
         match authority {
             ClockAuthority::Link => self.link_sync.as_ref().is_some_and(|s| s.is_link_enabled()),
-            ClockAuthority::MidiClock => self.midi_clock_sync.as_ref().is_some_and(|s| s.is_midi_clock_enabled()),
+            ClockAuthority::MidiClock => self
+                .midi_clock_sync
+                .as_ref()
+                .is_some_and(|s| s.is_midi_clock_enabled()),
             ClockAuthority::Osc => self.osc_enabled,
             ClockAuthority::Internal => true,
         }
@@ -224,7 +243,8 @@ impl TransportController {
             self.osc_sender_enabled = false;
             log::info!("[TransportController] SYNC output disabled");
         } else {
-            let port = engine.project()
+            let port = engine
+                .project()
                 .map(|p| p.settings.osc_send_port)
                 .unwrap_or(9001);
             self.osc_sender_port = port;
@@ -237,7 +257,11 @@ impl TransportController {
 
     /// Set BPM from text input. Parse, clamp [20,300], create command.
     /// Port of Unity TransportController.SetBpm.
-    pub fn set_bpm(engine: &mut PlaybackEngine, editing: &mut manifold_editing::service::EditingService, value: &str) {
+    pub fn set_bpm(
+        engine: &mut PlaybackEngine,
+        editing: &mut manifold_editing::service::EditingService,
+        value: &str,
+    ) {
         let new_bpm = match value.parse::<f32>() {
             Ok(v) => Bpm(v.clamp(20.0, 300.0)),
             Err(_) => return,
@@ -245,20 +269,22 @@ impl TransportController {
 
         if let Some(project) = engine.project_mut() {
             let old_bpm = project.settings.bpm;
-            if (old_bpm.0 - new_bpm.0).abs() < 0.01 { return; }
+            if (old_bpm.0 - new_bpm.0).abs() < 0.01 {
+                return;
+            }
 
-            let bpm_cmd = manifold_editing::commands::settings::ChangeBpmCommand::new(old_bpm, new_bpm);
+            let bpm_cmd =
+                manifold_editing::commands::settings::ChangeBpmCommand::new(old_bpm, new_bpm);
 
             // Build rescale command (proportionally moves clip positions)
-            let rescale_cmd = manifold_editing::commands::settings::RescaleBeatsForBpmChangeCommand::build(
-                project, old_bpm, new_bpm,
-            );
+            let rescale_cmd =
+                manifold_editing::commands::settings::RescaleBeatsForBpmChangeCommand::build(
+                    project, old_bpm, new_bpm,
+                );
 
             if let Some(rescale) = rescale_cmd {
-                let commands: Vec<Box<dyn manifold_editing::command::Command>> = vec![
-                    Box::new(bpm_cmd),
-                    Box::new(rescale),
-                ];
+                let commands: Vec<Box<dyn manifold_editing::command::Command>> =
+                    vec![Box::new(bpm_cmd), Box::new(rescale)];
                 let composite = manifold_editing::command::CompositeCommand::new(
                     commands,
                     format!("Change BPM {:.1} → {:.1}", old_bpm.0, new_bpm.0),
@@ -272,16 +298,20 @@ impl TransportController {
 
     /// Reset BPM to recorded value (tempo lane or recorded project BPM).
     /// Port of Unity TransportController.ResetBpm.
-    pub fn reset_bpm(engine: &mut PlaybackEngine, editing: &mut manifold_editing::service::EditingService) {
+    pub fn reset_bpm(
+        engine: &mut PlaybackEngine,
+        editing: &mut manifold_editing::service::EditingService,
+    ) {
         if let Some(project) = engine.project_mut() {
             // Try recorded tempo lane first
             if !project.recording_provenance.recorded_tempo_lane.is_empty() {
                 let old_bpm = project.settings.bpm;
                 let old_points = project.tempo_map.clone_points();
                 let new_points = project.recording_provenance.recorded_tempo_lane.clone();
-                let cmd = manifold_editing::commands::settings::RestoreRecordedTempoLaneCommand::new(
-                    old_bpm, old_points, new_points,
-                );
+                let cmd =
+                    manifold_editing::commands::settings::RestoreRecordedTempoLaneCommand::new(
+                        old_bpm, old_points, new_points,
+                    );
                 editing.execute(Box::new(cmd), project);
                 return;
             }
@@ -290,9 +320,14 @@ impl TransportController {
             if project.recording_provenance.has_recorded_project_bpm {
                 let recorded_bpm = project.recording_provenance.recorded_project_bpm;
                 let old_bpm = project.settings.bpm;
-                if (old_bpm.0 - recorded_bpm.0).abs() < 0.0001 { return; }
+                if (old_bpm.0 - recorded_bpm.0).abs() < 0.0001 {
+                    return;
+                }
 
-                let cmd = manifold_editing::commands::settings::ChangeBpmCommand::new(old_bpm, recorded_bpm);
+                let cmd = manifold_editing::commands::settings::ChangeBpmCommand::new(
+                    old_bpm,
+                    recorded_bpm,
+                );
                 editing.execute(Box::new(cmd), project);
             }
         }
@@ -300,17 +335,25 @@ impl TransportController {
 
     /// Clear tempo map to single point at current BPM.
     /// Port of Unity TransportController.ClearTempoMap.
-    pub fn clear_tempo_map(engine: &mut PlaybackEngine, editing: &mut manifold_editing::service::EditingService) {
+    pub fn clear_tempo_map(
+        engine: &mut PlaybackEngine,
+        editing: &mut manifold_editing::service::EditingService,
+    ) {
         if let Some(project) = engine.project_mut() {
-            if project.tempo_map.point_count() <= 1 { return; }
+            if project.tempo_map.point_count() <= 1 {
+                return;
+            }
             let old_points = project.tempo_map.clone_points();
             let bpm = project.settings.bpm;
-            let cmd = manifold_editing::commands::settings::ClearTempoMapCommand::new(old_points, bpm);
+            let cmd =
+                manifold_editing::commands::settings::ClearTempoMapCommand::new(old_points, bpm);
             editing.execute(Box::new(cmd), project);
         }
     }
 }
 
 impl Default for TransportController {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }

@@ -134,9 +134,7 @@ impl ArtNetOutput {
 
         // Open UDP socket
         if !self.open_socket(&settings.artnet_ip, settings.artnet_port) {
-            eprintln!(
-                "[ArtNet] Socket failed to open — no LED packets will be sent."
-            );
+            eprintln!("[ArtNet] Socket failed to open — no LED packets will be sent.");
             self.cleanup();
             return false;
         }
@@ -237,8 +235,7 @@ impl ArtNetOutput {
         }
         for u in 0..self.universe_count {
             self.dmx_buffers[u].fill(0);
-            self.artnet_packets[u]
-                [ARTNET_HEADER_SIZE..ARTNET_HEADER_SIZE + DMX_UNIVERSE_SIZE]
+            self.artnet_packets[u][ARTNET_HEADER_SIZE..ARTNET_HEADER_SIZE + DMX_UNIVERSE_SIZE]
                 .copy_from_slice(&self.dmx_buffers[u]);
             let packet = self.artnet_packets[u].clone();
             self.send_packet(&packet);
@@ -278,8 +275,7 @@ impl ArtNetOutput {
 
         // Copy DMX data into ArtNet packets and send
         for u in 0..self.universe_count {
-            self.artnet_packets[u]
-                [ARTNET_HEADER_SIZE..ARTNET_HEADER_SIZE + DMX_UNIVERSE_SIZE]
+            self.artnet_packets[u][ARTNET_HEADER_SIZE..ARTNET_HEADER_SIZE + DMX_UNIVERSE_SIZE]
                 .copy_from_slice(&self.dmx_buffers[u]);
             let packet = self.artnet_packets[u].clone();
             self.send_packet(&packet);

@@ -12,11 +12,11 @@
 //!   osc_receiver.update();                         // drain UDP messages → fire callbacks
 //!   router.apply(&mut project);                    // write pending values to project
 
-use std::sync::{Arc, Mutex};
+use crate::osc_receiver::OscReceiver;
 use manifold_core::EffectTypeId;
 use manifold_core::LayerId;
 use manifold_core::project::Project;
-use crate::osc_receiver::OscReceiver;
+use std::sync::{Arc, Mutex};
 
 // ── Target descriptor ───────────────────────────────────────────
 
@@ -24,11 +24,25 @@ use crate::osc_receiver::OscReceiver;
 #[derive(Clone)]
 enum OscParamTarget {
     MasterOpacity,
-    MasterEffect { effect_type: EffectTypeId, param_index: usize },
-    LayerOpacity { layer_id: LayerId },
-    LayerEffect { layer_id: LayerId, effect_type: EffectTypeId, param_index: usize },
-    GenParam { layer_id: LayerId, param_index: usize },
-    Macro { index: usize },
+    MasterEffect {
+        effect_type: EffectTypeId,
+        param_index: usize,
+    },
+    LayerOpacity {
+        layer_id: LayerId,
+    },
+    LayerEffect {
+        layer_id: LayerId,
+        effect_type: EffectTypeId,
+        param_index: usize,
+    },
+    GenParam {
+        layer_id: LayerId,
+        param_index: usize,
+    },
+    Macro {
+        index: usize,
+    },
 }
 
 /// A pending parameter write from an OSC message.
@@ -52,7 +66,9 @@ pub struct OscParamRouter {
 }
 
 impl Default for OscParamRouter {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl OscParamRouter {
@@ -85,35 +101,46 @@ impl OscParamRouter {
         for i in 0..manifold_core::macro_bank::MACRO_COUNT {
             let addr = format!("/macro/{}", i + 1);
             self.subscribe(
-                receiver, &addr,
+                receiver,
+                &addr,
                 OscParamTarget::Macro { index: i },
-                0.0, 1.0,
+                0.0,
+                1.0,
             );
         }
 
         // Master opacity
         self.subscribe(
-            receiver, "/master/opacity",
-            OscParamTarget::MasterOpacity, 0.0, 1.0,
+            receiver,
+            "/master/opacity",
+            OscParamTarget::MasterOpacity,
+            0.0,
+            1.0,
         );
 
         // Master effects
         for fx in &project.settings.master_effects {
-            let Some(def) = manifold_core::effect_definition_registry::try_get(
-                fx.effect_type(),
-            ) else { continue };
+            let Some(def) = manifold_core::effect_definition_registry::try_get(fx.effect_type())
+            else {
+                continue;
+            };
             for pi in 0..def.param_count {
                 let Some(addr) = manifold_core::effect_definition_registry::get_osc_address(
-                    fx.effect_type(), pi,
-                ) else { continue };
+                    fx.effect_type(),
+                    pi,
+                ) else {
+                    continue;
+                };
                 let pd = &def.param_defs[pi];
                 self.subscribe(
-                    receiver, &addr,
+                    receiver,
+                    &addr,
                     OscParamTarget::MasterEffect {
                         effect_type: fx.effect_type().clone(),
                         param_index: pi,
                     },
-                    pd.min, pd.max,
+                    pd.min,
+                    pd.max,
                 );
             }
         }
@@ -132,31 +159,44 @@ impl OscParamRouter {
         // Layer opacity: /layer/{layerId}/opacity
         let opacity_addr = format!("/layer/{}/opacity", lid_str);
         self.subscribe(
-            receiver, &opacity_addr,
-            OscParamTarget::LayerOpacity { layer_id: lid.clone() },
-            0.0, 1.0,
+            receiver,
+            &opacity_addr,
+            OscParamTarget::LayerOpacity {
+                layer_id: lid.clone(),
+            },
+            0.0,
+            1.0,
         );
 
         // Layer effects
         if let Some(effects) = &layer.effects {
             for fx in effects {
-                let Some(def) = manifold_core::effect_definition_registry::try_get(
-                    fx.effect_type(),
-                ) else { continue };
+                let Some(def) =
+                    manifold_core::effect_definition_registry::try_get(fx.effect_type())
+                else {
+                    continue;
+                };
                 for pi in 0..def.param_count {
                     let Some(addr) =
                         manifold_core::effect_definition_registry::get_osc_address_for_layer(
-                            fx.effect_type(), lid_str, pi,
-                        ) else { continue };
+                            fx.effect_type(),
+                            lid_str,
+                            pi,
+                        )
+                    else {
+                        continue;
+                    };
                     let pd = &def.param_defs[pi];
                     self.subscribe(
-                        receiver, &addr,
+                        receiver,
+                        &addr,
                         OscParamTarget::LayerEffect {
                             layer_id: lid.clone(),
                             effect_type: fx.effect_type().clone(),
                             param_index: pi,
                         },
-                        pd.min, pd.max,
+                        pd.min,
+                        pd.max,
                     );
                 }
             }
@@ -164,22 +204,31 @@ impl OscParamRouter {
 
         // Generator params
         if let Some(gp) = layer.gen_params() {
-            let Some(def) = manifold_core::generator_definition_registry::try_get(
-                gp.generator_type(),
-            ) else { return };
+            let Some(def) =
+                manifold_core::generator_definition_registry::try_get(gp.generator_type())
+            else {
+                return;
+            };
             for pi in 0..def.param_count {
                 let Some(addr) =
                     manifold_core::generator_definition_registry::get_osc_address_for_layer(
-                        gp.generator_type(), lid_str, pi,
-                    ) else { continue };
+                        gp.generator_type(),
+                        lid_str,
+                        pi,
+                    )
+                else {
+                    continue;
+                };
                 let pd = &def.param_defs[pi];
                 self.subscribe(
-                    receiver, &addr,
+                    receiver,
+                    &addr,
                     OscParamTarget::GenParam {
                         layer_id: lid.clone(),
                         param_index: pi,
                     },
-                    pd.min, pd.max,
+                    pd.min,
+                    pd.max,
                 );
             }
         }
@@ -200,19 +249,25 @@ impl OscParamRouter {
         let target_clone = target.clone();
         let is_direct = (min - 0.0).abs() < f32::EPSILON && (max - 1.0).abs() < f32::EPSILON;
 
-        receiver.subscribe(address, Box::new(move |_addr, values| {
-            if let Some(&v) = values.first() {
-                let mapped = if is_direct {
-                    v
-                } else {
-                    // Unity: Mathf.Lerp(min, max, v) — clamps t to 0-1
-                    min + (max - min) * v.clamp(0.0, 1.0)
-                };
-                if let Ok(mut buf) = pending.lock() {
-                    buf.push(PendingWrite { target: target_clone.clone(), value: mapped });
+        receiver.subscribe(
+            address,
+            Box::new(move |_addr, values| {
+                if let Some(&v) = values.first() {
+                    let mapped = if is_direct {
+                        v
+                    } else {
+                        // Unity: Mathf.Lerp(min, max, v) — clamps t to 0-1
+                        min + (max - min) * v.clamp(0.0, 1.0)
+                    };
+                    if let Ok(mut buf) = pending.lock() {
+                        buf.push(PendingWrite {
+                            target: target_clone.clone(),
+                            value: mapped,
+                        });
+                    }
                 }
-            }
-        }));
+            }),
+        );
 
         self.registered_addresses.push(address.to_string());
     }
@@ -224,48 +279,62 @@ impl OscParamRouter {
             Ok(p) => p,
             Err(_) => return,
         };
-        if pending.is_empty() { return; }
+        if pending.is_empty() {
+            return;
+        }
 
         for write in pending.drain(..) {
             match &write.target {
                 OscParamTarget::MasterOpacity => {
                     project.settings.set_master_opacity(write.value);
                 }
-                OscParamTarget::MasterEffect { effect_type, param_index } => {
-                    if let Some(fx) = project.settings.master_effects.iter_mut()
+                OscParamTarget::MasterEffect {
+                    effect_type,
+                    param_index,
+                } => {
+                    if let Some(fx) = project
+                        .settings
+                        .master_effects
+                        .iter_mut()
                         .find(|f| f.effect_type() == effect_type)
                     {
                         fx.set_base_param(*param_index, write.value);
                     }
                 }
                 OscParamTarget::LayerOpacity { layer_id } => {
-                    if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(
-                        layer_id.as_str(),
-                    ) {
+                    if let Some((_, layer)) =
+                        project.timeline.find_layer_by_id_mut(layer_id.as_str())
+                    {
                         layer.opacity = write.value.clamp(0.0, 1.0);
                     }
                 }
-                OscParamTarget::LayerEffect { layer_id, effect_type, param_index } => {
-                    if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(
-                        layer_id.as_str(),
-                    ) && let Some(effects) = &mut layer.effects
-                        && let Some(fx) = effects.iter_mut()
-                            .find(|f| f.effect_type() == effect_type)
+                OscParamTarget::LayerEffect {
+                    layer_id,
+                    effect_type,
+                    param_index,
+                } => {
+                    if let Some((_, layer)) =
+                        project.timeline.find_layer_by_id_mut(layer_id.as_str())
+                        && let Some(effects) = &mut layer.effects
+                        && let Some(fx) =
+                            effects.iter_mut().find(|f| f.effect_type() == effect_type)
                     {
                         fx.set_base_param(*param_index, write.value);
                     }
                 }
-                OscParamTarget::GenParam { layer_id, param_index } => {
-                    if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(
-                        layer_id.as_str(),
-                    ) && let Some(gp) = layer.gen_params_mut() {
+                OscParamTarget::GenParam {
+                    layer_id,
+                    param_index,
+                } => {
+                    if let Some((_, layer)) =
+                        project.timeline.find_layer_by_id_mut(layer_id.as_str())
+                        && let Some(gp) = layer.gen_params_mut()
+                    {
                         gp.set_param_base(*param_index, write.value);
                     }
                 }
                 OscParamTarget::Macro { index } => {
-                    manifold_core::macro_bank::MacroBank::apply_macro(
-                        project, *index, write.value,
-                    );
+                    manifold_core::macro_bank::MacroBank::apply_macro(project, *index, write.value);
                 }
             }
         }

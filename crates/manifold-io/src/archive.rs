@@ -2,11 +2,11 @@ use std::collections::HashSet;
 use std::io::{Cursor, Read, Write};
 use std::path::Path;
 
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
-use crate::manifest::{ProjectManifest, SnapshotEntry, ProjectInfo};
+use crate::manifest::{ProjectInfo, ProjectManifest, SnapshotEntry};
 
 /// V2 project archive constants.
 /// Port of C# ProjectArchive.cs lines 19-22.
@@ -64,10 +64,12 @@ pub fn save_v2_archive(
 
     // Create parent directory if needed (Unity line 139-141)
     if let Some(directory) = Path::new(path).parent()
-        && !directory.as_os_str().is_empty() && !directory.exists() {
-            std::fs::create_dir_all(directory)
-                .map_err(|e| format!("Failed to create directory: {e}"))?;
-        }
+        && !directory.as_os_str().is_empty()
+        && !directory.exists()
+    {
+        std::fs::create_dir_all(directory)
+            .map_err(|e| format!("Failed to create directory: {e}"))?;
+    }
 
     let project_bytes = project_json.as_bytes();
 
@@ -103,8 +105,8 @@ pub fn save_v2_archive(
             .map_err(|e| format!("Failed to create temp file: {e}"))?;
         let mut zip = ZipWriter::new(file);
 
-        let options_no_compress = SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored);
+        let options_no_compress =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
         // Copy existing history entries from old archive (Unity lines 186-190)
         let copied_entries = if Path::new(path).exists() && is_v2_archive(path) {
@@ -115,14 +117,14 @@ pub fn save_v2_archive(
 
         // Push previous state to history (Unity lines 192-196)
         // Skip if already copied from the existing archive to avoid duplicate entries
-        if let (Some(prev_bytes), Some(prev_hash)) =
-            (&previous_project_bytes, &previous_hash)
-            && !prev_hash.is_empty() {
-                let entry_name = format!("{}{}.json.gz", HISTORY_FOLDER, prev_hash);
-                if !copied_entries.contains(&entry_name) {
-                    write_gzip_entry(&mut zip, &entry_name, prev_bytes)?;
-                }
+        if let (Some(prev_bytes), Some(prev_hash)) = (&previous_project_bytes, &previous_hash)
+            && !prev_hash.is_empty()
+        {
+            let entry_name = format!("{}{}.json.gz", HISTORY_FOLDER, prev_hash);
+            if !copied_entries.contains(&entry_name) {
+                write_gzip_entry(&mut zip, &entry_name, prev_bytes)?;
             }
+        }
 
         // Write current project.json — uncompressed for fast reads (Unity line 199)
         zip.start_file(PROJECT_ENTRY, options_no_compress)
@@ -288,20 +290,21 @@ pub fn revert_to(path: &str, hash: &str) -> bool {
         let file = std::fs::File::create(&temp_path)
             .map_err(|e| format!("Failed to create temp file: {e}"))?;
         let mut zip = ZipWriter::new(file);
-        let options = SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
         // Copy all existing history entries
         let copied_entries = copy_history_entries(path, &mut zip)?;
 
         // Push current state to history (if not already there as a file)
         if let Some(ref cur_bytes) = current_bytes
-            && !current_hash.is_empty() {
-                let current_history_entry = format!("{}{}.json.gz", HISTORY_FOLDER, current_hash);
-                if !copied_entries.contains(&current_history_entry) {
-                    write_gzip_entry(&mut zip, &current_history_entry, cur_bytes)?;
-                }
+            && !current_hash.is_empty()
+        {
+            let current_history_entry = format!("{}{}.json.gz", HISTORY_FOLDER, current_hash);
+            if !copied_entries.contains(&current_history_entry) {
+                write_gzip_entry(&mut zip, &current_history_entry, cur_bytes)?;
             }
+        }
 
         // Write reverted snapshot as current project.json
         zip.start_file(PROJECT_ENTRY, options)
@@ -433,8 +436,7 @@ fn write_entry<W: Write + std::io::Seek>(
     entry_name: &str,
     data: &[u8],
 ) -> Result<(), String> {
-    let options = SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Stored);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
     zip.start_file(entry_name, options)
         .map_err(|e| format!("Failed to start entry {}: {}", entry_name, e))?;
     zip.write_all(data)
@@ -451,14 +453,15 @@ fn write_gzip_entry<W: Write + std::io::Seek>(
 ) -> Result<(), String> {
     // Gzip-compress the data
     let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-    encoder.write_all(data)
+    encoder
+        .write_all(data)
         .map_err(|e| format!("Failed to gzip data: {e}"))?;
-    let compressed = encoder.finish()
+    let compressed = encoder
+        .finish()
         .map_err(|e| format!("Failed to finish gzip: {e}"))?;
 
     // Write as uncompressed ZIP entry (the entry itself is already gzipped)
-    let options = SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Stored);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
     zip.start_file(entry_name, options)
         .map_err(|e| format!("Failed to start entry {}: {}", entry_name, e))?;
     zip.write_all(&compressed)
@@ -495,19 +498,19 @@ fn copy_history_entries<W: Write + std::io::Seek>(
     source_path: &str,
     dest_zip: &mut ZipWriter<W>,
 ) -> Result<HashSet<String>, String> {
-    let file_bytes = std::fs::read(source_path)
-        .map_err(|e| format!("Failed to read source archive: {e}"))?;
+    let file_bytes =
+        std::fs::read(source_path).map_err(|e| format!("Failed to read source archive: {e}"))?;
     let cursor = Cursor::new(&file_bytes);
-    let mut source_archive = ZipArchive::new(cursor)
-        .map_err(|e| format!("Failed to open source archive: {e}"))?;
+    let mut source_archive =
+        ZipArchive::new(cursor).map_err(|e| format!("Failed to open source archive: {e}"))?;
 
-    let options = SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Stored);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
     let mut copied = HashSet::new();
 
     for i in 0..source_archive.len() {
-        let mut entry = source_archive.by_index(i)
+        let mut entry = source_archive
+            .by_index(i)
             .map_err(|e| format!("Failed to read entry {}: {}", i, e))?;
         let name = entry.name().to_string();
 
@@ -516,12 +519,15 @@ fn copy_history_entries<W: Write + std::io::Seek>(
         }
 
         let mut data = Vec::new();
-        entry.read_to_end(&mut data)
+        entry
+            .read_to_end(&mut data)
             .map_err(|e| format!("Failed to read entry data {}: {}", name, e))?;
 
-        dest_zip.start_file(&name, options)
+        dest_zip
+            .start_file(&name, options)
             .map_err(|e| format!("Failed to start dest entry {}: {}", name, e))?;
-        dest_zip.write_all(&data)
+        dest_zip
+            .write_all(&data)
             .map_err(|e| format!("Failed to write dest entry {}: {}", name, e))?;
 
         copied.insert(name);
@@ -561,21 +567,21 @@ fn rewrite_manifest(path: &str, manifest: &ProjectManifest) -> bool {
     let temp_path = format!("{}.tmp", path);
 
     let result = (|| -> Result<(), String> {
-        let file_bytes = std::fs::read(path)
-            .map_err(|e| format!("Failed to read source: {e}"))?;
+        let file_bytes = std::fs::read(path).map_err(|e| format!("Failed to read source: {e}"))?;
         let cursor = Cursor::new(&file_bytes);
-        let mut source_archive = ZipArchive::new(cursor)
-            .map_err(|e| format!("Failed to open source: {e}"))?;
+        let mut source_archive =
+            ZipArchive::new(cursor).map_err(|e| format!("Failed to open source: {e}"))?;
 
-        let dest_file = std::fs::File::create(&temp_path)
-            .map_err(|e| format!("Failed to create temp: {e}"))?;
+        let dest_file =
+            std::fs::File::create(&temp_path).map_err(|e| format!("Failed to create temp: {e}"))?;
         let mut zip = ZipWriter::new(dest_file);
-        let options = SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
         // Copy everything except old manifest
         for i in 0..source_archive.len() {
-            let mut entry = source_archive.by_index(i)
+            let mut entry = source_archive
+                .by_index(i)
                 .map_err(|e| format!("Failed to read entry: {e}"))?;
             let name = entry.name().to_string();
 
@@ -584,7 +590,8 @@ fn rewrite_manifest(path: &str, manifest: &ProjectManifest) -> bool {
             }
 
             let mut data = Vec::new();
-            entry.read_to_end(&mut data)
+            entry
+                .read_to_end(&mut data)
                 .map_err(|e| format!("Failed to read entry data: {e}"))?;
 
             zip.start_file(&name, options)
@@ -635,20 +642,20 @@ fn rebuild_archive(path: &str, manifest: &ProjectManifest) {
     let temp_path = format!("{}.tmp", path);
 
     let result = (|| -> Result<(), String> {
-        let file_bytes = std::fs::read(path)
-            .map_err(|e| format!("Failed to read source: {e}"))?;
+        let file_bytes = std::fs::read(path).map_err(|e| format!("Failed to read source: {e}"))?;
         let cursor = Cursor::new(&file_bytes);
-        let mut source_archive = ZipArchive::new(cursor)
-            .map_err(|e| format!("Failed to open source: {e}"))?;
+        let mut source_archive =
+            ZipArchive::new(cursor).map_err(|e| format!("Failed to open source: {e}"))?;
 
-        let dest_file = std::fs::File::create(&temp_path)
-            .map_err(|e| format!("Failed to create temp: {e}"))?;
+        let dest_file =
+            std::fs::File::create(&temp_path).map_err(|e| format!("Failed to create temp: {e}"))?;
         let mut zip = ZipWriter::new(dest_file);
-        let options = SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
         for i in 0..source_archive.len() {
-            let mut entry = source_archive.by_index(i)
+            let mut entry = source_archive
+                .by_index(i)
                 .map_err(|e| format!("Failed to read entry: {e}"))?;
             let name = entry.name().to_string();
 
@@ -671,7 +678,8 @@ fn rebuild_archive(path: &str, manifest: &ProjectManifest) {
             }
 
             let mut data = Vec::new();
-            entry.read_to_end(&mut data)
+            entry
+                .read_to_end(&mut data)
                 .map_err(|e| format!("Failed to read entry data: {e}"))?;
 
             zip.start_file(&name, options)

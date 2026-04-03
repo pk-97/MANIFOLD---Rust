@@ -1,7 +1,7 @@
-use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
+use manifold_core::GeneratorTypeId;
 
 const LINE: usize = 0;
 const SCALE: usize = 2;
@@ -44,9 +44,21 @@ impl Generator for BasicShapesSnapGenerator {
         target: &manifold_gpu::GpuTexture,
         ctx: &GeneratorContext,
     ) -> f32 {
-        let line = if ctx.param_count > LINE as u32 { ctx.params[LINE] } else { 0.015 };
-        let scale = if ctx.param_count > SCALE as u32 { ctx.params[SCALE] } else { 1.0 };
-        let fill = if ctx.param_count > FILL as u32 { ctx.params[FILL].round() } else { 1.0 };
+        let line = if ctx.param_count > LINE as u32 {
+            ctx.params[LINE]
+        } else {
+            0.015
+        };
+        let scale = if ctx.param_count > SCALE as u32 {
+            ctx.params[SCALE]
+        } else {
+            1.0
+        };
+        let fill = if ctx.param_count > FILL as u32 {
+            ctx.params[FILL].round()
+        } else {
+            1.0
+        };
 
         let uniforms = BasicShapesSnapUniforms {
             aspect_ratio: ctx.aspect,

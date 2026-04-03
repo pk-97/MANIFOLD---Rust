@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
+use crate::effects::{ParamDef, ParamEnvelope, ParamSource, ParameterDriver};
 use crate::generator_type_id::GeneratorTypeId;
-use crate::effects::{ParamDef, ParamSource, ParameterDriver, ParamEnvelope};
 use crate::types::{BeatDivision, DriverWaveform};
+use serde::{Deserialize, Serialize};
 
 /// Per-layer generator parameter state.
 /// Port of Unity GeneratorParamState.cs.
@@ -20,7 +20,11 @@ pub struct GeneratorParamState {
     pub envelopes: Option<Vec<ParamEnvelope>>,
 
     // Legacy flat fields from V1.0.0 (before genParams nesting)
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genParamVersion")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "genParamVersion"
+    )]
     pub legacy_param_version: Option<i32>,
 }
 
@@ -40,8 +44,11 @@ impl GeneratorParamState {
     }
 
     pub fn ensure_base_values(&mut self) {
-        if self.base_param_values.is_none() ||
-           self.base_param_values.as_ref().is_some_and(|b| b.len() != self.param_values.len())
+        if self.base_param_values.is_none()
+            || self
+                .base_param_values
+                .as_ref()
+                .is_some_and(|b| b.len() != self.param_values.len())
         {
             self.base_param_values = Some(self.param_values.clone());
         }
@@ -63,9 +70,8 @@ impl GeneratorParamState {
                 self.init_defaults_for_type(gt);
             }
             if index < self.param_values.len() {
-                self.param_values[index] = generator_definition_registry::clamp_param(
-                    &self.generator_type, index, value
-                );
+                self.param_values[index] =
+                    generator_definition_registry::clamp_param(&self.generator_type, index, value);
             }
         }
     }
@@ -74,9 +80,10 @@ impl GeneratorParamState {
     /// Unity GeneratorParamState.cs lines 64-69.
     pub fn get_param_base(&self, index: usize) -> f32 {
         if let Some(base) = &self.base_param_values
-            && index < base.len() {
-                return base[index];
-            }
+            && index < base.len()
+        {
+            return base[index];
+        }
         self.get_param(index)
     }
 
@@ -91,13 +98,13 @@ impl GeneratorParamState {
             }
             self.ensure_base_values();
             if index < self.param_values.len() {
-                let clamped = generator_definition_registry::clamp_param(
-                    &self.generator_type, index, value
-                );
+                let clamped =
+                    generator_definition_registry::clamp_param(&self.generator_type, index, value);
                 if let Some(base) = &mut self.base_param_values
-                    && index < base.len() {
-                        base[index] = clamped;
-                    }
+                    && index < base.len()
+                {
+                    base[index] = clamped;
+                }
                 self.param_values[index] = clamped;
             }
         }
@@ -106,13 +113,19 @@ impl GeneratorParamState {
     /// Find the driver for a given param index, or None.
     /// Unity GeneratorParamState.cs lines 34-40.
     pub fn find_driver(&self, param_index: i32) -> Option<&ParameterDriver> {
-        self.drivers.as_ref()?.iter().find(|d| d.param_index == param_index)
+        self.drivers
+            .as_ref()?
+            .iter()
+            .find(|d| d.param_index == param_index)
     }
 
     /// Find the envelope for a given param index, or None.
     /// Unity GeneratorParamState.cs lines 121-127.
     pub fn find_envelope(&self, param_index: i32) -> Option<&ParamEnvelope> {
-        self.envelopes.as_ref()?.iter().find(|e| e.param_index == param_index)
+        self.envelopes
+            .as_ref()?
+            .iter()
+            .find(|e| e.param_index == param_index)
     }
 
     /// True if this state has envelopes (no-alloc check).
@@ -218,17 +231,17 @@ impl GeneratorParamState {
     /// Snapshot current drivers (for undo). Returns deep copies.
     /// Unity GeneratorParamState.cs SnapshotDrivers lines 193-200.
     pub fn snapshot_drivers(&self) -> Option<Vec<ParameterDriver>> {
-        self.drivers.as_ref().and_then(|d| {
-            if d.is_empty() { None } else { Some(d.clone()) }
-        })
+        self.drivers
+            .as_ref()
+            .and_then(|d| if d.is_empty() { None } else { Some(d.clone()) })
     }
 
     /// Snapshot current envelopes (for undo). Returns deep copies.
     /// Unity GeneratorParamState.cs SnapshotEnvelopes lines 203-210.
     pub fn snapshot_envelopes(&self) -> Option<Vec<ParamEnvelope>> {
-        self.envelopes.as_ref().and_then(|e| {
-            if e.is_empty() { None } else { Some(e.clone()) }
-        })
+        self.envelopes
+            .as_ref()
+            .and_then(|e| if e.is_empty() { None } else { Some(e.clone()) })
     }
 
     /// Restore from a snapshot (used by undo).

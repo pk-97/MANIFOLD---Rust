@@ -1,8 +1,8 @@
-use manifold_core::EffectTypeId;
-use manifold_core::effects::EffectInstance;
+use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
-use super::compute_dual_blit_helper::ComputeDualBlitHelper;
+use manifold_core::EffectTypeId;
+use manifold_core::effects::EffectInstance;
 
 /// LUT resolution — 512 entries covering [0, 2] range.
 /// First 256 entries cover [0, 1] (normal palette), last 256 cover [1, 2]
@@ -95,10 +95,13 @@ impl PostProcessEffect for InfraredFX {
 
         self.helper.dispatch(
             gpu,
-            source, lut, target,
+            source,
+            lut,
+            target,
             bytemuck::bytes_of(&uniforms),
             "Infrared Pass",
-            ctx.width, ctx.height,
+            ctx.width,
+            ctx.height,
         );
     }
 }
@@ -142,24 +145,31 @@ fn pixels_to_f16(pixels: &[[f32; 4]]) -> Vec<u8> {
 
 // ─── Palette functions (match the original WGSL exactly) ────────────
 
-fn palette_white_hot(t: f32) -> [f32; 3] { [t, t, t] }
+fn palette_white_hot(t: f32) -> [f32; 3] {
+    [t, t, t]
+}
 
 fn palette_black_hot(t: f32) -> [f32; 3] {
     let v = 1.0 - t;
     [v, v, v]
 }
 
-fn palette_green_nv(t: f32) -> [f32; 3] { [t * 0.15, t, t * 0.1] }
+fn palette_green_nv(t: f32) -> [f32; 3] {
+    [t * 0.15, t, t * 0.1]
+}
 
 fn palette_iron_bow(t: f32) -> [f32; 3] {
-    gradient(&[
-        (0.0, [0.0, 0.0, 0.0]),
-        (0.2, [0.15, 0.0, 0.3]),
-        (0.4, [0.7, 0.05, 0.1]),
-        (0.6, [0.95, 0.4, 0.0]),
-        (0.8, [1.0, 0.85, 0.2]),
-        (1.0, [1.0, 1.0, 0.9]),
-    ], t)
+    gradient(
+        &[
+            (0.0, [0.0, 0.0, 0.0]),
+            (0.2, [0.15, 0.0, 0.3]),
+            (0.4, [0.7, 0.05, 0.1]),
+            (0.6, [0.95, 0.4, 0.0]),
+            (0.8, [1.0, 0.85, 0.2]),
+            (1.0, [1.0, 1.0, 0.9]),
+        ],
+        t,
+    )
 }
 
 fn palette_rainbow(t: f32) -> [f32; 3] {
@@ -170,60 +180,77 @@ fn palette_rainbow(t: f32) -> [f32; 3] {
 }
 
 fn palette_lava(t: f32) -> [f32; 3] {
-    gradient(&[
-        (0.0, [0.0, 0.0, 0.0]),
-        (0.25, [0.4, 0.02, 0.0]),
-        (0.5, [0.85, 0.15, 0.0]),
-        (0.75, [1.0, 0.55, 0.0]),
-        (1.0, [1.0, 0.9, 0.2]),
-    ], t)
+    gradient(
+        &[
+            (0.0, [0.0, 0.0, 0.0]),
+            (0.25, [0.4, 0.02, 0.0]),
+            (0.5, [0.85, 0.15, 0.0]),
+            (0.75, [1.0, 0.55, 0.0]),
+            (1.0, [1.0, 0.9, 0.2]),
+        ],
+        t,
+    )
 }
 
 fn palette_arctic(t: f32) -> [f32; 3] {
-    gradient(&[
-        (0.0, [0.0, 0.0, 0.0]),
-        (0.3, [0.0, 0.05, 0.35]),
-        (0.6, [0.1, 0.55, 0.8]),
-        (0.85, [0.6, 0.9, 1.0]),
-        (1.0, [1.0, 1.0, 1.0]),
-    ], t)
+    gradient(
+        &[
+            (0.0, [0.0, 0.0, 0.0]),
+            (0.3, [0.0, 0.05, 0.35]),
+            (0.6, [0.1, 0.55, 0.8]),
+            (0.85, [0.6, 0.9, 1.0]),
+            (1.0, [1.0, 1.0, 1.0]),
+        ],
+        t,
+    )
 }
 
 fn palette_magenta(t: f32) -> [f32; 3] {
-    gradient(&[
-        (0.0, [0.0, 0.0, 0.0]),
-        (0.3, [0.3, 0.0, 0.35]),
-        (0.6, [0.9, 0.1, 0.5]),
-        (0.85, [1.0, 0.5, 0.7]),
-        (1.0, [1.0, 0.95, 1.0]),
-    ], t)
+    gradient(
+        &[
+            (0.0, [0.0, 0.0, 0.0]),
+            (0.3, [0.3, 0.0, 0.35]),
+            (0.6, [0.9, 0.1, 0.5]),
+            (0.85, [1.0, 0.5, 0.7]),
+            (1.0, [1.0, 0.95, 1.0]),
+        ],
+        t,
+    )
 }
 
 fn palette_electric(t: f32) -> [f32; 3] {
-    gradient(&[
-        (0.0, [0.0, 0.0, 0.0]),
-        (0.25, [0.15, 0.0, 0.4]),
-        (0.5, [0.1, 0.2, 0.9]),
-        (0.75, [0.0, 0.7, 1.0]),
-        (1.0, [0.7, 1.0, 1.0]),
-    ], t)
+    gradient(
+        &[
+            (0.0, [0.0, 0.0, 0.0]),
+            (0.25, [0.15, 0.0, 0.4]),
+            (0.5, [0.1, 0.2, 0.9]),
+            (0.75, [0.0, 0.7, 1.0]),
+            (1.0, [0.7, 1.0, 1.0]),
+        ],
+        t,
+    )
 }
 
 fn palette_toxic(t: f32) -> [f32; 3] {
-    gradient(&[
-        (0.0, [0.0, 0.0, 0.0]),
-        (0.3, [0.0, 0.2, 0.05]),
-        (0.6, [0.3, 0.75, 0.0]),
-        (0.85, [0.7, 1.0, 0.1]),
-        (1.0, [1.0, 1.0, 0.3]),
-    ], t)
+    gradient(
+        &[
+            (0.0, [0.0, 0.0, 0.0]),
+            (0.3, [0.0, 0.2, 0.05]),
+            (0.6, [0.3, 0.75, 0.0]),
+            (0.85, [0.7, 1.0, 0.1]),
+            (1.0, [1.0, 1.0, 0.3]),
+        ],
+        t,
+    )
 }
 
 /// Evaluate a piecewise-linear gradient at position t.
 /// For t > last stop, extrapolates the last segment's gradient direction —
 /// this produces the HDR blowout colors (e.g., arctic's golden highlights).
 fn gradient(stops: &[(f32, [f32; 3])], t: f32) -> [f32; 3] {
-    if t <= stops[0].0 { return stops[0].1; }
+    if t <= stops[0].0 {
+        return stops[0].1;
+    }
     for i in 1..stops.len() {
         if t <= stops[i].0 {
             let s = (t - stops[i - 1].0) / (stops[i].0 - stops[i - 1].0);

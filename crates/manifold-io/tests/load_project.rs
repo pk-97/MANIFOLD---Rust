@@ -12,14 +12,17 @@ fn load_burn_v5_project() {
     let path = fixture_path("Burn V5.manifold");
     assert!(path.exists(), "Test fixture not found: {}", path.display());
 
-    let project = loader::load_project(&path)
-        .expect("Failed to load Burn V5.manifold");
+    let project = loader::load_project(&path).expect("Failed to load Burn V5.manifold");
 
     // Basic project-level assertions
     assert_eq!(project.project_name, "Burn V5");
 
     // Settings
-    assert!((project.settings.bpm.0 - 138.0).abs() < 0.01, "BPM should be 138.0, got {}", project.settings.bpm);
+    assert!(
+        (project.settings.bpm.0 - 138.0).abs() < 0.01,
+        "BPM should be 138.0, got {}",
+        project.settings.bpm
+    );
     assert_eq!(project.settings.output_width, 1440);
     assert_eq!(project.settings.output_height, 2560);
 
@@ -27,11 +30,33 @@ fn load_burn_v5_project() {
     assert_eq!(project.timeline.layers.len(), 9, "Expected 9 layers");
 
     // Layer names
-    let layer_names: Vec<&str> = project.timeline.layers.iter().map(|l| l.name.as_str()).collect();
-    assert_eq!(layer_names, vec!["Gen 2", "Gen 3", "LISSAJOUS", "Gen 3", "Gen 4", "TUNNELS 2", "TESSERACT", "FIRE", "STOCK"]);
+    let layer_names: Vec<&str> = project
+        .timeline
+        .layers
+        .iter()
+        .map(|l| l.name.as_str())
+        .collect();
+    assert_eq!(
+        layer_names,
+        vec![
+            "Gen 2",
+            "Gen 3",
+            "LISSAJOUS",
+            "Gen 3",
+            "Gen 4",
+            "TUNNELS 2",
+            "TESSERACT",
+            "FIRE",
+            "STOCK"
+        ]
+    );
 
     // Total clip count
-    assert_eq!(project.timeline.total_clip_count(), 34, "Expected 34 total clips");
+    assert_eq!(
+        project.timeline.total_clip_count(),
+        34,
+        "Expected 34 total clips"
+    );
 }
 
 #[test]
@@ -45,19 +70,29 @@ fn load_burn_v5_clips_have_valid_beats() {
             assert!(!clip.id.is_empty(), "Clip [{li}][{ci}] has empty ID");
 
             // Duration must be positive
-            assert!(clip.duration_beats > manifold_core::Beats::ZERO,
+            assert!(
+                clip.duration_beats > manifold_core::Beats::ZERO,
                 "Clip {} [{li}][{ci}] has non-positive duration: {}",
-                clip.id, clip.duration_beats);
+                clip.id,
+                clip.duration_beats
+            );
 
             // Start beat should be non-negative
-            assert!(clip.start_beat >= manifold_core::Beats::ZERO,
+            assert!(
+                clip.start_beat >= manifold_core::Beats::ZERO,
                 "Clip {} [{li}][{ci}] has negative start beat: {}",
-                clip.id, clip.start_beat);
+                clip.id,
+                clip.start_beat
+            );
 
             // end_beat should be after start_beat
-            assert!(clip.end_beat() > clip.start_beat,
+            assert!(
+                clip.end_beat() > clip.start_beat,
                 "Clip {} [{li}][{ci}] end beat {} <= start beat {}",
-                clip.id, clip.end_beat(), clip.start_beat);
+                clip.id,
+                clip.end_beat(),
+                clip.start_beat
+            );
         }
     }
 }
@@ -68,7 +103,11 @@ fn load_burn_v5_timeline_duration() {
     let project = loader::load_project(&path).unwrap();
 
     let duration = project.timeline.duration_beats();
-    assert!(duration > manifold_core::Beats::ZERO, "Timeline should have positive duration, got {}", duration);
+    assert!(
+        duration > manifold_core::Beats::ZERO,
+        "Timeline should have positive duration, got {}",
+        duration
+    );
 }
 
 #[test]
@@ -81,7 +120,10 @@ fn load_burn_v5_clip_lookup_works() {
 
     // O(1) lookup should find it
     let found = project.timeline.find_clip_by_id(&first_clip_id);
-    assert!(found.is_some(), "Clip lookup failed for ID: {first_clip_id}");
+    assert!(
+        found.is_some(),
+        "Clip lookup failed for ID: {first_clip_id}"
+    );
     assert_eq!(found.unwrap().id, first_clip_id);
 }
 
@@ -91,18 +133,23 @@ fn load_burn_v5_roundtrip_json() {
     let project = loader::load_project(&path).unwrap();
 
     // Serialize back to JSON
-    let json = serde_json::to_string_pretty(&project)
-        .expect("Failed to serialize project");
+    let json = serde_json::to_string_pretty(&project).expect("Failed to serialize project");
 
     // Reload from the serialized JSON
-    let project2 = loader::load_project_from_json(&json)
-        .expect("Failed to reload from serialized JSON");
+    let project2 =
+        loader::load_project_from_json(&json).expect("Failed to reload from serialized JSON");
 
     // Basic structural equivalence
     assert_eq!(project2.project_name, project.project_name);
     assert_eq!(project2.settings.bpm, project.settings.bpm);
-    assert_eq!(project2.timeline.layers.len(), project.timeline.layers.len());
-    assert_eq!(project2.timeline.total_clip_count(), project.timeline.total_clip_count());
+    assert_eq!(
+        project2.timeline.layers.len(),
+        project.timeline.layers.len()
+    );
+    assert_eq!(
+        project2.timeline.total_clip_count(),
+        project.timeline.total_clip_count()
+    );
 }
 
 // ── Driver beat division preservation ──
@@ -165,7 +212,10 @@ fn driver_beat_divisions_survive_load() {
         let (e_loc, e_param, e_div) = &expected[i];
         assert_eq!(loc, e_loc, "Location mismatch at index {i}");
         assert_eq!(param, e_param, "Param index mismatch at {loc}");
-        assert_eq!(div, e_div, "BeatDivision mismatch at {loc}: got {div:?}, expected {e_div:?}");
+        assert_eq!(
+            div, e_div,
+            "BeatDivision mismatch at {loc}: got {div:?}, expected {e_div:?}"
+        );
     }
 }
 
@@ -179,19 +229,29 @@ fn driver_beat_divisions_survive_roundtrip() {
     let project2 = loader::load_project_from_json(&json).unwrap();
 
     // Compare driver beat divisions
-    for (li, (l1, l2)) in project.timeline.layers.iter()
-        .zip(project2.timeline.layers.iter()).enumerate()
+    for (li, (l1, l2)) in project
+        .timeline
+        .layers
+        .iter()
+        .zip(project2.timeline.layers.iter())
+        .enumerate()
     {
         let fx1 = l1.effects.as_deref().unwrap_or(&[]);
         let fx2 = l2.effects.as_deref().unwrap_or(&[]);
         for (fi, (f1, f2)) in fx1.iter().zip(fx2.iter()).enumerate() {
             let d1 = f1.drivers.as_deref().unwrap_or(&[]);
             let d2 = f2.drivers.as_deref().unwrap_or(&[]);
-            assert_eq!(d1.len(), d2.len(), "Driver count mismatch at layer[{li}].fx[{fi}]");
+            assert_eq!(
+                d1.len(),
+                d2.len(),
+                "Driver count mismatch at layer[{li}].fx[{fi}]"
+            );
             for (di, (a, b)) in d1.iter().zip(d2.iter()).enumerate() {
-                assert_eq!(a.beat_division, b.beat_division,
+                assert_eq!(
+                    a.beat_division, b.beat_division,
                     "BeatDiv roundtrip mismatch at layer[{li}].fx[{fi}].drv[{di}]: {:?} vs {:?}",
-                    a.beat_division, b.beat_division);
+                    a.beat_division, b.beat_division
+                );
             }
         }
     }
@@ -201,7 +261,9 @@ fn driver_beat_divisions_survive_roundtrip() {
 fn waypoints_gen_drivers_survive_migration() {
     use manifold_core::types::BeatDivision;
     let path = fixture_path("WAYPOINTS.manifold");
-    if !path.exists() { return; }
+    if !path.exists() {
+        return;
+    }
 
     let project = loader::load_project(&path).unwrap();
 
@@ -217,14 +279,23 @@ fn waypoints_gen_drivers_survive_migration() {
                     if d.beat_division != BeatDivision::Quarter {
                         non_quarter_count += 1;
                     }
-                    eprintln!("  layer[{li}].gen param={} beat_div={:?}", d.param_index, d.beat_division);
+                    eprintln!(
+                        "  layer[{li}].gen param={} beat_div={:?}",
+                        d.param_index, d.beat_division
+                    );
                 }
             }
         }
     }
     eprintln!("Gen drivers: {gen_driver_count} total, {non_quarter_count} non-Quarter");
-    assert!(gen_driver_count > 0, "WAYPOINTS should have generator drivers");
-    assert!(non_quarter_count > 0, "WAYPOINTS gen drivers should have non-Quarter beat divisions");
+    assert!(
+        gen_driver_count > 0,
+        "WAYPOINTS should have generator drivers"
+    );
+    assert!(
+        non_quarter_count > 0,
+        "WAYPOINTS gen drivers should have non-Quarter beat divisions"
+    );
 }
 
 // ── Additional project files ──
@@ -232,10 +303,11 @@ fn waypoints_gen_drivers_survive_migration() {
 #[test]
 fn load_burn_v4_project() {
     let path = fixture_path("Burn V4.manifold");
-    if !path.exists() { return; } // Skip if fixture not available
+    if !path.exists() {
+        return;
+    } // Skip if fixture not available
 
-    let project = loader::load_project(&path)
-        .expect("Failed to load Burn V4.manifold");
+    let project = loader::load_project(&path).expect("Failed to load Burn V4.manifold");
 
     assert_eq!(project.project_name, "Burn V4");
     assert!((project.settings.bpm.0 - 138.0).abs() < 0.01);
@@ -246,10 +318,11 @@ fn load_burn_v4_project() {
 #[test]
 fn load_waypoints_large_project() {
     let path = fixture_path("WAYPOINTS.manifold");
-    if !path.exists() { return; }
+    if !path.exists() {
+        return;
+    }
 
-    let project = loader::load_project(&path)
-        .expect("Failed to load WAYPOINTS.manifold");
+    let project = loader::load_project(&path).expect("Failed to load WAYPOINTS.manifold");
 
     assert_eq!(project.project_name, "WAYPOINTS");
     assert!((project.settings.bpm.0 - 110.0).abs() < 0.01);
@@ -263,8 +336,10 @@ fn load_waypoints_large_project() {
             assert!(clip.duration_beats > manifold_core::Beats::ZERO);
             assert!(clip.start_beat >= manifold_core::Beats::ZERO);
         }
-        assert!(!layer.has_overlapping_clips(),
+        assert!(
+            !layer.has_overlapping_clips(),
             "Layer {:?} still has overlapping clips after load repair",
-            layer.layer_id);
+            layer.layer_id
+        );
     }
 }

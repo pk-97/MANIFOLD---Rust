@@ -2,7 +2,6 @@
 ///
 /// These tests catch regressions where someone changes a constant
 /// without checking the Unity USER_GUIDE.md or UIConstants.cs.
-
 use manifold_ui::color;
 use manifold_ui::node::Color32;
 
@@ -176,36 +175,100 @@ use manifold_core::GeneratorTypeId;
 use manifold_core::generator_definition_registry;
 
 #[test]
-fn generator_param_count_plasma() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::PLASMA).param_count, 6); }
+fn generator_param_count_plasma() {
+    assert_eq!(
+        generator_definition_registry::get(&GeneratorTypeId::PLASMA).param_count,
+        6
+    );
+}
 #[test]
-fn generator_param_count_basic_shapes() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::BASIC_SHAPES_SNAP).param_count, 4); }
+fn generator_param_count_basic_shapes() {
+    assert_eq!(
+        generator_definition_registry::get(&GeneratorTypeId::BASIC_SHAPES_SNAP).param_count,
+        4
+    );
+}
 #[test]
-fn generator_param_count_concentric_tunnel() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::CONCENTRIC_TUNNEL).param_count, 6); }
+fn generator_param_count_concentric_tunnel() {
+    assert_eq!(
+        generator_definition_registry::get(&GeneratorTypeId::CONCENTRIC_TUNNEL).param_count,
+        6
+    );
+}
 #[test]
-fn generator_param_count_tesseract() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::TESSERACT).param_count, 11); }
+fn generator_param_count_tesseract() {
+    assert_eq!(
+        generator_definition_registry::get(&GeneratorTypeId::TESSERACT).param_count,
+        11
+    );
+}
 #[test]
-fn generator_param_count_duocylinder() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::DUOCYLINDER).param_count, 11); }
+fn generator_param_count_duocylinder() {
+    assert_eq!(
+        generator_definition_registry::get(&GeneratorTypeId::DUOCYLINDER).param_count,
+        11
+    );
+}
 #[test]
-fn generator_param_count_lissajous() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::LISSAJOUS).param_count, 11); }
+fn generator_param_count_lissajous() {
+    assert_eq!(
+        generator_definition_registry::get(&GeneratorTypeId::LISSAJOUS).param_count,
+        11
+    );
+}
 #[test]
-fn generator_param_count_wireframe_zoo() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::WIREFRAME_ZOO).param_count, 8); }
+fn generator_param_count_wireframe_zoo() {
+    assert_eq!(
+        generator_definition_registry::get(&GeneratorTypeId::WIREFRAME_ZOO).param_count,
+        8
+    );
+}
 #[test]
-fn generator_param_count_oscilloscope_xy() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::OSCILLOSCOPE_XY).param_count, 9); }
+fn generator_param_count_oscilloscope_xy() {
+    assert_eq!(
+        generator_definition_registry::get(&GeneratorTypeId::OSCILLOSCOPE_XY).param_count,
+        9
+    );
+}
 #[test]
-fn generator_param_count_parametric_surface() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::PARAMETRIC_SURFACE).param_count, 5); }
+fn generator_param_count_parametric_surface() {
+    assert_eq!(
+        generator_definition_registry::get(&GeneratorTypeId::PARAMETRIC_SURFACE).param_count,
+        5
+    );
+}
 #[test]
-fn generator_param_count_mycelium() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::MYCELIUM).param_count, 12); }
+fn generator_param_count_mycelium() {
+    assert_eq!(
+        generator_definition_registry::get(&GeneratorTypeId::MYCELIUM).param_count,
+        12
+    );
+}
 #[test]
-fn generator_param_count_fluid_sim() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::FLUID_SIMULATION).param_count, 13); }
+fn generator_param_count_fluid_sim() {
+    assert_eq!(
+        generator_definition_registry::get(&GeneratorTypeId::FLUID_SIMULATION).param_count,
+        13
+    );
+}
 #[test]
-fn generator_param_count_fluid_sim_3d() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::FLUID_SIMULATION_3D).param_count, 21); }
+fn generator_param_count_fluid_sim_3d() {
+    assert_eq!(
+        generator_definition_registry::get(&GeneratorTypeId::FLUID_SIMULATION_3D).param_count,
+        21
+    );
+}
 
 #[test]
 fn generator_all_types_have_params() {
     // Every generator type (except None) must have at least 1 param defined
     use manifold_core::generator_type_registry;
     for reg in generator_type_registry::all() {
-        assert!(generator_definition_registry::get(&reg.id).param_count > 0, "{:?} has no param definitions", reg.id);
+        assert!(
+            generator_definition_registry::get(&reg.id).param_count > 0,
+            "{:?} has no param definitions",
+            reg.id
+        );
     }
 }
 
@@ -213,7 +276,8 @@ fn generator_all_types_have_params() {
 fn generator_max_param_count() {
     // FluidSimulation3D has the most params (21)
     use manifold_core::generator_type_registry;
-    let max = generator_type_registry::all().iter()
+    let max = generator_type_registry::all()
+        .iter()
         .map(|reg| generator_definition_registry::get(&reg.id).param_count)
         .max()
         .unwrap_or(0);

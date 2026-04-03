@@ -4,9 +4,9 @@
 // Mechanical 1:1 port of Unity UIState.cs.
 // Replaces the former app::SelectionState + app::ClipDragState.
 
-use std::collections::HashSet;
-use manifold_core::{Beats, ClipId, LayerId, MarkerId, Seconds};
 use manifold_core::selection::SelectionRegion;
+use manifold_core::{Beats, ClipId, LayerId, MarkerId, Seconds};
+use std::collections::HashSet;
 
 pub struct UIState {
     // ── Clip Selection ──
@@ -180,7 +180,11 @@ impl UIState {
     /// Set a region selection (clears individual clip and layer selection).
     /// Unity UIState.cs SetRegion (lines 50-68).
     pub fn set_region(
-        &mut self, start_beat: Beats, end_beat: Beats, start_layer: i32, end_layer: i32,
+        &mut self,
+        start_beat: Beats,
+        end_beat: Beats,
+        start_layer: i32,
+        end_layer: i32,
         layers: &[manifold_core::layer::Layer],
     ) {
         self.selected_clip_ids.clear();
@@ -199,7 +203,9 @@ impl UIState {
         self.selection_region.selected_layer_ids.clear();
         let upper = max.min(layers.len().saturating_sub(1));
         for layer in &layers[min..=upper] {
-            self.selection_region.selected_layer_ids.insert(layer.layer_id.clone());
+            self.selection_region
+                .selected_layer_ids
+                .insert(layer.layer_id.clone());
         }
         self.selection_region.start_layer_id = layers.get(min).map(|l| l.layer_id.clone());
         self.selection_region.end_layer_id = layers.get(max).map(|l| l.layer_id.clone());
@@ -210,7 +216,11 @@ impl UIState {
     /// individual clip IDs so per-clip highlight and inspector still work.
     /// Unity UIState.cs SetRegionFromClipBounds (lines 74-92).
     pub fn set_region_from_clip_bounds(
-        &mut self, start_beat: Beats, end_beat: Beats, start_layer: i32, end_layer: i32,
+        &mut self,
+        start_beat: Beats,
+        end_beat: Beats,
+        start_layer: i32,
+        end_layer: i32,
         layers: &[manifold_core::layer::Layer],
     ) {
         self.clear_layer_selection();
@@ -226,7 +236,9 @@ impl UIState {
         self.selection_region.selected_layer_ids.clear();
         let upper = e_layer.min(layers.len().saturating_sub(1));
         for layer in &layers[s_layer..=upper] {
-            self.selection_region.selected_layer_ids.insert(layer.layer_id.clone());
+            self.selection_region
+                .selected_layer_ids
+                .insert(layer.layer_id.clone());
         }
         self.selection_region.start_layer_id = layers.get(s_layer).map(|l| l.layer_id.clone());
         self.selection_region.end_layer_id = layers.get(e_layer).map(|l| l.layer_id.clone());
@@ -341,7 +353,9 @@ impl UIState {
     /// Select a range of layers from primary to target (Shift+Click).
     /// Unity UIState.cs SelectLayerRange (lines 297-333).
     pub fn select_layer_range(
-        &mut self, target_layer_id: &str, layers: &[manifold_core::layer::Layer],
+        &mut self,
+        target_layer_id: &str,
+        layers: &[manifold_core::layer::Layer],
     ) {
         self.selected_clip_ids.clear();
         self.primary_selected_clip_id = None;
@@ -407,9 +421,7 @@ impl UIState {
             return true;
         }
         // 4. Region selection spans this layer
-        if self.selection_region.is_active
-            && self.selection_region.contains_layer_id(layer_id)
-        {
+        if self.selection_region.is_active && self.selection_region.contains_layer_id(layer_id) {
             return true;
         }
         false
@@ -425,7 +437,11 @@ impl UIState {
     /// Begin a clip move drag.
     /// Unity UIState.cs BeginDrag (lines 374-381).
     pub fn begin_drag(
-        &mut self, clip_id: &ClipId, start_beat: Beats, layer_id: LayerId, mouse_beat: Beats,
+        &mut self,
+        clip_id: &ClipId,
+        start_beat: Beats,
+        layer_id: LayerId,
+        mouse_beat: Beats,
     ) {
         self.is_dragging = true;
         self.drag_clip_id = Some(clip_id.clone());
@@ -446,7 +462,11 @@ impl UIState {
     /// Begin a left-edge trim.
     /// Unity UIState.cs BeginTrimLeft (lines 389-397).
     pub fn begin_trim_left(
-        &mut self, clip_id: &ClipId, start_beat: Beats, duration_beats: Beats, in_point: Seconds,
+        &mut self,
+        clip_id: &ClipId,
+        start_beat: Beats,
+        duration_beats: Beats,
+        in_point: Seconds,
     ) {
         self.is_trimming = true;
         self.trim_from_left = true;
@@ -459,7 +479,11 @@ impl UIState {
     /// Begin a right-edge trim.
     /// Unity UIState.cs BeginTrimRight (lines 399-407).
     pub fn begin_trim_right(
-        &mut self, clip_id: &ClipId, start_beat: Beats, duration_beats: Beats, in_point: Seconds,
+        &mut self,
+        clip_id: &ClipId,
+        start_beat: Beats,
+        duration_beats: Beats,
+        in_point: Seconds,
     ) {
         self.is_trimming = true;
         self.trim_from_left = false;
@@ -490,8 +514,11 @@ impl UIState {
 
         // Prune clip IDs
         let before = self.selected_clip_ids.len();
-        self.selected_clip_ids.retain(|id| valid_clip_ids.contains(id));
-        if self.selected_clip_ids.len() != before { changed = true; }
+        self.selected_clip_ids
+            .retain(|id| valid_clip_ids.contains(id));
+        if self.selected_clip_ids.len() != before {
+            changed = true;
+        }
 
         if let Some(ref id) = self.primary_selected_clip_id
             && !valid_clip_ids.contains(id)
@@ -510,8 +537,11 @@ impl UIState {
 
         // Prune layer IDs
         let before = self.selected_layer_ids.len();
-        self.selected_layer_ids.retain(|id| valid_layer_ids.contains(id));
-        if self.selected_layer_ids.len() != before { changed = true; }
+        self.selected_layer_ids
+            .retain(|id| valid_layer_ids.contains(id));
+        if self.selected_layer_ids.len() != before {
+            changed = true;
+        }
 
         if let Some(ref id) = self.primary_selected_layer_id
             && !valid_layer_ids.contains(id)
@@ -537,7 +567,9 @@ impl UIState {
         // Prune region layer IDs
         if self.selection_region.is_active {
             let before = self.selection_region.selected_layer_ids.len();
-            self.selection_region.selected_layer_ids.retain(|id| valid_layer_ids.contains(id));
+            self.selection_region
+                .selected_layer_ids
+                .retain(|id| valid_layer_ids.contains(id));
             if self.selection_region.selected_layer_ids.len() != before {
                 changed = true;
             }

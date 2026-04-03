@@ -7,9 +7,9 @@
 
 use crate::color;
 use crate::snap;
+use manifold_core::Beats;
 use manifold_core::layer::Layer;
 use manifold_core::types::LayerType;
-use manifold_core::Beats;
 
 pub struct CoordinateMapper {
     pixels_per_beat: f32,
@@ -170,14 +170,18 @@ impl CoordinateMapper {
     /// Get the cumulative Y offset for a layer (top of that layer's track row).
     /// Unity line 186-191.
     pub fn get_layer_y_offset(&self, layer_index: usize) -> f32 {
-        self.layer_y_offsets.get(layer_index).copied()
+        self.layer_y_offsets
+            .get(layer_index)
+            .copied()
             .unwrap_or(layer_index as f32 * color::TRACK_HEIGHT)
     }
 
     /// Get the height of a layer's track row (0 for hidden children of collapsed groups).
     /// Unity line 196-201.
     pub fn get_layer_height(&self, layer_index: usize) -> f32 {
-        self.layer_heights.get(layer_index).copied()
+        self.layer_heights
+            .get(layer_index)
+            .copied()
             .unwrap_or(color::TRACK_HEIGHT)
     }
 
@@ -189,7 +193,9 @@ impl CoordinateMapper {
         if self.layer_y_offsets.is_empty() {
             return None;
         }
-        (0..self.layer_y_offsets.len()).rev().find(|&i| y_in_tracks >= self.layer_y_offsets[i] && self.layer_heights[i] > 0.0)
+        (0..self.layer_y_offsets.len())
+            .rev()
+            .find(|&i| y_in_tracks >= self.layer_y_offsets[i] && self.layer_heights[i] > 0.0)
     }
 
     /// Number of layers in the current Y layout.
@@ -225,8 +231,7 @@ impl CoordinateMapper {
     /// Unity line 251-255.
     pub fn snap_beat_to_grid(&self, beat: Beats, beats_per_bar: u32) -> Beats {
         let interval = self.get_grid_interval_beats(beats_per_bar);
-        snap::snap_beat_to_grid(beat, Beats::from_f32(interval))
-            .max(Beats::ZERO)
+        snap::snap_beat_to_grid(beat, Beats::from_f32(interval)).max(Beats::ZERO)
     }
 
     /// Floor a beat value to the LEFT EDGE of the grid cell.

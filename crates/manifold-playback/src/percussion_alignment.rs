@@ -1,10 +1,12 @@
-use manifold_core::{Beats, Seconds, ClipId};
+use manifold_core::{Beats, ClipId, Seconds};
 // Port of Unity PercussionAlignmentService.cs (538 lines).
 // Application-layer service for percussion alignment calibration, nudge, reset, and reprojection.
 // No UI dependencies.
 
 use manifold_core::percussion::ImportedPercussionClipPlacement;
-use manifold_core::percussion_analysis::{PercussionClipReprojectionPlanner, ProjectBeatTimeConverter};
+use manifold_core::percussion_analysis::{
+    PercussionClipReprojectionPlanner, ProjectBeatTimeConverter,
+};
 use manifold_core::project::Project;
 use manifold_editing::command::{Command, CompositeCommand};
 use manifold_editing::commands::clip::MoveClipCommand;
@@ -62,7 +64,6 @@ pub struct AlignmentResult {
     pub undo_command: Option<Box<dyn Command>>,
 }
 
-
 // ─── ReprojectionResult ───
 
 /// Port of Unity ReprojectionResult struct.
@@ -75,7 +76,6 @@ pub struct ReprojectionResult {
     pub tracked: i32,
     pub undo_command: Option<Box<dyn Command>>,
 }
-
 
 // ─── PercussionAlignmentService ───
 
@@ -96,7 +96,9 @@ impl PercussionAlignmentService {
     /// `project` is no longer stored as a field — it is passed per-call to match
     /// the Rust ownership model. The Unity `project` field is threaded through.
     pub fn new(on_start_beat_changed: Box<dyn FnMut(f32) + Send>) -> Self {
-        Self { on_start_beat_changed }
+        Self {
+            on_start_beat_changed,
+        }
     }
 
     /// Port of Unity PercussionAlignmentService.CalibrateDownbeatAtPlayhead().
@@ -193,9 +195,7 @@ impl PercussionAlignmentService {
         }
 
         let reference_clip_id = {
-            let provenance = project
-                .imported_percussion_clip_placements()
-                .unwrap();
+            let provenance = project.imported_percussion_clip_placements().unwrap();
             find_first_valid_placement_id(provenance)
         };
         let reference_clip_id = match reference_clip_id {
@@ -297,11 +297,8 @@ impl PercussionAlignmentService {
             provenance_snapshot
                 .iter()
                 .map(|p| {
-                    PercussionClipReprojectionPlanner::try_compute_placement_beat(
-                        p,
-                        &mut converter,
-                    )
-                    .map(|(_src, pb)| pb)
+                    PercussionClipReprojectionPlanner::try_compute_placement_beat(p, &mut converter)
+                        .map(|(_src, pb)| pb)
                 })
                 .collect()
         };
@@ -309,7 +306,9 @@ impl PercussionAlignmentService {
         let mut commands: Vec<Box<dyn Command>> = Vec::with_capacity(provenance_snapshot.len());
         let mut retained_ids: Vec<String> = Vec::with_capacity(provenance_snapshot.len());
 
-        for (placement, projected_beat_opt) in provenance_snapshot.iter().zip(projected_beats.iter()) {
+        for (placement, projected_beat_opt) in
+            provenance_snapshot.iter().zip(projected_beats.iter())
+        {
             let projected_beat = match projected_beat_opt {
                 Some(pb) => *pb,
                 None => {
@@ -318,9 +317,10 @@ impl PercussionAlignmentService {
                 }
             };
 
-            let clip_data = project.timeline.find_clip_by_id(&placement.clip_id).map(|c| {
-                (c.start_beat, c.layer_id.clone())
-            });
+            let clip_data = project
+                .timeline
+                .find_clip_by_id(&placement.clip_id)
+                .map(|c| (c.start_beat, c.layer_id.clone()));
             let (old_beat, layer_id) = match clip_data {
                 Some(d) => d,
                 None => {
@@ -509,11 +509,7 @@ impl PercussionAlignmentService {
                     })
                     .collect()
             };
-            build_reprojection_move_commands_inner(
-                &provenance_snapshot,
-                &projected_beats,
-                project,
-            )
+            build_reprojection_move_commands_inner(&provenance_snapshot, &projected_beats, project)
         };
 
         // Revert to old state so the command system applies changes atomically.
@@ -534,8 +530,7 @@ impl PercussionAlignmentService {
 
         // Atomicity fix: build composite first, then execute atomically.
         // Port of Unity lines 330-335.
-        let mut all_commands: Vec<Box<dyn Command>> =
-            Vec::with_capacity(1 + move_commands.len());
+        let mut all_commands: Vec<Box<dyn Command>> = Vec::with_capacity(1 + move_commands.len());
         all_commands.push(alignment_command);
         all_commands.extend(move_commands);
 
@@ -576,13 +571,14 @@ impl PercussionAlignmentService {
 pub fn find_first_valid_placement(
     provenance: &[ImportedPercussionClipPlacement],
 ) -> Option<&ImportedPercussionClipPlacement> {
-    provenance.iter().find(|&placement| placement.is_valid()).map(|v| v as _)
+    provenance
+        .iter()
+        .find(|&placement| placement.is_valid())
+        .map(|v| v as _)
 }
 
 /// Returns the clip_id of the first valid placement (for borrow-safe callers).
-fn find_first_valid_placement_id(
-    provenance: &[ImportedPercussionClipPlacement],
-) -> Option<String> {
+fn find_first_valid_placement_id(provenance: &[ImportedPercussionClipPlacement]) -> Option<String> {
     find_first_valid_placement(provenance).map(|p| p.clip_id.clone())
 }
 
@@ -689,18 +685,30 @@ impl ApplyPercussionAlignmentCommand {
                 .find(|p| p.clip_id == snapshot.clip_id)
             {
                 p.set_alignment_state(
-                    if use_new { snapshot.new_offset_beats } else { snapshot.old_offset_beats },
+                    if use_new {
+                        snapshot.new_offset_beats
+                    } else {
+                        snapshot.old_offset_beats
+                    },
                     if use_new {
                         snapshot.new_slope_beats_per_second
                     } else {
                         snapshot.old_slope_beats_per_second
                     },
-                    if use_new { snapshot.new_pivot_seconds } else { snapshot.old_pivot_seconds },
+                    if use_new {
+                        snapshot.new_pivot_seconds
+                    } else {
+                        snapshot.old_pivot_seconds
+                    },
                 );
             }
         }
 
-        let start_beat = if use_new { self.new_start_beat } else { self.old_start_beat };
+        let start_beat = if use_new {
+            self.new_start_beat
+        } else {
+            self.old_start_beat
+        };
         project.set_imported_percussion_audio_start_beat(start_beat.max(0.0));
         // Note: onStartBeatChanged callback is NOT stored here (can't store a closure in a
         // Debug struct without wrapping). The PercussionAlignmentService caller is responsible
@@ -738,11 +746,7 @@ pub struct SetAudioStartBeatCommand {
 }
 
 impl SetAudioStartBeatCommand {
-    pub fn new(
-        old_start_beat: f32,
-        new_start_beat: f32,
-        description: String,
-    ) -> Self {
+    pub fn new(old_start_beat: f32, new_start_beat: f32, description: String) -> Self {
         let description = if description.trim().is_empty() {
             "Set audio start beat".to_string()
         } else {

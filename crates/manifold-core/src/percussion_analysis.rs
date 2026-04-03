@@ -1,15 +1,15 @@
 // Port of Unity PercussionAnalysisModels.cs (561 lines) + BeatTimeConverter.cs (90 lines).
 // All data types for the percussion analysis pipeline.
 
-use serde::{Deserialize, Serialize};
 use serde::de::Deserializer;
 use serde::ser::Serializer;
+use serde::{Deserialize, Serialize};
 
+use crate::generator_type_id::GeneratorTypeId;
 use crate::percussion::ImportedPercussionClipPlacement;
 use crate::project::Project;
 use crate::tempo::TempoMapConverter;
-use crate::generator_type_id::GeneratorTypeId;
-use crate::units::{Beats, Seconds, Bpm};
+use crate::units::{Beats, Bpm, Seconds};
 
 // ─── PercussionTriggerType ───
 
@@ -175,7 +175,8 @@ impl PercussionBeatGrid {
         // Remove non-finite or negative beat times.
         self.beat_times_seconds
             .retain(|&t| t.is_finite() && t >= 0.0);
-        self.beat_times_seconds.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        self.beat_times_seconds
+            .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
         // Deduplicate near-identical beat markers to keep interpolation stable.
         let mut i = self.beat_times_seconds.len().saturating_sub(1);
@@ -236,14 +237,22 @@ impl PercussionBeatGrid {
 
         if target_seconds <= first_beat_seconds {
             let beat = beat_offset + ((target_seconds - first_beat_seconds) / interval);
-            return if beat.is_finite() { Some(Beats::from_f32(beat)) } else { None };
+            return if beat.is_finite() {
+                Some(Beats::from_f32(beat))
+            } else {
+                None
+            };
         }
 
         if target_seconds >= self.beat_times_seconds[last_index] {
             let beat = beat_offset
                 + last_index as f32
                 + ((target_seconds - self.beat_times_seconds[last_index]) / interval);
-            return if beat.is_finite() { Some(Beats::from_f32(beat)) } else { None };
+            return if beat.is_finite() {
+                Some(Beats::from_f32(beat))
+            } else {
+                None
+            };
         }
 
         // Binary search for the containing segment.
@@ -330,7 +339,11 @@ impl PercussionAnalysisData {
         } else {
             track_id.to_string()
         };
-        let bpm = Bpm(if bpm.0 > 0.0 { bpm.0.clamp(20.0, 300.0) } else { 0.0 });
+        let bpm = Bpm(if bpm.0 > 0.0 {
+            bpm.0.clamp(20.0, 300.0)
+        } else {
+            0.0
+        });
         let bpm_confidence = if bpm_confidence.is_finite() {
             bpm_confidence.clamp(0.0, 1.0)
         } else {
@@ -356,9 +369,7 @@ impl PercussionAnalysisData {
     }
 
     pub fn has_energy_envelope(&self) -> bool {
-        self.energy_envelope
-            .as_ref()
-            .is_some_and(|e| !e.is_empty())
+        self.energy_envelope.as_ref().is_some_and(|e| !e.is_empty())
     }
 
     /// Port of Unity PercussionAnalysisData.EnergyAtBeat().
@@ -400,13 +411,15 @@ impl PercussionAnalysisData {
         }
         if self.bpm.0 <= 0.0
             && let Some(ref grid) = self.beat_grid
-                && grid.bpm_derived_clamped() > 0.0 {
-                    self.bpm = Bpm(grid.bpm_derived_clamped());
-                }
+            && grid.bpm_derived_clamped() > 0.0
+        {
+            self.bpm = Bpm(grid.bpm_derived_clamped());
+        }
         if self.bpm_confidence <= 0.0
-            && let Some(ref grid) = self.beat_grid {
-                self.bpm_confidence = grid.confidence_clamped();
-            }
+            && let Some(ref grid) = self.beat_grid
+        {
+            self.bpm_confidence = grid.confidence_clamped();
+        }
 
         if let Some(ref mut envelope) = self.energy_envelope {
             for val in envelope.iter_mut() {
@@ -419,8 +432,11 @@ impl PercussionAnalysisData {
         }
 
         self.events.retain(|_| true); // no null check needed in Rust
-        self.events
-            .sort_by(|a, b| a.time_seconds.partial_cmp(&b.time_seconds).unwrap_or(std::cmp::Ordering::Equal));
+        self.events.sort_by(|a, b| {
+            a.time_seconds
+                .partial_cmp(&b.time_seconds)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
 
     /// Port of Unity PercussionAnalysisData.TryMapSecondsToBeat().
@@ -618,8 +634,12 @@ impl PercussionPlacementPlan {
     }
 
     pub fn sort_placements(&mut self) {
-        self.placements
-            .sort_by(|a, b| a.start_beat.0.partial_cmp(&b.start_beat.0).unwrap_or(std::cmp::Ordering::Equal));
+        self.placements.sort_by(|a, b| {
+            a.start_beat
+                .0
+                .partial_cmp(&b.start_beat.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
 }
 
@@ -645,11 +665,7 @@ impl<'a> ProjectBeatTimeConverter<'a> {
 impl<'a> BeatTimeConverter for ProjectBeatTimeConverter<'a> {
     fn seconds_to_beat(&mut self, seconds: Seconds) -> Beats {
         let fallback_bpm = self.project.settings.bpm;
-        TempoMapConverter::seconds_to_beat(
-            &mut self.project.tempo_map,
-            seconds,
-            fallback_bpm,
-        )
+        TempoMapConverter::seconds_to_beat(&mut self.project.tempo_map, seconds, fallback_bpm)
     }
 }
 

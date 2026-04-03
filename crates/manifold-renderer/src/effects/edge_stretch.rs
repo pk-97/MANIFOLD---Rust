@@ -1,15 +1,15 @@
-use manifold_core::EffectTypeId;
-use manifold_core::effects::EffectInstance;
+use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
-use super::compute_blit_helper::ComputeBlitHelper;
+use manifold_core::EffectTypeId;
+use manifold_core::effects::EffectInstance;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct EdgeStretchUniforms {
     amount: f32,
     source_width: f32,
-    mode: u32,          // 0=Horizontal, 1=Vertical, 2=Both
+    mode: u32, // 0=Horizontal, 1=Vertical, 2=Both
     _pad: f32,
 }
 
@@ -55,10 +55,12 @@ impl PostProcessEffect for EdgeStretchFX {
 
         self.helper.dispatch(
             gpu,
-            source, target,
+            source,
+            target,
             bytemuck::bytes_of(&uniforms),
             "EdgeStretch Pass",
-            ctx.width, ctx.height,
+            ctx.width,
+            ctx.height,
         );
     }
 }

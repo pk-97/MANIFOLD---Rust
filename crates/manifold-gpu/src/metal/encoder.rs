@@ -1,7 +1,7 @@
 //! GpuEncoder — per-frame GPU command encoder wrapping a retained Metal command buffer.
 
-use crate::types::*;
 use super::*;
+use crate::types::*;
 
 /// Encoder state — tracks the current active Metal encoder.
 #[allow(dead_code)]
@@ -141,7 +141,9 @@ impl GpuEncoder {
         // Retain the encoder so it survives autorelease pool drains.
         // The autoreleased reference from new_compute_command_encoder() could
         // be freed by an outer pool drain in release builds.
-        unsafe { objc_retain(ptr as *mut std::ffi::c_void); }
+        unsafe {
+            objc_retain(ptr as *mut std::ffi::c_void);
+        }
         self.state = EncoderState::Compute(ptr);
         ptr
     }
@@ -152,7 +154,9 @@ impl GpuEncoder {
             EncoderState::None => {}
             EncoderState::Compute(ptr) => {
                 unsafe { &*ptr }.end_encoding();
-                unsafe { objc_release(ptr as *mut std::ffi::c_void); }
+                unsafe {
+                    objc_release(ptr as *mut std::ffi::c_void);
+                }
                 self.compute_cache.clear();
             }
             EncoderState::Render(ptr) => {
@@ -195,22 +199,22 @@ impl GpuEncoder {
 
         for binding in bindings {
             match binding {
-                GpuBinding::Buffer { binding: b, buffer, offset } => {
+                GpuBinding::Buffer {
+                    binding: b,
+                    buffer,
+                    offset,
+                } => {
                     // Skip bindings not used by this entry point. Metal ignores
                     // unused argument slots, so this is safe. Multi-entry-point
                     // shaders have per-entry slot maps that may exclude globals
                     // not referenced by the specific entry point.
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
                     let idx = slot.metal_index as usize;
                     let id = buffer_identity(&buffer.raw);
-                    if idx >= CACHE_SLOTS
-                        || self.compute_cache.buffers[idx] != (id, *offset)
-                    {
-                        enc.set_buffer(
-                            slot.metal_index as _,
-                            Some(&buffer.raw),
-                            *offset as _,
-                        );
+                    if idx >= CACHE_SLOTS || self.compute_cache.buffers[idx] != (id, *offset) {
+                        enc.set_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
                         if idx < CACHE_SLOTS {
                             self.compute_cache.buffers[idx] = (id, *offset);
                         }
@@ -224,26 +228,32 @@ impl GpuEncoder {
                         }
                     }
                 }
-                GpuBinding::Texture { binding: b, texture } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                GpuBinding::Texture {
+                    binding: b,
+                    texture,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
                     let idx = slot.metal_index as usize;
                     let id = texture_identity(&texture.raw);
-                    if idx >= CACHE_SLOTS
-                        || self.compute_cache.textures[idx] != id
-                    {
+                    if idx >= CACHE_SLOTS || self.compute_cache.textures[idx] != id {
                         enc.set_texture(slot.metal_index as _, Some(&texture.raw));
                         if idx < CACHE_SLOTS {
                             self.compute_cache.textures[idx] = id;
                         }
                     }
                 }
-                GpuBinding::Sampler { binding: b, sampler } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                GpuBinding::Sampler {
+                    binding: b,
+                    sampler,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
                     let idx = slot.metal_index as usize;
                     let id = sampler_identity(&sampler.raw);
-                    if idx >= CACHE_SLOTS
-                        || self.compute_cache.samplers[idx] != id
-                    {
+                    if idx >= CACHE_SLOTS || self.compute_cache.samplers[idx] != id {
                         enc.set_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                         if idx < CACHE_SLOTS {
                             self.compute_cache.samplers[idx] = id;
@@ -252,7 +262,9 @@ impl GpuEncoder {
                 }
                 GpuBinding::Bytes { binding: b, data } => {
                     // Always re-bind: inline bytes change every dispatch (uniforms).
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
                     enc.set_bytes(
                         slot.metal_index as _,
                         data.len() as _,
@@ -264,7 +276,9 @@ impl GpuEncoder {
 
         // Bind the sizes buffer if this pipeline has runtime-sized arrays.
         if pipeline.needs_sizes_buffer {
-            let slot = pipeline.slot_map.get(SIZES_BUFFER_BINDING)
+            let slot = pipeline
+                .slot_map
+                .get(SIZES_BUFFER_BINDING)
                 .expect("sizes buffer slot missing");
             enc.set_bytes(
                 slot.metal_index as _,
@@ -318,22 +332,38 @@ impl GpuEncoder {
 
         for binding in bindings {
             match binding {
-                GpuBinding::Buffer { binding: b, buffer, offset } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
-                    enc.set_fragment_buffer(
-                        slot.metal_index as _, Some(&buffer.raw), *offset as _,
-                    );
+                GpuBinding::Buffer {
+                    binding: b,
+                    buffer,
+                    offset,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
+                    enc.set_fragment_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
                 }
-                GpuBinding::Texture { binding: b, texture } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                GpuBinding::Texture {
+                    binding: b,
+                    texture,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
                     enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
                 }
-                GpuBinding::Sampler { binding: b, sampler } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                GpuBinding::Sampler {
+                    binding: b,
+                    sampler,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
                     enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                 }
                 GpuBinding::Bytes { binding: b, data } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
                     enc.set_fragment_bytes(
                         slot.metal_index as _,
                         data.len() as _,
@@ -392,22 +422,38 @@ impl GpuEncoder {
 
         for binding in bindings {
             match binding {
-                GpuBinding::Buffer { binding: b, buffer, offset } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
-                    enc.set_fragment_buffer(
-                        slot.metal_index as _, Some(&buffer.raw), *offset as _,
-                    );
+                GpuBinding::Buffer {
+                    binding: b,
+                    buffer,
+                    offset,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
+                    enc.set_fragment_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
                 }
-                GpuBinding::Texture { binding: b, texture } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                GpuBinding::Texture {
+                    binding: b,
+                    texture,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
                     enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
                 }
-                GpuBinding::Sampler { binding: b, sampler } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                GpuBinding::Sampler {
+                    binding: b,
+                    sampler,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
                     enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                 }
                 GpuBinding::Bytes { binding: b, data } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
                     enc.set_fragment_bytes(
                         slot.metal_index as _,
                         data.len() as _,
@@ -457,31 +503,47 @@ impl GpuEncoder {
 
         for binding in bindings {
             match binding {
-                GpuBinding::Buffer { binding: b, buffer, offset } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
-                    enc.set_vertex_buffer(
-                        slot.metal_index as _, Some(&buffer.raw), *offset as _,
-                    );
-                    enc.set_fragment_buffer(
-                        slot.metal_index as _, Some(&buffer.raw), *offset as _,
-                    );
+                GpuBinding::Buffer {
+                    binding: b,
+                    buffer,
+                    offset,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
+                    enc.set_vertex_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
+                    enc.set_fragment_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
                 }
-                GpuBinding::Texture { binding: b, texture } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                GpuBinding::Texture {
+                    binding: b,
+                    texture,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
                     enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
                 }
-                GpuBinding::Sampler { binding: b, sampler } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                GpuBinding::Sampler {
+                    binding: b,
+                    sampler,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
                     enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                 }
                 GpuBinding::Bytes { binding: b, data } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
                     enc.set_vertex_bytes(
-                        slot.metal_index as _, data.len() as _,
+                        slot.metal_index as _,
+                        data.len() as _,
                         data.as_ptr() as *const _,
                     );
                     enc.set_fragment_bytes(
-                        slot.metal_index as _, data.len() as _,
+                        slot.metal_index as _,
+                        data.len() as _,
                         data.as_ptr() as *const _,
                     );
                 }
@@ -491,7 +553,9 @@ impl GpuEncoder {
         if instance_count > 0 {
             enc.draw_primitives_instanced(
                 metal::MTLPrimitiveType::Triangle,
-                0, vertex_count as u64, instance_count as u64,
+                0,
+                vertex_count as u64,
+                instance_count as u64,
             );
         }
         enc.pop_debug_group();
@@ -534,31 +598,47 @@ impl GpuEncoder {
 
         for binding in bindings {
             match binding {
-                GpuBinding::Buffer { binding: b, buffer, offset } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
-                    enc.set_vertex_buffer(
-                        slot.metal_index as _, Some(&buffer.raw), *offset as _,
-                    );
-                    enc.set_fragment_buffer(
-                        slot.metal_index as _, Some(&buffer.raw), *offset as _,
-                    );
+                GpuBinding::Buffer {
+                    binding: b,
+                    buffer,
+                    offset,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
+                    enc.set_vertex_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
+                    enc.set_fragment_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
                 }
-                GpuBinding::Texture { binding: b, texture } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                GpuBinding::Texture {
+                    binding: b,
+                    texture,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
                     enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
                 }
-                GpuBinding::Sampler { binding: b, sampler } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                GpuBinding::Sampler {
+                    binding: b,
+                    sampler,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
                     enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                 }
                 GpuBinding::Bytes { binding: b, data } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
                     enc.set_vertex_bytes(
-                        slot.metal_index as _, data.len() as _,
+                        slot.metal_index as _,
+                        data.len() as _,
                         data.as_ptr() as *const _,
                     );
                     enc.set_fragment_bytes(
-                        slot.metal_index as _, data.len() as _,
+                        slot.metal_index as _,
+                        data.len() as _,
                         data.as_ptr() as *const _,
                     );
                 }
@@ -568,7 +648,9 @@ impl GpuEncoder {
         if instance_count > 0 {
             enc.draw_primitives_instanced(
                 metal::MTLPrimitiveType::Triangle,
-                0, vertex_count as u64, instance_count as u64,
+                0,
+                vertex_count as u64,
+                instance_count as u64,
             );
         }
         enc.pop_debug_group();
@@ -633,35 +715,55 @@ impl GpuEncoder {
 
         // Bind vertex buffer at index 30 (same as vertex descriptor buffer index).
         const VERTEX_BUFFER_INDEX: u64 = 30;
-        enc.set_vertex_buffer(VERTEX_BUFFER_INDEX, Some(&vertex_buffer.raw), vertex_offset as _);
+        enc.set_vertex_buffer(
+            VERTEX_BUFFER_INDEX,
+            Some(&vertex_buffer.raw),
+            vertex_offset as _,
+        );
 
         for binding in bindings {
             match binding {
-                GpuBinding::Buffer { binding: b, buffer, offset } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
-                    enc.set_vertex_buffer(
-                        slot.metal_index as _, Some(&buffer.raw), *offset as _,
-                    );
-                    enc.set_fragment_buffer(
-                        slot.metal_index as _, Some(&buffer.raw), *offset as _,
-                    );
+                GpuBinding::Buffer {
+                    binding: b,
+                    buffer,
+                    offset,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
+                    enc.set_vertex_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
+                    enc.set_fragment_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
                 }
-                GpuBinding::Texture { binding: b, texture } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                GpuBinding::Texture {
+                    binding: b,
+                    texture,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
                     enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
                 }
-                GpuBinding::Sampler { binding: b, sampler } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                GpuBinding::Sampler {
+                    binding: b,
+                    sampler,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
                     enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                 }
                 GpuBinding::Bytes { binding: b, data } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
                     enc.set_vertex_bytes(
-                        slot.metal_index as _, data.len() as _,
+                        slot.metal_index as _,
+                        data.len() as _,
                         data.as_ptr() as *const _,
                     );
                     enc.set_fragment_bytes(
-                        slot.metal_index as _, data.len() as _,
+                        slot.metal_index as _,
+                        data.len() as _,
                         data.as_ptr() as *const _,
                     );
                 }
@@ -717,9 +819,7 @@ impl GpuEncoder {
         enc.set_viewport(vp);
 
         // Store as active render encoder (not retained — caller must end the pass).
-        self.state = EncoderState::Render(
-            enc as *const metal::RenderCommandEncoderRef,
-        );
+        self.state = EncoderState::Render(enc as *const metal::RenderCommandEncoderRef);
     }
 
     /// Draw indexed geometry within an active render pass (from `begin_render_pass`).
@@ -762,74 +862,88 @@ impl GpuEncoder {
             enc.set_vertex_buffer_offset(VERTEX_BUFFER_INDEX, vertex_offset as _);
         } else {
             enc.set_vertex_buffer(
-                VERTEX_BUFFER_INDEX, Some(&vertex_buffer.raw), vertex_offset as _,
+                VERTEX_BUFFER_INDEX,
+                Some(&vertex_buffer.raw),
+                vertex_offset as _,
             );
             self.render_cache.vertex_buf_30 = vb_id;
         }
 
         for binding in bindings {
             match binding {
-                GpuBinding::Buffer { binding: b, buffer, offset } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                GpuBinding::Buffer {
+                    binding: b,
+                    buffer,
+                    offset,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
                     let idx = slot.metal_index as usize;
                     let id = buffer_identity(&buffer.raw);
-                    if idx >= CACHE_SLOTS
-                        || self.render_cache.buffers[idx] != (id, *offset)
-                    {
+                    if idx >= CACHE_SLOTS || self.render_cache.buffers[idx] != (id, *offset) {
                         enc.set_vertex_buffer(
-                            slot.metal_index as _, Some(&buffer.raw), *offset as _,
+                            slot.metal_index as _,
+                            Some(&buffer.raw),
+                            *offset as _,
                         );
                         enc.set_fragment_buffer(
-                            slot.metal_index as _, Some(&buffer.raw), *offset as _,
+                            slot.metal_index as _,
+                            Some(&buffer.raw),
+                            *offset as _,
                         );
                         if idx < CACHE_SLOTS {
                             self.render_cache.buffers[idx] = (id, *offset);
                         }
                     }
                 }
-                GpuBinding::Texture { binding: b, texture } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                GpuBinding::Texture {
+                    binding: b,
+                    texture,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
                     let idx = slot.metal_index as usize;
                     let id = texture_identity(&texture.raw);
-                    if idx >= CACHE_SLOTS
-                        || self.render_cache.frag_textures[idx] != id
-                    {
-                        enc.set_fragment_texture(
-                            slot.metal_index as _, Some(&texture.raw),
-                        );
+                    if idx >= CACHE_SLOTS || self.render_cache.frag_textures[idx] != id {
+                        enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
                         if idx < CACHE_SLOTS {
                             self.render_cache.frag_textures[idx] = id;
                         }
                     }
                 }
-                GpuBinding::Sampler { binding: b, sampler } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                GpuBinding::Sampler {
+                    binding: b,
+                    sampler,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
                     let idx = slot.metal_index as usize;
                     let id = sampler_identity(&sampler.raw);
-                    if idx >= CACHE_SLOTS
-                        || self.render_cache.frag_samplers[idx] != id
-                    {
-                        enc.set_fragment_sampler_state(
-                            slot.metal_index as _, Some(&sampler.raw),
-                        );
+                    if idx >= CACHE_SLOTS || self.render_cache.frag_samplers[idx] != id {
+                        enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                         if idx < CACHE_SLOTS {
                             self.render_cache.frag_samplers[idx] = id;
                         }
                     }
                 }
                 GpuBinding::Bytes { binding: b, data } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
                     let idx = slot.metal_index as usize;
                     let id = (data.as_ptr(), data.len());
-                    if idx >= CACHE_SLOTS
-                        || self.render_cache.bytes[idx] != id
-                    {
+                    if idx >= CACHE_SLOTS || self.render_cache.bytes[idx] != id {
                         enc.set_vertex_bytes(
-                            slot.metal_index as _, data.len() as _,
+                            slot.metal_index as _,
+                            data.len() as _,
                             data.as_ptr() as *const _,
                         );
                         enc.set_fragment_bytes(
-                            slot.metal_index as _, data.len() as _,
+                            slot.metal_index as _,
+                            data.len() as _,
                             data.as_ptr() as *const _,
                         );
                         if idx < CACHE_SLOTS {
@@ -868,14 +982,25 @@ impl GpuEncoder {
     /// render-pass clear for formats without storage support (R16Float, etc.).
     pub fn clear_texture(&mut self, texture: &GpuTexture, r: f64, g: f64, b: f64, a: f64) {
         let pipelines = unsafe { &*self.clear_pipelines };
-        let has_write = texture.raw.usage().contains(metal::MTLTextureUsage::ShaderWrite);
+        let has_write = texture
+            .raw
+            .usage()
+            .contains(metal::MTLTextureUsage::ShaderWrite);
         if let Some(pipeline) = pipelines.get(texture.format).filter(|_| has_write) {
             #[repr(C)]
             #[derive(Clone, Copy)]
-            struct ClearColor { r: f32, g: f32, b: f32, a: f32 }
+            struct ClearColor {
+                r: f32,
+                g: f32,
+                b: f32,
+                a: f32,
+            }
 
             let color = ClearColor {
-                r: r as f32, g: g as f32, b: b as f32, a: a as f32,
+                r: r as f32,
+                g: g as f32,
+                b: b as f32,
+                a: a as f32,
             };
             let color_bytes: &[u8] = unsafe {
                 std::slice::from_raw_parts(
@@ -886,8 +1011,14 @@ impl GpuEncoder {
             self.dispatch_compute(
                 pipeline,
                 &[
-                    GpuBinding::Texture { binding: 0, texture },
-                    GpuBinding::Bytes { binding: 1, data: color_bytes },
+                    GpuBinding::Texture {
+                        binding: 0,
+                        texture,
+                    },
+                    GpuBinding::Bytes {
+                        binding: 1,
+                        data: color_bytes,
+                    },
                 ],
                 [texture.width.div_ceil(16), texture.height.div_ceil(16), 1],
                 "Clear Texture",
@@ -959,8 +1090,8 @@ impl GpuEncoder {
             src_origin,
             src_size,
             &dst.raw,
-            0,                      // destination_offset
-            bytes_per_row as u64,   // destination_bytes_per_row
+            0,                                    // destination_offset
+            bytes_per_row as u64,                 // destination_bytes_per_row
             bytes_per_row as u64 * height as u64, // destination_bytes_per_image
             metal::MTLBlitOption::empty(),
         );
@@ -1048,9 +1179,9 @@ impl GpuEncoder {
     /// Uses Metal's `addCompletedHandler` — fires immediately on GPU completion,
     /// no polling or next-frame delay.
     pub fn add_completed_handler<F: Fn() + Send + 'static>(&self, callback: F) {
-        let block = block::ConcreteBlock::new(
-            move |_: &metal::CommandBufferRef| { callback(); },
-        );
+        let block = block::ConcreteBlock::new(move |_: &metal::CommandBufferRef| {
+            callback();
+        });
         let block = block.copy();
         self.cmd_buf().add_completed_handler(&block);
     }
@@ -1075,14 +1206,15 @@ impl GpuEncoder {
         cb.commit();
         cb.wait_until_scheduled();
     }
-
 }
 
 impl Drop for GpuEncoder {
     fn drop(&mut self) {
         self.end_current();
         if !self.cmd_buf_ptr.is_null() {
-            unsafe { objc_release(self.cmd_buf_ptr); }
+            unsafe {
+                objc_release(self.cmd_buf_ptr);
+            }
         }
     }
 }

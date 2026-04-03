@@ -1,14 +1,14 @@
-use manifold_core::EffectTypeId;
-use manifold_core::effects::EffectInstance;
+use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
-use super::compute_blit_helper::ComputeBlitHelper;
+use manifold_core::EffectTypeId;
+use manifold_core::effects::EffectInstance;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct DitherUniforms {
     amount: f32,
-    algorithm: u32,    // 0=Bayer,1=Halftone,2=Lines,3=CrossHatch,4=Noise,5=Diamond
+    algorithm: u32, // 0=Bayer,1=Halftone,2=Lines,3=CrossHatch,4=Noise,5=Diamond
     resolution_x: f32,
     resolution_y: f32,
 }
@@ -54,10 +54,12 @@ impl PostProcessEffect for DitherFX {
 
         self.helper.dispatch(
             gpu,
-            source, target,
+            source,
+            target,
             bytemuck::bytes_of(&uniforms),
             "Dither Pass",
-            ctx.width, ctx.height,
+            ctx.width,
+            ctx.height,
         );
     }
 }

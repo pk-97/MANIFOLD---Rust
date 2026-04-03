@@ -101,9 +101,9 @@ struct OwnerState {
     readback_h: u32,
     has_blob_data: bool,
     _pixel_buffer: Vec<u8>,
-    native_blob_output: Vec<f32>, // new float[MAX_BLOBS * 4]
+    native_blob_output: Vec<f32>,        // new float[MAX_BLOBS * 4]
     blob_data_for_shader: Vec<[f32; 4]>, // Vector4[MAX_BLOBS]
-    connection_lines: Vec<[f32; 4]>, // Vector4[MAX_BLOBS]
+    connection_lines: Vec<[f32; 4]>,     // Vector4[MAX_BLOBS]
     blob_count: i32,
     connection_count: i32,
     pending_threshold: f32,
@@ -253,9 +253,8 @@ impl BlobTrackingFX {
             Some(blend),
             "BlobTracking OverlayRender",
         );
-        let overlay_buf = device.create_buffer_shared(
-            (MAX_OVERLAY_QUADS * std::mem::size_of::<OverlayQuad>()) as u64,
-        );
+        let overlay_buf = device
+            .create_buffer_shared((MAX_OVERLAY_QUADS * std::mem::size_of::<OverlayQuad>()) as u64);
 
         // ---- Samplers ----
         let sampler = device.create_sampler(&GpuSamplerDesc::default());
@@ -514,8 +513,7 @@ impl BlobTrackingFX {
                 // Adaptive cutoff: faster motion → higher cutoff → less smoothing
                 let cutoff = min_cutoff + ONE_EURO_BETA * b.dx_pos[ax].abs();
                 let alpha = one_euro_alpha(dt, cutoff);
-                b.smooth_pos[ax] =
-                    b.smooth_pos[ax] + alpha * (b.raw_pos[ax] - b.smooth_pos[ax]);
+                b.smooth_pos[ax] = b.smooth_pos[ax] + alpha * (b.raw_pos[ax] - b.smooth_pos[ax]);
             }
 
             // --- Size (2 axes) ---
@@ -585,7 +583,6 @@ impl BlobTrackingFX {
         width: u32,
         height: u32,
     ) {
-
         let dpi_scale = height as f32 / 1080.0;
         let px_u = (1.0 / width as f32) * dpi_scale;
         let px_v = (1.0 / height as f32) * dpi_scale;
@@ -605,12 +602,7 @@ impl BlobTrackingFX {
             let bracket_len = half_size[0].min(half_size[1]) * 0.4;
 
             // (a) Corner brackets — 4 corners × 2 arms = 8 quads
-            for &dir in &[
-                [-1.0f32, -1.0f32],
-                [1.0, -1.0],
-                [-1.0, 1.0],
-                [1.0, 1.0],
-            ] {
+            for &dir in &[[-1.0f32, -1.0f32], [1.0, -1.0], [-1.0, 1.0], [1.0, 1.0]] {
                 let corner = [
                     center[0] + half_size[0] * dir[0],
                     center[1] + half_size[1] * dir[1],
@@ -622,8 +614,12 @@ impl BlobTrackingFX {
                     (corner[0] - bracket_len, corner[0])
                 };
                 push_solid(
-                    quads, hx0, corner[1] - line_thick / 2.0,
-                    hx1, corner[1] + line_thick / 2.0, 1.0,
+                    quads,
+                    hx0,
+                    corner[1] - line_thick / 2.0,
+                    hx1,
+                    corner[1] + line_thick / 2.0,
+                    1.0,
                 );
                 // Vertical arm
                 let (vy0, vy1) = if dir[1] < 0.0 {
@@ -632,8 +628,12 @@ impl BlobTrackingFX {
                     (corner[1] - bracket_len, corner[1])
                 };
                 push_solid(
-                    quads, corner[0] - line_thick / 2.0, vy0,
-                    corner[0] + line_thick / 2.0, vy1, 1.0,
+                    quads,
+                    corner[0] - line_thick / 2.0,
+                    vy0,
+                    corner[0] + line_thick / 2.0,
+                    vy1,
+                    1.0,
                 );
             }
 
@@ -641,14 +641,18 @@ impl BlobTrackingFX {
             let ch_size = half_size[0].min(half_size[1]) * 0.3;
             push_solid(
                 quads,
-                center[0] - ch_size, center[1] - thin_line / 2.0,
-                center[0] + ch_size, center[1] + thin_line / 2.0,
+                center[0] - ch_size,
+                center[1] - thin_line / 2.0,
+                center[0] + ch_size,
+                center[1] + thin_line / 2.0,
                 1.0,
             );
             push_solid(
                 quads,
-                center[0] - thin_line / 2.0, center[1] - ch_size,
-                center[0] + thin_line / 2.0, center[1] + ch_size,
+                center[0] - thin_line / 2.0,
+                center[1] - ch_size,
+                center[0] + thin_line / 2.0,
+                center[1] + ch_size,
                 1.0,
             );
 
@@ -656,8 +660,10 @@ impl BlobTrackingFX {
             let dot_radius = px_u * 4.0;
             push_solid(
                 quads,
-                center[0] - dot_radius, center[1] - dot_radius,
-                center[0] + dot_radius, center[1] + dot_radius,
+                center[0] - dot_radius,
+                center[1] - dot_radius,
+                center[0] + dot_radius,
+                center[1] + dot_radius,
                 1.0,
             );
 
@@ -674,8 +680,7 @@ impl BlobTrackingFX {
             // at pixel offsets 0, 6, 13, 19
             let glyph_w = 5.0 * digit_size;
             let glyph_h = 7.0 * digit_size;
-            for &(char_code, px_offset) in
-                &[(0.0f32, 0.0f32), (16.0, 6.0), (hi, 13.0), (lo, 19.0)]
+            for &(char_code, px_offset) in &[(0.0f32, 0.0f32), (16.0, 6.0), (hi, 13.0), (lo, 19.0)]
             {
                 let gx = hex_pos[0] + px_offset * digit_size;
                 let gy = hex_pos[1];
@@ -728,30 +733,43 @@ impl BlobTrackingFX {
             let gy1 = gauge_pos[1] - gauge_h;
             // Top edge
             push_solid(
-                quads, gx0, gy0 - thin_line / 2.0,
-                gx1, gy0 + thin_line / 2.0, 1.0,
+                quads,
+                gx0,
+                gy0 - thin_line / 2.0,
+                gx1,
+                gy0 + thin_line / 2.0,
+                1.0,
             );
             // Bottom edge
             push_solid(
-                quads, gx0, gy1 - thin_line / 2.0,
-                gx1, gy1 + thin_line / 2.0, 1.0,
+                quads,
+                gx0,
+                gy1 - thin_line / 2.0,
+                gx1,
+                gy1 + thin_line / 2.0,
+                1.0,
             );
             // Left edge
             push_solid(
-                quads, gx0 - thin_line / 2.0, gy1,
-                gx0 + thin_line / 2.0, gy0, 1.0,
+                quads,
+                gx0 - thin_line / 2.0,
+                gy1,
+                gx0 + thin_line / 2.0,
+                gy0,
+                1.0,
             );
             // Right edge
             push_solid(
-                quads, gx1 - thin_line / 2.0, gy1,
-                gx1 + thin_line / 2.0, gy0, 1.0,
+                quads,
+                gx1 - thin_line / 2.0,
+                gy1,
+                gx1 + thin_line / 2.0,
+                gy0,
+                1.0,
             );
             // Fill quad
             if gauge_fill > 0.0 {
-                push_solid(
-                    quads, gx0, gy1,
-                    gx0 + gauge_w * gauge_fill, gy0, 0.4,
-                );
+                push_solid(quads, gx0, gy1, gx0 + gauge_w * gauge_fill, gy0, 0.4);
             }
 
             // (g) Tick marks — 4 quads
@@ -765,8 +783,10 @@ impl BlobTrackingFX {
                 let tick_len = if t % 2 == 0 { 12.0 * px_u } else { 6.0 * px_u };
                 push_solid(
                     quads,
-                    tick_base[0], tick_y - thin_line / 2.0,
-                    tick_base[0] + tick_len, tick_y + thin_line / 2.0,
+                    tick_base[0],
+                    tick_y - thin_line / 2.0,
+                    tick_base[0] + tick_len,
+                    tick_y + thin_line / 2.0,
                     0.5,
                 );
             }
@@ -806,14 +826,8 @@ impl BlobTrackingFX {
                 let t1 = ((d as f32 * dash_total + dash_total * 0.6) / len).min(1.0);
                 // Dash "on" portion: from t0 to t1 along the line
                 // The compute shader uses step(0.4, dash_phase) which gives ~60% on
-                let p0 = [
-                    conn_a[0] + dir[0] * len * t0,
-                    conn_a[1] + dir[1] * len * t0,
-                ];
-                let p1 = [
-                    conn_a[0] + dir[0] * len * t1,
-                    conn_a[1] + dir[1] * len * t1,
-                ];
+                let p0 = [conn_a[0] + dir[0] * len * t0, conn_a[1] + dir[1] * len * t0];
+                let p1 = [conn_a[0] + dir[0] * len * t1, conn_a[1] + dir[1] * len * t1];
                 // Expand along perpendicular for thickness
                 let min_x = (p0[0] - perp[0] * half_thick)
                     .min(p0[0] + perp[0] * half_thick)
@@ -835,15 +849,14 @@ impl BlobTrackingFX {
             }
 
             // (i) Midpoint dot — 1 quad
-            let mid = [
-                (conn_a[0] + conn_b[0]) * 0.5,
-                (conn_a[1] + conn_b[1]) * 0.5,
-            ];
+            let mid = [(conn_a[0] + conn_b[0]) * 0.5, (conn_a[1] + conn_b[1]) * 0.5];
             let dot_r = px_u * 5.0;
             push_solid(
                 quads,
-                mid[0] - dot_r, mid[1] - dot_r,
-                mid[0] + dot_r, mid[1] + dot_r,
+                mid[0] - dot_r,
+                mid[1] - dot_r,
+                mid[0] + dot_r,
+                mid[1] + dot_r,
                 0.4,
             );
 
@@ -856,15 +869,11 @@ impl BlobTrackingFX {
             let small_digit = digit_size * 0.7;
             let small_gw = 5.0 * small_digit;
             let small_gh = 7.0 * small_digit;
-            for &(char_code, px_offset) in
-                &[(hundreds, 0.0f32), (tens, 6.0), (ones, 12.0)]
-            {
+            for &(char_code, px_offset) in &[(hundreds, 0.0f32), (tens, 6.0), (ones, 12.0)] {
                 let gx = dist_label_pos[0] + px_offset * small_digit;
                 let gy = dist_label_pos[1];
                 let atlas = glyph_atlas_rect(char_code);
-                push_textured(
-                    quads, gx, gy, gx + small_gw, gy + small_gh, atlas, 0.6,
-                );
+                push_textured(quads, gx, gy, gx + small_gw, gy + small_gh, atlas, 0.6);
             }
         }
     }
@@ -874,14 +883,16 @@ impl BlobTrackingFX {
 
 /// Convert a draw_uv rect [0,1] to clip-space rect [-1,1].
 fn uv_rect_to_clip(x0: f32, y0: f32, x1: f32, y1: f32) -> [f32; 4] {
-    [x0 * 2.0 - 1.0, y0 * 2.0 - 1.0, x1 * 2.0 - 1.0, y1 * 2.0 - 1.0]
+    [
+        x0 * 2.0 - 1.0,
+        y0 * 2.0 - 1.0,
+        x1 * 2.0 - 1.0,
+        y1 * 2.0 - 1.0,
+    ]
 }
 
 /// Push a solid (untextured) quad in draw_uv space.
-fn push_solid(
-    quads: &mut Vec<OverlayQuad>,
-    x0: f32, y0: f32, x1: f32, y1: f32, alpha: f32,
-) {
+fn push_solid(quads: &mut Vec<OverlayQuad>, x0: f32, y0: f32, x1: f32, y1: f32, alpha: f32) {
     if quads.len() >= MAX_OVERLAY_QUADS {
         return;
     }
@@ -896,8 +907,12 @@ fn push_solid(
 /// Push a textured (font glyph) quad in draw_uv space.
 fn push_textured(
     quads: &mut Vec<OverlayQuad>,
-    x0: f32, y0: f32, x1: f32, y1: f32,
-    atlas_rect: [f32; 4], alpha: f32,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    atlas_rect: [f32; 4],
+    alpha: f32,
 ) {
     if quads.len() >= MAX_OVERLAY_QUADS {
         return;
@@ -1136,12 +1151,9 @@ impl PostProcessEffect for BlobTrackingFX {
                 );
 
                 // Readback via native copy_texture_to_buffer
-                state.readback.submit(
-                    gpu,
-                    &state.downsample_rt.texture,
-                    rb_w,
-                    rb_h,
-                );
+                state
+                    .readback
+                    .submit(gpu, &state.downsample_rt.texture, rb_w, rb_h);
                 state.pending_threshold = threshold;
                 state.pending_sensitivity = sensitivity;
                 state.last_readback_frame = frame;
@@ -1182,12 +1194,12 @@ impl PostProcessEffect for BlobTrackingFX {
 
         // Copy source → target, then draw overlay directly on top with additive blend.
         // Eliminates the temp overlay texture and full-screen composite pass (~7% savings).
-        gpu.native_enc.copy_texture_to_texture(source, target, ctx.width, ctx.height, 1);
+        gpu.native_enc
+            .copy_texture_to_texture(source, target, ctx.width, ctx.height, 1);
 
         let quad_count = self.overlay_quads.len().min(MAX_OVERLAY_QUADS);
         if quad_count > 0 {
-            let quad_bytes =
-                bytemuck::cast_slice(&self.overlay_quads[..quad_count]);
+            let quad_bytes = bytemuck::cast_slice(&self.overlay_quads[..quad_count]);
             unsafe {
                 self.overlay_buf.write(0, quad_bytes);
             }
@@ -1234,7 +1246,9 @@ impl PostProcessEffect for BlobTrackingFX {
     }
 
     fn flush_background_work(&mut self) {
-        let Some(worker) = &mut self.worker else { return; };
+        let Some(worker) = &mut self.worker else {
+            return;
+        };
         if let Some(response) = worker.recv_blocking()
             && let Some(state) = self.owner_states.get_mut(&response.owner_key)
         {

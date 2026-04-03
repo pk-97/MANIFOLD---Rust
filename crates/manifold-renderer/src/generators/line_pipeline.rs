@@ -66,10 +66,8 @@ impl LinePipeline {
             MSAA_SAMPLE_COUNT,
             &format!("{label} Line"),
         );
-        let positions_buf =
-            device.create_buffer_shared(MAX_POSITIONS * POSITION_STRIDE);
-        let instances_buf =
-            device.create_buffer_shared(MAX_INSTANCES * INSTANCE_STRIDE);
+        let positions_buf = device.create_buffer_shared(MAX_POSITIONS * POSITION_STRIDE);
+        let instances_buf = device.create_buffer_shared(MAX_INSTANCES * INSTANCE_STRIDE);
 
         Self {
             pipeline,
@@ -82,15 +80,8 @@ impl LinePipeline {
     }
 
     /// Ensure the memoryless MSAA texture matches the target dimensions.
-    fn ensure_msaa_texture(
-        &mut self,
-        device: &manifold_gpu::GpuDevice,
-        width: u32,
-        height: u32,
-    ) {
-        if self.msaa_width == width && self.msaa_height == height
-            && self.msaa_texture.is_some()
-        {
+    fn ensure_msaa_texture(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+        if self.msaa_width == width && self.msaa_height == height && self.msaa_texture.is_some() {
             return;
         }
         self.msaa_texture = Some(device.create_texture_msaa_memoryless(
@@ -205,6 +196,8 @@ pub struct LineGeneratorHelper {
     // Depth sorting scratch buffers (Unity: LineMeshUtil.edgeDepth/edgeSortedIdx)
     edge_depth: Vec<f32>,
     edge_sorted_idx: Vec<usize>,
+    // Scratch: which vertices are visible during animation (for dot filtering)
+    vert_visible: Vec<bool>,
 }
 
 impl LineGeneratorHelper {
@@ -220,6 +213,7 @@ impl LineGeneratorHelper {
             instances: Vec::with_capacity(edge_count + vertex_count),
             edge_depth: vec![0.0; edge_count],
             edge_sorted_idx: vec![0; edge_count],
+            vert_visible: vec![false; vertex_count],
         }
     }
 
@@ -267,14 +261,15 @@ impl LineGeneratorHelper {
         self.instances.clear();
         let edge_half_thick = line_thickness * rt_height * 0.5;
 
-        if animate && edge_count > 0 {
+        let animated = animate && edge_count > 0;
+
+        if animated {
             // Depth sort edges back-to-front (Unity: LineMeshUtil.BuildEdgeQuads)
             self.ensure_sort_buffers(edge_count);
             for i in 0..edge_count {
                 let a = self.edge_a[i];
                 let b = self.edge_b[i];
-                self.edge_depth[i] =
-                    (self.projected_z[a] + self.projected_z[b]) * 0.5;
+                self.edge_depth[i] = (self.projected_z[a] + self.projected_z[b]) * 0.5;
                 self.edge_sorted_idx[i] = i;
             }
             let depths = &self.edge_depth;
@@ -289,24 +284,27 @@ impl LineGeneratorHelper {
             if self.anim_progress >= total {
                 self.anim_progress -= total;
             }
-            let window_edges =
-                ((edge_count as f32 * window).ceil() as usize).max(1);
-            let window_start = (self.anim_progress
-                / (edge_count as f32 / 100.0).max(1.0))
-            .floor() as usize
-                % edge_count;
+            let window_edges = ((edge_count as f32 * window).ceil() as usize).max(1);
+            let window_start = self.anim_progress.floor() as usize % edge_count;
+
+            // Track which vertices are touched by visible edges
+            self.vert_visible.resize(vert_count, false);
+            self.vert_visible.fill(false);
 
             for offset in 0..window_edges {
                 let sort_pos = (window_start + offset) % edge_count;
                 let edge_idx = self.edge_sorted_idx[sort_pos];
-                let fade =
-                    1.0 - offset as f32 / window_edges as f32;
+                let va = self.edge_a[edge_idx];
+                let vb = self.edge_b[edge_idx];
+                let fade = 1.0 - offset as f32 / window_edges as f32;
                 self.instances.push(EdgeInstance {
-                    a: self.edge_a[edge_idx] as u32,
-                    b: self.edge_b[edge_idx] as u32,
+                    a: va as u32,
+                    b: vb as u32,
                     alpha_bits: fade.to_bits(),
                     _pad: 0,
                 });
+                self.vert_visible[va] = true;
+                self.vert_visible[vb] = true;
             }
         } else {
             for i in 0..edge_count {
@@ -323,9 +321,12 @@ impl LineGeneratorHelper {
 
         // Append dot instances (same position for a and b → capsule degenerates to circle)
         let dot_half_thick = if show_verts {
-            let base_radius =
-                DEFAULT_DOT_RADIUS * rt_height * vert_size * dot_scale;
+            let base_radius = DEFAULT_DOT_RADIUS * rt_height * vert_size * dot_scale;
             for i in 0..vert_count {
+                // In animation mode, only show dots for vertices on visible edges
+                if animated && !self.vert_visible[i] {
+                    continue;
+                }
                 self.instances.push(EdgeInstance {
                     a: i as u32,
                     b: i as u32,

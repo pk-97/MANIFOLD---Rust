@@ -27,12 +27,16 @@ impl Application {
         if let Some(ref rx) = self.state_rx {
             // Drain all pending states, keep the latest
             while let Ok(state) = rx.try_recv() {
-                let drag_active = self.overlay.drag_mode() != manifold_ui::interaction_overlay::DragMode::None;
+                let drag_active =
+                    self.overlay.drag_mode() != manifold_ui::interaction_overlay::DragMode::None;
                 // Suppress snapshots until content thread catches up after a local project load.
                 // Safety net: timeout after 120 frames (~2s) to prevent indefinite suppression.
                 const MAX_SUPPRESS_FRAMES: u64 = 120;
                 let suppress_timed_out = self.suppress_snapshot_until > 0
-                    && self.frame_count.saturating_sub(self.suppress_snapshot_set_at) >= MAX_SUPPRESS_FRAMES;
+                    && self
+                        .frame_count
+                        .saturating_sub(self.suppress_snapshot_set_at)
+                        >= MAX_SUPPRESS_FRAMES;
                 if suppress_timed_out {
                     log::warn!("[UI] Snapshot suppression timed out — accepting snapshot");
                     self.suppress_snapshot_until = 0;
@@ -57,7 +61,9 @@ impl Application {
                         // (new data_version). Modulation-only frames send the same
                         // Arc pointer — skip the clone (values are 1 frame stale,
                         // imperceptible).
-                        let is_new_arc = self.last_snapshot_arc.as_ref()
+                        let is_new_arc = self
+                            .last_snapshot_arc
+                            .as_ref()
                             .is_none_or(|prev| !std::sync::Arc::ptr_eq(prev, &snapshot));
                         if is_new_arc {
                             self.local_project = (*snapshot).clone();
@@ -77,7 +83,9 @@ impl Application {
                         // Sync waveform lane visibility and detect new audio path
                         // from content thread (fresh percussion import or audio-only
                         // import). Actual loading is deferred to after the rx borrow.
-                        let current_audio_path = self.local_project.percussion_import
+                        let current_audio_path = self
+                            .local_project
+                            .percussion_import
                             .as_ref()
                             .and_then(|p| p.audio_path.clone())
                             .filter(|s| !s.is_empty());
@@ -86,10 +94,12 @@ impl Application {
                                 self.ui_root.layout.waveform_lane_visible = true;
                                 self.needs_rebuild = true;
                             }
-                            let already_loaded = self.loaded_audio_path.as_ref()
-                                .is_some_and(|lp| lp == path);
+                            let already_loaded =
+                                self.loaded_audio_path.as_ref().is_some_and(|lp| lp == path);
                             if !already_loaded && self.pending_audio_load.is_none() {
-                                let start_beat = self.local_project.percussion_import
+                                let start_beat = self
+                                    .local_project
+                                    .percussion_import
                                     .as_ref()
                                     .map_or(0.0, |p| p.audio_start_beat.as_f32());
                                 deferred_audio_load = Some((path.clone(), start_beat));
@@ -107,21 +117,32 @@ impl Application {
                         if version_changed {
                             // Prune selection references to deleted clips/layers
                             let valid_clips: std::collections::HashSet<manifold_core::ClipId> =
-                                self.local_project.timeline.layers.iter()
+                                self.local_project
+                                    .timeline
+                                    .layers
+                                    .iter()
                                     .flat_map(|l| l.clips.iter().map(|c| c.id.clone()))
                                     .collect();
                             let valid_layers: std::collections::HashSet<manifold_core::LayerId> =
-                                self.local_project.timeline.layers.iter()
+                                self.local_project
+                                    .timeline
+                                    .layers
+                                    .iter()
                                     .map(|l| l.layer_id.clone())
                                     .collect();
-                            self.selection.prune_stale_references(&valid_clips, &valid_layers);
+                            self.selection
+                                .prune_stale_references(&valid_clips, &valid_layers);
 
                             // Validate active_layer_id
                             if let Some(ref id) = self.active_layer_id
                                 && !valid_layers.contains(id)
                             {
-                                self.active_layer_id = self.local_project.timeline.layers
-                                    .last().map(|l| l.layer_id.clone());
+                                self.active_layer_id = self
+                                    .local_project
+                                    .timeline
+                                    .layers
+                                    .last()
+                                    .map(|l| l.layer_id.clone());
                             }
 
                             self.needs_structural_sync = true;
@@ -131,7 +152,8 @@ impl Application {
                 }
                 // Apply lightweight modulation snapshot (param_values only)
                 // to local_project — no full Project clone needed.
-                if !drag_active && !suppressed
+                if !drag_active
+                    && !suppressed
                     && let Some(ref mod_snap) = state.modulation_snapshot
                 {
                     mod_snap.apply(&mut self.local_project);
@@ -142,7 +164,7 @@ impl Application {
                     }
                 }
                 self.content_state = ContentState {
-                    project_snapshot: None, // consumed above
+                    project_snapshot: None,    // consumed above
                     modulation_snapshot: None, // consumed above
                     ..state
                 };
@@ -175,7 +197,11 @@ impl Application {
             self.ui_root.header.set_import_status(
                 &mut self.ui_root.tree,
                 &msg,
-                if progress < 0.0 { 0.0 } else { progress.clamp(0.0, 1.0) },
+                if progress < 0.0 {
+                    0.0
+                } else {
+                    progress.clamp(0.0, 1.0)
+                },
                 show,
             );
             // Force UI rebuild while pipeline is running (progress bar updates)
@@ -194,18 +220,26 @@ impl Application {
         // Port of Unity: WorkspaceController.OnStemMuteToggled/OnStemSoloToggled refreshing button visuals.
         {
             for i in 0..manifold_playback::stem_audio::STEM_COUNT {
-                self.ui_root.stem_lanes.set_mute_state(i, self.content_state.stem_muted[i]);
-                self.ui_root.stem_lanes.set_solo_state(i, self.content_state.stem_soloed[i]);
+                self.ui_root
+                    .stem_lanes
+                    .set_mute_state(i, self.content_state.stem_muted[i]);
+                self.ui_root
+                    .stem_lanes
+                    .set_solo_state(i, self.content_state.stem_soloed[i]);
             }
             // 1g. Sync stem availability — drives Expand button visibility on waveform lane.
             // Port of Unity: WorkspaceController sets SetStemsAvailable when stem PATHS exist.
             // Check project state (file paths resolved), not content_state.stem_available
             // (which tracks loaded audio — only true AFTER expansion).
-            let any_stem_available = self.local_project.percussion_import
+            let any_stem_available = self
+                .local_project
+                .percussion_import
                 .as_ref()
                 .and_then(|p| p.stem_paths.as_ref())
                 .is_some_and(|paths| !paths.is_empty());
-            self.ui_root.waveform_lane.set_stems_available(any_stem_available);
+            self.ui_root
+                .waveform_lane
+                .set_stems_available(any_stem_available);
 
             // 1h. Push visibility/text state to UITree nodes (buttons, labels).
             self.ui_root.update_waveform_stem_nodes();
@@ -240,38 +274,61 @@ impl Application {
                     match event {
                         UIEvent::Click { pos, modifiers, .. } => {
                             self.overlay.on_pointer_click(
-                                *pos, modifiers.shift, modifiers.ctrl || modifiers.command,
-                                1, false,
-                                &mut host, &mut self.selection, &self.ui_root.viewport,
+                                *pos,
+                                modifiers.shift,
+                                modifiers.ctrl || modifiers.command,
+                                1,
+                                false,
+                                &mut host,
+                                &mut self.selection,
+                                &self.ui_root.viewport,
                             );
                         }
                         UIEvent::DoubleClick { pos, modifiers, .. } => {
                             self.overlay.on_pointer_click(
-                                *pos, modifiers.shift, modifiers.ctrl || modifiers.command,
-                                2, false,
-                                &mut host, &mut self.selection, &self.ui_root.viewport,
+                                *pos,
+                                modifiers.shift,
+                                modifiers.ctrl || modifiers.command,
+                                2,
+                                false,
+                                &mut host,
+                                &mut self.selection,
+                                &self.ui_root.viewport,
                             );
                         }
                         UIEvent::RightClick { pos, .. } => {
                             self.overlay.on_pointer_click(
-                                *pos, false, false,
-                                1, true,
-                                &mut host, &mut self.selection, &self.ui_root.viewport,
+                                *pos,
+                                false,
+                                false,
+                                1,
+                                true,
+                                &mut host,
+                                &mut self.selection,
+                                &self.ui_root.viewport,
                             );
                         }
                         UIEvent::DragBegin { origin, .. } => {
                             self.overlay.on_begin_drag(
-                                *origin, &mut host, &mut self.selection, &self.ui_root.viewport,
+                                *origin,
+                                &mut host,
+                                &mut self.selection,
+                                &self.ui_root.viewport,
                             );
                         }
                         UIEvent::Drag { pos, .. } => {
                             self.overlay.on_drag(
-                                *pos, &mut host, &mut self.selection, &self.ui_root.viewport,
+                                *pos,
+                                &mut host,
+                                &mut self.selection,
+                                &self.ui_root.viewport,
                             );
                         }
                         UIEvent::DragEnd { .. } => {
                             self.overlay.on_end_drag(
-                                &mut host, &mut self.selection, &self.ui_root.viewport,
+                                &mut host,
+                                &mut self.selection,
+                                &self.ui_root.viewport,
                             );
                         }
                         _ => {}
@@ -307,38 +364,74 @@ impl Application {
                     }
                     continue;
                 }
-                PanelAction::ToggleMonitor => { self.pending_toggle_output = true; continue; }
-                PanelAction::SaveProject => { self.save_project(); continue; }
-                PanelAction::SaveProjectAs => { self.save_project_as(); continue; }
-                PanelAction::ExportVideo => { self.start_export(); continue; }
-                PanelAction::OpenProject => { self.open_project(); needs_structural_sync = true; continue; }
-                PanelAction::OpenRecent => { self.open_recent_project(); needs_structural_sync = true; continue; }
+                PanelAction::ToggleMonitor => {
+                    self.pending_toggle_output = true;
+                    continue;
+                }
+                PanelAction::SaveProject => {
+                    self.save_project();
+                    continue;
+                }
+                PanelAction::SaveProjectAs => {
+                    self.save_project_as();
+                    continue;
+                }
+                PanelAction::ExportVideo => {
+                    self.start_export();
+                    continue;
+                }
+                PanelAction::OpenProject => {
+                    self.open_project();
+                    needs_structural_sync = true;
+                    continue;
+                }
+                PanelAction::OpenRecent => {
+                    self.open_recent_project();
+                    needs_structural_sync = true;
+                    continue;
+                }
                 PanelAction::PasteEffects => {
                     // Browser popup paste button → route through same logic as Cmd+V
                     let tab = self.ui_root.inspector.last_effect_tab();
                     let target = match tab {
-                        manifold_ui::InspectorTab::Master => manifold_editing::commands::effect_target::EffectTarget::Master,
+                        manifold_ui::InspectorTab::Master => {
+                            manifold_editing::commands::effect_target::EffectTarget::Master
+                        }
                         manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Clip => {
                             let layer_id = self.active_layer_id.clone().unwrap_or_default();
-                            manifold_editing::commands::effect_target::EffectTarget::Layer { layer_id }
-                        },
+                            manifold_editing::commands::effect_target::EffectTarget::Layer {
+                                layer_id,
+                            }
+                        }
                     };
                     let effects_len = match tab {
-                        manifold_ui::InspectorTab::Master => self.local_project.settings.master_effects.len(),
-                        manifold_ui::InspectorTab::Layer => self.active_layer_id.as_ref()
+                        manifold_ui::InspectorTab::Master => {
+                            self.local_project.settings.master_effects.len()
+                        }
+                        manifold_ui::InspectorTab::Layer => self
+                            .active_layer_id
+                            .as_ref()
                             .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
                             .and_then(|(_, l)| l.effects.as_ref())
-                            .map(|e| e.len()).unwrap_or(0),
-                        manifold_ui::InspectorTab::Clip => self.selection.primary_selected_clip_id.as_ref()
+                            .map(|e| e.len())
+                            .unwrap_or(0),
+                        manifold_ui::InspectorTab::Clip => self
+                            .selection
+                            .primary_selected_clip_id
+                            .as_ref()
                             .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
-                            .map(|c| c.effects.len()).unwrap_or(0),
+                            .map(|c| c.effects.len())
+                            .unwrap_or(0),
                     };
                     let clones = self.effect_clipboard.get_paste_clones();
                     for (offset, fx) in clones.into_iter().enumerate() {
                         let cmd = manifold_editing::commands::effects::AddEffectCommand::new(
-                            target.clone(), fx, effects_len + offset,
+                            target.clone(),
+                            fx,
+                            effects_len + offset,
                         );
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(cmd);
                         boxed.execute(&mut self.local_project);
                         self.send_content_cmd(ContentCommand::Execute(boxed));
                     }
@@ -346,7 +439,10 @@ impl Application {
                     continue;
                 }
                 PanelAction::BrowserSearchClicked => {
-                    let r = self.ui_root.browser_popup.search_bar_rect(&self.ui_root.tree);
+                    let r = self
+                        .ui_root
+                        .browser_popup
+                        .search_bar_rect(&self.ui_root.tree);
                     self.text_input.begin(
                         crate::text_input::TextInputField::SearchFilter,
                         &self.ui_root.browser_popup.current_filter,
@@ -357,9 +453,10 @@ impl Application {
                 }
                 PanelAction::BpmFieldClicked => {
                     let bpm = Some(&self.local_project).map_or(120.0, |p| p.settings.bpm.0);
-                    let r = self.ui_root.tree.get_bounds(
-                        self.ui_root.transport.bpm_field_id() as u32,
-                    );
+                    let r = self
+                        .ui_root
+                        .tree
+                        .get_bounds(self.ui_root.transport.bpm_field_id() as u32);
                     self.text_input.begin(
                         crate::text_input::TextInputField::Bpm,
                         &format!("{:.1}", bpm),
@@ -370,9 +467,10 @@ impl Application {
                 }
                 PanelAction::FpsFieldClicked => {
                     let fps = Some(&self.local_project).map_or(60.0, |p| p.settings.frame_rate);
-                    let r = self.ui_root.tree.get_bounds(
-                        self.ui_root.footer.fps_field_id() as u32,
-                    );
+                    let r = self
+                        .ui_root
+                        .tree
+                        .get_bounds(self.ui_root.footer.fps_field_id() as u32);
                     self.text_input.begin(
                         crate::text_input::TextInputField::Fps,
                         &format!("{:.0}", fps),
@@ -434,7 +532,9 @@ impl Application {
                     if let Some(clip_id) = &self.selection.primary_selected_clip_id {
                         let bpm_text = Some(&self.local_project)
                             .and_then(|p| {
-                                p.timeline.layers.iter()
+                                p.timeline
+                                    .layers
+                                    .iter()
                                     .flat_map(|l| l.clips.iter())
                                     .find(|c| c.id == *clip_id)
                             })
@@ -446,7 +546,10 @@ impl Application {
                                 }
                             })
                             .unwrap_or_else(|| "Auto".to_string());
-                        let r = self.ui_root.inspector.clip_chrome_mut()
+                        let r = self
+                            .ui_root
+                            .inspector
+                            .clip_chrome_mut()
                             .bpm_button_rect(&self.ui_root.tree);
                         self.text_input.begin(
                             crate::text_input::TextInputField::ClipBpm,
@@ -467,12 +570,26 @@ impl Application {
                             self.text_input.begin(
                                 crate::text_input::TextInputField::GenStringParam(*sp_idx),
                                 &current,
-                                crate::text_input::AnchorRect::new(
-                                    r.x, r.y, r.width, r.height,
-                                ),
+                                crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
                                 11.0,
                             );
                         }
+                    }
+                    continue;
+                }
+                PanelAction::MacroLabelRename(idx) => {
+                    if let Some(slot) = self.local_project.settings.macro_bank.slots.get(*idx)
+                        && let Some(r) = self
+                            .ui_root
+                            .inspector
+                            .macro_label_rect(&self.ui_root.tree, *idx)
+                    {
+                        self.text_input.begin(
+                            crate::text_input::TextInputField::MacroLabel(*idx),
+                            &slot.label,
+                            crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
+                            11.0,
+                        );
                     }
                     continue;
                 }
@@ -508,7 +625,8 @@ impl Application {
                 _ => {}
             }
             let content_tx = self.content_tx.as_ref().unwrap();
-            let parent_win = self.primary_window_id
+            let parent_win = self
+                .primary_window_id
                 .and_then(|id| self.window_registry.get(&id))
                 .map(|ws| ws.window.as_ref());
             let result = crate::ui_bridge::dispatch(
@@ -542,24 +660,63 @@ impl Application {
             let h = p.settings.output_height.max(1) as u32;
             let rs = p.settings.render_scale;
             self.send_content_cmd(ContentCommand::ResizeContent(w, h, rs));
-            log::info!("Resolution changed to {}x{} @ {:.2}x render scale", w, h, rs);
+            log::info!(
+                "Resolution changed to {}x{} @ {:.2}x render scale",
+                w,
+                h,
+                rs
+            );
         }
 
         // Selection version change → sync inspector so it shows the newly selected clip
         if self.selection.selection_version != prev_sel_version && !needs_structural_sync {
-            let active_idx = self.active_layer_id.as_ref().and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
-            crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.local_project, active_idx, &self.selection);
+            let active_idx = self
+                .active_layer_id
+                .as_ref()
+                .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
+            crate::ui_bridge::sync_inspector_data(
+                &mut self.ui_root,
+                &self.local_project,
+                active_idx,
+                &self.selection,
+            );
             needs_structural_sync = true;
         }
 
         if needs_structural_sync {
-            let active_idx = self.active_layer_id.as_ref().and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
-            crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.local_project, active_idx, &self.selection);
-            crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.local_project, active_idx, &self.selection);
+            let active_idx = self
+                .active_layer_id
+                .as_ref()
+                .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
+            crate::ui_bridge::sync_project_data(
+                &mut self.ui_root,
+                &self.local_project,
+                active_idx,
+                &self.selection,
+            );
+            crate::ui_bridge::sync_inspector_data(
+                &mut self.ui_root,
+                &self.local_project,
+                active_idx,
+                &self.selection,
+            );
         } else if self.active_layer_id != prev_active_layer {
-            let active_idx = self.active_layer_id.as_ref().and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
-            crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.local_project, active_idx, &self.selection);
-            crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.local_project, active_idx, &self.selection);
+            let active_idx = self
+                .active_layer_id
+                .as_ref()
+                .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
+            crate::ui_bridge::sync_project_data(
+                &mut self.ui_root,
+                &self.local_project,
+                active_idx,
+                &self.selection,
+            );
+            crate::ui_bridge::sync_inspector_data(
+                &mut self.ui_root,
+                &self.local_project,
+                active_idx,
+                &self.selection,
+            );
             needs_structural_sync = true; // Inspector content changed — needs rebuild
         }
         // 2a. Per-frame drag polling with auto-scroll.
@@ -581,7 +738,10 @@ impl Application {
                     &mut self.pre_drag_commands,
                 );
                 self.overlay.poll_move_drag(
-                    self.cursor_pos, &mut host, &mut self.selection, &self.ui_root.viewport,
+                    self.cursor_pos,
+                    &mut host,
+                    &mut self.selection,
+                    &self.ui_root.viewport,
                 );
             }
         }
@@ -595,7 +755,11 @@ impl Application {
         }
 
         // 2c. Auto-scroll check for playback (BEFORE build so rebuild includes new scroll)
-        let auto_scroll_changed = crate::ui_bridge::check_auto_scroll(&mut self.ui_root, &self.content_state, &self.local_project);
+        let auto_scroll_changed = crate::ui_bridge::check_auto_scroll(
+            &mut self.ui_root,
+            &self.content_state,
+            &self.local_project,
+        );
         let overlay_changed = self.ui_root.overlay_dirty;
         self.ui_root.overlay_dirty = false;
         let scroll_changed = auto_scroll_changed || self.needs_scroll_rebuild || overlay_changed;
@@ -631,7 +795,9 @@ impl Application {
                 self.ui_root.build();
                 // Re-apply effect card selection visuals after rebuild —
                 // structural changes recreate cards with is_selected=false.
-                self.ui_root.inspector.apply_selection_visuals(&mut self.ui_root.tree);
+                self.ui_root
+                    .inspector
+                    .apply_selection_visuals(&mut self.ui_root.tree);
                 if let Some(cm) = &mut self.ui_cache_manager {
                     cm.invalidate_all();
                 }
@@ -647,7 +813,10 @@ impl Application {
         self.sync_workspace_preview_size();
 
         // 4. Push engine state to UI panels (AFTER build so new nodes get state)
-        let active_idx = self.active_layer_id.as_ref().and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
+        let active_idx = self
+            .active_layer_id
+            .as_ref()
+            .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
         crate::ui_bridge::push_state(
             &mut self.ui_root,
             &self.local_project,
@@ -674,27 +843,31 @@ impl Application {
 
         // 5. Push performance metrics to HUD
         if self.ui_root.perf_hud.is_visible() {
-            let bpm = Some(&self.local_project).map(|p| p.settings.bpm).unwrap_or(manifold_core::Bpm(120.0));
+            let bpm = Some(&self.local_project)
+                .map(|p| p.settings.bpm)
+                .unwrap_or(manifold_core::Bpm(120.0));
             let clock_source = Some(&self.local_project)
                 .map(|p| p.settings.clock_authority.display_name().to_string())
                 .unwrap_or_else(|| "Internal".to_string());
-            self.ui_root.perf_hud.set_metrics(manifold_ui::panels::perf_hud::PerfMetrics {
-                ui_fps: self.frame_timer.current_fps() as f32,
-                ui_frame_time_ms: (self.frame_timer.last_dt() * 1000.0) as f32,
-                render_fps: self.content_state.content_fps,
-                render_frame_time_ms: self.content_state.content_frame_time_ms,
-                render_target_fps: self.content_state.frame_rate as f32,
-                active_clips: self.content_state.active_clips,
-                preparing_clips: 0,
-                current_beat: self.content_state.current_beat,
-                current_time_secs: self.content_state.current_time.as_f32(),
-                bpm,
-                clock_source,
-                is_playing: self.content_state.is_playing,
-                data_version: self.content_state.data_version,
-                profiling_active: self.content_state.profiling_active,
-                profiling_frame_count: self.content_state.profiling_frame_count,
-            });
+            self.ui_root
+                .perf_hud
+                .set_metrics(manifold_ui::panels::perf_hud::PerfMetrics {
+                    ui_fps: self.frame_timer.current_fps() as f32,
+                    ui_frame_time_ms: (self.frame_timer.last_dt() * 1000.0) as f32,
+                    render_fps: self.content_state.content_fps,
+                    render_frame_time_ms: self.content_state.content_frame_time_ms,
+                    render_target_fps: self.content_state.frame_rate as f32,
+                    active_clips: self.content_state.active_clips,
+                    preparing_clips: 0,
+                    current_beat: self.content_state.current_beat,
+                    current_time_secs: self.content_state.current_time.as_f32(),
+                    bpm,
+                    clock_source,
+                    is_playing: self.content_state.is_playing,
+                    data_version: self.content_state.data_version,
+                    profiling_active: self.content_state.profiling_active,
+                    profiling_frame_count: self.content_state.profiling_frame_count,
+                });
         }
 
         // 6. Lightweight update (playhead, insert cursor, layer selection, HUD values)
@@ -702,7 +875,8 @@ impl Application {
 
         // 6a. Update waveform lane overlay (position for dirty-checking)
         {
-            let scroll_x = self.ui_root.viewport.scroll_x_beats().as_f32() * self.ui_root.viewport.pixels_per_beat();
+            let scroll_x = self.ui_root.viewport.scroll_x_beats().as_f32()
+                * self.ui_root.viewport.pixels_per_beat();
             let wf = &mut self.ui_root.waveform_lane;
             if wf.is_ready() {
                 // Get start beat and duration from project percussion import state
@@ -730,28 +904,34 @@ impl Application {
 
             // 6a-ii. Update stem lane overlay (same position/scroll as master).
             if self.ui_root.stem_lanes.is_expanded() {
-                let start_beat = self.local_project.percussion_import
+                let start_beat = self
+                    .local_project
+                    .percussion_import
                     .as_ref()
                     .map_or(0.0, |perc| perc.audio_start_beat.as_f32());
                 let bpm = self.local_project.settings.bpm.0.max(1.0);
                 let mapper = self.ui_root.viewport.mapper();
-                self.ui_root.stem_lanes.update_overlay(
-                    start_beat,
-                    scroll_x,
-                    bpm,
-                    mapper,
-                );
+                self.ui_root
+                    .stem_lanes
+                    .update_overlay(start_beat, scroll_x, bpm, mapper);
             }
         }
 
         // 6b. Repaint dirty layer bitmaps (CPU pixel painting).
         // Build BitmapRepaintState from current selection/hover.
         {
-            let hovered = self.ui_root.viewport.hovered_clip_id().map(|s| s.to_string());
+            let hovered = self
+                .ui_root
+                .viewport
+                .hovered_clip_id()
+                .map(|s| s.to_string());
             let sel_region = self.ui_root.viewport.selection_region_ref().cloned();
             let has_region = sel_region.is_some();
             let insert_cursor_beat = self.ui_root.viewport.insert_cursor_beat().as_f32();
-            let insert_layer = self.selection.insert_cursor_layer_id.as_ref()
+            let insert_layer = self
+                .selection
+                .insert_cursor_layer_id
+                .as_ref()
                 .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
             let has_insert = self.selection.has_insert_cursor();
             let ppb = self.ui_root.viewport.pixels_per_beat();
@@ -774,10 +954,7 @@ impl Application {
         // 6c. Upload dirty layer textures to GPU
         if let (Some(gpu), Some(bitmap_gpu)) = (&self.gpu, &mut self.layer_bitmap_gpu) {
             for (layer_idx, pixels, tw, th) in self.ui_root.viewport.dirty_layer_iter() {
-                bitmap_gpu.upload_layer(
-                    &gpu.device,
-                    layer_idx, pixels, tw as u32, th as u32,
-                );
+                bitmap_gpu.upload_layer(&gpu.device, layer_idx, pixels, tw as u32, th as u32);
             }
 
             // 6d. Repaint + upload waveform lane if dirty
@@ -794,8 +971,10 @@ impl Application {
                     if wf.buffer_width > 0 && wf.buffer_height > 0 && !wf.pixel_buffer.is_empty() {
                         bitmap_gpu.upload_layer(
                             &gpu.device,
-                            1000, &wf.pixel_buffer,
-                            wf.buffer_width as u32, wf.buffer_height as u32,
+                            1000,
+                            &wf.pixel_buffer,
+                            wf.buffer_width as u32,
+                            wf.buffer_height as u32,
                         );
                     }
                 }
@@ -812,11 +991,16 @@ impl Application {
                     }
                     if sl.dirty {
                         sl.repaint(sl_rect.width as usize, mapper);
-                        if sl.buffer_width > 0 && sl.buffer_height > 0 && !sl.pixel_buffer.is_empty() {
+                        if sl.buffer_width > 0
+                            && sl.buffer_height > 0
+                            && !sl.pixel_buffer.is_empty()
+                        {
                             bitmap_gpu.upload_layer(
                                 &gpu.device,
-                                1001, &sl.pixel_buffer,
-                                sl.buffer_width as u32, sl.buffer_height as u32,
+                                1001,
+                                &sl.pixel_buffer,
+                                sl.buffer_width as u32,
+                                sl.buffer_height as u32,
                             );
                         }
                     }
@@ -839,11 +1023,16 @@ impl Application {
                 let bridge_gen = bridge.generation();
                 if bridge_gen != self.last_bridge_generation {
                     self.last_bridge_generation = bridge_gen;
-                    let ui_textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT] =
-                        std::array::from_fn(|i| unsafe { bridge.import_texture_native(&gpu.device, i) });
+                    let ui_textures: [manifold_gpu::GpuTexture;
+                        crate::shared_texture::SURFACE_COUNT] = std::array::from_fn(|i| unsafe {
+                        bridge.import_texture_native(&gpu.device, i)
+                    });
                     self.ui_shared_textures = ui_textures.map(Some);
-                    log::info!("[UI] re-imported {} IOSurface textures after resize (gen={})",
-                        crate::shared_texture::SURFACE_COUNT, bridge_gen);
+                    log::info!(
+                        "[UI] re-imported {} IOSurface textures after resize (gen={})",
+                        crate::shared_texture::SURFACE_COUNT,
+                        bridge_gen
+                    );
                 }
             }
             // Detect preview bridge resize (generation changed) and re-import workspace textures.
@@ -851,15 +1040,22 @@ impl Application {
                 let bridge_gen = bridge.generation();
                 if bridge_gen != self.last_preview_bridge_generation {
                     self.last_preview_bridge_generation = bridge_gen;
-                    let ui_textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT] =
-                        std::array::from_fn(|i| unsafe { bridge.import_texture_native(&gpu.device, i) });
+                    let ui_textures: [manifold_gpu::GpuTexture;
+                        crate::shared_texture::SURFACE_COUNT] = std::array::from_fn(|i| unsafe {
+                        bridge.import_texture_native(&gpu.device, i)
+                    });
                     self.ui_preview_textures = ui_textures.map(Some);
-                    log::info!("[UI] re-imported {} workspace preview IOSurface textures after resize (gen={})",
-                        crate::shared_texture::SURFACE_COUNT, bridge_gen);
+                    log::info!(
+                        "[UI] re-imported {} workspace preview IOSurface textures after resize (gen={})",
+                        crate::shared_texture::SURFACE_COUNT,
+                        bridge_gen
+                    );
                 }
             }
             // Read the workspace preview front surface published by the content thread.
-            let front = self.preview_texture_bridge.as_ref()
+            let front = self
+                .preview_texture_bridge
+                .as_ref()
                 .map_or(0, |b| b.front_index()) as usize;
             if front != self.last_output_front_index {
                 self.last_output_front_index = front;
@@ -892,7 +1088,8 @@ impl Application {
         let panel_infos = self.ui_root.panel_cache_info();
         if let (Some(cm), Some(ui)) = (&mut self.ui_cache_manager, &mut self.ui_renderer) {
             // Compute logical surface dimensions
-            let (surface_w, surface_h) = self.primary_window_id
+            let (surface_w, surface_h) = self
+                .primary_window_id
                 .and_then(|id| self.window_registry.get(&id))
                 .and_then(|ws| ws.surface.as_ref())
                 .map(|s| (s.width, s.height))
@@ -914,14 +1111,20 @@ impl Application {
         // All passes render to an offscreen texture. The drawable is acquired
         // late (just before present) to minimize time blocking on WindowServer
         // IPC during Direct Display synchronization on external monitors.
-        let Some(window_id) = self.primary_window_id else { return };
-        let surface_dims = self.window_registry.get(&window_id)
+        let Some(window_id) = self.primary_window_id else {
+            return;
+        };
+        let surface_dims = self
+            .window_registry
+            .get(&window_id)
             .and_then(|ws| ws.surface.as_ref())
             .map(|s| (s.width, s.height))
             .unwrap_or((1, 1));
         let (surface_w, surface_h) = surface_dims;
 
-        let Some(offscreen) = &self.ui_offscreen else { return };
+        let Some(offscreen) = &self.ui_offscreen else {
+            return;
+        };
         // Ensure offscreen matches surface (may be stale after resize race).
         if offscreen.width != surface_w || offscreen.height != surface_h {
             return;
@@ -959,12 +1162,21 @@ impl Application {
             if let (Some(blit_p), Some(blit_s)) = (&self.blit_pipeline, &self.blit_sampler) {
                 let mut enc = gpu.device.create_encoder("Re-present");
                 enc.draw_fullscreen(
-                    blit_p, &drawable_tex,
+                    blit_p,
+                    &drawable_tex,
                     &[
-                        manifold_gpu::GpuBinding::Texture { binding: 0, texture: offscreen },
-                        manifold_gpu::GpuBinding::Sampler { binding: 1, sampler: blit_s },
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 0,
+                            texture: offscreen,
+                        },
+                        manifold_gpu::GpuBinding::Sampler {
+                            binding: 1,
+                            sampler: blit_s,
+                        },
                     ],
-                    false, true, "Offscreen → Drawable",
+                    false,
+                    true,
+                    "Offscreen → Drawable",
                 );
                 enc.present_drawable(&drawable);
                 enc.commit();
@@ -985,7 +1197,10 @@ impl Application {
         encoder.clear_texture(offscreen, 0.0, 0.0, 0.0, 1.0);
 
         // Pass 2: Atlas blit fullscreen (UI panels onto black)
-        let atlas_opt = self.ui_cache_manager.as_ref().and_then(|cm| cm.atlas_texture());
+        let atlas_opt = self
+            .ui_cache_manager
+            .as_ref()
+            .and_then(|cm| cm.atlas_texture());
         if let (Some(atlas_pipeline), Some(atlas_sampler), Some(atlas)) = (
             &self.atlas_pipeline,
             &self.atlas_sampler,
@@ -995,8 +1210,14 @@ impl Application {
                 atlas_pipeline,
                 offscreen,
                 &[
-                    manifold_gpu::GpuBinding::Texture { binding: 0, texture: atlas },
-                    manifold_gpu::GpuBinding::Sampler { binding: 1, sampler: atlas_sampler },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 0,
+                        texture: atlas,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 1,
+                        sampler: atlas_sampler,
+                    },
                 ],
                 false,
                 true,
@@ -1007,16 +1228,14 @@ impl Application {
         // Pass 3: Blit compositor output ON TOP of atlas in video area (aspect-fit)
         // Compositor replaces whatever is in the video rect (opaque, no blend).
         #[cfg(target_os = "macos")]
-        if let (
-            Some(compositor_tex),
-            Some(blit_pipeline),
-            Some(blit_sampler),
-        ) = (
+        if let (Some(compositor_tex), Some(blit_pipeline), Some(blit_sampler)) = (
             self.ui_preview_textures[front_index].as_ref(),
             &self.blit_pipeline,
             &self.blit_sampler,
         ) {
-            let (comp_w, comp_h) = self.content_pipeline_output.as_ref()
+            let (comp_w, comp_h) = self
+                .content_pipeline_output
+                .as_ref()
                 .map(|p| p.get_dimensions())
                 .unwrap_or((1920, 1080));
             let source_aspect = comp_w as f32 / comp_h as f32;
@@ -1041,10 +1260,12 @@ impl Application {
                     offscreen,
                     &[
                         manifold_gpu::GpuBinding::Texture {
-                            binding: 0, texture: compositor_tex,
+                            binding: 0,
+                            texture: compositor_tex,
                         },
                         manifold_gpu::GpuBinding::Sampler {
-                            binding: 1, sampler: blit_sampler,
+                            binding: 1,
+                            sampler: blit_sampler,
                         },
                     ],
                     (fit_x, fit_y, fit_w, fit_h),
@@ -1071,7 +1292,14 @@ impl Application {
             }
 
             if !rects.is_empty() {
-                bitmap_gpu.render_layers(&gpu.device, &mut encoder, offscreen, logical_w, logical_h, &rects);
+                bitmap_gpu.render_layers(
+                    &gpu.device,
+                    &mut encoder,
+                    offscreen,
+                    logical_w,
+                    logical_h,
+                    &rects,
+                );
             }
         }
 
@@ -1099,8 +1327,10 @@ impl Application {
                 let top = ruler.y;
                 let height = (tr.y + tr.height) - top;
                 ui.draw_rect(
-                    px - 1.0, top,
-                    manifold_ui::color::PLAYHEAD_WIDTH, height,
+                    px - 1.0,
+                    top,
+                    manifold_ui::color::PLAYHEAD_WIDTH,
+                    height,
                     manifold_ui::color::PLAYHEAD_RED.to_f32(),
                 );
             }
@@ -1199,8 +1429,14 @@ impl Application {
             blit_pipeline,
             &drawable_tex,
             &[
-                manifold_gpu::GpuBinding::Texture { binding: 0, texture: offscreen },
-                manifold_gpu::GpuBinding::Sampler { binding: 1, sampler: blit_sampler },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 0,
+                    texture: offscreen,
+                },
+                manifold_gpu::GpuBinding::Sampler {
+                    binding: 1,
+                    sampler: blit_sampler,
+                },
             ],
             false,
             true, // store: must write to drawable for present
@@ -1208,7 +1444,6 @@ impl Application {
         );
         present_enc.present_drawable(&drawable);
         present_enc.commit();
-
     }
 }
 
@@ -1233,7 +1468,10 @@ fn render_text_input_overlay(
     let bg_h = a.height.max(fs + pad_v * 2.0);
 
     ui.draw_bordered_rect(
-        bg_x, bg_y, bg_w, bg_h,
+        bg_x,
+        bg_y,
+        bg_w,
+        bg_h,
         TEXT_INPUT_BG,
         3.0,
         1.0,
@@ -1242,10 +1480,14 @@ fn render_text_input_overlay(
 
     // Selection highlight (when select_all)
     if ti.select_all && !ti.text.is_empty() {
-        let text_w = ui.measure_text_cached(&ti.text, fs as u16, FontWeight::Medium).x;
+        let text_w = ui
+            .measure_text_cached(&ti.text, fs as u16, FontWeight::Medium)
+            .x;
         ui.draw_rect(
-            bg_x + pad_h, bg_y + pad_v,
-            text_w.min(bg_w - pad_h * 2.0), bg_h - pad_v * 2.0,
+            bg_x + pad_h,
+            bg_y + pad_v,
+            text_w.min(bg_w - pad_h * 2.0),
+            bg_h - pad_v * 2.0,
             TEXT_INPUT_SELECT_BG,
         );
     }
@@ -1261,10 +1503,14 @@ fn render_text_input_overlay(
         let blink_on = ((elapsed / TEXT_INPUT_BLINK_PERIOD) as u64).is_multiple_of(2);
         if blink_on {
             let before = &ti.text[..ti.cursor];
-            let cursor_x = text_x + ui.measure_text_cached(before, fs as u16, FontWeight::Medium).x;
+            let cursor_x = text_x
+                + ui.measure_text_cached(before, fs as u16, FontWeight::Medium)
+                    .x;
             ui.draw_rect(
-                cursor_x, bg_y + pad_v,
-                TEXT_INPUT_CURSOR_W, bg_h - pad_v * 2.0,
+                cursor_x,
+                bg_y + pad_v,
+                TEXT_INPUT_CURSOR_W,
+                bg_h - pad_v * 2.0,
                 TEXT_INPUT_CURSOR,
             );
         }

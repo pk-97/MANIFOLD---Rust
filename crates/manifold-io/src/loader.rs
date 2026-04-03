@@ -1,8 +1,8 @@
-use std::path::Path;
-use std::io::Read;
-use manifold_core::project::Project;
 use crate::migrate;
 use crate::path_resolver::PathResolver;
+use manifold_core::project::Project;
+use std::io::Read;
+use std::path::Path;
 
 /// Load a .manifold project file with full post-load validation.
 ///
@@ -21,8 +21,7 @@ use crate::path_resolver::PathResolver;
 /// 6. ValidateClips — missing file detection
 /// 7. PurgeOrphanedReferences — stale clip/MIDI cleanup
 pub fn load_project(path: &Path) -> Result<Project, LoadError> {
-    let file_bytes = std::fs::read(path)
-        .map_err(|e| LoadError::Io(e.to_string()))?;
+    let file_bytes = std::fs::read(path).map_err(|e| LoadError::Io(e.to_string()))?;
 
     // Try V2 ZIP format first
     let (json, is_v2) = match extract_json_from_zip(&file_bytes) {
@@ -65,15 +64,17 @@ pub fn load_project(path: &Path) -> Result<Project, LoadError> {
 /// Extract `project.json` from a V2 ZIP archive.
 fn extract_json_from_zip(bytes: &[u8]) -> Result<String, LoadError> {
     let cursor = std::io::Cursor::new(bytes);
-    let mut archive = zip::ZipArchive::new(cursor)
-        .map_err(|e| LoadError::Io(format!("Not a ZIP: {e}")))?;
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|e| LoadError::Io(format!("Not a ZIP: {e}")))?;
 
     // Look for project.json entry
-    let mut entry = archive.by_name("project.json")
+    let mut entry = archive
+        .by_name("project.json")
         .map_err(|e| LoadError::Io(format!("No project.json in archive: {e}")))?;
 
     let mut json = String::new();
-    entry.read_to_string(&mut json)
+    entry
+        .read_to_string(&mut json)
         .map_err(|e| LoadError::Io(format!("Failed to read project.json: {e}")))?;
 
     Ok(json)
@@ -85,12 +86,12 @@ fn extract_json_from_zip(bytes: &[u8]) -> Result<String, LoadError> {
 /// should call run_post_load_validation() separately.
 pub fn load_project_from_json(json: &str) -> Result<Project, LoadError> {
     // Run version migration
-    let migrated = migrate::migrate_if_needed(json)
-        .map_err(|e| LoadError::Migration(e.to_string()))?;
+    let migrated =
+        migrate::migrate_if_needed(json).map_err(|e| LoadError::Migration(e.to_string()))?;
 
     // Deserialize
-    let mut project: Project = serde_json::from_str(&migrated)
-        .map_err(|e| LoadError::Deserialize(format!("{e}")))?;
+    let mut project: Project =
+        serde_json::from_str(&migrated).map_err(|e| LoadError::Deserialize(format!("{e}")))?;
 
     // Strip unrecognized effect types (e.g. removed effects from Unity projects).
     // Without this, Unknown effects stay in the effect list and show in the UI.
@@ -159,13 +160,13 @@ fn repair_overlapping_clips(project: &mut Project) {
         // Iterate until no overlaps remain (removal may reveal new overlaps).
         loop {
             let mut remove_ids: Vec<manifold_core::ClipId> = Vec::new();
-            let mut sorted: Vec<(usize, manifold_core::Beats, manifold_core::Beats)> = layer.clips
+            let mut sorted: Vec<(usize, manifold_core::Beats, manifold_core::Beats)> = layer
+                .clips
                 .iter()
                 .enumerate()
                 .map(|(i, c)| (i, c.start_beat, c.end_beat()))
                 .collect();
-            sorted.sort_by(|a, b| a.1.partial_cmp(&b.1)
-                .unwrap_or(std::cmp::Ordering::Equal));
+            sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
             for w in sorted.windows(2) {
                 if w[0].2 > w[1].1 {

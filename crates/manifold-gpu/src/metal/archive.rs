@@ -39,13 +39,15 @@ fn create_retained_url(string: &str) -> metal::URL {
         // Create NSURL via alloc+init (returns +1 retained, no autorelease)
         let url_cls = objc::class!(NSURL);
         let alloc: *mut objc::runtime::Object = objc::msg_send![url_cls, alloc];
-        let obj: *mut objc::runtime::Object =
-            objc::msg_send![alloc, initWithString: ns_str];
+        let obj: *mut objc::runtime::Object = objc::msg_send![alloc, initWithString: ns_str];
 
         // Release the NSString — NSURL retains it internally if needed
         let _: () = objc::msg_send![ns_str, release];
 
-        assert!(!obj.is_null(), "NSURL initWithString: returned nil for {string}");
+        assert!(
+            !obj.is_null(),
+            "NSURL initWithString: returned nil for {string}"
+        );
         metal::URL::from_ptr(obj as *mut _)
     }
 }
@@ -88,7 +90,8 @@ impl GpuPipelineArchive {
             Err(_) => {
                 // No existing archive or corrupt — create empty
                 let empty_desc = metal::BinaryArchiveDescriptor::new();
-                device.new_binary_archive_with_descriptor(&empty_desc)
+                device
+                    .new_binary_archive_with_descriptor(&empty_desc)
                     .unwrap_or_else(|e| panic!("Failed to create empty binary archive: {e}"))
             }
         };

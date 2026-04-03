@@ -1,7 +1,7 @@
+use crate::effect_type_id::EffectTypeId;
+use crate::effects::{EffectInstance, ParamDef};
 use std::collections::HashMap;
 use std::sync::LazyLock;
-use crate::effect_type_id::EffectTypeId;
-use crate::effects::{ParamDef, EffectInstance};
 
 // ─── Effect Definition ───
 
@@ -67,7 +67,14 @@ fn pd_whole(name: &str, min: f32, max: f32, default: f32, osc_suffix: &str) -> P
 }
 
 /// Whole-number parameter with value labels and osc suffix.
-fn pd_whole_labels(name: &str, min: f32, max: f32, default: f32, labels: &[&str], osc_suffix: &str) -> ParamDef {
+fn pd_whole_labels(
+    name: &str,
+    min: f32,
+    max: f32,
+    default: f32,
+    labels: &[&str],
+    osc_suffix: &str,
+) -> ParamDef {
     ParamDef {
         name: name.to_string(),
         min,
@@ -101,8 +108,12 @@ fn pd_toggle(name: &str, min: f32, max: f32, default: f32, osc_suffix: &str) -> 
 /// Get the definition for an effect type. Panics if not found.
 /// Matches Unity's `EffectDefinitionRegistry.Get(EffectType)`.
 pub fn get(effect_type: &EffectTypeId) -> &'static EffectDef {
-    DEFINITIONS.get(effect_type)
-        .unwrap_or_else(|| panic!("EffectDefinitionRegistry: unknown EffectTypeId '{}'", effect_type))
+    DEFINITIONS.get(effect_type).unwrap_or_else(|| {
+        panic!(
+            "EffectDefinitionRegistry: unknown EffectTypeId '{}'",
+            effect_type
+        )
+    })
 }
 
 /// Try to get the definition for an effect type.
@@ -160,7 +171,11 @@ pub fn get_osc_address(effect_type: &EffectTypeId, param_index: usize) -> Option
 /// Get the OSC address for a layer effect parameter scoped to a specific layer.
 /// Format: /layer/{layerId}/effectName or /layer/{layerId}/effectName/paramName
 /// Matches Unity's `EffectDefinitionRegistry.GetOscAddressForLayer(EffectType, string, int)`.
-pub fn get_osc_address_for_layer(effect_type: &EffectTypeId, layer_id: &str, param_index: usize) -> Option<String> {
+pub fn get_osc_address_for_layer(
+    effect_type: &EffectTypeId,
+    layer_id: &str,
+    param_index: usize,
+) -> Option<String> {
     if layer_id.is_empty() {
         return None;
     }
@@ -203,444 +218,589 @@ fn build_definitions() -> HashMap<EffectTypeId, EffectDef> {
     let mut m = HashMap::new();
 
     // Transform
-    m.insert(EffectTypeId::TRANSFORM, EffectDef {
-        display_name: "Transform",
-        param_count: 4,
-        param_defs: vec![
-            pd("X", -1.0, 1.0, 0.0),
-            pd("Y", -1.0, 1.0, 0.0),
-            pd("Zoom", 0.1, 5.0, 1.0),
-            pd("Rot", -180.0, 180.0, 0.0),
-        ],
-        osc_prefix: Some("transform"),
-    });
+    m.insert(
+        EffectTypeId::TRANSFORM,
+        EffectDef {
+            display_name: "Transform",
+            param_count: 4,
+            param_defs: vec![
+                pd("X", -1.0, 1.0, 0.0),
+                pd("Y", -1.0, 1.0, 0.0),
+                pd("Zoom", 0.1, 5.0, 1.0),
+                pd("Rot", -180.0, 180.0, 0.0),
+            ],
+            osc_prefix: Some("transform"),
+        },
+    );
 
     // InvertColors
-    m.insert(EffectTypeId::INVERT_COLORS, EffectDef {
-        display_name: "Invert Colors",
-        param_count: 1,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 1.0),
-        ],
-        osc_prefix: Some("invert"),
-    });
+    m.insert(
+        EffectTypeId::INVERT_COLORS,
+        EffectDef {
+            display_name: "Invert Colors",
+            param_count: 1,
+            param_defs: vec![pd("Amount", 0.0, 1.0, 1.0)],
+            osc_prefix: Some("invert"),
+        },
+    );
 
     // Bloom
-    m.insert(EffectTypeId::BLOOM, EffectDef {
-        display_name: "Bloom",
-        param_count: 1,
-        param_defs: vec![
-            pd("Amount", 0.0, 5.0, 0.187),
-        ],
-        osc_prefix: Some("bloom"),
-    });
+    m.insert(
+        EffectTypeId::BLOOM,
+        EffectDef {
+            display_name: "Bloom",
+            param_count: 1,
+            param_defs: vec![pd("Amount", 0.0, 5.0, 0.187)],
+            osc_prefix: Some("bloom"),
+        },
+    );
 
     // InfiniteZoom
-    m.insert(EffectTypeId::INFINITE_ZOOM, EffectDef {
-        display_name: "Infinite Zoom",
-        param_count: 2,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-            pd_osc("Sharp", 0.0, 1.0, 0.5, "Sharpness"),
-        ],
-        osc_prefix: Some("infiniteZoom"),
-    });
+    m.insert(
+        EffectTypeId::INFINITE_ZOOM,
+        EffectDef {
+            display_name: "Infinite Zoom",
+            param_count: 2,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 0.0),
+                pd_osc("Sharp", 0.0, 1.0, 0.5, "Sharpness"),
+            ],
+            osc_prefix: Some("infiniteZoom"),
+        },
+    );
 
     // Kaleidoscope
-    m.insert(EffectTypeId::KALEIDOSCOPE, EffectDef {
-        display_name: "Kaleidoscope",
-        param_count: 2,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-            pd_whole("Segs", 2.0, 16.0, 6.0, "Segments"),
-        ],
-        osc_prefix: Some("kaleidoscope"),
-    });
+    m.insert(
+        EffectTypeId::KALEIDOSCOPE,
+        EffectDef {
+            display_name: "Kaleidoscope",
+            param_count: 2,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 0.0),
+                pd_whole("Segs", 2.0, 16.0, 6.0, "Segments"),
+            ],
+            osc_prefix: Some("kaleidoscope"),
+        },
+    );
 
     // EdgeStretch
-    m.insert(EffectTypeId::EDGE_STRETCH, EffectDef {
-        display_name: "Edge Stretch",
-        param_count: 3,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 1.0),
-            pd_osc("Width", 0.1, 0.9, 0.433, "SourceWidth"),
-            pd_whole_labels("Dir", 0.0, 2.0, 0.0, &["Horiz", "Vert", "Both"], "Direction"),
-        ],
-        osc_prefix: Some("edgeStretch"),
-    });
+    m.insert(
+        EffectTypeId::EDGE_STRETCH,
+        EffectDef {
+            display_name: "Edge Stretch",
+            param_count: 3,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 1.0),
+                pd_osc("Width", 0.1, 0.9, 0.433, "SourceWidth"),
+                pd_whole_labels(
+                    "Dir",
+                    0.0,
+                    2.0,
+                    0.0,
+                    &["Horiz", "Vert", "Both"],
+                    "Direction",
+                ),
+            ],
+            osc_prefix: Some("edgeStretch"),
+        },
+    );
 
     // VoronoiPrism
-    m.insert(EffectTypeId::VORONOI_PRISM, EffectDef {
-        display_name: "Voronoi Prism",
-        param_count: 2,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-            pd_whole("Cells", 4.0, 64.0, 16.0, "CellCount"),
-        ],
-        osc_prefix: Some("voronoiPrism"),
-    });
+    m.insert(
+        EffectTypeId::VORONOI_PRISM,
+        EffectDef {
+            display_name: "Voronoi Prism",
+            param_count: 2,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 0.0),
+                pd_whole("Cells", 4.0, 64.0, 16.0, "CellCount"),
+            ],
+            osc_prefix: Some("voronoiPrism"),
+        },
+    );
 
     // QuadMirror
-    m.insert(EffectTypeId::QUAD_MIRROR, EffectDef {
-        display_name: "Quad Mirror",
-        param_count: 1,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 1.0),
-        ],
-        osc_prefix: Some("quadMirror"),
-    });
+    m.insert(
+        EffectTypeId::QUAD_MIRROR,
+        EffectDef {
+            display_name: "Quad Mirror",
+            param_count: 1,
+            param_defs: vec![pd("Amount", 0.0, 1.0, 1.0)],
+            osc_prefix: Some("quadMirror"),
+        },
+    );
 
     // Dither
-    m.insert(EffectTypeId::DITHER, EffectDef {
-        display_name: "Dither",
-        param_count: 2,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-            pd_whole_labels("Algo", 0.0, 5.0, 0.0,
-                &["Bayer", "Halftone", "Lines", "X-Hatch", "Noise", "Diamond"],
-                "Algorithm"),
-        ],
-        osc_prefix: Some("dither"),
-    });
+    m.insert(
+        EffectTypeId::DITHER,
+        EffectDef {
+            display_name: "Dither",
+            param_count: 2,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 0.0),
+                pd_whole_labels(
+                    "Algo",
+                    0.0,
+                    5.0,
+                    0.0,
+                    &["Bayer", "Halftone", "Lines", "X-Hatch", "Noise", "Diamond"],
+                    "Algorithm",
+                ),
+            ],
+            osc_prefix: Some("dither"),
+        },
+    );
 
     // Strobe
-    m.insert(EffectTypeId::STROBE, EffectDef {
-        display_name: "Strobe",
-        param_count: 3,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-            pd_whole_labels("Rate", 0.0, 9.0, 6.0,
-                &["1/1", "1/2", "1/4", "1/4T", "1/8", "1/8T", "1/16", "1/16T", "1/32", "1/64"],
-                "Rate"),
-            pd_whole_labels("Mode", 0.0, 2.0, 0.0,
-                &["Opacity", "White", "Gain"],
-                "Mode"),
-        ],
-        osc_prefix: Some("strobe"),
-    });
+    m.insert(
+        EffectTypeId::STROBE,
+        EffectDef {
+            display_name: "Strobe",
+            param_count: 3,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 0.0),
+                pd_whole_labels(
+                    "Rate",
+                    0.0,
+                    9.0,
+                    6.0,
+                    &[
+                        "1/1", "1/2", "1/4", "1/4T", "1/8", "1/8T", "1/16", "1/16T", "1/32", "1/64",
+                    ],
+                    "Rate",
+                ),
+                pd_whole_labels("Mode", 0.0, 2.0, 0.0, &["Opacity", "White", "Gain"], "Mode"),
+            ],
+            osc_prefix: Some("strobe"),
+        },
+    );
 
     // StylizedFeedback
-    m.insert(EffectTypeId::STYLIZED_FEEDBACK, EffectDef {
-        display_name: "Stylized Feedback",
-        param_count: 4,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.5),
-            pd_osc("Zoom", 0.9, 1.1, 0.95, "Zoom"),
-            pd_osc("Rotate", -10.0, 10.0, 0.0, "Rotate"),
-            pd_whole_labels("Mode", 0.0, 2.0, 0.0,
-                &["Screen", "Add", "Max"],
-                "Mode"),
-        ],
-        osc_prefix: Some("stylizedFeedback"),
-    });
+    m.insert(
+        EffectTypeId::STYLIZED_FEEDBACK,
+        EffectDef {
+            display_name: "Stylized Feedback",
+            param_count: 4,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 0.5),
+                pd_osc("Zoom", 0.9, 1.1, 0.95, "Zoom"),
+                pd_osc("Rotate", -10.0, 10.0, 0.0, "Rotate"),
+                pd_whole_labels("Mode", 0.0, 2.0, 0.0, &["Screen", "Add", "Max"], "Mode"),
+            ],
+            osc_prefix: Some("stylizedFeedback"),
+        },
+    );
 
     // Mirror
-    m.insert(EffectTypeId::MIRROR, EffectDef {
-        display_name: "Mirror",
-        param_count: 2,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 1.0),
-            pd_whole_labels("Mode", 0.0, 2.0, 0.0,
-                &["Horiz", "Vert", "Both"],
-                "Mode"),
-        ],
-        osc_prefix: Some("mirror"),
-    });
+    m.insert(
+        EffectTypeId::MIRROR,
+        EffectDef {
+            display_name: "Mirror",
+            param_count: 2,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 1.0),
+                pd_whole_labels("Mode", 0.0, 2.0, 0.0, &["Horiz", "Vert", "Both"], "Mode"),
+            ],
+            osc_prefix: Some("mirror"),
+        },
+    );
 
     // BlobTracking
-    m.insert(EffectTypeId::BLOB_TRACKING, EffectDef {
-        display_name: "Blob Tracking",
-        param_count: 5,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-            pd_osc("Thresh", 0.05, 0.9, 0.65, "Threshold"),
-            pd_osc("Sens", 0.2, 1.0, 0.85, "Sensitivity"),
-            pd_osc("Smooth", 0.0, 1.0, 0.7, "Smoothing"),
-            pd_osc("Connect", 0.0, 1.0, 0.35, "Connect"),
-        ],
-        osc_prefix: Some("blobTracking"),
-    });
+    m.insert(
+        EffectTypeId::BLOB_TRACKING,
+        EffectDef {
+            display_name: "Blob Tracking",
+            param_count: 5,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 0.0),
+                pd_osc("Thresh", 0.05, 0.9, 0.65, "Threshold"),
+                pd_osc("Sens", 0.2, 1.0, 0.85, "Sensitivity"),
+                pd_osc("Smooth", 0.0, 1.0, 0.7, "Smoothing"),
+                pd_osc("Connect", 0.0, 1.0, 0.35, "Connect"),
+            ],
+            osc_prefix: Some("blobTracking"),
+        },
+    );
 
     // CRT
     // FluidDistortion
-    m.insert(EffectTypeId::FLUID_DISTORTION, EffectDef {
-        display_name: "Fluid Distortion",
-        param_count: 4,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-            pd_osc("Viscosity", 0.0, 1.0, 0.5, "Viscosity"),
-            pd_osc("Vorticity", 0.0, 1.0, 0.5, "Vorticity"),
-            pd_osc("Inject", 0.0, 1.0, 0.5, "Inject"),
-        ],
-        osc_prefix: Some("fluidDistortion"),
-    });
+    m.insert(
+        EffectTypeId::FLUID_DISTORTION,
+        EffectDef {
+            display_name: "Fluid Distortion",
+            param_count: 4,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 0.0),
+                pd_osc("Viscosity", 0.0, 1.0, 0.5, "Viscosity"),
+                pd_osc("Vorticity", 0.0, 1.0, 0.5, "Vorticity"),
+                pd_osc("Inject", 0.0, 1.0, 0.5, "Inject"),
+            ],
+            osc_prefix: Some("fluidDistortion"),
+        },
+    );
 
     // EdgeDetect (formerly EdgeGlow — glow removed, use Bloom/Halation for glow)
-    m.insert(EffectTypeId::EDGE_DETECT, EffectDef {
-        display_name: "Edge Detect",
-        param_count: 3,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-            pd_osc("Thresh", 0.0, 1.0, 0.1, "Threshold"),
-            pd_whole_labels("Mode", 0.0, 2.0, 0.0,
-                &["Sobel", "Laplacian", "Frei-Chen"],
-                "Mode"),
-        ],
-        osc_prefix: Some("edgeDetect"),
-    });
+    m.insert(
+        EffectTypeId::EDGE_DETECT,
+        EffectDef {
+            display_name: "Edge Detect",
+            param_count: 3,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 0.0),
+                pd_osc("Thresh", 0.0, 1.0, 0.1, "Threshold"),
+                pd_whole_labels(
+                    "Mode",
+                    0.0,
+                    2.0,
+                    0.0,
+                    &["Sobel", "Laplacian", "Frei-Chen"],
+                    "Mode",
+                ),
+            ],
+            osc_prefix: Some("edgeDetect"),
+        },
+    );
 
     // Datamosh
-    m.insert(EffectTypeId::DATAMOSH, EffectDef {
-        display_name: "Datamosh",
-        param_count: 3,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-            pd_osc("Hold", 0.0, 1.0, 0.5, "Hold"),
-            pd_osc("Blend", 0.0, 1.0, 0.5, "Blend"),
-        ],
-        osc_prefix: Some("datamosh"),
-    });
+    m.insert(
+        EffectTypeId::DATAMOSH,
+        EffectDef {
+            display_name: "Datamosh",
+            param_count: 3,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 0.0),
+                pd_osc("Hold", 0.0, 1.0, 0.5, "Hold"),
+                pd_osc("Blend", 0.0, 1.0, 0.5, "Blend"),
+            ],
+            osc_prefix: Some("datamosh"),
+        },
+    );
 
     // SlitScan
-    m.insert(EffectTypeId::SLIT_SCAN, EffectDef {
-        display_name: "Slit Scan",
-        param_count: 3,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-            pd_osc("Width", 0.01, 0.5, 0.1, "Width"),
-            pd_whole_labels("Dir", 0.0, 1.0, 0.0,
-                &["Horiz", "Vert"],
-                "Direction"),
-        ],
-        osc_prefix: Some("slitScan"),
-    });
+    m.insert(
+        EffectTypeId::SLIT_SCAN,
+        EffectDef {
+            display_name: "Slit Scan",
+            param_count: 3,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 0.0),
+                pd_osc("Width", 0.01, 0.5, 0.1, "Width"),
+                pd_whole_labels("Dir", 0.0, 1.0, 0.0, &["Horiz", "Vert"], "Direction"),
+            ],
+            osc_prefix: Some("slitScan"),
+        },
+    );
 
     // ColorGrade
-    m.insert(EffectTypeId::COLOR_GRADE, EffectDef {
-        display_name: "Color Grade",
-        param_count: 9,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-            pd_osc("Gain", 0.0, 2.0, 1.0, "Gain"),
-            pd_osc("Sat", 0.0, 2.0, 1.0, "Saturation"),
-            pd_osc("Hue", -180.0, 180.0, 0.0, "Hue"),
-            pd_osc("Contrast", 0.0, 2.0, 1.0, "Contrast"),
-            pd_osc("Colorize", 0.0, 1.0, 0.0, "Colorize"),
-            pd_whole("TintHue", 0.0, 360.0, 0.0, "TintHue"),
-            pd_osc("TintSat", 0.0, 2.0, 1.0, "TintSaturation"),
-            pd_osc("Focus", 0.0, 1.0, 0.75, "ColorizeFocus"),
-        ],
-        osc_prefix: Some("colorGrade"),
-    });
+    m.insert(
+        EffectTypeId::COLOR_GRADE,
+        EffectDef {
+            display_name: "Color Grade",
+            param_count: 9,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 0.0),
+                pd_osc("Gain", 0.0, 2.0, 1.0, "Gain"),
+                pd_osc("Sat", 0.0, 2.0, 1.0, "Saturation"),
+                pd_osc("Hue", -180.0, 180.0, 0.0, "Hue"),
+                pd_osc("Contrast", 0.0, 2.0, 1.0, "Contrast"),
+                pd_osc("Colorize", 0.0, 1.0, 0.0, "Colorize"),
+                pd_whole("TintHue", 0.0, 360.0, 0.0, "TintHue"),
+                pd_osc("TintSat", 0.0, 2.0, 1.0, "TintSaturation"),
+                pd_osc("Focus", 0.0, 1.0, 0.75, "ColorizeFocus"),
+            ],
+            osc_prefix: Some("colorGrade"),
+        },
+    );
 
     // WireframeDepth — intentional divergence from Unity (D-22):
     // 12 params, removed Persist/Depth/Face, added EdgeFollow, renamed CVFlow→Flow.
-    m.insert(EffectTypeId::WIREFRAME_DEPTH, EffectDef {
-        display_name: "Wireframe Depth",
-        param_count: 12,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 1.0),                                      // 0
-            pd_whole("Density", 16.0, 280.0, 260.0, "Density"),                // 1
-            pd_osc("Width", 0.4, 3.0, 1.335, "Width"),                         // 2
-            pd_osc("ZScale", 0.0, 2.5, 1.35, "ZScale"),                        // 3
-            pd_osc("Smooth", 0.0, 0.98, 0.90, "Smooth"),                       // 4
-            pd_osc("Subject", 0.0, 1.0, 0.52, "SubjectIsolation"),             // 5
-            pd_whole_labels("Blend", 0.0, 6.0, 6.0,
-                &["Normal", "Add", "Multiply", "Screen", "Overlay", "Stencil", "Opaque"],
-                "BlendMode"),                                                   // 6
-            pd_osc("WireRes", 0.5, 1.0, 1.0, "WireRes"),                       // 7
-            pd_whole_labels("MeshRate", 1.0, 4.0, 1.0,
-                &["Every", "Half", "Third", "Quarter"],
-                "MeshRate"),                                                    // 8
-            pd_whole_labels("Flow", 0.0, 1.0, 1.0,
-                &["Off", "On"],
-                "NativeFlow"),                                                  // 9
-            pd_whole_labels("Lock", 0.0, 1.0, 1.0,
-                &["Off", "On"],
-                "FlowLock"),                                                    // 10
-            pd_osc("EdgeFollow", 0.0, 1.0, 0.5, "EdgeFollow"),                 // 11
-        ],
-        osc_prefix: Some("wireframeDepth"),
-    });
+    m.insert(
+        EffectTypeId::WIREFRAME_DEPTH,
+        EffectDef {
+            display_name: "Wireframe Depth",
+            param_count: 12,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 1.0),                           // 0
+                pd_whole("Density", 16.0, 280.0, 260.0, "Density"),    // 1
+                pd_osc("Width", 0.4, 3.0, 1.335, "Width"),             // 2
+                pd_osc("ZScale", 0.0, 2.5, 1.35, "ZScale"),            // 3
+                pd_osc("Smooth", 0.0, 0.98, 0.90, "Smooth"),           // 4
+                pd_osc("Subject", 0.0, 1.0, 0.52, "SubjectIsolation"), // 5
+                pd_whole_labels(
+                    "Blend",
+                    0.0,
+                    6.0,
+                    6.0,
+                    &[
+                        "Normal", "Add", "Multiply", "Screen", "Overlay", "Stencil", "Opaque",
+                    ],
+                    "BlendMode",
+                ), // 6
+                pd_osc("WireRes", 0.5, 1.0, 1.0, "WireRes"),           // 7
+                pd_whole_labels(
+                    "MeshRate",
+                    1.0,
+                    4.0,
+                    1.0,
+                    &["Every", "Half", "Third", "Quarter"],
+                    "MeshRate",
+                ), // 8
+                pd_whole_labels("Flow", 0.0, 1.0, 1.0, &["Off", "On"], "NativeFlow"), // 9
+                pd_whole_labels("Lock", 0.0, 1.0, 1.0, &["Off", "On"], "FlowLock"), // 10
+                pd_osc("EdgeFollow", 0.0, 1.0, 0.5, "EdgeFollow"),     // 11
+            ],
+            osc_prefix: Some("wireframeDepth"),
+        },
+    );
 
     // ChromaticAberration
-    m.insert(EffectTypeId::CHROMATIC_ABERRATION, EffectDef {
-        display_name: "Chromatic Aberration",
-        param_count: 5,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-            pd_osc("Offset", 0.0, 0.05, 0.01, "Offset"),
-            pd_whole_labels("Mode", 0.0, 1.0, 0.0,
-                &["Radial", "Linear"],
-                "Mode"),
-            pd_whole("Angle", 0.0, 360.0, 0.0, "Angle"),
-            pd_osc("Falloff", 0.0, 1.0, 0.5, "Falloff"),
-        ],
-        osc_prefix: Some("chromAb"),
-    });
+    m.insert(
+        EffectTypeId::CHROMATIC_ABERRATION,
+        EffectDef {
+            display_name: "Chromatic Aberration",
+            param_count: 5,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 0.0),
+                pd_osc("Offset", 0.0, 0.05, 0.01, "Offset"),
+                pd_whole_labels("Mode", 0.0, 1.0, 0.0, &["Radial", "Linear"], "Mode"),
+                pd_whole("Angle", 0.0, 360.0, 0.0, "Angle"),
+                pd_osc("Falloff", 0.0, 1.0, 0.5, "Falloff"),
+            ],
+            osc_prefix: Some("chromAb"),
+        },
+    );
 
     // GradientMap
-    m.insert(EffectTypeId::GRADIENT_MAP, EffectDef {
-        display_name: "Gradient Map",
-        param_count: 7,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-            pd_whole("ShadowH", 0.0, 360.0, 240.0, "ShadowHue"),
-            pd_osc("ShadowS", 0.0, 1.0, 0.8, "ShadowSat"),
-            pd_whole("HighH", 0.0, 360.0, 30.0, "HighlightHue"),
-            pd_osc("HighS", 0.0, 1.0, 0.8, "HighlightSat"),
-            pd_whole("MidH", 0.0, 360.0, 160.0, "MidHue"),
-            pd_osc("Contrast", 0.0, 2.0, 1.0, "Contrast"),
-        ],
-        osc_prefix: Some("gradientMap"),
-    });
+    m.insert(
+        EffectTypeId::GRADIENT_MAP,
+        EffectDef {
+            display_name: "Gradient Map",
+            param_count: 7,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 0.0),
+                pd_whole("ShadowH", 0.0, 360.0, 240.0, "ShadowHue"),
+                pd_osc("ShadowS", 0.0, 1.0, 0.8, "ShadowSat"),
+                pd_whole("HighH", 0.0, 360.0, 30.0, "HighlightHue"),
+                pd_osc("HighS", 0.0, 1.0, 0.8, "HighlightSat"),
+                pd_whole("MidH", 0.0, 360.0, 160.0, "MidHue"),
+                pd_osc("Contrast", 0.0, 2.0, 1.0, "Contrast"),
+            ],
+            osc_prefix: Some("gradientMap"),
+        },
+    );
 
     // Glitch
-    m.insert(EffectTypeId::GLITCH, EffectDef {
-        display_name: "Glitch",
-        param_count: 5,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-            pd_whole("Block", 4.0, 64.0, 16.0, "BlockSize"),
-            pd_osc("RGB Shift", 0.0, 0.05, 0.01, "RGBShift"),
-            pd_osc("Scanline", 0.0, 1.0, 0.3, "Scanline"),
-            pd_osc("Speed", 0.1, 10.0, 2.0, "Speed"),
-        ],
-        osc_prefix: Some("glitch"),
-    });
-
+    m.insert(
+        EffectTypeId::GLITCH,
+        EffectDef {
+            display_name: "Glitch",
+            param_count: 5,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 0.0),
+                pd_whole("Block", 4.0, 64.0, 16.0, "BlockSize"),
+                pd_osc("RGB Shift", 0.0, 0.05, 0.01, "RGBShift"),
+                pd_osc("Scanline", 0.0, 1.0, 0.3, "Scanline"),
+                pd_osc("Speed", 0.1, 10.0, 2.0, "Speed"),
+            ],
+            osc_prefix: Some("glitch"),
+        },
+    );
 
     // Halation
-    m.insert(EffectTypeId::HALATION, EffectDef {
-        display_name: "Halation",
-        param_count: 5,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-            pd_osc("Thresh", 0.0, 1.0, 0.5, "Threshold"),
-            pd_osc("Spread", 0.0, 1.0, 0.5, "Spread"),
-            pd_whole("Hue", 0.0, 360.0, 20.0, "Hue"),
-            pd_osc("Sat", 0.0, 1.0, 0.6, "Saturation"),
-        ],
-        osc_prefix: Some("halation"),
-    });
-
+    m.insert(
+        EffectTypeId::HALATION,
+        EffectDef {
+            display_name: "Halation",
+            param_count: 5,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 0.0),
+                pd_osc("Thresh", 0.0, 1.0, 0.5, "Threshold"),
+                pd_osc("Spread", 0.0, 1.0, 0.5, "Spread"),
+                pd_whole("Hue", 0.0, 360.0, 20.0, "Hue"),
+                pd_osc("Sat", 0.0, 1.0, 0.6, "Saturation"),
+            ],
+            osc_prefix: Some("halation"),
+        },
+    );
 
     // DepthOfField
-    m.insert(EffectTypeId::DEPTH_OF_FIELD, EffectDef {
-        display_name: "Depth of Field",
-        param_count: 8,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-            pd_whole_labels("Mode", 0.0, 2.0, 0.0,
-                &["Tilt-Shift", "Radial", "Depth"],
-                "Mode"),
-            pd_osc("Focus", 0.0, 1.0, 0.5, "FocusPosition"),
-            pd_osc("Focus X", 0.0, 1.0, 0.5, "FocusX"),
-            pd_osc("Width", 0.01, 0.5, 0.15, "FocusWidth"),
-            pd_osc("Blur", 0.0, 1.0, 0.5, "BlurStrength"),
-            pd_whole("Angle", 0.0, 360.0, 0.0, "TiltAngle"),
-            pd_whole_labels("Quality", 0.0, 2.0, 1.0,
-                &["Low", "Medium", "High"],
-                "Quality"),
-        ],
-        osc_prefix: Some("dof"),
-    });
+    m.insert(
+        EffectTypeId::DEPTH_OF_FIELD,
+        EffectDef {
+            display_name: "Depth of Field",
+            param_count: 8,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 0.0),
+                pd_whole_labels(
+                    "Mode",
+                    0.0,
+                    2.0,
+                    0.0,
+                    &["Tilt-Shift", "Radial", "Depth"],
+                    "Mode",
+                ),
+                pd_osc("Focus", 0.0, 1.0, 0.5, "FocusPosition"),
+                pd_osc("Focus X", 0.0, 1.0, 0.5, "FocusX"),
+                pd_osc("Width", 0.01, 0.5, 0.15, "FocusWidth"),
+                pd_osc("Blur", 0.0, 1.0, 0.5, "BlurStrength"),
+                pd_whole("Angle", 0.0, 360.0, 0.0, "TiltAngle"),
+                pd_whole_labels(
+                    "Quality",
+                    0.0,
+                    2.0,
+                    1.0,
+                    &["Low", "Medium", "High"],
+                    "Quality",
+                ),
+            ],
+            osc_prefix: Some("dof"),
+        },
+    );
 
     // HdrBoost
-    m.insert(EffectTypeId::HDR_BOOST, EffectDef {
-        display_name: "HDR Boost",
-        param_count: 4,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-            pd_osc("Gain", 0.0, 5.0, 1.5, "Gain"),
-            pd_osc("Thresh", 0.0, 1.0, 0.15, "Threshold"),
-            pd_osc("Knee", 0.0, 1.0, 0.3, "Knee"),
-        ],
-        osc_prefix: Some("hdrBoost"),
-    });
+    m.insert(
+        EffectTypeId::HDR_BOOST,
+        EffectDef {
+            display_name: "HDR Boost",
+            param_count: 4,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 0.0),
+                pd_osc("Gain", 0.0, 5.0, 1.5, "Gain"),
+                pd_osc("Thresh", 0.0, 1.0, 0.15, "Threshold"),
+                pd_osc("Knee", 0.0, 1.0, 0.3, "Knee"),
+            ],
+            osc_prefix: Some("hdrBoost"),
+        },
+    );
 
     // AutoGain — visual dynamics compressor
-    m.insert(EffectTypeId::AUTO_GAIN, EffectDef {
-        display_name: "Auto Gain",
-        param_count: 7,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.5),
-            pd_osc("Ratio", 0.0, 1.0, 0.5, "Ratio"),
-            pd_osc("Punch", 0.0, 1.0, 0.5, "Punch"),
-            pd_osc("Target", 0.0, 1.0, 0.5, "Target"),
-            pd_osc("HDR Ret", 0.0, 1.0, 0.5, "HdrRetention"),
-            pd_osc("Color", -1.0, 1.0, 0.0, "ColorPush"),
-            pd_whole_labels("Char", 0.0, 4.0, 0.0,
-                &["Clean", "Warm", "Film", "Vivid", "Grit"],
-                "Character"),
-        ],
-        osc_prefix: Some("autoGain"),
-    });
+    m.insert(
+        EffectTypeId::AUTO_GAIN,
+        EffectDef {
+            display_name: "Auto Gain",
+            param_count: 7,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 0.5),
+                pd_osc("Ratio", 0.0, 1.0, 0.5, "Ratio"),
+                pd_osc("Punch", 0.0, 1.0, 0.5, "Punch"),
+                pd_osc("Target", 0.0, 1.0, 0.5, "Target"),
+                pd_osc("HDR Ret", 0.0, 1.0, 0.5, "HdrRetention"),
+                pd_osc("Color", -1.0, 1.0, 0.0, "ColorPush"),
+                pd_whole_labels(
+                    "Char",
+                    0.0,
+                    4.0,
+                    0.0,
+                    &["Clean", "Warm", "Film", "Vivid", "Grit"],
+                    "Character",
+                ),
+            ],
+            osc_prefix: Some("autoGain"),
+        },
+    );
 
     // Corruption
-    m.insert(EffectTypeId::CORRUPTION, EffectDef {
-        display_name: "Corruption",
-        param_count: 6,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-            pd_whole("Block", 4.0, 64.0, 16.0, "BlockSize"),
-            pd_osc("Hold", 0.0, 1.0, 0.5, "HoldChance"),
-            pd_osc("Color", 0.0, 1.0, 0.3, "ColorCorrupt"),
-            pd_osc("Rate", 0.1, 10.0, 2.0, "RefreshRate"),
-            pd_osc("Drift", 0.0, 1.0, 0.2, "Drift"),
-        ],
-        osc_prefix: Some("corruption"),
-    });
+    m.insert(
+        EffectTypeId::CORRUPTION,
+        EffectDef {
+            display_name: "Corruption",
+            param_count: 6,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 0.0),
+                pd_whole("Block", 4.0, 64.0, 16.0, "BlockSize"),
+                pd_osc("Hold", 0.0, 1.0, 0.5, "HoldChance"),
+                pd_osc("Color", 0.0, 1.0, 0.3, "ColorCorrupt"),
+                pd_osc("Rate", 0.1, 10.0, 2.0, "RefreshRate"),
+                pd_osc("Drift", 0.0, 1.0, 0.2, "Drift"),
+            ],
+            osc_prefix: Some("corruption"),
+        },
+    );
 
     // Infrared
-    m.insert(EffectTypeId::INFRARED, EffectDef {
-        display_name: "Infrared",
-        param_count: 3,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-            pd_whole_labels("Palette", 0.0, 9.0, 0.0,
-                &["White Hot", "Black Hot", "Green NV", "Iron Bow", "Rainbow", "Lava", "Arctic", "Magenta", "Electric", "Toxic"],
-                "Palette"),
-            pd_osc("Contrast", 0.5, 3.0, 1.0, "Contrast"),
-        ],
-        osc_prefix: Some("infrared"),
-    });
+    m.insert(
+        EffectTypeId::INFRARED,
+        EffectDef {
+            display_name: "Infrared",
+            param_count: 3,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 0.0),
+                pd_whole_labels(
+                    "Palette",
+                    0.0,
+                    9.0,
+                    0.0,
+                    &[
+                        "White Hot",
+                        "Black Hot",
+                        "Green NV",
+                        "Iron Bow",
+                        "Rainbow",
+                        "Lava",
+                        "Arctic",
+                        "Magenta",
+                        "Electric",
+                        "Toxic",
+                    ],
+                    "Palette",
+                ),
+                pd_osc("Contrast", 0.5, 3.0, 1.0, "Contrast"),
+            ],
+            osc_prefix: Some("infrared"),
+        },
+    );
 
     // Surveillance
-    m.insert(EffectTypeId::SURVEILLANCE, EffectDef {
-        display_name: "Surveillance",
-        param_count: 7,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-            pd_osc("Edge", 0.0, 1.0, 0.3, "EdgeThreshold"),
-            pd_whole("Boxes", 1.0, 8.0, 3.0, "Boxes"),
-            pd_osc("Cross", 0.0, 1.0, 0.5, "CrosshairSize"),
-            pd_osc("Scan", 0.0, 5.0, 1.0, "ScanSpeed"),
-            pd_whole_labels("Overlay", 0.0, 2.0, 0.0,
-                &["Brackets", "Crosshair", "Grid"],
-                "Overlay"),
-            pd_toggle("IDs", 0.0, 1.0, 1.0, "IDLabels"),
-        ],
-        osc_prefix: Some("surveillance"),
-    });
+    m.insert(
+        EffectTypeId::SURVEILLANCE,
+        EffectDef {
+            display_name: "Surveillance",
+            param_count: 7,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 0.0),
+                pd_osc("Edge", 0.0, 1.0, 0.3, "EdgeThreshold"),
+                pd_whole("Boxes", 1.0, 8.0, 3.0, "Boxes"),
+                pd_osc("Cross", 0.0, 1.0, 0.5, "CrosshairSize"),
+                pd_osc("Scan", 0.0, 5.0, 1.0, "ScanSpeed"),
+                pd_whole_labels(
+                    "Overlay",
+                    0.0,
+                    2.0,
+                    0.0,
+                    &["Brackets", "Crosshair", "Grid"],
+                    "Overlay",
+                ),
+                pd_toggle("IDs", 0.0, 1.0, 1.0, "IDLabels"),
+            ],
+            osc_prefix: Some("surveillance"),
+        },
+    );
 
     // Redaction
-    m.insert(EffectTypeId::REDACTION, EffectDef {
-        display_name: "Redaction",
-        param_count: 7,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-            pd_whole("Boxes", 1.0, 8.0, 3.0, "BoxCount"),
-            pd_osc("Size", 0.05, 0.5, 0.15, "BoxSize"),
-            pd_whole_labels("Style", 0.0, 2.0, 0.0,
-                &["Solid", "Pixelate", "Bars"],
-                "Style"),
-            pd_whole("Pixel", 4.0, 32.0, 8.0, "PixelSize"),
-            pd_osc("Speed", 0.0, 3.0, 0.5, "Speed"),
-            pd_osc("Snap", 0.0, 1.0, 0.0, "Snap"),
-        ],
-        osc_prefix: Some("redaction"),
-    });
+    m.insert(
+        EffectTypeId::REDACTION,
+        EffectDef {
+            display_name: "Redaction",
+            param_count: 7,
+            param_defs: vec![
+                pd("Amount", 0.0, 1.0, 0.0),
+                pd_whole("Boxes", 1.0, 8.0, 3.0, "BoxCount"),
+                pd_osc("Size", 0.05, 0.5, 0.15, "BoxSize"),
+                pd_whole_labels(
+                    "Style",
+                    0.0,
+                    2.0,
+                    0.0,
+                    &["Solid", "Pixelate", "Bars"],
+                    "Style",
+                ),
+                pd_whole("Pixel", 4.0, 32.0, 8.0, "PixelSize"),
+                pd_osc("Speed", 0.0, 3.0, 0.5, "Speed"),
+                pd_osc("Snap", 0.0, 1.0, 0.0, "Snap"),
+            ],
+            osc_prefix: Some("redaction"),
+        },
+    );
 
     m
 }
@@ -653,7 +813,11 @@ mod tests {
     fn test_all_effects_registered() {
         // Every variant in EffectType::ALL should have a registry entry
         for et in get_all_effect_types() {
-            assert!(try_get(&et).is_some(), "Missing registry entry for {:?}", et);
+            assert!(
+                try_get(&et).is_some(),
+                "Missing registry entry for {:?}",
+                et
+            );
         }
         // Transform is also in ALL implicitly (it's the default)
         assert!(try_get(&EffectTypeId::TRANSFORM).is_some());
@@ -667,7 +831,9 @@ mod tests {
                 def.param_count,
                 def.param_defs.len(),
                 "param_count mismatch for {:?}: declared {} but has {} defs",
-                et, def.param_count, def.param_defs.len()
+                et,
+                def.param_count,
+                def.param_defs.len()
             );
         }
         let def = get(&EffectTypeId::TRANSFORM);

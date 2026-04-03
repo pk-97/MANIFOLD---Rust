@@ -1,16 +1,16 @@
 //! State synchronization: push_state, sync_project_data, sync_clip_positions,
 //! sync_inspector_data, check_auto_scroll.
-use manifold_core::{Beats, Seconds};
+use manifold_core::GeneratorTypeId;
 use manifold_core::effects::{EffectInstance, ParamEnvelope};
 use manifold_core::project::Project;
-use manifold_core::types::{LayerType, BeatDivision};
-use manifold_core::GeneratorTypeId;
-use manifold_ui::node::Color32;
+use manifold_core::types::{BeatDivision, LayerType};
+use manifold_core::{Beats, Seconds};
 use manifold_ui::color;
-use manifold_ui::panels::layer_header::LayerInfo;
-use manifold_ui::panels::viewport::TrackInfo;
+use manifold_ui::node::Color32;
 use manifold_ui::panels::effect_card::{EffectCardConfig, EffectParamInfo};
 use manifold_ui::panels::gen_param::{GenParamConfig, GenParamInfo, GenStringParamInfo};
+use manifold_ui::panels::layer_header::LayerInfo;
+use manifold_ui::panels::viewport::TrackInfo;
 
 use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
@@ -58,11 +58,19 @@ impl TransportDisplayCache {
 
     /// Returns the formatted display string, only reformatting when values change.
     fn time_display(
-        &mut self, mins: i32, secs: i32, tenths: i32,
-        bar: i32, beat_in_bar: i32, sixteenth: i32,
+        &mut self,
+        mins: i32,
+        secs: i32,
+        tenths: i32,
+        bar: i32,
+        beat_in_bar: i32,
+        sixteenth: i32,
     ) -> &str {
-        if mins != self.prev_mins || secs != self.prev_secs || tenths != self.prev_tenths
-            || bar != self.prev_bar || beat_in_bar != self.prev_beat_in_bar
+        if mins != self.prev_mins
+            || secs != self.prev_secs
+            || tenths != self.prev_tenths
+            || bar != self.prev_bar
+            || beat_in_bar != self.prev_beat_in_bar
             || sixteenth != self.prev_sixteenth
         {
             self.prev_mins = mins;
@@ -106,7 +114,11 @@ impl TransportDisplayCache {
 /// Check auto-scroll during playback and return true if viewport scroll changed.
 /// Must run BEFORE build() so the rebuild includes the new scroll position.
 /// From Unity ViewportManager.UpdatePlayheadPosition (lines 327-357).
-pub fn check_auto_scroll(ui: &mut UIRoot, content_state: &crate::content_state::ContentState, project: &Project) -> bool {
+pub fn check_auto_scroll(
+    ui: &mut UIRoot,
+    content_state: &crate::content_state::ContentState,
+    project: &Project,
+) -> bool {
     if !content_state.is_playing {
         return false;
     }
@@ -137,7 +149,8 @@ pub fn check_auto_scroll(ui: &mut UIRoot, content_state: &crate::content_state::
     if playhead_px > viewport_w - right_margin_px {
         // Scroll so playhead is at 25% from left (75% ahead)
         let target_scroll_beat = playhead_beat - (viewport_w * 0.25) / ppb;
-        ui.viewport.set_scroll(target_scroll_beat.max(0.0), ui.viewport.scroll_y_px());
+        ui.viewport
+            .set_scroll(target_scroll_beat.max(0.0), ui.viewport.scroll_y_px());
         return true;
     }
 
@@ -145,7 +158,8 @@ pub fn check_auto_scroll(ui: &mut UIRoot, content_state: &crate::content_state::
     let left_margin_px = 20.0;
     if playhead_px < left_margin_px {
         let target_scroll_beat = playhead_beat - left_margin_px / ppb;
-        ui.viewport.set_scroll(target_scroll_beat.max(0.0), ui.viewport.scroll_y_px());
+        ui.viewport
+            .set_scroll(target_scroll_beat.max(0.0), ui.viewport.scroll_y_px());
         return true;
     }
 
@@ -167,7 +181,11 @@ pub fn push_state(
     let tree = &mut ui.tree;
 
     // Transport state — three visual states matching Unity TransportPanel
-    let state = if content_state.is_playing { manifold_core::types::PlaybackState::Playing } else { manifold_core::types::PlaybackState::Stopped };
+    let state = if content_state.is_playing {
+        manifold_core::types::PlaybackState::Playing
+    } else {
+        manifold_core::types::PlaybackState::Stopped
+    };
     let (play_text, play_color) = match state {
         manifold_core::types::PlaybackState::Playing => ("PAUSE", PLAY_ACTIVE),
         manifold_core::types::PlaybackState::Paused => ("PLAY", PAUSED_YELLOW),
@@ -185,7 +203,8 @@ pub fn push_state(
         // the BPM field reflects user input without waiting for the content thread
         // round-trip. When an external source is active (Link, MIDI Clock, OSC),
         // use content_state.bpm which carries the live external tempo.
-        let bpm = if content_state.clock_authority == manifold_core::types::ClockAuthority::Internal {
+        let bpm = if content_state.clock_authority == manifold_core::types::ClockAuthority::Internal
+        {
             project.settings.bpm.0
         } else {
             content_state.bpm as f32
@@ -203,9 +222,7 @@ pub fn push_state(
         let beat_in_bar = (beat % bpb).floor() as i32 + 1;
         let sixteenth = ((beat % 1.0) * 4.0).floor() as i32 + 1;
 
-        let display = transport_cache.time_display(
-            mins, secs, tenths, bar, beat_in_bar, sixteenth,
-        );
+        let display = transport_cache.time_display(mins, secs, tenths, bar, beat_in_bar, sixteenth);
         ui.header.set_time_display(tree, display);
         let bpm_str = transport_cache.bpm_display(bpm);
         ui.transport.set_bpm_text(tree, bpm_str);
@@ -219,20 +236,40 @@ pub fn push_state(
             manifold_core::types::ClockAuthority::MidiClock => color::MIDI_PURPLE,
             manifold_core::types::ClockAuthority::Osc => color::ABLETON_LINK_BLUE,
         };
-        ui.transport.set_clock_authority(tree, auth.transport_label(), auth_color);
+        ui.transport
+            .set_clock_authority(tree, auth.transport_label(), auth_color);
 
         // Cache MIDI device names for dropdown
-        ui.midi_device_names.clone_from(&content_state.midi_device_names);
+        ui.midi_device_names
+            .clone_from(&content_state.midi_device_names);
 
         // Sync source status — driven by content_state from transport controller
         // Link
         if !content_state.link_enabled {
-            ui.transport.set_link_state(tree, false, color::STATUS_DOT_INACTIVE, "Off", color::TEXT_DIMMED_C32);
+            ui.transport.set_link_state(
+                tree,
+                false,
+                color::STATUS_DOT_INACTIVE,
+                "Off",
+                color::TEXT_DIMMED_C32,
+            );
         } else if content_state.link_peers > 0 {
             let status = transport_cache.link_peers_display(content_state.link_peers as u32);
-            ui.transport.set_link_state(tree, true, color::STATUS_DOT_GREEN, status, color::TEXT_WHITE_C32);
+            ui.transport.set_link_state(
+                tree,
+                true,
+                color::STATUS_DOT_GREEN,
+                status,
+                color::TEXT_WHITE_C32,
+            );
         } else {
-            ui.transport.set_link_state(tree, true, color::STATUS_DOT_YELLOW, "Listening", color::TEXT_DIMMED_C32);
+            ui.transport.set_link_state(
+                tree,
+                true,
+                color::STATUS_DOT_YELLOW,
+                "Listening",
+                color::TEXT_DIMMED_C32,
+            );
         }
 
         // MIDI Clock
@@ -242,7 +279,14 @@ pub fn push_state(
             } else {
                 &content_state.midi_clock_device_name
             };
-            ui.transport.set_clk_state(tree, false, device_text, color::STATUS_DOT_INACTIVE, "Off", color::TEXT_DIMMED_C32);
+            ui.transport.set_clk_state(
+                tree,
+                false,
+                device_text,
+                color::STATUS_DOT_INACTIVE,
+                "Off",
+                color::TEXT_DIMMED_C32,
+            );
         } else if content_state.midi_clock_receiving {
             let device_text = if content_state.midi_clock_device_name.is_empty() {
                 "MIDI"
@@ -254,28 +298,55 @@ pub fn push_state(
             } else {
                 content_state.midi_clock_position_display.clone()
             };
-            ui.transport.set_clk_state(tree, true, device_text, color::STATUS_DOT_GREEN, &position, color::TEXT_WHITE_C32);
+            ui.transport.set_clk_state(
+                tree,
+                true,
+                device_text,
+                color::STATUS_DOT_GREEN,
+                &position,
+                color::TEXT_WHITE_C32,
+            );
         } else {
             let device_text = if content_state.midi_clock_device_name.is_empty() {
                 "MIDI"
             } else {
                 &content_state.midi_clock_device_name
             };
-            ui.transport.set_clk_state(tree, true, device_text, color::STATUS_DOT_YELLOW, "Waiting", color::TEXT_DIMMED_C32);
+            ui.transport.set_clk_state(
+                tree,
+                true,
+                device_text,
+                color::STATUS_DOT_YELLOW,
+                "Waiting",
+                color::TEXT_DIMMED_C32,
+            );
         }
 
         // OSC Sync output
         if !content_state.osc_sender_enabled {
-            ui.transport.set_sync_state(tree, false, color::STATUS_DOT_INACTIVE, "Off", color::TEXT_DIMMED_C32);
+            ui.transport.set_sync_state(
+                tree,
+                false,
+                color::STATUS_DOT_INACTIVE,
+                "Off",
+                color::TEXT_DIMMED_C32,
+            );
         } else {
             let port = project.settings.osc_send_port;
             let status = format!(":{}", port);
-            ui.transport.set_sync_state(tree, true, color::STATUS_DOT_GREEN, &status, color::TEXT_WHITE_C32);
+            ui.transport.set_sync_state(
+                tree,
+                true,
+                color::STATUS_DOT_GREEN,
+                &status,
+                color::TEXT_WHITE_C32,
+            );
         }
 
         // Record state — disabled when OSC is clock authority (Unity invariant)
         let rec_allowed = auth != manifold_core::types::ClockAuthority::Osc;
-        ui.transport.set_record_state(tree, content_state.is_recording && rec_allowed, rec_allowed);
+        ui.transport
+            .set_record_state(tree, content_state.is_recording && rec_allowed, rec_allowed);
 
         // BPM reset: enabled only when a recorded tempo lane exists (tempo
         // automation from a recording session). Audio-import-detected BPM is
@@ -288,14 +359,15 @@ pub fn push_state(
         ui.transport.set_bpm_clear_active(tree, can_clear);
 
         // Save button — "SAVE" clean, "SAVE *" dirty with warm brown tint
-        ui.transport.set_save_text(tree, if is_dirty { "SAVE *" } else { "SAVE" });
+        ui.transport
+            .set_save_text(tree, if is_dirty { "SAVE *" } else { "SAVE" });
 
         // Export state — matches Unity ExportSection.UpdateUI():
         // HasExportRange = exportRangeEnabled (any marker set)
         // HasExportOut = exportRangeEnabled && exportOutBeat > exportInBeat
         let has_range = project.timeline.export_range_enabled;
-        let has_out = has_range
-            && project.timeline.export_out_beat > project.timeline.export_in_beat;
+        let has_out =
+            has_range && project.timeline.export_out_beat > project.timeline.export_in_beat;
         if has_range {
             let in_b = project.timeline.export_in_beat;
             let out_b = project.timeline.export_out_beat;
@@ -309,7 +381,8 @@ pub fn push_state(
             ui.transport.set_export_label(tree, "");
         }
         ui.transport.set_export_active(tree, has_range);
-        ui.transport.set_hdr_active(tree, project.settings.export_hdr);
+        ui.transport
+            .set_hdr_active(tree, project.settings.export_hdr);
         let perc_active = project.percussion_import.is_some();
         ui.transport.set_perc_active(tree, perc_active);
 
@@ -332,26 +405,41 @@ pub fn push_state(
         };
         ui.header.set_project_name(tree, &header_name);
         let ppb = ui.viewport.pixels_per_beat();
-        ui.header.set_zoom_label(tree, &format!("{:.0} px/beat", ppb));
+        ui.header
+            .set_zoom_label(tree, &format!("{:.0} px/beat", ppb));
 
         // Footer — quantize mode, resolution, FPS
-        ui.footer.set_quantize_text(tree, project.settings.quantize_mode.display_name());
+        ui.footer
+            .set_quantize_text(tree, project.settings.quantize_mode.display_name());
         // Show preset label if dimensions match, otherwise show "WxH" (Unity: UpdateFooterResolutionText)
         let (preset_w, preset_h) = project.settings.resolution_preset.dimensions();
-        let res_label = if preset_w == project.settings.output_width && preset_h == project.settings.output_height {
-            project.settings.resolution_preset.display_name().to_string()
+        let res_label = if preset_w == project.settings.output_width
+            && preset_h == project.settings.output_height
+        {
+            project
+                .settings
+                .resolution_preset
+                .display_name()
+                .to_string()
         } else {
-            format!("{}x{}", project.settings.output_width, project.settings.output_height)
+            format!(
+                "{}x{}",
+                project.settings.output_width, project.settings.output_height
+            )
         };
         ui.footer.set_resolution_text(tree, &res_label);
-        ui.footer.set_fps_text(tree, &format!("{:.0} FPS", project.settings.frame_rate));
-        ui.footer.set_vsync_state(tree,
+        ui.footer
+            .set_fps_text(tree, &format!("{:.0} FPS", project.settings.frame_rate));
+        ui.footer.set_vsync_state(
+            tree,
             project.settings.vsync_enabled,
             content_state.vsync_active,
             content_state.vsync_actual_fps,
         );
-        ui.footer.set_render_scale(tree, project.settings.render_scale);
-        ui.footer.set_tonemap_curve(tree, project.settings.tonemap_curve);
+        ui.footer
+            .set_render_scale(tree, project.settings.render_scale);
+        ui.footer
+            .set_tonemap_curve(tree, project.settings.tonemap_curve);
     }
 
     // Footer stats
@@ -368,12 +456,10 @@ pub fn push_state(
     ui.viewport.set_playing(content_state.is_playing);
 
     // Selection → viewport
-    ui.viewport.set_selected_clip_ids(
-        selection.selected_clip_ids.iter().cloned().collect()
-    );
-    ui.viewport.set_selected_marker_ids(
-        selection.selected_marker_ids.iter().cloned().collect()
-    );
+    ui.viewport
+        .set_selected_clip_ids(selection.selected_clip_ids.iter().cloned().collect());
+    ui.viewport
+        .set_selected_marker_ids(selection.selected_marker_ids.iter().cloned().collect());
     if let Some(beat) = selection.insert_cursor_beat {
         ui.viewport.set_insert_cursor(beat);
     }
@@ -381,16 +467,16 @@ pub fn push_state(
     // Region → viewport (sync from UIState so clearing via set_insert_cursor propagates)
     if selection.has_region() {
         let r = selection.get_region();
-        let (start_layer, end_layer) = r.layer_index_range(&project.timeline.layers)
+        let (start_layer, end_layer) = r
+            .layer_index_range(&project.timeline.layers)
             .unwrap_or((0, 0));
-        ui.viewport.set_selection_region(Some(
-            manifold_ui::panels::viewport::SelectionRegion {
+        ui.viewport
+            .set_selection_region(Some(manifold_ui::panels::viewport::SelectionRegion {
                 start_beat: r.start_beat,
                 end_beat: r.end_beat,
                 start_layer,
                 end_layer,
-            }
-        ));
+            }));
     } else {
         ui.viewport.set_selection_region(None);
     }
@@ -398,7 +484,10 @@ pub fn push_state(
     // Layer highlighting via UIState.is_layer_active (unified check across 4 paths):
     // explicit layer selection, clip selection, insert cursor, region.
     {
-        let active_flags: Vec<bool> = project.timeline.layers.iter()
+        let active_flags: Vec<bool> = project
+            .timeline
+            .layers
+            .iter()
             .map(|l| selection.is_layer_active(&l.layer_id))
             .collect();
         ui.layer_headers.set_active_layers(&active_flags);
@@ -412,7 +501,8 @@ pub fn push_state(
         for (i, layer) in project.timeline.layers.iter().enumerate() {
             ui.layer_headers.set_mute_state(tree, i, layer.is_muted);
             ui.layer_headers.set_solo_state(tree, i, layer.is_solo);
-            ui.layer_headers.set_blend_mode_text(tree, i, layer.default_blend_mode.display_name());
+            ui.layer_headers
+                .set_blend_mode_text(tree, i, layer.default_blend_mode.display_name());
 
             // MIDI note/channel labels
             let note_text = if layer.midi_note >= 0 {
@@ -431,8 +521,41 @@ pub fn push_state(
 
             // Layer info text (clip count)
             let clip_count = layer.clips.len();
-            let info = if clip_count == 1 { "1 clip".into() } else { format!("{} clips", clip_count) };
+            let info = if clip_count == 1 {
+                "1 clip".into()
+            } else {
+                format!("{} clips", clip_count)
+            };
             ui.layer_headers.set_info_text(tree, i, &info);
+        }
+    }
+
+    // Macro slider values + labels/mapping counts for context menus
+    let macro_vals: Vec<f32> = project
+        .settings
+        .macro_bank
+        .slots
+        .iter()
+        .map(|s| s.value)
+        .collect();
+    let macro_labels: Vec<String> = project
+        .settings
+        .macro_bank
+        .slots
+        .iter()
+        .map(|slot| slot.label.clone())
+        .collect();
+    ui.inspector
+        .macros_panel_mut()
+        .sync_values(tree, &macro_vals, &macro_labels);
+    for (i, slot) in project.settings.macro_bank.slots.iter().enumerate() {
+        if i < manifold_core::MACRO_COUNT {
+            ui.macro_labels[i].clone_from(&slot.label);
+            ui.macro_mapping_descs[i] = slot
+                .mappings
+                .iter()
+                .map(|m| describe_macro_mapping(&m.target, project))
+                .collect();
         }
     }
 
@@ -440,39 +563,37 @@ pub fn push_state(
     if let Some(idx) = active_layer {
         {
             if let Some(layer) = project.timeline.layers.get(idx) {
-                ui.inspector.layer_chrome_mut().sync_opacity(tree, layer.opacity);
+                ui.inspector
+                    .layer_chrome_mut()
+                    .sync_opacity(tree, layer.opacity);
                 ui.inspector.layer_chrome_mut().sync_name(tree, &layer.name);
             }
             // Master opacity + LED brightness
-            ui.inspector.master_chrome_mut().sync_opacity(tree, project.settings.master_opacity);
-            ui.inspector.master_chrome_mut().sync_led_brightness(tree, project.settings.led_brightness);
-
-            // Macro slider values + labels/mapping counts for context menus
-            let macro_vals: Vec<f32> = project.settings.macro_bank.slots
-                .iter().map(|s| s.value).collect();
-            ui.inspector.macros_panel_mut().sync_values(tree, &macro_vals);
-            for (i, slot) in project.settings.macro_bank.slots.iter().enumerate() {
-                if i < manifold_core::MACRO_COUNT {
-                    ui.macro_labels[i].clone_from(&slot.label);
-                    ui.macro_mapping_descs[i] = slot.mappings.iter()
-                        .map(|m| describe_macro_mapping(&m.target, project))
-                        .collect();
-                }
-            }
+            ui.inspector
+                .master_chrome_mut()
+                .sync_opacity(tree, project.settings.master_opacity);
+            ui.inspector
+                .master_chrome_mut()
+                .sync_led_brightness(tree, project.settings.led_brightness);
 
             // LED exit path label + cached effect names for dropdown
             let exit_label = super::led_exit_path_label(
                 project.settings.led_exit_index,
                 &project.settings.master_effects,
             );
-            ui.inspector.master_chrome_mut().sync_exit_path(tree, &exit_label);
+            ui.inspector
+                .master_chrome_mut()
+                .sync_exit_path(tree, &exit_label);
         }
     }
 
     // Cache master effect names for the LED exit path dropdown
     {
         use manifold_core::effect_type_registry;
-        let names: Vec<String> = project.settings.master_effects.iter()
+        let names: Vec<String> = project
+            .settings
+            .master_effects
+            .iter()
             .map(|fx| effect_type_registry::display_name(fx.effect_type()).to_string())
             .collect();
         ui.master_effect_names = names;
@@ -483,7 +604,10 @@ pub fn push_state(
     // BEFORE build so the tree layout is correct. Here we only sync text/values
     // into the already-built nodes.
     if let Some(clip_id) = &selection.primary_selected_clip_id {
-        let clip = project.timeline.layers.iter()
+        let clip = project
+            .timeline
+            .layers
+            .iter()
             .flat_map(|l| l.clips.iter())
             .find(|c| c.id == *clip_id);
         if let Some(clip) = clip {
@@ -508,8 +632,14 @@ pub fn push_state(
                 chrome.set_slip_range(clip_dur_s.max(Seconds(1.0)));
                 chrome.set_loop_range(clip.duration_beats.max(Beats(1.0)));
             } else if is_gen {
-                chrome.sync_name(tree, manifold_core::generator_type_registry::display_name(&clip.generator_type));
-                chrome.sync_gen_type(tree, manifold_core::generator_type_registry::display_name(&clip.generator_type));
+                chrome.sync_name(
+                    tree,
+                    manifold_core::generator_type_registry::display_name(&clip.generator_type),
+                );
+                chrome.sync_gen_type(
+                    tree,
+                    manifold_core::generator_type_registry::display_name(&clip.generator_type),
+                );
             }
         }
     }
@@ -519,7 +649,10 @@ pub fn push_state(
         // Master effects
         for (i, effect) in project.settings.master_effects.iter().enumerate() {
             if let Some(card) = ui.inspector.master_effect_mut(i) {
-                card.sync_effect_name(tree, manifold_core::effect_type_registry::display_name(effect.effect_type()));
+                card.sync_effect_name(
+                    tree,
+                    manifold_core::effect_type_registry::display_name(effect.effect_type()),
+                );
                 card.sync_enabled(tree, effect.enabled);
                 card.sync_values(tree, &effect.param_values);
             }
@@ -528,67 +661,89 @@ pub fn push_state(
         // Layer effects
         if let Some(idx) = active_layer
             && let Some(layer) = project.timeline.layers.get(idx)
-                && let Some(effects) = &layer.effects {
-                    for (i, effect) in effects.iter().enumerate() {
-                        if let Some(card) = ui.inspector.layer_effect_mut(i) {
-                            card.sync_effect_name(tree, manifold_core::effect_type_registry::display_name(effect.effect_type()));
-                            card.sync_enabled(tree, effect.enabled);
-                            card.sync_values(tree, &effect.param_values);
-                        }
-                    }
+            && let Some(effects) = &layer.effects
+        {
+            for (i, effect) in effects.iter().enumerate() {
+                if let Some(card) = ui.inspector.layer_effect_mut(i) {
+                    card.sync_effect_name(
+                        tree,
+                        manifold_core::effect_type_registry::display_name(effect.effect_type()),
+                    );
+                    card.sync_enabled(tree, effect.enabled);
+                    card.sync_values(tree, &effect.param_values);
                 }
+            }
+        }
 
         // Generator params (stored on layer, not clip)
         if let Some(idx) = active_layer
             && let Some(layer) = project.timeline.layers.get(idx)
-                && let Some(gp_state) = layer.gen_params()
-                    && let Some(gp) = ui.inspector.gen_params_mut() {
-                        gp.sync_gen_type_name(tree, manifold_core::generator_type_registry::display_name(gp_state.generator_type()));
-                        gp.sync_values(tree, &gp_state.param_values);
-                    }
+            && let Some(gp_state) = layer.gen_params()
+            && let Some(gp) = ui.inspector.gen_params_mut()
+        {
+            gp.sync_gen_type_name(
+                tree,
+                manifold_core::generator_type_registry::display_name(gp_state.generator_type()),
+            );
+            gp.sync_values(tree, &gp_state.param_values);
+        }
     }
-
 }
 
 /// Sync structural project data (layers, tracks) into UI panels.
 /// Call once at init and whenever the project structure changes.
 /// Triggers a full UI rebuild afterward.
-pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Option<usize>, selection: &SelectionState) {
+pub fn sync_project_data(
+    ui: &mut UIRoot,
+    project: &Project,
+    active_layer: Option<usize>,
+    selection: &SelectionState,
+) {
     {
         // Rebuild CoordinateMapper Y-layout FIRST so layer headers and viewport share
         // the same Y offsets. Unity: LayerHeaderPanel reads from CoordinateMapper.
         ui.viewport.rebuild_mapper_layout(&project.timeline.layers);
 
         // Layer data → LayerHeaderPanel (Y from mapper — matches viewport exactly)
-        let layers: Vec<LayerInfo> = project.timeline.layers.iter().enumerate().map(|(i, layer)| {
-            let y = ui.viewport.mapper().get_layer_y_offset(i);
-            let track_h = ui.viewport.mapper().get_layer_height(i);
-            LayerInfo {
-                name: layer.name.clone(),
-                layer_id: layer.layer_id.to_string(),
-                is_collapsed: layer.is_collapsed,
-                is_group: layer.is_group(),
-                is_generator: layer.layer_type == LayerType::Generator,
-                is_muted: layer.is_muted,
-                is_solo: layer.is_solo,
-                parent_layer_id: layer.parent_layer_id.as_ref().map(|id| id.to_string()),
-                blend_mode: format!("{:?}", layer.default_blend_mode),
-                generator_type: layer.gen_params()
-                    .map(|g| manifold_core::generator_type_registry::display_name(g.generator_type()).to_string()),
-                clip_count: layer.clips.len(),
-                video_folder_path: layer.video_folder_path.clone(),
-                source_clip_count: 0,
-                midi_note: layer.midi_note,
-                midi_channel: layer.midi_channel,
-                y_offset: y,
-                height: track_h,
-                is_selected: selection.is_layer_active(&layer.layer_id),
-                color: manifold_ui::node::Color32::from_f32(
-                    layer.layer_color.r, layer.layer_color.g,
-                    layer.layer_color.b, layer.layer_color.a,
-                ),
-            }
-        }).collect();
+        let layers: Vec<LayerInfo> = project
+            .timeline
+            .layers
+            .iter()
+            .enumerate()
+            .map(|(i, layer)| {
+                let y = ui.viewport.mapper().get_layer_y_offset(i);
+                let track_h = ui.viewport.mapper().get_layer_height(i);
+                LayerInfo {
+                    name: layer.name.clone(),
+                    layer_id: layer.layer_id.to_string(),
+                    is_collapsed: layer.is_collapsed,
+                    is_group: layer.is_group(),
+                    is_generator: layer.layer_type == LayerType::Generator,
+                    is_muted: layer.is_muted,
+                    is_solo: layer.is_solo,
+                    parent_layer_id: layer.parent_layer_id.as_ref().map(|id| id.to_string()),
+                    blend_mode: format!("{:?}", layer.default_blend_mode),
+                    generator_type: layer.gen_params().map(|g| {
+                        manifold_core::generator_type_registry::display_name(g.generator_type())
+                            .to_string()
+                    }),
+                    clip_count: layer.clips.len(),
+                    video_folder_path: layer.video_folder_path.clone(),
+                    source_clip_count: 0,
+                    midi_note: layer.midi_note,
+                    midi_channel: layer.midi_channel,
+                    y_offset: y,
+                    height: track_h,
+                    is_selected: selection.is_layer_active(&layer.layer_id),
+                    color: manifold_ui::node::Color32::from_f32(
+                        layer.layer_color.r,
+                        layer.layer_color.g,
+                        layer.layer_color.b,
+                        layer.layer_color.a,
+                    ),
+                }
+            })
+            .collect();
         let active_layer_id = active_layer
             .and_then(|i| project.timeline.layers.get(i))
             .map(|l| l.layer_id.clone());
@@ -600,62 +755,87 @@ pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Optio
         // - is_muted includes parent group mute (children of muted groups are dimmed)
         // - is_group set correctly for group layers
         // - accent_color set for child layers
-        let tracks: Vec<TrackInfo> = project.timeline.layers.iter().map(|layer| {
-            // Check if muted individually or by parent group
-            let parent_muted = layer.parent_layer_id.as_ref().is_some_and(|pid| {
-                project.timeline.layers.iter().any(|l| l.layer_id == *pid && l.is_muted)
-            });
-            let is_muted = layer.is_muted || parent_muted;
-
-            // Variable track heights matching Unity CoordinateMapper.RebuildYLayout
-            let height = if layer.parent_layer_id.is_some() {
-                // Child of group: check parent collapsed
-                let parent_collapsed = layer.parent_layer_id.as_ref().is_some_and(|pid| {
-                    project.timeline.layers.iter().any(|l| l.layer_id == *pid && l.is_collapsed)
+        let tracks: Vec<TrackInfo> = project
+            .timeline
+            .layers
+            .iter()
+            .map(|layer| {
+                // Check if muted individually or by parent group
+                let parent_muted = layer.parent_layer_id.as_ref().is_some_and(|pid| {
+                    project
+                        .timeline
+                        .layers
+                        .iter()
+                        .any(|l| l.layer_id == *pid && l.is_muted)
                 });
-                if parent_collapsed { 0.0 } else { color::TRACK_HEIGHT }
-            } else if layer.is_group() && layer.is_collapsed {
-                color::COLLAPSED_GROUP_TRACK_HEIGHT
-            } else if !layer.is_group() && layer.is_collapsed {
-                if layer.layer_type == manifold_core::types::LayerType::Generator {
-                    color::COLLAPSED_GEN_TRACK_HEIGHT
+                let is_muted = layer.is_muted || parent_muted;
+
+                // Variable track heights matching Unity CoordinateMapper.RebuildYLayout
+                let height = if layer.parent_layer_id.is_some() {
+                    // Child of group: check parent collapsed
+                    let parent_collapsed = layer.parent_layer_id.as_ref().is_some_and(|pid| {
+                        project
+                            .timeline
+                            .layers
+                            .iter()
+                            .any(|l| l.layer_id == *pid && l.is_collapsed)
+                    });
+                    if parent_collapsed {
+                        0.0
+                    } else {
+                        color::TRACK_HEIGHT
+                    }
+                } else if layer.is_group() && layer.is_collapsed {
+                    color::COLLAPSED_GROUP_TRACK_HEIGHT
+                } else if !layer.is_group() && layer.is_collapsed {
+                    if layer.layer_type == manifold_core::types::LayerType::Generator {
+                        color::COLLAPSED_GEN_TRACK_HEIGHT
+                    } else {
+                        color::COLLAPSED_TRACK_HEIGHT
+                    }
                 } else {
-                    color::COLLAPSED_TRACK_HEIGHT
+                    color::TRACK_HEIGHT
+                };
+
+                // Accent color for child layers (group visual)
+                let accent_color = if layer.parent_layer_id.is_some() {
+                    Some(color::DEFAULT_GROUP_ACCENT)
+                } else {
+                    None
+                };
+
+                // Child layer indices for collapsed group preview
+                let child_layer_indices = if layer.is_group() {
+                    let layer_id = &layer.layer_id;
+                    project
+                        .timeline
+                        .layers
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, l)| l.parent_layer_id.as_ref() == Some(layer_id))
+                        .map(|(j, _)| j)
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
+                TrackInfo {
+                    height,
+                    is_muted,
+                    is_group: layer.is_group(),
+                    is_collapsed: layer.is_collapsed,
+                    accent_color,
+                    child_layer_indices,
                 }
-            } else {
-                color::TRACK_HEIGHT
-            };
-
-            // Accent color for child layers (group visual)
-            let accent_color = if layer.parent_layer_id.is_some() {
-                Some(color::DEFAULT_GROUP_ACCENT)
-            } else {
-                None
-            };
-
-            // Child layer indices for collapsed group preview
-            let child_layer_indices = if layer.is_group() {
-                let layer_id = &layer.layer_id;
-                project.timeline.layers.iter().enumerate()
-                    .filter(|(_, l)| l.parent_layer_id.as_ref() == Some(layer_id))
-                    .map(|(j, _)| j)
-                    .collect()
-            } else {
-                Vec::new()
-            };
-
-            TrackInfo {
-                height,
-                is_muted,
-                is_group: layer.is_group(),
-                is_collapsed: layer.is_collapsed,
-                accent_color,
-                child_layer_indices,
-            }
-        }).collect();
+            })
+            .collect();
         ui.viewport.set_tracks(tracks);
-        ui.viewport.layer_ids = project.timeline.layers.iter()
-            .map(|l| l.layer_id.clone()).collect();
+        ui.viewport.layer_ids = project
+            .timeline
+            .layers
+            .iter()
+            .map(|l| l.layer_id.clone())
+            .collect();
 
         // (CoordinateMapper Y-layout already rebuilt above, before layer headers)
 
@@ -665,8 +845,14 @@ pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Optio
             for clip in &layer.clips {
                 let is_gen = layer.layer_type == LayerType::Generator;
                 let name = if is_gen {
-                    layer.gen_params()
-                        .map(|gp| manifold_core::generator_type_registry::display_name(gp.generator_type()).to_string())
+                    layer
+                        .gen_params()
+                        .map(|gp| {
+                            manifold_core::generator_type_registry::display_name(
+                                gp.generator_type(),
+                            )
+                            .to_string()
+                        })
                         .unwrap_or_else(|| "Gen".to_string())
                 } else if !clip.video_clip_id.is_empty() {
                     clip.video_clip_id.clone()
@@ -675,8 +861,10 @@ pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Optio
                 };
                 use manifold_ui::panels::viewport::ViewportClip;
                 let clip_color = manifold_ui::node::Color32::from_f32(
-                    layer.layer_color.r, layer.layer_color.g,
-                    layer.layer_color.b, 1.0,
+                    layer.layer_color.r,
+                    layer.layer_color.g,
+                    layer.layer_color.b,
+                    1.0,
                 );
                 viewport_clips.push(ViewportClip {
                     clip_id: clip.id.clone(),
@@ -695,12 +883,12 @@ pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Optio
 
         // Timeline markers → viewport
         ui.viewport.set_markers(project.timeline.markers.clone());
-        ui.viewport.set_selected_marker_ids(
-            selection.selected_marker_ids.iter().cloned().collect(),
-        );
+        ui.viewport
+            .set_selected_marker_ids(selection.selected_marker_ids.iter().cloned().collect());
 
         // Beats per bar
-        ui.viewport.set_beats_per_bar(project.settings.time_signature_numerator as u32);
+        ui.viewport
+            .set_beats_per_bar(project.settings.time_signature_numerator as u32);
     }
 }
 
@@ -717,8 +905,12 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
         let is_gen = layer.layer_type == LayerType::Generator;
         for clip in &layer.clips {
             let name = if is_gen {
-                layer.gen_params()
-                    .map(|gp| manifold_core::generator_type_registry::display_name(gp.generator_type()).to_string())
+                layer
+                    .gen_params()
+                    .map(|gp| {
+                        manifold_core::generator_type_registry::display_name(gp.generator_type())
+                            .to_string()
+                    })
                     .unwrap_or_else(|| "Gen".to_string())
             } else if !clip.video_clip_id.is_empty() {
                 clip.video_clip_id.clone()
@@ -726,8 +918,10 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
                 "Clip".to_string()
             };
             let clip_color = manifold_ui::node::Color32::from_f32(
-                layer.layer_color.r, layer.layer_color.g,
-                layer.layer_color.b, 0.86,
+                layer.layer_color.r,
+                layer.layer_color.g,
+                layer.layer_color.b,
+                0.86,
             );
             viewport_clips.push(ViewportClip {
                 clip_id: clip.id.clone(),
@@ -755,9 +949,9 @@ pub fn sync_inspector_data(
     active_layer: Option<usize>,
     selection: &SelectionState,
 ) {
-
     // Master effects → inspector (master has no envelopes)
-    let master_configs = effects_to_configs(&project.settings.master_effects, &[], OscScope::Master);
+    let master_configs =
+        effects_to_configs(&project.settings.master_effects, &[], OscScope::Master);
     ui.inspector.configure_master_effects(&master_configs);
 
     // Active layer effects + gen params → inspector
@@ -766,22 +960,28 @@ pub fn sync_inspector_data(
             // Layer effects — envelopes live on the layer
             let envs = layer.envelopes.as_deref().unwrap_or(&[]);
             let lid = layer.layer_id.as_str();
-            let layer_effects = layer.effects.as_ref()
+            let layer_effects = layer
+                .effects
+                .as_ref()
                 .map(|e| effects_to_configs(e, envs, OscScope::Layer(lid)))
                 .unwrap_or_default();
             ui.inspector.configure_layer_effects(&layer_effects);
 
             // Generator params — find clip's string_params for text fields.
             // Use selected clip if on this layer, otherwise first clip.
-            let clip_string_params = selection.primary_selected_clip_id.as_ref()
+            let clip_string_params = selection
+                .primary_selected_clip_id
+                .as_ref()
                 .and_then(|sel_id| layer.clips.iter().find(|c| c.id == *sel_id))
                 .or_else(|| layer.clips.first())
                 .and_then(|c| c.string_params.as_ref());
-            let gen_config = layer.gen_params()
+            let gen_config = layer
+                .gen_params()
                 .filter(|gp| *gp.generator_type() != GeneratorTypeId::NONE)
                 .map(|gp| gen_params_to_config(gp, lid, clip_string_params));
             let layer_id = layer.layer_id.clone();
-            ui.inspector.configure_gen_params(gen_config.as_ref(), Some(layer_id));
+            ui.inspector
+                .configure_gen_params(gen_config.as_ref(), Some(layer_id));
         } else {
             ui.inspector.configure_layer_effects(&[]);
             ui.inspector.configure_gen_params(None, None);
@@ -793,7 +993,10 @@ pub fn sync_inspector_data(
 
     // Clip chrome → inspector (per-clip effects removed)
     if let Some(clip_id) = &selection.primary_selected_clip_id {
-        let clip = project.timeline.layers.iter()
+        let clip = project
+            .timeline
+            .layers
+            .iter()
             .flat_map(|l| l.clips.iter())
             .find(|c| c.id == *clip_id);
         if let Some(clip) = clip {
@@ -801,14 +1004,18 @@ pub fn sync_inspector_data(
             // Value sync (name, bpm, etc.) happens in push_state after build.
             let is_video = !clip.video_clip_id.is_empty();
             let is_gen = clip.generator_type != GeneratorTypeId::NONE;
-            ui.inspector.clip_chrome_mut().set_mode(
-                true, is_video, is_gen, clip.is_looping,
-            );
+            ui.inspector
+                .clip_chrome_mut()
+                .set_mode(true, is_video, is_gen, clip.is_looping);
         } else {
-            ui.inspector.clip_chrome_mut().set_mode(false, false, false, false);
+            ui.inspector
+                .clip_chrome_mut()
+                .set_mode(false, false, false, false);
         }
     } else {
-        ui.inspector.clip_chrome_mut().set_mode(false, false, false, false);
+        ui.inspector
+            .clip_chrome_mut()
+            .set_mode(false, false, false, false);
     }
 }
 
@@ -824,103 +1031,129 @@ enum OscScope<'a> {
 /// Convert a slice of `EffectInstance` into `EffectCardConfig` for the UI.
 /// Build EffectCardConfig from EffectInstance + envelopes.
 /// Unity: EffectCardState.SyncFromDataModel — populates all data-derived visual state.
-fn effects_to_configs(effects: &[EffectInstance], envelopes: &[ParamEnvelope], osc_scope: OscScope<'_>) -> Vec<EffectCardConfig> {
-    effects.iter().enumerate().filter_map(|(i, fx)| {
-        let reg_def = manifold_core::effect_definition_registry::try_get(fx.effect_type())?;
-        let n = reg_def.param_count;
-        let params: Vec<EffectParamInfo> = reg_def.param_defs.iter().enumerate().map(|(pi, pd)| {
-            let osc_address = match osc_scope {
-                OscScope::Master => manifold_core::effect_definition_registry::get_osc_address(fx.effect_type(), pi),
-                OscScope::Layer(lid) => manifold_core::effect_definition_registry::get_osc_address_for_layer(fx.effect_type(), lid, pi),
-            };
-            EffectParamInfo {
-                name: pd.name.clone(),
-                min: pd.min,
-                max: pd.max,
-                default: pd.default_value,
-                whole_numbers: pd.whole_numbers,
-                value_labels: pd.value_labels.clone(),
-                osc_address,
-            }
-        }).collect();
+fn effects_to_configs(
+    effects: &[EffectInstance],
+    envelopes: &[ParamEnvelope],
+    osc_scope: OscScope<'_>,
+) -> Vec<EffectCardConfig> {
+    effects
+        .iter()
+        .enumerate()
+        .filter_map(|(i, fx)| {
+            let reg_def = manifold_core::effect_definition_registry::try_get(fx.effect_type())?;
+            let n = reg_def.param_count;
+            let params: Vec<EffectParamInfo> = reg_def
+                .param_defs
+                .iter()
+                .enumerate()
+                .map(|(pi, pd)| {
+                    let osc_address = match osc_scope {
+                        OscScope::Master => {
+                            manifold_core::effect_definition_registry::get_osc_address(
+                                fx.effect_type(),
+                                pi,
+                            )
+                        }
+                        OscScope::Layer(lid) => {
+                            manifold_core::effect_definition_registry::get_osc_address_for_layer(
+                                fx.effect_type(),
+                                lid,
+                                pi,
+                            )
+                        }
+                    };
+                    EffectParamInfo {
+                        name: pd.name.clone(),
+                        min: pd.min,
+                        max: pd.max,
+                        default: pd.default_value,
+                        whole_numbers: pd.whole_numbers,
+                        value_labels: pd.value_labels.clone(),
+                        osc_address,
+                    }
+                })
+                .collect();
 
-        // Per-param driver state (Unity: SyncFromDataModel driver loop)
-        let mut has_drv = false;
-        let mut driver_active = vec![false; n];
-        let mut trim_min = vec![0.0f32; n];
-        let mut trim_max = vec![1.0f32; n];
-        let mut driver_beat_div_idx = vec![-1i32; n];
-        let mut driver_waveform_idx = vec![-1i32; n];
-        let mut driver_reversed = vec![false; n];
-        let mut driver_dotted = vec![false; n];
-        let mut driver_triplet = vec![false; n];
-        if let Some(ref drivers) = fx.drivers {
-            for d in drivers {
-                let pi = d.param_index as usize;
-                if pi < n && d.enabled {
-                    has_drv = true;
-                    driver_active[pi] = true;
-                    trim_min[pi] = d.trim_min;
-                    trim_max[pi] = d.trim_max;
-                    // Driver visual state for button highlighting
-                    driver_beat_div_idx[pi] = beat_div_to_button_index(d.beat_division.base_division());
-                    driver_waveform_idx[pi] = d.waveform as i32;
-                    driver_reversed[pi] = d.reversed;
-                    driver_dotted[pi] = d.beat_division.is_dotted();
-                    driver_triplet[pi] = d.beat_division.is_triplet();
+            // Per-param driver state (Unity: SyncFromDataModel driver loop)
+            let mut has_drv = false;
+            let mut driver_active = vec![false; n];
+            let mut trim_min = vec![0.0f32; n];
+            let mut trim_max = vec![1.0f32; n];
+            let mut driver_beat_div_idx = vec![-1i32; n];
+            let mut driver_waveform_idx = vec![-1i32; n];
+            let mut driver_reversed = vec![false; n];
+            let mut driver_dotted = vec![false; n];
+            let mut driver_triplet = vec![false; n];
+            if let Some(ref drivers) = fx.drivers {
+                for d in drivers {
+                    let pi = d.param_index as usize;
+                    if pi < n && d.enabled {
+                        has_drv = true;
+                        driver_active[pi] = true;
+                        trim_min[pi] = d.trim_min;
+                        trim_max[pi] = d.trim_max;
+                        // Driver visual state for button highlighting
+                        driver_beat_div_idx[pi] =
+                            beat_div_to_button_index(d.beat_division.base_division());
+                        driver_waveform_idx[pi] = d.waveform as i32;
+                        driver_reversed[pi] = d.reversed;
+                        driver_dotted[pi] = d.beat_division.is_dotted();
+                        driver_triplet[pi] = d.beat_division.is_triplet();
+                    }
                 }
             }
-        }
 
-        // Per-param envelope state (Unity: SyncFromDataModel envelope loop)
-        let mut has_env = false;
-        let mut envelope_active = vec![false; n];
-        let mut target_norm = vec![1.0f32; n];
-        let mut env_attack = vec![0.0f32; n];
-        let mut env_decay = vec![0.0f32; n];
-        let mut env_sustain = vec![0.0f32; n];
-        let mut env_release = vec![0.0f32; n];
-        for env in envelopes {
-            if env.target_effect_type == *fx.effect_type() && env.enabled {
-                let pi = env.param_index as usize;
-                if pi < n {
-                    has_env = true;
-                    envelope_active[pi] = true;
-                    target_norm[pi] = env.target_normalized;
-                    env_attack[pi] = env.attack_beats;
-                    env_decay[pi] = env.decay_beats;
-                    env_sustain[pi] = env.sustain_level;
-                    env_release[pi] = env.release_beats;
+            // Per-param envelope state (Unity: SyncFromDataModel envelope loop)
+            let mut has_env = false;
+            let mut envelope_active = vec![false; n];
+            let mut target_norm = vec![1.0f32; n];
+            let mut env_attack = vec![0.0f32; n];
+            let mut env_decay = vec![0.0f32; n];
+            let mut env_sustain = vec![0.0f32; n];
+            let mut env_release = vec![0.0f32; n];
+            for env in envelopes {
+                if env.target_effect_type == *fx.effect_type() && env.enabled {
+                    let pi = env.param_index as usize;
+                    if pi < n {
+                        has_env = true;
+                        envelope_active[pi] = true;
+                        target_norm[pi] = env.target_normalized;
+                        env_attack[pi] = env.attack_beats;
+                        env_decay[pi] = env.decay_beats;
+                        env_sustain[pi] = env.sustain_level;
+                        env_release[pi] = env.release_beats;
+                    }
                 }
             }
-        }
 
-        Some(EffectCardConfig {
-            effect_index: i,
-            effect_id: fx.id.clone(),
-            name: manifold_core::effect_type_registry::display_name(fx.effect_type()).to_string(),
-            enabled: fx.enabled,
-            collapsed: fx.collapsed,
-            supports_envelopes: true,
-            params,
-            has_drv,
-            has_env,
-            driver_active,
-            envelope_active,
-            trim_min,
-            trim_max,
-            target_norm,
-            env_attack,
-            env_decay,
-            env_sustain,
-            env_release,
-            driver_beat_div_idx,
-            driver_waveform_idx,
-            driver_reversed,
-            driver_dotted,
-            driver_triplet,
+            Some(EffectCardConfig {
+                effect_index: i,
+                effect_id: fx.id.clone(),
+                name: manifold_core::effect_type_registry::display_name(fx.effect_type())
+                    .to_string(),
+                enabled: fx.enabled,
+                collapsed: fx.collapsed,
+                supports_envelopes: true,
+                params,
+                has_drv,
+                has_env,
+                driver_active,
+                envelope_active,
+                trim_min,
+                trim_max,
+                target_norm,
+                env_attack,
+                env_decay,
+                env_sustain,
+                env_release,
+                driver_beat_div_idx,
+                driver_waveform_idx,
+                driver_reversed,
+                driver_dotted,
+                driver_triplet,
+            })
         })
-    }).collect()
+        .collect()
 }
 
 /// Map a base BeatDivision to its button index (0-10).
@@ -952,31 +1185,49 @@ fn gen_params_to_config(
         None => {
             return GenParamConfig {
                 gen_type_name: gp.generator_type().to_string(),
-                params: vec![], string_params: vec![],
-                driver_active: vec![], envelope_active: vec![],
-                trim_min: vec![], trim_max: vec![], target_norm: vec![],
-                env_attack: vec![], env_decay: vec![], env_sustain: vec![], env_release: vec![],
-                driver_beat_div_idx: vec![], driver_waveform_idx: vec![],
-                driver_reversed: vec![], driver_dotted: vec![], driver_triplet: vec![],
+                params: vec![],
+                string_params: vec![],
+                driver_active: vec![],
+                envelope_active: vec![],
+                trim_min: vec![],
+                trim_max: vec![],
+                target_norm: vec![],
+                env_attack: vec![],
+                env_decay: vec![],
+                env_sustain: vec![],
+                env_release: vec![],
+                driver_beat_div_idx: vec![],
+                driver_waveform_idx: vec![],
+                driver_reversed: vec![],
+                driver_dotted: vec![],
+                driver_triplet: vec![],
             };
         }
     };
     let n = reg_def.param_defs.len();
-    let params: Vec<GenParamInfo> = reg_def.param_defs.iter().enumerate().map(|(pi, pd)| {
-        let osc_address = manifold_core::generator_definition_registry::get_osc_address_for_layer(
-            gp.generator_type(), layer_id, pi,
-        );
-        GenParamInfo {
-            name: pd.name.clone(),
-            min: pd.min,
-            max: pd.max,
-            default: pd.default_value,
-            whole_numbers: pd.whole_numbers,
-            is_toggle: pd.is_toggle,
-            value_labels: pd.value_labels.clone(),
-            osc_address,
-        }
-    }).collect();
+    let params: Vec<GenParamInfo> = reg_def
+        .param_defs
+        .iter()
+        .enumerate()
+        .map(|(pi, pd)| {
+            let osc_address =
+                manifold_core::generator_definition_registry::get_osc_address_for_layer(
+                    gp.generator_type(),
+                    layer_id,
+                    pi,
+                );
+            GenParamInfo {
+                name: pd.name.clone(),
+                min: pd.min,
+                max: pd.max,
+                default: pd.default_value,
+                whole_numbers: pd.whole_numbers,
+                is_toggle: pd.is_toggle,
+                value_labels: pd.value_labels.clone(),
+                osc_address,
+            }
+        })
+        .collect();
 
     // Per-param driver state
     let mut driver_active = vec![false; n];
@@ -995,7 +1246,8 @@ fn gen_params_to_config(
                     driver_active[pi] = true;
                     trim_min[pi] = d.trim_min;
                     trim_max[pi] = d.trim_max;
-                    driver_beat_div_idx[pi] = beat_div_to_button_index(d.beat_division.base_division());
+                    driver_beat_div_idx[pi] =
+                        beat_div_to_button_index(d.beat_division.base_division());
                     driver_waveform_idx[pi] = d.waveform as i32;
                     driver_reversed[pi] = d.reversed;
                     driver_dotted[pi] = d.beat_division.is_dotted();
@@ -1029,20 +1281,25 @@ fn gen_params_to_config(
     }
 
     // String param defs → populate with current clip values
-    let string_params: Vec<GenStringParamInfo> = reg_def.string_param_defs.iter().map(|sp_def| {
-        let value = clip_string_params
-            .and_then(|m| m.get(sp_def.key))
-            .cloned()
-            .unwrap_or_else(|| sp_def.default_value.to_string());
-        GenStringParamInfo {
-            name: sp_def.name.to_string(),
-            key: sp_def.key.to_string(),
-            value,
-        }
-    }).collect();
+    let string_params: Vec<GenStringParamInfo> = reg_def
+        .string_param_defs
+        .iter()
+        .map(|sp_def| {
+            let value = clip_string_params
+                .and_then(|m| m.get(sp_def.key))
+                .cloned()
+                .unwrap_or_else(|| sp_def.default_value.to_string());
+            GenStringParamInfo {
+                name: sp_def.name.to_string(),
+                key: sp_def.key.to_string(),
+                value,
+            }
+        })
+        .collect();
 
     GenParamConfig {
-        gen_type_name: manifold_core::generator_type_registry::display_name(gp.generator_type()).to_string(),
+        gen_type_name: manifold_core::generator_type_registry::display_name(gp.generator_type())
+            .to_string(),
         params,
         string_params,
         driver_active,
@@ -1070,7 +1327,10 @@ fn describe_macro_mapping(
     use manifold_core::MacroMappingTarget;
     match target {
         MacroMappingTarget::MasterOpacity => "Master Opacity".to_string(),
-        MacroMappingTarget::MasterEffect { effect_type, param_index } => {
+        MacroMappingTarget::MasterEffect {
+            effect_type,
+            param_index,
+        } => {
             let effect_name = manifold_core::effect_definition_registry::try_get(effect_type)
                 .map(|d| d.display_name)
                 .unwrap_or(effect_type.as_str());
@@ -1081,14 +1341,24 @@ fn describe_macro_mapping(
             format!("{} → {}", effect_name, param_name)
         }
         MacroMappingTarget::LayerOpacity { layer_id } => {
-            let layer_name = project.timeline.layers.iter()
+            let layer_name = project
+                .timeline
+                .layers
+                .iter()
                 .find(|l| l.layer_id == *layer_id)
                 .map(|l| l.name.as_str())
                 .unwrap_or(layer_id.as_str());
             format!("{} Opacity", layer_name)
         }
-        MacroMappingTarget::LayerEffect { layer_id, effect_type, param_index } => {
-            let layer_name = project.timeline.layers.iter()
+        MacroMappingTarget::LayerEffect {
+            layer_id,
+            effect_type,
+            param_index,
+        } => {
+            let layer_name = project
+                .timeline
+                .layers
+                .iter()
                 .find(|l| l.layer_id == *layer_id)
                 .map(|l| l.name.as_str())
                 .unwrap_or("?");
@@ -1101,8 +1371,14 @@ fn describe_macro_mapping(
                 .unwrap_or("?");
             format!("{} {} → {}", layer_name, effect_name, param_name)
         }
-        MacroMappingTarget::GenParam { layer_id, param_index } => {
-            let layer = project.timeline.layers.iter()
+        MacroMappingTarget::GenParam {
+            layer_id,
+            param_index,
+        } => {
+            let layer = project
+                .timeline
+                .layers
+                .iter()
                 .find(|l| l.layer_id == *layer_id);
             let layer_name = layer.map(|l| l.name.as_str()).unwrap_or("?");
             let param_name = layer

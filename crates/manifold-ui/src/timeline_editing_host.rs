@@ -11,10 +11,10 @@
 //! CompositeCommand internally. This avoids a dependency from manifold-ui
 //! on manifold-editing.
 
-use std::collections::HashSet;
-use manifold_core::{Beats, ClipId, LayerId, Seconds};
-use manifold_core::selection::SelectionRegion;
 use crate::node::Vec2;
+use manifold_core::selection::SelectionRegion;
+use manifold_core::{Beats, ClipId, LayerId, Seconds};
+use std::collections::HashSet;
 
 /// Cursor shapes the overlay can request.
 /// Matches Unity Cursors.cs static methods: SetDefault, SetMove, SetResizeHorizontal, SetBlocked.
@@ -107,7 +107,12 @@ pub trait TimelineEditingHost {
     /// Beat should be pre-snapped by the caller. `grid_step` is the current
     /// grid interval in beats (used as the new clip's default duration).
     /// Unity: CreateClipAtPosition(float, int).
-    fn create_clip_at_position(&mut self, beat: Beats, layer: usize, grid_step: Beats) -> Option<ClipId>;
+    fn create_clip_at_position(
+        &mut self,
+        beat: Beats,
+        layer: usize,
+        grid_step: Beats,
+    ) -> Option<ClipId>;
 
     /// Move a clip to a different layer (cross-layer drag).
     /// Unity: MoveClipToLayer(TimelineClip, int).
@@ -185,17 +190,22 @@ pub trait TimelineEditingHost {
     fn record_move(
         &mut self,
         clip_id: &str,
-        old_start: Beats, new_start: Beats,
-        old_layer: usize, new_layer: usize,
+        old_start: Beats,
+        new_start: Beats,
+        old_layer: usize,
+        new_layer: usize,
     );
 
     /// Record a trim operation into the current batch.
     fn record_trim(
         &mut self,
         clip_id: &str,
-        old_start: Beats, new_start: Beats,
-        old_duration: Beats, new_duration: Beats,
-        old_in_point: Seconds, new_in_point: Seconds,
+        old_start: Beats,
+        new_start: Beats,
+        old_duration: Beats,
+        new_duration: Beats,
+        old_in_point: Seconds,
+        new_in_point: Seconds,
     );
 
     /// Commit the current command batch as a single undo entry.
@@ -209,7 +219,13 @@ pub trait TimelineEditingHost {
 
     /// Set a clip's trim state. Used during trim drag to update live.
     /// Unity: trimClip.StartBeat/DurationBeats/InPoint = ... (lines 554-557).
-    fn set_clip_trim(&mut self, clip_id: &str, start_beat: Beats, duration_beats: Beats, in_point: Seconds);
+    fn set_clip_trim(
+        &mut self,
+        clip_id: &str,
+        start_beat: Beats,
+        duration_beats: Beats,
+        in_point: Seconds,
+    );
 
     // ── Video metadata ──────────────────────────────────────────────
 

@@ -88,13 +88,31 @@ pub fn draw_border(
     thickness: i32,
 ) {
     // Bottom
-    fill_rect(buffer, tex_w, tex_h, x, y + h - thickness, w, thickness, color);
+    fill_rect(
+        buffer,
+        tex_w,
+        tex_h,
+        x,
+        y + h - thickness,
+        w,
+        thickness,
+        color,
+    );
     // Top
     fill_rect(buffer, tex_w, tex_h, x, y, w, thickness, color);
     // Left
     fill_rect(buffer, tex_w, tex_h, x, y, thickness, h, color);
     // Right
-    fill_rect(buffer, tex_w, tex_h, x + w - thickness, y, thickness, h, color);
+    fill_rect(
+        buffer,
+        tex_w,
+        tex_h,
+        x + w - thickness,
+        y,
+        thickness,
+        h,
+        color,
+    );
 }
 
 /// Draw a single clip rectangle with background, separator, borders, and trim hints.
@@ -123,8 +141,16 @@ pub fn draw_clip(
         return;
     }
 
-    let border_thickness = if is_selected { s(2, render_scale) } else { s(1, render_scale) };
-    let border_color = if is_selected { BORDER_SELECTED } else { BORDER_NORMAL };
+    let border_thickness = if is_selected {
+        s(2, render_scale)
+    } else {
+        s(1, render_scale)
+    };
+    let border_color = if is_selected {
+        BORDER_SELECTED
+    } else {
+        BORDER_NORMAL
+    };
 
     // 1. Background fill
     fill_rect(buffer, tex_w, tex_h, x, y, w, h, bg_color);
@@ -138,7 +164,16 @@ pub fn draw_clip(
 
     // 3. Always draw top/bottom borders — consistent horizontal edges,
     // eliminates "caterpillar" ribbing at low zoom.
-    fill_rect(buffer, tex_w, tex_h, x, y, w, border_thickness, border_color);
+    fill_rect(
+        buffer,
+        tex_w,
+        tex_h,
+        x,
+        y,
+        w,
+        border_thickness,
+        border_color,
+    );
     fill_rect(
         buffer,
         tex_w,
@@ -153,7 +188,16 @@ pub fn draw_clip(
     // 4. Left/right borders only on clips wide enough that borders don't dominate.
     // s(12) keeps narrow clips clean at low zoom while showing edges at high zoom.
     if w >= s(12, render_scale) {
-        fill_rect(buffer, tex_w, tex_h, x, y, border_thickness, h, border_color);
+        fill_rect(
+            buffer,
+            tex_w,
+            tex_h,
+            x,
+            y,
+            border_thickness,
+            h,
+            border_color,
+        );
         fill_rect(
             buffer,
             tex_w,
@@ -327,7 +371,19 @@ mod tests {
     #[test]
     fn draw_clip_zero_size_noop() {
         let mut buf = vec![Color32::TRANSPARENT; 4];
-        draw_clip(&mut buf, 2, 2, 0, 0, 0, 2, Color32::new(255, 0, 0, 255), false, false, 1.0);
+        draw_clip(
+            &mut buf,
+            2,
+            2,
+            0,
+            0,
+            0,
+            2,
+            Color32::new(255, 0, 0, 255),
+            false,
+            false,
+            1.0,
+        );
         // Should not have painted anything
         assert_eq!(buf[0], Color32::TRANSPARENT);
     }

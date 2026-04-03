@@ -20,30 +20,30 @@
 //! This is a future task — the current `metal` crate works correctly for all
 //! existing functionality.
 
-#[allow(unexpected_cfgs)]
-pub mod mps;
 pub mod archive;
 pub mod metalfx;
+#[allow(unexpected_cfgs)]
+pub mod mps;
 
 mod device;
-mod types;
-mod texture_pool;
 mod encoder;
-mod shader_compiler;
 mod format;
 mod msl_cache;
+mod shader_compiler;
 pub mod surface;
+mod texture_pool;
+mod types;
 pub mod vsync;
 
 // Re-export all public types so external code paths remain identical.
 pub use device::GpuDevice;
-pub use types::{
-    GpuTexture, GpuBuffer, GpuSampler, GpuComputePipeline, GpuRenderPipeline, GpuEvent, GpuHeap,
-};
-pub use texture_pool::TexturePool;
-pub use encoder::GpuEncoder;
 use encoder::ComputeBindCache;
-pub use surface::{GpuSurface, GpuDrawable};
+pub use encoder::GpuEncoder;
+pub use surface::{GpuDrawable, GpuSurface};
+pub use texture_pool::TexturePool;
+pub use types::{
+    GpuBuffer, GpuComputePipeline, GpuEvent, GpuHeap, GpuRenderPipeline, GpuSampler, GpuTexture,
+};
 pub use vsync::{GpuVsyncSignal, GpuVsyncWaiter, VsyncWaitResult, display_id_for_window};
 
 // Raw ObjC retain/release — avoids dependency on objc::msg_send! macro.

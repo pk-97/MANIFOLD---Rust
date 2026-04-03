@@ -14,7 +14,8 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         Err(_) => return Ok(json.to_string()), // let downstream deserializer handle the error
     };
 
-    let version = root.get("projectVersion")
+    let version = root
+        .get("projectVersion")
         .and_then(|v| v.as_str())
         .unwrap_or("1.0.0")
         .to_string();
@@ -32,12 +33,37 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
 fn migrate_v100_to_v110(root: &mut Value) {
     // ── Percussion import state ──
     let mut perc_import = serde_json::Map::new();
-    move_field(root, "importedPercussionAudioPath", &mut perc_import, "audioPath");
-    move_field(root, "importedPercussionAudioStartBeat", &mut perc_import, "audioStartBeat");
-    move_field(root, "importedPercussionClipPlacements", &mut perc_import, "clipPlacements");
-    move_field(root, "percussionEnergyEnvelope", &mut perc_import, "energyEnvelope");
+    move_field(
+        root,
+        "importedPercussionAudioPath",
+        &mut perc_import,
+        "audioPath",
+    );
+    move_field(
+        root,
+        "importedPercussionAudioStartBeat",
+        &mut perc_import,
+        "audioStartBeat",
+    );
+    move_field(
+        root,
+        "importedPercussionClipPlacements",
+        &mut perc_import,
+        "clipPlacements",
+    );
+    move_field(
+        root,
+        "percussionEnergyEnvelope",
+        &mut perc_import,
+        "energyEnvelope",
+    );
     move_field(root, "importedStemPaths", &mut perc_import, "stemPaths");
-    move_field(root, "importedPercussionAudioHash", &mut perc_import, "audioHash");
+    move_field(
+        root,
+        "importedPercussionAudioHash",
+        &mut perc_import,
+        "audioHash",
+    );
     if let Value::Object(map) = root {
         map.insert("percussionImport".to_string(), Value::Object(perc_import));
     }
@@ -52,7 +78,12 @@ fn migrate_v100_to_v110(root: &mut Value) {
             let mut gen_params = serde_json::Map::new();
             move_field(layer, "generatorType", &mut gen_params, "generatorType");
             move_field(layer, "genParamValues", &mut gen_params, "paramValues");
-            move_field(layer, "genParamBaseValues", &mut gen_params, "baseParamValues");
+            move_field(
+                layer,
+                "genParamBaseValues",
+                &mut gen_params,
+                "baseParamValues",
+            );
             move_field(layer, "genDrivers", &mut gen_params, "drivers");
             move_field(layer, "genParamEnvelopes", &mut gen_params, "envelopes");
             if let Value::Object(map) = layer {
@@ -62,22 +93,35 @@ fn migrate_v100_to_v110(root: &mut Value) {
     }
 }
 
-fn move_field(source: &mut Value, source_key: &str, target: &mut serde_json::Map<String, Value>, target_key: &str) {
+fn move_field(
+    source: &mut Value,
+    source_key: &str,
+    target: &mut serde_json::Map<String, Value>,
+    target_key: &str,
+) {
     if let Value::Object(map) = source
-        && let Some(val) = map.remove(source_key) {
-            target.insert(target_key.to_string(), val);
-        }
+        && let Some(val) = map.remove(source_key)
+    {
+        target.insert(target_key.to_string(), val);
+    }
 }
 
 fn is_version_less_than(version: &str, threshold: &str) -> bool {
     let v_parts: Vec<u32> = version.split('.').filter_map(|s| s.parse().ok()).collect();
-    let t_parts: Vec<u32> = threshold.split('.').filter_map(|s| s.parse().ok()).collect();
+    let t_parts: Vec<u32> = threshold
+        .split('.')
+        .filter_map(|s| s.parse().ok())
+        .collect();
 
     for i in 0..3 {
         let v = v_parts.get(i).copied().unwrap_or(0);
         let t = t_parts.get(i).copied().unwrap_or(0);
-        if v < t { return true; }
-        if v > t { return false; }
+        if v < t {
+            return true;
+        }
+        if v > t {
+            return false;
+        }
     }
     false // equal
 }

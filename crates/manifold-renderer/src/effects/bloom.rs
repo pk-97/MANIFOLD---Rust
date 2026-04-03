@@ -1,14 +1,14 @@
 // Mechanical port of Unity BloomFX.cs + BloomEffect.shader.
 // Same logic, same variables, same constants, same edge cases.
 
-use ahash::AHashMap;
-use manifold_core::EffectTypeId;
-use manifold_core::effects::EffectInstance;
+use super::HDR_BUFFER_DIVISOR;
+use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
-use super::HDR_BUFFER_DIVISOR;
-use super::compute_dual_blit_helper::ComputeDualBlitHelper;
+use ahash::AHashMap;
+use manifold_core::EffectTypeId;
+use manifold_core::effects::EffectInstance;
 
 // BloomFX.cs lines 19-25 — constants
 const MAX_LEVELS: usize = 6;
@@ -23,12 +23,12 @@ const RADIUS_AT_ONE: f32 = 1.25;
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct BloomUniforms {
-    mode: u32,           // 0=prefilter, 1=downsample, 2=upsample, 3=composite
-    threshold: f32,      // _Threshold
-    knee: f32,           // _Knee
-    intensity: f32,      // _Intensity
-    radius_scale: f32,   // _RadiusScale
-    combine_weight: f32, // _CombineWeight
+    mode: u32,               // 0=prefilter, 1=downsample, 2=upsample, 3=composite
+    threshold: f32,          // _Threshold
+    knee: f32,               // _Knee
+    intensity: f32,          // _Intensity
+    radius_scale: f32,       // _RadiusScale
+    combine_weight: f32,     // _CombineWeight
     main_texel_size_x: f32,  // _MainTex_TexelSize.x
     main_texel_size_y: f32,  // _MainTex_TexelSize.y
     bloom_texel_size_x: f32, // _BloomTex_TexelSize.x
@@ -52,7 +52,7 @@ pub struct BloomFX {
     helper: ComputeDualBlitHelper,
     /// Specialized pipelines with mode baked in — one per bloom pass type.
     /// Metal compiler dead-code eliminates inactive branches in each variant.
-    pipeline_prefilter: manifold_gpu::GpuComputePipeline,  // mode=0
+    pipeline_prefilter: manifold_gpu::GpuComputePipeline, // mode=0
     pipeline_downsample: manifold_gpu::GpuComputePipeline, // mode=1
     pipeline_upsample: manifold_gpu::GpuComputePipeline,   // mode=2
     pipeline_composite: manifold_gpu::GpuComputePipeline,  // mode=3
@@ -127,7 +127,14 @@ impl BloomFX {
             ph = (ph / 2).max(1);
         }
 
-        self.states.insert(owner_key, BloomState { mips_a, mips_b, count });
+        self.states.insert(
+            owner_key,
+            BloomState {
+                mips_a,
+                mips_b,
+                count,
+            },
+        );
     }
 }
 
@@ -153,16 +160,28 @@ impl PostProcessEffect for BloomFX {
         let state = self.states.get(&ctx.owner_key).unwrap();
         if state.count == 0 {
             let skip_u = BloomUniforms {
-                mode: 3, threshold: 0.0, knee: 0.0, intensity: 0.0,
-                radius_scale: 1.0, combine_weight: 0.0,
-                main_texel_size_x: 0.0, main_texel_size_y: 0.0,
-                bloom_texel_size_x: 0.0, bloom_texel_size_y: 0.0,
-                _pad0: 0.0, _pad1: 0.0,
+                mode: 3,
+                threshold: 0.0,
+                knee: 0.0,
+                intensity: 0.0,
+                radius_scale: 1.0,
+                combine_weight: 0.0,
+                main_texel_size_x: 0.0,
+                main_texel_size_y: 0.0,
+                bloom_texel_size_x: 0.0,
+                bloom_texel_size_y: 0.0,
+                _pad0: 0.0,
+                _pad1: 0.0,
             };
             self.helper.dispatch_a_only_with(
-                &self.pipeline_composite, gpu, source, target,
+                &self.pipeline_composite,
+                gpu,
+                source,
+                target,
                 bytemuck::bytes_of(&skip_u),
-                "Bloom Skip", ctx.width, ctx.height,
+                "Bloom Skip",
+                ctx.width,
+                ctx.height,
             );
             return;
         }
@@ -180,9 +199,12 @@ impl PostProcessEffect for BloomFX {
             intensity: amount,
             radius_scale,
             combine_weight: 1.0,
-            main_texel_size_x: 0.0, main_texel_size_y: 0.0,
-            bloom_texel_size_x: 0.0, bloom_texel_size_y: 0.0,
-            _pad0: 0.0, _pad1: 0.0,
+            main_texel_size_x: 0.0,
+            main_texel_size_y: 0.0,
+            bloom_texel_size_x: 0.0,
+            bloom_texel_size_y: 0.0,
+            _pad0: 0.0,
+            _pad1: 0.0,
         };
 
         // Pass 0: Prefilter
@@ -193,10 +215,14 @@ impl PostProcessEffect for BloomFX {
             ..base_uniforms
         };
         self.helper.dispatch_a_only_with(
-            &self.pipeline_prefilter, gpu, source, &state.mips_a[0].texture,
+            &self.pipeline_prefilter,
+            gpu,
+            source,
+            &state.mips_a[0].texture,
             bytemuck::bytes_of(&prefilter_u),
             "Bloom Prefilter",
-            state.mips_a[0].width, state.mips_a[0].height,
+            state.mips_a[0].width,
+            state.mips_a[0].height,
         );
 
         // Downsample chain
@@ -210,10 +236,14 @@ impl PostProcessEffect for BloomFX {
                 ..base_uniforms
             };
             self.helper.dispatch_a_only_with(
-                &self.pipeline_downsample, gpu,
-                &state.mips_a[i - 1].texture, &state.mips_a[i].texture,
-                bytemuck::bytes_of(&down_u), "Bloom Down",
-                state.mips_a[i].width, state.mips_a[i].height,
+                &self.pipeline_downsample,
+                gpu,
+                &state.mips_a[i - 1].texture,
+                &state.mips_a[i].texture,
+                bytemuck::bytes_of(&down_u),
+                "Bloom Down",
+                state.mips_a[i].width,
+                state.mips_a[i].height,
             );
         }
 
@@ -222,9 +252,17 @@ impl PostProcessEffect for BloomFX {
             let hi_w = state.mips_a[i].width;
             let hi_h = state.mips_a[i].height;
             let (lo_tex, lo_w, lo_h) = if i == used_levels - 2 {
-                (&state.mips_a[i + 1].texture, state.mips_a[i + 1].width, state.mips_a[i + 1].height)
+                (
+                    &state.mips_a[i + 1].texture,
+                    state.mips_a[i + 1].width,
+                    state.mips_a[i + 1].height,
+                )
             } else {
-                (&state.mips_b[i + 1].texture, state.mips_b[i + 1].width, state.mips_b[i + 1].height)
+                (
+                    &state.mips_b[i + 1].texture,
+                    state.mips_b[i + 1].width,
+                    state.mips_b[i + 1].height,
+                )
             };
 
             let up_u = BloomUniforms {
@@ -236,10 +274,15 @@ impl PostProcessEffect for BloomFX {
                 ..base_uniforms
             };
             self.helper.dispatch_with(
-                &self.pipeline_upsample, gpu,
-                &state.mips_a[i].texture, lo_tex, &state.mips_b[i].texture,
-                bytemuck::bytes_of(&up_u), "Bloom Up",
-                state.mips_b[i].width, state.mips_b[i].height,
+                &self.pipeline_upsample,
+                gpu,
+                &state.mips_a[i].texture,
+                lo_tex,
+                &state.mips_b[i].texture,
+                bytemuck::bytes_of(&up_u),
+                "Bloom Up",
+                state.mips_b[i].width,
+                state.mips_b[i].height,
             );
         }
 
@@ -255,10 +298,15 @@ impl PostProcessEffect for BloomFX {
             ..base_uniforms
         };
         self.helper.dispatch_with(
-            &self.pipeline_composite, gpu,
-            source, &state.mips_b[0].texture, target,
-            bytemuck::bytes_of(&composite_u), "Bloom Composite",
-            ctx.width, ctx.height,
+            &self.pipeline_composite,
+            gpu,
+            source,
+            &state.mips_b[0].texture,
+            target,
+            bytemuck::bytes_of(&composite_u),
+            "Bloom Composite",
+            ctx.width,
+            ctx.height,
         );
     }
 
@@ -275,9 +323,13 @@ impl PostProcessEffect for BloomFX {
             let mut ph = (height / HDR_BUFFER_DIVISOR).max(1);
             let mut count = 0;
             for i in 0..state.mips_a.len() {
-                if pw < MIN_SIZE || ph < MIN_SIZE { break; }
-                state.mips_a[i] = RenderTarget::new(device, pw, ph, format, &format!("BloomMipA_{i}"));
-                state.mips_b[i] = RenderTarget::new(device, pw, ph, format, &format!("BloomMipB_{i}"));
+                if pw < MIN_SIZE || ph < MIN_SIZE {
+                    break;
+                }
+                state.mips_a[i] =
+                    RenderTarget::new(device, pw, ph, format, &format!("BloomMipA_{i}"));
+                state.mips_b[i] =
+                    RenderTarget::new(device, pw, ph, format, &format!("BloomMipB_{i}"));
                 count += 1;
                 pw = (pw / 2).max(1);
                 ph = (ph / 2).max(1);
@@ -293,6 +345,10 @@ impl PostProcessEffect for BloomFX {
 
 impl StatefulEffect for BloomFX {
     fn clear_state_for_owner(&mut self, _owner_key: i64) {}
-    fn cleanup_owner(&mut self, owner_key: i64) { self.states.remove(&owner_key); }
-    fn cleanup_all_owners(&mut self, _device: &manifold_gpu::GpuDevice) { self.states.clear(); }
+    fn cleanup_owner(&mut self, owner_key: i64) {
+        self.states.remove(&owner_key);
+    }
+    fn cleanup_all_owners(&mut self, _device: &manifold_gpu::GpuDevice) {
+        self.states.clear();
+    }
 }

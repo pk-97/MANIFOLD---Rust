@@ -24,11 +24,7 @@ pub struct ComputeBlitHelper {
 impl ComputeBlitHelper {
     /// Create a new compute-based single-source effect pipeline.
     /// Shader must contain cs_main with @workgroup_size(16, 16).
-    pub fn new(
-        device: &manifold_gpu::GpuDevice,
-        shader_source: &str,
-        label: &str,
-    ) -> Self {
+    pub fn new(device: &manifold_gpu::GpuDevice, shader_source: &str, label: &str) -> Self {
         let pipeline = device.create_compute_pipeline(shader_source, "cs_main", label);
         let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc::default());
         Self { pipeline, sampler }
@@ -36,11 +32,7 @@ impl ComputeBlitHelper {
 
     /// Half-precision variant — converts all f32 ALU to f16 (`half`) in MSL.
     /// 2× ALU throughput on Apple Silicon. Only use for non-accumulative shaders.
-    pub fn new_half(
-        device: &manifold_gpu::GpuDevice,
-        shader_source: &str,
-        label: &str,
-    ) -> Self {
+    pub fn new_half(device: &manifold_gpu::GpuDevice, shader_source: &str, label: &str) -> Self {
         let pipeline = device.create_compute_pipeline_half(shader_source, "cs_main", label);
         let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc::default());
         Self { pipeline, sampler }
@@ -97,7 +89,14 @@ impl ComputeBlitHelper {
         height: u32,
     ) {
         self.dispatch_with(
-            &self.pipeline, gpu, source, target, uniform_bytes, label, width, height,
+            &self.pipeline,
+            gpu,
+            source,
+            target,
+            uniform_bytes,
+            label,
+            width,
+            height,
         );
     }
 }

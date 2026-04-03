@@ -1,3 +1,4 @@
+use crate::render_target::RenderTarget;
 /// Pool of reusable RenderTargets keyed by (width, height, format).
 ///
 /// When a `TexturePool` (MTLHeap-backed) is available, delegates to it for
@@ -9,7 +10,6 @@
 ///   pool.release(rt);  // returns to pool for reuse
 use ahash::AHashMap;
 use manifold_gpu::{GpuDevice, GpuTextureFormat, TexturePool};
-use crate::render_target::RenderTarget;
 
 type PoolKey = (u32, u32, GpuTextureFormat);
 

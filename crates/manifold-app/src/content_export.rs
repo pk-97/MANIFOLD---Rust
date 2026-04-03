@@ -44,7 +44,12 @@ impl ContentThread {
         // 2. Resolve export range
         let Some(project) = self.engine.project() else {
             log::error!("[ContentThread] No project loaded, cannot export");
-            self.send_export_finished(state_tx, false, "No project loaded".into(), &config.output_path);
+            self.send_export_finished(
+                state_tx,
+                false,
+                "No project loaded".into(),
+                &config.output_path,
+            );
             return;
         };
         let bpm = project.settings.bpm;
@@ -66,7 +71,12 @@ impl ContentThread {
 
         if start_beat >= end_beat || content_start >= content_end {
             log::error!("[ContentThread] No content in export range ({start_beat}..{end_beat})");
-            self.send_export_finished(state_tx, false, "No content in export range".into(), &config.output_path);
+            self.send_export_finished(
+                state_tx,
+                false,
+                "No content in export range".into(),
+                &config.output_path,
+            );
             return;
         }
 
@@ -97,7 +107,12 @@ impl ContentThread {
 
         if total_frames == 0 {
             log::error!("[ContentThread] Zero frames to export");
-            self.send_export_finished(state_tx, false, "Zero frames to export".into(), &export_config.output_path);
+            self.send_export_finished(
+                state_tx,
+                false,
+                "Zero frames to export".into(),
+                &export_config.output_path,
+            );
             return;
         }
 
@@ -107,13 +122,23 @@ impl ContentThread {
         let generator_only = project.timeline.layers.iter().all(|layer| {
             layer.is_group() || layer.clips.iter().all(|c| c.video_clip_id.is_empty())
         });
-        let mode_label = if generator_only { "offline" } else { "real-time" };
+        let mode_label = if generator_only {
+            "offline"
+        } else {
+            "real-time"
+        };
 
         log::info!(
             "[Export] {} mode: {} frames, {:.2}s, beats {:.1}-{:.1}, \
              {}x{} @ {} fps, audio={}",
-            mode_label, total_frames, duration, start_beat, end_beat,
-            export_config.width, export_config.height, export_config.fps,
+            mode_label,
+            total_frames,
+            duration,
+            start_beat,
+            end_beat,
+            export_config.width,
+            export_config.height,
+            export_config.fps,
             export_config.has_audio(),
         );
 
@@ -132,7 +157,9 @@ impl ContentThread {
             );
         }
         // Seek to start
-        let start_time = self.engine.beat_to_timeline_time(Beats::from_f32(start_beat));
+        let start_time = self
+            .engine
+            .beat_to_timeline_time(Beats::from_f32(start_beat));
         self.engine.seek_to(start_time);
         self.engine.play();
 
@@ -142,12 +169,17 @@ impl ContentThread {
         let session_result = if let Some(ptr) = device_ptr {
             unsafe {
                 manifold_media::export_session::ExportSession::new_with_device(
-                    export_config.clone(), bpm.0, &mut tempo_map, ptr,
+                    export_config.clone(),
+                    bpm.0,
+                    &mut tempo_map,
+                    ptr,
                 )
             }
         } else {
             manifold_media::export_session::ExportSession::new(
-                export_config.clone(), bpm.0, &mut tempo_map,
+                export_config.clone(),
+                bpm.0,
+                &mut tempo_map,
             )
         };
         let mut session = match session_result {
@@ -158,7 +190,12 @@ impl ContentThread {
                 self.engine.stop();
                 let restore_time = self.engine.beat_to_timeline_time(saved_beat);
                 self.engine.seek_to(restore_time);
-                self.send_export_finished(state_tx, false, format!("Export failed: {e}"), &export_config.output_path);
+                self.send_export_finished(
+                    state_tx,
+                    false,
+                    format!("Export failed: {e}"),
+                    &export_config.output_path,
+                );
                 return;
             }
         };
@@ -192,7 +229,9 @@ impl ContentThread {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
             // Re-seek to start — warmup ticks advanced the engine
-            let start_time = self.engine.beat_to_timeline_time(Beats::from_f32(start_beat));
+            let start_time = self
+                .engine
+                .beat_to_timeline_time(Beats::from_f32(start_beat));
             self.engine.seek_to(start_time);
         }
 
@@ -217,14 +256,24 @@ impl ContentThread {
             #[cfg(target_os = "macos")]
             let frame_err: Option<String> = objc::rc::autoreleasepool(|| {
                 self.export_one_frame(
-                    &mut session, &export_config, frame_idx, total_frames,
-                    frame_dt, state_tx, generator_only,
+                    &mut session,
+                    &export_config,
+                    frame_idx,
+                    total_frames,
+                    frame_dt,
+                    state_tx,
+                    generator_only,
                 )
             });
             #[cfg(not(target_os = "macos"))]
             let frame_err: Option<String> = self.export_one_frame(
-                &mut session, &export_config, frame_idx, total_frames,
-                frame_dt, state_tx, generator_only,
+                &mut session,
+                &export_config,
+                frame_idx,
+                total_frames,
+                frame_dt,
+                state_tx,
+                generator_only,
             );
 
             if let Some(err) = frame_err {
@@ -237,7 +286,10 @@ impl ContentThread {
         let failed = cancelled || encode_error.is_some();
         if failed {
             if cancelled {
-                log::info!("[ContentThread] Export cancelled at frame {}", session.frames_encoded());
+                log::info!(
+                    "[ContentThread] Export cancelled at frame {}",
+                    session.frames_encoded()
+                );
             }
             // Clean up partial file
             let _ = std::fs::remove_file(&export_config.output_path);
@@ -250,10 +302,13 @@ impl ContentThread {
                 Ok(result) => {
                     log::info!(
                         "[ContentThread] Export complete: {} frames, {:.2}s -> {}",
-                        result.frames_encoded, result.duration_seconds, result.output_path,
+                        result.frames_encoded,
+                        result.duration_seconds,
+                        result.output_path,
                     );
                     self.send_export_finished(
-                        state_tx, true,
+                        state_tx,
+                        true,
                         format!("Export complete: {} frames", result.frames_encoded),
                         &result.output_path,
                     );
@@ -261,7 +316,8 @@ impl ContentThread {
                 Err(e) => {
                     log::error!("[ContentThread] Export finalization failed: {e}");
                     self.send_export_finished(
-                        state_tx, false,
+                        state_tx,
+                        false,
                         format!("Export failed: {e}"),
                         &export_config.output_path,
                     );
@@ -280,9 +336,12 @@ impl ContentThread {
         self.engine.set_export_mode(false);
         // Restore content pipeline resolution (and render scale) after export.
         if cur_w != export_config.width || cur_h != export_config.height {
-            let render_scale = self.engine.project()
+            let render_scale = self
+                .engine
+                .project()
                 .map_or(1.0, |p| p.settings.render_scale);
-            self.content_pipeline.resize(&mut self.engine, cur_w, cur_h, render_scale);
+            self.content_pipeline
+                .resize(&mut self.engine, cur_w, cur_h, render_scale);
         }
         self.engine.stop();
         let restore_time = self.engine.beat_to_timeline_time(saved_beat);
@@ -297,9 +356,7 @@ impl ContentThread {
             } else {
                 "Export cancelled".into()
             };
-            self.send_export_finished(
-                state_tx, false, msg, &export_config.output_path,
-            );
+            self.send_export_finished(state_tx, false, msg, &export_config.output_path);
         }
     }
 
@@ -332,7 +389,11 @@ impl ContentThread {
         }
 
         self.content_pipeline.render_content(
-            &self.gpu, &mut self.engine, &tick_result, frame_dt, frame_idx as u64,
+            &self.gpu,
+            &mut self.engine,
+            &tick_result,
+            frame_dt,
+            frame_idx as u64,
             true,
         );
 
@@ -345,9 +406,9 @@ impl ContentThread {
         let tex_ptr = if export_config.hdr {
             let paper_white = 200.0f32;
             let max_nits = 10000.0f32;
-            let texture = self.content_pipeline.pq_encode_for_export(
-                paper_white, max_nits,
-            );
+            let texture = self
+                .content_pipeline
+                .pq_encode_for_export(paper_white, max_nits);
             Self::get_metal_texture_ptr(texture)
         } else {
             let texture = self.content_pipeline.export_output_texture();
@@ -370,7 +431,8 @@ impl ContentThread {
         }
 
         if !tick_result.stopped_clips.is_empty() {
-            self.content_pipeline.cleanup_stopped_clips(&tick_result.stopped_clips);
+            self.content_pipeline
+                .cleanup_stopped_clips(&tick_result.stopped_clips);
         }
         self.engine.reclaim_tick_result(tick_result);
 

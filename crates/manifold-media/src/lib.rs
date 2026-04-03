@@ -5,6 +5,12 @@
 //! FFmpeg-based audio muxing, and export session orchestration.
 
 pub mod audio_muxer;
+#[cfg(target_os = "macos")]
+pub mod decode_scheduler;
+#[cfg(target_os = "macos")]
+pub mod decoder;
+#[cfg(target_os = "macos")]
+mod decoder_ffi;
 pub mod export_config;
 pub mod export_session;
 pub mod metadata;
@@ -12,11 +18,5 @@ pub mod metadata;
 pub mod metal_encoder;
 #[cfg(target_os = "macos")]
 mod metal_ffi;
-#[cfg(target_os = "macos")]
-pub mod decoder;
-#[cfg(target_os = "macos")]
-mod decoder_ffi;
-#[cfg(target_os = "macos")]
-pub mod decode_scheduler;
 #[cfg(target_os = "macos")]
 pub mod video_renderer;

@@ -18,7 +18,7 @@
 //! see `mps.rs` header for details. Once the full `metal` → `objc2-metal` migration
 //! happens, MetalFX bindings should be replaced with the typed objc2-metal-fx crate.
 
-use objc::runtime::{Class, Object, BOOL};
+use objc::runtime::{BOOL, Class, Object};
 use std::ffi::c_void;
 
 use super::GpuTexture;
@@ -44,17 +44,17 @@ pub fn metalfx_available() -> bool {
 fn to_mtl_pixel_format(fmt: GpuTextureFormat) -> u64 {
     // MTLPixelFormat raw values (from Metal headers)
     match fmt {
-        GpuTextureFormat::Rgba16Float => 115,   // MTLPixelFormatRGBA16Float
-        GpuTextureFormat::Rgba32Float => 125,   // MTLPixelFormatRGBA32Float
-        GpuTextureFormat::Rgba8Unorm => 70,     // MTLPixelFormatRGBA8Unorm
-        GpuTextureFormat::Bgra8Unorm => 80,     // MTLPixelFormatBGRA8Unorm
-        GpuTextureFormat::R32Float => 55,       // MTLPixelFormatR32Float
-        GpuTextureFormat::Rg32Float => 63,      // MTLPixelFormatRG32Float
-        GpuTextureFormat::R16Float => 25,       // MTLPixelFormatR16Float
-        GpuTextureFormat::Rg16Float => 35,      // MTLPixelFormatRG16Float
-        GpuTextureFormat::R32Uint => 53,        // MTLPixelFormatR32Uint
+        GpuTextureFormat::Rgba16Float => 115, // MTLPixelFormatRGBA16Float
+        GpuTextureFormat::Rgba32Float => 125, // MTLPixelFormatRGBA32Float
+        GpuTextureFormat::Rgba8Unorm => 70,   // MTLPixelFormatRGBA8Unorm
+        GpuTextureFormat::Bgra8Unorm => 80,   // MTLPixelFormatBGRA8Unorm
+        GpuTextureFormat::R32Float => 55,     // MTLPixelFormatR32Float
+        GpuTextureFormat::Rg32Float => 63,    // MTLPixelFormatRG32Float
+        GpuTextureFormat::R16Float => 25,     // MTLPixelFormatR16Float
+        GpuTextureFormat::Rg16Float => 35,    // MTLPixelFormatRG16Float
+        GpuTextureFormat::R32Uint => 53,      // MTLPixelFormatR32Uint
         GpuTextureFormat::Rgba8UnormSrgb => 71, // MTLPixelFormatRGBA8Unorm_sRGB
-        GpuTextureFormat::R8Unorm => 10,        // MTLPixelFormatR8Unorm
+        GpuTextureFormat::R8Unorm => 10,      // MTLPixelFormatR8Unorm
     }
 }
 
@@ -117,11 +117,18 @@ impl MetalFxSpatialScaler {
         };
 
         // Release the descriptor (scaler retains what it needs)
-        unsafe { objc_release(desc as *mut c_void); }
+        unsafe {
+            objc_release(desc as *mut c_void);
+        }
 
         if scaler.is_null() {
-            log::error!("[MetalFX] Failed to create spatial scaler ({}x{} -> {}x{})",
-                input_width, input_height, output_width, output_height);
+            log::error!(
+                "[MetalFX] Failed to create spatial scaler ({}x{} -> {}x{})",
+                input_width,
+                input_height,
+                output_width,
+                output_height
+            );
             return None;
         }
 
@@ -129,7 +136,10 @@ impl MetalFxSpatialScaler {
         // No extra retain needed — we own it, drop releases it.
         log::info!(
             "[MetalFX] Created spatial scaler: {}x{} -> {}x{}",
-            input_width, input_height, output_width, output_height
+            input_width,
+            input_height,
+            output_width,
+            output_height
         );
 
         Some(Self {
@@ -144,12 +154,7 @@ impl MetalFxSpatialScaler {
     /// Encode the upscale operation into a command buffer.
     /// The source texture must match input dimensions, dst must match output dimensions.
     /// Caller must end any active encoder on the command buffer before calling this.
-    pub fn encode(
-        &self,
-        cmd_buf: &metal::CommandBufferRef,
-        src: &GpuTexture,
-        dst: &GpuTexture,
-    ) {
+    pub fn encode(&self, cmd_buf: &metal::CommandBufferRef, src: &GpuTexture, dst: &GpuTexture) {
         unsafe {
             let src_ref: &metal::TextureRef = &src.raw;
             let dst_ref: &metal::TextureRef = &dst.raw;
@@ -177,7 +182,9 @@ impl MetalFxSpatialScaler {
 impl Drop for MetalFxSpatialScaler {
     fn drop(&mut self) {
         if !self.scaler_ptr.is_null() {
-            unsafe { objc_release(self.scaler_ptr as *mut c_void); }
+            unsafe {
+                objc_release(self.scaler_ptr as *mut c_void);
+            }
         }
     }
 }
@@ -198,8 +205,8 @@ pub fn supports_spatial_scaling(device: &metal::DeviceRef) -> bool {
 
 // ─── TextureUpscaler ─────────────────────────────────────────────────
 
-use super::mps;
 use super::GpuDevice;
+use super::mps;
 
 /// Upscale mode for generator internal resolution scaling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -265,13 +272,8 @@ impl TextureUpscaler {
     ) {
         if self.mode == UpscaleMode::MetalFxSpatial {
             // Find or create a MetalFX scaler for this dimension pair
-            let scaler_idx = self.ensure_metalfx_scaler(
-                device,
-                src.width,
-                src.height,
-                dst.width,
-                dst.height,
-            );
+            let scaler_idx =
+                self.ensure_metalfx_scaler(device, src.width, src.height, dst.width, dst.height);
             if let Some(idx) = scaler_idx {
                 let scaler = &self.metalfx_scalers[idx];
                 enc.end_current();
@@ -308,14 +310,8 @@ impl TextureUpscaler {
             }
         }
         // Create new
-        let scaler = MetalFxSpatialScaler::new(
-            device.raw_device(),
-            in_w,
-            in_h,
-            out_w,
-            out_h,
-            self.format,
-        )?;
+        let scaler =
+            MetalFxSpatialScaler::new(device.raw_device(), in_w, in_h, out_w, out_h, self.format)?;
         self.metalfx_scalers.push(scaler);
         Some(self.metalfx_scalers.len() - 1)
     }

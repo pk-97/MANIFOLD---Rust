@@ -70,8 +70,16 @@ pub fn navigate_cursor(
 ) -> NavResult {
     match direction {
         Direction::Left | Direction::Right => {
-            let step = if is_fine { FINE_NUDGE_BEATS } else { grid_interval };
-            let delta = if direction == Direction::Left { -step } else { step };
+            let step = if is_fine {
+                FINE_NUDGE_BEATS
+            } else {
+                grid_interval
+            };
+            let delta = if direction == Direction::Left {
+                -step
+            } else {
+                step
+            };
             let new_beat = (current_beat + delta).max(0.0);
 
             // Check if a clip exists at the new position on the current layer
@@ -85,11 +93,8 @@ pub fn navigate_cursor(
             }
         }
         Direction::Up | Direction::Down => {
-            let new_layer = find_adjacent_visible_layer(
-                layers,
-                current_layer,
-                direction == Direction::Up,
-            );
+            let new_layer =
+                find_adjacent_visible_layer(layers, current_layer, direction == Direction::Up);
 
             match new_layer {
                 Some(layer_idx) => {
@@ -111,9 +116,9 @@ pub fn navigate_cursor(
 
 /// Find a clip that contains the given beat on the given layer.
 fn find_clip_at(clips: &[NavClipInfo], beat: f32, layer: usize) -> Option<&NavClipInfo> {
-    clips.iter().find(|c| {
-        c.layer_index == layer && c.start_beat <= beat && c.end_beat > beat
-    })
+    clips
+        .iter()
+        .find(|c| c.layer_index == layer && c.start_beat <= beat && c.end_beat > beat)
 }
 
 /// Find the next visible layer in the given direction, skipping zero-height layers.
@@ -152,7 +157,10 @@ mod tests {
         heights
             .iter()
             .enumerate()
-            .map(|(i, &h)| NavLayerInfo { index: i, height: h })
+            .map(|(i, &h)| NavLayerInfo {
+                index: i,
+                height: h,
+            })
             .collect()
     }
 
@@ -168,67 +176,89 @@ mod tests {
     #[test]
     fn arrow_right_moves_by_grid_step() {
         let layers = make_layers(&[140.0]);
-        let result = navigate_cursor(
-            Direction::Right, 4.0, 0, 1.0, false, &layers, &[],
+        let result = navigate_cursor(Direction::Right, 4.0, 0, 1.0, false, &layers, &[]);
+        assert_eq!(
+            result,
+            NavResult::SetCursor {
+                beat: 5.0,
+                layer: 0
+            }
         );
-        assert_eq!(result, NavResult::SetCursor { beat: 5.0, layer: 0 });
     }
 
     #[test]
     fn arrow_left_moves_by_grid_step() {
         let layers = make_layers(&[140.0]);
-        let result = navigate_cursor(
-            Direction::Left, 4.0, 0, 1.0, false, &layers, &[],
+        let result = navigate_cursor(Direction::Left, 4.0, 0, 1.0, false, &layers, &[]);
+        assert_eq!(
+            result,
+            NavResult::SetCursor {
+                beat: 3.0,
+                layer: 0
+            }
         );
-        assert_eq!(result, NavResult::SetCursor { beat: 3.0, layer: 0 });
     }
 
     #[test]
     fn shift_arrow_moves_by_sixteenth() {
         let layers = make_layers(&[140.0]);
-        let result = navigate_cursor(
-            Direction::Right, 4.0, 0, 1.0, true, &layers, &[],
-        );
+        let result = navigate_cursor(Direction::Right, 4.0, 0, 1.0, true, &layers, &[]);
         let expected_beat = 4.0 + FINE_NUDGE_BEATS;
-        assert_eq!(result, NavResult::SetCursor { beat: expected_beat, layer: 0 });
+        assert_eq!(
+            result,
+            NavResult::SetCursor {
+                beat: expected_beat,
+                layer: 0
+            }
+        );
     }
 
     #[test]
     fn arrow_left_clamps_to_zero() {
         let layers = make_layers(&[140.0]);
-        let result = navigate_cursor(
-            Direction::Left, 0.0, 0, 1.0, false, &layers, &[],
+        let result = navigate_cursor(Direction::Left, 0.0, 0, 1.0, false, &layers, &[]);
+        assert_eq!(
+            result,
+            NavResult::SetCursor {
+                beat: 0.0,
+                layer: 0
+            }
         );
-        assert_eq!(result, NavResult::SetCursor { beat: 0.0, layer: 0 });
     }
 
     #[test]
     fn arrow_up_skips_collapsed_layers() {
         // Layer 0: visible, Layer 1: collapsed (height 0), Layer 2: visible (current)
         let layers = make_layers(&[140.0, 0.0, 140.0]);
-        let result = navigate_cursor(
-            Direction::Up, 4.0, 2, 1.0, false, &layers, &[],
-        );
+        let result = navigate_cursor(Direction::Up, 4.0, 2, 1.0, false, &layers, &[]);
         // Should skip layer 1 (collapsed) and land on layer 0
-        assert_eq!(result, NavResult::SetCursor { beat: 4.0, layer: 0 });
+        assert_eq!(
+            result,
+            NavResult::SetCursor {
+                beat: 4.0,
+                layer: 0
+            }
+        );
     }
 
     #[test]
     fn arrow_down_skips_collapsed_layers() {
         // Layer 0: visible (current), Layer 1: collapsed, Layer 2: visible
         let layers = make_layers(&[140.0, 0.0, 140.0]);
-        let result = navigate_cursor(
-            Direction::Down, 4.0, 0, 1.0, false, &layers, &[],
+        let result = navigate_cursor(Direction::Down, 4.0, 0, 1.0, false, &layers, &[]);
+        assert_eq!(
+            result,
+            NavResult::SetCursor {
+                beat: 4.0,
+                layer: 2
+            }
         );
-        assert_eq!(result, NavResult::SetCursor { beat: 4.0, layer: 2 });
     }
 
     #[test]
     fn arrow_up_at_top_returns_no_change() {
         let layers = make_layers(&[140.0, 140.0]);
-        let result = navigate_cursor(
-            Direction::Up, 4.0, 0, 1.0, false, &layers, &[],
-        );
+        let result = navigate_cursor(Direction::Up, 4.0, 0, 1.0, false, &layers, &[]);
         assert_eq!(result, NavResult::NoChange);
     }
 
@@ -236,9 +266,7 @@ mod tests {
     fn auto_selects_clip_at_position() {
         let layers = make_layers(&[140.0]);
         let clips = vec![make_clip("clip-a", 0, 5.0, 2.0)];
-        let result = navigate_cursor(
-            Direction::Right, 4.0, 0, 1.0, false, &layers, &clips,
-        );
+        let result = navigate_cursor(Direction::Right, 4.0, 0, 1.0, false, &layers, &clips);
         // Beat moves to 5.0, clip-a spans [5.0, 7.0) — auto-select
         assert_eq!(result, NavResult::SelectClip(ClipId::new("clip-a")));
     }
@@ -247,19 +275,21 @@ mod tests {
     fn sets_cursor_when_no_clip() {
         let layers = make_layers(&[140.0]);
         let clips = vec![make_clip("clip-a", 0, 10.0, 2.0)]; // Far away
-        let result = navigate_cursor(
-            Direction::Right, 4.0, 0, 1.0, false, &layers, &clips,
+        let result = navigate_cursor(Direction::Right, 4.0, 0, 1.0, false, &layers, &clips);
+        assert_eq!(
+            result,
+            NavResult::SetCursor {
+                beat: 5.0,
+                layer: 0
+            }
         );
-        assert_eq!(result, NavResult::SetCursor { beat: 5.0, layer: 0 });
     }
 
     #[test]
     fn arrow_down_auto_selects_clip_on_new_layer() {
         let layers = make_layers(&[140.0, 140.0]);
         let clips = vec![make_clip("clip-b", 1, 3.0, 4.0)]; // Layer 1, spans [3, 7)
-        let result = navigate_cursor(
-            Direction::Down, 4.0, 0, 1.0, false, &layers, &clips,
-        );
+        let result = navigate_cursor(Direction::Down, 4.0, 0, 1.0, false, &layers, &clips);
         // Moves to layer 1 at beat 4.0 — clip-b contains beat 4.0
         assert_eq!(result, NavResult::SelectClip(ClipId::new("clip-b")));
     }

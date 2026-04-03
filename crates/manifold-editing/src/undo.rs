@@ -1,5 +1,5 @@
-use manifold_core::project::Project;
 use crate::command::Command;
+use manifold_core::project::Project;
 use std::collections::VecDeque;
 
 const MAX_UNDO_HISTORY: usize = 200;
@@ -60,10 +60,18 @@ impl UndoRedoManager {
         }
     }
 
-    pub fn can_undo(&self) -> bool { !self.undo_stack.is_empty() }
-    pub fn can_redo(&self) -> bool { !self.redo_stack.is_empty() }
-    pub fn undo_count(&self) -> usize { self.undo_stack.len() }
-    pub fn redo_count(&self) -> usize { self.redo_stack.len() }
+    pub fn can_undo(&self) -> bool {
+        !self.undo_stack.is_empty()
+    }
+    pub fn can_redo(&self) -> bool {
+        !self.redo_stack.is_empty()
+    }
+    pub fn undo_count(&self) -> usize {
+        self.undo_stack.len()
+    }
+    pub fn redo_count(&self) -> usize {
+        self.redo_stack.len()
+    }
 
     pub fn clear(&mut self) {
         self.undo_stack.clear();
@@ -102,7 +110,9 @@ mod tests {
         fn undo(&mut self, project: &mut Project) {
             project.settings.bpm = self.old_bpm;
         }
-        fn description(&self) -> &str { "Set BPM" }
+        fn description(&self) -> &str {
+            "Set BPM"
+        }
     }
 
     #[test]
@@ -112,7 +122,13 @@ mod tests {
         let mut project = Project::default();
         project.settings.bpm = Bpm(120.0);
 
-        mgr.execute(Box::new(SetBpmCommand { old_bpm: Bpm(0.0), new_bpm: Bpm(140.0) }), &mut project);
+        mgr.execute(
+            Box::new(SetBpmCommand {
+                old_bpm: Bpm(0.0),
+                new_bpm: Bpm(140.0),
+            }),
+            &mut project,
+        );
         assert_eq!(project.settings.bpm, Bpm(140.0));
         assert!(mgr.can_undo());
 

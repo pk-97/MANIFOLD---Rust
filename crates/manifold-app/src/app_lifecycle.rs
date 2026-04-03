@@ -672,8 +672,7 @@ impl Application {
         }
 
         let id = window.id();
-        let resolved_index =
-            display_index.or(if monitors.len() > 1 { Some(1) } else { Some(0) });
+        let resolved_index = display_index.or(if monitors.len() > 1 { Some(1) } else { Some(0) });
 
         // Query headroom for the new output window immediately — don't wait
         // for an NSNotification. Without this, output_edr_headroom stays at 1.0

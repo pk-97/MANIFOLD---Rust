@@ -1,5 +1,5 @@
-use manifold_core::types::{ClockAuthority, PlaybackState};
 use manifold_core::project::Project;
+use manifold_core::types::{ClockAuthority, PlaybackState};
 use manifold_core::{Beats, Seconds};
 
 /// Read-only view of playback state for sync controllers.
@@ -40,8 +40,7 @@ pub struct SyncTargetSnapshot {
 impl SyncTargetSnapshot {
     /// Capture a snapshot from any SyncTarget implementor.
     pub fn from_engine(target: &dyn SyncTarget) -> Self {
-        let bpm = target.current_project()
-            .map_or(120.0, |p| p.settings.bpm.0);
+        let bpm = target.current_project().map_or(120.0, |p| p.settings.bpm.0);
         Self {
             state: target.current_state(),
             time: target.current_time(),
@@ -51,9 +50,15 @@ impl SyncTargetSnapshot {
 }
 
 impl SyncTarget for SyncTargetSnapshot {
-    fn current_state(&self) -> PlaybackState { self.state }
-    fn current_time(&self) -> Seconds { self.time }
-    fn is_playing(&self) -> bool { self.state == PlaybackState::Playing }
+    fn current_state(&self) -> PlaybackState {
+        self.state
+    }
+    fn current_time(&self) -> Seconds {
+        self.time
+    }
+    fn is_playing(&self) -> bool {
+        self.state == PlaybackState::Playing
+    }
     fn timeline_beat_to_time(&self, beat: Beats) -> Seconds {
         // Fallback: use BPM for beat→time conversion (no tempo map in snapshot).
         let beat_f = beat.as_f32();
@@ -63,7 +68,9 @@ impl SyncTarget for SyncTargetSnapshot {
             Seconds((beat_f * 0.5) as f64)
         }
     }
-    fn current_project(&self) -> Option<&Project> { None }
+    fn current_project(&self) -> Option<&Project> {
+        None
+    }
 }
 
 /// Structural gatekeeper for sync source authority.
@@ -71,26 +78,28 @@ impl SyncTarget for SyncTargetSnapshot {
 pub struct SyncArbiter {
     pub suppress_next_transport: bool,
     pub manifold_owns_playback: bool,
-    /// Whether a user-initiated seek is pending confirmation from MIDI Clock.
-    /// While true, MIDI Clock position sync and beat derivation are suppressed.
-    /// Cleared deterministically when MIDI Clock's position converges with the
-    /// engine's position (no timers — clears the instant MIDI Clock catches up).
-    pub pending_seek: bool,
+    /// Wall-clock time when `manifold_owns_playback` was last set.
+    /// Prevents premature clearing during the OSC→DAW→MIDI round trip.
+    owns_set_time: Seconds,
+    /// Wall-clock time of the last local seek initiated from MANIFOLD while playing.
+    /// Used to briefly suppress stale CLK position during the OSC→Ableton→CLK round trip.
+    last_user_seek_time: Seconds,
 }
 
-/// Convergence threshold (seconds). When the delta between MIDI Clock's
-/// position and the engine's position falls below this, the pending seek
-/// is considered confirmed and MIDI Clock resumes driving position.
-/// ~6 MIDI Clock ticks at 120 BPM — tight enough to be musically meaningful,
-/// loose enough to account for MIDI Clock quantization (24 PPQN).
-const SEEK_CONVERGE_THRESHOLD: f64 = 0.1;
+/// Grace period (seconds) after setting manifold_owns before it can be cleared.
+/// Covers OSC send → Ableton processes → MIDI Clock reflects new state.
+const OWNERSHIP_GRACE_PERIOD: f32 = 0.5;
+/// Cooldown (seconds) after a local seek during playback before external
+/// position sync is allowed to drive again.
+const SEEK_COOLDOWN: f64 = 0.3;
 
 impl SyncArbiter {
     pub fn new() -> Self {
         Self {
             suppress_next_transport: false,
             manifold_owns_playback: false,
-            pending_seek: false,
+            owns_set_time: Seconds(-999.0),
+            last_user_seek_time: Seconds(-999.0),
         }
     }
 
@@ -102,60 +111,90 @@ impl SyncArbiter {
 
     pub fn set_manifold_owns(&mut self) {
         self.manifold_owns_playback = true;
+        // Record wall-clock time so clear_ownership can enforce the grace period.
+        // Uses owns_set_time field; caller must have called update_time() this frame.
     }
 
     /// Set manifold_owns for transport echo suppression.
-    pub fn set_manifold_owns_at(&mut self, _now: Seconds) {
+    pub fn set_manifold_owns_at(&mut self, now: Seconds) {
         self.manifold_owns_playback = true;
+        self.owns_set_time = now;
     }
 
-    /// Clear ownership — called when MIDI Clock confirms the expected
-    /// transport state (deterministic, not timer-based).
+    /// Clear ownership only if the grace period has elapsed.
+    /// Prevents MIDI Clock from clearing manifold_owns before the
+    /// OSC→DAW→MIDI round trip completes.
+    pub fn clear_ownership_if_expired(&mut self, now: Seconds) {
+        if (now - self.owns_set_time).0 >= OWNERSHIP_GRACE_PERIOD as f64 {
+            self.manifold_owns_playback = false;
+        }
+    }
+
     pub fn clear_ownership(&mut self) {
         self.manifold_owns_playback = false;
     }
 
-    /// Mark a user-initiated seek as pending. MIDI Clock position sync
-    /// is suppressed until `check_seek_convergence` clears it.
-    pub fn set_pending_seek(&mut self) {
-        self.pending_seek = true;
+    pub fn set_user_seek_time(&mut self, now: Seconds) {
+        self.last_user_seek_time = now;
     }
 
-    /// Check if MIDI Clock has converged to the engine's position after
-    /// a pending seek. Returns true if the seek was cleared (convergence
-    /// detected), meaning MIDI Clock can resume driving position.
-    pub fn check_seek_convergence(&mut self, delta: Seconds) -> bool {
-        if !self.pending_seek { return true; }
-        if delta.0.abs() < SEEK_CONVERGE_THRESHOLD {
-            self.pending_seek = false;
-            true
-        } else {
-            false
+    pub fn is_seek_cooldown_active(&self, now: Seconds) -> bool {
+        (now - self.last_user_seek_time).0 < SEEK_COOLDOWN
+    }
+
+    pub fn play(
+        &mut self,
+        source: ClockAuthority,
+        authority: ClockAuthority,
+        target: &mut dyn SyncArbiterTarget,
+    ) -> bool {
+        if source != authority {
+            return false;
         }
-    }
-
-    pub fn play(&mut self, source: ClockAuthority, authority: ClockAuthority, target: &mut dyn SyncArbiterTarget) -> bool {
-        if source != authority { return false; }
         self.suppress_next_transport = true;
         target.play();
         true
     }
 
-    pub fn pause(&mut self, source: ClockAuthority, authority: ClockAuthority, target: &mut dyn SyncArbiterTarget, clear_recording: bool) -> bool {
-        if source != authority { return false; }
+    pub fn pause(
+        &mut self,
+        source: ClockAuthority,
+        authority: ClockAuthority,
+        target: &mut dyn SyncArbiterTarget,
+        clear_recording: bool,
+    ) -> bool {
+        if source != authority {
+            return false;
+        }
         self.suppress_next_transport = true;
         target.pause(clear_recording);
         true
     }
 
-    pub fn nudge_time(&self, source: ClockAuthority, authority: ClockAuthority, target: &mut dyn SyncArbiterTarget, time: Seconds) -> bool {
-        if source != authority { return false; }
+    pub fn nudge_time(
+        &self,
+        source: ClockAuthority,
+        authority: ClockAuthority,
+        target: &mut dyn SyncArbiterTarget,
+        time: Seconds,
+    ) -> bool {
+        if source != authority {
+            return false;
+        }
         target.nudge_time(time);
         true
     }
 
-    pub fn seek(&mut self, source: ClockAuthority, authority: ClockAuthority, target: &mut dyn SyncArbiterTarget, time: Seconds) -> bool {
-        if source != authority { return false; }
+    pub fn seek(
+        &mut self,
+        source: ClockAuthority,
+        authority: ClockAuthority,
+        target: &mut dyn SyncArbiterTarget,
+        time: Seconds,
+    ) -> bool {
+        if source != authority {
+            return false;
+        }
         // NOTE: Unity's Seek() does NOT set SuppressNextTransport.
         // Only Play() and Pause() suppress echo. Seeks during playback are
         // detected by OscPositionSender via beat-delta comparison instead.
@@ -163,8 +202,16 @@ impl SyncArbiter {
         true
     }
 
-    pub fn set_external_time_sync(&self, source: ClockAuthority, authority: ClockAuthority, target: &mut dyn SyncArbiterTarget, value: bool) -> bool {
-        if source != authority { return false; }
+    pub fn set_external_time_sync(
+        &self,
+        source: ClockAuthority,
+        authority: ClockAuthority,
+        target: &mut dyn SyncArbiterTarget,
+        value: bool,
+    ) -> bool {
+        if source != authority {
+            return false;
+        }
         target.set_external_time_sync(value);
         true
     }

@@ -121,12 +121,7 @@ impl WaveformRenderer {
     /// - `samples`: interleaved PCM float data (all channels interleaved)
     /// - `channels`: number of audio channels (1=mono, 2=stereo, etc.)
     /// - `sample_rate`: sample rate in Hz (e.g. 44100, 48000)
-    pub fn set_audio_data(
-        &mut self,
-        samples: &[f32],
-        channels: usize,
-        sample_rate: u32,
-    ) {
+    pub fn set_audio_data(&mut self, samples: &[f32], channels: usize, sample_rate: u32) {
         self.ready = false;
         self.clip_duration_seconds = 0.0;
         self.clip_total_frames = 0;
@@ -209,8 +204,11 @@ impl WaveformRenderer {
             return false;
         }
 
-        self.levels
-            .push(WaveformLevel::new(FINEST_FRAMES_PER_TEXEL, finest.clone(), finest_colors.clone()));
+        self.levels.push(WaveformLevel::new(
+            FINEST_FRAMES_PER_TEXEL,
+            finest.clone(),
+            finest_colors.clone(),
+        ));
 
         let mut frames_per_texel = FINEST_FRAMES_PER_TEXEL;
         let mut previous = finest;
@@ -243,8 +241,11 @@ impl WaveformRenderer {
             }
 
             frames_per_texel *= 2;
-            self.levels
-                .push(WaveformLevel::new(frames_per_texel, next.clone(), next_colors.clone()));
+            self.levels.push(WaveformLevel::new(
+                frames_per_texel,
+                next.clone(),
+                next_colors.clone(),
+            ));
             previous = next;
             prev_colors = next_colors;
         }
@@ -297,8 +298,7 @@ impl WaveformRenderer {
             mono_sample /= channels as f32;
 
             // Map frame to texel (Unity lines 267-272)
-            let texel_index = (frame / FINEST_FRAMES_PER_TEXEL)
-                .min(amplitudes.len() - 1);
+            let texel_index = (frame / FINEST_FRAMES_PER_TEXEL).min(amplitudes.len() - 1);
 
             // Finalize previous texel when we advance (Unity lines 274-282)
             if texel_index != current_texel {

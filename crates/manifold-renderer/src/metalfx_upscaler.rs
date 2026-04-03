@@ -62,7 +62,10 @@ mod imp {
             let fmt = manifold_gpu::GpuTextureFormat::Rgba16Float;
             let scaler = manifold_gpu::metalfx::MetalFxSpatialScaler::new(
                 device.raw_device(),
-                src_w, src_h, dst_w, dst_h,
+                src_w,
+                src_h,
+                dst_w,
+                dst_h,
                 fmt,
             )?;
             let rcas_pipeline = device.create_compute_pipeline(
@@ -78,14 +81,19 @@ mod imp {
                 mag_filter: manifold_gpu::GpuFilterMode::Linear,
                 ..Default::default()
             });
-            let metalfx_intermediate = RenderTarget::new(
-                device, dst_w, dst_h, fmt, "MetalFX Intermediate",
-            );
+            let metalfx_intermediate =
+                RenderTarget::new(device, dst_w, dst_h, fmt, "MetalFX Intermediate");
             let output = RenderTarget::new(device, dst_w, dst_h, fmt, "MetalFX+RCAS Output");
             Some(Self {
-                scaler, rcas_pipeline, rcas_sampler,
-                metalfx_intermediate, output,
-                src_w, src_h, dst_w, dst_h,
+                scaler,
+                rcas_pipeline,
+                rcas_sampler,
+                metalfx_intermediate,
+                output,
+                src_w,
+                src_h,
+                dst_w,
+                dst_h,
             })
         }
 
@@ -109,12 +117,15 @@ mod imp {
         ) {
             // Pass 1: MetalFX Spatial — source → metalfx_intermediate
             let cmd_buf = gpu.native_enc.raw_cmd_buf();
-            self.scaler.encode(cmd_buf, source, &self.metalfx_intermediate.texture);
+            self.scaler
+                .encode(cmd_buf, source, &self.metalfx_intermediate.texture);
 
             // Pass 2: RCAS — intermediate → output
             let rcas_u = RcasUniforms {
                 sharpness: sharpness_exp.clamp(0.01, 1.0),
-                _pad0: 0.0, _pad1: 0.0, _pad2: 0.0,
+                _pad0: 0.0,
+                _pad1: 0.0,
+                _pad2: 0.0,
             };
             gpu.native_enc.dispatch_compute(
                 &self.rcas_pipeline,
@@ -154,7 +165,10 @@ mod imp {
             let fmt = manifold_gpu::GpuTextureFormat::Rgba16Float;
             let Some(scaler) = manifold_gpu::metalfx::MetalFxSpatialScaler::new(
                 device.raw_device(),
-                src_w, src_h, dst_w, dst_h,
+                src_w,
+                src_h,
+                dst_w,
+                dst_h,
                 fmt,
             ) else {
                 return false;

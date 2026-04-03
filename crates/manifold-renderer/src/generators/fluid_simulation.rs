@@ -5,11 +5,11 @@
 //   Blur density (H + V) -> GradientRotate -> Blur vector (H + V) ->
 //   Simulate -> Display
 
-use manifold_core::GeneratorTypeId;
+use super::compute_common::Particle;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
-use super::compute_common::Particle;
+use manifold_core::GeneratorTypeId;
 
 // Parameter indices (15 params).
 // Removed: Invert, Field Res, Wander, Respawn, Dense Respawn.
@@ -46,7 +46,11 @@ const VECTOR_FORMAT: manifold_gpu::GpuTextureFormat = manifold_gpu::GpuTextureFo
 const PARTICLE_SIZE_BYTES: u64 = std::mem::size_of::<Particle>() as u64;
 
 fn param(ctx: &GeneratorContext, idx: usize, default: f32) -> f32 {
-    if ctx.param_count > idx as u32 { ctx.params[idx] } else { default }
+    if ctx.param_count > idx as u32 {
+        ctx.params[idx]
+    } else {
+        default
+    }
 }
 
 // ── Uniform structs (matching shader layouts exactly) ──
@@ -470,10 +474,8 @@ impl Generator for FluidSimulationGenerator {
                 } else if self.active_snap_mode == 4 {
                     // Mode 4: inject force at random point
                     self.inject_active = true;
-                    self.inject_point = random_inject_uv(
-                        trigger_count as u32,
-                        self.frame_count as u32,
-                    );
+                    self.inject_point =
+                        random_inject_uv(trigger_count as u32, self.frame_count as u32);
                     self.inject_elapsed = 0.0;
                 }
             }
@@ -515,7 +517,11 @@ impl Generator for FluidSimulationGenerator {
         } else {
             0.0
         };
-        let active_inject_force = if self.inject_active { inject_force } else { 0.0 };
+        let active_inject_force = if self.inject_active {
+            inject_force
+        } else {
+            0.0
+        };
 
         // --- Pre-computed energy for scatter ---
         let energy = 0.005 * splat_size / 3.0 * (1_000_000.0 / active_count as f32);
@@ -545,10 +551,14 @@ impl Generator for FluidSimulationGenerator {
             &self.splat_pipeline,
             &[
                 manifold_gpu::GpuBinding::Buffer {
-                    binding: 0, buffer: particle_buf, offset: 0,
+                    binding: 0,
+                    buffer: particle_buf,
+                    offset: 0,
                 },
                 manifold_gpu::GpuBinding::Buffer {
-                    binding: 1, buffer: scatter_accum, offset: 0,
+                    binding: 1,
+                    buffer: scatter_accum,
+                    offset: 0,
                 },
                 manifold_gpu::GpuBinding::Bytes {
                     binding: 2,
@@ -561,17 +571,22 @@ impl Generator for FluidSimulationGenerator {
 
         // Resolve
         let resolve_uniforms = ResolveUniforms {
-            width: sw, height: sh,
-            _pad0: 0, _pad1: 0,
+            width: sw,
+            height: sh,
+            _pad0: 0,
+            _pad1: 0,
         };
         gpu.native_enc.dispatch_compute(
             &self.resolve_pipeline,
             &[
                 manifold_gpu::GpuBinding::Buffer {
-                    binding: 0, buffer: scatter_accum, offset: 0,
+                    binding: 0,
+                    buffer: scatter_accum,
+                    offset: 0,
                 },
                 manifold_gpu::GpuBinding::Texture {
-                    binding: 1, texture: density_tex,
+                    binding: 1,
+                    texture: density_tex,
                 },
                 manifold_gpu::GpuBinding::Bytes {
                     binding: 2,
@@ -592,25 +607,53 @@ impl Generator for FluidSimulationGenerator {
 
         // Aspect-correct blur radii: scale relative to reference width (640),
         // apply separately per axis so blur covers equal UV distance in both.
-        let radius_h = (base_blur_radius as f32 * bw as f32 / 640.0).round().max(1.0);
-        let radius_v = (base_blur_radius as f32 * bh as f32 / 640.0).round().max(1.0);
+        let radius_h = (base_blur_radius as f32 * bw as f32 / 640.0)
+            .round()
+            .max(1.0);
+        let radius_v = (base_blur_radius as f32 * bh as f32 / 640.0)
+            .round()
+            .max(1.0);
 
         // Downsample: density -> blur_density (radius=0)
         self.dispatch_blur(
-            gpu, density_tex, blur_density_tex,
-            [0.0, 0.0], 0.0, blur_texel_x, blur_texel_y, bw, bh, "FluidSim Blur Downsample",
+            gpu,
+            density_tex,
+            blur_density_tex,
+            [0.0, 0.0],
+            0.0,
+            blur_texel_x,
+            blur_texel_y,
+            bw,
+            bh,
+            "FluidSim Blur Downsample",
         );
 
         // H blur: blur_density -> blur_temp
         self.dispatch_blur(
-            gpu, blur_density_tex, blur_temp_tex,
-            [1.0, 0.0], radius_h, blur_texel_x, blur_texel_y, bw, bh, "FluidSim Blur H",
+            gpu,
+            blur_density_tex,
+            blur_temp_tex,
+            [1.0, 0.0],
+            radius_h,
+            blur_texel_x,
+            blur_texel_y,
+            bw,
+            bh,
+            "FluidSim Blur H",
         );
 
         // V blur: blur_temp -> blur_density
         self.dispatch_blur(
-            gpu, blur_temp_tex, blur_density_tex,
-            [0.0, 1.0], radius_v, blur_texel_x, blur_texel_y, bw, bh, "FluidSim Blur V",
+            gpu,
+            blur_temp_tex,
+            blur_density_tex,
+            [0.0, 1.0],
+            radius_v,
+            blur_texel_x,
+            blur_texel_y,
+            bw,
+            bh,
+            "FluidSim Blur V",
         );
 
         // Gradient + Rotate
@@ -622,7 +665,9 @@ impl Generator for FluidSimulationGenerator {
             slope_strength: slope_snap * density_area_scale,
             rot_cos: rot_rad.cos(),
             rot_sin: rot_rad.sin(),
-            _pad0: 0.0, _pad1: 0.0, _pad2: 0.0,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
         gpu.native_enc.dispatch_compute(
             &self.gradient_pipeline,
@@ -632,10 +677,12 @@ impl Generator for FluidSimulationGenerator {
                     data: bytemuck::bytes_of(&gradient_uniforms),
                 },
                 manifold_gpu::GpuBinding::Texture {
-                    binding: 1, texture: blur_density_tex,
+                    binding: 1,
+                    texture: blur_density_tex,
                 },
                 manifold_gpu::GpuBinding::Texture {
-                    binding: 2, texture: vector_field_tex,
+                    binding: 2,
+                    texture: vector_field_tex,
                 },
             ],
             [bw.div_ceil(16), bh.div_ceil(16), 1],
@@ -644,14 +691,30 @@ impl Generator for FluidSimulationGenerator {
 
         // Blur vector field H: vector -> blur_temp
         self.dispatch_blur(
-            gpu, vector_field_tex, blur_temp_tex,
-            [1.0, 0.0], radius_h, blur_texel_x, blur_texel_y, bw, bh, "FluidSim Blur Vector H",
+            gpu,
+            vector_field_tex,
+            blur_temp_tex,
+            [1.0, 0.0],
+            radius_h,
+            blur_texel_x,
+            blur_texel_y,
+            bw,
+            bh,
+            "FluidSim Blur Vector H",
         );
 
         // Blur vector field V: blur_temp -> vector
         self.dispatch_blur(
-            gpu, blur_temp_tex, vector_field_tex,
-            [0.0, 1.0], radius_v, blur_texel_x, blur_texel_y, bw, bh, "FluidSim Blur Vector V",
+            gpu,
+            blur_temp_tex,
+            vector_field_tex,
+            [0.0, 1.0],
+            radius_v,
+            blur_texel_x,
+            blur_texel_y,
+            bw,
+            bh,
+            "FluidSim Blur Vector V",
         );
 
         // ================================================================
@@ -667,31 +730,46 @@ impl Generator for FluidSimulationGenerator {
             density_noise_gain: density_noise,
             diffusion,
             frame_count: self.frame_count as u32,
-            inject_point_x: if self.inject_active { self.inject_point[0] } else { 0.0 },
-            inject_point_y: if self.inject_active { self.inject_point[1] } else { 0.0 },
+            inject_point_x: if self.inject_active {
+                self.inject_point[0]
+            } else {
+                0.0
+            },
+            inject_point_y: if self.inject_active {
+                self.inject_point[1]
+            } else {
+                0.0
+            },
             inject_force: active_inject_force,
             inject_phase,
             time_val: ctx.time as f32,
             dt: ctx.dt,
-            _pad0: 0, _pad1: 0,
+            _pad0: 0,
+            _pad1: 0,
         };
         gpu.native_enc.dispatch_compute(
             &self.simulate_pipeline,
             &[
                 manifold_gpu::GpuBinding::Buffer {
-                    binding: 0, buffer: particle_buf, offset: 0,
+                    binding: 0,
+                    buffer: particle_buf,
+                    offset: 0,
                 },
                 manifold_gpu::GpuBinding::Texture {
-                    binding: 1, texture: vector_field_tex,
+                    binding: 1,
+                    texture: vector_field_tex,
                 },
                 manifold_gpu::GpuBinding::Sampler {
-                    binding: 2, sampler: &self.sampler,
+                    binding: 2,
+                    sampler: &self.sampler,
                 },
                 manifold_gpu::GpuBinding::Texture {
-                    binding: 3, texture: blur_density_tex,
+                    binding: 3,
+                    texture: blur_density_tex,
                 },
                 manifold_gpu::GpuBinding::Sampler {
-                    binding: 4, sampler: &self.sampler,
+                    binding: 4,
+                    sampler: &self.sampler,
                 },
                 manifold_gpu::GpuBinding::Bytes {
                     binding: 5,
@@ -722,13 +800,16 @@ impl Generator for FluidSimulationGenerator {
                     data: bytemuck::bytes_of(&display_uniforms),
                 },
                 manifold_gpu::GpuBinding::Texture {
-                    binding: 1, texture: density_tex,
+                    binding: 1,
+                    texture: density_tex,
                 },
                 manifold_gpu::GpuBinding::Sampler {
-                    binding: 2, sampler: &self.sampler,
+                    binding: 2,
+                    sampler: &self.sampler,
                 },
                 manifold_gpu::GpuBinding::Texture {
-                    binding: 3, texture: target,
+                    binding: 3,
+                    texture: target,
                 },
             ],
             [ctx.width.div_ceil(16), ctx.height.div_ceil(16), 1],

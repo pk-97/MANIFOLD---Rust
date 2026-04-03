@@ -1,7 +1,7 @@
-use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
+use manifold_core::GeneratorTypeId;
 
 // Parameter indices matching Unity ComputeParametricSurfaceGenerator
 const SHAPE: usize = 0;
@@ -83,8 +83,7 @@ impl ParametricSurfaceGenerator {
 
     // Matches Unity: Mathf.Approximately uses ~0.00001 epsilon
     fn needs_rebake(&self, shape: f32, morph: f32) -> bool {
-        (self.last_shape - shape).abs() > 0.00001
-            || (self.last_morph - morph).abs() > 0.00001
+        (self.last_shape - shape).abs() > 0.00001 || (self.last_morph - morph).abs() > 0.00001
     }
 
     // Matches Unity ResolveShape: when snap > 0.5, shape = trigger_count % SURFACE_COUNT

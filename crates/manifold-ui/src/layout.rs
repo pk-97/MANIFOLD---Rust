@@ -1,5 +1,5 @@
-use crate::node::Rect;
 use crate::color;
+use crate::node::Rect;
 
 /// Single source of truth for all top-level panel regions on screen.
 ///
@@ -96,7 +96,12 @@ impl ScreenLayout {
     /// Footer bar: bottom of timeline area, full width.
     pub fn footer(&self) -> Rect {
         let tl = self.timeline_area();
-        Rect::new(tl.x, tl.y + tl.height - self.footer_height, tl.width, self.footer_height)
+        Rect::new(
+            tl.x,
+            tl.y + tl.height - self.footer_height,
+            tl.width,
+            self.footer_height,
+        )
     }
 
     /// Timeline body: between header and footer within timeline area.
@@ -128,7 +133,12 @@ impl ScreenLayout {
             return Rect::ZERO;
         }
         let top = self.transport_bar_height;
-        Rect::new(0.0, top, self.effect_browser_width, self.screen_height - top)
+        Rect::new(
+            0.0,
+            top,
+            self.effect_browser_width,
+            self.screen_height - top,
+        )
     }
 
     // ── Convenience accessors for dropdown anchoring ──────────────
@@ -216,10 +226,15 @@ impl ScreenLayout {
     /// From Unity PanelResizeHandle.OnDrag (lines 55-76).
     pub fn update_split_from_drag(&mut self, screen_y: f32) {
         let content = self.content_area();
-        if content.height <= 0.0 { return; }
+        if content.height <= 0.0 {
+            return;
+        }
         // How much of the content area is below the drag point
         let timeline_h = (content.y + content.height) - screen_y;
-        let ratio = (timeline_h / content.height).clamp(color::MIN_TIMELINE_SPLIT_RATIO, color::MAX_TIMELINE_SPLIT_RATIO);
+        let ratio = (timeline_h / content.height).clamp(
+            color::MIN_TIMELINE_SPLIT_RATIO,
+            color::MAX_TIMELINE_SPLIT_RATIO,
+        );
         self.timeline_split_ratio = ratio;
     }
 }

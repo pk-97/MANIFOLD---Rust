@@ -58,7 +58,7 @@ The Rust codebase is the complete, authoritative implementation. The Unity codeb
 - **parking_lot** — `RwLock`/`Mutex` replacing std (no poisoning, smaller, faster)
 - **Lock-free MIDI** — `AtomicClockState` packed `AtomicU64` CAS for real-time-safe MIDI clock callbacks
 - **Per-owner effect cleanup** — `TickResult::stopped_clips` → `ContentPipeline::cleanup_stopped_clips()` → `EffectRegistry` → stateful effects
-- **Native Metal GPU** — content thread uses `manifold-gpu` crate (`metal` crate directly, zero wgpu). UI thread uses wgpu on separate device.
+- **Native Metal GPU** — all threads use `manifold-gpu` crate (`metal` crate directly, zero wgpu)
 - **All-compute effect pipeline** — all effects use compute dispatches via `ComputeBlitHelper` / `ComputeDualBlitHelper`, eliminating TBDR tile load/store overhead from render passes
 - **Async compute** — independent layers generate in parallel `MTLCommandBuffer`s, compositor waits via `MTLEvent`
 - **Texture pool** — frame-stamped recycling, zero per-frame allocations after 3-frame warmup
@@ -134,7 +134,7 @@ These invariants govern how the system works. Violating them causes subtle, hard
 
 ### Build
 
-- **manifold-gpu** (native `metal` crate on macOS), **wgpu 28** (UI thread only), winit 0.30, Edition 2024, Rust stable
+- **manifold-gpu** (native `metal` crate on macOS, zero wgpu), winit 0.30, Edition 2024, Rust stable
 - `clippy.toml`: `too-many-arguments-threshold = 20`
 - `rustfmt.toml`: `max_width = 100`, `use_field_init_shorthand = true`
 - Release: `lto = "thin"`, `codegen-units = 1`, `strip = "symbols"`, `panic = "abort"`
@@ -150,12 +150,11 @@ YOU MUST COMMIT AND PUSH CODE CHANGES TO THE RELEVANT REPO AFTER COMPLETING FEAT
 
 ## GPU ARCHITECTURE — NATIVE METAL
 
-The content thread uses `manifold-gpu` with the `metal` crate directly. **Zero wgpu on the content thread.** wgpu is only used on the UI thread (separate device). See `docs/MANIFOLD_GPU_ARCHITECTURE.md` for full details.
+All threads use `manifold-gpu` with the `metal` crate directly. **Zero wgpu anywhere in the codebase.** See `docs/MANIFOLD_GPU_ARCHITECTURE.md` for full details.
 
-### Content Thread GPU Types
+### GPU Types
 - ALL GPU types from `manifold-gpu`: `GpuDevice`, `GpuEncoder`, `GpuTexture`, `GpuBuffer`, `GpuComputePipeline`, `GpuRenderPipeline`
-- **NEVER** use `wgpu::*` types on the content thread
-- UI thread files (`ui_renderer.rs`, `tonemap_blit.rs`, `layer_bitmap_gpu.rs`, `app_render.rs`) use wgpu — don't migrate these
+- **NEVER** introduce wgpu dependencies
 
 ### All-Compute Effect Pipeline
 - **All effects use compute dispatches** via `ComputeBlitHelper` (single source) or `ComputeDualBlitHelper` (dual source)

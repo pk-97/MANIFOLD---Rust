@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
 use serde::de::Deserializer;
 use serde::ser::Serializer;
+use serde::{Deserialize, Serialize};
 
 // ─── Blend Modes ───
 
@@ -43,10 +43,18 @@ impl BlendMode {
     }
 
     pub const ALL: &'static [BlendMode] = &[
-        BlendMode::Normal, BlendMode::Additive, BlendMode::Multiply,
-        BlendMode::Screen, BlendMode::Overlay, BlendMode::Stencil,
-        BlendMode::Opaque, BlendMode::Difference, BlendMode::Exclusion,
-        BlendMode::Subtract, BlendMode::ColorDodge, BlendMode::Lighten,
+        BlendMode::Normal,
+        BlendMode::Additive,
+        BlendMode::Multiply,
+        BlendMode::Screen,
+        BlendMode::Overlay,
+        BlendMode::Stencil,
+        BlendMode::Opaque,
+        BlendMode::Difference,
+        BlendMode::Exclusion,
+        BlendMode::Subtract,
+        BlendMode::ColorDodge,
+        BlendMode::Lighten,
         BlendMode::Darken,
     ];
 
@@ -101,7 +109,6 @@ impl<'de> Deserialize<'de> for BlendMode {
         })
     }
 }
-
 
 // ─── Layer Type ───
 
@@ -334,8 +341,14 @@ impl<'de> Deserialize<'de> for ResolutionPreset {
 
 impl ResolutionPreset {
     pub const ALL: &[Self] = &[
-        Self::HD720p, Self::FHD1080p, Self::QHD1440p, Self::UHD4K,
-        Self::Square1080, Self::Portrait720, Self::Portrait1080, Self::Portrait1440,
+        Self::HD720p,
+        Self::FHD1080p,
+        Self::QHD1440p,
+        Self::UHD4K,
+        Self::Square1080,
+        Self::Portrait720,
+        Self::Portrait1080,
+        Self::Portrait1440,
     ];
 
     pub fn dimensions(&self) -> (i32, i32) {
@@ -625,15 +638,21 @@ impl BeatDivision {
     }
 
     pub fn is_dotted(self) -> bool {
-        matches!(self,
-            Self::EighthDotted | Self::QuarterDotted | Self::HalfDotted
-            | Self::WholeDotted | Self::TwoWholeDotted)
+        matches!(
+            self,
+            Self::EighthDotted
+                | Self::QuarterDotted
+                | Self::HalfDotted
+                | Self::WholeDotted
+                | Self::TwoWholeDotted
+        )
     }
 
     pub fn is_triplet(self) -> bool {
-        matches!(self,
-            Self::EighthTriplet | Self::QuarterTriplet
-            | Self::HalfTriplet | Self::WholeTriplet)
+        matches!(
+            self,
+            Self::EighthTriplet | Self::QuarterTriplet | Self::HalfTriplet | Self::WholeTriplet
+        )
     }
 
     /// Toggle dotted modifier. Returns None if no dotted variant exists for this base.
@@ -819,9 +838,14 @@ impl MarkerColor {
     }
 
     pub const ALL: &'static [MarkerColor] = &[
-        MarkerColor::Red, MarkerColor::Orange, MarkerColor::Yellow,
-        MarkerColor::Green, MarkerColor::Cyan, MarkerColor::Blue,
-        MarkerColor::Purple, MarkerColor::White,
+        MarkerColor::Red,
+        MarkerColor::Orange,
+        MarkerColor::Yellow,
+        MarkerColor::Green,
+        MarkerColor::Cyan,
+        MarkerColor::Blue,
+        MarkerColor::Purple,
+        MarkerColor::White,
     ];
 
     pub fn from_index(i: usize) -> Self {

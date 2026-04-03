@@ -4,19 +4,19 @@
 //! mutations. The app layer calls `dispatch()` after collecting actions
 //! from all panels, and `push_state()` to sync engine state back to panels.
 
-mod transport;
 mod editing;
 mod inspector;
 mod layer;
 mod marker;
 mod project;
 mod state_sync;
+mod transport;
 
 use manifold_core::LayerId;
 use manifold_core::effects::EffectInstance;
 use manifold_core::project::Project;
 use manifold_editing::commands::effect_target::EffectTarget;
-use manifold_ui::{PanelAction, InspectorTab};
+use manifold_ui::{InspectorTab, PanelAction};
 
 use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
@@ -35,10 +35,34 @@ pub struct DispatchResult {
 
 #[allow(dead_code)]
 impl DispatchResult {
-    pub(crate) fn handled() -> Self { Self { handled: true, structural_change: false, resolution_changed: false } }
-    pub(crate) fn structural() -> Self { Self { handled: true, structural_change: true, resolution_changed: false } }
-    pub(crate) fn resolution() -> Self { Self { handled: true, structural_change: true, resolution_changed: true } }
-    pub(crate) fn unhandled() -> Self { Self { handled: false, structural_change: false, resolution_changed: false } }
+    pub(crate) fn handled() -> Self {
+        Self {
+            handled: true,
+            structural_change: false,
+            resolution_changed: false,
+        }
+    }
+    pub(crate) fn structural() -> Self {
+        Self {
+            handled: true,
+            structural_change: true,
+            resolution_changed: false,
+        }
+    }
+    pub(crate) fn resolution() -> Self {
+        Self {
+            handled: true,
+            structural_change: true,
+            resolution_changed: true,
+        }
+    }
+    pub(crate) fn unhandled() -> Self {
+        Self {
+            handled: false,
+            structural_change: false,
+            resolution_changed: false,
+        }
+    }
 }
 
 /// Dispatch a panel action. Mutates local_project for immediate feedback;
@@ -109,9 +133,17 @@ pub fn dispatch(
         | PanelAction::ClipRightClicked(_)
         | PanelAction::TrackRightClicked(..)
         | PanelAction::LayerHeaderRightClicked(_)
-        | PanelAction::DropdownSelected(_) => {
-            editing::dispatch_editing(action, project, content_tx, content_state, ui, selection, active_layer, user_prefs, parent_window)
-        }
+        | PanelAction::DropdownSelected(_) => editing::dispatch_editing(
+            action,
+            project,
+            content_tx,
+            content_state,
+            ui,
+            selection,
+            active_layer,
+            user_prefs,
+            parent_window,
+        ),
 
         // ── Inspector: chrome, effects, generators ────────────────
         PanelAction::MasterOpacitySnapshot
@@ -195,6 +227,7 @@ pub fn dispatch(
         | PanelAction::MacroRightClick(_)
         | PanelAction::MacroReset(_)
         | PanelAction::MacroLabelRightClick(_)
+        | PanelAction::MacroLabelRename(_)
         | PanelAction::MapEffectParamToMacro(..)
         | PanelAction::MapGenParamToMacro(..)
         | PanelAction::UnmapMacro(..)
@@ -202,9 +235,20 @@ pub fn dispatch(
         | PanelAction::EffectParamLabelRightClick(..)
         | PanelAction::GenParamLabelRightClick(_)
         | PanelAction::AddEffect(..)
-        | PanelAction::PasteEffects => {
-            inspector::dispatch_inspector(action, project, content_tx, content_state, ui, selection, active_layer, drag_snapshot, trim_snapshot, adsr_snapshot, target_snapshot, active_inspector_drag)
-        }
+        | PanelAction::PasteEffects => inspector::dispatch_inspector(
+            action,
+            project,
+            content_tx,
+            content_state,
+            ui,
+            selection,
+            active_layer,
+            drag_snapshot,
+            trim_snapshot,
+            adsr_snapshot,
+            target_snapshot,
+            active_inspector_drag,
+        ),
 
         // ── Layer operations ──────────────────────────────────────
         PanelAction::ToggleMute(_)
@@ -225,9 +269,15 @@ pub fn dispatch(
         | PanelAction::LayerDragMoved(..)
         | PanelAction::LayerDragEnded(..)
         | PanelAction::AddLayerClicked
-        | PanelAction::DeleteLayerClicked(_) => {
-            layer::dispatch_layer(action, project, content_tx, content_state, ui, selection, active_layer)
-        }
+        | PanelAction::DeleteLayerClicked(_) => layer::dispatch_layer(
+            action,
+            project,
+            content_tx,
+            content_state,
+            ui,
+            selection,
+            active_layer,
+        ),
 
         // ── Timeline markers ─────────────────────────────────────────
         PanelAction::MarkerClicked(..)
@@ -271,9 +321,17 @@ pub fn dispatch(
         | PanelAction::ReAnalyzeVocal
         | PanelAction::ReImportStems
         | PanelAction::StemMuteToggled(_)
-        | PanelAction::StemSoloToggled(_) => {
-            project::dispatch_project(action, project, content_tx, content_state, ui, selection, active_layer, user_prefs, parent_window)
-        }
+        | PanelAction::StemSoloToggled(_) => project::dispatch_project(
+            action,
+            project,
+            content_tx,
+            content_state,
+            ui,
+            selection,
+            active_layer,
+            user_prefs,
+            parent_window,
+        ),
 
         // Handled in app_render.rs (Application-level intercept, never reaches dispatch)
         PanelAction::CopyOscAddress(_) => DispatchResult::handled(),
@@ -309,14 +367,23 @@ fn update_region_from_clip_selection(selection: &mut SelectionState, project: &P
         }
 
         if found {
-            selection.set_region_from_clip_bounds(min_beat, max_beat, min_layer, max_layer, &project.timeline.layers);
+            selection.set_region_from_clip_bounds(
+                min_beat,
+                max_beat,
+                min_layer,
+                max_layer,
+                &project.timeline.layers,
+            );
         }
     }
 }
 
 /// Update region from clip selection — public version taking &Project directly.
 /// Used by app.rs keyboard handlers that can't pass &PlaybackEngine.
-pub fn update_region_from_clip_selection_inline(selection: &mut SelectionState, project: &manifold_core::project::Project) {
+pub fn update_region_from_clip_selection_inline(
+    selection: &mut SelectionState,
+    project: &manifold_core::project::Project,
+) {
     if selection.selected_clip_ids.len() < 2 {
         return;
     }
@@ -340,7 +407,13 @@ pub fn update_region_from_clip_selection_inline(selection: &mut SelectionState, 
     }
 
     if found {
-        selection.set_region_from_clip_bounds(min_beat, max_beat, min_layer, max_layer, &project.timeline.layers);
+        selection.set_region_from_clip_bounds(
+            min_beat,
+            max_beat,
+            min_layer,
+            max_layer,
+            &project.timeline.layers,
+        );
     }
 }
 
@@ -352,27 +425,41 @@ pub(crate) fn select_region_to_with_project(
     project: &Project,
 ) {
     let layer_count = project.timeline.layers.len();
-    if layer_count == 0 { return; }
+    if layer_count == 0 {
+        return;
+    }
 
     let anchor: Option<(manifold_core::Beats, usize)> = if selection.has_insert_cursor() {
-        let anchor_idx = selection.insert_cursor_layer_id.as_ref()
+        let anchor_idx = selection
+            .insert_cursor_layer_id
+            .as_ref()
             .and_then(|id| project.timeline.find_layer_index_by_id(id))
             .unwrap_or(0);
         Some((
-            selection.insert_cursor_beat.unwrap_or(manifold_core::Beats::ZERO),
+            selection
+                .insert_cursor_beat
+                .unwrap_or(manifold_core::Beats::ZERO),
             anchor_idx,
         ))
     } else if selection.has_region() {
         let r = selection.get_region();
-        let start_idx = r.layer_index_range(&project.timeline.layers)
+        let start_idx = r
+            .layer_index_range(&project.timeline.layers)
             .map(|(lo, _)| lo)
             .unwrap_or(0);
         Some((r.start_beat, start_idx))
     } else if let Some(ref clip_id) = selection.primary_selected_clip_id.clone() {
-        project.timeline.layers.iter().enumerate()
-            .find_map(|(li, l)| l.clips.iter()
-                .find(|c| c.id == *clip_id)
-                .map(|_c| (_c.start_beat, li)))
+        project
+            .timeline
+            .layers
+            .iter()
+            .enumerate()
+            .find_map(|(li, l)| {
+                l.clips
+                    .iter()
+                    .find(|c| c.id == *clip_id)
+                    .map(|_c| (_c.start_beat, li))
+            })
     } else {
         None
     };
@@ -383,11 +470,21 @@ pub(crate) fn select_region_to_with_project(
             let max_beat = anchor_beat.max(target_beat);
             let min_layer = anchor_layer.min(target_layer).min(layer_count - 1) as i32;
             let max_layer = anchor_layer.max(target_layer).min(layer_count - 1) as i32;
-            selection.set_region(min_beat, max_beat, min_layer, max_layer, &project.timeline.layers);
+            selection.set_region(
+                min_beat,
+                max_beat,
+                min_layer,
+                max_layer,
+                &project.timeline.layers,
+            );
         }
         None => {
-            let lid = project.timeline.layers.get(target_layer)
-                .map(|l| l.layer_id.clone()).unwrap_or_default();
+            let lid = project
+                .timeline
+                .layers
+                .get(target_layer)
+                .map(|l| l.layer_id.clone())
+                .unwrap_or_default();
             selection.set_insert_cursor(target_beat, lid);
         }
     }
@@ -395,12 +492,18 @@ pub(crate) fn select_region_to_with_project(
 
 /// Handle undo (called from keyboard shortcut). Sends to content thread.
 pub fn undo(content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>) {
-    crate::content_command::ContentCommand::send(content_tx, crate::content_command::ContentCommand::Undo);
+    crate::content_command::ContentCommand::send(
+        content_tx,
+        crate::content_command::ContentCommand::Undo,
+    );
 }
 
 /// Handle redo (called from keyboard shortcut). Sends to content thread.
 pub fn redo(content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>) {
-    crate::content_command::ContentCommand::send(content_tx, crate::content_command::ContentCommand::Redo);
+    crate::content_command::ContentCommand::send(
+        content_tx,
+        crate::content_command::ContentCommand::Redo,
+    );
 }
 
 // ── Effect tab routing helpers ───────────────────────────────────
@@ -410,18 +513,28 @@ pub(crate) fn resolve_active_layer_index(
     active_layer: &Option<LayerId>,
     project: &Project,
 ) -> Option<usize> {
-    active_layer.as_ref().and_then(|id| project.timeline.find_layer_index_by_id(id))
+    active_layer
+        .as_ref()
+        .and_then(|id| project.timeline.find_layer_index_by_id(id))
 }
 
 /// Build an EffectTarget for the given tab.
-pub(crate) fn resolve_effect_target(tab: InspectorTab, active_layer: &Option<LayerId>, project: &Project) -> EffectTarget {
+pub(crate) fn resolve_effect_target(
+    tab: InspectorTab,
+    active_layer: &Option<LayerId>,
+    project: &Project,
+) -> EffectTarget {
     match tab {
         InspectorTab::Master => EffectTarget::Master,
         InspectorTab::Layer | InspectorTab::Clip => {
-            let layer_id = active_layer.clone()
-                .unwrap_or_else(|| project.timeline.layers.first()
+            let layer_id = active_layer.clone().unwrap_or_else(|| {
+                project
+                    .timeline
+                    .layers
+                    .first()
                     .map(|l| l.layer_id.clone())
-                    .unwrap_or_default());
+                    .unwrap_or_default()
+            });
             EffectTarget::Layer { layer_id }
         }
     }
@@ -435,10 +548,7 @@ pub(crate) fn resolve_effects_read<'a>(
     selection: &SelectionState,
 ) -> (Option<&'a [EffectInstance]>, EffectTarget) {
     match tab {
-        InspectorTab::Master => (
-            Some(&project.settings.master_effects),
-            EffectTarget::Master,
-        ),
+        InspectorTab::Master => (Some(&project.settings.master_effects), EffectTarget::Master),
         InspectorTab::Layer => {
             let target = resolve_effect_target(tab, active_layer, project);
             let effects = resolve_active_layer_index(active_layer, project)
@@ -449,7 +559,10 @@ pub(crate) fn resolve_effects_read<'a>(
         InspectorTab::Clip => {
             let target = resolve_effect_target(tab, active_layer, project);
             let effects = selection.primary_selected_clip_id.as_ref().and_then(|cid| {
-                project.timeline.layers.iter()
+                project
+                    .timeline
+                    .layers
+                    .iter()
                     .flat_map(|l| l.clips.iter())
                     .find(|c| c.id == *cid)
                     .map(|c| c.effects.as_slice())
@@ -482,10 +595,14 @@ pub(crate) fn resolve_effects_mut<'a>(
             (Some(effects), EffectTarget::Master)
         }
         InspectorTab::Layer => {
-            let layer_id = active_layer.clone()
-                .unwrap_or_else(|| project.timeline.layers.first()
+            let layer_id = active_layer.clone().unwrap_or_else(|| {
+                project
+                    .timeline
+                    .layers
+                    .first()
                     .map(|l| l.layer_id.clone())
-                    .unwrap_or_default());
+                    .unwrap_or_default()
+            });
             let target = EffectTarget::Layer { layer_id };
             let effects = resolve_active_layer_index(active_layer, project)
                 .and_then(move |idx| project.timeline.layers.get_mut(idx))
@@ -493,14 +610,20 @@ pub(crate) fn resolve_effects_mut<'a>(
             (effects, target)
         }
         InspectorTab::Clip => {
-            let layer_id = active_layer.clone()
-                .unwrap_or_else(|| project.timeline.layers.first()
+            let layer_id = active_layer.clone().unwrap_or_else(|| {
+                project
+                    .timeline
+                    .layers
+                    .first()
                     .map(|l| l.layer_id.clone())
-                    .unwrap_or_default());
+                    .unwrap_or_default()
+            });
             let target = EffectTarget::Layer { layer_id };
             let clip_id = selection.primary_selected_clip_id.clone();
             let effects = clip_id.and_then(|cid| {
-                project.timeline.find_clip_by_id_mut(&cid)
+                project
+                    .timeline
+                    .find_clip_by_id_mut(&cid)
                     .map(|c| &mut c.effects)
             });
             (effects, target)
@@ -520,7 +643,10 @@ pub(crate) fn led_exit_path_label(
         n => {
             let idx = (n - 1) as usize;
             if let Some(fx) = master_effects.get(idx) {
-                format!("After {}", effect_type_registry::display_name(fx.effect_type()))
+                format!(
+                    "After {}",
+                    effect_type_registry::display_name(fx.effect_type())
+                )
             } else {
                 "After All FX".into()
             }
@@ -529,4 +655,7 @@ pub(crate) fn led_exit_path_label(
 }
 
 // Re-export public functions from sub-modules
-pub use state_sync::{push_state, sync_project_data, sync_clip_positions, sync_inspector_data, check_auto_scroll, TransportDisplayCache};
+pub use state_sync::{
+    TransportDisplayCache, check_auto_scroll, push_state, sync_clip_positions, sync_inspector_data,
+    sync_project_data,
+};

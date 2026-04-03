@@ -47,9 +47,7 @@ impl LedOutputController {
         self.enabled = settings.enabled;
 
         if !self.output.initialize(device, settings) {
-            log::warn!(
-                "[LedOutputController] ArtNet output failed to initialize."
-            );
+            log::warn!("[LedOutputController] ArtNet output failed to initialize.");
             return false;
         }
 

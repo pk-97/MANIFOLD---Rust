@@ -19,9 +19,7 @@ use core_graphics::{
     geometry::{CGPoint, CGSize},
 };
 use core_text::{
-    font::CTFont,
-    font_descriptor::kCTFontOrientationDefault,
-    line::CTLine,
+    font::CTFont, font_descriptor::kCTFontOrientationDefault, line::CTLine,
     string_attributes::kCTFontAttributeName,
 };
 use manifold_gpu::{
@@ -219,11 +217,7 @@ impl GlyphAtlas {
     }
 
     /// Ensure glyph is in the atlas, rasterizing if needed. Returns its GlyphInfo.
-    fn rasterize_glyph(
-        &mut self,
-        font_mgr: &mut FontManager,
-        key: GlyphKey,
-    ) -> Option<&GlyphInfo> {
+    fn rasterize_glyph(&mut self, font_mgr: &mut FontManager, key: GlyphKey) -> Option<&GlyphInfo> {
         if self.glyphs.contains_key(&key) {
             return self.glyphs.get(&key);
         }
@@ -269,13 +263,9 @@ impl GlyphAtlas {
         let atlas_y = self.shelf_y;
 
         // Rasterize into a caller-owned pixel buffer, copy into atlas.
-        if let Some(glyph_pixels) = rasterize_glyph_bitmap(
-            ct_font,
-            glyph_id,
-            bitmap_w,
-            bitmap_h,
-            descent,
-        ) {
+        if let Some(glyph_pixels) =
+            rasterize_glyph_bitmap(ct_font, glyph_id, bitmap_w, bitmap_h, descent)
+        {
             for row in 0..bitmap_h {
                 let src_start = (row * bitmap_w) as usize;
                 let dst_start = ((atlas_y + row) * ATLAS_SIZE + atlas_x) as usize;
@@ -353,8 +343,8 @@ fn rasterize_glyph_bitmap(
         Some(pixels.as_mut_ptr() as *mut std::ffi::c_void),
         w,
         h,
-        8,   // bits per component
-        w,   // bytes per row (1 byte per pixel)
+        8, // bits per component
+        w, // bytes per row (1 byte per pixel)
         &color_space,
         0u32, // kCGImageAlphaNone
     );
@@ -412,8 +402,7 @@ impl GlyphAtlas {
         for row in 0..h {
             let src = (row * w) as usize;
             let dst = ((ay + row) * ATLAS_SIZE + ax) as usize;
-            self.pixels[dst..dst + w as usize]
-                .copy_from_slice(&pixels[src..src + w as usize]);
+            self.pixels[dst..dst + w as usize].copy_from_slice(&pixels[src..src + w as usize]);
         }
         self.shelf_x += w + GLYPH_PADDING;
         self.shelf_height = self.shelf_height.max(h);
@@ -470,13 +459,23 @@ fn generate_single_waveform(idx: usize) -> Vec<u8> {
         }
         1 => vec![(0.0, remap(0.0)), (0.5, remap(1.0)), (1.0, remap(0.0))],
         2 => vec![(0.0, remap(0.0)), (1.0, remap(1.0)), (1.0, remap(0.0))],
-        3 => vec![(0.0, remap(1.0)), (0.5, remap(1.0)), (0.5, remap(0.0)), (1.0, remap(0.0))],
+        3 => vec![
+            (0.0, remap(1.0)),
+            (0.5, remap(1.0)),
+            (0.5, remap(0.0)),
+            (1.0, remap(0.0)),
+        ],
         4 => vec![
-            (0.0, remap(0.3)), (0.2, remap(0.3)),
-            (0.2, remap(0.85)), (0.4, remap(0.85)),
-            (0.4, remap(0.1)), (0.6, remap(0.1)),
-            (0.6, remap(0.65)), (0.8, remap(0.65)),
-            (0.8, remap(0.45)), (1.0, remap(0.45)),
+            (0.0, remap(0.3)),
+            (0.2, remap(0.3)),
+            (0.2, remap(0.85)),
+            (0.4, remap(0.85)),
+            (0.4, remap(0.1)),
+            (0.6, remap(0.1)),
+            (0.6, remap(0.65)),
+            (0.8, remap(0.65)),
+            (0.8, remap(0.45)),
+            (1.0, remap(0.45)),
         ],
         _ => vec![(0.0, 0.5), (1.0, 0.5)],
     };
@@ -792,7 +791,13 @@ impl NativeTextRenderer {
     ) {
         if (icon_id as usize) < ICON_COUNT && self.icon_infos[icon_id as usize].is_some() {
             self.icon_commands.push(IconCommand {
-                x, y, w, h, icon_id, color, clip_bounds,
+                x,
+                y,
+                w,
+                h,
+                icon_id,
+                color,
+                clip_bounds,
             });
         }
     }
@@ -830,12 +835,14 @@ impl NativeTextRenderer {
         let arena = std::mem::take(&mut self.text_arena);
 
         for cmd in &commands {
-            let text = &arena[cmd.text_offset as usize
-                ..(cmd.text_offset as usize + cmd.text_len as usize)];
+            let text = &arena
+                [cmd.text_offset as usize..(cmd.text_offset as usize + cmd.text_len as usize)];
             let physical_size = cmd.font_size * scale;
             let size_x10 = (physical_size * 10.0).round() as u16;
 
-            let ct_font = self.font_manager.get_ct_font(physical_size, cmd.font_weight);
+            let ct_font = self
+                .font_manager
+                .get_ct_font(physical_size, cmd.font_weight);
             let glyphs_and_positions = shape_line(ct_font, text);
             let Some((glyph_ids, positions_ct)) = glyphs_and_positions else {
                 continue;
@@ -912,8 +919,14 @@ impl NativeTextRenderer {
                     uv: [info.uv_x, info.uv_y + info.uv_h],
                     color,
                 });
-                self.indices
-                    .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+                self.indices.extend_from_slice(&[
+                    base,
+                    base + 1,
+                    base + 2,
+                    base,
+                    base + 2,
+                    base + 3,
+                ]);
             }
         }
 
@@ -923,7 +936,9 @@ impl NativeTextRenderer {
         // Emit quads for icon commands.
         let icon_cmds: Vec<IconCommand> = std::mem::take(&mut self.icon_commands);
         for cmd in &icon_cmds {
-            let Some(info) = self.icon_infos[cmd.icon_id as usize] else { continue };
+            let Some(info) = self.icon_infos[cmd.icon_id as usize] else {
+                continue;
+            };
             let color = [
                 cmd.color[0] as f32 / 255.0,
                 cmd.color[1] as f32 / 255.0,
@@ -934,8 +949,9 @@ impl NativeTextRenderer {
 
             // Clip check — clip_bounds is [x_min, y_min, x_max, y_max].
             if let Some([clip_x0, clip_y0, clip_x1, clip_y1]) = cmd.clip_bounds
-                && (x1 < clip_x0 || y1 < clip_y0 || x0 > clip_x1 || y0 > clip_y1) {
-                    continue;
+                && (x1 < clip_x0 || y1 < clip_y0 || x0 > clip_x1 || y0 > clip_y1)
+            {
+                continue;
             }
 
             let base = self.vertices.len() as u32;
@@ -979,14 +995,18 @@ impl NativeTextRenderer {
             Some(buf) if buf.size >= vdata.len() as u64 => buf,
             _ => device.create_buffer_shared(vdata.len() as u64),
         };
-        unsafe { vbuf.write(0, vdata); }
+        unsafe {
+            vbuf.write(0, vdata);
+        }
 
         let idata = bytemuck::cast_slice::<u32, u8>(&self.indices);
         let ibuf = match self.ibuf_ring[slot].take() {
             Some(buf) if buf.size >= idata.len() as u64 => buf,
             _ => device.create_buffer_shared(idata.len() as u64),
         };
-        unsafe { ibuf.write(0, idata); }
+        unsafe {
+            ibuf.write(0, idata);
+        }
 
         self.vbuf_ring[slot] = Some(vbuf);
         self.ibuf_ring[slot] = Some(ibuf);
@@ -1039,10 +1059,7 @@ impl NativeTextRenderer {
     }
 
     /// Draw text into an already-active render pass.
-    pub fn render_in_pass(
-        &self,
-        encoder: &mut GpuEncoder,
-    ) {
+    pub fn render_in_pass(&self, encoder: &mut GpuEncoder) {
         if self.prepared_index_count == 0 {
             return;
         }
@@ -1076,7 +1093,6 @@ impl NativeTextRenderer {
             "TextRenderer",
         );
     }
-
 }
 
 // ─── TextMeasure impl ────────────────────────────────────────────────────────
@@ -1174,11 +1190,26 @@ mod tests {
         let ct_font = fm.get_ct_font(12.0, FontWeight::Regular);
         let line = make_ct_line(ct_font, "Hello");
         let bounds = line.get_typographic_bounds();
-        assert!(bounds.width > 0.0, "text width should be positive, got {}", bounds.width);
-        assert!(bounds.ascent > 0.0, "ascent should be positive, got {}", bounds.ascent);
-        assert!(bounds.descent >= 0.0, "descent should be non-negative, got {}", bounds.descent);
+        assert!(
+            bounds.width > 0.0,
+            "text width should be positive, got {}",
+            bounds.width
+        );
+        assert!(
+            bounds.ascent > 0.0,
+            "ascent should be positive, got {}",
+            bounds.ascent
+        );
+        assert!(
+            bounds.descent >= 0.0,
+            "descent should be non-negative, got {}",
+            bounds.descent
+        );
         let height = bounds.ascent + bounds.descent;
-        assert!(height >= 8.0, "line height should be at least 8px, got {height}");
+        assert!(
+            height >= 8.0,
+            "line height should be at least 8px, got {height}"
+        );
     }
 
     #[test]
@@ -1216,7 +1247,11 @@ mod tests {
             }
         }
 
-        assert_eq!(rects.len(), glyph_chars.len(), "all glyphs should be in atlas");
+        assert_eq!(
+            rects.len(),
+            glyph_chars.len(),
+            "all glyphs should be in atlas"
+        );
 
         // Non-zero pixel dimensions.
         for &(_, _, _, _, pw, ph) in &rects {

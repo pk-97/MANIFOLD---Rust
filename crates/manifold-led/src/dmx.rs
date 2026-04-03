@@ -166,10 +166,7 @@ mod tests {
 
     #[test]
     fn test_write_pixel_universe_boundary() {
-        let mut buffers = vec![
-            vec![0u8; DMX_UNIVERSE_SIZE],
-            vec![0u8; DMX_UNIVERSE_SIZE],
-        ];
+        let mut buffers = vec![vec![0u8; DMX_UNIVERSE_SIZE], vec![0u8; DMX_UNIVERSE_SIZE]];
         // Start at channel 511 — straddles into universe 1
         write_pixel_to_universes(&mut buffers, 511, 10, 20, 30, false);
         assert_eq!(buffers[0][511], 10); // R in universe 0
@@ -182,9 +179,7 @@ mod tests {
         let mut buffers = vec![vec![0u8; DMX_UNIVERSE_SIZE]];
         // 1 strip, 1 LED, RGBA pixel
         let pixels = [200u8, 100, 50, 255];
-        sample_strip_to_universes(
-            &mut buffers, &pixels, 1, 0, 1, 0, false, 0.5,
-        );
+        sample_strip_to_universes(&mut buffers, &pixels, 1, 0, 1, 0, false, 0.5);
         // brightness 0.5 → bright_int = 128
         // 200 * 128 >> 8 = 100
         // 100 * 128 >> 8 = 50

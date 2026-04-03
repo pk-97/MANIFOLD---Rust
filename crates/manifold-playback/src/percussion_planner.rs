@@ -49,11 +49,16 @@ impl<'a> PercussionTimelinePlanner<'a> {
         let events = &analysis.events;
         plan.total_events = events.len() as i32;
 
-        let mut accepted_placements: Vec<PercussionClipPlacement> = Vec::with_capacity(events.len());
+        let mut accepted_placements: Vec<PercussionClipPlacement> =
+            Vec::with_capacity(events.len());
         let mut placement_index_by_quantized_slot: HashMap<i64, usize> = HashMap::new();
 
         let quantizing = options.quantize_to_grid && options.quantize_step_beats > Beats::ZERO;
-        let quantize_step = if quantizing { options.quantize_step_beats } else { Beats::ZERO };
+        let quantize_step = if quantizing {
+            options.quantize_step_beats
+        } else {
+            Beats::ZERO
+        };
         let energy_gate = options.minimum_energy_gate;
         let energy_gate_enabled = energy_gate > 0.0 && analysis.has_energy_envelope();
 
@@ -76,11 +81,11 @@ impl<'a> PercussionTimelinePlanner<'a> {
                 continue;
             }
 
-            let compensated_time = Seconds(percussion_event.time_seconds as f64) + options.onset_compensation_seconds;
-            let mapped_beat = match analysis.try_map_seconds_to_beat(
-                compensated_time,
-                Some(self.beat_time_converter.as_mut()),
-            ) {
+            let compensated_time =
+                Seconds(percussion_event.time_seconds as f64) + options.onset_compensation_seconds;
+            let mapped_beat = match analysis
+                .try_map_seconds_to_beat(compensated_time, Some(self.beat_time_converter.as_mut()))
+            {
                 Some(b) => b,
                 None => {
                     plan.skipped_invalid_timing += 1;
@@ -105,7 +110,8 @@ impl<'a> PercussionTimelinePlanner<'a> {
             }
             placement_beat = placement_beat.max(Beats::ZERO);
 
-            let spacing_key = ((binding.trigger_type as i32).wrapping_mul(397)) ^ binding.layer_index;
+            let spacing_key =
+                ((binding.trigger_type as i32).wrapping_mul(397)) ^ binding.layer_index;
 
             // Duration priority: per-event (from model) > binding (from SO) > default.
             let duration_beats = if percussion_event.has_duration() && analysis.bpm.0 > 0.0 {

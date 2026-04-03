@@ -64,7 +64,8 @@ impl FrameTimer {
     /// Time remaining until next frame deadline.
     /// Returns Duration::ZERO if already past the deadline.
     pub fn time_until_next_tick(&self) -> Duration {
-        self.target_frame_duration.saturating_sub(self.last_tick_time.elapsed())
+        self.target_frame_duration
+            .saturating_sub(self.last_tick_time.elapsed())
     }
 
     /// Consume the tick, returning delta time in seconds.
@@ -177,7 +178,10 @@ impl FrameTimer {
         self.actual_fps = self.display_hz / self.frame_divisor as f64;
         log::info!(
             "[FrameTimer] VSync divisor: {} (display={:.1}Hz, target={:.1}fps, actual={:.1}fps)",
-            self.frame_divisor, self.display_hz, self.target_fps, self.actual_fps,
+            self.frame_divisor,
+            self.display_hz,
+            self.target_fps,
+            self.actual_fps,
         );
     }
 

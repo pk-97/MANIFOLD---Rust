@@ -28,9 +28,7 @@ fn find_wgsl_files(dir: &std::path::Path) -> Vec<PathBuf> {
 
 /// Files that are partials (no entry points, included by other shaders).
 /// These won't validate standalone — skip them.
-const PARTIAL_SHADERS: &[&str] = &[
-    "particle_common.wgsl",
-];
+const PARTIAL_SHADERS: &[&str] = &["particle_common.wgsl"];
 
 fn is_partial(path: &std::path::Path) -> bool {
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
@@ -43,7 +41,10 @@ fn is_partial(path: &std::path::Path) -> bool {
 #[test]
 fn all_wgsl_shaders_validate() {
     let files = find_wgsl_files(&shader_dir());
-    assert!(!files.is_empty(), "No .wgsl files found — test infrastructure broken");
+    assert!(
+        !files.is_empty(),
+        "No .wgsl files found — test infrastructure broken"
+    );
 
     let mut validated = 0;
     let mut skipped = 0;

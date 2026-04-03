@@ -96,11 +96,17 @@ impl ExportSession {
     ) -> Result<Self, ExportError> {
         let fallback = Bpm(bpm);
         let start_seconds = TempoMapConverter::beat_to_seconds(
-            tempo_map, Beats::from_f32(config.start_beat), fallback,
-        ).as_f32();
+            tempo_map,
+            Beats::from_f32(config.start_beat),
+            fallback,
+        )
+        .as_f32();
         let end_seconds = TempoMapConverter::beat_to_seconds(
-            tempo_map, Beats::from_f32(config.end_beat), fallback,
-        ).as_f32();
+            tempo_map,
+            Beats::from_f32(config.end_beat),
+            fallback,
+        )
+        .as_f32();
 
         if end_seconds <= start_seconds {
             return Err(ExportError::InvalidRange {
@@ -123,7 +129,8 @@ impl ExportSession {
                 tempo_map,
                 Beats::from_f32(config.audio_start_beat),
                 fallback,
-            ).as_f32();
+            )
+            .as_f32();
             audio_start_seconds - start_seconds - config.audio_encoder_delay
         } else {
             0.0
@@ -137,9 +144,7 @@ impl ExportSession {
             config.output_path.clone()
         };
 
-        let encoder = Self::create_encoder(
-            &config, &encoder_output, None,
-        )?;
+        let encoder = Self::create_encoder(&config, &encoder_output, None)?;
 
         log::info!(
             "[ExportSession] {} frames, {:.2}s, beats {:.1}-{:.1}, audio_offset={:.3}s",
@@ -190,11 +195,17 @@ impl ExportSession {
     ) -> Result<Self, ExportError> {
         let fallback = Bpm(bpm);
         let start_seconds = TempoMapConverter::beat_to_seconds(
-            tempo_map, Beats::from_f32(config.start_beat), fallback,
-        ).as_f32();
+            tempo_map,
+            Beats::from_f32(config.start_beat),
+            fallback,
+        )
+        .as_f32();
         let end_seconds = TempoMapConverter::beat_to_seconds(
-            tempo_map, Beats::from_f32(config.end_beat), fallback,
-        ).as_f32();
+            tempo_map,
+            Beats::from_f32(config.end_beat),
+            fallback,
+        )
+        .as_f32();
 
         if end_seconds <= start_seconds {
             return Err(ExportError::InvalidRange {
@@ -212,8 +223,11 @@ impl ExportSession {
 
         let audio_offset_seconds = if config.has_audio() {
             let audio_start_seconds = TempoMapConverter::beat_to_seconds(
-                tempo_map, Beats::from_f32(config.audio_start_beat), fallback,
-            ).as_f32();
+                tempo_map,
+                Beats::from_f32(config.audio_start_beat),
+                fallback,
+            )
+            .as_f32();
             audio_start_seconds - start_seconds - config.audio_encoder_delay
         } else {
             0.0
@@ -225,14 +239,15 @@ impl ExportSession {
             config.output_path.clone()
         };
 
-        let encoder = Self::create_encoder(
-            &config, &encoder_output, Some(device_ptr),
-        )?;
+        let encoder = Self::create_encoder(&config, &encoder_output, Some(device_ptr))?;
 
         log::info!(
             "[ExportSession] {} frames, {:.2}s, beats {:.1}-{:.1}, \
              audio_offset={:.3}s (shared device)",
-            total_frames, duration, config.start_beat, config.end_beat,
+            total_frames,
+            duration,
+            config.start_beat,
+            config.end_beat,
             audio_offset_seconds,
         );
 
@@ -256,14 +271,21 @@ impl ExportSession {
         if let Some(ptr) = device_ptr {
             unsafe {
                 MetalEncoder::new_with_device(
-                    config.width, config.height, config.fps,
-                    encoder_output, config.hdr, ptr,
+                    config.width,
+                    config.height,
+                    config.fps,
+                    encoder_output,
+                    config.hdr,
+                    ptr,
                 )
             }
         } else {
             MetalEncoder::new(
-                config.width, config.height, config.fps,
-                encoder_output, config.hdr,
+                config.width,
+                config.height,
+                config.fps,
+                encoder_output,
+                config.hdr,
             )
         }
     }
@@ -300,10 +322,7 @@ impl ExportSession {
     /// Finalize the export: close encoder, optionally mux audio.
     ///
     /// `ffmpeg_path`: required if audio muxing is needed.
-    pub fn finalize(
-        self,
-        ffmpeg_path: Option<&str>,
-    ) -> Result<ExportResult, ExportError> {
+    pub fn finalize(self, ffmpeg_path: Option<&str>) -> Result<ExportResult, ExportError> {
         let frames_encoded = self.encoder.frames_encoded();
         let duration = self.end_seconds - self.start_seconds;
         let config = self.config.clone();
@@ -322,9 +341,8 @@ impl ExportSession {
         // Post-mux audio if needed
         if config.has_audio() {
             let audio_path = config.audio_path.as_ref().unwrap();
-            let ffmpeg = ffmpeg_path.ok_or_else(|| {
-                ExportError::AudioMux("ffmpeg not found".to_string())
-            })?;
+            let ffmpeg =
+                ffmpeg_path.ok_or_else(|| ExportError::AudioMux("ffmpeg not found".to_string()))?;
 
             crate::audio_muxer::AudioMuxer::mux(
                 ffmpeg,

@@ -4,9 +4,9 @@
 //! and the dropdown overlay. The app layer creates one UIRoot per
 //! workspace window and forwards winit events through it.
 
-use manifold_ui::*;
 use manifold_ui::input::{Key, Modifiers, PointerAction, UIEvent};
-use manifold_ui::node::{Vec2, Rect};
+use manifold_ui::node::{Rect, Vec2};
+use manifold_ui::*;
 
 /// What the currently-open dropdown is selecting for.
 #[derive(Debug, Clone)]
@@ -17,15 +17,15 @@ pub enum DropdownContext {
     Resolution,
     #[allow(dead_code)]
     AddEffect(InspectorTab),
-    ClipContext(String),     // right-click on clip: clip_id
+    ClipContext(String),      // right-click on clip: clip_id
     TrackContext(f32, usize), // right-click on empty track: beat, layer
-    LayerContext(usize),     // right-click on layer header: layer_index
-    MasterExitPath,          // LED exit path dropdown
-    ClkDevice,               // MIDI clock device selection
+    LayerContext(usize),      // right-click on layer header: layer_index
+    MasterExitPath,           // LED exit path dropdown
+    ClkDevice,                // MIDI clock device selection
     GenCardContext,           // right-click on generator card header
     EffectParamContext(InspectorTab, usize, usize, f32), // tab, fx_idx, param_idx, default_val
-    GenParamContext(usize, f32),                          // param_idx, default_val
-    MacroSlotContext(usize),                              // macro_index (right-click on macro slider)
+    GenParamContext(usize, f32), // param_idx, default_val
+    MacroSlotContext(usize),  // macro_index (right-click on macro slider)
 }
 
 /// Owns all UI state for one window.
@@ -181,7 +181,8 @@ impl UIRoot {
         if start < end {
             info.push(PanelCacheInfo {
                 slot: PanelSlot::Transport,
-                node_start: start, node_end: end,
+                node_start: start,
+                node_end: end,
                 rect: self.layout.transport_bar(),
                 sub_regions: None,
             });
@@ -192,7 +193,8 @@ impl UIRoot {
         if start < end {
             info.push(PanelCacheInfo {
                 slot: PanelSlot::Header,
-                node_start: start, node_end: end,
+                node_start: start,
+                node_end: end,
                 rect: self.layout.header(),
                 sub_regions: None,
             });
@@ -203,7 +205,8 @@ impl UIRoot {
         if start < end {
             info.push(PanelCacheInfo {
                 slot: PanelSlot::Footer,
-                node_start: start, node_end: end,
+                node_start: start,
+                node_end: end,
                 rect: self.layout.footer(),
                 sub_regions: None,
             });
@@ -214,23 +217,29 @@ impl UIRoot {
         if start < end {
             info.push(PanelCacheInfo {
                 slot: PanelSlot::Inspector,
-                node_start: start, node_end: end,
+                node_start: start,
+                node_end: end,
                 rect: self.layout.inspector(),
                 sub_regions: Some(self.inspector.sub_region_ranges()),
             });
         }
 
         // SplitHandles — nodes between inspector end and scroll_panels_start
-        let inspector_end = self.inspector.first_node()
+        let inspector_end = self
+            .inspector
+            .first_node()
             .saturating_add(self.inspector.node_count());
-        if inspector_end < self.scroll_panels_start
-            && self.inspector.first_node() != usize::MAX
-        {
+        if inspector_end < self.scroll_panels_start && self.inspector.first_node() != usize::MAX {
             info.push(PanelCacheInfo {
                 slot: PanelSlot::SplitHandles,
                 node_start: inspector_end,
                 node_end: self.scroll_panels_start,
-                rect: Rect::new(0.0, 0.0, self.layout.screen_width, self.layout.screen_height),
+                rect: Rect::new(
+                    0.0,
+                    0.0,
+                    self.layout.screen_width,
+                    self.layout.screen_height,
+                ),
                 sub_regions: None,
             });
         }
@@ -240,7 +249,8 @@ impl UIRoot {
         if start < end {
             info.push(PanelCacheInfo {
                 slot: PanelSlot::LayerHeaders,
-                node_start: start, node_end: end,
+                node_start: start,
+                node_end: end,
                 rect: self.layout.layer_controls(),
                 sub_regions: None,
             });
@@ -251,7 +261,8 @@ impl UIRoot {
         if start < end {
             info.push(PanelCacheInfo {
                 slot: PanelSlot::Viewport,
-                node_start: start, node_end: end,
+                node_start: start,
+                node_end: end,
                 rect: self.layout.timeline_body(),
                 sub_regions: None,
             });
@@ -264,13 +275,15 @@ impl UIRoot {
     /// Equivalent to Unity's WorkspaceController.ApplySavedLayout().
     pub fn apply_project_layout(&mut self, settings: &manifold_core::settings::ProjectSettings) {
         if settings.inspector_width > 0.0 {
-            self.layout.inspector_width = settings.inspector_width
+            self.layout.inspector_width = settings
+                .inspector_width
                 .clamp(Self::INSPECTOR_MIN_W, Self::INSPECTOR_MAX_W);
         }
         if settings.timeline_height_percent > 0.0 {
-            self.layout.timeline_split_ratio = settings.timeline_height_percent
-                .clamp(manifold_ui::color::MIN_TIMELINE_SPLIT_RATIO,
-                       manifold_ui::color::MAX_TIMELINE_SPLIT_RATIO);
+            self.layout.timeline_split_ratio = settings.timeline_height_percent.clamp(
+                manifold_ui::color::MIN_TIMELINE_SPLIT_RATIO,
+                manifold_ui::color::MAX_TIMELINE_SPLIT_RATIO,
+            );
         }
         // Restore viewport scroll + zoom
         if settings.viewport_pixels_per_beat > 0.0 {
@@ -280,7 +293,8 @@ impl UIRoot {
             settings.viewport_scroll_x_beats,
             settings.viewport_scroll_y_px,
         );
-        self.layer_headers.set_scroll_y(settings.viewport_scroll_y_px);
+        self.layer_headers
+            .set_scroll_y(settings.viewport_scroll_y_px);
     }
 
     /// Build all panels. Call once after creation and after resize.
@@ -303,7 +317,11 @@ impl UIRoot {
         {
             let r = self.layout.split_handle();
             self.split_handle_id = self.tree.add_panel(
-                -1, r.x, r.y, r.width, r.height,
+                -1,
+                r.x,
+                r.y,
+                r.width,
+                r.height,
                 manifold_ui::node::UIStyle {
                     bg_color: manifold_ui::color::RESIZE_HANDLE_IDLE,
                     ..manifold_ui::node::UIStyle::default()
@@ -316,7 +334,11 @@ impl UIRoot {
             let edge_x = self.layout.content_left() - 2.0;
             let insp = self.layout.inspector();
             self.inspector_handle_id = self.tree.add_panel(
-                -1, edge_x, insp.y, 4.0, insp.height,
+                -1,
+                edge_x,
+                insp.y,
+                4.0,
+                insp.height,
                 manifold_ui::node::UIStyle {
                     bg_color: manifold_ui::color::RESIZE_HANDLE_IDLE,
                     ..manifold_ui::node::UIStyle::default()
@@ -367,12 +389,14 @@ impl UIRoot {
 
         self.perf_hud.build(&mut self.tree, &self.layout);
 
-        self.dropdown.set_screen_size(self.screen_width, self.screen_height);
+        self.dropdown
+            .set_screen_size(self.screen_width, self.screen_height);
         if self.dropdown.is_open() {
             self.dropdown.rebuild_nodes(&mut self.tree);
         }
 
-        self.browser_popup.set_screen_size(self.screen_width, self.screen_height);
+        self.browser_popup
+            .set_screen_size(self.screen_width, self.screen_height);
         if self.browser_popup.is_open() {
             self.browser_popup.build(&mut self.tree);
         }
@@ -380,8 +404,8 @@ impl UIRoot {
 
     /// Handle a resize event. Rebuilds all panels.
     pub fn resize(&mut self, width: f32, height: f32) {
-        let same_size = (width - self.screen_width).abs() < 1.0
-            && (height - self.screen_height).abs() < 1.0;
+        let same_size =
+            (width - self.screen_width).abs() < 1.0 && (height - self.screen_height).abs() < 1.0;
         if same_size && self.built {
             return;
         }
@@ -393,7 +417,8 @@ impl UIRoot {
     /// Process a pointer event from winit.
     pub fn pointer_event(&mut self, pos: Vec2, action: PointerAction, time: f32) {
         self.time_accumulator = time;
-        self.input.process_pointer(&mut self.tree, pos, action, time);
+        self.input
+            .process_pointer(&mut self.tree, pos, action, time);
 
         // On cursor move, perform continuous clip hit-testing in the viewport.
         // HoverEnter/HoverExit only fire on node-level transitions; they cannot
@@ -417,7 +442,12 @@ impl UIRoot {
     }
 
     /// Open a dropdown anchored below a trigger rect.
-    fn open_dropdown_at(&mut self, context: DropdownContext, items: Vec<DropdownItem>, trigger: Rect) {
+    fn open_dropdown_at(
+        &mut self,
+        context: DropdownContext,
+        items: Vec<DropdownItem>,
+        trigger: Rect,
+    ) {
         self.dropdown_context = Some(context);
         self.dropdown.open(items, trigger, 120.0, &mut self.tree);
     }
@@ -451,11 +481,14 @@ impl UIRoot {
                 let mut consumed = false;
 
                 // Escape key
-                if let UIEvent::KeyDown { key: Key::Escape, .. } = event
-                    && self.browser_popup.handle_escape().is_some() {
-                        self.overlay_dirty = true;
-                        consumed = true;
-                    }
+                if let UIEvent::KeyDown {
+                    key: Key::Escape, ..
+                } = event
+                    && self.browser_popup.handle_escape().is_some()
+                {
+                    self.overlay_dirty = true;
+                    consumed = true;
+                }
 
                 // Click events
                 if let UIEvent::Click { node_id, .. } = event {
@@ -466,16 +499,20 @@ impl UIRoot {
                     } else {
                         if let Some(bp_action) = self.browser_popup.handle_click(*node_id) {
                             match bp_action {
-                                BrowserPopupAction::Selected { key, mode, tab, layer_id } => {
-                                    match mode {
-                                        BrowserPopupMode::Effect => {
-                                            actions.push(PanelAction::AddEffect(tab, key as usize));
-                                        }
-                                        BrowserPopupMode::Generator => {
-                                            actions.push(PanelAction::SetGenType(layer_id, key as usize));
-                                        }
+                                BrowserPopupAction::Selected {
+                                    key,
+                                    mode,
+                                    tab,
+                                    layer_id,
+                                } => match mode {
+                                    BrowserPopupMode::Effect => {
+                                        actions.push(PanelAction::AddEffect(tab, key as usize));
                                     }
-                                }
+                                    BrowserPopupMode::Generator => {
+                                        actions
+                                            .push(PanelAction::SetGenType(layer_id, key as usize));
+                                    }
+                                },
                                 BrowserPopupAction::Paste => {
                                     actions.push(PanelAction::PasteEffects);
                                 }
@@ -506,30 +543,33 @@ impl UIRoot {
 
             // Dropdown gets first crack at all events.
             if self.dropdown.is_open()
-                && let Some(dd_action) = self.dropdown.handle_event(event, &mut self.tree) {
-                    match dd_action {
-                        DropdownAction::Selected(index) => {
-                            if let Some(ctx) = self.dropdown_context.take()
-                                && let Some(action) = self.dropdown_to_action(ctx, index) {
-                                    actions.push(action);
-                                }
-                        }
-                        DropdownAction::ColorSelected(color_idx) => {
-                            if let Some(ctx) = self.dropdown_context.take()
-                                && let Some(action) = self.dropdown_color_to_action(ctx, color_idx) {
-                                    actions.push(action);
-                                }
-                        }
-                        DropdownAction::Dismissed => {
-                            // Only clear context if dropdown actually closed
-                            // (disabled item clicks send Dismissed but keep dropdown open)
-                            if !self.dropdown.is_open() {
-                                self.dropdown_context = None;
-                            }
+                && let Some(dd_action) = self.dropdown.handle_event(event, &mut self.tree)
+            {
+                match dd_action {
+                    DropdownAction::Selected(index) => {
+                        if let Some(ctx) = self.dropdown_context.take()
+                            && let Some(action) = self.dropdown_to_action(ctx, index)
+                        {
+                            actions.push(action);
                         }
                     }
-                    continue; // Event consumed by dropdown.
+                    DropdownAction::ColorSelected(color_idx) => {
+                        if let Some(ctx) = self.dropdown_context.take()
+                            && let Some(action) = self.dropdown_color_to_action(ctx, color_idx)
+                        {
+                            actions.push(action);
+                        }
+                    }
+                    DropdownAction::Dismissed => {
+                        // Only clear context if dropdown actually closed
+                        // (disabled item clicks send Dismissed but keep dropdown open)
+                        if !self.dropdown.is_open() {
+                            self.dropdown_context = None;
+                        }
+                    }
                 }
+                continue; // Event consumed by dropdown.
+            }
 
             // Route to panels.
             let mut panel_actions;
@@ -567,13 +607,21 @@ impl UIRoot {
                 let is_scroll = matches!(event, UIEvent::Scroll { .. });
 
                 if let Some(pos) = event.pos() {
-                    if !is_scroll && wf_rect.width > 0.0 && wf_rect.height > 0.0 && wf_rect.contains(pos) {
+                    if !is_scroll
+                        && wf_rect.width > 0.0
+                        && wf_rect.height > 0.0
+                        && wf_rect.contains(pos)
+                    {
                         // Event is inside the waveform lane rect
                         let local = event.with_offset(-wf_rect.x, -wf_rect.y);
                         panel_actions = self.waveform_lane.handle_event(&local, &self.tree);
                         actions.append(&mut panel_actions);
                         consumed_by_lane = true;
-                    } else if !is_scroll && sl_rect.width > 0.0 && sl_rect.height > 0.0 && sl_rect.contains(pos) {
+                    } else if !is_scroll
+                        && sl_rect.width > 0.0
+                        && sl_rect.height > 0.0
+                        && sl_rect.contains(pos)
+                    {
                         // Event is inside the stem lanes rect
                         let local = event.with_offset(-sl_rect.x, -sl_rect.y);
                         panel_actions = self.stem_lanes.handle_event(&local, &self.tree);
@@ -583,7 +631,9 @@ impl UIRoot {
                         // Active scrub/drag started inside waveform lane but moved outside.
                         // Continue routing Drag/PointerUp/DragEnd so the interaction completes.
                         match event {
-                            UIEvent::Drag { .. } | UIEvent::PointerUp { .. } | UIEvent::DragEnd { .. } => {
+                            UIEvent::Drag { .. }
+                            | UIEvent::PointerUp { .. }
+                            | UIEvent::DragEnd { .. } => {
                                 let local = event.with_offset(-wf_rect.x, -wf_rect.y);
                                 panel_actions = self.waveform_lane.handle_event(&local, &self.tree);
                                 actions.append(&mut panel_actions);
@@ -647,7 +697,9 @@ impl UIRoot {
                     // Effect card drag handle — try to start card reorder drag
                     self.inspector.try_begin_card_drag(*node_id, &mut self.tree);
                     // Layer header drag handle — needs &mut tree for dim/indicator
-                    let mut lh_actions = self.layer_headers.handle_drag_begin(&mut self.tree, *node_id);
+                    let mut lh_actions = self
+                        .layer_headers
+                        .handle_drag_begin(&mut self.tree, *node_id);
                     actions.append(&mut lh_actions);
                 }
                 UIEvent::Drag { pos, .. } => {
@@ -712,7 +764,8 @@ impl UIRoot {
         match action {
             PanelAction::BlendModeClicked(idx) => {
                 use manifold_core::types::BlendMode;
-                let items: Vec<DropdownItem> = BlendMode::ALL.iter()
+                let items: Vec<DropdownItem> = BlendMode::ALL
+                    .iter()
                     .map(|m| DropdownItem::new(m.display_name()))
                     .collect();
                 self.open_dropdown_at(DropdownContext::BlendMode(*idx), items, trigger);
@@ -723,13 +776,16 @@ impl UIRoot {
                 use manifold_ui::panels::browser_popup::*;
 
                 let available = effect_type_registry::available_effects();
-                let mut items: Vec<(String, i32, String)> = available.iter()
+                let mut items: Vec<(String, i32, String)> = available
+                    .iter()
                     .enumerate()
-                    .map(|(i, reg)| (
-                        reg.display_name.to_string(),
-                        i as i32,
-                        reg.category.to_string(),
-                    ))
+                    .map(|(i, reg)| {
+                        (
+                            reg.display_name.to_string(),
+                            i as i32,
+                            reg.category.to_string(),
+                        )
+                    })
                     .collect();
                 items.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
                 let names: Vec<String> = items.iter().map(|i| i.0.clone()).collect();
@@ -737,11 +793,13 @@ impl UIRoot {
                 let categories: Vec<String> = items.iter().map(|i| i.2.clone()).collect();
 
                 // Unique category names
-                let cat_names: Vec<String> = effect_type_registry::ALL_CATEGORIES.iter()
+                let cat_names: Vec<String> = effect_type_registry::ALL_CATEGORIES
+                    .iter()
                     .map(|&c| c.to_string())
                     .collect();
 
-                self.browser_popup.set_screen_size(self.screen_width, self.screen_height);
+                self.browser_popup
+                    .set_screen_size(self.screen_width, self.screen_height);
                 self.browser_popup.open(BrowserPopupRequest {
                     mode: BrowserPopupMode::Effect,
                     tab: *tab,
@@ -760,7 +818,8 @@ impl UIRoot {
                 use manifold_ui::panels::browser_popup::*;
 
                 let available = generator_type_registry::available_generators();
-                let mut items: Vec<(String, i32)> = available.iter()
+                let mut items: Vec<(String, i32)> = available
+                    .iter()
                     .enumerate()
                     .map(|(i, reg)| (reg.display_name.to_string(), i as i32))
                     .collect();
@@ -768,7 +827,8 @@ impl UIRoot {
                 let names: Vec<String> = items.iter().map(|i| i.0.clone()).collect();
                 let keys: Vec<i32> = items.iter().map(|i| i.1).collect();
 
-                self.browser_popup.set_screen_size(self.screen_width, self.screen_height);
+                self.browser_popup
+                    .set_screen_size(self.screen_width, self.screen_height);
                 self.browser_popup.open(BrowserPopupRequest {
                     mode: BrowserPopupMode::Generator,
                     tab: InspectorTab::Layer,
@@ -787,7 +847,9 @@ impl UIRoot {
                     log::info!("[UIRoot] No MIDI devices available for CLK selection");
                     return false;
                 }
-                let items: Vec<DropdownItem> = self.midi_device_names.iter()
+                let items: Vec<DropdownItem> = self
+                    .midi_device_names
+                    .iter()
                     .map(|name| DropdownItem::new(name))
                     .collect();
                 self.open_dropdown_at(DropdownContext::ClkDevice, items, trigger);
@@ -811,7 +873,8 @@ impl UIRoot {
                 use manifold_core::types::ResolutionPreset;
                 let has_displays = !self.display_resolutions.is_empty();
 
-                let mut items: Vec<DropdownItem> = ResolutionPreset::ALL.iter()
+                let mut items: Vec<DropdownItem> = ResolutionPreset::ALL
+                    .iter()
                     .map(|r| DropdownItem::new(&r.dropdown_label()))
                     .collect();
 
@@ -846,7 +909,8 @@ impl UIRoot {
                     DropdownItem::new("Duplicate"),
                 ];
                 self.dropdown_context = Some(DropdownContext::ClipContext(clip_id.clone()));
-                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                self.dropdown
+                    .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
             PanelAction::TrackRightClicked(beat, layer) => {
@@ -857,7 +921,8 @@ impl UIRoot {
                     DropdownItem::new("Insert Generator Layer"),
                 ];
                 self.dropdown_context = Some(DropdownContext::TrackContext(*beat, *layer));
-                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                self.dropdown
+                    .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
             PanelAction::LayerHeaderRightClicked(layer_idx) => {
@@ -905,7 +970,8 @@ impl UIRoot {
                 self.dropdown_context = Some(DropdownContext::EffectParamContext(
                     tab, *fx_idx, *param_idx, 0.0, // default_val unused for label right-click
                 ));
-                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                self.dropdown
+                    .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
             PanelAction::GenParamLabelRightClick(param_idx) => {
@@ -924,42 +990,46 @@ impl UIRoot {
                 self.dropdown_context = Some(DropdownContext::GenParamContext(
                     *param_idx, 0.0, // default_val unused for label right-click
                 ));
-                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                self.dropdown
+                    .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
             PanelAction::MacroLabelRightClick(macro_idx) => {
                 let descs = &self.macro_mapping_descs[*macro_idx];
+                let mut rename = DropdownItem::new("Rename");
+                rename.separator_after = true;
                 if descs.is_empty() {
                     // No mappings — show a disabled "No mappings" item
                     let mut item = DropdownItem::new("No mappings");
                     item.enabled = false;
                     self.dropdown_context = Some(DropdownContext::MacroSlotContext(*macro_idx));
-                    self.dropdown.open_context(vec![item], right_click_pos, &mut self.tree);
+                    self.dropdown
+                        .open_context(vec![rename, item], right_click_pos, &mut self.tree);
                 } else {
                     // List each mapping with a "Remove" prefix
-                    let mut items: Vec<DropdownItem> = descs.iter()
-                        .map(|desc| DropdownItem::new(desc))
-                        .collect();
-                    if items.len() > 1 {
+                    let mut items: Vec<DropdownItem> =
+                        descs.iter().map(|desc| DropdownItem::new(desc)).collect();
+                    items.insert(0, rename);
+                    if descs.len() > 1 {
                         if let Some(last) = items.last_mut() {
                             last.separator_after = true;
                         }
                         items.push(DropdownItem::new("Clear All"));
                     }
                     self.dropdown_context = Some(DropdownContext::MacroSlotContext(*macro_idx));
-                    self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                    self.dropdown
+                        .open_context(items, right_click_pos, &mut self.tree);
                 }
                 true
             }
             PanelAction::GenCardRightClicked => {
-                let mut items = vec![
-                    DropdownItem::new("Copy Generator"),
-                ];
+                let mut items = vec![DropdownItem::new("Copy Generator")];
                 if self.gen_clipboard.has_content() {
                     items.push(DropdownItem::new("Paste Generator"));
                 }
                 self.dropdown_context = Some(DropdownContext::GenCardContext);
-                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                self.dropdown
+                    .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
             _ => false,
@@ -994,52 +1064,42 @@ impl UIRoot {
                     Some(PanelAction::SetDisplayResolution(*w as i32, *h as i32))
                 }
             }
-            DropdownContext::AddEffect(tab) => {
-                Some(PanelAction::AddEffect(tab, index))
-            }
-            DropdownContext::ClipContext(clip_id) => {
-                match index {
-                    0 => Some(PanelAction::ContextSplitAtPlayhead(clip_id)),
-                    1 => Some(PanelAction::ContextDeleteClip(clip_id)),
-                    2 => Some(PanelAction::ContextDuplicateClip(clip_id)),
-                    _ => None,
-                }
-            }
-            DropdownContext::TrackContext(beat, layer) => {
-                match index {
-                    0 => Some(PanelAction::ContextPasteAtTrack(beat, layer)),
-                    1 => Some(PanelAction::ContextImportMidi(layer)),
-                    2 => Some(PanelAction::ContextAddVideoLayer(layer)),
-                    3 => Some(PanelAction::ContextAddGeneratorLayer(layer)),
-                    _ => None,
-                }
-            }
-            DropdownContext::LayerContext(layer_idx) => {
-                match index {
-                    0 => Some(PanelAction::ContextPasteAtLayer(layer_idx)),
-                    1 => Some(PanelAction::ContextImportMidi(layer_idx)),
-                    2 => Some(PanelAction::ContextAddVideoLayer(layer_idx)),
-                    3 => Some(PanelAction::ContextAddGeneratorLayer(layer_idx)),
-                    4 => Some(PanelAction::ContextDuplicateLayer(layer_idx)),
-                    5 => Some(PanelAction::ContextGroupSelectedLayers),
-                    6 => Some(PanelAction::ContextUngroup(layer_idx)),
-                    7 => Some(PanelAction::ContextDeleteLayer(layer_idx)),
-                    _ => None,
-                }
-            }
-            DropdownContext::ClkDevice => {
-                Some(PanelAction::SetMidiClockDevice(index as i32))
-            }
-            DropdownContext::GenCardContext => {
-                match index {
-                    0 => Some(PanelAction::CopyGenerator),
-                    1 => Some(PanelAction::PasteGenerator),
-                    _ => None,
-                }
-            }
+            DropdownContext::AddEffect(tab) => Some(PanelAction::AddEffect(tab, index)),
+            DropdownContext::ClipContext(clip_id) => match index {
+                0 => Some(PanelAction::ContextSplitAtPlayhead(clip_id)),
+                1 => Some(PanelAction::ContextDeleteClip(clip_id)),
+                2 => Some(PanelAction::ContextDuplicateClip(clip_id)),
+                _ => None,
+            },
+            DropdownContext::TrackContext(beat, layer) => match index {
+                0 => Some(PanelAction::ContextPasteAtTrack(beat, layer)),
+                1 => Some(PanelAction::ContextImportMidi(layer)),
+                2 => Some(PanelAction::ContextAddVideoLayer(layer)),
+                3 => Some(PanelAction::ContextAddGeneratorLayer(layer)),
+                _ => None,
+            },
+            DropdownContext::LayerContext(layer_idx) => match index {
+                0 => Some(PanelAction::ContextPasteAtLayer(layer_idx)),
+                1 => Some(PanelAction::ContextImportMidi(layer_idx)),
+                2 => Some(PanelAction::ContextAddVideoLayer(layer_idx)),
+                3 => Some(PanelAction::ContextAddGeneratorLayer(layer_idx)),
+                4 => Some(PanelAction::ContextDuplicateLayer(layer_idx)),
+                5 => Some(PanelAction::ContextGroupSelectedLayers),
+                6 => Some(PanelAction::ContextUngroup(layer_idx)),
+                7 => Some(PanelAction::ContextDeleteLayer(layer_idx)),
+                _ => None,
+            },
+            DropdownContext::ClkDevice => Some(PanelAction::SetMidiClockDevice(index as i32)),
+            DropdownContext::GenCardContext => match index {
+                0 => Some(PanelAction::CopyGenerator),
+                1 => Some(PanelAction::PasteGenerator),
+                _ => None,
+            },
             DropdownContext::EffectParamContext(tab, fx_idx, param_idx, _default_val) => {
                 if index < manifold_core::MACRO_COUNT {
-                    Some(PanelAction::MapEffectParamToMacro(tab, fx_idx, param_idx, index))
+                    Some(PanelAction::MapEffectParamToMacro(
+                        tab, fx_idx, param_idx, index,
+                    ))
                 } else {
                     None
                 }
@@ -1053,14 +1113,16 @@ impl UIRoot {
             }
             DropdownContext::MacroSlotContext(macro_idx) => {
                 let mapping_count = self.macro_mapping_descs[macro_idx].len();
-                if mapping_count == 0 {
+                if index == 0 {
+                    Some(PanelAction::MacroLabelRename(macro_idx))
+                } else if mapping_count == 0 {
                     None // "No mappings" item — disabled, shouldn't fire
-                } else if mapping_count > 1 && index == mapping_count {
+                } else if mapping_count > 1 && index == mapping_count + 1 {
                     // "Clear All" item (after all mappings + separator)
                     Some(PanelAction::ClearMacroMappings(macro_idx))
-                } else if index < mapping_count {
+                } else if index > 0 && index <= mapping_count {
                     // Remove specific mapping
-                    Some(PanelAction::UnmapMacro(macro_idx, index))
+                    Some(PanelAction::UnmapMacro(macro_idx, index - 1))
                 } else {
                     None
                 }
@@ -1080,7 +1142,11 @@ impl UIRoot {
     }
 
     /// Convert a color swatch selection into the appropriate PanelAction.
-    fn dropdown_color_to_action(&self, ctx: DropdownContext, color_idx: usize) -> Option<PanelAction> {
+    fn dropdown_color_to_action(
+        &self,
+        ctx: DropdownContext,
+        color_idx: usize,
+    ) -> Option<PanelAction> {
         match ctx {
             DropdownContext::LayerContext(layer_idx) => {
                 let color = manifold_ui::color::COLOR_GRID.get(color_idx)?;
@@ -1099,8 +1165,7 @@ impl UIRoot {
     /// Returns true if pos is near the inspector right edge (resize handle).
     pub fn is_near_inspector_edge(&self, pos: Vec2) -> bool {
         let edge_x = self.layout.content_left();
-        (pos.x - edge_x).abs() < Self::RESIZE_EDGE_PX
-            && pos.y >= self.layout.inspector().y
+        (pos.x - edge_x).abs() < Self::RESIZE_EDGE_PX && pos.y >= self.layout.inspector().y
     }
 
     /// Begin an inspector resize drag.
@@ -1112,7 +1177,9 @@ impl UIRoot {
 
     /// Update inspector width during resize drag. Returns true if width changed.
     pub fn update_inspector_resize(&mut self, x: f32) -> bool {
-        if !self.inspector_resize_dragging { return false; }
+        if !self.inspector_resize_dragging {
+            return false;
+        }
         let delta = x - self.inspector_drag_start_x;
         let new_width = (self.inspector_drag_start_width + delta)
             .clamp(Self::INSPECTOR_MIN_W, Self::INSPECTOR_MAX_W);
@@ -1134,57 +1201,75 @@ impl UIRoot {
     /// Update split handle color to hover state.
     pub fn set_split_handle_hover(&mut self) {
         if self.split_handle_id >= 0 {
-            self.tree.set_style(self.split_handle_id as u32, manifold_ui::node::UIStyle {
-                bg_color: manifold_ui::color::RESIZE_HANDLE_HOVER,
-                ..manifold_ui::node::UIStyle::default()
-            });
+            self.tree.set_style(
+                self.split_handle_id as u32,
+                manifold_ui::node::UIStyle {
+                    bg_color: manifold_ui::color::RESIZE_HANDLE_HOVER,
+                    ..manifold_ui::node::UIStyle::default()
+                },
+            );
         }
     }
 
     /// Update split handle color to drag state.
     pub fn set_split_handle_drag(&mut self) {
         if self.split_handle_id >= 0 {
-            self.tree.set_style(self.split_handle_id as u32, manifold_ui::node::UIStyle {
-                bg_color: manifold_ui::color::RESIZE_HANDLE_DRAG,
-                ..manifold_ui::node::UIStyle::default()
-            });
+            self.tree.set_style(
+                self.split_handle_id as u32,
+                manifold_ui::node::UIStyle {
+                    bg_color: manifold_ui::color::RESIZE_HANDLE_DRAG,
+                    ..manifold_ui::node::UIStyle::default()
+                },
+            );
         }
     }
 
     /// Update split handle color to idle state.
     pub fn set_split_handle_idle(&mut self) {
         if self.split_handle_id >= 0 {
-            self.tree.set_style(self.split_handle_id as u32, manifold_ui::node::UIStyle {
-                bg_color: manifold_ui::color::RESIZE_HANDLE_IDLE,
-                ..manifold_ui::node::UIStyle::default()
-            });
+            self.tree.set_style(
+                self.split_handle_id as u32,
+                manifold_ui::node::UIStyle {
+                    bg_color: manifold_ui::color::RESIZE_HANDLE_IDLE,
+                    ..manifold_ui::node::UIStyle::default()
+                },
+            );
         }
     }
 
     pub fn set_inspector_handle_hover(&mut self) {
         if self.inspector_handle_id >= 0 {
-            self.tree.set_style(self.inspector_handle_id as u32, manifold_ui::node::UIStyle {
-                bg_color: manifold_ui::color::RESIZE_HANDLE_HOVER,
-                ..manifold_ui::node::UIStyle::default()
-            });
+            self.tree.set_style(
+                self.inspector_handle_id as u32,
+                manifold_ui::node::UIStyle {
+                    bg_color: manifold_ui::color::RESIZE_HANDLE_HOVER,
+                    ..manifold_ui::node::UIStyle::default()
+                },
+            );
         }
     }
 
     pub fn set_inspector_handle_drag(&mut self) {
         if self.inspector_handle_id >= 0 {
-            self.tree.set_style(self.inspector_handle_id as u32, manifold_ui::node::UIStyle {
-                bg_color: manifold_ui::color::RESIZE_HANDLE_DRAG,
-                ..manifold_ui::node::UIStyle::default()
-            });
+            self.tree.set_style(
+                self.inspector_handle_id as u32,
+                manifold_ui::node::UIStyle {
+                    bg_color: manifold_ui::color::RESIZE_HANDLE_DRAG,
+                    ..manifold_ui::node::UIStyle::default()
+                },
+            );
         }
     }
 
     pub fn set_inspector_handle_idle(&mut self) {
         if self.inspector_handle_id >= 0 {
-            self.tree.set_style(self.inspector_handle_id as u32, manifold_ui::node::UIStyle {
-                bg_color: manifold_ui::color::RESIZE_HANDLE_IDLE,
-                ..manifold_ui::node::UIStyle::default()
-            });
+            self.tree.set_style(
+                self.inspector_handle_id as u32,
+                manifold_ui::node::UIStyle {
+                    bg_color: manifold_ui::color::RESIZE_HANDLE_IDLE,
+                    ..manifold_ui::node::UIStyle::default()
+                },
+            );
         }
     }
 

@@ -48,10 +48,20 @@ pub struct Rect {
 }
 
 impl Rect {
-    pub const ZERO: Rect = Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 };
+    pub const ZERO: Rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 0.0,
+        height: 0.0,
+    };
 
     pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     pub fn x_max(&self) -> f32 {
@@ -68,7 +78,10 @@ impl Rect {
 
     /// Offset the rect's Y position.
     pub fn offset_y(self, dy: f32) -> Self {
-        Self { y: self.y + dy, ..self }
+        Self {
+            y: self.y + dy,
+            ..self
+        }
     }
 }
 
@@ -85,9 +98,24 @@ pub struct Color32 {
 }
 
 impl Color32 {
-    pub const TRANSPARENT: Color32 = Color32 { r: 0, g: 0, b: 0, a: 0 };
-    pub const WHITE: Color32 = Color32 { r: 255, g: 255, b: 255, a: 255 };
-    pub const BLACK: Color32 = Color32 { r: 0, g: 0, b: 0, a: 255 };
+    pub const TRANSPARENT: Color32 = Color32 {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0,
+    };
+    pub const WHITE: Color32 = Color32 {
+        r: 255,
+        g: 255,
+        b: 255,
+        a: 255,
+    };
+    pub const BLACK: Color32 = Color32 {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 255,
+    };
 
     pub const fn new(r: u8, g: u8, b: u8, a: u8) -> Self {
         Self { r, g, b, a }

@@ -101,15 +101,15 @@ impl DecoderPool {
         if handle.is_null() {
             return Err(DecoderError::Unavailable);
         }
-        Ok(Self { pool_handle: handle })
+        Ok(Self {
+            pool_handle: handle,
+        })
     }
 
     /// Open a video file and return a decoder handle.
     pub fn open(&self, path: &str) -> Result<DecoderHandle, DecoderError> {
         let c_path = CString::new(path).map_err(|_| DecoderError::OpenFailed)?;
-        let handle = unsafe {
-            decoder_ffi::VideoDecoder_Open(self.pool_handle, c_path.as_ptr())
-        };
+        let handle = unsafe { decoder_ffi::VideoDecoder_Open(self.pool_handle, c_path.as_ptr()) };
         if handle.is_null() {
             return Err(DecoderError::OpenFailed);
         }
@@ -162,7 +162,11 @@ impl DecoderPool {
         if result != 0 {
             return None;
         }
-        Some(VideoMetadata { duration, width, height })
+        Some(VideoMetadata {
+            duration,
+            width,
+            height,
+        })
     }
 }
 

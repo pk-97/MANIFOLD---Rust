@@ -28,8 +28,6 @@ pub struct ExportConfig {
 impl ExportConfig {
     /// Whether this export has an audio track to mux.
     pub fn has_audio(&self) -> bool {
-        self.audio_path
-            .as_ref()
-            .is_some_and(|p| !p.is_empty())
+        self.audio_path.as_ref().is_some_and(|p| !p.is_empty())
     }
 }

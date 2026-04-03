@@ -16,12 +16,12 @@ const THUMB_INSET: f32 = 1.0;
 /// Stored by the owning panel for event routing and value updates.
 #[derive(Debug, Clone, Copy)]
 pub struct SliderNodeIds {
-    pub label: i32,            // -1 if no label
-    pub track: u32,            // interactive — drag target
-    pub fill: u32,             // non-interactive — subtle fill from left to value
-    pub thumb: u32,            // non-interactive — thin vertical bar at value position
-    pub value_text: u32,       // interactive — click to type
-    pub track_rect: Rect,      // cached for x_to_normalized()
+    pub label: i32,              // -1 if no label
+    pub track: u32,              // interactive — drag target
+    pub fill: u32,               // non-interactive — subtle fill from left to value
+    pub thumb: u32,              // non-interactive — thin vertical bar at value position
+    pub value_text: u32,         // interactive — click to type
+    pub track_rect: Rect,        // cached for x_to_normalized()
     pub default_normalized: f32, // for right-click reset
 }
 
@@ -107,28 +107,32 @@ impl BitmapSlider {
 
         // ── Label (fixed width, left, interactive for right-click mapping) ──
         if let Some(label_text) = label
-            && !label_text.is_empty() {
-                ids.label = tree.add_node(
-                    parent_id,
-                    Rect::new(x, y, label_width, h),
-                    UINodeType::Label,
-                    UIStyle {
-                        text_color: colors.text,
-                        font_size,
-                        text_align: TextAlign::Right,
-                        ..UIStyle::default()
-                    },
-                    Some(label_text),
-                    UIFlags::VISIBLE | UIFlags::INTERACTIVE,
-                ) as i32;
-                x += label_width + GAP;
-            }
+            && !label_text.is_empty()
+        {
+            ids.label = tree.add_node(
+                parent_id,
+                Rect::new(x, y, label_width, h),
+                UINodeType::Label,
+                UIStyle {
+                    text_color: colors.text,
+                    font_size,
+                    text_align: TextAlign::Right,
+                    ..UIStyle::default()
+                },
+                Some(label_text),
+                UIFlags::VISIBLE | UIFlags::INTERACTIVE,
+            ) as i32;
+            x += label_width + GAP;
+        }
 
         // ── Value text (fixed width, right) ──
         let value_x = rect.x + rect.width - VALUE_WIDTH;
         ids.value_text = tree.add_label(
             parent_id,
-            value_x, y, VALUE_WIDTH, h,
+            value_x,
+            y,
+            VALUE_WIDTH,
+            h,
             value_text,
             UIStyle {
                 bg_color: colors.value_bg,
@@ -297,11 +301,18 @@ impl Default for SliderDragState {
 impl SliderDragState {
     /// Create with explicit range.
     pub fn with_range(min: f32, max: f32, whole_numbers: bool) -> Self {
-        Self { min, max, whole_numbers, ..Self::default() }
+        Self {
+            min,
+            max,
+            whole_numbers,
+            ..Self::default()
+        }
     }
 
     /// Store node IDs after build.
-    pub fn set_ids(&mut self, ids: SliderNodeIds) { self.ids = Some(ids); }
+    pub fn set_ids(&mut self, ids: SliderNodeIds) {
+        self.ids = Some(ids);
+    }
 
     /// Clear node IDs (panel teardown / rebuild).
     pub fn clear(&mut self) {
@@ -318,13 +329,21 @@ impl SliderDragState {
     }
 
     /// Node IDs (for panels that need to read track_rect, etc.).
-    pub fn ids(&self) -> Option<&SliderNodeIds> { self.ids.as_ref() }
+    pub fn ids(&self) -> Option<&SliderNodeIds> {
+        self.ids.as_ref()
+    }
 
     /// Track node ID for hit-testing.
-    pub fn track_id(&self) -> Option<u32> { self.ids.as_ref().map(|ids| ids.track) }
+    pub fn track_id(&self) -> Option<u32> {
+        self.ids.as_ref().map(|ids| ids.track)
+    }
 
-    pub fn is_dragging(&self) -> bool { self.dragging }
-    pub fn cached_value(&self) -> f32 { self.cached_value }
+    pub fn is_dragging(&self) -> bool {
+        self.dragging
+    }
+    pub fn cached_value(&self) -> f32 {
+        self.cached_value
+    }
 
     // ── Drag lifecycle ──────────────────────────────────────────
 
@@ -333,7 +352,9 @@ impl SliderDragState {
     /// The caller emits Snapshot + Changed actions.
     pub fn try_start_drag(&mut self, node_id: u32, pos_x: f32) -> Option<f32> {
         let ids = self.ids.as_ref()?;
-        if node_id != ids.track { return None; }
+        if node_id != ids.track {
+            return None;
+        }
         self.dragging = true;
         let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos_x);
         let val = BitmapSlider::normalized_to_value(norm, self.min, self.max);
@@ -351,7 +372,9 @@ impl SliderDragState {
         tree: &mut UITree,
         fmt: &dyn Fn(f32) -> String,
     ) -> Option<f32> {
-        if !self.dragging { return None; }
+        if !self.dragging {
+            return None;
+        }
         let ids = self.ids.as_ref()?;
         let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos_x);
         let val = BitmapSlider::normalized_to_value(norm, self.min, self.max);
@@ -371,7 +394,9 @@ impl SliderDragState {
         tree: &mut UITree,
         text: &str,
     ) -> bool {
-        if !self.dragging { return false; }
+        if !self.dragging {
+            return false;
+        }
         if let Some(ref ids) = self.ids {
             BitmapSlider::update_value(tree, ids, norm, text);
             self.cached_value = val;
@@ -384,7 +409,8 @@ impl SliderDragState {
     /// Get raw normalized value from position (for callers that need custom
     /// value computation, e.g. snap_quarter_note).
     pub fn raw_norm(&self, pos_x: f32) -> f32 {
-        self.ids.as_ref()
+        self.ids
+            .as_ref()
             .map(|ids| BitmapSlider::x_to_normalized(ids.track_rect, pos_x))
             .unwrap_or(0.0)
     }
@@ -404,12 +430,7 @@ impl SliderDragState {
 
     /// Sync from model value. Dirty-checks against cache. Updates visual
     /// only if value changed. `fmt` converts value to display text.
-    pub fn sync(
-        &mut self,
-        tree: &mut UITree,
-        value: f32,
-        fmt: &dyn Fn(f32) -> String,
-    ) {
+    pub fn sync(&mut self, tree: &mut UITree, value: f32, fmt: &dyn Fn(f32) -> String) {
         if (self.cached_value - value).abs() < f32::EPSILON && !self.cached_value.is_nan() {
             return;
         }
@@ -422,13 +443,7 @@ impl SliderDragState {
 
     /// Sync with explicit normalized value (for sliders where norm != value,
     /// e.g. slip where value is seconds but norm is value/max_slip).
-    pub fn sync_with_norm(
-        &mut self,
-        tree: &mut UITree,
-        value: f32,
-        norm: f32,
-        text: &str,
-    ) {
+    pub fn sync_with_norm(&mut self, tree: &mut UITree, value: f32, norm: f32, text: &str) {
         if (self.cached_value - value).abs() < f32::EPSILON && !self.cached_value.is_nan() {
             return;
         }

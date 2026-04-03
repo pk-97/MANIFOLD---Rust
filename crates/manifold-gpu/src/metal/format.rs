@@ -20,10 +20,7 @@ pub(crate) fn to_mtl_pixel_format(format: GpuTextureFormat) -> metal::MTLPixelFo
     }
 }
 
-pub(crate) fn to_mtl_texture_type(
-    dim: GpuTextureDimension,
-    _depth: u32,
-) -> metal::MTLTextureType {
+pub(crate) fn to_mtl_texture_type(dim: GpuTextureDimension, _depth: u32) -> metal::MTLTextureType {
     match dim {
         GpuTextureDimension::D2 => metal::MTLTextureType::D2,
         GpuTextureDimension::D3 => metal::MTLTextureType::D3,

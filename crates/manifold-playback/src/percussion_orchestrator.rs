@@ -21,23 +21,19 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use manifold_core::Beats;
-use manifold_core::percussion_analysis::{
-    PercussionAnalysisData, ProjectBeatTimeConverter,
-};
+use manifold_core::percussion_analysis::{PercussionAnalysisData, ProjectBeatTimeConverter};
 use manifold_core::percussion_binding::ProjectPercussionBindingResolver;
-use manifold_core::percussion_settings::{PercussionImportOptionsFactory, PercussionPipelineSettings};
+use manifold_core::percussion_settings::{
+    PercussionImportOptionsFactory, PercussionPipelineSettings,
+};
 use manifold_core::project::Project;
 use manifold_editing::command::Command;
 
-use crate::percussion_backend::{
-    PercussionPipelineBackendResolver, PercussionPipelineInvocation,
-};
-use crate::percussion_import::{
-    PercussionBpmDecision, PercussionImportService,
-};
+use crate::percussion_backend::{PercussionPipelineBackendResolver, PercussionPipelineInvocation};
+use crate::percussion_import::{PercussionBpmDecision, PercussionImportService};
 use crate::percussion_parser::{JsonPercussionAnalysisParser, PercussionAnalysisParser};
 use crate::percussion_planner::PercussionTimelinePlanner;
-use crate::process_runner::{ProcessHandle, ProcessRunnerImpl, ExternalProcessRunner};
+use crate::process_runner::{ExternalProcessRunner, ProcessHandle, ProcessRunnerImpl};
 
 // ──────────────────────────────────────
 // CONSTANTS (preserved from Unity)
@@ -70,10 +66,10 @@ const COLOR_GREEN: StatusColor = [0.5, 0.95, 0.6, 1.0];
 const COLOR_ORANGE: StatusColor = [1.0, 0.75, 0.35, 1.0];
 const COLOR_RED: StatusColor = [1.0, 0.4, 0.35, 1.0];
 
-pub use crate::percussion_progress_parser::{PipelineProgress, PercussionPipelineProgressParser};
 pub use crate::percussion_commands::{
-    SetImportedAudioCommand, SetAudioStartBeatCommand, MoveClipBeatCommand,
+    MoveClipBeatCommand, SetAudioStartBeatCommand, SetImportedAudioCommand,
 };
+pub use crate::percussion_progress_parser::{PercussionPipelineProgressParser, PipelineProgress};
 
 // ──────────────────────────────────────
 // Pipeline state machine
@@ -154,9 +150,13 @@ enum ImportMapSubPhase {
     /// Audio file: running the analysis pipeline.
     RunningPipeline,
     /// Pipeline finished; now importing JSON result and loading audio.
-    ImportingJson { pipeline_ok: bool },
+    ImportingJson {
+        pipeline_ok: bool,
+    },
     /// Loading the source audio after successful import.
-    LoadingAudio { import_succeeded: bool },
+    LoadingAudio {
+        import_succeeded: bool,
+    },
     Done,
 }
 
@@ -177,7 +177,9 @@ enum ImportAudioOnlySubPhase {
     /// Audio loaded; running BPM-only analysis.
     RunningBpmPipeline,
     /// Pipeline finished; parsing BPM result.
-    ParsingBpm { pipeline_ok: bool },
+    ParsingBpm {
+        pipeline_ok: bool,
+    },
     Done,
 }
 
@@ -314,7 +316,8 @@ impl PercussionImportOrchestrator {
         // This matches Unity's `Time.unscaledTime + clearAfterSeconds` pattern.
         if self.percussion_import_status_clear_time < -1.0 {
             // Convert pending negative interval to absolute deadline.
-            self.percussion_import_status_clear_time = unscaled_time + (-self.percussion_import_status_clear_time);
+            self.percussion_import_status_clear_time =
+                unscaled_time + (-self.percussion_import_status_clear_time);
         }
         if !self.percussion_import_in_progress
             && self.percussion_import_status_clear_time > 0.0
@@ -402,8 +405,10 @@ impl PercussionImportOrchestrator {
         // responsibility after this call completes.
 
         let extension = get_extension_lowercase(&selected_path);
-        let import_start_beat =
-            Self::get_percussion_import_start_beat_with_headroom_static(current_beat, beats_per_bar);
+        let import_start_beat = Self::get_percussion_import_start_beat_with_headroom_static(
+            current_beat,
+            beats_per_bar,
+        );
 
         if extension == ".json" {
             self.set_percussion_import_status(
@@ -422,17 +427,16 @@ impl PercussionImportOrchestrator {
                 editing_service,
             );
             self.percussion_import_in_progress = false;
-            if self.percussion_import_status_message.is_empty()
-                && imported {
-                    self.set_percussion_import_status(
-                        "Perc JSON import finished",
-                        COLOR_GREEN,
-                        false,
-                        3.0,
-                        PERCUSSION_PROGRESS_UNKNOWN,
-                        false,
-                    );
-                }
+            if self.percussion_import_status_message.is_empty() && imported {
+                self.set_percussion_import_status(
+                    "Perc JSON import finished",
+                    COLOR_GREEN,
+                    false,
+                    3.0,
+                    PERCUSSION_PROGRESS_UNKNOWN,
+                    false,
+                );
+            }
             return;
         }
 
@@ -543,19 +547,14 @@ impl PercussionImportOrchestrator {
 
         // Apply audio path immediately (Unity does this synchronously after controller.LoadAudioAsync).
         // The actual audio load is caller-driven; we record the state change for undo.
-        let state = project.percussion_import.get_or_insert_with(Default::default);
+        let state = project
+            .percussion_import
+            .get_or_insert_with(Default::default);
         state.audio_path = Some(selected_path.clone());
         state.audio_start_beat = Beats::from_f32(start_beat);
         state.audio_hash = Some(compute_audio_hash(&selected_path));
 
-        self.set_percussion_import_status(
-            "Loading audio",
-            COLOR_BLUE,
-            true,
-            0.0,
-            0.10,
-            true,
-        );
+        self.set_percussion_import_status("Loading audio", COLOR_BLUE, true, 0.0, 0.10, true);
 
         let temp_output_json = Self::build_temp_percussion_output_path(&selected_path);
         let invocation = if let Some(settings) = self.pipeline_settings.as_ref() {
@@ -614,14 +613,7 @@ impl PercussionImportOrchestrator {
             }
         };
 
-        self.set_percussion_import_status(
-            "Detecting BPM",
-            COLOR_BLUE,
-            true,
-            0.0,
-            0.30,
-            true,
-        );
+        self.set_percussion_import_status("Detecting BPM", COLOR_BLUE, true, 0.0, 0.30, true);
 
         self.percussion_import_in_progress = true;
         self.phase = OrchestratorPhase::ImportAudioOnly(ImportAudioOnlyState {
@@ -636,11 +628,7 @@ impl PercussionImportOrchestrator {
     }
 
     /// Port of Unity OnReAnalyzeTriggers().
-    pub fn on_re_analyze_triggers(
-        &mut self,
-        instrument_group: &str,
-        project: &mut Project,
-    ) {
+    pub fn on_re_analyze_triggers(&mut self, instrument_group: &str, project: &mut Project) {
         if self.percussion_import_in_progress {
             self.set_percussion_import_status(
                 "Re-analysis already running",
@@ -933,9 +921,10 @@ impl PercussionImportOrchestrator {
         // Validate stems against audio content identity.
         let validated = self.validate_stem_ownership(project, &path);
         if let Some(ref stems) = validated
-            && let Some(state) = project.percussion_import.as_mut() {
-                state.stem_paths = Some(stems.clone());
-            }
+            && let Some(state) = project.percussion_import.as_mut()
+        {
+            state.stem_paths = Some(stems.clone());
+        }
         validated
     }
 
@@ -1081,10 +1070,7 @@ impl PercussionImportOrchestrator {
 
         if set_status {
             self.set_percussion_import_status(
-                &format!(
-                    "Nudged ({:+.3} beats)",
-                    delta_beats
-                ),
+                &format!("Nudged ({:+.3} beats)", delta_beats),
                 COLOR_GREEN,
                 false,
                 3.0,
@@ -1214,7 +1200,9 @@ impl PercussionImportOrchestrator {
                 if (new_beat - old_beat).abs() < Beats::from(0.0001f32) {
                     continue;
                 }
-                let clip_li = project.timeline.layer_index_for_id(&clip.layer_id)
+                let clip_li = project
+                    .timeline
+                    .layer_index_for_id(&clip.layer_id)
                     .unwrap_or(0) as i32;
                 commands.push(Box::new(MoveClipBeatCommand::new(
                     clip.id.clone(),
@@ -1311,7 +1299,8 @@ impl PercussionImportOrchestrator {
                             true,
                         );
                         if let OrchestratorPhase::ImportMap(state) = &mut self.phase {
-                            state.sub_phase = ImportMapSubPhase::ImportingJson { pipeline_ok: true };
+                            state.sub_phase =
+                                ImportMapSubPhase::ImportingJson { pipeline_ok: true };
                         }
                     }
                 }
@@ -1394,7 +1383,9 @@ impl PercussionImportOrchestrator {
                     };
 
                 let hash = compute_audio_hash(&selected_path);
-                let state = project.percussion_import.get_or_insert_with(Default::default);
+                let state = project
+                    .percussion_import
+                    .get_or_insert_with(Default::default);
                 state.audio_path = Some(selected_path.clone());
                 state.audio_start_beat = Beats::from_f32(final_start_beat);
                 state.audio_hash = Some(hash.clone());
@@ -1479,10 +1470,9 @@ impl PercussionImportOrchestrator {
                     &self.pipeline_progress_parser,
                 );
 
-                if done
-                    && let OrchestratorPhase::ImportAudioOnly(s) = &mut self.phase {
-                        s.sub_phase = ImportAudioOnlySubPhase::ParsingBpm { pipeline_ok: ok };
-                    }
+                if done && let OrchestratorPhase::ImportAudioOnly(s) = &mut self.phase {
+                    s.sub_phase = ImportAudioOnlySubPhase::ParsingBpm { pipeline_ok: ok };
+                }
             }
 
             ImportAudioOnlySubPhase::ParsingBpm { pipeline_ok } => {
@@ -1523,20 +1513,21 @@ impl PercussionImportOrchestrator {
                                 let import_service = PercussionImportService::new_with_settings(
                                     self.pipeline_settings.as_ref(),
                                 );
-                                                let (bpm_decision, bpm_command) = import_service.apply_detected_bpm(
-                                    project,
-                                    Some(&analysis),
-                                    &path_file_name(&selected_path),
-                                );
+                                let (bpm_decision, bpm_command) = import_service
+                                    .apply_detected_bpm(
+                                        project,
+                                        Some(&analysis),
+                                        &path_file_name(&selected_path),
+                                    );
                                 if let Some(cmd) = bpm_command {
                                     editing_service.record(cmd);
                                 }
-                                let _request_clip_sync = bpm_decision == PercussionBpmDecision::AutoApplied;
+                                let _request_clip_sync =
+                                    bpm_decision == PercussionBpmDecision::AutoApplied;
 
                                 // Auto-align: shift audio so first detected downbeat lands on a bar line.
                                 let settings = &project.settings;
-                                let beats_per_bar =
-                                    settings.time_signature_numerator.max(1);
+                                let beats_per_bar = settings.time_signature_numerator.max(1);
                                 let aligned_start_beat = self.align_start_beat_to_downbeat(
                                     Some(&analysis),
                                     start_beat,
@@ -1724,7 +1715,12 @@ impl PercussionImportOrchestrator {
                     };
 
                     if !raw_json.is_empty() {
-                        self.try_re_apply_triggers(&raw_json, &instrument_group, project, editing_service);
+                        self.try_re_apply_triggers(
+                            &raw_json,
+                            &instrument_group,
+                            project,
+                            editing_service,
+                        );
                     } else {
                         let group_label = instrument_group.to_uppercase();
                         self.set_percussion_import_status(
@@ -1909,8 +1905,18 @@ impl PercussionImportOrchestrator {
         }
 
         let group_label_final = instrument_group.to_uppercase();
-        let status = format!("Re-analyzed {}: {} clips", group_label_final, result.added_clips);
-        self.set_percussion_import_status(&status, COLOR_GREEN, false, 5.0, PERCUSSION_PROGRESS_UNKNOWN, false);
+        let status = format!(
+            "Re-analyzed {}: {} clips",
+            group_label_final, result.added_clips
+        );
+        self.set_percussion_import_status(
+            &status,
+            COLOR_GREEN,
+            false,
+            5.0,
+            PERCUSSION_PROGRESS_UNKNOWN,
+            false,
+        );
 
         log::info!(
             "[PercussionImportOrchestrator] Re-analyzed {}: {} clips placed \
@@ -1958,7 +1964,13 @@ impl PercussionImportOrchestrator {
             }
         };
 
-        self.try_import_percussion_json(&raw_json, &path_file_name(json_path), start_beat_offset, project, editing_service)
+        self.try_import_percussion_json(
+            &raw_json,
+            &path_file_name(json_path),
+            start_beat_offset,
+            project,
+            editing_service,
+        )
     }
 
     /// Port of Unity TryImportPercussionJson().
@@ -1999,8 +2011,12 @@ impl PercussionImportOrchestrator {
 
         let bpm = project.settings.bpm;
         let beats_per_bar = project.settings.time_signature_numerator.max(1);
-        let aligned_offset =
-            self.align_start_beat_to_downbeat(Some(&analysis), start_beat_offset, bpm.0, beats_per_bar);
+        let aligned_offset = self.align_start_beat_to_downbeat(
+            Some(&analysis),
+            start_beat_offset,
+            bpm.0,
+            beats_per_bar,
+        );
         self.last_import_aligned_start_beat = aligned_offset;
 
         let options = PercussionImportOptionsFactory::create_default_with_settings(
@@ -2099,7 +2115,11 @@ impl PercussionImportOrchestrator {
     /// Validates that saved stem paths belong to the given audio file by checking
     /// the content hash and file existence. Returns validated paths or None.
     /// Only used on project restore — never uses cache fallback.
-    fn validate_stem_ownership(&self, project: &mut Project, audio_path: &str) -> Option<Vec<String>> {
+    fn validate_stem_ownership(
+        &self,
+        project: &mut Project,
+        audio_path: &str,
+    ) -> Option<Vec<String>> {
         let saved_stems = project
             .percussion_import
             .as_ref()
@@ -2159,9 +2179,7 @@ impl PercussionImportOrchestrator {
             }
         };
 
-        if current_hash.is_empty()
-            || !current_hash.eq_ignore_ascii_case(&stored_hash)
-        {
+        if current_hash.is_empty() || !current_hash.eq_ignore_ascii_case(&stored_hash) {
             log::warn!(
                 "[PercussionImportOrchestrator] Audio content hash mismatch — clearing stale stems."
             );
@@ -2465,7 +2483,6 @@ impl PercussionImportOrchestrator {
     }
 }
 
-
 // ──────────────────────────────────────
 // Pipeline runner helper (drives PipelineRunState)
 // ──────────────────────────────────────
@@ -2512,32 +2529,31 @@ fn drive_pipeline_run(
         });
     }
 
-    let (finished, exit_code, new_lines, latest_line) =
-        match pipeline_run.as_mut() {
-            Some(PipelineRunState::Running {
-                handle,
-                latest_process_line,
-            }) => {
-                let new_lines = handle.poll();
-                let mut latest = latest_process_line.clone();
-                for line_info in &new_lines {
-                    if !line_info.line.trim().is_empty() {
-                        latest = line_info.line.trim().to_string();
-                    }
+    let (finished, exit_code, new_lines, latest_line) = match pipeline_run.as_mut() {
+        Some(PipelineRunState::Running {
+            handle,
+            latest_process_line,
+        }) => {
+            let new_lines = handle.poll();
+            let mut latest = latest_process_line.clone();
+            for line_info in &new_lines {
+                if !line_info.line.trim().is_empty() {
+                    latest = line_info.line.trim().to_string();
                 }
-                let finished = handle.is_finished();
-                let exit_code = handle.exit_code();
-                (finished, exit_code, new_lines, latest)
             }
-            Some(PipelineRunState::Done { ok, details }) => {
-                let ok = *ok;
-                let details = details.clone();
-                return (true, ok, details);
-            }
-            None => {
-                return (true, false, "No pipeline run active.".to_string());
-            }
-        };
+            let finished = handle.is_finished();
+            let exit_code = handle.exit_code();
+            (finished, exit_code, new_lines, latest)
+        }
+        Some(PipelineRunState::Done { ok, details }) => {
+            let ok = *ok;
+            let details = details.clone();
+            return (true, ok, details);
+        }
+        None => {
+            return (true, false, "No pipeline run active.".to_string());
+        }
+    };
 
     // Parse progress lines and surface to status.
     for line_info in &new_lines {
@@ -2559,9 +2575,8 @@ fn drive_pipeline_run(
     // Process finished. Check result.
     let exit_code = exit_code.unwrap_or(-1);
 
-    let output_json = PercussionImportOrchestrator::resolve_output_path_from_arguments(
-        &invocation.arguments,
-    );
+    let output_json =
+        PercussionImportOrchestrator::resolve_output_path_from_arguments(&invocation.arguments);
     let output_exists = output_json
         .as_deref()
         .is_some_and(|p| std::path::Path::new(p).exists());
@@ -2721,7 +2736,9 @@ fn apply_energy_envelope_to_project(analysis: &PercussionAnalysisData, project: 
     }
 
     if let Some(ref envelope) = analysis.energy_envelope {
-        let state = project.percussion_import.get_or_insert_with(Default::default);
+        let state = project
+            .percussion_import
+            .get_or_insert_with(Default::default);
         state.energy_envelope = Some(envelope.clone());
     }
 }

@@ -103,7 +103,13 @@ impl MidiFileParser {
     }
 }
 
-fn parse_track(data: &[u8], pos: &mut usize, track_end: usize, ppq: i32, output: &mut Vec<MidiNote>) {
+fn parse_track(
+    data: &[u8],
+    pos: &mut usize,
+    track_end: usize,
+    ppq: i32,
+    output: &mut Vec<MidiNote>,
+) {
     let mut absolute_tick: i64 = 0;
     let mut running_status: u8 = 0;
 
@@ -238,7 +244,14 @@ fn parse_track(data: &[u8], pos: &mut usize, track_end: usize, ppq: i32, output:
     }
 }
 
-fn emit_note(output: &mut Vec<MidiNote>, on_tick: i64, off_tick: i64, pitch: i32, channel: i32, ppq: i32) {
+fn emit_note(
+    output: &mut Vec<MidiNote>,
+    on_tick: i64,
+    off_tick: i64,
+    pitch: i32,
+    channel: i32,
+    ppq: i32,
+) {
     let start_beat = on_tick as f32 / ppq as f32;
     let duration_beats = (off_tick - on_tick) as f32 / ppq as f32;
 
@@ -313,8 +326,5 @@ fn compare_notes_by_start_beat(a: &MidiNote, b: &MidiNote) -> std::cmp::Ordering
     a.start_beat
         .partial_cmp(&b.start_beat)
         .unwrap_or(std::cmp::Ordering::Equal)
-        .then_with(|| {
-            a.pitch
-                .cmp(&b.pitch)
-        })
+        .then_with(|| a.pitch.cmp(&b.pitch))
 }

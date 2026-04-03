@@ -1,8 +1,8 @@
-use std::collections::BTreeMap;
-use serde::{Deserialize, Serialize};
+use crate::effects::{EffectGroup, EffectInstance, ParamEnvelope};
 use crate::id::ClipId;
-use crate::effects::{EffectInstance, EffectGroup, ParamEnvelope};
 use crate::units::{Beats, Seconds};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// A single clip on the timeline. Beat-primary timing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,15 +74,35 @@ pub struct TimelineClip {
     pub envelopes: Option<Vec<ParamEnvelope>>,
 
     // ── Legacy flat generator params (V1.0.0 clips) ──
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genRotSpeedXY")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "genRotSpeedXY"
+    )]
     pub legacy_gen_rot_speed_xy: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genRotSpeedZW")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "genRotSpeedZW"
+    )]
     pub legacy_gen_rot_speed_zw: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genRotSpeedXW")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "genRotSpeedXW"
+    )]
     pub legacy_gen_rot_speed_xw: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genLineThickness")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "genLineThickness"
+    )]
     pub legacy_gen_line_thickness: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genProjDistance")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "genProjDistance"
+    )]
     pub legacy_gen_proj_distance: Option<f32>,
 }
 
@@ -181,17 +201,13 @@ impl TimelineClip {
     }
 
     /// Create a new generator clip.
-    pub fn new_generator(
-        start_beat: Beats,
-        duration_beats: Beats,
-    ) -> Self {
+    pub fn new_generator(start_beat: Beats, duration_beats: Beats) -> Self {
         Self {
             start_beat,
             duration_beats: duration_beats.max(Beats::ZERO),
             ..Default::default()
         }
     }
-
 
     /// Set scale with clamp. Unity TimelineClip.cs line 179.
     pub fn set_scale(&mut self, v: f32) {
@@ -202,7 +218,6 @@ impl TimelineClip {
     pub fn set_loop_duration_beats(&mut self, v: Beats) {
         self.loop_duration_beats = v.max(Beats::ZERO);
     }
-
 }
 
 impl Default for TimelineClip {
@@ -240,8 +255,12 @@ impl Default for TimelineClip {
     }
 }
 
-fn default_one() -> f32 { 1.0 }
-fn default_one_beat() -> Beats { Beats::ONE }
+fn default_one() -> f32 {
+    1.0
+}
+fn default_one_beat() -> Beats {
+    Beats::ONE
+}
 
 #[cfg(test)]
 mod tests {
@@ -270,25 +289,37 @@ mod tests {
 
     #[test]
     fn test_recorded_bpm_resolved_zero_passthrough() {
-        let clip = TimelineClip { recorded_bpm: 0.0, ..Default::default() };
+        let clip = TimelineClip {
+            recorded_bpm: 0.0,
+            ..Default::default()
+        };
         assert_eq!(clip.recorded_bpm_resolved(), 0.0);
     }
 
     #[test]
     fn test_recorded_bpm_resolved_clamps_low() {
-        let clip = TimelineClip { recorded_bpm: 10.0, ..Default::default() };
+        let clip = TimelineClip {
+            recorded_bpm: 10.0,
+            ..Default::default()
+        };
         assert_eq!(clip.recorded_bpm_resolved(), 20.0);
     }
 
     #[test]
     fn test_recorded_bpm_resolved_clamps_high() {
-        let clip = TimelineClip { recorded_bpm: 500.0, ..Default::default() };
+        let clip = TimelineClip {
+            recorded_bpm: 500.0,
+            ..Default::default()
+        };
         assert_eq!(clip.recorded_bpm_resolved(), 300.0);
     }
 
     #[test]
     fn test_recorded_bpm_resolved_normal() {
-        let clip = TimelineClip { recorded_bpm: 120.0, ..Default::default() };
+        let clip = TimelineClip {
+            recorded_bpm: 120.0,
+            ..Default::default()
+        };
         assert_eq!(clip.recorded_bpm_resolved(), 120.0);
     }
 
@@ -335,19 +366,14 @@ mod tests {
 
     #[test]
     fn test_new_video_clamps_duration() {
-        let clip = TimelineClip::new_video(
-            "v1".into(),
-            Beats(0.0), Beats(-3.0), Seconds(-1.0),
-        );
+        let clip = TimelineClip::new_video("v1".into(), Beats(0.0), Beats(-3.0), Seconds(-1.0));
         assert_eq!(clip.duration_beats, Beats(0.0));
         assert_eq!(clip.in_point, Seconds(0.0));
     }
 
     #[test]
     fn test_new_generator_clamps_duration() {
-        let clip = TimelineClip::new_generator(
-            Beats(0.0), Beats(-2.0),
-        );
+        let clip = TimelineClip::new_generator(Beats(0.0), Beats(-2.0));
         assert_eq!(clip.duration_beats, Beats(0.0));
     }
 }

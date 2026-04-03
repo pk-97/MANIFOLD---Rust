@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use crate::types::TempoPointSource;
 use crate::math::BeatQuantizer;
+use crate::types::TempoPointSource;
 use crate::units::{Beats, Bpm, Seconds};
+use serde::{Deserialize, Serialize};
 
 /// A single tempo change point in the tempo map.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,7 +29,11 @@ pub struct TempoMap {
 impl TempoMap {
     pub fn ensure_sorted(&mut self) {
         if !self.is_sorted {
-            self.points.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(std::cmp::Ordering::Equal));
+            self.points.sort_by(|a, b| {
+                a.beat
+                    .partial_cmp(&b.beat)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             self.is_sorted = true;
         }
     }
@@ -37,13 +41,18 @@ impl TempoMap {
     /// Validate and sanitize all tempo points.
     pub fn ensure_valid(&mut self) {
         // Remove any points with NaN or infinite BPM/beat
-        self.points.retain(|p| p.bpm.0.is_finite() && p.beat.is_finite());
+        self.points
+            .retain(|p| p.bpm.0.is_finite() && p.beat.is_finite());
         // Clamp BPM to 20-300
         for p in &mut self.points {
             p.bpm = Bpm::clamped(p.bpm.0);
         }
         // Re-sort by beat
-        self.points.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(std::cmp::Ordering::Equal));
+        self.points.sort_by(|a, b| {
+            a.beat
+                .partial_cmp(&b.beat)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         self.is_sorted = true;
     }
 
@@ -87,7 +96,8 @@ impl TempoMap {
         let bpm = Bpm(BeatQuantizer::quantize_bpm(bpm.0));
 
         // Remove existing point at same beat (within epsilon)
-        self.points.retain(|p| (p.beat - beat).abs() > Beats::from_f32(epsilon));
+        self.points
+            .retain(|p| (p.beat - beat).abs() > Beats::from_f32(epsilon));
 
         self.points.push(TempoPoint {
             beat,
@@ -275,12 +285,20 @@ impl TempoMapConverter {
         let spb_at_zero = Self::seconds_per_beat_from_bpm(bpm_at_zero.0) as f64;
 
         if tempo_map.points.is_empty() {
-            return if spb_at_zero > 0.0 { Beats(seconds.0 / spb_at_zero) } else { Beats::ZERO };
+            return if spb_at_zero > 0.0 {
+                Beats(seconds.0 / spb_at_zero)
+            } else {
+                Beats::ZERO
+            };
         }
 
         // Negative-time conversion uses beat-0 tempo
         if seconds <= Seconds::ZERO {
-            return if spb_at_zero > 0.0 { Beats(seconds.0 / spb_at_zero) } else { Beats::ZERO };
+            return if spb_at_zero > 0.0 {
+                Beats(seconds.0 / spb_at_zero)
+            } else {
+                Beats::ZERO
+            };
         }
 
         let mut remaining_seconds = seconds.0;
@@ -301,7 +319,8 @@ impl TempoMapConverter {
                 continue;
             }
 
-            let segment_seconds = segment_beats * Self::seconds_per_beat_from_bpm(current_bpm) as f64;
+            let segment_seconds =
+                segment_beats * Self::seconds_per_beat_from_bpm(current_bpm) as f64;
             if remaining_seconds <= segment_seconds {
                 let spb = Self::seconds_per_beat_from_bpm(current_bpm) as f64;
                 return if spb > 0.0 {
@@ -317,7 +336,11 @@ impl TempoMapConverter {
         }
 
         let tail_spb = Self::seconds_per_beat_from_bpm(current_bpm) as f64;
-        if tail_spb > 0.0 { Beats(current_beat + remaining_seconds / tail_spb) } else { Beats(current_beat) }
+        if tail_spb > 0.0 {
+            Beats(current_beat + remaining_seconds / tail_spb)
+        } else {
+            Beats(current_beat)
+        }
     }
 
     // ── f64 precision versions ─────────────────────────────────────────
@@ -331,21 +354,25 @@ impl TempoMapConverter {
 
     /// Convert seconds to beat position using tempo map (f64 precision).
     #[must_use]
-    pub fn seconds_to_beat_f64(
-        tempo_map: &mut TempoMap,
-        seconds: f64,
-        fallback_bpm: Bpm,
-    ) -> f64 {
+    pub fn seconds_to_beat_f64(tempo_map: &mut TempoMap, seconds: f64, fallback_bpm: Bpm) -> f64 {
         tempo_map.ensure_sorted();
         let bpm_at_zero = Self::get_bpm_at_beat_zero(tempo_map, fallback_bpm);
         let spb_at_zero = Self::seconds_per_beat_from_bpm_f64(bpm_at_zero.0);
 
         if tempo_map.points.is_empty() {
-            return if spb_at_zero > 0.0 { seconds / spb_at_zero } else { 0.0 };
+            return if spb_at_zero > 0.0 {
+                seconds / spb_at_zero
+            } else {
+                0.0
+            };
         }
 
         if seconds <= 0.0 {
-            return if spb_at_zero > 0.0 { seconds / spb_at_zero } else { 0.0 };
+            return if spb_at_zero > 0.0 {
+                seconds / spb_at_zero
+            } else {
+                0.0
+            };
         }
 
         let mut remaining_seconds = seconds;
@@ -365,8 +392,7 @@ impl TempoMapConverter {
                 continue;
             }
 
-            let segment_seconds =
-                segment_beats * Self::seconds_per_beat_from_bpm_f64(current_bpm);
+            let segment_seconds = segment_beats * Self::seconds_per_beat_from_bpm_f64(current_bpm);
             if remaining_seconds <= segment_seconds {
                 let spb = Self::seconds_per_beat_from_bpm_f64(current_bpm);
                 return if spb > 0.0 {
@@ -390,7 +416,9 @@ impl TempoMapConverter {
     }
 }
 
-fn default_neg_one() -> Seconds { Seconds(-1.0) }
+fn default_neg_one() -> Seconds {
+    Seconds(-1.0)
+}
 
 #[cfg(test)]
 mod tests {

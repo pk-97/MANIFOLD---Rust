@@ -1,16 +1,16 @@
 //! Project-related dispatch: file operations, export, audio/percussion, resolution,
 //! MIDI note/channel, generator type, waveform/stem actions.
 
-use manifold_core::{Beats, LayerId};
-use manifold_core::project::Project;
 use manifold_core::GeneratorTypeId;
+use manifold_core::project::Project;
+use manifold_core::{Beats, LayerId};
 use manifold_ui::PanelAction;
 
+use super::DispatchResult;
 use crate::app::SelectionState;
 use crate::dialog_path_memory::{self, DialogContext};
 use crate::ui_root::UIRoot;
 use crate::user_prefs::UserPrefs;
-use super::DispatchResult;
 
 pub(super) fn dispatch_project(
     action: &PanelAction,
@@ -29,17 +29,25 @@ pub(super) fn dispatch_project(
         PanelAction::ToggleHdr => {
             let old_hdr = project.settings.export_hdr;
             let cmd = manifold_editing::commands::settings::ToggleExportHdrCommand::new(old_hdr);
-            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
+            {
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
             log::info!("HDR export → {}", project.settings.export_hdr);
             DispatchResult::handled()
         }
         PanelAction::TogglePercussion => {
-            let last_dir = dialog_path_memory::get_last_directory(
-                DialogContext::PercussionImport, user_prefs,
-            );
+            let last_dir =
+                dialog_path_memory::get_last_directory(DialogContext::PercussionImport, user_prefs);
             let mut dialog = rfd::FileDialog::new()
                 .set_title("Import Audio for Percussion Analysis")
-                .add_filter("Audio Files", &["wav", "mp3", "m4a", "aac", "flac", "ogg", "aif", "aiff", "wma", "json"]);
+                .add_filter(
+                    "Audio Files",
+                    &[
+                        "wav", "mp3", "m4a", "aac", "flac", "ogg", "aif", "aiff", "wma", "json",
+                    ],
+                );
             if let Some(w) = parent_window {
                 dialog = dialog.set_parent(w);
             }
@@ -49,31 +57,33 @@ pub(super) fn dispatch_project(
             if let Some(path) = dialog.pick_file() {
                 let path_str = path.to_string_lossy().to_string();
                 dialog_path_memory::remember_directory(
-                    DialogContext::PercussionImport, &path_str, user_prefs,
+                    DialogContext::PercussionImport,
+                    &path_str,
+                    user_prefs,
                 );
                 ContentCommand::send(content_tx, ContentCommand::PercussionImport(path_str));
                 ui.layout.waveform_lane_visible = true;
             }
             DispatchResult::structural()
         }
-        PanelAction::ToggleMonitor => {
-            DispatchResult {
-                handled: true,
-                structural_change: false,
-                resolution_changed: false,
-            }
-        }
+        PanelAction::ToggleMonitor => DispatchResult {
+            handled: true,
+            structural_change: false,
+            resolution_changed: false,
+        },
 
         PanelAction::NewProject
         | PanelAction::OpenProject
         | PanelAction::OpenRecent
         | PanelAction::SaveProject
         | PanelAction::SaveProjectAs => {
-            log::warn!("File action {:?} reached ui_bridge (should be intercepted in app.rs)", action);
+            log::warn!(
+                "File action {:?} reached ui_bridge (should be intercepted in app.rs)",
+                action
+            );
             DispatchResult::handled()
         }
-        PanelAction::ExportVideo
-        | PanelAction::ExportXml => {
+        PanelAction::ExportVideo | PanelAction::ExportXml => {
             log::info!("Export action: {:?} (not yet wired)", action);
             DispatchResult::handled()
         }
@@ -86,7 +96,12 @@ pub(super) fn dispatch_project(
                 let cmd = manifold_editing::commands::settings::ChangeLayerMidiNoteCommand::new(
                     layer_id, old_note, *note,
                 );
-                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
+                {
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        Box::new(cmd);
+                    boxed.execute(project);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                }
             }
             DispatchResult::structural()
         }
@@ -95,9 +110,16 @@ pub(super) fn dispatch_project(
                 let layer_id = layer.layer_id.clone();
                 let old_channel = layer.midi_channel;
                 let cmd = manifold_editing::commands::settings::ChangeLayerMidiChannelCommand::new(
-                    layer_id, old_channel, *channel,
+                    layer_id,
+                    old_channel,
+                    *channel,
                 );
-                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
+                {
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        Box::new(cmd);
+                    boxed.execute(project);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                }
             }
             DispatchResult::structural()
         }
@@ -105,8 +127,14 @@ pub(super) fn dispatch_project(
             use manifold_core::types::ResolutionPreset;
             let old = project.settings.resolution_preset;
             if let Some(new) = ResolutionPreset::from_index(*preset_idx) {
-                let cmd = manifold_editing::commands::settings::ChangeResolutionCommand::new(old, new);
-                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
+                let cmd =
+                    manifold_editing::commands::settings::ChangeResolutionCommand::new(old, new);
+                {
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        Box::new(cmd);
+                    boxed.execute(project);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                }
             }
             DispatchResult::resolution()
         }
@@ -116,7 +144,11 @@ pub(super) fn dispatch_project(
             let cmd = manifold_editing::commands::settings::SetDisplayDimensionsCommand::new(
                 old_w, old_h, *w, *h,
             );
-            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
+            {
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
             DispatchResult::resolution()
         }
         PanelAction::SetRenderScale(scale) => {
@@ -126,7 +158,12 @@ pub(super) fn dispatch_project(
                 let cmd = manifold_editing::commands::settings::ChangeRenderScaleCommand::new(
                     old_scale, new_scale,
                 );
-                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
+                {
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        Box::new(cmd);
+                    boxed.execute(project);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                }
             }
             DispatchResult::resolution()
         }
@@ -142,38 +179,55 @@ pub(super) fn dispatch_project(
                 let cmd = manifold_editing::commands::settings::ChangeTonemapCurveCommand::new(
                     old_curve, *curve,
                 );
-                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
+                {
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        Box::new(cmd);
+                    boxed.execute(project);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                }
             }
             DispatchResult::handled()
         }
         PanelAction::SetGenType(opt_layer_id, gen_type_idx) => {
-            let resolved_idx = opt_layer_id.as_ref()
+            let resolved_idx = opt_layer_id
+                .as_ref()
                 .and_then(|lid| project.timeline.find_layer_index_by_id(lid));
             if let Some(layer_idx) = resolved_idx {
                 let available = manifold_core::generator_type_registry::available_generators();
                 let layer = &project.timeline.layers[layer_idx];
-                let old_type = layer.gen_params()
+                let old_type = layer
+                    .gen_params()
                     .map(|gp| gp.generator_type().clone())
                     .unwrap_or(GeneratorTypeId::NONE);
                 if let Some(reg) = available.get(*gen_type_idx) {
                     let new_type = reg.id.clone();
                     if new_type != old_type {
-                        let old_params = layer.gen_params()
+                        let old_params = layer
+                            .gen_params()
                             .map(|gp| gp.param_values.clone())
                             .unwrap_or_default();
-                        let old_drivers = layer.gen_params()
-                            .and_then(|gp| gp.drivers.clone());
-                        let old_envelopes = layer.gen_params()
-                            .and_then(|gp| gp.envelopes.clone());
+                        let old_drivers = layer.gen_params().and_then(|gp| gp.drivers.clone());
+                        let old_envelopes = layer.gen_params().and_then(|gp| gp.envelopes.clone());
                         let layer_id = layer.layer_id.clone();
-                        let cmd = manifold_editing::commands::settings::ChangeGeneratorTypeCommand::new(
-                            layer_id.clone(), old_type, new_type.clone(), old_params, old_drivers, old_envelopes,
+                        let cmd =
+                            manifold_editing::commands::settings::ChangeGeneratorTypeCommand::new(
+                                layer_id.clone(),
+                                old_type,
+                                new_type.clone(),
+                                old_params,
+                                old_drivers,
+                                old_envelopes,
+                            );
+                        {
+                            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                                Box::new(cmd);
+                            boxed.execute(project);
+                            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                        }
+                        ContentCommand::send(
+                            content_tx,
+                            ContentCommand::GeneratorTypeChanged { layer_id, new_type },
                         );
-                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
-                        ContentCommand::send(content_tx, ContentCommand::GeneratorTypeChanged {
-                            layer_id,
-                            new_type,
-                        });
                     }
                 }
             }
@@ -182,12 +236,16 @@ pub(super) fn dispatch_project(
 
         // ── Waveform lane ─────────────────────────────────────────
         PanelAction::ImportAudioClicked => {
-            let last_dir = dialog_path_memory::get_last_directory(
-                DialogContext::PercussionImport, user_prefs,
-            );
+            let last_dir =
+                dialog_path_memory::get_last_directory(DialogContext::PercussionImport, user_prefs);
             let mut dialog = rfd::FileDialog::new()
                 .set_title("Import Audio for Percussion Analysis")
-                .add_filter("Audio Files", &["wav", "mp3", "m4a", "aac", "flac", "ogg", "aif", "aiff", "wma", "json"]);
+                .add_filter(
+                    "Audio Files",
+                    &[
+                        "wav", "mp3", "m4a", "aac", "flac", "ogg", "aif", "aiff", "wma", "json",
+                    ],
+                );
             if let Some(w) = parent_window {
                 dialog = dialog.set_parent(w);
             }
@@ -197,7 +255,9 @@ pub(super) fn dispatch_project(
             if let Some(path) = dialog.pick_file() {
                 let path_str = path.to_string_lossy().to_string();
                 dialog_path_memory::remember_directory(
-                    DialogContext::PercussionImport, &path_str, user_prefs,
+                    DialogContext::PercussionImport,
+                    &path_str,
+                    user_prefs,
                 );
                 ContentCommand::send(content_tx, ContentCommand::PercussionImport(path_str));
                 ui.layout.waveform_lane_visible = true;
@@ -208,7 +268,11 @@ pub(super) fn dispatch_project(
             log::info!("Remove audio clicked");
             let old_state = project.percussion_import.clone();
             let cmd = manifold_editing::commands::settings::ClearPercussionCommand::new(old_state);
-            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
+            {
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
             ContentCommand::send(content_tx, ContentCommand::ResetAudio);
             ContentCommand::send(content_tx, ContentCommand::StemReset);
             ui.waveform_lane.clear_audio();
@@ -247,7 +311,8 @@ pub(super) fn dispatch_project(
             }
 
             // Clamp delta so nothing goes below beat 0 (Unity lines 1380-1388)
-            let mut min_current = project.percussion_import
+            let mut min_current = project
+                .percussion_import
                 .as_ref()
                 .map_or(f32::MAX, |s| s.audio_start_beat.as_f32());
             for layer in &project.timeline.layers {
@@ -261,7 +326,8 @@ pub(super) fn dispatch_project(
 
             // Move audio (Unity lines 1391-1393)
             if let Some(state) = project.percussion_import.as_mut() {
-                state.audio_start_beat = (state.audio_start_beat + Beats::from_f32(clamped)).max(Beats::ZERO);
+                state.audio_start_beat =
+                    (state.audio_start_beat + Beats::from_f32(clamped)).max(Beats::ZERO);
             }
 
             // Move ALL clips (Unity lines 1395-1400)
@@ -274,17 +340,22 @@ pub(super) fn dispatch_project(
 
             // Sync to content thread
             let db = clamped;
-            ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
-                if let Some(state) = p.percussion_import.as_mut() {
-                    state.audio_start_beat = (state.audio_start_beat + Beats::from_f32(db)).max(Beats::ZERO);
-                }
-                for layer in &mut p.timeline.layers {
-                    for clip in &mut layer.clips {
-                        clip.start_beat = (clip.start_beat + Beats::from_f32(db)).max(Beats::ZERO);
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::MutateProject(Box::new(move |p| {
+                    if let Some(state) = p.percussion_import.as_mut() {
+                        state.audio_start_beat =
+                            (state.audio_start_beat + Beats::from_f32(db)).max(Beats::ZERO);
                     }
-                    layer.mark_clips_unsorted();
-                }
-            })));
+                    for layer in &mut p.timeline.layers {
+                        for clip in &mut layer.clips {
+                            clip.start_beat =
+                                (clip.start_beat + Beats::from_f32(db)).max(Beats::ZERO);
+                        }
+                        layer.mark_clips_unsorted();
+                    }
+                })),
+            );
             DispatchResult::structural()
         }
         PanelAction::WaveformDragEnd(_total_delta) => {
@@ -292,27 +363,29 @@ pub(super) fn dispatch_project(
             // Build CompositeCommand with SetAudioStartBeatCommand + MoveClipCommand
             // per changed clip, for a single undoable unit.
             if let Some(old_audio_start) = ui.waveform_lane.take_drag_start_beat() {
-                let new_audio_start = project.percussion_import
+                let new_audio_start = project
+                    .percussion_import
                     .as_ref()
                     .map_or(Beats::ZERO, |s| s.audio_start_beat);
 
-                let mut commands: Vec<Box<dyn manifold_editing::command::Command>> =
-                    Vec::new();
+                let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
 
                 // Audio command
                 if (new_audio_start - old_audio_start).abs() > Beats(0.0001) {
                     commands.push(Box::new(
                         manifold_editing::commands::settings::SetAudioStartBeatCommand::new(
-                            old_audio_start, new_audio_start,
+                            old_audio_start,
+                            new_audio_start,
                         ),
                     ));
                 }
 
                 // Clip move commands (Unity lines 1440-1454)
-                let snapshots =
-                    std::mem::take(&mut ui.waveform_lane.waveform_drag_clip_snapshots);
+                let snapshots = std::mem::take(&mut ui.waveform_lane.waveform_drag_clip_snapshots);
                 for (clip_id, old_beat, layer_id) in &snapshots {
-                    let new_beat = project.timeline.find_clip_by_id(clip_id)
+                    let new_beat = project
+                        .timeline
+                        .find_clip_by_id(clip_id)
                         .map(|c| c.start_beat);
                     if let Some(new_beat) = new_beat
                         && (new_beat.as_f32() - old_beat).abs() > 0.0001
@@ -352,33 +425,37 @@ pub(super) fn dispatch_project(
             ContentCommand::send(content_tx, ContentCommand::StemSetExpanded(*expanded));
 
             if *expanded
-                && let Some(stem_paths) = project.percussion_import
+                && let Some(stem_paths) = project
+                    .percussion_import
                     .as_ref()
                     .and_then(|perc| perc.stem_paths.as_ref())
-                {
-                    for (i, path) in stem_paths.iter().enumerate() {
-                        if i >= manifold_playback::stem_audio::STEM_COUNT {
-                            break;
+            {
+                for (i, path) in stem_paths.iter().enumerate() {
+                    if i >= manifold_playback::stem_audio::STEM_COUNT {
+                        break;
+                    }
+                    match manifold_playback::audio_decoder::decode_audio_to_pcm(path) {
+                        Ok(decoded) => {
+                            ui.stem_lanes.set_stem_audio(
+                                i,
+                                &decoded.samples,
+                                decoded.channels,
+                                decoded.sample_rate,
+                            );
                         }
-                        match manifold_playback::audio_decoder::decode_audio_to_pcm(path) {
-                            Ok(decoded) => {
-                                ui.stem_lanes.set_stem_audio(
-                                    i,
-                                    &decoded.samples,
-                                    decoded.channels,
-                                    decoded.sample_rate,
-                                );
-                            }
-                            Err(e) => {
-                                log::warn!("[StemWaveform] Failed to decode stem {}: {}", i, e);
-                            }
+                        Err(e) => {
+                            log::warn!("[StemWaveform] Failed to decode stem {}: {}", i, e);
                         }
                     }
                 }
+            }
             DispatchResult::structural()
         }
         PanelAction::ReAnalyzeDrums => {
-            ContentCommand::send(content_tx, ContentCommand::ReAnalyzeTriggers("drums".into()));
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::ReAnalyzeTriggers("drums".into()),
+            );
             DispatchResult::handled()
         }
         PanelAction::ReAnalyzeBass => {
@@ -386,11 +463,17 @@ pub(super) fn dispatch_project(
             DispatchResult::handled()
         }
         PanelAction::ReAnalyzeSynth => {
-            ContentCommand::send(content_tx, ContentCommand::ReAnalyzeTriggers("synth".into()));
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::ReAnalyzeTriggers("synth".into()),
+            );
             DispatchResult::handled()
         }
         PanelAction::ReAnalyzeVocal => {
-            ContentCommand::send(content_tx, ContentCommand::ReAnalyzeTriggers("vocal".into()));
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::ReAnalyzeTriggers("vocal".into()),
+            );
             DispatchResult::handled()
         }
         PanelAction::ReImportStems => {

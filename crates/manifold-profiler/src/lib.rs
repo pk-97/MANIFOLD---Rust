@@ -67,7 +67,9 @@ pub struct FrameRecord {
     pub memory: MemorySnapshot,
 }
 
-fn is_zero_u64(v: &u64) -> bool { *v == 0 }
+fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
+}
 
 /// GPU pass timing from timestamp queries.
 #[derive(Debug, Clone, Serialize)]
@@ -132,7 +134,9 @@ pub struct LayerState {
     pub is_solo: bool,
 }
 
-fn is_zero_u32(v: &u32) -> bool { *v == 0 }
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
 
 // ─── Timeline Snapshot ─────────────────────────────────────────────
 
@@ -346,7 +350,9 @@ impl ProfileSession {
     ) -> Self {
         // ISO 8601 timestamp from system time
         let now = std::time::SystemTime::now();
-        let since_epoch = now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+        let since_epoch = now
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
         let secs = since_epoch.as_secs();
         // Simple timestamp: YYYY-MM-DD_HHMMSS (approximate from epoch)
         let start_time_str = format_timestamp(secs);
@@ -440,10 +446,16 @@ impl ProfileSession {
         let mut wall_times: Vec<f64> = self.frames.iter().map(|f| f.wall_time_ms).collect();
         wall_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-        let frames_over_budget = self.frames.iter().filter(|f| f.wall_time_ms > budget).count() as u64;
+        let frames_over_budget = self
+            .frames
+            .iter()
+            .filter(|f| f.wall_time_ms > budget)
+            .count() as u64;
 
         let worst = self.frames.iter().max_by(|a, b| {
-            a.wall_time_ms.partial_cmp(&b.wall_time_ms).unwrap_or(std::cmp::Ordering::Equal)
+            a.wall_time_ms
+                .partial_cmp(&b.wall_time_ms)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         let worst_frame = worst.map(|f| WorstFrame {
@@ -456,7 +468,9 @@ impl ProfileSession {
         // Phase aggregates
         let phase_aggregates = PhaseAggregates {
             midi_input: percentile_stat(&self.frames, |f| f.content_thread.midi_input_ms),
-            sync_controllers: percentile_stat(&self.frames, |f| f.content_thread.sync_controllers_ms),
+            sync_controllers: percentile_stat(&self.frames, |f| {
+                f.content_thread.sync_controllers_ms
+            }),
             engine_tick: percentile_stat(&self.frames, |f| f.content_thread.engine_tick_ms),
             render_content: percentile_stat(&self.frames, |f| f.content_thread.render_content_ms),
             gpu_poll: percentile_stat(&self.frames, |f| f.content_thread.gpu_poll_ms),
@@ -485,8 +499,11 @@ impl ProfileSession {
 
         // Automated recommendations
         let recommendations = self.generate_recommendations(
-            &gpu_pass_aggregates, &jitter,
-            idle_vs_active.as_ref(), &pass_count, budget,
+            &gpu_pass_aggregates,
+            &jitter,
+            idle_vs_active.as_ref(),
+            &pass_count,
+            budget,
         );
 
         SessionSummary {
@@ -518,10 +535,12 @@ impl ProfileSession {
             std::collections::HashMap::new();
         for frame in &self.frames {
             for pass in &frame.gpu_passes {
-                let entry = by_label.entry(pass.name.clone()).or_insert_with(|| PassData {
-                    times: Vec::new(),
-                    first_seen_frame: frame.index,
-                });
+                let entry = by_label
+                    .entry(pass.name.clone())
+                    .or_insert_with(|| PassData {
+                        times: Vec::new(),
+                        first_seen_frame: frame.index,
+                    });
                 entry.times.push(pass.ms);
             }
         }
@@ -529,7 +548,8 @@ impl ProfileSession {
         let mut aggregates: Vec<GpuPassAggregate> = by_label
             .into_iter()
             .map(|(name, mut data)| {
-                data.times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                data.times
+                    .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                 let n = data.times.len();
                 let steady_state_mean = if n > 1 {
                     // Exclude first occurrence for steady-state mean
@@ -553,8 +573,11 @@ impl ProfileSession {
             .collect();
 
         // Sort by mean_ms descending (most expensive first)
-        aggregates
-            .sort_by(|a, b| b.mean_ms.partial_cmp(&a.mean_ms).unwrap_or(std::cmp::Ordering::Equal));
+        aggregates.sort_by(|a, b| {
+            b.mean_ms
+                .partial_cmp(&a.mean_ms)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         aggregates
     }
 
@@ -645,17 +668,23 @@ impl ProfileSession {
         }
     }
 
-
     /// Detect first-use spikes (shader compilation on first occurrence).
     fn detect_first_use_spikes(&self, aggregates: &[GpuPassAggregate]) -> Vec<FirstUseSpike> {
         let mut spikes = Vec::new();
         for agg in aggregates {
-            if agg.frame_count < 2 { continue; }
+            if agg.frame_count < 2 {
+                continue;
+            }
             // Find the first occurrence timing
-            let first_ms = self.frames.iter()
-                .find_map(|f| f.gpu_passes.iter()
-                    .find(|p| p.name == agg.name)
-                    .map(|p| p.ms))
+            let first_ms = self
+                .frames
+                .iter()
+                .find_map(|f| {
+                    f.gpu_passes
+                        .iter()
+                        .find(|p| p.name == agg.name)
+                        .map(|p| p.ms)
+                })
                 .unwrap_or(0.0);
             let ratio = if agg.steady_state_mean_ms > 0.001 {
                 first_ms / agg.steady_state_mean_ms
@@ -672,18 +701,25 @@ impl ProfileSession {
                 });
             }
         }
-        spikes.sort_by(|a, b| b.spike_ratio.partial_cmp(&a.spike_ratio)
-            .unwrap_or(std::cmp::Ordering::Equal));
+        spikes.sort_by(|a, b| {
+            b.spike_ratio
+                .partial_cmp(&a.spike_ratio)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         spikes
     }
 
     /// Idle (0 active clips) vs active (1+ clips) comparison.
     fn compute_idle_vs_active(&self) -> Option<IdleActiveComparison> {
-        let idle: Vec<f64> = self.frames.iter()
+        let idle: Vec<f64> = self
+            .frames
+            .iter()
             .filter(|f| f.active_clips.is_empty())
             .map(|f| f.wall_time_ms)
             .collect();
-        let active: Vec<f64> = self.frames.iter()
+        let active: Vec<f64> = self
+            .frames
+            .iter()
             .filter(|f| !f.active_clips.is_empty())
             .map(|f| f.wall_time_ms)
             .collect();
@@ -706,10 +742,14 @@ impl ProfileSession {
         if self.frames.is_empty() {
             return PassCountStats::default();
         }
-        let counts: Vec<u32> = self.frames.iter()
+        let counts: Vec<u32> = self
+            .frames
+            .iter()
             .map(|f| f.gpu_passes.len() as u32)
             .collect();
-        let totals: Vec<f64> = self.frames.iter()
+        let totals: Vec<f64> = self
+            .frames
+            .iter()
             .map(|f| f.gpu_passes.iter().map(|p| p.ms).sum::<f64>())
             .collect();
         let n = counts.len() as f64;
@@ -740,8 +780,11 @@ impl ProfileSession {
         let mut recs = Vec::new();
 
         // Most expensive always-on effects (present in >80% of active frames)
-        let active_frame_count = self.frames.iter()
-            .filter(|f| !f.active_clips.is_empty()).count() as u64;
+        let active_frame_count = self
+            .frames
+            .iter()
+            .filter(|f| !f.active_clips.is_empty())
+            .count() as u64;
         if active_frame_count > 0 {
             for pass in gpu_passes.iter().take(5) {
                 let usage_pct = pass.frame_count as f64 / active_frame_count as f64 * 100.0;
@@ -761,8 +804,11 @@ impl ProfileSession {
                 recs.push(format!(
                     "{} has {:.0}x variance (mean {:.2}ms, max {:.2}ms). \
                      Investigate spike at frame {}.",
-                    pass.name, pass.max_ms / pass.mean_ms,
-                    pass.mean_ms, pass.max_ms, pass.first_seen_frame
+                    pass.name,
+                    pass.max_ms / pass.mean_ms,
+                    pass.mean_ms,
+                    pass.max_ms,
+                    pass.first_seen_frame
                 ));
             }
         }
@@ -772,8 +818,7 @@ impl ProfileSession {
             recs.push(format!(
                 "High frame time jitter (CV={:.2}). {} frames exceed 1.5x budget. \
                  Check for allocation spikes or GC pauses.",
-                jitter.coefficient_of_variation,
-                jitter.frames_with_significant_jitter
+                jitter.coefficient_of_variation, jitter.frames_with_significant_jitter
             ));
         }
 
@@ -791,8 +836,7 @@ impl ProfileSession {
             recs.push(format!(
                 "GPU pass time uses {:.0}% of frame budget ({:.2}ms / {:.2}ms). \
                  Little headroom for additional effects.",
-                pass_count.gpu_budget_usage_pct,
-                pass_count.mean_gpu_total_ms, budget_ms
+                pass_count.gpu_budget_usage_pct, pass_count.mean_gpu_total_ms, budget_ms
             ));
         }
 
@@ -817,7 +861,9 @@ impl ProfileSession {
         summary: &SessionSummary,
     ) -> Result<PathBuf, String> {
         // Output directory: profiling_sessions/<timestamp>_<project_name>/
-        let sanitized_name = self.project_name.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_");
+        let sanitized_name = self
+            .project_name
+            .replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_");
         let dir_name = format!("{}_{}", self.start_time_str, sanitized_name);
         let output_dir = PathBuf::from("profiling_sessions").join(dir_name);
 
@@ -855,10 +901,10 @@ impl ProfileSession {
         for frame in &self.frames {
             let line = serde_json::to_string(frame)
                 .map_err(|e| format!("Failed to serialize frame: {}", e))?;
-            writeln!(file, "{}", line)
-                .map_err(|e| format!("Failed to write frame line: {}", e))?;
+            writeln!(file, "{}", line).map_err(|e| format!("Failed to write frame line: {}", e))?;
         }
-        file.flush().map_err(|e| format!("Failed to flush frames.jsonl: {}", e))?;
+        file.flush()
+            .map_err(|e| format!("Failed to flush frames.jsonl: {}", e))?;
 
         Ok(output_dir)
     }
@@ -867,7 +913,10 @@ impl ProfileSession {
 // ─── Helpers ───────────────────────────────────────────────────────
 
 /// Compute percentile statistics for a given field extractor.
-fn percentile_stat(frames: &[FrameRecord], extract: impl Fn(&FrameRecord) -> f64) -> PercentileStat {
+fn percentile_stat(
+    frames: &[FrameRecord],
+    extract: impl Fn(&FrameRecord) -> f64,
+) -> PercentileStat {
     if frames.is_empty() {
         return PercentileStat::default();
     }
@@ -902,7 +951,10 @@ fn format_timestamp(epoch_secs: u64) -> String {
 
     // Days since 1970-01-01 → year/month/day
     let (year, month, day) = days_to_date(days);
-    format!("{:04}-{:02}-{:02}_{:02}{:02}{:02}", year, month, day, hours, minutes, seconds)
+    format!(
+        "{:04}-{:02}-{:02}_{:02}{:02}{:02}",
+        year, month, day, hours, minutes, seconds
+    )
 }
 
 /// Convert days since epoch to (year, month, day).

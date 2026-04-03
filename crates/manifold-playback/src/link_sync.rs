@@ -4,10 +4,10 @@
 //! One-way sync: Ableton controls MANIFOLD transport + tempo when Link
 //! is selected as clock authority.
 
-use manifold_core::types::ClockAuthority;
-use manifold_core::Beats;
 use crate::sync::{SyncArbiter, SyncArbiterTarget};
 use crate::sync_source::SyncSource;
+use manifold_core::Beats;
+use manifold_core::types::ClockAuthority;
 
 /// Link sync controller state.
 /// Port of Unity LinkSyncController.cs fields.
@@ -48,13 +48,19 @@ impl LinkSyncController {
         }
     }
 
-    pub fn is_link_enabled(&self) -> bool { self.is_link_enabled }
-    pub fn has_active_peers(&self) -> bool { self.is_link_enabled && self.num_peers > 0 }
+    pub fn is_link_enabled(&self) -> bool {
+        self.is_link_enabled
+    }
+    pub fn has_active_peers(&self) -> bool {
+        self.is_link_enabled && self.num_peers > 0
+    }
 
     /// Enable Link with initial BPM.
     /// Port of C# LinkSyncController.EnableLink.
     pub fn enable_link(&mut self, initial_bpm: f64) {
-        if self.is_link_enabled { return; }
+        if self.is_link_enabled {
+            return;
+        }
         let link = rusty_link::AblLink::new(initial_bpm);
         link.enable(true);
         if self.enable_start_stop_sync {
@@ -64,11 +70,17 @@ impl LinkSyncController {
         self.is_link_enabled = true;
         self.last_link_is_playing = false;
         self.last_num_peers = 0;
-        log::info!("[LinkSync] Enabled (BPM: {:.1}, quantum: {})", initial_bpm, self.quantum);
+        log::info!(
+            "[LinkSync] Enabled (BPM: {:.1}, quantum: {})",
+            initial_bpm,
+            self.quantum
+        );
     }
 
     pub fn disable_link(&mut self) {
-        if !self.is_link_enabled { return; }
+        if !self.is_link_enabled {
+            return;
+        }
         if let Some(ref link) = self.link {
             link.enable(false);
         }
@@ -87,7 +99,9 @@ impl LinkSyncController {
         arb_target: &mut dyn SyncArbiterTarget,
         authority: ClockAuthority,
     ) {
-        if !self.is_link_enabled { return; }
+        if !self.is_link_enabled {
+            return;
+        }
 
         if let Some(ref link) = self.link {
             link.capture_app_session_state(&mut self.session_state);
@@ -100,7 +114,11 @@ impl LinkSyncController {
 
             // Log peer changes
             if new_num_peers != self.last_num_peers {
-                log::info!("[LinkSync] Peers: {} → {}", self.last_num_peers, new_num_peers);
+                log::info!(
+                    "[LinkSync] Peers: {} → {}",
+                    self.last_num_peers,
+                    new_num_peers
+                );
                 self.last_num_peers = new_num_peers;
             }
             self.num_peers = new_num_peers;
@@ -140,12 +158,22 @@ impl LinkSyncController {
 }
 
 impl SyncSource for LinkSyncController {
-    fn is_enabled(&self) -> bool { self.is_link_enabled }
-    fn display_name(&self) -> &str { "Link" }
-    fn enable(&mut self) { self.enable_link(120.0); }
-    fn disable(&mut self) { self.disable_link(); }
+    fn is_enabled(&self) -> bool {
+        self.is_link_enabled
+    }
+    fn display_name(&self) -> &str {
+        "Link"
+    }
+    fn enable(&mut self) {
+        self.enable_link(120.0);
+    }
+    fn disable(&mut self) {
+        self.disable_link();
+    }
 }
 
 impl Default for LinkSyncController {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }

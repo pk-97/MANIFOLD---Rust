@@ -8,14 +8,14 @@
 // Time.frameCount → EffectContext.frame_count.
 // Graphics.Blit → compute dispatch per pass.
 
-use ahash::AHashMap;
-use manifold_core::EffectTypeId;
-use manifold_core::effects::EffectInstance;
 use crate::background_worker::BackgroundWorker;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
 use crate::render_target::RenderTarget;
+use ahash::AHashMap;
+use manifold_core::EffectTypeId;
+use manifold_core::effects::EffectInstance;
 
 // Request/response types for the background depth estimation worker.
 struct DepthRequest {
@@ -93,34 +93,34 @@ enum WorkerMode {
 }
 
 // WireframeDepthFX.cs line 21-35
-const PASS_ANALYSIS: usize           = 0;
-const PASS_HEURISTIC_DEPTH: usize    = 1;
-const PASS_WIREFRAME_MASK: usize     = 2;
-const PASS_UPDATE_HISTORY: usize     = 3;
-const PASS_COMPOSITE: usize          = 4;
-const PASS_DNN_DEPTH_POST: usize     = 5;
-const PASS_FLOW_ESTIMATE: usize      = 6;
-const PASS_FLOW_ADVECT_COORD: usize  = 7;
-const PASS_INIT_MESH_COORD: usize    = 8;
-const PASS_MESH_REGULARIZE: usize    = 9;
-const PASS_MESH_CELL_AFFINE: usize   = 10;
-const PASS_SEMANTIC_MASK: usize      = 11;
-const PASS_MESH_FACE_WARP: usize     = 12;
+const PASS_ANALYSIS: usize = 0;
+const PASS_HEURISTIC_DEPTH: usize = 1;
+const PASS_WIREFRAME_MASK: usize = 2;
+const PASS_UPDATE_HISTORY: usize = 3;
+const PASS_COMPOSITE: usize = 4;
+const PASS_DNN_DEPTH_POST: usize = 5;
+const PASS_FLOW_ESTIMATE: usize = 6;
+const PASS_FLOW_ADVECT_COORD: usize = 7;
+const PASS_INIT_MESH_COORD: usize = 8;
+const PASS_MESH_REGULARIZE: usize = 9;
+const PASS_MESH_CELL_AFFINE: usize = 10;
+const PASS_SEMANTIC_MASK: usize = 11;
+const PASS_MESH_FACE_WARP: usize = 12;
 const PASS_SURFACE_CACHE_UPDATE: usize = 13;
-const PASS_FLOW_HYGIENE: usize       = 14;
+const PASS_FLOW_HYGIENE: usize = 14;
 
 // WireframeDepthFX.cs line 36-39
-const MAX_ANALYSIS_DIM: u32               = 360;
-const NATIVE_UPDATE_INTERVAL_DNN: i64     = 1;
+const MAX_ANALYSIS_DIM: u32 = 360;
+const NATIVE_UPDATE_INTERVAL_DNN: i64 = 1;
 const NATIVE_UPDATE_INTERVAL_HEURISTIC: i64 = 1;
-const NATIVE_UPDATE_INTERVAL_SUBJECT: i64  = 1;
+const NATIVE_UPDATE_INTERVAL_SUBJECT: i64 = 1;
 
 // WireframeDepthFX.cs line 41-45
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 enum DepthSourceMode {
     Heuristic = 0,
-    Dnn       = 1,
+    Dnn = 1,
 }
 
 // WireframeDepthFX.cs line 47-90 — OwnerState
@@ -146,24 +146,24 @@ struct OwnerState {
     dnn_readback_pending: bool,
     dnn_has_depth: bool,
     dnn_depth_dirty: bool,
-    _dnn_pixel_buffer: Vec<u8>,          // byte[analysisWidth * analysisHeight * 4]
-    dnn_depth_buffer: Vec<f32>,          // float[analysisWidth * analysisHeight]
+    _dnn_pixel_buffer: Vec<u8>, // byte[analysisWidth * analysisHeight * 4]
+    dnn_depth_buffer: Vec<f32>, // float[analysisWidth * analysisHeight]
     dnn_depth_texture: manifold_gpu::GpuTexture, // Rgba8Unorm CPU-upload texture
     // DNN subject mask CPU path
     dnn_has_subject_mask: bool,
     dnn_subject_dirty: bool,
-    _dnn_subject_buffer: Vec<f32>,       // float[analysisWidth * analysisHeight]
-    dnn_subject_history_buffer: Vec<f32>,// float[analysisWidth * analysisHeight]
+    _dnn_subject_buffer: Vec<f32>, // float[analysisWidth * analysisHeight]
+    dnn_subject_history_buffer: Vec<f32>, // float[analysisWidth * analysisHeight]
     dnn_subject_texture: manifold_gpu::GpuTexture, // Rgba8Unorm CPU-upload texture
     // Native flow CPU path
     has_prev_native_frame: bool,
-    prev_native_pixel_buffer: Vec<u8>,   // byte[analysisWidth * analysisHeight * 4]
-    native_flow_buffer: Vec<f32>,        // float[analysisWidth * analysisHeight * 4]
+    prev_native_pixel_buffer: Vec<u8>, // byte[analysisWidth * analysisHeight * 4]
+    native_flow_buffer: Vec<f32>,      // float[analysisWidth * analysisHeight * 4]
     native_flow_texture: manifold_gpu::GpuTexture, // RGBAFloat → Rgba16Float CPU-upload texture
     native_flow_has_data: bool,
     native_flow_dirty: bool,
     native_flow_ready: bool,
-    _cut_score_buffer: Vec<f32>,         // float[1]
+    _cut_score_buffer: Vec<f32>, // float[1]
     latest_cut_score: f32,
     // Timing
     last_native_request_frame: i64,
@@ -182,14 +182,14 @@ struct OwnerState {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct WireUniforms {
-    amount: f32,             // _Amount
-    grid_density: f32,       // _GridDensity
-    line_width: f32,         // _LineWidth
-    depth_scale: f32,        // _DepthScale
-    temporal_smooth: f32,    // _TemporalSmooth
-    persistence: f32,        // _Persistence
-    flow_lock_strength: f32, // _FlowLockStrength
-    mesh_regularize: f32,    // _MeshRegularize
+    amount: f32,               // _Amount
+    grid_density: f32,         // _GridDensity
+    line_width: f32,           // _LineWidth
+    depth_scale: f32,          // _DepthScale
+    temporal_smooth: f32,      // _TemporalSmooth
+    persistence: f32,          // _Persistence
+    flow_lock_strength: f32,   // _FlowLockStrength
+    mesh_regularize: f32,      // _MeshRegularize
     cell_affine_strength: f32, // _CellAffineStrength
     face_warp_strength: f32,   // _FaceWarpStrength
     surface_persistence: f32,  // _SurfacePersistence
@@ -241,31 +241,27 @@ impl WireframeDepthFX {
         // --- Native Metal compute pipelines (15 entry points) ---
         let compute_wgsl = include_str!("shaders/fx_wireframe_depth_compute.wgsl");
         let cs_entry_points = [
-            "cs_analysis",              // 0
-            "cs_heuristic_depth",       // 1
-            "cs_wire_mask",             // 2
-            "cs_update_history",        // 3
-            "cs_composite",             // 4
-            "cs_dnn_depth_post",        // 5
-            "cs_flow_estimate",         // 6
-            "cs_flow_advect_coord",     // 7
-            "cs_init_mesh_coord",       // 8
-            "cs_mesh_regularize",       // 9
-            "cs_mesh_cell_affine",      // 10
-            "cs_semantic_mask",         // 11
-            "cs_mesh_face_warp",        // 12
-            "cs_surface_cache_update",  // 13
-            "cs_flow_hygiene",          // 14
+            "cs_analysis",             // 0
+            "cs_heuristic_depth",      // 1
+            "cs_wire_mask",            // 2
+            "cs_update_history",       // 3
+            "cs_composite",            // 4
+            "cs_dnn_depth_post",       // 5
+            "cs_flow_estimate",        // 6
+            "cs_flow_advect_coord",    // 7
+            "cs_init_mesh_coord",      // 8
+            "cs_mesh_regularize",      // 9
+            "cs_mesh_cell_affine",     // 10
+            "cs_semantic_mask",        // 11
+            "cs_mesh_face_warp",       // 12
+            "cs_surface_cache_update", // 13
+            "cs_flow_hygiene",         // 14
         ];
         let compute_pipelines: Vec<manifold_gpu::GpuComputePipeline> = cs_entry_points
             .iter()
             .enumerate()
             .map(|(i, ep)| {
-                device.create_compute_pipeline(
-                    compute_wgsl,
-                    ep,
-                    &format!("WireframeDepth P{i}"),
-                )
+                device.create_compute_pipeline(compute_wgsl, ep, &format!("WireframeDepth P{i}"))
             })
             .collect();
 
@@ -378,24 +374,66 @@ impl WireframeDepthFX {
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                manifold_gpu::GpuBinding::Bytes { binding: 0, data: uniform_bytes },
-                manifold_gpu::GpuBinding::Texture { binding: 1, texture: main_tex },
-                manifold_gpu::GpuBinding::Texture { binding: 2, texture: prev_analysis_tex },
-                manifold_gpu::GpuBinding::Texture { binding: 3, texture: prev_depth_tex },
-                manifold_gpu::GpuBinding::Texture { binding: 4, texture: depth_tex },
-                manifold_gpu::GpuBinding::Texture { binding: 5, texture: history_tex },
-                manifold_gpu::GpuBinding::Texture { binding: 6, texture: flow_tex },
-                manifold_gpu::GpuBinding::Texture { binding: 7, texture: mesh_coord_tex },
-                manifold_gpu::GpuBinding::Texture { binding: 8, texture: prev_mesh_coord_tex },
-                manifold_gpu::GpuBinding::Texture { binding: 9, texture: semantic_tex },
-                manifold_gpu::GpuBinding::Texture { binding: 10, texture: surface_cache_tex },
+                manifold_gpu::GpuBinding::Bytes {
+                    binding: 0,
+                    data: uniform_bytes,
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 1,
+                    texture: main_tex,
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 2,
+                    texture: prev_analysis_tex,
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 3,
+                    texture: prev_depth_tex,
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 4,
+                    texture: depth_tex,
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 5,
+                    texture: history_tex,
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 6,
+                    texture: flow_tex,
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 7,
+                    texture: mesh_coord_tex,
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 8,
+                    texture: prev_mesh_coord_tex,
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 9,
+                    texture: semantic_tex,
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 10,
+                    texture: surface_cache_tex,
+                },
                 manifold_gpu::GpuBinding::Texture {
                     binding: 11,
                     texture: prev_surface_cache_tex,
                 },
-                manifold_gpu::GpuBinding::Texture { binding: 12, texture: subject_mask_tex },
-                manifold_gpu::GpuBinding::Sampler { binding: 13, sampler: &self.sampler },
-                manifold_gpu::GpuBinding::Texture { binding: 14, texture: target },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 12,
+                    texture: subject_mask_tex,
+                },
+                manifold_gpu::GpuBinding::Sampler {
+                    binding: 13,
+                    sampler: &self.sampler,
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 14,
+                    texture: target,
+                },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
             "WireframeDepth Pass",
@@ -459,7 +497,10 @@ impl WireframeDepthFX {
                 state.wire_width = wire_w;
                 state.wire_height = wire_h;
                 state.line_history_tex = Self::create_rt(
-                    gpu.pool, gpu.device, wire_w, wire_h,
+                    gpu.pool,
+                    gpu.device,
+                    wire_w,
+                    wire_h,
                     manifold_gpu::GpuTextureFormat::Rgba8Unorm,
                     &format!("WireframeDepthHistory_{owner_key}"),
                 );
@@ -473,55 +514,104 @@ impl WireframeDepthFX {
         // overwrite below)
 
         // WireframeDepthFX.cs line 167-169
-        let scale =
-            (MAX_ANALYSIS_DIM as f32 / self.width.max(self.height) as f32).min(1.0);
-        let analysis_width =
-            ((self.width as f32 * scale).round() as u32).max(64);
-        let analysis_height =
-            ((self.height as f32 * scale).round() as u32).max(36);
+        let scale = (MAX_ANALYSIS_DIM as f32 / self.width.max(self.height) as f32).min(1.0);
+        let analysis_width = ((self.width as f32 * scale).round() as u32).max(64);
+        let analysis_height = ((self.height as f32 * scale).round() as u32).max(36);
 
         let aw = analysis_width;
         let ah = analysis_height;
         let pixel_count = (aw * ah) as usize;
 
         let previous_analysis_tex = Self::create_rt(
-            gpu.pool, gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba8Unorm,
-            &format!("WireframeDepthPrev_{owner_key}"));
+            gpu.pool,
+            gpu.device,
+            aw,
+            ah,
+            manifold_gpu::GpuTextureFormat::Rgba8Unorm,
+            &format!("WireframeDepthPrev_{owner_key}"),
+        );
         let depth_tex = Self::create_rt(
-            gpu.pool, gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba16Float,
-            &format!("WireframeDepthDepth_{owner_key}"));
+            gpu.pool,
+            gpu.device,
+            aw,
+            ah,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            &format!("WireframeDepthDepth_{owner_key}"),
+        );
         let line_history_tex = Self::create_rt(
-            gpu.pool, gpu.device, wire_w, wire_h, manifold_gpu::GpuTextureFormat::Rgba8Unorm,
-            &format!("WireframeDepthHistory_{owner_key}"));
+            gpu.pool,
+            gpu.device,
+            wire_w,
+            wire_h,
+            manifold_gpu::GpuTextureFormat::Rgba8Unorm,
+            &format!("WireframeDepthHistory_{owner_key}"),
+        );
         let flow_tex = Self::create_rt(
-            gpu.pool, gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba16Float,
-            &format!("WireframeDepthFlow_{owner_key}"));
+            gpu.pool,
+            gpu.device,
+            aw,
+            ah,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            &format!("WireframeDepthFlow_{owner_key}"),
+        );
         let mesh_coord_tex = Self::create_rt(
-            gpu.pool, gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba16Float,
-            &format!("WireframeDepthMeshCoord_{owner_key}"));
+            gpu.pool,
+            gpu.device,
+            aw,
+            ah,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            &format!("WireframeDepthMeshCoord_{owner_key}"),
+        );
         let semantic_tex = Self::create_rt(
-            gpu.pool, gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba16Float,
-            &format!("WireframeDepthSemantic_{owner_key}"));
+            gpu.pool,
+            gpu.device,
+            aw,
+            ah,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            &format!("WireframeDepthSemantic_{owner_key}"),
+        );
         let surface_cache_tex = Self::create_rt(
-            gpu.pool, gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba16Float,
-            &format!("WireframeDepthSurface_{owner_key}"));
+            gpu.pool,
+            gpu.device,
+            aw,
+            ah,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            &format!("WireframeDepthSurface_{owner_key}"),
+        );
         let dnn_input_tex = Self::create_rt(
-            gpu.pool, gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba8Unorm,
-            &format!("WireframeDepthDnnInput_{owner_key}"));
+            gpu.pool,
+            gpu.device,
+            aw,
+            ah,
+            manifold_gpu::GpuTextureFormat::Rgba8Unorm,
+            &format!("WireframeDepthDnnInput_{owner_key}"),
+        );
 
         // WireframeDepthFX.cs line 205-222 — CPU upload textures
         let dnn_depth_texture = Self::create_cpu_texture(
-            gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba8Unorm,
-            &format!("WireframeDepthDnnDepth_{owner_key}"));
+            gpu.device,
+            aw,
+            ah,
+            manifold_gpu::GpuTextureFormat::Rgba8Unorm,
+            &format!("WireframeDepthDnnDepth_{owner_key}"),
+        );
         // Unity: RGBAFloat (Rgba32Float), but Rgba32Float is NOT filterable on Metal.
         // textureSample requires filterable; Rgba16Float is the approved Metal fallback.
         // Upload converts f32 → f16 in upload_native_flow_texture().
         let native_flow_texture = Self::create_cpu_texture(
-            gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba16Float,
-            &format!("WireframeDepthNativeFlow_{owner_key}"));
+            gpu.device,
+            aw,
+            ah,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            &format!("WireframeDepthNativeFlow_{owner_key}"),
+        );
         let dnn_subject_texture = Self::create_cpu_texture(
-            gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba8Unorm,
-            &format!("WireframeDepthDnnSubject_{owner_key}"));
+            gpu.device,
+            aw,
+            ah,
+            manifold_gpu::GpuTextureFormat::Rgba8Unorm,
+            &format!("WireframeDepthDnnSubject_{owner_key}"),
+        );
 
         // WireframeDepthFX.cs line 224-231: clear RTs
         Self::encode_clear(gpu, &previous_analysis_tex);
@@ -533,9 +623,9 @@ impl WireframeDepthFX {
         Self::encode_clear(gpu, &dnn_input_tex);
 
         let mut state = OwnerState {
-            analysis_width:  aw,
+            analysis_width: aw,
             analysis_height: ah,
-            wire_width:  wire_w,
+            wire_width: wire_w,
             wire_height: wire_h,
             previous_analysis_tex,
             depth_tex,
@@ -584,11 +674,7 @@ impl WireframeDepthFX {
     // WireframeDepthFX.cs line 240-257 — InitializeMeshCoord
     // Called during owner creation. Runs PASS_INIT_MESH_COORD then
     // PASS_SURFACE_CACHE_UPDATE.
-    fn initialize_mesh_coord_new(
-        &self,
-        gpu: &mut GpuEncoder,
-        state: &mut OwnerState,
-    ) {
+    fn initialize_mesh_coord_new(&self, gpu: &mut GpuEncoder, state: &mut OwnerState) {
         // WireframeDepthFX.cs line 242: if meshCoordTex == null return
         // (always valid here since we just created it)
 
@@ -609,18 +695,47 @@ impl WireframeDepthFX {
         // In Unity: Graphics.Blit(null, state.meshCoordTex, material,
         //   PASS_INIT_MESH_COORD)
         // We bind dummy for all textures.
-        self.encode_pass(gpu, PASS_INIT_MESH_COORD, &uniforms,
-            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-            &state.mesh_coord_tex.texture, aw, ah);
-        // PASS_SURFACE_CACHE_UPDATE from fresh mesh coord
-        self.encode_pass(gpu, PASS_SURFACE_CACHE_UPDATE, &uniforms,
-            &state.mesh_coord_tex.texture, &self.dummy_tex, &self.dummy_tex,
-            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+        self.encode_pass(
+            gpu,
+            PASS_INIT_MESH_COORD,
+            &uniforms,
             &self.dummy_tex,
-            &state.surface_cache_tex.texture, aw, ah);
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &state.mesh_coord_tex.texture,
+            aw,
+            ah,
+        );
+        // PASS_SURFACE_CACHE_UPDATE from fresh mesh coord
+        self.encode_pass(
+            gpu,
+            PASS_SURFACE_CACHE_UPDATE,
+            &uniforms,
+            &state.mesh_coord_tex.texture,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &state.surface_cache_tex.texture,
+            aw,
+            ah,
+        );
     }
 
     // WireframeDepthFX.cs line 538-554 — UploadDnnDepthTexture
@@ -655,8 +770,7 @@ impl WireframeDepthFX {
         let count = (state.analysis_width * state.analysis_height) as usize;
         let mut pixels = vec![0u8; count * 4];
         for i in 0..count {
-            let v =
-                (state.dnn_subject_history_buffer[i].clamp(0.0, 1.0) * 255.0) as u8;
+            let v = (state.dnn_subject_history_buffer[i].clamp(0.0, 1.0) * 255.0) as u8;
             pixels[i * 4] = v;
             pixels[i * 4 + 1] = v;
             pixels[i * 4 + 2] = v;
@@ -707,8 +821,12 @@ impl WireframeDepthFX {
                 let pc = (req.width * req.height) as usize;
                 let mut depth = vec![0f32; pc];
                 let ok = estimator.process(
-                    &req.pixel_data, req.width, req.height,
-                    &mut depth, req.width, req.height,
+                    &req.pixel_data,
+                    req.width,
+                    req.height,
+                    &mut depth,
+                    req.width,
+                    req.height,
                 );
                 DepthOnlyResponse {
                     owner_key: req.owner_key,
@@ -733,8 +851,14 @@ impl WireframeDepthFX {
                 let mut flow = vec![0f32; pc * 4];
                 let mut cut = vec![0f32; 1];
                 let ok = estimator.compute_flow(
-                    &req.prev_pixel_data, &req.pixel_data,
-                    req.width, req.height, &mut flow, req.width, req.height, &mut cut,
+                    &req.prev_pixel_data,
+                    &req.pixel_data,
+                    req.width,
+                    req.height,
+                    &mut flow,
+                    req.width,
+                    req.height,
+                    &mut cut,
                 );
                 if ok != 0 {
                     FlowOnlyResponse {
@@ -760,16 +884,19 @@ impl WireframeDepthFX {
                 let pc = (req.width * req.height) as usize;
                 let mut mask = vec![0f32; pc];
                 let ok = estimator.process_subject_mask(
-                    &req.pixel_data, req.width, req.height,
-                    &mut mask, req.width, req.height,
+                    &req.pixel_data,
+                    req.width,
+                    req.height,
+                    &mut mask,
+                    req.width,
+                    req.height,
                 );
                 if ok != 0 {
                     const BLEND: f32 = 0.55;
                     let blended: Vec<f32> = if req.has_subject_mask_history {
                         let mut hist = req.subject_history;
                         for i in 0..pc {
-                            hist[i] =
-                                hist[i] + (mask[i].clamp(0.0, 1.0) - hist[i]) * BLEND;
+                            hist[i] = hist[i] + (mask[i].clamp(0.0, 1.0) - hist[i]) * BLEND;
                         }
                         hist
                     } else {
@@ -790,7 +917,11 @@ impl WireframeDepthFX {
             })
         })?;
 
-        Some(WorkerMode::Parallel { depth_worker, flow_worker, subject_worker })
+        Some(WorkerMode::Parallel {
+            depth_worker,
+            flow_worker,
+            subject_worker,
+        })
     }
 
     /// Try to spawn workers: parallel mode first, monolithic fallback.
@@ -809,72 +940,72 @@ impl WireframeDepthFX {
 
     /// Try to spawn a BackgroundWorker that owns the DepthEstimator (monolithic mode).
     /// Returns None if the native plugin isn't available.
-    fn try_spawn_monolithic_worker(
-    ) -> Option<BackgroundWorker<DepthRequest, DepthResponse>> {
+    fn try_spawn_monolithic_worker() -> Option<BackgroundWorker<DepthRequest, DepthResponse>> {
         BackgroundWorker::try_new(|| {
             use manifold_native::depth_estimator::DepthEstimator;
-            let mut estimator =
-                manifold_native::ffi::depth_ffi::FfiDepthEstimator::new()?;
+            let mut estimator = manifold_native::ffi::depth_ffi::FfiDepthEstimator::new()?;
             Some(move |req: DepthRequest| -> DepthResponse {
                 let w = req.width;
                 let h = req.height;
                 let pixel_count = (w * h) as usize;
 
                 // Flow
-                let (flow_buffer, cut_score) =
-                    if req.wants_flow && req.has_prev_frame {
-                        let mut flow = vec![0f32; pixel_count * 4];
-                        let mut cut = vec![0f32; 1];
-                        let ok = estimator.compute_flow(
-                            &req.prev_pixel_data, &req.pixel_data,
-                            w, h, &mut flow, w, h, &mut cut,
-                        );
-                        if ok != 0 { (Some(flow), cut[0]) } else { (None, 0.0) }
+                let (flow_buffer, cut_score) = if req.wants_flow && req.has_prev_frame {
+                    let mut flow = vec![0f32; pixel_count * 4];
+                    let mut cut = vec![0f32; 1];
+                    let ok = estimator.compute_flow(
+                        &req.prev_pixel_data,
+                        &req.pixel_data,
+                        w,
+                        h,
+                        &mut flow,
+                        w,
+                        h,
+                        &mut cut,
+                    );
+                    if ok != 0 {
+                        (Some(flow), cut[0])
                     } else {
                         (None, 0.0)
-                    };
+                    }
+                } else {
+                    (None, 0.0)
+                };
 
                 // Depth
                 let depth_buffer = if req.wants_depth {
                     let mut depth = vec![0f32; pixel_count];
-                    let ok = estimator.process(
-                        &req.pixel_data, w, h, &mut depth, w, h,
-                    );
+                    let ok = estimator.process(&req.pixel_data, w, h, &mut depth, w, h);
                     if ok != 0 { Some(depth) } else { None }
                 } else {
                     None
                 };
 
                 // Subject mask + temporal blend
-                let (subject_history_blended, subject_api_failed) =
-                    if req.wants_subject {
-                        let mut mask = vec![0f32; pixel_count];
-                        let ok = estimator.process_subject_mask(
-                            &req.pixel_data, w, h, &mut mask, w, h,
-                        );
-                        if ok != 0 {
-                            // Temporal blend on worker thread (cheap, data is local)
-                            const BLEND: f32 = 0.55;
-                            let blended: Vec<f32> =
-                                if req.has_subject_mask_history {
-                                    let mut hist = req.subject_history;
-                                    for i in 0..pixel_count {
-                                        let current = mask[i].clamp(0.0, 1.0);
-                                        hist[i] =
-                                            hist[i] + (current - hist[i]) * BLEND;
-                                    }
-                                    hist
-                                } else {
-                                    mask.iter().map(|v| v.clamp(0.0, 1.0)).collect()
-                                };
-                            (Some(blended), false)
+                let (subject_history_blended, subject_api_failed) = if req.wants_subject {
+                    let mut mask = vec![0f32; pixel_count];
+                    let ok = estimator.process_subject_mask(&req.pixel_data, w, h, &mut mask, w, h);
+                    if ok != 0 {
+                        // Temporal blend on worker thread (cheap, data is local)
+                        const BLEND: f32 = 0.55;
+                        let blended: Vec<f32> = if req.has_subject_mask_history {
+                            let mut hist = req.subject_history;
+                            for i in 0..pixel_count {
+                                let current = mask[i].clamp(0.0, 1.0);
+                                hist[i] = hist[i] + (current - hist[i]) * BLEND;
+                            }
+                            hist
                         } else {
-                            // API not available in this plugin build
-                            (None, true)
-                        }
+                            mask.iter().map(|v| v.clamp(0.0, 1.0)).collect()
+                        };
+                        (Some(blended), false)
                     } else {
-                        (None, false)
-                    };
+                        // API not available in this plugin build
+                        (None, true)
+                    }
+                } else {
+                    (None, false)
+                };
 
                 DepthResponse {
                     owner_key: req.owner_key,
@@ -895,7 +1026,8 @@ impl WireframeDepthFX {
         if self.dnn_backend_initialized && self.dnn_backend_available {
             return true;
         }
-        if self.dnn_backend_initialized && !self.dnn_backend_available
+        if self.dnn_backend_initialized
+            && !self.dnn_backend_available
             && frame_count < self.dnn_next_retry_frame
         {
             return false;
@@ -939,12 +1071,10 @@ impl WireframeDepthFX {
         // WireframeDepthFX.cs line 465-472
         let wants_depth = mode == DepthSourceMode::Dnn;
         let wants_flow = true;
-        let wants_subject =
-            self.dnn_subject_api_available
+        let wants_subject = self.dnn_subject_api_available
             && mode == DepthSourceMode::Dnn
             && subject_isolation > 0.02
-            && frame_count - state.last_subject_request_frame
-                >= NATIVE_UPDATE_INTERVAL_SUBJECT;
+            && frame_count - state.last_subject_request_frame >= NATIVE_UPDATE_INTERVAL_SUBJECT;
         if !wants_depth && !wants_flow && !wants_subject {
             return;
         }
@@ -976,12 +1106,18 @@ impl WireframeDepthFX {
         // Copy source → dnn_input_tex via blit (both are Rgba8Unorm)
         let copy_aw = state.analysis_width;
         let copy_ah = state.analysis_height;
-        Self::encode_copy(gpu, source_tex, &state.dnn_input_tex.texture, copy_aw, copy_ah);
+        Self::encode_copy(
+            gpu,
+            source_tex,
+            &state.dnn_input_tex.texture,
+            copy_aw,
+            copy_ah,
+        );
 
-        state.native_request_wants_depth   = wants_depth;
-        state.native_request_wants_flow    = wants_flow;
+        state.native_request_wants_depth = wants_depth;
+        state.native_request_wants_flow = wants_flow;
         state.native_request_wants_subject = wants_subject;
-        state.last_native_request_frame    = frame_count;
+        state.last_native_request_frame = frame_count;
         if wants_subject {
             state.last_subject_request_frame = frame_count;
         }
@@ -989,7 +1125,9 @@ impl WireframeDepthFX {
         let aw = state.analysis_width;
         let ah = state.analysis_height;
         // Native shared-memory readback via GpuEncoder.
-        state.readback.submit(gpu, &state.dnn_input_tex.texture, aw, ah);
+        state
+            .readback
+            .submit(gpu, &state.dnn_input_tex.texture, aw, ah);
         state.dnn_readback_pending = true;
     }
 
@@ -999,35 +1137,31 @@ impl WireframeDepthFX {
         // Flow
         if let Some(ref flow) = response.flow_buffer {
             let copy_len = flow.len().min(state.native_flow_buffer.len());
-            state.native_flow_buffer[..copy_len]
-                .copy_from_slice(&flow[..copy_len]);
+            state.native_flow_buffer[..copy_len].copy_from_slice(&flow[..copy_len]);
             state.native_flow_has_data = true;
-            state.native_flow_dirty    = true;
-            state.native_flow_ready    = true;
-            state.latest_cut_score     = response.cut_score;
+            state.native_flow_dirty = true;
+            state.native_flow_ready = true;
+            state.latest_cut_score = response.cut_score;
         } else {
             state.native_flow_has_data = false;
-            state.native_flow_ready    = false;
-            state.latest_cut_score     = 0.0;
+            state.native_flow_ready = false;
+            state.latest_cut_score = 0.0;
         }
 
         // Depth
         if let Some(ref depth) = response.depth_buffer {
             let copy_len = depth.len().min(state.dnn_depth_buffer.len());
-            state.dnn_depth_buffer[..copy_len]
-                .copy_from_slice(&depth[..copy_len]);
-            state.dnn_has_depth   = true;
+            state.dnn_depth_buffer[..copy_len].copy_from_slice(&depth[..copy_len]);
+            state.dnn_has_depth = true;
             state.dnn_depth_dirty = true;
         }
 
         // Subject mask (temporally blended on worker thread)
         if let Some(ref blended) = response.subject_history_blended {
-            let copy_len =
-                blended.len().min(state.dnn_subject_history_buffer.len());
-            state.dnn_subject_history_buffer[..copy_len]
-                .copy_from_slice(&blended[..copy_len]);
+            let copy_len = blended.len().min(state.dnn_subject_history_buffer.len());
+            state.dnn_subject_history_buffer[..copy_len].copy_from_slice(&blended[..copy_len]);
             state.dnn_has_subject_mask = true;
-            state.dnn_subject_dirty    = true;
+            state.dnn_subject_dirty = true;
         }
     }
 
@@ -1043,18 +1177,34 @@ impl WireframeDepthFX {
         let aw = state.analysis_width;
         let ah = state.analysis_height;
         let depth_next = Self::create_transient(
-            gpu, aw, ah,
-            manifold_gpu::GpuTextureFormat::Rgba16Float, "WD DepthNext",
+            gpu,
+            aw,
+            ah,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            "WD DepthNext",
         );
 
         // PASS_HEURISTIC_DEPTH: analysis → depthNext
-        self.encode_pass(gpu, PASS_HEURISTIC_DEPTH, uniforms,
-            analysis_tex, &state.previous_analysis_tex.texture,
+        self.encode_pass(
+            gpu,
+            PASS_HEURISTIC_DEPTH,
+            uniforms,
+            analysis_tex,
+            &state.previous_analysis_tex.texture,
             &state.depth_tex.texture,
-            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-            &depth_next.texture, aw, ah);
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &depth_next.texture,
+            aw,
+            ah,
+        );
 
         // Graphics.Blit(depthNext, state.depthTex) — copy
         Self::encode_copy(gpu, &depth_next.texture, &state.depth_tex.texture, aw, ah);
@@ -1080,17 +1230,34 @@ impl WireframeDepthFX {
         let aw = state.analysis_width;
         let ah = state.analysis_height;
         let depth_next = Self::create_transient(
-            gpu, aw, ah,
-            manifold_gpu::GpuTextureFormat::Rgba16Float, "WD DnnDepthNext",
+            gpu,
+            aw,
+            ah,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            "WD DnnDepthNext",
         );
 
         // PASS_DNN_DEPTH_POST: dnnDepthTexture → depthNext
-        self.encode_pass(gpu, PASS_DNN_DEPTH_POST, uniforms,
-            &state.dnn_depth_texture, &self.dummy_tex, &state.depth_tex.texture,
-            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-            &depth_next.texture, aw, ah);
+        self.encode_pass(
+            gpu,
+            PASS_DNN_DEPTH_POST,
+            uniforms,
+            &state.dnn_depth_texture,
+            &self.dummy_tex,
+            &state.depth_tex.texture,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &depth_next.texture,
+            aw,
+            ah,
+        );
 
         // Graphics.Blit(depthNext, state.depthTex)
         Self::encode_copy(gpu, &depth_next.texture, &state.depth_tex.texture, aw, ah);
@@ -1119,8 +1286,7 @@ impl WireframeDepthFX {
         }
 
         // WireframeDepthFX.cs line 747-748
-        let use_native_flow = native_flow_enabled
-            && state.native_flow_has_data;
+        let use_native_flow = native_flow_enabled && state.native_flow_has_data;
         // WireframeDepthFX.cs line 750-766 — scene cut hard reset
         if use_native_flow && state.latest_cut_score > 0.28 {
             let aw = state.analysis_width;
@@ -1137,25 +1303,53 @@ impl WireframeDepthFX {
                 depth_texel_y: 1.0 / ah as f32,
                 ..bytemuck::Zeroable::zeroed()
             };
-            self.encode_pass(gpu, PASS_INIT_MESH_COORD, &cut_uniforms,
-                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-                &state.mesh_coord_tex.texture, aw, ah);
-            self.encode_pass(gpu, PASS_SURFACE_CACHE_UPDATE, &cut_uniforms,
-                &state.mesh_coord_tex.texture, &self.dummy_tex, &self.dummy_tex,
-                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-                &state.surface_cache_tex.texture, aw, ah);
+            self.encode_pass(
+                gpu,
+                PASS_INIT_MESH_COORD,
+                &cut_uniforms,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &state.mesh_coord_tex.texture,
+                aw,
+                ah,
+            );
+            self.encode_pass(
+                gpu,
+                PASS_SURFACE_CACHE_UPDATE,
+                &cut_uniforms,
+                &state.mesh_coord_tex.texture,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &state.surface_cache_tex.texture,
+                aw,
+                ah,
+            );
 
             state.dnn_has_subject_mask = false;
             if !state.dnn_subject_history_buffer.is_empty() {
                 state.dnn_subject_history_buffer.fill(0.0);
             }
-            state.latest_cut_score   = 0.0;
-            state.native_flow_ready  = false;
+            state.latest_cut_score = 0.0;
+            state.native_flow_ready = false;
             state.native_flow_has_data = false;
             state.last_mesh_update_frame = frame_count;
             // Blit analysis → previousAnalysisTex
@@ -1163,13 +1357,14 @@ impl WireframeDepthFX {
                 gpu,
                 &state.dnn_input_tex.texture,
                 &state.previous_analysis_tex.texture,
-                aw, ah,
+                aw,
+                ah,
             );
             return;
         }
         // WireframeDepthFX.cs line 770-776 — amortization check
-        let run_mesh_pipeline = mesh_rate <= 1
-            || frame_count - state.last_mesh_update_frame >= mesh_rate as i64;
+        let run_mesh_pipeline =
+            mesh_rate <= 1 || frame_count - state.last_mesh_update_frame >= mesh_rate as i64;
         if !run_mesh_pipeline {
             return;
         }
@@ -1182,129 +1377,256 @@ impl WireframeDepthFX {
             &state.native_flow_texture
         } else {
             // PASS_FLOW_ESTIMATE: analysis → flowTex
-            self.encode_pass(gpu, PASS_FLOW_ESTIMATE, uniforms,
-                analysis_tex, &state.previous_analysis_tex.texture,
-                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+            self.encode_pass(
+                gpu,
+                PASS_FLOW_ESTIMATE,
+                uniforms,
+                analysis_tex,
+                &state.previous_analysis_tex.texture,
                 &self.dummy_tex,
-                &state.flow_tex.texture, aw, ah);
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &state.flow_tex.texture,
+                aw,
+                ah,
+            );
             &state.flow_tex.texture
         };
 
         // WireframeDepthFX.cs line 792-826 — flowFiltered, temp RTs
         let flow_filtered = Self::create_transient(
-            gpu, aw, ah,
-            manifold_gpu::GpuTextureFormat::Rgba16Float, "WD FlowFiltered",
+            gpu,
+            aw,
+            ah,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            "WD FlowFiltered",
         );
         // PASS_FLOW_HYGIENE: flowInput → flowFiltered
-        self.encode_pass(gpu, PASS_FLOW_HYGIENE, uniforms,
-            flow_input_tex, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-            &flow_filtered.texture, aw, ah);
+        self.encode_pass(
+            gpu,
+            PASS_FLOW_HYGIENE,
+            uniforms,
+            flow_input_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &flow_filtered.texture,
+            aw,
+            ah,
+        );
         let flow_stable_tex = &flow_filtered.texture;
 
         // WireframeDepthFX.cs line 808-826: semantic mask
         // PASS_SEMANTIC_MASK: analysis → semanticTex
-        self.encode_pass(gpu, PASS_SEMANTIC_MASK, uniforms,
-            analysis_tex, &state.previous_analysis_tex.texture,
-            &self.dummy_tex, &state.depth_tex.texture,
-            &self.dummy_tex, flow_stable_tex,
-            &self.dummy_tex, &self.dummy_tex,
-            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-            &state.semantic_tex.texture, aw, ah);
+        self.encode_pass(
+            gpu,
+            PASS_SEMANTIC_MASK,
+            uniforms,
+            analysis_tex,
+            &state.previous_analysis_tex.texture,
+            &self.dummy_tex,
+            &state.depth_tex.texture,
+            &self.dummy_tex,
+            flow_stable_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &state.semantic_tex.texture,
+            aw,
+            ah,
+        );
 
         // WireframeDepthFX.cs line 811-826: temp coord RTs
         let coord_next = Self::create_transient(
-            gpu, aw, ah,
-            manifold_gpu::GpuTextureFormat::Rgba16Float, "WD CoordNext",
+            gpu,
+            aw,
+            ah,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            "WD CoordNext",
         );
         let coord_affine = Self::create_transient(
-            gpu, aw, ah,
-            manifold_gpu::GpuTextureFormat::Rgba16Float, "WD CoordAffine",
+            gpu,
+            aw,
+            ah,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            "WD CoordAffine",
         );
         let coord_regularized = Self::create_transient(
-            gpu, aw, ah,
-            manifold_gpu::GpuTextureFormat::Rgba16Float, "WD CoordReg",
+            gpu,
+            aw,
+            ah,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            "WD CoordReg",
         );
         let surface_next = Self::create_transient(
-            gpu, aw, ah,
-            manifold_gpu::GpuTextureFormat::Rgba16Float, "WD SurfaceNext",
+            gpu,
+            aw,
+            ah,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            "WD SurfaceNext",
         );
 
         // WireframeDepthFX.cs line 829-835: PASS_FLOW_ADVECT_COORD
-        self.encode_pass(gpu, PASS_FLOW_ADVECT_COORD, uniforms,
-            analysis_tex, &state.previous_analysis_tex.texture,
-            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-            flow_stable_tex, &self.dummy_tex, &state.mesh_coord_tex.texture,
-            &state.semantic_tex.texture, &self.dummy_tex, &self.dummy_tex,
+        self.encode_pass(
+            gpu,
+            PASS_FLOW_ADVECT_COORD,
+            uniforms,
+            analysis_tex,
+            &state.previous_analysis_tex.texture,
             &self.dummy_tex,
-            &coord_next.texture, aw, ah);
+            &self.dummy_tex,
+            &self.dummy_tex,
+            flow_stable_tex,
+            &self.dummy_tex,
+            &state.mesh_coord_tex.texture,
+            &state.semantic_tex.texture,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &coord_next.texture,
+            aw,
+            ah,
+        );
 
         // WireframeDepthFX.cs line 837-841: PASS_MESH_CELL_AFFINE
-        self.encode_pass(gpu, PASS_MESH_CELL_AFFINE, uniforms,
-            &coord_next.texture, &self.dummy_tex, &self.dummy_tex,
-            &self.dummy_tex, &self.dummy_tex, flow_stable_tex,
-            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-            &coord_affine.texture, aw, ah);
+        self.encode_pass(
+            gpu,
+            PASS_MESH_CELL_AFFINE,
+            uniforms,
+            &coord_next.texture,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            flow_stable_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &coord_affine.texture,
+            aw,
+            ah,
+        );
 
         // WireframeDepthFX.cs line 843-862: optional face warp pass
         let pre_regularize_tex: &manifold_gpu::GpuTexture;
         let coord_face_opt: Option<RenderTarget>;
         if face_warp_enabled {
             let coord_face = Self::create_transient(
-                gpu, aw, ah,
-                manifold_gpu::GpuTextureFormat::Rgba16Float, "WD CoordFace",
+                gpu,
+                aw,
+                ah,
+                manifold_gpu::GpuTextureFormat::Rgba16Float,
+                "WD CoordFace",
             );
             let edge_follow_mask_tex = if state.dnn_has_subject_mask {
                 &state.dnn_subject_texture
             } else {
                 &state.semantic_tex.texture
             };
-            self.encode_pass(gpu, PASS_MESH_FACE_WARP, uniforms,
-                &coord_affine.texture, &self.dummy_tex, &self.dummy_tex,
-                &self.dummy_tex, &self.dummy_tex, flow_stable_tex,
-                &self.dummy_tex, &self.dummy_tex,
-                edge_follow_mask_tex, &self.dummy_tex, &self.dummy_tex,
+            self.encode_pass(
+                gpu,
+                PASS_MESH_FACE_WARP,
+                uniforms,
+                &coord_affine.texture,
                 &self.dummy_tex,
-                &coord_face.texture, aw, ah);
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                flow_stable_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                edge_follow_mask_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &coord_face.texture,
+                aw,
+                ah,
+            );
             coord_face_opt = Some(coord_face);
-            pre_regularize_tex =
-                &coord_face_opt.as_ref().unwrap().texture;
+            pre_regularize_tex = &coord_face_opt.as_ref().unwrap().texture;
         } else {
             coord_face_opt = None;
             pre_regularize_tex = &coord_affine.texture;
         }
 
         // WireframeDepthFX.cs line 863-871: PASS_MESH_REGULARIZE
-        self.encode_pass(gpu, PASS_MESH_REGULARIZE, uniforms,
-            pre_regularize_tex, &self.dummy_tex, &self.dummy_tex,
-            &self.dummy_tex, &self.dummy_tex, flow_stable_tex,
-            &self.dummy_tex, &state.mesh_coord_tex.texture,
-            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-            &coord_regularized.texture, aw, ah);
+        self.encode_pass(
+            gpu,
+            PASS_MESH_REGULARIZE,
+            uniforms,
+            pre_regularize_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            flow_stable_tex,
+            &self.dummy_tex,
+            &state.mesh_coord_tex.texture,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &coord_regularized.texture,
+            aw,
+            ah,
+        );
         Self::encode_copy(
             gpu,
             &coord_regularized.texture,
             &state.mesh_coord_tex.texture,
-            aw, ah,
+            aw,
+            ah,
         );
 
         // WireframeDepthFX.cs line 873-879: PASS_SURFACE_CACHE_UPDATE
-        self.encode_pass(gpu, PASS_SURFACE_CACHE_UPDATE, uniforms,
-            &state.mesh_coord_tex.texture, &self.dummy_tex, &self.dummy_tex,
-            &self.dummy_tex, &self.dummy_tex, flow_stable_tex,
-            &self.dummy_tex, &self.dummy_tex,
-            &self.dummy_tex, &self.dummy_tex, &state.surface_cache_tex.texture,
+        self.encode_pass(
+            gpu,
+            PASS_SURFACE_CACHE_UPDATE,
+            uniforms,
+            &state.mesh_coord_tex.texture,
             &self.dummy_tex,
-            &surface_next.texture, aw, ah);
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            flow_stable_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &state.surface_cache_tex.texture,
+            &self.dummy_tex,
+            &surface_next.texture,
+            aw,
+            ah,
+        );
         Self::encode_copy(
             gpu,
             &surface_next.texture,
             &state.surface_cache_tex.texture,
-            aw, ah,
+            aw,
+            ah,
         );
         // Release transient textures back to pool. Frame-stamped recycling
         // ensures they won't be reused until the GPU is done with them.
@@ -1328,21 +1650,21 @@ impl WireframeDepthFX {
         Self::encode_clear(gpu, &state.mesh_coord_tex);
         Self::encode_clear(gpu, &state.semantic_tex);
         Self::encode_clear(gpu, &state.surface_cache_tex);
-        state.dnn_readback_pending     = false;
-        state.dnn_has_depth            = false;
-        state.dnn_depth_dirty          = false;
-        state.dnn_has_subject_mask     = false;
-        state.dnn_subject_dirty        = false;
-        state.has_prev_native_frame    = false;
-        state.native_flow_has_data     = false;
-        state.native_flow_dirty        = false;
-        state.native_flow_ready        = false;
-        state.native_request_wants_flow    = false;
-        state.native_request_wants_depth   = false;
+        state.dnn_readback_pending = false;
+        state.dnn_has_depth = false;
+        state.dnn_depth_dirty = false;
+        state.dnn_has_subject_mask = false;
+        state.dnn_subject_dirty = false;
+        state.has_prev_native_frame = false;
+        state.native_flow_has_data = false;
+        state.native_flow_dirty = false;
+        state.native_flow_ready = false;
+        state.native_request_wants_flow = false;
+        state.native_request_wants_depth = false;
         state.native_request_wants_subject = false;
-        state.latest_cut_score         = 0.0;
-        state.last_subject_request_frame   = -1024;
-        state.last_mesh_update_frame       = -1024;
+        state.latest_cut_score = 0.0;
+        state.last_subject_request_frame = -1024;
+        state.last_mesh_update_frame = -1024;
         // Clear CPU pixel buffers (equivalent to SetPixels32 with zeros)
         state.dnn_depth_buffer.fill(0.0);
         state.dnn_subject_history_buffer.fill(0.0);
@@ -1371,17 +1693,17 @@ impl PostProcessEffect for WireframeDepthFX {
         }
 
         // Read params — new 12-param layout (see effect_definition_registry.rs)
-        let wire_scale = fx.param_values.get(7).copied().unwrap_or(1.0)
+        let wire_scale = fx
+            .param_values
+            .get(7)
+            .copied()
+            .unwrap_or(1.0)
             .clamp(0.5, 1.0);
-        let mesh_rate = fx.param_values.get(8).copied().unwrap_or(1.0)
-            .round() as i32;
+        let mesh_rate = fx.param_values.get(8).copied().unwrap_or(1.0).round() as i32;
         let mesh_rate = mesh_rate.clamp(1, 4);
-        let native_flow_enabled = fx.param_values.get(9).copied()
-            .unwrap_or(0.0).round() as i32 > 0;
-        let flow_lock_enabled = fx.param_values.get(10).copied()
-            .unwrap_or(0.0).round() as i32 > 0;
-        let face_warp_enabled = fx.param_values.get(11).copied()
-            .unwrap_or(0.0) > 0.01;
+        let native_flow_enabled = fx.param_values.get(9).copied().unwrap_or(0.0).round() as i32 > 0;
+        let flow_lock_enabled = fx.param_values.get(10).copied().unwrap_or(0.0).round() as i32 > 0;
+        let face_warp_enabled = fx.param_values.get(11).copied().unwrap_or(0.0) > 0.01;
 
         // GetOrCreateOwner needs encoder; owner_states borrow released before later
         // use. We store the owner_key to look up the state again after this call.
@@ -1399,29 +1721,37 @@ impl PostProcessEffect for WireframeDepthFX {
         }
 
         // Read remaining params — new 12-param layout
-        let density         = fx.param_values.get(1).copied().unwrap_or(96.0);
-        let line_width      = fx.param_values.get(2).copied().unwrap_or(1.2);
-        let depth_scale     = fx.param_values.get(3).copied().unwrap_or(1.0);
+        let density = fx.param_values.get(1).copied().unwrap_or(96.0);
+        let line_width = fx.param_values.get(2).copied().unwrap_or(1.2);
+        let depth_scale = fx.param_values.get(3).copied().unwrap_or(1.0);
         let temporal_smooth = fx.param_values.get(4).copied().unwrap_or(0.8);
-        let persistence     = 0.82; // hardcoded default (Persist param removed from UI)
-        let depth_mode      = DepthSourceMode::Dnn; // always DNN
-        let subject_isolation = fx.param_values.get(5).copied().unwrap_or(0.0)
+        let persistence = 0.82; // hardcoded default (Persist param removed from UI)
+        let depth_mode = DepthSourceMode::Dnn; // always DNN
+        let subject_isolation = fx
+            .param_values
+            .get(5)
+            .copied()
+            .unwrap_or(0.0)
             .clamp(0.0, 1.0);
-        let blend_mode = fx.param_values.get(6).copied().unwrap_or(0.0)
+        let blend_mode = fx
+            .param_values
+            .get(6)
+            .copied()
+            .unwrap_or(0.0)
             .clamp(0.0, 6.0);
         // ── Poll background worker(s) for completed native results ──
         match &mut self.workers {
             Some(WorkerMode::Parallel {
-                depth_worker, flow_worker, subject_worker,
+                depth_worker,
+                flow_worker,
+                subject_worker,
             }) => {
                 if let Some(resp) = depth_worker.try_recv()
                     && let Some(state) = self.owner_states.get_mut(&resp.owner_key)
                     && let Some(ref depth) = resp.depth_buffer
                 {
-                    let copy_len =
-                        depth.len().min(state.dnn_depth_buffer.len());
-                    state.dnn_depth_buffer[..copy_len]
-                        .copy_from_slice(&depth[..copy_len]);
+                    let copy_len = depth.len().min(state.dnn_depth_buffer.len());
+                    state.dnn_depth_buffer[..copy_len].copy_from_slice(&depth[..copy_len]);
                     state.dnn_has_depth = true;
                     state.dnn_depth_dirty = true;
                 }
@@ -1429,10 +1759,8 @@ impl PostProcessEffect for WireframeDepthFX {
                     && let Some(state) = self.owner_states.get_mut(&resp.owner_key)
                 {
                     if let Some(ref flow) = resp.flow_buffer {
-                        let copy_len =
-                            flow.len().min(state.native_flow_buffer.len());
-                        state.native_flow_buffer[..copy_len]
-                            .copy_from_slice(&flow[..copy_len]);
+                        let copy_len = flow.len().min(state.native_flow_buffer.len());
+                        state.native_flow_buffer[..copy_len].copy_from_slice(&flow[..copy_len]);
                         state.native_flow_has_data = true;
                         state.native_flow_dirty = true;
                         state.native_flow_ready = true;
@@ -1448,12 +1776,9 @@ impl PostProcessEffect for WireframeDepthFX {
                         self.dnn_subject_api_available = false;
                     }
                     if let Some(state) = self.owner_states.get_mut(&resp.owner_key)
-                        && let Some(ref blended) =
-                            resp.subject_history_blended
+                        && let Some(ref blended) = resp.subject_history_blended
                     {
-                        let copy_len = blended.len().min(
-                            state.dnn_subject_history_buffer.len(),
-                        );
+                        let copy_len = blended.len().min(state.dnn_subject_history_buffer.len());
                         state.dnn_subject_history_buffer[..copy_len]
                             .copy_from_slice(&blended[..copy_len]);
                         state.dnn_has_subject_mask = true;
@@ -1463,9 +1788,7 @@ impl PostProcessEffect for WireframeDepthFX {
             }
             Some(WorkerMode::Monolithic { worker }) => {
                 if let Some(response) = worker.try_recv() {
-                    if let Some(state) =
-                        self.owner_states.get_mut(&response.owner_key)
-                    {
+                    if let Some(state) = self.owner_states.get_mut(&response.owner_key) {
                         Self::apply_depth_response(state, &response);
                     }
                     if response.subject_api_failed {
@@ -1478,14 +1801,13 @@ impl PostProcessEffect for WireframeDepthFX {
 
         // ── Poll GPU readback → submit to background worker(s) ──
         // Native shared-memory readback via GpuEncoder.
-        let readback_pixels =
-            if let Some(state) = self.owner_states.get_mut(&owner_key)
-                && state.dnn_readback_pending
-            {
-                state.readback.try_read()
-            } else {
-                None
-            };
+        let readback_pixels = if let Some(state) = self.owner_states.get_mut(&owner_key)
+            && state.dnn_readback_pending
+        {
+            state.readback.try_read()
+        } else {
+            None
+        };
         if let Some(pixels) = readback_pixels
             && let Some(state) = self.owner_states.get_mut(&owner_key)
         {
@@ -1495,13 +1817,13 @@ impl PostProcessEffect for WireframeDepthFX {
 
             match &mut self.workers {
                 Some(WorkerMode::Parallel {
-                    depth_worker, flow_worker, subject_worker,
+                    depth_worker,
+                    flow_worker,
+                    subject_worker,
                 }) => {
                     // Only submit to each worker if idle — prevents
                     // overwriting another owner's in-flight request.
-                    if state.native_request_wants_depth
-                        && !depth_worker.is_busy()
-                    {
+                    if state.native_request_wants_depth && !depth_worker.is_busy() {
                         depth_worker.submit(DepthOnlyRequest {
                             owner_key,
                             pixel_data: pixels.clone(),
@@ -1509,31 +1831,24 @@ impl PostProcessEffect for WireframeDepthFX {
                             height: ah,
                         });
                     }
-                    if state.native_request_wants_flow
-                        && !flow_worker.is_busy()
-                    {
+                    if state.native_request_wants_flow && !flow_worker.is_busy() {
                         flow_worker.submit(FlowOnlyRequest {
                             owner_key,
                             pixel_data: pixels.clone(),
-                            prev_pixel_data:
-                                state.prev_native_pixel_buffer.clone(),
+                            prev_pixel_data: state.prev_native_pixel_buffer.clone(),
                             has_prev_frame: state.has_prev_native_frame,
                             width: aw,
                             height: ah,
                         });
                     }
-                    if state.native_request_wants_subject
-                        && !subject_worker.is_busy()
-                    {
+                    if state.native_request_wants_subject && !subject_worker.is_busy() {
                         subject_worker.submit(SubjectOnlyRequest {
                             owner_key,
                             pixel_data: pixels.clone(),
                             width: aw,
                             height: ah,
-                            has_subject_mask_history:
-                                state.dnn_has_subject_mask,
-                            subject_history:
-                                state.dnn_subject_history_buffer.clone(),
+                            has_subject_mask_history: state.dnn_has_subject_mask,
+                            subject_history: state.dnn_subject_history_buffer.clone(),
                         });
                     }
                 }
@@ -1542,19 +1857,15 @@ impl PostProcessEffect for WireframeDepthFX {
                         let req = DepthRequest {
                             owner_key,
                             pixel_data: pixels.clone(),
-                            prev_pixel_data:
-                                state.prev_native_pixel_buffer.clone(),
+                            prev_pixel_data: state.prev_native_pixel_buffer.clone(),
                             has_prev_frame: state.has_prev_native_frame,
                             width: aw,
                             height: ah,
                             wants_flow: state.native_request_wants_flow,
                             wants_depth: state.native_request_wants_depth,
-                            wants_subject:
-                                state.native_request_wants_subject,
-                            has_subject_mask_history:
-                                state.dnn_has_subject_mask,
-                            subject_history:
-                                state.dnn_subject_history_buffer.clone(),
+                            wants_subject: state.native_request_wants_subject,
+                            has_subject_mask_history: state.dnn_has_subject_mask,
+                            subject_history: state.dnn_subject_history_buffer.clone(),
                         };
                         worker.submit(req);
                     }
@@ -1563,10 +1874,8 @@ impl PostProcessEffect for WireframeDepthFX {
             }
 
             // Copy current → prev immediately (at submit time, not completion).
-            let copy_len =
-                pixels.len().min(state.prev_native_pixel_buffer.len());
-            state.prev_native_pixel_buffer[..copy_len]
-                .copy_from_slice(&pixels[..copy_len]);
+            let copy_len = pixels.len().min(state.prev_native_pixel_buffer.len());
+            state.prev_native_pixel_buffer[..copy_len].copy_from_slice(&pixels[..copy_len]);
             state.has_prev_native_frame = true;
         }
         // Check DNN backend for this frame
@@ -1582,22 +1891,26 @@ impl PostProcessEffect for WireframeDepthFX {
         // WireframeDepthFX.cs line 829: flowLockStrength =
         //   Lerp(0.76, 0.985, Clamp01(temporalSmooth))
         let ts01 = temporal_smooth.clamp(0.0, 1.0);
-        let flow_lock_strength  = 0.76 + (0.985 - 0.76) * ts01;
+        let flow_lock_strength = 0.76 + (0.985 - 0.76) * ts01;
         // WireframeDepthFX.cs line 838: cellAffine = Lerp(0.40, 0.88, ...)
-        let cell_affine         = 0.40 + (0.88 - 0.40) * ts01;
+        let cell_affine = 0.40 + (0.88 - 0.40) * ts01;
         // EdgeFollow (param 11) scales the face warp strength.
         // At 1.0 = original behavior.
-        let edge_follow = fx.param_values.get(11).copied().unwrap_or(0.5)
+        let edge_follow = fx
+            .param_values
+            .get(11)
+            .copied()
+            .unwrap_or(0.5)
             .clamp(0.0, 1.0);
-        let face_warp_strength  = (0.25 + (0.90 - 0.25) * ts01) * edge_follow;
+        let face_warp_strength = (0.25 + (0.90 - 0.25) * ts01) * edge_follow;
         // WireframeDepthFX.cs line 864: regularize = Lerp(0.40, 0.74, ...)
-        let mesh_regularize     = 0.40 + (0.74 - 0.40) * ts01;
+        let mesh_regularize = 0.40 + (0.74 - 0.40) * ts01;
         // WireframeDepthFX.cs line 874: surfacePersist =
         //   Lerp(0.80, 0.985, ...)
         let surface_persistence = 0.80 + (0.985 - 0.80) * ts01;
         // WireframeDepthFX.cs line 334: wireTaa =
         //   Lerp(0.48, 0.92, Clamp01(temporalSmooth))
-        let wire_taa            = 0.48 + (0.92 - 0.48) * ts01;
+        let wire_taa = 0.48 + (0.92 - 0.48) * ts01;
 
         // Build analysis-resolution uniforms
         let uniforms_analysis = WireUniforms {
@@ -1644,22 +1957,38 @@ impl PostProcessEffect for WireframeDepthFX {
 
         // PASS_ANALYSIS: source → analysis (temp RT at analysis resolution)
         let analysis_rt = Self::create_transient(
-            gpu, aw, ah,
-            manifold_gpu::GpuTextureFormat::Rgba8Unorm, "WD Analysis",
+            gpu,
+            aw,
+            ah,
+            manifold_gpu::GpuTextureFormat::Rgba8Unorm,
+            "WD Analysis",
         );
-        self.encode_pass(gpu, PASS_ANALYSIS, &uniforms_analysis,
-            source, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-            &analysis_rt.texture, aw, ah);
+        self.encode_pass(
+            gpu,
+            PASS_ANALYSIS,
+            &uniforms_analysis,
+            source,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &self.dummy_tex,
+            &analysis_rt.texture,
+            aw,
+            ah,
+        );
 
         // WireframeDepthFX.cs line 388-394 — request native readback
         if native_flow_enabled && flow_lock_enabled {
             let mesh_update_due = {
                 let state = self.owner_states.get(&owner_key).unwrap();
-                mesh_rate <= 1
-                    || ctx.frame_count - state.last_mesh_update_frame
-                        >= mesh_rate as i64
+                mesh_rate <= 1 || ctx.frame_count - state.last_mesh_update_frame >= mesh_rate as i64
             };
             if mesh_update_due {
                 // Copy analysis_rt → dnn_input_tex happens inside
@@ -1667,25 +1996,25 @@ impl PostProcessEffect for WireframeDepthFX {
                 self.request_native_readback(
                     gpu,
                     &analysis_rt.texture,
-                    owner_key, depth_mode, subject_isolation, ctx.frame_count,
+                    owner_key,
+                    depth_mode,
+                    subject_isolation,
+                    ctx.frame_count,
                 );
             }
         }
         // WireframeDepthFX.cs line 396-407 — depth estimation
         // Temporarily remove state to avoid borrow conflict
         // (self.method + self.owner_states)
-        let dnn_used =
-            if depth_mode == DepthSourceMode::Dnn && dnn_available {
-                let mut state =
-                    self.owner_states.remove(&owner_key).unwrap();
-                let result = self.try_estimate_depth_dnn(
-                    gpu, &mut state, temporal_smooth, &uniforms_analysis,
-                );
-                self.owner_states.insert(owner_key, state);
-                result
-            } else {
-                false
-            };
+        let dnn_used = if depth_mode == DepthSourceMode::Dnn && dnn_available {
+            let mut state = self.owner_states.remove(&owner_key).unwrap();
+            let result =
+                self.try_estimate_depth_dnn(gpu, &mut state, temporal_smooth, &uniforms_analysis);
+            self.owner_states.insert(owner_key, state);
+            result
+        } else {
+            false
+        };
         if !dnn_used {
             if depth_mode == DepthSourceMode::Dnn
                 && !self.warned_missing_dnn
@@ -1697,24 +2026,30 @@ impl PostProcessEffect for WireframeDepthFX {
                 );
                 self.warned_missing_dnn = true;
             }
-            let mut state =
-                self.owner_states.remove(&owner_key).unwrap();
+            let mut state = self.owner_states.remove(&owner_key).unwrap();
             self.estimate_depth_heuristic(
-                gpu, &analysis_rt.texture, &mut state,
-                temporal_smooth, &uniforms_analysis,
+                gpu,
+                &analysis_rt.texture,
+                &mut state,
+                temporal_smooth,
+                &uniforms_analysis,
             );
             self.owner_states.insert(owner_key, state);
         }
         // WireframeDepthFX.cs line 409-412 — UpdateFlowLock or blit analysis →
         //   previousAnalysisTex
         if flow_lock_enabled {
-            let mut state =
-                self.owner_states.remove(&owner_key).unwrap();
+            let mut state = self.owner_states.remove(&owner_key).unwrap();
             self.update_flow_lock(
                 gpu,
-                &analysis_rt.texture, &mut state,
-                temporal_smooth, mesh_rate, native_flow_enabled,
-                face_warp_enabled, ctx.frame_count, &uniforms_analysis,
+                &analysis_rt.texture,
+                &mut state,
+                temporal_smooth,
+                mesh_rate,
+                native_flow_enabled,
+                face_warp_enabled,
+                ctx.frame_count,
+                &uniforms_analysis,
             );
             self.owner_states.insert(owner_key, state);
         }
@@ -1726,7 +2061,8 @@ impl PostProcessEffect for WireframeDepthFX {
                 gpu,
                 &analysis_rt.texture,
                 &state.previous_analysis_tex.texture,
-                aw, ah,
+                aw,
+                ah,
             );
         }
 
@@ -1742,50 +2078,79 @@ impl PostProcessEffect for WireframeDepthFX {
         // --- Wire mask pass (Pass 2) ---
         // WireframeDepthFX.cs line 305-328
         let line_mask = Self::create_transient(
-            gpu, ww, wh,
-            manifold_gpu::GpuTextureFormat::Rgba8Unorm, "WD LineMask",
+            gpu,
+            ww,
+            wh,
+            manifold_gpu::GpuTextureFormat::Rgba8Unorm,
+            "WD LineMask",
         );
         {
             let state = self.owner_states.get(&owner_key).unwrap();
             let subject_mask_tex =
-                if depth_mode == DepthSourceMode::Dnn
-                    && state.dnn_has_subject_mask
-                {
+                if depth_mode == DepthSourceMode::Dnn && state.dnn_has_subject_mask {
                     &state.dnn_subject_texture
                 } else {
                     &self.dummy_tex
                 };
-            self.encode_pass(gpu, PASS_WIREFRAME_MASK, &uniforms_wire,
-                source, &self.dummy_tex, &self.dummy_tex,
-                &state.depth_tex.texture, &self.dummy_tex, &self.dummy_tex,
-                &state.mesh_coord_tex.texture, &self.dummy_tex,
+            self.encode_pass(
+                gpu,
+                PASS_WIREFRAME_MASK,
+                &uniforms_wire,
+                source,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &state.depth_tex.texture,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &state.mesh_coord_tex.texture,
+                &self.dummy_tex,
                 &state.semantic_tex.texture,
                 &state.surface_cache_tex.texture,
-                &self.dummy_tex, subject_mask_tex,
-                &line_mask.texture, ww, wh);
+                &self.dummy_tex,
+                subject_mask_tex,
+                &line_mask.texture,
+                ww,
+                wh,
+            );
         }
 
         // --- Update history pass (Pass 3) + copy → lineHistoryTex ---
         // WireframeDepthFX.cs line 330-347
         let history_next = Self::create_transient(
-            gpu, ww, wh,
-            manifold_gpu::GpuTextureFormat::Rgba8Unorm, "WD HistoryNext",
+            gpu,
+            ww,
+            wh,
+            manifold_gpu::GpuTextureFormat::Rgba8Unorm,
+            "WD HistoryNext",
         );
         {
             let state = self.owner_states.get(&owner_key).unwrap();
-            self.encode_pass(gpu, PASS_UPDATE_HISTORY, &uniforms_wire,
-                &line_mask.texture, &self.dummy_tex, &self.dummy_tex,
+            self.encode_pass(
+                gpu,
+                PASS_UPDATE_HISTORY,
+                &uniforms_wire,
+                &line_mask.texture,
                 &self.dummy_tex,
-                &state.line_history_tex.texture, &self.dummy_tex,
-                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-                &state.surface_cache_tex.texture, &self.dummy_tex,
                 &self.dummy_tex,
-                &history_next.texture, ww, wh);
+                &self.dummy_tex,
+                &state.line_history_tex.texture,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &state.surface_cache_tex.texture,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &history_next.texture,
+                ww,
+                wh,
+            );
             Self::encode_copy(
                 gpu,
                 &history_next.texture,
                 &state.line_history_tex.texture,
-                ww, wh,
+                ww,
+                wh,
             );
         }
 
@@ -1793,12 +2158,26 @@ impl PostProcessEffect for WireframeDepthFX {
         // WireframeDepthFX.cs line 349-355
         {
             let state = self.owner_states.get(&owner_key).unwrap();
-            self.encode_pass(gpu, PASS_COMPOSITE, &uniforms_source,
-                source, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-                &state.line_history_tex.texture, &self.dummy_tex,
-                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
-                target, self.width, self.height);
+            self.encode_pass(
+                gpu,
+                PASS_COMPOSITE,
+                &uniforms_source,
+                source,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &state.line_history_tex.texture,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                &self.dummy_tex,
+                target,
+                self.width,
+                self.height,
+            );
         }
 
         // Release transient textures back to pool for frame-stamped recycling.
@@ -1810,7 +2189,9 @@ impl PostProcessEffect for WireframeDepthFX {
     fn flush_background_work(&mut self) {
         match &mut self.workers {
             Some(WorkerMode::Parallel {
-                depth_worker, flow_worker, subject_worker,
+                depth_worker,
+                flow_worker,
+                subject_worker,
             }) => {
                 if let Some(resp) = depth_worker.recv_blocking()
                     && let Some(state) = self.owner_states.get_mut(&resp.owner_key)
@@ -1844,11 +2225,8 @@ impl PostProcessEffect for WireframeDepthFX {
                     if let Some(state) = self.owner_states.get_mut(&resp.owner_key)
                         && let Some(ref blended) = resp.subject_history_blended
                     {
-                        let n = blended.len().min(
-                            state.dnn_subject_history_buffer.len(),
-                        );
-                        state.dnn_subject_history_buffer[..n]
-                            .copy_from_slice(&blended[..n]);
+                        let n = blended.len().min(state.dnn_subject_history_buffer.len());
+                        state.dnn_subject_history_buffer[..n].copy_from_slice(&blended[..n]);
                         state.dnn_has_subject_mask = true;
                         state.dnn_subject_dirty = true;
                     }
@@ -1856,9 +2234,7 @@ impl PostProcessEffect for WireframeDepthFX {
             }
             Some(WorkerMode::Monolithic { worker }) => {
                 if let Some(response) = worker.recv_blocking() {
-                    if let Some(state) =
-                        self.owner_states.get_mut(&response.owner_key)
-                    {
+                    if let Some(state) = self.owner_states.get_mut(&response.owner_key) {
                         Self::apply_depth_response(state, &response);
                     }
                     if response.subject_api_failed {
@@ -1875,35 +2251,30 @@ impl PostProcessEffect for WireframeDepthFX {
         // We can't call encoder from trait — clear flags + CPU buffers,
         // GPU cleared on next apply.
         for state in self.owner_states.values_mut() {
-            state.dnn_readback_pending     = false;
-            state.dnn_has_depth            = false;
-            state.dnn_depth_dirty          = false;
-            state.dnn_has_subject_mask     = false;
-            state.dnn_subject_dirty        = false;
-            state.has_prev_native_frame    = false;
-            state.native_flow_has_data     = false;
-            state.native_flow_dirty        = false;
-            state.native_flow_ready        = false;
-            state.native_request_wants_flow    = false;
-            state.native_request_wants_depth   = false;
+            state.dnn_readback_pending = false;
+            state.dnn_has_depth = false;
+            state.dnn_depth_dirty = false;
+            state.dnn_has_subject_mask = false;
+            state.dnn_subject_dirty = false;
+            state.has_prev_native_frame = false;
+            state.native_flow_has_data = false;
+            state.native_flow_dirty = false;
+            state.native_flow_ready = false;
+            state.native_request_wants_flow = false;
+            state.native_request_wants_depth = false;
             state.native_request_wants_subject = false;
-            state.latest_cut_score         = 0.0;
-            state.last_subject_request_frame   = -1024;
-            state.last_mesh_update_frame       = -1024;
+            state.latest_cut_score = 0.0;
+            state.last_subject_request_frame = -1024;
+            state.last_mesh_update_frame = -1024;
             state.dnn_depth_buffer.fill(0.0);
             state.dnn_subject_history_buffer.fill(0.0);
             state.native_flow_buffer.fill(0.0);
         }
     }
 
-    fn resize(
-        &mut self,
-        _device: &manifold_gpu::GpuDevice,
-        width: u32,
-        height: u32,
-    ) {
+    fn resize(&mut self, _device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
         // WireframeDepthFX.cs line 133-137 — InitializeState
-        self.width  = width;
+        self.width = width;
         self.height = height;
         // Per-owner textures are rebuilt lazily in GetOrCreateOwner.
         self.owner_states.clear();
@@ -1918,21 +2289,21 @@ impl StatefulEffect for WireframeDepthFX {
     // WireframeDepthFX.cs line 921-925 — ClearState(ownerKey)
     fn clear_state_for_owner(&mut self, owner_key: i64) {
         if let Some(state) = self.owner_states.get_mut(&owner_key) {
-            state.dnn_readback_pending     = false;
-            state.dnn_has_depth            = false;
-            state.dnn_depth_dirty          = false;
-            state.dnn_has_subject_mask     = false;
-            state.dnn_subject_dirty        = false;
-            state.has_prev_native_frame    = false;
-            state.native_flow_has_data     = false;
-            state.native_flow_dirty        = false;
-            state.native_flow_ready        = false;
-            state.native_request_wants_flow    = false;
-            state.native_request_wants_depth   = false;
+            state.dnn_readback_pending = false;
+            state.dnn_has_depth = false;
+            state.dnn_depth_dirty = false;
+            state.dnn_has_subject_mask = false;
+            state.dnn_subject_dirty = false;
+            state.has_prev_native_frame = false;
+            state.native_flow_has_data = false;
+            state.native_flow_dirty = false;
+            state.native_flow_ready = false;
+            state.native_request_wants_flow = false;
+            state.native_request_wants_depth = false;
             state.native_request_wants_subject = false;
-            state.latest_cut_score         = 0.0;
-            state.last_subject_request_frame   = -1024;
-            state.last_mesh_update_frame       = -1024;
+            state.latest_cut_score = 0.0;
+            state.last_subject_request_frame = -1024;
+            state.last_mesh_update_frame = -1024;
             state.dnn_depth_buffer.fill(0.0);
             state.dnn_subject_history_buffer.fill(0.0);
             state.native_flow_buffer.fill(0.0);

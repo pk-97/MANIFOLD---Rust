@@ -1,14 +1,14 @@
-use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use crate::timeline::Timeline;
-use crate::video::VideoLibrary;
 use crate::midi::MidiMappingConfig;
+use crate::percussion::PercussionImportState;
+use crate::recording::RecordingProvenance;
 use crate::settings::ProjectSettings;
 use crate::tempo::TempoMap;
-use crate::recording::RecordingProvenance;
-use crate::percussion::PercussionImportState;
+use crate::timeline::Timeline;
 use crate::types::ClipDurationMode;
 use crate::units::Beats;
+use crate::video::VideoLibrary;
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 /// Root project aggregate. Contains all project data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,17 +38,41 @@ pub struct Project {
     pub saved_playhead_time: f32,
 
     // ── Legacy top-level fields from V1.0.0 (before percussionImport nesting) ──
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "importedPercussionAudioPath")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "importedPercussionAudioPath"
+    )]
     pub legacy_perc_audio_path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "importedPercussionAudioStartBeat")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "importedPercussionAudioStartBeat"
+    )]
     pub legacy_perc_audio_start_beat: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "importedPercussionClipPlacements")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "importedPercussionClipPlacements"
+    )]
     pub legacy_perc_clip_placements: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "percussionEnergyEnvelope")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "percussionEnergyEnvelope"
+    )]
     pub legacy_perc_energy_envelope: Option<Vec<f32>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "importedStemPaths")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "importedStemPaths"
+    )]
     pub legacy_imported_stem_paths: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "importedPercussionAudioHash")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "importedPercussionAudioHash"
+    )]
     pub legacy_perc_audio_hash: Option<String>,
 }
 
@@ -79,13 +103,13 @@ impl Project {
 
         // Validate tempo map data
         self.tempo_map.ensure_valid();
-        self.tempo_map.ensure_default_at_beat_zero(
-            self.settings.bpm,
-            crate::TempoPointSource::Manual,
-        );
+        self.tempo_map
+            .ensure_default_at_beat_zero(self.settings.bpm, crate::TempoPointSource::Manual);
 
         // Sync BPM from tempo map at beat 0
-        self.settings.bpm = self.tempo_map.get_bpm_at_beat(Beats::ZERO, self.settings.bpm);
+        self.settings.bpm = self
+            .tempo_map
+            .get_bpm_at_beat(Beats::ZERO, self.settings.bpm);
 
         // Clamp saved playhead
         self.saved_playhead_time = self.saved_playhead_time.max(0.0);
@@ -168,7 +192,9 @@ impl Project {
     /// Sync BPM from tempo map beat 0, clamped to 20-300.
     /// Port of C# ProjectSerializer.cs lines 39-43.
     pub fn sync_bpm_from_tempo_map(&mut self) {
-        self.settings.bpm = self.tempo_map.get_bpm_at_beat(Beats::ZERO, self.settings.bpm);
+        self.settings.bpm = self
+            .tempo_map
+            .get_bpm_at_beat(Beats::ZERO, self.settings.bpm);
     }
 
     /// Validate project structure. Returns list of error strings.
@@ -179,7 +205,9 @@ impl Project {
         // Validate timeline clip references
         for layer in &self.timeline.layers {
             for clip in &layer.clips {
-                if layer.layer_type == crate::types::LayerType::Generator || clip.video_clip_id.is_empty() {
+                if layer.layer_type == crate::types::LayerType::Generator
+                    || clip.video_clip_id.is_empty()
+                {
                     continue;
                 }
                 if !self.video_library.has_clip(&clip.video_clip_id) {
@@ -200,7 +228,9 @@ impl Project {
         let mut result = PurgeResult::default();
 
         // Build set of all valid video clip IDs in the library
-        let valid_ids: HashSet<String> = self.video_library.clips
+        let valid_ids: HashSet<String> = self
+            .video_library
+            .clips
             .iter()
             .map(|c| c.id.clone())
             .collect();
@@ -211,8 +241,12 @@ impl Project {
             let is_gen_layer = layer.layer_type == crate::types::LayerType::Generator;
             layer.clips.retain(|clip| {
                 // Keep generator layer clips — they have no video reference
-                if is_gen_layer { return true; }
-                if clip.video_clip_id.is_empty() { return true; }
+                if is_gen_layer {
+                    return true;
+                }
+                if clip.video_clip_id.is_empty() {
+                    return true;
+                }
                 valid_ids.contains(&clip.video_clip_id)
             });
             result.timeline_clips_removed += before - layer.clips.len();
@@ -268,4 +302,6 @@ impl Default for Project {
     }
 }
 
-fn default_version() -> String { "1.1.0".to_string() }
+fn default_version() -> String {
+    "1.1.0".to_string()
+}

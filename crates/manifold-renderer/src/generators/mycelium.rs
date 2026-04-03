@@ -163,8 +163,7 @@ impl MyceliumGenerator {
         self.frame_count = 0;
 
         // Agent buffer: agent_count * 16 bytes (shared for CPU seeding)
-        let agent_buf_size =
-            (agent_count as u64) * (std::mem::size_of::<PhysarumAgent>() as u64);
+        let agent_buf_size = (agent_count as u64) * (std::mem::size_of::<PhysarumAgent>() as u64);
         let agent_buffer = device.create_buffer_shared(agent_buf_size);
 
         // Seed agents with random positions
@@ -172,8 +171,7 @@ impl MyceliumGenerator {
 
         // Accumulator buffer: tw * th * 4 bytes (atomic u32) — GPU-only
         let accum_size = (tw as u64) * (th as u64) * 4;
-        let accum_buffer =
-            device.create_buffer(accum_size);
+        let accum_buffer = device.create_buffer(accum_size);
 
         // Trail textures (Rgba16Float, half-res)
         let trail_a = device.create_texture(&manifold_gpu::GpuTextureDesc {
@@ -202,12 +200,7 @@ impl MyceliumGenerator {
         self.initialized = true;
     }
 
-    fn seed_agents(
-        &self,
-        buffer: &manifold_gpu::GpuBuffer,
-        count: u32,
-        seeds: u32,
-    ) {
+    fn seed_agents(&self, buffer: &manifold_gpu::GpuBuffer, count: u32, seeds: u32) {
         let mut agents = Vec::with_capacity(count as usize);
         let seed_base = seeds.wrapping_mul(2654435761);
         for i in 0..count {

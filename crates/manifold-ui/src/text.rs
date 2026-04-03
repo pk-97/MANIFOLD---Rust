@@ -18,21 +18,31 @@ pub fn truncate_with_ellipsis(
     weight: FontWeight,
     max_width: f32,
 ) -> String {
-    if text.is_empty() { return text.to_string(); }
-    if max_width <= 0.0 { return String::new(); }
+    if text.is_empty() {
+        return text.to_string();
+    }
+    if max_width <= 0.0 {
+        return String::new();
+    }
 
     let size = measurer.measure_text(text, font_size, weight);
-    if size.x <= max_width { return text.to_string(); }
+    if size.x <= max_width {
+        return text.to_string();
+    }
 
     let ellipsis = "...";
     let ellipsis_w = measurer.measure_text(ellipsis, font_size, weight).x;
     let target_w = max_width - ellipsis_w;
-    if target_w <= 0.0 { return ellipsis.to_string(); }
+    if target_w <= 0.0 {
+        return ellipsis.to_string();
+    }
 
     // Progressive trim from end
     for len in (1..text.len()).rev() {
         // Ensure we don't split a multi-byte char
-        if !text.is_char_boundary(len) { continue; }
+        if !text.is_char_boundary(len) {
+            continue;
+        }
         let sub = &text[..len];
         if measurer.measure_text(sub, font_size, weight).x <= target_w {
             return format!("{}{}", sub, ellipsis);

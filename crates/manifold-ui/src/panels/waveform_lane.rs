@@ -13,7 +13,7 @@ use crate::color;
 use crate::coordinate_mapper::CoordinateMapper;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
-use crate::node::{Color32, Rect, UIStyle, TextAlign};
+use crate::node::{Color32, Rect, TextAlign, UIStyle};
 use crate::tree::UITree;
 use crate::waveform_painter;
 use crate::waveform_renderer::WaveformRenderer;
@@ -230,7 +230,10 @@ impl WaveformLanePanel {
             screen_rect.y,
             screen_rect.width,
             screen_rect.height,
-            UIStyle { bg_color: Color32::TRANSPARENT, ..UIStyle::default() },
+            UIStyle {
+                bg_color: Color32::TRANSPARENT,
+                ..UIStyle::default()
+            },
             "",
         ) as i32;
 
@@ -257,8 +260,7 @@ impl WaveformLanePanel {
         ) as i32;
 
         // Expand stems button (next to remove). Unity: anchoredPosition(-28, -2).
-        let expand_x = screen_rect.x + screen_rect.width
-            - EXPAND_BTN_MARGIN_RIGHT - EXPAND_BTN_W;
+        let expand_x = screen_rect.x + screen_rect.width - EXPAND_BTN_MARGIN_RIGHT - EXPAND_BTN_W;
         let expand_y = screen_rect.y + EXPAND_BTN_MARGIN_TOP;
         self.expand_btn_id = tree.add_button(
             -1,
@@ -305,7 +307,11 @@ impl WaveformLanePanel {
 
         // Update expand chevron direction.
         if self.expand_btn_id >= 0 {
-            let chevron = if self.stems_expanded { "\u{25BC}" } else { "\u{25B6}" };
+            let chevron = if self.stems_expanded {
+                "\u{25BC}"
+            } else {
+                "\u{25B6}"
+            };
             tree.set_text(self.expand_btn_id as u32, chevron);
         }
     }
@@ -352,8 +358,9 @@ impl WaveformLanePanel {
         if has_waveform {
             let waveform_x =
                 mapper.beat_to_pixel_absolute(Beats::from_f32(waveform_start_beat.max(0.0)));
-            let waveform_width =
-                mapper.beat_duration_to_width(Beats::from_f32(waveform_duration_beats)).max(1.0);
+            let waveform_width = mapper
+                .beat_duration_to_width(Beats::from_f32(waveform_duration_beats))
+                .max(1.0);
 
             if (waveform_x - self.cached_waveform_x).abs() > 0.5
                 || (waveform_width - self.cached_waveform_width).abs() > 0.5
@@ -399,30 +406,31 @@ impl WaveformLanePanel {
         let waveform_width = self.cached_waveform_width;
 
         if waveform_width > 0.0
-            && let Some(level) = self.renderer.select_level_for_zoom(waveform_width, 1.0) {
-                // Clamp drawing to visible region
-                let draw_left = (waveform_x - self.scroll_offset_x) as i32;
-                let draw_right =
-                    ((waveform_x + waveform_width - self.scroll_offset_x) as i32).min(buf_w as i32);
+            && let Some(level) = self.renderer.select_level_for_zoom(waveform_width, 1.0)
+        {
+            // Clamp drawing to visible region
+            let draw_left = (waveform_x - self.scroll_offset_x) as i32;
+            let draw_right =
+                ((waveform_x + waveform_width - self.scroll_offset_x) as i32).min(buf_w as i32);
 
-                let x_start = draw_left.max(0);
-                let x_end = draw_right.min(buf_w as i32);
+            let x_start = draw_left.max(0);
+            let x_end = draw_right.min(buf_w as i32);
 
-                if x_end > x_start {
-                    waveform_painter::draw_waveform(
-                        &mut self.pixel_buffer,
-                        buf_w,
-                        buf_h,
-                        level,
-                        x_start,
-                        x_end,
-                        0,
-                        buf_h as i32,
-                        waveform_x - self.scroll_offset_x,
-                        waveform_width,
-                    );
-                }
+            if x_end > x_start {
+                waveform_painter::draw_waveform(
+                    &mut self.pixel_buffer,
+                    buf_w,
+                    buf_h,
+                    level,
+                    x_start,
+                    x_end,
+                    0,
+                    buf_h as i32,
+                    waveform_x - self.scroll_offset_x,
+                    waveform_width,
+                );
             }
+        }
 
         // Buttons are UITree nodes — not drawn in the bitmap.
 
@@ -502,8 +510,8 @@ impl Panel for WaveformLanePanel {
                     self.accumulated_beats += delta_beats;
 
                     // Snap: emit in whole-beat increments
-                    let snapped = (self.accumulated_beats / SNAP_STEP_BEATS) as i32 as f32
-                        * SNAP_STEP_BEATS;
+                    let snapped =
+                        (self.accumulated_beats / SNAP_STEP_BEATS) as i32 as f32 * SNAP_STEP_BEATS;
                     if snapped.abs() >= SNAP_STEP_BEATS {
                         actions.push(PanelAction::WaveformDragDelta(snapped));
                         self.total_snapped_delta += snapped;

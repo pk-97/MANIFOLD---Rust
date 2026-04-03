@@ -1,17 +1,17 @@
 //! Editing-related dispatch: clip interaction, context menus, drag actions.
-use manifold_core::{Beats, ClipId, LayerId};
+use manifold_core::GeneratorTypeId;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
-use manifold_core::GeneratorTypeId;
+use manifold_core::{Beats, ClipId, LayerId};
 use manifold_editing::commands::layer::{AddLayerCommand, DeleteLayerCommand};
 use manifold_editing::service::EditingService;
 use manifold_ui::PanelAction;
 
+use super::DispatchResult;
 use crate::app::SelectionState;
 use crate::dialog_path_memory::{self, DialogContext};
 use crate::ui_root::UIRoot;
 use crate::user_prefs::UserPrefs;
-use super::DispatchResult;
 
 pub(super) fn dispatch_editing(
     action: &PanelAction,
@@ -31,16 +31,25 @@ pub(super) fn dispatch_editing(
             let clip_id = ClipId::new(clip_id.as_str());
             // Find the clip's layer index, layer ID, and end beat for UIState
             let (layer_idx, layer_id, clip_end_beat) = Some(&*project)
-                .and_then(|p| p.timeline.layers.iter().enumerate()
-                    .find_map(|(i, l)| l.clips.iter()
-                        .find(|c| c.id == clip_id)
-                        .map(|c| (i, l.layer_id.clone(), c.start_beat + c.duration_beats))))
+                .and_then(|p| {
+                    p.timeline.layers.iter().enumerate().find_map(|(i, l)| {
+                        l.clips
+                            .iter()
+                            .find(|c| c.id == clip_id)
+                            .map(|c| (i, l.layer_id.clone(), c.start_beat + c.duration_beats))
+                    })
+                })
                 .unwrap_or((0, manifold_core::LayerId::default(), Beats::ZERO));
 
             if modifiers.shift {
                 // Shift+Click: extend region from anchor to clip end.
                 // From Unity InteractionOverlay.OnPointerClick (line 206-207).
-                super::select_region_to_with_project(clip_end_beat, layer_idx, selection, &*project);
+                super::select_region_to_with_project(
+                    clip_end_beat,
+                    layer_idx,
+                    selection,
+                    &*project,
+                );
             } else if modifiers.command || modifiers.ctrl {
                 // Cmd/Ctrl+Click: toggle clip in/out of selection, then update region bounds.
                 // From Unity InteractionOverlay.OnPointerClick (line 208-211).
@@ -51,7 +60,11 @@ pub(super) fn dispatch_editing(
                 // Plain click: select single clip (clears region, layers, insert cursor)
                 selection.select_clip(clip_id.clone(), layer_id);
             }
-            *active_layer = project.timeline.layers.get(layer_idx).map(|l| l.layer_id.clone());
+            *active_layer = project
+                .timeline
+                .layers
+                .get(layer_idx)
+                .map(|l| l.layer_id.clone());
             DispatchResult::structural()
         }
         PanelAction::ClipDoubleClicked(_clip_id) => {
@@ -67,11 +80,19 @@ pub(super) fn dispatch_editing(
             } else {
                 // Plain click: set insert cursor (clears everything, Ableton behavior).
                 // From Unity InteractionOverlay.OnPointerClick (line 183).
-                let lid = project.timeline.layers.get(*layer)
-                    .map(|l| l.layer_id.clone()).unwrap_or_default();
+                let lid = project
+                    .timeline
+                    .layers
+                    .get(*layer)
+                    .map(|l| l.layer_id.clone())
+                    .unwrap_or_default();
                 selection.set_insert_cursor(Beats::from_f32(*beat), lid);
             }
-            *active_layer = project.timeline.layers.get(*layer).map(|l| l.layer_id.clone());
+            *active_layer = project
+                .timeline
+                .layers
+                .get(*layer)
+                .map(|l| l.layer_id.clone());
             DispatchResult::structural()
         }
         PanelAction::TrackDoubleClicked(beat, layer) => {
@@ -80,27 +101,49 @@ pub(super) fn dispatch_editing(
             let grid_step = Beats::from_f32(ui.viewport.grid_step());
             let snapped = manifold_ui::snap::floor_beat_to_grid(Beats::from_f32(*beat), grid_step);
             {
-                let (cmd, _clip_id) = EditingService::create_clip_at_position(project, snapped, *layer, Beats::from_f32(4.0));
-                { ContentCommand::send(content_tx, ContentCommand::Execute(cmd)); }
+                let (cmd, _clip_id) = EditingService::create_clip_at_position(
+                    project,
+                    snapped,
+                    *layer,
+                    Beats::from_f32(4.0),
+                );
+                {
+                    ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
+                }
                 // Enforce non-overlap for the newly created clip
                 if let Some(new_layer) = project.timeline.layers.get(*layer)
-                    && let Some(new_clip) = new_layer.clips.last() {
-                        let new_clip_clone = new_clip.clone();
-                        let ignore = std::collections::HashSet::new();
-                        let spb = 60.0 / project.settings.bpm.0;
-                        let overlap_cmds = EditingService::enforce_non_overlap(
-                            project, &new_clip_clone, *layer, &ignore, spb,
-                        );
-                        for cmd in overlap_cmds {
-                            { ContentCommand::send(content_tx, ContentCommand::Execute(cmd)); }
+                    && let Some(new_clip) = new_layer.clips.last()
+                {
+                    let new_clip_clone = new_clip.clone();
+                    let ignore = std::collections::HashSet::new();
+                    let spb = 60.0 / project.settings.bpm.0;
+                    let overlap_cmds = EditingService::enforce_non_overlap(
+                        project,
+                        &new_clip_clone,
+                        *layer,
+                        &ignore,
+                        spb,
+                    );
+                    for cmd in overlap_cmds {
+                        {
+                            ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
                         }
-                        // Select the newly created clip
-                        let new_lid = project.timeline.layers.get(*layer)
-                            .map(|l| l.layer_id.clone()).unwrap_or_default();
-                        selection.select_clip(new_clip_clone.id, new_lid);
                     }
+                    // Select the newly created clip
+                    let new_lid = project
+                        .timeline
+                        .layers
+                        .get(*layer)
+                        .map(|l| l.layer_id.clone())
+                        .unwrap_or_default();
+                    selection.select_clip(new_clip_clone.id, new_lid);
+                }
             }
-            *active_layer = project.timeline.layers.get(*layer).map(|l| l.layer_id.clone());
+            *active_layer = project
+                .timeline
+                .layers
+                .get(*layer)
+                .map(|l| l.layer_id.clone());
             DispatchResult::structural()
         }
         PanelAction::ViewportHoverChanged(_clip_id) => {
@@ -113,8 +156,12 @@ pub(super) fn dispatch_editing(
             let beat = content_state.current_beat.as_f32();
             {
                 let spb = 60.0 / project.settings.bpm.0;
-                if let Some(cmd) = EditingService::split_clip_at_beat(project, clip_id, Beats::from_f32(beat), spb) {
-                    { ContentCommand::send(content_tx, ContentCommand::Execute(cmd)); }
+                if let Some(cmd) =
+                    EditingService::split_clip_at_beat(project, clip_id, Beats::from_f32(beat), spb)
+                {
+                    {
+                        ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
+                    }
                 }
             }
             DispatchResult::structural()
@@ -122,9 +169,16 @@ pub(super) fn dispatch_editing(
         PanelAction::ContextDeleteClip(clip_id) => {
             let clip_id = ClipId::new(clip_id.as_str());
             {
-                let commands = EditingService::delete_clips(project, std::slice::from_ref(&clip_id), None, 0.0);
+                let commands = EditingService::delete_clips(
+                    project,
+                    std::slice::from_ref(&clip_id),
+                    None,
+                    0.0,
+                );
                 if !commands.is_empty() {
-                    for c in commands { ContentCommand::send(content_tx, ContentCommand::Execute(c)); }
+                    for c in commands {
+                        ContentCommand::send(content_tx, ContentCommand::Execute(c));
+                    }
                 }
             }
             selection.selected_clip_ids.remove(&clip_id);
@@ -141,9 +195,16 @@ pub(super) fn dispatch_editing(
                     region.is_active = true;
                 }
                 let spb = 60.0 / project.settings.bpm.0.max(1.0);
-                let commands = EditingService::duplicate_clips(project, std::slice::from_ref(&clip_id), &region, spb);
+                let commands = EditingService::duplicate_clips(
+                    project,
+                    std::slice::from_ref(&clip_id),
+                    &region,
+                    spb,
+                );
                 if !commands.is_empty() {
-                    for c in commands { ContentCommand::send(content_tx, ContentCommand::Execute(c)); }
+                    for c in commands {
+                        ContentCommand::send(content_tx, ContentCommand::Execute(c));
+                    }
                 }
             }
             DispatchResult::structural()
@@ -153,14 +214,22 @@ pub(super) fn dispatch_editing(
             {
                 let _spb = 60.0 / project.settings.bpm.0;
                 // TODO: browser paste not yet wired
-                let result = manifold_editing::service::PasteResult { commands: Vec::new(), pasted_clip_ids: Vec::new(), skip_reason: None, skipped_count: 0 };
+                let result = manifold_editing::service::PasteResult {
+                    commands: Vec::new(),
+                    pasted_clip_ids: Vec::new(),
+                    skip_reason: None,
+                    skipped_count: 0,
+                };
                 if !result.commands.is_empty() {
-                    for c in result.commands { ContentCommand::send(content_tx, ContentCommand::Execute(c)); }
+                    for c in result.commands {
+                        ContentCommand::send(content_tx, ContentCommand::Execute(c));
+                    }
                     selection.selected_clip_ids.clear();
                     for id in result.pasted_clip_ids {
                         selection.selected_clip_ids.insert(id);
                     }
-                    selection.primary_selected_clip_id = selection.selected_clip_ids.iter().next().cloned();
+                    selection.primary_selected_clip_id =
+                        selection.selected_clip_ids.iter().next().cloned();
                     selection.selection_version += 1;
                 }
             }
@@ -170,14 +239,14 @@ pub(super) fn dispatch_editing(
             {
                 let idx = after_layer + 1;
                 let name = format!("Layer {}", project.timeline.layers.len() + 1);
-                let cmd = AddLayerCommand::new(
-                    name,
-                    LayerType::Video,
-                    GeneratorTypeId::NONE,
-                    idx,
-                    None,
-                );
-                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
+                let cmd =
+                    AddLayerCommand::new(name, LayerType::Video, GeneratorTypeId::NONE, idx, None);
+                {
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        Box::new(cmd);
+                    boxed.execute(project);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                }
             }
             DispatchResult::structural()
         }
@@ -192,7 +261,12 @@ pub(super) fn dispatch_editing(
                     idx,
                     None,
                 );
-                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
+                {
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        Box::new(cmd);
+                    boxed.execute(project);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                }
             }
             DispatchResult::structural()
         }
@@ -203,7 +277,12 @@ pub(super) fn dispatch_editing(
                 if project.timeline.layers.len() > 1 && idx < project.timeline.layers.len() {
                     let layer = project.timeline.layers[idx].clone();
                     let cmd = DeleteLayerCommand::new(layer);
-                    { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
+                    {
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(cmd);
+                        boxed.execute(project);
+                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    }
                 }
             }
             DispatchResult::structural()
@@ -223,9 +302,10 @@ pub(super) fn dispatch_editing(
                     };
                     if let Some(mut cmd) = EditingService::duplicate_layers(project, &ids) {
                         cmd.execute(project);
-                        ContentCommand::send(content_tx, ContentCommand::ExecuteBatch(
-                            vec![cmd], "Duplicate Layers".to_string(),
-                        ));
+                        ContentCommand::send(
+                            content_tx,
+                            ContentCommand::ExecuteBatch(vec![cmd], "Duplicate Layers".to_string()),
+                        );
                     }
                 }
             }
@@ -245,9 +325,8 @@ pub(super) fn dispatch_editing(
         }
         PanelAction::ContextImportMidi(layer_idx) => {
             // Open file dialog for MIDI import
-            let last_dir = dialog_path_memory::get_last_directory(
-                DialogContext::MidiImport, user_prefs,
-            );
+            let last_dir =
+                dialog_path_memory::get_last_directory(DialogContext::MidiImport, user_prefs);
             let mut dialog = rfd::FileDialog::new()
                 .set_title("Import MIDI File")
                 .add_filter("MIDI Files", &["mid", "midi"]);
@@ -260,23 +339,34 @@ pub(super) fn dispatch_editing(
             if let Some(path) = dialog.pick_file() {
                 let path_str = path.to_string_lossy().to_string();
                 dialog_path_memory::remember_directory(
-                    DialogContext::MidiImport, &path_str, user_prefs,
+                    DialogContext::MidiImport,
+                    &path_str,
+                    user_prefs,
                 );
                 // Parse MIDI file and import to layer
                 let notes = manifold_playback::midi_parser::MidiFileParser::parse_file(&path_str);
                 if !notes.is_empty() {
-                    let target_layer_id = project.timeline.layers
+                    let target_layer_id = project
+                        .timeline
+                        .layers
                         .get(*layer_idx)
                         .map(|l| l.layer_id.clone())
                         .unwrap_or_default();
                     let result = manifold_playback::midi_import::MidiImportService::import_to_layer(
-                        &notes, &target_layer_id, 0.0, project,
+                        &notes,
+                        &target_layer_id,
+                        0.0,
+                        project,
                     );
                     if result.success {
                         if let Some(undo_cmd) = result.undo_command {
                             ContentCommand::send(content_tx, ContentCommand::Execute(undo_cmd));
                         }
-                        log::info!("Imported {} clips from MIDI to layer '{}'", result.added_clips, target_layer_id);
+                        log::info!(
+                            "Imported {} clips from MIDI to layer '{}'",
+                            result.added_clips,
+                            target_layer_id
+                        );
                     }
                 }
             }
@@ -305,11 +395,14 @@ pub(super) fn dispatch_editing(
                 layer.layer_color = manifold_core::color::Color { r, g, b, a };
             }
             // Mirror to content thread
-            ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
-                if let Some(layer) = p.timeline.layers.get_mut(idx) {
-                    layer.layer_color = manifold_core::color::Color { r, g, b, a };
-                }
-            })));
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::MutateProject(Box::new(move |p| {
+                    if let Some(layer) = p.timeline.layers.get_mut(idx) {
+                        layer.layer_color = manifold_core::color::Color { r, g, b, a };
+                    }
+                })),
+            );
             DispatchResult::structural()
         }
 

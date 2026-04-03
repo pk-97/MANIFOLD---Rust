@@ -184,19 +184,30 @@ impl ParamDragState {
     }
 
     pub(crate) fn is_dragging(&self) -> bool {
-        self.dragging_param >= 0 || self.dragging_env_param >= 0
-            || self.dragging_trim_param >= 0 || self.dragging_target_param >= 0
+        self.dragging_param >= 0
+            || self.dragging_env_param >= 0
+            || self.dragging_trim_param >= 0
+            || self.dragging_target_param >= 0
     }
 }
 
 // ── Shared helper functions ─────────────────────────────────────
 
-pub(crate) fn format_param_value(val: f32, min: f32, whole_numbers: bool, value_labels: Option<&[String]>) -> String {
+pub(crate) fn format_param_value(
+    val: f32,
+    min: f32,
+    whole_numbers: bool,
+    value_labels: Option<&[String]>,
+) -> String {
     if let Some(labels) = value_labels {
         let idx = ((val - min).round() as i32).clamp(0, labels.len() as i32 - 1) as usize;
         return labels[idx].clone();
     }
-    if whole_numbers { format!("{}", val.round() as i32) } else { format!("{:.2}", val) }
+    if whole_numbers {
+        format!("{}", val.round() as i32)
+    } else {
+        format!("{:.2}", val)
+    }
 }
 
 pub(crate) fn de_btn_style(active: bool, active_color: Color32) -> UIStyle {
@@ -302,27 +313,60 @@ pub(crate) fn build_driver_config(
     btn_font_size: u16,
 ) -> DriverConfigIds {
     let container_id = tree.add_panel(
-        parent, x, y, w, DRIVER_CONFIG_HEIGHT,
-        UIStyle { bg_color: color::CONFIG_BG_C32, corner_radius: 2.0, ..UIStyle::default() },
+        parent,
+        x,
+        y,
+        w,
+        DRIVER_CONFIG_HEIGHT,
+        UIStyle {
+            bg_color: color::CONFIG_BG_C32,
+            corner_radius: 2.0,
+            ..UIStyle::default()
+        },
     ) as i32;
 
-    let active_div = mod_state.driver_beat_div_idx.get(param_idx).copied().unwrap_or(-1);
-    let active_wave = mod_state.driver_waveform_idx.get(param_idx).copied().unwrap_or(-1);
-    let is_reversed = mod_state.driver_reversed.get(param_idx).copied().unwrap_or(false);
-    let is_dotted = mod_state.driver_dotted.get(param_idx).copied().unwrap_or(false);
-    let is_triplet = mod_state.driver_triplet.get(param_idx).copied().unwrap_or(false);
+    let active_div = mod_state
+        .driver_beat_div_idx
+        .get(param_idx)
+        .copied()
+        .unwrap_or(-1);
+    let active_wave = mod_state
+        .driver_waveform_idx
+        .get(param_idx)
+        .copied()
+        .unwrap_or(-1);
+    let is_reversed = mod_state
+        .driver_reversed
+        .get(param_idx)
+        .copied()
+        .unwrap_or(false);
+    let is_dotted = mod_state
+        .driver_dotted
+        .get(param_idx)
+        .copied()
+        .unwrap_or(false);
+    let is_triplet = mod_state
+        .driver_triplet
+        .get(param_idx)
+        .copied()
+        .unwrap_or(false);
     let no_mod = !is_dotted && !is_triplet;
 
     let mut cx = x + DRIVER_PAD_H;
     let row1_y = y + 4.0;
     let avail_w = w - DRIVER_PAD_H * 2.0;
-    let btn_w = (avail_w - BEAT_DIV_SPACING * (BEAT_DIV_COUNT as f32 - 1.0)) / BEAT_DIV_COUNT as f32;
+    let btn_w =
+        (avail_w - BEAT_DIV_SPACING * (BEAT_DIV_COUNT as f32 - 1.0)) / BEAT_DIV_COUNT as f32;
 
     let mut beat_div_btn_ids = [-1i32; BEAT_DIV_COUNT];
     for j in 0..BEAT_DIV_COUNT {
         let active = j as i32 == active_div && no_mod;
         beat_div_btn_ids[j] = tree.add_button(
-            container_id, cx, row1_y, btn_w, DRIVER_ROW_HEIGHT,
+            container_id,
+            cx,
+            row1_y,
+            btn_w,
+            DRIVER_ROW_HEIGHT,
             config_btn_style(active, btn_font_size),
             BEAT_DIV_LABELS[j],
         ) as i32;
@@ -338,14 +382,24 @@ pub(crate) fn build_driver_config(
     let wave_btn_w = (avail_w - BEAT_DIV_SPACING * (row2_count as f32 - 1.0)) / row2_count as f32;
 
     let dot_btn_id = tree.add_button(
-        container_id, cx, row2_y, wave_btn_w, DRIVER_ROW_HEIGHT,
-        config_btn_style(is_dotted, btn_font_size), ".",
+        container_id,
+        cx,
+        row2_y,
+        wave_btn_w,
+        DRIVER_ROW_HEIGHT,
+        config_btn_style(is_dotted, btn_font_size),
+        ".",
     ) as i32;
     cx += wave_btn_w + BEAT_DIV_SPACING;
 
     let triplet_btn_id = tree.add_button(
-        container_id, cx, row2_y, wave_btn_w, DRIVER_ROW_HEIGHT,
-        config_btn_style(is_triplet, btn_font_size), "T",
+        container_id,
+        cx,
+        row2_y,
+        wave_btn_w,
+        DRIVER_ROW_HEIGHT,
+        config_btn_style(is_triplet, btn_font_size),
+        "T",
     ) as i32;
     cx += wave_btn_w + BEAT_DIV_SPACING;
 
@@ -358,15 +412,25 @@ pub(crate) fn build_driver_config(
         let mut icon_text = String::new();
         icon_text.push(icon_char);
         *btn_id = tree.add_button(
-            container_id, cx, row2_y, wave_btn_w, DRIVER_ROW_HEIGHT,
-            style, &icon_text,
+            container_id,
+            cx,
+            row2_y,
+            wave_btn_w,
+            DRIVER_ROW_HEIGHT,
+            style,
+            &icon_text,
         ) as i32;
         cx += wave_btn_w + BEAT_DIV_SPACING;
     }
 
     let reverse_btn_id = tree.add_button(
-        container_id, cx, row2_y, wave_btn_w, DRIVER_ROW_HEIGHT,
-        config_btn_style(is_reversed, btn_font_size), "Rev",
+        container_id,
+        cx,
+        row2_y,
+        wave_btn_w,
+        DRIVER_ROW_HEIGHT,
+        config_btn_style(is_reversed, btn_font_size),
+        "Rev",
     ) as i32;
 
     DriverConfigIds {
@@ -389,8 +453,16 @@ pub(crate) fn build_envelope_config(
     param_idx: usize,
 ) -> EnvelopeConfigIds {
     let container_id = tree.add_panel(
-        parent, x, y, w, ENV_CONFIG_HEIGHT,
-        UIStyle { bg_color: color::CONFIG_BG_C32, corner_radius: 2.0, ..UIStyle::default() },
+        parent,
+        x,
+        y,
+        w,
+        ENV_CONFIG_HEIGHT,
+        UIStyle {
+            bg_color: color::CONFIG_BG_C32,
+            corner_radius: 2.0,
+            ..UIStyle::default()
+        },
     ) as i32;
 
     let half_w = (w - ENV_PAD_H * 2.0 - GAP) * 0.5;
@@ -406,31 +478,51 @@ pub(crate) fn build_envelope_config(
     let env_colors = SliderColors::envelope();
 
     let attack_slider = BitmapSlider::build(
-        tree, container_id,
+        tree,
+        container_id,
         Rect::new(sx, row1_y, half_w, ENV_ROW_HEIGHT),
-        Some("A"), attack_val / ENV_ADR_MAX,
-        &format!("{:.2}", attack_val), &env_colors, FONT_SIZE, ENV_LABEL_W,
+        Some("A"),
+        attack_val / ENV_ADR_MAX,
+        &format!("{:.2}", attack_val),
+        &env_colors,
+        FONT_SIZE,
+        ENV_LABEL_W,
     );
 
     let decay_slider = BitmapSlider::build(
-        tree, container_id,
+        tree,
+        container_id,
         Rect::new(sx + half_w + GAP, row1_y, half_w, ENV_ROW_HEIGHT),
-        Some("D"), decay_val / ENV_ADR_MAX,
-        &format!("{:.2}", decay_val), &env_colors, FONT_SIZE, ENV_LABEL_W,
+        Some("D"),
+        decay_val / ENV_ADR_MAX,
+        &format!("{:.2}", decay_val),
+        &env_colors,
+        FONT_SIZE,
+        ENV_LABEL_W,
     );
 
     let sustain_slider = BitmapSlider::build(
-        tree, container_id,
+        tree,
+        container_id,
         Rect::new(sx, row2_y, half_w, ENV_ROW_HEIGHT),
-        Some("S"), sustain_val / ENV_S_MAX,
-        &format!("{:.2}", sustain_val), &env_colors, FONT_SIZE, ENV_LABEL_W,
+        Some("S"),
+        sustain_val / ENV_S_MAX,
+        &format!("{:.2}", sustain_val),
+        &env_colors,
+        FONT_SIZE,
+        ENV_LABEL_W,
     );
 
     let release_slider = BitmapSlider::build(
-        tree, container_id,
+        tree,
+        container_id,
         Rect::new(sx + half_w + GAP, row2_y, half_w, ENV_ROW_HEIGHT),
-        Some("R"), release_val / ENV_ADR_MAX,
-        &format!("{:.2}", release_val), &env_colors, FONT_SIZE, ENV_LABEL_W,
+        Some("R"),
+        release_val / ENV_ADR_MAX,
+        &format!("{:.2}", release_val),
+        &env_colors,
+        FONT_SIZE,
+        ENV_LABEL_W,
     );
 
     EnvelopeConfigIds {
@@ -456,14 +548,24 @@ pub(crate) fn build_trim_handles(
     let fill_x = track_rect.x + OVERLAY_INSET + tmin * usable;
     let fill_w = (tmax - tmin) * usable;
     let fill_id = tree.add_panel(
-        track_parent, fill_x, track_rect.y + OVERLAY_INSET,
-        fill_w, track_rect.height - OVERLAY_INSET * 2.0,
-        UIStyle { bg_color: color::TRIM_FILL_C32, ..UIStyle::default() },
+        track_parent,
+        fill_x,
+        track_rect.y + OVERLAY_INSET,
+        fill_w,
+        track_rect.height - OVERLAY_INSET * 2.0,
+        UIStyle {
+            bg_color: color::TRIM_FILL_C32,
+            ..UIStyle::default()
+        },
     ) as i32;
 
     let min_x = fill_x - TRIM_BAR_W * 0.5;
     let min_bar_id = tree.add_button(
-        track_parent, min_x, track_rect.y, TRIM_BAR_W, track_rect.height,
+        track_parent,
+        min_x,
+        track_rect.y,
+        TRIM_BAR_W,
+        track_rect.height,
         UIStyle {
             bg_color: color::DRIVER_ACTIVE_C32,
             hover_bg_color: color::TRIM_BAR_HOVER_C32,
@@ -475,7 +577,11 @@ pub(crate) fn build_trim_handles(
 
     let max_x = track_rect.x + OVERLAY_INSET + tmax * usable - TRIM_BAR_W * 0.5;
     let max_bar_id = tree.add_button(
-        track_parent, max_x, track_rect.y, TRIM_BAR_W, track_rect.height,
+        track_parent,
+        max_x,
+        track_rect.y,
+        TRIM_BAR_W,
+        track_rect.height,
         UIStyle {
             bg_color: color::DRIVER_ACTIVE_C32,
             hover_bg_color: color::TRIM_BAR_HOVER_C32,
@@ -485,7 +591,11 @@ pub(crate) fn build_trim_handles(
         "",
     ) as i32;
 
-    TrimHandleIds { fill_id, min_bar_id, max_bar_id }
+    TrimHandleIds {
+        fill_id,
+        min_bar_id,
+        max_bar_id,
+    }
 }
 
 pub(crate) fn build_envelope_target(
@@ -502,7 +612,11 @@ pub(crate) fn build_envelope_target(
     let bar_y = track_rect.y - 2.0;
 
     let target_bar_id = tree.add_button(
-        track_parent, bar_x, bar_y, TARGET_BAR_W, bar_h,
+        track_parent,
+        bar_x,
+        bar_y,
+        TARGET_BAR_W,
+        bar_h,
         UIStyle {
             bg_color: color::ENVELOPE_ACTIVE_C32,
             hover_bg_color: color::TARGET_BAR_HOVER_C32,
@@ -535,14 +649,24 @@ pub(crate) fn check_driver_config_click(
     for (pi, cfg) in driver_config_ids.iter().enumerate() {
         if let Some(c) = cfg {
             for (j, &bid) in c.beat_div_btn_ids.iter().enumerate() {
-                if node_id == bid { return Some((pi, DriverClickResult::BeatDiv(j))); }
+                if node_id == bid {
+                    return Some((pi, DriverClickResult::BeatDiv(j)));
+                }
             }
-            if node_id == c.dot_btn_id { return Some((pi, DriverClickResult::Dot)); }
-            if node_id == c.triplet_btn_id { return Some((pi, DriverClickResult::Triplet)); }
+            if node_id == c.dot_btn_id {
+                return Some((pi, DriverClickResult::Dot));
+            }
+            if node_id == c.triplet_btn_id {
+                return Some((pi, DriverClickResult::Triplet));
+            }
             for (j, &wid) in c.wave_btn_ids.iter().enumerate() {
-                if node_id == wid { return Some((pi, DriverClickResult::Wave(j))); }
+                if node_id == wid {
+                    return Some((pi, DriverClickResult::Wave(j)));
+                }
             }
-            if node_id == c.reverse_btn_id { return Some((pi, DriverClickResult::Reverse)); }
+            if node_id == c.reverse_btn_id {
+                return Some((pi, DriverClickResult::Reverse));
+            }
         }
     }
     None

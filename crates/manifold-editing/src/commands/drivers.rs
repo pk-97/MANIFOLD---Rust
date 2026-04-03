@@ -1,7 +1,7 @@
 use crate::command::Command;
 use crate::commands::effect_target::{DriverTarget, with_effects_mut};
-use manifold_core::project::Project;
 use manifold_core::effects::ParameterDriver;
+use manifold_core::project::Project;
 use manifold_core::types::{BeatDivision, DriverWaveform};
 
 /// Resolve a DriverTarget to mutable access to the driver list.
@@ -10,7 +10,10 @@ where
     F: FnOnce(&mut Vec<ParameterDriver>) -> R,
 {
     match target {
-        DriverTarget::Effect { effect_target, effect_index } => {
+        DriverTarget::Effect {
+            effect_target,
+            effect_index,
+        } => {
             let eidx = *effect_index;
             with_effects_mut(project, effect_target, |effects, _groups| {
                 if let Some(effect) = effects.get_mut(eidx) {
@@ -60,7 +63,9 @@ impl Command for AddDriverCommand {
         });
     }
 
-    fn description(&self) -> &str { "Add Driver" }
+    fn description(&self) -> &str {
+        "Add Driver"
+    }
 }
 
 /// Toggle driver enabled state.
@@ -73,8 +78,18 @@ pub struct ToggleDriverEnabledCommand {
 }
 
 impl ToggleDriverEnabledCommand {
-    pub fn new(target: DriverTarget, driver_index: usize, old_enabled: bool, new_enabled: bool) -> Self {
-        Self { target, driver_index, old_enabled, new_enabled }
+    pub fn new(
+        target: DriverTarget,
+        driver_index: usize,
+        old_enabled: bool,
+        new_enabled: bool,
+    ) -> Self {
+        Self {
+            target,
+            driver_index,
+            old_enabled,
+            new_enabled,
+        }
     }
 }
 
@@ -99,7 +114,9 @@ impl Command for ToggleDriverEnabledCommand {
         });
     }
 
-    fn description(&self) -> &str { "Toggle Driver" }
+    fn description(&self) -> &str {
+        "Toggle Driver"
+    }
 }
 
 /// Change driver beat division.
@@ -112,8 +129,18 @@ pub struct ChangeDriverBeatDivCommand {
 }
 
 impl ChangeDriverBeatDivCommand {
-    pub fn new(target: DriverTarget, driver_index: usize, old_div: BeatDivision, new_div: BeatDivision) -> Self {
-        Self { target, driver_index, old_div, new_div }
+    pub fn new(
+        target: DriverTarget,
+        driver_index: usize,
+        old_div: BeatDivision,
+        new_div: BeatDivision,
+    ) -> Self {
+        Self {
+            target,
+            driver_index,
+            old_div,
+            new_div,
+        }
     }
 }
 
@@ -138,7 +165,9 @@ impl Command for ChangeDriverBeatDivCommand {
         });
     }
 
-    fn description(&self) -> &str { "Change Driver Beat Division" }
+    fn description(&self) -> &str {
+        "Change Driver Beat Division"
+    }
 }
 
 /// Change driver waveform.
@@ -151,8 +180,18 @@ pub struct ChangeDriverWaveformCommand {
 }
 
 impl ChangeDriverWaveformCommand {
-    pub fn new(target: DriverTarget, driver_index: usize, old_waveform: DriverWaveform, new_waveform: DriverWaveform) -> Self {
-        Self { target, driver_index, old_waveform, new_waveform }
+    pub fn new(
+        target: DriverTarget,
+        driver_index: usize,
+        old_waveform: DriverWaveform,
+        new_waveform: DriverWaveform,
+    ) -> Self {
+        Self {
+            target,
+            driver_index,
+            old_waveform,
+            new_waveform,
+        }
     }
 }
 
@@ -177,7 +216,9 @@ impl Command for ChangeDriverWaveformCommand {
         });
     }
 
-    fn description(&self) -> &str { "Change Driver Waveform" }
+    fn description(&self) -> &str {
+        "Change Driver Waveform"
+    }
 }
 
 /// Toggle driver reversed.
@@ -190,8 +231,18 @@ pub struct ToggleDriverReversedCommand {
 }
 
 impl ToggleDriverReversedCommand {
-    pub fn new(target: DriverTarget, driver_index: usize, old_reversed: bool, new_reversed: bool) -> Self {
-        Self { target, driver_index, old_reversed, new_reversed }
+    pub fn new(
+        target: DriverTarget,
+        driver_index: usize,
+        old_reversed: bool,
+        new_reversed: bool,
+    ) -> Self {
+        Self {
+            target,
+            driver_index,
+            old_reversed,
+            new_reversed,
+        }
     }
 }
 
@@ -216,7 +267,9 @@ impl Command for ToggleDriverReversedCommand {
         });
     }
 
-    fn description(&self) -> &str { "Toggle Driver Reversed" }
+    fn description(&self) -> &str {
+        "Toggle Driver Reversed"
+    }
 }
 
 /// Change driver trim range.
@@ -231,8 +284,22 @@ pub struct ChangeTrimCommand {
 }
 
 impl ChangeTrimCommand {
-    pub fn new(target: DriverTarget, driver_index: usize, old_min: f32, old_max: f32, new_min: f32, new_max: f32) -> Self {
-        Self { target, driver_index, old_min, old_max, new_min, new_max }
+    pub fn new(
+        target: DriverTarget,
+        driver_index: usize,
+        old_min: f32,
+        old_max: f32,
+        new_min: f32,
+        new_max: f32,
+    ) -> Self {
+        Self {
+            target,
+            driver_index,
+            old_min,
+            old_max,
+            new_min,
+            new_max,
+        }
     }
 }
 
@@ -259,5 +326,7 @@ impl Command for ChangeTrimCommand {
         });
     }
 
-    fn description(&self) -> &str { "Change Trim" }
+    fn description(&self) -> &str {
+        "Change Trim"
+    }
 }

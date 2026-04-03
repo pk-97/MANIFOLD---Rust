@@ -47,12 +47,14 @@ pub fn compare_sessions(dir_a: &Path, dir_b: &Path) -> Result<SessionComparison,
     let mut removed_passes = Vec::new();
 
     // Build lookup for session B
-    let b_by_name: std::collections::HashMap<&str, f64> = summary_b.gpu_pass_aggregates
+    let b_by_name: std::collections::HashMap<&str, f64> = summary_b
+        .gpu_pass_aggregates
         .iter()
         .map(|p| (p.name.as_str(), p.mean_ms))
         .collect();
 
-    let a_by_name: std::collections::HashMap<&str, f64> = summary_a.gpu_pass_aggregates
+    let a_by_name: std::collections::HashMap<&str, f64> = summary_a
+        .gpu_pass_aggregates
         .iter()
         .map(|p| (p.name.as_str(), p.mean_ms))
         .collect();
@@ -61,7 +63,11 @@ pub fn compare_sessions(dir_a: &Path, dir_b: &Path) -> Result<SessionComparison,
     for pass in &summary_a.gpu_pass_aggregates {
         if let Some(&after) = b_by_name.get(pass.name.as_str()) {
             let delta = after - pass.mean_ms;
-            let pct = if pass.mean_ms > 0.0 { delta / pass.mean_ms * 100.0 } else { 0.0 };
+            let pct = if pass.mean_ms > 0.0 {
+                delta / pass.mean_ms * 100.0
+            } else {
+                0.0
+            };
             per_pass_deltas.push(PassDelta {
                 name: pass.name.clone(),
                 before_mean_ms: pass.mean_ms,
@@ -83,7 +89,10 @@ pub fn compare_sessions(dir_a: &Path, dir_b: &Path) -> Result<SessionComparison,
 
     // Sort deltas by absolute delta descending
     per_pass_deltas.sort_by(|a, b| {
-        b.delta_ms.abs().partial_cmp(&a.delta_ms.abs()).unwrap_or(std::cmp::Ordering::Equal)
+        b.delta_ms
+            .abs()
+            .partial_cmp(&a.delta_ms.abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     // Budget improvement
@@ -108,10 +117,17 @@ pub fn compare_sessions(dir_a: &Path, dir_b: &Path) -> Result<SessionComparison,
     }
     for delta in per_pass_deltas.iter().take(3) {
         if delta.delta_ms.abs() > 0.1 {
-            let direction = if delta.delta_ms < 0.0 { "improved" } else { "regressed" };
+            let direction = if delta.delta_ms < 0.0 {
+                "improved"
+            } else {
+                "regressed"
+            };
             recs.push(format!(
                 "{}: {} by {:.2}ms ({:.1}%)",
-                delta.name, direction, delta.delta_ms.abs(), delta.delta_pct.abs()
+                delta.name,
+                direction,
+                delta.delta_ms.abs(),
+                delta.delta_pct.abs()
             ));
         }
     }
@@ -134,6 +150,5 @@ fn load_summary(dir: &Path) -> Result<SessionSummary, String> {
     let path = dir.join("summary.json");
     let content = std::fs::read_to_string(&path)
         .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-    serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))
+    serde_json::from_str(&content).map_err(|e| format!("Failed to parse {}: {}", path.display(), e))
 }

@@ -1,29 +1,29 @@
-use std::collections::HashMap;
-use manifold_core::EffectTypeId;
-use manifold_gpu::GpuDevice;
 use crate::effect::PostProcessEffect;
-use crate::effects::invert_colors::InvertColorsFX;
-use crate::effects::color_grade::ColorGradeFX;
-use crate::effects::mirror::MirrorFX;
+use crate::effects::auto_gain::AutoGainFX;
+use crate::effects::blob_tracking::BlobTrackingFX;
 use crate::effects::bloom::BloomFX;
 use crate::effects::chromatic_aberration::ChromaticAberrationFX;
-use crate::effects::glitch::GlitchFX;
+use crate::effects::color_grade::ColorGradeFX;
+use crate::effects::depth_of_field::DepthOfFieldFX;
 use crate::effects::dither::DitherFX;
-use crate::effects::halation::HalationFX;
-use crate::effects::kaleidoscope::KaleidoscopeFX;
+use crate::effects::edge_detect::EdgeDetectFX;
 use crate::effects::edge_stretch::EdgeStretchFX;
+use crate::effects::glitch::GlitchFX;
+use crate::effects::halation::HalationFX;
+use crate::effects::hdr_boost::HdrBoostFX;
+use crate::effects::infrared::InfraredFX;
+use crate::effects::invert_colors::InvertColorsFX;
+use crate::effects::kaleidoscope::KaleidoscopeFX;
+use crate::effects::mirror::MirrorFX;
 use crate::effects::quad_mirror::QuadMirrorFX;
 use crate::effects::strobe::StrobeFX;
 use crate::effects::stylized_feedback::StylizedFeedbackFX;
-use crate::effects::edge_detect::EdgeDetectFX;
 use crate::effects::transform::TransformFX;
-use crate::effects::infrared::InfraredFX;
 use crate::effects::voronoi_prism::VoronoiPrismFX;
 use crate::effects::wireframe_depth::WireframeDepthFX;
-use crate::effects::blob_tracking::BlobTrackingFX;
-use crate::effects::depth_of_field::DepthOfFieldFX;
-use crate::effects::hdr_boost::HdrBoostFX;
-use crate::effects::auto_gain::AutoGainFX;
+use manifold_core::EffectTypeId;
+use manifold_gpu::GpuDevice;
+use std::collections::HashMap;
 
 /// Factory + singleton storage for all effect processors.
 /// One processor per EffectTypeId — per-owner state lives inside each processor.
@@ -33,8 +33,7 @@ pub struct EffectRegistry {
 
 impl EffectRegistry {
     pub fn new(device: &GpuDevice) -> Self {
-        let mut processors: HashMap<EffectTypeId, Box<dyn PostProcessEffect>> =
-            HashMap::new();
+        let mut processors: HashMap<EffectTypeId, Box<dyn PostProcessEffect>> = HashMap::new();
         processors.insert(
             EffectTypeId::INVERT_COLORS,
             Box::new(InvertColorsFX::new(device)),
@@ -73,10 +72,7 @@ impl EffectRegistry {
             EffectTypeId::EDGE_DETECT,
             Box::new(EdgeDetectFX::new(device)),
         );
-        processors.insert(
-            EffectTypeId::TRANSFORM,
-            Box::new(TransformFX::new(device)),
-        );
+        processors.insert(EffectTypeId::TRANSFORM, Box::new(TransformFX::new(device)));
         processors.insert(EffectTypeId::INFRARED, Box::new(InfraredFX::new(device)));
         processors.insert(
             EffectTypeId::VORONOI_PRISM,
@@ -94,23 +90,13 @@ impl EffectRegistry {
             EffectTypeId::DEPTH_OF_FIELD,
             Box::new(DepthOfFieldFX::new(device)),
         );
-        processors.insert(
-            EffectTypeId::HDR_BOOST,
-            Box::new(HdrBoostFX::new(device)),
-        );
-        processors.insert(
-            EffectTypeId::AUTO_GAIN,
-            Box::new(AutoGainFX::new(device)),
-        );
+        processors.insert(EffectTypeId::HDR_BOOST, Box::new(HdrBoostFX::new(device)));
+        processors.insert(EffectTypeId::AUTO_GAIN, Box::new(AutoGainFX::new(device)));
         Self { processors }
     }
 
     /// Register an effect processor for a given type.
-    pub fn register(
-        &mut self,
-        effect_type: EffectTypeId,
-        processor: Box<dyn PostProcessEffect>,
-    ) {
+    pub fn register(&mut self, effect_type: EffectTypeId, processor: Box<dyn PostProcessEffect>) {
         self.processors.insert(effect_type, processor);
     }
 

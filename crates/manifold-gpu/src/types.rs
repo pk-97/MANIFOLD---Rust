@@ -54,9 +54,13 @@ impl GpuTextureUsage {
     pub const CPU_UPLOAD: Self = Self(1 << 5);
 
     /// Standard content-thread render target usage.
-    pub const RENDER_TARGET_FULL: Self =
-        Self(Self::RENDER_TARGET.0 | Self::SHADER_READ.0 | Self::SHADER_WRITE.0
-            | Self::COPY_SRC.0 | Self::COPY_DST.0);
+    pub const RENDER_TARGET_FULL: Self = Self(
+        Self::RENDER_TARGET.0
+            | Self::SHADER_READ.0
+            | Self::SHADER_WRITE.0
+            | Self::COPY_SRC.0
+            | Self::COPY_DST.0,
+    );
 
     pub fn contains(self, other: Self) -> bool {
         (self.0 & other.0) == other.0
@@ -65,7 +69,9 @@ impl GpuTextureUsage {
 
 impl std::ops::BitOr for GpuTextureUsage {
     type Output = Self;
-    fn bitor(self, rhs: Self) -> Self { Self(self.0 | rhs.0) }
+    fn bitor(self, rhs: Self) -> Self {
+        Self(self.0 | rhs.0)
+    }
 }
 
 /// Texture descriptor for creation.
@@ -235,8 +241,5 @@ pub enum GpuBinding<'a> {
         sampler: &'a super::GpuSampler,
     },
     /// Inline bytes at WGSL @binding(N). Uses set_bytes on Metal (no buffer allocation).
-    Bytes {
-        binding: u32,
-        data: &'a [u8],
-    },
+    Bytes { binding: u32, data: &'a [u8] },
 }

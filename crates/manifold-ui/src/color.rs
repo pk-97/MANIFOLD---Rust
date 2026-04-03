@@ -221,45 +221,45 @@ pub const COLOR_GRID: [Color32; 70] = [
     Color32::new(100, 140, 255, 255), // cornflower
     Color32::new(185, 105, 255, 255), // lavender
     // Row 2 — saturated brights
-    Color32::new(255, 50, 50, 255),   // bright red
-    Color32::new(255, 128, 0, 255),   // bright orange
-    Color32::new(255, 200, 0, 255),   // bright yellow
-    Color32::new(50, 200, 50, 255),   // bright green
-    Color32::new(0, 180, 210, 255),   // bright cyan
-    Color32::new(60, 110, 255, 255),  // bright blue
-    Color32::new(160, 60, 255, 255),  // bright purple
+    Color32::new(255, 50, 50, 255),  // bright red
+    Color32::new(255, 128, 0, 255),  // bright orange
+    Color32::new(255, 200, 0, 255),  // bright yellow
+    Color32::new(50, 200, 50, 255),  // bright green
+    Color32::new(0, 180, 210, 255),  // bright cyan
+    Color32::new(60, 110, 255, 255), // bright blue
+    Color32::new(160, 60, 255, 255), // bright purple
     // Row 3 — pure saturated
-    Color32::new(230, 25, 25, 255),   // pure red
-    Color32::new(230, 105, 0, 255),   // pure orange
-    Color32::new(230, 180, 0, 255),   // amber
-    Color32::new(25, 180, 25, 255),   // pure green
-    Color32::new(0, 155, 190, 255),   // teal
-    Color32::new(35, 80, 230, 255),   // pure blue
-    Color32::new(135, 35, 230, 255),  // pure purple
+    Color32::new(230, 25, 25, 255),  // pure red
+    Color32::new(230, 105, 0, 255),  // pure orange
+    Color32::new(230, 180, 0, 255),  // amber
+    Color32::new(25, 180, 25, 255),  // pure green
+    Color32::new(0, 155, 190, 255),  // teal
+    Color32::new(35, 80, 230, 255),  // pure blue
+    Color32::new(135, 35, 230, 255), // pure purple
     // Row 4 — mid-depth
-    Color32::new(200, 20, 50, 255),   // crimson
-    Color32::new(200, 85, 0, 255),    // burnt orange
-    Color32::new(200, 160, 0, 255),   // gold
-    Color32::new(20, 155, 40, 255),   // forest green
-    Color32::new(0, 130, 165, 255),   // ocean
-    Color32::new(25, 60, 200, 255),   // royal blue
-    Color32::new(110, 25, 200, 255),  // violet
+    Color32::new(200, 20, 50, 255),  // crimson
+    Color32::new(200, 85, 0, 255),   // burnt orange
+    Color32::new(200, 160, 0, 255),  // gold
+    Color32::new(20, 155, 40, 255),  // forest green
+    Color32::new(0, 130, 165, 255),  // ocean
+    Color32::new(25, 60, 200, 255),  // royal blue
+    Color32::new(110, 25, 200, 255), // violet
     // Row 5 — deep saturated
-    Color32::new(170, 15, 45, 255),   // deep crimson
-    Color32::new(170, 70, 0, 255),    // rust
-    Color32::new(170, 140, 0, 255),   // dark gold
-    Color32::new(15, 130, 35, 255),   // deep green
-    Color32::new(0, 105, 140, 255),   // deep teal
-    Color32::new(20, 45, 170, 255),   // navy blue
-    Color32::new(90, 20, 170, 255),   // deep violet
+    Color32::new(170, 15, 45, 255), // deep crimson
+    Color32::new(170, 70, 0, 255),  // rust
+    Color32::new(170, 140, 0, 255), // dark gold
+    Color32::new(15, 130, 35, 255), // deep green
+    Color32::new(0, 105, 140, 255), // deep teal
+    Color32::new(20, 45, 170, 255), // navy blue
+    Color32::new(90, 20, 170, 255), // deep violet
     // Row 6 — rich darks
-    Color32::new(140, 10, 40, 255),   // dark red
-    Color32::new(140, 55, 0, 255),    // dark orange
-    Color32::new(140, 115, 0, 255),   // dark amber
-    Color32::new(10, 105, 30, 255),   // dark green
-    Color32::new(0, 85, 115, 255),    // dark cyan
-    Color32::new(15, 35, 140, 255),   // dark blue
-    Color32::new(75, 15, 140, 255),   // dark purple
+    Color32::new(140, 10, 40, 255), // dark red
+    Color32::new(140, 55, 0, 255),  // dark orange
+    Color32::new(140, 115, 0, 255), // dark amber
+    Color32::new(10, 105, 30, 255), // dark green
+    Color32::new(0, 85, 115, 255),  // dark cyan
+    Color32::new(15, 35, 140, 255), // dark blue
+    Color32::new(75, 15, 140, 255), // dark purple
     // Row 7 — warm earth tones
     Color32::new(190, 100, 80, 255),  // terracotta
     Color32::new(175, 130, 80, 255),  // tan
@@ -571,13 +571,13 @@ pub const POPUP_RADIUS: f32 = 6.0;
 
 // ── Font sizes ──────────────────────────────────────────────────────
 // Semantic scale — all panel font sizes should reference these.
-pub const FONT_CAPTION: u16 = 8;       // tiny badges, config buttons
-pub const FONT_SMALL: u16 = 9;         // layer info, perf hud, ruler
-pub const FONT_BODY: u16 = 10;         // sliders, params, chrome, buttons
-pub const FONT_LABEL: u16 = 11;        // layer names, footer, search, clip names
-pub const FONT_SUBHEADING: u16 = 12;   // chrome headings, transport buttons
-pub const FONT_HEADING: u16 = 14;      // section titles, drag handle
-pub const FONT_TITLE: u16 = 16;        // top-level headings
+pub const FONT_CAPTION: u16 = 8; // tiny badges, config buttons
+pub const FONT_SMALL: u16 = 9; // layer info, perf hud, ruler
+pub const FONT_BODY: u16 = 10; // sliders, params, chrome, buttons
+pub const FONT_LABEL: u16 = 11; // layer names, footer, search, clip names
+pub const FONT_SUBHEADING: u16 = 12; // chrome headings, transport buttons
+pub const FONT_HEADING: u16 = 14; // section titles, drag handle
+pub const FONT_TITLE: u16 = 16; // top-level headings
 
 pub const FONT_WEIGHT_DEFAULT: crate::node::FontWeight = crate::node::FontWeight::Medium;
 

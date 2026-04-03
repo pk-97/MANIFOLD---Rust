@@ -111,13 +111,21 @@ impl PercussionPipelineBackendResolver {
     fn resolve_python(runtime_root: &str) -> Option<String> {
         // Env var escape hatch for development.
         if let Ok(p) = std::env::var("MANIFOLD_PYTHON_PATH")
-            && !p.trim().is_empty() && Path::new(&p).exists() {
-                return Some(p);
-            }
+            && !p.trim().is_empty()
+            && Path::new(&p).exists()
+        {
+            return Some(p);
+        }
 
         let candidates = [
-            Path::new(runtime_root).join("python").join("bin").join("python3"),
-            Path::new(runtime_root).join("python").join("bin").join("python"),
+            Path::new(runtime_root)
+                .join("python")
+                .join("bin")
+                .join("python3"),
+            Path::new(runtime_root)
+                .join("python")
+                .join("bin")
+                .join("python"),
             Path::new(runtime_root).join("bin").join("python3"),
             Path::new(runtime_root).join("python3"),
         ];
@@ -145,9 +153,11 @@ impl PercussionPipelineBackendResolver {
     fn resolve_ffmpeg(runtime_root: &str) -> Option<String> {
         // Env var escape hatch.
         if let Ok(p) = std::env::var("FFMPEG_PATH")
-            && !p.trim().is_empty() && Path::new(&p).exists() {
-                return Some(p);
-            }
+            && !p.trim().is_empty()
+            && Path::new(&p).exists()
+        {
+            return Some(p);
+        }
 
         let candidates = [
             Path::new(runtime_root).join("bin").join("ffmpeg"),
@@ -186,19 +196,32 @@ impl PercussionPipelineBackendResolver {
         // 1. Repo development path: {repo}/tools/audio_analysis/BundledRuntime/{platform}/
         let mut dir = Path::new(application_data_path).to_path_buf();
         for _ in 0..4 {
-            let candidate = dir.join("tools").join("audio_analysis")
-                .join("BundledRuntime").join(platform);
+            let candidate = dir
+                .join("tools")
+                .join("audio_analysis")
+                .join("BundledRuntime")
+                .join(platform);
             candidates.push(candidate);
-            if !dir.pop() { break; }
+            if !dir.pop() {
+                break;
+            }
         }
 
         // 2. App bundle paths (macOS .app/Contents/Resources/AudioAnalysisRuntime/)
         let app_data = Path::new(application_data_path);
         candidates.push(app_data.join(Self::BUNDLED_RUNTIME_FOLDER_NAME));
-        candidates.push(app_data.join("Resources").join(Self::BUNDLED_RUNTIME_FOLDER_NAME));
+        candidates.push(
+            app_data
+                .join("Resources")
+                .join(Self::BUNDLED_RUNTIME_FOLDER_NAME),
+        );
         if let Some(parent) = app_data.parent() {
             candidates.push(parent.join(Self::BUNDLED_RUNTIME_FOLDER_NAME));
-            candidates.push(parent.join("Resources").join(Self::BUNDLED_RUNTIME_FOLDER_NAME));
+            candidates.push(
+                parent
+                    .join("Resources")
+                    .join(Self::BUNDLED_RUNTIME_FOLDER_NAME),
+            );
         }
 
         for candidate in &candidates {
@@ -243,10 +266,11 @@ fn build_default_arguments(
     append_demucs_defaults(&mut args);
 
     if let Some(bin) = ffmpeg_bin
-        && !bin.trim().is_empty() {
-            args.push("--ffmpeg-bin".to_string());
-            args.push(bin.to_string());
-        }
+        && !bin.trim().is_empty()
+    {
+        args.push("--ffmpeg-bin".to_string());
+        args.push(bin.to_string());
+    }
 
     args
 }
@@ -273,7 +297,14 @@ fn build_settings_arguments(
     args.push("--profile".to_string());
     args.push("electronic".to_string());
     args.push("--emit-bass".to_string());
-    args.push(if settings.demucs.emit_bass { "on" } else { "off" }.to_string());
+    args.push(
+        if settings.demucs.emit_bass {
+            "on"
+        } else {
+            "off"
+        }
+        .to_string(),
+    );
     args.push("--use-bass-stem".to_string());
     args.push(stem_mode_str(settings.demucs.bass_stem_mode).to_string());
     args.push("--use-vocal-stem".to_string());
@@ -289,13 +320,22 @@ fn build_settings_arguments(
     args.push("--demucs-model".to_string());
     args.push(env_or("MANIFOLD_DEMUCS_MODEL", &settings.demucs.model));
     args.push("--demucs-shifts".to_string());
-    args.push(env_or("MANIFOLD_DEMUCS_SHIFTS", &settings.demucs.shifts.to_string()));
+    args.push(env_or(
+        "MANIFOLD_DEMUCS_SHIFTS",
+        &settings.demucs.shifts.to_string(),
+    ));
     args.push("--demucs-overlap".to_string());
-    args.push(env_or("MANIFOLD_DEMUCS_OVERLAP", &settings.demucs.overlap.to_string()));
+    args.push(env_or(
+        "MANIFOLD_DEMUCS_OVERLAP",
+        &settings.demucs.overlap.to_string(),
+    ));
     args.push("--demucs-device".to_string());
     args.push(env_or("MANIFOLD_DEMUCS_DEVICE", default_demucs_device()));
     args.push("--demucs-jobs".to_string());
-    args.push(env_or("MANIFOLD_DEMUCS_JOBS", &settings.demucs.jobs.to_string()));
+    args.push(env_or(
+        "MANIFOLD_DEMUCS_JOBS",
+        &settings.demucs.jobs.to_string(),
+    ));
 
     if let Some(segment) = env_opt("MANIFOLD_DEMUCS_SEGMENT") {
         args.push("--demucs-segment".to_string());
@@ -309,16 +349,18 @@ fn build_settings_arguments(
     }
 
     if let Some(bin) = ffmpeg_bin
-        && !bin.trim().is_empty() {
-            args.push("--ffmpeg-bin".to_string());
-            args.push(bin.to_string());
-        }
+        && !bin.trim().is_empty()
+    {
+        args.push("--ffmpeg-bin".to_string());
+        args.push(bin.to_string());
+    }
 
     if let Some(instr) = instruments
-        && !instr.trim().is_empty() {
-            args.push("--instruments".to_string());
-            args.push(instr.to_string());
-        }
+        && !instr.trim().is_empty()
+    {
+        args.push("--instruments".to_string());
+        args.push(instr.to_string());
+    }
 
     // Demucs stem caching (only if explicitly enabled via env var).
     append_demucs_cache_arguments(&mut args);
@@ -371,19 +413,33 @@ fn extract_track_id(input_audio_path: &str) -> String {
 }
 
 fn has_bundled_pipeline_files(runtime_root: &Path) -> bool {
-    runtime_root.join(SCRIPT_FILE_NAME).exists()
-        && runtime_root.join(SHIMS_FILE_NAME).exists()
+    runtime_root.join(SCRIPT_FILE_NAME).exists() && runtime_root.join(SHIMS_FILE_NAME).exists()
 }
 
 fn platform_folder() -> &'static str {
-    #[cfg(target_os = "windows")] { "windows" }
-    #[cfg(target_os = "linux")] { "linux" }
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))] { "macOS" }
+    #[cfg(target_os = "windows")]
+    {
+        "windows"
+    }
+    #[cfg(target_os = "linux")]
+    {
+        "linux"
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    {
+        "macOS"
+    }
 }
 
 fn default_demucs_device() -> &'static str {
-    #[cfg(target_os = "macos")] { "mps" }
-    #[cfg(not(target_os = "macos"))] { "cpu" }
+    #[cfg(target_os = "macos")]
+    {
+        "mps"
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "cpu"
+    }
 }
 
 fn stem_mode_str(mode: StemMode) -> &'static str {
@@ -411,7 +467,10 @@ fn env_opt(key: &str) -> Option<String> {
 
 fn env_bool(key: &str, default: bool) -> bool {
     match std::env::var(key) {
-        Ok(v) => matches!(v.trim().to_lowercase().as_str(), "1" | "on" | "true" | "yes"),
+        Ok(v) => matches!(
+            v.trim().to_lowercase().as_str(),
+            "1" | "on" | "true" | "yes"
+        ),
         Err(_) => default,
     }
 }

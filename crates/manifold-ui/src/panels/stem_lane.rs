@@ -8,15 +8,15 @@
 //! Unity: `StemWaveformLane` + `StemLaneGroup`.
 
 use crate::bitmap_painter::fill_rect;
-use manifold_core::units::Beats;
 use crate::color;
 use crate::coordinate_mapper::CoordinateMapper;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
-use crate::node::{Color32, Rect, UIStyle, TextAlign};
+use crate::node::{Color32, Rect, TextAlign, UIStyle};
 use crate::tree::UITree;
 use crate::waveform_painter;
 use crate::waveform_renderer::WaveformRenderer;
+use manifold_core::units::Beats;
 
 use super::{Panel, PanelAction};
 
@@ -234,7 +234,10 @@ impl StemLaneGroupPanel {
                 lane_y,
                 screen_rect.width,
                 lane_h,
-                UIStyle { bg_color: Color32::TRANSPARENT, ..UIStyle::default() },
+                UIStyle {
+                    bg_color: Color32::TRANSPARENT,
+                    ..UIStyle::default()
+                },
                 "",
             ) as i32;
 
@@ -399,37 +402,37 @@ impl StemLaneGroupPanel {
 
             // Draw waveform if this stem has audio
             if lane.renderer.is_ready() && lane.renderer.clip_duration_seconds() > 0.0 {
-                let waveform_x =
-                    mapper.beat_to_pixel_absolute(Beats::from_f32(self.waveform_start_beat.max(0.0)));
+                let waveform_x = mapper
+                    .beat_to_pixel_absolute(Beats::from_f32(self.waveform_start_beat.max(0.0)));
 
-                let stem_width = mapper.beat_duration_to_width(
-                    Beats::from_f32(self.waveform_duration_beats_for_stem(i)),
-                );
+                let stem_width = mapper.beat_duration_to_width(Beats::from_f32(
+                    self.waveform_duration_beats_for_stem(i),
+                ));
 
                 if stem_width > 0.0
-                    && let Some(level) = lane.renderer.select_level_for_zoom(stem_width, 1.0) {
-                        let draw_left = (waveform_x - self.scroll_offset_x) as i32;
-                        let draw_right =
-                            ((waveform_x + stem_width - self.scroll_offset_x) as i32)
-                                .min(buf_w as i32);
-                        let x_start = draw_left.max(0);
-                        let x_end = draw_right.min(buf_w as i32);
+                    && let Some(level) = lane.renderer.select_level_for_zoom(stem_width, 1.0)
+                {
+                    let draw_left = (waveform_x - self.scroll_offset_x) as i32;
+                    let draw_right =
+                        ((waveform_x + stem_width - self.scroll_offset_x) as i32).min(buf_w as i32);
+                    let x_start = draw_left.max(0);
+                    let x_end = draw_right.min(buf_w as i32);
 
-                        if x_end > x_start {
-                            waveform_painter::draw_waveform(
-                                &mut self.pixel_buffer,
-                                buf_w,
-                                buf_h,
-                                level,
-                                x_start,
-                                x_end,
-                                y_offset,
-                                lane_h as i32,
-                                waveform_x - self.scroll_offset_x,
-                                stem_width,
-                            );
-                        }
+                    if x_end > x_start {
+                        waveform_painter::draw_waveform(
+                            &mut self.pixel_buffer,
+                            buf_w,
+                            buf_h,
+                            level,
+                            x_start,
+                            x_end,
+                            y_offset,
+                            lane_h as i32,
+                            waveform_x - self.scroll_offset_x,
+                            stem_width,
+                        );
                     }
+                }
             }
 
             // Mute/Solo buttons are UITree nodes — not drawn in the bitmap.
@@ -506,7 +509,11 @@ impl Panel for StemLaneGroupPanel {
 
 /// Button style for mute toggle.
 fn mute_btn_style(active: bool) -> UIStyle {
-    let bg = if active { color::MUTE_BTN_ACTIVE } else { color::MUTE_SOLO_BTN_INACTIVE };
+    let bg = if active {
+        color::MUTE_BTN_ACTIVE
+    } else {
+        color::MUTE_SOLO_BTN_INACTIVE
+    };
     UIStyle {
         bg_color: bg,
         hover_bg_color: bg, // manual color control, no hover transition
@@ -521,7 +528,11 @@ fn mute_btn_style(active: bool) -> UIStyle {
 
 /// Button style for solo toggle.
 fn solo_btn_style(active: bool) -> UIStyle {
-    let bg = if active { color::SOLO_BTN_ACTIVE } else { color::MUTE_SOLO_BTN_INACTIVE };
+    let bg = if active {
+        color::SOLO_BTN_ACTIVE
+    } else {
+        color::MUTE_SOLO_BTN_INACTIVE
+    };
     UIStyle {
         bg_color: bg,
         hover_bg_color: bg,

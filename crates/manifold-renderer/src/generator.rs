@@ -1,7 +1,7 @@
-use std::collections::BTreeMap;
-use manifold_core::GeneratorTypeId;
 use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
+use manifold_core::GeneratorTypeId;
+use std::collections::BTreeMap;
 
 /// GPU-aware generator processor. Each instance owns its manifold-gpu pipeline(s)
 /// and any per-generator GPU state (compute buffers, temporal state, etc.).

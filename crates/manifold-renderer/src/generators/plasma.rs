@@ -1,7 +1,7 @@
-use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
+use manifold_core::GeneratorTypeId;
 
 // Parameter indices matching Unity's PlasmaGenerator.cs
 const PATTERN: usize = 0;
@@ -39,8 +39,7 @@ pub struct PlasmaGenerator {
 impl PlasmaGenerator {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
         let names = [
-            "Classic", "Rings", "Diamond", "Warp", "Cells",
-            "Noise", "Pulse", "Fractal", "Lattice",
+            "Classic", "Rings", "Diamond", "Warp", "Cells", "Noise", "Pulse", "Fractal", "Lattice",
         ];
         let pipelines = std::array::from_fn(|i| {
             let val = format!("{}.0", i);

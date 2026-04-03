@@ -1,9 +1,9 @@
-use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
+use crate::generators::generator_math::{project_4d, rotate_4d};
+use crate::generators::line_pipeline::{LineGeneratorHelper, LinePipeline};
 use crate::gpu_encoder::GpuEncoder;
-use crate::generators::generator_math::{rotate_4d, project_4d};
-use crate::generators::line_pipeline::{LinePipeline, LineGeneratorHelper};
+use manifold_core::GeneratorTypeId;
 
 // Parameter indices matching Unity's DuocylinderGenerator
 const ROT_XY: usize = 0;
@@ -20,7 +20,7 @@ const SCALE: usize = 10;
 
 const GRID_SIZE: usize = 24;
 const VERTEX_COUNT: usize = GRID_SIZE * GRID_SIZE; // 576
-const EDGE_COUNT: usize = VERTEX_COUNT * 2;         // 1152
+const EDGE_COUNT: usize = VERTEX_COUNT * 2; // 1152
 
 pub struct DuocylinderGenerator {
     line_pipeline: LinePipeline,
@@ -82,17 +82,61 @@ impl Generator for DuocylinderGenerator {
         target: &manifold_gpu::GpuTexture,
         ctx: &GeneratorContext,
     ) -> f32 {
-        let rot_xy = if ctx.param_count > ROT_XY as u32 { ctx.params[ROT_XY] } else { 0.4 };
-        let rot_zw = if ctx.param_count > ROT_ZW as u32 { ctx.params[ROT_ZW] } else { 0.25 };
-        let rot_xw = if ctx.param_count > ROT_XW as u32 { ctx.params[ROT_XW] } else { 0.15 };
-        let line = if ctx.param_count > LINE as u32 { ctx.params[LINE] } else { 0.0015 };
-        let dist = if ctx.param_count > DIST as u32 { ctx.params[DIST] } else { 3.0 };
-        let show_verts = if ctx.param_count > VERTS as u32 { ctx.params[VERTS] > 0.5 } else { true };
-        let vert_size = if ctx.param_count > VSIZE as u32 { ctx.params[VSIZE] } else { 1.0 };
-        let animate = if ctx.param_count > ANIM as u32 { ctx.params[ANIM] > 0.5 } else { false };
-        let speed = if ctx.param_count > SPEED as u32 { ctx.params[SPEED] } else { 1.0 };
-        let window = if ctx.param_count > WINDOW as u32 { ctx.params[WINDOW] } else { 0.1 };
-        let scale = if ctx.param_count > SCALE as u32 { ctx.params[SCALE] } else { 1.0 };
+        let rot_xy = if ctx.param_count > ROT_XY as u32 {
+            ctx.params[ROT_XY]
+        } else {
+            0.4
+        };
+        let rot_zw = if ctx.param_count > ROT_ZW as u32 {
+            ctx.params[ROT_ZW]
+        } else {
+            0.25
+        };
+        let rot_xw = if ctx.param_count > ROT_XW as u32 {
+            ctx.params[ROT_XW]
+        } else {
+            0.15
+        };
+        let line = if ctx.param_count > LINE as u32 {
+            ctx.params[LINE]
+        } else {
+            0.0015
+        };
+        let dist = if ctx.param_count > DIST as u32 {
+            ctx.params[DIST]
+        } else {
+            3.0
+        };
+        let show_verts = if ctx.param_count > VERTS as u32 {
+            ctx.params[VERTS] > 0.5
+        } else {
+            true
+        };
+        let vert_size = if ctx.param_count > VSIZE as u32 {
+            ctx.params[VSIZE]
+        } else {
+            1.0
+        };
+        let animate = if ctx.param_count > ANIM as u32 {
+            ctx.params[ANIM] > 0.5
+        } else {
+            false
+        };
+        let speed = if ctx.param_count > SPEED as u32 {
+            ctx.params[SPEED]
+        } else {
+            1.0
+        };
+        let window = if ctx.param_count > WINDOW as u32 {
+            ctx.params[WINDOW]
+        } else {
+            0.1
+        };
+        let scale = if ctx.param_count > SCALE as u32 {
+            ctx.params[SCALE]
+        } else {
+            1.0
+        };
 
         let t = ctx.time as f32;
         let angle_xy = t * rot_xy;
@@ -125,10 +169,17 @@ impl Generator for DuocylinderGenerator {
             );
 
         self.line_pipeline.draw(
-            gpu, target,
-            positions, instances, num_edges,
-            edge_half_thick, dot_half_thick,
-            ctx.beat as f32, "Duocylinder", ctx.width, ctx.height,
+            gpu,
+            target,
+            positions,
+            instances,
+            num_edges,
+            edge_half_thick,
+            dot_half_thick,
+            ctx.beat as f32,
+            "Duocylinder",
+            ctx.width,
+            ctx.height,
         );
         self.helper.anim_progress
     }

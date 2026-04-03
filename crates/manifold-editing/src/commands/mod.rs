@@ -1,10 +1,10 @@
 pub mod clip;
-pub mod layer;
-pub mod settings;
-pub mod effects;
-pub mod effect_target;
-pub mod effect_groups;
 pub mod drivers;
+pub mod effect_groups;
+pub mod effect_target;
+pub mod effects;
 pub mod envelopes;
-pub mod selection;
+pub mod layer;
 pub mod marker;
+pub mod selection;
+pub mod settings;

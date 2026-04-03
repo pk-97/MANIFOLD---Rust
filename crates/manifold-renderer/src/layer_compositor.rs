@@ -1,9 +1,4 @@
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use ahash::AHashMap;
-use manifold_core::{BlendMode, EffectTypeId};
-use manifold_core::effects::{EffectGroup, EffectInstance};
-use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
+use crate::compositor::{Compositor, CompositorFrame};
 use crate::effect::EffectContext;
 use crate::effect_chain::EffectChain;
 use crate::effect_registry::EffectRegistry;
@@ -12,7 +7,12 @@ use crate::render_target::RenderTarget;
 use crate::tonemap::TonemapPipeline;
 use crate::uniform_arena::UniformArena;
 use crate::wet_dry_lerp::WetDryLerpPipeline;
-use crate::compositor::{Compositor, CompositorFrame};
+use ahash::AHashMap;
+use manifold_core::effects::{EffectGroup, EffectInstance};
+use manifold_core::{BlendMode, EffectTypeId};
+use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 /// Descriptor for a single clip to composite.
 pub struct CompositeClipDescriptor<'a> {
@@ -80,7 +80,12 @@ impl BlendResources {
             address_mode_w: manifold_gpu::GpuAddressMode::ClampToEdge,
         });
 
-        Self { pipelines, sampler, width, height }
+        Self {
+            pipelines,
+            sampler,
+            width,
+            height,
+        }
     }
 
     /// Execute a compute blend. Selects the specialized pipeline for the blend mode.
@@ -95,7 +100,9 @@ impl BlendResources {
     ) {
         let _offset = arena.push(uniforms);
 
-        let pipeline = self.pipelines.get(&uniforms.blend_mode)
+        let pipeline = self
+            .pipelines
+            .get(&uniforms.blend_mode)
             .or_else(|| self.pipelines.get(&0))
             .unwrap();
 
@@ -154,12 +161,24 @@ impl PingPong {
         let ping = if let Some(p) = pool {
             RenderTarget::new_pooled(p, width, height, format, &format!("{label_prefix} Ping"))
         } else {
-            RenderTarget::new(device, width, height, format, &format!("{label_prefix} Ping"))
+            RenderTarget::new(
+                device,
+                width,
+                height,
+                format,
+                &format!("{label_prefix} Ping"),
+            )
         };
         let pong = if let Some(p) = pool {
             RenderTarget::new_pooled(p, width, height, format, &format!("{label_prefix} Pong"))
         } else {
-            RenderTarget::new(device, width, height, format, &format!("{label_prefix} Pong"))
+            RenderTarget::new(
+                device,
+                width,
+                height,
+                format,
+                &format!("{label_prefix} Pong"),
+            )
         };
         Self {
             ping,
@@ -377,7 +396,10 @@ impl LayerCompositor {
         while self.layer_bufs.len() < count {
             let idx = self.layer_bufs.len();
             self.layer_bufs.push(PingPong::new(
-                device, pool, w, h,
+                device,
+                pool,
+                w,
+                h,
                 &format!("Layer Scratch {idx}"),
             ));
         }
@@ -447,15 +469,10 @@ impl LayerCompositor {
     ///
     /// Each layer uses its own effect chain (no shared state between layers).
     /// Populates `self.layer_outputs_scratch` for the blend pass.
-    fn generate_layers(
-        &mut self,
-        gpu: &mut GpuEncoder,
-        frame: &CompositorFrame,
-    ) {
+    fn generate_layers(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) {
         let clips = frame.clips;
         let width = self.main.width();
         let height = self.main.height();
-
 
         // Check for any solo layer
         let any_solo = frame.layers.iter().any(|l| l.is_solo);
@@ -534,8 +551,7 @@ impl LayerCompositor {
             let layer_opacity = layer_desc.map_or(1.0, |l| l.opacity);
 
             // Check if this layer has layer-level effects
-            let has_layer_effects =
-                layer_desc.is_some_and(|ld| has_enabled_effects(ld.effects));
+            let has_layer_effects = layer_desc.is_some_and(|ld| has_enabled_effects(ld.effects));
 
             // Acquire this layer's effect chain (unique index per layer).
             // Safety: ec_idx is unique per iteration and < effect_chains.len().
@@ -593,8 +609,7 @@ impl LayerCompositor {
                         height,
                         output_width: frame.output_width,
                         output_height: frame.output_height,
-                        owner_key: layer_desc
-                            .map_or(0, |ld| layer_id_owner_key(&ld.layer_id)),
+                        owner_key: layer_desc.map_or(0, |ld| layer_id_owner_key(&ld.layer_id)),
                         is_clip_level: false,
                         edge_stretch_width: 0.5625,
                         frame_count: frame.frame_count as i64,
@@ -633,11 +648,7 @@ impl LayerCompositor {
     ///
     /// Layers are blended bottom-to-top (order preserved from generate_layers).
     /// This pass is always serial — each blend reads the previous blend's result.
-    fn blend_layers(
-        &mut self,
-        gpu: &mut GpuEncoder,
-        layer_outputs: &[LayerOutput],
-    ) {
+    fn blend_layers(&mut self, gpu: &mut GpuEncoder, layer_outputs: &[LayerOutput]) {
         // Clear main to opaque black
         self.main.clear_source(gpu, true);
 
@@ -662,11 +673,7 @@ impl LayerCompositor {
 
     /// Serial composite path: single encoder for all work.
     /// Used when only 1 active layer (no parallel benefit).
-    fn composite_serial(
-        &mut self,
-        gpu: &mut GpuEncoder,
-        frame: &CompositorFrame,
-    ) {
+    fn composite_serial(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) {
         self.uniform_arena.reset();
         self.generate_layers(gpu, frame);
         // Safety: layer_outputs_scratch contains raw pointers to textures owned
@@ -692,11 +699,7 @@ impl LayerCompositor {
     /// the frame duration since they're owned by effect chains, layer bufs, or
     /// clip render targets that aren't reallocated between generate and blend.
     #[cfg(target_os = "macos")]
-    fn composite_parallel(
-        &mut self,
-        compositor_gpu: &mut GpuEncoder,
-        frame: &CompositorFrame,
-    ) {
+    fn composite_parallel(&mut self, compositor_gpu: &mut GpuEncoder, frame: &CompositorFrame) {
         let clips = frame.clips;
         let width = self.main.width();
         let height = self.main.height();
@@ -713,8 +716,7 @@ impl LayerCompositor {
         // Raw pointer to avoid borrow conflict with &mut self later.
         // Safety: async_event lives for the duration of this method and
         // is not modified (only signal values change, which is interior mutation).
-        let async_event: *const manifold_gpu::GpuEvent =
-            self.async_event.as_ref().unwrap();
+        let async_event: *const manifold_gpu::GpuEvent = self.async_event.as_ref().unwrap();
 
         // Check for any solo layer
         let any_solo = frame.layers.iter().any(|l| l.is_solo);
@@ -726,8 +728,7 @@ impl LayerCompositor {
             let mut ci = 0;
             while ci < clips.len() {
                 let layer_idx = clips[ci].layer_index;
-                let layer_desc =
-                    frame.layers.iter().find(|l| l.layer_index == layer_idx);
+                let layer_desc = frame.layers.iter().find(|l| l.layer_index == layer_idx);
                 let start = ci;
                 while ci < clips.len() && clips[ci].layer_index == layer_idx {
                     ci += 1;
@@ -765,8 +766,7 @@ impl LayerCompositor {
         let mut i = 0;
         while i < clips.len() {
             let layer_idx = clips[i].layer_index;
-            let layer_desc =
-                frame.layers.iter().find(|l| l.layer_index == layer_idx);
+            let layer_desc = frame.layers.iter().find(|l| l.layer_index == layer_idx);
 
             // Check mute/solo
             if let Some(ld) = layer_desc
@@ -784,16 +784,13 @@ impl LayerCompositor {
             }
             let group = &clips[group_start..i];
 
-            let layer_blend =
-                layer_desc.map_or(BlendMode::Normal, |l| l.blend_mode);
+            let layer_blend = layer_desc.map_or(BlendMode::Normal, |l| l.blend_mode);
             let layer_opacity = layer_desc.map_or(1.0, |l| l.opacity);
-            let has_layer_effects =
-                layer_desc.is_some_and(|ld| has_enabled_effects(ld.effects));
+            let has_layer_effects = layer_desc.is_some_and(|ld| has_enabled_effects(ld.effects));
 
             let ec_idx = effect_chain_idx;
             effect_chain_idx += 1;
-            let effect_chain =
-                unsafe { &mut *effect_chains_ptr.add(ec_idx) };
+            let effect_chain = unsafe { &mut *effect_chains_ptr.add(ec_idx) };
 
             // Create per-layer command buffer
             let mut layer_enc = device.create_encoder("Layer");
@@ -818,8 +815,7 @@ impl LayerCompositor {
                 } else {
                     let lb_idx = layer_buf_idx;
                     layer_buf_idx += 1;
-                    let layer_buf =
-                        unsafe { &mut *layer_bufs_ptr.add(lb_idx) };
+                    let layer_buf = unsafe { &mut *layer_bufs_ptr.add(lb_idx) };
 
                     layer_buf.clear_source(&mut gpu, false);
 
@@ -853,9 +849,7 @@ impl LayerCompositor {
                             height,
                             output_width: frame.output_width,
                             output_height: frame.output_height,
-                            owner_key: layer_desc.map_or(0, |ld| {
-                                layer_id_owner_key(&ld.layer_id)
-                            }),
+                            owner_key: layer_desc.map_or(0, |ld| layer_id_owner_key(&ld.layer_id)),
                             is_clip_level: false,
                             edge_stretch_width: 0.5625,
                             frame_count: frame.frame_count as i64,
@@ -888,9 +882,7 @@ impl LayerCompositor {
             // Signal completion for this layer and commit
             layer_signal_idx += 1;
             let signal_value = base_signal + layer_signal_idx;
-            layer_enc.signal_event_value(
-                unsafe { &*async_event }, signal_value,
-            );
+            layer_enc.signal_event_value(unsafe { &*async_event }, signal_value);
             layer_enc.commit();
         }
 
@@ -904,9 +896,9 @@ impl LayerCompositor {
         // Compositor command buffer waits for all layer completions
         let final_signal = base_signal + layer_signal_idx;
         if layer_signal_idx > 0 {
-            compositor_gpu.native_enc.wait_event(
-                unsafe { &*async_event }, final_signal,
-            );
+            compositor_gpu
+                .native_enc
+                .wait_event(unsafe { &*async_event }, final_signal);
         }
 
         // Serial blend phase on the compositor command buffer.
@@ -919,11 +911,7 @@ impl LayerCompositor {
 }
 
 impl Compositor for LayerCompositor {
-    fn render(
-        &mut self,
-        gpu: &mut GpuEncoder,
-        frame: &CompositorFrame,
-    ) -> &GpuTexture {
+    fn render(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) -> &GpuTexture {
         if frame.clips.is_empty() {
             // Unity: CompositorStack.cs returns immediately for empty playback.
             // Clear to black + return tonemap output (already cleared from previous frame).
@@ -959,29 +947,13 @@ impl Compositor for LayerCompositor {
         if frame.led_exit_index == 0 {
             let (w, h) = (self.main.width(), self.main.height());
             let tap = self.led_tap.get_or_insert_with(|| {
-                RenderTarget::new(
-                    gpu.device,
-                    w,
-                    h,
-                    GpuTextureFormat::Rgba16Float,
-                    "LED_Tap",
-                )
+                RenderTarget::new(gpu.device, w, h, GpuTextureFormat::Rgba16Float, "LED_Tap")
             });
             if tap.width != w || tap.height != h {
-                *tap = RenderTarget::new(
-                    gpu.device,
-                    w,
-                    h,
-                    GpuTextureFormat::Rgba16Float,
-                    "LED_Tap",
-                );
+                *tap =
+                    RenderTarget::new(gpu.device, w, h, GpuTextureFormat::Rgba16Float, "LED_Tap");
             }
-            gpu.copy_texture_to_texture(
-                self.main.source_texture(),
-                &tap.texture,
-                w,
-                h,
-            );
+            gpu.copy_texture_to_texture(self.main.source_texture(), &tap.texture, w, h);
         } else {
             // Free the tap buffer when not needed
             self.led_tap = None;

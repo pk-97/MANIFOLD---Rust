@@ -4,9 +4,9 @@
 //! and a compute pipeline with the edge-extend shader.
 
 use manifold_gpu::{
-    GpuBinding, GpuComputePipeline, GpuDevice, GpuSampler, GpuSamplerDesc,
-    GpuTexture, GpuTextureDesc, GpuTextureFormat, GpuTextureDimension,
-    GpuTextureUsage, GpuFilterMode, GpuAddressMode,
+    GpuAddressMode, GpuBinding, GpuComputePipeline, GpuDevice, GpuFilterMode, GpuSampler,
+    GpuSamplerDesc, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
+    GpuTextureUsage,
 };
 
 /// GPU resources for the LED edge-extend compute pass.

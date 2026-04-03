@@ -19,8 +19,18 @@ pub fn resolve_bundle_path(name: &str) -> Option<PathBuf> {
     }
 
     if let Ok(exe) = std::env::current_exe()
-        && let Some(exe_dir) = exe.parent() {
-            let candidate = exe_dir
+        && let Some(exe_dir) = exe.parent()
+    {
+        let candidate = exe_dir
+            .join("assets/plugins")
+            .join(format!("{}.bundle", name))
+            .join("Contents/MacOS")
+            .join(name);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        if let Some(project_dir) = exe_dir.parent().and_then(|p| p.parent()) {
+            let candidate = project_dir
                 .join("assets/plugins")
                 .join(format!("{}.bundle", name))
                 .join("Contents/MacOS")
@@ -28,17 +38,8 @@ pub fn resolve_bundle_path(name: &str) -> Option<PathBuf> {
             if candidate.exists() {
                 return Some(candidate);
             }
-            if let Some(project_dir) = exe_dir.parent().and_then(|p| p.parent()) {
-                let candidate = project_dir
-                    .join("assets/plugins")
-                    .join(format!("{}.bundle", name))
-                    .join("Contents/MacOS")
-                    .join(name);
-                if candidate.exists() {
-                    return Some(candidate);
-                }
-            }
         }
+    }
 
     let cwd_candidate = Path::new("assets/plugins")
         .join(format!("{}.bundle", name))

@@ -21,12 +21,12 @@ use crate::render_target::RenderTarget;
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct EasuUniforms {
-    scale_x: f32,    // srcW / dstW
-    scale_y: f32,    // srcH / dstH
-    bias_x: f32,     // 0.5 * srcW/dstW − 0.5
-    bias_y: f32,     // 0.5 * srcH/dstH − 0.5
-    inv_src_w: f32,  // 1.0 / srcW
-    inv_src_h: f32,  // 1.0 / srcH
+    scale_x: f32,   // srcW / dstW
+    scale_y: f32,   // srcH / dstH
+    bias_x: f32,    // 0.5 * srcW/dstW − 0.5
+    bias_y: f32,    // 0.5 * srcH/dstH − 0.5
+    inv_src_w: f32, // 1.0 / srcW
+    inv_src_h: f32, // 1.0 / srcH
     _pad0: f32,
     _pad1: f32,
 }
@@ -86,7 +86,7 @@ impl Fsr1Upscaler {
             ..Default::default()
         });
         let easu_output = RenderTarget::new(device, dst_w, dst_h, fmt, "FSR1 EASU Output");
-        let output      = RenderTarget::new(device, dst_w, dst_h, fmt, "FSR1 RCAS Output");
+        let output = RenderTarget::new(device, dst_w, dst_h, fmt, "FSR1 RCAS Output");
 
         Self {
             easu_pipeline,
@@ -112,10 +112,10 @@ impl Fsr1Upscaler {
         sharpness_exp: f32,
     ) {
         let easu_u = EasuUniforms {
-            scale_x:   self.src_w as f32 / self.dst_w as f32,
-            scale_y:   self.src_h as f32 / self.dst_h as f32,
-            bias_x:    0.5 * self.src_w as f32 / self.dst_w as f32 - 0.5,
-            bias_y:    0.5 * self.src_h as f32 / self.dst_h as f32 - 0.5,
+            scale_x: self.src_w as f32 / self.dst_w as f32,
+            scale_y: self.src_h as f32 / self.dst_h as f32,
+            bias_x: 0.5 * self.src_w as f32 / self.dst_w as f32 - 0.5,
+            bias_y: 0.5 * self.src_h as f32 / self.dst_h as f32 - 0.5,
             inv_src_w: 1.0 / self.src_w as f32,
             inv_src_h: 1.0 / self.src_h as f32,
             _pad0: 0.0,
@@ -143,11 +143,7 @@ impl Fsr1Upscaler {
                     texture: &self.easu_output.texture,
                 },
             ],
-            [
-                self.dst_w.div_ceil(16),
-                self.dst_h.div_ceil(16),
-                1,
-            ],
+            [self.dst_w.div_ceil(16), self.dst_h.div_ceil(16), 1],
             "FSR1 EASU",
         );
 
@@ -179,11 +175,7 @@ impl Fsr1Upscaler {
                     texture: &self.output.texture,
                 },
             ],
-            [
-                self.dst_w.div_ceil(16),
-                self.dst_h.div_ceil(16),
-                1,
-            ],
+            [self.dst_w.div_ceil(16), self.dst_h.div_ceil(16), 1],
             "FSR1 RCAS",
         );
     }

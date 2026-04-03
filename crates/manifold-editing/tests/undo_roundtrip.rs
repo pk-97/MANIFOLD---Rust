@@ -1,9 +1,11 @@
+use manifold_core::clip::TimelineClip;
 use manifold_core::{Beats, Bpm};
 use manifold_editing::command::Command;
-use manifold_editing::commands::clip::{MoveClipCommand, TrimClipCommand, MuteClipCommand, AddClipCommand, DeleteClipCommand};
+use manifold_editing::commands::clip::{
+    AddClipCommand, DeleteClipCommand, MoveClipCommand, MuteClipCommand, TrimClipCommand,
+};
 use manifold_editing::commands::settings::ChangeBpmCommand;
 use manifold_editing::undo::UndoRedoManager;
-use manifold_core::clip::TimelineClip;
 
 fn fixture_path(name: &str) -> std::path::PathBuf {
     let mut p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -27,17 +29,29 @@ fn move_clip_undo_restores_position() {
 
     let new_beat = original_beat + Beats(4.0);
     let layer_id = project.timeline.layers[0].layer_id.clone();
-    let mut cmd = MoveClipCommand::new(clip_id.clone(), original_beat, new_beat, layer_id.clone(), layer_id);
+    let mut cmd = MoveClipCommand::new(
+        clip_id.clone(),
+        original_beat,
+        new_beat,
+        layer_id.clone(),
+        layer_id,
+    );
 
     // Execute
     cmd.execute(&mut project);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!((clip.start_beat - new_beat).abs() < Beats(0.001), "Clip should have moved to {new_beat}");
+    assert!(
+        (clip.start_beat - new_beat).abs() < Beats(0.001),
+        "Clip should have moved to {new_beat}"
+    );
 
     // Undo
     cmd.undo(&mut project);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!((clip.start_beat - original_beat).abs() < Beats(0.001), "Undo should restore to {original_beat}");
+    assert!(
+        (clip.start_beat - original_beat).abs() < Beats(0.001),
+        "Undo should restore to {original_beat}"
+    );
 }
 
 #[test]
@@ -52,9 +66,12 @@ fn trim_clip_undo_restores_duration() {
     let new_dur = original_dur + Beats(2.0);
     let mut cmd = TrimClipCommand::new(
         clip_id.clone(),
-        original_start, original_start,
-        original_dur, new_dur,
-        original_in, original_in,
+        original_start,
+        original_start,
+        original_dur,
+        new_dur,
+        original_in,
+        original_in,
     );
 
     cmd.execute(&mut project);
@@ -123,7 +140,10 @@ fn add_delete_clip_undo_roundtrip() {
     assert_eq!(project.timeline.total_clip_count(), initial_count + 1);
 
     // Delete the clip we added
-    let clip_to_delete = project.timeline.layers[0].find_clip(&new_clip_id).unwrap().clone();
+    let clip_to_delete = project.timeline.layers[0]
+        .find_clip(&new_clip_id)
+        .unwrap()
+        .clone();
     let mut del_cmd = DeleteClipCommand::new(clip_to_delete, layer_id_0.clone());
     del_cmd.execute(&mut project);
     assert_eq!(project.timeline.total_clip_count(), initial_count);
@@ -149,7 +169,13 @@ fn undo_manager_multi_command_roundtrip() {
 
     // Command 2: move clip
     let layer_id = project.timeline.layers[0].layer_id.clone();
-    let mut cmd2 = Box::new(MoveClipCommand::new(clip_id.clone(), original_beat, original_beat + Beats(8.0), layer_id.clone(), layer_id));
+    let mut cmd2 = Box::new(MoveClipCommand::new(
+        clip_id.clone(),
+        original_beat,
+        original_beat + Beats(8.0),
+        layer_id.clone(),
+        layer_id,
+    ));
     cmd2.execute(&mut project);
     undo_mgr.record(cmd2);
 

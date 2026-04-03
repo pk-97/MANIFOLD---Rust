@@ -20,12 +20,12 @@ use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::video::VideoLibrary;
 use manifold_core::{Beats, Seconds};
-use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
+use manifold_gpu::{
+    GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+};
 use manifold_playback::renderer::ClipRenderer;
 
-use crate::decode_scheduler::{
-    DecodeJob, DecodeResultStatus, DecodeScheduler,
-};
+use crate::decode_scheduler::{DecodeJob, DecodeResultStatus, DecodeScheduler};
 use crate::decoder::DecoderPool;
 use crate::decoder_ffi;
 
@@ -106,9 +106,8 @@ impl VideoRenderer {
         format: GpuTextureFormat,
         _pool_size: usize,
     ) -> Self {
-        let decoder_pool = Arc::new(
-            DecoderPool::new().expect("Failed to create video decoder pool"),
-        );
+        let decoder_pool =
+            Arc::new(DecoderPool::new().expect("Failed to create video decoder pool"));
         let scheduler = DecodeScheduler::new(decoder_pool);
 
         // Lazy allocation: start empty, grow on demand as clips start.
@@ -144,9 +143,13 @@ impl VideoRenderer {
 
     /// Get the texture for a rendered clip.
     pub fn get_clip_texture(&self, clip_id: &str) -> Option<&GpuTexture> {
-        self.active_clips
-            .get(clip_id)
-            .and_then(|c| if c.has_frame { Some(&c.render_target.texture) } else { None })
+        self.active_clips.get(clip_id).and_then(|c| {
+            if c.has_frame {
+                Some(&c.render_target.texture)
+            } else {
+                None
+            }
+        })
     }
 
     /// Submit pre-warm requests for clips near the playhead.
@@ -174,7 +177,10 @@ impl VideoRenderer {
     /// Accepts the PrewarmCandidate type from PlaybackEngine::compute_prewarm_candidates().
     pub fn pre_warm_from_candidates(
         &mut self,
-        candidates: &std::collections::HashMap<String, manifold_playback::video_time::PrewarmCandidate>,
+        candidates: &std::collections::HashMap<
+            String,
+            manifold_playback::video_time::PrewarmCandidate,
+        >,
     ) {
         for (video_clip_id, candidate) in candidates {
             let already_active = self
@@ -222,17 +228,11 @@ impl VideoRenderer {
         let dest_ptr = render_target.texture.raw_ptr();
 
         let result = unsafe {
-            decoder_ffi::VideoDecoder_CopyFrameToTexture(
-                pool.raw_handle(),
-                handle_ptr,
-                dest_ptr,
-            )
+            decoder_ffi::VideoDecoder_CopyFrameToTexture(pool.raw_handle(), handle_ptr, dest_ptr)
         };
 
         if result != 0 {
-            log::warn!(
-                "[VideoRenderer] CopyFrameToTexture failed (code={result})"
-            );
+            log::warn!("[VideoRenderer] CopyFrameToTexture failed (code={result})");
             return false;
         }
 
@@ -250,60 +250,46 @@ impl VideoRenderer {
 
     /// Process a batch of decode results — shared by `pre_render` and
     /// `flush_pending_decodes` to avoid duplicating the match arms.
-    fn process_decode_results(
-        &mut self,
-        results: Vec<crate::decode_scheduler::DecodeResult>,
-    ) {
+    fn process_decode_results(&mut self, results: Vec<crate::decode_scheduler::DecodeResult>) {
         let pool = Arc::clone(self.scheduler.pool());
         for result in results {
             let clip_id = result.clip_id;
             match result.status {
                 DecodeResultStatus::Opened {
-                    duration, frame_rate, ..
+                    duration,
+                    frame_rate,
+                    ..
                 } => {
-                    if let Some(clip) =
-                        self.active_clips.get_mut(clip_id.as_str())
-                    {
+                    if let Some(clip) = self.active_clips.get_mut(clip_id.as_str()) {
                         clip.media_length = duration;
                         clip.frame_rate = frame_rate.max(1.0);
                     }
                 }
                 DecodeResultStatus::Prepared { handle_ptr } => {
-                    if let Some(clip) =
-                        self.active_clips.get_mut(clip_id.as_str())
-                    {
+                    if let Some(clip) = self.active_clips.get_mut(clip_id.as_str()) {
                         clip.ready = true;
                         clip.decode_pending = false;
-                        if unsafe {
-                            Self::copy_frame_to_rt(
-                                &pool, handle_ptr, &clip.render_target,
-                            )
-                        } {
+                        if unsafe { Self::copy_frame_to_rt(&pool, handle_ptr, &clip.render_target) }
+                        {
                             clip.has_frame = true;
                         }
                     }
                 }
                 DecodeResultStatus::FrameReady {
-                    frame_time, handle_ptr,
+                    frame_time,
+                    handle_ptr,
                 } => {
-                    if let Some(clip) =
-                        self.active_clips.get_mut(clip_id.as_str())
-                    {
+                    if let Some(clip) = self.active_clips.get_mut(clip_id.as_str()) {
                         clip.playback_time = frame_time;
                         clip.decode_pending = false;
-                        if unsafe {
-                            Self::copy_frame_to_rt(
-                                &pool, handle_ptr, &clip.render_target,
-                            )
-                        } {
+                        if unsafe { Self::copy_frame_to_rt(&pool, handle_ptr, &clip.render_target) }
+                        {
                             clip.has_frame = true;
                         }
                     }
                 }
                 DecodeResultStatus::EndOfFile => {
-                    if let Some(clip) =
-                        self.active_clips.get_mut(clip_id.as_str())
-                    {
+                    if let Some(clip) = self.active_clips.get_mut(clip_id.as_str()) {
                         clip.decode_pending = false;
                         if clip.looping {
                             clip.decode_pending = true;
@@ -317,19 +303,15 @@ impl VideoRenderer {
                     }
                 }
                 DecodeResultStatus::Seeked {
-                    frame_time, handle_ptr,
+                    frame_time,
+                    handle_ptr,
                 } => {
-                    if let Some(clip) =
-                        self.active_clips.get_mut(clip_id.as_str())
-                    {
+                    if let Some(clip) = self.active_clips.get_mut(clip_id.as_str()) {
                         clip.playback_time = frame_time;
                         clip.decode_pending = false;
                         clip.time_accumulator = 0.0;
-                        if unsafe {
-                            Self::copy_frame_to_rt(
-                                &pool, handle_ptr, &clip.render_target,
-                            )
-                        } {
+                        if unsafe { Self::copy_frame_to_rt(&pool, handle_ptr, &clip.render_target) }
+                        {
                             clip.has_frame = true;
                         }
                     }
@@ -337,9 +319,7 @@ impl VideoRenderer {
                 DecodeResultStatus::WarmReady { .. } => {}
                 DecodeResultStatus::Error(msg) => {
                     log::error!("[VideoRenderer] Error for {clip_id}: {msg}");
-                    if let Some(clip) =
-                        self.active_clips.get_mut(clip_id.as_str())
-                    {
+                    if let Some(clip) = self.active_clips.get_mut(clip_id.as_str()) {
                         clip.decode_pending = false;
                     }
                 }
@@ -472,11 +452,15 @@ impl ClipRenderer for VideoRenderer {
     }
 
     fn get_clip_playback_time(&self, clip_id: &str) -> f32 {
-        self.active_clips.get(clip_id).map_or(0.0, |c| c.playback_time)
+        self.active_clips
+            .get(clip_id)
+            .map_or(0.0, |c| c.playback_time)
     }
 
     fn get_clip_media_length(&self, clip_id: &str) -> f32 {
-        self.active_clips.get(clip_id).map_or(0.0, |c| c.media_length)
+        self.active_clips
+            .get(clip_id)
+            .map_or(0.0, |c| c.media_length)
     }
 
     fn resume_clip(&mut self, clip_id: &str) {
@@ -552,7 +536,8 @@ impl ClipRenderer for VideoRenderer {
         // speed and flooding the result queue.
         //    Reuses pre-allocated scratch buffer to avoid per-frame Vec allocation.
         self.clip_ids_scratch.clear();
-        self.clip_ids_scratch.extend(self.active_clips.keys().cloned());
+        self.clip_ids_scratch
+            .extend(self.active_clips.keys().cloned());
         for idx in 0..self.clip_ids_scratch.len() {
             let clip_id = &self.clip_ids_scratch[idx];
             let Some(clip) = self.active_clips.get_mut(clip_id.as_str()) else {
@@ -610,8 +595,7 @@ impl ClipRenderer for VideoRenderer {
         self.rt_counter = 0;
 
         for clip in self.active_clips.values_mut() {
-            clip.render_target =
-                VideoRenderTarget::new(device, w, h, fmt, self.rt_counter);
+            clip.render_target = VideoRenderTarget::new(device, w, h, fmt, self.rt_counter);
             self.rt_counter += 1;
             clip.has_frame = false;
         }

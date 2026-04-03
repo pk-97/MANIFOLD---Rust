@@ -1,8 +1,8 @@
 use crate::command::Command;
 use crate::commands::effect_target::{EffectTarget, with_effects_mut};
 use manifold_core::EffectGroupId;
-use manifold_core::project::Project;
 use manifold_core::effects::{EffectGroup, EffectInstance};
+use manifold_core::project::Project;
 
 /// Group effects into a rack group.
 /// Matches Unity GroupEffectsCommand: makes effects contiguous in the list
@@ -41,16 +41,16 @@ impl Command for GroupEffectsCommand {
             // Snapshot old group IDs for undo
             self.old_group_ids.clear();
             for &i in &indices {
-                self.old_group_ids.push(
-                    effects.get(i).and_then(|e| e.group_id.clone())
-                );
+                self.old_group_ids
+                    .push(effects.get(i).and_then(|e| e.group_id.clone()));
             }
 
             // Snapshot original indices for undo
             self.original_indices = indices.clone();
 
             // Collect the grouped effects (in selection order, which preserves relative order)
-            let grouped: Vec<EffectInstance> = indices.iter()
+            let grouped: Vec<EffectInstance> = indices
+                .iter()
                 .filter_map(|&i| effects.get(i).cloned())
                 .collect();
 
@@ -67,9 +67,8 @@ impl Command for GroupEffectsCommand {
 
             // MakeContiguous: find the index of the first grouped effect
             let mut insert_at = effects.len();
-            let grouped_at_indices: Vec<bool> = (0..effects.len())
-                .map(|i| indices.contains(&i))
-                .collect();
+            let grouped_at_indices: Vec<bool> =
+                (0..effects.len()).map(|i| indices.contains(&i)).collect();
             for (i, &is_grouped) in grouped_at_indices.iter().enumerate() {
                 if is_grouped {
                     insert_at = i;
@@ -109,7 +108,8 @@ impl Command for GroupEffectsCommand {
         with_effects_mut(project, &self.target, |effects, groups| {
             // Find all effects in this group (they are contiguous after execute)
             let grouped: Vec<EffectInstance> = if let Some(ref gid) = group_id {
-                effects.iter()
+                effects
+                    .iter()
                     .filter(|e| e.group_id.as_deref() == Some(gid.as_str()))
                     .cloned()
                     .collect()
@@ -145,7 +145,9 @@ impl Command for GroupEffectsCommand {
         });
     }
 
-    fn description(&self) -> &str { "Group Effects" }
+    fn description(&self) -> &str {
+        "Group Effects"
+    }
 }
 
 /// Ungroup effects from a rack group.
@@ -159,7 +161,12 @@ pub struct UngroupEffectsCommand {
 
 impl UngroupEffectsCommand {
     pub fn new(target: EffectTarget, group_id: EffectGroupId) -> Self {
-        Self { target, group_id, group: None, member_indices: Vec::new() }
+        Self {
+            target,
+            group_id,
+            group: None,
+            member_indices: Vec::new(),
+        }
     }
 }
 
@@ -170,7 +177,9 @@ impl Command for UngroupEffectsCommand {
         with_effects_mut(project, &self.target, |effects, groups| {
             self.group = groups.iter().find(|g| g.id == gid).cloned();
 
-            self.member_indices = effects.iter().enumerate()
+            self.member_indices = effects
+                .iter()
+                .enumerate()
                 .filter(|(_, e)| e.group_id.as_deref() == Some(&gid))
                 .map(|(i, _)| i)
                 .collect();
@@ -203,7 +212,9 @@ impl Command for UngroupEffectsCommand {
         });
     }
 
-    fn description(&self) -> &str { "Ungroup Effects" }
+    fn description(&self) -> &str {
+        "Ungroup Effects"
+    }
 }
 
 /// Toggle a group's enabled state.
@@ -216,8 +227,18 @@ pub struct ToggleGroupCommand {
 }
 
 impl ToggleGroupCommand {
-    pub fn new(target: EffectTarget, group_id: EffectGroupId, old_enabled: bool, new_enabled: bool) -> Self {
-        Self { target, group_id, old_enabled, new_enabled }
+    pub fn new(
+        target: EffectTarget,
+        group_id: EffectGroupId,
+        old_enabled: bool,
+        new_enabled: bool,
+    ) -> Self {
+        Self {
+            target,
+            group_id,
+            old_enabled,
+            new_enabled,
+        }
     }
 }
 
@@ -242,7 +263,9 @@ impl Command for ToggleGroupCommand {
         });
     }
 
-    fn description(&self) -> &str { "Toggle Group" }
+    fn description(&self) -> &str {
+        "Toggle Group"
+    }
 }
 
 /// Rename a group.
@@ -255,8 +278,18 @@ pub struct RenameGroupCommand {
 }
 
 impl RenameGroupCommand {
-    pub fn new(target: EffectTarget, group_id: EffectGroupId, old_name: String, new_name: String) -> Self {
-        Self { target, group_id, old_name, new_name }
+    pub fn new(
+        target: EffectTarget,
+        group_id: EffectGroupId,
+        old_name: String,
+        new_name: String,
+    ) -> Self {
+        Self {
+            target,
+            group_id,
+            old_name,
+            new_name,
+        }
     }
 }
 
@@ -281,7 +314,9 @@ impl Command for RenameGroupCommand {
         });
     }
 
-    fn description(&self) -> &str { "Rename Group" }
+    fn description(&self) -> &str {
+        "Rename Group"
+    }
 }
 
 /// Change group wet/dry mix.
@@ -294,8 +329,18 @@ pub struct ChangeGroupWetDryCommand {
 }
 
 impl ChangeGroupWetDryCommand {
-    pub fn new(target: EffectTarget, group_id: EffectGroupId, old_wet_dry: f32, new_wet_dry: f32) -> Self {
-        Self { target, group_id, old_wet_dry, new_wet_dry }
+    pub fn new(
+        target: EffectTarget,
+        group_id: EffectGroupId,
+        old_wet_dry: f32,
+        new_wet_dry: f32,
+    ) -> Self {
+        Self {
+            target,
+            group_id,
+            old_wet_dry,
+            new_wet_dry,
+        }
     }
 }
 
@@ -320,7 +365,9 @@ impl Command for ChangeGroupWetDryCommand {
         });
     }
 
-    fn description(&self) -> &str { "Change Group Wet/Dry" }
+    fn description(&self) -> &str {
+        "Change Group Wet/Dry"
+    }
 }
 
 /// Move an effect to a different rack (change group assignment + index).
@@ -345,7 +392,14 @@ impl MoveEffectToRackCommand {
         old_index: usize,
         new_index: usize,
     ) -> Self {
-        Self { target, effect_index, old_group_id, new_group_id, old_index, new_index }
+        Self {
+            target,
+            effect_index,
+            old_group_id,
+            new_group_id,
+            old_index,
+            new_index,
+        }
     }
 }
 
@@ -382,7 +436,9 @@ impl Command for MoveEffectToRackCommand {
         });
     }
 
-    fn description(&self) -> &str { "Move Effect to Rack" }
+    fn description(&self) -> &str {
+        "Move Effect to Rack"
+    }
 }
 
 /// Move an entire rack (all effects with matching groupId) to a new position.
@@ -423,12 +479,16 @@ impl Command for ReorderRackCommand {
             }
 
             // Collect members in list order
-            let members: Vec<EffectInstance> = self.original_indices.iter()
+            let members: Vec<EffectInstance> = self
+                .original_indices
+                .iter()
                 .filter_map(|&i| effects.get(i).cloned())
                 .collect();
 
             // Count how many members were before the target (their removal shifts target down)
-            let removed_before = self.original_indices.iter()
+            let removed_before = self
+                .original_indices
+                .iter()
                 .filter(|&&i| i < target_idx)
                 .count();
 
@@ -453,7 +513,8 @@ impl Command for ReorderRackCommand {
 
         with_effects_mut(project, &self.target, |effects, _groups| {
             // Collect current members
-            let members: Vec<EffectInstance> = effects.iter()
+            let members: Vec<EffectInstance> = effects
+                .iter()
                 .filter(|e| e.group_id.as_deref() == Some(&gid))
                 .cloned()
                 .collect();
@@ -462,7 +523,8 @@ impl Command for ReorderRackCommand {
             effects.retain(|e| e.group_id.as_deref() != Some(&gid));
 
             // Re-insert at original positions (ascending order)
-            let mut pairs: Vec<(usize, EffectInstance)> = original_indices.iter()
+            let mut pairs: Vec<(usize, EffectInstance)> = original_indices
+                .iter()
                 .zip(members)
                 .map(|(&idx, fx)| (idx, fx))
                 .collect();
@@ -475,5 +537,7 @@ impl Command for ReorderRackCommand {
         });
     }
 
-    fn description(&self) -> &str { "Move Rack" }
+    fn description(&self) -> &str {
+        "Move Rack"
+    }
 }

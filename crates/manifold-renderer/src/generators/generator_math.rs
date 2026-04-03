@@ -15,8 +15,13 @@ pub const DEFAULT_DOT_RADIUS: f32 = 0.005;
 /// 4D rotation in XY, ZW, XW planes (in-place).
 #[inline]
 pub fn rotate_4d(
-    x: &mut f32, y: &mut f32, z: &mut f32, w: &mut f32,
-    angle_xy: f32, angle_zw: f32, angle_xw: f32,
+    x: &mut f32,
+    y: &mut f32,
+    z: &mut f32,
+    w: &mut f32,
+    angle_xy: f32,
+    angle_zw: f32,
+    angle_xw: f32,
 ) {
     // XY plane
     let (s, c) = angle_xy.sin_cos();
@@ -68,10 +73,15 @@ pub fn project_4d(x: f32, y: f32, z: f32, w: f32, proj_dist: f32) -> (f32, f32, 
 /// Takes precomputed sin/cos for each axis.
 #[inline]
 pub fn rotate_3d(
-    x: &mut f32, y: &mut f32, z: &mut f32,
-    cos_x: f32, sin_x: f32,
-    cos_y: f32, sin_y: f32,
-    cos_z: f32, sin_z: f32,
+    x: &mut f32,
+    y: &mut f32,
+    z: &mut f32,
+    cos_x: f32,
+    sin_x: f32,
+    cos_y: f32,
+    sin_y: f32,
+    cos_z: f32,
+    sin_z: f32,
 ) {
     // Rotate around X
     let ny = *y * cos_x - *z * sin_x;

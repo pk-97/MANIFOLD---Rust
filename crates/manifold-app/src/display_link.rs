@@ -24,7 +24,7 @@ use manifold_gpu::{
     GpuSamplerDesc, GpuSurface, GpuTexture, GpuTextureFormat, GpuTextureUsage,
 };
 
-use crate::shared_texture::{SharedTextureBridge, SURFACE_COUNT};
+use crate::shared_texture::{SURFACE_COUNT, SharedTextureBridge};
 
 // ─── CVDisplayLink FFI ──────────────────────────────────────────────────
 
@@ -72,7 +72,6 @@ unsafe extern "C" {
     fn CVDisplayLinkGetActualOutputVideoRefreshPeriod(link: CVDisplayLinkRef) -> f64;
 }
 
-
 // ─── Display ID extraction ──────────────────────────────────────────────
 
 /// Get the CGDirectDisplayID for the monitor a window is currently on.
@@ -87,18 +86,25 @@ fn display_id_for_window(window: &winit::window::Window) -> u32 {
 
     unsafe {
         let ns_window: *mut objc::runtime::Object = msg_send![ns_view, window];
-        if ns_window.is_null() { return 0; }
+        if ns_window.is_null() {
+            return 0;
+        }
         let screen: *mut objc::runtime::Object = msg_send![ns_window, screen];
-        if screen.is_null() { return 0; }
+        if screen.is_null() {
+            return 0;
+        }
         let desc: *mut objc::runtime::Object = msg_send![screen, deviceDescription];
-        if desc.is_null() { return 0; }
+        if desc.is_null() {
+            return 0;
+        }
         let key: *mut objc::runtime::Object = msg_send![
             class!(NSString),
             stringWithUTF8String: c"NSScreenNumber".as_ptr()
         ];
-        let display_id_obj: *mut objc::runtime::Object =
-            msg_send![desc, objectForKey: key];
-        if display_id_obj.is_null() { return 0; }
+        let display_id_obj: *mut objc::runtime::Object = msg_send![desc, objectForKey: key];
+        if display_id_obj.is_null() {
+            return 0;
+        }
         msg_send![display_id_obj, unsignedIntValue]
     }
 }
@@ -112,7 +118,9 @@ fn display_id_for_window(window: &winit::window::Window) -> u32 {
 struct SendPtr<T>(*mut T);
 unsafe impl<T> Send for SendPtr<T> {}
 impl<T> SendPtr<T> {
-    fn get(self) -> *mut T { self.0 }
+    fn get(self) -> *mut T {
+        self.0
+    }
 }
 
 // ─── Presenter WGSL (same as NativeOutputPresenter) ─────────────────────
@@ -200,8 +208,14 @@ impl PresenterContext {
             &self.pipeline,
             &target,
             &[
-                GpuBinding::Texture { binding: 0, texture: source },
-                GpuBinding::Sampler { binding: 1, sampler: &self.sampler },
+                GpuBinding::Texture {
+                    binding: 0,
+                    texture: source,
+                },
+                GpuBinding::Sampler {
+                    binding: 1,
+                    sampler: &self.sampler,
+                },
             ],
             (0.0, 0.0, w, h),
             GpuLoadAction::DontCare,
@@ -334,7 +348,9 @@ impl DisplayLinkPresenter {
 
         // displaySyncEnabled: true for fullscreen (Direct Display), false for windowed.
         let surface = presenter_device.create_surface(
-            window, proj_w, proj_h,
+            window,
+            proj_w,
+            proj_h,
             GpuTextureFormat::Rgba16Float,
             presentation,
         );
@@ -348,8 +364,12 @@ impl DisplayLinkPresenter {
         surface.set_presents_with_transaction(!presentation);
 
         let pipeline = presenter_device.create_render_pipeline(
-            PRESENTER_WGSL, "vs_main", "fs_main",
-            GpuTextureFormat::Rgba16Float, None, "Presenter Blit",
+            PRESENTER_WGSL,
+            "vs_main",
+            "fs_main",
+            GpuTextureFormat::Rgba16Float,
+            None,
+            "Presenter Blit",
         );
         let sampler = presenter_device.create_sampler(&GpuSamplerDesc {
             min_filter: GpuFilterMode::Nearest,
@@ -391,7 +411,8 @@ impl DisplayLinkPresenter {
             }));
             unsafe {
                 CVDisplayLinkSetOutputCallback(
-                    display_link, fullscreen_present_callback,
+                    display_link,
+                    fullscreen_present_callback,
                     ctx as *mut c_void,
                 );
             }
@@ -399,8 +420,7 @@ impl DisplayLinkPresenter {
         } else {
             // Windowed: lightweight callback, main thread does the blit.
             let vsync_ready = Arc::new(AtomicBool::new(false));
-            let win_arc = window_arc
-                .expect("window_arc required for windowed presenter");
+            let win_arc = window_arc.expect("window_arc required for windowed presenter");
             let cb_ctx = Box::into_raw(Box::new(WindowedCallbackContext {
                 vsync_ready: Arc::clone(&vsync_ready),
                 window: win_arc,
@@ -408,7 +428,8 @@ impl DisplayLinkPresenter {
             }));
             unsafe {
                 CVDisplayLinkSetOutputCallback(
-                    display_link, windowed_vsync_callback,
+                    display_link,
+                    windowed_vsync_callback,
                     cb_ctx as *mut c_void,
                 );
             }
@@ -427,11 +448,21 @@ impl DisplayLinkPresenter {
         log::info!(
             "[DisplayLink] Started for display {display_id}, \
              mode={}, drawable={}x{} Rgba16Float",
-            if presentation { "fullscreen" } else { "windowed" },
-            proj_w, proj_h,
+            if presentation {
+                "fullscreen"
+            } else {
+                "windowed"
+            },
+            proj_w,
+            proj_h,
         );
 
-        Self { display_link, mode, edr_headroom: edr, current_display_id: display_id }
+        Self {
+            display_link,
+            mode,
+            edr_headroom: edr,
+            current_display_id: display_id,
+        }
     }
 
     /// Present the latest content frame if a vsync signal is pending.
@@ -439,7 +470,11 @@ impl DisplayLinkPresenter {
     /// Uses presentsWithTransaction to sync with the WindowServer compositor.
     /// In fullscreen mode this is a no-op (the callback does the present).
     pub fn present_if_ready(&mut self) {
-        if let PresenterMode::Windowed { ref mut presenter, ref vsync_ready, .. } = self.mode
+        if let PresenterMode::Windowed {
+            ref mut presenter,
+            ref vsync_ready,
+            ..
+        } = self.mode
             && vsync_ready.swap(false, Ordering::AcqRel)
         {
             objc::rc::autoreleasepool(|| {
@@ -449,7 +484,8 @@ impl DisplayLinkPresenter {
     }
 
     pub fn update_edr_headroom(&mut self, headroom: f64) {
-        self.edr_headroom.store(headroom.to_bits(), Ordering::Relaxed);
+        self.edr_headroom
+            .store(headroom.to_bits(), Ordering::Relaxed);
     }
 
     /// Retarget the presenter if the window moved to a different display.
@@ -464,7 +500,8 @@ impl DisplayLinkPresenter {
         }
         log::info!(
             "[DisplayLink] Retargeted: display {} → {}",
-            self.current_display_id, new_id,
+            self.current_display_id,
+            new_id,
         );
         self.current_display_id = new_id;
         true
@@ -478,8 +515,12 @@ impl Drop for DisplayLinkPresenter {
             PresenterMode::Fullscreen { context } => {
                 unsafe { &**context }.stop.store(true, Ordering::Release);
             }
-            PresenterMode::Windowed { callback_context, .. } => {
-                unsafe { &**callback_context }.stop.store(true, Ordering::Release);
+            PresenterMode::Windowed {
+                callback_context, ..
+            } => {
+                unsafe { &**callback_context }
+                    .stop
+                    .store(true, Ordering::Release);
             }
         }
 
@@ -495,7 +536,9 @@ impl Drop for DisplayLinkPresenter {
                     drop(Box::from_raw(ctx.get()));
                 });
             }
-            PresenterMode::Windowed { callback_context, .. } => {
+            PresenterMode::Windowed {
+                callback_context, ..
+            } => {
                 let ctx = SendPtr(*callback_context);
                 std::thread::spawn(move || unsafe {
                     let dl = dl.get();
@@ -632,9 +675,7 @@ impl UiDisplayLink {
             );
         }
 
-        let refresh = unsafe {
-            CVDisplayLinkGetActualOutputVideoRefreshPeriod(display_link)
-        };
+        let refresh = unsafe { CVDisplayLinkGetActualOutputVideoRefreshPeriod(display_link) };
         log::info!(
             "[UiDisplayLink] Started for display {display_id}, \
              refresh={:.2}ms ({:.1}Hz)",
@@ -642,7 +683,12 @@ impl UiDisplayLink {
             if refresh > 0.0 { 1.0 / refresh } else { 0.0 },
         );
 
-        Self { display_link, context, vsync_ready, current_display_id: display_id }
+        Self {
+            display_link,
+            context,
+            vsync_ready,
+            current_display_id: display_id,
+        }
     }
 
     /// Check and consume the vsync signal. Returns true once per display vsync.
@@ -673,9 +719,8 @@ impl UiDisplayLink {
         if new_id == 0 || new_id == self.current_display_id {
             return false;
         }
-        let old_refresh = unsafe {
-            CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
-        };
+        let old_refresh =
+            unsafe { CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link) };
         unsafe {
             let ctx = &*self.context;
             ctx.stop.store(true, Ordering::Release);
@@ -685,15 +730,23 @@ impl UiDisplayLink {
             CVDisplayLinkSetCurrentCGDisplay(self.display_link, new_id);
             ctx.stop.store(false, Ordering::Release);
         }
-        let new_refresh = unsafe {
-            CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
-        };
+        let new_refresh =
+            unsafe { CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link) };
         log::info!(
             "[UiDisplayLink] Retargeted: display {} → {}, \
              refresh {:.1}Hz → {:.1}Hz",
-            self.current_display_id, new_id,
-            if old_refresh > 0.0 { 1.0 / old_refresh } else { 0.0 },
-            if new_refresh > 0.0 { 1.0 / new_refresh } else { 0.0 },
+            self.current_display_id,
+            new_id,
+            if old_refresh > 0.0 {
+                1.0 / old_refresh
+            } else {
+                0.0
+            },
+            if new_refresh > 0.0 {
+                1.0 / new_refresh
+            } else {
+                0.0
+            },
         );
         self.current_display_id = new_id;
         true
@@ -703,7 +756,9 @@ impl UiDisplayLink {
 impl Drop for UiDisplayLink {
     fn drop(&mut self) {
         // Signal the callback to become a no-op IMMEDIATELY.
-        unsafe { (*self.context).stop.store(true, Ordering::Release); }
+        unsafe {
+            (*self.context).stop.store(true, Ordering::Release);
+        }
 
         // Move blocking cleanup off the main thread. CVDisplayLinkStop blocks
         // until the in-flight callback finishes, and the callback calls

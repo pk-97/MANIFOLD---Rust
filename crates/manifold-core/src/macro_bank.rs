@@ -5,9 +5,9 @@
 //! optional response curves. Targets are identified by the same addressing scheme
 //! as `OscParamTarget` so the fan-out reuses the existing parameter write path.
 
-use serde::{Deserialize, Serialize};
 use crate::effect_type_id::EffectTypeId;
 use crate::id::LayerId;
+use serde::{Deserialize, Serialize};
 
 /// Number of macro slots in the bank.
 pub const MACRO_COUNT: usize = 8;
@@ -81,7 +81,9 @@ pub struct MacroMapping {
     pub curve: MacroCurve,
 }
 
-fn default_one() -> f32 { 1.0 }
+fn default_one() -> f32 {
+    1.0
+}
 
 // ── Slot ───────────────────────────────────────────────────────────
 
@@ -123,7 +125,9 @@ fn default_slots() -> Vec<MacroSlot> {
 
 impl Default for MacroBank {
     fn default() -> Self {
-        Self { slots: default_slots() }
+        Self {
+            slots: default_slots(),
+        }
     }
 }
 
@@ -135,58 +139,65 @@ impl MacroBank {
 
     /// Apply a macro value change: update the slot and fan out to all mapped
     /// targets. Called from both OSC `apply()` and UI dispatch.
-    pub fn apply_macro(
-        project: &mut crate::project::Project,
-        index: usize,
-        value: f32,
-    ) {
-        if index >= MACRO_COUNT { return; }
+    pub fn apply_macro(project: &mut crate::project::Project, index: usize, value: f32) {
+        if index >= MACRO_COUNT {
+            return;
+        }
 
         let value = value.clamp(0.0, 1.0);
         project.settings.macro_bank.slots[index].value = value;
 
         // Collect mappings to avoid borrow conflict (slot borrows project.settings)
-        let mappings: Vec<_> = project.settings.macro_bank.slots[index]
-            .mappings.clone();
+        let mappings: Vec<_> = project.settings.macro_bank.slots[index].mappings.clone();
 
         for mapping in &mappings {
             let curved = mapping.curve.apply(value);
-            let mapped = mapping.range_min
-                + (mapping.range_max - mapping.range_min) * curved;
+            let mapped = mapping.range_min + (mapping.range_max - mapping.range_min) * curved;
 
             match &mapping.target {
                 MacroMappingTarget::MasterOpacity => {
                     project.settings.set_master_opacity(mapped);
                 }
-                MacroMappingTarget::MasterEffect { effect_type, param_index } => {
-                    if let Some(fx) = project.settings.master_effects.iter_mut()
+                MacroMappingTarget::MasterEffect {
+                    effect_type,
+                    param_index,
+                } => {
+                    if let Some(fx) = project
+                        .settings
+                        .master_effects
+                        .iter_mut()
                         .find(|f| f.effect_type() == effect_type)
                     {
                         fx.set_base_param(*param_index, mapped);
                     }
                 }
                 MacroMappingTarget::LayerOpacity { layer_id } => {
-                    if let Some((_, layer)) = project.timeline
-                        .find_layer_by_id_mut(layer_id.as_str())
+                    if let Some((_, layer)) =
+                        project.timeline.find_layer_by_id_mut(layer_id.as_str())
                     {
                         layer.opacity = mapped.clamp(0.0, 1.0);
                     }
                 }
                 MacroMappingTarget::LayerEffect {
-                    layer_id, effect_type, param_index,
+                    layer_id,
+                    effect_type,
+                    param_index,
                 } => {
-                    if let Some((_, layer)) = project.timeline
-                        .find_layer_by_id_mut(layer_id.as_str())
+                    if let Some((_, layer)) =
+                        project.timeline.find_layer_by_id_mut(layer_id.as_str())
                         && let Some(effects) = &mut layer.effects
-                        && let Some(fx) = effects.iter_mut()
-                            .find(|f| f.effect_type() == effect_type)
+                        && let Some(fx) =
+                            effects.iter_mut().find(|f| f.effect_type() == effect_type)
                     {
                         fx.set_base_param(*param_index, mapped);
                     }
                 }
-                MacroMappingTarget::GenParam { layer_id, param_index } => {
-                    if let Some((_, layer)) = project.timeline
-                        .find_layer_by_id_mut(layer_id.as_str())
+                MacroMappingTarget::GenParam {
+                    layer_id,
+                    param_index,
+                } => {
+                    if let Some((_, layer)) =
+                        project.timeline.find_layer_by_id_mut(layer_id.as_str())
                         && let Some(gp) = layer.gen_params_mut()
                     {
                         gp.set_param_base(*param_index, mapped);
@@ -245,7 +256,9 @@ mod tests {
 
     #[test]
     fn normalize_handles_short_vec() {
-        let mut bank = MacroBank { slots: vec![MacroSlot::default(); 3] };
+        let mut bank = MacroBank {
+            slots: vec![MacroSlot::default(); 3],
+        };
         bank.normalize();
         assert_eq!(bank.slots.len(), MACRO_COUNT);
     }

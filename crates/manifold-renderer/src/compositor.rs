@@ -1,9 +1,9 @@
 use crate::gpu_encoder::GpuEncoder;
 use crate::layer_compositor::CompositeClipDescriptor;
 use crate::tonemap::TonemapSettings;
+use manifold_core::BlendMode;
 use manifold_core::LayerId;
 use manifold_core::effects::{EffectGroup, EffectInstance};
-use manifold_core::BlendMode;
 
 /// Per-layer metadata passed to the compositor.
 pub struct CompositeLayerDescriptor<'a> {

@@ -180,10 +180,8 @@ impl InputHandler {
             if self.inspector_has_focus && host.handle_effect_paste() {
                 return true;
             }
-            let target_beat = host.insert_cursor_beat()
-                .unwrap_or(host.current_beat());
-            let target_layer = host.insert_cursor_layer_index()
-                .unwrap_or(0) as i32;
+            let target_beat = host.insert_cursor_beat().unwrap_or(host.current_beat());
+            let target_layer = host.insert_cursor_layer_index().unwrap_or(0) as i32;
             host.paste_clips(target_beat, target_layer);
             return true;
         }
@@ -221,8 +219,10 @@ impl InputHandler {
         }
 
         // ── Delete/Backspace (context-sensitive: effects → markers → layers → clips) (Unity line 336) ──
-        if matches!(logical_key, Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace))
-            && m.is_none()
+        if matches!(
+            logical_key,
+            Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace)
+        ) && m.is_none()
         {
             // Priority 1: inspector focused → delete effects
             if self.inspector_has_focus && host.handle_effect_delete() {
@@ -235,9 +235,7 @@ impl InputHandler {
             }
             // Priority 3: layer selection active, no clips, no region → delete layers
             // (Unity lines 341-346)
-            if host.layer_selection_count() > 0
-                && !host.has_region()
-                && host.selection_count() == 0
+            if host.layer_selection_count() > 0 && !host.has_region() && host.selection_count() == 0
             {
                 host.delete_selected_layers();
                 return true;
@@ -321,10 +319,14 @@ impl InputHandler {
 
         // ── Arrow keys: nudge clips when selected, navigate cursor otherwise ──
         // (Unity lines 426-458)
-        if matches!(logical_key,
-            Key::Named(NamedKey::ArrowLeft) | Key::Named(NamedKey::ArrowRight) |
-            Key::Named(NamedKey::ArrowUp) | Key::Named(NamedKey::ArrowDown))
-            && !m.command && !m.alt
+        if matches!(
+            logical_key,
+            Key::Named(NamedKey::ArrowLeft)
+                | Key::Named(NamedKey::ArrowRight)
+                | Key::Named(NamedKey::ArrowUp)
+                | Key::Named(NamedKey::ArrowDown)
+        ) && !m.command
+            && !m.alt
         {
             let has_selected = host.selection_count() > 0;
 
@@ -375,15 +377,11 @@ impl InputHandler {
             host.calibrate_percussion_downbeat();
             return true;
         }
-        if matches!(logical_key, Key::Character(c) if c.as_str() == "[")
-            && m.is_command_shift()
-        {
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "[") && m.is_command_shift() {
             host.nudge_percussion_alignment(-0.25);
             return true;
         }
-        if matches!(logical_key, Key::Character(c) if c.as_str() == "]")
-            && m.is_command_shift()
-        {
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "]") && m.is_command_shift() {
             host.nudge_percussion_alignment(0.25);
             return true;
         }

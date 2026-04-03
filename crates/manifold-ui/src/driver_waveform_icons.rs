@@ -215,7 +215,10 @@ mod tests {
 
     #[test]
     fn waveform_points_correct_count() {
-        assert_eq!(fill_waveform_points(DriverWaveform::Sine).len(), SINE_SAMPLES);
+        assert_eq!(
+            fill_waveform_points(DriverWaveform::Sine).len(),
+            SINE_SAMPLES
+        );
         assert_eq!(fill_waveform_points(DriverWaveform::Triangle).len(), 3);
         assert_eq!(fill_waveform_points(DriverWaveform::Sawtooth).len(), 3);
         assert_eq!(fill_waveform_points(DriverWaveform::Square).len(), 4);

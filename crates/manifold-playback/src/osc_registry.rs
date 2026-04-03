@@ -13,9 +13,9 @@
 //!
 //! STUB: OscReceiver native I/O is not available — see osc_receiver.rs.
 
+use crate::osc_receiver::OscReceiver;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
-use crate::osc_receiver::OscReceiver;
 
 /// Setter callback for a registered float parameter.
 /// Port of Unity `Action<float>`.
@@ -68,19 +68,25 @@ impl OscParameterRegistry {
     /// Port of Unity OscParameterRegistry.EnsureReceiver().
     fn ensure_receiver(&mut self) {
         if let Some(ref r) = self.osc_receiver
-            && r.is_listening() { return; }
+            && r.is_listening()
+        {
+            return;
+        }
 
         if self.osc_receiver.is_none() {
             self.osc_receiver = Some(OscReceiver::new());
         }
 
         if let Some(ref mut r) = self.osc_receiver
-            && !r.is_listening() {
-                r.start_listening();
-            }
+            && !r.is_listening()
+        {
+            r.start_listening();
+        }
     }
 
-    pub fn registered_count(&self) -> usize { self.parameters.len() }
+    pub fn registered_count(&self) -> usize {
+        self.parameters.len()
+    }
 
     // =================================================================
     // Register / Unregister
@@ -90,7 +96,9 @@ impl OscParameterRegistry {
     /// Re-registering the same address replaces the previous setter.
     /// Port of Unity OscParameterRegistry.Register().
     pub fn register(&mut self, address: &str, setter: FloatSetter) {
-        if address.is_empty() { return; }
+        if address.is_empty() {
+            return;
+        }
 
         // Replace existing registration for same address.
         if self.parameters.contains_key(address) {
@@ -116,18 +124,24 @@ impl OscParameterRegistry {
         //
         // For the stub phase the OscReceiver dispatches through update() and
         // OscParameterRegistry::dispatch() must be called by the host each frame.
-        let _ = self.osc_callback_keys.entry(address.to_string()).or_insert(0);
+        let _ = self
+            .osc_callback_keys
+            .entry(address.to_string())
+            .or_insert(0);
     }
 
     /// Unregister a single parameter by address.
     /// Port of Unity OscParameterRegistry.Unregister().
     pub fn unregister(&mut self, address: &str) {
-        if self.parameters.remove(address).is_none() { return; }
+        if self.parameters.remove(address).is_none() {
+            return;
+        }
 
         if let Some(ref mut receiver) = self.osc_receiver
-            && let Some(_key) = self.osc_callback_keys.remove(address) {
-                receiver.unsubscribe_all(address);
-            }
+            && let Some(_key) = self.osc_callback_keys.remove(address)
+        {
+            receiver.unsubscribe_all(address);
+        }
     }
 
     /// Unregister all parameters whose address starts with prefix.

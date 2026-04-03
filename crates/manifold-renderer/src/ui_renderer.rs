@@ -165,15 +165,41 @@ impl UIRenderer {
         let layout = GpuVertexLayout {
             stride: std::mem::size_of::<UIVertex>() as u32, // 64 bytes
             attributes: vec![
-                GpuVertexAttribute { format: GpuVertexFormat::Float32x2, offset: 0, shader_location: 0 },
-                GpuVertexAttribute { format: GpuVertexFormat::Float32x2, offset: 8, shader_location: 1 },
-                GpuVertexAttribute { format: GpuVertexFormat::Float32x4, offset: 16, shader_location: 2 },
-                GpuVertexAttribute { format: GpuVertexFormat::Float32x4, offset: 32, shader_location: 3 },
-                GpuVertexAttribute { format: GpuVertexFormat::Float32x4, offset: 48, shader_location: 4 },
+                GpuVertexAttribute {
+                    format: GpuVertexFormat::Float32x2,
+                    offset: 0,
+                    shader_location: 0,
+                },
+                GpuVertexAttribute {
+                    format: GpuVertexFormat::Float32x2,
+                    offset: 8,
+                    shader_location: 1,
+                },
+                GpuVertexAttribute {
+                    format: GpuVertexFormat::Float32x4,
+                    offset: 16,
+                    shader_location: 2,
+                },
+                GpuVertexAttribute {
+                    format: GpuVertexFormat::Float32x4,
+                    offset: 32,
+                    shader_location: 3,
+                },
+                GpuVertexAttribute {
+                    format: GpuVertexFormat::Float32x4,
+                    offset: 48,
+                    shader_location: 4,
+                },
             ],
         };
         let pipeline = device.create_render_pipeline_with_vertex_layout(
-            UI_SHADER, "vs_main", "fs_main", format, Some(blend), &layout, "UI Pipeline",
+            UI_SHADER,
+            "vs_main",
+            "fs_main",
+            format,
+            Some(blend),
+            &layout,
+            "UI Pipeline",
         );
 
         #[cfg(target_os = "macos")]
@@ -204,7 +230,11 @@ impl UIRenderer {
     /// Queue a filled rectangle.
     pub fn draw_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [f32; 4]) {
         self.rect_commands.push(RectCommand {
-            x, y, w, h, color,
+            x,
+            y,
+            w,
+            h,
+            color,
             corner_radius: 0.0,
             border_width: 0.0,
             border_color: [0.0; 4],
@@ -214,12 +244,20 @@ impl UIRenderer {
     /// Queue a rounded rectangle.
     pub fn draw_rounded_rect(
         &mut self,
-        x: f32, y: f32, w: f32, h: f32,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
         color: [f32; 4],
         corner_radius: f32,
     ) {
         self.rect_commands.push(RectCommand {
-            x, y, w, h, color, corner_radius,
+            x,
+            y,
+            w,
+            h,
+            color,
+            corner_radius,
             border_width: 0.0,
             border_color: [0.0; 4],
         });
@@ -229,27 +267,32 @@ impl UIRenderer {
     #[allow(clippy::too_many_arguments)]
     pub fn draw_bordered_rect(
         &mut self,
-        x: f32, y: f32, w: f32, h: f32,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
         color: [f32; 4],
         corner_radius: f32,
         border_width: f32,
         border_color: [f32; 4],
     ) {
         self.rect_commands.push(RectCommand {
-            x, y, w, h, color, corner_radius, border_width, border_color,
+            x,
+            y,
+            w,
+            h,
+            color,
+            corner_radius,
+            border_width,
+            border_color,
         });
     }
 
     /// Queue text at a position.
-    pub fn draw_text(
-        &mut self,
-        x: f32, y: f32,
-        text: &str,
-        font_size: f32,
-        color: [u8; 4],
-    ) {
+    pub fn draw_text(&mut self, x: f32, y: f32, text: &str, font_size: f32, color: [u8; 4]) {
         #[cfg(target_os = "macos")]
-        self.text_renderer.draw_text(x, y, text, font_size, color, FontWeight::Medium, None);
+        self.text_renderer
+            .draw_text(x, y, text, font_size, color, FontWeight::Medium, None);
     }
 
     // ── UITree rendering ────────────────────────────────────────────
@@ -263,9 +306,10 @@ impl UIRenderer {
         tree.traverse(|event| match event {
             TraversalEvent::Node(node) => {
                 if let Some(start) = skip_from
-                    && node.id as usize >= start {
-                        return;
-                    }
+                    && node.id as usize >= start
+                {
+                    return;
+                }
                 self.draw_node(node);
             }
             TraversalEvent::PushClip(rect) => {
@@ -319,13 +363,7 @@ impl UIRenderer {
     /// When `dirty_only` is true, only draws dirty nodes. The atlas already
     /// contains previous content via LoadOp::Load, so non-dirty nodes are
     /// preserved. Clip events are always processed for correctness.
-    pub fn render_sub_region(
-        &mut self,
-        tree: &UITree,
-        start: usize,
-        end: usize,
-        dirty_only: bool,
-    ) {
+    pub fn render_sub_region(&mut self, tree: &UITree, start: usize, end: usize, dirty_only: bool) {
         self.clip_stack.clear();
 
         tree.traverse_flat_range(start, end, dirty_only, |event| match event {
@@ -428,46 +466,72 @@ impl UIRenderer {
         // Text (or icon if text starts with PUA marker U+E000..U+E004)
         #[cfg(target_os = "macos")]
         if let Some(text) = &node.text
-            && !text.is_empty() {
-                let clip_bounds = self.clip_stack.last().map(|c| [c.x, c.y, c.x_max(), c.y_max()]);
-                let text_color = if disabled {
-                    [style.text_color.r, style.text_color.g, style.text_color.b, style.text_color.a / 3]
-                } else {
-                    [style.text_color.r, style.text_color.g, style.text_color.b, style.text_color.a]
+            && !text.is_empty()
+        {
+            let clip_bounds = self
+                .clip_stack
+                .last()
+                .map(|c| [c.x, c.y, c.x_max(), c.y_max()]);
+            let text_color = if disabled {
+                [
+                    style.text_color.r,
+                    style.text_color.g,
+                    style.text_color.b,
+                    style.text_color.a / 3,
+                ]
+            } else {
+                [
+                    style.text_color.r,
+                    style.text_color.g,
+                    style.text_color.b,
+                    style.text_color.a,
+                ]
+            };
+
+            let first_char = text.chars().next().unwrap();
+            if ('\u{E000}'..='\u{E004}').contains(&first_char) {
+                // Icon: square aspect ratio, centered in bounds
+                let icon_id = (first_char as u32 - 0xE000) as u8;
+                let pad = 2.0_f32;
+                let icon_size = (bounds.width.min(bounds.height) - pad * 2.0).max(4.0);
+                let icon_w = icon_size;
+                let icon_h = icon_size;
+                let icon_x = bounds.x + (bounds.width - icon_size) * 0.5;
+                let icon_y = bounds.y + (bounds.height - icon_size) * 0.5;
+                self.text_renderer.draw_icon(
+                    icon_id,
+                    icon_x,
+                    icon_y,
+                    icon_w,
+                    icon_h,
+                    text_color,
+                    clip_bounds,
+                );
+            } else {
+                let text_size = self.text_renderer.measure_text_cached(
+                    text,
+                    style.font_size,
+                    style.font_weight,
+                );
+                let text_y = bounds.y + (bounds.height - text_size.y) * 0.5;
+
+                let text_x = match style.text_align {
+                    TextAlign::Center => bounds.x + (bounds.width - text_size.x) * 0.5,
+                    TextAlign::Right => bounds.x + bounds.width - text_size.x,
+                    TextAlign::Left => bounds.x,
                 };
 
-                let first_char = text.chars().next().unwrap();
-                if ('\u{E000}'..='\u{E004}').contains(&first_char) {
-                    // Icon: square aspect ratio, centered in bounds
-                    let icon_id = (first_char as u32 - 0xE000) as u8;
-                    let pad = 2.0_f32;
-                    let icon_size = (bounds.width.min(bounds.height) - pad * 2.0).max(4.0);
-                    let icon_w = icon_size;
-                    let icon_h = icon_size;
-                    let icon_x = bounds.x + (bounds.width - icon_size) * 0.5;
-                    let icon_y = bounds.y + (bounds.height - icon_size) * 0.5;
-                    self.text_renderer.draw_icon(
-                        icon_id, icon_x, icon_y, icon_w, icon_h,
-                        text_color, clip_bounds,
-                    );
-                } else {
-                    let text_size = self.text_renderer.measure_text_cached(
-                        text, style.font_size, style.font_weight,
-                    );
-                    let text_y = bounds.y + (bounds.height - text_size.y) * 0.5;
-
-                    let text_x = match style.text_align {
-                        TextAlign::Center => bounds.x + (bounds.width - text_size.x) * 0.5,
-                        TextAlign::Right => bounds.x + bounds.width - text_size.x,
-                        TextAlign::Left => bounds.x,
-                    };
-
-                    self.text_renderer.draw_text(
-                        text_x, text_y, text, style.font_size as f32,
-                        text_color, style.font_weight, clip_bounds,
-                    );
-                }
+                self.text_renderer.draw_text(
+                    text_x,
+                    text_y,
+                    text,
+                    style.font_size as f32,
+                    text_color,
+                    style.font_weight,
+                    clip_bounds,
+                );
             }
+        }
     }
 
     /// Queue an icon draw. `icon_id` is one of the `ICON_WAVE_*` constants.
@@ -476,17 +540,28 @@ impl UIRenderer {
     pub fn draw_icon(
         &mut self,
         icon_id: u8,
-        x: f32, y: f32, w: f32, h: f32,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
         color: [u8; 4],
         clip_bounds: Option<[f32; 4]>,
     ) {
-        self.text_renderer.draw_icon(icon_id, x, y, w, h, color, clip_bounds);
+        self.text_renderer
+            .draw_icon(icon_id, x, y, w, h, color, clip_bounds);
     }
 
     /// Text measurement using NativeTextRenderer's cached measurement.
-    pub fn measure_text_cached(&mut self, text: &str, font_size: u16, font_weight: FontWeight) -> Vec2 {
+    pub fn measure_text_cached(
+        &mut self,
+        text: &str,
+        font_size: u16,
+        font_weight: FontWeight,
+    ) -> Vec2 {
         #[cfg(target_os = "macos")]
-        return self.text_renderer.measure_text_cached(text, font_size, font_weight);
+        return self
+            .text_renderer
+            .measure_text_cached(text, font_size, font_weight);
         #[cfg(not(target_os = "macos"))]
         {
             let em = font_size as f32;
@@ -547,34 +622,36 @@ impl UIRenderer {
             let (x1, y1) = (cmd.x + cmd.w, cmd.y + cmd.h);
 
             self.vertices.push(UIVertex {
-                position: [x0, y0], uv: [0.0, 0.0],
+                position: [x0, y0],
+                uv: [0.0, 0.0],
                 color: cmd.color,
                 rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
                 border_color: cmd.border_color,
             });
             self.vertices.push(UIVertex {
-                position: [x1, y0], uv: [1.0, 0.0],
+                position: [x1, y0],
+                uv: [1.0, 0.0],
                 color: cmd.color,
                 rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
                 border_color: cmd.border_color,
             });
             self.vertices.push(UIVertex {
-                position: [x1, y1], uv: [1.0, 1.0],
+                position: [x1, y1],
+                uv: [1.0, 1.0],
                 color: cmd.color,
                 rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
                 border_color: cmd.border_color,
             });
             self.vertices.push(UIVertex {
-                position: [x0, y1], uv: [0.0, 1.0],
+                position: [x0, y1],
+                uv: [0.0, 1.0],
                 color: cmd.color,
                 rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
                 border_color: cmd.border_color,
             });
 
-            self.indices.extend_from_slice(&[
-                base, base + 1, base + 2,
-                base, base + 2, base + 3,
-            ]);
+            self.indices
+                .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
         }
 
         // Ring-buffered GPU buffers: each prepare() call advances to the next
@@ -590,14 +667,18 @@ impl UIRenderer {
                 Some(buf) if buf.size >= vdata.len() as u64 => buf,
                 _ => device.create_buffer_shared(vdata.len() as u64),
             };
-            unsafe { vbuf.write(0, vdata); }
+            unsafe {
+                vbuf.write(0, vdata);
+            }
 
             let idata = bytemuck::cast_slice::<u32, u8>(&self.indices);
             let ibuf = match self.ibuf_ring[slot].take() {
                 Some(buf) if buf.size >= idata.len() as u64 => buf,
                 _ => device.create_buffer_shared(idata.len() as u64),
             };
-            unsafe { ibuf.write(0, idata); }
+            unsafe {
+                ibuf.write(0, idata);
+            }
 
             self.vbuf_ring[slot] = Some(vbuf);
             self.ibuf_ring[slot] = Some(ibuf);
@@ -610,7 +691,12 @@ impl UIRenderer {
         // Prepare text.
         #[cfg(target_os = "macos")]
         let has_text = self.text_renderer.prepare(
-            device, viewport_w, viewport_h, offset_x, offset_y, scale_factor,
+            device,
+            viewport_w,
+            viewport_h,
+            offset_x,
+            offset_y,
+            scale_factor,
         );
         #[cfg(not(target_os = "macos"))]
         let has_text = false;
@@ -638,10 +724,7 @@ impl UIRenderer {
     /// Draw UI rects + text into an already-active render pass.
     /// Used when the caller manages the render pass lifetime (e.g. batching
     /// UI draws with layer bitmap draws into a single pass).
-    pub fn render_in_pass(
-        &self,
-        encoder: &mut GpuEncoder,
-    ) {
+    pub fn render_in_pass(&self, encoder: &mut GpuEncoder) {
         if self.prepared_index_count > 0 {
             let vbuf = self.vbuf_ring[self.prepared_slot].as_ref().unwrap();
             let ibuf = self.ibuf_ring[self.prepared_slot].as_ref().unwrap();
@@ -669,7 +752,9 @@ impl UIRenderer {
 impl TextMeasure for UIRenderer {
     fn measure_text(&self, text: &str, font_size: u16, font_weight: FontWeight) -> Vec2 {
         #[cfg(target_os = "macos")]
-        return self.text_renderer.measure_text(text, font_size, font_weight);
+        return self
+            .text_renderer
+            .measure_text(text, font_size, font_weight);
         #[cfg(not(target_os = "macos"))]
         {
             let em = font_size as f32;

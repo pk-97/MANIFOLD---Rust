@@ -1,8 +1,8 @@
-use manifold_core::EffectTypeId;
-use manifold_core::effects::EffectInstance;
+use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
-use super::compute_blit_helper::ComputeBlitHelper;
+use manifold_core::EffectTypeId;
+use manifold_core::effects::EffectInstance;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -46,18 +46,20 @@ impl PostProcessEffect for EdgeDetectFX {
     ) {
         let p = &fx.param_values;
         let uniforms = EdgeDetectUniforms {
-            amount:       p.first().copied().unwrap_or(0.0),
-            threshold:    p.get(1).copied().unwrap_or(0.1),
+            amount: p.first().copied().unwrap_or(0.0),
+            threshold: p.get(1).copied().unwrap_or(0.1),
             texel_size_x: 1.0 / ctx.output_width as f32,
             texel_size_y: 1.0 / ctx.output_height as f32,
         };
 
         self.helper.dispatch(
             gpu,
-            source, target,
+            source,
+            target,
             bytemuck::bytes_of(&uniforms),
             "EdgeDetect Pass",
-            ctx.width, ctx.height,
+            ctx.width,
+            ctx.height,
         );
     }
 }

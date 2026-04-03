@@ -16,6 +16,7 @@ pub enum TextInputField {
     Fps,
     LayerName(usize),
     ClipBpm,
+    MacroLabel(usize),
     /// Effect parameter: (effect_index, param_index).
     EffectParam(usize, usize),
     /// Effect group rename: group index.
@@ -41,11 +42,21 @@ pub struct AnchorRect {
 
 impl AnchorRect {
     pub fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
-        Self { x, y, width: w, height: h }
+        Self {
+            x,
+            y,
+            width: w,
+            height: h,
+        }
     }
 
     pub fn zero() -> Self {
-        Self { x: 0.0, y: 0.0, width: 0.0, height: 0.0 }
+        Self {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        }
     }
 }
 
@@ -82,7 +93,13 @@ impl TextInputState {
 
     /// Begin editing a field with an initial value.
     /// Auto-cancels any existing session (Unity: only one active at a time).
-    pub fn begin(&mut self, field: TextInputField, initial: &str, anchor: AnchorRect, font_size: f32) {
+    pub fn begin(
+        &mut self,
+        field: TextInputField,
+        initial: &str,
+        anchor: AnchorRect,
+        font_size: f32,
+    ) {
         self.active = true;
         self.field = field;
         self.text = initial.to_string();
@@ -178,7 +195,10 @@ impl TextInputState {
             return;
         }
         if self.cursor < self.text.len() {
-            self.cursor += self.text[self.cursor..].chars().next().map_or(0, |c| c.len_utf8());
+            self.cursor += self.text[self.cursor..]
+                .chars()
+                .next()
+                .map_or(0, |c| c.len_utf8());
         }
     }
 

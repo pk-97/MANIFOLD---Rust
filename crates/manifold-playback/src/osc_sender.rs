@@ -9,9 +9,9 @@
 //! Echo suppression: checks SyncArbiter.suppress_next_transport.
 //! When true, consumes the flag and skips the send (prevents echo loops).
 
-use std::net::UdpSocket;
-use manifold_core::{Beats, Seconds};
 use crate::sync::SyncArbiter;
+use manifold_core::{Beats, Seconds};
+use std::net::UdpSocket;
 
 const DESTINATION_IP: &str = "127.0.0.1";
 const SEEK_THRESHOLD_BEATS: f32 = 0.5;
@@ -53,10 +53,20 @@ impl OscPositionSender {
         }
     }
 
-    pub fn is_sender_enabled(&self) -> bool { self.is_enabled }
+    pub fn is_sender_enabled(&self) -> bool {
+        self.is_enabled
+    }
 
-    pub fn enable_sender(&mut self, port: i32, is_playing: bool, current_beat: Beats, realtime: Seconds) {
-        if self.is_enabled { return; }
+    pub fn enable_sender(
+        &mut self,
+        port: i32,
+        is_playing: bool,
+        current_beat: Beats,
+        realtime: Seconds,
+    ) {
+        if self.is_enabled {
+            return;
+        }
 
         let addr = format!("{}:{}", DESTINATION_IP, port);
         match UdpSocket::bind("0.0.0.0:0") {
@@ -83,7 +93,9 @@ impl OscPositionSender {
     }
 
     pub fn disable_sender(&mut self, arbiter: &mut SyncArbiter) {
-        if !self.is_enabled { return; }
+        if !self.is_enabled {
+            return;
+        }
         self.is_enabled = false;
         arbiter.clear_ownership();
         self.socket = None;
@@ -100,7 +112,9 @@ impl OscPositionSender {
         realtime: f64,
         arbiter: &mut SyncArbiter,
     ) {
-        if !self.is_enabled || self.socket.is_none() { return; }
+        if !self.is_enabled || self.socket.is_none() {
+            return;
+        }
 
         let now = realtime;
 
@@ -197,7 +211,9 @@ impl OscPositionSender {
 }
 
 impl Default for OscPositionSender {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ── Minimal OSC encoding ──────────────────────────────────────────
@@ -247,7 +263,12 @@ mod tests {
         assert_eq!(&packet[16..18], b",f");
         // Float 4.5 in big-endian
         let float_bytes = &packet[20..24];
-        let val = f32::from_be_bytes([float_bytes[0], float_bytes[1], float_bytes[2], float_bytes[3]]);
+        let val = f32::from_be_bytes([
+            float_bytes[0],
+            float_bytes[1],
+            float_bytes[2],
+            float_bytes[3],
+        ]);
         assert!((val - 4.5).abs() < 0.001);
     }
 
@@ -256,7 +277,12 @@ mod tests {
         let packet = encode_osc_int("/manifold/transport", 0);
         assert!(packet.len() >= 28);
         let int_start = packet.len() - 4;
-        let val = i32::from_be_bytes([packet[int_start], packet[int_start+1], packet[int_start+2], packet[int_start+3]]);
+        let val = i32::from_be_bytes([
+            packet[int_start],
+            packet[int_start + 1],
+            packet[int_start + 2],
+            packet[int_start + 3],
+        ]);
         assert_eq!(val, 0);
     }
 }

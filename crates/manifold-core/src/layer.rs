@@ -1,14 +1,14 @@
-use serde::{Deserialize, Serialize};
-use ahash::AHashMap;
-use crate::id::{LayerId, EffectGroupId};
-use crate::types::{BlendMode, ClipDurationMode, LayerType};
-use crate::generator_type_id::GeneratorTypeId;
-use crate::effect_type_id::EffectTypeId;
 use crate::clip::TimelineClip;
 use crate::color::Color;
-use crate::effects::{EffectInstance, EffectGroup, ParamEnvelope, ParameterDriver};
+use crate::effect_type_id::EffectTypeId;
+use crate::effects::{EffectGroup, EffectInstance, ParamEnvelope, ParameterDriver};
 use crate::generator::GeneratorParamState;
+use crate::generator_type_id::GeneratorTypeId;
+use crate::id::{EffectGroupId, LayerId};
+use crate::types::{BlendMode, ClipDurationMode, LayerType};
 use crate::units::Beats;
+use ahash::AHashMap;
+use serde::{Deserialize, Serialize};
 
 /// A single layer in the timeline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,33 +68,89 @@ pub struct Layer {
     pub source_clip_ids: Vec<String>,
 
     // ── Legacy flat generator fields (V1.0.0 format) ──
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "generatorType")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "generatorType"
+    )]
     pub legacy_generator_type: Option<GeneratorTypeId>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genParamValues")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "genParamValues"
+    )]
     pub legacy_gen_param_values: Option<Vec<f32>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genDrivers")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "genDrivers"
+    )]
     pub legacy_gen_drivers: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genParamVersion")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "genParamVersion"
+    )]
     pub legacy_gen_param_version: Option<i32>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genAnimSpeed")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "genAnimSpeed"
+    )]
     pub legacy_gen_anim_speed: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genAnimateEdges")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "genAnimateEdges"
+    )]
     pub legacy_gen_animate_edges: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genLineThickness")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "genLineThickness"
+    )]
     pub legacy_gen_line_thickness: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genProjDistance")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "genProjDistance"
+    )]
     pub legacy_gen_proj_distance: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genRotSpeedXY")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "genRotSpeedXY"
+    )]
     pub legacy_gen_rot_speed_xy: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genRotSpeedZW")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "genRotSpeedZW"
+    )]
     pub legacy_gen_rot_speed_zw: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genRotSpeedXW")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "genRotSpeedXW"
+    )]
     pub legacy_gen_rot_speed_xw: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genShowVertices")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "genShowVertices"
+    )]
     pub legacy_gen_show_vertices: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genVertexSize")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "genVertexSize"
+    )]
     pub legacy_gen_vertex_size: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genWindowSize")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "genWindowSize"
+    )]
     pub legacy_gen_window_size: Option<f32>,
 
     // ── Runtime caches (not serialized) ──
@@ -147,7 +203,8 @@ impl Layer {
     /// Mutable access to generator params, creating a default if None.
     #[inline]
     pub fn gen_params_or_init(&mut self) -> &mut GeneratorParamState {
-        self.gen_params.get_or_insert_with(GeneratorParamState::default)
+        self.gen_params
+            .get_or_insert_with(GeneratorParamState::default)
     }
 
     /// Generates a distinct color for layer visualization based on index.
@@ -167,7 +224,9 @@ impl Layer {
         if let Some(gp) = &self.gen_params {
             gp.generator_type()
         } else {
-            self.legacy_generator_type.as_ref().unwrap_or(&GeneratorTypeId::NONE)
+            self.legacy_generator_type
+                .as_ref()
+                .unwrap_or(&GeneratorTypeId::NONE)
         }
     }
 
@@ -182,9 +241,8 @@ impl Layer {
         if !self.clips_by_end_sorted || self.clips_by_end_indices.len() != self.clips.len() {
             self.clips_by_end_indices = (0..self.clips.len()).collect();
             let clips = &self.clips;
-            self.clips_by_end_indices.sort_by(|&a, &b| {
-                Self::compare_by_end_beat_ref(&clips[a], &clips[b])
-            });
+            self.clips_by_end_indices
+                .sort_by(|&a, &b| Self::compare_by_end_beat_ref(&clips[a], &clips[b]));
             self.clips_by_end_sorted = true;
         }
     }
@@ -289,17 +347,27 @@ impl Layer {
     /// Compare by start_beat, tiebreak by end_beat.
     /// From Unity Layer.cs CompareByStartBeat (lines 507-515).
     fn compare_by_start_beat(a: &TimelineClip, b: &TimelineClip) -> std::cmp::Ordering {
-        a.start_beat.partial_cmp(&b.start_beat)
+        a.start_beat
+            .partial_cmp(&b.start_beat)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.end_beat().partial_cmp(&b.end_beat()).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| {
+                a.end_beat()
+                    .partial_cmp(&b.end_beat())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
     }
 
     /// Compare by end_beat, tiebreak by start_beat.
     /// From Unity Layer.cs CompareByEndBeat (lines 517-525).
     fn compare_by_end_beat_ref(a: &TimelineClip, b: &TimelineClip) -> std::cmp::Ordering {
-        a.end_beat().partial_cmp(&b.end_beat())
+        a.end_beat()
+            .partial_cmp(&b.end_beat())
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.start_beat.partial_cmp(&b.start_beat).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| {
+                a.start_beat
+                    .partial_cmp(&b.start_beat)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
     }
 
     /// Convenience: ensure caches + collect active clips in one &mut self call.
@@ -309,7 +377,8 @@ impl Layer {
         self.collect_active_clips_at_beat(beat, results);
     }
 
-    pub fn add_clip(&mut self, clip: TimelineClip) {
+    pub fn add_clip(&mut self, mut clip: TimelineClip) {
+        clip.layer_id = self.layer_id.clone();
         self.clips.push(clip);
         self.mark_clips_unsorted();
     }
@@ -338,8 +407,9 @@ impl Layer {
     }
 
     /// Insert a clip at a specific index.
-    pub fn insert_clip_at(&mut self, index: usize, clip: TimelineClip) {
+    pub fn insert_clip_at(&mut self, index: usize, mut clip: TimelineClip) {
         let idx = index.min(self.clips.len());
+        clip.layer_id = self.layer_id.clone();
         self.clips.insert(idx, clip);
         self.mark_clips_unsorted();
     }
@@ -350,7 +420,9 @@ impl Layer {
         if self.clips.len() < 2 {
             return false;
         }
-        let mut sorted: Vec<(Beats, Beats)> = self.clips.iter()
+        let mut sorted: Vec<(Beats, Beats)> = self
+            .clips
+            .iter()
             .map(|c| (c.start_beat, c.end_beat()))
             .collect();
         sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -397,7 +469,9 @@ impl Layer {
 
     /// Snapshot current generator param values.
     pub fn snapshot_gen_params(&self) -> Vec<f32> {
-        self.gen_params.as_ref().map_or_else(Vec::new, |gp| gp.param_values.clone())
+        self.gen_params
+            .as_ref()
+            .map_or_else(Vec::new, |gp| gp.param_values.clone())
     }
 
     /// Snapshot current generator drivers.
@@ -416,7 +490,9 @@ impl Layer {
         if self.layer_type != LayerType::Generator {
             return;
         }
-        let gp = self.gen_params.get_or_insert_with(GeneratorParamState::default);
+        let gp = self
+            .gen_params
+            .get_or_insert_with(GeneratorParamState::default);
         gp.change_type(new_type.clone());
     }
 
@@ -432,7 +508,9 @@ impl Layer {
         if self.layer_type != LayerType::Generator {
             return;
         }
-        let gp = self.gen_params.get_or_insert_with(GeneratorParamState::default);
+        let gp = self
+            .gen_params
+            .get_or_insert_with(GeneratorParamState::default);
         gp.restore(old_type.clone(), params, drivers, envelopes);
     }
 
@@ -459,7 +537,10 @@ impl Layer {
 
     /// Get duration in beats (max end_beat across all clips). Unity Layer.cs line 530.
     pub fn get_duration_beats(&self) -> Beats {
-        self.clips.iter().map(|c| c.end_beat()).fold(Beats::ZERO, |a, b| a.max(b))
+        self.clips
+            .iter()
+            .map(|c| c.end_beat())
+            .fold(Beats::ZERO, |a, b| a.max(b))
     }
 
     /// Deep-clone this layer with all nested IDs regenerated.
@@ -475,11 +556,14 @@ impl Layer {
         // Remap effect groups: build old→new EffectGroupId map, update group_id refs on effects.
         if let Some(groups) = &self.effect_groups {
             let mut id_map: AHashMap<EffectGroupId, EffectGroupId> = AHashMap::new();
-            let new_groups: Vec<EffectGroup> = groups.iter().map(|g| {
-                let new_group = g.clone_with_new_id();
-                id_map.insert(g.id.clone(), new_group.id.clone());
-                new_group
-            }).collect();
+            let new_groups: Vec<EffectGroup> = groups
+                .iter()
+                .map(|g| {
+                    let new_group = g.clone_with_new_id();
+                    id_map.insert(g.id.clone(), new_group.id.clone());
+                    new_group
+                })
+                .collect();
             cloned.effect_groups = Some(new_groups);
 
             if let Some(effects) = &mut cloned.effects {
@@ -536,10 +620,16 @@ impl crate::effects::EffectContainer for Layer {
         self.effects.as_ref().is_some_and(|e| !e.is_empty())
     }
     fn find_effect(&self, effect_type: &EffectTypeId) -> Option<&crate::effects::EffectInstance> {
-        self.effects.as_ref()?.iter().find(|e| e.effect_type() == effect_type)
+        self.effects
+            .as_ref()?
+            .iter()
+            .find(|e| e.effect_type() == effect_type)
     }
     fn find_effect_group(&self, group_id: &str) -> Option<&crate::effects::EffectGroup> {
-        self.effect_groups.as_ref()?.iter().find(|g| g.id == group_id)
+        self.effect_groups
+            .as_ref()?
+            .iter()
+            .find(|g| g.id == group_id)
     }
     fn envelopes(&self) -> &[crate::effects::ParamEnvelope] {
         self.envelopes.as_deref().unwrap_or(&[])
@@ -598,5 +688,24 @@ impl Default for Layer {
     }
 }
 
-fn default_one() -> f32 { 1.0 }
-fn default_neg_one() -> i32 { -1 }
+fn default_one() -> f32 {
+    1.0
+}
+fn default_neg_one() -> i32 {
+    -1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::clip::TimelineClip;
+
+    #[test]
+    fn add_clip_syncs_clip_layer_id() {
+        let mut layer = Layer::new("Video 1".into(), LayerType::Video, 0);
+        layer.add_clip(TimelineClip::default());
+
+        assert_eq!(layer.clips.len(), 1);
+        assert_eq!(layer.clips[0].layer_id, layer.layer_id);
+    }
+}

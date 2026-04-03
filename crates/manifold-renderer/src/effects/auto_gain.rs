@@ -13,12 +13,12 @@
 // Character modes (Clean/Warm/Film/Vivid/Grit) are specialized via function
 // constants — Metal compiler dead-code eliminates inactive branches.
 
+use super::compute_blit_helper::ComputeBlitHelper;
+use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
+use crate::gpu_encoder::GpuEncoder;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
-use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
-use crate::gpu_encoder::GpuEncoder;
-use super::compute_blit_helper::ComputeBlitHelper;
 
 // ── Uniforms for the apply pass ────────────────────────────────────────
 
@@ -26,11 +26,11 @@ use super::compute_blit_helper::ComputeBlitHelper;
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct AutoGainUniforms {
     gain: f32,
-    character: u32,      // 0=clean, 1=warm, 2=film, 3=vivid, 4=grit
+    character: u32, // 0=clean, 1=warm, 2=film, 3=vivid, 4=grit
     color_push: f32,
     hdr_retention: f32,
-    gain_delta: f32,     // gain - 1.0, for coloration intensity
-    amount: f32,         // wet/dry mix (parallel compression)
+    gain_delta: f32, // gain - 1.0, for coloration intensity
+    amount: f32,     // wet/dry mix (parallel compression)
     _pad0: f32,
     _pad1: f32,
 }
@@ -119,11 +119,23 @@ impl AutoGainOwnerState {
         let base_release = lerp(1.000, 0.100, punch_param);
 
         // Program-dependent adjustment: widen attack on transients, tighten release.
-        let attack = if is_transient { base_attack * 2.0 } else { base_attack };
-        let release = if is_transient { base_release * 0.5 } else { base_release };
+        let attack = if is_transient {
+            base_attack * 2.0
+        } else {
+            base_attack
+        };
+        let release = if is_transient {
+            base_release * 0.5
+        } else {
+            base_release
+        };
 
         // Choose attack or release based on direction.
-        let time_constant = if log_lum > self.envelope_log { attack } else { release };
+        let time_constant = if log_lum > self.envelope_log {
+            attack
+        } else {
+            release
+        };
         let alpha = 1.0 - (-dt / time_constant.max(0.001)).exp();
 
         self.envelope_log += (log_lum - self.envelope_log) * alpha;
@@ -169,9 +181,8 @@ pub struct AutoGainFX {
 
 impl AutoGainFX {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
-        let measure_pipeline = device.create_compute_pipeline(
-            MEASURE_WGSL, "cs_main", "Auto Gain Measure",
-        );
+        let measure_pipeline =
+            device.create_compute_pipeline(MEASURE_WGSL, "cs_main", "Auto Gain Measure");
 
         // Specialized apply pipelines — character mode baked in.
         let spec = |mode: &str, label: &str| -> ComputeBlitHelper {
@@ -192,7 +203,8 @@ impl AutoGainFX {
 
     fn ensure_state(&mut self, device: &manifold_gpu::GpuDevice, owner_key: i64) {
         if !self.states.contains_key(&owner_key) {
-            self.states.insert(owner_key, AutoGainOwnerState::new(device));
+            self.states
+                .insert(owner_key, AutoGainOwnerState::new(device));
         }
     }
 }
@@ -225,7 +237,11 @@ impl PostProcessEffect for AutoGainFX {
         // ── CPU envelope: read previous frame's measurement, compute gain ──
         let measured_lum = state.read_measured_luminance();
         let gain = state.update_and_compute_gain(
-            measured_lum, ratio_param, punch_param, target_param, ctx.dt,
+            measured_lum,
+            ratio_param,
+            punch_param,
+            target_param,
+            ctx.dt,
         );
 
         // ── Dispatch 1: measure current frame's luminance (for next frame) ──
@@ -266,10 +282,13 @@ impl PostProcessEffect for AutoGainFX {
             _ => &self.apply_grit,
         };
         helper.dispatch(
-            gpu, source, target,
+            gpu,
+            source,
+            target,
             bytemuck::bytes_of(&uniforms),
             "Auto Gain Apply",
-            ctx.width, ctx.height,
+            ctx.width,
+            ctx.height,
         );
     }
 

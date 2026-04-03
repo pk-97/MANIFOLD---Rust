@@ -1,8 +1,8 @@
-use manifold_core::{Beats, Seconds};
+use super::PanelAction;
 use crate::color;
 use crate::node::*;
 use crate::tree::UITree;
-use super::PanelAction;
+use manifold_core::{Beats, Seconds};
 
 // ── Layout constants (from ClipChromeBitmapPanel.cs) ──────────────
 
@@ -23,7 +23,7 @@ const SMALL_FONT_SIZE: u16 = color::FONT_LABEL;
 
 // ── Panel-specific colors (imported from color module) ───────────
 
-use crate::color::{LOOP_ON_COLOR, LOOP_OFF_COLOR, BPM_BTN_COLOR, BPM_BTN_HOVER, GEN_TYPE_COLOR};
+use crate::color::{BPM_BTN_COLOR, BPM_BTN_HOVER, GEN_TYPE_COLOR, LOOP_OFF_COLOR, LOOP_ON_COLOR};
 
 // ── ClipChromePanel ──────────────────────────────────────────────
 
@@ -104,19 +104,35 @@ impl ClipChromePanel {
         h
     }
 
-    pub fn first_node(&self) -> usize { self.first_node }
-    pub fn node_count(&self) -> usize { self.node_count }
-    pub fn is_dragging(&self) -> bool { false }
-    pub fn is_collapsed(&self) -> bool { self.is_collapsed }
+    pub fn first_node(&self) -> usize {
+        self.first_node
+    }
+    pub fn node_count(&self) -> usize {
+        self.node_count
+    }
+    pub fn is_dragging(&self) -> bool {
+        false
+    }
+    pub fn is_collapsed(&self) -> bool {
+        self.is_collapsed
+    }
 
     pub fn toggle_collapsed(&mut self) {
         self.is_collapsed = !self.is_collapsed;
     }
 
     /// Returns true if mode changed (caller should rebuild).
-    pub fn set_mode(&mut self, has_clip: bool, is_video: bool, is_generator: bool, is_looping: bool) -> bool {
-        if self.has_clip == has_clip && self.mode_video == is_video
-            && self.mode_generator == is_generator && self.mode_looping == is_looping
+    pub fn set_mode(
+        &mut self,
+        has_clip: bool,
+        is_video: bool,
+        is_generator: bool,
+        is_looping: bool,
+    ) -> bool {
+        if self.has_clip == has_clip
+            && self.mode_video == is_video
+            && self.mode_generator == is_generator
+            && self.mode_looping == is_looping
         {
             return false;
         }
@@ -151,7 +167,11 @@ impl ClipChromePanel {
 
         // Name row
         self.name_label_id = tree.add_label(
-            -1, cx, cy, content_w, NAME_ROW_H,
+            -1,
+            cx,
+            cy,
+            content_w,
+            NAME_ROW_H,
             &name,
             UIStyle {
                 text_color: color::TEXT_PRIMARY_C32,
@@ -165,8 +185,15 @@ impl ClipChromePanel {
         if self.has_clip {
             // Divider
             self.divider_ids[div_idx] = tree.add_panel(
-                -1, cx, cy, content_w, DIVIDER_H,
-                UIStyle { bg_color: color::DIVIDER_C32, ..UIStyle::default() },
+                -1,
+                cx,
+                cy,
+                content_w,
+                DIVIDER_H,
+                UIStyle {
+                    bg_color: color::DIVIDER_C32,
+                    ..UIStyle::default()
+                },
             ) as i32;
             div_idx += 1;
             cy += DIVIDER_H;
@@ -180,15 +207,26 @@ impl ClipChromePanel {
             // Divider before effects label
             if div_idx < 3 {
                 self.divider_ids[div_idx] = tree.add_panel(
-                    -1, cx, cy, content_w, DIVIDER_H,
-                    UIStyle { bg_color: color::DIVIDER_C32, ..UIStyle::default() },
+                    -1,
+                    cx,
+                    cy,
+                    content_w,
+                    DIVIDER_H,
+                    UIStyle {
+                        bg_color: color::DIVIDER_C32,
+                        ..UIStyle::default()
+                    },
                 ) as i32;
             }
             cy += DIVIDER_H;
 
             // Effects section label
             self.effects_label_id = tree.add_label(
-                -1, cx, cy, content_w, SECTION_LABEL_H,
+                -1,
+                cx,
+                cy,
+                content_w,
+                SECTION_LABEL_H,
                 "Effects",
                 UIStyle {
                     text_color: color::TEXT_DIMMED_C32,
@@ -203,13 +241,21 @@ impl ClipChromePanel {
     }
 
     fn build_video_section(
-        &mut self, tree: &mut UITree,
-        cx: f32, mut cy: f32, w: f32,
-        source_name: &str, bpm_text: &str,
+        &mut self,
+        tree: &mut UITree,
+        cx: f32,
+        mut cy: f32,
+        w: f32,
+        source_name: &str,
+        bpm_text: &str,
     ) -> f32 {
         // "Source" section label
         self.source_section_label_id = tree.add_label(
-            -1, cx, cy, w, SECTION_LABEL_H,
+            -1,
+            cx,
+            cy,
+            w,
+            SECTION_LABEL_H,
             "Source",
             UIStyle {
                 text_color: color::TEXT_DIMMED_C32,
@@ -222,8 +268,11 @@ impl ClipChromePanel {
 
         // Source name
         self.source_name_label_id = tree.add_label(
-            -1, cx + SOURCE_LABEL_W + GAP, cy,
-            (w - SOURCE_LABEL_W - GAP).max(10.0), SMALL_ROW_H,
+            -1,
+            cx + SOURCE_LABEL_W + GAP,
+            cy,
+            (w - SOURCE_LABEL_W - GAP).max(10.0),
+            SMALL_ROW_H,
             source_name,
             UIStyle {
                 text_color: color::TEXT_DIMMED_C32,
@@ -236,7 +285,11 @@ impl ClipChromePanel {
 
         // BPM row
         self.bpm_label_id = tree.add_label(
-            -1, cx, cy, BPM_LABEL_W, BPM_ROW_H,
+            -1,
+            cx,
+            cy,
+            BPM_LABEL_W,
+            BPM_ROW_H,
             "Src BPM",
             UIStyle {
                 text_color: color::TEXT_DIMMED_C32,
@@ -248,8 +301,11 @@ impl ClipChromePanel {
 
         let bpm_btn_w = (w - BPM_LABEL_W - GAP).max(20.0);
         self.bpm_value_btn_id = tree.add_button(
-            -1, cx + BPM_LABEL_W + GAP, cy + (BPM_ROW_H - 18.0) * 0.5,
-            bpm_btn_w, 18.0,
+            -1,
+            cx + BPM_LABEL_W + GAP,
+            cy + (BPM_ROW_H - 18.0) * 0.5,
+            bpm_btn_w,
+            18.0,
             UIStyle {
                 bg_color: BPM_BTN_COLOR,
                 hover_bg_color: BPM_BTN_HOVER,
@@ -265,9 +321,17 @@ impl ClipChromePanel {
         cy += BPM_ROW_H;
 
         // Loop toggle button
-        let loop_base = if self.cached_loop_enabled { LOOP_ON_COLOR } else { LOOP_OFF_COLOR };
+        let loop_base = if self.cached_loop_enabled {
+            LOOP_ON_COLOR
+        } else {
+            LOOP_OFF_COLOR
+        };
         self.loop_toggle_btn_id = tree.add_button(
-            -1, cx, cy, w, LOOP_BUTTON_H,
+            -1,
+            cx,
+            cy,
+            w,
+            LOOP_BUTTON_H,
             UIStyle {
                 bg_color: loop_base,
                 hover_bg_color: lighten(loop_base, 10),
@@ -278,7 +342,11 @@ impl ClipChromePanel {
                 text_align: TextAlign::Center,
                 ..UIStyle::default()
             },
-            if self.cached_loop_enabled { "Loop ON" } else { "Loop OFF" },
+            if self.cached_loop_enabled {
+                "Loop ON"
+            } else {
+                "Loop OFF"
+            },
         ) as i32;
         cy += LOOP_BUTTON_H;
 
@@ -286,12 +354,20 @@ impl ClipChromePanel {
     }
 
     fn build_gen_type_row(
-        &mut self, tree: &mut UITree,
-        cx: f32, cy: f32, w: f32, gen_type: &str,
+        &mut self,
+        tree: &mut UITree,
+        cx: f32,
+        cy: f32,
+        w: f32,
+        gen_type: &str,
     ) -> f32 {
         let label = format!("Type: {}", gen_type);
         self.gen_type_label_id = tree.add_label(
-            -1, cx, cy, w, SMALL_ROW_H,
+            -1,
+            cx,
+            cy,
+            w,
+            SMALL_ROW_H,
             &label,
             UIStyle {
                 text_color: GEN_TYPE_COLOR,
@@ -355,17 +431,24 @@ impl ClipChromePanel {
                 self.loop_toggle_btn_id as u32,
                 if enabled { "Loop ON" } else { "Loop OFF" },
             );
-            let base = if enabled { LOOP_ON_COLOR } else { LOOP_OFF_COLOR };
-            tree.set_style(self.loop_toggle_btn_id as u32, UIStyle {
-                bg_color: base,
-                hover_bg_color: lighten(base, 10),
-                pressed_bg_color: darken(base, 10),
-                text_color: color::TEXT_PRIMARY_C32,
-                font_size: SMALL_FONT_SIZE,
-                corner_radius: color::BUTTON_RADIUS,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            });
+            let base = if enabled {
+                LOOP_ON_COLOR
+            } else {
+                LOOP_OFF_COLOR
+            };
+            tree.set_style(
+                self.loop_toggle_btn_id as u32,
+                UIStyle {
+                    bg_color: base,
+                    hover_bg_color: lighten(base, 10),
+                    pressed_bg_color: darken(base, 10),
+                    text_color: color::TEXT_PRIMARY_C32,
+                    font_size: SMALL_FONT_SIZE,
+                    corner_radius: color::BUTTON_RADIUS,
+                    text_align: TextAlign::Center,
+                    ..UIStyle::default()
+                },
+            );
         }
     }
 
@@ -411,7 +494,9 @@ impl ClipChromePanel {
 }
 
 impl Default for ClipChromePanel {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────

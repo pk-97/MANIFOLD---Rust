@@ -46,9 +46,9 @@ impl Default for EffectClipboard {
 
 // ─── Generator Clipboard ───
 
+use manifold_core::effects::{ParamEnvelope, ParameterDriver};
 use manifold_core::generator::GeneratorParamState;
 use manifold_core::generator_type_id::GeneratorTypeId;
-use manifold_core::effects::{ParameterDriver, ParamEnvelope};
 
 /// Snapshot of a generator's complete state for copy/paste.
 #[derive(Debug, Clone)]

@@ -1,9 +1,9 @@
-use std::any::Any;
 use manifold_core::ClipId;
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
-use manifold_core::{Seconds, Beats};
+use manifold_core::{Beats, Seconds};
+use std::any::Any;
 
 /// Abstraction over clip renderers (video player pool, generator renderer, etc.).
 /// Port of C# IClipRenderer interface.
@@ -16,7 +16,6 @@ pub trait ClipRenderer: Any + Send {
     /// Called when a project is loaded/changed.
     /// Port of C# IClipRenderer.OnProjectLoaded (lines 16-17).
     fn on_project_loaded(&mut self, _project: &Project) {}
-
 
     fn is_clip_ready(&self, clip_id: &str) -> bool;
     fn is_active(&self, clip_id: &str) -> bool;
@@ -39,7 +38,9 @@ pub trait ClipRenderer: Any + Send {
     fn resize(&mut self, width: i32, height: i32);
 
     /// True if any active clip has a decode job in-flight.
-    fn has_pending_decodes(&self) -> bool { false }
+    fn has_pending_decodes(&self) -> bool {
+        false
+    }
 
     /// Block until all in-flight decode jobs complete and process results.
     /// No-op for renderers without async decode.
@@ -67,28 +68,46 @@ struct StubClipState {
 
 impl StubRenderer {
     pub fn new_video() -> Self {
-        Self { active_clips: std::collections::HashMap::new(), is_generator: false }
+        Self {
+            active_clips: std::collections::HashMap::new(),
+            is_generator: false,
+        }
     }
 
     pub fn new_generator() -> Self {
-        Self { active_clips: std::collections::HashMap::new(), is_generator: true }
+        Self {
+            active_clips: std::collections::HashMap::new(),
+            is_generator: true,
+        }
     }
 }
 
 impl ClipRenderer for StubRenderer {
     fn can_handle(&self, clip: &TimelineClip) -> bool {
-        if self.is_generator { clip.video_clip_id.is_empty() } else { !clip.video_clip_id.is_empty() }
+        if self.is_generator {
+            clip.video_clip_id.is_empty()
+        } else {
+            !clip.video_clip_id.is_empty()
+        }
     }
 
-    fn start_clip(&mut self, clip: &TimelineClip, _current_time: Seconds, _layers: &[Layer]) -> bool {
-        self.active_clips.insert(clip.id.clone(), StubClipState {
-            playing: true,
-            ready: true,
-            playback_time: 0.0,
-            media_length: 10.0, // stub: 10 seconds
-            looping: clip.is_looping,
-            playback_rate: 1.0,
-        });
+    fn start_clip(
+        &mut self,
+        clip: &TimelineClip,
+        _current_time: Seconds,
+        _layers: &[Layer],
+    ) -> bool {
+        self.active_clips.insert(
+            clip.id.clone(),
+            StubClipState {
+                playing: true,
+                ready: true,
+                playback_time: 0.0,
+                media_length: 10.0, // stub: 10 seconds
+                looping: clip.is_looping,
+                playback_rate: 1.0,
+            },
+        );
         true
     }
 
@@ -112,41 +131,65 @@ impl ClipRenderer for StubRenderer {
         self.active_clips.get(clip_id).is_some_and(|s| s.playing)
     }
 
-    fn needs_prepare_phase(&self) -> bool { !self.is_generator }
-    fn needs_drift_correction(&self) -> bool { !self.is_generator }
-    fn needs_pending_pause(&self) -> bool { !self.is_generator }
+    fn needs_prepare_phase(&self) -> bool {
+        !self.is_generator
+    }
+    fn needs_drift_correction(&self) -> bool {
+        !self.is_generator
+    }
+    fn needs_pending_pause(&self) -> bool {
+        !self.is_generator
+    }
 
     fn get_clip_playback_time(&self, clip_id: &str) -> f32 {
-        self.active_clips.get(clip_id).map_or(0.0, |s| s.playback_time)
+        self.active_clips
+            .get(clip_id)
+            .map_or(0.0, |s| s.playback_time)
     }
 
     fn get_clip_media_length(&self, clip_id: &str) -> f32 {
-        self.active_clips.get(clip_id).map_or(0.0, |s| s.media_length)
+        self.active_clips
+            .get(clip_id)
+            .map_or(0.0, |s| s.media_length)
     }
 
     fn resume_clip(&mut self, clip_id: &str) {
-        if let Some(s) = self.active_clips.get_mut(clip_id) { s.playing = true; }
+        if let Some(s) = self.active_clips.get_mut(clip_id) {
+            s.playing = true;
+        }
     }
 
     fn pause_clip(&mut self, clip_id: &str) {
-        if let Some(s) = self.active_clips.get_mut(clip_id) { s.playing = false; }
+        if let Some(s) = self.active_clips.get_mut(clip_id) {
+            s.playing = false;
+        }
     }
 
     fn seek_clip(&mut self, clip_id: &str, video_time: f32) {
-        if let Some(s) = self.active_clips.get_mut(clip_id) { s.playback_time = video_time; }
+        if let Some(s) = self.active_clips.get_mut(clip_id) {
+            s.playback_time = video_time;
+        }
     }
 
     fn set_clip_looping(&mut self, clip_id: &str, looping: bool) {
-        if let Some(s) = self.active_clips.get_mut(clip_id) { s.looping = looping; }
+        if let Some(s) = self.active_clips.get_mut(clip_id) {
+            s.looping = looping;
+        }
     }
 
     fn set_clip_playback_rate(&mut self, clip_id: &str, rate: f32) {
-        if let Some(s) = self.active_clips.get_mut(clip_id) { s.playback_rate = rate; }
+        if let Some(s) = self.active_clips.get_mut(clip_id) {
+            s.playback_rate = rate;
+        }
     }
 
     fn pre_render(&mut self, _time: Seconds, _beat: Beats, _dt: f32) {}
     fn resize(&mut self, _width: i32, _height: i32) {}
 
-    fn as_any(&self) -> &dyn Any { self }
-    fn as_any_mut(&mut self) -> &mut dyn Any { self }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }

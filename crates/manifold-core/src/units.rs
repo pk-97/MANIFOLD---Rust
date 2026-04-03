@@ -11,9 +11,9 @@
 //! GPU boundary: GPU uniforms always use `f32`. Convert with `.0 as f32`.
 //! Serialized model: `TimelineClip` fields use `Beats`/`Seconds` directly.
 
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Rem, Sub, SubAssign};
-use serde::{Deserialize, Serialize};
 
 // ─── Beats ───────────────────────────────────────────────────────────────────
 
@@ -31,19 +31,29 @@ impl Beats {
     pub const ONE: Beats = Beats(1.0);
 
     #[inline]
-    pub fn from_f32(v: f32) -> Self { Beats(v as f64) }
+    pub fn from_f32(v: f32) -> Self {
+        Beats(v as f64)
+    }
 
     #[inline]
-    pub fn as_f32(self) -> f32 { self.0 as f32 }
+    pub fn as_f32(self) -> f32 {
+        self.0 as f32
+    }
 
     #[inline]
-    pub fn abs(self) -> Self { Beats(self.0.abs()) }
+    pub fn abs(self) -> Self {
+        Beats(self.0.abs())
+    }
 
     #[inline]
-    pub fn min(self, other: Beats) -> Self { Beats(self.0.min(other.0)) }
+    pub fn min(self, other: Beats) -> Self {
+        Beats(self.0.min(other.0))
+    }
 
     #[inline]
-    pub fn max(self, other: Beats) -> Self { Beats(self.0.max(other.0)) }
+    pub fn max(self, other: Beats) -> Self {
+        Beats(self.0.max(other.0))
+    }
 
     #[inline]
     pub fn clamp(self, lo: Beats, hi: Beats) -> Self {
@@ -51,13 +61,19 @@ impl Beats {
     }
 
     #[inline]
-    pub fn floor(self) -> Self { Beats(self.0.floor()) }
+    pub fn floor(self) -> Self {
+        Beats(self.0.floor())
+    }
 
     #[inline]
-    pub fn ceil(self) -> Self { Beats(self.0.ceil()) }
+    pub fn ceil(self) -> Self {
+        Beats(self.0.ceil())
+    }
 
     #[inline]
-    pub fn round(self) -> Self { Beats(self.0.round()) }
+    pub fn round(self) -> Self {
+        Beats(self.0.round())
+    }
 
     /// `Mathf.Repeat(t, len)` — equivalent, not raw modulo.
     #[inline]
@@ -66,10 +82,14 @@ impl Beats {
     }
 
     #[inline]
-    pub fn is_finite(self) -> bool { self.0.is_finite() }
+    pub fn is_finite(self) -> bool {
+        self.0.is_finite()
+    }
 
     #[inline]
-    pub fn is_nan(self) -> bool { self.0.is_nan() }
+    pub fn is_nan(self) -> bool {
+        self.0.is_nan()
+    }
 }
 
 impl fmt::Display for Beats {
@@ -80,96 +100,130 @@ impl fmt::Display for Beats {
 
 impl From<f32> for Beats {
     #[inline]
-    fn from(v: f32) -> Self { Beats(v as f64) }
+    fn from(v: f32) -> Self {
+        Beats(v as f64)
+    }
 }
 
 impl From<f64> for Beats {
     #[inline]
-    fn from(v: f64) -> Self { Beats(v) }
+    fn from(v: f64) -> Self {
+        Beats(v)
+    }
 }
 
 impl From<Beats> for f64 {
     #[inline]
-    fn from(b: Beats) -> f64 { b.0 }
+    fn from(b: Beats) -> f64 {
+        b.0
+    }
 }
 
 impl From<Beats> for f32 {
     #[inline]
-    fn from(b: Beats) -> f32 { b.0 as f32 }
+    fn from(b: Beats) -> f32 {
+        b.0 as f32
+    }
 }
 
 impl Add for Beats {
     type Output = Beats;
     #[inline]
-    fn add(self, rhs: Beats) -> Beats { Beats(self.0 + rhs.0) }
+    fn add(self, rhs: Beats) -> Beats {
+        Beats(self.0 + rhs.0)
+    }
 }
 
 impl AddAssign for Beats {
     #[inline]
-    fn add_assign(&mut self, rhs: Beats) { self.0 += rhs.0; }
+    fn add_assign(&mut self, rhs: Beats) {
+        self.0 += rhs.0;
+    }
 }
 
 impl Sub for Beats {
     type Output = Beats;
     #[inline]
-    fn sub(self, rhs: Beats) -> Beats { Beats(self.0 - rhs.0) }
+    fn sub(self, rhs: Beats) -> Beats {
+        Beats(self.0 - rhs.0)
+    }
 }
 
 impl SubAssign for Beats {
     #[inline]
-    fn sub_assign(&mut self, rhs: Beats) { self.0 -= rhs.0; }
+    fn sub_assign(&mut self, rhs: Beats) {
+        self.0 -= rhs.0;
+    }
 }
 
 impl Mul<f64> for Beats {
     type Output = Beats;
     #[inline]
-    fn mul(self, rhs: f64) -> Beats { Beats(self.0 * rhs) }
+    fn mul(self, rhs: f64) -> Beats {
+        Beats(self.0 * rhs)
+    }
 }
 
 impl Mul<f32> for Beats {
     type Output = Beats;
     #[inline]
-    fn mul(self, rhs: f32) -> Beats { Beats(self.0 * rhs as f64) }
+    fn mul(self, rhs: f32) -> Beats {
+        Beats(self.0 * rhs as f64)
+    }
 }
 
 impl MulAssign<f64> for Beats {
     #[inline]
-    fn mul_assign(&mut self, rhs: f64) { self.0 *= rhs; }
+    fn mul_assign(&mut self, rhs: f64) {
+        self.0 *= rhs;
+    }
 }
 
 impl Div<f64> for Beats {
     type Output = Beats;
     #[inline]
-    fn div(self, rhs: f64) -> Beats { Beats(self.0 / rhs) }
+    fn div(self, rhs: f64) -> Beats {
+        Beats(self.0 / rhs)
+    }
 }
 
 impl Div<f32> for Beats {
     type Output = Beats;
     #[inline]
-    fn div(self, rhs: f32) -> Beats { Beats(self.0 / rhs as f64) }
+    fn div(self, rhs: f32) -> Beats {
+        Beats(self.0 / rhs as f64)
+    }
 }
 
 impl Div<Beats> for Beats {
     type Output = f64;
     #[inline]
-    fn div(self, rhs: Beats) -> f64 { self.0 / rhs.0 }
+    fn div(self, rhs: Beats) -> f64 {
+        self.0 / rhs.0
+    }
 }
 
 impl DivAssign<f64> for Beats {
     #[inline]
-    fn div_assign(&mut self, rhs: f64) { self.0 /= rhs; }
+    fn div_assign(&mut self, rhs: f64) {
+        self.0 /= rhs;
+    }
 }
 
 impl Rem<Beats> for Beats {
     type Output = Beats;
     #[inline]
-    fn rem(self, rhs: Beats) -> Beats { Beats(self.0 % rhs.0) }
+    fn rem(self, rhs: Beats) -> Beats {
+        Beats(self.0 % rhs.0)
+    }
 }
 
 impl Neg for Beats {
     type Output = Beats;
     #[inline]
-    fn neg(self) -> Beats { Beats(-self.0) }
+    fn neg(self) -> Beats {
+        Beats(-self.0)
+    }
 }
 
 // ─── Seconds ─────────────────────────────────────────────────────────────────
@@ -188,19 +242,29 @@ impl Seconds {
     pub const ONE: Seconds = Seconds(1.0);
 
     #[inline]
-    pub fn from_f32(v: f32) -> Self { Seconds(v as f64) }
+    pub fn from_f32(v: f32) -> Self {
+        Seconds(v as f64)
+    }
 
     #[inline]
-    pub fn as_f32(self) -> f32 { self.0 as f32 }
+    pub fn as_f32(self) -> f32 {
+        self.0 as f32
+    }
 
     #[inline]
-    pub fn abs(self) -> Self { Seconds(self.0.abs()) }
+    pub fn abs(self) -> Self {
+        Seconds(self.0.abs())
+    }
 
     #[inline]
-    pub fn min(self, other: Seconds) -> Self { Seconds(self.0.min(other.0)) }
+    pub fn min(self, other: Seconds) -> Self {
+        Seconds(self.0.min(other.0))
+    }
 
     #[inline]
-    pub fn max(self, other: Seconds) -> Self { Seconds(self.0.max(other.0)) }
+    pub fn max(self, other: Seconds) -> Self {
+        Seconds(self.0.max(other.0))
+    }
 
     #[inline]
     pub fn clamp(self, lo: Seconds, hi: Seconds) -> Self {
@@ -208,10 +272,14 @@ impl Seconds {
     }
 
     #[inline]
-    pub fn is_finite(self) -> bool { self.0.is_finite() }
+    pub fn is_finite(self) -> bool {
+        self.0.is_finite()
+    }
 
     #[inline]
-    pub fn is_nan(self) -> bool { self.0.is_nan() }
+    pub fn is_nan(self) -> bool {
+        self.0.is_nan()
+    }
 }
 
 impl fmt::Display for Seconds {
@@ -222,90 +290,122 @@ impl fmt::Display for Seconds {
 
 impl From<f32> for Seconds {
     #[inline]
-    fn from(v: f32) -> Self { Seconds(v as f64) }
+    fn from(v: f32) -> Self {
+        Seconds(v as f64)
+    }
 }
 
 impl From<f64> for Seconds {
     #[inline]
-    fn from(v: f64) -> Self { Seconds(v) }
+    fn from(v: f64) -> Self {
+        Seconds(v)
+    }
 }
 
 impl From<Seconds> for f64 {
     #[inline]
-    fn from(s: Seconds) -> f64 { s.0 }
+    fn from(s: Seconds) -> f64 {
+        s.0
+    }
 }
 
 impl From<Seconds> for f32 {
     #[inline]
-    fn from(s: Seconds) -> f32 { s.0 as f32 }
+    fn from(s: Seconds) -> f32 {
+        s.0 as f32
+    }
 }
 
 impl Add for Seconds {
     type Output = Seconds;
     #[inline]
-    fn add(self, rhs: Seconds) -> Seconds { Seconds(self.0 + rhs.0) }
+    fn add(self, rhs: Seconds) -> Seconds {
+        Seconds(self.0 + rhs.0)
+    }
 }
 
 impl AddAssign for Seconds {
     #[inline]
-    fn add_assign(&mut self, rhs: Seconds) { self.0 += rhs.0; }
+    fn add_assign(&mut self, rhs: Seconds) {
+        self.0 += rhs.0;
+    }
 }
 
 impl Sub for Seconds {
     type Output = Seconds;
     #[inline]
-    fn sub(self, rhs: Seconds) -> Seconds { Seconds(self.0 - rhs.0) }
+    fn sub(self, rhs: Seconds) -> Seconds {
+        Seconds(self.0 - rhs.0)
+    }
 }
 
 impl SubAssign for Seconds {
     #[inline]
-    fn sub_assign(&mut self, rhs: Seconds) { self.0 -= rhs.0; }
+    fn sub_assign(&mut self, rhs: Seconds) {
+        self.0 -= rhs.0;
+    }
 }
 
 impl Mul<f64> for Seconds {
     type Output = Seconds;
     #[inline]
-    fn mul(self, rhs: f64) -> Seconds { Seconds(self.0 * rhs) }
+    fn mul(self, rhs: f64) -> Seconds {
+        Seconds(self.0 * rhs)
+    }
 }
 
 impl Mul<f32> for Seconds {
     type Output = Seconds;
     #[inline]
-    fn mul(self, rhs: f32) -> Seconds { Seconds(self.0 * rhs as f64) }
+    fn mul(self, rhs: f32) -> Seconds {
+        Seconds(self.0 * rhs as f64)
+    }
 }
 
 impl MulAssign<f64> for Seconds {
     #[inline]
-    fn mul_assign(&mut self, rhs: f64) { self.0 *= rhs; }
+    fn mul_assign(&mut self, rhs: f64) {
+        self.0 *= rhs;
+    }
 }
 
 impl Div<f64> for Seconds {
     type Output = Seconds;
     #[inline]
-    fn div(self, rhs: f64) -> Seconds { Seconds(self.0 / rhs) }
+    fn div(self, rhs: f64) -> Seconds {
+        Seconds(self.0 / rhs)
+    }
 }
 
 impl Div<f32> for Seconds {
     type Output = Seconds;
     #[inline]
-    fn div(self, rhs: f32) -> Seconds { Seconds(self.0 / rhs as f64) }
+    fn div(self, rhs: f32) -> Seconds {
+        Seconds(self.0 / rhs as f64)
+    }
 }
 
 impl Div<Seconds> for Seconds {
     type Output = f64;
     #[inline]
-    fn div(self, rhs: Seconds) -> f64 { self.0 / rhs.0 }
+    fn div(self, rhs: Seconds) -> f64 {
+        self.0 / rhs.0
+    }
 }
 
 impl DivAssign<f64> for Seconds {
     #[inline]
-    fn div_assign(&mut self, rhs: f64) { self.0 /= rhs; }
+    fn div_assign(&mut self, rhs: f64) {
+        self.0 /= rhs;
+    }
 }
 
 impl Neg for Seconds {
     type Output = Seconds;
     #[inline]
-    fn neg(self) -> Seconds { Seconds(-self.0) }
+    fn neg(self) -> Seconds {
+        Seconds(-self.0)
+    }
 }
 
 // ─── Bpm ─────────────────────────────────────────────────────────────────────
@@ -325,18 +425,26 @@ impl Bpm {
     pub const MAX: Bpm = Bpm(300.0);
 
     #[inline]
-    pub fn clamped(v: f32) -> Self { Bpm(v.clamp(20.0, 300.0)) }
+    pub fn clamped(v: f32) -> Self {
+        Bpm(v.clamp(20.0, 300.0))
+    }
 
     /// Beats per second derived from this BPM.
     #[inline]
-    pub fn beats_per_second(self) -> f64 { self.0 as f64 / 60.0 }
+    pub fn beats_per_second(self) -> f64 {
+        self.0 as f64 / 60.0
+    }
 
     /// Seconds per beat derived from this BPM.
     #[inline]
-    pub fn seconds_per_beat(self) -> f64 { 60.0 / self.0 as f64 }
+    pub fn seconds_per_beat(self) -> f64 {
+        60.0 / self.0 as f64
+    }
 
     #[inline]
-    pub fn is_valid(self) -> bool { self.0 >= 20.0 && self.0 <= 300.0 }
+    pub fn is_valid(self) -> bool {
+        self.0 >= 20.0 && self.0 <= 300.0
+    }
 }
 
 impl fmt::Display for Bpm {
@@ -347,12 +455,16 @@ impl fmt::Display for Bpm {
 
 impl From<f32> for Bpm {
     #[inline]
-    fn from(v: f32) -> Self { Bpm(v) }
+    fn from(v: f32) -> Self {
+        Bpm(v)
+    }
 }
 
 impl From<Bpm> for f32 {
     #[inline]
-    fn from(b: Bpm) -> f32 { b.0 }
+    fn from(b: Bpm) -> f32 {
+        b.0
+    }
 }
 
 // ─── Cross-unit helpers ───────────────────────────────────────────────────────

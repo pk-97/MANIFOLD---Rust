@@ -55,12 +55,20 @@ pub fn decode_audio_to_pcm(path: &str) -> Result<DecodedAudio, String> {
 
     // Provide a hint based on file extension
     let mut hint = Hint::new();
-    if let Some(ext) = std::path::Path::new(path).extension().and_then(|e| e.to_str()) {
+    if let Some(ext) = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+    {
         hint.with_extension(ext);
     }
 
     let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .map_err(|e| format!("Failed to probe audio format: {}", e))?;
 
     let mut format = probed.format;
@@ -77,11 +85,7 @@ pub fn decode_audio_to_pcm(path: &str) -> Result<DecodedAudio, String> {
         .codec_params
         .sample_rate
         .ok_or_else(|| "Unknown sample rate".to_string())?;
-    let channels = track
-        .codec_params
-        .channels
-        .map(|c| c.count())
-        .unwrap_or(2);
+    let channels = track.codec_params.channels.map(|c| c.count()).unwrap_or(2);
 
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())

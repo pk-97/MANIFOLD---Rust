@@ -1,9 +1,9 @@
+use super::{Panel, PanelAction};
 use crate::color;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
 use crate::node::*;
 use crate::tree::UITree;
-use super::{Panel, PanelAction};
 
 // ── Layout constants (from TransportLayout.cs) ─────────────────────
 
@@ -70,8 +70,16 @@ fn darken(c: Color32, amount: u8) -> Color32 {
 
 fn button_style(bg: Color32) -> UIStyle {
     let is_active = bg != color::BUTTON_INACTIVE_C32;
-    let hover = if is_active { lighten(bg, 30) } else { BUTTON_HOVER_C };
-    let pressed = if is_active { darken(bg, 20) } else { color::BUTTON_PRESSED };
+    let hover = if is_active {
+        lighten(bg, 30)
+    } else {
+        BUTTON_HOVER_C
+    };
+    let pressed = if is_active {
+        darken(bg, 20)
+    } else {
+        color::BUTTON_PRESSED
+    };
     UIStyle {
         bg_color: bg,
         hover_bg_color: hover,
@@ -105,14 +113,32 @@ fn status_text_style(c: Color32) -> UIStyle {
 
 #[derive(Default)]
 struct TransportLayout {
-    clock_authority: Rect, link_button: Rect, link_dot: Rect, link_status: Rect,
-    clk_button: Rect, clk_device: Rect, clk_dot: Rect, clk_status: Rect,
-    sync_button: Rect, sync_dot: Rect, sync_status: Rect,
-    play_button: Rect, stop_button: Rect, rec_button: Rect,
-    bpm_label: Rect, bpm_field: Rect, bpm_reset: Rect, bpm_clear: Rect,
-    new_button: Rect, open_button: Rect, open_recent: Rect,
-    save_button: Rect, save_as: Rect, export_button: Rect,
-    hdr_button: Rect, perc_button: Rect,
+    clock_authority: Rect,
+    link_button: Rect,
+    link_dot: Rect,
+    link_status: Rect,
+    clk_button: Rect,
+    clk_device: Rect,
+    clk_dot: Rect,
+    clk_status: Rect,
+    sync_button: Rect,
+    sync_dot: Rect,
+    sync_status: Rect,
+    play_button: Rect,
+    stop_button: Rect,
+    rec_button: Rect,
+    bpm_label: Rect,
+    bpm_field: Rect,
+    bpm_reset: Rect,
+    bpm_clear: Rect,
+    new_button: Rect,
+    open_button: Rect,
+    open_recent: Rect,
+    save_button: Rect,
+    save_as: Rect,
+    export_button: Rect,
+    hdr_button: Rect,
+    perc_button: Rect,
 }
 
 impl TransportLayout {
@@ -200,32 +226,69 @@ impl TransportLayout {
     }
 
     fn left_width() -> f32 {
-        CLOCK_AUTHORITY_W + ITEM_SPACING + SECTION_SPACER + ITEM_SPACING
-            + LINK_BUTTON_W + ITEM_SPACING + STATUS_DOT_SIZE + ITEM_SPACING + STATUS_TEXT_W
-            + ITEM_SPACING + SECTION_SPACER + ITEM_SPACING
-            + CLK_BUTTON_W + ITEM_SPACING + CLK_DEVICE_W + ITEM_SPACING + STATUS_DOT_SIZE
-            + ITEM_SPACING + STATUS_TEXT_W + ITEM_SPACING + SECTION_SPACER + ITEM_SPACING
-            + SYNC_BUTTON_W + ITEM_SPACING + STATUS_DOT_SIZE + ITEM_SPACING + STATUS_TEXT_W
+        CLOCK_AUTHORITY_W
+            + ITEM_SPACING
+            + SECTION_SPACER
+            + ITEM_SPACING
+            + LINK_BUTTON_W
+            + ITEM_SPACING
+            + STATUS_DOT_SIZE
+            + ITEM_SPACING
+            + STATUS_TEXT_W
+            + ITEM_SPACING
+            + SECTION_SPACER
+            + ITEM_SPACING
+            + CLK_BUTTON_W
+            + ITEM_SPACING
+            + CLK_DEVICE_W
+            + ITEM_SPACING
+            + STATUS_DOT_SIZE
+            + ITEM_SPACING
+            + STATUS_TEXT_W
+            + ITEM_SPACING
+            + SECTION_SPACER
+            + ITEM_SPACING
+            + SYNC_BUTTON_W
+            + ITEM_SPACING
+            + STATUS_DOT_SIZE
+            + ITEM_SPACING
+            + STATUS_TEXT_W
     }
 
     fn center_width() -> f32 {
-        PLAY_BUTTON_W + ITEM_SPACING
-            + STOP_BUTTON_W + ITEM_SPACING
-            + REC_BUTTON_W + ITEM_SPACING + CENTER_SPACER + ITEM_SPACING
-            + BPM_LABEL_W + ITEM_SPACING
-            + BPM_FIELD_W + ITEM_SPACING
-            + BPM_RESET_W + ITEM_SPACING
+        PLAY_BUTTON_W
+            + ITEM_SPACING
+            + STOP_BUTTON_W
+            + ITEM_SPACING
+            + REC_BUTTON_W
+            + ITEM_SPACING
+            + CENTER_SPACER
+            + ITEM_SPACING
+            + BPM_LABEL_W
+            + ITEM_SPACING
+            + BPM_FIELD_W
+            + ITEM_SPACING
+            + BPM_RESET_W
+            + ITEM_SPACING
             + BPM_CLEAR_W
     }
 
     fn right_width() -> f32 {
-        NEW_BUTTON_W + RIGHT_SPACING
-            + OPEN_BUTTON_W + RIGHT_SPACING
-            + OPEN_RECENT_W + RIGHT_SPACING
-            + SAVE_BUTTON_W + RIGHT_SPACING
-            + SAVE_AS_W + RIGHT_SPACING + SECTION_SPACER
-            + EXPORT_BUTTON_W + RIGHT_SPACING
-            + HDR_BUTTON_W + RIGHT_SPACING
+        NEW_BUTTON_W
+            + RIGHT_SPACING
+            + OPEN_BUTTON_W
+            + RIGHT_SPACING
+            + OPEN_RECENT_W
+            + RIGHT_SPACING
+            + SAVE_BUTTON_W
+            + RIGHT_SPACING
+            + SAVE_AS_W
+            + RIGHT_SPACING
+            + SECTION_SPACER
+            + EXPORT_BUTTON_W
+            + RIGHT_SPACING
+            + HDR_BUTTON_W
+            + RIGHT_SPACING
             + PERC_BUTTON_W
     }
 }
@@ -236,14 +299,32 @@ pub struct TransportPanel {
     layout: TransportLayout,
 
     // Node IDs (-1 = unset)
-    clock_authority_id: i32, link_button_id: i32, link_dot_id: i32, link_status_id: i32,
-    clk_button_id: i32, clk_device_id: i32, clk_dot_id: i32, clk_status_id: i32,
-    sync_button_id: i32, sync_dot_id: i32, sync_status_id: i32,
-    play_button_id: i32, stop_button_id: i32, rec_button_id: i32,
-    bpm_label_id: i32, bpm_field_id: i32, bpm_reset_id: i32, bpm_clear_id: i32,
-    new_button_id: i32, open_button_id: i32, open_recent_id: i32,
-    save_button_id: i32, save_as_id: i32, export_button_id: i32,
-    hdr_button_id: i32, perc_button_id: i32,
+    clock_authority_id: i32,
+    link_button_id: i32,
+    link_dot_id: i32,
+    link_status_id: i32,
+    clk_button_id: i32,
+    clk_device_id: i32,
+    clk_dot_id: i32,
+    clk_status_id: i32,
+    sync_button_id: i32,
+    sync_dot_id: i32,
+    sync_status_id: i32,
+    play_button_id: i32,
+    stop_button_id: i32,
+    rec_button_id: i32,
+    bpm_label_id: i32,
+    bpm_field_id: i32,
+    bpm_reset_id: i32,
+    bpm_clear_id: i32,
+    new_button_id: i32,
+    open_button_id: i32,
+    open_recent_id: i32,
+    save_button_id: i32,
+    save_as_id: i32,
+    export_button_id: i32,
+    hdr_button_id: i32,
+    perc_button_id: i32,
 
     // Dynamic state
     clock_authority_text: String,
@@ -283,14 +364,32 @@ impl TransportPanel {
     pub fn new() -> Self {
         Self {
             layout: TransportLayout::default(),
-            clock_authority_id: -1, link_button_id: -1, link_dot_id: -1, link_status_id: -1,
-            clk_button_id: -1, clk_device_id: -1, clk_dot_id: -1, clk_status_id: -1,
-            sync_button_id: -1, sync_dot_id: -1, sync_status_id: -1,
-            play_button_id: -1, stop_button_id: -1, rec_button_id: -1,
-            bpm_label_id: -1, bpm_field_id: -1, bpm_reset_id: -1, bpm_clear_id: -1,
-            new_button_id: -1, open_button_id: -1, open_recent_id: -1,
-            save_button_id: -1, save_as_id: -1, export_button_id: -1,
-            hdr_button_id: -1, perc_button_id: -1,
+            clock_authority_id: -1,
+            link_button_id: -1,
+            link_dot_id: -1,
+            link_status_id: -1,
+            clk_button_id: -1,
+            clk_device_id: -1,
+            clk_dot_id: -1,
+            clk_status_id: -1,
+            sync_button_id: -1,
+            sync_dot_id: -1,
+            sync_status_id: -1,
+            play_button_id: -1,
+            stop_button_id: -1,
+            rec_button_id: -1,
+            bpm_label_id: -1,
+            bpm_field_id: -1,
+            bpm_reset_id: -1,
+            bpm_clear_id: -1,
+            new_button_id: -1,
+            open_button_id: -1,
+            open_recent_id: -1,
+            save_button_id: -1,
+            save_as_id: -1,
+            export_button_id: -1,
+            hdr_button_id: -1,
+            perc_button_id: -1,
             clock_authority_text: "SRC:INT".into(),
             clock_authority_color: color::BUTTON_INACTIVE_C32,
             link_enabled: false,
@@ -325,13 +424,21 @@ impl TransportPanel {
 
     // ── Public accessors ───────────────────────────────────────────
 
-    pub fn bpm_field_id(&self) -> i32 { self.bpm_field_id }
-    pub fn clock_authority_node_id(&self) -> i32 { self.clock_authority_id }
-    pub fn clk_device_node_id(&self) -> i32 { self.clk_device_id }
+    pub fn bpm_field_id(&self) -> i32 {
+        self.bpm_field_id
+    }
+    pub fn clock_authority_node_id(&self) -> i32 {
+        self.clock_authority_id
+    }
+    pub fn clk_device_node_id(&self) -> i32 {
+        self.clk_device_id
+    }
 
     /// Get bounds of any node owned by this panel.
     pub fn get_node_bounds(&self, tree: &UITree, node_id: i32) -> Rect {
-        if node_id < 0 { return Rect::ZERO; }
+        if node_id < 0 {
+            return Rect::ZERO;
+        }
         tree.get_bounds(node_id as u32)
     }
 
@@ -349,15 +456,23 @@ impl TransportPanel {
 
     #[allow(clippy::too_many_arguments)]
     pub fn set_link_state(
-        &mut self, tree: &mut UITree,
-        enabled: bool, dot_color: Color32, status: &str, status_color: Color32,
+        &mut self,
+        tree: &mut UITree,
+        enabled: bool,
+        dot_color: Color32,
+        status: &str,
+        status_color: Color32,
     ) {
         self.link_enabled = enabled;
         self.link_dot_color = dot_color;
         self.link_status_text = status.into();
         self.link_status_color = status_color;
         if self.link_button_id >= 0 {
-            let bg = if enabled { color::LINK_ORANGE } else { color::BUTTON_INACTIVE_C32 };
+            let bg = if enabled {
+                color::LINK_ORANGE
+            } else {
+                color::BUTTON_INACTIVE_C32
+            };
             tree.set_style(self.link_button_id as u32, button_style(bg));
         }
         if self.link_dot_id >= 0 {
@@ -371,9 +486,13 @@ impl TransportPanel {
 
     #[allow(clippy::too_many_arguments)]
     pub fn set_clk_state(
-        &mut self, tree: &mut UITree,
-        enabled: bool, device_text: &str, dot_color: Color32,
-        status: &str, status_color: Color32,
+        &mut self,
+        tree: &mut UITree,
+        enabled: bool,
+        device_text: &str,
+        dot_color: Color32,
+        status: &str,
+        status_color: Color32,
     ) {
         self.clk_enabled = enabled;
         self.clk_device_text = device_text.into();
@@ -381,11 +500,19 @@ impl TransportPanel {
         self.clk_status_text = status.into();
         self.clk_status_color = status_color;
         if self.clk_button_id >= 0 {
-            let bg = if enabled { color::MIDI_PURPLE } else { color::BUTTON_INACTIVE_C32 };
+            let bg = if enabled {
+                color::MIDI_PURPLE
+            } else {
+                color::BUTTON_INACTIVE_C32
+            };
             tree.set_style(self.clk_button_id as u32, button_style(bg));
         }
-        if self.clk_device_id >= 0 { tree.set_text(self.clk_device_id as u32, device_text); }
-        if self.clk_dot_id >= 0 { tree.set_style(self.clk_dot_id as u32, dot_style(dot_color)); }
+        if self.clk_device_id >= 0 {
+            tree.set_text(self.clk_device_id as u32, device_text);
+        }
+        if self.clk_dot_id >= 0 {
+            tree.set_style(self.clk_dot_id as u32, dot_style(dot_color));
+        }
         if self.clk_status_id >= 0 {
             tree.set_text(self.clk_status_id as u32, status);
             tree.set_style(self.clk_status_id as u32, status_text_style(status_color));
@@ -394,18 +521,28 @@ impl TransportPanel {
 
     #[allow(clippy::too_many_arguments)]
     pub fn set_sync_state(
-        &mut self, tree: &mut UITree,
-        enabled: bool, dot_color: Color32, status: &str, status_color: Color32,
+        &mut self,
+        tree: &mut UITree,
+        enabled: bool,
+        dot_color: Color32,
+        status: &str,
+        status_color: Color32,
     ) {
         self.sync_enabled = enabled;
         self.sync_dot_color = dot_color;
         self.sync_status_text = status.into();
         self.sync_status_color = status_color;
         if self.sync_button_id >= 0 {
-            let bg = if enabled { color::SYNC_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
+            let bg = if enabled {
+                color::SYNC_ACTIVE
+            } else {
+                color::BUTTON_INACTIVE_C32
+            };
             tree.set_style(self.sync_button_id as u32, button_style(bg));
         }
-        if self.sync_dot_id >= 0 { tree.set_style(self.sync_dot_id as u32, dot_style(dot_color)); }
+        if self.sync_dot_id >= 0 {
+            tree.set_style(self.sync_dot_id as u32, dot_style(dot_color));
+        }
         if self.sync_status_id >= 0 {
             tree.set_text(self.sync_status_id as u32, status);
             tree.set_style(self.sync_status_id as u32, status_text_style(status_color));
@@ -427,26 +564,42 @@ impl TransportPanel {
         self.rec_enabled = enabled;
         if self.rec_button_id >= 0 {
             let id = self.rec_button_id as u32;
-            let c = if active { color::RECORD_ACTIVE } else { color::RECORD_RED };
+            let c = if active {
+                color::RECORD_ACTIVE
+            } else {
+                color::RECORD_RED
+            };
             tree.set_style(id, button_style(c));
-            if enabled { tree.clear_flag(id, UIFlags::DISABLED); }
-            else { tree.set_flag(id, UIFlags::DISABLED); }
+            if enabled {
+                tree.clear_flag(id, UIFlags::DISABLED);
+            } else {
+                tree.set_flag(id, UIFlags::DISABLED);
+            }
         }
     }
 
     pub fn set_bpm_text(&mut self, tree: &mut UITree, text: &str) {
         self.bpm_text = text.into();
-        if self.bpm_field_id >= 0 { tree.set_text(self.bpm_field_id as u32, text); }
+        if self.bpm_field_id >= 0 {
+            tree.set_text(self.bpm_field_id as u32, text);
+        }
     }
 
     pub fn set_bpm_reset_active(&mut self, tree: &mut UITree, active: bool) {
         self.bpm_reset_active = active;
         if self.bpm_reset_id >= 0 {
             let id = self.bpm_reset_id as u32;
-            let c = if active { color::BPM_RESET_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
+            let c = if active {
+                color::BPM_RESET_ACTIVE
+            } else {
+                color::BUTTON_INACTIVE_C32
+            };
             tree.set_style(id, button_style(c));
-            if active { tree.clear_flag(id, UIFlags::DISABLED); }
-            else { tree.set_flag(id, UIFlags::DISABLED); }
+            if active {
+                tree.clear_flag(id, UIFlags::DISABLED);
+            } else {
+                tree.set_flag(id, UIFlags::DISABLED);
+            }
         }
     }
 
@@ -454,10 +607,17 @@ impl TransportPanel {
         self.bpm_clear_active = active;
         if self.bpm_clear_id >= 0 {
             let id = self.bpm_clear_id as u32;
-            let c = if active { color::BPM_CLEAR_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
+            let c = if active {
+                color::BPM_CLEAR_ACTIVE
+            } else {
+                color::BUTTON_INACTIVE_C32
+            };
             tree.set_style(id, button_style(c));
-            if active { tree.clear_flag(id, UIFlags::DISABLED); }
-            else { tree.set_flag(id, UIFlags::DISABLED); }
+            if active {
+                tree.clear_flag(id, UIFlags::DISABLED);
+            } else {
+                tree.set_flag(id, UIFlags::DISABLED);
+            }
         }
     }
 
@@ -467,7 +627,11 @@ impl TransportPanel {
             let id = self.save_button_id as u32;
             tree.set_text(id, text);
             let dirty = text.contains('*');
-            let c = if dirty { SAVE_DIRTY_BG } else { color::BUTTON_INACTIVE_C32 };
+            let c = if dirty {
+                SAVE_DIRTY_BG
+            } else {
+                color::BUTTON_INACTIVE_C32
+            };
             tree.set_style(id, button_style(c));
         }
     }
@@ -479,7 +643,11 @@ impl TransportPanel {
     pub fn set_export_active(&mut self, tree: &mut UITree, active: bool) {
         self.export_active = active;
         if self.export_button_id >= 0 {
-            let c = if active { color::SYNC_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
+            let c = if active {
+                color::SYNC_ACTIVE
+            } else {
+                color::BUTTON_INACTIVE_C32
+            };
             tree.set_style(self.export_button_id as u32, button_style(c));
         }
     }
@@ -487,7 +655,11 @@ impl TransportPanel {
     pub fn set_hdr_active(&mut self, tree: &mut UITree, active: bool) {
         self.hdr_active = active;
         if self.hdr_button_id >= 0 {
-            let c = if active { color::SYNC_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
+            let c = if active {
+                color::SYNC_ACTIVE
+            } else {
+                color::BUTTON_INACTIVE_C32
+            };
             tree.set_style(self.hdr_button_id as u32, button_style(c));
         }
     }
@@ -495,7 +667,11 @@ impl TransportPanel {
     pub fn set_perc_active(&mut self, tree: &mut UITree, active: bool) {
         self.perc_active = active;
         if self.perc_button_id >= 0 {
-            let c = if active { color::SYNC_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
+            let c = if active {
+                color::SYNC_ACTIVE
+            } else {
+                color::BUTTON_INACTIVE_C32
+            };
             tree.set_style(self.perc_button_id as u32, button_style(c));
         }
     }
@@ -511,72 +687,122 @@ impl TransportPanel {
         let sync_status = self.sync_status_text.clone();
 
         self.clock_authority_id = tree.add_button(
-            bg, self.layout.clock_authority.x, self.layout.clock_authority.y,
-            self.layout.clock_authority.width, self.layout.clock_authority.height,
-            button_style(self.clock_authority_color), &clock_text,
+            bg,
+            self.layout.clock_authority.x,
+            self.layout.clock_authority.y,
+            self.layout.clock_authority.width,
+            self.layout.clock_authority.height,
+            button_style(self.clock_authority_color),
+            &clock_text,
         ) as i32;
 
-        let link_bg = if self.link_enabled { color::LINK_ORANGE } else { color::BUTTON_INACTIVE_C32 };
+        let link_bg = if self.link_enabled {
+            color::LINK_ORANGE
+        } else {
+            color::BUTTON_INACTIVE_C32
+        };
         self.link_button_id = tree.add_button(
-            bg, self.layout.link_button.x, self.layout.link_button.y,
-            self.layout.link_button.width, self.layout.link_button.height,
-            button_style(link_bg), "LINK",
+            bg,
+            self.layout.link_button.x,
+            self.layout.link_button.y,
+            self.layout.link_button.width,
+            self.layout.link_button.height,
+            button_style(link_bg),
+            "LINK",
         ) as i32;
 
         self.link_dot_id = tree.add_panel(
-            bg, self.layout.link_dot.x, self.layout.link_dot.y,
-            self.layout.link_dot.width, self.layout.link_dot.height,
+            bg,
+            self.layout.link_dot.x,
+            self.layout.link_dot.y,
+            self.layout.link_dot.width,
+            self.layout.link_dot.height,
             dot_style(self.link_dot_color),
         ) as i32;
 
         self.link_status_id = tree.add_node(
-            bg, self.layout.link_status, UINodeType::Label,
+            bg,
+            self.layout.link_status,
+            UINodeType::Label,
             status_text_style(self.link_status_color),
-            Some(&link_status), UIFlags::empty(),
+            Some(&link_status),
+            UIFlags::empty(),
         ) as i32;
 
-        let clk_bg = if self.clk_enabled { color::MIDI_PURPLE } else { color::BUTTON_INACTIVE_C32 };
+        let clk_bg = if self.clk_enabled {
+            color::MIDI_PURPLE
+        } else {
+            color::BUTTON_INACTIVE_C32
+        };
         self.clk_button_id = tree.add_button(
-            bg, self.layout.clk_button.x, self.layout.clk_button.y,
-            self.layout.clk_button.width, self.layout.clk_button.height,
-            button_style(clk_bg), "CLK",
+            bg,
+            self.layout.clk_button.x,
+            self.layout.clk_button.y,
+            self.layout.clk_button.width,
+            self.layout.clk_button.height,
+            button_style(clk_bg),
+            "CLK",
         ) as i32;
 
         self.clk_device_id = tree.add_button(
-            bg, self.layout.clk_device.x, self.layout.clk_device.y,
-            self.layout.clk_device.width, self.layout.clk_device.height,
-            button_style(color::BUTTON_INACTIVE_C32), &clk_device,
+            bg,
+            self.layout.clk_device.x,
+            self.layout.clk_device.y,
+            self.layout.clk_device.width,
+            self.layout.clk_device.height,
+            button_style(color::BUTTON_INACTIVE_C32),
+            &clk_device,
         ) as i32;
 
         self.clk_dot_id = tree.add_panel(
-            bg, self.layout.clk_dot.x, self.layout.clk_dot.y,
-            self.layout.clk_dot.width, self.layout.clk_dot.height,
+            bg,
+            self.layout.clk_dot.x,
+            self.layout.clk_dot.y,
+            self.layout.clk_dot.width,
+            self.layout.clk_dot.height,
             dot_style(self.clk_dot_color),
         ) as i32;
 
         self.clk_status_id = tree.add_node(
-            bg, self.layout.clk_status, UINodeType::Label,
+            bg,
+            self.layout.clk_status,
+            UINodeType::Label,
             status_text_style(self.clk_status_color),
-            Some(&clk_status), UIFlags::empty(),
+            Some(&clk_status),
+            UIFlags::empty(),
         ) as i32;
 
-        let sync_bg = if self.sync_enabled { color::SYNC_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
+        let sync_bg = if self.sync_enabled {
+            color::SYNC_ACTIVE
+        } else {
+            color::BUTTON_INACTIVE_C32
+        };
         self.sync_button_id = tree.add_button(
-            bg, self.layout.sync_button.x, self.layout.sync_button.y,
-            self.layout.sync_button.width, self.layout.sync_button.height,
-            button_style(sync_bg), "SYNC",
+            bg,
+            self.layout.sync_button.x,
+            self.layout.sync_button.y,
+            self.layout.sync_button.width,
+            self.layout.sync_button.height,
+            button_style(sync_bg),
+            "SYNC",
         ) as i32;
 
         self.sync_dot_id = tree.add_panel(
-            bg, self.layout.sync_dot.x, self.layout.sync_dot.y,
-            self.layout.sync_dot.width, self.layout.sync_dot.height,
+            bg,
+            self.layout.sync_dot.x,
+            self.layout.sync_dot.y,
+            self.layout.sync_dot.width,
+            self.layout.sync_dot.height,
             dot_style(self.sync_dot_color),
         ) as i32;
 
         self.sync_status_id = tree.add_node(
-            bg, self.layout.sync_status, UINodeType::Label,
+            bg,
+            self.layout.sync_status,
+            UINodeType::Label,
             status_text_style(self.sync_status_color),
-            Some(&sync_status), UIFlags::empty(),
+            Some(&sync_status),
+            UIFlags::empty(),
         ) as i32;
     }
 
@@ -585,39 +811,63 @@ impl TransportPanel {
         let bpm_text = self.bpm_text.clone();
 
         self.play_button_id = tree.add_button(
-            bg, self.layout.play_button.x, self.layout.play_button.y,
-            self.layout.play_button.width, self.layout.play_button.height,
-            button_style(self.play_color), &play_text,
+            bg,
+            self.layout.play_button.x,
+            self.layout.play_button.y,
+            self.layout.play_button.width,
+            self.layout.play_button.height,
+            button_style(self.play_color),
+            &play_text,
         ) as i32;
 
         self.stop_button_id = tree.add_button(
-            bg, self.layout.stop_button.x, self.layout.stop_button.y,
-            self.layout.stop_button.width, self.layout.stop_button.height,
-            button_style(self.stop_color), "STOP",
+            bg,
+            self.layout.stop_button.x,
+            self.layout.stop_button.y,
+            self.layout.stop_button.width,
+            self.layout.stop_button.height,
+            button_style(self.stop_color),
+            "STOP",
         ) as i32;
 
-        let rec_c = if self.rec_active { color::RECORD_ACTIVE } else { color::RECORD_RED };
+        let rec_c = if self.rec_active {
+            color::RECORD_ACTIVE
+        } else {
+            color::RECORD_RED
+        };
         self.rec_button_id = tree.add_button(
-            bg, self.layout.rec_button.x, self.layout.rec_button.y,
-            self.layout.rec_button.width, self.layout.rec_button.height,
-            button_style(rec_c), "REC",
+            bg,
+            self.layout.rec_button.x,
+            self.layout.rec_button.y,
+            self.layout.rec_button.width,
+            self.layout.rec_button.height,
+            button_style(rec_c),
+            "REC",
         ) as i32;
-        if !self.rec_enabled { tree.set_flag(self.rec_button_id as u32, UIFlags::DISABLED); }
+        if !self.rec_enabled {
+            tree.set_flag(self.rec_button_id as u32, UIFlags::DISABLED);
+        }
 
         self.bpm_label_id = tree.add_node(
-            bg, self.layout.bpm_label, UINodeType::Label,
+            bg,
+            self.layout.bpm_label,
+            UINodeType::Label,
             UIStyle {
                 text_color: color::TEXT_DIMMED_C32,
                 font_size: STATUS_FONT,
                 text_align: TextAlign::Right,
                 ..UIStyle::default()
             },
-            Some("BPM"), UIFlags::empty(),
+            Some("BPM"),
+            UIFlags::empty(),
         ) as i32;
 
         self.bpm_field_id = tree.add_button(
-            bg, self.layout.bpm_field.x, self.layout.bpm_field.y,
-            self.layout.bpm_field.width, self.layout.bpm_field.height,
+            bg,
+            self.layout.bpm_field.x,
+            self.layout.bpm_field.y,
+            self.layout.bpm_field.width,
+            self.layout.bpm_field.height,
             UIStyle {
                 bg_color: color::SLIDER_TRACK_C32,
                 hover_bg_color: BPM_FIELD_HOVER,
@@ -631,41 +881,72 @@ impl TransportPanel {
             &bpm_text,
         ) as i32;
 
-        let reset_c = if self.bpm_reset_active { color::BPM_RESET_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
+        let reset_c = if self.bpm_reset_active {
+            color::BPM_RESET_ACTIVE
+        } else {
+            color::BUTTON_INACTIVE_C32
+        };
         self.bpm_reset_id = tree.add_button(
-            bg, self.layout.bpm_reset.x, self.layout.bpm_reset.y,
-            self.layout.bpm_reset.width, self.layout.bpm_reset.height,
-            button_style(reset_c), "R",
+            bg,
+            self.layout.bpm_reset.x,
+            self.layout.bpm_reset.y,
+            self.layout.bpm_reset.width,
+            self.layout.bpm_reset.height,
+            button_style(reset_c),
+            "R",
         ) as i32;
-        if !self.bpm_reset_active { tree.set_flag(self.bpm_reset_id as u32, UIFlags::DISABLED); }
+        if !self.bpm_reset_active {
+            tree.set_flag(self.bpm_reset_id as u32, UIFlags::DISABLED);
+        }
 
-        let clear_c = if self.bpm_clear_active { color::BPM_CLEAR_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
+        let clear_c = if self.bpm_clear_active {
+            color::BPM_CLEAR_ACTIVE
+        } else {
+            color::BUTTON_INACTIVE_C32
+        };
         self.bpm_clear_id = tree.add_button(
-            bg, self.layout.bpm_clear.x, self.layout.bpm_clear.y,
-            self.layout.bpm_clear.width, self.layout.bpm_clear.height,
-            button_style(clear_c), "CLR",
+            bg,
+            self.layout.bpm_clear.x,
+            self.layout.bpm_clear.y,
+            self.layout.bpm_clear.width,
+            self.layout.bpm_clear.height,
+            button_style(clear_c),
+            "CLR",
         ) as i32;
-        if !self.bpm_clear_active { tree.set_flag(self.bpm_clear_id as u32, UIFlags::DISABLED); }
+        if !self.bpm_clear_active {
+            tree.set_flag(self.bpm_clear_id as u32, UIFlags::DISABLED);
+        }
     }
 
     fn build_right(&mut self, tree: &mut UITree, bg: i32) {
         let save_text = self.save_text.clone();
 
         self.new_button_id = tree.add_button(
-            bg, self.layout.new_button.x, self.layout.new_button.y,
-            self.layout.new_button.width, self.layout.new_button.height,
-            button_style(color::BUTTON_INACTIVE_C32), "NEW",
+            bg,
+            self.layout.new_button.x,
+            self.layout.new_button.y,
+            self.layout.new_button.width,
+            self.layout.new_button.height,
+            button_style(color::BUTTON_INACTIVE_C32),
+            "NEW",
         ) as i32;
 
         self.open_button_id = tree.add_button(
-            bg, self.layout.open_button.x, self.layout.open_button.y,
-            self.layout.open_button.width, self.layout.open_button.height,
-            button_style(color::BUTTON_INACTIVE_C32), "OPEN",
+            bg,
+            self.layout.open_button.x,
+            self.layout.open_button.y,
+            self.layout.open_button.width,
+            self.layout.open_button.height,
+            button_style(color::BUTTON_INACTIVE_C32),
+            "OPEN",
         ) as i32;
 
         self.open_recent_id = tree.add_button(
-            bg, self.layout.open_recent.x, self.layout.open_recent.y,
-            self.layout.open_recent.width, self.layout.open_recent.height,
+            bg,
+            self.layout.open_recent.x,
+            self.layout.open_recent.y,
+            self.layout.open_recent.width,
+            self.layout.open_recent.height,
             UIStyle {
                 bg_color: color::BUTTON_INACTIVE_C32,
                 hover_bg_color: BUTTON_HOVER_C,
@@ -680,65 +961,131 @@ impl TransportPanel {
         ) as i32;
 
         self.save_button_id = tree.add_button(
-            bg, self.layout.save_button.x, self.layout.save_button.y,
-            self.layout.save_button.width, self.layout.save_button.height,
-            button_style(color::BUTTON_INACTIVE_C32), &save_text,
+            bg,
+            self.layout.save_button.x,
+            self.layout.save_button.y,
+            self.layout.save_button.width,
+            self.layout.save_button.height,
+            button_style(color::BUTTON_INACTIVE_C32),
+            &save_text,
         ) as i32;
 
         self.save_as_id = tree.add_button(
-            bg, self.layout.save_as.x, self.layout.save_as.y,
-            self.layout.save_as.width, self.layout.save_as.height,
-            button_style(color::BUTTON_INACTIVE_C32), "SAVE AS",
+            bg,
+            self.layout.save_as.x,
+            self.layout.save_as.y,
+            self.layout.save_as.width,
+            self.layout.save_as.height,
+            button_style(color::BUTTON_INACTIVE_C32),
+            "SAVE AS",
         ) as i32;
 
-        let export_bg = if self.export_active { color::SYNC_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
+        let export_bg = if self.export_active {
+            color::SYNC_ACTIVE
+        } else {
+            color::BUTTON_INACTIVE_C32
+        };
         self.export_button_id = tree.add_button(
-            bg, self.layout.export_button.x, self.layout.export_button.y,
-            self.layout.export_button.width, self.layout.export_button.height,
-            button_style(export_bg), "EXPORT",
+            bg,
+            self.layout.export_button.x,
+            self.layout.export_button.y,
+            self.layout.export_button.width,
+            self.layout.export_button.height,
+            button_style(export_bg),
+            "EXPORT",
         ) as i32;
 
-        let hdr_bg = if self.hdr_active { color::SYNC_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
+        let hdr_bg = if self.hdr_active {
+            color::SYNC_ACTIVE
+        } else {
+            color::BUTTON_INACTIVE_C32
+        };
         self.hdr_button_id = tree.add_button(
-            bg, self.layout.hdr_button.x, self.layout.hdr_button.y,
-            self.layout.hdr_button.width, self.layout.hdr_button.height,
-            button_style(hdr_bg), "HDR",
+            bg,
+            self.layout.hdr_button.x,
+            self.layout.hdr_button.y,
+            self.layout.hdr_button.width,
+            self.layout.hdr_button.height,
+            button_style(hdr_bg),
+            "HDR",
         ) as i32;
 
         self.perc_button_id = tree.add_button(
-            bg, self.layout.perc_button.x, self.layout.perc_button.y,
-            self.layout.perc_button.width, self.layout.perc_button.height,
-            button_style(color::BUTTON_INACTIVE_C32), "PERC",
+            bg,
+            self.layout.perc_button.x,
+            self.layout.perc_button.y,
+            self.layout.perc_button.width,
+            self.layout.perc_button.height,
+            button_style(color::BUTTON_INACTIVE_C32),
+            "PERC",
         ) as i32;
     }
 
     fn handle_click(&self, node_id: u32) -> Vec<PanelAction> {
         let id = node_id as i32;
         // clock_authority_id is read-only — authority is auto-determined from enabled sources
-        if id == self.link_button_id { return vec![PanelAction::ToggleLink]; }
-        if id == self.clk_button_id { return vec![PanelAction::ToggleMidiClock]; }
-        if id == self.clk_device_id { return vec![PanelAction::SelectClkDevice]; }
-        if id == self.sync_button_id { return vec![PanelAction::ToggleSyncOutput]; }
-        if id == self.play_button_id { return vec![PanelAction::PlayPause]; }
-        if id == self.stop_button_id { return vec![PanelAction::Stop]; }
-        if id == self.rec_button_id { return vec![PanelAction::Record]; }
-        if id == self.bpm_field_id { return vec![PanelAction::BpmFieldClicked]; }
-        if id == self.bpm_reset_id { return vec![PanelAction::ResetBpm]; }
-        if id == self.bpm_clear_id { return vec![PanelAction::ClearBpm]; }
-        if id == self.new_button_id { return vec![PanelAction::NewProject]; }
-        if id == self.open_button_id { return vec![PanelAction::OpenProject]; }
-        if id == self.open_recent_id { return vec![PanelAction::OpenRecent]; }
-        if id == self.save_button_id { return vec![PanelAction::SaveProject]; }
-        if id == self.save_as_id { return vec![PanelAction::SaveProjectAs]; }
-        if id == self.export_button_id { return vec![PanelAction::ExportVideo]; }
-        if id == self.hdr_button_id { return vec![PanelAction::ToggleHdr]; }
-        if id == self.perc_button_id { return vec![PanelAction::TogglePercussion]; }
+        if id == self.link_button_id {
+            return vec![PanelAction::ToggleLink];
+        }
+        if id == self.clk_button_id {
+            return vec![PanelAction::ToggleMidiClock];
+        }
+        if id == self.clk_device_id {
+            return vec![PanelAction::SelectClkDevice];
+        }
+        if id == self.sync_button_id {
+            return vec![PanelAction::ToggleSyncOutput];
+        }
+        if id == self.play_button_id {
+            return vec![PanelAction::PlayPause];
+        }
+        if id == self.stop_button_id {
+            return vec![PanelAction::Stop];
+        }
+        if id == self.rec_button_id {
+            return vec![PanelAction::Record];
+        }
+        if id == self.bpm_field_id {
+            return vec![PanelAction::BpmFieldClicked];
+        }
+        if id == self.bpm_reset_id {
+            return vec![PanelAction::ResetBpm];
+        }
+        if id == self.bpm_clear_id {
+            return vec![PanelAction::ClearBpm];
+        }
+        if id == self.new_button_id {
+            return vec![PanelAction::NewProject];
+        }
+        if id == self.open_button_id {
+            return vec![PanelAction::OpenProject];
+        }
+        if id == self.open_recent_id {
+            return vec![PanelAction::OpenRecent];
+        }
+        if id == self.save_button_id {
+            return vec![PanelAction::SaveProject];
+        }
+        if id == self.save_as_id {
+            return vec![PanelAction::SaveProjectAs];
+        }
+        if id == self.export_button_id {
+            return vec![PanelAction::ExportVideo];
+        }
+        if id == self.hdr_button_id {
+            return vec![PanelAction::ToggleHdr];
+        }
+        if id == self.perc_button_id {
+            return vec![PanelAction::TogglePercussion];
+        }
         Vec::new()
     }
 }
 
 impl Default for TransportPanel {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Panel for TransportPanel {
@@ -749,8 +1096,15 @@ impl Panel for TransportPanel {
         self.layout.compute(bar);
 
         let bg = tree.add_panel(
-            -1, bar.x, bar.y, bar.width, bar.height,
-            UIStyle { bg_color: color::PANEL_BG_DARK, ..UIStyle::default() },
+            -1,
+            bar.x,
+            bar.y,
+            bar.width,
+            bar.height,
+            UIStyle {
+                bg_color: color::PANEL_BG_DARK,
+                ..UIStyle::default()
+            },
         ) as i32;
 
         self.build_left(tree, bg);
@@ -769,8 +1123,12 @@ impl Panel for TransportPanel {
         }
     }
 
-    fn first_node(&self) -> usize { self.cache_first_node }
-    fn node_count(&self) -> usize { self.cache_node_count }
+    fn first_node(&self) -> usize {
+        self.cache_first_node
+    }
+    fn node_count(&self) -> usize {
+        self.cache_node_count
+    }
 }
 
 #[cfg(test)]

@@ -25,32 +25,17 @@ const WORKER_COUNT: usize = 4;
 /// Job submitted to a decode worker.
 pub enum DecodeJob {
     /// Open a video file and assign it to a clip ID.
-    Open {
-        clip_id: String,
-        path: String,
-    },
+    Open { clip_id: String, path: String },
     /// Create AVAssetReader and decode first frame.
-    Prepare {
-        clip_id: String,
-    },
+    Prepare { clip_id: String },
     /// Seek to a specific time (recreates reader, decodes one frame).
-    Seek {
-        clip_id: String,
-        target_time: f32,
-    },
+    Seek { clip_id: String, target_time: f32 },
     /// Decode the next sequential frame.
-    DecodeNext {
-        clip_id: String,
-    },
+    DecodeNext { clip_id: String },
     /// Close and release a decoder handle.
-    Close {
-        clip_id: String,
-    },
+    Close { clip_id: String },
     /// Open a video file for warm cache (keyed by video_clip_id, not clip_id).
-    WarmOpen {
-        video_clip_id: String,
-        path: String,
-    },
+    WarmOpen { video_clip_id: String, path: String },
     /// Promote a warm decoder to active (move from warm to active by clip_id).
     #[allow(dead_code)]
     PromoteWarm {
@@ -59,9 +44,7 @@ pub enum DecodeJob {
     },
     /// Close a warm cache entry.
     #[allow(dead_code)]
-    WarmClose {
-        video_clip_id: String,
-    },
+    WarmClose { video_clip_id: String },
     /// Shutdown the worker thread.
     Shutdown,
 }
@@ -106,9 +89,7 @@ pub enum DecodeResultStatus {
     },
     /// First frame decoded — decoder is prepared.
     /// `handle_ptr` is the raw native DecoderHandle for CopyFrameToTexture.
-    Prepared {
-        handle_ptr: *mut c_void,
-    },
+    Prepared { handle_ptr: *mut c_void },
     /// A new frame is ready at the given presentation time.
     /// `handle_ptr` is the raw native DecoderHandle for CopyFrameToTexture.
     FrameReady {
@@ -124,9 +105,7 @@ pub enum DecodeResultStatus {
         handle_ptr: *mut c_void,
     },
     /// Warm cache decoder is ready (keyed by video_clip_id).
-    WarmReady {
-        video_clip_id: String,
-    },
+    WarmReady { video_clip_id: String },
     /// An error occurred.
     Error(String),
 }
@@ -258,44 +237,36 @@ impl Drop for DecodeScheduler {
 /// and warm cache handles (pre-opened for MIDI). All FFI calls happen here.
 /// Affinity routing guarantees all jobs for the same clip arrive at the
 /// same worker.
-fn worker_loop(
-    job_rx: Receiver<DecodeJob>,
-    result_tx: Sender<DecodeResult>,
-    pool: &DecoderPool,
-) {
+fn worker_loop(job_rx: Receiver<DecodeJob>, result_tx: Sender<DecodeResult>, pool: &DecoderPool) {
     let mut active: AHashMap<String, DecoderHandle> = AHashMap::new();
     let mut warm: AHashMap<String, DecoderHandle> = AHashMap::new();
 
     while let Ok(job) = job_rx.recv() {
         match job {
-            DecodeJob::Open { clip_id, path } => {
-                match pool.open(&path) {
-                    Ok(handle) => {
-                        let duration = handle.duration();
-                        let width = handle.width();
-                        let height = handle.height();
-                        let frame_rate = handle.frame_rate();
-                        active.insert(clip_id.clone(), handle);
-                        let _ = result_tx.send(DecodeResult {
-                            clip_id,
-                            status: DecodeResultStatus::Opened {
-                                duration,
-                                width,
-                                height,
-                                frame_rate,
-                            },
-                        });
-                    }
-                    Err(e) => {
-                        let _ = result_tx.send(DecodeResult {
-                            clip_id,
-                            status: DecodeResultStatus::Error(format!(
-                                "open failed: {e}"
-                            )),
-                        });
-                    }
+            DecodeJob::Open { clip_id, path } => match pool.open(&path) {
+                Ok(handle) => {
+                    let duration = handle.duration();
+                    let width = handle.width();
+                    let height = handle.height();
+                    let frame_rate = handle.frame_rate();
+                    active.insert(clip_id.clone(), handle);
+                    let _ = result_tx.send(DecodeResult {
+                        clip_id,
+                        status: DecodeResultStatus::Opened {
+                            duration,
+                            width,
+                            height,
+                            frame_rate,
+                        },
+                    });
                 }
-            }
+                Err(e) => {
+                    let _ = result_tx.send(DecodeResult {
+                        clip_id,
+                        status: DecodeResultStatus::Error(format!("open failed: {e}")),
+                    });
+                }
+            },
 
             DecodeJob::Prepare { clip_id } => {
                 if let Some(handle) = active.get_mut(&clip_id) {
@@ -310,16 +281,17 @@ fn worker_loop(
                         Err(e) => {
                             let _ = result_tx.send(DecodeResult {
                                 clip_id,
-                                status: DecodeResultStatus::Error(format!(
-                                    "prepare failed: {e}"
-                                )),
+                                status: DecodeResultStatus::Error(format!("prepare failed: {e}")),
                             });
                         }
                     }
                 }
             }
 
-            DecodeJob::Seek { clip_id, target_time } => {
+            DecodeJob::Seek {
+                clip_id,
+                target_time,
+            } => {
                 if let Some(handle) = active.get_mut(&clip_id) {
                     match handle.seek_to(target_time) {
                         Ok(()) => {
@@ -336,9 +308,7 @@ fn worker_loop(
                         Err(e) => {
                             let _ = result_tx.send(DecodeResult {
                                 clip_id,
-                                status: DecodeResultStatus::Error(format!(
-                                    "seek failed: {e}"
-                                )),
+                                status: DecodeResultStatus::Error(format!("seek failed: {e}")),
                             });
                         }
                     }
@@ -368,9 +338,7 @@ fn worker_loop(
                         Err(e) => {
                             let _ = result_tx.send(DecodeResult {
                                 clip_id,
-                                status: DecodeResultStatus::Error(format!(
-                                    "decode failed: {e}"
-                                )),
+                                status: DecodeResultStatus::Error(format!("decode failed: {e}")),
                             });
                         }
                     }
@@ -394,16 +362,12 @@ fn worker_loop(
                             warm.insert(video_clip_id.clone(), handle);
                             let _ = result_tx.send(DecodeResult {
                                 clip_id: video_clip_id.clone(),
-                                status: DecodeResultStatus::WarmReady {
-                                    video_clip_id,
-                                },
+                                status: DecodeResultStatus::WarmReady { video_clip_id },
                             });
                         }
                     }
                     Err(e) => {
-                        log::warn!(
-                            "[DecodeWorker] Warm open failed for {video_clip_id}: {e}"
-                        );
+                        log::warn!("[DecodeWorker] Warm open failed for {video_clip_id}: {e}");
                     }
                 }
             }

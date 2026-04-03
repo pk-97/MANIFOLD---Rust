@@ -1,8 +1,8 @@
-use manifold_core::GeneratorTypeId;
+use super::mri_volume_loader::{ScanInfo, discover_scans, load_tiff_slice};
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
-use super::mri_volume_loader::{ScanInfo, discover_scans, load_tiff_slice};
+use manifold_core::GeneratorTypeId;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
@@ -76,23 +76,24 @@ impl MriVolumeGenerator {
             for (i, s) in scans.iter().enumerate() {
                 let axes: Vec<&str> = [
                     s.axes[0].as_ref().map(|a| {
-                        log::info!(
-                            "  Scan {} ({}): axial={} slices",
-                            i, s.name, a.slice_count
-                        );
+                        log::info!("  Scan {} ({}): axial={} slices", i, s.name, a.slice_count);
                         "axial"
                     }),
                     s.axes[1].as_ref().map(|a| {
                         log::info!(
                             "  Scan {} ({}): sagittal={} slices",
-                            i, s.name, a.slice_count
+                            i,
+                            s.name,
+                            a.slice_count
                         );
                         "sagittal"
                     }),
                     s.axes[2].as_ref().map(|a| {
                         log::info!(
                             "  Scan {} ({}): coronal={} slices",
-                            i, s.name, a.slice_count
+                            i,
+                            s.name,
+                            a.slice_count
                         );
                         "coronal"
                     }),
@@ -100,12 +101,7 @@ impl MriVolumeGenerator {
                 .into_iter()
                 .flatten()
                 .collect();
-                log::info!(
-                    "  Scan {}: {} [{}]",
-                    i,
-                    s.name,
-                    axes.join(", ")
-                );
+                log::info!("  Scan {}: {} [{}]", i, s.name, axes.join(", "));
             }
         }
 
@@ -126,12 +122,7 @@ impl MriVolumeGenerator {
     }
 
     /// Ensure the 2D texture exists and matches the given dimensions.
-    fn ensure_texture(
-        &mut self,
-        device: &manifold_gpu::GpuDevice,
-        width: u32,
-        height: u32,
-    ) {
+    fn ensure_texture(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
         if self.current_tex_dims == (width, height) && self.slice_texture.is_some() {
             return;
         }
@@ -151,17 +142,12 @@ impl MriVolumeGenerator {
     }
 
     /// Upload R8Unorm data to the current texture via a blit encoder.
-    fn upload_slice(
-        &self,
-        gpu: &mut GpuEncoder,
-        width: u32,
-        height: u32,
-        data: &[u8],
-    ) {
+    fn upload_slice(&self, gpu: &mut GpuEncoder, width: u32, height: u32, data: &[u8]) {
         let Some(texture) = &self.slice_texture else {
             return;
         };
-        gpu.native_enc.upload_texture(texture, width, height, 1, data);
+        gpu.native_enc
+            .upload_texture(texture, width, height, 1, data);
     }
 }
 
@@ -210,8 +196,8 @@ impl Generator for MriVolumeGenerator {
         }
 
         // Scan selection
-        let scan_index = (param(ctx, SCAN, 0.0).round() as i32)
-            .clamp(0, self.scans.len() as i32 - 1);
+        let scan_index =
+            (param(ctx, SCAN, 0.0).round() as i32).clamp(0, self.scans.len() as i32 - 1);
         let snap = param(ctx, SNAP, 0.0) > 0.5;
         let axis = if snap {
             (ctx.trigger_count % 3) as i32
@@ -255,7 +241,11 @@ impl Generator for MriVolumeGenerator {
         // Uniforms
         let scale = param(ctx, SCALE, 1.0);
         let uv_scale = if scale > 0.0 { 1.0 / scale } else { 1.0 };
-        let invert = if param(ctx, INVERT, 0.0) > 0.5 { 1.0 } else { 0.0 };
+        let invert = if param(ctx, INVERT, 0.0) > 0.5 {
+            1.0
+        } else {
+            0.0
+        };
 
         let uniforms = SliceUniforms {
             aspect_ratio: ctx.aspect,

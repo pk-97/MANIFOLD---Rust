@@ -1,19 +1,19 @@
-use manifold_core::GeneratorTypeId;
-use manifold_gpu::{GpuDevice, GpuTextureFormat};
-use crate::generator::Generator;
 use super::basic_shapes_snap::BasicShapesSnapGenerator;
 use super::concentric_tunnel::ConcentricTunnelGenerator;
 use super::duocylinder::DuocylinderGenerator;
 use super::fluid_simulation::FluidSimulationGenerator;
 use super::fluid_simulation_3d::FluidSimulation3DGenerator;
 use super::lissajous::LissajousGenerator;
+use super::mri_volume::MriVolumeGenerator;
 use super::mycelium::MyceliumGenerator;
 use super::oscilloscope_xy::OscilloscopeXYGenerator;
 use super::parametric_surface::ParametricSurfaceGenerator;
 use super::plasma::PlasmaGenerator;
 use super::tesseract::TesseractGenerator;
-use super::mri_volume::MriVolumeGenerator;
 use super::wireframe_zoo::WireframeZooGenerator;
+use crate::generator::Generator;
+use manifold_core::GeneratorTypeId;
+use manifold_gpu::{GpuDevice, GpuTextureFormat};
 
 /// Factory that maps GeneratorTypeId to concrete Generator instances.
 /// Pipeline compilation happens at creation time (expensive — do at startup or first use).

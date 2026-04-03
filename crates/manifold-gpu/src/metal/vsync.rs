@@ -79,18 +79,25 @@ pub fn display_id_for_window(window: &impl raw_window_handle::HasWindowHandle) -
 
     unsafe {
         let ns_window: *mut objc::runtime::Object = msg_send![ns_view, window];
-        if ns_window.is_null() { return 0; }
+        if ns_window.is_null() {
+            return 0;
+        }
         let screen: *mut objc::runtime::Object = msg_send![ns_window, screen];
-        if screen.is_null() { return 0; }
+        if screen.is_null() {
+            return 0;
+        }
         let desc: *mut objc::runtime::Object = msg_send![screen, deviceDescription];
-        if desc.is_null() { return 0; }
+        if desc.is_null() {
+            return 0;
+        }
         let key: *mut objc::runtime::Object = msg_send![
             class!(NSString),
             stringWithUTF8String: c"NSScreenNumber".as_ptr()
         ];
-        let display_id_obj: *mut objc::runtime::Object =
-            msg_send![desc, objectForKey: key];
-        if display_id_obj.is_null() { return 0; }
+        let display_id_obj: *mut objc::runtime::Object = msg_send![desc, objectForKey: key];
+        if display_id_obj.is_null() {
+            return 0;
+        }
         msg_send![display_id_obj, unsignedIntValue]
     }
 }
@@ -170,7 +177,9 @@ unsafe extern "C" fn content_vsync_callback(
 struct SendPtr<T>(*mut T);
 unsafe impl<T> Send for SendPtr<T> {}
 impl<T> SendPtr<T> {
-    fn get(self) -> *mut T { self.0 }
+    fn get(self) -> *mut T {
+        self.0
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -204,11 +213,13 @@ impl GpuVsyncWaiter {
         let guard = self.inner.state.lock().unwrap();
 
         // Wait until vsync_count advances past last_seen, or shutdown, or timeout.
-        let (guard, wait_result) = self.inner.condvar.wait_timeout_while(
-            guard,
-            timeout,
-            |state| !state.shutdown && state.vsync_count <= last_seen_count,
-        ).unwrap();
+        let (guard, wait_result) = self
+            .inner
+            .condvar
+            .wait_timeout_while(guard, timeout, |state| {
+                !state.shutdown && state.vsync_count <= last_seen_count
+            })
+            .unwrap();
 
         VsyncWaitResult {
             count: guard.vsync_count,
@@ -288,11 +299,7 @@ impl GpuVsyncSignal {
             // The Arc is kept alive by GpuVsyncSignal — the pointer is valid
             // until Drop stops the display link.
             let ctx_ptr = Arc::as_ptr(&inner) as *mut c_void;
-            let ret = CVDisplayLinkSetOutputCallback(
-                display_link,
-                content_vsync_callback,
-                ctx_ptr,
-            );
+            let ret = CVDisplayLinkSetOutputCallback(display_link, content_vsync_callback, ctx_ptr);
             assert!(
                 ret == K_CV_RETURN_SUCCESS,
                 "CVDisplayLinkSetOutputCallback failed (ret={ret})"
@@ -307,10 +314,13 @@ impl GpuVsyncSignal {
 
         // Try to read initial display Hz. May return 0 if the link hasn't
         // fired yet — the callback will populate it from CVTimeStamp on first vsync.
-        let refresh_period = unsafe {
-            CVDisplayLinkGetActualOutputVideoRefreshPeriod(display_link)
+        let refresh_period =
+            unsafe { CVDisplayLinkGetActualOutputVideoRefreshPeriod(display_link) };
+        let hz = if refresh_period > 0.0 {
+            1.0 / refresh_period
+        } else {
+            0.0
         };
-        let hz = if refresh_period > 0.0 { 1.0 / refresh_period } else { 0.0 };
         if hz > 0.0
             && let Ok(mut state) = inner.state.lock()
         {
@@ -319,7 +329,8 @@ impl GpuVsyncSignal {
 
         log::info!(
             "[GpuVsyncSignal] Started for display {display_id}, \
-             initial_hz={:.1} (callback will update)", hz,
+             initial_hz={:.1} (callback will update)",
+            hz,
         );
 
         Self {
@@ -358,19 +369,21 @@ impl GpuVsyncSignal {
             return false;
         }
 
-        let old_refresh = unsafe {
-            CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
-        };
+        let old_refresh =
+            unsafe { CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link) };
 
         // Retarget while running — callback keeps firing without interruption.
         unsafe {
             CVDisplayLinkSetCurrentCGDisplay(self.display_link, display_id);
         }
 
-        let new_refresh = unsafe {
-            CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
+        let new_refresh =
+            unsafe { CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link) };
+        let new_hz = if new_refresh > 0.0 {
+            1.0 / new_refresh
+        } else {
+            0.0
         };
-        let new_hz = if new_refresh > 0.0 { 1.0 / new_refresh } else { 0.0 };
 
         // Update stored Hz so the next wait() returns the new rate.
         if let Ok(mut state) = self.inner.state.lock() {
@@ -380,8 +393,13 @@ impl GpuVsyncSignal {
         log::info!(
             "[GpuVsyncSignal] Retargeted: display {} → {}, \
              refresh {:.1}Hz → {:.1}Hz",
-            self.current_display_id, display_id,
-            if old_refresh > 0.0 { 1.0 / old_refresh } else { 0.0 },
+            self.current_display_id,
+            display_id,
+            if old_refresh > 0.0 {
+                1.0 / old_refresh
+            } else {
+                0.0
+            },
             new_hz,
         );
 

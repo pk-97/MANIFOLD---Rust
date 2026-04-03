@@ -177,7 +177,10 @@ impl MidiInputController {
     pub fn set_midi_config(&mut self, config: MidiMappingConfig) {
         if self.show_debug_logs {
             let note_count = config.mappings.len();
-            log::debug!("[MidiInputController] Config set: {} notes mapped", note_count);
+            log::debug!(
+                "[MidiInputController] Config set: {} notes mapped",
+                note_count
+            );
         }
         self.midi_config = Some(config);
     }
@@ -203,7 +206,10 @@ impl MidiInputController {
             .collect();
         for i in to_remove.into_iter().rev() {
             let dev = self.registered_devices.remove(i);
-            log::info!("[MidiInputController] MIDI device disconnected (filter): {}", dev.name);
+            log::info!(
+                "[MidiInputController] MIDI device disconnected (filter): {}",
+                dev.name
+            );
         }
 
         // Port of C#: register devices that now match but weren't registered.
@@ -282,10 +288,12 @@ impl MidiInputController {
             if self.show_debug_logs {
                 log::debug!("[MidiInputController] Native CLK note path: active");
             }
-        } else if !native_path_active && self.native_clock_path_active_last_frame
-            && self.show_debug_logs {
-                log::debug!("[MidiInputController] Native CLK note path: inactive");
-            }
+        } else if !native_path_active
+            && self.native_clock_path_active_last_frame
+            && self.show_debug_logs
+        {
+            log::debug!("[MidiInputController] Native CLK note path: inactive");
+        }
 
         self.native_clock_path_active_last_frame = native_path_active;
 
@@ -305,7 +313,8 @@ impl MidiInputController {
             let reorders = Self::count_same_tick_reorders(&self.native_event_buffer);
             self.native_clock_same_tick_reorders_last_frame = reorders;
             self.native_clock_same_tick_reorders_total += reorders;
-            self.native_event_buffer.sort_by(compare_native_clock_events);
+            self.native_event_buffer
+                .sort_by(compare_native_clock_events);
         }
 
         // Dispatch each event to ClipLauncher.
@@ -388,7 +397,10 @@ impl MidiInputController {
         let midi_in = match midir::MidiInput::new("manifold-scan") {
             Ok(m) => m,
             Err(e) => {
-                log::warn!("[MidiInputController] Failed to create MidiInput for scan: {}", e);
+                log::warn!(
+                    "[MidiInputController] Failed to create MidiInput for scan: {}",
+                    e
+                );
                 return;
             }
         };
@@ -408,7 +420,11 @@ impl MidiInputController {
             }
 
             // Don't register duplicates.
-            if self.registered_devices.iter().any(|d| d.port_index == port_index) {
+            if self
+                .registered_devices
+                .iter()
+                .any(|d| d.port_index == port_index)
+            {
                 continue;
             }
 
@@ -424,7 +440,8 @@ impl MidiInputController {
             Err(e) => {
                 log::warn!(
                     "[MidiInputController] Failed to create MidiInput for port {}: {}",
-                    port_index, e
+                    port_index,
+                    e
                 );
                 return;
             }
@@ -508,7 +525,8 @@ impl MidiInputController {
             Err(e) => {
                 log::warn!(
                     "[MidiInputController] Failed to connect to port '{}': {}",
-                    port_name, e
+                    port_name,
+                    e
                 );
                 return;
             }
@@ -516,7 +534,8 @@ impl MidiInputController {
 
         log::info!(
             "[MidiInputController] MIDI device connected: {} (port {})",
-            port_name, port_index
+            port_name,
+            port_index
         );
 
         self.registered_devices.push(MidiDevice {
@@ -529,7 +548,10 @@ impl MidiInputController {
     /// Port of C# MidiInputController.UnregisterAllDevices.
     fn unregister_all_devices(&mut self) {
         for dev in self.registered_devices.drain(..) {
-            log::info!("[MidiInputController] MIDI device disconnected: {}", dev.name);
+            log::info!(
+                "[MidiInputController] MIDI device disconnected: {}",
+                dev.name
+            );
             // midir MidiInputConnection is closed on drop.
         }
     }
@@ -616,7 +638,12 @@ impl MidiInputController {
                 };
                 log::debug!(
                     "[MidiInputController] [{}] NoteOn: {} ch={} vel={:.2}{}{} → handled by layer",
-                    source, note_number, channel, velocity, beat_info, seq_info
+                    source,
+                    note_number,
+                    channel,
+                    velocity,
+                    beat_info,
+                    seq_info
                 );
             }
             return;
@@ -706,7 +733,11 @@ impl MidiInputController {
             };
             log::debug!(
                 "[MidiInputController] [{}] NoteOff: {} ch={}{}{}",
-                source, note_number, channel, beat_info, seq_info
+                source,
+                note_number,
+                channel,
+                beat_info,
+                seq_info
             );
         }
 

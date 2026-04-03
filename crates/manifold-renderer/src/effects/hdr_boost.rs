@@ -2,11 +2,11 @@
 // Same soft-knee threshold as bloom but without any blur passes.
 // Single pass via ComputeBlitHelper.
 
-use manifold_core::EffectTypeId;
-use manifold_core::effects::EffectInstance;
+use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
-use super::compute_blit_helper::ComputeBlitHelper;
+use manifold_core::EffectTypeId;
+use manifold_core::effects::EffectInstance;
 
 const EPSILON: f32 = 0.001;
 

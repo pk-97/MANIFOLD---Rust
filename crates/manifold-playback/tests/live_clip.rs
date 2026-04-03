@@ -1,11 +1,11 @@
-use manifold_core::{Beats, Seconds};
-use manifold_core::clip::TimelineClip;
-use manifold_core::project::Project;
-use manifold_core::layer::Layer;
-use manifold_core::types::*;
 use manifold_core::GeneratorTypeId;
-use manifold_playback::live_clip_manager::*;
+use manifold_core::clip::TimelineClip;
+use manifold_core::layer::Layer;
+use manifold_core::project::Project;
+use manifold_core::types::*;
+use manifold_core::{Beats, Seconds};
 use manifold_editing::command::Command;
+use manifold_playback::live_clip_manager::*;
 
 use std::collections::HashMap;
 
@@ -54,23 +54,46 @@ impl MockHost {
 }
 
 impl LiveClipHost for MockHost {
-    fn current_beat(&self) -> Beats { self.beat }
-    fn current_time(&self) -> Seconds { self.time }
-    fn is_recording(&self) -> bool { self.recording }
-    fn is_playing(&self) -> bool { self.playing }
-    fn show_debug_logs(&self) -> bool { false }
-    fn get_bpm_at_beat(&self, _beat: Beats) -> f32 { self.bpm }
+    fn current_beat(&self) -> Beats {
+        self.beat
+    }
+    fn current_time(&self) -> Seconds {
+        self.time
+    }
+    fn is_recording(&self) -> bool {
+        self.recording
+    }
+    fn is_playing(&self) -> bool {
+        self.playing
+    }
+    fn show_debug_logs(&self) -> bool {
+        false
+    }
+    fn get_bpm_at_beat(&self, _beat: Beats) -> f32 {
+        self.bpm
+    }
     fn get_tempo_source_at_beat(&self, _beat: Beats) -> manifold_core::types::TempoPointSource {
         manifold_core::types::TempoPointSource::Unknown
     }
-    fn get_beat_snapped_beat(&self) -> Beats { self.beat }
-    fn get_current_absolute_tick(&self) -> i32 { self.current_tick }
-    fn stop_clip(&mut self, clip_id: &str) { self.stopped_clips.push(clip_id.to_string()); }
-    fn mark_sync_dirty(&mut self) { self.sync_dirty = true; }
-    fn mark_compositor_dirty(&mut self) { self.compositor_dirty = true; }
+    fn get_beat_snapped_beat(&self) -> Beats {
+        self.beat
+    }
+    fn get_current_absolute_tick(&self) -> i32 {
+        self.current_tick
+    }
+    fn stop_clip(&mut self, clip_id: &str) {
+        self.stopped_clips.push(clip_id.to_string());
+    }
+    fn mark_sync_dirty(&mut self) {
+        self.sync_dirty = true;
+    }
+    fn mark_compositor_dirty(&mut self) {
+        self.compositor_dirty = true;
+    }
     fn invalidate_lookahead_prewarm(&mut self) {}
     fn register_clip_lookup(&mut self, clip_id: &str, clip: &TimelineClip) {
-        self.registered_clips.insert(clip_id.to_string(), clip.clone());
+        self.registered_clips
+            .insert(clip_id.to_string(), clip.clone());
     }
     fn record_command(&mut self, cmd: Box<dyn Command>) {
         self.recorded_commands.push(cmd);
@@ -85,8 +108,12 @@ fn make_project() -> Project {
     project.settings.bpm = manifold_core::Bpm(120.0);
     project.settings.time_signature_numerator = 4;
     project.settings.quantize_mode = QuantizeMode::Beat;
-    project.timeline.insert_layer(0, Layer::new("Layer 0".into(), LayerType::Video, 0));
-    project.timeline.insert_layer(1, Layer::new("Layer 1".into(), LayerType::Video, 1));
+    project
+        .timeline
+        .insert_layer(0, Layer::new("Layer 0".into(), LayerType::Video, 0));
+    project
+        .timeline
+        .insert_layer(1, Layer::new("Layer 1".into(), LayerType::Video, 1));
     project
 }
 
@@ -99,9 +126,16 @@ fn trigger_creates_phantom_clip() {
     let mut mgr = LiveClipManager::new();
 
     let clip = mgr.trigger_live_clip(
-        &mut project, &host,
-        "video1".into(), 0, 2.0, 0.0,
-        None, -1, 0.0, -1,
+        &mut project,
+        &host,
+        "video1".into(),
+        0,
+        2.0,
+        0.0,
+        None,
+        -1,
+        0.0,
+        -1,
     );
 
     assert!(clip.is_some());
@@ -116,9 +150,15 @@ fn trigger_live_generator_clip() {
     let mut mgr = LiveClipManager::new();
 
     let clip = mgr.trigger_live_generator_clip(
-        &mut project, &host,
-        GeneratorTypeId::PLASMA, 0, 4.0,
-        None, -1, 0.0, -1,
+        &mut project,
+        &host,
+        GeneratorTypeId::PLASMA,
+        0,
+        4.0,
+        None,
+        -1,
+        0.0,
+        -1,
     );
 
     assert!(clip.is_some());
@@ -133,17 +173,35 @@ fn second_trigger_on_same_layer_replaces() {
     let host = MockHost::new();
     let mut mgr = LiveClipManager::new();
 
-    let clip1 = mgr.trigger_live_clip(
-        &mut project, &host,
-        "video1".into(), 0, 2.0, 0.0,
-        None, -1, 0.0, -1,
-    ).unwrap();
+    let clip1 = mgr
+        .trigger_live_clip(
+            &mut project,
+            &host,
+            "video1".into(),
+            0,
+            2.0,
+            0.0,
+            None,
+            -1,
+            0.0,
+            -1,
+        )
+        .unwrap();
 
-    let clip2 = mgr.trigger_live_clip(
-        &mut project, &host,
-        "video2".into(), 0, 3.0, 0.0,
-        None, -1, 1.0, -1,
-    ).unwrap();
+    let clip2 = mgr
+        .trigger_live_clip(
+            &mut project,
+            &host,
+            "video2".into(),
+            0,
+            3.0,
+            0.0,
+            None,
+            -1,
+            1.0,
+            -1,
+        )
+        .unwrap();
 
     assert_eq!(mgr.live_slots().len(), 1);
     assert!(!mgr.is_live_slot_clip(&clip1.id));
@@ -156,8 +214,30 @@ fn multiple_layers_independent_slots() {
     let host = MockHost::new();
     let mut mgr = LiveClipManager::new();
 
-    mgr.trigger_live_clip(&mut project, &host, "v1".into(), 0, 2.0, 0.0, None, -1, 0.0, -1);
-    mgr.trigger_live_clip(&mut project, &host, "v2".into(), 1, 2.0, 0.0, None, -1, 0.0, -1);
+    mgr.trigger_live_clip(
+        &mut project,
+        &host,
+        "v1".into(),
+        0,
+        2.0,
+        0.0,
+        None,
+        -1,
+        0.0,
+        -1,
+    );
+    mgr.trigger_live_clip(
+        &mut project,
+        &host,
+        "v2".into(),
+        1,
+        2.0,
+        0.0,
+        None,
+        -1,
+        0.0,
+        -1,
+    );
 
     assert_eq!(mgr.live_slots().len(), 2);
 }
@@ -170,15 +250,33 @@ fn commit_with_recording_adds_to_timeline() {
     let mut host = MockHost::new().recording();
     let mut mgr = LiveClipManager::new();
 
-    let clip = mgr.trigger_live_clip(
-        &mut project, &host,
-        "video1".into(), 0, 2.0, 0.0,
-        None, -1, 0.0, -1,
-    ).unwrap();
+    let clip = mgr
+        .trigger_live_clip(
+            &mut project,
+            &host,
+            "video1".into(),
+            0,
+            2.0,
+            0.0,
+            None,
+            -1,
+            0.0,
+            -1,
+        )
+        .unwrap();
     let clip_id = clip.id.clone();
 
     host.beat = Beats(4.0); // held for 4 beats
-    mgr.commit_live_clip(&mut project, &mut host, 0, Some(&clip_id), Some(4.0), -1, 1.0, -1);
+    mgr.commit_live_clip(
+        &mut project,
+        &mut host,
+        0,
+        Some(&clip_id),
+        Some(4.0),
+        -1,
+        1.0,
+        -1,
+    );
 
     // Clip should be committed to timeline
     assert_eq!(project.timeline.layers[0].clips.len(), 1);
@@ -193,13 +291,31 @@ fn commit_without_recording_discards() {
     let mut host = MockHost::new(); // NOT recording
     let mut mgr = LiveClipManager::new();
 
-    let clip = mgr.trigger_live_clip(
-        &mut project, &host,
-        "video1".into(), 0, 2.0, 0.0,
-        None, -1, 0.0, -1,
-    ).unwrap();
+    let clip = mgr
+        .trigger_live_clip(
+            &mut project,
+            &host,
+            "video1".into(),
+            0,
+            2.0,
+            0.0,
+            None,
+            -1,
+            0.0,
+            -1,
+        )
+        .unwrap();
 
-    mgr.commit_live_clip(&mut project, &mut host, 0, Some(&clip.id), Some(4.0), -1, 1.0, -1);
+    mgr.commit_live_clip(
+        &mut project,
+        &mut host,
+        0,
+        Some(&clip.id),
+        Some(4.0),
+        -1,
+        1.0,
+        -1,
+    );
 
     // Clip should NOT be in timeline
     assert_eq!(project.timeline.layers[0].clips.len(), 0);
@@ -215,11 +331,20 @@ fn pending_launch_queue_activates_at_tick() {
     let mut mgr = LiveClipManager::new();
 
     // Trigger with tick 0, quantize to beat — should queue for tick 24
-    let clip = mgr.trigger_live_clip(
-        &mut project, &host,
-        "video1".into(), 0, 2.0, 0.0,
-        None, 0, 0.0, -1,
-    ).unwrap();
+    let clip = mgr
+        .trigger_live_clip(
+            &mut project,
+            &host,
+            "video1".into(),
+            0,
+            2.0,
+            0.0,
+            None,
+            0,
+            0.0,
+            -1,
+        )
+        .unwrap();
 
     // Might be queued as pending or activated immediately depending on snap
     let is_pending = mgr.pending_launch_count() > 0;
@@ -245,7 +370,18 @@ fn clear_on_seek_small_delta_no_clear() {
     let host = MockHost::new();
     let mut mgr = LiveClipManager::new();
 
-    mgr.trigger_live_clip(&mut project, &host, "v1".into(), 0, 2.0, 0.0, None, -1, 0.0, -1);
+    mgr.trigger_live_clip(
+        &mut project,
+        &host,
+        "v1".into(),
+        0,
+        2.0,
+        0.0,
+        None,
+        -1,
+        0.0,
+        -1,
+    );
     assert_eq!(mgr.live_slots().len(), 1);
 
     // Small seek delta (< 1.0) should NOT clear
@@ -260,8 +396,30 @@ fn clear_on_seek_large_delta_clears() {
     let host = MockHost::new();
     let mut mgr = LiveClipManager::new();
 
-    mgr.trigger_live_clip(&mut project, &host, "v1".into(), 0, 2.0, 0.0, None, -1, 0.0, -1);
-    mgr.trigger_live_clip(&mut project, &host, "v2".into(), 1, 2.0, 0.0, None, -1, 0.0, -1);
+    mgr.trigger_live_clip(
+        &mut project,
+        &host,
+        "v1".into(),
+        0,
+        2.0,
+        0.0,
+        None,
+        -1,
+        0.0,
+        -1,
+    );
+    mgr.trigger_live_clip(
+        &mut project,
+        &host,
+        "v2".into(),
+        1,
+        2.0,
+        0.0,
+        None,
+        -1,
+        0.0,
+        -1,
+    );
     assert_eq!(mgr.live_slots().len(), 2);
 
     // Large seek delta (> 1.0) should clear and call stop for each
@@ -278,9 +436,20 @@ fn notify_clip_stopped_removes_only_clip_id() {
     let host = MockHost::new();
     let mut mgr = LiveClipManager::new();
 
-    let clip = mgr.trigger_live_clip(
-        &mut project, &host, "v1".into(), 0, 2.0, 0.0, None, -1, 0.0, -1,
-    ).unwrap();
+    let clip = mgr
+        .trigger_live_clip(
+            &mut project,
+            &host,
+            "v1".into(),
+            0,
+            2.0,
+            0.0,
+            None,
+            -1,
+            0.0,
+            -1,
+        )
+        .unwrap();
 
     mgr.notify_clip_stopped(&clip.id);
     // Unity behavior: only removes from liveSlotClipIds, NOT from liveSlots dict.
@@ -335,9 +504,24 @@ fn held_beats_from_ticks_with_quantize() {
 
 #[test]
 fn get_quantize_interval_ticks() {
-    assert_eq!(LiveClipManager::get_quantize_interval_ticks(QuantizeMode::Off, 4), 1);
-    assert_eq!(LiveClipManager::get_quantize_interval_ticks(QuantizeMode::QuarterBeat, 4), 6);
-    assert_eq!(LiveClipManager::get_quantize_interval_ticks(QuantizeMode::Beat, 4), 24);
-    assert_eq!(LiveClipManager::get_quantize_interval_ticks(QuantizeMode::Bar, 4), 96);
-    assert_eq!(LiveClipManager::get_quantize_interval_ticks(QuantizeMode::Bar, 3), 72);
+    assert_eq!(
+        LiveClipManager::get_quantize_interval_ticks(QuantizeMode::Off, 4),
+        1
+    );
+    assert_eq!(
+        LiveClipManager::get_quantize_interval_ticks(QuantizeMode::QuarterBeat, 4),
+        6
+    );
+    assert_eq!(
+        LiveClipManager::get_quantize_interval_ticks(QuantizeMode::Beat, 4),
+        24
+    );
+    assert_eq!(
+        LiveClipManager::get_quantize_interval_ticks(QuantizeMode::Bar, 4),
+        96
+    );
+    assert_eq!(
+        LiveClipManager::get_quantize_interval_ticks(QuantizeMode::Bar, 3),
+        72
+    );
 }

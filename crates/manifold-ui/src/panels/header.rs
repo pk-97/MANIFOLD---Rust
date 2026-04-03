@@ -1,9 +1,9 @@
+use super::{Panel, PanelAction};
 use crate::color;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
 use crate::node::*;
 use crate::tree::UITree;
-use super::{Panel, PanelAction};
 
 // ── Layout constants (from HeaderLayout.cs) ────────────────────────
 
@@ -159,41 +159,63 @@ impl HeaderPanel {
 
     pub fn set_project_name(&mut self, tree: &mut UITree, name: &str) {
         self.project_name = name.into();
-        if self.project_name_id >= 0 { tree.set_text(self.project_name_id as u32, name); }
+        if self.project_name_id >= 0 {
+            tree.set_text(self.project_name_id as u32, name);
+        }
     }
 
-    pub fn set_import_status(&mut self, tree: &mut UITree, status: &str, progress: f32, show: bool) {
+    pub fn set_import_status(
+        &mut self,
+        tree: &mut UITree,
+        status: &str,
+        progress: f32,
+        show: bool,
+    ) {
         self.import_status = status.into();
         self.import_progress = progress.clamp(0.0, 1.0);
         self.import_progress_visible = show;
-        if self.import_status_id >= 0 { tree.set_text(self.import_status_id as u32, status); }
-        if self.progress_bg_id >= 0 { tree.set_visible(self.progress_bg_id as u32, show); }
+        if self.import_status_id >= 0 {
+            tree.set_text(self.import_status_id as u32, status);
+        }
+        if self.progress_bg_id >= 0 {
+            tree.set_visible(self.progress_bg_id as u32, show);
+        }
         if self.progress_fill_id >= 0 {
             tree.set_visible(self.progress_fill_id as u32, show);
             let bg = self.layout.progress_bg;
             let fill_inset = 1.0;
             let max_fill_w = bg.width - fill_inset * 2.0;
-            tree.set_bounds(self.progress_fill_id as u32, Rect::new(
-                bg.x + fill_inset, bg.y + fill_inset,
-                max_fill_w * self.import_progress,
-                bg.height - fill_inset * 2.0,
-            ));
+            tree.set_bounds(
+                self.progress_fill_id as u32,
+                Rect::new(
+                    bg.x + fill_inset,
+                    bg.y + fill_inset,
+                    max_fill_w * self.import_progress,
+                    bg.height - fill_inset * 2.0,
+                ),
+            );
         }
     }
 
     pub fn set_time_display(&mut self, tree: &mut UITree, text: &str) {
         self.time_display = text.into();
-        if self.time_display_id >= 0 { tree.set_text(self.time_display_id as u32, text); }
+        if self.time_display_id >= 0 {
+            tree.set_text(self.time_display_id as u32, text);
+        }
     }
 
     pub fn set_zoom_label(&mut self, tree: &mut UITree, text: &str) {
         self.zoom_label = text.into();
-        if self.zoom_label_id >= 0 { tree.set_text(self.zoom_label_id as u32, text); }
+        if self.zoom_label_id >= 0 {
+            tree.set_text(self.zoom_label_id as u32, text);
+        }
     }
 
     pub fn set_monitor_active(&mut self, tree: &mut UITree, active: bool) {
         self.monitor_active = active;
-        if self.monitor_btn_id >= 0 { tree.set_style(self.monitor_btn_id as u32, self.monitor_style()); }
+        if self.monitor_btn_id >= 0 {
+            tree.set_style(self.monitor_btn_id as u32, self.monitor_style());
+        }
     }
 
     fn monitor_style(&self) -> UIStyle {
@@ -224,15 +246,23 @@ impl HeaderPanel {
 
     fn handle_click(&self, node_id: u32) -> Vec<PanelAction> {
         let id = node_id as i32;
-        if id == self.zoom_out_id { return vec![PanelAction::ZoomOut]; }
-        if id == self.zoom_in_id { return vec![PanelAction::ZoomIn]; }
-        if id == self.monitor_btn_id { return vec![PanelAction::ToggleMonitor]; }
+        if id == self.zoom_out_id {
+            return vec![PanelAction::ZoomOut];
+        }
+        if id == self.zoom_in_id {
+            return vec![PanelAction::ZoomIn];
+        }
+        if id == self.monitor_btn_id {
+            return vec![PanelAction::ToggleMonitor];
+        }
         Vec::new()
     }
 }
 
 impl Default for HeaderPanel {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Panel for HeaderPanel {
@@ -248,15 +278,24 @@ impl Panel for HeaderPanel {
         let zoom_label = self.zoom_label.clone();
 
         let bg = tree.add_panel(
-            -1, header.x, header.y, header.width, header.height,
-            UIStyle { bg_color: color::PANEL_BG_DARK, ..UIStyle::default() },
+            -1,
+            header.x,
+            header.y,
+            header.width,
+            header.height,
+            UIStyle {
+                bg_color: color::PANEL_BG_DARK,
+                ..UIStyle::default()
+            },
         ) as i32;
 
         // Left group
         self.project_name_id = tree.add_label(
             bg,
-            self.layout.project_name.x, self.layout.project_name.y,
-            self.layout.project_name.width, self.layout.project_name.height,
+            self.layout.project_name.x,
+            self.layout.project_name.y,
+            self.layout.project_name.width,
+            self.layout.project_name.height,
             &project_name,
             UIStyle {
                 text_color: color::TEXT_DIMMED_C32,
@@ -267,8 +306,10 @@ impl Panel for HeaderPanel {
 
         self.import_status_id = tree.add_label(
             bg,
-            self.layout.import_status.x, self.layout.import_status.y,
-            self.layout.import_status.width, self.layout.import_status.height,
+            self.layout.import_status.x,
+            self.layout.import_status.y,
+            self.layout.import_status.width,
+            self.layout.import_status.height,
             &import_status,
             UIStyle {
                 text_color: color::TEXT_DIMMED_C32,
@@ -279,8 +320,10 @@ impl Panel for HeaderPanel {
 
         self.progress_bg_id = tree.add_panel(
             bg,
-            self.layout.progress_bg.x, self.layout.progress_bg.y,
-            self.layout.progress_bg.width, self.layout.progress_bg.height,
+            self.layout.progress_bg.x,
+            self.layout.progress_bg.y,
+            self.layout.progress_bg.width,
+            self.layout.progress_bg.height,
             UIStyle {
                 bg_color: color::SLIDER_TRACK_PRESSED_C32,
                 corner_radius: PROGRESS_RADIUS,
@@ -291,8 +334,10 @@ impl Panel for HeaderPanel {
 
         self.progress_fill_id = tree.add_panel(
             bg,
-            self.layout.progress_fill.x, self.layout.progress_fill.y,
-            self.layout.progress_fill.width, self.layout.progress_fill.height,
+            self.layout.progress_fill.x,
+            self.layout.progress_fill.y,
+            self.layout.progress_fill.width,
+            self.layout.progress_fill.height,
             UIStyle {
                 bg_color: PROGRESS_FILL,
                 corner_radius: 1.0,
@@ -303,21 +348,26 @@ impl Panel for HeaderPanel {
 
         // Center group
         self.time_display_id = tree.add_node(
-            bg, self.layout.time_display, UINodeType::Label,
+            bg,
+            self.layout.time_display,
+            UINodeType::Label,
             UIStyle {
                 text_color: color::TEXT_PRIMARY_C32,
                 font_size: color::FONT_HEADING,
                 text_align: TextAlign::Center,
                 ..UIStyle::default()
             },
-            Some(&time_display), UIFlags::empty(),
+            Some(&time_display),
+            UIFlags::empty(),
         ) as i32;
 
         // Right group
         self.zoom_out_id = tree.add_button(
             bg,
-            self.layout.zoom_out.x, self.layout.zoom_out.y,
-            self.layout.zoom_out.width, self.layout.zoom_out.height,
+            self.layout.zoom_out.x,
+            self.layout.zoom_out.y,
+            self.layout.zoom_out.width,
+            self.layout.zoom_out.height,
             UIStyle {
                 bg_color: BUTTON_DIM,
                 hover_bg_color: BUTTON_HOVER_H,
@@ -332,20 +382,25 @@ impl Panel for HeaderPanel {
         ) as i32;
 
         self.zoom_label_id = tree.add_node(
-            bg, self.layout.zoom_label, UINodeType::Label,
+            bg,
+            self.layout.zoom_label,
+            UINodeType::Label,
             UIStyle {
                 text_color: color::TEXT_PRIMARY_C32,
                 font_size: color::FONT_SUBHEADING,
                 text_align: TextAlign::Center,
                 ..UIStyle::default()
             },
-            Some(&zoom_label), UIFlags::empty(),
+            Some(&zoom_label),
+            UIFlags::empty(),
         ) as i32;
 
         self.zoom_in_id = tree.add_button(
             bg,
-            self.layout.zoom_in.x, self.layout.zoom_in.y,
-            self.layout.zoom_in.width, self.layout.zoom_in.height,
+            self.layout.zoom_in.x,
+            self.layout.zoom_in.y,
+            self.layout.zoom_in.width,
+            self.layout.zoom_in.height,
             UIStyle {
                 bg_color: BUTTON_DIM,
                 hover_bg_color: BUTTON_HOVER_H,
@@ -361,8 +416,10 @@ impl Panel for HeaderPanel {
 
         self.monitor_btn_id = tree.add_button(
             bg,
-            self.layout.monitor_button.x, self.layout.monitor_button.y,
-            self.layout.monitor_button.width, self.layout.monitor_button.height,
+            self.layout.monitor_button.x,
+            self.layout.monitor_button.y,
+            self.layout.monitor_button.width,
+            self.layout.monitor_button.height,
             self.monitor_style(),
             "Monitor",
         ) as i32;
@@ -379,8 +436,12 @@ impl Panel for HeaderPanel {
         }
     }
 
-    fn first_node(&self) -> usize { self.cache_first_node }
-    fn node_count(&self) -> usize { self.cache_node_count }
+    fn first_node(&self) -> usize {
+        self.cache_first_node
+    }
+    fn node_count(&self) -> usize {
+        self.cache_node_count
+    }
 }
 
 #[cfg(test)]

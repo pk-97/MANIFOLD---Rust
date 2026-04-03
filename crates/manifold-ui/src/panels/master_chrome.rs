@@ -1,8 +1,8 @@
+use super::PanelAction;
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderDragState};
 use crate::tree::UITree;
-use super::PanelAction;
 
 // ── Layout constants (from MasterChromeBitmapPanel.cs) ───────────
 
@@ -23,7 +23,9 @@ const FONT_SIZE: u16 = color::FONT_BODY;
 
 use crate::color::{EXIT_PATH_BG, EXIT_PATH_HOVER, EXIT_PATH_PRESSED};
 
-fn fmt_opacity(v: f32) -> String { format!("{:.2}", v) }
+fn fmt_opacity(v: f32) -> String {
+    format!("{:.2}", v)
+}
 
 // ── MasterChromePanel ────────────────────────────────────────────
 
@@ -69,16 +71,29 @@ impl MasterChromePanel {
         if self.is_collapsed {
             PAD_V + HEADER_ROW_H + PAD_V
         } else {
-            PAD_V + HEADER_ROW_H + DIVIDER_H
-                + EXIT_PATH_ROW_H + DIVIDER_H
-                + SLIDER_ROW_H + DIVIDER_H + PAD_V
+            PAD_V
+                + HEADER_ROW_H
+                + DIVIDER_H
+                + EXIT_PATH_ROW_H
+                + DIVIDER_H
+                + SLIDER_ROW_H
+                + DIVIDER_H
+                + PAD_V
         }
     }
 
-    pub fn first_node(&self) -> usize { self.first_node }
-    pub fn node_count(&self) -> usize { self.node_count }
-    pub fn is_dragging(&self) -> bool { self.opacity.is_dragging() || self.led_brightness.is_dragging() }
-    pub fn is_collapsed(&self) -> bool { self.is_collapsed }
+    pub fn first_node(&self) -> usize {
+        self.first_node
+    }
+    pub fn node_count(&self) -> usize {
+        self.node_count
+    }
+    pub fn is_dragging(&self) -> bool {
+        self.opacity.is_dragging() || self.led_brightness.is_dragging()
+    }
+    pub fn is_collapsed(&self) -> bool {
+        self.is_collapsed
+    }
 
     pub fn toggle_collapsed(&mut self) {
         self.is_collapsed = !self.is_collapsed;
@@ -93,13 +108,21 @@ impl MasterChromePanel {
         let mut cy = rect.y + PAD_V;
 
         let opacity_val = self.opacity.cached_value();
-        let opacity = if opacity_val.is_nan() { 1.0 } else { opacity_val };
+        let opacity = if opacity_val.is_nan() {
+            1.0
+        } else {
+            opacity_val
+        };
         let exit_path = self.cached_exit_path.clone();
 
         // Header row
         let label_w = content_w - CHEVRON_W - GAP;
         self.header_label_id = tree.add_label(
-            -1, cx, cy, label_w, HEADER_ROW_H,
+            -1,
+            cx,
+            cy,
+            label_w,
+            HEADER_ROW_H,
             "Master FX",
             UIStyle {
                 text_color: color::TEXT_PRIMARY_C32,
@@ -111,7 +134,11 @@ impl MasterChromePanel {
 
         let chev_x = cx + content_w - CHEVRON_W;
         self.chevron_btn_id = tree.add_button(
-            -1, chev_x, cy + (HEADER_ROW_H - 16.0) * 0.5, CHEVRON_W, 16.0,
+            -1,
+            chev_x,
+            cy + (HEADER_ROW_H - 16.0) * 0.5,
+            CHEVRON_W,
+            16.0,
             UIStyle {
                 bg_color: Color32::TRANSPARENT,
                 hover_bg_color: color::HOVER_OVERLAY,
@@ -121,7 +148,11 @@ impl MasterChromePanel {
                 text_align: TextAlign::Center,
                 ..UIStyle::default()
             },
-            if self.is_collapsed { "\u{25B6}" } else { "\u{25BC}" },
+            if self.is_collapsed {
+                "\u{25B6}"
+            } else {
+                "\u{25BC}"
+            },
         ) as i32;
 
         cy += HEADER_ROW_H;
@@ -135,8 +166,15 @@ impl MasterChromePanel {
 
         // Divider 0
         self.divider_ids[0] = tree.add_panel(
-            -1, cx, cy, content_w, DIVIDER_H,
-            UIStyle { bg_color: color::DIVIDER_C32, ..UIStyle::default() },
+            -1,
+            cx,
+            cy,
+            content_w,
+            DIVIDER_H,
+            UIStyle {
+                bg_color: color::DIVIDER_C32,
+                ..UIStyle::default()
+            },
         ) as i32;
         cy += DIVIDER_H;
 
@@ -145,7 +183,11 @@ impl MasterChromePanel {
         let led_brightness = if led_val.is_nan() { 1.0 } else { led_val };
 
         self.exit_path_label_id = tree.add_label(
-            -1, cx, cy, LED_LABEL_W, EXIT_PATH_ROW_H,
+            -1,
+            cx,
+            cy,
+            LED_LABEL_W,
+            EXIT_PATH_ROW_H,
             "LED",
             UIStyle {
                 text_color: color::TEXT_DIMMED_C32,
@@ -159,7 +201,11 @@ impl MasterChromePanel {
         let btn_x = cx + LED_LABEL_W + GAP;
         let btn_w = (content_w - LED_LABEL_W - GAP - GAP - LED_SLIDER_W).max(20.0);
         self.exit_path_btn_id = tree.add_button(
-            -1, btn_x, cy + (EXIT_PATH_ROW_H - 18.0) * 0.5, btn_w, 18.0,
+            -1,
+            btn_x,
+            cy + (EXIT_PATH_ROW_H - 18.0) * 0.5,
+            btn_w,
+            18.0,
             UIStyle {
                 bg_color: EXIT_PATH_BG,
                 hover_bg_color: EXIT_PATH_HOVER,
@@ -176,23 +222,37 @@ impl MasterChromePanel {
         // Mini brightness slider (no label, inline)
         let slider_x = btn_x + btn_w + GAP;
         let led_slider_rect = Rect::new(
-            slider_x, cy + (EXIT_PATH_ROW_H - SLIDER_ROW_H) * 0.5,
-            LED_SLIDER_W, SLIDER_ROW_H,
+            slider_x,
+            cy + (EXIT_PATH_ROW_H - SLIDER_ROW_H) * 0.5,
+            LED_SLIDER_W,
+            SLIDER_ROW_H,
         );
         let led_val_text = fmt_opacity(led_brightness);
         let led_ids = BitmapSlider::build(
-            tree, -1, led_slider_rect,
-            None, led_brightness,
-            &led_val_text, &SliderColors::default_slider(),
-            FONT_SIZE, 0.0,
+            tree,
+            -1,
+            led_slider_rect,
+            None,
+            led_brightness,
+            &led_val_text,
+            &SliderColors::default_slider(),
+            FONT_SIZE,
+            0.0,
         );
         self.led_brightness.set_ids(led_ids);
         cy += EXIT_PATH_ROW_H;
 
         // Divider 1
         self.divider_ids[1] = tree.add_panel(
-            -1, cx, cy, content_w, DIVIDER_H,
-            UIStyle { bg_color: color::DIVIDER_C32, ..UIStyle::default() },
+            -1,
+            cx,
+            cy,
+            content_w,
+            DIVIDER_H,
+            UIStyle {
+                bg_color: color::DIVIDER_C32,
+                ..UIStyle::default()
+            },
         ) as i32;
         cy += DIVIDER_H;
 
@@ -200,18 +260,30 @@ impl MasterChromePanel {
         let slider_rect = Rect::new(cx, cy, content_w, SLIDER_ROW_H);
         let val_text = fmt_opacity(opacity);
         let ids = BitmapSlider::build(
-            tree, -1, slider_rect,
-            Some("Opacity"), opacity,
-            &val_text, &SliderColors::default_slider(),
-            FONT_SIZE, OPACITY_LABEL_W,
+            tree,
+            -1,
+            slider_rect,
+            Some("Opacity"),
+            opacity,
+            &val_text,
+            &SliderColors::default_slider(),
+            FONT_SIZE,
+            OPACITY_LABEL_W,
         );
         self.opacity.set_ids(ids);
         cy += SLIDER_ROW_H;
 
         // Divider 2
         self.divider_ids[2] = tree.add_panel(
-            -1, cx, cy, content_w, DIVIDER_H,
-            UIStyle { bg_color: color::DIVIDER_C32, ..UIStyle::default() },
+            -1,
+            cx,
+            cy,
+            content_w,
+            DIVIDER_H,
+            UIStyle {
+                bg_color: color::DIVIDER_C32,
+                ..UIStyle::default()
+            },
         ) as i32;
 
         self.node_count = tree.count() - self.first_node;
@@ -297,7 +369,11 @@ impl MasterChromePanel {
         if self.opacity.ids().is_some_and(|ids| node_id == ids.track) {
             return vec![PanelAction::MasterOpacityRightClick];
         }
-        if self.led_brightness.ids().is_some_and(|ids| node_id == ids.track) {
+        if self
+            .led_brightness
+            .ids()
+            .is_some_and(|ids| node_id == ids.track)
+        {
             return vec![PanelAction::LedBrightnessRightClick];
         }
         Vec::new()
@@ -313,7 +389,9 @@ impl MasterChromePanel {
 }
 
 impl Default for MasterChromePanel {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]

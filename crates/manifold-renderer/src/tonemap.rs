@@ -7,10 +7,10 @@
 //! Uses a native Metal compute dispatch via manifold-gpu. This eliminates
 //! Metal TBDR tile alloc/load/store overhead (~290us at 4K per pass).
 
-use manifold_core::TonemapCurve;
-use manifold_gpu::{GpuDevice, GpuTexture};
 use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
+use manifold_core::TonemapCurve;
+use manifold_gpu::{GpuDevice, GpuTexture};
 
 /// Per-frame tonemap settings. Matches Unity CompositorStack properties:
 /// TonemapExposure, HDROutputEnabled, PaperWhiteNits, MaxDisplayNits.
@@ -95,15 +95,14 @@ impl TonemapPipeline {
     ///
     /// Realtime display uses SDR (mode 0) or EDR (mode 2) depending on
     /// hdr_output_enabled. PQ (mode 1) is reserved for export pipeline.
-    pub fn apply(
-        &self,
-        gpu: &mut GpuEncoder,
-        hdr_source: &GpuTexture,
-        settings: &TonemapSettings,
-    ) {
+    pub fn apply(&self, gpu: &mut GpuEncoder, hdr_source: &GpuTexture, settings: &TonemapSettings) {
         // Realtime HDR preview uses EDR passthrough (3) — no ACES compression,
         // linear values passed directly to macOS EDR with soft-clip at display peak.
-        let mode = if settings.hdr_output_enabled { 3u32 } else { 0u32 };
+        let mode = if settings.hdr_output_enabled {
+            3u32
+        } else {
+            0u32
+        };
 
         let uniforms = TonemapUniforms {
             exposure: settings.exposure,

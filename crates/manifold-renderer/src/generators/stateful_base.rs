@@ -18,12 +18,10 @@ impl StatefulState {
         format: GpuTextureFormat,
         label: &str,
     ) -> Self {
-        let state_a = RenderTarget::new(
-            device, width, height, format, &format!("{} State A", label),
-        );
-        let state_b = RenderTarget::new(
-            device, width, height, format, &format!("{} State B", label),
-        );
+        let state_a =
+            RenderTarget::new(device, width, height, format, &format!("{} State A", label));
+        let state_b =
+            RenderTarget::new(device, width, height, format, &format!("{} State B", label));
         Self {
             state_a,
             state_b,

@@ -1,16 +1,16 @@
-use std::sync::Arc;
 use parking_lot::RwLock;
+use std::sync::Arc;
 
 use manifold_core::effects::{EffectGroup, EffectInstance};
 use manifold_core::types::BlendMode;
-use manifold_renderer::compositor::{Compositor, CompositeLayerDescriptor, CompositorFrame};
+#[cfg(target_os = "macos")]
+use manifold_media::video_renderer::VideoRenderer;
+use manifold_playback::engine::{PlaybackEngine, TickResult};
+use manifold_renderer::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
 use manifold_renderer::generator_renderer::GeneratorRenderer;
 use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_renderer::layer_compositor::CompositeClipDescriptor;
-#[cfg(target_os = "macos")]
-use manifold_media::video_renderer::VideoRenderer;
 use manifold_renderer::tonemap::TonemapSettings;
-use manifold_playback::engine::{PlaybackEngine, TickResult};
 
 /// Thread-safe shared output dimensions. The content thread writes new
 /// dimensions after resize; the UI thread reads them for aspect ratio.
@@ -126,9 +126,7 @@ pub struct ContentPipeline {
 }
 
 impl ContentPipeline {
-    pub fn new(
-        compositor: Box<dyn Compositor>,
-    ) -> Self {
+    pub fn new(compositor: Box<dyn Compositor>) -> Self {
         let shared = Arc::new(SharedOutputView::new());
         Self {
             compositor,
@@ -281,9 +279,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         #[cfg(target_os = "macos")]
         if let Some(ref native_event) = self.native_event {
             let pending = self.surface_signal_values[self.write_surface_index];
-            if pending > 0
-                && !native_event.wait_until_done_timeout(pending, 5000)
-            {
+            if pending > 0 && !native_event.wait_until_done_timeout(pending, 5000) {
                 log::error!(
                     "[ContentPipeline] GPU timeout waiting for surface {} \
                      (signal={}, signaled={})",
@@ -336,16 +332,35 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         #[cfg(target_os = "macos")]
         if self.native_device.is_some() {
             self.render_content_native(
-                gpu, engine, tick_result, dt, frame_count,
-                time.as_f32(), beat.as_f32(), time_f64, beat_f64,
-                _t_frame, _poll_ms, export_mode,
+                gpu,
+                engine,
+                tick_result,
+                dt,
+                frame_count,
+                time.as_f32(),
+                beat.as_f32(),
+                time_f64,
+                beat_f64,
+                _t_frame,
+                _poll_ms,
+                export_mode,
             );
         }
 
         // Non-macOS: not yet supported (native Metal path required).
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = (gpu, engine, tick_result, dt, frame_count, time, beat, time_f64, beat_f64);
+            let _ = (
+                gpu,
+                engine,
+                tick_result,
+                dt,
+                frame_count,
+                time,
+                beat,
+                time_f64,
+                beat_f64,
+            );
             log::warn!("[ContentPipeline] Non-macOS render path not available");
         }
     }
@@ -431,7 +446,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             }
                         }
                         gen_renderer.render_all(
-                            &mut gpu_gen, time_f64, beat_f64, dt as f32, layers,
+                            &mut gpu_gen,
+                            time_f64,
+                            beat_f64,
+                            dt as f32,
+                            layers,
                         );
                         break;
                     }
@@ -453,15 +472,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             Vec::with_capacity(tick_result.ready_clips.len());
         for clip in &tick_result.ready_clips {
             let clip_texture = renderers.iter().find_map(|r| {
-                if let Some(gen_r) =
-                    r.as_any().downcast_ref::<GeneratorRenderer>()
+                if let Some(gen_r) = r.as_any().downcast_ref::<GeneratorRenderer>()
                     && let Some(t) = gen_r.get_clip_texture(&clip.id)
                 {
                     return Some(t);
                 }
                 #[cfg(target_os = "macos")]
-                if let Some(vid_r) =
-                    r.as_any().downcast_ref::<VideoRenderer>()
+                if let Some(vid_r) = r.as_any().downcast_ref::<VideoRenderer>()
                     && let Some(t) = vid_r.get_clip_texture(&clip.id)
                 {
                     return Some(t);
@@ -469,23 +486,22 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 None
             });
             if let Some(texture) = clip_texture {
-                let clip_li = layers.iter().position(|l| {
-                    l.clips.iter().any(|c| c.id == clip.id)
-                }).unwrap_or(0);
+                let clip_li = layers
+                    .iter()
+                    .position(|l| l.clips.iter().any(|c| c.id == clip.id))
+                    .unwrap_or(0);
                 let layer = layers.get(clip_li);
                 clip_descs.push(CompositeClipDescriptor {
                     clip_id: &clip.id,
                     texture,
                     layer_index: clip_li as i32,
-                    blend_mode: layer
-                        .map_or(BlendMode::Normal, |l| l.default_blend_mode),
+                    blend_mode: layer.map_or(BlendMode::Normal, |l| l.default_blend_mode),
                     opacity: layer.map_or(1.0, |l| l.opacity),
                     effects: &[],
                     effect_groups: &[],
                 });
             }
         }
-
 
         // Sort clips descending by layer_index: higher index = bottom of timeline = rendered first
         // as base layer. This ordering is required by generate_layers' consecutive-run grouping.
@@ -501,15 +517,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 is_muted: layer.is_muted,
                 is_solo: layer.is_solo,
                 effects: layer.effects.as_deref().unwrap_or(empty_effects),
-                effect_groups: layer
-                    .effect_groups
-                    .as_deref()
-                    .unwrap_or(empty_groups),
+                effect_groups: layer.effect_groups.as_deref().unwrap_or(empty_groups),
             })
             .collect();
 
-        let master_effects =
-            project.map_or(empty_effects, |p| &p.settings.master_effects);
+        let master_effects = project.map_or(empty_effects, |p| &p.settings.master_effects);
         let master_effect_groups = project
             .and_then(|p| p.settings.master_effect_groups.as_deref())
             .unwrap_or(empty_groups);
@@ -531,10 +543,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 hdr_output_enabled: self.edr_headroom > 1.0,
                 paper_white_nits: 200.0,
                 max_display_nits: (200.0 * self.edr_headroom as f32).min(10000.0),
-                curve: project
-                    .map_or(manifold_core::TonemapCurve::AcesNarkowicz, |p| {
-                        p.settings.tonemap_curve
-                    }),
+                curve: project.map_or(manifold_core::TonemapCurve::AcesNarkowicz, |p| {
+                    p.settings.tonemap_curve
+                }),
             },
             output_width: self.output_w,
             output_height: self.output_h,
@@ -550,8 +561,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 GpuEncoder::new(&mut native_enc, native_device)
             };
 
-            let _compositor_tex =
-                self.compositor.render(&mut gpu_comp, &frame);
+            let _compositor_tex = self.compositor.render(&mut gpu_comp, &frame);
         }
 
         // Upscale (render-res → output-res) + IOSurface copy.
@@ -572,14 +582,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     // 0.35 ≈ exp2(-1.5) — crisper without ringing.
                     mfx.upscale(&mut gpu_upscale, self.compositor.output_texture(), 0.35);
                 }
-                if let Some(ref shared_tex) =
-                    self.shared_textures[self.write_surface_index]
+                if let Some(ref shared_tex) = self.shared_textures[self.write_surface_index]
                     && shared_tex.width == self.output_w
                     && shared_tex.height == self.output_h
                 {
                     native_enc.copy_texture_to_texture(
-                        &mfx.output.texture, shared_tex,
-                        self.output_w, self.output_h, 1,
+                        &mfx.output.texture,
+                        shared_tex,
+                        self.output_w,
+                        self.output_h,
+                        1,
                     );
                 }
                 Self::update_workspace_preview(
@@ -601,14 +613,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     // 0.35 ≈ exp2(-1.5) — crisper without ringing.
                     fsr.upscale(&mut gpu_fsr, self.compositor.output_texture(), 0.35);
                 }
-                if let Some(ref shared_tex) =
-                    self.shared_textures[self.write_surface_index]
+                if let Some(ref shared_tex) = self.shared_textures[self.write_surface_index]
                     && shared_tex.width == self.output_w
                     && shared_tex.height == self.output_h
                 {
                     native_enc.copy_texture_to_texture(
-                        &fsr.output.texture, shared_tex,
-                        self.output_w, self.output_h, 1,
+                        &fsr.output.texture,
+                        shared_tex,
+                        self.output_w,
+                        self.output_h,
+                        1,
                     );
                 }
                 Self::update_workspace_preview(
@@ -620,13 +634,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 );
             } else {
                 // No upscaling: blit compositor output directly to IOSurface.
-                if let Some(ref shared_tex) =
-                    self.shared_textures[self.write_surface_index]
+                if let Some(ref shared_tex) = self.shared_textures[self.write_surface_index]
                     && shared_tex.width == comp_w
                     && shared_tex.height == comp_h
                 {
                     native_enc.copy_texture_to_texture(
-                        self.compositor.output_texture(), shared_tex, comp_w, comp_h, 1,
+                        self.compositor.output_texture(),
+                        shared_tex,
+                        comp_w,
+                        comp_h,
+                        1,
                     );
                 }
                 Self::update_workspace_preview(
@@ -647,8 +664,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let bridge = self.shared_bridge.clone();
             let preview = self.preview_bridge.clone();
             native_enc.add_completed_handler(move || {
-                if let Some(ref b) = bridge { b.publish_front(write_idx); }
-                if let Some(ref b) = preview { b.publish_front(write_idx); }
+                if let Some(ref b) = bridge {
+                    b.publish_front(write_idx);
+                }
+                if let Some(ref b) = preview {
+                    b.publish_front(write_idx);
+                }
             });
         }
 
@@ -661,11 +682,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
         // Surface tracking — skipped in export mode (no surface cycling needed).
         if !export_mode {
-            self.surface_signal_values[self.write_surface_index] =
-                self.native_signal_value;
+            self.surface_signal_values[self.write_surface_index] = self.native_signal_value;
             self.last_write_surface = self.write_surface_index;
-            self.write_surface_index = (self.write_surface_index + 1)
-                % crate::shared_texture::SURFACE_COUNT;
+            self.write_surface_index =
+                (self.write_surface_index + 1) % crate::shared_texture::SURFACE_COUNT;
         }
 
         // Update shared output view for UI thread
@@ -699,7 +719,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Update shared dimensions (always output dims, not render dims).
         let (old_w, old_h) = self.shared_output.get_dimensions();
         if old_w != self.output_w || old_h != self.output_h {
-            self.shared_output.set_dimensions(self.output_w, self.output_h);
+            self.shared_output
+                .set_dimensions(self.output_w, self.output_h);
         }
 
         // GPU profiler (if active): store poll timing
@@ -724,14 +745,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         render_scale: f32,
     ) {
         let scale = render_scale.clamp(0.25, 1.0);
-        let render_w = ((width  as f32) * scale).round().max(1.0) as u32;
+        let render_w = ((width as f32) * scale).round().max(1.0) as u32;
         let render_h = ((height as f32) * scale).round().max(1.0) as u32;
 
         self.output_w = width;
         self.output_h = height;
 
         #[cfg(target_os = "macos")]
-        let native_device = self.native_device.as_ref()
+        let native_device = self
+            .native_device
+            .as_ref()
             .expect("native device required for resize");
 
         // Compositor renders at render resolution (may be smaller than output).
@@ -741,9 +764,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Resize generator renderer via engine downcast (at render resolution).
         let (renderers, _) = engine.split_renderer_project();
         for renderer in renderers.iter_mut() {
-            if let Some(gen_renderer) =
-                renderer.as_any_mut().downcast_mut::<GeneratorRenderer>()
-            {
+            if let Some(gen_renderer) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
                 gen_renderer.resize_gpu(render_w, render_h, width, height);
                 break;
             }
@@ -755,18 +776,29 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         #[cfg(target_os = "macos")]
         if scale < 1.0 {
             // Try MetalFX first.
-            if manifold_renderer::metalfx_upscaler::MetalFxFullFrameUpscaler::is_available(native_device) {
+            if manifold_renderer::metalfx_upscaler::MetalFxFullFrameUpscaler::is_available(
+                native_device,
+            ) {
                 if let Some(ref mut mfx) = self.metalfx {
                     mfx.resize(native_device, render_w, render_h, width, height);
                 } else {
-                    self.metalfx = manifold_renderer::metalfx_upscaler::MetalFxFullFrameUpscaler::new(
-                        native_device, render_w, render_h, width, height,
-                    );
+                    self.metalfx =
+                        manifold_renderer::metalfx_upscaler::MetalFxFullFrameUpscaler::new(
+                            native_device,
+                            render_w,
+                            render_h,
+                            width,
+                            height,
+                        );
                 }
                 self.fsr1 = None; // MetalFX takes over
                 eprintln!(
                     "[Upscaler] MetalFX Spatial: {}x{} → {}x{} ({:.0}% render scale)",
-                    render_w, render_h, width, height, scale * 100.0,
+                    render_w,
+                    render_h,
+                    width,
+                    height,
+                    scale * 100.0,
                 );
             } else {
                 // MetalFX not available — use FSR 1.0.
@@ -775,17 +807,28 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     fsr.resize(native_device, render_w, render_h, width, height);
                 } else {
                     self.fsr1 = Some(manifold_renderer::fsr1::Fsr1Upscaler::new(
-                        native_device, render_w, render_h, width, height,
+                        native_device,
+                        render_w,
+                        render_h,
+                        width,
+                        height,
                     ));
                 }
                 eprintln!(
                     "[Upscaler] FSR 1.0: {}x{} → {}x{} ({:.0}% render scale)",
-                    render_w, render_h, width, height, scale * 100.0,
+                    render_w,
+                    render_h,
+                    width,
+                    height,
+                    scale * 100.0,
                 );
             }
         } else {
             if self.metalfx.is_some() || self.fsr1.is_some() {
-                eprintln!("[Upscaler] Disabled — rendering at native {}x{}", width, height);
+                eprintln!(
+                    "[Upscaler] Disabled — rendering at native {}x{}",
+                    width, height
+                );
             }
             self.metalfx = None;
             self.fsr1 = None;
@@ -812,12 +855,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let width = width.max(1);
         let height = height.max(1);
 
-        let Some(ref bridge) = self.preview_bridge else { return };
+        let Some(ref bridge) = self.preview_bridge else {
+            return;
+        };
         if bridge.width() == width && bridge.height() == height {
             return;
         }
 
-        let native_device = self.native_device.as_ref()
+        let native_device = self
+            .native_device
+            .as_ref()
             .expect("native device required for workspace preview resize");
         bridge.resize(width, height);
         self.preview_textures = std::array::from_fn(|i| {
@@ -912,7 +959,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     /// LED tap texture: pre-tonemap composite captured when led_exit_index == 0.
     /// Returns the tap if available, otherwise falls back to the final output.
     pub fn led_source_texture(&self) -> &manifold_gpu::GpuTexture {
-        self.compositor.led_tap_texture()
+        self.compositor
+            .led_tap_texture()
             .unwrap_or_else(|| self.compositor.output_texture())
     }
 
@@ -924,23 +972,29 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         paper_white_nits: f32,
         max_nits: f32,
     ) -> &manifold_gpu::GpuTexture {
-        let native_device = self.native_device.as_ref()
+        let native_device = self
+            .native_device
+            .as_ref()
             .expect("native device required for PQ encoding");
         let (w, h) = self.compositor.dimensions();
 
         // Lazy init PQ encoder
         if self.pq_encoder.is_none() {
-            self.pq_encoder =
-                Some(manifold_renderer::pq_encoder::PqEncoder::new(
-                    native_device, w, h,
-                ));
+            self.pq_encoder = Some(manifold_renderer::pq_encoder::PqEncoder::new(
+                native_device,
+                w,
+                h,
+            ));
             log::info!("[ContentPipeline] Created PQ encoder {}x{}", w, h);
         }
         let pq = self.pq_encoder.as_ref().unwrap();
 
         // Resize if needed
         if pq.output.width != w || pq.output.height != h {
-            self.pq_encoder.as_mut().unwrap().resize(native_device, w, h);
+            self.pq_encoder
+                .as_mut()
+                .unwrap()
+                .resize(native_device, w, h);
         }
 
         // Encode: take the final compositor output (post-tonemap, post-effects)
@@ -972,5 +1026,4 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     pub fn last_gpu_poll_ms(&self) -> f64 {
         self.gpu_poll_ms
     }
-
 }

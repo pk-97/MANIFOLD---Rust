@@ -1,9 +1,9 @@
-use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
+use crate::generators::generator_math::{PROJ_SCALE, rotate_3d};
+use crate::generators::line_pipeline::{LineGeneratorHelper, LinePipeline};
 use crate::gpu_encoder::GpuEncoder;
-use crate::generators::generator_math::{rotate_3d, PROJ_SCALE};
-use crate::generators::line_pipeline::{LinePipeline, LineGeneratorHelper};
+use manifold_core::GeneratorTypeId;
 
 // Parameter indices matching Unity's WireframeZooGenerator
 const ROT_XY: usize = 0;
@@ -19,57 +19,108 @@ const SCALE: usize = 7;
 
 // Tetrahedron: 4 vertices, 6 edges
 const TETRA_VERTS: [[f32; 3]; 4] = [
-    [1.0, 1.0, 1.0], [1.0, -1.0, -1.0],
-    [-1.0, 1.0, -1.0], [-1.0, -1.0, 1.0],
+    [1.0, 1.0, 1.0],
+    [1.0, -1.0, -1.0],
+    [-1.0, 1.0, -1.0],
+    [-1.0, -1.0, 1.0],
 ];
-const TETRA_EDGES: [[usize; 2]; 6] = [
-    [0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3],
-];
+const TETRA_EDGES: [[usize; 2]; 6] = [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]];
 
 // Cube: 8 vertices, 12 edges
 const CUBE_VERTS: [[f32; 3]; 8] = [
-    [-1.0, -1.0, -1.0], [1.0, -1.0, -1.0],
-    [1.0, 1.0, -1.0],   [-1.0, 1.0, -1.0],
-    [-1.0, -1.0, 1.0],  [1.0, -1.0, 1.0],
-    [1.0, 1.0, 1.0],    [-1.0, 1.0, 1.0],
+    [-1.0, -1.0, -1.0],
+    [1.0, -1.0, -1.0],
+    [1.0, 1.0, -1.0],
+    [-1.0, 1.0, -1.0],
+    [-1.0, -1.0, 1.0],
+    [1.0, -1.0, 1.0],
+    [1.0, 1.0, 1.0],
+    [-1.0, 1.0, 1.0],
 ];
 const CUBE_EDGES: [[usize; 2]; 12] = [
-    [0, 1], [1, 2], [2, 3], [3, 0],
-    [4, 5], [5, 6], [6, 7], [7, 4],
-    [0, 4], [1, 5], [2, 6], [3, 7],
+    [0, 1],
+    [1, 2],
+    [2, 3],
+    [3, 0],
+    [4, 5],
+    [5, 6],
+    [6, 7],
+    [7, 4],
+    [0, 4],
+    [1, 5],
+    [2, 6],
+    [3, 7],
 ];
 
 // Octahedron: 6 vertices, 12 edges
 const OCTA_VERTS: [[f32; 3]; 6] = [
-    [1.0, 0.0, 0.0], [-1.0, 0.0, 0.0],
-    [0.0, 1.0, 0.0], [0.0, -1.0, 0.0],
-    [0.0, 0.0, 1.0], [0.0, 0.0, -1.0],
+    [1.0, 0.0, 0.0],
+    [-1.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0],
+    [0.0, -1.0, 0.0],
+    [0.0, 0.0, 1.0],
+    [0.0, 0.0, -1.0],
 ];
 const OCTA_EDGES: [[usize; 2]; 12] = [
-    [0, 2], [0, 3], [0, 4], [0, 5],
-    [1, 2], [1, 3], [1, 4], [1, 5],
-    [2, 4], [2, 5], [3, 4], [3, 5],
+    [0, 2],
+    [0, 3],
+    [0, 4],
+    [0, 5],
+    [1, 2],
+    [1, 3],
+    [1, 4],
+    [1, 5],
+    [2, 4],
+    [2, 5],
+    [3, 4],
+    [3, 5],
 ];
 
 // Icosahedron: 12 vertices, 30 edges
 const PHI: f32 = 1.618034; // golden ratio
 const ICOSA_VERTS: [[f32; 3]; 12] = [
-    [-1.0, PHI, 0.0],  [1.0, PHI, 0.0],
-    [-1.0, -PHI, 0.0], [1.0, -PHI, 0.0],
-    [0.0, -1.0, PHI],  [0.0, 1.0, PHI],
-    [0.0, -1.0, -PHI], [0.0, 1.0, -PHI],
-    [PHI, 0.0, -1.0],  [PHI, 0.0, 1.0],
-    [-PHI, 0.0, -1.0], [-PHI, 0.0, 1.0],
+    [-1.0, PHI, 0.0],
+    [1.0, PHI, 0.0],
+    [-1.0, -PHI, 0.0],
+    [1.0, -PHI, 0.0],
+    [0.0, -1.0, PHI],
+    [0.0, 1.0, PHI],
+    [0.0, -1.0, -PHI],
+    [0.0, 1.0, -PHI],
+    [PHI, 0.0, -1.0],
+    [PHI, 0.0, 1.0],
+    [-PHI, 0.0, -1.0],
+    [-PHI, 0.0, 1.0],
 ];
 const ICOSA_EDGES: [[usize; 2]; 30] = [
-    [0, 1], [0, 5], [0, 7], [0, 10], [0, 11],
-    [1, 5], [1, 7], [1, 8], [1, 9],
-    [2, 3], [2, 4], [2, 6], [2, 10], [2, 11],
-    [3, 4], [3, 6], [3, 8], [3, 9],
-    [4, 5], [4, 9], [4, 11],
-    [5, 9], [5, 11],
-    [6, 7], [6, 8], [6, 10],
-    [7, 8], [7, 10],
+    [0, 1],
+    [0, 5],
+    [0, 7],
+    [0, 10],
+    [0, 11],
+    [1, 5],
+    [1, 7],
+    [1, 8],
+    [1, 9],
+    [2, 3],
+    [2, 4],
+    [2, 6],
+    [2, 10],
+    [2, 11],
+    [3, 4],
+    [3, 6],
+    [3, 8],
+    [3, 9],
+    [4, 5],
+    [4, 9],
+    [4, 11],
+    [5, 9],
+    [5, 11],
+    [6, 7],
+    [6, 8],
+    [6, 10],
+    [7, 8],
+    [7, 10],
     [8, 9],
     [10, 11],
 ];
@@ -78,31 +129,61 @@ const ICOSA_EDGES: [[usize; 2]; 30] = [
 const INV_PHI: f32 = 0.618034; // 1/phi
 const DODECA_VERTS: [[f32; 3]; 20] = [
     // Cube vertices (8)
-    [1.0, 1.0, 1.0], [1.0, 1.0, -1.0],
-    [1.0, -1.0, 1.0], [1.0, -1.0, -1.0],
-    [-1.0, 1.0, 1.0], [-1.0, 1.0, -1.0],
-    [-1.0, -1.0, 1.0], [-1.0, -1.0, -1.0],
+    [1.0, 1.0, 1.0],
+    [1.0, 1.0, -1.0],
+    [1.0, -1.0, 1.0],
+    [1.0, -1.0, -1.0],
+    [-1.0, 1.0, 1.0],
+    [-1.0, 1.0, -1.0],
+    [-1.0, -1.0, 1.0],
+    [-1.0, -1.0, -1.0],
     // Rectangle vertices on XY plane (4)
-    [0.0, PHI, INV_PHI], [0.0, PHI, -INV_PHI],
-    [0.0, -PHI, INV_PHI], [0.0, -PHI, -INV_PHI],
+    [0.0, PHI, INV_PHI],
+    [0.0, PHI, -INV_PHI],
+    [0.0, -PHI, INV_PHI],
+    [0.0, -PHI, -INV_PHI],
     // Rectangle vertices on XZ plane (4)
-    [INV_PHI, 0.0, PHI], [INV_PHI, 0.0, -PHI],
-    [-INV_PHI, 0.0, PHI], [-INV_PHI, 0.0, -PHI],
+    [INV_PHI, 0.0, PHI],
+    [INV_PHI, 0.0, -PHI],
+    [-INV_PHI, 0.0, PHI],
+    [-INV_PHI, 0.0, -PHI],
     // Rectangle vertices on YZ plane (4)
-    [PHI, INV_PHI, 0.0], [PHI, -INV_PHI, 0.0],
-    [-PHI, INV_PHI, 0.0], [-PHI, -INV_PHI, 0.0],
+    [PHI, INV_PHI, 0.0],
+    [PHI, -INV_PHI, 0.0],
+    [-PHI, INV_PHI, 0.0],
+    [-PHI, -INV_PHI, 0.0],
 ];
 const DODECA_EDGES: [[usize; 2]; 30] = [
-    [0, 8], [0, 12], [0, 16],
-    [1, 9], [1, 13], [1, 16],
-    [2, 10], [2, 12], [2, 17],
-    [3, 11], [3, 13], [3, 17],
-    [4, 8], [4, 14], [4, 18],
-    [5, 9], [5, 15], [5, 18],
-    [6, 10], [6, 14], [6, 19],
-    [7, 11], [7, 15], [7, 19],
-    [8, 9], [10, 11], [12, 14],
-    [13, 15], [16, 17], [18, 19],
+    [0, 8],
+    [0, 12],
+    [0, 16],
+    [1, 9],
+    [1, 13],
+    [1, 16],
+    [2, 10],
+    [2, 12],
+    [2, 17],
+    [3, 11],
+    [3, 13],
+    [3, 17],
+    [4, 8],
+    [4, 14],
+    [4, 18],
+    [5, 9],
+    [5, 15],
+    [5, 18],
+    [6, 10],
+    [6, 14],
+    [6, 19],
+    [7, 11],
+    [7, 15],
+    [7, 19],
+    [8, 9],
+    [10, 11],
+    [12, 14],
+    [13, 15],
+    [16, 17],
+    [18, 19],
 ];
 
 const SHAPE_COUNT: u32 = 5;
@@ -115,14 +196,18 @@ const MAX_EDGES: usize = 30;
 /// Normalize shape vertices to unit distance from origin.
 /// Unity ref: WireframeZooGenerator.NormalizeShape()
 fn normalize_shape(verts: &[[f32; 3]]) -> Vec<[f32; 3]> {
-    let max_dist = verts.iter()
+    let max_dist = verts
+        .iter()
         .map(|v| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt())
         .fold(0.0f32, f32::max);
     if max_dist < 0.001 {
         return verts.to_vec();
     }
     let inv = 1.0 / max_dist;
-    verts.iter().map(|v| [v[0] * inv, v[1] * inv, v[2] * inv]).collect()
+    verts
+        .iter()
+        .map(|v| [v[0] * inv, v[1] * inv, v[2] * inv])
+        .collect()
 }
 
 pub struct WireframeZooGenerator {
@@ -153,14 +238,46 @@ impl Generator for WireframeZooGenerator {
         target: &manifold_gpu::GpuTexture,
         ctx: &GeneratorContext,
     ) -> f32 {
-        let rot_xy = if ctx.param_count > ROT_XY as u32 { ctx.params[ROT_XY] } else { 0.5 };
-        let rot_zw = if ctx.param_count > ROT_ZW as u32 { ctx.params[ROT_ZW] } else { 0.3 };
-        let rot_xw = if ctx.param_count > ROT_XW as u32 { ctx.params[ROT_XW] } else { 0.2 };
-        let line = if ctx.param_count > LINE as u32 { ctx.params[LINE] } else { 0.003 };
-        let _shape_param = if ctx.param_count > SHAPE as u32 { ctx.params[SHAPE].round() as u32 } else { 0 };
-        let show_verts = if ctx.param_count > VERTS as u32 { ctx.params[VERTS] > 0.5 } else { true };
-        let vert_size = if ctx.param_count > VSIZE as u32 { ctx.params[VSIZE] } else { 1.0 };
-        let scale = if ctx.param_count > SCALE as u32 { ctx.params[SCALE] } else { 1.0 };
+        let rot_xy = if ctx.param_count > ROT_XY as u32 {
+            ctx.params[ROT_XY]
+        } else {
+            0.5
+        };
+        let rot_zw = if ctx.param_count > ROT_ZW as u32 {
+            ctx.params[ROT_ZW]
+        } else {
+            0.3
+        };
+        let rot_xw = if ctx.param_count > ROT_XW as u32 {
+            ctx.params[ROT_XW]
+        } else {
+            0.2
+        };
+        let line = if ctx.param_count > LINE as u32 {
+            ctx.params[LINE]
+        } else {
+            0.003
+        };
+        let _shape_param = if ctx.param_count > SHAPE as u32 {
+            ctx.params[SHAPE].round() as u32
+        } else {
+            0
+        };
+        let show_verts = if ctx.param_count > VERTS as u32 {
+            ctx.params[VERTS] > 0.5
+        } else {
+            true
+        };
+        let vert_size = if ctx.param_count > VSIZE as u32 {
+            ctx.params[VSIZE]
+        } else {
+            1.0
+        };
+        let scale = if ctx.param_count > SCALE as u32 {
+            ctx.params[SCALE]
+        } else {
+            1.0
+        };
 
         // Shape selection via trigger_count (param is ignored in favor of trigger cycling)
         let shape_idx = (ctx.trigger_count % SHAPE_COUNT) as usize;
@@ -202,7 +319,9 @@ impl Generator for WireframeZooGenerator {
 
         // Rotate and project
         for (i, &[mut x, mut y, mut z]) in verts_3d.iter().enumerate().take(vert_count) {
-            rotate_3d(&mut x, &mut y, &mut z, cos_x, sin_x, cos_y, sin_y, cos_z, sin_z);
+            rotate_3d(
+                &mut x, &mut y, &mut z, cos_x, sin_x, cos_y, sin_y, cos_z, sin_z,
+            );
             self.helper.projected_x[i] = x * proj_scale;
             self.helper.projected_y[i] = y * proj_scale;
             // Raw z depth, NOT scaled by proj_scale (Unity stores raw z)
@@ -226,10 +345,17 @@ impl Generator for WireframeZooGenerator {
             );
 
         self.line_pipeline.draw(
-            gpu, target,
-            positions, instances, num_edges,
-            edge_half_thick, dot_half_thick,
-            ctx.beat as f32, "WireframeZoo", ctx.width, ctx.height,
+            gpu,
+            target,
+            positions,
+            instances,
+            num_edges,
+            edge_half_thick,
+            dot_half_thick,
+            ctx.beat as f32,
+            "WireframeZoo",
+            ctx.width,
+            ctx.height,
         );
         self.helper.anim_progress
     }

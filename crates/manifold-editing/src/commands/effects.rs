@@ -1,7 +1,7 @@
 use crate::command::Command;
 use crate::commands::effect_target::{EffectTarget, with_effects_mut};
-use manifold_core::project::Project;
 use manifold_core::effects::EffectInstance;
+use manifold_core::project::Project;
 
 /// Add an effect to a target's effect chain.
 #[derive(Debug)]
@@ -13,7 +13,11 @@ pub struct AddEffectCommand {
 
 impl AddEffectCommand {
     pub fn new(target: EffectTarget, effect: EffectInstance, insert_index: usize) -> Self {
-        Self { target, effect, insert_index }
+        Self {
+            target,
+            effect,
+            insert_index,
+        }
     }
 }
 
@@ -34,7 +38,9 @@ impl Command for AddEffectCommand {
         });
     }
 
-    fn description(&self) -> &str { "Add Effect" }
+    fn description(&self) -> &str {
+        "Add Effect"
+    }
 }
 
 /// Remove an effect from a target's effect chain.
@@ -47,7 +53,11 @@ pub struct RemoveEffectCommand {
 
 impl RemoveEffectCommand {
     pub fn new(target: EffectTarget, effect: EffectInstance, removed_index: usize) -> Self {
-        Self { target, effect: Some(effect), removed_index }
+        Self {
+            target,
+            effect: Some(effect),
+            removed_index,
+        }
     }
 }
 
@@ -71,7 +81,9 @@ impl Command for RemoveEffectCommand {
         }
     }
 
-    fn description(&self) -> &str { "Remove Effect" }
+    fn description(&self) -> &str {
+        "Remove Effect"
+    }
 }
 
 /// Reorder an effect within a target's effect chain.
@@ -84,7 +96,11 @@ pub struct ReorderEffectCommand {
 
 impl ReorderEffectCommand {
     pub fn new(target: EffectTarget, from_index: usize, to_index: usize) -> Self {
-        Self { target, from_index, to_index }
+        Self {
+            target,
+            from_index,
+            to_index,
+        }
     }
 }
 
@@ -118,7 +134,9 @@ impl Command for ReorderEffectCommand {
         });
     }
 
-    fn description(&self) -> &str { "Reorder Effect" }
+    fn description(&self) -> &str {
+        "Reorder Effect"
+    }
 }
 
 /// Toggle an effect's enabled state.
@@ -131,8 +149,18 @@ pub struct ToggleEffectCommand {
 }
 
 impl ToggleEffectCommand {
-    pub fn new(target: EffectTarget, effect_index: usize, old_enabled: bool, new_enabled: bool) -> Self {
-        Self { target, effect_index, old_enabled, new_enabled }
+    pub fn new(
+        target: EffectTarget,
+        effect_index: usize,
+        old_enabled: bool,
+        new_enabled: bool,
+    ) -> Self {
+        Self {
+            target,
+            effect_index,
+            old_enabled,
+            new_enabled,
+        }
     }
 }
 
@@ -157,7 +185,9 @@ impl Command for ToggleEffectCommand {
         });
     }
 
-    fn description(&self) -> &str { "Toggle Effect" }
+    fn description(&self) -> &str {
+        "Toggle Effect"
+    }
 }
 
 /// Reorder a group of effects within a target's effect chain (multi-select).
@@ -177,7 +207,11 @@ impl ReorderEffectGroupCommand {
         old_effects: Vec<EffectInstance>,
         new_effects: Vec<EffectInstance>,
     ) -> Self {
-        Self { target, old_effects, new_effects }
+        Self {
+            target,
+            old_effects,
+            new_effects,
+        }
     }
 }
 
@@ -194,7 +228,9 @@ impl Command for ReorderEffectGroupCommand {
         });
     }
 
-    fn description(&self) -> &str { "Reorder Effects" }
+    fn description(&self) -> &str {
+        "Reorder Effects"
+    }
 }
 
 /// Change a single parameter value on an effect.
@@ -208,8 +244,20 @@ pub struct ChangeEffectParamCommand {
 }
 
 impl ChangeEffectParamCommand {
-    pub fn new(target: EffectTarget, effect_index: usize, param_index: usize, old_value: f32, new_value: f32) -> Self {
-        Self { target, effect_index, param_index, old_value, new_value }
+    pub fn new(
+        target: EffectTarget,
+        effect_index: usize,
+        param_index: usize,
+        old_value: f32,
+        new_value: f32,
+    ) -> Self {
+        Self {
+            target,
+            effect_index,
+            param_index,
+            old_value,
+            new_value,
+        }
     }
 }
 
@@ -236,5 +284,7 @@ impl Command for ChangeEffectParamCommand {
         });
     }
 
-    fn description(&self) -> &str { "Change Effect Param" }
+    fn description(&self) -> &str {
+        "Change Effect Param"
+    }
 }

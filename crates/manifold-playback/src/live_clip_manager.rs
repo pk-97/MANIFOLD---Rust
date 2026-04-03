@@ -1,10 +1,10 @@
-use manifold_core::{Beats, Seconds, Bpm, ClipId, LayerId};
+use manifold_core::GeneratorTypeId;
 use manifold_core::clip::TimelineClip;
 use manifold_core::math::BeatQuantizer;
 use manifold_core::project::Project;
 use manifold_core::recording::RecordedClipProvenance;
 use manifold_core::types::{QuantizeMode, TempoPointSource};
-use manifold_core::GeneratorTypeId;
+use manifold_core::{Beats, Bpm, ClipId, LayerId, Seconds};
 use manifold_editing::command::Command;
 use manifold_editing::commands::clip::AddClipCommand;
 use manifold_editing::service::EditingService;
@@ -111,11 +111,21 @@ impl LiveClipManager {
 
     // ─── Accessors ───
 
-    pub fn live_slots(&self) -> &HashMap<i32, TimelineClip> { &self.live_slots }
-    pub fn live_slots_list(&self) -> &[(i32, TimelineClip)] { &self.live_slots_list }
-    pub fn live_slot_clip_ids(&self) -> &HashSet<ClipId> { &self.live_slot_clip_ids }
-    pub fn pending_launch_count(&self) -> usize { self.pending_by_clip_id.len() }
-    pub fn last_live_trigger_at(&self) -> f64 { self.last_live_trigger_at }
+    pub fn live_slots(&self) -> &HashMap<i32, TimelineClip> {
+        &self.live_slots
+    }
+    pub fn live_slots_list(&self) -> &[(i32, TimelineClip)] {
+        &self.live_slots_list
+    }
+    pub fn live_slot_clip_ids(&self) -> &HashSet<ClipId> {
+        &self.live_slot_clip_ids
+    }
+    pub fn pending_launch_count(&self) -> usize {
+        self.pending_by_clip_id.len()
+    }
+    pub fn last_live_trigger_at(&self) -> f64 {
+        self.last_live_trigger_at
+    }
 
     // ─── Lifecycle ───
 
@@ -170,7 +180,10 @@ impl LiveClipManager {
     // ─── Quantize math (pure functions) ───
 
     /// Get quantize interval in MIDI clock ticks.
-    pub fn get_quantize_interval_ticks(quantize_mode: QuantizeMode, time_sig_numerator: i32) -> i32 {
+    pub fn get_quantize_interval_ticks(
+        quantize_mode: QuantizeMode,
+        time_sig_numerator: i32,
+    ) -> i32 {
         match quantize_mode {
             QuantizeMode::Off => 1,
             QuantizeMode::QuarterBeat => TICKS_PER_SIXTEENTH, // 6
@@ -228,7 +241,8 @@ impl LiveClipManager {
         let mut snapped_tick = tick;
 
         // Sixteenth-note compensation: snap to nearest 16th if within ±1 tick
-        let nearest_16th = ((tick as f32 / TICKS_PER_SIXTEENTH as f32).round() as i32) * TICKS_PER_SIXTEENTH;
+        let nearest_16th =
+            ((tick as f32 / TICKS_PER_SIXTEENTH as f32).round() as i32) * TICKS_PER_SIXTEENTH;
         if (tick - nearest_16th).abs() <= 1 {
             snapped_tick = nearest_16th;
         }
@@ -433,20 +447,26 @@ impl LiveClipManager {
         midi_note: i32,
     ) -> Option<TimelineClip> {
         // Ensure enough layers exist
-        project.timeline.ensure_layer_count((layer_index + 1) as usize);
+        project
+            .timeline
+            .ensure_layer_count((layer_index + 1) as usize);
 
         let spb = 60.0 / host.get_bpm_at_beat(host.current_beat());
 
         // Compute snap beat
         let snap_beat = self.compute_trigger_snap_beat(
-            host, beat_stamp, event_absolute_tick,
+            host,
+            beat_stamp,
+            event_absolute_tick,
             project.settings.quantize_mode,
             project.settings.time_signature_numerator,
         );
 
         // Compute duration
         let duration_beats = Self::compute_duration_beats(
-            duration_seconds, spb, event_absolute_tick,
+            duration_seconds,
+            spb,
+            event_absolute_tick,
             project.settings.quantize_mode,
             project.settings.time_signature_numerator,
         );
@@ -461,12 +481,16 @@ impl LiveClipManager {
         clip.recorded_bpm = host.get_bpm_at_beat(snap_beat);
 
         if event_absolute_tick >= 0 {
-            clip.start_absolute_tick = (snap_beat.as_f32() * MIDI_CLOCK_TICKS_PER_BEAT as f32) as i32;
+            clip.start_absolute_tick =
+                (snap_beat.as_f32() * MIDI_CLOCK_TICKS_PER_BEAT as f32) as i32;
             clip.has_start_absolute_tick = true;
         }
 
         // Resolve LayerId for stable pending launch tracking
-        let layer_id = project.timeline.layers.get(layer_index as usize)
+        let layer_id = project
+            .timeline
+            .layers
+            .get(layer_index as usize)
             .map(|l| l.layer_id.clone())
             .unwrap_or_default();
 
@@ -492,7 +516,8 @@ impl LiveClipManager {
         // Record creation timestamps for 5ms NoteOff timing guard
         self.slot_creation_times.insert(layer_index, realtime_now);
         if event_absolute_tick >= 0 {
-            self.slot_creation_sequences.insert(layer_index, event_absolute_tick);
+            self.slot_creation_sequences
+                .insert(layer_index, event_absolute_tick);
         }
 
         self.last_live_trigger_at = realtime_now;
@@ -513,34 +538,42 @@ impl LiveClipManager {
         realtime_now: f64,
         midi_note: i32,
     ) -> Option<TimelineClip> {
-        project.timeline.ensure_layer_count((layer_index + 1) as usize);
+        project
+            .timeline
+            .ensure_layer_count((layer_index + 1) as usize);
 
         let spb = 60.0 / host.get_bpm_at_beat(host.current_beat());
 
         let snap_beat = self.compute_trigger_snap_beat(
-            host, beat_stamp, event_absolute_tick,
+            host,
+            beat_stamp,
+            event_absolute_tick,
             project.settings.quantize_mode,
             project.settings.time_signature_numerator,
         );
 
         let duration_beats = Self::compute_duration_beats(
-            duration_seconds, spb, event_absolute_tick,
+            duration_seconds,
+            spb,
+            event_absolute_tick,
             project.settings.quantize_mode,
             project.settings.time_signature_numerator,
         );
 
-        let mut clip = TimelineClip::new_generator(
-            snap_beat, duration_beats,
-        );
+        let mut clip = TimelineClip::new_generator(snap_beat, duration_beats);
         clip.recorded_bpm = host.get_bpm_at_beat(snap_beat);
 
         if event_absolute_tick >= 0 {
-            clip.start_absolute_tick = (snap_beat.as_f32() * MIDI_CLOCK_TICKS_PER_BEAT as f32) as i32;
+            clip.start_absolute_tick =
+                (snap_beat.as_f32() * MIDI_CLOCK_TICKS_PER_BEAT as f32) as i32;
             clip.has_start_absolute_tick = true;
         }
 
         // Resolve LayerId for stable pending launch tracking
-        let layer_id = project.timeline.layers.get(layer_index as usize)
+        let layer_id = project
+            .timeline
+            .layers
+            .get(layer_index as usize)
             .map(|l| l.layer_id.clone())
             .unwrap_or_default();
 
@@ -564,7 +597,8 @@ impl LiveClipManager {
         // Record creation timestamps for 5ms NoteOff timing guard
         self.slot_creation_times.insert(layer_index, realtime_now);
         if event_absolute_tick >= 0 {
-            self.slot_creation_sequences.insert(layer_index, event_absolute_tick);
+            self.slot_creation_sequences
+                .insert(layer_index, event_absolute_tick);
         }
 
         self.last_live_trigger_at = realtime_now;
@@ -630,21 +664,27 @@ impl LiveClipManager {
             // Sequence-based guard: reject if NoteOff tick <= NoteOn tick (out of order)
             if event_absolute_tick > 0
                 && let Some(&creation_seq) = self.slot_creation_sequences.get(&layer_index)
-                    && creation_seq > 0 && event_absolute_tick <= creation_seq {
-                        return;
-                    }
+                && creation_seq > 0
+                && event_absolute_tick <= creation_seq
+            {
+                return;
+            }
         }
 
         // Check for pending launch cancellation
         if !self.live_slots.contains_key(&layer_index) {
-            let layer_id = project.timeline.layers.get(layer_index as usize)
+            let layer_id = project
+                .timeline
+                .layers
+                .get(layer_index as usize)
                 .map(|l| l.layer_id.clone())
                 .unwrap_or_default();
             if let Some(pending_id) = self.pending_by_layer.get(&layer_id).cloned()
-                && clip_id.is_none_or(|id| id == pending_id) {
-                    self.remove_pending_by_clip_id(&pending_id);
-                    return;
-                }
+                && clip_id.is_none_or(|id| id == pending_id)
+            {
+                self.remove_pending_by_clip_id(&pending_id);
+                return;
+            }
             return;
         }
 
@@ -655,9 +695,10 @@ impl LiveClipManager {
 
         // If a specific clip_id was given but doesn't match, skip
         if let Some(id) = clip_id
-            && id != live_clip.id {
-                return;
-            }
+            && id != live_clip.id
+        {
+            return;
+        }
 
         let start_beat = live_clip.start_beat;
 
@@ -675,7 +716,9 @@ impl LiveClipManager {
                 project.settings.time_signature_numerator,
             )
         } else {
-            let beat_now = beat_stamp.map(Beats::from_f32).unwrap_or_else(|| host.get_beat_snapped_beat());
+            let beat_now = beat_stamp
+                .map(Beats::from_f32)
+                .unwrap_or_else(|| host.get_beat_snapped_beat());
             let raw = (beat_now - start_beat).as_f32();
             let min_beats = 1.0 / MIDI_CLOCK_TICKS_PER_BEAT as f32;
             if project.settings.quantize_mode != QuantizeMode::Off {
@@ -713,7 +756,9 @@ impl LiveClipManager {
                 raw_snap
             }
         } else {
-            beat_stamp.map(Beats::from_f32).unwrap_or_else(|| host.get_beat_snapped_beat())
+            beat_stamp
+                .map(Beats::from_f32)
+                .unwrap_or_else(|| host.get_beat_snapped_beat())
         };
 
         let live_clip_id = live_clip.id.clone();
@@ -733,7 +778,10 @@ impl LiveClipManager {
                 committed.loop_duration_beats = original_duration;
             }
 
-            let layer_lid = project.timeline.layers.get(layer_index as usize)
+            let layer_lid = project
+                .timeline
+                .layers
+                .get(layer_index as usize)
                 .map(|l| l.layer_id.clone())
                 .unwrap_or_default();
             committed.layer_id = layer_lid.clone();
@@ -743,8 +791,11 @@ impl LiveClipManager {
             // existing clips that the committed clip will collide with.
             let spb = 60.0 / host.get_bpm_at_beat(committed.start_beat).max(1.0);
             let overlap_cmds = EditingService::enforce_non_overlap(
-                project, &committed, layer_index as usize,
-                &HashSet::new(), spb,
+                project,
+                &committed,
+                layer_index as usize,
+                &HashSet::new(),
+                spb,
             );
             for mut cmd in overlap_cmds {
                 cmd.execute(project);
@@ -771,8 +822,13 @@ impl LiveClipManager {
 
         if let Some(ref recorded) = committed_clip {
             self.finalize_recording_clip(
-                host, project, &live_clip_id, recorded,
-                beat_now, resolved_end_tick, midi_note,
+                host,
+                project,
+                &live_clip_id,
+                recorded,
+                beat_now,
+                resolved_end_tick,
+                midi_note,
             );
         } else {
             self.remove_recording_clip_start(&live_clip_id);
@@ -803,7 +859,8 @@ impl LiveClipManager {
         let start_source = host.get_tempo_source_at_beat(start_beat);
 
         // Port of C# TempoRecorder.CaptureProjectBpm (line 179).
-        project.recording_provenance
+        project
+            .recording_provenance
             .set_recorded_project_bpm(start_bpm, start_source, false);
 
         // Resolve start tick. Port of C# TempoRecorder.TrackClipStart lines 181-183.
@@ -813,19 +870,24 @@ impl LiveClipManager {
             (start_beat.as_f32() * MIDI_CLOCK_TICKS_PER_BEAT as f32).round() as i32
         };
 
-        let clip_layer_idx = project.timeline.layer_index_for_id(&clip.layer_id)
+        let clip_layer_idx = project
+            .timeline
+            .layer_index_for_id(&clip.layer_id)
             .unwrap_or(0) as i32;
-        self.clip_starts.insert(clip.id.clone(), RecordingClipStartInfo {
-            clip_id: clip.id.clone(),
-            video_clip_id: clip.video_clip_id.clone(),
-            layer_index: clip_layer_idx,
-            midi_note,
-            start_time_seconds: host.beat_to_timeline_time(start_beat),
-            start_beat,
-            start_absolute_tick: resolved_start_tick,
-            start_bpm,
-            start_tempo_source: start_source,
-        });
+        self.clip_starts.insert(
+            clip.id.clone(),
+            RecordingClipStartInfo {
+                clip_id: clip.id.clone(),
+                video_clip_id: clip.video_clip_id.clone(),
+                layer_index: clip_layer_idx,
+                midi_note,
+                start_time_seconds: host.beat_to_timeline_time(start_beat),
+                start_beat,
+                start_absolute_tick: resolved_start_tick,
+                start_bpm,
+                start_tempo_source: start_source,
+            },
+        );
     }
 
     /// Finalize recording clip provenance metadata.
@@ -854,13 +916,19 @@ impl LiveClipManager {
         };
 
         // Resolve MIDI note. Port of C# TempoRecorder.FinalizeClip line 217.
-        let resolved_midi_note = if midi_note >= 0 { midi_note } else { start.midi_note };
+        let resolved_midi_note = if midi_note >= 0 {
+            midi_note
+        } else {
+            start.midi_note
+        };
 
         // Use recorded clip's identity/layer if available.
         // Port of C# TempoRecorder.FinalizeClip lines 219-221.
         let saved_clip_id = recorded_clip.id.clone();
         let saved_video_id = recorded_clip.video_clip_id.clone();
-        let saved_layer = project.timeline.layer_index_for_id(&recorded_clip.layer_id)
+        let saved_layer = project
+            .timeline
+            .layer_index_for_id(&recorded_clip.layer_id)
             .unwrap_or(0) as i32;
 
         let end_bpm = host.get_bpm_at_beat(end_beat);
@@ -873,7 +941,8 @@ impl LiveClipManager {
             layer_index: saved_layer.max(0),
             layer_id: None,
             midi_note: resolved_midi_note,
-            start_time_seconds: BeatQuantizer::quantize_time_seconds(start.start_time_seconds).as_f32(),
+            start_time_seconds: BeatQuantizer::quantize_time_seconds(start.start_time_seconds)
+                .as_f32(),
             end_time_seconds: BeatQuantizer::quantize_time_seconds(end_time).as_f32(),
             start_beat: BeatQuantizer::quantize_beat(start.start_beat),
             end_beat: BeatQuantizer::quantize_beat(end_beat),

@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::units::{Beats, Seconds};
+use serde::{Deserialize, Serialize};
 
 /// Placement data for an imported percussion clip.
 /// Port of Unity ImportedPercussionClipPlacement (Project.cs lines 398-492).
@@ -31,11 +31,21 @@ impl ImportedPercussionClipPlacement {
         slope_beats_per_second: f32,
         pivot_seconds: Seconds,
     ) {
-        self.alignment_offset_beats = if offset_beats.0.is_finite() { offset_beats } else { Beats::ZERO };
-        self.alignment_slope_beats_per_second =
-            if slope_beats_per_second.is_finite() { slope_beats_per_second } else { 0.0 };
-        self.alignment_pivot_seconds =
-            if pivot_seconds.0.is_finite() { pivot_seconds.max(Seconds::ZERO) } else { Seconds::ZERO };
+        self.alignment_offset_beats = if offset_beats.0.is_finite() {
+            offset_beats
+        } else {
+            Beats::ZERO
+        };
+        self.alignment_slope_beats_per_second = if slope_beats_per_second.is_finite() {
+            slope_beats_per_second
+        } else {
+            0.0
+        };
+        self.alignment_pivot_seconds = if pivot_seconds.0.is_finite() {
+            pivot_seconds.max(Seconds::ZERO)
+        } else {
+            Seconds::ZERO
+        };
     }
 
     /// Port of Unity ImportedPercussionClipPlacement.IsValid() (Project.cs lines 468-490).
@@ -58,7 +68,9 @@ impl ImportedPercussionClipPlacement {
         if !self.alignment_slope_beats_per_second.is_finite() {
             return false;
         }
-        if !self.alignment_pivot_seconds.0.is_finite() || self.alignment_pivot_seconds < Seconds::ZERO {
+        if !self.alignment_pivot_seconds.0.is_finite()
+            || self.alignment_pivot_seconds < Seconds::ZERO
+        {
             return false;
         }
         true

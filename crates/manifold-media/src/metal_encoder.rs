@@ -116,24 +116,13 @@ impl MetalEncoder {
             return Err(EncoderError::Unavailable);
         }
 
-        let c_path =
-            CString::new(output_path).map_err(|_| EncoderError::WriterFailed)?;
+        let c_path = CString::new(output_path).map_err(|_| EncoderError::WriterFailed)?;
 
         let handle = unsafe {
             if hdr {
-                metal_ffi::MetalEncoder_CreateHDR(
-                    width as i32,
-                    height as i32,
-                    fps,
-                    c_path.as_ptr(),
-                )
+                metal_ffi::MetalEncoder_CreateHDR(width as i32, height as i32, fps, c_path.as_ptr())
             } else {
-                metal_ffi::MetalEncoder_Create(
-                    width as i32,
-                    height as i32,
-                    fps,
-                    c_path.as_ptr(),
-                )
+                metal_ffi::MetalEncoder_Create(width as i32, height as i32, fps, c_path.as_ptr())
             }
         };
 
@@ -175,17 +164,24 @@ impl MetalEncoder {
         hdr: bool,
         device_ptr: *mut c_void,
     ) -> Result<Self, EncoderError> {
-        let c_path =
-            CString::new(output_path).map_err(|_| EncoderError::WriterFailed)?;
+        let c_path = CString::new(output_path).map_err(|_| EncoderError::WriterFailed)?;
 
         let handle = unsafe {
             if hdr {
                 metal_ffi::MetalEncoder_CreateHDRWithDevice(
-                    width as i32, height as i32, fps, c_path.as_ptr(), device_ptr,
+                    width as i32,
+                    height as i32,
+                    fps,
+                    c_path.as_ptr(),
+                    device_ptr,
                 )
             } else {
                 metal_ffi::MetalEncoder_CreateWithDevice(
-                    width as i32, height as i32, fps, c_path.as_ptr(), device_ptr,
+                    width as i32,
+                    height as i32,
+                    fps,
+                    c_path.as_ptr(),
+                    device_ptr,
                 )
             }
         };
@@ -197,7 +193,10 @@ impl MetalEncoder {
         log::info!(
             "[MetalEncoder] Created {} encoder (shared device) {}x{} @ {} fps -> {}",
             if hdr { "HDR" } else { "SDR" },
-            width, height, fps, output_path,
+            width,
+            height,
+            fps,
+            output_path,
         );
 
         Ok(Self {
@@ -283,9 +282,7 @@ impl MetalEncoder {
 impl Drop for MetalEncoder {
     fn drop(&mut self) {
         if !self.handle.is_null() {
-            log::warn!(
-                "[MetalEncoder] Encoder dropped without end_session(), cleaning up"
-            );
+            log::warn!("[MetalEncoder] Encoder dropped without end_session(), cleaning up");
             unsafe {
                 metal_ffi::MetalEncoder_EndSession(self.handle);
             }

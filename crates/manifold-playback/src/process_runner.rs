@@ -80,23 +80,24 @@ impl ProcessHandle {
 
         // Check if the process has finished (exit code sent).
         if self.exit_code.is_none()
-            && let Some(rx) = &self.finished_rx {
-                match rx.try_recv() {
-                    Ok(code) => {
-                        self.exit_code = Some(code);
-                        // Drop the channels — process is done.
-                        self.receiver = None;
-                        self.finished_rx = None;
-                    }
-                    Err(TryRecvError::Empty) => {}
-                    Err(TryRecvError::Disconnected) => {
-                        // Worker thread exited without sending exit code (crash path).
-                        self.exit_code = Some(-1);
-                        self.receiver = None;
-                        self.finished_rx = None;
-                    }
+            && let Some(rx) = &self.finished_rx
+        {
+            match rx.try_recv() {
+                Ok(code) => {
+                    self.exit_code = Some(code);
+                    // Drop the channels — process is done.
+                    self.receiver = None;
+                    self.finished_rx = None;
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => {
+                    // Worker thread exited without sending exit code (crash path).
+                    self.exit_code = Some(-1);
+                    self.receiver = None;
+                    self.finished_rx = None;
                 }
             }
+        }
 
         lines
     }

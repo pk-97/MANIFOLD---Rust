@@ -26,22 +26,21 @@ pub struct PqEncoder {
 }
 
 impl PqEncoder {
-    pub fn new(
-        device: &manifold_gpu::GpuDevice,
-        width: u32,
-        height: u32,
-    ) -> Self {
+    pub fn new(device: &manifold_gpu::GpuDevice, width: u32, height: u32) -> Self {
         let format = manifold_gpu::GpuTextureFormat::Rgba16Float;
         let pipeline = device.create_compute_pipeline(
             include_str!("effects/shaders/linear_to_pq_compute.wgsl"),
             "cs_main",
             "PQ Encoder",
         );
-        let sampler =
-            device.create_sampler(&manifold_gpu::GpuSamplerDesc::default());
+        let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc::default());
         let output = RenderTarget::new(device, width, height, format, "PQ Export Output");
 
-        Self { pipeline, sampler, output }
+        Self {
+            pipeline,
+            sampler,
+            output,
+        }
     }
 
     /// Encode linear EDR → PQ. Source is the tonemap output (EDR display-linear).

@@ -28,7 +28,10 @@ pub struct CompositeCommand {
 
 impl CompositeCommand {
     pub fn new(commands: Vec<Box<dyn Command>>, description: String) -> Self {
-        Self { commands, desc: description }
+        Self {
+            commands,
+            desc: description,
+        }
     }
 }
 

@@ -5,8 +5,7 @@ use std::sync::{Arc, OnceLock};
 
 type FnCreate = unsafe extern "C" fn() -> *mut c_void;
 type FnDestroy = unsafe extern "C" fn(*mut c_void);
-type FnProcess =
-    unsafe extern "C" fn(*mut c_void, *const u8, i32, i32, *mut f32, i32, i32) -> i32;
+type FnProcess = unsafe extern "C" fn(*mut c_void, *const u8, i32, i32, *mut f32, i32, i32) -> i32;
 type FnProcessSubjectMask =
     unsafe extern "C" fn(*mut c_void, *const u8, i32, i32, *mut f32, i32, i32) -> i32;
 type FnComputeFlow = unsafe extern "C" fn(

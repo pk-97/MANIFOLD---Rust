@@ -1,14 +1,14 @@
-use manifold_core::EffectTypeId;
-use manifold_core::effects::EffectInstance;
+use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
-use super::compute_blit_helper::ComputeBlitHelper;
+use manifold_core::EffectTypeId;
+use manifold_core::effects::EffectInstance;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct MirrorUniforms {
-    amount: f32,   // MirrorFX.cs:13 — _Amount
-    mode: u32,     // MirrorFX.cs:14 — _Mode
+    amount: f32, // MirrorFX.cs:13 — _Amount
+    mode: u32,   // MirrorFX.cs:14 — _Mode
     _pad: [f32; 2],
 }
 
@@ -21,11 +21,7 @@ pub struct MirrorFX {
 impl MirrorFX {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
         Self {
-            helper: ComputeBlitHelper::new(
-                device,
-                include_str!("shaders/mirror.wgsl"),
-                "Mirror",
-            ),
+            helper: ComputeBlitHelper::new(device, include_str!("shaders/mirror.wgsl"), "Mirror"),
         }
     }
 }
@@ -54,10 +50,12 @@ impl PostProcessEffect for MirrorFX {
 
         self.helper.dispatch(
             gpu,
-            source, target,
+            source,
+            target,
             bytemuck::bytes_of(&uniforms),
             "Mirror Pass",
-            ctx.width, ctx.height,
+            ctx.width,
+            ctx.height,
         );
     }
 }

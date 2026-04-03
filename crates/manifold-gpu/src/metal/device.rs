@@ -1,8 +1,8 @@
 //! GpuDevice — native Metal device + command queue for the content thread.
 
-use crate::types::*;
-use super::*;
 use super::encoder::{EncoderState, RenderBindCache};
+use super::*;
+use crate::types::*;
 
 /// Generate a compute clear shader for a given WGSL storage texel format.
 fn clear_texture_wgsl(texel_format: &str) -> String {
@@ -55,9 +55,7 @@ impl ClearPipelines {
     /// Look up the clear pipeline for a texture format.
     /// Returns None for formats without storage write support (R16Float, R8Unorm, etc.)
     /// — caller falls back to render-pass clear.
-    pub(super) fn get(
-        &self, format: crate::GpuTextureFormat,
-    ) -> Option<&GpuComputePipeline> {
+    pub(super) fn get(&self, format: crate::GpuTextureFormat) -> Option<&GpuComputePipeline> {
         use crate::GpuTextureFormat::*;
         match format {
             Rgba16Float => Some(&self.rgba16float),
@@ -73,7 +71,9 @@ impl ClearPipelines {
     }
 }
 use super::format::*;
-use super::shader_compiler::{compile_wgsl_to_msl, compile_wgsl_to_msl_render, find_entry_function};
+use super::shader_compiler::{
+    compile_wgsl_to_msl, compile_wgsl_to_msl_render, find_entry_function,
+};
 
 /// Native Metal device + command queue for the content thread.
 /// Created once at startup. Owns the Metal device and a dedicated command queue
@@ -108,7 +108,9 @@ unsafe impl Send for GpuDevice {}
 unsafe impl Sync for GpuDevice {}
 
 impl Default for GpuDevice {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GpuDevice {
@@ -174,10 +176,9 @@ impl GpuDevice {
     /// Create a GPU buffer with private storage (GPU-only).
     pub fn create_buffer(&self, size: u64) -> GpuBuffer {
         use metal::foreign_types::ForeignType;
-        let raw = self.device.new_buffer(
-            size,
-            metal::MTLResourceOptions::StorageModePrivate,
-        );
+        let raw = self
+            .device
+            .new_buffer(size, metal::MTLResourceOptions::StorageModePrivate);
         assert!(
             !raw.as_ptr().is_null(),
             "Metal: buffer allocation failed ({size} bytes) — GPU memory exhausted",
@@ -193,10 +194,9 @@ impl GpuDevice {
     /// Returns a buffer with a persistent mapped pointer for zero-copy writes.
     pub fn create_buffer_shared(&self, size: u64) -> GpuBuffer {
         use metal::foreign_types::ForeignType;
-        let raw = self.device.new_buffer(
-            size,
-            metal::MTLResourceOptions::StorageModeShared,
-        );
+        let raw = self
+            .device
+            .new_buffer(size, metal::MTLResourceOptions::StorageModeShared);
         assert!(
             !raw.as_ptr().is_null(),
             "Metal: shared buffer allocation failed ({size} bytes) — GPU memory exhausted",
@@ -225,16 +225,10 @@ impl GpuDevice {
     /// Upload pixel data to a texture synchronously (CPU → GPU).
     /// Uses Metal `replace_region` which works on all storage modes on macOS.
     /// Best for one-time uploads during initialization (font atlases, LUTs).
-    pub fn upload_texture(
-        &self,
-        texture: &GpuTexture,
-        data: &[u8],
-    ) {
+    pub fn upload_texture(&self, texture: &GpuTexture, data: &[u8]) {
         let bpp = texture.format.bytes_per_pixel();
         let bytes_per_row = texture.width as u64 * bpp as u64;
-        let region = metal::MTLRegion::new_2d(
-            0, 0, texture.width as _, texture.height as _,
-        );
+        let region = metal::MTLRegion::new_2d(0, 0, texture.width as _, texture.height as _);
         texture.raw.replace_region(
             region,
             0, // mipmap level
@@ -300,7 +294,12 @@ impl GpuDevice {
             if let Some(ref mut cache) = *msl_guard
                 && let Some(entry) = cache.get_compute(hash)
             {
-                (entry.slot_map, entry.msl_source, entry.msl_entry_name, entry.workgroup_size)
+                (
+                    entry.slot_map,
+                    entry.msl_source,
+                    entry.msl_entry_name,
+                    entry.workgroup_size,
+                )
             } else {
                 if let Some(ref mut cache) = *msl_guard {
                     cache.record_miss();
@@ -328,9 +327,7 @@ impl GpuDevice {
             });
 
         let available = library.function_names();
-        let function = find_entry_function(
-            &library, &msl_entry_name, &available, label, "compute",
-        );
+        let function = find_entry_function(&library, &msl_entry_name, &available, label, "compute");
 
         // Use descriptor-based creation when archive is available — enables
         // binary archive lookup (near-instant on cache hit) and auto-populates
@@ -373,7 +370,10 @@ impl GpuDevice {
             workgroup_size,
             needs_sizes_buffer,
         };
-        self.compute_cache.lock().unwrap().insert(hash, pipeline.clone());
+        self.compute_cache
+            .lock()
+            .unwrap()
+            .insert(hash, pipeline.clone());
         pipeline
     }
 
@@ -482,7 +482,13 @@ impl GpuDevice {
         label: &str,
     ) -> GpuRenderPipeline {
         self.create_render_pipeline_inner(
-            wgsl_source, vs_entry, fs_entry, color_format, blend, 1, label,
+            wgsl_source,
+            vs_entry,
+            fs_entry,
+            color_format,
+            blend,
+            1,
+            label,
         )
     }
 
@@ -502,7 +508,13 @@ impl GpuDevice {
         label: &str,
     ) -> GpuRenderPipeline {
         self.create_render_pipeline_inner(
-            wgsl_source, vs_entry, fs_entry, color_format, blend, sample_count, label,
+            wgsl_source,
+            vs_entry,
+            fs_entry,
+            color_format,
+            blend,
+            sample_count,
+            label,
         )
     }
 
@@ -547,8 +559,7 @@ impl GpuDevice {
                 }
                 drop(msl_guard);
 
-                let result =
-                    compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, label);
+                let result = compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, label);
 
                 // Store in MSL cache
                 if let Some(ref cache) = *self.msl_cache.lock().unwrap() {
@@ -579,12 +590,8 @@ impl GpuDevice {
 
         let vs_available = vs_library.function_names();
         let fs_available = fs_library.function_names();
-        let vs_func = find_entry_function(
-            &vs_library, vs_entry, &vs_available, label, "vertex",
-        );
-        let fs_func = find_entry_function(
-            &fs_library, fs_entry, &fs_available, label, "fragment",
-        );
+        let vs_func = find_entry_function(&vs_library, vs_entry, &vs_available, label, "vertex");
+        let fs_func = find_entry_function(&fs_library, fs_entry, &fs_available, label, "fragment");
 
         let desc = metal::RenderPipelineDescriptor::new();
         desc.set_vertex_function(Some(&vs_func));
@@ -604,10 +611,8 @@ impl GpuDevice {
             color_attach.set_rgb_blend_operation(to_mtl_blend_op(blend.operation));
             color_attach.set_alpha_blend_operation(to_mtl_blend_op(blend.alpha_operation));
             color_attach.set_source_rgb_blend_factor(to_mtl_blend_factor(blend.src_factor));
-            color_attach
-                .set_destination_rgb_blend_factor(to_mtl_blend_factor(blend.dst_factor));
-            color_attach
-                .set_source_alpha_blend_factor(to_mtl_blend_factor(blend.src_alpha_factor));
+            color_attach.set_destination_rgb_blend_factor(to_mtl_blend_factor(blend.dst_factor));
+            color_attach.set_source_alpha_blend_factor(to_mtl_blend_factor(blend.src_alpha_factor));
             color_attach
                 .set_destination_alpha_blend_factor(to_mtl_blend_factor(blend.dst_alpha_factor));
         }
@@ -645,7 +650,10 @@ impl GpuDevice {
             slot_map,
             label: label.to_string(),
         };
-        self.render_cache.lock().unwrap().insert(hash, pipeline.clone());
+        self.render_cache
+            .lock()
+            .unwrap()
+            .insert(hash, pipeline.clone());
         pipeline
     }
 
@@ -693,8 +701,7 @@ impl GpuDevice {
                 }
                 drop(msl_guard);
 
-                let result =
-                    compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, label);
+                let result = compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, label);
 
                 if let Some(ref cache) = *self.msl_cache.lock().unwrap() {
                     cache.put_render(base_hash, &result.0, &result.1, &result.2);
@@ -722,12 +729,8 @@ impl GpuDevice {
 
         let vs_available = vs_library.function_names();
         let fs_available = fs_library.function_names();
-        let vs_func = find_entry_function(
-            &vs_library, vs_entry, &vs_available, label, "vertex",
-        );
-        let fs_func = find_entry_function(
-            &fs_library, fs_entry, &fs_available, label, "fragment",
-        );
+        let vs_func = find_entry_function(&vs_library, vs_entry, &vs_available, label, "vertex");
+        let fs_func = find_entry_function(&fs_library, fs_entry, &fs_available, label, "fragment");
 
         let desc = metal::RenderPipelineDescriptor::new();
         desc.set_vertex_function(Some(&vs_func));
@@ -766,10 +769,8 @@ impl GpuDevice {
             color_attach.set_rgb_blend_operation(to_mtl_blend_op(blend.operation));
             color_attach.set_alpha_blend_operation(to_mtl_blend_op(blend.alpha_operation));
             color_attach.set_source_rgb_blend_factor(to_mtl_blend_factor(blend.src_factor));
-            color_attach
-                .set_destination_rgb_blend_factor(to_mtl_blend_factor(blend.dst_factor));
-            color_attach
-                .set_source_alpha_blend_factor(to_mtl_blend_factor(blend.src_alpha_factor));
+            color_attach.set_destination_rgb_blend_factor(to_mtl_blend_factor(blend.dst_factor));
+            color_attach.set_source_alpha_blend_factor(to_mtl_blend_factor(blend.src_alpha_factor));
             color_attach
                 .set_destination_alpha_blend_factor(to_mtl_blend_factor(blend.dst_alpha_factor));
         }
@@ -806,7 +807,10 @@ impl GpuDevice {
             slot_map,
             label: label.to_string(),
         };
-        self.render_cache.lock().unwrap().insert(hash, pipeline.clone());
+        self.render_cache
+            .lock()
+            .unwrap()
+            .insert(hash, pipeline.clone());
         pipeline
     }
 
@@ -843,7 +847,9 @@ impl GpuDevice {
         cmd_buf.set_label(label);
         // Retain the command buffer so it outlives the autorelease pool drain.
         let ptr = cmd_buf as *const metal::CommandBufferRef as *mut std::ffi::c_void;
-        unsafe { objc_retain(ptr); }
+        unsafe {
+            objc_retain(ptr);
+        }
         GpuEncoder {
             cmd_buf_ptr: ptr,
             state: EncoderState::None,
@@ -861,11 +867,7 @@ impl GpuDevice {
 
     /// Create a GPU heap for sub-allocation.
     /// Textures allocated from a heap avoid per-allocation kernel calls.
-    pub fn create_heap(
-        &self,
-        size: u64,
-        storage_mode: GpuStorageMode,
-    ) -> GpuHeap {
+    pub fn create_heap(&self, size: u64, storage_mode: GpuStorageMode) -> GpuHeap {
         let desc = metal::HeapDescriptor::new();
         desc.set_size(size as _);
         desc.set_storage_mode(to_mtl_storage_mode(storage_mode));
@@ -992,30 +994,32 @@ impl GpuDevice {
         height: u32,
         format: GpuTextureFormat,
         usage: GpuTextureUsage,
-    ) -> GpuTexture { unsafe {
-        let descriptor = metal::TextureDescriptor::new();
-        descriptor.set_pixel_format(to_mtl_pixel_format(format));
-        descriptor.set_width(width as u64);
-        descriptor.set_height(height as u64);
-        descriptor.set_depth(1);
-        descriptor.set_mipmap_level_count(1);
-        descriptor.set_sample_count(1);
-        descriptor.set_texture_type(metal::MTLTextureType::D2);
-        descriptor.set_usage(to_mtl_texture_usage(usage));
-        descriptor.set_storage_mode(metal::MTLStorageMode::Shared);
+    ) -> GpuTexture {
+        unsafe {
+            let descriptor = metal::TextureDescriptor::new();
+            descriptor.set_pixel_format(to_mtl_pixel_format(format));
+            descriptor.set_width(width as u64);
+            descriptor.set_height(height as u64);
+            descriptor.set_depth(1);
+            descriptor.set_mipmap_level_count(1);
+            descriptor.set_sample_count(1);
+            descriptor.set_texture_type(metal::MTLTextureType::D2);
+            descriptor.set_usage(to_mtl_texture_usage(usage));
+            descriptor.set_storage_mode(metal::MTLStorageMode::Shared);
 
-        let raw_mtl_texture: *mut objc::runtime::Object = msg_send![
-            self.raw_device(),
-            newTextureWithDescriptor:descriptor.as_ref()
-            iosurface:io_surface
-            plane:0usize
-        ];
-        assert!(
-            !raw_mtl_texture.is_null(),
-            "newTextureWithDescriptor:iosurface:plane: failed"
-        );
-        use metal::foreign_types::ForeignType;
-        let mtl_texture = metal::Texture::from_ptr(raw_mtl_texture as *mut _);
-        GpuTexture::from_raw(mtl_texture, width, height, 1, format)
-    }}
+            let raw_mtl_texture: *mut objc::runtime::Object = msg_send![
+                self.raw_device(),
+                newTextureWithDescriptor:descriptor.as_ref()
+                iosurface:io_surface
+                plane:0usize
+            ];
+            assert!(
+                !raw_mtl_texture.is_null(),
+                "newTextureWithDescriptor:iosurface:plane: failed"
+            );
+            use metal::foreign_types::ForeignType;
+            let mtl_texture = metal::Texture::from_ptr(raw_mtl_texture as *mut _);
+            GpuTexture::from_raw(mtl_texture, width, height, 1, format)
+        }
+    }
 }

@@ -1,17 +1,17 @@
-use manifold_core::{Beats, Seconds, Bpm};
 use manifold_core::ClipId;
-use manifold_core::layer::Layer;
-use manifold_core::types::{LayerType, PlaybackState, TempoPointSource};
 use manifold_core::GeneratorTypeId;
 use manifold_core::clip::TimelineClip;
+use manifold_core::layer::Layer;
 use manifold_core::math::BeatQuantizer;
 use manifold_core::project::Project;
 use manifold_core::tempo::TempoMapConverter;
+use manifold_core::types::{LayerType, PlaybackState, TempoPointSource};
+use manifold_core::{Beats, Bpm, Seconds};
 
-use crate::renderer::ClipRenderer;
-use crate::scheduler::ClipScheduler;
 use crate::active_window::ActiveTimelineClipWindow;
 use crate::live_clip_manager::LiveClipManager;
+use crate::renderer::ClipRenderer;
+use crate::scheduler::ClipScheduler;
 
 use ahash::{AHashMap, AHashSet};
 use std::collections::HashMap;
@@ -78,7 +78,8 @@ pub struct TickResult {
     /// Video clips approaching the playhead that should be pre-warmed
     /// (decoder opened + first frame decoded before the clip becomes active).
     /// The content thread passes these to VideoRenderer::pre_warm_clips().
-    pub prewarm_candidates: Option<std::collections::HashMap<String, crate::video_time::PrewarmCandidate>>,
+    pub prewarm_candidates:
+        Option<std::collections::HashMap<String, crate::video_time::PrewarmCandidate>>,
 }
 
 // ─── Playback Engine ───
@@ -103,12 +104,12 @@ pub struct PlaybackEngine {
     renderers: Vec<Box<dyn ClipRenderer>>,
 
     // Active clip tracking
-    active_clip_renderers: AHashMap<ClipId, usize>,  // clip_id → renderer index
+    active_clip_renderers: AHashMap<ClipId, usize>, // clip_id → renderer index
     active_clip_ids: AHashSet<ClipId>,
     preparing_clips: AHashSet<ClipId>,
-    pending_pauses: AHashMap<ClipId, f64>,  // clip_id → pause deadline
+    pending_pauses: AHashMap<ClipId, f64>, // clip_id → pause deadline
     looping_clip_ids: AHashSet<ClipId>,
-    recently_started_times: AHashMap<ClipId, f64>,  // clip_id → start realtime
+    recently_started_times: AHashMap<ClipId, f64>, // clip_id → start realtime
 
     // Scheduling
     scheduler: ClipScheduler,
@@ -167,7 +168,8 @@ pub struct PlaybackEngine {
     pub on_drift_corrected: Option<Box<dyn Fn(&str, f32) + Send>>,
     pub beat_snapped_beat_resolver: Option<Box<dyn Fn() -> f32 + Send>>,
     pub absolute_tick_resolver: Option<Box<dyn Fn() -> i32 + Send>>,
-    pub record_command_delegate: Option<Box<dyn Fn(Box<dyn manifold_editing::command::Command>) + Send>>,
+    pub record_command_delegate:
+        Option<Box<dyn Fn(Box<dyn manifold_editing::command::Command>) + Send>>,
 
     // Debug flag. Port of C# PlaybackEngine.showDebugLogs.
     pub show_debug_logs: bool,
@@ -239,24 +241,47 @@ impl PlaybackEngine {
 
     // ─── Properties ───
 
-    pub fn current_state(&self) -> PlaybackState { self.current_state }
-    pub fn current_time_double(&self) -> f64 { self.current_time_double }
-    pub fn current_time(&self) -> Seconds { self.current_time }
-    pub fn current_beat(&self) -> Beats { Beats(self.current_beat) }
-    pub fn current_beat_f64(&self) -> f64 { self.current_beat }
-    pub fn playback_speed(&self) -> f32 { self.playback_speed }
-    pub fn is_playing(&self) -> bool { self.current_state == PlaybackState::Playing }
-    pub fn is_recording(&self) -> bool { self.is_recording }
-    pub fn external_time_sync(&self) -> bool { self.external_time_sync }
-    pub fn is_export_mode(&self) -> bool { self.is_export_mode }
-    pub fn video_sync_interval(&self) -> Seconds { self.video_sync_interval }
-    pub fn active_clip_count(&self) -> usize { self.active_clip_renderers.len() }
+    pub fn current_state(&self) -> PlaybackState {
+        self.current_state
+    }
+    pub fn current_time_double(&self) -> f64 {
+        self.current_time_double
+    }
+    pub fn current_time(&self) -> Seconds {
+        self.current_time
+    }
+    pub fn current_beat(&self) -> Beats {
+        Beats(self.current_beat)
+    }
+    pub fn current_beat_f64(&self) -> f64 {
+        self.current_beat
+    }
+    pub fn playback_speed(&self) -> f32 {
+        self.playback_speed
+    }
+    pub fn is_playing(&self) -> bool {
+        self.current_state == PlaybackState::Playing
+    }
+    pub fn is_recording(&self) -> bool {
+        self.is_recording
+    }
+    pub fn external_time_sync(&self) -> bool {
+        self.external_time_sync
+    }
+    pub fn is_export_mode(&self) -> bool {
+        self.is_export_mode
+    }
+    pub fn video_sync_interval(&self) -> Seconds {
+        self.video_sync_interval
+    }
+    pub fn active_clip_count(&self) -> usize {
+        self.active_clip_renderers.len()
+    }
     /// True when all active clips that need a prepare phase are ready.
     /// Used by export warmup to wait for video decoders.
     pub fn all_active_clips_ready(&self) -> bool {
         self.active_clip_renderers.iter().all(|(clip_id, &idx)| {
-            !self.renderers[idx].needs_prepare_phase()
-                || self.renderers[idx].is_clip_ready(clip_id)
+            !self.renderers[idx].needs_prepare_phase() || self.renderers[idx].is_clip_ready(clip_id)
         })
     }
     /// Block until all in-flight video decode jobs complete.
@@ -268,11 +293,21 @@ impl PlaybackEngine {
             }
         }
     }
-    pub fn project(&self) -> Option<&Project> { self.project.as_ref() }
-    pub fn project_mut(&mut self) -> Option<&mut Project> { self.project.as_mut() }
-    pub fn live_clip_manager(&self) -> Option<&LiveClipManager> { self.live_clip_manager.as_ref() }
-    pub fn live_clip_manager_mut(&mut self) -> Option<&mut LiveClipManager> { self.live_clip_manager.as_mut() }
-    pub fn compositor_dirty_deadline(&self) -> f64 { self.compositor_dirty_deadline }
+    pub fn project(&self) -> Option<&Project> {
+        self.project.as_ref()
+    }
+    pub fn project_mut(&mut self) -> Option<&mut Project> {
+        self.project.as_mut()
+    }
+    pub fn live_clip_manager(&self) -> Option<&LiveClipManager> {
+        self.live_clip_manager.as_ref()
+    }
+    pub fn live_clip_manager_mut(&mut self) -> Option<&mut LiveClipManager> {
+        self.live_clip_manager.as_mut()
+    }
+    pub fn compositor_dirty_deadline(&self) -> f64 {
+        self.compositor_dirty_deadline
+    }
 
     // ─── Renderer access ───
 
@@ -284,7 +319,9 @@ impl PlaybackEngine {
     /// Split borrow: get renderers and project simultaneously.
     /// Needed because Rust can't borrow both `&mut self.renderers` and `&self.project`
     /// through a single `&mut self`.
-    pub fn split_renderer_project(&mut self) -> (&mut Vec<Box<dyn ClipRenderer>>, Option<&Project>) {
+    pub fn split_renderer_project(
+        &mut self,
+    ) -> (&mut Vec<Box<dyn ClipRenderer>>, Option<&Project>) {
         (&mut self.renderers, self.project.as_ref())
     }
 
@@ -349,7 +386,9 @@ impl PlaybackEngine {
     /// Consume the sync-dirty flag. Returns true and resets if set.
     /// Port of C# PlaybackEngine.ConsumeSyncDirty (lines 284-289).
     pub fn consume_sync_dirty(&mut self) -> bool {
-        if !self.sync_clips_dirty { return false; }
+        if !self.sync_clips_dirty {
+            return false;
+        }
         self.sync_clips_dirty = false;
         true
     }
@@ -366,7 +405,9 @@ impl PlaybackEngine {
     }
 
     pub fn play(&mut self) {
-        if self.current_state == PlaybackState::Playing { return; }
+        if self.current_state == PlaybackState::Playing {
+            return;
+        }
         self.current_state = PlaybackState::Playing;
         self.pending_pauses.clear();
 
@@ -395,7 +436,9 @@ impl PlaybackEngine {
     }
 
     pub fn pause(&mut self) {
-        if self.current_state != PlaybackState::Playing { return; }
+        if self.current_state != PlaybackState::Playing {
+            return;
+        }
         self.current_state = PlaybackState::Paused;
         // Pause only seekable clips (generators render procedurally each frame)
         self.pause_active_clips();
@@ -476,21 +519,23 @@ impl PlaybackEngine {
         // The engine's stop_clip handles renderer cleanup, but we can't call it here
         // due to borrow conflict. Instead, collect IDs and stop after the borrow.
         if beat_delta > 1.0
-            && let Some(mgr) = &mut self.live_clip_manager {
-                let ids_to_stop: Vec<ClipId> = mgr.live_slots_list()
-                    .iter()
-                    .map(|(_, c)| c.id.clone())
-                    .collect();
-                mgr.clear_all();
-                for id in &ids_to_stop {
-                    // Stop via renderer directly (not full stop_clip to avoid double-remove)
-                    if let Some(renderer_idx) = self.active_clip_renderers.remove(id.as_str()) {
-                        self.renderers[renderer_idx].stop_clip(id);
-                    }
-                    self.active_clip_ids.remove(id);
-                    self.stopped_this_tick.push(id.clone());
+            && let Some(mgr) = &mut self.live_clip_manager
+        {
+            let ids_to_stop: Vec<ClipId> = mgr
+                .live_slots_list()
+                .iter()
+                .map(|(_, c)| c.id.clone())
+                .collect();
+            mgr.clear_all();
+            for id in &ids_to_stop {
+                // Stop via renderer directly (not full stop_clip to avoid double-remove)
+                if let Some(renderer_idx) = self.active_clip_renderers.remove(id.as_str()) {
+                    self.renderers[renderer_idx].stop_clip(id);
                 }
+                self.active_clip_ids.remove(id);
+                self.stopped_this_tick.push(id.clone());
             }
+        }
 
         // Re-sync clips at new position — unconditional, matching Unity's
         // PlaybackController.Seek() which always calls SyncClipsToTime() + SeekActiveClips()
@@ -648,8 +693,8 @@ impl PlaybackEngine {
         //    Port of C# UpdateCompositor → engine.FilterReadyClips (lines 1432-1458).
         let ready = self.filter_ready_clips(ctx.pre_render_dt);
 
-        let compositor_dirty = !ready.is_empty()
-            || ctx.realtime_now.0 < self.compositor_dirty_deadline;
+        let compositor_dirty =
+            !ready.is_empty() || ctx.realtime_now.0 < self.compositor_dirty_deadline;
         let should_clear = ready.is_empty() && !self.has_pending_clip_state();
 
         // 10. Lookahead prewarm — engine computes candidates, caller executes pool pre-warm.
@@ -697,7 +742,8 @@ impl PlaybackEngine {
         //    Port of C# UpdateCompositor (lines 1126-1132).
         //    Only runs while compositor dirty deadline is active or generators are running.
         let has_active_clips = !self.active_clip_renderers.is_empty();
-        let compositor_dirty = ctx.realtime_now.0 < self.compositor_dirty_deadline || has_active_clips;
+        let compositor_dirty =
+            ctx.realtime_now.0 < self.compositor_dirty_deadline || has_active_clips;
 
         let ready = if compositor_dirty {
             self.filter_ready_clips(ctx.pre_render_dt)
@@ -732,7 +778,12 @@ impl PlaybackEngine {
             let beat = Beats(self.current_beat);
             let active_indices = project.timeline.get_active_clips_at_beat_ref(beat);
             for (li, ci) in &active_indices {
-                if let Some(clip) = project.timeline.layers.get(*li).and_then(|l| l.clips.get(*ci)) {
+                if let Some(clip) = project
+                    .timeline
+                    .layers
+                    .get(*li)
+                    .and_then(|l| l.clips.get(*ci))
+                {
                     self.timeline_active_scratch.push(clip.clone());
                 }
             }
@@ -745,20 +796,25 @@ impl PlaybackEngine {
         // Fix 6: Never start clips on group layers
         if let Some(project) = &self.project
             && let Some(li) = project.timeline.layer_index_for_id(&clip.layer_id)
-                && let Some(layer) = project.timeline.layers.get(li)
-                && layer.layer_type == LayerType::Group {
-                    return;
-                }
+            && let Some(layer) = project.timeline.layers.get(li)
+            && layer.layer_type == LayerType::Group
+        {
+            return;
+        }
 
         // Find renderer
         let renderer_idx = self.renderers.iter().position(|r| r.can_handle(clip));
         if let Some(idx) = renderer_idx {
-            let layers = self.project.as_ref().map_or(&[] as &[_], |p| &p.timeline.layers);
+            let layers = self
+                .project
+                .as_ref()
+                .map_or(&[] as &[_], |p| &p.timeline.layers);
             let success = self.renderers[idx].start_clip(clip, self.current_time, layers);
             if success {
                 self.active_clip_renderers.insert(clip.id.clone(), idx);
                 self.active_clip_ids.insert(clip.id.clone());
-                self.recently_started_times.insert(clip.id.clone(), realtime_now.0);
+                self.recently_started_times
+                    .insert(clip.id.clone(), realtime_now.0);
 
                 if clip.is_looping {
                     self.looping_clip_ids.insert(clip.id.clone());
@@ -766,10 +822,8 @@ impl PlaybackEngine {
 
                 // Pending pause for video renderers
                 if self.renderers[idx].needs_pending_pause() {
-                    self.pending_pauses.insert(
-                        clip.id.clone(),
-                        realtime_now.0 + PENDING_PAUSE_DELAY as f64,
-                    );
+                    self.pending_pauses
+                        .insert(clip.id.clone(), realtime_now.0 + PENDING_PAUSE_DELAY as f64);
                 }
 
                 self.mark_compositor_dirty(realtime_now);
@@ -797,14 +851,16 @@ impl PlaybackEngine {
 
     pub fn stop_all_clips(&mut self) {
         self.stop_buffer.clear();
-        self.stop_buffer.extend(self.active_clip_ids.iter().cloned());
+        self.stop_buffer
+            .extend(self.active_clip_ids.iter().cloned());
         for clip_id in &self.stop_buffer {
             if let Some(renderer_idx) = self.active_clip_renderers.remove(clip_id.as_str()) {
                 self.renderers[renderer_idx].stop_clip(clip_id);
             }
         }
         // Track all stopped clips for per-owner GPU effect state cleanup.
-        self.stopped_this_tick.extend(self.stop_buffer.iter().cloned());
+        self.stopped_this_tick
+            .extend(self.stop_buffer.iter().cloned());
         self.active_clip_ids.clear();
         self.preparing_clips.clear();
         self.pending_pauses.clear();
@@ -815,7 +871,9 @@ impl PlaybackEngine {
     // ─── Pending pauses ───
 
     pub fn process_pending_pauses(&mut self, realtime_now: Seconds) {
-        let expired: Vec<ClipId> = self.pending_pauses.iter()
+        let expired: Vec<ClipId> = self
+            .pending_pauses
+            .iter()
             .filter(|(_, deadline)| realtime_now.0 >= **deadline)
             .map(|(id, _)| id.clone())
             .collect();
@@ -875,7 +933,11 @@ impl PlaybackEngine {
 
             // Seek to correct loop position if looping enabled
             if clip.is_looping && clip.loop_duration_beats > Beats::ZERO {
-                let bpm = self.project.as_ref().map(|p| p.settings.bpm.0).unwrap_or(120.0);
+                let bpm = self
+                    .project
+                    .as_ref()
+                    .map(|p| p.settings.bpm.0)
+                    .unwrap_or(120.0);
                 let spb = 60.0_f32 / bpm.max(20.0);
                 let clip_start_time = clip.start_beat.as_f32() * spb;
                 let loop_dur_seconds = clip.loop_duration_beats.as_f32() * spb;
@@ -897,7 +959,11 @@ impl PlaybackEngine {
     /// Compute clip playback rate matching Unity's ApplyClipPlaybackRate.
     fn compute_clip_playback_rate(&self, clip: &TimelineClip) -> f32 {
         if clip.recorded_bpm > 0.0 {
-            let current_bpm = self.project.as_ref().map(|p| p.settings.bpm.0).unwrap_or(120.0);
+            let current_bpm = self
+                .project
+                .as_ref()
+                .map(|p| p.settings.bpm.0)
+                .unwrap_or(120.0);
             (current_bpm / clip.recorded_bpm).clamp(MIN_CLIP_PLAYBACK_RATE, MAX_CLIP_PLAYBACK_RATE)
         } else {
             1.0
@@ -934,7 +1000,11 @@ impl PlaybackEngine {
 
         self.query_active_timeline_clips();
 
-        let bpm = self.project.as_ref().map(|p| p.settings.bpm.0).unwrap_or(120.0);
+        let bpm = self
+            .project
+            .as_ref()
+            .map(|p| p.settings.bpm.0)
+            .unwrap_or(120.0);
         let spb = 60.0_f32 / bpm.max(20.0);
         let min_remaining_beats = if spb > 0.0 {
             MIN_START_REMAINING_TIME / spb
@@ -968,7 +1038,9 @@ impl PlaybackEngine {
         }
 
         if !sync_result.to_stop.is_empty() {
-            self.compositor_dirty_deadline = self.compositor_dirty_deadline.max(0.0 + COMPOSITOR_DIRTY_TIME as f64);
+            self.compositor_dirty_deadline = self
+                .compositor_dirty_deadline
+                .max(0.0 + COMPOSITOR_DIRTY_TIME as f64);
         }
 
         // Reclaim buffers for reuse on the next sync call (zero allocation).
@@ -1001,11 +1073,7 @@ impl PlaybackEngine {
 
     pub fn beat_to_timeline_time(&mut self, beat: Beats) -> Seconds {
         if let Some(project) = &mut self.project {
-            TempoMapConverter::beat_to_seconds(
-                &mut project.tempo_map,
-                beat,
-                project.settings.bpm,
-            )
+            TempoMapConverter::beat_to_seconds(&mut project.tempo_map, beat, project.settings.bpm)
         } else {
             Seconds(beat.as_f32() as f64 * 0.5) // fallback: 120 bpm
         }
@@ -1015,11 +1083,7 @@ impl PlaybackEngine {
     /// which borrows engine immutably for sync.
     pub fn beat_to_timeline_time_immut(&self, beat: Beats) -> Seconds {
         if let Some(project) = &self.project {
-            TempoMapConverter::beat_to_seconds_immut(
-                &project.tempo_map,
-                beat,
-                project.settings.bpm,
-            )
+            TempoMapConverter::beat_to_seconds_immut(&project.tempo_map, beat, project.settings.bpm)
         } else {
             Seconds(beat.as_f32() as f64 * 0.5) // fallback: 120 bpm
         }
@@ -1039,7 +1103,9 @@ impl PlaybackEngine {
         }
         // Priority 2: tempo map
         if let Some(project) = &mut self.project {
-            let bpm = project.tempo_map.get_bpm_at_beat(beat, project.settings.bpm);
+            let bpm = project
+                .tempo_map
+                .get_bpm_at_beat(beat, project.settings.bpm);
             TempoMapConverter::seconds_per_beat_from_bpm(bpm.0)
         } else {
             0.5 // fallback 120 BPM
@@ -1053,7 +1119,9 @@ impl PlaybackEngine {
             return Bpm(live_bpm);
         }
         if let Some(project) = &mut self.project {
-            project.tempo_map.get_bpm_at_beat(beat, project.settings.bpm)
+            project
+                .tempo_map
+                .get_bpm_at_beat(beat, project.settings.bpm)
         } else {
             Bpm::DEFAULT
         }
@@ -1073,7 +1141,9 @@ impl PlaybackEngine {
         realtime_now: f64,
     ) {
         // Get clock authority without borrowing project mutably.
-        let clock_authority = self.project.as_ref()
+        let clock_authority = self
+            .project
+            .as_ref()
             .map(|p| p.settings.clock_authority)
             .unwrap_or(manifold_core::types::ClockAuthority::Internal);
 
@@ -1089,7 +1159,8 @@ impl PlaybackEngine {
         // (stop_clip mutates active_clip_renderers etc., mark_sync_dirty sets a bool,
         // mark_compositor_dirty sets a deadline, invalidate_lookahead_prewarm resets a timer).
         let project = self.project.as_mut().unwrap() as *mut manifold_core::project::Project;
-        let live_clip_manager = self.live_clip_manager.as_mut().unwrap() as *mut crate::live_clip_manager::LiveClipManager;
+        let live_clip_manager = self.live_clip_manager.as_mut().unwrap()
+            as *mut crate::live_clip_manager::LiveClipManager;
 
         // SAFETY: project and live_clip_manager are distinct fields from those
         // mutated by the LiveClipHost trait methods called inside update().
@@ -1111,7 +1182,11 @@ impl PlaybackEngine {
     /// Set live external tempo state (called by driver from sync controllers each frame).
     /// Port of C# PlaybackEngine.SetLiveExternalTempo (lines 543-548).
     pub fn set_live_external_tempo(&mut self, has_live: bool, bpm: Bpm, source: TempoPointSource) {
-        self.live_external_tempo = if has_live { Some((bpm.0, source)) } else { None };
+        self.live_external_tempo = if has_live {
+            Some((bpm.0, source))
+        } else {
+            None
+        };
     }
 
     /// Try to get live external tempo from Link or MIDI Clock.
@@ -1132,7 +1207,10 @@ impl PlaybackEngine {
             let bpm_f32 = if let Some((live_bpm, _)) = live_tempo {
                 live_bpm
             } else if !project.tempo_map.points().is_empty() {
-                project.tempo_map.get_bpm_at_beat(Beats(self.current_beat), project.settings.bpm).0
+                project
+                    .tempo_map
+                    .get_bpm_at_beat(Beats(self.current_beat), project.settings.bpm)
+                    .0
             } else {
                 project.settings.bpm.0
             };
@@ -1154,12 +1232,12 @@ impl PlaybackEngine {
         for clip_id in &clip_ids {
             if let Some(&idx) = self.active_clip_renderers.get(clip_id.as_str())
                 && self.renderers[idx].needs_prepare_phase()
-                    && self.renderers[idx].is_clip_ready(clip_id)
-                    && !self.renderers[idx].is_clip_playing(clip_id)
-                    && !self.preparing_clips.contains(clip_id)
-                {
-                    self.renderers[idx].resume_clip(clip_id);
-                }
+                && self.renderers[idx].is_clip_ready(clip_id)
+                && !self.renderers[idx].is_clip_playing(clip_id)
+                && !self.preparing_clips.contains(clip_id)
+            {
+                self.renderers[idx].resume_clip(clip_id);
+            }
         }
     }
 
@@ -1170,10 +1248,10 @@ impl PlaybackEngine {
         for clip_id in &clip_ids {
             if let Some(&idx) = self.active_clip_renderers.get(clip_id.as_str())
                 && self.renderers[idx].needs_prepare_phase()
-                    && self.renderers[idx].is_clip_playing(clip_id)
-                {
-                    self.renderers[idx].pause_clip(clip_id);
-                }
+                && self.renderers[idx].is_clip_playing(clip_id)
+            {
+                self.renderers[idx].pause_clip(clip_id);
+            }
         }
     }
 
@@ -1181,9 +1259,10 @@ impl PlaybackEngine {
     /// Port of C# PlaybackEngine.FindTimelineClip (lines 1065-1074).
     pub fn find_timeline_clip(&self, clip_id: &str) -> Option<&TimelineClip> {
         if let Some(mgr) = &self.live_clip_manager
-            && let Some(clip) = mgr.find_live_clip(clip_id) {
-                return Some(clip);
-            }
+            && let Some(clip) = mgr.find_live_clip(clip_id)
+        {
+            return Some(clip);
+        }
         // Timeline.find_clip_by_id requires &mut self for cache, so fall back to linear scan
         self.project.as_ref().and_then(|p| {
             for layer in &p.timeline.layers {
@@ -1223,15 +1302,20 @@ impl PlaybackEngine {
     /// Get clip duration in timeline seconds.
     /// Port of C# PlaybackEngine.GetClipDurationSeconds (lines 1463-1468).
     pub fn get_clip_duration_seconds(&mut self, clip: &TimelineClip) -> Seconds {
-        let duration = self.get_clip_end_time_seconds(clip) - self.get_clip_start_time_seconds(clip);
+        let duration =
+            self.get_clip_end_time_seconds(clip) - self.get_clip_start_time_seconds(clip);
         duration.max(Seconds::ZERO)
     }
 
     /// Get clip loop duration in timeline seconds.
     /// Port of C# PlaybackEngine.GetClipLoopDurationSeconds (lines 1471-1477).
     pub fn get_clip_loop_duration_seconds(&mut self, clip: &TimelineClip) -> f32 {
-        if clip.loop_duration_beats <= Beats::ZERO { return 0.0; }
-        let loop_end = self.beat_to_timeline_time(clip.start_beat + clip.loop_duration_beats).as_f32();
+        if clip.loop_duration_beats <= Beats::ZERO {
+            return 0.0;
+        }
+        let loop_end = self
+            .beat_to_timeline_time(clip.start_beat + clip.loop_duration_beats)
+            .as_f32();
         let loop_start = self.get_clip_start_time_seconds(clip).as_f32();
         (loop_end - loop_start).max(0.0)
     }
@@ -1244,10 +1328,11 @@ impl PlaybackEngine {
             return clip.recorded_bpm;
         }
         if let Some(project) = &self.project
-            && project.recording_provenance.has_recorded_project_bpm {
-                let bpm = project.recording_provenance.recorded_project_bpm;
-                return bpm.0.clamp(20.0, 300.0);
-            }
+            && project.recording_provenance.has_recorded_project_bpm
+        {
+            let bpm = project.recording_provenance.recorded_project_bpm;
+            return bpm.0.clamp(20.0, 300.0);
+        }
         0.0
     }
 
@@ -1255,12 +1340,19 @@ impl PlaybackEngine {
     /// Returns 1.0 for generators or clips without recorded BPM.
     /// Port of C# PlaybackEngine.GetClipPlaybackRate (lines 1495-1505).
     pub fn get_clip_playback_rate(&mut self, clip: &TimelineClip) -> f32 {
-        if clip.video_clip_id.is_empty() { return 1.0; }
+        if clip.video_clip_id.is_empty() {
+            return 1.0;
+        }
 
         let recorded_bpm = self.resolve_clip_recorded_bpm(clip);
-        if recorded_bpm <= 0.0 { return 1.0; }
+        if recorded_bpm <= 0.0 {
+            return 1.0;
+        }
 
-        let timeline_bpm = self.get_bpm_at_beat(Beats(self.current_beat)).0.clamp(20.0, 300.0);
+        let timeline_bpm = self
+            .get_bpm_at_beat(Beats(self.current_beat))
+            .0
+            .clamp(20.0, 300.0);
         let rate = timeline_bpm / recorded_bpm;
         rate.clamp(MIN_CLIP_PLAYBACK_RATE, MAX_CLIP_PLAYBACK_RATE)
     }
@@ -1269,7 +1361,9 @@ impl PlaybackEngine {
     /// Port of C# PlaybackEngine.TryGetClipRecordedSpb (lines 1508-1516).
     pub fn try_get_clip_recorded_spb(&self, clip: &TimelineClip) -> Option<f32> {
         let recorded_bpm = self.resolve_clip_recorded_bpm(clip);
-        if recorded_bpm <= 0.0 { return None; }
+        if recorded_bpm <= 0.0 {
+            return None;
+        }
         let spb = TempoMapConverter::seconds_per_beat_from_bpm(recorded_bpm);
         if spb > 0.0 { Some(spb) } else { None }
     }
@@ -1298,7 +1392,9 @@ impl PlaybackEngine {
     /// Get source-time loop duration in seconds for a clip.
     /// Port of C# PlaybackEngine.GetClipSourceLoopDurationSeconds (lines 1546-1554).
     pub fn get_clip_source_loop_duration_seconds(&mut self, clip: &TimelineClip) -> f32 {
-        if clip.loop_duration_beats <= Beats::ZERO { return 0.0; }
+        if clip.loop_duration_beats <= Beats::ZERO {
+            return 0.0;
+        }
         if let Some(recorded_spb) = self.try_get_clip_recorded_spb(clip) {
             return (clip.loop_duration_beats.as_f32() * recorded_spb).max(0.0);
         }
@@ -1322,14 +1418,15 @@ impl PlaybackEngine {
         if clip.is_looping && media_length > 0.01 {
             let source_available = (media_length - in_point).max(0.0);
             let loop_len_sec = if clip.loop_duration_beats > Beats::ZERO {
-                self.get_clip_source_loop_duration_seconds(clip).min(source_available)
+                self.get_clip_source_loop_duration_seconds(clip)
+                    .min(source_available)
             } else {
                 media_length
             };
 
             if loop_len_sec > 0.01 {
-                let wrapped = source_elapsed
-                    - (source_elapsed / loop_len_sec).floor() * loop_len_sec;
+                let wrapped =
+                    source_elapsed - (source_elapsed / loop_len_sec).floor() * loop_len_sec;
                 return in_point + wrapped;
             }
         }
@@ -1360,7 +1457,9 @@ impl PlaybackEngine {
     /// Poll preparing clips for readiness. When ready: seek, resume, track as
     /// recently-started. Port of C# PlaybackEngine.CheckPreparingClips (lines 758-815).
     pub fn check_preparing_clips(&mut self) {
-        if self.preparing_clips.is_empty() { return; }
+        if self.preparing_clips.is_empty() {
+            return;
+        }
 
         self.became_ready_list.clear();
 
@@ -1390,7 +1489,11 @@ impl PlaybackEngine {
             // Apply rate and seek
             let rate = self.get_clip_playback_rate(&clip);
             let resolved_bpm = self.resolve_clip_recorded_bpm(&clip);
-            let project_bpm = self.project.as_ref().map(|p| p.settings.bpm.0).unwrap_or(120.0);
+            let project_bpm = self
+                .project
+                .as_ref()
+                .map(|p| p.settings.bpm.0)
+                .unwrap_or(120.0);
             let media_length = self.renderers[renderer_idx].get_clip_media_length(clip_id);
             self.renderers[renderer_idx].set_clip_playback_rate(clip_id, rate);
             let video_time = self.compute_video_time(&clip, clip_id);
@@ -1398,8 +1501,14 @@ impl PlaybackEngine {
             log::info!(
                 "[PlaybackEngine] Clip ready: {} | recorded_bpm={:.1} project_bpm={:.1} rate={:.4} \
                  seek={:.3}s media={:.1}s beat={:.2} start_beat={:.2}",
-                clip_id, resolved_bpm, project_bpm, rate,
-                video_time, media_length, self.current_beat, clip.start_beat.as_f32(),
+                clip_id,
+                resolved_bpm,
+                project_bpm,
+                rate,
+                video_time,
+                media_length,
+                self.current_beat,
+                clip.start_beat.as_f32(),
             );
 
             if self.looping_clip_ids.contains(clip_id) {
@@ -1409,7 +1518,8 @@ impl PlaybackEngine {
             self.renderers[renderer_idx].resume_clip(clip_id);
 
             // Exclude from compositor until first frame decodes
-            self.recently_started_times.insert(clip_id.clone(), self.last_realtime_now);
+            self.recently_started_times
+                .insert(clip_id.clone(), self.last_realtime_now);
 
             if self.current_state != PlaybackState::Playing
                 && self.renderers[renderer_idx].needs_pending_pause()
@@ -1437,22 +1547,34 @@ impl PlaybackEngine {
                 None => continue,
             };
 
-            if !self.renderers[renderer_idx].needs_prepare_phase() { continue; }
-            if self.preparing_clips.contains(clip_id) { continue; }
-            if !self.renderers[renderer_idx].is_clip_ready(clip_id) { continue; }
+            if !self.renderers[renderer_idx].needs_prepare_phase() {
+                continue;
+            }
+            if self.preparing_clips.contains(clip_id) {
+                continue;
+            }
+            if !self.renderers[renderer_idx].is_clip_ready(clip_id) {
+                continue;
+            }
 
             let clip = match self.find_timeline_clip(clip_id).cloned() {
                 Some(c) => c,
                 None => continue,
             };
-            if clip.loop_duration_beats <= Beats::ZERO { continue; }
+            if clip.loop_duration_beats <= Beats::ZERO {
+                continue;
+            }
 
             let in_point = clip.in_point.as_f32();
             let media_length = self.renderers[renderer_idx].get_clip_media_length(clip_id);
             let source_available = (media_length - in_point).max(0.0);
-            let loop_len_sec = self.get_clip_source_loop_duration_seconds(&clip).min(source_available);
+            let loop_len_sec = self
+                .get_clip_source_loop_duration_seconds(&clip)
+                .min(source_available);
 
-            if loop_len_sec < 0.01 { continue; }
+            if loop_len_sec < 0.01 {
+                continue;
+            }
 
             let boundary = in_point + loop_len_sec;
 
@@ -1470,19 +1592,28 @@ impl PlaybackEngine {
     /// stop clips past their out-point, restart stopped players.
     /// Port of C# PlaybackEngine.CorrectVideoDrift (lines 859-947).
     pub fn correct_video_drift(&mut self) {
-        if self.project.is_none() { return; }
+        if self.project.is_none() {
+            return;
+        }
 
         self.clips_to_stop_drift.clear();
 
-        let active_list: Vec<(ClipId, usize)> = self.active_clip_renderers
+        let active_list: Vec<(ClipId, usize)> = self
+            .active_clip_renderers
             .iter()
             .map(|(k, &v)| (k.clone(), v))
             .collect();
 
         for (clip_id, renderer_idx) in &active_list {
-            if !self.renderers[*renderer_idx].needs_drift_correction() { continue; }
-            if self.preparing_clips.contains(clip_id) { continue; }
-            if !self.renderers[*renderer_idx].is_clip_ready(clip_id) { continue; }
+            if !self.renderers[*renderer_idx].needs_drift_correction() {
+                continue;
+            }
+            if self.preparing_clips.contains(clip_id) {
+                continue;
+            }
+            if !self.renderers[*renderer_idx].is_clip_ready(clip_id) {
+                continue;
+            }
 
             let clip = match self.find_timeline_clip(clip_id).cloned() {
                 Some(c) => c,
@@ -1493,16 +1624,21 @@ impl PlaybackEngine {
             self.renderers[*renderer_idx].set_clip_playback_rate(clip_id, rate);
 
             // Looping clips managed by native looping — skip drift correction
-            if self.looping_clip_ids.contains(clip_id) { continue; }
+            if self.looping_clip_ids.contains(clip_id) {
+                continue;
+            }
 
             let in_point = clip.in_point.as_f32();
-            let expected_video_time = in_point + self.get_clip_source_elapsed_seconds(&clip).as_f32();
+            let expected_video_time =
+                in_point + self.get_clip_source_elapsed_seconds(&clip).as_f32();
             let out_point = in_point + self.get_clip_source_duration_seconds(&clip);
 
             let playback_time = self.renderers[*renderer_idx].get_clip_playback_time(clip_id);
             let media_length = self.renderers[*renderer_idx].get_clip_media_length(clip_id);
 
-            let is_live_slot = self.live_clip_manager.as_ref()
+            let is_live_slot = self
+                .live_clip_manager
+                .as_ref()
                 .is_some_and(|mgr| mgr.is_live_slot_clip(clip_id));
 
             // Out-point enforcement
@@ -1547,7 +1683,9 @@ impl PlaybackEngine {
                 self.renderers[*renderer_idx].set_clip_playback_rate(clip_id, rate);
                 self.renderers[*renderer_idx].resume_clip(clip_id);
                 if let Some(ref log_warn) = self.log_warning {
-                    log_warn(&format!("[PlaybackEngine] Restarted stopped player: {clip_id}"));
+                    log_warn(&format!(
+                        "[PlaybackEngine] Restarted stopped player: {clip_id}"
+                    ));
                 }
                 continue;
             }
@@ -1559,7 +1697,9 @@ impl PlaybackEngine {
                 self.renderers[*renderer_idx].set_clip_playback_rate(clip_id, rate);
                 self.drift_correction_count += 1;
                 if let Some(ref log_warn) = self.log_warning {
-                    log_warn(&format!("[PlaybackEngine] Drift correction: {clip_id} ({drift:.3}s)"));
+                    log_warn(&format!(
+                        "[PlaybackEngine] Drift correction: {clip_id} ({drift:.3}s)"
+                    ));
                 }
             }
         }
@@ -1574,7 +1714,8 @@ impl PlaybackEngine {
     /// Re-apply playback rates to all active clips.
     /// Port of C# PlaybackEngine.UpdateActiveClipPlaybackRates (lines 952-962).
     pub fn update_active_clip_playback_rates(&mut self) {
-        let active_list: Vec<(ClipId, usize)> = self.active_clip_renderers
+        let active_list: Vec<(ClipId, usize)> = self
+            .active_clip_renderers
             .iter()
             .map(|(k, &v)| (k.clone(), v))
             .collect();
@@ -1592,15 +1733,22 @@ impl PlaybackEngine {
     /// Re-seek all active seekable clips to current playhead position.
     /// Port of C# PlaybackEngine.SeekActiveClips (lines 967-987).
     pub fn seek_active_clips(&mut self) {
-        let active_list: Vec<(ClipId, usize)> = self.active_clip_renderers
+        let active_list: Vec<(ClipId, usize)> = self
+            .active_clip_renderers
             .iter()
             .map(|(k, &v)| (k.clone(), v))
             .collect();
 
         for (clip_id, renderer_idx) in &active_list {
-            if !self.renderers[*renderer_idx].needs_prepare_phase() { continue; }
-            if self.preparing_clips.contains(clip_id.as_str()) { continue; }
-            if !self.renderers[*renderer_idx].is_clip_ready(clip_id) { continue; }
+            if !self.renderers[*renderer_idx].needs_prepare_phase() {
+                continue;
+            }
+            if self.preparing_clips.contains(clip_id.as_str()) {
+                continue;
+            }
+            if !self.renderers[*renderer_idx].is_clip_ready(clip_id) {
+                continue;
+            }
 
             let clip = match self.find_timeline_clip(clip_id).cloned() {
                 Some(c) => c,
@@ -1649,7 +1797,8 @@ impl PlaybackEngine {
         // Resolve should-be-active clips (timeline + live slots)
         self.compositor_fallback_clips.clear();
         self.query_active_timeline_clips();
-        self.compositor_fallback_clips.extend(self.timeline_active_scratch.iter().cloned());
+        self.compositor_fallback_clips
+            .extend(self.timeline_active_scratch.iter().cloned());
         if let Some(mgr) = &self.live_clip_manager {
             for (_, clip) in mgr.live_slots_list() {
                 self.compositor_fallback_clips.push(clip.clone());
@@ -1658,7 +1807,11 @@ impl PlaybackEngine {
 
         // Pre-render all renderers (generators blit shaders, video is no-op)
         for renderer in &mut self.renderers {
-            renderer.pre_render(self.current_time, Beats(self.current_beat), pre_render_dt.as_f32());
+            renderer.pre_render(
+                self.current_time,
+                Beats(self.current_beat),
+                pre_render_dt.as_f32(),
+            );
         }
 
         // Filter to ready clips (index-based to avoid borrow conflict)
@@ -1670,15 +1823,17 @@ impl PlaybackEngine {
                 Some(&idx) => idx,
                 None => continue,
             };
-            if !self.renderers[renderer_idx].is_clip_ready(&clip_id) { continue; }
+            if !self.renderers[renderer_idx].is_clip_ready(&clip_id) {
+                continue;
+            }
 
             // Skip clips whose RenderTexture hasn't had time to decode (video-specific).
             // Bypass in export mode — the gate prevents glitches during interactive
             // scrubbing but causes black frames and clip-transition gaps in export.
-            if !self.is_export_mode
-                && self.renderers[renderer_idx].needs_prepare_phase()
-            {
-                let is_live_clip = self.live_clip_manager.as_ref()
+            if !self.is_export_mode && self.renderers[renderer_idx].needs_prepare_phase() {
+                let is_live_clip = self
+                    .live_clip_manager
+                    .as_ref()
                     .is_some_and(|mgr| mgr.is_live_slot_clip(&clip_id));
                 // Inline beat_to_timeline_time to avoid &mut self borrow
                 let clip_end_time = if let Some(project) = &self.project {
@@ -1690,25 +1845,21 @@ impl PlaybackEngine {
                 } else {
                     Seconds(clip.end_beat().0 * 0.5)
                 };
-                if self.should_exclude_recently_started(
-                    &clip_id,
-                    clip_end_time,
-                    is_live_clip,
-                ) {
+                if self.should_exclude_recently_started(&clip_id, clip_end_time, is_live_clip) {
                     continue;
                 }
             }
 
-            self.ready_clips_list.push(self.compositor_fallback_clips[i].clone());
+            self.ready_clips_list
+                .push(self.compositor_fallback_clips[i].clone());
         }
 
         // Layer ordering is applied in content_pipeline.rs after layer_index is assigned.
 
         // Clear expired recently-started entries that passed the gate
         let last_rt = self.last_realtime_now;
-        self.recently_started_times.retain(|_id, &mut start_time| {
-            last_rt - start_time < RECENTLY_STARTED_TIME as f64
-        });
+        self.recently_started_times
+            .retain(|_id, &mut start_time| last_rt - start_time < RECENTLY_STARTED_TIME as f64);
 
         // Take the buffer out instead of cloning — zero allocation.
         // The empty Vec left behind has zero capacity, but on the next tick,
@@ -1719,12 +1870,21 @@ impl PlaybackEngine {
 
     /// Compute pre-warm candidates: clips near the playhead that should have decoders started.
     /// Port of C# PlaybackEngine.ComputePrewarmCandidates (lines 1251-1330).
-    pub fn compute_prewarm_candidates(&mut self, force: bool) -> Option<HashMap<String, crate::video_time::PrewarmCandidate>> {
-        if self.project.as_ref().is_none_or(|p| p.video_library.clips.is_empty()) {
+    pub fn compute_prewarm_candidates(
+        &mut self,
+        force: bool,
+    ) -> Option<HashMap<String, crate::video_time::PrewarmCandidate>> {
+        if self
+            .project
+            .as_ref()
+            .is_none_or(|p| p.video_library.clips.is_empty())
+        {
             return None;
         }
 
-        if !force && self.last_realtime_now < self.next_prewarm_at { return None; }
+        if !force && self.last_realtime_now < self.next_prewarm_at {
+            return None;
+        }
 
         let in_live_burst = if let Some(mgr) = &self.live_clip_manager {
             (self.last_realtime_now - mgr.last_live_trigger_at()) <= LIVE_PREWARM_BURST_TIME as f64
@@ -1732,7 +1892,11 @@ impl PlaybackEngine {
             false
         };
         self.next_prewarm_at = self.last_realtime_now
-            + if in_live_burst { LIVE_PREWARM_INTERVAL } else { LOOKAHEAD_PREWARM_INTERVAL } as f64;
+            + if in_live_burst {
+                LIVE_PREWARM_INTERVAL
+            } else {
+                LOOKAHEAD_PREWARM_INTERVAL
+            } as f64;
 
         let window_start = self.current_time - Seconds(LOOKAHEAD_PREWARM_BEHIND_TIME as f64);
         let window_end = self.current_time + Seconds(LOOKAHEAD_PREWARM_AHEAD_TIME as f64);
@@ -1744,47 +1908,80 @@ impl PlaybackEngine {
             let fallback_bpm = project.settings.bpm;
 
             for layer in &project.timeline.layers {
-                if layer.is_muted { continue; }
-                if any_solo && !layer.is_solo { continue; }
+                if layer.is_muted {
+                    continue;
+                }
+                if any_solo && !layer.is_solo {
+                    continue;
+                }
 
                 for clip in &layer.clips {
-                    if clip.video_clip_id.is_empty() || clip.is_muted { continue; }
-                    if clip.video_clip_id.is_empty() { continue; }
+                    if clip.video_clip_id.is_empty() || clip.is_muted {
+                        continue;
+                    }
+                    if clip.video_clip_id.is_empty() {
+                        continue;
+                    }
 
                     let clip_start = TempoMapConverter::beat_to_seconds_immut(
-                        &project.tempo_map, clip.start_beat, fallback_bpm);
+                        &project.tempo_map,
+                        clip.start_beat,
+                        fallback_bpm,
+                    );
                     let clip_end = TempoMapConverter::beat_to_seconds_immut(
-                        &project.tempo_map, clip.end_beat(), fallback_bpm);
-                    if clip_end < window_start { continue; }
-                    if clip_start > window_end { continue; }
+                        &project.tempo_map,
+                        clip.end_beat(),
+                        fallback_bpm,
+                    );
+                    if clip_end < window_start {
+                        continue;
+                    }
+                    if clip_start > window_end {
+                        continue;
+                    }
                     self.prewarm_candidates.push(clip.clone());
                 }
             }
         }
 
-        self.prewarm_candidates.sort_unstable_by(|a, b| a.start_beat.partial_cmp(&b.start_beat).unwrap_or(std::cmp::Ordering::Equal));
+        self.prewarm_candidates.sort_unstable_by(|a, b| {
+            a.start_beat
+                .partial_cmp(&b.start_beat)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // Build prewarm set from candidates
         let mut prewarm_set: HashMap<String, crate::video_time::PrewarmCandidate> = HashMap::new();
         if let Some(project) = &self.project {
             for clip in &self.prewarm_candidates {
-                if prewarm_set.len() >= LOOKAHEAD_PREWARM_MAX_UNIQUE_CLIPS { break; }
-                if prewarm_set.contains_key(&clip.video_clip_id) { continue; }
+                if prewarm_set.len() >= LOOKAHEAD_PREWARM_MAX_UNIQUE_CLIPS {
+                    break;
+                }
+                if prewarm_set.contains_key(&clip.video_clip_id) {
+                    continue;
+                }
 
                 if let Some(vc) = project.video_library.find_clip_by_id(&clip.video_clip_id) {
-                    prewarm_set.insert(clip.video_clip_id.clone(), crate::video_time::PrewarmCandidate {
-                        video_clip_id: vc.id.clone(),
-                        file_path: vc.file_path.clone(),
-                    });
+                    prewarm_set.insert(
+                        clip.video_clip_id.clone(),
+                        crate::video_time::PrewarmCandidate {
+                            video_clip_id: vc.id.clone(),
+                            file_path: vc.file_path.clone(),
+                        },
+                    );
                 }
             }
         }
 
         // Change detection
         let changed = prewarm_set.len() != self.last_prewarm_ids.len()
-            || prewarm_set.keys().any(|k| !self.last_prewarm_ids.contains(k));
+            || prewarm_set
+                .keys()
+                .any(|k| !self.last_prewarm_ids.contains(k));
 
-        if !changed { return None; }
+        if !changed {
+            return None;
+        }
 
         self.last_prewarm_ids.clear();
         self.last_prewarm_ids.extend(prewarm_set.keys().cloned());
@@ -1801,11 +1998,21 @@ use crate::live_clip_manager::LiveClipHost;
 /// ClipLauncher / LiveClipManager without a separate adapter type.
 /// Port of C# PlaybackController implementing ILiveClipHost.
 impl LiveClipHost for PlaybackEngine {
-    fn current_beat(&self) -> Beats { Beats(self.current_beat) }
-    fn current_time(&self) -> Seconds { self.current_time }
-    fn is_recording(&self) -> bool { self.is_recording }
-    fn is_playing(&self) -> bool { self.current_state == PlaybackState::Playing }
-    fn show_debug_logs(&self) -> bool { self.show_debug_logs }
+    fn current_beat(&self) -> Beats {
+        Beats(self.current_beat)
+    }
+    fn current_time(&self) -> Seconds {
+        self.current_time
+    }
+    fn is_recording(&self) -> bool {
+        self.is_recording
+    }
+    fn is_playing(&self) -> bool {
+        self.current_state == PlaybackState::Playing
+    }
+    fn show_debug_logs(&self) -> bool {
+        self.show_debug_logs
+    }
 
     /// BPM at the given beat. Checks live external tempo first.
     fn get_bpm_at_beat(&self, beat: Beats) -> f32 {
@@ -1888,11 +2095,7 @@ impl LiveClipHost for PlaybackEngine {
 
     fn beat_to_timeline_time(&self, beat: Beats) -> Seconds {
         if let Some(project) = &self.project {
-            TempoMapConverter::beat_to_seconds_immut(
-                &project.tempo_map,
-                beat,
-                project.settings.bpm,
-            )
+            TempoMapConverter::beat_to_seconds_immut(&project.tempo_map, beat, project.settings.bpm)
         } else {
             Seconds(beat.0 * 0.5) // fallback: 120 bpm
         }
@@ -1905,35 +2108,49 @@ impl LiveClipHost for PlaybackEngine {
 // Port of Unity ISyncTarget + ISyncArbiterTarget implemented by PlaybackController.
 
 impl crate::sync::SyncTarget for PlaybackEngine {
-    fn current_state(&self) -> PlaybackState { self.current_state }
-    fn current_time(&self) -> Seconds { self.current_time }
-    fn is_playing(&self) -> bool { self.current_state == PlaybackState::Playing }
+    fn current_state(&self) -> PlaybackState {
+        self.current_state
+    }
+    fn current_time(&self) -> Seconds {
+        self.current_time
+    }
+    fn is_playing(&self) -> bool {
+        self.current_state == PlaybackState::Playing
+    }
 
     fn timeline_beat_to_time(&self, beat: Beats) -> Seconds {
         if let Some(project) = &self.project {
-            TempoMapConverter::beat_to_seconds_immut(
-                &project.tempo_map,
-                beat,
-                project.settings.bpm,
-            )
+            TempoMapConverter::beat_to_seconds_immut(&project.tempo_map, beat, project.settings.bpm)
         } else {
             Seconds(beat.0 * 0.5) // fallback: 120 bpm
         }
     }
 
-    fn current_project(&self) -> Option<&Project> { self.project.as_ref() }
+    fn current_project(&self) -> Option<&Project> {
+        self.project.as_ref()
+    }
 }
 
 impl crate::sync::SyncArbiterTarget for PlaybackEngine {
-    fn current_project(&self) -> Option<&Project> { self.project.as_ref() }
-    fn external_time_sync(&self) -> bool { self.external_time_sync }
-    fn set_external_time_sync(&mut self, value: bool) { self.external_time_sync = value; }
+    fn current_project(&self) -> Option<&Project> {
+        self.project.as_ref()
+    }
+    fn external_time_sync(&self) -> bool {
+        self.external_time_sync
+    }
+    fn set_external_time_sync(&mut self, value: bool) {
+        self.external_time_sync = value;
+    }
 
-    fn play(&mut self) { self.play(); }
+    fn play(&mut self) {
+        self.play();
+    }
 
     fn pause(&mut self, clear_recording: bool) {
         self.pause();
-        if clear_recording { self.set_recording(false); }
+        if clear_recording {
+            self.set_recording(false);
+        }
     }
 
     fn nudge_time(&mut self, time: Seconds) {

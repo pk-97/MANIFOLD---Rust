@@ -23,15 +23,15 @@
 // Workers are shared across all owners (one estimator instance).
 // Readback → CPU inference → GPU upload, ~2-3 frame latency.
 
-use ahash::AHashMap;
-use manifold_core::EffectTypeId;
-use manifold_core::effects::EffectInstance;
+use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 use crate::background_worker::BackgroundWorker;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
 use crate::render_target::RenderTarget;
-use super::compute_dual_blit_helper::ComputeDualBlitHelper;
+use ahash::AHashMap;
+use manifold_core::EffectTypeId;
+use manifold_core::effects::EffectInstance;
 
 // ─── Depth worker types ───────────────────────────────────────────────
 
@@ -59,15 +59,15 @@ const FOCUS_DEPTH: u32 = 2;
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct DofUniforms {
-    mode: u32,           // pass: 0=CoC+Down, 1=HBlur, 2=VBlur, 3=Composite
-    focus_mode: u32,     // 0=TiltShift, 1=Radial, 2=Depth
+    mode: u32,       // pass: 0=CoC+Down, 1=HBlur, 2=VBlur, 3=Composite
+    focus_mode: u32, // 0=TiltShift, 1=Radial, 2=Depth
     amount: f32,
     focus_y: f32,
     focus_x: f32,
     focus_width: f32,
     blur_strength: f32,
-    tilt_angle: f32,     // radians
-    quality: u32,        // 0=9tap, 1=17tap, 2=25tap
+    tilt_angle: f32, // radians
+    quality: u32,    // 0=9tap, 1=17tap, 2=25tap
     texel_size_x: f32,
     texel_size_y: f32,
     _pad: f32,
@@ -76,8 +76,8 @@ struct DofUniforms {
 // ─── Per-owner state ──────────────────────────────────────────────────
 
 struct DofOwnerState {
-    buf_a: RenderTarget,  // blur ping-pong A (full-res)
-    buf_b: RenderTarget,  // blur ping-pong B (full-res)
+    buf_a: RenderTarget, // blur ping-pong A (full-res)
+    buf_b: RenderTarget, // blur ping-pong B (full-res)
 }
 
 /// Per-owner state for depth mode (shared across owners via single worker).
@@ -126,19 +126,17 @@ impl DepthOfFieldFX {
             if let Some(f) = focus {
                 constants.push(("uniforms.focus_mode", f));
             }
-            device.create_specialized_compute_pipeline(
-                DOF_WGSL, "cs_main", &constants, label,
-            )
+            device.create_specialized_compute_pipeline(DOF_WGSL, "cs_main", &constants, label)
         };
 
         Self {
             helper: ComputeDualBlitHelper::new(device, DOF_WGSL, "DOF Compute"),
             pipeline_coc_tilt_shift: spec("0u", Some("0u"), "DOF CoC TiltShift"),
-            pipeline_coc_radial:     spec("0u", Some("1u"), "DOF CoC Radial"),
-            pipeline_coc_depth:      spec("0u", Some("2u"), "DOF CoC Depth"),
-            pipeline_blur_h:         spec("1u", None, "DOF HBlur"),
-            pipeline_blur_v:         spec("2u", None, "DOF VBlur"),
-            pipeline_composite:      spec("3u", None, "DOF Composite"),
+            pipeline_coc_radial: spec("0u", Some("1u"), "DOF CoC Radial"),
+            pipeline_coc_depth: spec("0u", Some("2u"), "DOF CoC Depth"),
+            pipeline_blur_h: spec("1u", None, "DOF HBlur"),
+            pipeline_blur_v: spec("2u", None, "DOF VBlur"),
+            pipeline_composite: spec("3u", None, "DOF Composite"),
             states: AHashMap::new(),
             depth_worker: None,
             depth_states: AHashMap::new(),
@@ -175,7 +173,8 @@ impl DepthOfFieldFX {
         } else {
             RenderTarget::new(device, w, h, format, &format!("DofB_{owner_key}"))
         };
-        self.states.insert(owner_key, DofOwnerState { buf_a, buf_b });
+        self.states
+            .insert(owner_key, DofOwnerState { buf_a, buf_b });
     }
 
     // ── Depth worker management ───────────────────────────────────────
@@ -194,8 +193,12 @@ impl DepthOfFieldFX {
                 let pc = (req.width * req.height) as usize;
                 let mut depth = vec![0f32; pc];
                 let ok = estimator.process(
-                    &req.pixel_data, req.width, req.height,
-                    &mut depth, req.width, req.height,
+                    &req.pixel_data,
+                    req.width,
+                    req.height,
+                    &mut depth,
+                    req.width,
+                    req.height,
                 );
                 DofDepthResponse {
                     depth_buffer: if ok != 0 { Some(depth) } else { None },
@@ -207,16 +210,11 @@ impl DepthOfFieldFX {
         }
     }
 
-    fn ensure_depth_state(
-        &mut self,
-        device: &manifold_gpu::GpuDevice,
-        owner_key: i64,
-    ) {
+    fn ensure_depth_state(&mut self, device: &manifold_gpu::GpuDevice, owner_key: i64) {
         if self.depth_states.contains_key(&owner_key) {
             return;
         }
-        let scale =
-            (MAX_ANALYSIS_DIM as f32 / self.width.max(self.height) as f32).min(1.0);
+        let scale = (MAX_ANALYSIS_DIM as f32 / self.width.max(self.height) as f32).min(1.0);
         let aw = ((self.width as f32 * scale).round() as u32).max(64);
         let ah = ((self.height as f32 * scale).round() as u32).max(36);
         let pixel_count = (aw * ah) as usize;
@@ -232,17 +230,20 @@ impl DepthOfFieldFX {
             label: &format!("DofDepth_{owner_key}"),
         });
 
-        self.depth_states.insert(owner_key, DepthState {
-            analysis_width: aw,
-            analysis_height: ah,
-            readback: ReadbackRequest::new(),
-            readback_pending: false,
-            has_depth: false,
-            depth_dirty: false,
-            depth_buffer: vec![0.0f32; pixel_count],
-            depth_texture,
-            last_request_frame: -1024,
-        });
+        self.depth_states.insert(
+            owner_key,
+            DepthState {
+                analysis_width: aw,
+                analysis_height: ah,
+                readback: ReadbackRequest::new(),
+                readback_pending: false,
+                has_depth: false,
+                depth_dirty: false,
+                depth_buffer: vec![0.0f32; pixel_count],
+                depth_texture,
+                last_request_frame: -1024,
+            },
+        );
     }
 
     /// Start GPU readback of the source texture at analysis resolution.
@@ -261,7 +262,8 @@ impl DepthOfFieldFX {
         // Use the pool for a transient staging texture
         let staging = if let Some(pool) = gpu.pool {
             pool.acquire(
-                aw, ah,
+                aw,
+                ah,
                 manifold_gpu::GpuTextureFormat::Rgba8Unorm,
                 manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
                 "DofDepthStaging",
@@ -320,8 +322,7 @@ impl DepthOfFieldFX {
 
         // Upload to GPU if dirty
         if depth_state.depth_dirty {
-            let count =
-                (depth_state.analysis_width * depth_state.analysis_height) as usize;
+            let count = (depth_state.analysis_width * depth_state.analysis_height) as usize;
             let mut pixels = vec![0u8; count * 4];
             for i in 0..count {
                 let v = (depth_state.depth_buffer[i].clamp(0.0, 1.0) * 255.0) as u8;
@@ -389,39 +390,38 @@ impl PostProcessEffect for DepthOfFieldFX {
 
         // ── Depth mode: manage DNN worker + readback ──────────────────
         // Determine which texture to use as source_b for CoC pass
-        let depth_tex_for_coc: Option<&manifold_gpu::GpuTexture> =
-            if focus_mode == FOCUS_DEPTH {
-                self.ensure_depth_worker();
-                self.ensure_depth_state(gpu.device, ctx.owner_key);
+        let depth_tex_for_coc: Option<&manifold_gpu::GpuTexture> = if focus_mode == FOCUS_DEPTH {
+            self.ensure_depth_worker();
+            self.ensure_depth_state(gpu.device, ctx.owner_key);
 
-                // Borrow split: get depth_worker and depth_state separately
-                let has_worker = self.depth_worker.is_some();
-                if has_worker {
-                    // Poll worker for completed results
-                    let ds = self.depth_states.get_mut(&ctx.owner_key).unwrap();
-                    let dw = self.depth_worker.as_mut().unwrap();
-                    Self::poll_depth_readback(ds, dw);
-                    Self::poll_depth_worker(ds, dw, gpu);
+            // Borrow split: get depth_worker and depth_state separately
+            let has_worker = self.depth_worker.is_some();
+            if has_worker {
+                // Poll worker for completed results
+                let ds = self.depth_states.get_mut(&ctx.owner_key).unwrap();
+                let dw = self.depth_worker.as_mut().unwrap();
+                Self::poll_depth_readback(ds, dw);
+                Self::poll_depth_worker(ds, dw, gpu);
 
-                    // Submit new readback if interval elapsed.
-                    // Guard: reset if frame_count jumped backwards (export restart).
-                    let ds = self.depth_states.get_mut(&ctx.owner_key).unwrap();
-                    if ctx.frame_count < ds.last_request_frame {
-                        ds.last_request_frame = ctx.frame_count - DEPTH_UPDATE_INTERVAL;
-                    }
-                    let elapsed = ctx.frame_count - ds.last_request_frame;
-                    if elapsed >= DEPTH_UPDATE_INTERVAL && !ds.readback.is_pending() {
-                        Self::submit_depth_readback(gpu, source, ds);
-                        ds.last_request_frame = ctx.frame_count;
-                    }
+                // Submit new readback if interval elapsed.
+                // Guard: reset if frame_count jumped backwards (export restart).
+                let ds = self.depth_states.get_mut(&ctx.owner_key).unwrap();
+                if ctx.frame_count < ds.last_request_frame {
+                    ds.last_request_frame = ctx.frame_count - DEPTH_UPDATE_INTERVAL;
                 }
+                let elapsed = ctx.frame_count - ds.last_request_frame;
+                if elapsed >= DEPTH_UPDATE_INTERVAL && !ds.readback.is_pending() {
+                    Self::submit_depth_readback(gpu, source, ds);
+                    ds.last_request_frame = ctx.frame_count;
+                }
+            }
 
-                // Get texture ref if depth data available
-                let ds = self.depth_states.get(&ctx.owner_key);
-                ds.filter(|d| d.has_depth).map(|d| &d.depth_texture)
-            } else {
-                None
-            };
+            // Get texture ref if depth data available
+            let ds = self.depth_states.get(&ctx.owner_key);
+            ds.filter(|d| d.has_depth).map(|d| &d.depth_texture)
+        } else {
+            None
+        };
 
         // Re-borrow state after depth management
         let state = self.states.get(&ctx.owner_key).unwrap();
@@ -457,22 +457,38 @@ impl PostProcessEffect for DepthOfFieldFX {
         if focus_mode == FOCUS_DEPTH {
             if let Some(depth_tex) = depth_tex_for_coc {
                 self.helper.dispatch_with(
-                    coc_pipeline, gpu, source, depth_tex, &state.buf_a.texture,
+                    coc_pipeline,
+                    gpu,
+                    source,
+                    depth_tex,
+                    &state.buf_a.texture,
                     bytemuck::bytes_of(&pass0_u),
-                    "DOF CoC (Depth)", w, h,
+                    "DOF CoC (Depth)",
+                    w,
+                    h,
                 );
             } else {
                 self.helper.dispatch_a_only_with(
-                    coc_pipeline, gpu, source, &state.buf_a.texture,
+                    coc_pipeline,
+                    gpu,
+                    source,
+                    &state.buf_a.texture,
                     bytemuck::bytes_of(&pass0_u),
-                    "DOF CoC (Depth pending)", w, h,
+                    "DOF CoC (Depth pending)",
+                    w,
+                    h,
                 );
             }
         } else {
             self.helper.dispatch_a_only_with(
-                coc_pipeline, gpu, source, &state.buf_a.texture,
+                coc_pipeline,
+                gpu,
+                source,
+                &state.buf_a.texture,
                 bytemuck::bytes_of(&pass0_u),
-                "DOF CoC", w, h,
+                "DOF CoC",
+                w,
+                h,
             );
         }
 
@@ -484,10 +500,14 @@ impl PostProcessEffect for DepthOfFieldFX {
             ..base
         };
         self.helper.dispatch_a_only_with(
-            &self.pipeline_blur_h, gpu,
-            &state.buf_a.texture, &state.buf_b.texture,
+            &self.pipeline_blur_h,
+            gpu,
+            &state.buf_a.texture,
+            &state.buf_b.texture,
             bytemuck::bytes_of(&pass1_u),
-            "DOF HBlur", w, h,
+            "DOF HBlur",
+            w,
+            h,
         );
 
         // ── Pass 2: Vertical blur (full-res) ─────────────────────────
@@ -498,10 +518,14 @@ impl PostProcessEffect for DepthOfFieldFX {
             ..base
         };
         self.helper.dispatch_a_only_with(
-            &self.pipeline_blur_v, gpu,
-            &state.buf_b.texture, &state.buf_a.texture,
+            &self.pipeline_blur_v,
+            gpu,
+            &state.buf_b.texture,
+            &state.buf_a.texture,
             bytemuck::bytes_of(&pass2_u),
-            "DOF VBlur", w, h,
+            "DOF VBlur",
+            w,
+            h,
         );
 
         // ── Pass 3: Composite (full-res) ─────────────────────────────
@@ -512,10 +536,15 @@ impl PostProcessEffect for DepthOfFieldFX {
             ..base
         };
         self.helper.dispatch_with(
-            &self.pipeline_composite, gpu,
-            source, &state.buf_a.texture, target,
+            &self.pipeline_composite,
+            gpu,
+            source,
+            &state.buf_a.texture,
+            target,
             bytemuck::bytes_of(&pass3_u),
-            "DOF Composite", w, h,
+            "DOF Composite",
+            w,
+            h,
         );
     }
 
@@ -529,12 +558,8 @@ impl PostProcessEffect for DepthOfFieldFX {
         self.height = height;
         let format = manifold_gpu::GpuTextureFormat::Rgba16Float;
         for (key, state) in &mut self.states {
-            state.buf_a = RenderTarget::new(
-                device, width, height, format, &format!("DofA_{key}"),
-            );
-            state.buf_b = RenderTarget::new(
-                device, width, height, format, &format!("DofB_{key}"),
-            );
+            state.buf_a = RenderTarget::new(device, width, height, format, &format!("DofA_{key}"));
+            state.buf_b = RenderTarget::new(device, width, height, format, &format!("DofB_{key}"));
         }
         // Depth states use analysis-res which may also change
         self.depth_states.clear();

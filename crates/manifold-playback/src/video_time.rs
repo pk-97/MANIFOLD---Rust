@@ -33,8 +33,8 @@ pub fn compute_video_time(
         };
 
         if loop_len_sec > 0.01 {
-            let wrapped = source_local_time
-                - (source_local_time / loop_len_sec).floor() * loop_len_sec;
+            let wrapped =
+                source_local_time - (source_local_time / loop_len_sec).floor() * loop_len_sec;
             return in_point_f + wrapped;
         }
     }

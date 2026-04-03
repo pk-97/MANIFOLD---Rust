@@ -14,11 +14,11 @@ use manifold_core::selection::SelectionRegion;
 use manifold_editing::command::{Command, CompositeCommand};
 use manifold_editing::service::EditingService;
 
-use manifold_ui::node::Vec2;
 use manifold_ui::cursors::{CursorManager, TimelineCursor as UICursor};
+use manifold_ui::node::Vec2;
 use manifold_ui::panels::PanelAction;
 use manifold_ui::timeline_editing_host::{
-    TimelineEditingHost, TimelineCursor, ClipRef, RegionSplitResult,
+    ClipRef, RegionSplitResult, TimelineCursor, TimelineEditingHost,
 };
 
 /// Wrapper that implements TimelineEditingHost by borrowing Application fields.
@@ -97,7 +97,11 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     }
 
     fn layer_id_at_index(&self, index: usize) -> Option<manifold_core::LayerId> {
-        self.project.timeline.layers.get(index).map(|l| l.layer_id.clone())
+        self.project
+            .timeline
+            .layers
+            .get(index)
+            .map(|l| l.layer_id.clone())
     }
 
     fn layer_is_generator(&self, index: usize) -> bool {
@@ -146,7 +150,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                         layer_index: li,
                         layer_id: layer.layer_id.clone(),
                         in_point: clip.in_point,
-                        is_generator: layer.layer_type == manifold_core::types::LayerType::Generator,
+                        is_generator: layer.layer_type
+                            == manifold_core::types::LayerType::Generator,
                         is_locked: clip.is_locked,
                         is_looping: clip.is_looping,
                     });
@@ -174,7 +179,9 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         if let Some(project) = Some(&*self.project) {
             let bpm = project.settings.bpm;
             manifold_core::tempo::TempoMapConverter::beat_to_seconds_immut(
-                &project.tempo_map, beat, bpm,
+                &project.tempo_map,
+                beat,
+                bpm,
             )
         } else {
             Seconds::ZERO
@@ -183,11 +190,20 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     // ── Clip operations ─────────────────────────────────────────
 
-    fn create_clip_at_position(&mut self, beat: Beats, layer: usize, grid_step: Beats) -> Option<ClipId> {
+    fn create_clip_at_position(
+        &mut self,
+        beat: Beats,
+        layer: usize,
+        grid_step: Beats,
+    ) -> Option<ClipId> {
         // Port of Unity EditingService.CreateClipAtPosition.
         // Beat arrives pre-snapped from the overlay. grid_step is the clip duration.
         let min_duration = Beats(0.25); // minimum 1/16th note
-        let mut duration = if grid_step < min_duration { min_duration } else { grid_step };
+        let mut duration = if grid_step < min_duration {
+            min_duration
+        } else {
+            grid_step
+        };
 
         // Clamp duration to fit available gap — if the next clip on this layer
         // starts before beat + duration, shrink the new clip to fill the gap
@@ -201,15 +217,28 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             }
             if nearest_start.0 < f64::MAX {
                 let available = Beats(nearest_start.0 - beat.0);
-                duration = if duration < available { duration } else { available };
-                if duration < min_duration { duration = min_duration; }
+                duration = if duration < available {
+                    duration
+                } else {
+                    available
+                };
+                if duration < min_duration {
+                    duration = min_duration;
+                }
             }
         }
 
         let clip_id = {
             let project = Some(&mut *self.project)?;
             let (cmd, id) = EditingService::create_clip_at_position(project, beat, layer, duration);
-            { let mut cmd = cmd; cmd.execute(project); crate::content_command::ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::Execute(cmd)); }
+            {
+                let mut cmd = cmd;
+                cmd.execute(project);
+                crate::content_command::ContentCommand::send(
+                    self.content_tx,
+                    crate::content_command::ContentCommand::Execute(cmd),
+                );
+            }
             id
         };
         // Enforce non-overlap on the newly created clip (handles edge cases
@@ -220,24 +249,32 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             let mut found: Option<(TimelineClip, usize)> = None;
             for layer in &project.timeline.layers {
                 if let Some(clip) = layer.clips.iter().find(|c| c.id == clip_id) {
-                    let li = project.timeline.layer_index_for_id(&clip.layer_id).unwrap_or(0);
+                    let li = project
+                        .timeline
+                        .layer_index_for_id(&clip.layer_id)
+                        .unwrap_or(0);
                     found = Some((clip.clone(), li));
                     break;
                 }
             }
             if let Some((clip_clone, layer_idx)) = found {
                 let empty = HashSet::new();
-                EditingService::enforce_non_overlap(
-                    project, &clip_clone, layer_idx, &empty, spb,
-                )
+                EditingService::enforce_non_overlap(project, &clip_clone, layer_idx, &empty, spb)
             } else {
                 Vec::new()
             }
         };
         if !overlap_cmds.is_empty()
-            && let Some(project) = Some(&mut *self.project) {
-                for mut c in overlap_cmds { c.execute(project); crate::content_command::ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::Execute(c)); }
+            && let Some(project) = Some(&mut *self.project)
+        {
+            for mut c in overlap_cmds {
+                c.execute(project);
+                crate::content_command::ContentCommand::send(
+                    self.content_tx,
+                    crate::content_command::ContentCommand::Execute(c),
+                );
             }
+        }
         *self.needs_structural_sync = true;
         Some(clip_id)
     }
@@ -271,7 +308,9 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 }
 
                 // Gen↔video type mismatch: block
-                let clip_is_gen = project.timeline.layers[src_layer].clips[clip_idx].video_clip_id.is_empty();
+                let clip_is_gen = project.timeline.layers[src_layer].clips[clip_idx]
+                    .video_clip_id
+                    .is_empty();
                 let target_is_gen = project.timeline.layers[target_layer].layer_type
                     == manifold_core::types::LayerType::Generator;
                 if clip_is_gen != target_is_gen {
@@ -279,8 +318,11 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 }
 
                 // Move clip between layers
-                let clip = project.timeline.layers[src_layer].clips.remove(clip_idx);
-                project.timeline.layers[target_layer].clips.push(clip);
+                let clip_id = ClipId::new(clip_id);
+                let clip = project.timeline.layers[src_layer].remove_clip(&clip_id);
+                if let Some(clip) = clip {
+                    project.timeline.layers[target_layer].add_clip(clip);
+                }
                 project.timeline.mark_clip_lookup_dirty();
             }
         }
@@ -304,15 +346,20 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     }
 
     fn on_clip_right_click(&mut self, clip_id: &str, _screen_pos: Vec2) {
-        self.pending_actions.push(PanelAction::ClipRightClicked(clip_id.to_string()));
+        self.pending_actions
+            .push(PanelAction::ClipRightClicked(clip_id.to_string()));
     }
 
     fn on_track_right_click(&mut self, beat: Beats, layer_index: usize, _screen_pos: Vec2) {
-        self.pending_actions.push(PanelAction::TrackRightClicked(beat.as_f32(), layer_index));
+        self.pending_actions
+            .push(PanelAction::TrackRightClicked(beat.as_f32(), layer_index));
     }
 
     fn inspect_layer(&mut self, layer_index: usize) {
-        let new_layer = self.project.timeline.layers
+        let new_layer = self
+            .project
+            .timeline
+            .layers
             .get(layer_index)
             .map(|l| l.layer_id.clone());
         if new_layer != *self.active_layer {
@@ -358,7 +405,10 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     // ── Playback ────────────────────────────────────────────────
 
     fn scrub_to_time(&mut self, time: Seconds) {
-        crate::content_command::ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::SeekTo(time));
+        crate::content_command::ContentCommand::send(
+            self.content_tx,
+            crate::content_command::ContentCommand::SeekTo(time),
+        );
     }
 
     // ── Overlap enforcement ─────────────────────────────────────
@@ -380,7 +430,11 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 }
                 if let Some((clip_clone, layer_idx)) = found {
                     EditingService::enforce_non_overlap(
-                        project, &clip_clone, layer_idx, ignore_ids, spb,
+                        project,
+                        &clip_clone,
+                        layer_idx,
+                        ignore_ids,
+                        spb,
                     )
                 } else {
                     Vec::new()
@@ -390,14 +444,15 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             }
         };
         if !overlap_cmds.is_empty()
-            && let Some(project) = Some(&mut *self.project) {
-                // Execute overlap commands immediately for model consistency,
-                // then store in batch for composite undo on commit.
-                for mut cmd in overlap_cmds {
-                    cmd.execute(project);
-                    self.command_batch.push(cmd);
-                }
+            && let Some(project) = Some(&mut *self.project)
+        {
+            // Execute overlap commands immediately for model consistency,
+            // then store in batch for composite undo on commit.
+            for mut cmd in overlap_cmds {
+                cmd.execute(project);
+                self.command_batch.push(cmd);
             }
+        }
     }
 
     // ── Region-partial move ─────────────────────────────────────
@@ -415,7 +470,10 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             if let Some(project) = Some(&*self.project) {
                 EditingService::split_clips_at_region_boundaries(project, region, spb)
             } else {
-                return RegionSplitResult { interior_clip_ids: Vec::new(), split_count: 0 };
+                return RegionSplitResult {
+                    interior_clip_ids: Vec::new(),
+                    split_count: 0,
+                };
             }
         };
         let split_count = split_cmds.len();
@@ -443,7 +501,10 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             Vec::new()
         };
 
-        RegionSplitResult { interior_clip_ids, split_count }
+        RegionSplitResult {
+            interior_clip_ids,
+            split_count,
+        }
     }
 
     // ── Command batching ────────────────────────────────────────
@@ -455,19 +516,31 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     fn record_move(
         &mut self,
         clip_id: &str,
-        old_start: Beats, new_start: Beats,
-        old_layer: usize, new_layer: usize,
+        old_start: Beats,
+        new_start: Beats,
+        old_layer: usize,
+        new_layer: usize,
     ) {
-        let old_layer_id = self.project.timeline.layers.get(old_layer)
+        let old_layer_id = self
+            .project
+            .timeline
+            .layers
+            .get(old_layer)
             .map(|l| l.layer_id.clone())
             .unwrap_or_default();
-        let new_layer_id = self.project.timeline.layers.get(new_layer)
+        let new_layer_id = self
+            .project
+            .timeline
+            .layers
+            .get(new_layer)
             .map(|l| l.layer_id.clone())
             .unwrap_or_default();
         let cmd = manifold_editing::commands::clip::MoveClipCommand::new(
             ClipId::new(clip_id),
-            old_start, new_start,
-            old_layer_id, new_layer_id,
+            old_start,
+            new_start,
+            old_layer_id,
+            new_layer_id,
         );
         self.command_batch.push(Box::new(cmd));
     }
@@ -475,15 +548,21 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     fn record_trim(
         &mut self,
         clip_id: &str,
-        old_start: Beats, new_start: Beats,
-        old_duration: Beats, new_duration: Beats,
-        old_in_point: Seconds, new_in_point: Seconds,
+        old_start: Beats,
+        new_start: Beats,
+        old_duration: Beats,
+        new_duration: Beats,
+        old_in_point: Seconds,
+        new_in_point: Seconds,
     ) {
         let cmd = manifold_editing::commands::clip::TrimClipCommand::new(
             ClipId::new(clip_id),
-            old_start, new_start,
-            old_duration, new_duration,
-            old_in_point, new_in_point,
+            old_start,
+            new_start,
+            old_duration,
+            new_duration,
+            old_in_point,
+            new_in_point,
         );
         self.command_batch.push(Box::new(cmd));
     }
@@ -505,10 +584,16 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         // Use record() not execute() — just push to undo stack.
         if commands.len() == 1 {
             let cmd = commands.into_iter().next().unwrap();
-            crate::content_command::ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::Execute(cmd));
+            crate::content_command::ContentCommand::send(
+                self.content_tx,
+                crate::content_command::ContentCommand::Execute(cmd),
+            );
         } else {
             let composite = CompositeCommand::new(commands, description.to_string());
-            crate::content_command::ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::Execute(Box::new(composite)));
+            crate::content_command::ContentCommand::send(
+                self.content_tx,
+                crate::content_command::ContentCommand::Execute(Box::new(composite)),
+            );
         }
         *self.needs_structural_sync = true;
     }
@@ -517,19 +602,44 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     fn set_clip_start_beat(&mut self, clip_id: &str, beat: Beats) {
         if let Some(project) = Some(&mut *self.project) {
+            let mut layer_id = None;
             if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
                 clip.start_beat = beat;
+                layer_id = Some(clip.layer_id.clone());
+            }
+            if let Some(layer_id) = layer_id
+                && let Some(layer_idx) = project.timeline.layer_index_for_id(&layer_id)
+                && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
+            {
+                layer.mark_clips_unsorted();
             }
             project.timeline.mark_clip_lookup_dirty();
         }
     }
 
-    fn set_clip_trim(&mut self, clip_id: &str, start_beat: Beats, duration_beats: Beats, in_point: Seconds) {
+    fn set_clip_trim(
+        &mut self,
+        clip_id: &str,
+        start_beat: Beats,
+        duration_beats: Beats,
+        in_point: Seconds,
+    ) {
         if let Some(project) = Some(&mut *self.project) {
+            let mut layer_id = None;
+            let mut old_start_beat = None;
             if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
+                old_start_beat = Some(clip.start_beat);
                 clip.start_beat = start_beat;
                 clip.duration_beats = duration_beats;
                 clip.in_point = in_point;
+                layer_id = Some(clip.layer_id.clone());
+            }
+            if old_start_beat.is_some_and(|old| old != start_beat)
+                && let Some(layer_id) = layer_id
+                && let Some(layer_idx) = project.timeline.layer_index_for_id(&layer_id)
+                && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
+            {
+                layer.mark_clips_unsorted();
             }
             project.timeline.mark_clip_lookup_dirty();
         }
@@ -539,7 +649,11 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     fn get_max_duration_beats(&self, clip_id: &str) -> Beats {
         // Linear scan — find_clip_by_id requires &mut self (self-healing cache)
-        let clip = self.project.timeline.layers.iter()
+        let clip = self
+            .project
+            .timeline
+            .layers
+            .iter()
             .flat_map(|l| l.clips.iter())
             .find(|c| c.id.as_ref() == clip_id);
 
@@ -551,9 +665,11 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             return Beats::ZERO;
         }
 
-        let video_clip = match self.project.video_library.find_clip_by_id(
-            &clip.video_clip_id,
-        ) {
+        let video_clip = match self
+            .project
+            .video_library
+            .find_clip_by_id(&clip.video_clip_id)
+        {
             Some(vc) => vc,
             None => return Beats::ZERO,
         };
@@ -564,6 +680,10 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
         let available_seconds = (video_clip.duration - clip.in_point.as_f32()).max(0.0);
         let spb = self.get_seconds_per_beat();
-        if spb > 0.0 { Beats(available_seconds as f64 / spb as f64) } else { Beats::ZERO }
+        if spb > 0.0 {
+            Beats(available_seconds as f64 / spb as f64)
+        } else {
+            Beats::ZERO
+        }
     }
 }

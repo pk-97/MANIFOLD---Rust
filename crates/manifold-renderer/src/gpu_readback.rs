@@ -59,12 +59,12 @@ impl ReadbackRequest {
         let buffer_size = (bytes_per_row * height) as u64;
 
         let shared_buf = gpu.device.create_buffer_shared(buffer_size);
-        let mapped_ptr = shared_buf.mapped_ptr()
+        let mapped_ptr = shared_buf
+            .mapped_ptr()
             .expect("shared buffer must have mapped pointer") as *const u8;
 
-        gpu.native_enc.copy_texture_to_buffer(
-            texture, &shared_buf, width, height, bytes_per_row,
-        );
+        gpu.native_enc
+            .copy_texture_to_buffer(texture, &shared_buf, width, height, bytes_per_row);
 
         self.native_readback_buf = Some(shared_buf);
         self.native_shared_ptr = Some(mapped_ptr);

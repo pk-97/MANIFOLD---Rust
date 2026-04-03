@@ -1,5 +1,5 @@
-use manifold_core::{Beats, ClipId};
 use manifold_core::project::Project;
+use manifold_core::{Beats, ClipId};
 use manifold_editing::command::Command;
 
 // ──────────────────────────────────────
@@ -60,7 +60,9 @@ impl SetImportedAudioCommand {
         hash: Option<&str>,
         stem_paths: Option<&[String]>,
     ) {
-        let state = project.percussion_import.get_or_insert_with(Default::default);
+        let state = project
+            .percussion_import
+            .get_or_insert_with(Default::default);
         state.audio_path = path.map(|s| s.to_string());
         state.audio_start_beat = Beats::from_f32(start_beat);
         state.audio_hash = hash.map(|s| s.to_string());
@@ -120,12 +122,16 @@ impl SetAudioStartBeatCommand {
 
 impl Command for SetAudioStartBeatCommand {
     fn execute(&mut self, project: &mut Project) {
-        let state = project.percussion_import.get_or_insert_with(Default::default);
+        let state = project
+            .percussion_import
+            .get_or_insert_with(Default::default);
         state.audio_start_beat = Beats::from_f32(self.new_start_beat);
     }
 
     fn undo(&mut self, project: &mut Project) {
-        let state = project.percussion_import.get_or_insert_with(Default::default);
+        let state = project
+            .percussion_import
+            .get_or_insert_with(Default::default);
         state.audio_start_beat = Beats::from_f32(self.old_start_beat);
     }
 
@@ -145,7 +151,12 @@ pub struct MoveClipBeatCommand {
 }
 
 impl MoveClipBeatCommand {
-    pub fn new(clip_id: ClipId, layer_index: i32, old_start_beat: Beats, new_start_beat: Beats) -> Self {
+    pub fn new(
+        clip_id: ClipId,
+        layer_index: i32,
+        old_start_beat: Beats,
+        new_start_beat: Beats,
+    ) -> Self {
         Self {
             clip_id,
             layer_index,
@@ -156,19 +167,30 @@ impl MoveClipBeatCommand {
 
     fn apply(project: &mut Project, clip_id: &str, layer_index: i32, start_beat: Beats) {
         if let Some(layer) = project.timeline.layers.get_mut(layer_index as usize)
-            && let Some(clip) = layer.clips.iter_mut().find(|c| c.id == clip_id) {
-                clip.start_beat = start_beat;
-            }
+            && let Some(clip) = layer.clips.iter_mut().find(|c| c.id == clip_id)
+        {
+            clip.start_beat = start_beat;
+        }
     }
 }
 
 impl Command for MoveClipBeatCommand {
     fn execute(&mut self, project: &mut Project) {
-        Self::apply(project, &self.clip_id, self.layer_index, self.new_start_beat);
+        Self::apply(
+            project,
+            &self.clip_id,
+            self.layer_index,
+            self.new_start_beat,
+        );
     }
 
     fn undo(&mut self, project: &mut Project) {
-        Self::apply(project, &self.clip_id, self.layer_index, self.old_start_beat);
+        Self::apply(
+            project,
+            &self.clip_id,
+            self.layer_index,
+            self.old_start_beat,
+        );
     }
 
     fn description(&self) -> &str {

@@ -123,13 +123,25 @@ impl TransportStateCache {
 
             // Zoom label
             let ppb = ui.viewport.pixels_per_beat();
-            ui.header.set_zoom_label(tree, &format!("{:.0} px/beat", ppb));
+            ui.header
+                .set_zoom_label(tree, &format!("{:.0} px/beat", ppb));
         }
     }
 
-    fn update_playback_state(&mut self, ui: &mut UIRoot, content_state: &crate::content_state::ContentState, project: &manifold_core::project::Project) {
-        let state = if content_state.is_playing { PlaybackState::Playing } else { PlaybackState::Stopped };
-        if state == self.playback_state { return; }
+    fn update_playback_state(
+        &mut self,
+        ui: &mut UIRoot,
+        content_state: &crate::content_state::ContentState,
+        project: &manifold_core::project::Project,
+    ) {
+        let state = if content_state.is_playing {
+            PlaybackState::Playing
+        } else {
+            PlaybackState::Stopped
+        };
+        if state == self.playback_state {
+            return;
+        }
         self.playback_state = state;
 
         let tree = &mut ui.tree;
@@ -143,28 +155,37 @@ impl TransportStateCache {
         // Record state — disabled when OSC is authority
         let auth = project.settings.clock_authority;
         let rec_allowed = auth != ClockAuthority::Osc;
-        ui.transport.set_record_state(tree, content_state.is_recording && rec_allowed, rec_allowed);
+        ui.transport
+            .set_record_state(tree, content_state.is_recording && rec_allowed, rec_allowed);
     }
 
     fn update_bpm(&mut self, ui: &mut UIRoot, project: &manifold_core::project::Project) {
         {
             let bpm = project.settings.bpm.0;
-            if (bpm - self.bpm).abs() < 0.01 { return; }
+            if (bpm - self.bpm).abs() < 0.01 {
+                return;
+            }
             self.bpm = bpm;
-            ui.transport.set_bpm_text(&mut ui.tree, &format!("{:.1}", bpm));
+            ui.transport
+                .set_bpm_text(&mut ui.tree, &format!("{:.1}", bpm));
         }
     }
 
     fn update_dirty(&mut self, ui: &mut UIRoot, is_dirty: bool) {
-        if is_dirty == self.dirty { return; }
+        if is_dirty == self.dirty {
+            return;
+        }
         self.dirty = is_dirty;
-        ui.transport.set_save_text(&mut ui.tree, if is_dirty { "SAVE *" } else { "SAVE" });
+        ui.transport
+            .set_save_text(&mut ui.tree, if is_dirty { "SAVE *" } else { "SAVE" });
     }
 
     fn update_authority(&mut self, ui: &mut UIRoot, project: &manifold_core::project::Project) {
         {
             let auth = project.settings.clock_authority;
-            if auth == self.authority { return; }
+            if auth == self.authority {
+                return;
+            }
             self.authority = auth;
 
             let auth_color = match auth {
@@ -173,35 +194,73 @@ impl TransportStateCache {
                 ClockAuthority::MidiClock => color::MIDI_PURPLE,
                 ClockAuthority::Osc => color::ABLETON_LINK_BLUE,
             };
-            ui.transport.set_clock_authority(&mut ui.tree, auth.transport_label(), auth_color);
+            ui.transport
+                .set_clock_authority(&mut ui.tree, auth.transport_label(), auth_color);
         }
     }
 
-    fn update_link_state(&mut self, ui: &mut UIRoot, content_state: &crate::content_state::ContentState) {
+    fn update_link_state(
+        &mut self,
+        ui: &mut UIRoot,
+        content_state: &crate::content_state::ContentState,
+    ) {
         let enabled = content_state.link_enabled;
         let peers = content_state.link_peers;
 
-        if enabled == self.link_enabled && peers == self.link_peers { return; }
+        if enabled == self.link_enabled && peers == self.link_peers {
+            return;
+        }
         self.link_enabled = enabled;
         self.link_peers = peers;
 
         let tree = &mut ui.tree;
         if !enabled {
-            ui.transport.set_link_state(tree, false, color::STATUS_DOT_INACTIVE, "Off", color::TEXT_DIMMED_C32);
+            ui.transport.set_link_state(
+                tree,
+                false,
+                color::STATUS_DOT_INACTIVE,
+                "Off",
+                color::TEXT_DIMMED_C32,
+            );
         } else if peers > 0 {
-            let status = if peers == 1 { "1 peer".to_string() } else { format!("{} peers", peers) };
-            ui.transport.set_link_state(tree, true, color::STATUS_DOT_GREEN, &status, color::TEXT_WHITE_C32);
+            let status = if peers == 1 {
+                "1 peer".to_string()
+            } else {
+                format!("{} peers", peers)
+            };
+            ui.transport.set_link_state(
+                tree,
+                true,
+                color::STATUS_DOT_GREEN,
+                &status,
+                color::TEXT_WHITE_C32,
+            );
         } else {
-            ui.transport.set_link_state(tree, true, color::STATUS_DOT_YELLOW, "Listening", color::TEXT_DIMMED_C32);
+            ui.transport.set_link_state(
+                tree,
+                true,
+                color::STATUS_DOT_YELLOW,
+                "Listening",
+                color::TEXT_DIMMED_C32,
+            );
         }
     }
 
-    fn update_midi_clock_state(&mut self, ui: &mut UIRoot, content_state: &crate::content_state::ContentState) {
+    fn update_midi_clock_state(
+        &mut self,
+        ui: &mut UIRoot,
+        content_state: &crate::content_state::ContentState,
+    ) {
         let enabled = content_state.midi_clock_enabled;
         let receiving = content_state.midi_clock_receiving;
         let position = content_state.midi_clock_position_display.clone();
 
-        if enabled == self.clk_enabled && receiving == self.clk_receiving && position == self.clk_position { return; }
+        if enabled == self.clk_enabled
+            && receiving == self.clk_receiving
+            && position == self.clk_position
+        {
+            return;
+        }
         self.clk_enabled = enabled;
         self.clk_receiving = receiving;
         self.clk_position = position.clone();
@@ -214,27 +273,71 @@ impl TransportStateCache {
 
         let tree = &mut ui.tree;
         if !enabled {
-            ui.transport.set_clk_state(tree, false, device_text, color::STATUS_DOT_INACTIVE, "Off", color::TEXT_DIMMED_C32);
+            ui.transport.set_clk_state(
+                tree,
+                false,
+                device_text,
+                color::STATUS_DOT_INACTIVE,
+                "Off",
+                color::TEXT_DIMMED_C32,
+            );
         } else if receiving {
-            let display = if position.is_empty() { "Receiving".to_string() } else { position };
-            ui.transport.set_clk_state(tree, true, device_text, color::STATUS_DOT_GREEN, &display, color::TEXT_WHITE_C32);
+            let display = if position.is_empty() {
+                "Receiving".to_string()
+            } else {
+                position
+            };
+            ui.transport.set_clk_state(
+                tree,
+                true,
+                device_text,
+                color::STATUS_DOT_GREEN,
+                &display,
+                color::TEXT_WHITE_C32,
+            );
         } else {
-            ui.transport.set_clk_state(tree, true, device_text, color::STATUS_DOT_YELLOW, "Waiting", color::TEXT_DIMMED_C32);
+            ui.transport.set_clk_state(
+                tree,
+                true,
+                device_text,
+                color::STATUS_DOT_YELLOW,
+                "Waiting",
+                color::TEXT_DIMMED_C32,
+            );
         }
     }
 
-    fn update_sync_output_state(&mut self, ui: &mut UIRoot, content_state: &crate::content_state::ContentState, project: &manifold_core::project::Project) {
+    fn update_sync_output_state(
+        &mut self,
+        ui: &mut UIRoot,
+        content_state: &crate::content_state::ContentState,
+        project: &manifold_core::project::Project,
+    ) {
         let enabled = content_state.osc_sender_enabled;
-        if enabled == self.sync_enabled { return; }
+        if enabled == self.sync_enabled {
+            return;
+        }
         self.sync_enabled = enabled;
 
         let tree = &mut ui.tree;
         if !enabled {
-            ui.transport.set_sync_state(tree, false, color::STATUS_DOT_INACTIVE, "Off", color::TEXT_DIMMED_C32);
+            ui.transport.set_sync_state(
+                tree,
+                false,
+                color::STATUS_DOT_INACTIVE,
+                "Off",
+                color::TEXT_DIMMED_C32,
+            );
         } else {
             let port = project.settings.osc_send_port;
             let status = format!(":{}", port);
-            ui.transport.set_sync_state(tree, true, color::STATUS_DOT_GREEN, &status, color::TEXT_WHITE_C32);
+            ui.transport.set_sync_state(
+                tree,
+                true,
+                color::STATUS_DOT_GREEN,
+                &status,
+                color::TEXT_WHITE_C32,
+            );
         }
     }
 
@@ -252,5 +355,7 @@ impl TransportStateCache {
 }
 
 impl Default for TransportStateCache {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }

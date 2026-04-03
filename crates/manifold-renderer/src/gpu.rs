@@ -6,7 +6,9 @@ pub struct GpuContext {
 
 impl GpuContext {
     pub fn new() -> Self {
-        Self { device: manifold_gpu::GpuDevice::new() }
+        Self {
+            device: manifold_gpu::GpuDevice::new(),
+        }
     }
 }
 

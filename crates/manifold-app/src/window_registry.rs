@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[allow(dead_code)]
 /// Role of a window in the application.
@@ -58,13 +58,15 @@ impl WindowRegistry {
 
     /// Iterate windows in creation order.
     pub fn iter(&self) -> impl Iterator<Item = (&winit::window::WindowId, &WindowState)> {
-        self.creation_order.iter().filter_map(move |id| {
-            self.windows.get(id).map(|state| (id, state))
-        })
+        self.creation_order
+            .iter()
+            .filter_map(move |id| self.windows.get(id).map(|state| (id, state)))
     }
 
     /// Iterate mutable references in creation order.
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&winit::window::WindowId, &mut WindowState)> {
+    pub fn iter_mut(
+        &mut self,
+    ) -> impl Iterator<Item = (&winit::window::WindowId, &mut WindowState)> {
         let _order = &self.creation_order;
         let windows = &mut self.windows;
         // Can't easily do ordered mutable iteration with HashMap.
@@ -74,9 +76,9 @@ impl WindowRegistry {
 
     /// Get all Arc<Window> references (for request_redraw).
     pub fn window_arcs(&self) -> impl Iterator<Item = &Arc<winit::window::Window>> {
-        self.creation_order.iter().filter_map(move |id| {
-            self.windows.get(id).map(|s| &s.window)
-        })
+        self.creation_order
+            .iter()
+            .filter_map(move |id| self.windows.get(id).map(|s| &s.window))
     }
 
     pub fn len(&self) -> usize {
@@ -94,6 +96,8 @@ impl WindowRegistry {
     /// True if any Output-role window is currently open.
     /// Matches Unity's `host.IsMonitorOutputActive`.
     pub fn has_output_window(&self) -> bool {
-        self.windows.values().any(|s| matches!(&s.role, WindowRole::Output { .. }))
+        self.windows
+            .values()
+            .any(|s| matches!(&s.role, WindowRole::Output { .. }))
     }
 }

@@ -1,11 +1,11 @@
-use manifold_core::EffectTypeId;
-use manifold_core::effects::{EffectGroup, EffectInstance};
-use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
 use crate::effect::{EffectContext, find_chain_param};
 use crate::effect_registry::EffectRegistry;
 use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use crate::wet_dry_lerp::WetDryLerpPipeline;
+use manifold_core::EffectTypeId;
+use manifold_core::effects::{EffectGroup, EffectInstance};
+use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
 
 /// Dispatches a chain of effects through the registry, handling group wet/dry.
 ///
@@ -126,9 +126,9 @@ impl EffectChain {
         wet_dry_lerp: Option<&WetDryLerpPipeline>,
     ) -> Option<&'a GpuTexture> {
         // Quick scan: any enabled effects with registered processors?
-        let has_enabled = effects.iter().any(|fx| {
-            fx.enabled && registry.get_mut(fx.effect_type()).is_some()
-        });
+        let has_enabled = effects
+            .iter()
+            .any(|fx| fx.enabled && registry.get_mut(fx.effect_type()).is_some());
         if !has_enabled {
             return None;
         }
@@ -139,12 +139,7 @@ impl EffectChain {
         // Precompute cross-chain params for effects that need them.
         // Unity ref: EffectContext.FindChainParam() — VoronoiPrism reads EdgeStretch width.
         let chain_ctx = EffectContext {
-            edge_stretch_width: find_chain_param(
-                effects,
-                &EffectTypeId::EDGE_STRETCH,
-                1,
-                0.5625,
-            ),
+            edge_stretch_width: find_chain_param(effects, &EffectTypeId::EDGE_STRETCH, 1, 0.5625),
             ..*ctx
         };
 

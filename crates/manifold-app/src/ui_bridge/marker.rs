@@ -1,14 +1,14 @@
 //! Marker-related dispatch: click, drag, delete, rename.
-use manifold_core::MarkerId;
 use manifold_core::Beats;
+use manifold_core::MarkerId;
 use manifold_core::project::Project;
 use manifold_editing::commands::marker::{DeleteMarkerCommand, MoveMarkerCommand};
 use manifold_ui::PanelAction;
 
+use super::DispatchResult;
 use crate::app::SelectionState;
 use crate::content_command::ContentCommand;
 use crate::ui_root::UIRoot;
-use super::DispatchResult;
 
 pub(super) fn dispatch_marker(
     action: &PanelAction,
@@ -31,14 +31,14 @@ pub(super) fn dispatch_marker(
         }
 
         // ── DoubleClick: intercepted in app_render.rs for text input
-        PanelAction::MarkerDoubleClicked(_) => {
-            DispatchResult::handled()
-        }
+        PanelAction::MarkerDoubleClicked(_) => DispatchResult::handled(),
 
         // ── Drag start: snapshot beat for undo ─────────────────
         PanelAction::MarkerDragStarted(marker_id_str) => {
             let marker_id = MarkerId::new(marker_id_str.as_str());
-            *drag_snapshot = project.timeline.find_marker(&marker_id)
+            *drag_snapshot = project
+                .timeline
+                .find_marker(&marker_id)
                 .map(|m| m.beat.as_f32());
             // Select the marker being dragged
             selection.select_marker(marker_id);
@@ -69,7 +69,9 @@ pub(super) fn dispatch_marker(
 
                     let mut cmd: Box<dyn manifold_editing::command::Command + Send> =
                         Box::new(MoveMarkerCommand::new(
-                            marker_id, Beats::from_f32(old_beat), Beats::from_f32(*final_beat),
+                            marker_id,
+                            Beats::from_f32(old_beat),
+                            Beats::from_f32(*final_beat),
                         ));
                     cmd.execute(project);
                     ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
@@ -86,9 +88,10 @@ pub(super) fn dispatch_marker(
 
         // ── Delete selected markers ────────────────────────────
         PanelAction::DeleteSelectedMarkers => {
-            let ids: Vec<MarkerId> =
-                selection.selected_marker_ids.iter().cloned().collect();
-            if ids.is_empty() { return DispatchResult::handled(); }
+            let ids: Vec<MarkerId> = selection.selected_marker_ids.iter().cloned().collect();
+            if ids.is_empty() {
+                return DispatchResult::handled();
+            }
 
             let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
             for id in &ids {

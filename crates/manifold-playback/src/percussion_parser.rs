@@ -28,8 +28,8 @@ impl PercussionAnalysisParser for JsonPercussionAnalysisParser {
 
         let normalized = normalize_root(raw_json);
 
-        let root: RootDto = serde_json::from_str(&normalized)
-            .map_err(|ex| format!("JSON parse error: {}", ex))?;
+        let root: RootDto =
+            serde_json::from_str(&normalized).map_err(|ex| format!("JSON parse error: {}", ex))?;
 
         let source_events = if !root.events.is_empty() {
             &root.events[..]
@@ -112,8 +112,7 @@ fn try_convert_event(dto: &EventDto) -> Option<PercussionEvent> {
         return None;
     }
 
-    let mut confidence =
-        first_finite_non_negative(&[dto.confidence, dto.strength, dto.velocity]);
+    let mut confidence = first_finite_non_negative(&[dto.confidence, dto.strength, dto.velocity]);
     if !confidence.is_finite() {
         confidence = 1.0;
     }
@@ -282,17 +281,13 @@ fn parse_beat_grid(root: &RootDto) -> (Option<PercussionBeatGrid>, f32, f32) {
         return (None, f32::NAN, f32::NAN);
     }
 
-    let downbeat_source =
-        first_non_empty_int_array(&[&dto.downbeat_indices, &dto.downbeats]);
+    let downbeat_source = first_non_empty_int_array(&[&dto.downbeat_indices, &dto.downbeats]);
     let downbeat_indices = convert_non_negative(downbeat_source);
 
     let grid_bpm = first_finite_non_negative(&[dto.bpm_derived, dto.bpm, dto.tempo]);
     let grid_confidence =
         first_finite_non_negative(&[dto.confidence, dto.bpm_confidence, dto.tempo_confidence]);
-    let mode = {
-        
-        first_non_empty(&[dto.mode.as_deref().unwrap_or(""), "beat_times"])
-    };
+    let mode = { first_non_empty(&[dto.mode.as_deref().unwrap_or(""), "beat_times"]) };
     let onset_to_peak = first_finite_non_negative(&[dto.onset_to_peak_seconds]);
 
     let mut beat_grid = PercussionBeatGrid::new(
@@ -348,13 +343,21 @@ fn convert_non_negative(values: Option<&[i32]>) -> Vec<i32> {
 // ─── FirstNonEmptyArray (float overload) ───
 
 fn first_non_empty_float_array<'a>(arrays: &[&'a [f32]]) -> Option<&'a [f32]> {
-    arrays.iter().find(|&&arr| !arr.is_empty()).copied().map(|v| v as _)
+    arrays
+        .iter()
+        .find(|&&arr| !arr.is_empty())
+        .copied()
+        .map(|v| v as _)
 }
 
 // ─── FirstNonEmptyArray (int overload) ───
 
 fn first_non_empty_int_array<'a>(arrays: &[&'a [i32]]) -> Option<&'a [i32]> {
-    arrays.iter().find(|&&arr| !arr.is_empty()).copied().map(|v| v as _)
+    arrays
+        .iter()
+        .find(|&&arr| !arr.is_empty())
+        .copied()
+        .map(|v| v as _)
 }
 
 // ─── DTOs ───
@@ -508,7 +511,10 @@ mod tests {
         assert_eq!(parse_trigger_type("hh"), PercussionTriggerType::Hat);
         assert_eq!(parse_trigger_type("cymbal"), PercussionTriggerType::Hat);
         assert_eq!(parse_trigger_type("perc"), PercussionTriggerType::Perc);
-        assert_eq!(parse_trigger_type("percussion"), PercussionTriggerType::Perc);
+        assert_eq!(
+            parse_trigger_type("percussion"),
+            PercussionTriggerType::Perc
+        );
         assert_eq!(parse_trigger_type("tom"), PercussionTriggerType::Perc);
         assert_eq!(parse_trigger_type("shaker"), PercussionTriggerType::Perc);
         assert_eq!(parse_trigger_type("rim"), PercussionTriggerType::Perc);
@@ -562,10 +568,7 @@ mod tests {
             parse_trigger_type("snare_roll"),
             PercussionTriggerType::Snare
         );
-        assert_eq!(
-            parse_trigger_type("open_hihat"),
-            PercussionTriggerType::Hat
-        );
+        assert_eq!(parse_trigger_type("open_hihat"), PercussionTriggerType::Hat);
         assert_eq!(
             parse_trigger_type("heavy_bass"),
             PercussionTriggerType::Bass
@@ -592,10 +595,7 @@ mod tests {
 
     #[test]
     fn test_first_finite_non_negative() {
-        assert_eq!(
-            first_finite_non_negative(&[f32::NAN, -1.0, 0.5]),
-            0.5
-        );
+        assert_eq!(first_finite_non_negative(&[f32::NAN, -1.0, 0.5]), 0.5);
         assert!(first_finite_non_negative(&[f32::NAN, f32::NAN]).is_nan());
         assert_eq!(first_finite_non_negative(&[0.0, 1.0]), 0.0);
     }
@@ -654,9 +654,11 @@ mod tests {
         let json = r#"{"trackId": "t"}"#;
         let result = parser.try_parse(json);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("No events, beat grid, or BPM data found"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("No events, beat grid, or BPM data found")
+        );
     }
 
     #[test]

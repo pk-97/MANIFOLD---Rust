@@ -1,8 +1,8 @@
+use crate::command::Command;
 use manifold_core::id::MarkerId;
 use manifold_core::marker::TimelineMarker;
 use manifold_core::project::Project;
 use manifold_core::units::Beats;
-use crate::command::Command;
 
 // ── Add Marker ──────────────────────────────────────────────────
 
@@ -26,7 +26,9 @@ impl Command for AddMarkerCommand {
         project.timeline.remove_marker(&self.marker.id);
     }
 
-    fn description(&self) -> &str { "Add Marker" }
+    fn description(&self) -> &str {
+        "Add Marker"
+    }
 }
 
 // ── Delete Marker ───────────────────────────────────────────────
@@ -39,7 +41,10 @@ pub struct DeleteMarkerCommand {
 
 impl DeleteMarkerCommand {
     pub fn new(marker_id: MarkerId) -> Self {
-        Self { marker_id, removed: None }
+        Self {
+            marker_id,
+            removed: None,
+        }
     }
 }
 
@@ -54,7 +59,9 @@ impl Command for DeleteMarkerCommand {
         }
     }
 
-    fn description(&self) -> &str { "Delete Marker" }
+    fn description(&self) -> &str {
+        "Delete Marker"
+    }
 }
 
 // ── Move Marker ─────────────────────────────────────────────────
@@ -68,7 +75,11 @@ pub struct MoveMarkerCommand {
 
 impl MoveMarkerCommand {
     pub fn new(marker_id: MarkerId, old_beat: Beats, new_beat: Beats) -> Self {
-        Self { marker_id, old_beat, new_beat }
+        Self {
+            marker_id,
+            old_beat,
+            new_beat,
+        }
     }
 }
 
@@ -87,7 +98,9 @@ impl Command for MoveMarkerCommand {
         project.timeline.sort_markers();
     }
 
-    fn description(&self) -> &str { "Move Marker" }
+    fn description(&self) -> &str {
+        "Move Marker"
+    }
 }
 
 // ── Rename Marker ───────────────────────────────────────────────
@@ -101,7 +114,11 @@ pub struct RenameMarkerCommand {
 
 impl RenameMarkerCommand {
     pub fn new(marker_id: MarkerId, old_name: String, new_name: String) -> Self {
-        Self { marker_id, old_name, new_name }
+        Self {
+            marker_id,
+            old_name,
+            new_name,
+        }
     }
 }
 
@@ -118,5 +135,7 @@ impl Command for RenameMarkerCommand {
         }
     }
 
-    fn description(&self) -> &str { "Rename Marker" }
+    fn description(&self) -> &str {
+        "Rename Marker"
+    }
 }

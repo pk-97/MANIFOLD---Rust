@@ -4,11 +4,11 @@
 //! project data version, and other engine state without accessing the
 //! PlaybackEngine or EditingService directly.
 
-use std::sync::Arc;
-use manifold_core::{Beats, Bpm, Seconds};
 use manifold_core::project::Project;
 use manifold_core::types::{ClockAuthority, LayerType};
+use manifold_core::{Beats, Bpm, Seconds};
 use manifold_playback::stem_audio::STEM_COUNT;
+use std::sync::Arc;
 
 /// Sent once when an export finishes.
 #[derive(Clone, Debug)]
@@ -120,6 +120,8 @@ pub struct ContentState {
 /// avoiding a full `Project::clone()` on every modulation frame.
 #[derive(Clone)]
 pub struct ModulationSnapshot {
+    /// Macro slot values, indexed by macro slot.
+    pub macro_values: Vec<f32>,
     /// Master effect param values, indexed by effect position.
     pub master_params: Vec<Vec<f32>>,
     /// Per-layer modulation data, indexed by layer position.
@@ -138,13 +140,29 @@ impl ModulationSnapshot {
     /// Capture modulated param values from the project. Only clones small
     /// `Vec<f32>` buffers — no strings, no clips, no video library.
     pub fn capture(project: &Project) -> Self {
-        let master_params = project.settings.master_effects.iter()
+        let macro_values = project
+            .settings
+            .macro_bank
+            .slots
+            .iter()
+            .map(|slot| slot.value)
+            .collect();
+
+        let master_params = project
+            .settings
+            .master_effects
+            .iter()
             .map(|fx| fx.param_values.clone())
             .collect();
 
-        let layers = project.timeline.layers.iter()
+        let layers = project
+            .timeline
+            .layers
+            .iter()
             .map(|layer| {
-                let effect_params = layer.effects.as_ref()
+                let effect_params = layer
+                    .effects
+                    .as_ref()
                     .map(|effects| effects.iter().map(|fx| fx.param_values.clone()).collect())
                     .unwrap_or_default();
 
@@ -161,12 +179,22 @@ impl ModulationSnapshot {
             })
             .collect();
 
-        Self { master_params, layers }
+        Self {
+            macro_values,
+            master_params,
+            layers,
+        }
     }
 
     /// Apply modulated values to a project in-place. Overwrites only
     /// `param_values` — no structural changes, no allocations if lengths match.
     pub fn apply(&self, project: &mut Project) {
+        for (i, &value) in self.macro_values.iter().enumerate() {
+            if let Some(slot) = project.settings.macro_bank.slots.get_mut(i) {
+                slot.value = value;
+            }
+        }
+
         // Master effects
         for (i, params) in self.master_params.iter().enumerate() {
             if let Some(fx) = project.settings.master_effects.get_mut(i)

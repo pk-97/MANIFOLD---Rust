@@ -1,8 +1,8 @@
-use manifold_core::{Beats, ClipId, LayerId};
+use ahash::AHashMap;
 use manifold_core::clip::TimelineClip;
 use manifold_core::project::Project;
 use manifold_core::timeline::Timeline;
-use ahash::AHashMap;
+use manifold_core::{Beats, ClipId, LayerId};
 
 /// Runtime active-clip window for timeline playback.
 /// Maintains an incremental time-domain set of active clips and advances via
@@ -151,11 +151,13 @@ impl ActiveTimelineClipWindow {
         }
 
         let id_map = &self.layer_id_to_index;
-        self.clips_by_start.sort_by(|a, b| compare_start_order(a, b, id_map));
+        self.clips_by_start
+            .sort_by(|a, b| compare_start_order(a, b, id_map));
 
         self.clips_by_end.clear();
         self.clips_by_end.extend_from_slice(&self.clips_by_start);
-        self.clips_by_end.sort_by(|a, b| compare_end_order(a, b, id_map));
+        self.clips_by_end
+            .sort_by(|a, b| compare_end_order(a, b, id_map));
 
         self.active_by_id.clear();
         self.active_by_id_values.clear();
@@ -209,7 +211,8 @@ impl ActiveTimelineClipWindow {
             }
             if clip.end_beat() > beat {
                 let clip_cloned = clip.clone();
-                self.active_by_id.insert(clip_cloned.id.clone(), clip_cloned.clone());
+                self.active_by_id
+                    .insert(clip_cloned.id.clone(), clip_cloned.clone());
                 // PERF: keep parallel iteration list in sync (see field comment)
                 self.active_by_id_values.push(clip_cloned);
             }
@@ -228,7 +231,11 @@ impl ActiveTimelineClipWindow {
             }
             self.active_by_id.remove(&clip_id);
             // PERF: keep parallel iteration list in sync (see field comment)
-            if let Some(pos) = self.active_by_id_values.iter().rposition(|c| c.id == clip_id) {
+            if let Some(pos) = self
+                .active_by_id_values
+                .iter()
+                .rposition(|c| c.id == clip_id)
+            {
                 self.active_by_id_values.remove(pos);
             }
             self.end_cursor += 1;
@@ -237,7 +244,12 @@ impl ActiveTimelineClipWindow {
 
     /// Collect visible (non-muted, solo-respecting) clips into `results`.
     /// Unity ActiveTimelineClipWindow.CollectVisible (lines 224-249).
-    fn collect_visible(&mut self, timeline: &Timeline, beat: Beats, results: &mut Vec<TimelineClip>) {
+    fn collect_visible(
+        &mut self,
+        timeline: &Timeline,
+        beat: Beats,
+        results: &mut Vec<TimelineClip>,
+    ) {
         self.build_layer_visibility_cache(timeline);
 
         self.visible_scratch.clear();
@@ -260,7 +272,8 @@ impl ActiveTimelineClipWindow {
         }
 
         let id_map = &self.layer_id_to_index;
-        self.visible_scratch.sort_by(|a, b| compare_visible_order(a, b, id_map));
+        self.visible_scratch
+            .sort_by(|a, b| compare_visible_order(a, b, id_map));
         results.extend_from_slice(&self.visible_scratch);
     }
 
@@ -300,9 +313,7 @@ impl ActiveTimelineClipWindow {
                         .map(|pi| &layers[pi]);
 
                     if parent.is_some_and(|p| p.is_muted)
-                        || (any_solo
-                            && !layer.is_solo
-                            && !parent.is_some_and(|p| p.is_solo))
+                        || (any_solo && !layer.is_solo && !parent.is_some_and(|p| p.is_solo))
                     {
                         visible = false;
                     }
@@ -361,7 +372,11 @@ fn lower_bound_end(sorted_by_end: &[TimelineClip], beat: Beats) -> usize {
 
 /// Sort order: StartBeat → EndBeat → LayerIndex → Id.
 /// Unity ActiveTimelineClipWindow.CompareStartOrder (lines 352-365).
-fn compare_start_order(a: &TimelineClip, b: &TimelineClip, id_map: &AHashMap<LayerId, usize>) -> std::cmp::Ordering {
+fn compare_start_order(
+    a: &TimelineClip,
+    b: &TimelineClip,
+    id_map: &AHashMap<LayerId, usize>,
+) -> std::cmp::Ordering {
     let ai = id_map.get(&a.layer_id).copied().unwrap_or(0);
     let bi = id_map.get(&b.layer_id).copied().unwrap_or(0);
     a.start_beat
@@ -378,7 +393,11 @@ fn compare_start_order(a: &TimelineClip, b: &TimelineClip, id_map: &AHashMap<Lay
 
 /// Sort order: EndBeat → StartBeat → LayerIndex → Id.
 /// Unity ActiveTimelineClipWindow.CompareEndOrder (lines 367-380).
-fn compare_end_order(a: &TimelineClip, b: &TimelineClip, id_map: &AHashMap<LayerId, usize>) -> std::cmp::Ordering {
+fn compare_end_order(
+    a: &TimelineClip,
+    b: &TimelineClip,
+    id_map: &AHashMap<LayerId, usize>,
+) -> std::cmp::Ordering {
     let ai = id_map.get(&a.layer_id).copied().unwrap_or(0);
     let bi = id_map.get(&b.layer_id).copied().unwrap_or(0);
     a.end_beat()
@@ -395,7 +414,11 @@ fn compare_end_order(a: &TimelineClip, b: &TimelineClip, id_map: &AHashMap<Layer
 
 /// Sort order: LayerIndex → StartBeat → EndBeat → Id.
 /// Unity ActiveTimelineClipWindow.CompareVisibleOrder (lines 382-395).
-fn compare_visible_order(a: &TimelineClip, b: &TimelineClip, id_map: &AHashMap<LayerId, usize>) -> std::cmp::Ordering {
+fn compare_visible_order(
+    a: &TimelineClip,
+    b: &TimelineClip,
+    id_map: &AHashMap<LayerId, usize>,
+) -> std::cmp::Ordering {
     let ai = id_map.get(&a.layer_id).copied().unwrap_or(0);
     let bi = id_map.get(&b.layer_id).copied().unwrap_or(0);
     ai.cmp(&bi)
@@ -422,7 +445,12 @@ mod tests {
 
     // ── Test helpers ─────────────────────────────────────────────────────────
 
-    fn make_clip(id: &str, _layer_index: i32, start_beat: f32, duration_beats: f32) -> TimelineClip {
+    fn make_clip(
+        id: &str,
+        _layer_index: i32,
+        start_beat: f32,
+        duration_beats: f32,
+    ) -> TimelineClip {
         TimelineClip {
             id: ClipId::new(id),
             start_beat: Beats::from_f32(start_beat),
@@ -456,10 +484,7 @@ mod tests {
     #[test]
     fn test_basic_forward_advance() {
         // Clip A: beats 0-4, Clip B: beats 2-6.
-        let clips = vec![
-            make_clip("A", 0, 0.0, 4.0),
-            make_clip("B", 0, 2.0, 4.0),
-        ];
+        let clips = vec![make_clip("A", 0, 0.0, 4.0), make_clip("B", 0, 2.0, 4.0)];
         let project = make_project(vec![make_video_layer(0, clips)]);
         let mut window = ActiveTimelineClipWindow::new();
         let mut results = Vec::new();
@@ -468,7 +493,11 @@ mod tests {
         window.get_active_clips(&project, Beats(1.0), &mut results);
         let ids: Vec<&str> = results.iter().map(|c| c.id.as_str()).collect();
         assert!(ids.contains(&"A"), "expected A at beat 1.0, got {:?}", ids);
-        assert!(!ids.contains(&"B"), "expected no B at beat 1.0, got {:?}", ids);
+        assert!(
+            !ids.contains(&"B"),
+            "expected no B at beat 1.0, got {:?}",
+            ids
+        );
 
         // At beat 3.0: A and B active (forward advance from 1.0)
         window.get_active_clips(&project, Beats(3.0), &mut results);
@@ -479,12 +508,20 @@ mod tests {
         // At beat 5.0: only B active (A ended at 4.0)
         window.get_active_clips(&project, Beats(5.0), &mut results);
         let ids: Vec<&str> = results.iter().map(|c| c.id.as_str()).collect();
-        assert!(!ids.contains(&"A"), "expected no A at beat 5.0, got {:?}", ids);
+        assert!(
+            !ids.contains(&"A"),
+            "expected no A at beat 5.0, got {:?}",
+            ids
+        );
         assert!(ids.contains(&"B"), "expected B at beat 5.0, got {:?}", ids);
 
         // At beat 7.0: nothing active
         window.get_active_clips(&project, Beats(7.0), &mut results);
-        assert!(results.is_empty(), "expected empty at beat 7.0, got {:?}", results);
+        assert!(
+            results.is_empty(),
+            "expected empty at beat 7.0, got {:?}",
+            results
+        );
     }
 
     #[test]
@@ -501,16 +538,17 @@ mod tests {
         // Jitter within epsilon — must NOT trigger rebuild (clip still active)
         let jitter = Beats(5.0) - BACKWARD_EPSILON * 0.5_f64;
         window.get_active_clips(&project, jitter, &mut results);
-        assert_eq!(results.len(), 1, "clip should still be active after tiny backward jitter");
+        assert_eq!(
+            results.len(),
+            1,
+            "clip should still be active after tiny backward jitter"
+        );
     }
 
     #[test]
     fn test_backward_seek_rebuilds() {
         // Going backward by more than epsilon must trigger rebuild.
-        let clips = vec![
-            make_clip("A", 0, 0.0, 4.0),
-            make_clip("B", 0, 8.0, 4.0),
-        ];
+        let clips = vec![make_clip("A", 0, 0.0, 4.0), make_clip("B", 0, 8.0, 4.0)];
         let project = make_project(vec![make_video_layer(0, clips)]);
         let mut window = ActiveTimelineClipWindow::new();
         let mut results = Vec::new();
@@ -524,8 +562,16 @@ mod tests {
         // Seek backward to beat 1 — must rebuild, A should be active, B not
         window.get_active_clips(&project, Beats(1.0), &mut results);
         let ids: Vec<&str> = results.iter().map(|c| c.id.as_str()).collect();
-        assert!(ids.contains(&"A"), "expected A after backward seek, got {:?}", ids);
-        assert!(!ids.contains(&"B"), "expected no B after backward seek, got {:?}", ids);
+        assert!(
+            ids.contains(&"A"),
+            "expected A after backward seek, got {:?}",
+            ids
+        );
+        assert!(
+            !ids.contains(&"B"),
+            "expected no B after backward seek, got {:?}",
+            ids
+        );
     }
 
     #[test]
@@ -544,8 +590,16 @@ mod tests {
 
         window.get_active_clips(&project, Beats(2.0), &mut results);
         let ids: Vec<&str> = results.iter().map(|c| c.id.as_str()).collect();
-        assert!(!ids.contains(&"A"), "non-solo layer clip A should be hidden, got {:?}", ids);
-        assert!(ids.contains(&"B"), "solo layer clip B should be visible, got {:?}", ids);
+        assert!(
+            !ids.contains(&"A"),
+            "non-solo layer clip A should be hidden, got {:?}",
+            ids
+        );
+        assert!(
+            ids.contains(&"B"),
+            "solo layer clip B should be visible, got {:?}",
+            ids
+        );
     }
 
     #[test]
@@ -590,7 +644,11 @@ mod tests {
 
         // Visible order: LayerIndex → StartBeat → EndBeat → Id (lexicographic)
         let ids: Vec<&str> = results.iter().map(|c| c.id.as_str()).collect();
-        assert_eq!(ids, vec!["aaa", "mmm", "zzz"], "clips must be sorted deterministically by id");
+        assert_eq!(
+            ids,
+            vec!["aaa", "mmm", "zzz"],
+            "clips must be sorted deterministically by id"
+        );
     }
 
     #[test]
@@ -610,7 +668,11 @@ mod tests {
         let project_v2 = make_project(vec![make_video_layer(0, vec![clip_a2, clip_b])]);
 
         window.get_active_clips(&project_v2, Beats(2.0), &mut results);
-        assert_eq!(results.len(), 2, "after adding a clip, both clips must be active");
+        assert_eq!(
+            results.len(),
+            2,
+            "after adding a clip, both clips must be active"
+        );
         let ids: Vec<&str> = results.iter().map(|c| c.id.as_str()).collect();
         assert!(ids.contains(&"A"));
         assert!(ids.contains(&"B"));

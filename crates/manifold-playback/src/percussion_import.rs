@@ -1,23 +1,23 @@
-use manifold_core::{Beats, Seconds, ClipId};
 use manifold_core::units::Bpm;
+use manifold_core::{Beats, ClipId, Seconds};
 // Port of Unity PercussionImportService.cs (405 lines).
 // Application-layer service for applying percussion import results to the timeline.
 // Owns layer resolution, clip creation, BPM auto-apply, and undo recording.
 
 use std::collections::HashSet;
 
+use manifold_core::GeneratorTypeId;
+use manifold_core::clip::TimelineClip;
+use manifold_core::layer::Layer;
 use manifold_core::math::{BeatQuantizer, MathUtils};
 use manifold_core::percussion::ImportedPercussionClipPlacement;
 use manifold_core::percussion_analysis::{
-    PercussionAnalysisData, PercussionClipBinding, PercussionImportOptions, PercussionPlacementPlan,
-    PercussionTriggerType,
+    PercussionAnalysisData, PercussionClipBinding, PercussionImportOptions,
+    PercussionPlacementPlan, PercussionTriggerType,
 };
 use manifold_core::percussion_settings::PercussionPipelineSettings;
-use manifold_core::clip::TimelineClip;
-use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::types::{LayerType, TempoPointSource};
-use manifold_core::GeneratorTypeId;
 
 use manifold_editing::command::{Command, CompositeCommand};
 use manifold_editing::commands::clip::{AddClipCommand, DeleteClipCommand};
@@ -44,7 +44,6 @@ pub struct PercussionImportResult {
     pub success: bool,
     pub undo_command: Option<Box<dyn Command>>,
 }
-
 
 // ─── PercussionImportService ───
 
@@ -147,19 +146,20 @@ impl PercussionImportService {
             if !trigger_layer_name.is_empty()
                 && let Some(target_layer) =
                     project.timeline.layers.get_mut(target_layer_index as usize)
-                    && target_layer.name != trigger_layer_name {
-                        target_layer.name = trigger_layer_name.clone();
-                    }
+                && target_layer.name != trigger_layer_name
+            {
+                target_layer.name = trigger_layer_name.clone();
+            }
 
-            let target_layer_lid = project.timeline.layers.get(target_layer_index as usize)
+            let target_layer_lid = project
+                .timeline
+                .layers
+                .get(target_layer_index as usize)
                 .map(|l| l.layer_id.clone())
                 .unwrap_or_default();
 
             let timeline_clip: TimelineClip = if placement.is_generator() {
-                TimelineClip::new_generator(
-                    placement.start_beat,
-                    placement.duration_beats,
-                )
+                TimelineClip::new_generator(placement.start_beat, placement.duration_beats)
             } else {
                 let video_clip_id = match &placement.video_clip_id {
                     Some(id) if !id.is_empty() => id.clone(),
@@ -180,10 +180,11 @@ impl PercussionImportService {
             // Enforce non-overlap: trim any existing clip that extends past this clip's start,
             // and remove any fully-contained clips.
             {
-                let target_layer = match project.timeline.layers.get_mut(target_layer_index as usize) {
-                    Some(l) => l,
-                    None => continue,
-                };
+                let target_layer =
+                    match project.timeline.layers.get_mut(target_layer_index as usize) {
+                        Some(l) => l,
+                        None => continue,
+                    };
                 let clip_start = timeline_clip.start_beat;
                 let clip_end = timeline_clip.end_beat();
 
@@ -214,7 +215,8 @@ impl PercussionImportService {
             let clip_id = timeline_clip.id.clone();
             let add_cmd = AddClipCommand::new(timeline_clip.clone(), target_layer_lid.clone());
 
-            if let Some(target_layer) = project.timeline.layers.get_mut(target_layer_index as usize) {
+            if let Some(target_layer) = project.timeline.layers.get_mut(target_layer_index as usize)
+            {
                 target_layer.add_clip(timeline_clip);
             }
             commands.push(Box::new(add_cmd));
@@ -251,7 +253,9 @@ impl PercussionImportService {
         result.undo_command = Some(command);
 
         // Update import provenance on the project.
-        let perc_import = project.percussion_import.get_or_insert_with(Default::default);
+        let perc_import = project
+            .percussion_import
+            .get_or_insert_with(Default::default);
         perc_import.clip_placements.clear();
         perc_import.clip_placements.extend(import_provenance);
         result.success = true;
@@ -400,11 +404,7 @@ impl PercussionImportService {
         idx as i32
     }
 
-    fn resolve_video_layer_index(
-        &self,
-        project: &mut Project,
-        preferred_index: i32,
-    ) -> i32 {
+    fn resolve_video_layer_index(&self, project: &mut Project, preferred_index: i32) -> i32 {
         if preferred_index >= 0 && (preferred_index as usize) < project.timeline.layers.len() {
             let preferred = &project.timeline.layers[preferred_index as usize];
             if preferred.layer_type != LayerType::Generator
@@ -467,9 +467,15 @@ impl PercussionImportService {
                 layout_map.insert(binding.trigger_type, idx as i32);
             } else {
                 let idx = if binding.uses_generator() {
-                    project.timeline.add_layer(&layer_name, LayerType::Generator, binding.generator_type.clone())
+                    project.timeline.add_layer(
+                        &layer_name,
+                        LayerType::Generator,
+                        binding.generator_type.clone(),
+                    )
                 } else {
-                    project.timeline.add_layer(&layer_name, LayerType::Video, GeneratorTypeId::NONE)
+                    project
+                        .timeline
+                        .add_layer(&layer_name, LayerType::Video, GeneratorTypeId::NONE)
                 };
                 layout_map.insert(binding.trigger_type, idx as i32);
             }

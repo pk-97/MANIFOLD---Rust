@@ -3,12 +3,12 @@
 //! The UI thread communicates with the content thread via a bounded
 //! crossbeam channel. Each variant represents an action that must
 //! execute on the content thread where PlaybackEngine and EditingService live.
-use manifold_core::{Beats, Bpm, ClipId, LayerId, Seconds};
 use manifold_core::project::Project;
+use manifold_core::{Beats, Bpm, ClipId, LayerId, Seconds};
 use manifold_editing::command::Command;
 use manifold_media::export_config::ExportConfig;
-use manifold_playback::audio_sync::PreloadedAudioData;
 use manifold_playback::audio_decoder::DecodedAudio;
+use manifold_playback::audio_sync::PreloadedAudioData;
 use manifold_playback::stem_audio::PreloadedStemData;
 
 #[allow(dead_code)]
@@ -116,7 +116,10 @@ pub enum ContentCommand {
     ReImportStems,
     /// Calibrate percussion downbeat at the current playhead beat.
     /// Port of Unity: percussionImportController.CalibrateImportedPercussionDownbeatAtPlayhead().
-    PercussionCalibrateDownbeat { playhead_beat: Beats, beats_per_bar: i32 },
+    PercussionCalibrateDownbeat {
+        playhead_beat: Beats,
+        beats_per_bar: i32,
+    },
     /// Nudge percussion alignment by delta_beats.
     /// Port of Unity: percussionImportController.NudgeImportedPercussionAlignment(delta).
     PercussionNudgeAlignment(Beats),
@@ -138,7 +141,10 @@ pub enum ContentCommand {
     // ── Generator ──────────────────────────────────────────────────
     /// Notify renderer that a layer's generator type changed.
     /// Port of C# PlaybackController.NotifyGeneratorTypeChanged().
-    GeneratorTypeChanged { layer_id: LayerId, new_type: manifold_core::GeneratorTypeId },
+    GeneratorTypeChanged {
+        layer_id: LayerId,
+        new_type: manifold_core::GeneratorTypeId,
+    },
 
     // ── Lifecycle ─────────────────────────────────────────────────
     /// Pause rendering (content thread stops ticking/rendering but still drains commands).

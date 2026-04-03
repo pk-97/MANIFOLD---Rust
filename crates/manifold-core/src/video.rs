@@ -78,11 +78,12 @@ impl VideoLibrary {
     /// Unity VideoLibrary.cs RemoveClip lines 74-87.
     pub fn remove_clip(&mut self, id: &str) -> Option<VideoClip> {
         if let Some(&idx) = self.clip_lookup.get(id)
-            && idx < self.clips.len() {
-                let clip = self.clips.remove(idx);
-                self.rebuild_lookup();
-                return Some(clip);
-            }
+            && idx < self.clips.len()
+        {
+            let clip = self.clips.remove(idx);
+            self.rebuild_lookup();
+            return Some(clip);
+        }
         None
     }
 
@@ -103,9 +104,8 @@ impl VideoLibrary {
     /// Unity VideoLibrary.cs RemoveMissingClips lines 292-308.
     pub fn remove_missing_clips(&mut self) -> usize {
         let before = self.clips.len();
-        self.clips.retain(|clip| {
-            clip.file_path.is_empty() || Path::new(&clip.file_path).exists()
-        });
+        self.clips
+            .retain(|clip| clip.file_path.is_empty() || Path::new(&clip.file_path).exists());
         let removed = before - self.clips.len();
         if removed > 0 {
             self.rebuild_lookup();

@@ -1,9 +1,9 @@
-use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
-use crate::gpu_encoder::GpuEncoder;
 use crate::generators::generator_math::PROJ_SCALE;
-use crate::generators::line_pipeline::{LinePipeline, LineGeneratorHelper};
+use crate::generators::line_pipeline::{LineGeneratorHelper, LinePipeline};
+use crate::gpu_encoder::GpuEncoder;
+use manifold_core::GeneratorTypeId;
 
 // Parameter indices matching Unity's LissajousGenerator
 const FREQ_X: usize = 0;
@@ -60,17 +60,61 @@ impl Generator for LissajousGenerator {
         target: &manifold_gpu::GpuTexture,
         ctx: &GeneratorContext,
     ) -> f32 {
-        let freq_x_rate = if ctx.param_count > FREQ_X as u32 { ctx.params[FREQ_X] } else { 0.13 };
-        let freq_y_rate = if ctx.param_count > FREQ_Y as u32 { ctx.params[FREQ_Y] } else { 0.09 };
-        let phase_rate = if ctx.param_count > PHASE as u32 { ctx.params[PHASE] } else { 0.07 };
-        let line = if ctx.param_count > LINE as u32 { ctx.params[LINE] } else { 0.002 };
-        let show_verts = if ctx.param_count > VERTS as u32 { ctx.params[VERTS] > 0.5 } else { true };
-        let vert_size = if ctx.param_count > VSIZE as u32 { ctx.params[VSIZE] } else { 1.0 };
-        let animate = if ctx.param_count > ANIM as u32 { ctx.params[ANIM] > 0.5 } else { false };
-        let speed = if ctx.param_count > SPEED as u32 { ctx.params[SPEED] } else { 1.0 };
-        let window = if ctx.param_count > WINDOW as u32 { ctx.params[WINDOW] } else { 0.1 };
-        let scale = if ctx.param_count > SCALE as u32 { ctx.params[SCALE] } else { 1.0 };
-        let snap = if ctx.param_count > SNAP as u32 { ctx.params[SNAP] > 0.5 } else { false };
+        let freq_x_rate = if ctx.param_count > FREQ_X as u32 {
+            ctx.params[FREQ_X]
+        } else {
+            0.13
+        };
+        let freq_y_rate = if ctx.param_count > FREQ_Y as u32 {
+            ctx.params[FREQ_Y]
+        } else {
+            0.09
+        };
+        let phase_rate = if ctx.param_count > PHASE as u32 {
+            ctx.params[PHASE]
+        } else {
+            0.07
+        };
+        let line = if ctx.param_count > LINE as u32 {
+            ctx.params[LINE]
+        } else {
+            0.002
+        };
+        let show_verts = if ctx.param_count > VERTS as u32 {
+            ctx.params[VERTS] > 0.5
+        } else {
+            true
+        };
+        let vert_size = if ctx.param_count > VSIZE as u32 {
+            ctx.params[VSIZE]
+        } else {
+            1.0
+        };
+        let animate = if ctx.param_count > ANIM as u32 {
+            ctx.params[ANIM] > 0.5
+        } else {
+            false
+        };
+        let speed = if ctx.param_count > SPEED as u32 {
+            ctx.params[SPEED]
+        } else {
+            1.0
+        };
+        let window = if ctx.param_count > WINDOW as u32 {
+            ctx.params[WINDOW]
+        } else {
+            0.1
+        };
+        let scale = if ctx.param_count > SCALE as u32 {
+            ctx.params[SCALE]
+        } else {
+            1.0
+        };
+        let snap = if ctx.param_count > SNAP as u32 {
+            ctx.params[SNAP] > 0.5
+        } else {
+            false
+        };
 
         // Use clip-relative time from context (matches Unity ctx.Time)
         let time = ctx.time as f32;
@@ -134,10 +178,17 @@ impl Generator for LissajousGenerator {
             );
 
         self.line_pipeline.draw(
-            gpu, target,
-            positions, instances, num_edges,
-            edge_half_thick, dot_half_thick,
-            ctx.beat as f32, "Lissajous", ctx.width, ctx.height,
+            gpu,
+            target,
+            positions,
+            instances,
+            num_edges,
+            edge_half_thick,
+            dot_half_thick,
+            ctx.beat as f32,
+            "Lissajous",
+            ctx.width,
+            ctx.height,
         );
         self.helper.anim_progress
     }

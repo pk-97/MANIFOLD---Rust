@@ -1,8 +1,8 @@
-use serde::{Deserialize, Serialize};
+use crate::effect_type_id::EffectTypeId;
 use crate::id::{EffectGroupId, EffectId};
 use crate::types::{BeatDivision, DriverWaveform};
-use crate::effect_type_id::EffectTypeId;
 use crate::units::Beats;
+use serde::{Deserialize, Serialize};
 
 // ─── Param Definition ───
 
@@ -175,9 +175,10 @@ impl EffectInstance {
     /// Read the user-set base value (before modulation). Unity lines 104-110.
     pub fn get_base_param(&self, index: usize) -> f32 {
         if let Some(base) = &self.base_param_values
-            && index < base.len() {
-                return base[index];
-            }
+            && index < base.len()
+        {
+            return base[index];
+        }
         // Fall through to effective for backward compat
         self.get_param(index)
     }
@@ -208,8 +209,11 @@ impl EffectInstance {
 
     /// Lazy migration: create baseParamValues from paramValues if missing.
     pub fn ensure_base_values(&mut self) {
-        if self.base_param_values.is_none() ||
-           self.base_param_values.as_ref().is_some_and(|b| b.len() != self.param_values.len())
+        if self.base_param_values.is_none()
+            || self
+                .base_param_values
+                .as_ref()
+                .is_some_and(|b| b.len() != self.param_values.len())
         {
             self.base_param_values = Some(self.param_values.clone());
         }
@@ -225,7 +229,10 @@ impl EffectInstance {
 
     /// Find the driver for a given param index, or None.
     pub fn find_driver(&self, param_index: i32) -> Option<&ParameterDriver> {
-        self.drivers.as_ref()?.iter().find(|d| d.param_index == param_index)
+        self.drivers
+            .as_ref()?
+            .iter()
+            .find(|d| d.param_index == param_index)
     }
 
     /// Get drivers list reference (may be None).
@@ -277,14 +284,14 @@ impl EffectInstance {
             self.param_values = migrated;
             // Migrate base values too
             if let Some(ref base) = self.base_param_values
-                && base.len() == 14 {
-                    let migrated_base = vec![
-                        base[0], base[1], base[2], base[3], base[4],
-                        base[7], base[8], base[9], base[10], base[11], base[12],
-                        0.5,
-                    ];
-                    self.base_param_values = Some(migrated_base);
-                }
+                && base.len() == 14
+            {
+                let migrated_base = vec![
+                    base[0], base[1], base[2], base[3], base[4], base[7], base[8], base[9],
+                    base[10], base[11], base[12], 0.5,
+                ];
+                self.base_param_values = Some(migrated_base);
+            }
         }
 
         if let Some(def) = effect_definition_registry::try_get(&self.effect_type) {
@@ -297,7 +304,11 @@ impl EffectInstance {
             let copy_len = self.param_values.len().min(target);
             aligned[..copy_len].copy_from_slice(&self.param_values[..copy_len]);
             for (i, slot) in aligned.iter_mut().enumerate().take(target).skip(copy_len) {
-                *slot = def.param_defs.get(i).map(|pd| pd.default_value).unwrap_or(0.0);
+                *slot = def
+                    .param_defs
+                    .get(i)
+                    .map(|pd| pd.default_value)
+                    .unwrap_or(0.0);
             }
             self.param_values = aligned;
 
@@ -305,8 +316,17 @@ impl EffectInstance {
                 let mut aligned_base = vec![0.0f32; target];
                 let base_copy = base.len().min(target);
                 aligned_base[..base_copy].copy_from_slice(&base[..base_copy]);
-                for (i, slot) in aligned_base.iter_mut().enumerate().take(target).skip(base_copy) {
-                    *slot = def.param_defs.get(i).map(|pd| pd.default_value).unwrap_or(0.0);
+                for (i, slot) in aligned_base
+                    .iter_mut()
+                    .enumerate()
+                    .take(target)
+                    .skip(base_copy)
+                {
+                    *slot = def
+                        .param_defs
+                        .get(i)
+                        .map(|pd| pd.default_value)
+                        .unwrap_or(0.0);
                 }
                 self.base_param_values = Some(aligned_base);
             }
@@ -462,7 +482,12 @@ impl ParameterDriver {
 
     /// Evaluate driver at given beat position -> [0, 1].
     /// Port of Unity DriverEvaluator.Evaluate.
-    pub fn evaluate(current_beat: Beats, division: BeatDivision, waveform: DriverWaveform, phase_offset: f32) -> f32 {
+    pub fn evaluate(
+        current_beat: Beats,
+        division: BeatDivision,
+        waveform: DriverWaveform,
+        phase_offset: f32,
+    ) -> f32 {
         let period = division.beats();
         if period <= 0.0 {
             return 0.5;
@@ -474,10 +499,20 @@ impl ParameterDriver {
         match waveform {
             DriverWaveform::Sine => (phase * std::f32::consts::TAU).sin() * 0.5 + 0.5,
             DriverWaveform::Triangle => {
-                if phase < 0.5 { phase * 2.0 } else { 2.0 - phase * 2.0 }
+                if phase < 0.5 {
+                    phase * 2.0
+                } else {
+                    2.0 - phase * 2.0
+                }
             }
             DriverWaveform::Sawtooth => phase,
-            DriverWaveform::Square => if phase < 0.5 { 1.0 } else { 0.0 },
+            DriverWaveform::Square => {
+                if phase < 0.5 {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
             DriverWaveform::Random => {
                 // Deterministic per-period hash matching Unity's HashToFloat.
                 // Unity ParameterDriver.cs lines 224-236.
@@ -562,9 +597,7 @@ pub mod beat_division_helper {
             BeatModifier::Triplet if (2..=5).contains(&base_index) => {
                 BeatDivision::from_i32((base_index + 14) as i32)
             }
-            BeatModifier::None => {
-                BeatDivision::from_i32(base_index as i32)
-            }
+            BeatModifier::None => BeatDivision::from_i32(base_index as i32),
             _ => None,
         }
     }
@@ -666,7 +699,11 @@ impl ParamEnvelope {
 
         let decay_start = a;
         if local_beat < decay_start + d {
-            let t = if d > 0.0 { (local_beat - decay_start) / d } else { 1.0 };
+            let t = if d > 0.0 {
+                (local_beat - decay_start) / d
+            } else {
+                1.0
+            };
             return 1.0 - (1.0 - s) * t;
         }
 
@@ -685,10 +722,18 @@ impl ParamEnvelope {
 
 // ─── Default helpers ───
 
-fn default_true() -> bool { true }
-fn default_one() -> f32 { 1.0 }
-fn generate_effect_id() -> EffectId { EffectId::new(crate::math::short_id()) }
-fn default_group_name() -> String { "Group".to_string() }
+fn default_true() -> bool {
+    true
+}
+fn default_one() -> f32 {
+    1.0
+}
+fn generate_effect_id() -> EffectId {
+    EffectId::new(crate::math::short_id())
+}
+fn default_group_name() -> String {
+    "Group".to_string()
+}
 
 #[cfg(test)]
 mod tests {
@@ -696,28 +741,54 @@ mod tests {
 
     #[test]
     fn test_driver_sine() {
-        let val = ParameterDriver::evaluate(Beats(0.0), BeatDivision::Quarter, DriverWaveform::Sine, 0.0);
+        let val =
+            ParameterDriver::evaluate(Beats(0.0), BeatDivision::Quarter, DriverWaveform::Sine, 0.0);
         assert!((val - 0.5).abs() < 0.01);
 
-        let val = ParameterDriver::evaluate(Beats(0.25), BeatDivision::Quarter, DriverWaveform::Sine, 0.0);
+        let val = ParameterDriver::evaluate(
+            Beats(0.25),
+            BeatDivision::Quarter,
+            DriverWaveform::Sine,
+            0.0,
+        );
         assert!((val - 1.0).abs() < 0.01);
     }
 
     #[test]
     fn test_driver_square() {
-        let val = ParameterDriver::evaluate(Beats(0.1), BeatDivision::Quarter, DriverWaveform::Square, 0.0);
+        let val = ParameterDriver::evaluate(
+            Beats(0.1),
+            BeatDivision::Quarter,
+            DriverWaveform::Square,
+            0.0,
+        );
         assert_eq!(val, 1.0);
 
-        let val = ParameterDriver::evaluate(Beats(0.6), BeatDivision::Quarter, DriverWaveform::Square, 0.0);
+        let val = ParameterDriver::evaluate(
+            Beats(0.6),
+            BeatDivision::Quarter,
+            DriverWaveform::Square,
+            0.0,
+        );
         assert_eq!(val, 0.0);
     }
 
     #[test]
     fn test_driver_random_hash_matches_unity() {
-        let val = ParameterDriver::evaluate(Beats(1.0), BeatDivision::Quarter, DriverWaveform::Random, 0.0);
+        let val = ParameterDriver::evaluate(
+            Beats(1.0),
+            BeatDivision::Quarter,
+            DriverWaveform::Random,
+            0.0,
+        );
         assert!(val >= 0.0 && val <= 1.0);
         // Same cycle should give same value
-        let val2 = ParameterDriver::evaluate(Beats(1.5), BeatDivision::Quarter, DriverWaveform::Random, 0.0);
+        let val2 = ParameterDriver::evaluate(
+            Beats(1.5),
+            BeatDivision::Quarter,
+            DriverWaveform::Random,
+            0.0,
+        );
         assert_eq!(val, val2);
     }
 }

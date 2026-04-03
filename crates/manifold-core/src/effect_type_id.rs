@@ -4,9 +4,9 @@
 //! Built-in effects use compile-time constants; future plugins can register
 //! their own IDs at runtime.
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Cow;
 use std::fmt;
-use serde::{Serialize, Serializer, Deserialize, Deserializer};
 
 /// Identifies an effect type by name.
 ///
@@ -182,11 +182,26 @@ mod tests {
 
     #[test]
     fn legacy_discriminant_roundtrip() {
-        assert_eq!(EffectTypeId::from_legacy_discriminant(0), EffectTypeId::TRANSFORM);
-        assert_eq!(EffectTypeId::from_legacy_discriminant(12), EffectTypeId::BLOOM);
-        assert_eq!(EffectTypeId::from_legacy_discriminant(36), EffectTypeId::CORRUPTION);
-        assert_eq!(EffectTypeId::from_legacy_discriminant(999), EffectTypeId::UNKNOWN);
-        assert_eq!(EffectTypeId::from_legacy_discriminant(-1), EffectTypeId::UNKNOWN);
+        assert_eq!(
+            EffectTypeId::from_legacy_discriminant(0),
+            EffectTypeId::TRANSFORM
+        );
+        assert_eq!(
+            EffectTypeId::from_legacy_discriminant(12),
+            EffectTypeId::BLOOM
+        );
+        assert_eq!(
+            EffectTypeId::from_legacy_discriminant(36),
+            EffectTypeId::CORRUPTION
+        );
+        assert_eq!(
+            EffectTypeId::from_legacy_discriminant(999),
+            EffectTypeId::UNKNOWN
+        );
+        assert_eq!(
+            EffectTypeId::from_legacy_discriminant(-1),
+            EffectTypeId::UNKNOWN
+        );
     }
 
     #[test]

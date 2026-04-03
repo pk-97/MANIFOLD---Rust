@@ -43,8 +43,7 @@ impl UniformArena {
 
         // Grow capacity tracking if needed
         if aligned + bytes.len() as u64 > self.capacity {
-            self.capacity =
-                (self.capacity * 2).max(aligned + bytes.len() as u64 + 4096);
+            self.capacity = (self.capacity * 2).max(aligned + bytes.len() as u64 + 4096);
         }
 
         // Write directly to shared-memory mapped pointer

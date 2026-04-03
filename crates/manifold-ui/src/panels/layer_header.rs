@@ -1,10 +1,10 @@
+use super::{Panel, PanelAction};
 use crate::color;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
 use crate::node::*;
 use crate::tree::UITree;
 use manifold_core::LayerId;
-use super::{Panel, PanelAction};
 
 // ── Layout constants (from LayerHeaderLayout.cs / UIConstants) ───────
 
@@ -67,11 +67,23 @@ fn darken(c: Color32, amount: u8) -> Color32 {
 }
 
 fn mute_style(muted: bool) -> UIStyle {
-    let bg = if muted { color::MUTED_COLOR } else { color::BUTTON_DIM };
+    let bg = if muted {
+        color::MUTED_COLOR
+    } else {
+        color::BUTTON_DIM
+    };
     UIStyle {
         bg_color: bg,
-        hover_bg_color: if muted { lighten(color::MUTED_COLOR, 30) } else { color::BUTTON_HIGHLIGHTED },
-        pressed_bg_color: if muted { darken(color::MUTED_COLOR, 20) } else { color::BUTTON_PRESSED },
+        hover_bg_color: if muted {
+            lighten(color::MUTED_COLOR, 30)
+        } else {
+            color::BUTTON_HIGHLIGHTED
+        },
+        pressed_bg_color: if muted {
+            darken(color::MUTED_COLOR, 20)
+        } else {
+            color::BUTTON_PRESSED
+        },
         text_color: color::TEXT_WHITE_C32,
         font_size: BTN_FONT,
         corner_radius: LH_BTN_RADIUS,
@@ -81,11 +93,23 @@ fn mute_style(muted: bool) -> UIStyle {
 }
 
 fn solo_style(solo: bool) -> UIStyle {
-    let bg = if solo { color::SOLO_COLOR } else { color::BUTTON_DIM };
+    let bg = if solo {
+        color::SOLO_COLOR
+    } else {
+        color::BUTTON_DIM
+    };
     UIStyle {
         bg_color: bg,
-        hover_bg_color: if solo { lighten(color::SOLO_COLOR, 30) } else { color::BUTTON_HIGHLIGHTED },
-        pressed_bg_color: if solo { darken(color::SOLO_COLOR, 20) } else { color::BUTTON_PRESSED },
+        hover_bg_color: if solo {
+            lighten(color::SOLO_COLOR, 30)
+        } else {
+            color::BUTTON_HIGHLIGHTED
+        },
+        pressed_bg_color: if solo {
+            darken(color::SOLO_COLOR, 20)
+        } else {
+            color::BUTTON_PRESSED
+        },
         text_color: color::TEXT_WHITE_C32,
         font_size: BTN_FONT,
         corner_radius: LH_BTN_RADIUS,
@@ -121,7 +145,11 @@ fn field_style() -> UIStyle {
 }
 
 fn bg_style(selected: bool, layer_color: Color32) -> UIStyle {
-    let bg = if selected { lighten(layer_color, 30) } else { layer_color };
+    let bg = if selected {
+        lighten(layer_color, 30)
+    } else {
+        layer_color
+    };
     let hover = lighten(bg, 15);
     let pressed = darken(bg, 10);
     UIStyle {
@@ -203,12 +231,22 @@ struct LayerRowData {
 /// Compute element rects for one layer row in panel-local coordinates.
 #[allow(clippy::too_many_arguments)]
 fn compute_layer_row(
-    y_offset: f32, height: f32, panel_width: f32,
-    is_collapsed: bool, is_group: bool, is_generator: bool,
-    is_child: bool, is_last_child: bool, is_group_expanded: bool,
+    y_offset: f32,
+    height: f32,
+    panel_width: f32,
+    is_collapsed: bool,
+    is_group: bool,
+    is_generator: bool,
+    is_child: bool,
+    is_last_child: bool,
+    is_group_expanded: bool,
 ) -> LayerRowData {
     let mut d = LayerRowData::default();
-    let w = if panel_width > 0.0 { panel_width } else { color::LAYER_CONTROLS_WIDTH };
+    let w = if panel_width > 0.0 {
+        panel_width
+    } else {
+        color::LAYER_CONTROLS_WIDTH
+    };
 
     d.background = Rect::new(0.0, y_offset, w, height);
 
@@ -355,12 +393,27 @@ struct LayerRowIds {
 impl Default for LayerRowIds {
     fn default() -> Self {
         Self {
-            bg: -1, chevron: -1, name: -1, drag_handle: -1,
-            mute: -1, solo: -1, blend_mode: -1, separator: -1,
-            info: -1, accent_bar: -1, connector: -1, bottom_border: -1,
-            folder: -1, path_label: -1, new_clip: -1, gen_type: -1,
-            add_gen_clip: -1, midi_label: -1, midi_input: -1,
-            ch_label: -1, ch_dropdown: -1,
+            bg: -1,
+            chevron: -1,
+            name: -1,
+            drag_handle: -1,
+            mute: -1,
+            solo: -1,
+            blend_mode: -1,
+            separator: -1,
+            info: -1,
+            accent_bar: -1,
+            connector: -1,
+            bottom_border: -1,
+            folder: -1,
+            path_label: -1,
+            new_clip: -1,
+            gen_type: -1,
+            add_gen_clip: -1,
+            midi_label: -1,
+            midi_input: -1,
+            ch_label: -1,
+            ch_dropdown: -1,
         }
     }
 }
@@ -368,8 +421,12 @@ impl Default for LayerRowIds {
 // ── Helpers ─────────────────────────────────────────────────────────
 
 fn midi_note_to_name(note: i32) -> String {
-    if note < 0 { return "None".into(); }
-    const NAMES: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+    if note < 0 {
+        return "None".into();
+    }
+    const NAMES: [&str; 12] = [
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    ];
     let octave = (note / 12) - 1;
     let name = NAMES[(note % 12) as usize];
     format!("{}{}", name, octave)
@@ -378,7 +435,8 @@ fn midi_note_to_name(note: i32) -> String {
 fn folder_path_text(path: &Option<String>, source_count: usize) -> String {
     match path {
         Some(p) if !p.is_empty() => {
-            let folder = p.trim_end_matches(['/', '\\'])
+            let folder = p
+                .trim_end_matches(['/', '\\'])
                 .rsplit(['/', '\\'])
                 .next()
                 .unwrap_or("");
@@ -390,7 +448,8 @@ fn folder_path_text(path: &Option<String>, source_count: usize) -> String {
 
 fn info_text(layer: &LayerInfo, all_layers: &[LayerInfo]) -> String {
     if layer.is_group {
-        let child_count = all_layers.iter()
+        let child_count = all_layers
+            .iter()
             .filter(|l| l.parent_layer_id.as_deref() == Some(&layer.layer_id))
             .count();
         format!("{} children", child_count)
@@ -524,7 +583,9 @@ impl LayerHeaderPanel {
     }
 
     pub fn get_node_bounds(&self, tree: &UITree, node_id: i32) -> Rect {
-        if node_id < 0 { return Rect::ZERO; }
+        if node_id < 0 {
+            return Rect::ZERO;
+        }
         tree.get_bounds(node_id as u32)
     }
 
@@ -533,7 +594,9 @@ impl LayerHeaderPanel {
     pub fn set_mute_state(&mut self, tree: &mut UITree, index: usize, muted: bool) {
         if let Some(row) = self.rows.get(index) {
             if let Some(cached) = self.cached_mute.get_mut(index) {
-                if *cached == muted { return; }
+                if *cached == muted {
+                    return;
+                }
                 *cached = muted;
             }
             if row.mute >= 0 {
@@ -545,7 +608,9 @@ impl LayerHeaderPanel {
     pub fn set_solo_state(&mut self, tree: &mut UITree, index: usize, solo: bool) {
         if let Some(row) = self.rows.get(index) {
             if let Some(cached) = self.cached_solo.get_mut(index) {
-                if *cached == solo { return; }
+                if *cached == solo {
+                    return;
+                }
                 *cached = solo;
             }
             if row.solo >= 0 {
@@ -557,12 +622,17 @@ impl LayerHeaderPanel {
     pub fn set_selection(&mut self, tree: &mut UITree, index: usize, selected: bool) {
         if let Some(row) = self.rows.get(index) {
             if let Some(cached) = self.cached_selected.get_mut(index) {
-                if *cached == selected { return; }
+                if *cached == selected {
+                    return;
+                }
                 *cached = selected;
             }
             if row.bg >= 0 {
-                let layer_color = self.cached_colors.get(index)
-                    .copied().unwrap_or(Color32::TRANSPARENT);
+                let layer_color = self
+                    .cached_colors
+                    .get(index)
+                    .copied()
+                    .unwrap_or(Color32::TRANSPARENT);
                 tree.set_style(row.bg as u32, bg_style(selected, layer_color));
             }
         }
@@ -570,27 +640,42 @@ impl LayerHeaderPanel {
 
     pub fn set_layer_name(&mut self, tree: &mut UITree, index: usize, name: &str) {
         if let Some(row) = self.rows.get(index)
-            && row.name >= 0 { tree.set_text(row.name as u32, name); }
+            && row.name >= 0
+        {
+            tree.set_text(row.name as u32, name);
+        }
     }
 
     pub fn set_blend_mode_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
         if let Some(row) = self.rows.get(index)
-            && row.blend_mode >= 0 { tree.set_text(row.blend_mode as u32, text); }
+            && row.blend_mode >= 0
+        {
+            tree.set_text(row.blend_mode as u32, text);
+        }
     }
 
     pub fn set_midi_note_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
         if let Some(row) = self.rows.get(index)
-            && row.midi_input >= 0 { tree.set_text(row.midi_input as u32, text); }
+            && row.midi_input >= 0
+        {
+            tree.set_text(row.midi_input as u32, text);
+        }
     }
 
     pub fn set_midi_channel_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
         if let Some(row) = self.rows.get(index)
-            && row.ch_dropdown >= 0 { tree.set_text(row.ch_dropdown as u32, text); }
+            && row.ch_dropdown >= 0
+        {
+            tree.set_text(row.ch_dropdown as u32, text);
+        }
     }
 
     pub fn set_info_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
         if let Some(row) = self.rows.get(index)
-            && row.info >= 0 { tree.set_text(row.info as u32, text); }
+            && row.info >= 0
+        {
+            tree.set_text(row.info as u32, text);
+        }
     }
 
     // ── Drag-reorder (separate from Panel trait — needs &mut UITree) ──
@@ -628,10 +713,13 @@ impl LayerHeaderPanel {
             if let Some(row) = self.rows.get(i)
                 && row.bg >= 0
             {
-                tree.set_style(row.bg as u32, UIStyle {
-                    bg_color: DRAG_SOURCE_DIM,
-                    ..UIStyle::default()
-                });
+                tree.set_style(
+                    row.bg as u32,
+                    UIStyle {
+                        bg_color: DRAG_SOURCE_DIM,
+                        ..UIStyle::default()
+                    },
+                );
             }
             return vec![PanelAction::LayerDragStarted(i)];
         }
@@ -641,7 +729,9 @@ impl LayerHeaderPanel {
 
     /// Call during an active drag with the current pointer position (screen space).
     pub fn handle_drag(&mut self, tree: &mut UITree, screen_pos: Vec2) -> Vec<PanelAction> {
-        if self.drag_source < 0 { return Vec::new(); }
+        if self.drag_source < 0 {
+            return Vec::new();
+        }
 
         // Convert screen pos to panel-local Y
         let local_y = screen_pos.y - self.panel_origin.y;
@@ -649,7 +739,9 @@ impl LayerHeaderPanel {
         // Find target layer based on Y position
         let mut target = -1i32;
         for (i, layer) in self.layers.iter().enumerate() {
-            if layer.height <= 0.0 { continue; }
+            if layer.height <= 0.0 {
+                continue;
+            }
             if local_y >= layer.y_offset && local_y < layer.y_offset + layer.height {
                 target = i as i32;
                 break;
@@ -657,20 +749,29 @@ impl LayerHeaderPanel {
         }
 
         if target < 0 {
-            target = if local_y < 0.0 { 0 } else { (self.layers.len() as i32 - 1).max(0) };
+            target = if local_y < 0.0 {
+                0
+            } else {
+                (self.layers.len() as i32 - 1).max(0)
+            };
         }
 
         if target != self.drag_target {
             self.drag_target = target;
             self.update_insert_indicator(tree);
-            return vec![PanelAction::LayerDragMoved(self.drag_source as usize, target as usize)];
+            return vec![PanelAction::LayerDragMoved(
+                self.drag_source as usize,
+                target as usize,
+            )];
         }
         Vec::new()
     }
 
     /// Call when a drag ends.
     pub fn handle_drag_end(&mut self, tree: &mut UITree) -> Vec<PanelAction> {
-        if self.drag_source < 0 { return Vec::new(); }
+        if self.drag_source < 0 {
+            return Vec::new();
+        }
 
         let source = self.drag_source as usize;
         let target = self.drag_target as usize;
@@ -681,12 +782,16 @@ impl LayerHeaderPanel {
 
         // Restore source layer appearance
         if let Some(row) = self.rows.get(source)
-            && row.bg >= 0 {
-                let selected = self.cached_selected.get(source).copied().unwrap_or(false);
-                let layer_color = self.cached_colors.get(source)
-                    .copied().unwrap_or(Color32::TRANSPARENT);
-                tree.set_style(row.bg as u32, bg_style(selected, layer_color));
-            }
+            && row.bg >= 0
+        {
+            let selected = self.cached_selected.get(source).copied().unwrap_or(false);
+            let layer_color = self
+                .cached_colors
+                .get(source)
+                .copied()
+                .unwrap_or(Color32::TRANSPARENT);
+            tree.set_style(row.bg as u32, bg_style(selected, layer_color));
+        }
 
         if source != target {
             vec![PanelAction::LayerDragEnded(source, target)]
@@ -698,29 +803,54 @@ impl LayerHeaderPanel {
     // ── Drag visual helpers ─────────────────────────────────────────
 
     fn update_insert_indicator(&self, tree: &mut UITree) {
-        if self.insert_indicator_id < 0 { return; }
+        if self.insert_indicator_id < 0 {
+            return;
+        }
 
         let y = if self.drag_target <= self.drag_source {
-            self.layers.get(self.drag_target as usize)
+            self.layers
+                .get(self.drag_target as usize)
                 .map_or(0.0, |l| l.y_offset)
         } else {
-            self.layers.get(self.drag_target as usize)
+            self.layers
+                .get(self.drag_target as usize)
                 .map_or(0.0, |l| l.y_offset + l.height)
         };
 
         let screen_y = self.panel_origin.y + y - INSERT_LINE_H * 0.5;
-        tree.set_bounds(self.insert_indicator_id as u32,
-            Rect::new(self.panel_origin.x, screen_y, self.panel_width, INSERT_LINE_H));
-        tree.set_style(self.insert_indicator_id as u32,
-            UIStyle { bg_color: INSERT_LINE_CLR, ..UIStyle::default() });
+        tree.set_bounds(
+            self.insert_indicator_id as u32,
+            Rect::new(
+                self.panel_origin.x,
+                screen_y,
+                self.panel_width,
+                INSERT_LINE_H,
+            ),
+        );
+        tree.set_style(
+            self.insert_indicator_id as u32,
+            UIStyle {
+                bg_color: INSERT_LINE_CLR,
+                ..UIStyle::default()
+            },
+        );
     }
 
     fn hide_insert_indicator(&self, tree: &mut UITree) {
-        if self.insert_indicator_id < 0 { return; }
-        tree.set_bounds(self.insert_indicator_id as u32,
-            Rect::new(0.0, -10.0, 0.0, 0.0));
-        tree.set_style(self.insert_indicator_id as u32,
-            UIStyle { bg_color: Color32::TRANSPARENT, ..UIStyle::default() });
+        if self.insert_indicator_id < 0 {
+            return;
+        }
+        tree.set_bounds(
+            self.insert_indicator_id as u32,
+            Rect::new(0.0, -10.0, 0.0, 0.0),
+        );
+        tree.set_style(
+            self.insert_indicator_id as u32,
+            UIStyle {
+                bg_color: Color32::TRANSPARENT,
+                ..UIStyle::default()
+            },
+        );
     }
 
     // ── Build helpers ───────────────────────────────────────────────
@@ -740,8 +870,13 @@ impl LayerHeaderPanel {
         // Background (full row interactive area, uses exact layer color)
         let bg_r = s(row.background);
         ids.bg = tree.add_button(
-            clip_parent, bg_r.x, bg_r.y, bg_r.width, bg_r.height,
-            bg_style(layer.is_selected, layer.color), "",
+            clip_parent,
+            bg_r.x,
+            bg_r.y,
+            bg_r.width,
+            bg_r.height,
+            bg_style(layer.is_selected, layer.color),
+            "",
         ) as i32;
 
         // Contrast text color for readability on the layer's background
@@ -751,8 +886,15 @@ impl LayerHeaderPanel {
         if row.has_accent_bar {
             let r = s(row.accent_bar);
             ids.accent_bar = tree.add_panel(
-                clip_parent, r.x, r.y, r.width, r.height,
-                UIStyle { bg_color: ACCENT_COLOR, ..UIStyle::default() },
+                clip_parent,
+                r.x,
+                r.y,
+                r.width,
+                r.height,
+                UIStyle {
+                    bg_color: ACCENT_COLOR,
+                    ..UIStyle::default()
+                },
             ) as i32;
         }
 
@@ -760,8 +902,15 @@ impl LayerHeaderPanel {
         if row.has_connector {
             let r = s(row.connector);
             ids.connector = tree.add_panel(
-                clip_parent, r.x, r.y, r.width, r.height,
-                UIStyle { bg_color: ACCENT_COLOR, ..UIStyle::default() },
+                clip_parent,
+                r.x,
+                r.y,
+                r.width,
+                r.height,
+                UIStyle {
+                    bg_color: ACCENT_COLOR,
+                    ..UIStyle::default()
+                },
             ) as i32;
         }
 
@@ -769,17 +918,32 @@ impl LayerHeaderPanel {
         if row.has_bottom_border {
             let r = s(row.bottom_border);
             ids.bottom_border = tree.add_panel(
-                clip_parent, r.x, r.y, r.width, r.height,
-                UIStyle { bg_color: BORDER_CLR, ..UIStyle::default() },
+                clip_parent,
+                r.x,
+                r.y,
+                r.width,
+                r.height,
+                UIStyle {
+                    bg_color: BORDER_CLR,
+                    ..UIStyle::default()
+                },
             ) as i32;
         }
 
         // Chevron
         if row.has_chevron {
-            let chev = if layer.is_collapsed { "\u{25B6}" } else { "\u{25BC}" };
+            let chev = if layer.is_collapsed {
+                "\u{25B6}"
+            } else {
+                "\u{25BC}"
+            };
             let r = s(row.chevron);
             ids.chevron = tree.add_button(
-                clip_parent, r.x, r.y, r.width, r.height,
+                clip_parent,
+                r.x,
+                r.y,
+                r.width,
+                r.height,
                 UIStyle {
                     bg_color: Color32::TRANSPARENT,
                     hover_bg_color: color::BUTTON_HIGHLIGHTED,
@@ -797,7 +961,11 @@ impl LayerHeaderPanel {
         // Layer name
         let nr = s(row.name);
         ids.name = tree.add_button(
-            clip_parent, nr.x, nr.y, nr.width, nr.height,
+            clip_parent,
+            nr.x,
+            nr.y,
+            nr.width,
+            nr.height,
             UIStyle {
                 bg_color: Color32::TRANSPARENT,
                 hover_bg_color: color::LAYER_CHEVRON_HOVER,
@@ -813,7 +981,11 @@ impl LayerHeaderPanel {
         // Drag handle (hamburger icon drawn as 3 horizontal bars)
         let dr = s(row.drag_handle);
         ids.drag_handle = tree.add_button(
-            clip_parent, dr.x, dr.y, dr.width, dr.height,
+            clip_parent,
+            dr.x,
+            dr.y,
+            dr.width,
+            dr.height,
             UIStyle {
                 bg_color: color::HANDLE_BG,
                 hover_bg_color: color::BUTTON_HIGHLIGHTED,
@@ -828,7 +1000,10 @@ impl LayerHeaderPanel {
         let bar_h: f32 = 1.5;
         let bar_x = dr.x + (dr.width - bar_w) * 0.5;
         let bar_color = color::TEXT_ON_DARK;
-        let bar_style = UIStyle { bg_color: bar_color, ..UIStyle::default() };
+        let bar_style = UIStyle {
+            bg_color: bar_color,
+            ..UIStyle::default()
+        };
         for i in 0..3 {
             let bar_y = dr.y + 4.5 + i as f32 * 4.0;
             tree.add_panel(ids.drag_handle, bar_x, bar_y, bar_w, bar_h, bar_style);
@@ -839,7 +1014,11 @@ impl LayerHeaderPanel {
             let gen_text = layer.generator_type.as_deref().unwrap_or("Unknown");
             let r = s(row.gen_type);
             ids.gen_type = tree.add_label(
-                clip_parent, r.x, r.y, r.width, r.height,
+                clip_parent,
+                r.x,
+                r.y,
+                r.width,
+                r.height,
                 gen_text,
                 UIStyle {
                     text_color: text_clr,
@@ -853,29 +1032,51 @@ impl LayerHeaderPanel {
         // Mute button
         let mr = s(row.mute);
         ids.mute = tree.add_button(
-            clip_parent, mr.x, mr.y, mr.width, mr.height,
-            mute_style(layer.is_muted), "M",
+            clip_parent,
+            mr.x,
+            mr.y,
+            mr.width,
+            mr.height,
+            mute_style(layer.is_muted),
+            "M",
         ) as i32;
 
         // Solo button
         let sr = s(row.solo);
         ids.solo = tree.add_button(
-            clip_parent, sr.x, sr.y, sr.width, sr.height,
-            solo_style(layer.is_solo), "S",
+            clip_parent,
+            sr.x,
+            sr.y,
+            sr.width,
+            sr.height,
+            solo_style(layer.is_solo),
+            "S",
         ) as i32;
 
         // Blend mode
         let br = s(row.blend_mode);
         ids.blend_mode = tree.add_button(
-            clip_parent, br.x, br.y, br.width, br.height,
-            small_button_style(), &layer.blend_mode,
+            clip_parent,
+            br.x,
+            br.y,
+            br.width,
+            br.height,
+            small_button_style(),
+            &layer.blend_mode,
         ) as i32;
 
         // Separator
         let sepr = s(row.separator);
         ids.separator = tree.add_panel(
-            clip_parent, sepr.x, sepr.y, sepr.width, sepr.height,
-            UIStyle { bg_color: SEP_COLOR, ..UIStyle::default() },
+            clip_parent,
+            sepr.x,
+            sepr.y,
+            sepr.width,
+            sepr.height,
+            UIStyle {
+                bg_color: SEP_COLOR,
+                ..UIStyle::default()
+            },
         ) as i32;
 
         // ── Expanded controls ──
@@ -887,7 +1088,11 @@ impl LayerHeaderPanel {
         let info = info_text(layer, &self.layers);
         let ir = s(row.info);
         ids.info = tree.add_label(
-            clip_parent, ir.x, ir.y, ir.width, ir.height,
+            clip_parent,
+            ir.x,
+            ir.y,
+            ir.width,
+            ir.height,
             &info,
             UIStyle {
                 text_color: text_clr,
@@ -901,15 +1106,24 @@ impl LayerHeaderPanel {
             // Folder button
             let fr = s(row.folder);
             ids.folder = tree.add_button(
-                clip_parent, fr.x, fr.y, fr.width, fr.height,
-                small_button_style(), "Folder",
+                clip_parent,
+                fr.x,
+                fr.y,
+                fr.width,
+                fr.height,
+                small_button_style(),
+                "Folder",
             ) as i32;
 
             // Path label
             let path_text = folder_path_text(&layer.video_folder_path, layer.source_clip_count);
             let pr = s(row.path_label);
             ids.path_label = tree.add_label(
-                clip_parent, pr.x, pr.y, pr.width, pr.height,
+                clip_parent,
+                pr.x,
+                pr.y,
+                pr.width,
+                pr.height,
                 &path_text,
                 UIStyle {
                     text_color: text_clr,
@@ -922,8 +1136,13 @@ impl LayerHeaderPanel {
             // +new clip button
             let ncr = s(row.new_clip);
             ids.new_clip = tree.add_button(
-                clip_parent, ncr.x, ncr.y, ncr.width, ncr.height,
-                small_button_style(), "+ new clip",
+                clip_parent,
+                ncr.x,
+                ncr.y,
+                ncr.width,
+                ncr.height,
+                small_button_style(),
+                "+ new clip",
             ) as i32;
         }
 
@@ -932,7 +1151,11 @@ impl LayerHeaderPanel {
             // MIDI label + input
             let mlr = s(row.midi_label);
             ids.midi_label = tree.add_label(
-                clip_parent, mlr.x, mlr.y, mlr.width, mlr.height,
+                clip_parent,
+                mlr.x,
+                mlr.y,
+                mlr.width,
+                mlr.height,
                 "MIDI",
                 UIStyle {
                     text_color: text_clr,
@@ -945,14 +1168,23 @@ impl LayerHeaderPanel {
             let midi_text = midi_note_to_name(layer.midi_note);
             let mir = s(row.midi_input);
             ids.midi_input = tree.add_button(
-                clip_parent, mir.x, mir.y, mir.width, mir.height,
-                field_style(), &midi_text,
+                clip_parent,
+                mir.x,
+                mir.y,
+                mir.width,
+                mir.height,
+                field_style(),
+                &midi_text,
             ) as i32;
 
             // Channel label + dropdown
             let clr = s(row.ch_label);
             ids.ch_label = tree.add_label(
-                clip_parent, clr.x, clr.y, clr.width, clr.height,
+                clip_parent,
+                clr.x,
+                clr.y,
+                clr.width,
+                clr.height,
                 "CH",
                 UIStyle {
                     text_color: text_clr,
@@ -969,16 +1201,26 @@ impl LayerHeaderPanel {
             };
             let cdr = s(row.ch_dropdown);
             ids.ch_dropdown = tree.add_button(
-                clip_parent, cdr.x, cdr.y, cdr.width, cdr.height,
-                small_button_style(), &ch_text,
+                clip_parent,
+                cdr.x,
+                cdr.y,
+                cdr.width,
+                cdr.height,
+                small_button_style(),
+                &ch_text,
             ) as i32;
         }
 
         if row.has_generator_controls {
             let agr = s(row.add_gen_clip);
             ids.add_gen_clip = tree.add_button(
-                clip_parent, agr.x, agr.y, agr.width, agr.height,
-                small_button_style(), "+ Clip",
+                clip_parent,
+                agr.x,
+                agr.y,
+                agr.width,
+                agr.height,
+                small_button_style(),
+                "+ Clip",
             ) as i32;
         }
     }
@@ -990,15 +1232,33 @@ impl LayerHeaderPanel {
             return vec![PanelAction::AddLayerClicked];
         }
         for (i, row) in self.rows.iter().enumerate() {
-            if id == row.mute { return vec![PanelAction::ToggleMute(i)]; }
-            if id == row.solo { return vec![PanelAction::ToggleSolo(i)]; }
-            if id == row.chevron { return vec![PanelAction::ChevronClicked(i)]; }
-            if id == row.blend_mode { return vec![PanelAction::BlendModeClicked(i)]; }
-            if id == row.folder { return vec![PanelAction::FolderClicked(i)]; }
-            if id == row.new_clip { return vec![PanelAction::NewClipClicked(i)]; }
-            if id == row.add_gen_clip { return vec![PanelAction::AddGenClipClicked(i)]; }
-            if id == row.midi_input { return vec![PanelAction::MidiInputClicked(i)]; }
-            if id == row.ch_dropdown { return vec![PanelAction::MidiChannelClicked(i)]; }
+            if id == row.mute {
+                return vec![PanelAction::ToggleMute(i)];
+            }
+            if id == row.solo {
+                return vec![PanelAction::ToggleSolo(i)];
+            }
+            if id == row.chevron {
+                return vec![PanelAction::ChevronClicked(i)];
+            }
+            if id == row.blend_mode {
+                return vec![PanelAction::BlendModeClicked(i)];
+            }
+            if id == row.folder {
+                return vec![PanelAction::FolderClicked(i)];
+            }
+            if id == row.new_clip {
+                return vec![PanelAction::NewClipClicked(i)];
+            }
+            if id == row.add_gen_clip {
+                return vec![PanelAction::AddGenClipClicked(i)];
+            }
+            if id == row.midi_input {
+                return vec![PanelAction::MidiInputClicked(i)];
+            }
+            if id == row.ch_dropdown {
+                return vec![PanelAction::MidiChannelClicked(i)];
+            }
             if id == row.name || id == row.bg || id == row.drag_handle {
                 return vec![PanelAction::LayerClicked(i, modifiers)];
             }
@@ -1038,7 +1298,9 @@ impl LayerHeaderPanel {
 }
 
 impl Default for LayerHeaderPanel {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Panel for LayerHeaderPanel {
@@ -1055,8 +1317,15 @@ impl Panel for LayerHeaderPanel {
 
         // Full-area background (prevents compositor blit bleed-through)
         tree.add_panel(
-            -1, lc.x, lc.y, lc.width, lc.height,
-            UIStyle { bg_color: color::CONTROL_BG, ..UIStyle::default() },
+            -1,
+            lc.x,
+            lc.y,
+            lc.width,
+            lc.height,
+            UIStyle {
+                bg_color: color::CONTROL_BG,
+                ..UIStyle::default()
+            },
         );
 
         // Create a clip region for the scrollable layer rows area.
@@ -1093,7 +1362,9 @@ impl Panel for LayerHeaderPanel {
 
         for i in 0..layer_count {
             let layer = &layers_snapshot[i];
-            if layer.height <= 0.0 { continue; }
+            if layer.height <= 0.0 {
+                continue;
+            }
 
             // Check if this layer row is within the visible clip bounds
             let row_screen_y = self.panel_origin.y + layer.y_offset;
@@ -1115,9 +1386,14 @@ impl Panel for LayerHeaderPanel {
             };
 
             let row = compute_layer_row(
-                layer.y_offset, layer.height, lc.width,
-                layer.is_collapsed, layer.is_group, layer.is_generator,
-                is_child, is_last_child,
+                layer.y_offset,
+                layer.height,
+                lc.width,
+                layer.is_collapsed,
+                layer.is_group,
+                layer.is_generator,
+                is_child,
+                is_last_child,
                 layer.is_group && !layer.is_collapsed,
             );
 
@@ -1130,8 +1406,15 @@ impl Panel for LayerHeaderPanel {
 
         // Insert indicator (hidden off-screen)
         self.insert_indicator_id = tree.add_panel(
-            self.scroll_clip_id, lc.x, lc.y - 10.0, lc.width, INSERT_LINE_H,
-            UIStyle { bg_color: Color32::TRANSPARENT, ..UIStyle::default() },
+            self.scroll_clip_id,
+            lc.x,
+            lc.y - 10.0,
+            lc.width,
+            INSERT_LINE_H,
+            UIStyle {
+                bg_color: Color32::TRANSPARENT,
+                ..UIStyle::default()
+            },
         ) as i32;
 
         // No "+ Add Layer" button — layers are added via right-click context menu
@@ -1157,10 +1440,8 @@ impl Panel for LayerHeaderPanel {
             self.cached_active_layer = new.clone();
 
             // Resolve LayerId → index for tree updates
-            let old_idx = old.and_then(|id|
-                self.layers.iter().position(|l| l.layer_id == *id));
-            let new_idx = new.and_then(|id|
-                self.layers.iter().position(|l| l.layer_id == *id));
+            let old_idx = old.and_then(|id| self.layers.iter().position(|l| l.layer_id == *id));
+            let new_idx = new.and_then(|id| self.layers.iter().position(|l| l.layer_id == *id));
 
             // Deselect old active layer
             if let Some(idx) = old_idx {
@@ -1175,7 +1456,9 @@ impl Panel for LayerHeaderPanel {
 
     fn handle_event(&mut self, event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
         match event {
-            UIEvent::Click { node_id, modifiers, .. } => {
+            UIEvent::Click {
+                node_id, modifiers, ..
+            } => {
                 self.pending_drag_layer = -1;
                 self.handle_click(*node_id, *modifiers)
             }
@@ -1199,8 +1482,12 @@ impl Panel for LayerHeaderPanel {
         }
     }
 
-    fn first_node(&self) -> usize { self.cache_first_node }
-    fn node_count(&self) -> usize { self.cache_node_count }
+    fn first_node(&self) -> usize {
+        self.cache_first_node
+    }
+    fn node_count(&self) -> usize {
+        self.cache_node_count
+    }
 }
 
 #[cfg(test)]
@@ -1336,10 +1623,7 @@ mod tests {
         let mut child = make_video_layer("Child", 70.0, 140.0);
         child.parent_layer_id = Some("Group".into());
 
-        panel.set_layers(vec![
-            make_group_layer("Group", 0.0, 70.0),
-            child,
-        ]);
+        panel.set_layers(vec![make_group_layer("Group", 0.0, 70.0), child]);
 
         panel.build(&mut tree, &layout);
 
@@ -1363,8 +1647,14 @@ mod tests {
     fn folder_path_extraction() {
         assert_eq!(folder_path_text(&None, 0), "None");
         assert_eq!(folder_path_text(&Some(String::new()), 0), "None");
-        assert_eq!(folder_path_text(&Some("/Users/test/Videos/Drums/".into()), 12), "Drums/ (12)");
-        assert_eq!(folder_path_text(&Some("C:\\Videos\\Synth".into()), 5), "Synth/ (5)");
+        assert_eq!(
+            folder_path_text(&Some("/Users/test/Videos/Drums/".into()), 12),
+            "Drums/ (12)"
+        );
+        assert_eq!(
+            folder_path_text(&Some("C:\\Videos\\Synth".into()), 5),
+            "Synth/ (5)"
+        );
     }
 
     #[test]

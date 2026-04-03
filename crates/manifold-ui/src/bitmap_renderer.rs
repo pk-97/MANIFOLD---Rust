@@ -193,8 +193,7 @@ impl LayerBitmapRenderer {
             // Region overlay spans specific layers
             let region_on_this_layer = if state.has_region {
                 if let Some(region) = state.region {
-                    self.layer_index >= region.start_layer
-                        && self.layer_index <= region.end_layer
+                    self.layer_index >= region.start_layer && self.layer_index <= region.end_layer
                 } else {
                     false
                 }
@@ -203,8 +202,8 @@ impl LayerBitmapRenderer {
             };
 
             // Insert cursor is per-layer
-            let has_cursor = state.has_insert_cursor
-                && state.insert_cursor_layer == Some(self.layer_index);
+            let has_cursor =
+                state.has_insert_cursor && state.insert_cursor_layer == Some(self.layer_index);
 
             sel_dirty = has_selection
                 || self.last_had_selected_clips
@@ -260,10 +259,16 @@ impl LayerBitmapRenderer {
 
         // Detect scroll-only change (no zoom, no height change, no non-viewport dirty).
         let zoom_same = approx_eq(self.last_viewport_width, viewport_width_px)
-            && approx_eq(self.last_max_beat - self.last_min_beat,
-                         viewport_max_beat - viewport_min_beat);
-        let scroll_only = viewport_dirty && zoom_same
-            && !sel_dirty && !hover_dirty && !clip_data_dirty && !mute_dirty
+            && approx_eq(
+                self.last_max_beat - self.last_min_beat,
+                viewport_max_beat - viewport_min_beat,
+            );
+        let scroll_only = viewport_dirty
+            && zoom_same
+            && !sel_dirty
+            && !hover_dirty
+            && !clip_data_dirty
+            && !mute_dirty
             && !self.force_dirty;
 
         // Update cached state
@@ -294,20 +299,16 @@ impl LayerBitmapRenderer {
                     let row = y * tex_w;
                     if delta_px > 0 {
                         // Scrolled right: shift left, expose right strip.
-                        self.pixel_buffer.copy_within(
-                            row + abs_delta..row + tex_w,
-                            row,
-                        );
+                        self.pixel_buffer
+                            .copy_within(row + abs_delta..row + tex_w, row);
                         // Clear exposed strip at right.
                         for x in (tex_w - abs_delta)..tex_w {
                             self.pixel_buffer[row + x] = Color32::TRANSPARENT;
                         }
                     } else {
                         // Scrolled left: shift right, expose left strip.
-                        self.pixel_buffer.copy_within(
-                            row..row + tex_w - abs_delta,
-                            row + abs_delta,
-                        );
+                        self.pixel_buffer
+                            .copy_within(row..row + tex_w - abs_delta, row + abs_delta);
                         // Clear exposed strip at left.
                         for x in 0..abs_delta {
                             self.pixel_buffer[row + x] = Color32::TRANSPARENT;
@@ -401,28 +402,27 @@ impl LayerBitmapRenderer {
         // Paint region highlight ON TOP of clips (Unity lines 234-249)
         if state.has_region
             && let Some(region) = state.region
-                && self.layer_index >= region.start_layer
-                    && self.layer_index <= region.end_layer
-                {
-                    let region_start_px =
-                        (region.start_beat.as_f32() - viewport_min_beat) * scaled_ppb;
-                    let region_end_px = (region.end_beat.as_f32() - viewport_min_beat) * scaled_ppb;
-                    let rx = region_start_px.round().max(0.0) as i32;
-                    let rx1 = region_end_px.round().min(tex_w as f32) as i32;
-                    let rw = rx1 - rx;
-                    if rw > 0 {
-                        bitmap_painter::fill_rect(
-                            &mut self.pixel_buffer,
-                            tex_w,
-                            tex_h,
-                            rx,
-                            0,
-                            rw,
-                            tex_h as i32,
-                            REGION_HIGHLIGHT_COLOR,
-                        );
-                    }
-                }
+            && self.layer_index >= region.start_layer
+            && self.layer_index <= region.end_layer
+        {
+            let region_start_px = (region.start_beat.as_f32() - viewport_min_beat) * scaled_ppb;
+            let region_end_px = (region.end_beat.as_f32() - viewport_min_beat) * scaled_ppb;
+            let rx = region_start_px.round().max(0.0) as i32;
+            let rx1 = region_end_px.round().min(tex_w as f32) as i32;
+            let rw = rx1 - rx;
+            if rw > 0 {
+                bitmap_painter::fill_rect(
+                    &mut self.pixel_buffer,
+                    tex_w,
+                    tex_h,
+                    rx,
+                    0,
+                    rw,
+                    tex_h as i32,
+                    REGION_HIGHLIGHT_COLOR,
+                );
+            }
+        }
 
         // Paint insert cursor line on the active layer only (Unity lines 251-260)
         if state.has_insert_cursor && state.insert_cursor_layer == Some(self.layer_index) {
@@ -569,10 +569,8 @@ fn paint_grid_lines(
         }
 
         // Determine line type (Unity lines 386-413)
-        let beat_in_bar =
-            subdiv_beat - (subdiv_beat / beats_per_bar).floor() * beats_per_bar;
-        let is_bar =
-            beat_in_bar.abs() < 0.001 || (beat_in_bar - beats_per_bar).abs() < 0.001;
+        let beat_in_bar = subdiv_beat - (subdiv_beat / beats_per_bar).floor() * beats_per_bar;
+        let is_bar = beat_in_bar.abs() < 0.001 || (beat_in_bar - beats_per_bar).abs() < 0.001;
         let is_beat = (subdiv_beat - subdiv_beat.round()).abs() < 0.001;
 
         let (line_color, line_width) = if is_bar {
@@ -734,10 +732,7 @@ mod tests {
 
     #[test]
     fn fingerprint_stable_same_data() {
-        let clips = vec![
-            make_clip("a", 0.0, 4.0),
-            make_clip("b", 8.0, 2.0),
-        ];
+        let clips = vec![make_clip("a", 0.0, 4.0), make_clip("b", 8.0, 2.0)];
         let fp1 = compute_clip_fingerprint(&clips, 0.0, 16.0);
         let fp2 = compute_clip_fingerprint(&clips, 0.0, 16.0);
         assert_eq!(fp1, fp2);

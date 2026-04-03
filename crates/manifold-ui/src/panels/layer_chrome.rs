@@ -1,8 +1,8 @@
+use super::PanelAction;
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderDragState};
 use crate::tree::UITree;
-use super::PanelAction;
 
 // ── Layout constants (from LayerChromeBitmapPanel.cs) ─────────────
 
@@ -18,7 +18,9 @@ const OPACITY_LABEL_W: f32 = 50.0;
 const FONT_SIZE: u16 = color::FONT_BODY;
 const NAME_FONT_SIZE: u16 = color::FONT_SUBHEADING;
 
-fn fmt_opacity(v: f32) -> String { format!("{:.2}", v) }
+fn fmt_opacity(v: f32) -> String {
+    format!("{:.2}", v)
+}
 
 // ── LayerChromePanel ─────────────────────────────────────────────
 
@@ -77,10 +79,18 @@ impl LayerChromePanel {
         h
     }
 
-    pub fn first_node(&self) -> usize { self.first_node }
-    pub fn node_count(&self) -> usize { self.node_count }
-    pub fn is_dragging(&self) -> bool { self.opacity.is_dragging() }
-    pub fn is_collapsed(&self) -> bool { self.is_collapsed }
+    pub fn first_node(&self) -> usize {
+        self.first_node
+    }
+    pub fn node_count(&self) -> usize {
+        self.node_count
+    }
+    pub fn is_dragging(&self) -> bool {
+        self.opacity.is_dragging()
+    }
+    pub fn is_collapsed(&self) -> bool {
+        self.is_collapsed
+    }
 
     pub fn toggle_collapsed(&mut self) {
         self.is_collapsed = !self.is_collapsed;
@@ -107,12 +117,20 @@ impl LayerChromePanel {
         let header_text = self.cached_header_text.clone();
         let name = self.cached_name.clone();
         let opacity_val = self.opacity.cached_value();
-        let opacity = if opacity_val.is_nan() { 1.0 } else { opacity_val };
+        let opacity = if opacity_val.is_nan() {
+            1.0
+        } else {
+            opacity_val
+        };
 
         // Header row
         let label_w = content_w - CHEVRON_W - GAP;
         self.header_label_id = tree.add_label(
-            -1, cx, cy, label_w, HEADER_ROW_H,
+            -1,
+            cx,
+            cy,
+            label_w,
+            HEADER_ROW_H,
             &header_text,
             UIStyle {
                 text_color: color::TEXT_PRIMARY_C32,
@@ -124,7 +142,11 @@ impl LayerChromePanel {
 
         let chev_x = cx + content_w - CHEVRON_W;
         self.chevron_btn_id = tree.add_button(
-            -1, chev_x, cy + (HEADER_ROW_H - 16.0) * 0.5, CHEVRON_W, 16.0,
+            -1,
+            chev_x,
+            cy + (HEADER_ROW_H - 16.0) * 0.5,
+            CHEVRON_W,
+            16.0,
             UIStyle {
                 bg_color: Color32::TRANSPARENT,
                 hover_bg_color: color::HOVER_OVERLAY,
@@ -134,7 +156,11 @@ impl LayerChromePanel {
                 text_align: TextAlign::Center,
                 ..UIStyle::default()
             },
-            if self.is_collapsed { "\u{25B6}" } else { "\u{25BC}" },
+            if self.is_collapsed {
+                "\u{25B6}"
+            } else {
+                "\u{25BC}"
+            },
         ) as i32;
 
         cy += HEADER_ROW_H;
@@ -150,14 +176,25 @@ impl LayerChromePanel {
         // Name row (optional)
         if self.show_name {
             self.divider_ids[div_idx] = tree.add_panel(
-                -1, cx, cy, content_w, DIVIDER_H,
-                UIStyle { bg_color: color::DIVIDER_C32, ..UIStyle::default() },
+                -1,
+                cx,
+                cy,
+                content_w,
+                DIVIDER_H,
+                UIStyle {
+                    bg_color: color::DIVIDER_C32,
+                    ..UIStyle::default()
+                },
             ) as i32;
             div_idx += 1;
             cy += DIVIDER_H;
 
             self.name_label_id = tree.add_label(
-                -1, cx, cy, content_w, NAME_ROW_H,
+                -1,
+                cx,
+                cy,
+                content_w,
+                NAME_ROW_H,
                 &name,
                 UIStyle {
                     text_color: color::TEXT_PRIMARY_C32,
@@ -174,8 +211,15 @@ impl LayerChromePanel {
         // Opacity slider (optional)
         if self.show_opacity {
             self.divider_ids[div_idx] = tree.add_panel(
-                -1, cx, cy, content_w, DIVIDER_H,
-                UIStyle { bg_color: color::DIVIDER_C32, ..UIStyle::default() },
+                -1,
+                cx,
+                cy,
+                content_w,
+                DIVIDER_H,
+                UIStyle {
+                    bg_color: color::DIVIDER_C32,
+                    ..UIStyle::default()
+                },
             ) as i32;
             div_idx += 1;
             cy += DIVIDER_H;
@@ -183,10 +227,15 @@ impl LayerChromePanel {
             let slider_rect = Rect::new(cx, cy, content_w, SLIDER_ROW_H);
             let val_text = fmt_opacity(opacity);
             let ids = BitmapSlider::build(
-                tree, -1, slider_rect,
-                Some("Opacity"), opacity,
-                &val_text, &SliderColors::default_slider(),
-                FONT_SIZE, OPACITY_LABEL_W,
+                tree,
+                -1,
+                slider_rect,
+                Some("Opacity"),
+                opacity,
+                &val_text,
+                &SliderColors::default_slider(),
+                FONT_SIZE,
+                OPACITY_LABEL_W,
             );
             self.opacity.set_ids(ids);
             cy += SLIDER_ROW_H;
@@ -196,8 +245,15 @@ impl LayerChromePanel {
 
         // Final divider
         self.divider_ids[div_idx] = tree.add_panel(
-            -1, cx, cy, content_w, DIVIDER_H,
-            UIStyle { bg_color: color::DIVIDER_C32, ..UIStyle::default() },
+            -1,
+            cx,
+            cy,
+            content_w,
+            DIVIDER_H,
+            UIStyle {
+                bg_color: color::DIVIDER_C32,
+                ..UIStyle::default()
+            },
         ) as i32;
 
         self.node_count = tree.count() - self.first_node;
@@ -276,7 +332,9 @@ impl LayerChromePanel {
 }
 
 impl Default for LayerChromePanel {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]
@@ -312,7 +370,7 @@ mod tests {
     fn set_visibility_returns_changed() {
         let mut panel = LayerChromePanel::new();
         assert!(!panel.set_visibility(true, true)); // no change
-        assert!(panel.set_visibility(false, true));  // changed
+        assert!(panel.set_visibility(false, true)); // changed
         assert!(!panel.set_visibility(false, true)); // no change
     }
 

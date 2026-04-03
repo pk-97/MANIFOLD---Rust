@@ -13,8 +13,8 @@
 #![allow(deprecated)]
 #![allow(dead_code)]
 
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use parking_lot::RwLock;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use core_foundation::base::TCFType;
 use core_foundation::dictionary::CFMutableDictionary;
@@ -67,7 +67,10 @@ impl SharedTextureBridge {
 
         log::info!(
             "[SharedTextureBridge] created {}x IOSurface {}x{} Rgba16Float ({} bytes each)",
-            SURFACE_COUNT, width, height, width * height * BPP,
+            SURFACE_COUNT,
+            width,
+            height,
+            width * height * BPP,
         );
 
         Self {
@@ -93,10 +96,8 @@ impl SharedTextureBridge {
                 CFString::wrap_under_get_rule(io_surface::kIOSurfaceBytesPerRow);
             let key_bytes_per_elem =
                 CFString::wrap_under_get_rule(io_surface::kIOSurfaceBytesPerElement);
-            let key_pixel_format =
-                CFString::wrap_under_get_rule(io_surface::kIOSurfacePixelFormat);
-            let key_alloc_size =
-                CFString::wrap_under_get_rule(io_surface::kIOSurfaceAllocSize);
+            let key_pixel_format = CFString::wrap_under_get_rule(io_surface::kIOSurfacePixelFormat);
+            let key_alloc_size = CFString::wrap_under_get_rule(io_surface::kIOSurfaceAllocSize);
 
             props.set(key_width, CFNumber::from(width as i64));
             props.set(key_height, CFNumber::from(height as i64));
@@ -108,8 +109,7 @@ impl SharedTextureBridge {
             );
             props.set(key_alloc_size, CFNumber::from(total_bytes as i64));
 
-            let surface_ref =
-                io_surface::IOSurfaceCreate(props.as_concrete_TypeRef() as *mut _);
+            let surface_ref = io_surface::IOSurfaceCreate(props.as_concrete_TypeRef() as *mut _);
             assert!(!surface_ref.is_null(), "IOSurfaceCreate failed");
             TCFType::wrap_under_create_rule(surface_ref)
         }
@@ -126,24 +126,29 @@ impl SharedTextureBridge {
         &self,
         device: &manifold_gpu::GpuDevice,
         surface_index: usize,
-    ) -> manifold_gpu::GpuTexture { unsafe {
-        assert!(surface_index < SURFACE_COUNT, "surface_index must be 0..{SURFACE_COUNT}");
-        let width = self.width.load(Ordering::Acquire);
-        let height = self.height.load(Ordering::Acquire);
+    ) -> manifold_gpu::GpuTexture {
+        unsafe {
+            assert!(
+                surface_index < SURFACE_COUNT,
+                "surface_index must be 0..{SURFACE_COUNT}"
+            );
+            let width = self.width.load(Ordering::Acquire);
+            let height = self.height.load(Ordering::Acquire);
 
-        let io_surfaces_guard = self.io_surfaces.read();
-        let io_surface_ref = io_surfaces_guard[surface_index].as_concrete_TypeRef()
-            as *const std::ffi::c_void;
-        let texture = device.create_texture_from_io_surface(
-            io_surface_ref,
-            width,
-            height,
-            manifold_gpu::GpuTextureFormat::Rgba16Float,
-            manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
-        );
-        drop(io_surfaces_guard);
-        texture
-    }}
+            let io_surfaces_guard = self.io_surfaces.read();
+            let io_surface_ref =
+                io_surfaces_guard[surface_index].as_concrete_TypeRef() as *const std::ffi::c_void;
+            let texture = device.create_texture_from_io_surface(
+                io_surface_ref,
+                width,
+                height,
+                manifold_gpu::GpuTextureFormat::Rgba16Float,
+                manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+            );
+            drop(io_surfaces_guard);
+            texture
+        }
+    }
 
     /// Resize the bridge. Creates three new IOSurfaces at the new dimensions.
     /// Both devices must re-import their textures after this call
@@ -162,7 +167,9 @@ impl SharedTextureBridge {
         self.generation.fetch_add(1, Ordering::Release);
         log::info!(
             "[SharedTextureBridge] resized {}x IOSurface to {}x{}",
-            SURFACE_COUNT, width, height,
+            SURFACE_COUNT,
+            width,
+            height,
         );
     }
 

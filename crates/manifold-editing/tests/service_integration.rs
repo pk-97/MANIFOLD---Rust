@@ -1,28 +1,40 @@
-use manifold_core::{Beats, ClipId};
-use manifold_core::units::Bpm;
-use manifold_editing::service::EditingService;
 use manifold_core::clip::TimelineClip;
-use manifold_core::project::Project;
 use manifold_core::layer::Layer;
+use manifold_core::project::Project;
 use manifold_core::selection::SelectionRegion;
 use manifold_core::types::*;
+use manifold_core::units::Bpm;
+use manifold_core::{Beats, ClipId};
+use manifold_editing::service::EditingService;
 
 fn make_project() -> Project {
     let mut project = Project::default();
     project.settings.bpm = Bpm(120.0);
     project.settings.time_signature_numerator = 4;
-    project.timeline.insert_layer(0, Layer::new("Video 1".into(), LayerType::Video, 0));
-    project.timeline.insert_layer(1, Layer::new("Video 2".into(), LayerType::Video, 1));
+    project
+        .timeline
+        .insert_layer(0, Layer::new("Video 1".into(), LayerType::Video, 0));
+    project
+        .timeline
+        .insert_layer(1, Layer::new("Video 2".into(), LayerType::Video, 1));
     project.timeline.rebuild_clip_lookup();
     project
 }
 
 /// Build a SelectionRegion from layer index range + project layers.
-fn make_region(project: &Project, start_beat: f32, end_beat: f32, start_layer: usize, end_layer: usize) -> SelectionRegion {
+fn make_region(
+    project: &Project,
+    start_beat: f32,
+    end_beat: f32,
+    start_layer: usize,
+    end_layer: usize,
+) -> SelectionRegion {
     use std::collections::HashSet;
     let layers = &project.timeline.layers;
     let lo = start_layer.min(end_layer);
-    let hi = start_layer.max(end_layer).min(layers.len().saturating_sub(1));
+    let hi = start_layer
+        .max(end_layer)
+        .min(layers.len().saturating_sub(1));
     let mut selected = HashSet::new();
     for layer in layers.iter().skip(lo).take(hi - lo + 1) {
         selected.insert(layer.layer_id.clone());
@@ -152,7 +164,9 @@ fn overlap_splits_middle() {
 
     // Tail clip added at [5..8]
     assert_eq!(project.timeline.layers[0].clips.len(), 2);
-    let tail = project.timeline.layers[0].clips.iter()
+    let tail = project.timeline.layers[0]
+        .clips
+        .iter()
         .find(|c| c.id != existing_id)
         .expect("tail clip should exist");
     assert!((tail.start_beat - Beats(5.0)).abs() < Beats(0.001));
@@ -181,7 +195,12 @@ fn copy_paste_roundtrip() {
     project.timeline.rebuild_clip_lookup();
 
     // Pasted clips should have new IDs
-    assert!(result.pasted_clip_ids.iter().all(|id| id != &id1 && id != &id2));
+    assert!(
+        result
+            .pasted_clip_ids
+            .iter()
+            .all(|id| id != &id1 && id != &id2)
+    );
 
     // Pasted clips should exist
     for id in &result.pasted_clip_ids {
@@ -206,7 +225,9 @@ fn paste_preserves_relative_offsets() {
     project.timeline.rebuild_clip_lookup();
 
     // Collect pasted clip beats
-    let mut pasted: Vec<(f32, usize)> = result.pasted_clip_ids.iter()
+    let mut pasted: Vec<(f32, usize)> = result
+        .pasted_clip_ids
+        .iter()
         .map(|id| {
             let mut beat = 0.0f32;
             let mut layer_idx = 0usize;
@@ -248,7 +269,9 @@ fn duplicate_region_shifts_forward() {
     project.timeline.rebuild_clip_lookup();
 
     assert_eq!(project.timeline.layers[0].clips.len(), 2);
-    let dup = project.timeline.layers[0].clips.iter()
+    let dup = project.timeline.layers[0]
+        .clips
+        .iter()
         .find(|c| c.id != id1)
         .unwrap();
     assert!((dup.start_beat - Beats(4.0)).abs() < Beats(0.001)); // shifted by region duration (4)
@@ -279,7 +302,8 @@ fn create_clip_at_position() {
     let mut project = make_project();
     let initial = project.timeline.layers[0].clips.len();
 
-    let (mut cmd, _clip_id) = EditingService::create_clip_at_position(&mut project, Beats(2.0), 0, Beats(4.0));
+    let (mut cmd, _clip_id) =
+        EditingService::create_clip_at_position(&mut project, Beats(2.0), 0, Beats(4.0));
     cmd.execute(&mut project);
     project.timeline.rebuild_clip_lookup();
 
@@ -316,7 +340,10 @@ fn multi_step_undo_redo() {
     // Execute 5 operations
     for i in 0..5 {
         let (cmd, _) = EditingService::create_clip_at_position(
-            &mut project, Beats(i as f64 * 4.0), 0, Beats(4.0),
+            &mut project,
+            Beats(i as f64 * 4.0),
+            0,
+            Beats(4.0),
         );
         service.execute(cmd, &mut project);
     }
@@ -391,7 +418,9 @@ fn split_at_beat() {
     assert!((original.duration_beats - Beats(4.0)).abs() < Beats(0.001));
 
     assert_eq!(project.timeline.layers[0].clips.len(), 2);
-    let tail = project.timeline.layers[0].clips.iter()
+    let tail = project.timeline.layers[0]
+        .clips
+        .iter()
         .find(|c| c.id != id1)
         .unwrap();
     assert!((tail.start_beat - Beats(4.0)).abs() < Beats(0.001));
@@ -550,7 +579,9 @@ fn copy_clips_region_mode_trims() {
     project.timeline.rebuild_clip_lookup();
 
     // Find the pasted clip
-    let pasted = project.timeline.layers[0].clips.iter()
+    let pasted = project.timeline.layers[0]
+        .clips
+        .iter()
         .find(|c| c.id == result.pasted_clip_ids[0])
         .unwrap();
     // Should be trimmed: start=10.0 (paste target + 0 offset), duration=4.0 (6-2)
@@ -576,12 +607,19 @@ fn duplicate_clips_region_mode_trims() {
 
     // Should have 2 clips: original (0..6, trimmed) + duplicate (6..10)
     assert_eq!(project.timeline.layers[0].clips.len(), 2);
-    let orig = project.timeline.layers[0].clips.iter()
+    let orig = project.timeline.layers[0]
+        .clips
+        .iter()
         .find(|c| c.id == id1)
         .unwrap();
-    assert!((orig.duration_beats - Beats(6.0)).abs() < Beats(0.001),
-        "original should be trimmed to 6 beats, got {}", orig.duration_beats.0);
-    let dup = project.timeline.layers[0].clips.iter()
+    assert!(
+        (orig.duration_beats - Beats(6.0)).abs() < Beats(0.001),
+        "original should be trimmed to 6 beats, got {}",
+        orig.duration_beats.0
+    );
+    let dup = project.timeline.layers[0]
+        .clips
+        .iter()
         .find(|c| c.start_beat > Beats(5.0))
         .unwrap();
     // Region duration is 4.0, so duplicate starts at 2.0 + 4.0 = 6.0

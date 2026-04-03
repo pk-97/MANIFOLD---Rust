@@ -55,7 +55,9 @@ impl ReadbackRequest {
         let buffer_size = (bytes_per_row * height) as u64;
 
         // Create or recreate staging buffer if dimensions changed.
-        let needs_new = self.staging_buffer.as_ref()
+        let needs_new = self
+            .staging_buffer
+            .as_ref()
             .is_none_or(|b| b.size() < buffer_size);
         if needs_new {
             self.staging_buffer = Some(device.create_buffer_shared(buffer_size));

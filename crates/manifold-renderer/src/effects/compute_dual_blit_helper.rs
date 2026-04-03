@@ -18,11 +18,7 @@ pub struct ComputeDualBlitHelper {
 
 impl ComputeDualBlitHelper {
     /// Create a new compute-based dual-texture effect pipeline.
-    pub fn new(
-        device: &manifold_gpu::GpuDevice,
-        shader_source: &str,
-        label: &str,
-    ) -> Self {
+    pub fn new(device: &manifold_gpu::GpuDevice, shader_source: &str, label: &str) -> Self {
         let pipeline = device.create_compute_pipeline(shader_source, "cs_main", label);
         let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc::default());
         Self { pipeline, sampler }
@@ -30,11 +26,7 @@ impl ComputeDualBlitHelper {
 
     /// Half-precision variant — converts all f32 ALU to f16 (`half`) in MSL.
     /// 2× ALU throughput on Apple Silicon. Only use for non-accumulative shaders.
-    pub fn new_half(
-        device: &manifold_gpu::GpuDevice,
-        shader_source: &str,
-        label: &str,
-    ) -> Self {
+    pub fn new_half(device: &manifold_gpu::GpuDevice, shader_source: &str, label: &str) -> Self {
         let pipeline = device.create_compute_pipeline_half(shader_source, "cs_main", label);
         let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc::default());
         Self { pipeline, sampler }
@@ -54,7 +46,15 @@ impl ComputeDualBlitHelper {
         height: u32,
     ) {
         self.dispatch_with(
-            pipeline, gpu, source, source, target, uniform_bytes, label, width, height,
+            pipeline,
+            gpu,
+            source,
+            source,
+            target,
+            uniform_bytes,
+            label,
+            width,
+            height,
         );
     }
 
@@ -114,7 +114,16 @@ impl ComputeDualBlitHelper {
         width: u32,
         height: u32,
     ) {
-        self.dispatch(gpu, source, source, target, uniform_bytes, label, width, height);
+        self.dispatch(
+            gpu,
+            source,
+            source,
+            target,
+            uniform_bytes,
+            label,
+            width,
+            height,
+        );
     }
 
     /// Execute a compute dispatch with two source textures.

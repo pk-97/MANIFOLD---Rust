@@ -1,9 +1,9 @@
-use manifold_core::{Beats, Seconds};
+use manifold_core::GeneratorTypeId;
+use manifold_core::LayerId;
 use manifold_core::clip::TimelineClip;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
-use manifold_core::GeneratorTypeId;
-use manifold_core::LayerId;
+use manifold_core::{Beats, Seconds};
 use manifold_editing::command::{Command, CompositeCommand};
 use manifold_editing::commands::clip::AddClipCommand;
 
@@ -17,7 +17,6 @@ pub struct MidiImportResult {
     pub success: bool,
     pub undo_command: Option<Box<dyn Command>>,
 }
-
 
 /// Applies parsed MIDI notes to a timeline layer as clips.
 /// Handles overlap trimming, clip type resolution, and undo recording.
@@ -65,9 +64,12 @@ impl MidiImportService {
         }
 
         // Resolve clip creation strategy
-        let is_generator = project.timeline.layers[target_layer_index].layer_type == LayerType::Generator;
+        let is_generator =
+            project.timeline.layers[target_layer_index].layer_type == LayerType::Generator;
         let gen_type = project.timeline.layers[target_layer_index].generator_type();
-        let source_clip_ids_empty = project.timeline.layers[target_layer_index].source_clip_ids.is_empty();
+        let source_clip_ids_empty = project.timeline.layers[target_layer_index]
+            .source_clip_ids
+            .is_empty();
 
         let (use_generator, _resolved_gen_type) = if !is_generator && source_clip_ids_empty {
             // Video layer with no source clips — fall back to BasicShapesSnap generator
@@ -82,7 +84,9 @@ impl MidiImportService {
 
         // Snapshot source_clip_ids to avoid borrow issues during iteration
         let source_clip_ids: Vec<String> = if !use_generator {
-            project.timeline.layers[target_layer_index].source_clip_ids.clone()
+            project.timeline.layers[target_layer_index]
+                .source_clip_ids
+                .clone()
         } else {
             Vec::new()
         };
@@ -112,7 +116,10 @@ impl MidiImportService {
             };
 
             project.timeline.layers[target_layer_index].add_clip(clip.clone());
-            commands.push(Box::new(AddClipCommand::new(clip, target_layer_lid.clone())));
+            commands.push(Box::new(AddClipCommand::new(
+                clip,
+                target_layer_lid.clone(),
+            )));
             result.added_clips += 1;
         }
 
@@ -123,7 +130,10 @@ impl MidiImportService {
         let command: Box<dyn Command> = if commands.len() == 1 {
             commands.remove(0)
         } else {
-            Box::new(CompositeCommand::new(commands, "Import MIDI clips".to_string()))
+            Box::new(CompositeCommand::new(
+                commands,
+                "Import MIDI clips".to_string(),
+            ))
         };
 
         result.undo_command = Some(command);

@@ -18,7 +18,7 @@ use manifold_gpu::{
     GpuSamplerDesc, GpuSurface, GpuTexture, GpuTextureFormat, GpuTextureUsage,
 };
 
-use crate::shared_texture::{SharedTextureBridge, SURFACE_COUNT};
+use crate::shared_texture::{SURFACE_COUNT, SharedTextureBridge};
 
 const PRESENTER_WGSL: &str = r#"
 @group(0) @binding(0) var t_source: texture_2d<f32>;
@@ -130,7 +130,8 @@ impl NativeOutputPresenter {
     }
 
     pub fn update_edr_headroom(&mut self, headroom: f64) {
-        self.edr_headroom.store(headroom.to_bits(), Ordering::Relaxed);
+        self.edr_headroom
+            .store(headroom.to_bits(), Ordering::Relaxed);
     }
 }
 
@@ -168,9 +169,7 @@ impl PresenterThread {
             let pthread = unsafe { libc::pthread_self() };
             let mut param: libc::sched_param = unsafe { std::mem::zeroed() };
             param.sched_priority = 45;
-            let ret = unsafe {
-                libc::pthread_setschedparam(pthread, libc::SCHED_RR, &param)
-            };
+            let ret = unsafe { libc::pthread_setschedparam(pthread, libc::SCHED_RR, &param) };
             if ret != 0 {
                 log::warn!(
                     "[OutputPresenter] Failed to set RT priority (err={}), \
@@ -232,8 +231,14 @@ impl PresenterThread {
             &self.pipeline,
             &target,
             &[
-                GpuBinding::Texture { binding: 0, texture: source },
-                GpuBinding::Sampler { binding: 1, sampler: &self.sampler },
+                GpuBinding::Texture {
+                    binding: 0,
+                    texture: source,
+                },
+                GpuBinding::Sampler {
+                    binding: 1,
+                    sampler: &self.sampler,
+                },
             ],
             (0.0, 0.0, w, h),
             GpuLoadAction::DontCare,

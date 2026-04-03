@@ -1,7 +1,7 @@
 //! GPU resource types backed by native Metal objects.
 
-use crate::types::*;
 use super::*;
+use crate::types::*;
 
 // ─── GpuTexture ───────────────────────────────────────────────────────
 
@@ -26,7 +26,13 @@ impl GpuTexture {
         depth: u32,
         format: GpuTextureFormat,
     ) -> Self {
-        Self { raw, width, height, depth, format }
+        Self {
+            raw,
+            width,
+            height,
+            depth,
+            format,
+        }
     }
 
     /// Raw Metal texture reference.
@@ -78,13 +84,11 @@ impl GpuBuffer {
     /// Caller must ensure offset + data.len() <= buffer size,
     /// and no GPU reads overlap this write.
     pub unsafe fn write(&self, offset: u64, data: &[u8]) {
-        let ptr = self.mapped_ptr.expect("write() requires shared-memory buffer");
+        let ptr = self
+            .mapped_ptr
+            .expect("write() requires shared-memory buffer");
         unsafe {
-            std::ptr::copy_nonoverlapping(
-                data.as_ptr(),
-                ptr.add(offset as usize),
-                data.len(),
-            );
+            std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.add(offset as usize), data.len());
         }
     }
 
@@ -209,8 +213,7 @@ impl GpuEvent {
     /// Block the calling thread until the GPU has signaled `value`, with a timeout.
     /// Returns `true` if the event was signaled, `false` if timed out.
     pub fn wait_until_done_timeout(&self, value: u64, timeout_ms: u64) -> bool {
-        let deadline = std::time::Instant::now()
-            + std::time::Duration::from_millis(timeout_ms);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
         while !self.is_done(value) {
             if std::time::Instant::now() >= deadline {
                 return false;

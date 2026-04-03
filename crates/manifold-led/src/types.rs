@@ -99,11 +99,27 @@ impl Default for LedSettings {
     }
 }
 
-fn default_true() -> bool { true }
-fn default_left_edge_width() -> f32 { 0.2 }
-fn default_right_edge_width() -> f32 { 0.2 }
-fn default_artnet_ip() -> String { DEFAULT_ARTNET_IP.to_string() }
-fn default_artnet_port() -> u16 { DEFAULT_ARTNET_PORT }
-fn default_strip_count() -> u32 { DEFAULT_STRIP_COUNT }
-fn default_leds_per_strip() -> u32 { DEFAULT_LEDS_PER_STRIP }
-fn default_blur_radius() -> f32 { 12.0 }
+fn default_true() -> bool {
+    true
+}
+fn default_left_edge_width() -> f32 {
+    0.2
+}
+fn default_right_edge_width() -> f32 {
+    0.2
+}
+fn default_artnet_ip() -> String {
+    DEFAULT_ARTNET_IP.to_string()
+}
+fn default_artnet_port() -> u16 {
+    DEFAULT_ARTNET_PORT
+}
+fn default_strip_count() -> u32 {
+    DEFAULT_STRIP_COUNT
+}
+fn default_leds_per_strip() -> u32 {
+    DEFAULT_LEDS_PER_STRIP
+}
+fn default_blur_radius() -> f32 {
+    12.0
+}

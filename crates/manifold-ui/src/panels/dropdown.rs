@@ -172,12 +172,7 @@ impl DropdownPanel {
     }
 
     /// Open as a context menu at the given screen position.
-    pub fn open_context(
-        &mut self,
-        items: Vec<DropdownItem>,
-        pos: Vec2,
-        tree: &mut UITree,
-    ) {
+    pub fn open_context(&mut self, items: Vec<DropdownItem>, pos: Vec2, tree: &mut UITree) {
         self.color_grid.clear();
         self.color_grid_cols = 0;
         self.open_at(items, pos, MIN_WIDTH, tree);
@@ -318,7 +313,14 @@ impl DropdownPanel {
             border_width: 1.0,
             ..UIStyle::default()
         };
-        self.root_id = tree.add_panel(-1, bounds.x, bounds.y, bounds.width, bounds.height, container_style) as i32;
+        self.root_id = tree.add_panel(
+            -1,
+            bounds.x,
+            bounds.y,
+            bounds.width,
+            bounds.height,
+            container_style,
+        ) as i32;
 
         // Build items — positions must be absolute screen coordinates
         // (the tree does not offset children by parent position).
@@ -346,10 +348,26 @@ impl DropdownPanel {
             };
 
             let item_style = UIStyle {
-                bg_color: if checked { color::DROPDOWN_ITEM_SELECTED } else { color::DROPDOWN_BG },
-                hover_bg_color: if enabled { color::DROPDOWN_HIGHLIGHT } else { color::DROPDOWN_BG },
-                pressed_bg_color: if enabled { color::DROPDOWN_PRESSED_BG } else { color::DROPDOWN_BG },
-                text_color: if checked { color::DROPDOWN_CHECK_COLOR } else { text_color },
+                bg_color: if checked {
+                    color::DROPDOWN_ITEM_SELECTED
+                } else {
+                    color::DROPDOWN_BG
+                },
+                hover_bg_color: if enabled {
+                    color::DROPDOWN_HIGHLIGHT
+                } else {
+                    color::DROPDOWN_BG
+                },
+                pressed_bg_color: if enabled {
+                    color::DROPDOWN_PRESSED_BG
+                } else {
+                    color::DROPDOWN_BG
+                },
+                text_color: if checked {
+                    color::DROPDOWN_CHECK_COLOR
+                } else {
+                    text_color
+                },
                 font_size: color::FONT_BODY,
                 text_align: TextAlign::Left,
                 corner_radius: color::SMALL_RADIUS,
@@ -492,38 +510,37 @@ impl DropdownPanel {
             }
             UIEvent::HoverExit { node_id } => {
                 if let Some(index) = self.item_index_for_node(*node_id)
-                    && self.hovered_index == index as i32 {
-                        self.hovered_index = -1;
-                    }
+                    && self.hovered_index == index as i32
+                {
+                    self.hovered_index = -1;
+                }
                 None
             }
-            UIEvent::KeyDown { key, .. } => {
-                match key {
-                    crate::input::Key::Escape => {
-                        self.close(tree);
-                        Some(DropdownAction::Dismissed)
-                    }
-                    crate::input::Key::Enter => {
-                        if self.hovered_index >= 0 {
-                            let idx = self.hovered_index as usize;
-                            if idx < self.items.len() && self.items[idx].enabled {
-                                self.close(tree);
-                                return Some(DropdownAction::Selected(idx));
-                            }
-                        }
-                        None
-                    }
-                    crate::input::Key::Down => {
-                        self.move_hover(1);
-                        None
-                    }
-                    crate::input::Key::Up => {
-                        self.move_hover(-1);
-                        None
-                    }
-                    _ => None,
+            UIEvent::KeyDown { key, .. } => match key {
+                crate::input::Key::Escape => {
+                    self.close(tree);
+                    Some(DropdownAction::Dismissed)
                 }
-            }
+                crate::input::Key::Enter => {
+                    if self.hovered_index >= 0 {
+                        let idx = self.hovered_index as usize;
+                        if idx < self.items.len() && self.items[idx].enabled {
+                            self.close(tree);
+                            return Some(DropdownAction::Selected(idx));
+                        }
+                    }
+                    None
+                }
+                crate::input::Key::Down => {
+                    self.move_hover(1);
+                    None
+                }
+                crate::input::Key::Up => {
+                    self.move_hover(-1);
+                    None
+                }
+                _ => None,
+            },
             // Consume right-clicks and drags while open.
             UIEvent::RightClick { .. }
             | UIEvent::DragBegin { .. }
@@ -563,7 +580,8 @@ impl DropdownPanel {
         // Skip disabled items (max one full loop).
         let start = next;
         loop {
-            if next >= 0 && (next as usize) < self.items.len() && self.items[next as usize].enabled {
+            if next >= 0 && (next as usize) < self.items.len() && self.items[next as usize].enabled
+            {
                 self.hovered_index = next;
                 return;
             }
@@ -680,7 +698,12 @@ mod tests {
         let event = UIEvent::KeyDown {
             node_id: 0,
             key: crate::input::Key::Escape,
-            modifiers: crate::input::Modifiers { shift: false, ctrl: false, alt: false, command: false },
+            modifiers: crate::input::Modifiers {
+                shift: false,
+                ctrl: false,
+                alt: false,
+                command: false,
+            },
         };
         let result = dd.handle_event(&event, &mut tree);
         assert_eq!(result, Some(DropdownAction::Dismissed));

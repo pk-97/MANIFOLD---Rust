@@ -1,6 +1,6 @@
+use crate::gpu_encoder::GpuEncoder;
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
-use crate::gpu_encoder::GpuEncoder;
 
 /// Per-frame context for effects.
 /// Unity ref: EffectContext.cs
@@ -39,7 +39,8 @@ pub fn find_chain_param(
     param_index: usize,
     default: f32,
 ) -> f32 {
-    chain.iter()
+    chain
+        .iter()
         .find(|fx| fx.effect_type() == effect_type && fx.enabled)
         .and_then(|fx| fx.param_values.get(param_index).copied())
         .unwrap_or(default)

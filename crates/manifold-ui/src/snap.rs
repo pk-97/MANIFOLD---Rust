@@ -84,7 +84,11 @@ pub fn magnetic_snap_beat(
     let pixel_threshold = snap_threshold_px / ppb;
     // Grid threshold: at least half the grid interval so the nearest grid line
     // is always reachable. Capped by max_snap_beats for safety.
-    let half_grid = if grid_interval > 0.0 { grid_interval / 2.0 } else { 0.0 };
+    let half_grid = if grid_interval > 0.0 {
+        grid_interval / 2.0
+    } else {
+        0.0
+    };
     let effective_threshold = pixel_threshold.max(half_grid).min(max_snap_beats);
 
     let mut best_beat = raw_beat;
@@ -150,16 +154,34 @@ mod tests {
     #[test]
     fn snap_beat_to_grid_rounds_correctly() {
         // Quarter note grid
-        assert_eq!(snap_beat_to_grid(Beats::from_f32(4.1), Beats::from_f32(1.0)), Beats::from_f32(4.0));
-        assert_eq!(snap_beat_to_grid(Beats::from_f32(4.6), Beats::from_f32(1.0)), Beats::from_f32(5.0));
-        assert_eq!(snap_beat_to_grid(Beats::from_f32(4.5), Beats::from_f32(1.0)), Beats::from_f32(5.0)); // .5 rounds away from zero
+        assert_eq!(
+            snap_beat_to_grid(Beats::from_f32(4.1), Beats::from_f32(1.0)),
+            Beats::from_f32(4.0)
+        );
+        assert_eq!(
+            snap_beat_to_grid(Beats::from_f32(4.6), Beats::from_f32(1.0)),
+            Beats::from_f32(5.0)
+        );
+        assert_eq!(
+            snap_beat_to_grid(Beats::from_f32(4.5), Beats::from_f32(1.0)),
+            Beats::from_f32(5.0)
+        ); // .5 rounds away from zero
 
         // 16th note grid
-        assert!((snap_beat_to_grid(Beats::from_f32(4.13), Beats::from_f32(0.25)).as_f32() - 4.25).abs() < 0.001);
-        assert!((snap_beat_to_grid(Beats::from_f32(4.01), Beats::from_f32(0.25)).as_f32() - 4.0).abs() < 0.001);
+        assert!(
+            (snap_beat_to_grid(Beats::from_f32(4.13), Beats::from_f32(0.25)).as_f32() - 4.25).abs()
+                < 0.001
+        );
+        assert!(
+            (snap_beat_to_grid(Beats::from_f32(4.01), Beats::from_f32(0.25)).as_f32() - 4.0).abs()
+                < 0.001
+        );
 
         // Zero/negative grid interval returns raw beat
-        assert_eq!(snap_beat_to_grid(Beats::from_f32(4.3), Beats::from_f32(0.0)), Beats::from_f32(4.3));
+        assert_eq!(
+            snap_beat_to_grid(Beats::from_f32(4.3), Beats::from_f32(0.0)),
+            Beats::from_f32(4.3)
+        );
     }
 
     #[test]

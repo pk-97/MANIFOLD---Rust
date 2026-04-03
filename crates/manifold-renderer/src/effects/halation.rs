@@ -7,29 +7,29 @@
 // into a single dispatch, applying threshold/tint per sample.
 // Effective coverage: 17×17 = 289 unique positions vs Unity's 13-point cross.
 
-use ahash::AHashMap;
-use manifold_core::EffectTypeId;
-use manifold_core::effects::EffectInstance;
+use super::HDR_BUFFER_DIVISOR;
+use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
-use super::HDR_BUFFER_DIVISOR;
-use super::compute_dual_blit_helper::ComputeDualBlitHelper;
+use ahash::AHashMap;
+use manifold_core::EffectTypeId;
+use manifold_core::effects::EffectInstance;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct HalationUniforms {
-    mode: u32,               // 0=ThresholdTintBlurH, 1=BlurV, 2=Composite
-    amount: f32,             // _Amount
-    threshold: f32,          // _Threshold
-    spread: f32,             // _Spread
-    tint_r: f32,             // _TintR
-    tint_g: f32,             // _TintG
-    tint_b: f32,             // _TintB
-    main_texel_size_x: f32,  // _MainTex_TexelSize.x
-    main_texel_size_y: f32,  // _MainTex_TexelSize.y
-    halo_texel_size_x: f32,  // _HaloTex_TexelSize.x (composite pass only)
-    halo_texel_size_y: f32,  // _HaloTex_TexelSize.y (composite pass only)
+    mode: u32,              // 0=ThresholdTintBlurH, 1=BlurV, 2=Composite
+    amount: f32,            // _Amount
+    threshold: f32,         // _Threshold
+    spread: f32,            // _Spread
+    tint_r: f32,            // _TintR
+    tint_g: f32,            // _TintG
+    tint_b: f32,            // _TintB
+    main_texel_size_x: f32, // _MainTex_TexelSize.x
+    main_texel_size_y: f32, // _MainTex_TexelSize.y
+    halo_texel_size_x: f32, // _HaloTex_TexelSize.x (composite pass only)
+    halo_texel_size_y: f32, // _HaloTex_TexelSize.y (composite pass only)
     _pad: f32,
 }
 
@@ -85,7 +85,8 @@ impl HalationFX {
         } else {
             RenderTarget::new(device, qw, qh, format, &format!("HalationB_{owner_key}"))
         };
-        self.states.insert(owner_key, HalationState { buf_a, buf_b });
+        self.states
+            .insert(owner_key, HalationState { buf_a, buf_b });
     }
 
     // HalationFX.cs lines 21-40 — HsvToRgb
@@ -169,8 +170,13 @@ impl PostProcessEffect for HalationFX {
             ..base
         };
         self.helper.dispatch_a_only(
-            gpu, source, &state.buf_b.texture, bytemuck::bytes_of(&pass0_u),
-            "Halation ThresholdTintBlurH", qw, qh,
+            gpu,
+            source,
+            &state.buf_b.texture,
+            bytemuck::bytes_of(&pass0_u),
+            "Halation ThresholdTintBlurH",
+            qw,
+            qh,
         );
 
         // Pass 1: Vertical Gaussian blur — buf_b → buf_a (reduced-res)
@@ -181,9 +187,13 @@ impl PostProcessEffect for HalationFX {
             ..base
         };
         self.helper.dispatch_a_only(
-            gpu, &state.buf_b.texture, &state.buf_a.texture,
+            gpu,
+            &state.buf_b.texture,
+            &state.buf_a.texture,
             bytemuck::bytes_of(&pass1_u),
-            "Halation BlurV", qw, qh,
+            "Halation BlurV",
+            qw,
+            qh,
         );
 
         // Pass 2: Composite — source (full-res) + buf_a (reduced-res) → target
@@ -196,9 +206,14 @@ impl PostProcessEffect for HalationFX {
             ..base
         };
         self.helper.dispatch(
-            gpu, source, &state.buf_a.texture, target,
+            gpu,
+            source,
+            &state.buf_a.texture,
+            target,
             bytemuck::bytes_of(&pass2_u),
-            "Halation Composite", ctx.width, ctx.height,
+            "Halation Composite",
+            ctx.width,
+            ctx.height,
         );
     }
 
@@ -213,12 +228,8 @@ impl PostProcessEffect for HalationFX {
         let qw = (width / HDR_BUFFER_DIVISOR).max(1);
         let qh = (height / HDR_BUFFER_DIVISOR).max(1);
         for (key, state) in &mut self.states {
-            state.buf_a = RenderTarget::new(
-                device, qw, qh, format, &format!("HalationA_{key}"),
-            );
-            state.buf_b = RenderTarget::new(
-                device, qw, qh, format, &format!("HalationB_{key}"),
-            );
+            state.buf_a = RenderTarget::new(device, qw, qh, format, &format!("HalationA_{key}"));
+            state.buf_b = RenderTarget::new(device, qw, qh, format, &format!("HalationB_{key}"));
         }
     }
 

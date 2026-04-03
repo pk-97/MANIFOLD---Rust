@@ -133,9 +133,10 @@ impl<Req: Send + 'static, Res: Send + 'static> BackgroundWorker<Req, Res> {
     /// the latest when it finishes its current job.
     pub fn submit(&mut self, req: Req) {
         if let Some(tx) = &self.req_tx
-            && tx.send(req).is_ok() {
-                self.in_flight = true;
-            }
+            && tx.send(req).is_ok()
+        {
+            self.in_flight = true;
+        }
     }
 
     /// Non-blocking poll for a completed result.

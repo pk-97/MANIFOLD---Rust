@@ -13,11 +13,11 @@
 // This produces source→target unchanged (scale=1, translate=0, rot=0 is identity in the shader)
 // so the buffer swap in effect_chain correctly advances with unmodified content.
 
-use manifold_core::EffectTypeId;
-use manifold_core::effects::EffectInstance;
+use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
-use super::compute_blit_helper::ComputeBlitHelper;
+use manifold_core::EffectTypeId;
+use manifold_core::effects::EffectInstance;
 
 const DEG2RAD: f32 = std::f32::consts::PI / 180.0;
 
@@ -32,14 +32,14 @@ fn approximately(a: f32, b: f32) -> bool {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct TransformUniforms {
-    translate_x:  f32,  // _TranslateX  — GetParam(0)
-    translate_y:  f32,  // _TranslateY  — GetParam(1)
-    scale:        f32,  // _Scale       — GetParam(2)
-    rotation:     f32,  // _Rotation    — GetParam(3) * Deg2Rad
-    aspect_ratio: f32,  // ctx.width / ctx.height
-    _pad0:        f32,
-    _pad1:        f32,
-    _pad2:        f32,
+    translate_x: f32,  // _TranslateX  — GetParam(0)
+    translate_y: f32,  // _TranslateY  — GetParam(1)
+    scale: f32,        // _Scale       — GetParam(2)
+    rotation: f32,     // _Rotation    — GetParam(3) * Deg2Rad
+    aspect_ratio: f32, // ctx.width / ctx.height
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 /// Transform effect — translate, scale, and rotate at layer/master level.
@@ -71,10 +71,10 @@ impl PostProcessEffect for TransformFX {
     /// Note: the is_clip_level guard is in apply() because ctx is not available here.
     fn should_skip(&self, fx: &EffectInstance) -> bool {
         let p = &fx.param_values;
-        let x    = p.first().copied().unwrap_or(0.0);
-        let y    = p.get(1).copied().unwrap_or(0.0);
+        let x = p.first().copied().unwrap_or(0.0);
+        let y = p.get(1).copied().unwrap_or(0.0);
         let zoom = p.get(2).copied().unwrap_or(1.0);
-        let rot  = p.get(3).copied().unwrap_or(0.0);
+        let rot = p.get(3).copied().unwrap_or(0.0);
 
         approximately(x, 0.0)
             && approximately(y, 0.0)
@@ -97,9 +97,9 @@ impl PostProcessEffect for TransformFX {
         } else {
             let p = &fx.param_values;
             // TransformFX.cs:29-33 — SetUniforms: GetParam(0..3), p3*Deg2Rad, ctx.Width/Height
-            let tx  = p.first().copied().unwrap_or(0.0);
-            let ty  = p.get(1).copied().unwrap_or(0.0);
-            let sc  = p.get(2).copied().unwrap_or(1.0);
+            let tx = p.first().copied().unwrap_or(0.0);
+            let ty = p.get(1).copied().unwrap_or(0.0);
+            let sc = p.get(2).copied().unwrap_or(1.0);
             let rot = p.get(3).copied().unwrap_or(0.0) * DEG2RAD;
             (tx, ty, sc, rot)
         };
@@ -119,10 +119,12 @@ impl PostProcessEffect for TransformFX {
 
         self.helper.dispatch(
             gpu,
-            source, target,
+            source,
+            target,
             bytemuck::bytes_of(&uniforms),
             "Transform Pass",
-            ctx.width, ctx.height,
+            ctx.width,
+            ctx.height,
         );
     }
 }

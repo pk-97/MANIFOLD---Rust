@@ -1,3 +1,4 @@
+use super::{Panel, PanelAction};
 /// Performance HUD overlay panel.
 /// 1:1 port of Unity PerformanceHUDPanel.cs (493 lines).
 /// Shows FPS, frame time, sync state, MIDI state, clip scheduling metrics.
@@ -7,7 +8,6 @@ use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
 use crate::node::*;
 use crate::tree::UITree;
-use super::{Panel, PanelAction};
 
 const HUD_WIDTH: f32 = 250.0;
 const HUD_HEIGHT: f32 = 380.0;
@@ -163,23 +163,37 @@ impl PerfHudPanel {
 
     /// Push metric values and graph bars to the tree without rebuilding.
     pub fn push_values(&self, tree: &mut UITree) {
-        if !self.visible { return; }
+        if !self.visible {
+            return;
+        }
         let m = &self.metrics;
 
         if self.ui_fps_value_id >= 0 {
             tree.set_text(self.ui_fps_value_id as u32, &format!("{:.0}", m.ui_fps));
         }
         if self.ui_frame_time_id >= 0 {
-            tree.set_text(self.ui_frame_time_id as u32, &format!("{:.1} ms", m.ui_frame_time_ms));
+            tree.set_text(
+                self.ui_frame_time_id as u32,
+                &format!("{:.1} ms", m.ui_frame_time_ms),
+            );
         }
         if self.render_fps_value_id >= 0 {
-            tree.set_text(self.render_fps_value_id as u32, &format!("{:.0}", m.render_fps));
+            tree.set_text(
+                self.render_fps_value_id as u32,
+                &format!("{:.0}", m.render_fps),
+            );
         }
         if self.render_frame_time_id >= 0 {
-            tree.set_text(self.render_frame_time_id as u32, &format!("{:.1} ms", m.render_frame_time_ms));
+            tree.set_text(
+                self.render_frame_time_id as u32,
+                &format!("{:.1} ms", m.render_frame_time_ms),
+            );
         }
         if self.active_clips_id >= 0 {
-            tree.set_text(self.active_clips_id as u32, &format!("{} / {}", m.active_clips, m.preparing_clips));
+            tree.set_text(
+                self.active_clips_id as u32,
+                &format!("{} / {}", m.active_clips, m.preparing_clips),
+            );
         }
         if self.beat_id >= 0 {
             tree.set_text(self.beat_id as u32, &format!("{:.2}", m.current_beat.0));
@@ -202,20 +216,26 @@ impl PerfHudPanel {
                     self.profiling_id as u32,
                     &format!("REC {}", m.profiling_frame_count),
                 );
-                tree.set_style(self.profiling_id as u32, UIStyle {
-                    text_color: color::STATUS_BAD,
-                    font_size: VALUE_FONT,
-                    text_align: TextAlign::Right,
-                    ..UIStyle::default()
-                });
+                tree.set_style(
+                    self.profiling_id as u32,
+                    UIStyle {
+                        text_color: color::STATUS_BAD,
+                        font_size: VALUE_FONT,
+                        text_align: TextAlign::Right,
+                        ..UIStyle::default()
+                    },
+                );
             } else {
                 tree.set_text(self.profiling_id as u32, "—");
-                tree.set_style(self.profiling_id as u32, UIStyle {
-                    text_color: color::TEXT_NORMAL,
-                    font_size: VALUE_FONT,
-                    text_align: TextAlign::Right,
-                    ..UIStyle::default()
-                });
+                tree.set_style(
+                    self.profiling_id as u32,
+                    UIStyle {
+                        text_color: color::TEXT_NORMAL,
+                        font_size: VALUE_FONT,
+                        text_align: TextAlign::Right,
+                        ..UIStyle::default()
+                    },
+                );
             }
         }
 
@@ -227,10 +247,20 @@ impl PerfHudPanel {
         } else {
             16.67
         };
-        self.update_graph_bars(tree, &self.ui_graph_bar_ids, &self.ui_dt_history,
-            self.ui_graph_y, ui_budget_ms);
-        self.update_graph_bars(tree, &self.render_graph_bar_ids, &self.render_dt_history,
-            self.render_graph_y, render_budget_ms);
+        self.update_graph_bars(
+            tree,
+            &self.ui_graph_bar_ids,
+            &self.ui_dt_history,
+            self.ui_graph_y,
+            ui_budget_ms,
+        );
+        self.update_graph_bars(
+            tree,
+            &self.render_graph_bar_ids,
+            &self.render_dt_history,
+            self.render_graph_y,
+            render_budget_ms,
+        );
     }
 
     /// Update bar heights and colors from the ring buffer.
@@ -244,11 +274,17 @@ impl PerfHudPanel {
         graph_y: f32,
         budget_ms: f32,
     ) {
-        if bar_ids.is_empty() { return; }
+        if bar_ids.is_empty() {
+            return;
+        }
         for (i, ms) in history.iter_oldest_first().enumerate() {
-            if i >= bar_ids.len() { break; }
+            if i >= bar_ids.len() {
+                break;
+            }
             let id = bar_ids[i];
-            if id < 0 { continue; }
+            if id < 0 {
+                continue;
+            }
 
             let frac = (ms / GRAPH_MAX_MS).clamp(0.0, 1.0);
             let bar_h = (frac * GRAPH_HEIGHT).max(1.0);
@@ -266,22 +302,34 @@ impl PerfHudPanel {
 
             // Preserve x/w, update y/h
             let old = tree.get_bounds(id as u32);
-            tree.set_bounds(id as u32, Rect {
-                x: old.x,
-                y: bar_y,
-                width: old.width,
-                height: bar_h,
-            });
-            tree.set_style(id as u32, UIStyle {
-                bg_color: col,
-                ..UIStyle::default()
-            });
+            tree.set_bounds(
+                id as u32,
+                Rect {
+                    x: old.x,
+                    y: bar_y,
+                    width: old.width,
+                    height: bar_h,
+                },
+            );
+            tree.set_style(
+                id as u32,
+                UIStyle {
+                    bg_color: col,
+                    ..UIStyle::default()
+                },
+            );
         }
     }
 
     fn add_row(tree: &mut UITree, x: f32, y: f32, width: f32, label: &str) -> (i32, f32) {
         // Label on left
-        tree.add_label(-1, x, y, width * 0.5, ROW_HEIGHT, label,
+        tree.add_label(
+            -1,
+            x,
+            y,
+            width * 0.5,
+            ROW_HEIGHT,
+            label,
             UIStyle {
                 text_color: color::TEXT_DIMMED,
                 font_size: LABEL_FONT,
@@ -290,7 +338,13 @@ impl PerfHudPanel {
             },
         );
         // Value on right (returns node ID for push updates)
-        let val_id = tree.add_label(-1, x + width * 0.5, y, width * 0.5, ROW_HEIGHT, "—",
+        let val_id = tree.add_label(
+            -1,
+            x + width * 0.5,
+            y,
+            width * 0.5,
+            ROW_HEIGHT,
+            "—",
             UIStyle {
                 text_color: color::TEXT_NORMAL,
                 font_size: VALUE_FONT,
@@ -303,17 +357,17 @@ impl PerfHudPanel {
 
     /// Build the bar graph nodes for a frame time history.
     /// Each bar is a 2px-wide panel node; height/color updated per frame.
-    fn build_graph_bars(
-        tree: &mut UITree,
-        x: f32,
-        y: f32,
-        width: f32,
-    ) -> Vec<i32> {
+    fn build_graph_bars(tree: &mut UITree, x: f32, y: f32, width: f32) -> Vec<i32> {
         let bar_w = width / GRAPH_SAMPLES as f32;
         let mut ids = Vec::with_capacity(GRAPH_SAMPLES);
         for i in 0..GRAPH_SAMPLES {
             let bx = x + i as f32 * bar_w;
-            let id = tree.add_panel(-1, bx, y, bar_w.max(1.0), 1.0,
+            let id = tree.add_panel(
+                -1,
+                bx,
+                y,
+                bar_w.max(1.0),
+                1.0,
                 UIStyle {
                     bg_color: Color32::new(40, 40, 44, 255),
                     ..UIStyle::default()
@@ -352,7 +406,12 @@ impl Panel for PerfHudPanel {
         let y = layout.screen_height - HUD_HEIGHT - PAD;
 
         // Background
-        tree.add_panel(-1, x, y, HUD_WIDTH, HUD_HEIGHT,
+        tree.add_panel(
+            -1,
+            x,
+            y,
+            HUD_WIDTH,
+            HUD_HEIGHT,
             UIStyle {
                 bg_color: color::HUD_BG,
                 corner_radius: color::CARD_RADIUS,
@@ -363,7 +422,13 @@ impl Panel for PerfHudPanel {
         // Title
         let mut cy = y + PAD;
         let inner_w = HUD_WIDTH - PAD * 2.0;
-        tree.add_label(-1, x + PAD, cy, inner_w, 14.0, "PERFORMANCE",
+        tree.add_label(
+            -1,
+            x + PAD,
+            cy,
+            inner_w,
+            14.0,
+            "PERFORMANCE",
             UIStyle {
                 text_color: color::TEXT_NEAR_WHITE,
                 font_size: color::FONT_BODY,
@@ -379,9 +444,11 @@ impl Panel for PerfHudPanel {
 
         // ── UI timing ────────────────────────────────────────────
         let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "UI FPS");
-        self.ui_fps_value_id = id; cy = ny;
+        self.ui_fps_value_id = id;
+        cy = ny;
         let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "UI Frame");
-        self.ui_frame_time_id = id; cy = ny;
+        self.ui_frame_time_id = id;
+        cy = ny;
 
         // UI frame time graph
         self.ui_graph_y = cy;
@@ -390,9 +457,11 @@ impl Panel for PerfHudPanel {
 
         // ── Render timing ────────────────────────────────────────
         let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "Render FPS");
-        self.render_fps_value_id = id; cy = ny;
+        self.render_fps_value_id = id;
+        cy = ny;
         let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "Render Frame");
-        self.render_frame_time_id = id; cy = ny;
+        self.render_frame_time_id = id;
+        cy = ny;
 
         // Render frame time graph
         self.render_graph_y = cy;
@@ -401,18 +470,23 @@ impl Panel for PerfHudPanel {
 
         // ── Clip scheduling ──────────────────────────────────────
         let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "Active / Prep");
-        self.active_clips_id = id; cy = ny;
+        self.active_clips_id = id;
+        cy = ny;
         cy += SECTION_GAP;
 
         // ── Playback position ────────────────────────────────────
         let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "Beat");
-        self.beat_id = id; cy = ny;
+        self.beat_id = id;
+        cy = ny;
         let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "Time");
-        self.time_id = id; cy = ny;
+        self.time_id = id;
+        cy = ny;
         let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "BPM");
-        self.bpm_id = id; cy = ny;
+        self.bpm_id = id;
+        cy = ny;
         let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "Clock");
-        self.clock_id = id; cy = ny;
+        self.clock_id = id;
+        cy = ny;
 
         // ── Profiling status ─────────────────────────────────────
         let (id, _ny) = Self::add_row(tree, lx, cy, inner_w, "Profiling");

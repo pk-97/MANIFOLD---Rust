@@ -9,7 +9,7 @@
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
-use super::{SlotMap, Slot, SlotKind, SIZES_BUFFER_BINDING};
+use super::{SIZES_BUFFER_BINDING, Slot, SlotKind, SlotMap};
 
 const COMPUTE_HEADER: &str = "MSL_CACHE_V1_COMPUTE";
 const RENDER_HEADER: &str = "MSL_CACHE_V1_RENDER";
@@ -43,7 +43,11 @@ impl MslCache {
     /// Create or open a cache directory. Creates the directory if it doesn't exist.
     pub fn new(cache_dir: PathBuf) -> Self {
         std::fs::create_dir_all(&cache_dir).ok();
-        Self { cache_dir, hits: 0, misses: 0 }
+        Self {
+            cache_dir,
+            hits: 0,
+            misses: 0,
+        }
     }
 
     fn path_for(&self, hash: u64) -> PathBuf {
@@ -108,11 +112,17 @@ impl MslCache {
         workgroup_size: [u32; 3],
     ) {
         let path = self.path_for(hash);
-        let Ok(mut file) = std::fs::File::create(&path) else { return };
+        let Ok(mut file) = std::fs::File::create(&path) else {
+            return;
+        };
 
         let _ = writeln!(file, "{COMPUTE_HEADER}");
         write_slot_map(&mut file, slot_map);
-        let _ = writeln!(file, "{} {} {}", workgroup_size[0], workgroup_size[1], workgroup_size[2]);
+        let _ = writeln!(
+            file,
+            "{} {} {}",
+            workgroup_size[0], workgroup_size[1], workgroup_size[2]
+        );
         let _ = writeln!(file, "{msl_entry_name}");
         let _ = writeln!(file, "{MSL_SEPARATOR}");
         let _ = write!(file, "{msl_source}");
@@ -140,23 +150,22 @@ impl MslCache {
         let vs_msl = content[vs_start + VS_SEPARATOR.len() + 1..fs_start]
             .trim_end()
             .to_string();
-        let fs_msl = content[fs_start + FS_SEPARATOR.len() + 1..]
-            .to_string();
+        let fs_msl = content[fs_start + FS_SEPARATOR.len() + 1..].to_string();
 
         self.hits += 1;
-        Some(RenderCacheEntry { slot_map, vs_msl, fs_msl })
+        Some(RenderCacheEntry {
+            slot_map,
+            vs_msl,
+            fs_msl,
+        })
     }
 
     /// Store a render shader compilation result.
-    pub(super) fn put_render(
-        &self,
-        hash: u64,
-        slot_map: &SlotMap,
-        vs_msl: &str,
-        fs_msl: &str,
-    ) {
+    pub(super) fn put_render(&self, hash: u64, slot_map: &SlotMap, vs_msl: &str, fs_msl: &str) {
         let path = self.path_for(hash);
-        let Ok(mut file) = std::fs::File::create(&path) else { return };
+        let Ok(mut file) = std::fs::File::create(&path) else {
+            return;
+        };
 
         let _ = writeln!(file, "{RENDER_HEADER}");
         write_slot_map(&mut file, slot_map);
@@ -180,7 +189,9 @@ impl MslCache {
         if total > 0 {
             log::info!(
                 "[MslCache] {}/{} hits ({} misses)",
-                self.hits, total, self.misses,
+                self.hits,
+                total,
+                self.misses,
             );
         }
     }
@@ -204,7 +215,9 @@ fn write_slot_map(file: &mut std::fs::File, slot_map: &SlotMap) {
     }
 }
 
-fn read_slot_map(lines: &mut impl Iterator<Item = Result<String, std::io::Error>>) -> Option<SlotMap> {
+fn read_slot_map(
+    lines: &mut impl Iterator<Item = Result<String, std::io::Error>>,
+) -> Option<SlotMap> {
     let count_line = lines.next()?.ok()?;
     let count: usize = count_line.trim().parse().ok()?;
     let mut slot_map = SlotMap::new();

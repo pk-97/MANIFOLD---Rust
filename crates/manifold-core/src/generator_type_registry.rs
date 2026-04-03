@@ -22,19 +22,19 @@ static REGISTRY: LazyLock<Vec<GeneratorTypeRegistration>> = LazyLock::new(build_
 fn build_registry() -> Vec<GeneratorTypeRegistration> {
     use GeneratorTypeId as G;
     vec![
-        reg(G::PLASMA,                     "Plasma",               true),
-        reg(G::CONCENTRIC_TUNNEL,           "Concentric Tunnel",    true),
-        reg(G::LISSAJOUS,                   "Lissajous",            true),
-        reg(G::FLUID_SIMULATION,            "Fluid Simulation",     true),
-        reg(G::FLUID_SIMULATION_3D,         "Fluid Sim 3D",        true),
-        reg(G::BASIC_SHAPES_SNAP,           "Basic Shapes",         true),
-        reg(G::DUOCYLINDER,                 "Duocylinder",          true),
-        reg(G::TESSERACT,                   "Tesseract",            true),
-        reg(G::OSCILLOSCOPE_XY,             "Oscilloscope XY",      true),
-        reg(G::WIREFRAME_ZOO,               "Wireframe Zoo",        true),
-        reg(G::PARAMETRIC_SURFACE,          "Parametric Surface",   true),
-        reg(G::MYCELIUM,                    "Mycelium",             true),
-        reg(G::MRI_VOLUME,                  "MRI Volume",           true),
+        reg(G::PLASMA, "Plasma", true),
+        reg(G::CONCENTRIC_TUNNEL, "Concentric Tunnel", true),
+        reg(G::LISSAJOUS, "Lissajous", true),
+        reg(G::FLUID_SIMULATION, "Fluid Simulation", true),
+        reg(G::FLUID_SIMULATION_3D, "Fluid Sim 3D", true),
+        reg(G::BASIC_SHAPES_SNAP, "Basic Shapes", true),
+        reg(G::DUOCYLINDER, "Duocylinder", true),
+        reg(G::TESSERACT, "Tesseract", true),
+        reg(G::OSCILLOSCOPE_XY, "Oscilloscope XY", true),
+        reg(G::WIREFRAME_ZOO, "Wireframe Zoo", true),
+        reg(G::PARAMETRIC_SURFACE, "Parametric Surface", true),
+        reg(G::MYCELIUM, "Mycelium", true),
+        reg(G::MRI_VOLUME, "MRI Volume", true),
     ]
 }
 
@@ -43,7 +43,11 @@ fn reg(
     display_name: &'static str,
     available: bool,
 ) -> GeneratorTypeRegistration {
-    GeneratorTypeRegistration { id, display_name, available }
+    GeneratorTypeRegistration {
+        id,
+        display_name,
+        available,
+    }
 }
 
 // ── Public API ──────────────────────────────────────────────────────────
@@ -58,7 +62,8 @@ pub fn display_name(id: &GeneratorTypeId) -> &str {
     if id.is_none() {
         return "None";
     }
-    REGISTRY.iter()
+    REGISTRY
+        .iter()
         .find(|r| r.id == *id)
         .map(|r| r.display_name)
         .unwrap_or(id.as_str())

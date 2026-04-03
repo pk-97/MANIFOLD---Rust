@@ -1,6 +1,6 @@
-use std::collections::HashSet;
 use crate::LayerId;
 use crate::units::Beats;
+use std::collections::HashSet;
 
 /// Region-based selection on the timeline.
 #[derive(Debug, Clone, Default)]
@@ -24,9 +24,13 @@ impl SelectionRegion {
         end_layer_id: LayerId,
         layers: &[crate::layer::Layer],
     ) -> Self {
-        let start_idx = layers.iter().position(|l| l.layer_id == start_layer_id)
+        let start_idx = layers
+            .iter()
+            .position(|l| l.layer_id == start_layer_id)
             .unwrap_or(0);
-        let end_idx = layers.iter().position(|l| l.layer_id == end_layer_id)
+        let end_idx = layers
+            .iter()
+            .position(|l| l.layer_id == end_layer_id)
             .unwrap_or(0);
 
         let lo = start_idx.min(end_idx);
@@ -68,9 +72,13 @@ impl SelectionRegion {
         end_layer_id: LayerId,
         layers: &[crate::layer::Layer],
     ) {
-        let start_idx = layers.iter().position(|l| l.layer_id == start_layer_id)
+        let start_idx = layers
+            .iter()
+            .position(|l| l.layer_id == start_layer_id)
             .unwrap_or(0);
-        let end_idx = layers.iter().position(|l| l.layer_id == end_layer_id)
+        let end_idx = layers
+            .iter()
+            .position(|l| l.layer_id == end_layer_id)
             .unwrap_or(0);
 
         self.start_beat = start_beat;
@@ -100,9 +108,13 @@ impl SelectionRegion {
     /// Resolve LayerIds to a normalized index range (min, max) using the given layer array.
     /// Returns `None` if neither start nor end layer ID is set or found.
     pub fn layer_index_range(&self, layers: &[crate::layer::Layer]) -> Option<(usize, usize)> {
-        let start_idx = self.start_layer_id.as_ref()
+        let start_idx = self
+            .start_layer_id
+            .as_ref()
             .and_then(|id| layers.iter().position(|l| l.layer_id == *id));
-        let end_idx = self.end_layer_id.as_ref()
+        let end_idx = self
+            .end_layer_id
+            .as_ref()
             .and_then(|id| layers.iter().position(|l| l.layer_id == *id));
 
         match (start_idx, end_idx) {

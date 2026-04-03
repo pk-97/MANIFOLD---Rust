@@ -4,9 +4,9 @@ use manifold_core::{Beats, project::Project};
 use manifold_editing::commands::settings::ChangeQuantizeModeCommand;
 use manifold_ui::PanelAction;
 
+use super::DispatchResult;
 use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
-use super::DispatchResult;
 
 pub(super) fn dispatch_transport(
     action: &PanelAction,
@@ -37,7 +37,10 @@ pub(super) fn dispatch_transport(
             DispatchResult::handled()
         }
         PanelAction::Record => {
-            ContentCommand::send(content_tx, ContentCommand::SetRecording(!content_state.is_recording));
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::SetRecording(!content_state.is_recording),
+            );
             DispatchResult::handled()
         }
         PanelAction::ResetBpm => {
@@ -48,8 +51,15 @@ pub(super) fn dispatch_transport(
             {
                 let old_points = project.tempo_map.clone_points();
                 let bpm = project.settings.bpm;
-                let cmd = manifold_editing::commands::settings::ClearTempoMapCommand::new(old_points, bpm);
-                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
+                let cmd = manifold_editing::commands::settings::ClearTempoMapCommand::new(
+                    old_points, bpm,
+                );
+                {
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        Box::new(cmd);
+                    boxed.execute(project);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                }
             }
             DispatchResult::handled()
         }
@@ -58,7 +68,10 @@ pub(super) fn dispatch_transport(
             DispatchResult::handled()
         }
         PanelAction::Seek(beat) => {
-            ContentCommand::send(content_tx, ContentCommand::SeekToBeat(Beats::from_f32(*beat)));
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::SeekToBeat(Beats::from_f32(*beat)),
+            );
             DispatchResult::handled()
         }
         PanelAction::OverviewScrub(norm) => {
@@ -70,7 +83,8 @@ pub(super) fn dispatch_transport(
             let content_w = max_beat * ppb;
             let target_scroll = (norm * content_w - viewport_w * 0.5) / ppb;
             let target_scroll = target_scroll.max(0.0);
-            ui.viewport.set_scroll(target_scroll, ui.viewport.scroll_y_px());
+            ui.viewport
+                .set_scroll(target_scroll, ui.viewport.scroll_y_px());
             DispatchResult::structural()
         }
         PanelAction::SetInsertCursor(beat) => {
@@ -104,7 +118,12 @@ pub(super) fn dispatch_transport(
                 let old = project.settings.quantize_mode;
                 let new = old.next();
                 let cmd = ChangeQuantizeModeCommand::new(old, new);
-                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
+                {
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        Box::new(cmd);
+                    boxed.execute(project);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                }
             }
             DispatchResult::handled()
         }
@@ -121,7 +140,8 @@ pub(super) fn dispatch_transport(
         PanelAction::ZoomIn => {
             let ppb = ui.viewport.pixels_per_beat();
             let levels = &manifold_ui::color::ZOOM_LEVELS;
-            let current_idx = levels.iter()
+            let current_idx = levels
+                .iter()
                 .position(|&l| (l - ppb).abs() < 0.01)
                 .unwrap_or(manifold_ui::color::DEFAULT_ZOOM_INDEX);
             let new_idx = (current_idx + 1).min(levels.len() - 1);
@@ -136,17 +156,16 @@ pub(super) fn dispatch_transport(
                 let anchor_x = (playhead_px - tracks_x).clamp(0.0, viewport_w);
                 let new_scroll = playhead - anchor_x / new_ppb;
                 ui.viewport.set_zoom(new_ppb);
-                ui.viewport.set_scroll(
-                    new_scroll.max(0.0),
-                    ui.viewport.scroll_y_px(),
-                );
+                ui.viewport
+                    .set_scroll(new_scroll.max(0.0), ui.viewport.scroll_y_px());
             }
             DispatchResult::structural()
         }
         PanelAction::ZoomOut => {
             let ppb = ui.viewport.pixels_per_beat();
             let levels = &manifold_ui::color::ZOOM_LEVELS;
-            let current_idx = levels.iter()
+            let current_idx = levels
+                .iter()
                 .position(|&l| (l - ppb).abs() < 0.01)
                 .unwrap_or(manifold_ui::color::DEFAULT_ZOOM_INDEX);
             let new_idx = current_idx.saturating_sub(1);
@@ -159,10 +178,8 @@ pub(super) fn dispatch_transport(
                 let anchor_x = (playhead_px - tracks_x).clamp(0.0, viewport_w);
                 let new_scroll = playhead - anchor_x / new_ppb;
                 ui.viewport.set_zoom(new_ppb);
-                ui.viewport.set_scroll(
-                    new_scroll.max(0.0),
-                    ui.viewport.scroll_y_px(),
-                );
+                ui.viewport
+                    .set_scroll(new_scroll.max(0.0), ui.viewport.scroll_y_px());
             }
             DispatchResult::structural()
         }

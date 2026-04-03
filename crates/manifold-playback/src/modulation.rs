@@ -9,11 +9,11 @@
 //!   4. evaluate_gen_param_envelopes(project, beat) — gen ADSR → effective (additive)
 //!   5. If any_dirty → mark compositor dirty
 
+use manifold_core::Beats;
 use manifold_core::effects::{EffectInstance, ParamEnvelope, ParameterDriver};
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
 use manifold_core::{effect_definition_registry, generator_definition_registry};
-use manifold_core::{Beats};
 
 // =====================================================================
 // Phase 1: Reset all effectives (base → effective, blank slate)
@@ -27,9 +27,10 @@ pub fn reset_all_effectives(project: &mut Project) {
     for layer in layers.iter_mut() {
         // Generator params: reset only driven/enveloped params (per Unity semantics)
         if layer.layer_type == LayerType::Generator
-            && let Some(gp) = layer.gen_params_mut() {
-                gp.reset_effectives();
-            }
+            && let Some(gp) = layer.gen_params_mut()
+        {
+            gp.reset_effectives();
+        }
 
         // Layer effect params: reset all (copy base → effective)
         if let Some(effects) = &mut layer.effects {
@@ -37,7 +38,6 @@ pub fn reset_all_effectives(project: &mut Project) {
                 fx.reset_param_effectives();
             }
         }
-
     }
 
     // Master effect params: reset all
@@ -79,56 +79,57 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: Beats) -> bool 
 
         // Generator param drivers
         if layer.layer_type == LayerType::Generator
-            && let Some(gp) = layer.gen_params_mut() {
-                let gen_type = gp.generator_type();
-                let gen_def = match generator_definition_registry::try_get(gen_type) {
-                    Some(d) => d,
-                    None => continue,
-                };
-                let gen_defs = &gen_def.param_defs;
+            && let Some(gp) = layer.gen_params_mut()
+        {
+            let gen_type = gp.generator_type();
+            let gen_def = match generator_definition_registry::try_get(gen_type) {
+                Some(d) => d,
+                None => continue,
+            };
+            let gen_defs = &gen_def.param_defs;
 
-                if let Some(drivers) = &gp.drivers {
-                    // Collect driver evaluation results to avoid borrow conflict
-                    let results: Vec<(usize, f32)> = drivers
-                        .iter()
-                        .filter(|d| d.enabled && !d.is_paused_by_user)
-                        .filter_map(|driver| {
-                            let idx = driver.param_index as usize;
-                            if idx >= gen_defs.len() {
-                                return None;
-                            }
-                            let pd = &gen_defs[idx];
-                            let (min, max) = (pd.min, pd.max);
+            if let Some(drivers) = &gp.drivers {
+                // Collect driver evaluation results to avoid borrow conflict
+                let results: Vec<(usize, f32)> = drivers
+                    .iter()
+                    .filter(|d| d.enabled && !d.is_paused_by_user)
+                    .filter_map(|driver| {
+                        let idx = driver.param_index as usize;
+                        if idx >= gen_defs.len() {
+                            return None;
+                        }
+                        let pd = &gen_defs[idx];
+                        let (min, max) = (pd.min, pd.max);
 
-                            let mut normalized = ParameterDriver::evaluate(
-                                current_beat,
-                                driver.beat_division,
-                                driver.waveform,
-                                driver.phase,
-                            );
-                            if driver.reversed {
-                                normalized = 1.0 - normalized;
-                            }
+                        let mut normalized = ParameterDriver::evaluate(
+                            current_beat,
+                            driver.beat_division,
+                            driver.waveform,
+                            driver.phase,
+                        );
+                        if driver.reversed {
+                            normalized = 1.0 - normalized;
+                        }
 
-                            // Apply trim: map [0,1] to [lo, hi] within param range
-                            let lo = min + (max - min) * driver.trim_min;
-                            let hi = min + (max - min) * driver.trim_max;
-                            let value = lo + (hi - lo) * normalized;
+                        // Apply trim: map [0,1] to [lo, hi] within param range
+                        let lo = min + (max - min) * driver.trim_min;
+                        let hi = min + (max - min) * driver.trim_max;
+                        let value = lo + (hi - lo) * normalized;
 
-                            Some((idx, value))
-                        })
-                        .collect();
+                        Some((idx, value))
+                    })
+                    .collect();
 
-                    if !results.is_empty() {
-                        any_driven = true;
-                        for (idx, value) in results {
-                            if idx < gp.param_values.len() {
-                                gp.param_values[idx] = value;
-                            }
+                if !results.is_empty() {
+                    any_driven = true;
+                    for (idx, value) in results {
+                        if idx < gp.param_values.len() {
+                            gp.param_values[idx] = value;
                         }
                     }
                 }
             }
+        }
     }
 
     any_driven
@@ -232,9 +233,27 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> boo
             }
 
             for ei in 0..layer_env_count {
-                let (enabled, target_effect_type, param_index, attack, decay, sustain, release, target_norm) = {
+                let (
+                    enabled,
+                    target_effect_type,
+                    param_index,
+                    attack,
+                    decay,
+                    sustain,
+                    release,
+                    target_norm,
+                ) = {
                     let env = &layer.envelopes.as_ref().unwrap()[ei];
-                    (env.enabled, env.target_effect_type.clone(), env.param_index, env.attack_beats, env.decay_beats, env.sustain_level, env.release_beats, env.target_normalized)
+                    (
+                        env.enabled,
+                        env.target_effect_type.clone(),
+                        env.param_index,
+                        env.attack_beats,
+                        env.decay_beats,
+                        env.sustain_level,
+                        env.release_beats,
+                        env.target_normalized,
+                    )
                 };
 
                 if !enabled {
@@ -253,18 +272,19 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> boo
                 // Write back currentLevel (Phase 9B).
                 // Port of C# EnvelopeEvaluator line 192.
                 if let Some(envs) = &mut layer.envelopes
-                    && let Some(env) = envs.get_mut(ei) {
-                        env.current_level = adsr_value;
-                    }
+                    && let Some(env) = envs.get_mut(ei)
+                {
+                    env.current_level = adsr_value;
+                }
 
                 let layer_effects = match &mut layer.effects {
                     Some(effects) => effects,
                     None => continue,
                 };
 
-                let target_fx = layer_effects.iter_mut().find(|f| {
-                    f.effect_type() == &target_effect_type && f.enabled
-                });
+                let target_fx = layer_effects
+                    .iter_mut()
+                    .find(|f| f.effect_type() == &target_effect_type && f.enabled);
                 let fx = match target_fx {
                     Some(f) => f,
                     None => continue,
@@ -279,7 +299,10 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> boo
                     continue;
                 }
 
-                let (min, max) = (effect_def.param_defs[idx].min, effect_def.param_defs[idx].max);
+                let (min, max) = (
+                    effect_def.param_defs[idx].min,
+                    effect_def.param_defs[idx].max,
+                );
 
                 let current_value = fx.param_values[idx];
                 let target_value = min + (max - min) * target_norm.clamp(0.0, 1.0);
@@ -349,7 +372,15 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: Beats) 
         for ei in 0..env_count {
             let (enabled, param_index, attack, decay, sustain, release, target_norm) = {
                 let env = &gp.envelopes.as_ref().unwrap()[ei];
-                (env.enabled, env.param_index, env.attack_beats, env.decay_beats, env.sustain_level, env.release_beats, env.target_normalized)
+                (
+                    env.enabled,
+                    env.param_index,
+                    env.attack_beats,
+                    env.decay_beats,
+                    env.sustain_level,
+                    env.release_beats,
+                    env.target_normalized,
+                )
             };
 
             if !enabled {
@@ -380,9 +411,10 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: Beats) 
             // Write back currentLevel (Phase 9B).
             // Port of C# EnvelopeEvaluator line 270.
             if let Some(envs) = &mut gp.envelopes
-                && let Some(env) = envs.get_mut(ei) {
-                    env.current_level = adsr_level;
-                }
+                && let Some(env) = envs.get_mut(ei)
+            {
+                env.current_level = adsr_level;
+            }
 
             // Additive composition: push current toward target
             let current_value = gp.param_values[idx];

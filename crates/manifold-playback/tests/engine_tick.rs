@@ -52,7 +52,10 @@ fn engine_tick_while_stopped_has_no_active_clips() {
     };
 
     let result = engine.tick(ctx);
-    assert!(result.ready_clips.is_empty(), "No clips should be ready when stopped at beat 0");
+    assert!(
+        result.ready_clips.is_empty(),
+        "No clips should be ready when stopped at beat 0"
+    );
 }
 
 #[test]
@@ -128,8 +131,10 @@ fn engine_schedules_clips_at_correct_beats() {
         ever_had_ready_clips,
         "Engine should have scheduled clips during the timeline (ticked to beat ~163)"
     );
-    assert!(engine.active_clip_count() > 0,
-        "Should have active clips at beat ~163");
+    assert!(
+        engine.active_clip_count() > 0,
+        "Should have active clips at beat ~163"
+    );
 }
 
 #[test]
@@ -196,7 +201,9 @@ fn engine_beat_time_conversion_roundtrip() {
 #[test]
 fn engine_waypoints_stress_test() {
     let path = fixture_path("WAYPOINTS.manifold");
-    if !path.exists() { return; }
+    if !path.exists() {
+        return;
+    }
 
     let project = manifold_io::loader::load_project(&path).unwrap();
     // Original 2311 clips; 295 overlapping clips removed on load repair.
@@ -224,7 +231,13 @@ fn engine_waypoints_stress_test() {
         realtime += dt;
     }
 
-    assert!(engine.current_time() > Seconds(8.0), "Should have ticked ~8.3 seconds");
+    assert!(
+        engine.current_time() > Seconds(8.0),
+        "Should have ticked ~8.3 seconds"
+    );
     // WAYPOINTS has clips starting early in the timeline, so we should have seen some
-    assert!(total_ready > 0, "WAYPOINTS should have active clips in the first 8 seconds");
+    assert!(
+        total_ready > 0,
+        "WAYPOINTS should have active clips in the first 8 seconds"
+    );
 }

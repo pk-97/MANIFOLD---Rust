@@ -11,9 +11,9 @@
 
 use std::path::{Path, PathBuf};
 
+use manifold_core::GeneratorTypeId;
 use manifold_core::clip::TimelineClip;
 use manifold_core::project::Project;
-use manifold_core::GeneratorTypeId;
 use manifold_core::video::VideoClip;
 use manifold_editing::command::{Command, CompositeCommand};
 use manifold_editing::commands::clip::AddClipCommand;
@@ -87,7 +87,10 @@ impl ProjectIOService {
 
     /// Unity ProjectIOService.OnNewProject (lines 81-90).
     pub fn new_project(&self) -> ProjectIOAction {
-        let mut new_project = Project { project_name: "New Project".to_string(), ..Default::default() };
+        let mut new_project = Project {
+            project_name: "New Project".to_string(),
+            ..Default::default()
+        };
         new_project.timeline.add_layer(
             "Layer 0",
             manifold_core::types::LayerType::Video,
@@ -111,10 +114,8 @@ impl ProjectIOService {
         user_prefs: &mut UserPrefs,
         parent: Option<&winit::window::Window>,
     ) -> ProjectIOAction {
-        let last_dir = dialog_path_memory::get_last_directory(
-            DialogContext::ProjectOpen,
-            user_prefs,
-        );
+        let last_dir =
+            dialog_path_memory::get_last_directory(DialogContext::ProjectOpen, user_prefs);
 
         let mut dialog = rfd::FileDialog::new()
             .set_title("Open MANIFOLD Project")
@@ -186,7 +187,8 @@ impl ProjectIOService {
                 if was_v1 {
                     log::info!(
                         "[ProjectIO] Opened V1 project (will save as V2): {} from {}",
-                        name, path_str
+                        name,
+                        path_str
                     );
                 } else {
                     log::info!("[ProjectIO] Opened project: {} from {}", name, path_str);
@@ -254,10 +256,8 @@ impl ProjectIOService {
         // Sync playhead before save (Unity line 205)
         project.saved_playhead_time = current_time;
 
-        let last_dir = dialog_path_memory::get_last_directory(
-            DialogContext::ProjectSave,
-            user_prefs,
-        );
+        let last_dir =
+            dialog_path_memory::get_last_directory(DialogContext::ProjectSave, user_prefs);
 
         let project_name = if project.project_name.is_empty() {
             "project"
@@ -342,13 +342,16 @@ impl ProjectIOService {
         for raw_path in file_paths {
             let file_path = resolve_dropped_file_path(raw_path);
             if let Some(ref fp) = file_path
-                && fp.exists() && is_supported_midi_extension(fp) {
-                    let midi_action = self.process_dropped_midi_file(fp, drop_beat, drop_layer_index, project);
-                    if midi_action.needs_clip_sync {
-                        action.needs_clip_sync = true;
-                    }
-                    action.record_commands.extend(midi_action.record_commands);
+                && fp.exists()
+                && is_supported_midi_extension(fp)
+            {
+                let midi_action =
+                    self.process_dropped_midi_file(fp, drop_beat, drop_layer_index, project);
+                if midi_action.needs_clip_sync {
+                    action.needs_clip_sync = true;
                 }
+                action.record_commands.extend(midi_action.record_commands);
+            }
         }
 
         // Process video files (Unity lines 261-326)
@@ -433,7 +436,10 @@ impl ProjectIOService {
             );
 
             // Create timeline clip (Unity lines 301-307)
-            let drop_layer_id = project.timeline.layers.get(drop_layer_index as usize)
+            let drop_layer_id = project
+                .timeline
+                .layers
+                .get(drop_layer_index as usize)
                 .map(|l| l.layer_id.clone())
                 .unwrap_or_default();
             let timeline_clip = TimelineClip {
@@ -446,12 +452,27 @@ impl ProjectIOService {
                 ..TimelineClip::default()
             };
 
-            // Add clip to layer (Unity lines 309-312)
+            // Add clip to layer and immediately enforce non-overlap (Unity lines 309-312)
             let layer_idx = drop_layer_index as usize;
             if layer_idx < project.timeline.layers.len() {
-                project.timeline.layers[layer_idx].clips.push(timeline_clip.clone());
+                project.timeline.layers[layer_idx].add_clip(timeline_clip.clone());
                 project.timeline.mark_clip_lookup_dirty();
-                drop_commands.push(Box::new(AddClipCommand::new(timeline_clip, drop_layer_id)));
+                drop_commands.push(Box::new(AddClipCommand::new(
+                    timeline_clip.clone(),
+                    drop_layer_id,
+                )));
+
+                let overlap_cmds = EditingService::enforce_non_overlap(
+                    project,
+                    &timeline_clip,
+                    layer_idx,
+                    &std::collections::HashSet::new(),
+                    seconds_per_beat,
+                );
+                for mut cmd in overlap_cmds {
+                    cmd.execute(project);
+                    drop_commands.push(cmd);
+                }
             }
 
             placement_beat += duration_beats;
@@ -498,11 +519,16 @@ impl ProjectIOService {
         let notes = manifold_playback::midi_parser::MidiFileParser::parse_file(&file_path_str);
 
         if notes.is_empty() {
-            log::warn!("[ProjectIO] MIDI file contained no notes: {}", file_path_str);
+            log::warn!(
+                "[ProjectIO] MIDI file contained no notes: {}",
+                file_path_str
+            );
             return ProjectIOAction::default();
         }
 
-        let target_layer_id = project.timeline.layers
+        let target_layer_id = project
+            .timeline
+            .layers
             .get(drop_layer_index as usize)
             .map(|l| l.layer_id.clone())
             .unwrap_or_default();
@@ -514,7 +540,10 @@ impl ProjectIOService {
         );
 
         if result.success {
-            let mut action = ProjectIOAction { needs_clip_sync: true, ..Default::default() };
+            let mut action = ProjectIOAction {
+                needs_clip_sync: true,
+                ..Default::default()
+            };
             if let Some(cmd) = result.undo_command {
                 action.record_commands.push(cmd);
             }
@@ -543,9 +572,11 @@ impl ProjectIOService {
         if duration <= 0.0 {
             // Try preview metadata cache (Unity lines 332-339)
             if let Some(&preview_seconds) = self.file_drop_preview_duration_seconds.get(file_path)
-                && preview_seconds > 0.0 && seconds_per_beat > 0.0 {
-                    return (preview_seconds / seconds_per_beat).max(FILE_DROP_MIN_DURATION_BEATS);
-                }
+                && preview_seconds > 0.0
+                && seconds_per_beat > 0.0
+            {
+                return (preview_seconds / seconds_per_beat).max(FILE_DROP_MIN_DURATION_BEATS);
+            }
             return FILE_DROP_DEFAULT_DURATION_BEATS;
         }
 
@@ -611,4 +642,42 @@ pub fn is_supported_midi_extension(path: &Path) -> bool {
             .as_deref(),
         Some("mid" | "midi")
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manifold_core::clip::TimelineClip;
+    use manifold_core::layer::Layer;
+    use manifold_core::types::LayerType;
+    use manifold_core::units::Bpm;
+
+    #[test]
+    fn dropped_video_enforces_non_overlap_immediately() {
+        let temp_path =
+            std::env::temp_dir().join(format!("manifold-drop-{}.mp4", std::process::id()));
+        std::fs::write(&temp_path, b"test").unwrap();
+
+        let prefs = UserPrefs::load();
+        let mut service = ProjectIOService::new(&prefs);
+        let mut project = Project::default();
+        project.settings.bpm = Bpm(120.0);
+        project
+            .timeline
+            .insert_layer(0, Layer::new("Video 1".into(), LayerType::Video, 0));
+        project.timeline.layers[0].add_clip(TimelineClip {
+            video_clip_id: "existing".into(),
+            start_beat: manifold_core::Beats::from_f32(0.0),
+            duration_beats: manifold_core::Beats::from_f32(4.0),
+            ..TimelineClip::default()
+        });
+
+        let action = service.process_dropped_files(&[temp_path.clone()], 0.0, 0, &mut project, 0.5);
+
+        assert!(action.needs_clip_sync);
+        assert_eq!(project.timeline.layers[0].clips.len(), 1);
+        assert!(!project.timeline.layers[0].has_overlapping_clips());
+
+        let _ = std::fs::remove_file(temp_path);
+    }
 }

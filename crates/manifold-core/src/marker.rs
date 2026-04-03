@@ -1,8 +1,8 @@
-use serde::{Deserialize, Serialize};
 use crate::id::MarkerId;
-use crate::types::MarkerColor;
 use crate::math::short_id;
+use crate::types::MarkerColor;
 use crate::units::Beats;
+use serde::{Deserialize, Serialize};
 
 /// A user-placed timeline marker at a specific beat position.
 #[derive(Debug, Clone, Serialize, Deserialize)]

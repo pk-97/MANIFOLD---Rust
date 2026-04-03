@@ -1,5 +1,7 @@
-use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat, GpuTextureDimension,
-                   GpuTextureDesc, GpuTextureUsage, TexturePool};
+use manifold_gpu::{
+    GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+    TexturePool,
+};
 
 /// Offscreen render texture for compositing.
 pub struct RenderTarget {
@@ -29,7 +31,13 @@ impl RenderTarget {
             usage: GpuTextureUsage::RENDER_TARGET_FULL,
             label,
         });
-        Self { texture, width, height, format, label: label.to_string() }
+        Self {
+            texture,
+            width,
+            height,
+            format,
+            label: label.to_string(),
+        }
     }
 
     /// Create from the texture pool (heap sub-allocation or recycled).
@@ -48,7 +56,13 @@ impl RenderTarget {
             GpuTextureUsage::RENDER_TARGET_FULL,
             label,
         );
-        Self { texture, width, height, format, label: label.to_string() }
+        Self {
+            texture,
+            width,
+            height,
+            format,
+            label: label.to_string(),
+        }
     }
 
     /// Return this render target's texture to the pool for reuse.
@@ -76,7 +90,13 @@ impl RenderTarget {
             usage: GpuTextureUsage::RENDER_TARGET,
             label,
         });
-        Self { texture, width, height, format, label: label.to_string() }
+        Self {
+            texture,
+            width,
+            height,
+            format,
+            label: label.to_string(),
+        }
     }
 
     pub fn resize(&mut self, device: &GpuDevice, width: u32, height: u32) {

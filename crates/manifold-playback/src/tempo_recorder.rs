@@ -156,7 +156,10 @@ impl TempoRecorder {
         }
 
         tempo_map.add_or_replace_point_with_time(
-            Beats::from_f32(current_beat), Bpm(bpm), source, 0.001,
+            Beats::from_f32(current_beat),
+            Bpm(bpm),
+            source,
+            0.001,
             manifold_core::units::Seconds::from_f32(current_time),
         );
         self.last_recorded_beat = current_beat;
@@ -285,7 +288,11 @@ impl TempoRecorder {
         } else {
             (end_beat * ticks_per_beat as f32).round() as i32
         };
-        let resolved_midi_note = if midi_note >= 0 { midi_note } else { start.midi_note };
+        let resolved_midi_note = if midi_note >= 0 {
+            midi_note
+        } else {
+            start.midi_note
+        };
 
         let (saved_clip_id, saved_video_id, saved_layer) = match recorded_clip {
             Some(clip) => (

@@ -1,5 +1,5 @@
 use manifold_core::LayerId;
-use manifold_core::effects::{EffectInstance, EffectGroup};
+use manifold_core::effects::{EffectGroup, EffectInstance};
 use manifold_core::project::Project;
 
 /// Routes effect commands to layer/master effect lists.
@@ -12,11 +12,7 @@ pub enum EffectTarget {
 
 /// Execute a closure with mutable access to a target's effects and groups.
 /// Returns None if the target doesn't exist.
-pub fn with_effects_mut<F, R>(
-    project: &mut Project,
-    target: &EffectTarget,
-    f: F,
-) -> Option<R>
+pub fn with_effects_mut<F, R>(project: &mut Project, target: &EffectTarget, f: F) -> Option<R>
 where
     F: FnOnce(&mut Vec<EffectInstance>, &mut Vec<EffectGroup>) -> R,
 {
@@ -37,11 +33,7 @@ where
 }
 
 /// Execute a closure with read-only access to a target's effects.
-pub fn with_effects<F, R>(
-    project: &Project,
-    target: &EffectTarget,
-    f: F,
-) -> Option<R>
+pub fn with_effects<F, R>(project: &Project, target: &EffectTarget, f: F) -> Option<R>
 where
     F: FnOnce(&[EffectInstance], &[EffectGroup]) -> R,
 {
@@ -53,7 +45,11 @@ where
             Some(f(effects, groups))
         }
         EffectTarget::Master => {
-            let groups = project.settings.master_effect_groups.as_deref().unwrap_or(&[]);
+            let groups = project
+                .settings
+                .master_effect_groups
+                .as_deref()
+                .unwrap_or(&[]);
             Some(f(&project.settings.master_effects, groups))
         }
     }

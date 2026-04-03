@@ -5,12 +5,12 @@
 //! and optional paste button. Completely separate from DropdownPanel —
 //! different layout, interaction, and rendering model.
 
-use manifold_core::LayerId;
+use super::InspectorTab;
 use crate::color;
 use crate::node::Color32;
 use crate::node::*;
 use crate::tree::UITree;
-use super::InspectorTab;
+use manifold_core::LayerId;
 
 // ── Layout constants (from Unity BrowserPopupPanel.cs + BrowserPopupLayout.cs) ──
 
@@ -128,7 +128,7 @@ pub struct BrowserPopupPanel {
     search_bar_id: i32,
     chip_all_id: i32,
     chip_ids: Vec<i32>,
-    cell_ids: Vec<(i32, usize)>,  // (node_id, source_index)
+    cell_ids: Vec<(i32, usize)>, // (node_id, source_index)
     paste_id: i32,
     first_node: usize,
     node_count: usize,
@@ -178,11 +178,21 @@ impl BrowserPopupPanel {
         }
     }
 
-    pub fn is_open(&self) -> bool { self.is_open }
-    pub fn first_node(&self) -> usize { self.first_node }
-    pub fn mode(&self) -> BrowserPopupMode { self.mode }
-    pub fn tab(&self) -> InspectorTab { self.tab }
-    pub fn layer_id(&self) -> &Option<LayerId> { &self.layer_id }
+    pub fn is_open(&self) -> bool {
+        self.is_open
+    }
+    pub fn first_node(&self) -> usize {
+        self.first_node
+    }
+    pub fn mode(&self) -> BrowserPopupMode {
+        self.mode
+    }
+    pub fn tab(&self) -> InspectorTab {
+        self.tab
+    }
+    pub fn layer_id(&self) -> &Option<LayerId> {
+        &self.layer_id
+    }
 
     pub fn set_screen_size(&mut self, w: f32, h: f32) {
         self.screen_w = w;
@@ -242,9 +252,11 @@ impl BrowserPopupPanel {
         for (i, name) in self.item_names.iter().enumerate() {
             // Category filter
             if let Some(ref cat) = self.active_category
-                && i < self.item_categories.len() && self.item_categories[i] != *cat {
-                    continue;
-                }
+                && i < self.item_categories.len()
+                && self.item_categories[i] != *cat
+            {
+                continue;
+            }
             // Search filter — case-insensitive substring
             if !filter_lower.is_empty() && !name.to_lowercase().contains(&filter_lower) {
                 continue;
@@ -257,7 +269,9 @@ impl BrowserPopupPanel {
 
     fn compute_layout(&mut self, anchor: Vec2) {
         let inner_w = POPUP_WIDTH - PADDING * 2.0 - BORDER * 2.0;
-        self.columns = ((inner_w + CELL_SPACING) / (CELL_WIDTH + CELL_SPACING)).floor().max(1.0) as usize;
+        self.columns = ((inner_w + CELL_SPACING) / (CELL_WIDTH + CELL_SPACING))
+            .floor()
+            .max(1.0) as usize;
         self.recompute_height();
 
         // Position: anchor the popup at the click position, edge-clamp
@@ -268,13 +282,17 @@ impl BrowserPopupPanel {
         if self.popup_x + POPUP_WIDTH > self.screen_w {
             self.popup_x = self.screen_w - POPUP_WIDTH;
         }
-        if self.popup_x < 0.0 { self.popup_x = 0.0; }
+        if self.popup_x < 0.0 {
+            self.popup_x = 0.0;
+        }
 
         // Bottom edge
         if self.popup_y + self.total_height > self.screen_h {
             self.popup_y = self.screen_h - self.total_height;
         }
-        if self.popup_y < 0.0 { self.popup_y = 0.0; }
+        if self.popup_y < 0.0 {
+            self.popup_y = 0.0;
+        }
     }
 
     fn recompute_height(&mut self) {
@@ -290,8 +308,15 @@ impl BrowserPopupPanel {
         }
 
         // Grid viewport — clamp to reasonable height
-        let available = POPUP_MAX_HEIGHT - h - PADDING - BORDER
-            - if has_paste { PASTE_BUTTON_HEIGHT + SECTION_SPACING } else { 0.0 };
+        let available = POPUP_MAX_HEIGHT
+            - h
+            - PADDING
+            - BORDER
+            - if has_paste {
+                PASTE_BUTTON_HEIGHT + SECTION_SPACING
+            } else {
+                0.0
+            };
         self.grid_viewport_height = grid_content_h.min(available).max(CELL_HEIGHT);
 
         h += self.grid_viewport_height;
@@ -305,7 +330,9 @@ impl BrowserPopupPanel {
     // ── Build ──
 
     pub fn build(&mut self, tree: &mut UITree) {
-        if !self.is_open { return; }
+        if !self.is_open {
+            return;
+        }
 
         self.first_node = tree.count();
         self.cell_ids.clear();
@@ -318,19 +345,44 @@ impl BrowserPopupPanel {
 
         // Fullscreen backdrop (dismiss on click outside)
         self.backdrop_id = tree.add_button(
-            -1, 0.0, 0.0, self.screen_w, self.screen_h,
-            UIStyle { bg_color: Color32::new(0, 0, 0, 80), ..UIStyle::default() },
+            -1,
+            0.0,
+            0.0,
+            self.screen_w,
+            self.screen_h,
+            UIStyle {
+                bg_color: Color32::new(0, 0, 0, 80),
+                ..UIStyle::default()
+            },
             "",
         ) as i32;
 
         // Outer border
-        tree.add_panel(-1, px, py, pw, ph,
-            UIStyle { bg_color: BG_BORDER, corner_radius: 8.0, ..UIStyle::default() },
+        tree.add_panel(
+            -1,
+            px,
+            py,
+            pw,
+            ph,
+            UIStyle {
+                bg_color: BG_BORDER,
+                corner_radius: 8.0,
+                ..UIStyle::default()
+            },
         );
 
         // Inner background
-        tree.add_panel(-1, px + BORDER, py + BORDER, pw - BORDER * 2.0, ph - BORDER * 2.0,
-            UIStyle { bg_color: BG_INNER, corner_radius: 7.0, ..UIStyle::default() },
+        tree.add_panel(
+            -1,
+            px + BORDER,
+            py + BORDER,
+            pw - BORDER * 2.0,
+            ph - BORDER * 2.0,
+            UIStyle {
+                bg_color: BG_INNER,
+                corner_radius: 7.0,
+                ..UIStyle::default()
+            },
         );
 
         let cx = px + BORDER + PADDING;
@@ -339,7 +391,11 @@ impl BrowserPopupPanel {
 
         // Search bar
         self.search_bar_id = tree.add_button(
-            -1, cx, cy, content_w, SEARCH_BAR_HEIGHT,
+            -1,
+            cx,
+            cy,
+            content_w,
+            SEARCH_BAR_HEIGHT,
             UIStyle {
                 bg_color: SEARCH_BG,
                 hover_bg_color: SEARCH_HOVER,
@@ -348,7 +404,11 @@ impl BrowserPopupPanel {
                 text_color: SEARCH_TEXT,
                 ..UIStyle::default()
             },
-            &if self.current_filter.is_empty() { "  Search...".to_string() } else { format!("  {}", self.current_filter) },
+            &if self.current_filter.is_empty() {
+                "  Search...".to_string()
+            } else {
+                format!("  {}", self.current_filter)
+            },
         ) as i32;
         cy += SEARCH_BAR_HEIGHT + SECTION_SPACING;
 
@@ -361,10 +421,22 @@ impl BrowserPopupPanel {
             let all_active = self.active_category.is_none();
             let all_w = estimate_chip_width("All");
             self.chip_all_id = tree.add_button(
-                -1, chip_x, cy, all_w, chip_h,
+                -1,
+                chip_x,
+                cy,
+                all_w,
+                chip_h,
                 UIStyle {
-                    bg_color: if all_active { color::ACCENT_BLUE } else { CHIP_INACTIVE },
-                    hover_bg_color: if all_active { color::ACCENT_BLUE } else { CHIP_HOVER },
+                    bg_color: if all_active {
+                        color::ACCENT_BLUE
+                    } else {
+                        CHIP_INACTIVE
+                    },
+                    hover_bg_color: if all_active {
+                        color::ACCENT_BLUE
+                    } else {
+                        CHIP_HOVER
+                    },
                     corner_radius: chip_h * 0.5,
                     font_size: CELL_FONT,
                     text_color: if all_active { Color32::WHITE } else { TEXT_DIM },
@@ -376,14 +448,28 @@ impl BrowserPopupPanel {
 
             // Category chips
             for cat in &self.category_names {
-                if cat == "Generators" { continue; } // Don't show "Generators" in effect browser
+                if cat == "Generators" {
+                    continue;
+                } // Don't show "Generators" in effect browser
                 let is_active = self.active_category.as_deref() == Some(cat.as_str());
                 let w = estimate_chip_width(cat);
                 let id = tree.add_button(
-                    -1, chip_x, cy, w, chip_h,
+                    -1,
+                    chip_x,
+                    cy,
+                    w,
+                    chip_h,
                     UIStyle {
-                        bg_color: if is_active { color::ACCENT_BLUE } else { CHIP_INACTIVE },
-                        hover_bg_color: if is_active { color::ACCENT_BLUE } else { CHIP_HOVER },
+                        bg_color: if is_active {
+                            color::ACCENT_BLUE
+                        } else {
+                            CHIP_INACTIVE
+                        },
+                        hover_bg_color: if is_active {
+                            color::ACCENT_BLUE
+                        } else {
+                            CHIP_HOVER
+                        },
                         corner_radius: chip_h * 0.5,
                         font_size: CELL_FONT,
                         text_color: if is_active { Color32::WHITE } else { TEXT_DIM },
@@ -428,16 +514,33 @@ impl BrowserPopupPanel {
             // Category accent bar
             if src_idx < self.item_categories.len() && !self.item_categories[src_idx].is_empty() {
                 let accent_color = category_color(&self.item_categories[src_idx]);
-                tree.add_panel(clip_id, cell_x, cell_y, ACCENT_BAR_W, CELL_HEIGHT,
-                    UIStyle { bg_color: accent_color, corner_radius: 2.0, ..UIStyle::default() },
+                tree.add_panel(
+                    clip_id,
+                    cell_x,
+                    cell_y,
+                    ACCENT_BAR_W,
+                    CELL_HEIGHT,
+                    UIStyle {
+                        bg_color: accent_color,
+                        corner_radius: 2.0,
+                        ..UIStyle::default()
+                    },
                 );
             }
 
             // Cell button — full height, ClipRegion handles visual clipping
-            let prefix = if !self.item_categories.is_empty() { "     " } else { "  " };
+            let prefix = if !self.item_categories.is_empty() {
+                "     "
+            } else {
+                "  "
+            };
             let label = format!("{}{}", prefix, &self.item_names[src_idx]);
             let id = tree.add_button(
-                clip_id, cell_x, cell_y, CELL_WIDTH, CELL_HEIGHT,
+                clip_id,
+                cell_x,
+                cell_y,
+                CELL_WIDTH,
+                CELL_HEIGHT,
                 UIStyle {
                     bg_color: CELL_NORMAL,
                     hover_bg_color: CELL_HOVER,
@@ -463,7 +566,11 @@ impl BrowserPopupPanel {
                 format!("Paste {} Effects", self.paste_count)
             };
             self.paste_id = tree.add_button(
-                -1, cx, cy, content_w, PASTE_BUTTON_HEIGHT,
+                -1,
+                cx,
+                cy,
+                content_w,
+                PASTE_BUTTON_HEIGHT,
                 UIStyle {
                     bg_color: PASTE_BG,
                     hover_bg_color: PASTE_HOVER,
@@ -484,7 +591,9 @@ impl BrowserPopupPanel {
     // ── Event handling ──
 
     pub fn handle_click(&mut self, node_id: u32) -> Option<BrowserPopupAction> {
-        if !self.is_open { return None; }
+        if !self.is_open {
+            return None;
+        }
 
         let id = node_id as i32;
 
@@ -506,7 +615,9 @@ impl BrowserPopupPanel {
         }
 
         // Category chips
-        let cat_names: Vec<String> = self.category_names.iter()
+        let cat_names: Vec<String> = self
+            .category_names
+            .iter()
             .filter(|c| c.as_str() != "Generators")
             .cloned()
             .collect();
@@ -559,7 +670,9 @@ impl BrowserPopupPanel {
 
     /// Handle mouse wheel scroll within the popup.
     pub fn handle_scroll(&mut self, delta: f32) {
-        if !self.is_open { return; }
+        if !self.is_open {
+            return;
+        }
         let rows = (self.filtered_indices.len() + self.columns - 1) / self.columns.max(1);
         let content_h = rows as f32 * (CELL_HEIGHT + CELL_SPACING) - CELL_SPACING;
         let max_scroll = (content_h - self.grid_viewport_height).max(0.0);

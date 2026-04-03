@@ -1,9 +1,9 @@
 use crate::command::Command;
-use manifold_core::LayerId;
-use manifold_core::project::Project;
-use manifold_core::layer::Layer;
-use manifold_core::types::LayerType;
 use manifold_core::GeneratorTypeId;
+use manifold_core::LayerId;
+use manifold_core::layer::Layer;
+use manifold_core::project::Project;
+use manifold_core::types::LayerType;
 use std::collections::HashMap;
 
 /// Add a new layer to the timeline.
@@ -25,7 +25,14 @@ impl AddLayerCommand {
         insert_index: usize,
         parent_group_id: Option<LayerId>,
     ) -> Self {
-        Self { layer: None, name, layer_type, gen_type, insert_index, parent_group_id }
+        Self {
+            layer: None,
+            name,
+            layer_type,
+            gen_type,
+            insert_index,
+            parent_group_id,
+        }
     }
 }
 
@@ -49,12 +56,19 @@ impl Command for AddLayerCommand {
     fn undo(&mut self, project: &mut Project) {
         // Find the layer we inserted by ID
         if let Some(layer) = &self.layer
-            && let Some(idx) = project.timeline.layers.iter().position(|l| l.layer_id == layer.layer_id) {
-                project.timeline.remove_layer(idx);
-            }
+            && let Some(idx) = project
+                .timeline
+                .layers
+                .iter()
+                .position(|l| l.layer_id == layer.layer_id)
+        {
+            project.timeline.remove_layer(idx);
+        }
     }
 
-    fn description(&self) -> &str { "Add Layer" }
+    fn description(&self) -> &str {
+        "Add Layer"
+    }
 }
 
 /// Delete a layer from the timeline.
@@ -69,7 +83,11 @@ pub struct DeleteLayerCommand {
 impl DeleteLayerCommand {
     pub fn new(layer: Layer) -> Self {
         let layer_id = layer.layer_id.clone();
-        Self { layer: Some(layer), layer_id, deleted_at_index: 0 }
+        Self {
+            layer: Some(layer),
+            layer_id,
+            deleted_at_index: 0,
+        }
     }
 }
 
@@ -89,7 +107,9 @@ impl Command for DeleteLayerCommand {
         }
     }
 
-    fn description(&self) -> &str { "Delete Layer" }
+    fn description(&self) -> &str {
+        "Delete Layer"
+    }
 }
 
 /// Reorder layers atomically.
@@ -108,7 +128,12 @@ impl ReorderLayerCommand {
         old_parent_ids: HashMap<LayerId, Option<LayerId>>,
         new_parent_ids: HashMap<LayerId, Option<LayerId>>,
     ) -> Self {
-        Self { old_order, new_order, old_parent_ids, new_parent_ids }
+        Self {
+            old_order,
+            new_order,
+            old_parent_ids,
+            new_parent_ids,
+        }
     }
 
     fn apply_parent_ids(layers: &mut [Layer], parent_ids: &HashMap<LayerId, Option<LayerId>>) {
@@ -133,7 +158,9 @@ impl Command for ReorderLayerCommand {
         project.timeline.replace_layer_order(old_order);
     }
 
-    fn description(&self) -> &str { "Reorder Layers" }
+    fn description(&self) -> &str {
+        "Reorder Layers"
+    }
 }
 
 /// Group selected layers into a new group layer.
@@ -147,14 +174,17 @@ pub struct GroupLayersCommand {
 }
 
 impl GroupLayersCommand {
-    pub fn new(
-        selected_layer_ids: Vec<LayerId>,
-        original_order: Vec<Layer>,
-    ) -> Self {
-        let original_parent_ids = original_order.iter()
+    pub fn new(selected_layer_ids: Vec<LayerId>, original_order: Vec<Layer>) -> Self {
+        let original_parent_ids = original_order
+            .iter()
             .map(|l| (l.layer_id.clone(), l.parent_layer_id.clone()))
             .collect();
-        Self { selected_layer_ids, group_layer: None, original_order, original_parent_ids }
+        Self {
+            selected_layer_ids,
+            group_layer: None,
+            original_order,
+            original_parent_ids,
+        }
     }
 }
 
@@ -172,7 +202,10 @@ impl Command for GroupLayersCommand {
         let group_id = group.layer_id.clone();
 
         // Find insertion point (before first selected)
-        let insert_idx = project.timeline.layers.iter()
+        let insert_idx = project
+            .timeline
+            .layers
+            .iter()
             .position(|l| self.selected_layer_ids.contains(&l.layer_id))
             .unwrap_or(0);
 
@@ -190,9 +223,14 @@ impl Command for GroupLayersCommand {
     fn undo(&mut self, project: &mut Project) {
         // Remove group layer
         if let Some(group) = &self.group_layer
-            && let Some(idx) = project.timeline.layers.iter().position(|l| l.layer_id == group.layer_id) {
-                project.timeline.remove_layer(idx);
-            }
+            && let Some(idx) = project
+                .timeline
+                .layers
+                .iter()
+                .position(|l| l.layer_id == group.layer_id)
+        {
+            project.timeline.remove_layer(idx);
+        }
         // Restore parent IDs
         for layer in &mut project.timeline.layers {
             if let Some(parent_id) = self.original_parent_ids.get(&layer.layer_id) {
@@ -201,7 +239,9 @@ impl Command for GroupLayersCommand {
         }
     }
 
-    fn description(&self) -> &str { "Group Layers" }
+    fn description(&self) -> &str {
+        "Group Layers"
+    }
 }
 
 /// Rename a layer (undoable).
@@ -214,7 +254,11 @@ pub struct RenameLayerCommand {
 
 impl RenameLayerCommand {
     pub fn new(layer_id: LayerId, old_name: String, new_name: String) -> Self {
-        Self { layer_id, old_name, new_name }
+        Self {
+            layer_id,
+            old_name,
+            new_name,
+        }
     }
 }
 
@@ -231,7 +275,9 @@ impl Command for RenameLayerCommand {
         }
     }
 
-    fn description(&self) -> &str { "Rename Layer" }
+    fn description(&self) -> &str {
+        "Rename Layer"
+    }
 }
 
 /// Ungroup a group layer, dissolving it.
@@ -251,7 +297,12 @@ impl UngroupLayersCommand {
         child_layer_ids: Vec<LayerId>,
         original_order: Vec<Layer>,
     ) -> Self {
-        Self { group_layer: Some(group_layer), group_index, child_layer_ids, original_order }
+        Self {
+            group_layer: Some(group_layer),
+            group_index,
+            child_layer_ids,
+            original_order,
+        }
     }
 }
 
@@ -260,12 +311,19 @@ impl Command for UngroupLayersCommand {
         // Clear parent IDs on children
         if let Some(group) = &self.group_layer {
             for layer in &mut project.timeline.layers {
-                if self.child_layer_ids.contains(&layer.layer_id) && layer.parent_layer_id.as_ref() == Some(&group.layer_id) {
+                if self.child_layer_ids.contains(&layer.layer_id)
+                    && layer.parent_layer_id.as_ref() == Some(&group.layer_id)
+                {
                     layer.parent_layer_id = None;
                 }
             }
             // Remove group layer
-            if let Some(idx) = project.timeline.layers.iter().position(|l| l.layer_id == group.layer_id) {
+            if let Some(idx) = project
+                .timeline
+                .layers
+                .iter()
+                .position(|l| l.layer_id == group.layer_id)
+            {
                 project.timeline.remove_layer(idx);
             }
         }
@@ -273,10 +331,14 @@ impl Command for UngroupLayersCommand {
 
     fn undo(&mut self, project: &mut Project) {
         // Restore original order (includes group layer)
-        project.timeline.replace_layer_order(self.original_order.clone());
+        project
+            .timeline
+            .replace_layer_order(self.original_order.clone());
     }
 
-    fn description(&self) -> &str { "Ungroup Layers" }
+    fn description(&self) -> &str {
+        "Ungroup Layers"
+    }
 }
 
 /// Duplicate one or more layers (with full deep copy of all nested IDs).
@@ -291,14 +353,19 @@ pub struct DuplicateLayersCommand {
 
 impl DuplicateLayersCommand {
     pub fn new(new_layers: Vec<Layer>, insert_after_index: usize) -> Self {
-        Self { new_layers, insert_after_index }
+        Self {
+            new_layers,
+            insert_after_index,
+        }
     }
 }
 
 impl Command for DuplicateLayersCommand {
     fn execute(&mut self, project: &mut Project) {
         for (i, layer) in self.new_layers.iter().cloned().enumerate() {
-            project.timeline.insert_layer(self.insert_after_index + i, layer);
+            project
+                .timeline
+                .insert_layer(self.insert_after_index + i, layer);
         }
     }
 
@@ -311,5 +378,7 @@ impl Command for DuplicateLayersCommand {
         }
     }
 
-    fn description(&self) -> &str { "Duplicate Layers" }
+    fn description(&self) -> &str {
+        "Duplicate Layers"
+    }
 }

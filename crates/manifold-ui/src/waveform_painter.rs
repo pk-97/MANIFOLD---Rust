@@ -86,7 +86,9 @@ pub fn draw_waveform(
         // Unity: `int half = Mathf.Max(1, Mathf.RoundToInt(amp * (textureHeight * 0.45f)));`
         let half = ((amp * draw_height * 0.45).round() as i32).max(1);
         let y_min = (mid - half).max(y_offset).max(0);
-        let y_max = (mid + half).min(y_offset + lane_height - 1).min(buf_h as i32 - 1);
+        let y_max = (mid + half)
+            .min(y_offset + lane_height - 1)
+            .min(buf_h as i32 - 1);
 
         for y in y_min..=y_max {
             let idx = y as usize * buf_w + px as usize;
@@ -136,7 +138,16 @@ pub fn draw_empty_state_bg(
     lane_height: i32,
     lane_bg: Color32,
 ) {
-    fill_rect(buffer, buf_w, buf_h, 0, y_offset, buf_w as i32, lane_height, lane_bg);
+    fill_rect(
+        buffer,
+        buf_w,
+        buf_h,
+        0,
+        y_offset,
+        buf_w as i32,
+        lane_height,
+        lane_bg,
+    );
 }
 
 /// Draw mute/solo button indicator.
@@ -189,15 +200,16 @@ mod tests {
         let mut buf = vec![Color32::TRANSPARENT; 320 * 56];
 
         draw_waveform(
-            &mut buf, 320, 56, level,
-            0, 320,   // x range
-            0, 56,    // y offset, lane height
+            &mut buf, 320, 56, level, 0, 320, // x range
+            0, 56, // y offset, lane height
             0.0, 320.0, // waveform position and width
         );
 
         // Some pixels should be non-transparent (waveform was drawn)
         let non_transparent = buf.iter().filter(|c| c.a > 0).count();
-        assert!(non_transparent > 0, "Waveform should have drawn some pixels");
+        assert!(
+            non_transparent > 0,
+            "Waveform should have drawn some pixels"
+        );
     }
-
 }

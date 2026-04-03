@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use crate::LayerId;
 use crate::types::ClipDurationMode;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// A single MIDI note → clip mapping.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,11 +38,16 @@ impl MidiMappingConfig {
     }
 
     pub fn get_mapping_for_note(&self, note: i32) -> Option<&MidiNoteMapping> {
-        self.mapping_dict.get(&note).and_then(|&i| self.mappings.get(i))
+        self.mapping_dict
+            .get(&note)
+            .and_then(|&i| self.mappings.get(i))
     }
 
     /// Remove mappings referencing clip IDs not in the valid set.
-    pub fn purge_orphaned_clip_ids(&mut self, valid_ids: &std::collections::HashSet<String>) -> usize {
+    pub fn purge_orphaned_clip_ids(
+        &mut self,
+        valid_ids: &std::collections::HashSet<String>,
+    ) -> usize {
         let mut removed = 0;
         for mapping in &mut self.mappings {
             let before = mapping.video_clip_ids.len();

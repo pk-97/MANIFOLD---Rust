@@ -5,15 +5,15 @@
 //
 // Uses kira for audio playback (replacing Unity AudioSource + AudioClip).
 
+use crate::audio_sync::ImportedAudioSyncController;
+use crate::engine::PlaybackEngine;
 use kira::{
     manager::{AudioManager, AudioManagerSettings, backend::DefaultBackend},
-    sound::static_sound::{StaticSoundData, StaticSoundHandle},
     sound::PlaybackState as KiraPlaybackState,
+    sound::static_sound::{StaticSoundData, StaticSoundHandle},
     tween::Tween,
 };
 use manifold_core::types::PlaybackState;
-use crate::audio_sync::ImportedAudioSyncController;
-use crate::engine::PlaybackEngine;
 use std::path::Path;
 
 pub const STEM_COUNT: usize = 4;
@@ -79,7 +79,12 @@ impl StemAudioController {
 
         Ok(Self {
             audio_manager,
-            stems: [StemSlot::new(), StemSlot::new(), StemSlot::new(), StemSlot::new()],
+            stems: [
+                StemSlot::new(),
+                StemSlot::new(),
+                StemSlot::new(),
+                StemSlot::new(),
+            ],
             stem_muted: [false; STEM_COUNT],
             stem_soloed: [false; STEM_COUNT],
             expanded: false,
@@ -90,9 +95,15 @@ impl StemAudioController {
 
     // ─── Properties ───
 
-    pub fn is_expanded(&self) -> bool { self.expanded }
-    pub fn stems_ready(&self) -> bool { self.stems_ready }
-    pub fn stems_loaded_count(&self) -> usize { self.stems_loaded_count }
+    pub fn is_expanded(&self) -> bool {
+        self.expanded
+    }
+    pub fn stems_ready(&self) -> bool {
+        self.stems_ready
+    }
+    pub fn stems_loaded_count(&self) -> usize {
+        self.stems_loaded_count
+    }
 
     // ──────────────────────────────────────
     // STEM LOADING
@@ -156,7 +167,8 @@ impl StemAudioController {
                         Err(e) => {
                             log::warn!(
                                 "[StemAudioController] Failed to play stem '{}': {}",
-                                STEM_FILE_NAMES[i], e
+                                STEM_FILE_NAMES[i],
+                                e
                             );
                         }
                     }
@@ -164,7 +176,8 @@ impl StemAudioController {
                 Err(e) => {
                     log::warn!(
                         "[StemAudioController] Failed to load stem '{}': {}",
-                        STEM_FILE_NAMES[i], e
+                        STEM_FILE_NAMES[i],
+                        e
                     );
                 }
             }
@@ -175,7 +188,8 @@ impl StemAudioController {
         if self.stems_ready {
             log::info!(
                 "[StemAudioController] Loaded {}/{} stems.",
-                self.stems_loaded_count, STEM_COUNT
+                self.stems_loaded_count,
+                STEM_COUNT
             );
         }
     }
@@ -212,7 +226,8 @@ impl StemAudioController {
                     Err(e) => {
                         log::warn!(
                             "[StemAudioController] Failed to play preloaded stem '{}': {}",
-                            stem_name, e
+                            stem_name,
+                            e
                         );
                     }
                 }
@@ -223,14 +238,19 @@ impl StemAudioController {
         if self.stems_ready {
             log::info!(
                 "[StemAudioController] Applied {}/{} preloaded stems.",
-                self.stems_loaded_count, STEM_COUNT
+                self.stems_loaded_count,
+                STEM_COUNT
             );
         }
     }
 
     /// Get the clip duration in seconds for a stem (for waveform rendering).
     pub fn stem_clip_duration_seconds(&self, index: usize) -> f32 {
-        if index < STEM_COUNT { self.stems[index].clip_duration_seconds } else { 0.0 }
+        if index < STEM_COUNT {
+            self.stems[index].clip_duration_seconds
+        } else {
+            0.0
+        }
     }
 
     /// Returns true if the given stem is available (loaded successfully).
@@ -245,11 +265,7 @@ impl StemAudioController {
     /// Port of C# SetExpanded(bool expand).
     /// When expanded: mute master, apply stem volumes.
     /// When collapsed: stop stems, restore master.
-    pub fn set_expanded(
-        &mut self,
-        expand: bool,
-        master: Option<&mut ImportedAudioSyncController>,
-    ) {
+    pub fn set_expanded(&mut self, expand: bool, master: Option<&mut ImportedAudioSyncController>) {
         if self.expanded == expand {
             return;
         }
@@ -297,14 +313,18 @@ impl StemAudioController {
 
     /// Port of C# ToggleMuted(int index).
     pub fn toggle_muted(&mut self, index: usize) {
-        if index >= STEM_COUNT { return; }
+        if index >= STEM_COUNT {
+            return;
+        }
         self.stem_muted[index] = !self.stem_muted[index];
         self.apply_mute_solo_volumes();
     }
 
     /// Port of C# ToggleSoloed(int index).
     pub fn toggle_soloed(&mut self, index: usize) {
-        if index >= STEM_COUNT { return; }
+        if index >= STEM_COUNT {
+            return;
+        }
         self.stem_soloed[index] = !self.stem_soloed[index];
         self.apply_mute_solo_volumes();
     }
@@ -313,7 +333,9 @@ impl StemAudioController {
     ///
     /// Port of C# ApplyMuteSoloVolumes().
     fn apply_mute_solo_volumes(&mut self) {
-        if !self.expanded { return; }
+        if !self.expanded {
+            return;
+        }
 
         let any_soloed = (0..STEM_COUNT).any(|i| self.stem_soloed[i] && self.stems[i].available);
 
@@ -342,11 +364,7 @@ impl StemAudioController {
     /// Only active when expanded.
     ///
     /// Port of C# UpdateSync(ImportedAudioSyncController master, PlaybackController pc).
-    pub fn update_sync(
-        &mut self,
-        master: &ImportedAudioSyncController,
-        engine: &PlaybackEngine,
-    ) {
+    pub fn update_sync(&mut self, master: &ImportedAudioSyncController, engine: &PlaybackEngine) {
         if !self.expanded || !self.stems_ready || !master.is_ready() {
             return;
         }
@@ -355,7 +373,9 @@ impl StemAudioController {
         // Port: if (master.Source != null && master.Source.volume > 0f) master.Source.volume = 0f
         // (handled externally — master volume is set by set_expanded and caller)
 
-        let start_time_seconds = engine.beat_to_timeline_time_immut(master.start_beat()).as_f32();
+        let start_time_seconds = engine
+            .beat_to_timeline_time_immut(master.start_beat())
+            .as_f32();
         let expected_time = engine.current_time().as_f32() - start_time_seconds;
         // No encoder delay for WAV stems.
 
@@ -410,9 +430,8 @@ impl StemAudioController {
                                 Ok(mut new_handle) => {
                                     new_handle.seek_to(clamped as f64);
                                     // Apply current volume
-                                    let any_soloed = (0..STEM_COUNT).any(|j| {
-                                        self.stem_soloed[j] && self.stems[j].available
-                                    });
+                                    let any_soloed = (0..STEM_COUNT)
+                                        .any(|j| self.stem_soloed[j] && self.stems[j].available);
                                     let audible = (!any_soloed || self.stem_soloed[index])
                                         && !self.stem_muted[index];
                                     new_handle.set_volume(
@@ -424,7 +443,8 @@ impl StemAudioController {
                                 Err(e) => {
                                     log::warn!(
                                         "[StemAudioController] Failed to restart stem '{}': {}",
-                                        STEM_FILE_NAMES[index], e
+                                        STEM_FILE_NAMES[index],
+                                        e
                                     );
                                 }
                             }
@@ -546,10 +566,11 @@ impl StemAudioController {
 
                 if let Ok(meta) = std::fs::metadata(&stems_dir)
                     && let Ok(modified) = meta.modified()
-                        && modified > best_modified {
-                            best_modified = modified;
-                            best_stems_dir = Some(stems_dir);
-                        }
+                    && modified > best_modified
+                {
+                    best_modified = modified;
+                    best_stems_dir = Some(stems_dir);
+                }
             }
         }
 
@@ -598,7 +619,10 @@ pub fn preload_stems(paths: &[Option<String>; STEM_COUNT]) -> PreloadedStemData 
             Ok(sound_data) => {
                 let clip_duration = sound_data.duration().as_secs_f32();
                 if clip_duration > 0.0 {
-                    stems[i] = Some(PreloadedStem { sound_data, clip_duration });
+                    stems[i] = Some(PreloadedStem {
+                        sound_data,
+                        clip_duration,
+                    });
                 } else {
                     log::warn!(
                         "[StemAudioController] Preloaded stem '{}' has zero duration",
@@ -609,11 +633,15 @@ pub fn preload_stems(paths: &[Option<String>; STEM_COUNT]) -> PreloadedStemData 
             Err(e) => {
                 log::warn!(
                     "[StemAudioController] Failed to preload stem '{}': {}",
-                    STEM_FILE_NAMES[i], e
+                    STEM_FILE_NAMES[i],
+                    e
                 );
             }
         }
     }
 
-    PreloadedStemData { stems, paths: result_paths }
+    PreloadedStemData {
+        stems,
+        paths: result_paths,
+    }
 }

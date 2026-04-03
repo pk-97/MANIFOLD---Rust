@@ -1,16 +1,16 @@
-use std::any::Any;
-use ahash::AHashMap;
-use manifold_core::{Beats, GeneratorTypeId, LayerId, Seconds};
-use manifold_core::clip::TimelineClip;
-use manifold_core::layer::Layer;
-use manifold_gpu::{GpuDevice, GpuTextureFormat};
-use manifold_playback::renderer::ClipRenderer;
-use crate::gpu_encoder::GpuEncoder;
-use crate::render_target::RenderTarget;
 use crate::generator::Generator;
 use crate::generator_context::{GeneratorContext, MAX_GEN_PARAMS};
 use crate::generators::registry::GeneratorRegistry;
+use crate::gpu_encoder::GpuEncoder;
+use crate::render_target::RenderTarget;
 use crate::uniform_arena::UniformArena;
+use ahash::AHashMap;
+use manifold_core::clip::TimelineClip;
+use manifold_core::layer::Layer;
+use manifold_core::{Beats, GeneratorTypeId, LayerId, Seconds};
+use manifold_gpu::{GpuDevice, GpuTextureFormat};
+use manifold_playback::renderer::ClipRenderer;
+use std::any::Any;
 
 /// Per-clip active state.
 struct ActiveClip {
@@ -237,14 +237,23 @@ impl GeneratorRenderer {
             // Reduced-res generator: always create at scaled size
             log::debug!(
                 "[GenRenderer] Clip {clip_id}: rendering at {}x{} ({:.0}% of {}x{}), upscale to full",
-                rt_w, rt_h, internal_scale * 100.0, self.width, self.height,
+                rt_w,
+                rt_h,
+                internal_scale * 100.0,
+                self.width,
+                self.height,
             );
             RenderTarget::new(
                 self.device(),
                 rt_w,
                 rt_h,
                 self.format,
-                &format!("Generator RT ({}x{} @ {:.0}%)", rt_w, rt_h, internal_scale * 100.0),
+                &format!(
+                    "Generator RT ({}x{} @ {:.0}%)",
+                    rt_w,
+                    rt_h,
+                    internal_scale * 100.0
+                ),
             )
         };
 
@@ -299,8 +308,7 @@ impl GeneratorRenderer {
     ) {
         // Reset uniform arena for this frame and set on GpuEncoder.
         self.uniform_arena.reset();
-        gpu.uniform_arena =
-            Some(&mut self.uniform_arena as *mut UniformArena);
+        gpu.uniform_arena = Some(&mut self.uniform_arena as *mut UniformArena);
 
         // Refresh positional cache on active clips — layer_index may have changed
         // after reorder, but layer_id stays stable so generator state follows.
@@ -394,15 +402,16 @@ impl GeneratorRenderer {
                     active.needs_clear = false;
                 }
                 // Pass per-clip string params (e.g. text content) to the generator.
-                let string_params = layer.clips.iter()
+                let string_params = layer
+                    .clips
+                    .iter()
                     .find(|c| c.id.as_str() == id)
                     .and_then(|c| c.string_params.as_ref());
                 layer_state.generator.set_string_params(string_params);
-                let new_progress = layer_state.generator.render(
-                    gpu,
-                    &active.render_target.texture,
-                    &ctx,
-                );
+                let new_progress =
+                    layer_state
+                        .generator
+                        .render(gpu, &active.render_target.texture, &ctx);
                 active.anim_progress = new_progress;
             }
         }
@@ -433,12 +442,10 @@ impl GeneratorRenderer {
                 // Safety: textures are valid for the duration of this frame.
                 // No aliasing: src and dst are different textures, upscaler borrows
                 // are disjoint from active_clips reads.
-                self.upscaler.upscale(
-                    gpu.native_enc,
-                    device,
-                    unsafe { &*src_tex },
-                    unsafe { &*dst_tex },
-                );
+                self.upscaler
+                    .upscale(gpu.native_enc, device, unsafe { &*src_tex }, unsafe {
+                        &*dst_tex
+                    });
             }
         }
     }
@@ -454,9 +461,7 @@ impl GeneratorRenderer {
     /// Returns the upscaled full-res texture for scaled generators,
     /// or the direct render target for full-res generators.
     pub fn get_clip_texture(&self, clip_id: &str) -> Option<&manifold_gpu::GpuTexture> {
-        self.active_clips
-            .get(clip_id)
-            .map(|a| a.output_texture())
+        self.active_clips.get(clip_id).map(|a| a.output_texture())
     }
 
     /// Resize all render targets and generators.
@@ -506,11 +511,7 @@ impl GeneratorRenderer {
 
     /// Update active clip types for a layer after generator type change.
     /// Port of C# GeneratorRenderer.UpdateActiveTypesForLayer().
-    pub fn update_active_types_for_layer(
-        &mut self,
-        layer_id: &LayerId,
-        new_type: GeneratorTypeId,
-    ) {
+    pub fn update_active_types_for_layer(&mut self, layer_id: &LayerId, new_type: GeneratorTypeId) {
         // Update clip type tracking
         for active in self.active_clips.values_mut() {
             if active.layer_id == *layer_id {
@@ -541,8 +542,7 @@ impl GeneratorRenderer {
                     if active.layer_id == *layer_id && active.internal_scale != new_scale {
                         active.internal_scale = new_scale;
                         if new_scale < 1.0 {
-                            let (sw, sh) =
-                                Self::scaled_dimensions(width, height, new_scale);
+                            let (sw, sh) = Self::scaled_dimensions(width, height, new_scale);
                             active.render_target.resize(device, sw, sh);
                             if active.upscale_target.is_none() {
                                 active.upscale_target = Some(RenderTarget::new(
@@ -588,7 +588,12 @@ impl ClipRenderer for GeneratorRenderer {
         clip.video_clip_id.is_empty()
     }
 
-    fn start_clip(&mut self, clip: &TimelineClip, _current_time: Seconds, layers: &[Layer]) -> bool {
+    fn start_clip(
+        &mut self,
+        clip: &TimelineClip,
+        _current_time: Seconds,
+        layers: &[Layer],
+    ) -> bool {
         // Find the layer that contains this clip to get layer_id and generator_type
         let (layer_id, gen_type, layer_index) = layers
             .iter()
@@ -661,11 +666,16 @@ impl ClipRenderer for GeneratorRenderer {
         0.0
     }
 
-    fn resume_clip(&mut self, _clip_id: &str) { /* no-op: generators render every frame */ }
-    fn pause_clip(&mut self, _clip_id: &str) { /* no-op */ }
-    fn seek_clip(&mut self, _clip_id: &str, _video_time: f32) { /* no-op */ }
-    fn set_clip_looping(&mut self, _clip_id: &str, _looping: bool) { /* no-op */ }
-    fn set_clip_playback_rate(&mut self, _clip_id: &str, _rate: f32) { /* no-op */ }
+    fn resume_clip(&mut self, _clip_id: &str) { /* no-op: generators render every frame */
+    }
+    fn pause_clip(&mut self, _clip_id: &str) { /* no-op */
+    }
+    fn seek_clip(&mut self, _clip_id: &str, _video_time: f32) { /* no-op */
+    }
+    fn set_clip_looping(&mut self, _clip_id: &str, _looping: bool) { /* no-op */
+    }
+    fn set_clip_playback_rate(&mut self, _clip_id: &str, _rate: f32) { /* no-op */
+    }
 
     fn pre_render(&mut self, _time: Seconds, _beat: Beats, _dt: f32) {
         // No-op: actual GPU rendering is done via render_all() called from app

@@ -1,11 +1,11 @@
-use std::time::Instant;
-use manifold_core::LayerId;
+use super::copy_to_clipboard_label::CopyToClipboardLabelState;
+use super::param_slider_shared::*;
+use super::{DriverConfigAction, EnvelopeParam, PanelAction};
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
 use crate::tree::UITree;
-use super::{PanelAction, DriverConfigAction, EnvelopeParam};
-use super::param_slider_shared::*;
+use manifold_core::LayerId;
 
 // ── Layout constants unique to GenParamPanel ────────────────────
 
@@ -130,8 +130,7 @@ pub struct GenParamPanel {
     // Per-param OSC addresses (for click-to-copy)
     osc_addresses: Vec<Option<String>>,
 
-    // "Copied" flash state
-    copied_flash: Option<(u32, String, Instant)>,
+    copied_flash: CopyToClipboardLabelState,
 
     // Drag state
     drag: ParamDragState,
@@ -171,7 +170,7 @@ impl GenParamPanel {
             string_param_info: Vec::new(),
             string_param_btn_ids: Vec::new(),
             osc_addresses: Vec::new(),
-            copied_flash: None,
+            copied_flash: CopyToClipboardLabelState::default(),
             drag: ParamDragState::new(),
             param_cache: Vec::new(),
             toggle_cache: Vec::new(),
@@ -205,8 +204,12 @@ impl GenParamPanel {
         );
         self.string_param_info = config.string_params.clone();
         self.string_param_btn_ids = vec![-1; config.string_params.len()];
-        self.osc_addresses = config.params.iter().map(|p| p.osc_address.clone()).collect();
-        self.copied_flash = None;
+        self.osc_addresses = config
+            .params
+            .iter()
+            .map(|p| p.osc_address.clone())
+            .collect();
+        self.copied_flash.clear();
         self.slider_ids = vec![None; n];
         self.toggle_ids = Vec::new();
         self.toggle_ids.resize_with(n, || None);
@@ -224,9 +227,15 @@ impl GenParamPanel {
         self.toggle_cache = vec![false; n];
     }
 
-    pub fn first_node(&self) -> usize { self.first_node }
-    pub fn node_count(&self) -> usize { self.node_count }
-    pub fn state_mut(&mut self) -> &mut GenParamState { &mut self.state }
+    pub fn first_node(&self) -> usize {
+        self.first_node
+    }
+    pub fn node_count(&self) -> usize {
+        self.node_count
+    }
+    pub fn state_mut(&mut self) -> &mut GenParamState {
+        &mut self.state
+    }
     pub fn is_dragging(&self) -> bool {
         self.drag.is_dragging()
     }
@@ -239,10 +248,24 @@ impl GenParamPanel {
                     h += ROW_HEIGHT + ROW_SPACING;
                 } else {
                     h += ROW_HEIGHT + ROW_SPACING;
-                    if self.state.mod_state.driver_expanded.get(i).copied().unwrap_or(false) {
+                    if self
+                        .state
+                        .mod_state
+                        .driver_expanded
+                        .get(i)
+                        .copied()
+                        .unwrap_or(false)
+                    {
                         h += DRIVER_CONFIG_HEIGHT;
                     }
-                    if self.state.mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
+                    if self
+                        .state
+                        .mod_state
+                        .envelope_expanded
+                        .get(i)
+                        .copied()
+                        .unwrap_or(false)
+                    {
                         h += ENV_CONFIG_HEIGHT;
                     }
                 }
@@ -254,21 +277,36 @@ impl GenParamPanel {
         h + CARD_BOTTOM_MARGIN
     }
 
-    pub fn is_collapsed(&self) -> bool { self.is_collapsed }
-    pub fn set_collapsed(&mut self, v: bool) { self.is_collapsed = v; }
-    pub fn is_selected(&self) -> bool { self.is_selected }
+    pub fn is_collapsed(&self) -> bool {
+        self.is_collapsed
+    }
+    pub fn set_collapsed(&mut self, v: bool) {
+        self.is_collapsed = v;
+    }
+    pub fn is_selected(&self) -> bool {
+        self.is_selected
+    }
 
     /// Update selection visual (border color) without a full rebuild.
     pub fn update_selection_visual(&mut self, tree: &mut UITree, selected: bool) {
-        if selected == self.is_selected { return; }
+        if selected == self.is_selected {
+            return;
+        }
         self.is_selected = selected;
         if self.border_id >= 0 {
-            let border_color = if selected { color::SELECTED_BORDER } else { color::GEN_CARD_BORDER_C32 };
-            tree.set_style(self.border_id as u32, UIStyle {
-                bg_color: border_color,
-                corner_radius: CORNER_RADIUS,
-                ..UIStyle::default()
-            });
+            let border_color = if selected {
+                color::SELECTED_BORDER
+            } else {
+                color::GEN_CARD_BORDER_C32
+            };
+            tree.set_style(
+                self.border_id as u32,
+                UIStyle {
+                    bg_color: border_color,
+                    corner_radius: CORNER_RADIUS,
+                    ..UIStyle::default()
+                },
+            );
         }
     }
 
@@ -282,9 +320,17 @@ impl GenParamPanel {
         let total_h = self.compute_height() - CARD_BOTTOM_MARGIN;
 
         // ── Card shell ──
-        let border_color = if self.is_selected { color::SELECTED_BORDER } else { color::GEN_CARD_BORDER_C32 };
+        let border_color = if self.is_selected {
+            color::SELECTED_BORDER
+        } else {
+            color::GEN_CARD_BORDER_C32
+        };
         self.border_id = tree.add_panel(
-            -1, rect.x, rect.y, rect.width, total_h,
+            -1,
+            rect.x,
+            rect.y,
+            rect.width,
+            total_h,
             UIStyle {
                 bg_color: border_color,
                 corner_radius: CORNER_RADIUS,
@@ -298,7 +344,11 @@ impl GenParamPanel {
         let inner_w = rect.width - BORDER_W * 2.0;
         let inner_h = total_h - BORDER_W * 2.0;
         self.inner_bg_id = tree.add_panel(
-            -1, inner_x, inner_y, inner_w, inner_h,
+            -1,
+            inner_x,
+            inner_y,
+            inner_w,
+            inner_h,
             UIStyle {
                 bg_color: color::GEN_CARD_INNER_BG_C32,
                 corner_radius: CORNER_RADIUS - BORDER_W,
@@ -308,7 +358,11 @@ impl GenParamPanel {
 
         // ── Header ──
         self.header_bg_id = tree.add_panel(
-            -1, inner_x, inner_y, inner_w, HEADER_HEIGHT,
+            -1,
+            inner_x,
+            inner_y,
+            inner_w,
+            HEADER_HEIGHT,
             UIStyle {
                 bg_color: color::GEN_CARD_HEADER_BG_C32,
                 corner_radius: CORNER_RADIUS - BORDER_W,
@@ -326,7 +380,11 @@ impl GenParamPanel {
         let name_w = change_x - name_x - GAP;
 
         self.name_label_id = tree.add_label(
-            -1, name_x, inner_y, name_w, HEADER_HEIGHT,
+            -1,
+            name_x,
+            inner_y,
+            name_w,
+            HEADER_HEIGHT,
             &gen_name,
             UIStyle {
                 text_color: color::GEN_CARD_HEADER_NAME_C32,
@@ -337,8 +395,11 @@ impl GenParamPanel {
         ) as i32;
 
         self.change_btn_id = tree.add_button(
-            -1, change_x, inner_y + (HEADER_HEIGHT - CHANGE_BTN_H) * 0.5,
-            CHANGE_BTN_W, CHANGE_BTN_H,
+            -1,
+            change_x,
+            inner_y + (HEADER_HEIGHT - CHANGE_BTN_H) * 0.5,
+            CHANGE_BTN_W,
+            CHANGE_BTN_H,
             UIStyle {
                 bg_color: color::CONFIG_BG_C32,
                 hover_bg_color: color::GEN_CARD_HEADER_HOVER_C32,
@@ -352,10 +413,17 @@ impl GenParamPanel {
             "Change",
         ) as i32;
 
-        let chevron_text = if self.is_collapsed { "\u{25B6}" } else { "\u{25BC}" };
+        let chevron_text = if self.is_collapsed {
+            "\u{25B6}"
+        } else {
+            "\u{25BC}"
+        };
         self.chevron_id = tree.add_button(
-            -1, chevron_x, inner_y,
-            CHEVRON_W, HEADER_HEIGHT,
+            -1,
+            chevron_x,
+            inner_y,
+            CHEVRON_W,
+            HEADER_HEIGHT,
             UIStyle {
                 text_color: color::TEXT_DIMMED_C32,
                 font_size: FONT_SIZE,
@@ -367,173 +435,248 @@ impl GenParamPanel {
 
         // ── Params (if not collapsed) ──
         if !self.is_collapsed && !self.param_info.is_empty() {
+            let content_w = inner_w - PADDING * 2.0;
+            let cx = inner_x + PADDING;
+            let mut cy = inner_y + HEADER_HEIGHT;
+            let slider_w = content_w - (DE_BUTTON_SIZE + DE_BUTTON_GAP) * 2.0;
 
-        let content_w = inner_w - PADDING * 2.0;
-        let cx = inner_x + PADDING;
-        let mut cy = inner_y + HEADER_HEIGHT;
-        let slider_w = content_w - (DE_BUTTON_SIZE + DE_BUTTON_GAP) * 2.0;
+            for i in 0..self.param_info.len() {
+                let info = self.param_info[i].clone();
 
-        for i in 0..self.param_info.len() {
-            let info = self.param_info[i].clone();
+                if info.is_toggle {
+                    // Toggle row
+                    let label_id = tree.add_label(
+                        -1,
+                        cx,
+                        cy,
+                        content_w - TOGGLE_BTN_W - GAP,
+                        ROW_HEIGHT,
+                        &info.name,
+                        UIStyle {
+                            text_color: color::SLIDER_TEXT_C32,
+                            font_size: FONT_SIZE,
+                            text_align: TextAlign::Left,
+                            ..UIStyle::default()
+                        },
+                    ) as i32;
 
-            if info.is_toggle {
-                // Toggle row
-                let label_id = tree.add_label(
-                    -1, cx, cy, content_w - TOGGLE_BTN_W - GAP, ROW_HEIGHT,
-                    &info.name,
-                    UIStyle {
-                        text_color: color::SLIDER_TEXT_C32,
-                        font_size: FONT_SIZE,
-                        text_align: TextAlign::Left,
-                        ..UIStyle::default()
-                    },
-                ) as i32;
+                    let on = info.default > 0.5;
+                    let button_id = tree.add_button(
+                        -1,
+                        cx + content_w - TOGGLE_BTN_W,
+                        cy + (ROW_HEIGHT - TOGGLE_BTN_H) * 0.5,
+                        TOGGLE_BTN_W,
+                        TOGGLE_BTN_H,
+                        toggle_btn_style(on),
+                        if on { "ON" } else { "OFF" },
+                    ) as i32;
 
-                let on = info.default > 0.5;
-                let button_id = tree.add_button(
-                    -1, cx + content_w - TOGGLE_BTN_W,
-                    cy + (ROW_HEIGHT - TOGGLE_BTN_H) * 0.5,
-                    TOGGLE_BTN_W, TOGGLE_BTN_H,
-                    toggle_btn_style(on),
-                    if on { "ON" } else { "OFF" },
-                ) as i32;
+                    // Make toggle label interactive for click-to-copy OSC address
+                    if self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some() && label_id >= 0
+                    {
+                        tree.set_flag(label_id as u32, UIFlags::INTERACTIVE);
+                    }
 
-                // Make toggle label interactive for click-to-copy OSC address
-                if self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some() && label_id >= 0 {
-                    tree.set_flag(label_id as u32, UIFlags::INTERACTIVE);
-                }
+                    self.toggle_ids[i] = Some(ToggleParamIds {
+                        _label_id: label_id,
+                        button_id,
+                    });
+                    self.toggle_cache[i] = on;
+                    cy += ROW_HEIGHT + ROW_SPACING;
+                } else {
+                    // Slider row
+                    let norm = BitmapSlider::value_to_normalized(info.default, info.min, info.max);
+                    let val_text = format_param_value(
+                        info.default,
+                        info.min,
+                        info.whole_numbers,
+                        info.value_labels.as_deref(),
+                    );
+                    let slider_rect = Rect::new(cx, cy, slider_w, ROW_HEIGHT);
+                    self.slider_ids[i] = Some(BitmapSlider::build(
+                        tree,
+                        -1,
+                        slider_rect,
+                        Some(&info.name),
+                        norm,
+                        &val_text,
+                        &SliderColors::default_slider(),
+                        FONT_SIZE,
+                        crate::slider::DEFAULT_LABEL_WIDTH,
+                    ));
 
-                self.toggle_ids[i] = Some(ToggleParamIds { _label_id: label_id, button_id });
-                self.toggle_cache[i] = on;
-                cy += ROW_HEIGHT + ROW_SPACING;
-            } else {
-                // Slider row
-                let norm = BitmapSlider::value_to_normalized(info.default, info.min, info.max);
-                let val_text = format_param_value(info.default, info.min, info.whole_numbers, info.value_labels.as_deref());
-                let slider_rect = Rect::new(cx, cy, slider_w, ROW_HEIGHT);
-                self.slider_ids[i] = Some(BitmapSlider::build(
-                    tree, -1, slider_rect,
-                    Some(&info.name), norm,
-                    &val_text, &SliderColors::default_slider(),
-                    FONT_SIZE, crate::slider::DEFAULT_LABEL_WIDTH,
-                ));
+                    // Make label interactive for click-to-copy OSC address
+                    if self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some()
+                        && let Some(ids) = &self.slider_ids[i]
+                        && ids.label >= 0
+                    {
+                        tree.set_flag(ids.label as u32, UIFlags::INTERACTIVE);
+                    }
 
-                // Make label interactive for click-to-copy OSC address
-                if self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some()
-                    && let Some(ids) = &self.slider_ids[i]
-                    && ids.label >= 0
-                {
-                    tree.set_flag(ids.label as u32, UIFlags::INTERACTIVE);
-                }
-
-                // Trim handles (if driver expanded)
-                if self.state.mod_state.driver_expanded.get(i).copied().unwrap_or(false)
-                    && let Some(ref slider) = self.slider_ids[i] {
+                    // Trim handles (if driver expanded)
+                    if self
+                        .state
+                        .mod_state
+                        .driver_expanded
+                        .get(i)
+                        .copied()
+                        .unwrap_or(false)
+                        && let Some(ref slider) = self.slider_ids[i]
+                    {
                         self.trim_ids[i] = Some(build_trim_handles(
-                            tree, slider.track as i32, slider.track_rect, &self.state.mod_state, i,
+                            tree,
+                            slider.track as i32,
+                            slider.track_rect,
+                            &self.state.mod_state,
+                            i,
                         ));
                     }
 
-                // Envelope target
-                if self.state.mod_state.envelope_expanded.get(i).copied().unwrap_or(false)
-                    && let Some(ref slider) = self.slider_ids[i] {
+                    // Envelope target
+                    if self
+                        .state
+                        .mod_state
+                        .envelope_expanded
+                        .get(i)
+                        .copied()
+                        .unwrap_or(false)
+                        && let Some(ref slider) = self.slider_ids[i]
+                    {
                         self.target_ids[i] = Some(build_envelope_target(
-                            tree, slider.track as i32, slider.track_rect, &self.state.mod_state, i,
+                            tree,
+                            slider.track as i32,
+                            slider.track_rect,
+                            &self.state.mod_state,
+                            i,
                         ));
                     }
 
-                // D/E buttons
-                let btn_x = cx + slider_w + DE_BUTTON_GAP;
-                let btn_y = cy + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
+                    // D/E buttons
+                    let btn_x = cx + slider_w + DE_BUTTON_GAP;
+                    let btn_y = cy + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
 
-                let env_active = self.state.mod_state.envelope_expanded.get(i).copied().unwrap_or(false);
-                self.envelope_btn_ids[i] = tree.add_button(
-                    -1, btn_x, btn_y, DE_BUTTON_SIZE, DE_BUTTON_SIZE,
-                    de_btn_style(env_active, color::ENVELOPE_ACTIVE_C32),
-                    "E",
-                ) as i32;
+                    let env_active = self
+                        .state
+                        .mod_state
+                        .envelope_expanded
+                        .get(i)
+                        .copied()
+                        .unwrap_or(false);
+                    self.envelope_btn_ids[i] = tree.add_button(
+                        -1,
+                        btn_x,
+                        btn_y,
+                        DE_BUTTON_SIZE,
+                        DE_BUTTON_SIZE,
+                        de_btn_style(env_active, color::ENVELOPE_ACTIVE_C32),
+                        "E",
+                    ) as i32;
 
-                let drv_active = self.state.mod_state.driver_expanded.get(i).copied().unwrap_or(false);
-                self.driver_btn_ids[i] = tree.add_button(
-                    -1, btn_x + DE_BUTTON_SIZE + DE_BUTTON_GAP, btn_y,
-                    DE_BUTTON_SIZE, DE_BUTTON_SIZE,
-                    de_btn_style(drv_active, color::DRIVER_ACTIVE_C32),
-                    "\u{2192}",
-                ) as i32;
+                    let drv_active = self
+                        .state
+                        .mod_state
+                        .driver_expanded
+                        .get(i)
+                        .copied()
+                        .unwrap_or(false);
+                    self.driver_btn_ids[i] = tree.add_button(
+                        -1,
+                        btn_x + DE_BUTTON_SIZE + DE_BUTTON_GAP,
+                        btn_y,
+                        DE_BUTTON_SIZE,
+                        DE_BUTTON_SIZE,
+                        de_btn_style(drv_active, color::DRIVER_ACTIVE_C32),
+                        "\u{2192}",
+                    ) as i32;
 
-                cy += ROW_HEIGHT + ROW_SPACING;
+                    cy += ROW_HEIGHT + ROW_SPACING;
 
-                let config_w = content_w; // full width (no D/E button reservation)
+                    let config_w = content_w; // full width (no D/E button reservation)
 
-                // Envelope config
-                if self.state.mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
-                    self.envelope_config_ids[i] = Some(build_envelope_config(tree, -1, cx, cy, config_w, &self.state.mod_state, i));
-                    cy += ENV_CONFIG_HEIGHT;
-                }
+                    // Envelope config
+                    if self
+                        .state
+                        .mod_state
+                        .envelope_expanded
+                        .get(i)
+                        .copied()
+                        .unwrap_or(false)
+                    {
+                        self.envelope_config_ids[i] = Some(build_envelope_config(
+                            tree,
+                            -1,
+                            cx,
+                            cy,
+                            config_w,
+                            &self.state.mod_state,
+                            i,
+                        ));
+                        cy += ENV_CONFIG_HEIGHT;
+                    }
 
-                // Driver config
-                if self.state.mod_state.driver_expanded.get(i).copied().unwrap_or(false) {
-                    self.driver_config_ids[i] = Some(build_driver_config(tree, -1, cx, cy, config_w, &self.state.mod_state, i, FONT_SIZE));
-                    cy += DRIVER_CONFIG_HEIGHT;
+                    // Driver config
+                    if self
+                        .state
+                        .mod_state
+                        .driver_expanded
+                        .get(i)
+                        .copied()
+                        .unwrap_or(false)
+                    {
+                        self.driver_config_ids[i] = Some(build_driver_config(
+                            tree,
+                            -1,
+                            cx,
+                            cy,
+                            config_w,
+                            &self.state.mod_state,
+                            i,
+                            FONT_SIZE,
+                        ));
+                        cy += DRIVER_CONFIG_HEIGHT;
+                    }
                 }
             }
-        }
 
-        // ── String param rows (clickable text fields) ──
-        for (si, sp) in self.string_param_info.iter().enumerate() {
-            let display = if sp.value.is_empty() {
-                format!("{}: (empty)", sp.name)
-            } else {
-                format!("{}: {}", sp.name, sp.value)
-            };
-            self.string_param_btn_ids[si] = tree.add_button(
-                -1, cx, cy, content_w, ROW_HEIGHT,
-                UIStyle {
-                    bg_color: color::INSPECTOR_BG,
-                    text_color: color::TEXT_WHITE_C32,
-                    font_size: FONT_SIZE,
-                    text_align: TextAlign::Left,
-                    corner_radius: 2.0,
-                    ..UIStyle::default()
-                },
-                &display,
-            ) as i32;
-            cy += ROW_HEIGHT + ROW_SPACING;
-        }
-
+            // ── String param rows (clickable text fields) ──
+            for (si, sp) in self.string_param_info.iter().enumerate() {
+                let display = if sp.value.is_empty() {
+                    format!("{}: (empty)", sp.name)
+                } else {
+                    format!("{}: {}", sp.name, sp.value)
+                };
+                self.string_param_btn_ids[si] = tree.add_button(
+                    -1,
+                    cx,
+                    cy,
+                    content_w,
+                    ROW_HEIGHT,
+                    UIStyle {
+                        bg_color: color::INSPECTOR_BG,
+                        text_color: color::TEXT_WHITE_C32,
+                        font_size: FONT_SIZE,
+                        text_align: TextAlign::Left,
+                        corner_radius: 2.0,
+                        ..UIStyle::default()
+                    },
+                    &display,
+                ) as i32;
+                cy += ROW_HEIGHT + ROW_SPACING;
+            }
         } // end if !self.is_collapsed
 
         self.node_count = tree.count() - self.first_node;
     }
 
-
     // ── Sync methods ─────────────────────────────────────────────
 
     pub fn sync_values(&mut self, tree: &mut UITree, values: &[f32]) {
-        // "Copied" flash — apply on first sync, revert after 0.6s
-        if let Some((label_id, ref original_text, start)) = self.copied_flash {
-            let elapsed = start.elapsed().as_secs_f32();
-            if original_text.is_empty() {
-                let name = self.find_label_name(label_id);
-                tree.set_text(label_id, "Copied");
-                tree.set_style(label_id, UIStyle {
-                    text_color: color::ACCENT_BLUE_C32,
-                    font_size: FONT_SIZE,
-                    text_align: TextAlign::Right,
-                    ..UIStyle::default()
-                });
-                self.copied_flash = Some((label_id, name, start));
-            } else if elapsed > 0.6 {
-                tree.set_text(label_id, original_text);
-                tree.set_style(label_id, UIStyle {
-                    text_color: color::SLIDER_TEXT_C32,
-                    font_size: FONT_SIZE,
-                    text_align: TextAlign::Right,
-                    ..UIStyle::default()
-                });
-                self.copied_flash = None;
-            }
-        }
+        let copied_label = self
+            .copied_flash
+            .label_id()
+            .map(|label_id| self.find_label_name(label_id))
+            .unwrap_or_default();
+        self.copied_flash.sync(tree, FONT_SIZE, &copied_label);
 
         for (i, &val) in values.iter().enumerate().take(self.param_info.len()) {
             let info = &self.param_info[i];
@@ -550,7 +693,12 @@ impl GenParamPanel {
                 self.param_cache[i] = val;
                 if let Some(ref ids) = self.slider_ids[i] {
                     let norm = BitmapSlider::value_to_normalized(val, info.min, info.max);
-                    let text = format_param_value(val, info.min, info.whole_numbers, info.value_labels.as_deref());
+                    let text = format_param_value(
+                        val,
+                        info.min,
+                        info.whole_numbers,
+                        info.value_labels.as_deref(),
+                    );
                     BitmapSlider::update_value(tree, ids, norm, &text);
                 }
             }
@@ -561,16 +709,26 @@ impl GenParamPanel {
     fn find_label_name(&self, label_id: u32) -> String {
         for (pi, s) in self.slider_ids.iter().enumerate() {
             if let Some(ids) = s
-                && ids.label >= 0 && ids.label as u32 == label_id
+                && ids.label >= 0
+                && ids.label as u32 == label_id
             {
-                return self.param_info.get(pi).map(|p| p.name.clone()).unwrap_or_default();
+                return self
+                    .param_info
+                    .get(pi)
+                    .map(|p| p.name.clone())
+                    .unwrap_or_default();
             }
         }
         for (pi, t) in self.toggle_ids.iter().enumerate() {
             if let Some(ids) = t
-                && ids._label_id >= 0 && ids._label_id as u32 == label_id
+                && ids._label_id >= 0
+                && ids._label_id as u32 == label_id
             {
-                return self.param_info.get(pi).map(|p| p.name.clone()).unwrap_or_default();
+                return self
+                    .param_info
+                    .get(pi)
+                    .map(|p| p.name.clone())
+                    .unwrap_or_default();
             }
         }
         String::new()
@@ -587,7 +745,8 @@ impl GenParamPanel {
 
     /// Get the screen-space rect of a string param button for text input anchoring.
     pub fn string_param_rect(&self, tree: &UITree, index: usize) -> Option<Rect> {
-        self.string_param_btn_ids.get(index)
+        self.string_param_btn_ids
+            .get(index)
             .filter(|&&id| id >= 0)
             .map(|&id| tree.get_bounds(id as u32))
     }
@@ -639,20 +798,35 @@ impl GenParamPanel {
         // Toggle buttons
         for (pi, toggle) in self.toggle_ids.iter().enumerate() {
             if let Some(t) = toggle
-                && id == t.button_id {
-                    return vec![PanelAction::GenParamToggle(pi)];
-                }
+                && id == t.button_id
+            {
+                return vec![PanelAction::GenParamToggle(pi)];
+            }
         }
 
         // D/E buttons (skip toggles)
         for (pi, &btn_id) in self.driver_btn_ids.iter().enumerate() {
-            if self.param_info.get(pi).map(|i| i.is_toggle).unwrap_or(false) { continue; }
+            if self
+                .param_info
+                .get(pi)
+                .map(|i| i.is_toggle)
+                .unwrap_or(false)
+            {
+                continue;
+            }
             if id == btn_id {
                 return vec![PanelAction::GenDriverToggle(pi)];
             }
         }
         for (pi, &btn_id) in self.envelope_btn_ids.iter().enumerate() {
-            if self.param_info.get(pi).map(|i| i.is_toggle).unwrap_or(false) { continue; }
+            if self
+                .param_info
+                .get(pi)
+                .map(|i| i.is_toggle)
+                .unwrap_or(false)
+            {
+                continue;
+            }
             if id == btn_id {
                 return vec![PanelAction::GenEnvelopeToggle(pi)];
             }
@@ -661,10 +835,11 @@ impl GenParamPanel {
         // Param label click → copy OSC address to clipboard (slider labels)
         for (pi, slider) in self.slider_ids.iter().enumerate() {
             if let Some(ids) = slider
-                && ids.label >= 0 && id == ids.label
+                && ids.label >= 0
+                && id == ids.label
                 && let Some(addr) = self.osc_addresses.get(pi).and_then(|a| a.clone())
             {
-                self.copied_flash = Some((ids.label as u32, String::new(), Instant::now()));
+                self.copied_flash.trigger(ids.label as u32);
                 return vec![PanelAction::CopyOscAddress(addr)];
             }
         }
@@ -672,10 +847,11 @@ impl GenParamPanel {
         // Param label click → copy OSC address to clipboard (toggle labels)
         for (pi, toggle) in self.toggle_ids.iter().enumerate() {
             if let Some(t) = toggle
-                && t._label_id >= 0 && id == t._label_id
+                && t._label_id >= 0
+                && id == t._label_id
                 && let Some(addr) = self.osc_addresses.get(pi).and_then(|a| a.clone())
             {
-                self.copied_flash = Some((t._label_id as u32, String::new(), Instant::now()));
+                self.copied_flash.trigger(t._label_id as u32);
                 return vec![PanelAction::CopyOscAddress(addr)];
             }
         }
@@ -706,10 +882,11 @@ impl GenParamPanel {
         // Check envelope targets
         for (pi, target) in self.target_ids.iter().enumerate() {
             if let Some(t) = target
-                && node_id as i32 == t.target_bar_id {
-                    self.drag.dragging_target_param = pi as i32;
-                    return vec![PanelAction::GenTargetSnapshot(pi)];
-                }
+                && node_id as i32 == t.target_bar_id
+            {
+                self.drag.dragging_target_param = pi as i32;
+                return vec![PanelAction::GenTargetSnapshot(pi)];
+            }
         }
 
         // Check trim bars
@@ -742,7 +919,10 @@ impl GenParamPanel {
                         self.drag.dragging_env_param = pi as i32;
                         self.drag.dragging_env_slot = slot;
                         let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
-                        return vec![PanelAction::GenEnvParamSnapshot(pi), PanelAction::GenEnvParamChanged(pi, *param, norm * max)];
+                        return vec![
+                            PanelAction::GenEnvParamSnapshot(pi),
+                            PanelAction::GenEnvParamChanged(pi, *param, norm * max),
+                        ];
                     }
                 }
             }
@@ -750,19 +930,27 @@ impl GenParamPanel {
 
         // Check param slider tracks (skip toggles)
         for (pi, slider) in self.slider_ids.iter().enumerate() {
-            if self.param_info.get(pi).map(|i| i.is_toggle).unwrap_or(false) { continue; }
+            if self
+                .param_info
+                .get(pi)
+                .map(|i| i.is_toggle)
+                .unwrap_or(false)
+            {
+                continue;
+            }
             if let Some(ids) = slider
-                && node_id == ids.track {
-                    self.drag.dragging_param = pi as i32;
-                    let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
-                    let info = &self.param_info[pi];
-                    let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
-                    let val = if info.whole_numbers { val.round() } else { val };
-                    return vec![
-                        PanelAction::GenParamSnapshot(pi),
-                        PanelAction::GenParamChanged(pi, val),
-                    ];
-                }
+                && node_id == ids.track
+            {
+                self.drag.dragging_param = pi as i32;
+                let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
+                let info = &self.param_info[pi];
+                let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
+                let val = if info.whole_numbers { val.round() } else { val };
+                return vec![
+                    PanelAction::GenParamSnapshot(pi),
+                    PanelAction::GenParamChanged(pi, val),
+                ];
+            }
         }
 
         Vec::new()
@@ -774,7 +962,9 @@ impl GenParamPanel {
             let pi = self.drag.dragging_target_param as usize;
             if let Some(slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
                 let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
-                if let Some(v) = self.state.mod_state.target_norm.get_mut(pi) { *v = norm; }
+                if let Some(v) = self.state.mod_state.target_norm.get_mut(pi) {
+                    *v = norm;
+                }
 
                 // Visual update: reposition target bar node in the tree
                 if let Some(t) = self.target_ids.get(pi).and_then(|t| t.as_ref()) {
@@ -783,9 +973,10 @@ impl GenParamPanel {
                     let bar_x = base_x + norm * usable - TARGET_BAR_W * 0.5;
                     let bar_h = slider.track_rect.height + 4.0;
                     let bar_y = slider.track_rect.y - 2.0;
-                    tree.set_bounds(t.target_bar_id as u32, Rect::new(
-                        bar_x, bar_y, TARGET_BAR_W, bar_h,
-                    ));
+                    tree.set_bounds(
+                        t.target_bar_id as u32,
+                        Rect::new(bar_x, bar_y, TARGET_BAR_W, bar_h),
+                    );
                 }
 
                 return vec![PanelAction::GenTargetChanged(pi, norm)];
@@ -797,15 +988,31 @@ impl GenParamPanel {
             let pi = self.drag.dragging_trim_param as usize;
             if let Some(slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
                 let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
-                let tmin = self.state.mod_state.trim_min.get(pi).copied().unwrap_or(0.0);
-                let tmax = self.state.mod_state.trim_max.get(pi).copied().unwrap_or(1.0);
+                let tmin = self
+                    .state
+                    .mod_state
+                    .trim_min
+                    .get(pi)
+                    .copied()
+                    .unwrap_or(0.0);
+                let tmax = self
+                    .state
+                    .mod_state
+                    .trim_max
+                    .get(pi)
+                    .copied()
+                    .unwrap_or(1.0);
                 let (new_min, new_max) = if self.drag.dragging_trim_is_min {
                     (norm.min(tmax), tmax)
                 } else {
                     (tmin, norm.max(tmin))
                 };
-                if let Some(v) = self.state.mod_state.trim_min.get_mut(pi) { *v = new_min; }
-                if let Some(v) = self.state.mod_state.trim_max.get_mut(pi) { *v = new_max; }
+                if let Some(v) = self.state.mod_state.trim_min.get_mut(pi) {
+                    *v = new_min;
+                }
+                if let Some(v) = self.state.mod_state.trim_max.get_mut(pi) {
+                    *v = new_max;
+                }
 
                 // Visual update: reposition trim bar nodes in the tree
                 if let Some(t) = self.trim_ids.get(pi).and_then(|t| t.as_ref()) {
@@ -814,17 +1021,28 @@ impl GenParamPanel {
                     let fill_x = base_x + new_min * usable;
                     let fill_w = (new_max - new_min) * usable;
                     let fill_h = slider.track_rect.height - OVERLAY_INSET * 2.0;
-                    tree.set_bounds(t.fill_id as u32, Rect::new(
-                        fill_x, slider.track_rect.y + OVERLAY_INSET, fill_w, fill_h,
-                    ));
-                    tree.set_bounds(t.min_bar_id as u32, Rect::new(
-                        base_x + new_min * usable - TRIM_BAR_W * 0.5,
-                        slider.track_rect.y, TRIM_BAR_W, slider.track_rect.height,
-                    ));
-                    tree.set_bounds(t.max_bar_id as u32, Rect::new(
-                        base_x + new_max * usable - TRIM_BAR_W * 0.5,
-                        slider.track_rect.y, TRIM_BAR_W, slider.track_rect.height,
-                    ));
+                    tree.set_bounds(
+                        t.fill_id as u32,
+                        Rect::new(fill_x, slider.track_rect.y + OVERLAY_INSET, fill_w, fill_h),
+                    );
+                    tree.set_bounds(
+                        t.min_bar_id as u32,
+                        Rect::new(
+                            base_x + new_min * usable - TRIM_BAR_W * 0.5,
+                            slider.track_rect.y,
+                            TRIM_BAR_W,
+                            slider.track_rect.height,
+                        ),
+                    );
+                    tree.set_bounds(
+                        t.max_bar_id as u32,
+                        Rect::new(
+                            base_x + new_max * usable - TRIM_BAR_W * 0.5,
+                            slider.track_rect.y,
+                            TRIM_BAR_W,
+                            slider.track_rect.height,
+                        ),
+                    );
                 }
 
                 return vec![PanelAction::GenTrimChanged(pi, new_min, new_max)];
@@ -858,7 +1076,12 @@ impl GenParamPanel {
                 let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
                 let val = if info.whole_numbers { val.round() } else { val };
                 let display_norm = BitmapSlider::value_to_normalized(val, info.min, info.max);
-                let text = format_param_value(val, info.min, info.whole_numbers, info.value_labels.as_deref());
+                let text = format_param_value(
+                    val,
+                    info.min,
+                    info.whole_numbers,
+                    info.value_labels.as_deref(),
+                );
                 BitmapSlider::update_value(tree, ids, display_norm, &text);
                 self.param_cache[pi] = val;
                 return vec![PanelAction::GenParamChanged(pi, val)];
@@ -896,14 +1119,23 @@ impl GenParamPanel {
         let id = node_id as i32;
 
         // Header right-click → context menu for copy/paste
-        if id == self.header_bg_id || id == self.name_label_id
-            || id == self.border_id || id == self.inner_bg_id
+        if id == self.header_bg_id
+            || id == self.name_label_id
+            || id == self.border_id
+            || id == self.inner_bg_id
         {
             return vec![PanelAction::GenCardRightClicked];
         }
 
         for (pi, slider) in self.slider_ids.iter().enumerate() {
-            if self.param_info.get(pi).map(|i| i.is_toggle).unwrap_or(false) { continue; }
+            if self
+                .param_info
+                .get(pi)
+                .map(|i| i.is_toggle)
+                .unwrap_or(false)
+            {
+                continue;
+            }
             if let Some(ids) = slider {
                 // Right-click slider track → reset to default
                 if node_id == ids.track {
@@ -921,7 +1153,9 @@ impl GenParamPanel {
 }
 
 impl Default for GenParamPanel {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]
@@ -933,9 +1167,36 @@ mod tests {
         GenParamConfig {
             gen_type_name: "Plasma".into(),
             params: vec![
-                GenParamInfo { name: "Speed".into(), min: 0.0, max: 10.0, default: 1.0, whole_numbers: false, is_toggle: false, value_labels: None, osc_address: None },
-                GenParamInfo { name: "Invert".into(), min: 0.0, max: 1.0, default: 0.0, whole_numbers: false, is_toggle: true, value_labels: None, osc_address: None },
-                GenParamInfo { name: "Scale".into(), min: 0.1, max: 5.0, default: 1.0, whole_numbers: false, is_toggle: false, value_labels: None, osc_address: None },
+                GenParamInfo {
+                    name: "Speed".into(),
+                    min: 0.0,
+                    max: 10.0,
+                    default: 1.0,
+                    whole_numbers: false,
+                    is_toggle: false,
+                    value_labels: None,
+                    osc_address: None,
+                },
+                GenParamInfo {
+                    name: "Invert".into(),
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.0,
+                    whole_numbers: false,
+                    is_toggle: true,
+                    value_labels: None,
+                    osc_address: None,
+                },
+                GenParamInfo {
+                    name: "Scale".into(),
+                    min: 0.1,
+                    max: 5.0,
+                    default: 1.0,
+                    whole_numbers: false,
+                    is_toggle: false,
+                    value_labels: None,
+                    osc_address: None,
+                },
             ],
             string_params: vec![],
             driver_active: vec![false; 3],
@@ -966,7 +1227,7 @@ mod tests {
         assert!(panel.name_label_id >= 0);
         assert!(panel.chevron_id >= 0);
         assert!(panel.slider_ids[0].is_some()); // Speed = slider
-        assert!(panel.toggle_ids[1].is_some());  // Invert = toggle
+        assert!(panel.toggle_ids[1].is_some()); // Invert = toggle
         assert!(panel.slider_ids[2].is_some()); // Scale = slider
         assert!(panel.node_count > 0);
     }

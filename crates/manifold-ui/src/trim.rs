@@ -102,14 +102,16 @@ pub fn compute_right_trim(
     let mut new_end = mouse_beat.max(clip_start + min_duration);
 
     // Non-looping video clips: clamp to source length
-    if !is_generator && !is_looping
+    if !is_generator
+        && !is_looping
         && let Some(video_len) = video_length_seconds
-            && spb > 0.0 {
-                let max_duration_beats = Beats((video_len.0 - original_in_point.0).max(0.0) / spb);
-                new_end = new_end.min(clip_start + max_duration_beats);
-                // Re-enforce minimum after clamping
-                new_end = new_end.max(clip_start + min_duration);
-            }
+        && spb > 0.0
+    {
+        let max_duration_beats = Beats((video_len.0 - original_in_point.0).max(0.0) / spb);
+        new_end = new_end.min(clip_start + max_duration_beats);
+        // Re-enforce minimum after clamping
+        new_end = new_end.max(clip_start + min_duration);
+    }
 
     let new_duration = new_end - clip_start;
 
@@ -126,9 +128,15 @@ mod tests {
 
     const SPB: f64 = 0.5; // 120 BPM
 
-    fn b(v: f32) -> Beats { Beats::from_f32(v) }
-    fn s(v: f32) -> Seconds { Seconds::from_f32(v) }
-    fn min_dur() -> Beats { b(MIN_CLIP_DURATION_BEATS) }
+    fn b(v: f32) -> Beats {
+        Beats::from_f32(v)
+    }
+    fn s(v: f32) -> Seconds {
+        Seconds::from_f32(v)
+    }
+    fn min_dur() -> Beats {
+        b(MIN_CLIP_DURATION_BEATS)
+    }
 
     #[test]
     fn left_trim_video_clamps_to_original_start() {
@@ -176,7 +184,14 @@ mod tests {
     fn right_trim_minimum_duration() {
         // Clip at beat 4, try to trim right to beat 4.1 (duration 0.1 < 0.25).
         let result = compute_right_trim(
-            b(4.1), b(4.0), s(0.0), SPB, false, false, Some(s(10.0)), min_dur(),
+            b(4.1),
+            b(4.0),
+            s(0.0),
+            SPB,
+            false,
+            false,
+            Some(s(10.0)),
+            min_dur(),
         );
         assert_eq!(result.new_duration_beats, min_dur());
     }
@@ -187,7 +202,14 @@ mod tests {
         // Max duration = (5-1)/0.5 = 8 beats. Clip starts at beat 4.
         // Max end = beat 12. Try to extend to beat 20.
         let result = compute_right_trim(
-            b(20.0), b(4.0), s(1.0), SPB, false, false, Some(s(5.0)), min_dur(),
+            b(20.0),
+            b(4.0),
+            s(1.0),
+            SPB,
+            false,
+            false,
+            Some(s(5.0)),
+            min_dur(),
         );
         assert_eq!(result.new_duration_beats, b(8.0));
     }
@@ -196,7 +218,14 @@ mod tests {
     fn right_trim_looping_video_extends_freely() {
         // Same video, but looping enabled. Can extend past source length.
         let result = compute_right_trim(
-            b(20.0), b(4.0), s(1.0), SPB, false, true, Some(s(5.0)), min_dur(),
+            b(20.0),
+            b(4.0),
+            s(1.0),
+            SPB,
+            false,
+            true,
+            Some(s(5.0)),
+            min_dur(),
         );
         assert_eq!(result.new_duration_beats, b(16.0)); // 20 - 4
     }
@@ -204,9 +233,8 @@ mod tests {
     #[test]
     fn right_trim_generator_extends_freely() {
         // Generator clip at beat 4. Extend to beat 100.
-        let result = compute_right_trim(
-            b(100.0), b(4.0), s(0.0), SPB, true, false, None, min_dur(),
-        );
+        let result =
+            compute_right_trim(b(100.0), b(4.0), s(0.0), SPB, true, false, None, min_dur());
         assert_eq!(result.new_duration_beats, b(96.0));
     }
 }

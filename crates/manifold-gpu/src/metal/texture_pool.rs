@@ -2,8 +2,8 @@
 //!
 //! Matches Unity's `RenderTexture.GetTemporary()` / `ReleaseTemporary()` pattern.
 
-use crate::types::*;
 use super::*;
+use crate::types::*;
 
 /// Frame-stamped texture recycling pool.
 ///
@@ -104,8 +104,7 @@ impl TexturePool {
         // Try to recycle a texture that's old enough to be safe.
         if let Some(vec) = inner.available.get_mut(&key)
             && let Some(idx) = vec.iter().position(|entry| {
-                inner.current_frame.saturating_sub(entry.release_frame)
-                    >= inner.frames_in_flight
+                inner.current_frame.saturating_sub(entry.release_frame) >= inner.frames_in_flight
             })
         {
             inner.stats_recycled += 1;

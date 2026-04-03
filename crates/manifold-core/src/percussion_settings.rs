@@ -3,13 +3,13 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::generator_type_id::GeneratorTypeId;
 use crate::percussion_analysis::{
     PercussionClipBinding, PercussionImportOptions, PercussionTriggerType,
 };
 use crate::project::Project;
 use crate::settings::ProjectSettings;
 use crate::types::QuantizeMode;
-use crate::generator_type_id::GeneratorTypeId;
 use crate::units::{Beats, Bpm, Seconds};
 
 // ─── StemMode ───
@@ -590,45 +590,75 @@ impl PercussionPipelineSettings {
     "bpSynthMinEnergyDb": {}
   }}
 }}"#,
-            self.kick.band_hz[0], self.kick.band_hz[1],
-            self.snare.band_hz[0], self.snare.band_hz[1],
+            self.kick.band_hz[0],
+            self.kick.band_hz[1],
+            self.snare.band_hz[0],
+            self.snare.band_hz[1],
             self.snare.hat_suppression_window,
             self.snare.perc_conflict_window,
             self.snare.snare_dominance_ratio,
             self.snare.perc_dominance_ratio,
-            self.hat.band_hz[0], self.hat.band_hz[1],
+            self.hat.band_hz[0],
+            self.hat.band_hz[1],
             self.hat.weight_in_mix,
-            self.perc.band_hz[0], self.perc.band_hz[1],
+            self.perc.band_hz[0],
+            self.perc.band_hz[1],
             self.perc.weight_in_mix,
             self.kick.hat_suppression_window,
             self.bass.duration_threshold_sec,
-            self.vocal.chest_band_hz[0], self.vocal.chest_band_hz[1],
-            self.vocal.formant_band_hz[0], self.vocal.formant_band_hz[1],
-            self.vocal.presence_band_hz[0], self.vocal.presence_band_hz[1],
+            self.vocal.chest_band_hz[0],
+            self.vocal.chest_band_hz[1],
+            self.vocal.formant_band_hz[0],
+            self.vocal.formant_band_hz[1],
+            self.vocal.presence_band_hz[0],
+            self.vocal.presence_band_hz[1],
             self.vocal.chest_weight,
             self.vocal.formant_weight,
             self.vocal.presence_weight,
-            a.madmom_threshold, a.madmom_combine, a.madmom_pre_max, a.madmom_post_max,
-            a.adaptive_window_sec, a.local_norm_window,
-            a.autocorr_search_half_range, a.autocorr_margin_threshold,
-            a.octave_kick_weight, a.octave_snare_weight,
-            a.octave_onset_weight, a.octave_prior_weight,
-            a.octave_kick_weight_no_prior, a.octave_snare_weight_no_prior,
+            a.madmom_threshold,
+            a.madmom_combine,
+            a.madmom_pre_max,
+            a.madmom_post_max,
+            a.adaptive_window_sec,
+            a.local_norm_window,
+            a.autocorr_search_half_range,
+            a.autocorr_margin_threshold,
+            a.octave_kick_weight,
+            a.octave_snare_weight,
+            a.octave_onset_weight,
+            a.octave_prior_weight,
+            a.octave_kick_weight_no_prior,
+            a.octave_snare_weight_no_prior,
             a.octave_onset_weight_no_prior,
-            a.octave_tolerance, a.octave_tie_break_margin,
-            a.grid_stability_weight, a.grid_onset_align_weight,
-            a.grid_event_density_weight, a.grid_kick_bonus_weight,
-            a.grid_edge_coverage_weight, a.grid_rel_var_scale,
+            a.octave_tolerance,
+            a.octave_tie_break_margin,
+            a.grid_stability_weight,
+            a.grid_onset_align_weight,
+            a.grid_event_density_weight,
+            a.grid_kick_bonus_weight,
+            a.grid_edge_coverage_weight,
+            a.grid_rel_var_scale,
             a.synthetic_grid_penalty,
-            a.downbeat_tolerance, a.downbeat_min_agreement, a.non_downbeat_weight,
-            a.adtof_kick_threshold, a.adtof_snare_threshold,
-            a.adtof_hihat_threshold, a.adtof_tom_threshold, a.adtof_cymbal_threshold,
-            a.bp_bass_onset_threshold, a.bp_bass_frame_threshold,
-            a.bp_bass_min_note_length, a.bp_bass_min_frequency,
-            a.bp_bass_max_frequency, a.bp_bass_min_energy_db,
-            a.bp_synth_onset_threshold, a.bp_synth_frame_threshold,
-            a.bp_synth_min_note_length, a.bp_synth_min_frequency,
-            a.bp_synth_max_frequency, a.bp_synth_min_energy_db,
+            a.downbeat_tolerance,
+            a.downbeat_min_agreement,
+            a.non_downbeat_weight,
+            a.adtof_kick_threshold,
+            a.adtof_snare_threshold,
+            a.adtof_hihat_threshold,
+            a.adtof_tom_threshold,
+            a.adtof_cymbal_threshold,
+            a.bp_bass_onset_threshold,
+            a.bp_bass_frame_threshold,
+            a.bp_bass_min_note_length,
+            a.bp_bass_min_frequency,
+            a.bp_bass_max_frequency,
+            a.bp_bass_min_energy_db,
+            a.bp_synth_onset_threshold,
+            a.bp_synth_frame_threshold,
+            a.bp_synth_min_note_length,
+            a.bp_synth_min_frequency,
+            a.bp_synth_max_frequency,
+            a.bp_synth_min_energy_db,
         )
     }
 }
@@ -653,35 +683,75 @@ impl PercussionImportOptionsFactory {
 
         // Kick — punchy geometric wireframes, top of stack.
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Kick, 0, None, GeneratorTypeId::WIREFRAME_ZOO, Beats(0.5), 0.0,
+            PercussionTriggerType::Kick,
+            0,
+            None,
+            GeneratorTypeId::WIREFRAME_ZOO,
+            Beats(0.5),
+            0.0,
         ));
         // Snare — snapping shapes.
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Snare, 1, None, GeneratorTypeId::BASIC_SHAPES_SNAP, Beats(0.75), 0.0,
+            PercussionTriggerType::Snare,
+            1,
+            None,
+            GeneratorTypeId::BASIC_SHAPES_SNAP,
+            Beats(0.75),
+            0.0,
         ));
         // Perc — groove accents.
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Perc, 3, None, GeneratorTypeId::PLASMA, Beats(0.50), 0.0,
+            PercussionTriggerType::Perc,
+            3,
+            None,
+            GeneratorTypeId::PLASMA,
+            Beats(0.50),
+            0.0,
         ));
         // Hat — high-frequency shimmer.
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Hat, 4, None, GeneratorTypeId::OSCILLOSCOPE_XY, Beats(0.50), 0.0,
+            PercussionTriggerType::Hat,
+            4,
+            None,
+            GeneratorTypeId::OSCILLOSCOPE_XY,
+            Beats(0.50),
+            0.0,
         ));
         // Vocal — organic Lissajous curves.
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Vocal, 5, None, GeneratorTypeId::LISSAJOUS, Beats(0.50), 0.0,
+            PercussionTriggerType::Vocal,
+            5,
+            None,
+            GeneratorTypeId::LISSAJOUS,
+            Beats(0.50),
+            0.0,
         ));
         // Synth — bright plasma (duration from Basic Pitch).
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Synth, 6, None, GeneratorTypeId::PLASMA, Beats::ZERO, 0.0,
+            PercussionTriggerType::Synth,
+            6,
+            None,
+            GeneratorTypeId::PLASMA,
+            Beats::ZERO,
+            0.0,
         ));
         // Pad — slow ambient Duocylinder (duration from Basic Pitch).
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Pad, 7, None, GeneratorTypeId::DUOCYLINDER, Beats::ZERO, 0.0,
+            PercussionTriggerType::Pad,
+            7,
+            None,
+            GeneratorTypeId::DUOCYLINDER,
+            Beats::ZERO,
+            0.0,
         ));
         // Bass — heavy parametric surfaces (duration from Basic Pitch).
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Bass, 8, None, GeneratorTypeId::PARAMETRIC_SURFACE, Beats::ZERO, 0.0,
+            PercussionTriggerType::Bass,
+            8,
+            None,
+            GeneratorTypeId::PARAMETRIC_SURFACE,
+            Beats::ZERO,
+            0.0,
         ));
 
         options

@@ -1,15 +1,15 @@
-use manifold_core::EffectTypeId;
-use manifold_core::effects::EffectInstance;
+use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
-use super::compute_blit_helper::ComputeBlitHelper;
+use manifold_core::EffectTypeId;
+use manifold_core::effects::EffectInstance;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct StrobeUniforms {
     amount: f32,
     rate: f32,
-    mode: u32,      // 0=Opacity(black), 1=White, 2=Gain
+    mode: u32, // 0=Opacity(black), 1=White, 2=Gain
     beat: f32,
 }
 
@@ -61,10 +61,12 @@ impl PostProcessEffect for StrobeFX {
 
         self.helper.dispatch(
             gpu,
-            source, target,
+            source,
+            target,
             bytemuck::bytes_of(&uniforms),
             "Strobe Pass",
-            ctx.width, ctx.height,
+            ctx.width,
+            ctx.height,
         );
     }
 }

@@ -5,24 +5,24 @@ mod app;
 mod app_lifecycle;
 mod app_render;
 mod content_command;
-mod content_pipeline;
-mod content_state;
 mod content_commands;
 mod content_export;
+mod content_pipeline;
+mod content_state;
 mod content_thread;
 mod dialog_path_memory;
+#[cfg(target_os = "macos")]
+mod display_link;
 mod editing_host;
 mod edr_surface;
 mod frame_timer;
 mod input_handler;
-#[cfg(target_os = "macos")]
-mod shared_texture;
+mod input_host;
 #[cfg(target_os = "macos")]
 mod output_presenter;
-#[cfg(target_os = "macos")]
-mod display_link;
-mod input_host;
 mod project_io;
+#[cfg(target_os = "macos")]
+mod shared_texture;
 mod text_input;
 mod transport_state;
 mod ui_bridge;
@@ -42,9 +42,8 @@ fn main() {
                 .unwrap_or_default();
             d.as_secs()
         };
-        let msg = format!(
-            "MANIFOLD PANIC at unix_ts={timestamp}\n{info}\n\nBacktrace:\n{backtrace}",
-        );
+        let msg =
+            format!("MANIFOLD PANIC at unix_ts={timestamp}\n{info}\n\nBacktrace:\n{backtrace}",);
         eprintln!("{msg}");
 
         // Write crash log to ~/Library/Logs/com.latentspace.manifold/crash.log

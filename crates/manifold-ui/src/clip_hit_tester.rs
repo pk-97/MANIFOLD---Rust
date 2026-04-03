@@ -4,9 +4,9 @@
 //! No MonoBehaviour, no allocations on the hot path.
 //! The struct is stateless — CoordinateMapper and clip data are passed as parameters.
 
-use manifold_core::ClipId;
 use crate::coordinate_mapper::CoordinateMapper;
 use crate::panels::viewport::ViewportClip;
+use manifold_core::ClipId;
 
 // ── Data Types ──────────────────────────────────────────────────
 
@@ -148,7 +148,11 @@ impl ClipHitTester {
 
         // Unity lines 111-113: clamp layer bounds
         let lo = min_layer;
-        let hi = if max_layer < layer_count { max_layer } else { layer_count - 1 };
+        let hi = if max_layer < layer_count {
+            max_layer
+        } else {
+            layer_count - 1
+        };
 
         // Unity lines 115-128: iterate clips, filter by layer and beat range
         for clip in clips {
@@ -176,9 +180,9 @@ impl ClipHitTester {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_core::Beats;
     use crate::coordinate_mapper::CoordinateMapper;
     use crate::node::Color32;
+    use manifold_core::Beats;
 
     fn make_mapper(ppb: f32, layer_heights: &[f32]) -> CoordinateMapper {
         let mut mapper = CoordinateMapper::new();
@@ -201,7 +205,9 @@ mod tests {
         }
     }
 
-    fn no_groups(_: usize) -> bool { false }
+    fn no_groups(_: usize) -> bool {
+        false
+    }
 
     #[test]
     fn hit_body_region() {
@@ -247,10 +253,7 @@ mod tests {
     #[test]
     fn miss_gap_between_clips() {
         let mapper = make_mapper(100.0, &[60.0]);
-        let clips = vec![
-            make_clip("c1", 0, 0.0, 2.0),
-            make_clip("c2", 0, 4.0, 2.0),
-        ];
+        let clips = vec![make_clip("c1", 0, 0.0, 2.0), make_clip("c2", 0, 4.0, 2.0)];
         // Beat 3.0 is in the gap
         let result = ClipHitTester::hit_test(3.0, 30.0, 6.0, &mapper, &clips, no_groups);
         assert!(result.is_none());
@@ -290,10 +293,10 @@ mod tests {
     #[test]
     fn box_select_collects_overlapping() {
         let clips = vec![
-            make_clip("c1", 0, 0.0, 2.0),  // beats 0-2
-            make_clip("c2", 0, 3.0, 2.0),  // beats 3-5
-            make_clip("c3", 1, 1.0, 3.0),  // beats 1-4, layer 1
-            make_clip("c4", 2, 0.0, 1.0),  // beats 0-1, layer 2 (outside)
+            make_clip("c1", 0, 0.0, 2.0), // beats 0-2
+            make_clip("c2", 0, 3.0, 2.0), // beats 3-5
+            make_clip("c3", 1, 1.0, 3.0), // beats 1-4, layer 1
+            make_clip("c4", 2, 0.0, 1.0), // beats 0-1, layer 2 (outside)
         ];
         // Region: beats 1-4, layers 0-1
         let result = ClipHitTester::box_select(1.0, 4.0, 0, 1, &clips, 3, no_groups);
@@ -305,13 +308,10 @@ mod tests {
 
     #[test]
     fn box_select_skips_groups() {
-        let clips = vec![
-            make_clip("c1", 0, 0.0, 4.0),
-            make_clip("c2", 1, 0.0, 4.0),
-        ];
+        let clips = vec![make_clip("c1", 0, 0.0, 4.0), make_clip("c2", 1, 0.0, 4.0)];
         // Layer 0 is a group
         let result = ClipHitTester::box_select(0.0, 4.0, 0, 1, &clips, 2, |i| i == 0);
         assert!(!result.contains(&ClipId::new("c1"))); // group layer skipped
-        assert!(result.contains(&ClipId::new("c2")));  // non-group collected
+        assert!(result.contains(&ClipId::new("c2"))); // non-group collected
     }
 }

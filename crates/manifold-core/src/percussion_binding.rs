@@ -3,7 +3,9 @@
 
 use std::collections::HashMap;
 
-use crate::percussion_analysis::{PercussionClipBinding, PercussionEvent, PercussionImportOptions, PercussionTriggerType};
+use crate::percussion_analysis::{
+    PercussionClipBinding, PercussionEvent, PercussionImportOptions, PercussionTriggerType,
+};
 use crate::project::Project;
 
 // ─── IPercussionBindingResolver trait ───
@@ -35,7 +37,10 @@ impl ProjectPercussionBindingResolver {
         Self { resolved_bindings }
     }
 
-    fn resolve_binding(project: &Project, binding: &PercussionClipBinding) -> PercussionClipBinding {
+    fn resolve_binding(
+        project: &Project,
+        binding: &PercussionClipBinding,
+    ) -> PercussionClipBinding {
         if binding.uses_generator() {
             return binding.clone();
         }

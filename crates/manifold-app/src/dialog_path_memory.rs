@@ -50,11 +50,12 @@ pub fn get_last_directory(context: DialogContext, prefs: &mut UserPrefs) -> Stri
     // Migrate from legacy keys on first access.
     let legacy = get_legacy_path(context, prefs);
     if !legacy.is_empty()
-        && let Some(legacy_dir) = extract_directory(&legacy) {
-            prefs.set_string(&key, &legacy_dir);
-            prefs.save();
-            return legacy_dir;
-        }
+        && let Some(legacy_dir) = extract_directory(&legacy)
+    {
+        prefs.set_string(&key, &legacy_dir);
+        prefs.save();
+        return legacy_dir;
+    }
 
     String::new()
 }
@@ -103,9 +104,7 @@ fn get_legacy_path(context: DialogContext, prefs: &UserPrefs) -> String {
         DialogContext::ProjectOpen | DialogContext::ProjectSave => {
             prefs.get_string(LEGACY_PROJECT_PATH_KEY, "")
         }
-        DialogContext::PercussionImport => {
-            prefs.get_string(LEGACY_PERCUSSION_DIR_KEY, "")
-        }
+        DialogContext::PercussionImport => prefs.get_string(LEGACY_PERCUSSION_DIR_KEY, ""),
         _ => String::new(),
     }
 }

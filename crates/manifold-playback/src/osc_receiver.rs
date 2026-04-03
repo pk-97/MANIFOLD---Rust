@@ -8,9 +8,9 @@
 //! incoming messages and dispatches them on the main thread in update().
 //! The Rust port preserves this threading model exactly.
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Callback type for OSC subscribers. Receives (address, values) on the main thread.
@@ -119,8 +119,12 @@ impl OscReceiver {
         }
     }
 
-    pub fn is_listening(&self) -> bool { self.is_listening }
-    pub fn listen_port(&self) -> i32 { self.listen_port }
+    pub fn is_listening(&self) -> bool {
+        self.is_listening
+    }
+    pub fn listen_port(&self) -> i32 {
+        self.listen_port
+    }
 
     // =================================================================
     // Lifecycle
@@ -129,7 +133,9 @@ impl OscReceiver {
     /// Start the OSC UDP server.
     /// Port of Unity OscReceiver.StartListening().
     pub fn start_listening(&mut self) {
-        if self.is_listening { return; }
+        if self.is_listening {
+            return;
+        }
 
         let addr = format!("0.0.0.0:{}", self.listen_port);
         let socket = match std::net::UdpSocket::bind(&addr) {
@@ -153,12 +159,18 @@ impl OscReceiver {
         let handle = std::thread::spawn(move || {
             let mut buf = [0u8; 65536];
             loop {
-                if shutdown_flag.load(Ordering::Relaxed) { break; }
+                if shutdown_flag.load(Ordering::Relaxed) {
+                    break;
+                }
 
                 let size = match socket.recv_from(&mut buf) {
                     Ok((sz, _)) => sz,
-                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock
-                               || e.kind() == std::io::ErrorKind::TimedOut => continue,
+                    Err(ref e)
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                            || e.kind() == std::io::ErrorKind::TimedOut =>
+                    {
+                        continue;
+                    }
                     Err(e) => {
                         log::error!("[OscReceiver] recv_from error: {}", e);
                         continue;
@@ -180,11 +192,15 @@ impl OscReceiver {
     fn handle_packet(packet: rosc::OscPacket, queue: &Arc<Mutex<MessageQueue>>) {
         match packet {
             rosc::OscPacket::Message(msg) => {
-                let values: Vec<f32> = msg.args.iter().filter_map(|a| match a {
-                    rosc::OscType::Float(f) => Some(*f),
-                    rosc::OscType::Int(i) => Some(*i as f32),
-                    _ => None,
-                }).collect();
+                let values: Vec<f32> = msg
+                    .args
+                    .iter()
+                    .filter_map(|a| match a {
+                        rosc::OscType::Float(f) => Some(*f),
+                        rosc::OscType::Int(i) => Some(*i as f32),
+                        _ => None,
+                    })
+                    .collect();
                 queue.lock().push(msg.addr, values);
             }
             rosc::OscPacket::Bundle(bundle) => {
@@ -198,7 +214,9 @@ impl OscReceiver {
     /// Stop the OSC UDP server and clear pending messages.
     /// Port of Unity OscReceiver.StopListening().
     pub fn stop_listening(&mut self) {
-        if !self.is_listening { return; }
+        if !self.is_listening {
+            return;
+        }
 
         // Signal the background thread to exit and wait for it.
         self.shutdown_flag.store(true, Ordering::Relaxed);
@@ -222,9 +240,13 @@ impl OscReceiver {
     /// Port of Unity OscReceiver.SetPort().
     pub fn set_port(&mut self, port: i32) {
         let was_listening = self.is_listening;
-        if was_listening { self.stop_listening(); }
+        if was_listening {
+            self.stop_listening();
+        }
         self.listen_port = port;
-        if was_listening { self.start_listening(); }
+        if was_listening {
+            self.start_listening();
+        }
     }
 
     // =================================================================
@@ -238,7 +260,9 @@ impl OscReceiver {
         // Snapshot latest messages under lock, dispatch outside lock.
         {
             let mut q = self.queue.lock();
-            if q.is_empty() { return; }
+            if q.is_empty() {
+                return;
+            }
             q.drain(&mut self.dispatch_buffer);
         }
 
@@ -312,14 +336,17 @@ impl OscReceiver {
     /// is not preserved (matches Unity semantics — order is unspecified).
     pub fn unsubscribe_keyed(&mut self, address: &str, key: usize) {
         if let Some(list) = self.subscribers.get_mut(address)
-            && key < list.len() {
-                let _ = list.swap_remove(key);
-            }
+            && key < list.len()
+        {
+            let _ = list.swap_remove(key);
+        }
     }
 }
 
 impl Default for OscReceiver {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Drop for OscReceiver {
