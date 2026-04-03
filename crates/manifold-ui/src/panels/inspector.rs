@@ -215,13 +215,14 @@ impl InspectorCompositePanel {
     /// parts of the inspector changed and only re-render those.
     pub fn sub_region_ranges(&self) -> Vec<(usize, usize)> {
         let mut ranges = Vec::with_capacity(
-            3 + self.master_effects.len() + self.layer_effects.len() + 1,
+            4 + self.master_effects.len() + self.layer_effects.len() + 1,
         );
         let push = |ranges: &mut Vec<(usize, usize)>, first: usize, count: usize| {
             if first != usize::MAX && count > 0 {
                 ranges.push((first, first + count));
             }
         };
+        push(&mut ranges, self.macros_panel.first_node(), self.macros_panel.node_count());
         push(&mut ranges, self.master_chrome.first_node(), self.master_chrome.node_count());
         for card in &self.master_effects {
             push(&mut ranges, card.first_node(), card.node_count());
