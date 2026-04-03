@@ -112,12 +112,6 @@ fn star_field(dir: vec3<f32>, brightness: f32) -> vec3<f32> {
     // Layer 4: very dense faint background
     stars += star_layer(theta, phi, 160.0, 0.90, 0.15, 300.0);
 
-    // Galactic band (milky way feel)
-    let band_center = 1.5708;
-    let band = exp(-(theta - band_center) * (theta - band_center) * 3.0);
-    let band_detail = noise2d(vec2<f32>(phi * 2.5 + 10.0, theta * 4.0)) * 0.6 + 0.3;
-    stars += vec3<f32>(0.04, 0.035, 0.06) * band * band_detail;
-
     return stars * brightness;
 }
 
