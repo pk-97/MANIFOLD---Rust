@@ -48,10 +48,8 @@ fn compute_random_step(
     max: f32,
 ) -> f32 {
     if random_jump {
-        // Jump to a fully random value
         let raw = random_unit();
         if whole_numbers && (max - min) > 0.0 {
-            // Quantize to discrete steps
             let steps = (max - min).round() as i32;
             if steps > 0 {
                 let idx = (raw * (steps + 1) as f32).floor() as i32;
@@ -62,38 +60,29 @@ fn compute_random_step(
         return raw;
     }
 
-    // Random walk: step up or down by step_size, bounce at boundaries
-    let direction = if random_unit() < 0.5 { 1.0 } else { -1.0 };
+    // Random walk: step up or down by step_size, clamp at boundaries.
+    let up = random_unit() < 0.5;
 
     if whole_numbers && (max - min) > 0.0 {
-        // Discrete walk: step by at least 1 unit in param space
         let steps = (max - min).round() as i32;
         if steps > 0 {
             let step_units = ((step_size * steps as f32).round() as i32).max(1);
             let current_idx = (walk_value * steps as f32).round() as i32;
-            let mut new_idx = current_idx + step_units * direction as i32;
-            // Bounce at boundaries
-            if new_idx < 0 {
-                new_idx = -new_idx;
-            }
-            if new_idx > steps {
-                new_idx = 2 * steps - new_idx;
-            }
-            new_idx = new_idx.clamp(0, steps);
+            let new_idx = if up {
+                (current_idx + step_units).min(steps)
+            } else {
+                (current_idx - step_units).max(0)
+            };
             return new_idx as f32 / steps as f32;
         }
     }
 
-    // Continuous walk
-    let mut new_val = walk_value + step_size * direction;
-    // Bounce at boundaries
-    if new_val > 1.0 {
-        new_val = 2.0 - new_val;
+    // Continuous walk — clamp at [0, 1]
+    if up {
+        (walk_value + step_size).min(1.0)
+    } else {
+        (walk_value - step_size).max(0.0)
     }
-    if new_val < 0.0 {
-        new_val = -new_val;
-    }
-    new_val.clamp(0.0, 1.0)
 }
 
 // =====================================================================
@@ -472,9 +461,20 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> boo
                     let (min, max) = (pd.min, pd.max);
                     let whole = pd.whole_numbers || pd.value_labels.is_some();
 
+                    // Seed walk from current param value if uninitialized
+                    let seeded_walk = if walk_value < 0.0 {
+                        if (max - min).abs() > f32::EPSILON {
+                            ((fx.param_values[idx] - min) / (max - min)).clamp(0.0, 1.0)
+                        } else {
+                            0.5
+                        }
+                    } else {
+                        walk_value
+                    };
+
                     let new_walk = if rising_edge {
                         compute_random_step(
-                            walk_value,
+                            seeded_walk,
                             target_norm.clamp(0.0, 1.0),
                             random_jump,
                             whole,
@@ -482,7 +482,7 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> boo
                             max,
                         )
                     } else {
-                        walk_value
+                        seeded_walk
                     };
 
                     // Apply walk_value as the param value
@@ -657,9 +657,20 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: Beats) 
                     let rising_edge = clip_active && !was_active;
                     let whole = pd.whole_numbers || pd.value_labels.is_some();
 
+                    // Seed walk from current param value if uninitialized
+                    let seeded_walk = if walk_value < 0.0 {
+                        if (max - min).abs() > f32::EPSILON {
+                            ((gp.param_values[idx] - min) / (max - min)).clamp(0.0, 1.0)
+                        } else {
+                            0.5
+                        }
+                    } else {
+                        walk_value
+                    };
+
                     let new_walk = if rising_edge {
                         compute_random_step(
-                            walk_value,
+                            seeded_walk,
                             target_norm.clamp(0.0, 1.0),
                             random_jump,
                             whole,
@@ -667,7 +678,7 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: Beats) 
                             max,
                         )
                     } else {
-                        walk_value
+                        seeded_walk
                     };
 
                     let final_value = min + (max - min) * new_walk;

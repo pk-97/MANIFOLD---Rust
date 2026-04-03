@@ -668,7 +668,7 @@ impl ParamEnvelope {
             mode: EnvelopeMode::Adsr,
             random_jump: false,
             current_level: 0.0,
-            walk_value: 0.5,
+            walk_value: -1.0,
             was_clip_active: false,
         }
     }
@@ -687,7 +687,7 @@ impl ParamEnvelope {
             mode: EnvelopeMode::Adsr,
             random_jump: false,
             current_level: 0.0,
-            walk_value: 0.5,
+            walk_value: -1.0,
             was_clip_active: false,
         }
     }

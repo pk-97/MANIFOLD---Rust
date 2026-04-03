@@ -1307,6 +1307,9 @@ pub(super) fn dispatch_inspector(
                         EnvelopeMode::Adsr => EnvelopeMode::Random,
                         EnvelopeMode::Random => EnvelopeMode::Adsr,
                     };
+                    // Reset rising edge + walk state so Random mode triggers immediately
+                    env.was_clip_active = false;
+                    env.walk_value = -1.0; // sentinel: re-seed from current param
                     let new_mode = env.mode;
                     // Sync to content thread
                     let et2 = et.clone();
@@ -1322,6 +1325,8 @@ pub(super) fn dispatch_inspector(
                                     .find(|e| e.target_effect_type == et2 && e.param_index == pi2)
                                 {
                                     env.mode = new_mode;
+                                    env.was_clip_active = false;
+                                    env.walk_value = -1.0;
                                 }
                             }
                         })),
@@ -2079,6 +2084,8 @@ pub(super) fn dispatch_inspector(
                     EnvelopeMode::Adsr => EnvelopeMode::Random,
                     EnvelopeMode::Random => EnvelopeMode::Adsr,
                 };
+                env.was_clip_active = false;
+                env.walk_value = -1.0;
                 let new_mode = env.mode;
                 let pi2 = *pi as i32;
                 let layer_id = active_layer.clone().unwrap_or_default();
@@ -2093,6 +2100,8 @@ pub(super) fn dispatch_inspector(
                                 .find(|e| e.param_index == pi2 && e.enabled)
                         {
                             env.mode = new_mode;
+                            env.was_clip_active = false;
+                            env.walk_value = -1.0;
                         }
                     })),
                 );
