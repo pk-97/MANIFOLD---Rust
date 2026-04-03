@@ -16,7 +16,8 @@ use manifold_editing::commands::effects::{
     ToggleEffectCommand,
 };
 use manifold_editing::commands::envelopes::{
-    ChangeLayerEnvelopeADSRCommand, ChangeLayerEnvelopeTargetCommand,
+    ChangeLayerEnvelopeADSRCommand, ChangeLayerEnvelopeRangeCommand,
+    ChangeLayerEnvelopeTargetCommand,
 };
 use manifold_editing::commands::settings::{
     ChangeGeneratorParamsCommand, ChangeLayerOpacityCommand, ChangeLedBrightnessCommand,
@@ -41,6 +42,7 @@ pub(super) fn dispatch_inspector(
     trim_snapshot: &mut Option<(f32, f32)>,
     adsr_snapshot: &mut Option<(f32, f32, f32, f32)>,
     target_snapshot: &mut Option<f32>,
+    range_snapshot: &mut Option<(f32, f32)>,
     active_inspector_drag: &mut Option<crate::app::ActiveInspectorDrag>,
 ) -> DispatchResult {
     use crate::content_command::ContentCommand;
@@ -1176,6 +1178,140 @@ pub(super) fn dispatch_inspector(
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
+        PanelAction::EffectEnvRangeChanged(ei, pi, rmin, rmax) => {
+            let tab = ui.inspector.last_effect_tab();
+            let layer_idx = super::resolve_active_layer_index(active_layer, project);
+            let effect_type = {
+                let effects = resolve_effects_ref(tab, project, active_layer, selection);
+                effects
+                    .and_then(|e| e.get(*ei))
+                    .map(|fx| fx.effect_type().clone())
+            };
+            if let Some(ref et) = effect_type {
+                let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
+                    InspectorTab::Layer => layer_idx.and_then(|idx| {
+                        project
+                            .timeline
+                            .layers
+                            .get_mut(idx)
+                            .map(|l| l.envelopes_mut())
+                    }),
+                    InspectorTab::Clip | InspectorTab::Master => None,
+                };
+                if let Some(envs) = envs
+                    && let Some(env) = envs
+                        .iter_mut()
+                        .find(|e| e.target_effect_type == *et && e.param_index == *pi as i32)
+                {
+                    env.range_min = *rmin;
+                    env.range_max = *rmax;
+                }
+            }
+            if let Some(et) = effect_type {
+                let param_i = *pi as i32;
+                let rm = *rmin;
+                let rx = *rmax;
+                let layer_id = active_layer.clone().unwrap_or_default();
+                ContentCommand::send(
+                    content_tx,
+                    ContentCommand::MutateProject(Box::new(move |p| {
+                        let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
+                            InspectorTab::Layer => p
+                                .timeline
+                                .find_layer_by_id_mut(&layer_id)
+                                .map(|(_, l)| l.envelopes_mut()),
+                            InspectorTab::Clip | InspectorTab::Master => None,
+                        };
+                        if let Some(envs) = envs
+                            && let Some(env) = envs
+                                .iter_mut()
+                                .find(|e| e.target_effect_type == et && e.param_index == param_i)
+                        {
+                            env.range_min = rm;
+                            env.range_max = rx;
+                        }
+                    })),
+                );
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::EffectEnvRangeSnapshot(ei, pi) => {
+            let tab = ui.inspector.last_effect_tab();
+            let layer_idx = super::resolve_active_layer_index(active_layer, project);
+            let effect_type = {
+                let effects = resolve_effects_ref(tab, project, active_layer, selection);
+                effects
+                    .and_then(|e| e.get(*ei))
+                    .map(|fx| fx.effect_type().clone())
+            };
+            if let Some(et) = effect_type {
+                let envs: Option<&[ParamEnvelope]> = match tab {
+                    InspectorTab::Layer => layer_idx.and_then(|idx| {
+                        project
+                            .timeline
+                            .layers
+                            .get(idx)
+                            .and_then(|l| l.envelopes.as_deref())
+                    }),
+                    InspectorTab::Clip | InspectorTab::Master => None,
+                };
+                if let Some(envs) = envs
+                    && let Some(env) = envs
+                        .iter()
+                        .find(|e| e.target_effect_type == et && e.param_index == *pi as i32)
+                {
+                    *range_snapshot = Some((env.range_min, env.range_max));
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::EffectEnvRangeCommit(ei, pi) => {
+            if let Some((old_min, old_max)) = range_snapshot.take() {
+                let tab = ui.inspector.last_effect_tab();
+                let layer_idx = super::resolve_active_layer_index(active_layer, project);
+                let effect_type = {
+                    let effects = resolve_effects_ref(tab, project, active_layer, selection);
+                    effects
+                        .and_then(|e| e.get(*ei))
+                        .map(|fx| fx.effect_type().clone())
+                };
+                if let Some(et) = effect_type {
+                    match tab {
+                        InspectorTab::Layer => {
+                            if let Some(idx) = layer_idx
+                                && let Some(layer) = project.timeline.layers.get(idx)
+                            {
+                                let layer_id = layer.layer_id.clone();
+                                let envs = layer.envelopes.as_deref().unwrap_or(&[]);
+                                if let Some((env_idx, env)) =
+                                    envs.iter().enumerate().find(|(_, e)| {
+                                        e.target_effect_type == et && e.param_index == *pi as i32
+                                    })
+                                    && ((old_min - env.range_min).abs() > f32::EPSILON
+                                        || (old_max - env.range_max).abs() > f32::EPSILON)
+                                {
+                                    let cmd = ChangeLayerEnvelopeRangeCommand::new(
+                                        layer_id,
+                                        env_idx,
+                                        old_min,
+                                        old_max,
+                                        env.range_min,
+                                        env.range_max,
+                                    );
+                                    ContentCommand::send(
+                                        content_tx,
+                                        ContentCommand::Execute(Box::new(cmd)),
+                                    );
+                                }
+                            }
+                        }
+                        InspectorTab::Clip | InspectorTab::Master => {}
+                    }
+                }
+            }
+            *active_inspector_drag = None;
+            DispatchResult::handled()
+        }
         PanelAction::EffectEnvParamSnapshot(ei, pi) => {
             let tab = ui.inspector.last_effect_tab();
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
@@ -2012,6 +2148,78 @@ pub(super) fn dispatch_inspector(
                         env_idx,
                         old_target,
                         env.target_normalized,
+                    );
+                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                }
+            }
+            *active_inspector_drag = None;
+            DispatchResult::handled()
+        }
+        PanelAction::GenEnvRangeChanged(pi, rmin, rmax) => {
+            let layer_idx = super::resolve_active_layer_index(active_layer, project);
+            if let Some(layer_idx) = layer_idx {
+                if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
+                    && let Some(gp) = layer.gen_params_mut()
+                    && let Some(envs) = &mut gp.envelopes
+                    && let Some(env) = envs.iter_mut().find(|e| e.param_index == *pi as i32)
+                {
+                    env.range_min = *rmin;
+                    env.range_max = *rmax;
+                }
+                let param_i = *pi as i32;
+                let rm = *rmin;
+                let rx = *rmax;
+                let layer_id = active_layer.clone().unwrap_or_default();
+                ContentCommand::send(
+                    content_tx,
+                    ContentCommand::MutateProject(Box::new(move |p| {
+                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
+                            && let Some(gp) = layer.gen_params_mut()
+                            && let Some(envs) = &mut gp.envelopes
+                            && let Some(env) =
+                                envs.iter_mut().find(|e| e.param_index == param_i)
+                        {
+                            env.range_min = rm;
+                            env.range_max = rx;
+                        }
+                    })),
+                );
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::GenEnvRangeSnapshot(pi) => {
+            let layer_idx = super::resolve_active_layer_index(active_layer, project);
+            if let Some(layer_idx) = layer_idx
+                && let Some(layer) = project.timeline.layers.get(layer_idx)
+                && let Some(gp) = layer.gen_params()
+                && let Some(envs) = &gp.envelopes
+                && let Some(env) = envs.iter().find(|e| e.param_index == *pi as i32)
+            {
+                *range_snapshot = Some((env.range_min, env.range_max));
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::GenEnvRangeCommit(pi) => {
+            let layer_idx = super::resolve_active_layer_index(active_layer, project);
+            if let Some((old_min, old_max)) = range_snapshot.take()
+                && let Some(layer_idx) = layer_idx
+                && let Some(layer) = project.timeline.layers.get(layer_idx)
+                && let Some(gp) = layer.gen_params()
+                && let Some(envs) = &gp.envelopes
+                && let Some(env_idx) = envs.iter().position(|e| e.param_index == *pi as i32)
+            {
+                let env = &envs[env_idx];
+                if (old_min - env.range_min).abs() > f32::EPSILON
+                    || (old_max - env.range_max).abs() > f32::EPSILON
+                {
+                    let layer_id = layer.layer_id.clone();
+                    let cmd = ChangeLayerEnvelopeRangeCommand::new(
+                        layer_id,
+                        env_idx,
+                        old_min,
+                        old_max,
+                        env.range_min,
+                        env.range_max,
                     );
                     ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }

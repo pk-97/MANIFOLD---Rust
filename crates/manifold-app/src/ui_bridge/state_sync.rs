@@ -1114,6 +1114,8 @@ fn effects_to_configs(
             let mut env_mode =
                 vec![manifold_core::effects::EnvelopeMode::Adsr; n];
             let mut env_random_jump = vec![false; n];
+            let mut env_range_min = vec![0.0f32; n];
+            let mut env_range_max = vec![1.0f32; n];
             for env in envelopes {
                 if env.target_effect_type == *fx.effect_type() && env.enabled {
                     let pi = env.param_index as usize;
@@ -1127,6 +1129,8 @@ fn effects_to_configs(
                         env_release[pi] = env.release_beats;
                         env_mode[pi] = env.mode;
                         env_random_jump[pi] = env.random_jump;
+                        env_range_min[pi] = env.range_min;
+                        env_range_max[pi] = env.range_max;
                     }
                 }
             }
@@ -1153,6 +1157,8 @@ fn effects_to_configs(
                 env_release,
                 env_mode,
                 env_random_jump,
+                env_range_min,
+                env_range_max,
                 driver_beat_div_idx,
                 driver_waveform_idx,
                 driver_reversed,
@@ -1205,6 +1211,8 @@ fn gen_params_to_config(
                 env_release: vec![],
                 env_mode: vec![],
                 env_random_jump: vec![],
+                env_range_min: vec![],
+                env_range_max: vec![],
                 driver_beat_div_idx: vec![],
                 driver_waveform_idx: vec![],
                 driver_reversed: vec![],
@@ -1276,6 +1284,8 @@ fn gen_params_to_config(
     let mut env_mode =
         vec![manifold_core::effects::EnvelopeMode::Adsr; n];
     let mut env_random_jump = vec![false; n];
+    let mut env_range_min = vec![0.0f32; n];
+    let mut env_range_max = vec![1.0f32; n];
     if let Some(ref envelopes) = gp.envelopes {
         for env in envelopes {
             if env.enabled {
@@ -1289,6 +1299,8 @@ fn gen_params_to_config(
                     env_release[pi] = env.release_beats;
                     env_mode[pi] = env.mode;
                     env_random_jump[pi] = env.random_jump;
+                    env_range_min[pi] = env.range_min;
+                    env_range_max[pi] = env.range_max;
                 }
             }
         }
@@ -1327,6 +1339,8 @@ fn gen_params_to_config(
         env_release,
         env_mode,
         env_random_jump,
+        env_range_min,
+        env_range_max,
         driver_beat_div_idx,
         driver_waveform_idx,
         driver_reversed,

@@ -200,6 +200,8 @@ pub struct Application {
     pub(crate) adsr_snapshot: Option<(f32, f32, f32, f32)>,
     /// Envelope target drag snapshot for undo.
     pub(crate) target_snapshot: Option<f32>,
+    /// Envelope range drag snapshot (min, max) for undo.
+    pub(crate) range_snapshot: Option<(f32, f32)>,
 
     /// Active inspector drag — prevents snapshot from overwriting dragged field.
     pub(crate) active_inspector_drag: Option<ActiveInspectorDrag>,
@@ -403,6 +405,7 @@ impl Application {
             trim_snapshot: None,
             adsr_snapshot: None,
             target_snapshot: None,
+            range_snapshot: None,
             active_inspector_drag: None,
             effect_clipboard: manifold_editing::clipboard::EffectClipboard::new(),
             content_pipeline_output: None,

@@ -163,6 +163,63 @@ impl Command for ChangeLayerEnvelopeADSRCommand {
     }
 }
 
+/// Change layer envelope range_min/range_max values.
+#[derive(Debug)]
+pub struct ChangeLayerEnvelopeRangeCommand {
+    layer_id: LayerId,
+    env_index: usize,
+    old_min: f32,
+    old_max: f32,
+    new_min: f32,
+    new_max: f32,
+}
+
+impl ChangeLayerEnvelopeRangeCommand {
+    pub fn new(
+        layer_id: LayerId,
+        env_index: usize,
+        old_min: f32,
+        old_max: f32,
+        new_min: f32,
+        new_max: f32,
+    ) -> Self {
+        Self {
+            layer_id,
+            env_index,
+            old_min,
+            old_max,
+            new_min,
+            new_max,
+        }
+    }
+
+    fn apply(layer: &mut manifold_core::layer::Layer, idx: usize, rmin: f32, rmax: f32) {
+        let envs = layer.envelopes_mut();
+        if let Some(env) = envs.get_mut(idx) {
+            env.range_min = rmin;
+            env.range_max = rmax;
+        }
+    }
+}
+
+impl Command for ChangeLayerEnvelopeRangeCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
+            Self::apply(layer, self.env_index, self.new_min, self.new_max);
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
+            Self::apply(layer, self.env_index, self.old_min, self.old_max);
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Change Layer Envelope Range"
+    }
+}
+
 /// Change layer envelope target_normalized value.
 #[derive(Debug)]
 pub struct ChangeLayerEnvelopeTargetCommand {

@@ -177,6 +177,12 @@ pub enum PanelAction {
     EffectTargetSnapshot(usize, usize),
     /// Commit target drag (record undo command). Unity: onTargetCommit.
     EffectTargetCommit(usize, usize),
+    /// Envelope range changed: fx_idx, param_idx, range_min, range_max.
+    EffectEnvRangeChanged(usize, usize, f32, f32),
+    /// Snapshot envelope range before drag (for undo).
+    EffectEnvRangeSnapshot(usize, usize),
+    /// Commit envelope range drag (record undo command).
+    EffectEnvRangeCommit(usize, usize),
     /// Reorder effect card: move from_index to to_index.
     /// Unity: EffectsListBitmapPanel.onCardReorder.
     EffectReorder(usize, usize),
@@ -212,6 +218,12 @@ pub enum PanelAction {
     GenTargetSnapshot(usize),
     /// Commit target drag (record undo command). Unity: onTargetCommit.
     GenTargetCommit(usize),
+    /// Envelope range changed: param_idx, range_min, range_max.
+    GenEnvRangeChanged(usize, f32, f32),
+    /// Snapshot envelope range before drag (for undo).
+    GenEnvRangeSnapshot(usize),
+    /// Commit envelope range drag (record undo command).
+    GenEnvRangeCommit(usize),
 
     // Generator string params (per-clip text, etc.)
     GenStringParamClicked(usize), // string_param_index — open text input

@@ -64,6 +64,8 @@ pub struct GenParamConfig {
     pub env_release: Vec<f32>,
     pub env_mode: Vec<EnvelopeMode>,
     pub env_random_jump: Vec<bool>,
+    pub env_range_min: Vec<f32>,
+    pub env_range_max: Vec<f32>,
     pub driver_beat_div_idx: Vec<i32>,
     pub driver_waveform_idx: Vec<i32>,
     pub driver_reversed: Vec<bool>,
@@ -125,6 +127,7 @@ pub struct GenParamPanel {
     envelope_random_config_ids: Vec<Option<EnvelopeRandomConfigIds>>,
     trim_ids: Vec<Option<TrimHandleIds>>,
     target_ids: Vec<Option<EnvelopeTargetIds>>,
+    envelope_range_ids: Vec<Option<TrimHandleIds>>,
 
     // String params (text fields below sliders)
     string_param_info: Vec<GenStringParamInfo>,
@@ -171,6 +174,7 @@ impl GenParamPanel {
             envelope_random_config_ids: Vec::new(),
             trim_ids: Vec::new(),
             target_ids: Vec::new(),
+            envelope_range_ids: Vec::new(),
             string_param_info: Vec::new(),
             string_param_btn_ids: Vec::new(),
             osc_addresses: Vec::new(),
@@ -202,6 +206,8 @@ impl GenParamPanel {
             &config.env_release,
             &config.env_mode,
             &config.env_random_jump,
+            &config.env_range_min,
+            &config.env_range_max,
             &config.driver_beat_div_idx,
             &config.driver_waveform_idx,
             &config.driver_reversed,
@@ -231,6 +237,8 @@ impl GenParamPanel {
         self.trim_ids.resize_with(n, || None);
         self.target_ids = Vec::new();
         self.target_ids.resize_with(n, || None);
+        self.envelope_range_ids = Vec::new();
+        self.envelope_range_ids.resize_with(n, || None);
         self.param_cache = vec![f32::NAN; n];
         self.toggle_cache = vec![false; n];
     }
@@ -540,7 +548,7 @@ impl GenParamPanel {
                         ));
                     }
 
-                    // Envelope target
+                    // Envelope target or range handles
                     if self
                         .state
                         .mod_state
@@ -550,13 +558,31 @@ impl GenParamPanel {
                         .unwrap_or(false)
                         && let Some(ref slider) = self.slider_ids[i]
                     {
-                        self.target_ids[i] = Some(build_envelope_target(
-                            tree,
-                            slider.track as i32,
-                            slider.track_rect,
-                            &self.state.mod_state,
-                            i,
-                        ));
+                        let env_mode = self
+                            .state
+                            .mod_state
+                            .env_mode
+                            .get(i)
+                            .copied()
+                            .unwrap_or(EnvelopeMode::Adsr);
+                        if env_mode == EnvelopeMode::Random {
+                            self.envelope_range_ids[i] =
+                                Some(build_envelope_range_handles(
+                                    tree,
+                                    slider.track as i32,
+                                    slider.track_rect,
+                                    &self.state.mod_state,
+                                    i,
+                                ));
+                        } else {
+                            self.target_ids[i] = Some(build_envelope_target(
+                                tree,
+                                slider.track as i32,
+                                slider.track_rect,
+                                &self.state.mod_state,
+                                i,
+                            ));
+                        }
                     }
 
                     // D/E buttons
@@ -921,7 +947,23 @@ impl GenParamPanel {
     }
 
     pub fn handle_pointer_down(&mut self, node_id: u32, pos: Vec2) -> Vec<PanelAction> {
-        // Check envelope targets
+        // Check envelope range handles (Random mode)
+        for (pi, range) in self.envelope_range_ids.iter().enumerate() {
+            if let Some(t) = range {
+                if node_id as i32 == t.min_bar_id {
+                    self.drag.dragging_range_param = pi as i32;
+                    self.drag.dragging_range_is_min = true;
+                    return vec![PanelAction::GenEnvRangeSnapshot(pi)];
+                }
+                if node_id as i32 == t.max_bar_id {
+                    self.drag.dragging_range_param = pi as i32;
+                    self.drag.dragging_range_is_min = false;
+                    return vec![PanelAction::GenEnvRangeSnapshot(pi)];
+                }
+            }
+        }
+
+        // Check envelope targets (ADSR mode)
         for (pi, target) in self.target_ids.iter().enumerate() {
             if let Some(t) = target
                 && node_id as i32 == t.target_bar_id
@@ -999,6 +1041,71 @@ impl GenParamPanel {
     }
 
     pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree) -> Vec<PanelAction> {
+        // Range handle drag
+        if self.drag.dragging_range_param >= 0 {
+            let pi = self.drag.dragging_range_param as usize;
+            if let Some(slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
+                let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
+                let rmin = self
+                    .state
+                    .mod_state
+                    .env_range_min
+                    .get(pi)
+                    .copied()
+                    .unwrap_or(0.0);
+                let rmax = self
+                    .state
+                    .mod_state
+                    .env_range_max
+                    .get(pi)
+                    .copied()
+                    .unwrap_or(1.0);
+                let (new_min, new_max) = if self.drag.dragging_range_is_min {
+                    (norm.min(rmax), rmax)
+                } else {
+                    (rmin, norm.max(rmin))
+                };
+                if let Some(v) = self.state.mod_state.env_range_min.get_mut(pi) {
+                    *v = new_min;
+                }
+                if let Some(v) = self.state.mod_state.env_range_max.get_mut(pi) {
+                    *v = new_max;
+                }
+
+                if let Some(t) = self.envelope_range_ids.get(pi).and_then(|t| t.as_ref()) {
+                    let usable = slider.track_rect.width - OVERLAY_INSET * 2.0;
+                    let base_x = slider.track_rect.x + OVERLAY_INSET;
+                    let fill_x = base_x + new_min * usable;
+                    let fill_w = (new_max - new_min) * usable;
+                    let fill_h = slider.track_rect.height - OVERLAY_INSET * 2.0;
+                    tree.set_bounds(
+                        t.fill_id as u32,
+                        Rect::new(fill_x, slider.track_rect.y + OVERLAY_INSET, fill_w, fill_h),
+                    );
+                    tree.set_bounds(
+                        t.min_bar_id as u32,
+                        Rect::new(
+                            base_x + new_min * usable - TRIM_BAR_W * 0.5,
+                            slider.track_rect.y,
+                            TRIM_BAR_W,
+                            slider.track_rect.height,
+                        ),
+                    );
+                    tree.set_bounds(
+                        t.max_bar_id as u32,
+                        Rect::new(
+                            base_x + new_max * usable - TRIM_BAR_W * 0.5,
+                            slider.track_rect.y,
+                            TRIM_BAR_W,
+                            slider.track_rect.height,
+                        ),
+                    );
+                }
+
+                return vec![PanelAction::GenEnvRangeChanged(pi, new_min, new_max)];
+            }
+        }
+
         // Target bar drag — update state, reposition bar node, dispatch action
         if self.drag.dragging_target_param >= 0 {
             let pi = self.drag.dragging_target_param as usize;
@@ -1134,6 +1241,11 @@ impl GenParamPanel {
     }
 
     pub fn handle_drag_end(&mut self, _tree: &mut UITree) -> Vec<PanelAction> {
+        if self.drag.dragging_range_param >= 0 {
+            let pi = self.drag.dragging_range_param as usize;
+            self.drag.dragging_range_param = -1;
+            return vec![PanelAction::GenEnvRangeCommit(pi)];
+        }
         if self.drag.dragging_target_param >= 0 {
             let pi = self.drag.dragging_target_param as usize;
             self.drag.dragging_target_param = -1;
@@ -1252,6 +1364,8 @@ mod tests {
             env_release: vec![0.0; 3],
             env_mode: vec![EnvelopeMode::Adsr; 3],
             env_random_jump: vec![false; 3],
+            env_range_min: vec![0.0; 3],
+            env_range_max: vec![1.0; 3],
             driver_beat_div_idx: vec![-1; 3],
             driver_waveform_idx: vec![-1; 3],
             driver_reversed: vec![false; 3],

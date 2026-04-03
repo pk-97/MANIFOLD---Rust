@@ -642,6 +642,12 @@ pub struct ParamEnvelope {
     /// When mode=Random: true = jump to fully random value, false = walk by step.
     #[serde(default)]
     pub random_jump: bool,
+    /// Random mode range minimum (normalized 0-1). Walk/jump stays within this range.
+    #[serde(default)]
+    pub range_min: f32,
+    /// Random mode range maximum (normalized 0-1). Walk/jump stays within this range.
+    #[serde(default = "default_one")]
+    pub range_max: f32,
     /// Cached ADSR output (0-1) for UI display. Not serialized.
     #[serde(skip)]
     pub current_level: f32,
@@ -671,6 +677,8 @@ impl ParamEnvelope {
             target_normalized: 1.0,
             mode: EnvelopeMode::Adsr,
             random_jump: false,
+            range_min: 0.0,
+            range_max: 1.0,
             current_level: 0.0,
             walk_value: -1.0,
             was_clip_active: false,
@@ -691,6 +699,8 @@ impl ParamEnvelope {
             target_normalized: 1.0,
             mode: EnvelopeMode::Adsr,
             random_jump: false,
+            range_min: 0.0,
+            range_max: 1.0,
             current_level: 0.0,
             walk_value: -1.0,
             was_clip_active: false,

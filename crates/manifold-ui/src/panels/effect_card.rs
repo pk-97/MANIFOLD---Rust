@@ -78,6 +78,10 @@ pub struct EffectCardConfig {
     pub env_mode: Vec<EnvelopeMode>,
     /// Per-param random_jump flag.
     pub env_random_jump: Vec<bool>,
+    /// Per-param envelope range min (normalized). Defaults to 0.0.
+    pub env_range_min: Vec<f32>,
+    /// Per-param envelope range max (normalized). Defaults to 1.0.
+    pub env_range_max: Vec<f32>,
     /// Per-param driver beat division button index (0-10). -1 if no driver.
     pub driver_beat_div_idx: Vec<i32>,
     /// Per-param driver waveform index (0-4). -1 if no driver.
@@ -159,6 +163,7 @@ pub struct EffectCardPanel {
     envelope_random_config_ids: Vec<Option<EnvelopeRandomConfigIds>>,
     trim_ids: Vec<Option<TrimHandleIds>>,
     target_ids: Vec<Option<EnvelopeTargetIds>>,
+    envelope_range_ids: Vec<Option<TrimHandleIds>>,
 
     // Per-param OSC addresses (for click-to-copy). Indexed by param index.
     osc_addresses: Vec<Option<String>>,
@@ -213,6 +218,7 @@ impl EffectCardPanel {
             envelope_random_config_ids: Vec::new(),
             trim_ids: Vec::new(),
             target_ids: Vec::new(),
+            envelope_range_ids: Vec::new(),
             osc_addresses: Vec::new(),
             copied_flash: CopyToClipboardLabelState::default(),
             drag: ParamDragState::new(),
@@ -254,6 +260,8 @@ impl EffectCardPanel {
             &config.env_release,
             &config.env_mode,
             &config.env_random_jump,
+            &config.env_range_min,
+            &config.env_range_max,
             &config.driver_beat_div_idx,
             &config.driver_waveform_idx,
             &config.driver_reversed,
@@ -279,6 +287,8 @@ impl EffectCardPanel {
         self.trim_ids.resize_with(n, || None);
         self.target_ids = Vec::new();
         self.target_ids.resize_with(n, || None);
+        self.envelope_range_ids = Vec::new();
+        self.envelope_range_ids.resize_with(n, || None);
         self.param_cache = vec![f32::NAN; n];
     }
 
@@ -698,7 +708,7 @@ impl EffectCardPanel {
                 ));
             }
 
-            // Envelope target (if envelope expanded)
+            // Envelope target or range handles (if envelope expanded)
             if self
                 .state
                 .mod_state
@@ -708,13 +718,30 @@ impl EffectCardPanel {
                 .unwrap_or(false)
                 && let Some(ref slider) = self.slider_ids[i]
             {
-                self.target_ids[i] = Some(build_envelope_target(
-                    tree,
-                    slider.track as i32,
-                    slider.track_rect,
-                    &self.state.mod_state,
-                    i,
-                ));
+                let env_mode = self
+                    .state
+                    .mod_state
+                    .env_mode
+                    .get(i)
+                    .copied()
+                    .unwrap_or(EnvelopeMode::Adsr);
+                if env_mode == EnvelopeMode::Random {
+                    self.envelope_range_ids[i] = Some(build_envelope_range_handles(
+                        tree,
+                        slider.track as i32,
+                        slider.track_rect,
+                        &self.state.mod_state,
+                        i,
+                    ));
+                } else {
+                    self.target_ids[i] = Some(build_envelope_target(
+                        tree,
+                        slider.track as i32,
+                        slider.track_rect,
+                        &self.state.mod_state,
+                        i,
+                    ));
+                }
             }
 
             // D/E buttons (right side of row)
@@ -992,7 +1019,23 @@ impl EffectCardPanel {
     pub fn handle_pointer_down(&mut self, node_id: u32, pos: Vec2) -> Vec<PanelAction> {
         let ei = self.effect_index;
 
-        // Check envelope target bars first (highest priority)
+        // Check envelope range handles first (highest priority for Random mode)
+        for (pi, range) in self.envelope_range_ids.iter().enumerate() {
+            if let Some(t) = range {
+                if node_id as i32 == t.min_bar_id {
+                    self.drag.dragging_range_param = pi as i32;
+                    self.drag.dragging_range_is_min = true;
+                    return vec![PanelAction::EffectEnvRangeSnapshot(ei, pi)];
+                }
+                if node_id as i32 == t.max_bar_id {
+                    self.drag.dragging_range_param = pi as i32;
+                    self.drag.dragging_range_is_min = false;
+                    return vec![PanelAction::EffectEnvRangeSnapshot(ei, pi)];
+                }
+            }
+        }
+
+        // Check envelope target bars (ADSR mode)
         for (pi, target) in self.target_ids.iter().enumerate() {
             if let Some(t) = target
                 && node_id as i32 == t.target_bar_id
@@ -1102,6 +1145,15 @@ impl EffectCardPanel {
                             .get(pi)
                             .and_then(|t| t.as_ref())
                             .is_some_and(|t| node_id as i32 == t.target_bar_id)
+                        || self
+                            .envelope_range_ids
+                            .get(pi)
+                            .and_then(|t| t.as_ref())
+                            .is_some_and(|t| {
+                                node_id as i32 == t.fill_id
+                                    || node_id as i32 == t.min_bar_id
+                                    || node_id as i32 == t.max_bar_id
+                            })
                 })
             {
                 // If driver is expanded, check proximity to trim handles before falling through to param drag
@@ -1150,7 +1202,7 @@ impl EffectCardPanel {
                     }
                 }
 
-                // If envelope is expanded, check proximity to target bar before falling through
+                // If envelope is expanded, check proximity to target/range handles
                 if self
                     .state
                     .mod_state
@@ -1161,19 +1213,59 @@ impl EffectCardPanel {
                 {
                     let usable = ids.track_rect.width - OVERLAY_INSET * 2.0;
                     let base_x = ids.track_rect.x + OVERLAY_INSET;
-                    let tgt = self
+                    let hit_zone = 8.0;
+                    let env_mode = self
                         .state
                         .mod_state
-                        .target_norm
+                        .env_mode
                         .get(pi)
                         .copied()
-                        .unwrap_or(1.0);
-                    let target_center = base_x + tgt * usable;
-                    let hit_zone = 8.0;
+                        .unwrap_or(EnvelopeMode::Adsr);
 
-                    if (pos.x - target_center).abs() < hit_zone {
-                        self.drag.dragging_target_param = pi as i32;
-                        return vec![PanelAction::EffectTargetSnapshot(ei, pi)];
+                    if env_mode == EnvelopeMode::Random {
+                        let rmin = self
+                            .state
+                            .mod_state
+                            .env_range_min
+                            .get(pi)
+                            .copied()
+                            .unwrap_or(0.0);
+                        let rmax = self
+                            .state
+                            .mod_state
+                            .env_range_max
+                            .get(pi)
+                            .copied()
+                            .unwrap_or(1.0);
+                        let min_center = base_x + rmin * usable;
+                        let max_center = base_x + rmax * usable;
+                        let dist_min = (pos.x - min_center).abs();
+                        let dist_max = (pos.x - max_center).abs();
+
+                        if dist_min < hit_zone && dist_min <= dist_max {
+                            self.drag.dragging_range_param = pi as i32;
+                            self.drag.dragging_range_is_min = true;
+                            return vec![PanelAction::EffectEnvRangeSnapshot(ei, pi)];
+                        }
+                        if dist_max < hit_zone {
+                            self.drag.dragging_range_param = pi as i32;
+                            self.drag.dragging_range_is_min = false;
+                            return vec![PanelAction::EffectEnvRangeSnapshot(ei, pi)];
+                        }
+                    } else {
+                        let tgt = self
+                            .state
+                            .mod_state
+                            .target_norm
+                            .get(pi)
+                            .copied()
+                            .unwrap_or(1.0);
+                        let target_center = base_x + tgt * usable;
+
+                        if (pos.x - target_center).abs() < hit_zone {
+                            self.drag.dragging_target_param = pi as i32;
+                            return vec![PanelAction::EffectTargetSnapshot(ei, pi)];
+                        }
                     }
                 }
 
@@ -1195,6 +1287,71 @@ impl EffectCardPanel {
 
     pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree) -> Vec<PanelAction> {
         let ei = self.effect_index;
+
+        // Range handle drag — update state, reposition bar nodes, dispatch action
+        if self.drag.dragging_range_param >= 0 {
+            let pi = self.drag.dragging_range_param as usize;
+            if let Some(slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
+                let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
+                let rmin = self
+                    .state
+                    .mod_state
+                    .env_range_min
+                    .get(pi)
+                    .copied()
+                    .unwrap_or(0.0);
+                let rmax = self
+                    .state
+                    .mod_state
+                    .env_range_max
+                    .get(pi)
+                    .copied()
+                    .unwrap_or(1.0);
+                let (new_min, new_max) = if self.drag.dragging_range_is_min {
+                    (norm.min(rmax), rmax)
+                } else {
+                    (rmin, norm.max(rmin))
+                };
+                if let Some(v) = self.state.mod_state.env_range_min.get_mut(pi) {
+                    *v = new_min;
+                }
+                if let Some(v) = self.state.mod_state.env_range_max.get_mut(pi) {
+                    *v = new_max;
+                }
+
+                if let Some(t) = self.envelope_range_ids.get(pi).and_then(|t| t.as_ref()) {
+                    let usable = slider.track_rect.width - OVERLAY_INSET * 2.0;
+                    let base_x = slider.track_rect.x + OVERLAY_INSET;
+                    let fill_x = base_x + new_min * usable;
+                    let fill_w = (new_max - new_min) * usable;
+                    let fill_h = slider.track_rect.height - OVERLAY_INSET * 2.0;
+                    tree.set_bounds(
+                        t.fill_id as u32,
+                        Rect::new(fill_x, slider.track_rect.y + OVERLAY_INSET, fill_w, fill_h),
+                    );
+                    tree.set_bounds(
+                        t.min_bar_id as u32,
+                        Rect::new(
+                            base_x + new_min * usable - TRIM_BAR_W * 0.5,
+                            slider.track_rect.y,
+                            TRIM_BAR_W,
+                            slider.track_rect.height,
+                        ),
+                    );
+                    tree.set_bounds(
+                        t.max_bar_id as u32,
+                        Rect::new(
+                            base_x + new_max * usable - TRIM_BAR_W * 0.5,
+                            slider.track_rect.y,
+                            TRIM_BAR_W,
+                            slider.track_rect.height,
+                        ),
+                    );
+                }
+
+                return vec![PanelAction::EffectEnvRangeChanged(ei, pi, new_min, new_max)];
+            }
+        }
 
         // Target bar drag — update state, reposition bar node, dispatch action
         if self.drag.dragging_target_param >= 0 {
@@ -1333,6 +1490,11 @@ impl EffectCardPanel {
     pub fn handle_drag_end(&mut self, _tree: &mut UITree) -> Vec<PanelAction> {
         let ei = self.effect_index;
 
+        if self.drag.dragging_range_param >= 0 {
+            let pi = self.drag.dragging_range_param as usize;
+            self.drag.dragging_range_param = -1;
+            return vec![PanelAction::EffectEnvRangeCommit(ei, pi)];
+        }
         if self.drag.dragging_target_param >= 0 {
             let pi = self.drag.dragging_target_param as usize;
             self.drag.dragging_target_param = -1;
@@ -1429,6 +1591,8 @@ mod tests {
             env_release: vec![0.0; n],
             env_mode: vec![EnvelopeMode::Adsr; n],
             env_random_jump: vec![false; n],
+            env_range_min: vec![0.0; n],
+            env_range_max: vec![1.0; n],
             driver_beat_div_idx: vec![-1; n],
             driver_waveform_idx: vec![-1; n],
             driver_reversed: vec![false; n],

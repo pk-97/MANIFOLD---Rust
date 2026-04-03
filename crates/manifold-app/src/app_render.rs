@@ -637,6 +637,7 @@ impl Application {
                 &mut self.trim_snapshot,
                 &mut self.adsr_snapshot,
                 &mut self.target_snapshot,
+                &mut self.range_snapshot,
                 &mut self.user_prefs,
                 &mut self.active_inspector_drag,
             );

@@ -38,7 +38,9 @@ fn random_unit() -> f32 {
 /// `random_jump`: if true, jump to a fully random value instead of walking.
 /// `whole_numbers`: if true, quantize to discrete steps.
 /// `min`/`max`: param range (needed for discrete quantization).
-/// Returns the new walk_value in [0, 1].
+/// `range_min`/`range_max`: normalized range constraints [0, 1].
+/// Returns the new walk_value in [range_min, range_max].
+#[allow(clippy::too_many_arguments)]
 fn compute_random_step(
     walk_value: f32,
     step_size: f32,
@@ -46,21 +48,26 @@ fn compute_random_step(
     whole_numbers: bool,
     min: f32,
     max: f32,
+    range_min: f32,
+    range_max: f32,
 ) -> f32 {
     if random_jump {
         let raw = random_unit();
         if whole_numbers && (max - min) > 0.0 {
             let steps = (max - min).round() as i32;
             if steps > 0 {
-                let idx = (raw * (steps + 1) as f32).floor() as i32;
-                let idx = idx.clamp(0, steps);
+                let lo = (range_min * steps as f32).round() as i32;
+                let hi = (range_max * steps as f32).round() as i32;
+                let span = (hi - lo).max(0);
+                let idx = lo + (raw * (span + 1) as f32).floor() as i32;
+                let idx = idx.clamp(lo, hi);
                 return idx as f32 / steps as f32;
             }
         }
-        return raw;
+        return range_min + raw * (range_max - range_min);
     }
 
-    // Random walk: step up or down by step_size, clamp at boundaries.
+    // Random walk: step up or down by step_size, clamp at range boundaries.
     let up = random_unit() < 0.5;
 
     if whole_numbers && (max - min) > 0.0 {
@@ -68,20 +75,22 @@ fn compute_random_step(
         if steps > 0 {
             let step_units = ((step_size * steps as f32).round() as i32).max(1);
             let current_idx = (walk_value * steps as f32).round() as i32;
+            let lo = (range_min * steps as f32).round() as i32;
+            let hi = (range_max * steps as f32).round() as i32;
             let new_idx = if up {
-                (current_idx + step_units).min(steps)
+                (current_idx + step_units).min(hi)
             } else {
-                (current_idx - step_units).max(0)
+                (current_idx - step_units).max(lo)
             };
             return new_idx as f32 / steps as f32;
         }
     }
 
-    // Continuous walk — clamp at [0, 1]
+    // Continuous walk — clamp at [range_min, range_max]
     if up {
-        (walk_value + step_size).min(1.0)
+        (walk_value + step_size).min(range_max)
     } else {
-        (walk_value - step_size).max(0.0)
+        (walk_value - step_size).max(range_min)
     }
 }
 
@@ -326,6 +335,8 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> boo
                 walk_value,
                 was_active,
                 last_elapsed,
+                range_min,
+                range_max,
             ) = {
                 let env = &layer.envelopes.as_ref().unwrap()[ei];
                 (
@@ -342,6 +353,8 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> boo
                     env.walk_value,
                     env.was_clip_active,
                     env.last_elapsed,
+                    env.range_min,
+                    env.range_max,
                 )
             };
 
@@ -410,11 +423,13 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> boo
 
                 let new_walk = if trigger {
                     if walk_value < 0.0 {
-                        compute_random_step(0.5, 1.0, true, whole, min, max)
+                        compute_random_step(
+                            0.5, 1.0, true, whole, min, max, range_min, range_max,
+                        )
                     } else {
-                        // Step = 15% of range per trigger
                         compute_random_step(
                             walk_value, 0.15, random_jump, whole, min, max,
+                            range_min, range_max,
                         )
                     }
                 } else if walk_value < 0.0 {
@@ -428,6 +443,7 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> boo
                 } else {
                     walk_value
                 };
+                let new_walk = new_walk.clamp(range_min, range_max);
 
                 let held = min + (max - min) * new_walk;
                 let held = if whole {
@@ -580,6 +596,8 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: Beats) 
                 walk_value,
                 was_active,
                 last_elapsed,
+                range_min,
+                range_max,
             ) = {
                 let env = &gp.envelopes.as_ref().unwrap()[ei];
                 (
@@ -595,6 +613,8 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: Beats) 
                     env.walk_value,
                     env.was_clip_active,
                     env.last_elapsed,
+                    env.range_min,
+                    env.range_max,
                 )
             };
 
@@ -633,10 +653,13 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: Beats) 
 
                 let new_walk = if trigger {
                     if walk_value < 0.0 {
-                        compute_random_step(0.5, 1.0, true, whole, min, max)
+                        compute_random_step(
+                            0.5, 1.0, true, whole, min, max, range_min, range_max,
+                        )
                     } else {
                         compute_random_step(
                             walk_value, 0.15, random_jump, whole, min, max,
+                            range_min, range_max,
                         )
                     }
                 } else if walk_value < 0.0 {
@@ -650,6 +673,7 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: Beats) 
                 } else {
                     walk_value
                 };
+                let new_walk = new_walk.clamp(range_min, range_max);
 
                 let held = min + (max - min) * new_walk;
                 let held = if whole {

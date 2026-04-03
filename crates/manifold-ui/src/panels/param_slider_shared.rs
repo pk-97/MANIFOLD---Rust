@@ -102,6 +102,8 @@ pub struct ParamModState {
     pub env_release: Vec<f32>,
     pub env_mode: Vec<EnvelopeMode>,
     pub env_random_jump: Vec<bool>,
+    pub env_range_min: Vec<f32>,
+    pub env_range_max: Vec<f32>,
     pub driver_beat_div_idx: Vec<i32>,
     pub driver_waveform_idx: Vec<i32>,
     pub driver_reversed: Vec<bool>,
@@ -123,6 +125,8 @@ impl ParamModState {
             env_release: vec![0.0; param_count],
             env_mode: vec![EnvelopeMode::Adsr; param_count],
             env_random_jump: vec![false; param_count],
+            env_range_min: vec![0.0; param_count],
+            env_range_max: vec![1.0; param_count],
             driver_beat_div_idx: vec![-1; param_count],
             driver_waveform_idx: vec![-1; param_count],
             driver_reversed: vec![false; param_count],
@@ -148,6 +152,8 @@ impl ParamModState {
         env_release: &[f32],
         env_mode: &[EnvelopeMode],
         env_random_jump: &[bool],
+        env_range_min: &[f32],
+        env_range_max: &[f32],
         driver_beat_div_idx: &[i32],
         driver_waveform_idx: &[i32],
         driver_reversed: &[bool],
@@ -166,6 +172,8 @@ impl ParamModState {
             self.env_release[i] = env_release.get(i).copied().unwrap_or(0.0);
             self.env_mode[i] = env_mode.get(i).copied().unwrap_or(EnvelopeMode::Adsr);
             self.env_random_jump[i] = env_random_jump.get(i).copied().unwrap_or(false);
+            self.env_range_min[i] = env_range_min.get(i).copied().unwrap_or(0.0);
+            self.env_range_max[i] = env_range_max.get(i).copied().unwrap_or(1.0);
             self.driver_beat_div_idx[i] = driver_beat_div_idx.get(i).copied().unwrap_or(-1);
             self.driver_waveform_idx[i] = driver_waveform_idx.get(i).copied().unwrap_or(-1);
             self.driver_reversed[i] = driver_reversed.get(i).copied().unwrap_or(false);
@@ -185,6 +193,8 @@ pub(crate) struct ParamDragState {
     pub(crate) dragging_trim_param: i32,
     pub(crate) dragging_trim_is_min: bool,
     pub(crate) dragging_target_param: i32,
+    pub(crate) dragging_range_param: i32,
+    pub(crate) dragging_range_is_min: bool,
 }
 
 impl ParamDragState {
@@ -196,6 +206,8 @@ impl ParamDragState {
             dragging_trim_param: -1,
             dragging_trim_is_min: false,
             dragging_target_param: -1,
+            dragging_range_param: -1,
+            dragging_range_is_min: false,
         }
     }
 
@@ -204,6 +216,7 @@ impl ParamDragState {
             || self.dragging_env_param >= 0
             || self.dragging_trim_param >= 0
             || self.dragging_target_param >= 0
+            || self.dragging_range_param >= 0
     }
 }
 
@@ -619,6 +632,72 @@ pub(crate) fn build_envelope_random_config(
         _container_id: container_id,
         mode_btn_id,
         jump_btn_id,
+    }
+}
+
+/// Orange range handles for Random envelope mode. Same layout as trim handles
+/// but reads from `env_range_min/max` and uses envelope orange colors.
+pub(crate) fn build_envelope_range_handles(
+    tree: &mut UITree,
+    track_parent: i32,
+    track_rect: Rect,
+    mod_state: &ParamModState,
+    param_idx: usize,
+) -> TrimHandleIds {
+    let usable = track_rect.width - OVERLAY_INSET * 2.0;
+    let rmin = mod_state.env_range_min.get(param_idx).copied().unwrap_or(0.0);
+    let rmax = mod_state.env_range_max.get(param_idx).copied().unwrap_or(1.0);
+
+    let fill_x = track_rect.x + OVERLAY_INSET + rmin * usable;
+    let fill_w = (rmax - rmin) * usable;
+    let fill_id = tree.add_panel(
+        track_parent,
+        fill_x,
+        track_rect.y + OVERLAY_INSET,
+        fill_w,
+        track_rect.height - OVERLAY_INSET * 2.0,
+        UIStyle {
+            bg_color: color::ENV_FILL_C32,
+            ..UIStyle::default()
+        },
+    ) as i32;
+
+    let min_x = fill_x - TRIM_BAR_W * 0.5;
+    let min_bar_id = tree.add_button(
+        track_parent,
+        min_x,
+        track_rect.y,
+        TRIM_BAR_W,
+        track_rect.height,
+        UIStyle {
+            bg_color: color::ENVELOPE_ACTIVE_C32,
+            hover_bg_color: color::TARGET_BAR_HOVER_C32,
+            corner_radius: 1.0,
+            ..UIStyle::default()
+        },
+        "",
+    ) as i32;
+
+    let max_x = track_rect.x + OVERLAY_INSET + rmax * usable - TRIM_BAR_W * 0.5;
+    let max_bar_id = tree.add_button(
+        track_parent,
+        max_x,
+        track_rect.y,
+        TRIM_BAR_W,
+        track_rect.height,
+        UIStyle {
+            bg_color: color::ENVELOPE_ACTIVE_C32,
+            hover_bg_color: color::TARGET_BAR_HOVER_C32,
+            corner_radius: 1.0,
+            ..UIStyle::default()
+        },
+        "",
+    ) as i32;
+
+    TrimHandleIds {
+        fill_id,
+        min_bar_id,
+        max_bar_id,
     }
 }
 

@@ -79,6 +79,7 @@ pub fn dispatch(
     trim_snapshot: &mut Option<(f32, f32)>,
     adsr_snapshot: &mut Option<(f32, f32, f32, f32)>,
     target_snapshot: &mut Option<f32>,
+    range_snapshot: &mut Option<(f32, f32)>,
     user_prefs: &mut UserPrefs,
     active_inspector_drag: &mut Option<crate::app::ActiveInspectorDrag>,
 ) -> DispatchResult {
@@ -188,6 +189,9 @@ pub fn dispatch(
         | PanelAction::EffectTrimCommit(..)
         | PanelAction::EffectTargetSnapshot(..)
         | PanelAction::EffectTargetCommit(..)
+        | PanelAction::EffectEnvRangeChanged(..)
+        | PanelAction::EffectEnvRangeSnapshot(..)
+        | PanelAction::EffectEnvRangeCommit(..)
         | PanelAction::EffectEnvParamSnapshot(..)
         | PanelAction::EffectEnvParamCommit(..)
         | PanelAction::EffectEnvModeToggle(..)
@@ -213,6 +217,9 @@ pub fn dispatch(
         | PanelAction::GenTrimCommit(_)
         | PanelAction::GenTargetSnapshot(_)
         | PanelAction::GenTargetCommit(_)
+        | PanelAction::GenEnvRangeChanged(..)
+        | PanelAction::GenEnvRangeSnapshot(_)
+        | PanelAction::GenEnvRangeCommit(_)
         | PanelAction::GenEnvParamSnapshot(_)
         | PanelAction::GenEnvParamCommit(_)
         | PanelAction::GenEnvModeToggle(_)
@@ -249,6 +256,7 @@ pub fn dispatch(
             trim_snapshot,
             adsr_snapshot,
             target_snapshot,
+            range_snapshot,
             active_inspector_drag,
         ),
 
