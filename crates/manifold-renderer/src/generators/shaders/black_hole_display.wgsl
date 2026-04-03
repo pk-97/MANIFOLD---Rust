@@ -10,9 +10,9 @@ struct Uniforms {
     disk_outer: f32,
     disk_glow: f32,
     orbit_angle: f32,
-    rotate_rad: f32,
     _pad0: f32,
     _pad1: f32,
+    _pad2: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -55,7 +55,7 @@ fn shade_disk(disk_r: f32, cos_a: f32, sin_a: f32, is_secondary: bool) -> vec3<f
 
     // Keplerian orbital motion: inner orbits faster
     let orbital_speed = u.time_val * 0.4 * pow(r_norm, -1.5);
-    let angle = base_angle + orbital_speed + u.orbit_angle + u.rotate_rad;
+    let angle = base_angle + orbital_speed + u.orbit_angle;
 
     // Seamless angle coordinates for noise
     let ca = cos(angle);

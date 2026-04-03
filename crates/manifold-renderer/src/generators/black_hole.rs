@@ -33,11 +33,11 @@ struct DeflectionUniforms {
     aspect: f32,
     cam_dist: f32,
     tilt_rad: f32,
+    rotate_rad: f32,
     steps: f32,
     disk_inner: f32,
     disk_outer: f32,
     uv_scale: f32,
-    _pad0: f32,
 }
 
 #[repr(C)]
@@ -48,9 +48,9 @@ struct DisplayUniforms {
     disk_outer: f32,
     disk_glow: f32,
     orbit_angle: f32,
-    rotate_rad: f32,
     _pad0: f32,
     _pad1: f32,
+    _pad2: f32,
 }
 
 pub struct BlackHoleGenerator {
@@ -65,6 +65,7 @@ pub struct BlackHoleGenerator {
 
     last_cam_dist: f32,
     last_tilt: f32,
+    last_rotate: f32,
     last_scale: f32,
     last_steps: f32,
     last_disk_inner: f32,
@@ -95,6 +96,7 @@ impl BlackHoleGenerator {
             defl_h: 0,
             last_cam_dist: f32::MIN,
             last_tilt: f32::MIN,
+            last_rotate: f32::MIN,
             last_scale: f32::MIN,
             last_steps: f32::MIN,
             last_disk_inner: f32::MIN,
@@ -103,11 +105,16 @@ impl BlackHoleGenerator {
     }
 
     fn ensure_deflection_maps(&mut self, device: &manifold_gpu::GpuDevice, w: u32, h: u32) {
-        if self.deflection_map.is_some() && self.defl_w == w && self.defl_h == h {
+        // Deflection map at 1/4 resolution — lensing geometry is smooth,
+        // bilinear interpolation in display shader handles upscaling.
+        // This makes rebakes ~16x cheaper (dragging Tilt/CamDist is smooth).
+        let dw = (w / 4).max(128);
+        let dh = (h / 4).max(72);
+        if self.deflection_map.is_some() && self.defl_w == dw && self.defl_h == dh {
             return;
         }
-        self.defl_w = w;
-        self.defl_h = h;
+        self.defl_w = dw;
+        self.defl_h = dh;
         let make = |label| {
             device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width: w,
@@ -124,10 +131,11 @@ impl BlackHoleGenerator {
         self.last_cam_dist = f32::MIN;
     }
 
-    fn needs_rebake(&self, cd: f32, t: f32, s: f32, st: f32, di: f32, do_: f32) -> bool {
+    fn needs_rebake(&self, cd: f32, t: f32, r: f32, s: f32, st: f32, di: f32, do_: f32) -> bool {
         const EPS: f32 = 0.001;
         (self.last_cam_dist - cd).abs() > EPS
             || (self.last_tilt - t).abs() > EPS
+            || (self.last_rotate - r).abs() > EPS
             || (self.last_scale - s).abs() > EPS
             || (self.last_steps - st).abs() > 0.5
             || (self.last_disk_inner - di).abs() > EPS
@@ -168,18 +176,18 @@ impl Generator for BlackHoleGenerator {
         self.ensure_deflection_maps(gpu.device, ctx.width, ctx.height);
 
         // ── Pass 1: Deflection Map (only on param change) ──
-        // Bake at rotate=0 — flat disk is rotationally symmetric around y.
-        // Rotate offset applied in display shader.
-        if self.needs_rebake(cam_dist, tilt_rad, uv_scale, steps, disk_inner, disk_outer) {
+        if self.needs_rebake(
+            cam_dist, tilt_rad, rotate_rad, uv_scale, steps, disk_inner, disk_outer,
+        ) {
             let defl_uniforms = DeflectionUniforms {
                 aspect: ctx.aspect,
                 cam_dist,
                 tilt_rad,
+                rotate_rad,
                 steps,
                 disk_inner,
                 disk_outer,
                 uv_scale,
-                _pad0: 0.0,
             };
             gpu.native_enc.dispatch_compute(
                 &self.deflection_pipeline,
@@ -197,11 +205,12 @@ impl Generator for BlackHoleGenerator {
                         texture: self.deflection_map2.as_ref().unwrap(),
                     },
                 ],
-                [ctx.width.div_ceil(16), ctx.height.div_ceil(16), 1],
+                [self.defl_w.div_ceil(16), self.defl_h.div_ceil(16), 1],
                 "BlackHole Deflection",
             );
             self.last_cam_dist = cam_dist;
             self.last_tilt = tilt_rad;
+            self.last_rotate = rotate_rad;
             self.last_scale = uv_scale;
             self.last_steps = steps;
             self.last_disk_inner = disk_inner;
@@ -215,9 +224,9 @@ impl Generator for BlackHoleGenerator {
             disk_outer,
             disk_glow,
             orbit_angle,
-            rotate_rad,
             _pad0: 0.0,
             _pad1: 0.0,
+            _pad2: 0.0,
         };
         gpu.native_enc.dispatch_compute(
             &self.display_pipeline,
@@ -250,8 +259,8 @@ impl Generator for BlackHoleGenerator {
         ctx.anim_progress
     }
 
-    fn resize(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
-        self.ensure_deflection_maps(device, width, height);
+    fn resize(&mut self, _device: &manifold_gpu::GpuDevice, _width: u32, _height: u32) {
+        // Deflection maps are at 1/4 res — recreated in ensure_deflection_maps
     }
 
     fn internal_resolution_scale(&self) -> f32 {
