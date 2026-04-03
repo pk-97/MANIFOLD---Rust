@@ -105,9 +105,9 @@ struct DisplayUniforms {
     disk_outer: f32,
     disk_glow: f32,
     aspect: f32,
+    orbit_angle: f32,
     _pad0: f32,
     _pad1: f32,
-    _pad2: f32,
 }
 
 // Compile-time layout assertions
@@ -140,14 +140,13 @@ pub struct BlackHoleGenerator {
     frame_count: u64,
     initialized: bool,
 
-    // Dirty tracking for deflection map
+    // Dirty tracking for deflection map (orbit_angle excluded — rotationally symmetric)
     last_cam_dist: f32,
     last_tilt: f32,
     last_scale: f32,
     last_steps: f32,
     last_disk_inner: f32,
     last_disk_outer: f32,
-    last_orbit_angle: f32,
 }
 
 impl BlackHoleGenerator {
@@ -208,7 +207,6 @@ impl BlackHoleGenerator {
             last_steps: f32::MIN,
             last_disk_inner: f32::MIN,
             last_disk_outer: f32::MIN,
-            last_orbit_angle: f32::MIN,
         }
     }
 
@@ -260,7 +258,6 @@ impl BlackHoleGenerator {
         steps: f32,
         disk_inner: f32,
         disk_outer: f32,
-        orbit_angle: f32,
     ) -> bool {
         const EPS: f32 = 0.001;
         (self.last_cam_dist - cam_dist).abs() > EPS
@@ -269,7 +266,6 @@ impl BlackHoleGenerator {
             || (self.last_steps - steps).abs() > 0.5
             || (self.last_disk_inner - disk_inner).abs() > EPS
             || (self.last_disk_outer - disk_outer).abs() > EPS
-            || (self.last_orbit_angle - orbit_angle).abs() > 0.001
     }
 
     fn seed_particles(&self, gpu: &mut GpuEncoder, disk_inner: f32, disk_outer: f32) {
@@ -358,7 +354,9 @@ impl Generator for BlackHoleGenerator {
         }
 
         // ── Pass 1: Deflection Map (only on param change) ──
-        if self.needs_rebake(cam_dist, tilt_rad, uv_scale, steps, disk_inner, disk_outer, orbit_angle) {
+        // Bake at orbit_angle=0 — Schwarzschild is rotationally symmetric around y.
+        // The display shader offsets disk_angle by the current orbit_angle.
+        if self.needs_rebake(cam_dist, tilt_rad, uv_scale, steps, disk_inner, disk_outer) {
             let defl_uniforms = DeflectionUniforms {
                 aspect: ctx.aspect,
                 cam_dist,
@@ -367,7 +365,7 @@ impl Generator for BlackHoleGenerator {
                 disk_inner,
                 disk_outer,
                 uv_scale,
-                orbit_angle,
+                orbit_angle: 0.0,
             };
             gpu.native_enc.dispatch_compute(
                 &self.deflection_pipeline,
@@ -391,7 +389,6 @@ impl Generator for BlackHoleGenerator {
             self.last_steps = steps;
             self.last_disk_inner = disk_inner;
             self.last_disk_outer = disk_outer;
-            self.last_orbit_angle = orbit_angle;
         }
 
         // ── Pass 2: Particle Simulation ──
@@ -498,9 +495,9 @@ impl Generator for BlackHoleGenerator {
             disk_outer,
             disk_glow,
             aspect: ctx.aspect,
+            orbit_angle,
             _pad0: 0.0,
             _pad1: 0.0,
-            _pad2: 0.0,
         };
         gpu.native_enc.dispatch_compute(
             &self.display_pipeline,

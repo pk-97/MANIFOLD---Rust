@@ -15,9 +15,9 @@ struct Uniforms {
     disk_outer: f32,
     disk_glow: f32,
     aspect: f32,
+    orbit_angle: f32,
     _pad0: f32,
     _pad1: f32,
-    _pad2: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -66,8 +66,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // ── Disk hit — sample particle density texture ──
     if disk_r > 0.1 {
+        // Offset angle by orbit rotation (deflection map baked at angle=0)
+        let rotated_angle = disk_angle + u.orbit_angle;
         // Convert disk hit (r, angle) to density texture UV
-        let angle_norm = (disk_angle + 3.14159265) / 6.28318530; // [0, 1]
+        let angle_norm = (rotated_angle + 3.14159265) / 6.28318530; // [0, 1]
         let r_norm = clamp(
             (disk_r - u.disk_inner) / (u.disk_outer - u.disk_inner),
             0.0, 1.0,
@@ -95,7 +97,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 fallback = mix(mid_col, outer_col, (t - 0.5) * 2.0);
             }
             let intensity = u.disk_glow * (u.disk_inner * u.disk_inner) / (disk_r * disk_r);
-            let swirl = 0.7 + 0.3 * sin(disk_angle * 8.0 + disk_r * 1.5 - u.time_val * 0.4);
+            let swirl = 0.7 + 0.3 * sin(rotated_angle * 8.0 + disk_r * 1.5 - u.time_val * 0.4);
             color = fallback * intensity * swirl * 0.3; // Dim fallback
         }
 
