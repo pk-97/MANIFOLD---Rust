@@ -5,6 +5,7 @@ use manifold_core::selection::SelectionRegion;
 use manifold_core::types::*;
 use manifold_core::units::Bpm;
 use manifold_core::{Beats, ClipId};
+use manifold_editing::command::Command;
 use manifold_editing::service::EditingService;
 
 fn make_project() -> Project {
@@ -628,4 +629,113 @@ fn duplicate_clips_region_mode_trims() {
     assert!((dup.duration_beats - Beats(4.0)).abs() < Beats(0.001));
     // No overlaps
     assert!(!project.timeline.layers[0].has_overlapping_clips());
+}
+
+// ─── Region Delete ───
+
+#[test]
+fn delete_region_straddles_both_boundaries() {
+    // Clip [0..8], region [2..6] → delete interior [2..6], keep [0..2] and [6..8]
+    let mut project = make_project();
+    let id1 = add_clip(&mut project, 0, 0.0, 8.0);
+
+    let region = make_region(&project, 2.0, 6.0, 0, 0);
+    let spb = 60.0 / project.settings.bpm.0;
+    let cmds = EditingService::delete_clips(&project, &[id1.clone()], Some(&region), spb);
+    assert!(!cmds.is_empty(), "should produce split + delete commands");
+
+    let mut service = EditingService::new();
+    service.execute_batch(cmds, "del".into(), &mut project);
+
+    // Should have 2 clips: [0..2] and [6..8]
+    let clips = &project.timeline.layers[0].clips;
+    assert_eq!(clips.len(), 2, "expected 2 clips, got {}", clips.len());
+
+    let mut sorted: Vec<_> = clips.iter().collect();
+    sorted.sort_by(|a, b| a.start_beat.partial_cmp(&b.start_beat).unwrap());
+
+    assert!((sorted[0].start_beat - Beats(0.0)).abs() < Beats(0.001));
+    assert!((sorted[0].end_beat() - Beats(2.0)).abs() < Beats(0.001));
+    assert!((sorted[1].start_beat - Beats(6.0)).abs() < Beats(0.001));
+    assert!((sorted[1].end_beat() - Beats(8.0)).abs() < Beats(0.001));
+}
+
+#[test]
+fn delete_region_straddles_start_only() {
+    // Clip [0..4], region [2..6] → delete interior [2..4], keep [0..2]
+    let mut project = make_project();
+    let _id1 = add_clip(&mut project, 0, 0.0, 4.0);
+
+    let region = make_region(&project, 2.0, 6.0, 0, 0);
+    let spb = 60.0 / project.settings.bpm.0;
+    let cmds = EditingService::delete_clips(&project, &[], Some(&region), spb);
+
+    let mut service = EditingService::new();
+    service.execute_batch(cmds, "del".into(), &mut project);
+
+    let clips = &project.timeline.layers[0].clips;
+    assert_eq!(clips.len(), 1, "expected 1 clip, got {}", clips.len());
+    assert!((clips[0].start_beat - Beats(0.0)).abs() < Beats(0.001));
+    assert!((clips[0].end_beat() - Beats(2.0)).abs() < Beats(0.001));
+}
+
+#[test]
+fn delete_region_straddles_end_only() {
+    // Clip [4..10], region [2..6] → delete interior [4..6], keep [6..10]
+    let mut project = make_project();
+    let _id1 = add_clip(&mut project, 0, 4.0, 6.0);
+
+    let region = make_region(&project, 2.0, 6.0, 0, 0);
+    let spb = 60.0 / project.settings.bpm.0;
+    let cmds = EditingService::delete_clips(&project, &[], Some(&region), spb);
+
+    let mut service = EditingService::new();
+    service.execute_batch(cmds, "del".into(), &mut project);
+
+    let clips = &project.timeline.layers[0].clips;
+    assert_eq!(clips.len(), 1, "expected 1 clip, got {}", clips.len());
+    assert!((clips[0].start_beat - Beats(6.0)).abs() < Beats(0.001));
+    assert!((clips[0].end_beat() - Beats(10.0)).abs() < Beats(0.001));
+}
+
+#[test]
+fn delete_region_clip_fully_inside() {
+    // Clip [3..5], region [2..6] → delete entirely
+    let mut project = make_project();
+    let _id1 = add_clip(&mut project, 0, 3.0, 2.0);
+
+    let region = make_region(&project, 2.0, 6.0, 0, 0);
+    let spb = 60.0 / project.settings.bpm.0;
+    let cmds = EditingService::delete_clips(&project, &[], Some(&region), spb);
+
+    let mut service = EditingService::new();
+    service.execute_batch(cmds, "del".into(), &mut project);
+
+    let clips = &project.timeline.layers[0].clips;
+    assert_eq!(clips.len(), 0, "expected 0 clips, got {}", clips.len());
+}
+
+#[test]
+fn delete_region_undo_restores_original() {
+    // Clip [0..8], region [2..6] → delete → undo → original [0..8] restored
+    let mut project = make_project();
+    let id1 = add_clip(&mut project, 0, 0.0, 8.0);
+
+    let region = make_region(&project, 2.0, 6.0, 0, 0);
+    let spb = 60.0 / project.settings.bpm.0;
+    let cmds = EditingService::delete_clips(&project, &[id1.clone()], Some(&region), spb);
+
+    let mut service = EditingService::new();
+    service.execute_batch(cmds, "del".into(), &mut project);
+    assert_eq!(project.timeline.layers[0].clips.len(), 2);
+
+    // Undo
+    service.undo(&mut project);
+
+    let clips = &project.timeline.layers[0].clips;
+    assert_eq!(clips.len(), 1, "undo should restore to 1 clip, got {}", clips.len());
+    let clip = &clips[0];
+    assert_eq!(clip.id, id1);
+    assert!((clip.start_beat - Beats(0.0)).abs() < Beats(0.001));
+    assert!((clip.duration_beats - Beats(8.0)).abs() < Beats(0.001));
 }

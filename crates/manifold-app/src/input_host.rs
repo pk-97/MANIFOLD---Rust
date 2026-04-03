@@ -684,7 +684,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                     manifold_core::Beats::from_f32(beat),
                     spb,
                 ) {
-                    commands.push(cmd);
+                    commands.push(Box::new(cmd));
                 }
             }
             if !commands.is_empty() {

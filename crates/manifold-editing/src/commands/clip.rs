@@ -589,6 +589,11 @@ impl SplitClipCommand {
             tail_clip,
         }
     }
+
+    /// The clip ID of the tail (right) segment created by the split.
+    pub fn tail_clip_id(&self) -> &ClipId {
+        &self.tail_clip.id
+    }
 }
 
 impl Command for SplitClipCommand {

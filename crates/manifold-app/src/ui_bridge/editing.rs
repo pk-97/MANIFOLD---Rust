@@ -141,7 +141,7 @@ pub(super) fn dispatch_editing(
                     EditingService::split_clip_at_beat(project, clip_id, Beats::from_f32(beat), spb)
                 {
                     {
-                        ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
+                        ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                     }
                 }
             }

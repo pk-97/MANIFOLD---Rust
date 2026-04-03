@@ -475,7 +475,7 @@ impl EditingService {
         clip_id: &str,
         split_beat: Beats,
         spb: f32,
-    ) -> Option<Box<dyn Command>> {
+    ) -> Option<SplitClipCommand> {
         for layer in &project.timeline.layers {
             if let Some(clip) = layer.find_clip(clip_id) {
                 if split_beat <= clip.start_beat || split_beat >= clip.end_beat() {
@@ -492,13 +492,13 @@ impl EditingService {
                 if !clip.video_clip_id.is_empty() && clip.duration_beats > Beats::ZERO {
                     tail.in_point = clip.in_point + Seconds(new_duration.0 * spb as f64);
                 }
-                return Some(Box::new(SplitClipCommand::new(
+                return Some(SplitClipCommand::new(
                     clip.id.clone(),
                     layer.layer_id.clone(),
                     clip.duration_beats,
                     new_duration,
                     tail,
-                )));
+                ));
             }
         }
         None
@@ -512,7 +512,25 @@ impl EditingService {
         region: &SelectionRegion,
         spb: f32,
     ) -> Vec<Box<dyn Command>> {
+        Self::split_clips_at_region_boundaries_with_interior(project, region, spb).0
+    }
+
+    /// Split clips at region boundaries AND return the post-split interior clip IDs.
+    ///
+    /// The interior IDs are the clip IDs that will represent the region-interior
+    /// segments AFTER the split commands have executed:
+    /// - Both boundaries split → tail from the start split (new ID)
+    /// - Only start split → tail from the start split (new ID)
+    /// - Only end split → original clip ID (shortened to interior)
+    /// - Fully inside → original clip ID (unchanged)
+    #[allow(clippy::type_complexity)]
+    pub fn split_clips_at_region_boundaries_with_interior(
+        project: &Project,
+        region: &SelectionRegion,
+        spb: f32,
+    ) -> (Vec<Box<dyn Command>>, Vec<(usize, ClipId)>) {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
+        let mut interior_ids: Vec<(usize, ClipId)> = Vec::new();
 
         let layer_count = project.timeline.layers.len();
         let (start_layer, end_layer) = region
@@ -546,24 +564,39 @@ impl EditingService {
                     continue;
                 }
 
+                let straddles_end = clip.end_beat() > region_end;
+                let straddles_start = clip.start_beat < region_start;
+
                 // Split at region end FIRST (so the original's EndBeat is still valid
                 // when we split at region start)
-                if clip.end_beat() > region_end
+                if straddles_end
                     && let Some(cmd) = Self::split_clip_at_beat(project, clip_id, region_end, spb)
                 {
-                    commands.push(cmd);
+                    commands.push(Box::new(cmd));
                 }
 
                 // Split at region start
-                if clip.start_beat < region_start
+                let start_split_tail_id = if straddles_start
                     && let Some(cmd) = Self::split_clip_at_beat(project, clip_id, region_start, spb)
                 {
-                    commands.push(cmd);
-                }
+                    // The tail from this split IS the interior piece
+                    let tail_id = cmd.tail_clip_id().clone();
+                    commands.push(Box::new(cmd));
+                    Some(tail_id)
+                } else {
+                    None
+                };
+
+                // Determine the interior clip ID:
+                // - If we split at start, the tail is the interior piece
+                // - Otherwise, the original clip ID is the interior piece
+                //   (either shortened by end-split, or fully inside)
+                let interior_id = start_split_tail_id.unwrap_or_else(|| clip_id.clone());
+                interior_ids.push((li, interior_id));
             }
         }
 
-        commands
+        (commands, interior_ids)
     }
 
     // ─── Trim clip to region ───
@@ -724,16 +757,55 @@ impl EditingService {
         if let Some(region) = region
             && region.is_active
         {
-            // Region mode: split at boundaries, then delete clips inside region
-            let split_cmds = Self::split_clips_at_region_boundaries(project, region, spb);
+            // Region mode: split at boundaries, then delete interior clips.
+            // We must determine interior IDs at split-build time (not from
+            // the pre-split project), because splits change which ID maps to
+            // which segment.
+            let (split_cmds, interior_ids) =
+                Self::split_clips_at_region_boundaries_with_interior(project, region, spb);
             commands.extend(split_cmds);
 
-            // After splits, collect clips fully inside the region
-            let clips_in_region = Self::get_clips_in_region(project, region);
-            for (li, clip_id) in &clips_in_region {
-                if let Some(clip) = project.timeline.layers[*li].find_clip(clip_id) {
-                    let lid = project.timeline.layers[*li].layer_id.clone();
+            // Build delete commands for the interior clips.
+            // For clips that were split, we need the pre-split clip data to
+            // construct DeleteClipCommand (it stores the full clip for undo).
+            // The interior ID is either the original (if no start-split) or
+            // a new tail (if start-split). For new tails we build a synthetic
+            // clip snapshot matching what the tail will look like after splits.
+            for (li, interior_id) in &interior_ids {
+                let layer = &project.timeline.layers[*li];
+                let lid = layer.layer_id.clone();
+
+                if let Some(clip) = layer.find_clip(interior_id) {
+                    // Interior is the original clip (only end-split or fully inside):
+                    // After splits, its duration may shrink but its ID stays.
+                    // The delete command records the PRE-split state for undo;
+                    // that's fine because undo reverses splits after re-adding.
                     commands.push(Box::new(DeleteClipCommand::new(clip.clone(), lid)));
+                } else {
+                    // Interior is a NEW tail from a start-split. It doesn't exist
+                    // in the project yet — find the original clip and build the
+                    // trimmed interior snapshot that the split will produce.
+                    // The original clip ID is the one that was split (the clip on
+                    // this layer that overlaps the region).
+                    let region_start = region.start_beat;
+                    let region_end = region.end_beat;
+                    if let Some(orig) = layer.clips.iter().find(|c| {
+                        c.start_beat < region_start && c.end_beat() > region_start
+                    }) {
+                        let tail_end = orig.end_beat().min(region_end);
+                        let mut interior_clip = orig.clone();
+                        interior_clip.id = interior_id.clone();
+                        interior_clip.start_beat = region_start;
+                        interior_clip.duration_beats = tail_end - region_start;
+                        if !orig.video_clip_id.is_empty()
+                            && orig.duration_beats > Beats::ZERO
+                        {
+                            let offset = region_start - orig.start_beat;
+                            interior_clip.in_point =
+                                orig.in_point + Seconds(offset.0 * spb as f64);
+                        }
+                        commands.push(Box::new(DeleteClipCommand::new(interior_clip, lid)));
+                    }
                 }
             }
 
@@ -1098,9 +1170,7 @@ impl EditingService {
         region: &SelectionRegion,
         spb: f32,
     ) -> (Vec<Box<dyn Command>>, Vec<(usize, ClipId)>) {
-        let split_cmds = Self::split_clips_at_region_boundaries(project, region, spb);
-        let interior = Self::get_clips_in_region(project, region);
-        (split_cmds, interior)
+        Self::split_clips_at_region_boundaries_with_interior(project, region, spb)
     }
 
     /// Split selected clips at a given beat (playhead).
@@ -1121,18 +1191,8 @@ impl EditingService {
                     continue;
                 }
                 if let Some(cmd) = Self::split_clip_at_beat(project, &clip.id, split_beat, spb) {
-                    // The tail clip ID is generated by SplitClipCommand internally;
-                    // caller can find it by looking for new clips after the split beat.
-                    commands.push(cmd);
-                }
-            }
-        }
-
-        // Find tail clip IDs after split (clips starting at split_beat on same layers)
-        for layer in &project.timeline.layers {
-            for clip in &layer.clips {
-                if (clip.start_beat - split_beat).abs() < Beats(0.001) {
-                    tail_clip_ids.push(clip.id.clone());
+                    tail_clip_ids.push(cmd.tail_clip_id().clone());
+                    commands.push(Box::new(cmd));
                 }
             }
         }
