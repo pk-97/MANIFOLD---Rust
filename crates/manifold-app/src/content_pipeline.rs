@@ -518,6 +518,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 is_solo: layer.is_solo,
                 effects: layer.effects.as_deref().unwrap_or(empty_effects),
                 effect_groups: layer.effect_groups.as_deref().unwrap_or(empty_groups),
+                parent_layer_id: layer.parent_layer_id.clone(),
+                is_group: layer.is_group(),
             })
             .collect();
 

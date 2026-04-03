@@ -245,6 +245,13 @@ fn layer_id_owner_key(layer_id: &manifold_core::LayerId) -> i64 {
     (hasher.finish() | (1 << 63)) as i64
 }
 
+fn group_id_owner_key(layer_id: &manifold_core::LayerId) -> i64 {
+    let mut hasher = DefaultHasher::new();
+    layer_id.hash(&mut hasher);
+    // Bit 62 for groups (bit 63 is used for layers)
+    (hasher.finish() | (1 << 62)) as i64
+}
+
 /// Count active (non-muted, non-solo-hidden) layers in the frame.
 fn count_active_layers(frame: &CompositorFrame) -> usize {
     let clips = frame.clips;
@@ -296,6 +303,8 @@ pub(crate) struct LayerOutput {
     blend_mode: BlendMode,
     /// Layer opacity (includes per-clip opacity for single-clip layers).
     opacity: f32,
+    /// Source layer index (for group folding — correlates with layer descriptors).
+    layer_index: i32,
 }
 
 // Safety: LayerOutput is only used within the compositor on the content thread.
@@ -361,6 +370,11 @@ pub struct LayerCompositor {
     last_layer_buf_used: usize,
     /// How many effect_chains were actually used last frame.
     last_effect_chain_used: usize,
+    /// Scratch buffer for group compositing (lazy, transparent black init).
+    /// Reused across groups within a frame and across frames.
+    group_buf: Option<PingPong>,
+    /// Effect chain for group-level effects.
+    group_effect_chain: Option<EffectChain>,
 }
 
 impl LayerCompositor {
@@ -382,6 +396,8 @@ impl LayerCompositor {
             async_signal_base: 0,
             last_layer_buf_used: 0,
             last_effect_chain_used: 0,
+            group_buf: None,
+            group_effect_chain: None,
         }
     }
 
@@ -568,6 +584,7 @@ impl LayerCompositor {
                     texture: clip.texture,
                     blend_mode: layer_blend,
                     opacity: layer_opacity * clip.opacity,
+                    layer_index: layer_idx,
                 });
             } else {
                 // Multi-clip or layer-effects: composite into layer buffer
@@ -636,6 +653,7 @@ impl LayerCompositor {
                     texture: effective_layer_tex,
                     blend_mode: layer_blend,
                     opacity: layer_opacity,
+                    layer_index: layer_idx,
                 });
             }
         }
@@ -672,11 +690,147 @@ impl LayerCompositor {
         }
     }
 
+    /// Fold group children into single LayerOutputs.
+    ///
+    /// For each group layer that has children in layer_outputs_scratch:
+    /// 1. Composite child outputs into a group scratch buffer
+    /// 2. Apply group-level effects
+    /// 3. Replace child entries with a single output carrying the group's blend/opacity
+    ///
+    /// No-op when no groups exist (single boolean check).
+    fn fold_groups(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) {
+        // Early exit: no groups → nothing to fold
+        if !frame.layers.iter().any(|l| l.is_group) {
+            return;
+        }
+
+        let width = self.main.width();
+        let height = self.main.height();
+
+        // Process each group. Groups are processed in the order they appear in
+        // frame.layers (which matches timeline order). Since outputs are sorted
+        // descending by layer_index, children of a group are contiguous.
+        for group_desc in frame.layers.iter().filter(|l| l.is_group) {
+            // Find child layer_indices for this group
+            let child_indices: Vec<i32> = frame
+                .layers
+                .iter()
+                .filter(|l| l.parent_layer_id.as_ref() == Some(&group_desc.layer_id))
+                .map(|l| l.layer_index)
+                .collect();
+
+            if child_indices.is_empty() {
+                continue;
+            }
+
+            // Find which outputs belong to children of this group
+            let child_output_positions: Vec<usize> = self
+                .layer_outputs_scratch
+                .iter()
+                .enumerate()
+                .filter(|(_, o)| child_indices.contains(&o.layer_index))
+                .map(|(i, _)| i)
+                .collect();
+
+            if child_output_positions.is_empty() {
+                continue;
+            }
+
+            // Ensure group buffer exists (lazy allocation)
+            if self.group_buf.is_none() {
+                self.group_buf = Some(PingPong::new(
+                    gpu.device,
+                    gpu.pool,
+                    width,
+                    height,
+                    "Group Scratch",
+                ));
+            }
+            let group_buf = self.group_buf.as_mut().unwrap();
+
+            // Clear to transparent
+            group_buf.clear_source(gpu, false);
+
+            // Blend children into group buffer (using each child's own blend/opacity)
+            for &pos in &child_output_positions {
+                let output = &self.layer_outputs_scratch[pos];
+                let uniforms = BlendUniforms {
+                    blend_mode: output.blend_mode as u32,
+                    opacity: output.opacity,
+                    _pad0: 0,
+                    _pad1: 0,
+                };
+                self.blend.blend_pass(
+                    gpu,
+                    &mut self.uniform_arena,
+                    group_buf.source_texture(),
+                    output.texture(),
+                    group_buf.target_texture(),
+                    &uniforms,
+                );
+                group_buf.swap();
+            }
+
+            // Apply group-level effects (if any)
+            let group_texture: *const GpuTexture =
+                if has_enabled_effects(group_desc.effects) {
+                    if self.group_effect_chain.is_none() {
+                        self.group_effect_chain = Some(EffectChain::new());
+                    }
+                    let effect_chain = self.group_effect_chain.as_mut().unwrap();
+                    let ctx = EffectContext {
+                        time: frame.time,
+                        beat: frame.beat,
+                        dt: frame.dt,
+                        width,
+                        height,
+                        output_width: frame.output_width,
+                        output_height: frame.output_height,
+                        owner_key: group_id_owner_key(&group_desc.layer_id),
+                        is_clip_level: false,
+                        edge_stretch_width: 0.5625,
+                        frame_count: frame.frame_count as i64,
+                    };
+                    let result = Self::apply_effects(
+                        effect_chain,
+                        &mut self.effect_registry,
+                        &self.wet_dry_lerp,
+                        gpu,
+                        group_buf.source_texture(),
+                        group_desc.effects,
+                        group_desc.effect_groups,
+                        &ctx,
+                    );
+                    result.map_or(group_buf.source_texture() as *const _, |t| {
+                        t as *const _
+                    })
+                } else {
+                    group_buf.source_texture()
+                };
+
+            // Replace child outputs with a single group output.
+            // Insert group output at the first child's position, remove the rest.
+            let first_pos = child_output_positions[0];
+            self.layer_outputs_scratch[first_pos] = LayerOutput {
+                texture: group_texture,
+                blend_mode: group_desc.blend_mode,
+                opacity: group_desc.opacity,
+                layer_index: group_desc.layer_index,
+            };
+
+            // Remove remaining child entries (iterate in reverse to preserve indices)
+            for &pos in child_output_positions[1..].iter().rev() {
+                self.layer_outputs_scratch.remove(pos);
+            }
+        }
+    }
+
     /// Serial composite path: single encoder for all work.
     /// Used when only 1 active layer (no parallel benefit).
     fn composite_serial(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) {
         self.uniform_arena.reset();
         self.generate_layers(gpu, frame);
+        self.fold_groups(gpu, frame);
         // Safety: layer_outputs_scratch contains raw pointers to textures owned
         // by effect chains, layer bufs, or clip render targets — all valid for
         // the frame duration. Using a raw pointer avoids a split-borrow conflict
@@ -812,6 +966,7 @@ impl LayerCompositor {
                         texture: clip.texture,
                         blend_mode: layer_blend,
                         opacity: layer_opacity * clip.opacity,
+                        layer_index: layer_idx,
                     });
                 } else {
                     let lb_idx = layer_buf_idx;
@@ -876,6 +1031,7 @@ impl LayerCompositor {
                         texture: effective_layer_tex,
                         blend_mode: layer_blend,
                         opacity: layer_opacity,
+                        layer_index: layer_idx,
                     });
                 }
             } // gpu wrapper drops here, releasing borrow on layer_enc
@@ -901,6 +1057,9 @@ impl LayerCompositor {
                 .native_enc
                 .wait_event(unsafe { &*async_event }, final_signal);
         }
+
+        // Fold group children into single outputs before blending.
+        self.fold_groups(compositor_gpu, frame);
 
         // Serial blend phase on the compositor command buffer.
         // Safety: layer_outputs_scratch is populated above and not modified during blend.
@@ -1040,6 +1199,12 @@ impl Compositor for LayerCompositor {
         }
         self.effect_registry.resize_all(device, width, height);
         self.tonemap.resize(device, width, height);
+        if let Some(gb) = &mut self.group_buf {
+            gb.resize(device, width, height);
+        }
+        if let Some(ec) = &mut self.group_effect_chain {
+            ec.resize(device, width, height);
+        }
         // LED tap will be recreated at new size on next frame if needed.
         self.led_tap = None;
     }

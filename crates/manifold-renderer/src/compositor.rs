@@ -15,6 +15,10 @@ pub struct CompositeLayerDescriptor<'a> {
     pub is_solo: bool,
     pub effects: &'a [EffectInstance],
     pub effect_groups: &'a [EffectGroup],
+    /// Parent group layer ID (None for root layers).
+    pub parent_layer_id: Option<LayerId>,
+    /// Whether this layer is a group container.
+    pub is_group: bool,
 }
 
 /// Frame context passed to the compositor each tick.
