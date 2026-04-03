@@ -97,10 +97,11 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let uv = vec2<f32>(f32(gid.x) / u.width, f32(gid.y) / u.height);
 
     // TD Noise TOP: period = noise_scale, amplitude = 0.3, offset = 0.5
-    // Translate Z = absTime.seconds * noise_speed
+    // Center UV so noise scales from the middle, not top-left corner.
+    let centered = uv - vec2(0.5);
     let noise_pos = vec3<f32>(
-        uv.x / u.noise_scale,
-        uv.y / u.noise_scale,
+        centered.x / u.noise_scale,
+        centered.y / u.noise_scale,
         u.time * u.noise_speed,
     );
     // simplex3d returns [-1, 1]. Apply TD amplitude (0.3) and offset (0.5).

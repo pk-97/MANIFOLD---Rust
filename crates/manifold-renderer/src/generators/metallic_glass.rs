@@ -13,9 +13,9 @@ use crate::generators::mesh_pipeline;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::GeneratorTypeId;
 
-const GRID_SIZE: u32 = 500;
+const GRID_SIZE: u32 = 1000;
 const GRID_QUADS: u32 = GRID_SIZE - 1;
-const VERTEX_COUNT: u32 = GRID_QUADS * GRID_QUADS * 6; // 1,494,006
+const VERTEX_COUNT: u32 = GRID_QUADS * GRID_QUADS * 6; // 5,988,006
 
 // Parameter indices (must match generator_definition_registry order)
 const P_FEEDBACK: usize = 0;
