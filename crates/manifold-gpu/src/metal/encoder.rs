@@ -349,6 +349,9 @@ impl GpuEncoder {
                     let Some(slot) = pipeline.slot_map.get(*b) else {
                         continue;
                     };
+                    // Bind to both stages — vertex shaders may sample textures
+                    // (e.g. displacement maps). Metal ignores unused bindings.
+                    enc.set_vertex_texture(slot.metal_index as _, Some(&texture.raw));
                     enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
                 }
                 GpuBinding::Sampler {
@@ -358,6 +361,7 @@ impl GpuEncoder {
                     let Some(slot) = pipeline.slot_map.get(*b) else {
                         continue;
                     };
+                    enc.set_vertex_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                     enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                 }
                 GpuBinding::Bytes { binding: b, data } => {
@@ -439,6 +443,9 @@ impl GpuEncoder {
                     let Some(slot) = pipeline.slot_map.get(*b) else {
                         continue;
                     };
+                    // Bind to both stages — vertex shaders may sample textures
+                    // (e.g. displacement maps). Metal ignores unused bindings.
+                    enc.set_vertex_texture(slot.metal_index as _, Some(&texture.raw));
                     enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
                 }
                 GpuBinding::Sampler {
@@ -448,6 +455,7 @@ impl GpuEncoder {
                     let Some(slot) = pipeline.slot_map.get(*b) else {
                         continue;
                     };
+                    enc.set_vertex_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                     enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                 }
                 GpuBinding::Bytes { binding: b, data } => {
@@ -521,6 +529,9 @@ impl GpuEncoder {
                     let Some(slot) = pipeline.slot_map.get(*b) else {
                         continue;
                     };
+                    // Bind to both stages — vertex shaders may sample textures
+                    // (e.g. displacement maps). Metal ignores unused bindings.
+                    enc.set_vertex_texture(slot.metal_index as _, Some(&texture.raw));
                     enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
                 }
                 GpuBinding::Sampler {
@@ -530,6 +541,7 @@ impl GpuEncoder {
                     let Some(slot) = pipeline.slot_map.get(*b) else {
                         continue;
                     };
+                    enc.set_vertex_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                     enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                 }
                 GpuBinding::Bytes { binding: b, data } => {
@@ -616,6 +628,9 @@ impl GpuEncoder {
                     let Some(slot) = pipeline.slot_map.get(*b) else {
                         continue;
                     };
+                    // Bind to both stages — vertex shaders may sample textures
+                    // (e.g. displacement maps). Metal ignores unused bindings.
+                    enc.set_vertex_texture(slot.metal_index as _, Some(&texture.raw));
                     enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
                 }
                 GpuBinding::Sampler {
@@ -625,6 +640,7 @@ impl GpuEncoder {
                     let Some(slot) = pipeline.slot_map.get(*b) else {
                         continue;
                     };
+                    enc.set_vertex_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                     enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                 }
                 GpuBinding::Bytes { binding: b, data } => {
@@ -735,6 +751,9 @@ impl GpuEncoder {
                     let Some(slot) = pipeline.slot_map.get(*b) else {
                         continue;
                     };
+                    // Bind to both stages — vertex shaders may sample textures
+                    // (e.g. displacement maps). Metal ignores unused bindings.
+                    enc.set_vertex_texture(slot.metal_index as _, Some(&texture.raw));
                     enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
                 }
                 GpuBinding::Sampler {
@@ -744,6 +763,7 @@ impl GpuEncoder {
                     let Some(slot) = pipeline.slot_map.get(*b) else {
                         continue;
                     };
+                    enc.set_vertex_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                     enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                 }
                 GpuBinding::Bytes { binding: b, data } => {
@@ -860,6 +880,9 @@ impl GpuEncoder {
                     let Some(slot) = pipeline.slot_map.get(*b) else {
                         continue;
                     };
+                    // Bind to both stages — vertex shaders may sample textures
+                    // (e.g. displacement maps). Metal ignores unused bindings.
+                    enc.set_vertex_texture(slot.metal_index as _, Some(&texture.raw));
                     enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
                 }
                 GpuBinding::Sampler {
@@ -869,6 +892,7 @@ impl GpuEncoder {
                     let Some(slot) = pipeline.slot_map.get(*b) else {
                         continue;
                     };
+                    enc.set_vertex_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                     enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                 }
                 GpuBinding::Bytes { binding: b, data } => {
@@ -1026,7 +1050,10 @@ impl GpuEncoder {
                     let idx = slot.metal_index as usize;
                     let id = texture_identity(&texture.raw);
                     if idx >= CACHE_SLOTS || self.render_cache.frag_textures[idx] != id {
-                        enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
+                        // Bind to both stages — vertex shaders may sample textures
+                    // (e.g. displacement maps). Metal ignores unused bindings.
+                    enc.set_vertex_texture(slot.metal_index as _, Some(&texture.raw));
+                    enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
                         if idx < CACHE_SLOTS {
                             self.render_cache.frag_textures[idx] = id;
                         }
@@ -1042,7 +1069,8 @@ impl GpuEncoder {
                     let idx = slot.metal_index as usize;
                     let id = sampler_identity(&sampler.raw);
                     if idx >= CACHE_SLOTS || self.render_cache.frag_samplers[idx] != id {
-                        enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
+                        enc.set_vertex_sampler_state(slot.metal_index as _, Some(&sampler.raw));
+                    enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                         if idx < CACHE_SLOTS {
                             self.render_cache.frag_samplers[idx] = id;
                         }
