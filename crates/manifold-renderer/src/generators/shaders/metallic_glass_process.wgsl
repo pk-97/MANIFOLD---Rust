@@ -47,17 +47,23 @@ fn sobel(pos: vec2<i32>, w: i32, h: i32) -> f32 {
 // ─── Mirror ────────────────────────────────────────────────────────
 
 fn mirror_uv(uv: vec2<f32>, angle: f32) -> vec2<f32> {
+    // TD Mirror TOP: single-axis mirror at the specified angle.
+    // Reflects across ONE line through the pivot, creating 2-fold symmetry.
     let centered = uv - vec2(0.5);
 
     let ca = cos(angle);
     let sa = sin(angle);
+
+    // Rotate so mirror axis aligns with X
     let rotated = vec2<f32>(
         centered.x * ca - centered.y * sa,
         centered.x * sa + centered.y * ca,
     );
 
-    let folded = abs(rotated);
+    // Fold Y only (mirror across the rotated X axis)
+    let folded = vec2<f32>(rotated.x, abs(rotated.y));
 
+    // Rotate back
     let unrotated = vec2<f32>(
         folded.x * ca + folded.y * sa,
         -folded.x * sa + folded.y * ca,
