@@ -101,19 +101,22 @@ fn star_field(dir: vec3<f32>, brightness: f32) -> vec3<f32> {
     var stars = vec3<f32>(0.0);
 
     // Layer 1: bright stars
-    stars += star_layer(theta, phi, 18.0, 0.92, 2.0, 0.0);
+    stars += star_layer(theta, phi, 20.0, 0.85, 2.5, 0.0);
 
     // Layer 2: medium density
-    stars += star_layer(theta, phi, 35.0, 0.93, 0.8, 100.0);
+    stars += star_layer(theta, phi, 45.0, 0.85, 1.0, 100.0);
 
-    // Layer 3: faint dense field
-    stars += star_layer(theta, phi, 70.0, 0.94, 0.3, 200.0);
+    // Layer 3: dense field
+    stars += star_layer(theta, phi, 90.0, 0.88, 0.4, 200.0);
 
-    // Subtle galactic band (milky way feel)
+    // Layer 4: very dense faint background
+    stars += star_layer(theta, phi, 160.0, 0.90, 0.15, 300.0);
+
+    // Galactic band (milky way feel)
     let band_center = 1.5708;
-    let band = exp(-(theta - band_center) * (theta - band_center) * 4.0);
+    let band = exp(-(theta - band_center) * (theta - band_center) * 3.0);
     let band_detail = noise2d(vec2<f32>(phi * 2.5 + 10.0, theta * 4.0)) * 0.6 + 0.3;
-    stars += vec3<f32>(0.025, 0.02, 0.04) * band * band_detail;
+    stars += vec3<f32>(0.04, 0.035, 0.06) * band * band_detail;
 
     return stars * brightness;
 }
@@ -244,7 +247,9 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var total_opacity = 0.0;
 
     // ── First crossing (front disk) — composited over stars ──
-    if c1_r > 0.1 {
+    // Opacity threshold filters half-res interpolation artifacts where
+    // "no crossing" (c1_r=0) bleeds into real crossings via bilinear.
+    if c1_r > 0.1 && c1_op > 0.02 {
         let disk_col = shade_disk(c1_r, c1_ca, c1_sa, false) * c1_op;
         // Disk gas absorbs background starlight proportional to opacity
         color = color * (1.0 - c1_op * 0.85) + disk_col;
@@ -254,10 +259,12 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // ── Second crossing (lensed back) ──
     if c2_r > 0.1 {
         let c2_op = disk_opacity_from_r(c2_r);
-        let remaining = max(1.0 - total_opacity * 0.6, 0.0);
-        let disk_col = shade_disk(c2_r, c2_ca, c2_sa, true) * c2_op * remaining;
-        color = color * (1.0 - c2_op * remaining * 0.5) + disk_col;
-        total_opacity = clamp(total_opacity + c2_op * 0.5, 0.0, 1.0);
+        if c2_op > 0.02 {
+            let remaining = max(1.0 - total_opacity * 0.6, 0.0);
+            let disk_col = shade_disk(c2_r, c2_ca, c2_sa, true) * c2_op * remaining;
+            color = color * (1.0 - c2_op * remaining * 0.5) + disk_col;
+            total_opacity = clamp(total_opacity + c2_op * 0.5, 0.0, 1.0);
+        }
     }
 
     // ── Photon ring ──
