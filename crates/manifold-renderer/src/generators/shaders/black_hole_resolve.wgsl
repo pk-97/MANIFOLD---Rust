@@ -1,7 +1,7 @@
-// Black Hole — Scatter Resolve
+// Black Hole — Screen-Space Resolve
 //
 // Converts atomic accumulator → RGBA density texture + self-clear.
-// Separate file from scatter to avoid naga uniform size mismatch.
+// Output is at render resolution (same as display target).
 
 struct ResolveUniforms {
     tex_w: u32,
@@ -11,7 +11,7 @@ struct ResolveUniforms {
 };
 
 @group(0) @binding(0) var<storage, read_write> accum: array<atomic<u32>>;
-@group(0) @binding(1) var disk_density: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(1) var density_out: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(2) var<uniform> params: ResolveUniforms;
 
 @compute @workgroup_size(16, 16)
@@ -24,26 +24,9 @@ fn resolve(@builtin(global_invocation_id) gid: vec3<u32>) {
     let raw = atomicLoad(&accum[idx]);
     let density = f32(raw) / 4096.0;
 
-    // Color based on radial position (Y axis = radius)
-    let r_norm = f32(gid.y) / f32(params.tex_h);
+    // Density as monochrome emission (display shader applies final color)
+    textureStore(density_out, gid.xy, vec4<f32>(density, density, density, density));
 
-    // Temperature gradient
-    let inner_col = vec3<f32>(1.0, 0.95, 0.85);
-    let mid_col = vec3<f32>(1.0, 0.55, 0.15);
-    let outer_col = vec3<f32>(0.6, 0.12, 0.02);
-    var col: vec3<f32>;
-    if r_norm < 0.5 {
-        col = mix(inner_col, mid_col, r_norm * 2.0);
-    } else {
-        col = mix(mid_col, outer_col, (r_norm - 0.5) * 2.0);
-    }
-
-    // Apply density as emission intensity
-    let intensity = density * (1.0 + (1.0 - r_norm) * 3.0);
-    col *= intensity;
-
-    textureStore(disk_density, gid.xy, vec4<f32>(col, density));
-
-    // Self-clear for next frame
+    // Self-clear
     atomicStore(&accum[idx], 0u);
 }

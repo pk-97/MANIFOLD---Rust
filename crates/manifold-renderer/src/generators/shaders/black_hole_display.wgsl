@@ -1,16 +1,9 @@
 // Black Hole — Display Pass
 //
-// Samples precomputed deflection map + live particle disk density.
+// Composites: deflection map (lensing geometry) + screen-space particle density.
 //
-// Deflection map (Rgba32Float):
-//   R: final radius (0 = absorbed)
-//   G: disk crossing radius (0 = no disk)
-//   B: disk crossing angle (world-space atan2)
-//   A: accumulated disk opacity
-//
-// Disk density (Rgba16Float, polar-mapped):
-//   RGB: particle-colored emission
-//   A: density value
+// Deflection map (Rgba32Float): R=final_r, G=disk_r, B=disk_angle, A=disk_opacity
+// Particle density (Rgba16Float): R=density at this screen pixel
 
 struct Uniforms {
     time_val: f32,
@@ -25,11 +18,11 @@ struct Uniforms {
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var deflection_map: texture_2d<f32>;
-@group(0) @binding(2) var disk_density: texture_2d<f32>;
+@group(0) @binding(2) var particle_density: texture_2d<f32>;
 @group(0) @binding(3) var s_linear: sampler;
 @group(0) @binding(4) var output: texture_storage_2d<rgba16float, write>;
 
-// Star field background
+// Star field
 fn star_field(seed1: f32, seed2: f32) -> vec3<f32> {
     let p = vec3<f32>(seed1 * 400.0, seed2 * 400.0, seed1 * seed2 * 200.0);
     let cell = floor(p);
@@ -43,6 +36,18 @@ fn star_field(seed1: f32, seed2: f32) -> vec3<f32> {
         0.9 + 0.1 * fract(h * 41.1),
     );
     return tint * brightness;
+}
+
+// Disk emission color from radius
+fn disk_emission(disk_r: f32) -> vec3<f32> {
+    let t = clamp((disk_r - u.disk_inner) / (u.disk_outer - u.disk_inner), 0.0, 1.0);
+    let inner_col = vec3<f32>(1.0, 0.95, 0.85);
+    let mid_col = vec3<f32>(1.0, 0.55, 0.15);
+    let outer_col = vec3<f32>(0.6, 0.12, 0.02);
+    if t < 0.5 {
+        return mix(inner_col, mid_col, t * 2.0);
+    }
+    return mix(mid_col, outer_col, (t - 0.5) * 2.0);
 }
 
 @compute @workgroup_size(16, 16)
@@ -62,59 +67,44 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let disk_angle_raw = defl.b;
     let disk_opacity = defl.a;
 
-    // Offset angle by orbit rotation
-    let disk_angle = disk_angle_raw + u.orbit_angle;
+    // Sample particle density (screen-space, same resolution)
+    let particle_d = textureSampleLevel(particle_density, s_linear, uv, 0.0).r;
 
     var color = vec3<f32>(0.0);
 
-    // ── Disk hit — sample particle density texture ──
-    if disk_r > 0.1 {
-        // Convert (r, angle) to polar density texture UV
-        let angle_norm = fract((disk_angle + 3.14159265) / 6.28318530);
-        let r_norm = clamp(
-            (disk_r - u.disk_inner) / (u.disk_outer - u.disk_inner),
-            0.0, 1.0,
-        );
-        let disk_uv = vec2<f32>(angle_norm, r_norm);
-
-        // Sample particle density (bilinear filtered)
-        let density_sample = textureSampleLevel(disk_density, s_linear, disk_uv, 0.0);
-        let particle_color = density_sample.rgb;
-        let particle_density = density_sample.a;
-
-        if particle_density > 0.001 {
-            // Live particles — use their color
-            color = particle_color * u.disk_glow;
-        } else {
-            // Fallback procedural disk where no particles yet
-            let t = r_norm;
-            let inner_col = vec3<f32>(1.0, 0.95, 0.85);
-            let mid_col = vec3<f32>(1.0, 0.55, 0.15);
-            let outer_col = vec3<f32>(0.6, 0.12, 0.02);
-            var fallback: vec3<f32>;
-            if t < 0.5 {
-                fallback = mix(inner_col, mid_col, t * 2.0);
-            } else {
-                fallback = mix(mid_col, outer_col, (t - 0.5) * 2.0);
-            }
-            let intensity = u.disk_glow * (u.disk_inner * u.disk_inner) / (disk_r * disk_r);
-            let swirl = 0.7 + 0.3 * sin(disk_angle * 8.0 + disk_r * 1.5 - u.time_val * 0.4);
-            color = fallback * intensity * swirl * 0.3;
+    // ── Particles (screen-space projected) ──
+    if particle_d > 0.001 {
+        // Use deflection disk_r for coloring if available, otherwise estimate from density
+        var emit_r = disk_r;
+        if emit_r < 0.1 {
+            // Particle visible but deflection says no disk hit at this pixel
+            // (particle is in front of or behind the lensed disk plane)
+            emit_r = u.disk_inner + (u.disk_outer - u.disk_inner) * 0.5;
         }
-
-        color *= disk_opacity;
+        let emit_col = disk_emission(emit_r);
+        let clamped_density = min(particle_d, 2.0);
+        color = emit_col * clamped_density * u.disk_glow;
     }
 
-    // Background stars (escaped rays)
+    // ── Deflection-based disk (gravitationally lensed view) ──
+    if disk_r > 0.1 && particle_d < 0.01 {
+        let disk_angle = disk_angle_raw + u.orbit_angle;
+        let emit_col = disk_emission(disk_r);
+        let intensity = u.disk_glow * (u.disk_inner * u.disk_inner) / (disk_r * disk_r);
+        let swirl = 0.7 + 0.3 * sin(disk_angle * 8.0 + disk_r * 1.5 - u.time_val * 0.4);
+        color = emit_col * intensity * swirl * 0.2 * disk_opacity;
+    }
+
+    // Stars
     if final_r > 1.0 {
-        color += star_field(final_r * 0.01, disk_angle_raw + uv.x * 50.0)
-            * (1.0 - disk_opacity);
+        let star_alpha = max(1.0 - disk_opacity - particle_d, 0.0);
+        color += star_field(final_r * 0.01, disk_angle_raw + uv.x * 50.0) * star_alpha;
     }
 
-    // Photon ring glow
+    // Photon ring
     if final_r > 1.0 && final_r < 5.0 {
         let ring_glow = exp(-(final_r - 1.5) * (final_r - 1.5) * 8.0) * 0.3;
-        color += vec3<f32>(0.7, 0.8, 1.0) * ring_glow * (1.0 - disk_opacity);
+        color += vec3<f32>(0.7, 0.8, 1.0) * ring_glow * max(1.0 - disk_opacity, 0.0);
     }
 
     // ACES tone mapping

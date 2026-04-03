@@ -29,9 +29,8 @@ const TURBULENCE: usize = 9;
 const MAX_PARTICLES: u32 = 4_000_000;
 const THREAD_GROUP_SIZE: u32 = 256;
 const PARTICLE_SIZE_BYTES: u64 = std::mem::size_of::<Particle>() as u64;
-const DISK_DENSITY_W: u32 = 512;
-const DISK_DENSITY_H: u32 = 128;
 const FIXED_POINT_SCALE: f32 = 4096.0;
+const FOV_FACTOR: f32 = 1.2;
 
 fn param(ctx: &GeneratorContext, idx: usize, default: f32) -> f32 {
     if ctx.param_count > idx as u32 {
@@ -77,13 +76,21 @@ struct ParticleSimUniforms {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct ScatterUniforms {
     active_count: u32,
-    tex_w: u32,
-    tex_h: u32,
+    disp_w: u32,
+    disp_h: u32,
     scaled_energy: u32,
-    disk_inner: f32,
-    disk_outer: f32,
+    cam_pos: [f32; 3],
     _pad0: f32,
+    cam_fwd: [f32; 3],
     _pad1: f32,
+    cam_right: [f32; 3],
+    _pad2: f32,
+    cam_up: [f32; 3],
+    fov_factor: f32,
+    aspect: f32,
+    _pad3: f32,
+    _pad4: f32,
+    _pad5: f32,
 }
 
 #[repr(C)]
@@ -221,23 +228,32 @@ impl BlackHoleGenerator {
         self.last_cam_dist = f32::MIN;
     }
 
-    fn ensure_particle_resources(&mut self, device: &manifold_gpu::GpuDevice) {
-        if self.particle_buffer.is_some() {
-            return;
+    fn ensure_particle_resources(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        w: u32,
+        h: u32,
+    ) {
+        if self.particle_buffer.is_none() {
+            self.particle_buffer =
+                Some(device.create_buffer(MAX_PARTICLES as u64 * PARTICLE_SIZE_BYTES));
         }
-        self.particle_buffer =
-            Some(device.create_buffer(MAX_PARTICLES as u64 * PARTICLE_SIZE_BYTES));
-        self.scatter_accum =
-            Some(device.create_buffer((DISK_DENSITY_W as u64) * (DISK_DENSITY_H as u64) * 4));
-        self.disk_density_tex = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
-            width: DISK_DENSITY_W,
-            height: DISK_DENSITY_H,
-            depth: 1,
-            format: manifold_gpu::GpuTextureFormat::Rgba16Float,
-            dimension: manifold_gpu::GpuTextureDimension::D2,
-            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
-            label: "BlackHole DiskDensity",
-        }));
+        // Scatter accum + density tex must match render resolution
+        let need_resize =
+            self.scatter_accum.is_none() || self.defl_w != w || self.defl_h != h;
+        if need_resize {
+            self.scatter_accum =
+                Some(device.create_buffer((w as u64) * (h as u64) * 4));
+            self.disk_density_tex = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
+                width: w,
+                height: h,
+                depth: 1,
+                format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+                dimension: manifold_gpu::GpuTextureDimension::D2,
+                usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+                label: "BlackHole ParticleDensity",
+            }));
+        }
     }
 
     fn seed_particles(&self, gpu: &mut GpuEncoder, disk_inner: f32, disk_outer: f32) {
@@ -324,14 +340,12 @@ impl Generator for BlackHoleGenerator {
         let uv_scale = if scale > 0.0 { 1.0 / scale } else { 1.0 };
         let tilt_rad = tilt_deg.to_radians();
         let orbit_angle = ctx.time as f32 * speed * 0.3;
-        // Start with 100K to verify scatter pipeline, scale up once stable
         let new_active = ((particle_millions * 1_000_000.0).round() as u32)
-            .clamp(100_000, MAX_PARTICLES)
-            .min(100_000);
+            .clamp(100_000, MAX_PARTICLES);
 
         // ── Ensure GPU resources ──
         self.ensure_deflection_map(gpu.device, ctx.width, ctx.height);
-        self.ensure_particle_resources(gpu.device);
+        self.ensure_particle_resources(gpu.device, ctx.width, ctx.height);
 
         if self.active_count != new_active {
             self.active_count = new_active;
@@ -412,21 +426,63 @@ impl Generator for BlackHoleGenerator {
         );
         self.frame_count += 1;
 
-        // ── Pass 3: Scatter particles to disk density ──
+        // ── Pass 3: Scatter particles to screen-space density ──
+        // Compute camera vectors (must match deflection shader's camera at orbit_angle)
+        let cos_tilt = tilt_rad.cos();
+        let sin_tilt = tilt_rad.sin();
+        let cos_orbit = orbit_angle.cos();
+        let sin_orbit = orbit_angle.sin();
+
+        let cam_pos = [
+            cam_dist * cos_tilt * cos_orbit,
+            cam_dist * sin_tilt,
+            cam_dist * cos_tilt * sin_orbit,
+        ];
+        let cam_len = (cam_pos[0] * cam_pos[0]
+            + cam_pos[1] * cam_pos[1]
+            + cam_pos[2] * cam_pos[2])
+            .sqrt();
+        let fwd = [
+            -cam_pos[0] / cam_len,
+            -cam_pos[1] / cam_len,
+            -cam_pos[2] / cam_len,
+        ];
+        // right = normalize(cross(fwd, world_up))
+        let world_up = [0.0_f32, 1.0, 0.0];
+        let rx = fwd[1] * world_up[2] - fwd[2] * world_up[1];
+        let ry = fwd[2] * world_up[0] - fwd[0] * world_up[2];
+        let rz = fwd[0] * world_up[1] - fwd[1] * world_up[0];
+        let rlen = (rx * rx + ry * ry + rz * rz).sqrt();
+        let right = [rx / rlen, ry / rlen, rz / rlen];
+        // up = cross(right, fwd)
+        let up = [
+            right[1] * fwd[2] - right[2] * fwd[1],
+            right[2] * fwd[0] - right[0] * fwd[2],
+            right[0] * fwd[1] - right[1] * fwd[0],
+        ];
+
         let scatter_accum = self.scatter_accum.as_ref().unwrap();
         let reference_count = 2_000_000.0_f32;
         let energy_per_particle = reference_count / self.active_count as f32;
-        let scaled_energy = (energy_per_particle * FIXED_POINT_SCALE) as u32;
+        let scaled_energy = (energy_per_particle * FIXED_POINT_SCALE * 0.5) as u32;
 
         let scatter_uniforms = ScatterUniforms {
             active_count: self.active_count,
-            tex_w: DISK_DENSITY_W,
-            tex_h: DISK_DENSITY_H,
+            disp_w: ctx.width,
+            disp_h: ctx.height,
             scaled_energy: scaled_energy.max(1),
-            disk_inner,
-            disk_outer,
+            cam_pos,
             _pad0: 0.0,
+            cam_fwd: fwd,
             _pad1: 0.0,
+            cam_right: right,
+            _pad2: 0.0,
+            cam_up: up,
+            fov_factor: FOV_FACTOR,
+            aspect: ctx.aspect,
+            _pad3: 0.0,
+            _pad4: 0.0,
+            _pad5: 0.0,
         };
         gpu.native_enc.dispatch_compute(
             &self.scatter_pipeline,
@@ -451,10 +507,10 @@ impl Generator for BlackHoleGenerator {
         );
 
         // ── Pass 4: Resolve scatter → density texture ──
-        let disk_density = self.disk_density_tex.as_ref().unwrap();
+        let density_tex = self.disk_density_tex.as_ref().unwrap();
         let resolve_uniforms = ResolveUniforms {
-            tex_w: DISK_DENSITY_W,
-            tex_h: DISK_DENSITY_H,
+            tex_w: ctx.width,
+            tex_h: ctx.height,
             disk_inner,
             disk_outer,
         };
@@ -468,18 +524,14 @@ impl Generator for BlackHoleGenerator {
                 },
                 manifold_gpu::GpuBinding::Texture {
                     binding: 1,
-                    texture: disk_density,
+                    texture: density_tex,
                 },
                 manifold_gpu::GpuBinding::Bytes {
                     binding: 2,
                     data: bytemuck::bytes_of(&resolve_uniforms),
                 },
             ],
-            [
-                DISK_DENSITY_W.div_ceil(16),
-                DISK_DENSITY_H.div_ceil(16),
-                1,
-            ],
+            [ctx.width.div_ceil(16), ctx.height.div_ceil(16), 1],
             "BlackHole Resolve",
         );
 
@@ -507,7 +559,7 @@ impl Generator for BlackHoleGenerator {
                 },
                 manifold_gpu::GpuBinding::Texture {
                     binding: 2,
-                    texture: disk_density,
+                    texture: density_tex,
                 },
                 manifold_gpu::GpuBinding::Sampler {
                     binding: 3,
