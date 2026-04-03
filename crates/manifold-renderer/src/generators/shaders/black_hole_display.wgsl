@@ -72,12 +72,21 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if density > 0.01 && avg_r > 0.1 {
         let disk_range = u.disk_outer - u.disk_inner;
         let t = clamp((avg_r - u.disk_inner) / disk_range, 0.0, 1.0);
+        let ring_r = (avg_r - u.disk_inner) / disk_range;
+        let r_norm = avg_r / u.disk_inner;
+
+        // ── Keplerian orbital velocity: inner orbits faster ──
+        // v ∝ r^(-1.5) → angular velocity ∝ r^(-1.5)
+        let orbital_speed = u.time_val * 0.4 * pow(r_norm, -1.5);
+
+        // Angle with orbital motion applied
+        let orbit_a = avg_angle + orbital_speed;
 
         // ── Temperature gradient ──
         let inner_col = vec3<f32>(1.0, 0.95, 0.9);
-        let mid1_col = vec3<f32>(1.0, 0.7, 0.35);
-        let mid2_col = vec3<f32>(0.9, 0.35, 0.08);
-        let outer_col = vec3<f32>(0.4, 0.05, 0.0);
+        let mid1_col = vec3<f32>(1.0, 0.65, 0.3);
+        let mid2_col = vec3<f32>(0.85, 0.3, 0.06);
+        let outer_col = vec3<f32>(0.35, 0.04, 0.0);
 
         var base_col: vec3<f32>;
         if t < 0.15 {
@@ -88,44 +97,54 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             base_col = mix(mid2_col, outer_col, (t - 0.45) / 0.55);
         }
 
-        // ── Radial intensity ──
-        let r_norm = avg_r / u.disk_inner;
-        let r_falloff = u.disk_glow / (r_norm * r_norm);
+        // ── Radial intensity (toned down) ──
+        let r_falloff = u.disk_glow * 0.4 / (r_norm * r_norm);
 
-        // ── Doppler beaming ──
-        let v_orbital = 0.5 * inverseSqrt(r_norm);
-        let doppler = pow(max(1.0 + v_orbital * cos(avg_angle), 0.05), 4.0);
+        // ── Doppler beaming (uses orbiting angle) ──
+        let v_orb = 0.45 * inverseSqrt(r_norm);
+        let doppler = pow(max(1.0 + v_orb * cos(orbit_a), 0.05), 3.5);
 
-        // ── Concentric ring structure (seamless angle) ──
-        let ring_r = (avg_r - u.disk_inner) / disk_range;
-        let ca = cos(avg_angle);
-        let sa = sin(avg_angle);
+        // ── Concentric ring structure with orbital motion ──
+        let ca = cos(orbit_a);
+        let sa = sin(orbit_a);
 
         let ring1 = noise2d(vec2<f32>(ring_r * 50.0, ca * 0.2 + sa * 0.15 + 10.0));
         let ring2 = noise2d(vec2<f32>(ring_r * 100.0 + 5.0, ca * 0.1 - sa * 0.08 + 20.0));
-        let ring3 = noise2d(vec2<f32>(ring_r * 25.0 - u.time_val * 0.06, ca * 0.3 + sa * 0.2));
-        let ring4 = noise2d(vec2<f32>(ring_r * 200.0 + 2.0, ca * 0.05 + sa * 0.04 + 40.0));
+        let ring3 = noise2d(vec2<f32>(ring_r * 25.0, ca * 0.3 + sa * 0.2));
+        let ring4 = noise2d(vec2<f32>(ring_r * 200.0, ca * 0.05 + sa * 0.04 + 40.0));
 
         let rings = ring1 * 0.35 + ring2 * 0.25 + ring3 * 0.2 + ring4 * 0.2;
         let ring_mod = smoothstep(0.25, 0.6, rings);
 
-        // ── Turbulent wisps ──
-        let wisp_az = cos(avg_angle * 4.0 + u.time_val * 0.12)
-            + sin(avg_angle * 3.0 + u.time_val * 0.1) * 0.5;
-        let wisp = noise2d(vec2<f32>(wisp_az + 30.0, ring_r * 6.0 + u.time_val * 0.04));
-        let wisp_mod = 0.7 + 0.3 * wisp;
+        // ── Orbiting clumps — larger structures that visibly sweep around ──
+        // 3-5 major clumps at different radii, orbiting at Keplerian rates
+        let clump_a = orbit_a; // Already has differential rotation
+        let clump1 = smoothstep(0.5, 0.9, noise2d(vec2<f32>(
+            cos(clump_a * 2.0) * 1.5 + sin(clump_a * 1.5) * 0.8 + ring_r * 3.0,
+            sin(clump_a * 2.0) * 1.2 + cos(clump_a * 3.0) * 0.5 + 15.0,
+        )));
+        let clump2 = smoothstep(0.45, 0.85, noise2d(vec2<f32>(
+            cos(clump_a * 3.0) * 1.2 + ring_r * 4.0 + 30.0,
+            sin(clump_a * 2.5) * 1.0 + 25.0,
+        )));
+        // Combine clumps: bright knots of denser material
+        let clump_brightness = 1.0 + (clump1 + clump2) * 0.6;
+
+        // ── Turbulent wisps (orbiting) ──
+        let wisp_az = cos(orbit_a * 5.0) + sin(orbit_a * 3.5) * 0.5;
+        let wisp = noise2d(vec2<f32>(wisp_az + 30.0, ring_r * 6.0));
+        let wisp_mod = 0.75 + 0.25 * wisp;
 
         // ── Inner edge brightening ──
-        let inner_glow = exp(-(t * t) * 8.0) * 1.5;
+        let inner_glow = exp(-(t * t) * 6.0) * 0.8;
 
-        // ── Volumetric density → emission ──
-        // density comes from ray accumulation through thick slab
-        // Higher density = more material along line of sight = brighter
-        let vol_emission = 1.0 - exp(-density * 1.5);
+        // ── Volumetric density → emission (Beer-Lambert) ──
+        let vol_emission = 1.0 - exp(-density * 0.8);
 
         color = base_col * r_falloff * doppler
-            * (ring_mod * 0.7 + 0.3)
+            * (ring_mod * 0.6 + 0.4)
             * wisp_mod
+            * clump_brightness
             * (1.0 + inner_glow)
             * vol_emission;
     }
