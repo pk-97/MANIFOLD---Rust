@@ -21,6 +21,7 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var output1: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var output2: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(3) var output3: texture_storage_2d<rgba32float, write>;
 
 fn disk_opacity(r: f32) -> f32 {
     let inner_fade = smoothstep(u.disk_inner * 0.8, u.disk_inner * 1.1, r);
@@ -71,6 +72,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     var prev_y = pos.y;
     var final_r = 0.0;
+    var absorbed = false;
 
     var c1_r = 0.0; var c1_ca = 0.0; var c1_sa = 0.0; var c1_op = 0.0;
     var c2_r = 0.0; var c2_ca = 0.0; var c2_sa = 0.0; var c2_op = 0.0;
@@ -79,7 +81,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var i = 0; i < max_steps; i++) {
         let r = length(pos);
 
-        if r < 1.0 { final_r = 0.0; break; }
+        if r < 1.0 { final_r = 0.0; absorbed = true; break; }
         if r > escape_r { final_r = r; break; }
 
         let step = base_step * clamp(r * 0.08, 0.005, 1.0);
@@ -118,7 +120,15 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // Pack: output1 = (final_r, disk1_r, cos1, sin1)
-    //       output2 = (disk1_opacity | disk2_opacity<<16, disk2_r, cos2, sin2)
+    //       output2 = (disk1_opacity, disk2_r, cos2, sin2)
+    //       output3 = (sky_dir.xyz, escaped_flag)
     textureStore(output1, gid.xy, vec4<f32>(final_r, c1_r, c1_ca, c1_sa));
     textureStore(output2, gid.xy, vec4<f32>(c1_op, c2_r, c2_ca, c2_sa));
+
+    if absorbed {
+        textureStore(output3, gid.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));
+    } else {
+        let sky_dir = normalize(vel);
+        textureStore(output3, gid.xy, vec4<f32>(sky_dir, 1.0));
+    }
 }

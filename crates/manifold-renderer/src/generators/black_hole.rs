@@ -18,6 +18,7 @@ const DISK_INNER: usize = 5;
 const DISK_OUTER: usize = 6;
 const DISK_GLOW: usize = 7;
 const SCALE: usize = 8;
+const STARS: usize = 9;
 
 fn param(ctx: &GeneratorContext, idx: usize, default: f32) -> f32 {
     if ctx.param_count > idx as u32 {
@@ -48,9 +49,9 @@ struct DisplayUniforms {
     disk_outer: f32,
     disk_glow: f32,
     orbit_angle: f32,
+    stars_brightness: f32,
     _pad0: f32,
     _pad1: f32,
-    _pad2: f32,
 }
 
 pub struct BlackHoleGenerator {
@@ -60,6 +61,7 @@ pub struct BlackHoleGenerator {
 
     deflection_map: Option<manifold_gpu::GpuTexture>,
     deflection_map2: Option<manifold_gpu::GpuTexture>,
+    sky_dir_map: Option<manifold_gpu::GpuTexture>,
     defl_w: u32,
     defl_h: u32,
 
@@ -92,6 +94,7 @@ impl BlackHoleGenerator {
             sampler,
             deflection_map: None,
             deflection_map2: None,
+            sky_dir_map: None,
             defl_w: 0,
             defl_h: 0,
             last_cam_dist: f32::MIN,
@@ -123,6 +126,7 @@ impl BlackHoleGenerator {
         };
         self.deflection_map = Some(make("BlackHole Deflection1"));
         self.deflection_map2 = Some(make("BlackHole Deflection2"));
+        self.sky_dir_map = Some(make("BlackHole SkyDir"));
         self.last_cam_dist = f32::MIN;
     }
 
@@ -199,6 +203,10 @@ impl Generator for BlackHoleGenerator {
                         binding: 2,
                         texture: self.deflection_map2.as_ref().unwrap(),
                     },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 3,
+                        texture: self.sky_dir_map.as_ref().unwrap(),
+                    },
                 ],
                 [self.defl_w.div_ceil(16), self.defl_h.div_ceil(16), 1],
                 "BlackHole Deflection",
@@ -213,15 +221,16 @@ impl Generator for BlackHoleGenerator {
         }
 
         // ── Pass 2: Display ──
+        let stars = param(ctx, STARS, 0.5);
         let display_uniforms = DisplayUniforms {
             time_val: ctx.time as f32,
             disk_inner,
             disk_outer,
             disk_glow,
             orbit_angle,
+            stars_brightness: stars,
             _pad0: 0.0,
             _pad1: 0.0,
-            _pad2: 0.0,
         };
         gpu.native_enc.dispatch_compute(
             &self.display_pipeline,
@@ -245,6 +254,10 @@ impl Generator for BlackHoleGenerator {
                 manifold_gpu::GpuBinding::Texture {
                     binding: 4,
                     texture: target,
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 5,
+                    texture: self.sky_dir_map.as_ref().unwrap(),
                 },
             ],
             [ctx.width.div_ceil(16), ctx.height.div_ceil(16), 1],

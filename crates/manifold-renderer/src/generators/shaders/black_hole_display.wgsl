@@ -1,8 +1,9 @@
-// Black Hole — Cinematic Display (dual crossing)
+// Black Hole — Cinematic Display (dual crossing + gravitationally lensed star field)
 //
 // Deflection map layout:
 //   output1: (final_r, disk1_r, cos_angle1, sin_angle1)
 //   output2: (disk1_opacity, disk2_r, cos_angle2, sin_angle2)
+//   output3: (sky_dir.xyz, escaped_flag)
 
 struct Uniforms {
     time_val: f32,
@@ -10,9 +11,9 @@ struct Uniforms {
     disk_outer: f32,
     disk_glow: f32,
     orbit_angle: f32,
+    stars_brightness: f32,
     _pad0: f32,
     _pad1: f32,
-    _pad2: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -20,6 +21,9 @@ struct Uniforms {
 @group(0) @binding(2) var deflection2: texture_2d<f32>;
 @group(0) @binding(3) var s_linear: sampler;
 @group(0) @binding(4) var output: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(5) var sky_dir_tex: texture_2d<f32>;
+
+// ── Hash functions ──
 
 fn hash21(p: vec2<f32>) -> f32 {
     var p3 = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);
@@ -37,6 +41,88 @@ fn noise2d(p: vec2<f32>) -> f32 {
         u2.y,
     );
 }
+
+// ── Procedural star field ──
+
+fn star_layer(theta: f32, phi: f32, scale: f32, threshold: f32,
+              intensity_mult: f32, seed: f32) -> vec3<f32> {
+    // Map spherical coords to grid. phi/2pi and theta/pi give [0,1] range.
+    let uv = vec2<f32>(phi * scale * 0.15915, theta * scale * 0.31831);
+    let cell = floor(uv);
+    let f = fract(uv);
+
+    var light = vec3<f32>(0.0);
+
+    for (var j = -1; j <= 1; j++) {
+        for (var i = -1; i <= 1; i++) {
+            let neighbor = cell + vec2<f32>(f32(i), f32(j));
+            let h = hash21(neighbor + seed);
+            if h > threshold {
+                let sx = hash21(neighbor * 1.273 + seed + 7.0);
+                let sy = hash21(neighbor * 2.178 + seed + 13.0);
+                let d = f - vec2<f32>(f32(i), f32(j)) - vec2<f32>(sx, sy);
+                let dist2 = dot(d, d);
+
+                let norm_bright = (h - threshold) / (1.0 - threshold);
+                let star_intensity = pow(norm_bright, 0.35) * intensity_mult;
+
+                // Point spread: sharp core + soft halo on bright stars
+                let core = exp(-dist2 * 900.0);
+                let halo = exp(-dist2 * 90.0) * norm_bright * 0.15;
+
+                // Spectral class color
+                let temp = hash21(neighbor * 3.46 + seed + 27.0);
+                var star_col: vec3<f32>;
+                if temp > 0.82 {
+                    star_col = vec3<f32>(0.7, 0.85, 1.4);   // O/B hot blue
+                } else if temp > 0.65 {
+                    star_col = vec3<f32>(0.95, 0.97, 1.15);  // A white-blue
+                } else if temp > 0.4 {
+                    star_col = vec3<f32>(1.0, 0.98, 0.9);    // F/G solar
+                } else if temp > 0.2 {
+                    star_col = vec3<f32>(1.1, 0.88, 0.65);   // K orange
+                } else {
+                    star_col = vec3<f32>(1.15, 0.7, 0.45);   // M red-orange
+                }
+
+                light += star_col * star_intensity * (core + halo);
+            }
+        }
+    }
+    return light;
+}
+
+fn star_field(dir: vec3<f32>, brightness: f32) -> vec3<f32> {
+    if brightness < 0.001 { return vec3<f32>(0.0); }
+
+    let theta = acos(clamp(dir.y, -1.0, 1.0));
+    let phi = atan2(dir.z, dir.x) + 3.14159265;
+
+    var stars = vec3<f32>(0.0);
+
+    // Layer 1: bright sparse stars
+    stars += star_layer(theta, phi, 18.0, 0.955, 2.0, 0.0);
+
+    // Layer 2: medium density
+    stars += star_layer(theta, phi, 35.0, 0.965, 0.8, 100.0);
+
+    // Layer 3: faint dense field
+    stars += star_layer(theta, phi, 70.0, 0.975, 0.3, 200.0);
+
+    // Layer 4: very faint background dust
+    stars += star_layer(theta, phi, 140.0, 0.98, 0.1, 300.0);
+
+    // Subtle galactic band (milky way feel)
+    let band_center = 1.5708;
+    let band = exp(-(theta - band_center) * (theta - band_center) * 4.0);
+    let band_detail = noise2d(vec2<f32>(phi * 2.5 + 10.0, theta * 4.0)) * 0.5
+                    + noise2d(vec2<f32>(phi * 5.0 + 30.0, theta * 8.0)) * 0.3 + 0.2;
+    stars += vec3<f32>(0.025, 0.02, 0.04) * band * band_detail;
+
+    return stars * brightness;
+}
+
+// ── Accretion disk shading ──
 
 fn disk_opacity_from_r(r: f32) -> f32 {
     let inner_fade = smoothstep(u.disk_inner * 0.8, u.disk_inner * 1.1, r);
@@ -129,6 +215,8 @@ fn shade_disk(disk_r: f32, cos_a: f32, sin_a: f32, is_secondary: bool) -> vec3<f
     return emission;
 }
 
+// ── Main ──
+
 @compute @workgroup_size(16, 16)
 fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dims = textureDimensions(output);
@@ -141,6 +229,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let d1 = textureSampleLevel(deflection1, s_linear, uv, 0.0);
     let d2 = textureSampleLevel(deflection2, s_linear, uv, 0.0);
+    let sky = textureSampleLevel(sky_dir_tex, s_linear, uv, 0.0);
 
     let final_r = d1.r;
     let c1_r = d1.g;
@@ -151,30 +240,37 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let c2_ca = d2.b;
     let c2_sa = d2.a;
 
+    // ── Star field background (gravitationally lensed) ──
     var color = vec3<f32>(0.0);
+    if sky.w > 0.5 {
+        color = star_field(normalize(sky.xyz), u.stars_brightness);
+    }
     var total_opacity = 0.0;
 
-    // First crossing (front disk)
+    // ── First crossing (front disk) — composited over stars ──
     if c1_r > 0.1 {
-        color += shade_disk(c1_r, c1_ca, c1_sa, false) * c1_op;
+        let disk_col = shade_disk(c1_r, c1_ca, c1_sa, false) * c1_op;
+        // Disk gas absorbs background starlight proportional to opacity
+        color = color * (1.0 - c1_op * 0.85) + disk_col;
         total_opacity = c1_op;
     }
 
-    // Second crossing (lensed back)
+    // ── Second crossing (lensed back) ──
     if c2_r > 0.1 {
         let c2_op = disk_opacity_from_r(c2_r);
         let remaining = max(1.0 - total_opacity * 0.6, 0.0);
-        color += shade_disk(c2_r, c2_ca, c2_sa, true) * c2_op * remaining;
+        let disk_col = shade_disk(c2_r, c2_ca, c2_sa, true) * c2_op * remaining;
+        color = color * (1.0 - c2_op * remaining * 0.5) + disk_col;
         total_opacity = clamp(total_opacity + c2_op * 0.5, 0.0, 1.0);
     }
 
-    // Photon ring
+    // ── Photon ring ──
     if final_r > 1.0 && final_r < 5.0 && total_opacity < 0.5 {
         let ring = exp(-(final_r - 1.5) * (final_r - 1.5) * 8.0) * 0.15;
         color += vec3<f32>(0.8, 0.85, 1.0) * ring;
     }
 
-    // ACES
+    // ── ACES tonemapping ──
     let a = 2.51; let b = 0.03; let c = 2.43; let d = 0.59; let e = 0.14;
     color = clamp((color * (a * color + b)) / (color * (c * color + d) + e),
         vec3<f32>(0.0), vec3<f32>(1.0));
