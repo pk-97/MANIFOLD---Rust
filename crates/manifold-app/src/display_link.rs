@@ -281,7 +281,6 @@ unsafe extern "C" fn fullscreen_present_callback(
 /// a flag; the main thread does the actual blit + present.
 struct WindowedCallbackContext {
     vsync_ready: Arc<AtomicBool>,
-    window: Arc<winit::window::Window>,
     stop: AtomicBool,
 }
 
@@ -301,7 +300,8 @@ unsafe extern "C" fn windowed_vsync_callback(
         return K_CV_RETURN_SUCCESS;
     }
     ctx.vsync_ready.store(true, Ordering::Release);
-    ctx.window.request_redraw();
+    // Non-blocking wake — see ui_display_link_callback for rationale.
+    unsafe { CFRunLoopWakeUp(CFRunLoopGetMain()) };
     K_CV_RETURN_SUCCESS
 }
 
@@ -345,7 +345,7 @@ impl DisplayLinkPresenter {
     pub fn new(
         _gpu_device: &GpuDevice,
         window: &winit::window::Window,
-        window_arc: Option<Arc<winit::window::Window>>,
+        _window_arc: Option<Arc<winit::window::Window>>,
         bridge: Arc<SharedTextureBridge>,
         edr_headroom: f64,
         presentation: bool,
@@ -428,10 +428,8 @@ impl DisplayLinkPresenter {
         } else {
             // Windowed: lightweight callback, main thread does the blit.
             let vsync_ready = Arc::new(AtomicBool::new(false));
-            let win_arc = window_arc.expect("window_arc required for windowed presenter");
             let cb_ctx = Box::into_raw(Box::new(WindowedCallbackContext {
                 vsync_ready: Arc::clone(&vsync_ready),
-                window: win_arc,
                 stop: AtomicBool::new(false),
             }));
             unsafe {
@@ -611,11 +609,21 @@ fn import_textures(
 // UiDisplayLink — vsync-aligned render trigger for the UI thread
 // ═══════════════════════════════════════════════════════════════════════
 
+// FFI: wake the main CFRunLoop without blocking.
+// `request_redraw()` does `dispatch_sync` to the main thread, which deadlocks
+// if the main thread is blocked on CoreVideo's internal mutex (shared across
+// all CVDisplayLink instances). `CFRunLoopWakeUp` is non-blocking and
+// sufficient: the main run loop iterates → winit calls `about_to_wait` →
+// the app checks `vsync_ready`.
+unsafe extern "C" {
+    fn CFRunLoopGetMain() -> *mut c_void;
+    fn CFRunLoopWakeUp(rl: *mut c_void);
+}
+
 /// Context for the UI display link callback. Heap-allocated, accessed only
 /// from the serial CVDisplayLink callback thread.
 struct UiDisplayLinkContext {
     vsync_ready: Arc<AtomicBool>,
-    window: Arc<winit::window::Window>,
     stop: AtomicBool,
 }
 
@@ -623,7 +631,12 @@ unsafe impl Send for UiDisplayLinkContext {}
 unsafe impl Sync for UiDisplayLinkContext {}
 
 /// CVDisplayLink callback for the UI thread.
-/// Sets the vsync flag and wakes the winit event loop via request_redraw.
+/// Sets the vsync flag and wakes the winit event loop via CFRunLoopWakeUp.
+///
+/// CRITICAL: must NOT call `window.request_redraw()` here — winit's macOS
+/// impl does `dispatch_sync` to the main thread, which deadlocks when the
+/// main thread is blocked on CoreVideo's internal mutex (e.g. during
+/// `CVDisplayLinkSetCurrentCGDisplay` on any display link instance).
 unsafe extern "C" fn ui_display_link_callback(
     _display_link: CVDisplayLinkRef,
     _in_now: *const CVTimeStamp,
@@ -637,7 +650,9 @@ unsafe extern "C" fn ui_display_link_callback(
         return K_CV_RETURN_SUCCESS;
     }
     ctx.vsync_ready.store(true, Ordering::Release);
-    ctx.window.request_redraw();
+    // Non-blocking wake: poke the main CFRunLoop so winit iterates and
+    // the app checks vsync_ready in about_to_wait.
+    unsafe { CFRunLoopWakeUp(CFRunLoopGetMain()) };
     K_CV_RETURN_SUCCESS
 }
 
@@ -667,7 +682,6 @@ impl UiDisplayLink {
 
         let context = Box::into_raw(Box::new(UiDisplayLinkContext {
             vsync_ready: Arc::clone(&vsync_ready),
-            window,
             stop: AtomicBool::new(false),
         }));
 
