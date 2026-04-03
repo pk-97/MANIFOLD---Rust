@@ -1,11 +1,12 @@
-// Black Hole — Schwarzschild geodesic raytracer
+// Black Hole — Schwarzschild geodesic raytracer (3D Cartesian)
 //
 // All distances in units of Schwarzschild radius (rs = 1).
-// Speed of light c = 1 (natural units).
+// Integrates light geodesics in full 3D Cartesian coordinates.
+// Accretion disk on the y=0 plane, detected via sign-change crossing.
 //
-// Geodesic equations (polar coords in the ray's orbital plane):
-//   φ̈ = -2/r · ṙ · φ̇
-//   r̈ = 0.5/r² + r · φ̇²
+// The effective gravitational acceleration for a photon in Schwarzschild geometry:
+//   a = -1.5 * rs * h² / r⁵ * pos
+// where h = |pos × vel| is the conserved angular momentum magnitude.
 
 struct Uniforms {
     time_val: f32,
@@ -25,61 +26,50 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var output: texture_storage_2d<rgba16float, write>;
 
-// ── Geodesic derivatives ──
-// State: Y = (r, φ, ṙ, φ̇)
-// Returns: dY/dt = (ṙ, φ̇, r̈, φ̈)
-fn geodesic_deriv(r: f32, phi: f32, r_dot: f32, phi_dot: f32) -> vec4<f32> {
-    let r2 = r * r;
-    let r_ddot = 0.5 / r2 + r * phi_dot * phi_dot;
-    let phi_ddot = -2.0 / r * r_dot * phi_dot;
-    return vec4<f32>(r_dot, phi_dot, r_ddot, phi_ddot);
-}
-
-// ── RK4 integration step ──
-fn rk4_step(state: vec4<f32>, h: f32) -> vec4<f32> {
-    let k1 = geodesic_deriv(state.x, state.y, state.z, state.w);
-    let s2 = state + 0.5 * h * k1;
-    let k2 = geodesic_deriv(s2.x, s2.y, s2.z, s2.w);
-    let s3 = state + 0.5 * h * k2;
-    let k3 = geodesic_deriv(s3.x, s3.y, s3.z, s3.w);
-    let s4 = state + h * k3;
-    let k4 = geodesic_deriv(s4.x, s4.y, s4.z, s4.w);
-    return state + (h / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4);
-}
-
 // ── Accretion disk color ──
-// Temperature gradient: hotter (white-yellow) near inner edge, cooler (orange-red) at outer
-fn disk_color(r: f32, phi: f32) -> vec3<f32> {
+fn disk_color(r: f32, pos: vec3<f32>) -> vec3<f32> {
     let t = (r - u.disk_inner) / (u.disk_outer - u.disk_inner);
     let t_clamped = clamp(t, 0.0, 1.0);
 
-    // Inner = white-hot (1.0, 0.95, 0.8), outer = deep orange (0.8, 0.25, 0.05)
-    let inner_col = vec3<f32>(1.0, 0.95, 0.8);
-    let outer_col = vec3<f32>(0.8, 0.25, 0.05);
-    var col = mix(inner_col, outer_col, t_clamped);
+    // Temperature gradient: white-hot inner → orange → deep red outer
+    let inner_col = vec3<f32>(1.0, 0.95, 0.85);
+    let mid_col = vec3<f32>(1.0, 0.6, 0.2);
+    let outer_col = vec3<f32>(0.7, 0.15, 0.03);
 
-    // Radial falloff — intensity drops with r² (inverse square emission)
-    let intensity = u.disk_glow * (u.disk_inner / r) * (u.disk_inner / r);
+    var col: vec3<f32>;
+    if t_clamped < 0.5 {
+        col = mix(inner_col, mid_col, t_clamped * 2.0);
+    } else {
+        col = mix(mid_col, outer_col, (t_clamped - 0.5) * 2.0);
+    }
 
-    // Swirl pattern for visual texture
-    let swirl = 0.8 + 0.2 * sin(phi * 6.0 + r * 2.0 + u.time_val * 0.5);
-    col *= intensity * swirl;
+    // Radial intensity falloff (inverse square from inner edge)
+    let intensity = u.disk_glow * (u.disk_inner * u.disk_inner) / (r * r);
 
+    // Procedural swirl texture using world-space angle
+    let angle = atan2(pos.z, pos.x);
+    let noise1 = 0.7 + 0.3 * sin(angle * 8.0 + r * 1.5 - u.time_val * 0.4);
+    let noise2 = 0.85 + 0.15 * sin(angle * 20.0 - r * 3.0 + u.time_val * 0.7);
+
+    col *= intensity * noise1 * noise2;
     return col;
 }
 
 // ── Star field background ──
 fn star_field(dir: vec3<f32>) -> vec3<f32> {
-    // Simple procedural stars from ray direction
-    let p = dir * 500.0;
+    let p = dir * 400.0;
     let cell = floor(p);
     let f = fract(p) - 0.5;
-
-    // Hash-based star placement
     let h = fract(sin(dot(cell, vec3<f32>(127.1, 311.7, 74.7))) * 43758.5453);
-    let star = step(0.98, h) * smoothstep(0.5, 0.0, length(f));
-    let brightness = h * h * star * 0.3;
-    return vec3<f32>(brightness);
+    let star = step(0.985, h) * smoothstep(0.4, 0.0, length(f));
+    let brightness = h * h * star * 0.4;
+    // Slight color variation
+    let tint = vec3<f32>(
+        0.8 + 0.2 * fract(h * 13.7),
+        0.8 + 0.2 * fract(h * 27.3),
+        0.9 + 0.1 * fract(h * 41.1),
+    );
+    return tint * brightness;
 }
 
 @compute @workgroup_size(16, 16)
@@ -101,7 +91,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let cos_orbit = cos(orbit_angle);
     let sin_orbit = sin(orbit_angle);
 
-    // Camera position: orbit at cam_dist, tilted
+    // Camera position: orbit at cam_dist, tilted above disk plane (y = up)
     let cam_pos = vec3<f32>(
         u.cam_dist * cos_tilt * cos_orbit,
         u.cam_dist * sin_tilt,
@@ -114,107 +104,119 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let right = normalize(cross(fwd, world_up));
     let up = cross(right, fwd);
 
-    // Ray direction (FOV ~60°)
-    let fov_factor = 1.5;
+    // Ray direction (FOV ~50°)
+    let fov_factor = 1.2;
     let ray_dir = normalize(fwd + screen.x * right * fov_factor + screen.y * up * fov_factor);
 
-    // ── Convert to orbital plane coordinates ──
-    // The ray travels in the plane defined by cam_pos and ray_dir.
-    // We need initial (r, φ, ṙ, φ̇) in polar coords within that plane.
+    // ── 3D Cartesian geodesic integration ──
+    // For a Schwarzschild black hole, the effective acceleration on a photon is:
+    //   a = -1.5 * h² / r⁵ * pos
+    // where h = |pos × vel| is conserved angular momentum per unit mass,
+    // and rs = 1 in our units.
+    //
+    // This is the standard form from Weiskopf (2000) / James et al. (2015).
 
-    let r0 = length(cam_pos);
-    let phi0 = 0.0; // Start angle = 0 by convention (plane-local)
+    var pos = cam_pos;
+    var vel = ray_dir; // c = 1, photon moves at unit speed
 
-    // Decompose ray velocity into radial and tangential components
-    let radial_dir = normalize(cam_pos); // points outward from BH
-    let r_dot0 = dot(ray_dir, radial_dir); // radial velocity component
+    // Angular momentum (conserved quantity)
+    let h_vec = cross(pos, vel);
+    let h2 = dot(h_vec, h_vec);
 
-    // Tangential velocity: project ray_dir onto plane perpendicular to radial
-    let tangential = ray_dir - r_dot0 * radial_dir;
-    let phi_dot0 = length(tangential) / r0; // angular velocity = v_perp / r
-
-    // Sign of φ̇: determine rotation direction
-    // Use cross product to get consistent handedness
-    let cross_test = cross(radial_dir, ray_dir);
-    let tangent_ref = cross(radial_dir, cross_test);
-    let phi_sign = sign(dot(tangential, normalize(tangent_ref + vec3<f32>(1e-10))));
-    let phi_dot_signed = phi_dot0 * select(1.0, phi_sign, abs(phi_sign) > 0.01);
-
-    // ── Determine disk crossing geometry ──
-    // We need to track z-coordinate to detect accretion disk crossings (z = 0 plane).
-    // In the orbital plane, reconstruct 3D position from (r, φ):
-    //   pos_3d = r * (cos(φ) * e1 + sin(φ) * e2)
-    // where e1 = radial_dir (initial), e2 = tangent direction in the orbital plane.
-    let e1 = radial_dir;
-    // e2 must be in the orbital plane and perpendicular to e1
-    let orbit_normal = normalize(cross(cam_pos, ray_dir));
-    let e2 = normalize(cross(orbit_normal, e1));
-
-    // ── RK4 integration ──
-    var state = vec4<f32>(r0, phi0, r_dot0, phi_dot_signed);
+    // Adaptive step size based on distance
+    let base_step = 0.15;
     let max_steps = i32(u.steps);
-    // Adaptive step size: scale with initial r for stability
-    let h = r0 * 0.002;
 
     var color = vec3<f32>(0.0);
-    var prev_z = cam_pos.y; // Track z for disk crossing (use y as "up")
     var hit = false;
+    var prev_y = pos.y;
+    var disk_alpha = 0.0;
 
     for (var i = 0; i < max_steps; i++) {
-        state = rk4_step(state, h);
-        let r = state.x;
-        let phi = state.y;
+        let r = length(pos);
 
         // Event horizon check
         if r < 1.0 {
-            color = vec3<f32>(0.0); // Absorbed
+            color = vec3<f32>(0.0);
             hit = true;
             break;
         }
 
-        // Escaped
-        if r > 150.0 {
-            // Reconstruct 3D direction for star field
-            let pos_3d = r * (cos(phi) * e1 + sin(phi) * e2);
-            let escaped_dir = normalize(pos_3d);
-            color = star_field(escaped_dir);
+        // Escape check
+        if r > 100.0 {
+            color += star_field(normalize(vel)) * (1.0 - disk_alpha);
             hit = true;
             break;
         }
 
-        // Accretion disk crossing check
-        // Reconstruct 3D position to check y-coordinate (disk is on y = 0 plane)
-        let pos_3d = r * (cos(phi) * e1 + sin(phi) * e2);
-        let cur_z = pos_3d.y;
+        // Adaptive step: smaller near the hole for accuracy
+        let step = base_step * clamp(r * 0.1, 0.01, 1.0);
 
-        if prev_z * cur_z < 0.0 { // Sign change = crossed y = 0 plane
-            if r > u.disk_inner && r < u.disk_outer {
-                // Doppler-shifted disk color
-                let doppler = 1.0 + 0.3 * sin(phi + u.time_val);
-                color = disk_color(r, phi) * doppler;
-                hit = true;
-                break;
+        // ── Verlet / leapfrog integration (symplectic, energy-conserving) ──
+        let r2 = r * r;
+        let r5 = r2 * r2 * r;
+        let accel = -1.5 * h2 / r5 * pos;
+
+        // Update velocity (half step)
+        vel += accel * step * 0.5;
+        // Update position
+        pos += vel * step;
+        // Recompute acceleration at new position
+        let r_new = length(pos);
+        let r2_new = r_new * r_new;
+        let r5_new = r2_new * r2_new * r_new;
+        let accel_new = -1.5 * h2 / r5_new * pos;
+        // Update velocity (second half step)
+        vel += accel_new * step * 0.5;
+
+        // ── Accretion disk crossing (y = 0 plane) ──
+        let cur_y = pos.y;
+        if prev_y * cur_y < 0.0 {
+            // Crossed the disk plane — interpolate exact crossing point
+            let frac = abs(prev_y) / (abs(prev_y) + abs(cur_y) + 1e-8);
+            let cross_pos = pos - vel * step * (1.0 - frac);
+            let cross_r = length(cross_pos);
+
+            if cross_r > u.disk_inner && cross_r < u.disk_outer {
+                let dc = disk_color(cross_r, cross_pos);
+
+                // Semi-transparent disk: accumulate color, allow rays to pass through
+                // Opacity based on proximity to inner edge (denser near BH)
+                let opacity = 0.6 + 0.3 * (1.0 - (cross_r - u.disk_inner)
+                    / (u.disk_outer - u.disk_inner));
+                color += dc * (1.0 - disk_alpha);
+                disk_alpha = clamp(disk_alpha + opacity * 0.7, 0.0, 1.0);
+
+                // If disk is nearly opaque, stop tracing
+                if disk_alpha > 0.95 {
+                    hit = true;
+                    break;
+                }
             }
         }
-        prev_z = cur_z;
+        prev_y = cur_y;
     }
 
-    // If ray didn't terminate, treat as faint background
+    // Rays that didn't terminate — faint background
     if !hit {
-        let pos_3d = state.x * (cos(state.y) * e1 + sin(state.y) * e2);
-        color = star_field(normalize(pos_3d)) * 0.5;
+        color += star_field(normalize(vel)) * (1.0 - disk_alpha) * 0.5;
     }
 
-    // Gravitational lensing glow near event horizon
-    // Faint emission ring at the photon sphere (r = 1.5 rs)
-    let final_r = state.x;
-    if !hit || final_r < 3.0 {
-        let photon_ring = exp(-abs(final_r - 1.5) * 4.0) * 0.15;
-        color += vec3<f32>(0.6, 0.7, 1.0) * photon_ring;
+    // Photon ring glow (r ≈ 1.5 rs — the photon sphere)
+    // Only add if the ray got close but escaped
+    let final_r = length(pos);
+    if final_r > 1.0 && final_r < 5.0 {
+        let ring_glow = exp(-(final_r - 1.5) * (final_r - 1.5) * 8.0) * 0.3;
+        color += vec3<f32>(0.7, 0.8, 1.0) * ring_glow * (1.0 - disk_alpha);
     }
 
-    // Tone map (simple Reinhard)
-    color = color / (color + vec3<f32>(1.0));
+    // Tone map (ACES-ish filmic)
+    let a = 2.51;
+    let b = 0.03;
+    let c = 2.43;
+    let d = 0.59;
+    let e = 0.14;
+    color = clamp((color * (a * color + b)) / (color * (c * color + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
 
     textureStore(output, gid.xy, vec4<f32>(color, 1.0));
 }
