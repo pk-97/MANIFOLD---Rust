@@ -33,11 +33,11 @@ struct DeflectionUniforms {
     aspect: f32,
     cam_dist: f32,
     tilt_rad: f32,
-    rotate_rad: f32,
     steps: f32,
     disk_inner: f32,
     disk_outer: f32,
     uv_scale: f32,
+    _pad0: f32,
 }
 
 #[repr(C)]
@@ -48,13 +48,10 @@ struct DisplayUniforms {
     disk_outer: f32,
     disk_glow: f32,
     orbit_angle: f32,
+    rotate_rad: f32,
     _pad0: f32,
     _pad1: f32,
-    _pad2: f32,
 }
-
-// disk2_opacity not packed in deflection map — we use c2's presence (c2_r > 0) as indicator
-// and derive opacity from disk_opacity() in the display shader
 
 pub struct BlackHoleGenerator {
     deflection_pipeline: manifold_gpu::GpuComputePipeline,
@@ -68,7 +65,6 @@ pub struct BlackHoleGenerator {
 
     last_cam_dist: f32,
     last_tilt: f32,
-    last_rotate: f32,
     last_scale: f32,
     last_steps: f32,
     last_disk_inner: f32,
@@ -99,7 +95,6 @@ impl BlackHoleGenerator {
             defl_h: 0,
             last_cam_dist: f32::MIN,
             last_tilt: f32::MIN,
-            last_rotate: f32::MIN,
             last_scale: f32::MIN,
             last_steps: f32::MIN,
             last_disk_inner: f32::MIN,
@@ -129,11 +124,10 @@ impl BlackHoleGenerator {
         self.last_cam_dist = f32::MIN;
     }
 
-    fn needs_rebake(&self, cd: f32, t: f32, r: f32, s: f32, st: f32, di: f32, do_: f32) -> bool {
+    fn needs_rebake(&self, cd: f32, t: f32, s: f32, st: f32, di: f32, do_: f32) -> bool {
         const EPS: f32 = 0.001;
         (self.last_cam_dist - cd).abs() > EPS
             || (self.last_tilt - t).abs() > EPS
-            || (self.last_rotate - r).abs() > EPS
             || (self.last_scale - s).abs() > EPS
             || (self.last_steps - st).abs() > 0.5
             || (self.last_disk_inner - di).abs() > EPS
@@ -174,18 +168,18 @@ impl Generator for BlackHoleGenerator {
         self.ensure_deflection_maps(gpu.device, ctx.width, ctx.height);
 
         // ── Pass 1: Deflection Map (only on param change) ──
-        if self.needs_rebake(
-            cam_dist, tilt_rad, rotate_rad, uv_scale, steps, disk_inner, disk_outer,
-        ) {
+        // Bake at rotate=0 — flat disk is rotationally symmetric around y.
+        // Rotate offset applied in display shader.
+        if self.needs_rebake(cam_dist, tilt_rad, uv_scale, steps, disk_inner, disk_outer) {
             let defl_uniforms = DeflectionUniforms {
                 aspect: ctx.aspect,
                 cam_dist,
                 tilt_rad,
-                rotate_rad,
                 steps,
                 disk_inner,
                 disk_outer,
                 uv_scale,
+                _pad0: 0.0,
             };
             gpu.native_enc.dispatch_compute(
                 &self.deflection_pipeline,
@@ -208,7 +202,6 @@ impl Generator for BlackHoleGenerator {
             );
             self.last_cam_dist = cam_dist;
             self.last_tilt = tilt_rad;
-            self.last_rotate = rotate_rad;
             self.last_scale = uv_scale;
             self.last_steps = steps;
             self.last_disk_inner = disk_inner;
@@ -222,9 +215,9 @@ impl Generator for BlackHoleGenerator {
             disk_outer,
             disk_glow,
             orbit_angle,
+            rotate_rad,
             _pad0: 0.0,
             _pad1: 0.0,
-            _pad2: 0.0,
         };
         gpu.native_enc.dispatch_compute(
             &self.display_pipeline,
