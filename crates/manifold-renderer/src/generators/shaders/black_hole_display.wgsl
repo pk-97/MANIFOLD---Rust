@@ -2,7 +2,7 @@
 //
 // Deflection map layout:
 //   output1: (final_r, disk1_r, cos_angle1, sin_angle1)
-//   output2: (disk1_opacity, disk2_r, cos_angle2, sin_angle2)
+//   output2: (unused, disk2_r, cos_angle2, sin_angle2)
 //   output3: (sky_dir.xyz, escaped_flag)
 
 struct Uniforms {
@@ -109,14 +109,10 @@ fn star_field(dir: vec3<f32>, brightness: f32) -> vec3<f32> {
     // Layer 3: faint dense field
     stars += star_layer(theta, phi, 70.0, 0.975, 0.3, 200.0);
 
-    // Layer 4: very faint background dust
-    stars += star_layer(theta, phi, 140.0, 0.98, 0.1, 300.0);
-
     // Subtle galactic band (milky way feel)
     let band_center = 1.5708;
     let band = exp(-(theta - band_center) * (theta - band_center) * 4.0);
-    let band_detail = noise2d(vec2<f32>(phi * 2.5 + 10.0, theta * 4.0)) * 0.5
-                    + noise2d(vec2<f32>(phi * 5.0 + 30.0, theta * 8.0)) * 0.3 + 0.2;
+    let band_detail = noise2d(vec2<f32>(phi * 2.5 + 10.0, theta * 4.0)) * 0.6 + 0.3;
     stars += vec3<f32>(0.025, 0.02, 0.04) * band * band_detail;
 
     return stars * brightness;
@@ -235,7 +231,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let c1_r = d1.g;
     let c1_ca = d1.b;
     let c1_sa = d1.a;
-    let c1_op = d2.r;
+    let c1_op = disk_opacity_from_r(c1_r);
     let c2_r = d2.g;
     let c2_ca = d2.b;
     let c2_sa = d2.a;

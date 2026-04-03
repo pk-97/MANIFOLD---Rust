@@ -2,10 +2,12 @@
 //
 // Traces geodesics, records up to 2 disk crossings per ray.
 // Stores cos/sin of angle instead of raw atan2 to avoid seam artifacts.
+// Uses fixed generous crossing bounds (1.5–25.0) so disk_inner/disk_outer
+// changes don't require rebake — opacity is computed in the display pass.
 //
 // Output 1: (final_r, disk1_r, cos_angle1, sin_angle1)
-// Output 2: (disk1_opacity, disk2_r, cos_angle2, sin_angle2)
-// Remaining: disk2_opacity stored in output2.r as combined with disk1_opacity
+// Output 2: (unused, disk2_r, cos_angle2, sin_angle2)
+// Output 3: (sky_dir.xyz, escaped_flag)
 
 struct Uniforms {
     aspect: f32,
@@ -13,21 +15,20 @@ struct Uniforms {
     tilt_rad: f32,
     rotate_rad: f32,
     steps: f32,
-    disk_inner: f32,
-    disk_outer: f32,
     uv_scale: f32,
+    _pad0: f32,
+    _pad1: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var output1: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var output2: texture_storage_2d<rgba32float, write>;
-@group(0) @binding(3) var output3: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(3) var output3: texture_storage_2d<rgba16float, write>;
 
-fn disk_opacity(r: f32) -> f32 {
-    let inner_fade = smoothstep(u.disk_inner * 0.8, u.disk_inner * 1.1, r);
-    let outer_fade = 1.0 - smoothstep(u.disk_outer * 0.85, u.disk_outer * 1.2, r);
-    return inner_fade * outer_fade;
-}
+// Fixed generous crossing bounds — covers full param ranges
+// (disk_inner min=2.0, disk_outer max=20.0)
+const CROSS_INNER: f32 = 1.5;
+const CROSS_OUTER: f32 = 25.0;
 
 @compute @workgroup_size(16, 16)
 fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -40,9 +41,6 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let ndc = (uv * 2.0 - 1.0) * u.uv_scale;
     let screen = vec2<f32>(ndc.x * u.aspect, -ndc.y);
 
-    // Tilt = elevation above disk plane (0° = edge-on, 90° = face-on from above)
-    // Low tilt (10-30°) gives the dramatic Interstellar lensing halos.
-    // Rotate = orbit around y-axis (which side of the disk you see)
     let cos_tilt = cos(u.tilt_rad);
     let sin_tilt = sin(u.tilt_rad);
     let cos_rot = cos(u.rotate_rad);
@@ -74,8 +72,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var final_r = 0.0;
     var absorbed = false;
 
-    var c1_r = 0.0; var c1_ca = 0.0; var c1_sa = 0.0; var c1_op = 0.0;
-    var c2_r = 0.0; var c2_ca = 0.0; var c2_sa = 0.0; var c2_op = 0.0;
+    var c1_r = 0.0; var c1_ca = 0.0; var c1_sa = 0.0;
+    var c2_r = 0.0; var c2_ca = 0.0; var c2_sa = 0.0;
     var crossing_count = 0;
 
     for (var i = 0; i < max_steps; i++) {
@@ -101,16 +99,15 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let cross_pos = pos - vel * step * (1.0 - frac);
             let cross_r = length(cross_pos);
 
-            if cross_r > u.disk_inner * 0.8 && cross_r < u.disk_outer * 1.2 {
+            if cross_r > CROSS_INNER && cross_r < CROSS_OUTER {
                 let angle = atan2(cross_pos.z, cross_pos.x);
-                let op = disk_opacity(cross_r);
                 let ca = cos(angle);
                 let sa = sin(angle);
 
                 if crossing_count == 0 {
-                    c1_r = cross_r; c1_ca = ca; c1_sa = sa; c1_op = op;
+                    c1_r = cross_r; c1_ca = ca; c1_sa = sa;
                 } else if crossing_count == 1 {
-                    c2_r = cross_r; c2_ca = ca; c2_sa = sa; c2_op = op;
+                    c2_r = cross_r; c2_ca = ca; c2_sa = sa;
                 }
                 crossing_count++;
             }
@@ -119,11 +116,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         final_r = r;
     }
 
-    // Pack: output1 = (final_r, disk1_r, cos1, sin1)
-    //       output2 = (disk1_opacity, disk2_r, cos2, sin2)
-    //       output3 = (sky_dir.xyz, escaped_flag)
     textureStore(output1, gid.xy, vec4<f32>(final_r, c1_r, c1_ca, c1_sa));
-    textureStore(output2, gid.xy, vec4<f32>(c1_op, c2_r, c2_ca, c2_sa));
+    textureStore(output2, gid.xy, vec4<f32>(0.0, c2_r, c2_ca, c2_sa));
 
     if absorbed {
         textureStore(output3, gid.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));

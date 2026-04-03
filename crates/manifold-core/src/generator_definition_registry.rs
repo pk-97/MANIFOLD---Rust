@@ -582,7 +582,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Cam Dist", 5.0, 50.0, 20.0, Some("F1"), "camDist"),
         pd("Tilt", 0.0, 90.0, 15.0, Some("F0"), "tilt"),
         pd("Rotate", -180.0, 180.0, 0.0, Some("F0"), "rotate"),
-        pd_whole("Steps", 50.0, 500.0, 200.0, "steps"),
+        pd_whole("Steps", 50.0, 500.0, 150.0, "steps"),
         pd("Disk Inner", 2.0, 6.0, 3.0, Some("F1"), "diskInner"),
         pd("Disk Outer", 5.0, 20.0, 10.0, Some("F1"), "diskOuter"),
         pd("Disk Glow", 0.5, 5.0, 2.0, Some("F1"), "diskGlow"),
