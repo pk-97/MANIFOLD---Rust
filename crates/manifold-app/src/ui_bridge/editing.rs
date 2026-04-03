@@ -102,23 +102,24 @@ pub(super) fn dispatch_editing(
             {
                 let spb = 60.0 / project.settings.bpm.0.max(1.0);
                 // AddClipCommand enforces non-overlap internally.
-                let (cmd, clip_id) = EditingService::create_clip_at_position(
+                if let Some((cmd, clip_id)) = EditingService::create_clip_at_position(
                     project,
                     snapped,
                     *layer,
                     Beats::from_f32(4.0),
                     spb,
-                );
-                ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
+                ) {
+                    ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
 
-                // Select the newly created clip
-                let new_lid = project
-                    .timeline
-                    .layers
-                    .get(*layer)
-                    .map(|l| l.layer_id.clone())
-                    .unwrap_or_default();
-                selection.select_clip(clip_id, new_lid);
+                    // Select the newly created clip
+                    let new_lid = project
+                        .timeline
+                        .layers
+                        .get(*layer)
+                        .map(|l| l.layer_id.clone())
+                        .unwrap_or_default();
+                    selection.select_clip(clip_id, new_lid);
+                }
             }
             *active_layer = project
                 .timeline
@@ -355,14 +356,79 @@ pub(super) fn dispatch_editing(
             DispatchResult::structural()
         }
         PanelAction::ContextGroupSelectedLayers => {
-            // TODO: Wire to EditingService.GroupSelectedLayers
-            log::warn!("Group selected layers — not yet implemented");
-            DispatchResult::handled()
+            let selected_ids: Vec<manifold_core::LayerId> =
+                selection.selected_layer_ids.iter().cloned().collect();
+            if selected_ids.len() >= 2 {
+                let valid = selected_ids.iter().all(|id| {
+                    project
+                        .timeline
+                        .layers
+                        .iter()
+                        .find(|l| l.layer_id == *id)
+                        .is_some_and(|l| l.parent_layer_id.is_none() && !l.is_group())
+                });
+                if valid {
+                    let original_order = project.timeline.layers.clone();
+                    let cmd =
+                        manifold_editing::commands::layer::GroupLayersCommand::new(
+                            selected_ids, original_order,
+                        );
+                    {
+                        let mut boxed: Box<
+                            dyn manifold_editing::command::Command + Send,
+                        > = Box::new(cmd);
+                        boxed.execute(project);
+                        ContentCommand::send(
+                            content_tx,
+                            ContentCommand::Execute(boxed),
+                        );
+                    }
+                    selection.clear_selection();
+                }
+            }
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::MarkCompositorDirty,
+            );
+            DispatchResult::structural()
         }
         PanelAction::ContextUngroup(layer_idx) => {
-            // TODO: Wire to EditingService.Ungroup
-            log::warn!("Ungroup layer {} — not yet implemented", layer_idx);
-            DispatchResult::handled()
+            let idx = *layer_idx;
+            if let Some(layer) = project.timeline.layers.get(idx)
+                && layer.is_group()
+            {
+                    let group_layer = layer.clone();
+                    let group_id = group_layer.layer_id.clone();
+                    let child_ids: Vec<manifold_core::LayerId> = project
+                        .timeline
+                        .layers
+                        .iter()
+                        .filter(|l| {
+                            l.parent_layer_id.as_ref() == Some(&group_id)
+                        })
+                        .map(|l| l.layer_id.clone())
+                        .collect();
+                    let original_order = project.timeline.layers.clone();
+                    let cmd =
+                        manifold_editing::commands::layer::UngroupLayersCommand::new(
+                            group_layer, idx, child_ids, original_order,
+                        );
+                    {
+                        let mut boxed: Box<
+                            dyn manifold_editing::command::Command + Send,
+                        > = Box::new(cmd);
+                        boxed.execute(project);
+                        ContentCommand::send(
+                            content_tx,
+                            ContentCommand::Execute(boxed),
+                        );
+                    }
+                }
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::MarkCompositorDirty,
+            );
+            DispatchResult::structural()
         }
 
         PanelAction::ContextSetLayerColor(layer_idx, color) => {

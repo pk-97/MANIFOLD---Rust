@@ -1373,8 +1373,8 @@ impl TimelineViewportPanel {
             let id = tree.add_panel(-1, tr.x, clamped_y, tr.width, clamped_h, style) as i32;
             self.track_bg_ids.push(id);
 
-            // Group accent bar (only if top is visible)
-            if track.is_group
+            // Group child accent bar (only if top is visible)
+            if !track.is_group
                 && y >= tr_top
                 && let Some(accent) = track.accent_color
             {
@@ -1395,17 +1395,19 @@ impl TimelineViewportPanel {
             // From Unity ViewportManager.GenerateCollapsedGroupTexture (lines 700-770).
             if track.is_group && track.is_collapsed && !track.child_layer_indices.is_empty() {
                 let child_count = track.child_layer_indices.len();
-                let rows_per_child = 2.0_f32.min(clamped_h / child_count.max(1) as f32);
+                let rows_per_child = clamped_h / child_count.max(1) as f32;
                 let (min_beat, max_beat) = self.visible_beat_range();
 
                 for (ci, &child_idx) in track.child_layer_indices.iter().enumerate() {
                     let child_y = clamped_y + ci as f32 * rows_per_child;
 
                     // Render clips of this child layer as tiny rects
-                    for clip in &self.clips {
-                        if clip.layer_index != child_idx {
-                            continue;
-                        }
+                    let child_clips = if child_idx < self.clips_by_layer.len() {
+                        &self.clips_by_layer[child_idx]
+                    } else {
+                        continue;
+                    };
+                    for clip in child_clips {
                         let clip_start_f32 = clip.start_beat.as_f32();
                         let clip_end = clip_start_f32 + clip.duration_beats.as_f32();
                         if clip_end < min_beat || clip_start_f32 > max_beat {

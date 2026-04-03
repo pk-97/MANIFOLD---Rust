@@ -237,6 +237,38 @@ fn delete_layer_undo_roundtrip() {
 }
 
 #[test]
+fn delete_group_clears_children_parent_ids() {
+    let mut project = make_test_project();
+    // Create a group with children
+    let group = Layer::new("Group".into(), LayerType::Group, 0);
+    let group_id = group.layer_id.clone();
+    project.timeline.insert_layer(0, group);
+
+    // Set children's parent
+    for i in 1..project.timeline.layers.len() {
+        project.timeline.layers[i].parent_layer_id = Some(group_id.clone());
+    }
+    let child_count = project.timeline.layers.len() - 1;
+
+    let group_layer = project.timeline.layers[0].clone();
+    let mut cmd = DeleteLayerCommand::new(group_layer);
+
+    cmd.execute(&mut project);
+    // Children should have parent cleared
+    for layer in &project.timeline.layers {
+        assert!(layer.parent_layer_id.is_none(), "child {} still has parent", layer.name);
+    }
+
+    cmd.undo(&mut project);
+    // Group restored, children re-parented
+    assert!(project.timeline.layers[0].is_group());
+    let reparented = project.timeline.layers.iter()
+        .filter(|l| l.parent_layer_id.as_ref() == Some(&group_id))
+        .count();
+    assert_eq!(reparented, child_count);
+}
+
+#[test]
 fn reorder_layer_undo_roundtrip() {
     let mut project = make_test_project();
     let old_order = project.timeline.layers.clone();

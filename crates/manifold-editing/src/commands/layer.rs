@@ -72,12 +72,16 @@ impl Command for AddLayerCommand {
 }
 
 /// Delete a layer from the timeline.
+/// If the deleted layer is a group, its children's parent_layer_id is cleared
+/// (matching Unity's behavior where children become root layers).
 #[derive(Debug)]
 pub struct DeleteLayerCommand {
     layer: Option<Layer>,
     layer_id: LayerId,
     /// Remembered during execute so undo re-inserts at the same position.
     deleted_at_index: usize,
+    /// Children whose parent_layer_id was cleared when a group was deleted.
+    orphaned_children: Vec<(LayerId, Option<LayerId>)>,
 }
 
 impl DeleteLayerCommand {
@@ -87,6 +91,7 @@ impl DeleteLayerCommand {
             layer: Some(layer),
             layer_id,
             deleted_at_index: 0,
+            orphaned_children: Vec::new(),
         }
     }
 }
@@ -95,6 +100,17 @@ impl Command for DeleteLayerCommand {
     fn execute(&mut self, project: &mut Project) {
         if let Some(idx) = project.timeline.find_layer_index_by_id(&self.layer_id) {
             self.deleted_at_index = idx;
+
+            // Clear parent_layer_id on children referencing this layer
+            self.orphaned_children.clear();
+            for layer in &mut project.timeline.layers {
+                if layer.parent_layer_id.as_ref() == Some(&self.layer_id) {
+                    self.orphaned_children
+                        .push((layer.layer_id.clone(), layer.parent_layer_id.clone()));
+                    layer.parent_layer_id = None;
+                }
+            }
+
             self.layer = project.timeline.remove_layer(idx);
         }
     }
@@ -104,6 +120,15 @@ impl Command for DeleteLayerCommand {
             let idx = self.deleted_at_index.min(project.timeline.layers.len());
             project.timeline.insert_layer(idx, layer.clone());
             self.layer = Some(layer);
+
+            // Restore parent_layer_id on previously orphaned children
+            for (child_id, old_parent) in &self.orphaned_children {
+                if let Some((_, child)) =
+                    project.timeline.find_layer_by_id_mut(child_id)
+                {
+                    child.parent_layer_id = old_parent.clone();
+                }
+            }
         }
     }
 

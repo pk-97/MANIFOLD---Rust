@@ -719,8 +719,18 @@ pub fn sync_project_data(
                     is_collapsed: layer.is_collapsed,
                     is_group: layer.is_group(),
                     is_generator: layer.layer_type == LayerType::Generator,
-                    is_muted: layer.is_muted,
-                    is_solo: layer.is_solo,
+                    is_muted: layer.is_muted
+                        || layer.parent_layer_id.as_ref().is_some_and(|pid| {
+                            project.timeline.layers.iter().any(|l| {
+                                l.layer_id == *pid && l.is_muted
+                            })
+                        }),
+                    is_solo: layer.is_solo
+                        || layer.parent_layer_id.as_ref().is_some_and(|pid| {
+                            project.timeline.layers.iter().any(|l| {
+                                l.layer_id == *pid && l.is_solo
+                            })
+                        }),
                     parent_layer_id: layer.parent_layer_id.as_ref().map(|id| id.to_string()),
                     blend_mode: format!("{:?}", layer.default_blend_mode),
                     generator_type: layer.gen_params().map(|g| {
@@ -782,6 +792,12 @@ pub fn sync_project_data(
                     });
                     if parent_collapsed {
                         0.0
+                    } else if layer.is_collapsed {
+                        if layer.layer_type == manifold_core::types::LayerType::Generator {
+                            color::COLLAPSED_GEN_TRACK_HEIGHT
+                        } else {
+                            color::COLLAPSED_TRACK_HEIGHT
+                        }
                     } else {
                         color::TRACK_HEIGHT
                     }

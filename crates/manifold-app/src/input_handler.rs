@@ -204,6 +204,8 @@ impl InputHandler {
         {
             if self.inspector_has_focus {
                 host.handle_effect_ungroup();
+            } else {
+                host.ungroup_selected_layers();
             }
             return true;
         }

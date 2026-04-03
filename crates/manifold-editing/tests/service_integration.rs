@@ -304,7 +304,8 @@ fn create_clip_at_position() {
     let initial = project.timeline.layers[0].clips.len();
 
     let (mut cmd, _clip_id) =
-        EditingService::create_clip_at_position(&mut project, Beats(2.0), 0, Beats(4.0), 0.5);
+        EditingService::create_clip_at_position(&mut project, Beats(2.0), 0, Beats(4.0), 0.5)
+            .expect("should create clip on non-group layer");
     cmd.execute(&mut project);
     project.timeline.rebuild_clip_lookup();
 
@@ -346,7 +347,8 @@ fn multi_step_undo_redo() {
             0,
             Beats(4.0),
             0.5,
-        );
+        )
+        .unwrap();
         service.execute(cmd, &mut project);
     }
     assert_eq!(project.timeline.layers[0].clips.len(), 5);
@@ -372,7 +374,7 @@ fn data_version_increments() {
     let mut service = EditingService::new();
     assert_eq!(service.data_version(), 0);
 
-    let (cmd, _) = EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(4.0), 0.5);
+    let (cmd, _) = EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(4.0), 0.5).unwrap();
     service.execute(cmd, &mut project);
     assert_eq!(service.data_version(), 1);
 
@@ -390,7 +392,7 @@ fn dirty_flag_tracks_saves() {
 
     assert!(!service.is_dirty());
 
-    let (cmd, _) = EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(4.0), 0.5);
+    let (cmd, _) = EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(4.0), 0.5).unwrap();
     service.execute(cmd, &mut project);
     assert!(service.is_dirty());
 

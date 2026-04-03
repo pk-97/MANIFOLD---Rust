@@ -808,7 +808,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         let selected_ids: Vec<LayerId> =
             self.selection.selected_layer_ids.iter().cloned().collect();
 
-        if let Some(project) = Some(&*self.project) {
+        if let Some(project) = Some(&mut *self.project) {
             // Validate: none are nested (have parent) or group layers
             let mut layers_to_group = Vec::new();
             for layer in &project.timeline.layers {
@@ -829,10 +829,65 @@ impl TimelineInputHost for AppInputHost<'_> {
                 layers_to_group,
                 original_order,
             );
-
+            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                Box::new(cmd);
+            boxed.execute(project);
             ContentCommand::send(
                 self.content_tx,
-                crate::content_command::ContentCommand::Execute(Box::new(cmd)),
+                crate::content_command::ContentCommand::Execute(boxed),
+            );
+        }
+
+        self.selection.clear_selection();
+        ContentCommand::send(
+            self.content_tx,
+            crate::content_command::ContentCommand::MarkCompositorDirty,
+        );
+        *self.needs_rebuild = true;
+        *self.needs_structural_sync = true;
+    }
+
+    fn ungroup_selected_layers(&mut self) {
+        // If exactly one layer is selected and it's a group, dissolve it.
+        if self.selection.layer_selection_count() != 1 {
+            return;
+        }
+        let selected_id = self.selection.selected_layer_ids.iter().next().cloned();
+        if let Some(id) = selected_id
+            && let Some(project) = Some(&mut *self.project)
+        {
+            let (idx, layer) = match project
+                .timeline
+                .layers
+                .iter()
+                .enumerate()
+                .find(|(_, l)| l.layer_id == id)
+            {
+                Some((i, l)) => (i, l),
+                None => return,
+            };
+            if !layer.is_group() {
+                return;
+            }
+            let group_layer = layer.clone();
+            let group_id = group_layer.layer_id.clone();
+            let child_ids: Vec<LayerId> = project
+                .timeline
+                .layers
+                .iter()
+                .filter(|l| l.parent_layer_id.as_ref() == Some(&group_id))
+                .map(|l| l.layer_id.clone())
+                .collect();
+            let original_order = project.timeline.layers.clone();
+            let cmd = manifold_editing::commands::layer::UngroupLayersCommand::new(
+                group_layer, idx, child_ids, original_order,
+            );
+            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                Box::new(cmd);
+            boxed.execute(project);
+            ContentCommand::send(
+                self.content_tx,
+                crate::content_command::ContentCommand::Execute(boxed),
             );
         }
 

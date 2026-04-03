@@ -241,35 +241,21 @@ pub(super) fn dispatch_layer(
         }
         PanelAction::NewClipClicked(idx) => {
             let beat = content_state.current_beat;
+            let spb = 60.0 / project.settings.bpm.0.max(1.0);
+            if let Some((cmd, _)) =
+                EditingService::create_clip_at_position(project, beat, *idx, Beats(4.0), spb)
             {
-                let (cmd, _) =
-                    EditingService::create_clip_at_position(
-                        project,
-                        beat,
-                        *idx,
-                        Beats(4.0),
-                        60.0 / project.settings.bpm.0.max(1.0),
-                    );
-                {
-                    ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
-                }
+                ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
             }
             DispatchResult::structural()
         }
         PanelAction::AddGenClipClicked(idx) => {
             let beat = content_state.current_beat;
+            let spb = 60.0 / project.settings.bpm.0.max(1.0);
+            if let Some((cmd, _)) =
+                EditingService::create_clip_at_position(project, beat, *idx, Beats(4.0), spb)
             {
-                let (cmd, _) =
-                    EditingService::create_clip_at_position(
-                        project,
-                        beat,
-                        *idx,
-                        Beats(4.0),
-                        60.0 / project.settings.bpm.0.max(1.0),
-                    );
-                {
-                    ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
-                }
+                ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
             }
             DispatchResult::structural()
         }

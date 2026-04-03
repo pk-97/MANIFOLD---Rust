@@ -145,6 +145,12 @@ impl CoordinateMapper {
                 let parent = find_parent_in_list(layers, layer.parent_layer_id.as_deref());
                 height = if parent.is_some_and(|p| p.is_collapsed) {
                     0.0 // Hidden: parent is collapsed
+                } else if layer.is_collapsed {
+                    if layer.layer_type == LayerType::Generator {
+                        color::COLLAPSED_GEN_TRACK_HEIGHT
+                    } else {
+                        color::COLLAPSED_TRACK_HEIGHT
+                    }
                 } else {
                     color::TRACK_HEIGHT
                 };

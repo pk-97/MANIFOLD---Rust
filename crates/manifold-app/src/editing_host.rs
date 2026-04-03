@@ -210,7 +210,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             let spb = 60.0 / project.settings.bpm.0.max(1.0);
             // AddClipCommand enforces non-overlap internally.
             let (cmd, id) =
-                EditingService::create_clip_at_position(project, beat, layer, duration, spb);
+                EditingService::create_clip_at_position(project, beat, layer, duration, spb)?;
             {
                 let mut cmd = cmd;
                 cmd.execute(project);

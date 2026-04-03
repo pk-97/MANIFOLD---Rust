@@ -133,6 +133,11 @@ impl DropdownPanel {
         self.is_open
     }
 
+    /// Get the label of a menu item by index.
+    pub fn item_label(&self, index: usize) -> Option<&str> {
+        self.items.get(index).map(|i| i.label.as_str())
+    }
+
     /// Returns true when the dropdown is open and `pos` is inside its bounds.
     pub fn contains_point(&self, pos: Vec2) -> bool {
         self.is_open && self.container_bounds.contains(pos)

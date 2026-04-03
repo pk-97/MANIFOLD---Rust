@@ -632,6 +632,7 @@ impl EditingService {
     // ─── Create clip ───
 
     /// Create a new clip at the given beat and layer.
+    /// Returns None if the target layer is a group (groups cannot hold clips).
     /// Returns (command, clip_id) so the caller can track the new clip.
     pub fn create_clip_at_position(
         project: &mut Project,
@@ -639,10 +640,13 @@ impl EditingService {
         layer_index: usize,
         duration_beats: Beats,
         spb: f32,
-    ) -> (Box<dyn Command>, ClipId) {
-        let layer = project.timeline.layers.get(layer_index);
-        let is_generator = layer.is_some_and(|l| l.layer_type == LayerType::Generator);
-        let layer_id = layer.map(|l| l.layer_id.clone()).unwrap_or_default();
+    ) -> Option<(Box<dyn Command>, ClipId)> {
+        let layer = project.timeline.layers.get(layer_index)?;
+        if layer.is_group() {
+            return None;
+        }
+        let is_generator = layer.layer_type == LayerType::Generator;
+        let layer_id = layer.layer_id.clone();
 
         let clip = if is_generator {
             TimelineClip::new_generator(beat, duration_beats)
@@ -655,7 +659,7 @@ impl EditingService {
         };
 
         let clip_id = clip.id.clone();
-        (Box::new(AddClipCommand::new(clip, layer_id, spb)), clip_id)
+        Some((Box::new(AddClipCommand::new(clip, layer_id, spb)), clip_id))
     }
 
     // ─── Duplicate ───

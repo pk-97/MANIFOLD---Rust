@@ -926,15 +926,25 @@ impl UIRoot {
                 true
             }
             PanelAction::LayerHeaderRightClicked(layer_idx) => {
-                let mut items = vec![
-                    DropdownItem::new("Paste"),
-                    DropdownItem::new("Import MIDI File"),
-                    DropdownItem::new("Insert Video Layer"),
-                    DropdownItem::new("Insert Generator Layer"),
-                    DropdownItem::new("Duplicate Layer"),
-                    DropdownItem::new("Group Selected Layers"),
-                    DropdownItem::new("Ungroup"),
-                ];
+                let layer_info = self.layer_headers.layer_info(*layer_idx);
+                let is_group = layer_info.is_some_and(|l| l.is_group);
+
+                let mut items = vec![DropdownItem::new("Paste")];
+                if !is_group {
+                    items.push(DropdownItem::new("Import MIDI File"));
+                }
+                items.push(DropdownItem::new("Insert Video Layer"));
+                items.push(DropdownItem::new("Insert Generator Layer"));
+                items.push(DropdownItem::new("Duplicate Layer"));
+                // "Group" only when 2+ non-group, non-nested layers are selected
+                let can_group = self.layer_headers.layer_count() >= 2
+                    && !is_group;
+                if can_group {
+                    items.push(DropdownItem::new("Group Selected Layers"));
+                }
+                if is_group {
+                    items.push(DropdownItem::new("Ungroup"));
+                }
                 // Only allow delete if more than 1 layer exists
                 if self.layer_headers.layer_count() > 1 {
                     items.push(DropdownItem::new("Delete Layer"));
@@ -1078,17 +1088,33 @@ impl UIRoot {
                 3 => Some(PanelAction::ContextAddGeneratorLayer(layer)),
                 _ => None,
             },
-            DropdownContext::LayerContext(layer_idx) => match index {
-                0 => Some(PanelAction::ContextPasteAtLayer(layer_idx)),
-                1 => Some(PanelAction::ContextImportMidi(layer_idx)),
-                2 => Some(PanelAction::ContextAddVideoLayer(layer_idx)),
-                3 => Some(PanelAction::ContextAddGeneratorLayer(layer_idx)),
-                4 => Some(PanelAction::ContextDuplicateLayer(layer_idx)),
-                5 => Some(PanelAction::ContextGroupSelectedLayers),
-                6 => Some(PanelAction::ContextUngroup(layer_idx)),
-                7 => Some(PanelAction::ContextDeleteLayer(layer_idx)),
-                _ => None,
-            },
+            DropdownContext::LayerContext(layer_idx) => {
+                match self.dropdown.item_label(index) {
+                    Some("Paste") => Some(PanelAction::ContextPasteAtLayer(layer_idx)),
+                    Some("Import MIDI File") => {
+                        Some(PanelAction::ContextImportMidi(layer_idx))
+                    }
+                    Some("Insert Video Layer") => {
+                        Some(PanelAction::ContextAddVideoLayer(layer_idx))
+                    }
+                    Some("Insert Generator Layer") => {
+                        Some(PanelAction::ContextAddGeneratorLayer(layer_idx))
+                    }
+                    Some("Duplicate Layer") => {
+                        Some(PanelAction::ContextDuplicateLayer(layer_idx))
+                    }
+                    Some("Group Selected Layers") => {
+                        Some(PanelAction::ContextGroupSelectedLayers)
+                    }
+                    Some("Ungroup") => {
+                        Some(PanelAction::ContextUngroup(layer_idx))
+                    }
+                    Some("Delete Layer") => {
+                        Some(PanelAction::ContextDeleteLayer(layer_idx))
+                    }
+                    _ => None,
+                }
+            }
             DropdownContext::ClkDevice => Some(PanelAction::SetMidiClockDevice(index as i32)),
             DropdownContext::GenCardContext => match index {
                 0 => Some(PanelAction::CopyGenerator),

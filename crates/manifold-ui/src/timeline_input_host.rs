@@ -157,6 +157,9 @@ pub trait TimelineInputHost {
     /// Group selected layers.
     fn group_selected_layers(&mut self);
 
+    /// Ungroup the selected group layer.
+    fn ungroup_selected_layers(&mut self);
+
     /// Delete selected layers.
     fn delete_selected_layers(&mut self);
 

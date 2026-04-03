@@ -271,7 +271,7 @@ fn compute_layer_row(
     }
 
     // ── Top row: Chevron | Name | DragHandle ──
-    d.has_chevron = is_group || !is_child;
+    d.has_chevron = true;
     let chevron_w = if d.has_chevron { CHEVRON_W } else { 0.0 };
     if d.has_chevron {
         d.chevron = Rect::new(pad, y, CHEVRON_W, BTN_H);
@@ -544,6 +544,11 @@ impl LayerHeaderPanel {
     /// Number of layers in the current build.
     pub fn layer_count(&self) -> usize {
         self.rows.len()
+    }
+
+    /// Get layer info by index (for context menu filtering).
+    pub fn layer_info(&self, index: usize) -> Option<&LayerInfo> {
+        self.layers.get(index)
     }
 
     /// Set the active (focused) layer by LayerId. Applied in update() via dirty-check.
