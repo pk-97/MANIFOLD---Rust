@@ -413,10 +413,10 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd_whole_labels(
             "Pattern",
             0.0,
-            8.0,
+            7.0,
             0.0,
             &[
-                "Classic", "Rings", "Diamond", "Warp", "Cells", "Noise", "Pulse", "Fractal",
+                "Classic", "Rings", "Diamond", "Warp", "Cells", "Noise", "Fractal",
                 "Lattice",
             ],
             "pattern",
