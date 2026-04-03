@@ -39,15 +39,20 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let ndc = (uv * 2.0 - 1.0) * u.uv_scale;
     let screen = vec2<f32>(ndc.x * u.aspect, -ndc.y);
 
+    // Tilt = max elevation angle above disk. Rotate sweeps around a tilted
+    // great circle so camera height varies — giving different lensing views.
+    // rotate=0 → max elevation (tilt above disk)
+    // rotate=90 → edge-on from the side
+    // rotate=180 → max elevation below disk
     let cos_tilt = cos(u.tilt_rad);
     let sin_tilt = sin(u.tilt_rad);
     let cos_rot = cos(u.rotate_rad);
     let sin_rot = sin(u.rotate_rad);
 
     let cam_pos = vec3<f32>(
-        u.cam_dist * cos_tilt * cos_rot,
-        u.cam_dist * sin_tilt,
-        u.cam_dist * cos_tilt * sin_rot,
+        u.cam_dist * cos_tilt,
+        u.cam_dist * sin_tilt * cos_rot,
+        u.cam_dist * sin_tilt * sin_rot,
     );
     let fwd = normalize(-cam_pos);
     let world_up = vec3<f32>(0.0, 1.0, 0.0);
