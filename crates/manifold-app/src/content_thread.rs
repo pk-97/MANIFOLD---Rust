@@ -1015,7 +1015,11 @@ impl ContentThread {
                     ) {
                         self.engine
                             .set_beat(Beats::from_f32(clk_beat));
-                        self.engine.sync_time_from_beat();
+                        // Do NOT call sync_time_from_beat() here.
+                        // Time is set by nudge_time() in sync_position_to_playback.
+                        // Calling both causes time to oscillate between two slightly
+                        // different values every frame (nudge vs beat→time conversion).
+                        // Unity only sets currentBeat here, not time.
                     }
                 }
                 // else: beat derived from time (engine handles this in advance_time)
