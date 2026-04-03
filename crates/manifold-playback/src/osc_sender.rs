@@ -134,6 +134,7 @@ impl OscPositionSender {
                     self.try_send_float("/manifold/play", current_beat);
                 }
                 arbiter.set_manifold_owns_at(Seconds(now));
+                arbiter.set_pending_seek(current_beat, Seconds(now));
             } else {
                 for _ in 0..TRANSPORT_SEND_COUNT {
                     self.try_send_int("/manifold/transport", 0);
@@ -181,6 +182,8 @@ impl OscPositionSender {
         let beat_delta = (current_beat - expected_beat).abs();
         if beat_delta > SEEK_THRESHOLD_BEATS {
             self.try_send_float("/manifold/position", current_beat);
+            // Tell CLK to hold position at seek target until Ableton confirms.
+            arbiter.set_pending_seek(current_beat, Seconds(now));
             self.last_sent_beat = current_beat;
             self.last_sent_realtime = now;
             return;

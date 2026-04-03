@@ -607,21 +607,33 @@ impl MidiClockSyncController {
         }
 
         // Position sync — ALWAYS when CLK is receiving.
-        // CLK is the authoritative position source. No ownership gate, no
-        // cooldown gate. During a Manifold→Ableton handoff, CLK may briefly
-        // report a stale position (10-50ms until M4L deferred seek lands),
-        // but that's correct — we follow what Ableton is actually doing.
+        // CLK is the authoritative position source.
+        //
+        // Exception: when Manifold just sent a seek to Ableton via SYNC,
+        // CLK briefly reports the OLD position (~10-50ms round trip).
+        // Hold the playhead at the seek target until CLK confirms it,
+        // preventing the visible snap-back-then-forward glitch.
         if has_recent_clock_activity {
-            self.current_position_sixteenths = pos_sixteenths;
-            self.update_position_display(pos_sixteenths);
-            self.sync_position_to_playback(
-                pos_sixteenths,
-                clock_tick,
-                arbiter,
-                arb_target,
-                sync_target,
-                authority,
-            );
+            let clk_beat =
+                (pos_sixteenths as f32 + clock_tick as f32 / 6.0) / 4.0;
+
+            if arbiter.should_hold_for_pending_seek(clk_beat, now) {
+                // CLK hasn't caught up to the seek target yet — skip nudge.
+                // The engine stays at the seek position the user intended.
+                self.current_position_sixteenths = pos_sixteenths;
+                self.update_position_display(pos_sixteenths);
+            } else {
+                self.current_position_sixteenths = pos_sixteenths;
+                self.update_position_display(pos_sixteenths);
+                self.sync_position_to_playback(
+                    pos_sixteenths,
+                    clock_tick,
+                    arbiter,
+                    arb_target,
+                    sync_target,
+                    authority,
+                );
+            }
         }
     }
 

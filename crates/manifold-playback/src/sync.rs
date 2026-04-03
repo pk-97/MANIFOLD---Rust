@@ -81,17 +81,21 @@ pub struct SyncArbiter {
     /// Wall-clock time when `manifold_owns_playback` was last set.
     /// Prevents premature clearing during the OSC→DAW→MIDI round trip.
     owns_set_time: Seconds,
-    /// Wall-clock time of the last local seek initiated from MANIFOLD while playing.
-    /// Used to briefly suppress stale CLK position during the OSC→Ableton→CLK round trip.
-    last_user_seek_time: Seconds,
+    /// Pending seek: when Manifold sends a seek via SYNC (OSC → Ableton),
+    /// hold the local playhead at the target beat until CLK confirms it.
+    /// This prevents the playhead from snapping back to the old position
+    /// during the OSC→Ableton→CLK round trip (~10-50ms).
+    pending_seek_beat: Option<f32>,
+    pending_seek_time: Seconds,
 }
 
 /// Grace period (seconds) after setting manifold_owns before it can be cleared.
 /// Covers OSC send → Ableton processes → MIDI Clock reflects new state.
 const OWNERSHIP_GRACE_PERIOD: f32 = 0.5;
-/// Cooldown (seconds) after a local seek during playback before external
-/// position sync is allowed to drive again.
-const SEEK_COOLDOWN: f64 = 0.3;
+/// Maximum time to hold a pending seek before giving up (CLK didn't confirm).
+const PENDING_SEEK_TIMEOUT: f64 = 0.5;
+/// Beat proximity threshold — CLK is "close enough" to the seek target.
+const PENDING_SEEK_TOLERANCE_BEATS: f32 = 2.0;
 
 impl SyncArbiter {
     pub fn new() -> Self {
@@ -99,7 +103,8 @@ impl SyncArbiter {
             suppress_next_transport: false,
             manifold_owns_playback: false,
             owns_set_time: Seconds(-999.0),
-            last_user_seek_time: Seconds(-999.0),
+            pending_seek_beat: None,
+            pending_seek_time: Seconds(-999.0),
         }
     }
 
@@ -134,12 +139,41 @@ impl SyncArbiter {
         self.manifold_owns_playback = false;
     }
 
-    pub fn set_user_seek_time(&mut self, now: Seconds) {
-        self.last_user_seek_time = now;
+    /// Record that Manifold just sent a seek to Ableton via SYNC.
+    /// CLK will hold the local playhead at `beat` until CLK confirms
+    /// the position (within tolerance) or the timeout expires.
+    pub fn set_pending_seek(&mut self, beat: f32, now: Seconds) {
+        self.pending_seek_beat = Some(beat);
+        self.pending_seek_time = now;
     }
 
-    pub fn is_seek_cooldown_active(&self, now: Seconds) -> bool {
-        (now - self.last_user_seek_time).0 < SEEK_COOLDOWN
+    /// Check if CLK should skip nudge_time because a pending seek hasn't
+    /// been confirmed yet. Returns true if CLK's reported beat is still
+    /// far from the seek target (Ableton hasn't caught up).
+    /// Returns false (resume normal tracking) if:
+    /// - No pending seek
+    /// - CLK beat is close to the target (confirmed)
+    /// - Timeout expired (give up waiting)
+    pub fn should_hold_for_pending_seek(&mut self, clk_beat: f32, now: Seconds) -> bool {
+        let target = match self.pending_seek_beat {
+            Some(b) => b,
+            None => return false,
+        };
+
+        // Timeout — give up, resume CLK tracking
+        if (now - self.pending_seek_time).0 >= PENDING_SEEK_TIMEOUT {
+            self.pending_seek_beat = None;
+            return false;
+        }
+
+        // CLK caught up — confirmed, resume tracking
+        if (clk_beat - target).abs() < PENDING_SEEK_TOLERANCE_BEATS {
+            self.pending_seek_beat = None;
+            return false;
+        }
+
+        // Still waiting — hold position
+        true
     }
 
     pub fn play(

@@ -1002,17 +1002,21 @@ impl ContentThread {
                 }
             }
             ClockAuthority::MidiClock => {
-                if !self.sync_arbiter.manifold_owns_playback
-                    && !self
-                        .sync_arbiter
-                        .is_seek_cooldown_active(self.time_since_start)
-                    && let Some(ref clk) = self.transport_controller.midi_clock_sync
+                if let Some(ref clk) = self.transport_controller.midi_clock_sync
                     && clk.is_midi_clock_enabled()
                     && clk.is_receiving_clock()
                 {
-                    self.engine
-                        .set_beat(Beats::from_f32(clk.current_clock_beat()));
-                    self.engine.sync_time_from_beat();
+                    let clk_beat = clk.current_clock_beat();
+                    // Skip beat override if holding for a pending seek
+                    // (Manifold sent a seek to Ableton, waiting for CLK confirmation).
+                    if !self.sync_arbiter.should_hold_for_pending_seek(
+                        clk_beat,
+                        self.time_since_start,
+                    ) {
+                        self.engine
+                            .set_beat(Beats::from_f32(clk_beat));
+                        self.engine.sync_time_from_beat();
+                    }
                 }
                 // else: beat derived from time (engine handles this in advance_time)
             }
