@@ -618,7 +618,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
     // ── MetallicGlass ──
     // All defaults match the TD tutorial spec exactly.
     let params = vec![
-        pd("Feedback", 0.9, 1.0, 0.98, Some("F3"), "feedback"),
+        pd("Feedback", 0.5, 1.0, 0.98, Some("F2"), "feedback"),
         pd("Noise Scale", 0.1, 2.0, 0.75, Some("F2"), "noiseScale"),
         pd("Noise Speed", 0.01, 1.0, 0.1, Some("F3"), "noiseSpeed"),
         pd("Edge Str", 0.5, 20.0, 5.0, Some("F1"), "edgeStr"),
