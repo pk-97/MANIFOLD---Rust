@@ -113,7 +113,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // non-trivial value. This produces a smooth undulating surface.
     let feedback = textureLoad(src_tex, mirrored_pos, 0);
     let feedback_luma = dot(feedback.rgb, vec3<f32>(0.299, 0.587, 0.114));
-    let height_val = levels_height(feedback_luma);
+    // Remap luma from [0,1] to [0.3,1.0] so the contrast adjustment in
+    // levels_height never crushes values to zero. Prevents flat spots.
+    let remapped = feedback_luma * 0.7 + 0.3;
+    let height_val = levels_height(remapped);
 
     // METALLIC: Sobel edges at mirrored position.
     // Edges isolate the "veins" — boundaries between feedback regions.
