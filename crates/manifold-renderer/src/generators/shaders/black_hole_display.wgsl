@@ -100,14 +100,14 @@ fn star_field(dir: vec3<f32>, brightness: f32) -> vec3<f32> {
 
     var stars = vec3<f32>(0.0);
 
-    // Layer 1: bright sparse stars
-    stars += star_layer(theta, phi, 18.0, 0.955, 2.0, 0.0);
+    // Layer 1: bright stars
+    stars += star_layer(theta, phi, 18.0, 0.92, 2.0, 0.0);
 
     // Layer 2: medium density
-    stars += star_layer(theta, phi, 35.0, 0.965, 0.8, 100.0);
+    stars += star_layer(theta, phi, 35.0, 0.93, 0.8, 100.0);
 
     // Layer 3: faint dense field
-    stars += star_layer(theta, phi, 70.0, 0.975, 0.3, 200.0);
+    stars += star_layer(theta, phi, 70.0, 0.94, 0.3, 200.0);
 
     // Subtle galactic band (milky way feel)
     let band_center = 1.5708;
