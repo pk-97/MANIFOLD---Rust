@@ -1,5 +1,5 @@
-use manifold_core::project::Project;
 use manifold_core::types::{ClockAuthority, PlaybackState};
+use manifold_core::project::Project;
 use manifold_core::{Beats, Seconds};
 
 /// Read-only view of playback state for sync controllers.
@@ -40,7 +40,8 @@ pub struct SyncTargetSnapshot {
 impl SyncTargetSnapshot {
     /// Capture a snapshot from any SyncTarget implementor.
     pub fn from_engine(target: &dyn SyncTarget) -> Self {
-        let bpm = target.current_project().map_or(120.0, |p| p.settings.bpm.0);
+        let bpm = target.current_project()
+            .map_or(120.0, |p| p.settings.bpm.0);
         Self {
             state: target.current_state(),
             time: target.current_time(),
@@ -50,15 +51,9 @@ impl SyncTargetSnapshot {
 }
 
 impl SyncTarget for SyncTargetSnapshot {
-    fn current_state(&self) -> PlaybackState {
-        self.state
-    }
-    fn current_time(&self) -> Seconds {
-        self.time
-    }
-    fn is_playing(&self) -> bool {
-        self.state == PlaybackState::Playing
-    }
+    fn current_state(&self) -> PlaybackState { self.state }
+    fn current_time(&self) -> Seconds { self.time }
+    fn is_playing(&self) -> bool { self.state == PlaybackState::Playing }
     fn timeline_beat_to_time(&self, beat: Beats) -> Seconds {
         // Fallback: use BPM for beat→time conversion (no tempo map in snapshot).
         let beat_f = beat.as_f32();
@@ -68,9 +63,7 @@ impl SyncTarget for SyncTargetSnapshot {
             Seconds((beat_f * 0.5) as f64)
         }
     }
-    fn current_project(&self) -> Option<&Project> {
-        None
-    }
+    fn current_project(&self) -> Option<&Project> { None }
 }
 
 /// Structural gatekeeper for sync source authority.
@@ -81,21 +74,21 @@ pub struct SyncArbiter {
     /// Wall-clock time when `manifold_owns_playback` was last set.
     /// Prevents premature clearing during the OSC→DAW→MIDI round trip.
     owns_set_time: Seconds,
-    /// Pending seek: when Manifold sends a seek via SYNC (OSC → Ableton),
-    /// hold the local playhead at the target beat until CLK confirms it.
-    /// This prevents the playhead from snapping back to the old position
-    /// during the OSC→Ableton→CLK round trip (~10-50ms).
-    pending_seek_beat: Option<f32>,
-    pending_seek_time: Seconds,
+    /// Wall-clock time of the last user-initiated seek (ruler scrub, click, etc.).
+    /// During the cooldown window, MIDI Clock position sync and beat derivation
+    /// are suppressed so Ableton has time to receive the OSC seek and update
+    /// its MIDI Clock output. Without this, MIDI Clock would drag the playhead
+    /// back to the pre-seek position during the round-trip latency.
+    last_user_seek_time: Seconds,
 }
 
 /// Grace period (seconds) after setting manifold_owns before it can be cleared.
 /// Covers OSC send → Ableton processes → MIDI Clock reflects new state.
 const OWNERSHIP_GRACE_PERIOD: f32 = 0.5;
-/// Maximum time to hold a pending seek before giving up (CLK didn't confirm).
-const PENDING_SEEK_TIMEOUT: f64 = 0.5;
-/// Beat proximity threshold — CLK is "close enough" to the seek target.
-const PENDING_SEEK_TOLERANCE_BEATS: f32 = 2.0;
+
+/// Cooldown (seconds) after a user-initiated seek during which MIDI Clock
+/// position sync is suppressed. Covers the OSC → Ableton → MIDI Clock round trip.
+const SEEK_COOLDOWN: f64 = 0.3;
 
 impl SyncArbiter {
     pub fn new() -> Self {
@@ -103,8 +96,7 @@ impl SyncArbiter {
             suppress_next_transport: false,
             manifold_owns_playback: false,
             owns_set_time: Seconds(-999.0),
-            pending_seek_beat: None,
-            pending_seek_time: Seconds(-999.0),
+            last_user_seek_time: Seconds(-999.0),
         }
     }
 
@@ -120,7 +112,7 @@ impl SyncArbiter {
         // Uses owns_set_time field; caller must have called update_time() this frame.
     }
 
-    /// Set manifold_owns for transport echo suppression.
+    /// Set manifold_owns with a wall-clock timestamp for grace period tracking.
     pub fn set_manifold_owns_at(&mut self, now: Seconds) {
         self.manifold_owns_playback = true;
         self.owns_set_time = now;
@@ -139,108 +131,39 @@ impl SyncArbiter {
         self.manifold_owns_playback = false;
     }
 
+    /// Record that a user-initiated seek just happened. Starts a brief cooldown
+    /// during which MIDI Clock position sync is suppressed (ruler scrub, click-seek, etc.).
     pub fn set_user_seek_time(&mut self, now: Seconds) {
-        self.pending_seek_time = now;
+        self.last_user_seek_time = now;
     }
 
     /// Whether the seek cooldown is active (MIDI Clock position sync should be suppressed).
-    /// During the cooldown, the engine advances internally while Ableton catches
-    /// up to the new position via OSC.
     pub fn is_seek_cooldown_active(&self, now: Seconds) -> bool {
-        (now - self.pending_seek_time).0 < PENDING_SEEK_TIMEOUT
-            && self.pending_seek_beat.is_some()
+        (now - self.last_user_seek_time).0 < SEEK_COOLDOWN
     }
 
-    /// Record that Manifold just sent a seek to Ableton via SYNC.
-    /// CLK will hold the local playhead at `beat` until CLK confirms
-    /// the position (within tolerance) or the timeout expires.
-    pub fn set_pending_seek(&mut self, beat: f32, now: Seconds) {
-        self.pending_seek_beat = Some(beat);
-        self.pending_seek_time = now;
-    }
-
-    /// Check if CLK should skip nudge_time because a pending seek hasn't
-    /// been confirmed yet. Returns true if CLK's reported beat is still
-    /// far from the seek target (Ableton hasn't caught up).
-    /// Returns false (resume normal tracking) if:
-    /// - No pending seek
-    /// - CLK beat is close to the target (confirmed)
-    /// - Timeout expired (give up waiting)
-    pub fn should_hold_for_pending_seek(&mut self, clk_beat: f32, now: Seconds) -> bool {
-        let target = match self.pending_seek_beat {
-            Some(b) => b,
-            None => return false,
-        };
-
-        // Timeout — give up, resume CLK tracking
-        if (now - self.pending_seek_time).0 >= PENDING_SEEK_TIMEOUT {
-            self.pending_seek_beat = None;
-            return false;
-        }
-
-        // CLK caught up — confirmed, resume tracking
-        if (clk_beat - target).abs() < PENDING_SEEK_TOLERANCE_BEATS {
-            self.pending_seek_beat = None;
-            return false;
-        }
-
-        // Still waiting — hold position
-        true
-    }
-
-    pub fn play(
-        &mut self,
-        source: ClockAuthority,
-        authority: ClockAuthority,
-        target: &mut dyn SyncArbiterTarget,
-    ) -> bool {
-        if source != authority {
-            return false;
-        }
+    pub fn play(&mut self, source: ClockAuthority, authority: ClockAuthority, target: &mut dyn SyncArbiterTarget) -> bool {
+        if source != authority { return false; }
         self.suppress_next_transport = true;
         target.play();
         true
     }
 
-    pub fn pause(
-        &mut self,
-        source: ClockAuthority,
-        authority: ClockAuthority,
-        target: &mut dyn SyncArbiterTarget,
-        clear_recording: bool,
-    ) -> bool {
-        if source != authority {
-            return false;
-        }
+    pub fn pause(&mut self, source: ClockAuthority, authority: ClockAuthority, target: &mut dyn SyncArbiterTarget, clear_recording: bool) -> bool {
+        if source != authority { return false; }
         self.suppress_next_transport = true;
         target.pause(clear_recording);
         true
     }
 
-    pub fn nudge_time(
-        &self,
-        source: ClockAuthority,
-        authority: ClockAuthority,
-        target: &mut dyn SyncArbiterTarget,
-        time: Seconds,
-    ) -> bool {
-        if source != authority {
-            return false;
-        }
+    pub fn nudge_time(&self, source: ClockAuthority, authority: ClockAuthority, target: &mut dyn SyncArbiterTarget, time: Seconds) -> bool {
+        if source != authority { return false; }
         target.nudge_time(time);
         true
     }
 
-    pub fn seek(
-        &mut self,
-        source: ClockAuthority,
-        authority: ClockAuthority,
-        target: &mut dyn SyncArbiterTarget,
-        time: Seconds,
-    ) -> bool {
-        if source != authority {
-            return false;
-        }
+    pub fn seek(&mut self, source: ClockAuthority, authority: ClockAuthority, target: &mut dyn SyncArbiterTarget, time: Seconds) -> bool {
+        if source != authority { return false; }
         // NOTE: Unity's Seek() does NOT set SuppressNextTransport.
         // Only Play() and Pause() suppress echo. Seeks during playback are
         // detected by OscPositionSender via beat-delta comparison instead.
@@ -248,16 +171,8 @@ impl SyncArbiter {
         true
     }
 
-    pub fn set_external_time_sync(
-        &self,
-        source: ClockAuthority,
-        authority: ClockAuthority,
-        target: &mut dyn SyncArbiterTarget,
-        value: bool,
-    ) -> bool {
-        if source != authority {
-            return false;
-        }
+    pub fn set_external_time_sync(&self, source: ClockAuthority, authority: ClockAuthority, target: &mut dyn SyncArbiterTarget, value: bool) -> bool {
+        if source != authority { return false; }
         target.set_external_time_sync(value);
         true
     }

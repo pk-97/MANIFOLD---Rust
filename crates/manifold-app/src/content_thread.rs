@@ -11,6 +11,7 @@ use manifold_core::types::{ClockAuthority, PlaybackState, TempoPointSource};
 use manifold_core::{Beats, Bpm, Seconds};
 use manifold_editing::service::EditingService;
 use manifold_playback::audio_sync::ImportedAudioSyncController;
+use manifold_playback::stem_audio::StemAudioController;
 use manifold_playback::clip_launcher::ClipLauncher;
 use manifold_playback::engine::{PlaybackEngine, TickContext};
 use manifold_playback::midi_input::MidiInputController;
@@ -18,7 +19,6 @@ use manifold_playback::osc_receiver::OscReceiver;
 use manifold_playback::osc_sender::OscPositionSender;
 use manifold_playback::osc_sync::OscSyncController;
 use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
-use manifold_playback::stem_audio::StemAudioController;
 use manifold_playback::sync::{SyncArbiter, SyncTargetSnapshot};
 use manifold_playback::tempo_recorder::TempoRecorder;
 use manifold_playback::transport_controller::TransportController;
@@ -114,7 +114,11 @@ pub struct ContentThread {
 
 impl ContentThread {
     /// Run the content loop. Blocks until Shutdown is received.
-    pub fn run(mut self, cmd_rx: Receiver<ContentCommand>, state_tx: Sender<ContentState>) {
+    pub fn run(
+        mut self,
+        cmd_rx: Receiver<ContentCommand>,
+        state_tx: Sender<ContentState>,
+    ) {
         log::info!("[ContentThread] started");
 
         // Set content thread to real-time scheduling priority.
@@ -135,15 +139,23 @@ impl ContentThread {
                 // Fallback: request highest QoS class so the scheduler still
                 // prioritises this thread over default work.
                 unsafe extern "C" {
-                    fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32)
-                    -> i32;
+                    fn pthread_set_qos_class_self_np(
+                        qos_class: u32,
+                        relative_priority: i32,
+                    ) -> i32;
                 }
                 // QOS_CLASS_USER_INTERACTIVE = 0x21
-                let qos_ret = unsafe { pthread_set_qos_class_self_np(0x21, 0) };
+                let qos_ret =
+                    unsafe { pthread_set_qos_class_self_np(0x21, 0) };
                 if qos_ret != 0 {
-                    log::warn!("[ContentThread] QoS fallback also failed (err={})", qos_ret,);
+                    log::warn!(
+                        "[ContentThread] QoS fallback also failed (err={})",
+                        qos_ret,
+                    );
                 } else {
-                    log::info!("[ContentThread] QoS set to USER_INTERACTIVE (fallback)");
+                    log::info!(
+                        "[ContentThread] QoS set to USER_INTERACTIVE (fallback)"
+                    );
                 }
             } else {
                 log::info!("[ContentThread] Real-time priority set (SCHED_RR, priority=47)");
@@ -159,15 +171,15 @@ impl ContentThread {
             for renderer in renderers.iter_mut() {
                 if let Some(gen_renderer) = renderer
                     .as_any_mut()
-                    .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>(
-                ) {
+                    .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>()
+                {
                     gen_renderer.set_device(native_device_ref);
                 }
                 #[cfg(target_os = "macos")]
                 if let Some(vid_renderer) = renderer
                     .as_any_mut()
-                    .downcast_mut::<manifold_media::video_renderer::VideoRenderer>(
-                ) {
+                    .downcast_mut::<manifold_media::video_renderer::VideoRenderer>()
+                {
                     vid_renderer.set_device(native_device_ref);
                 }
             }
@@ -178,19 +190,13 @@ impl ContentThread {
         {
             let settings = manifold_led::LedSettings::default();
             let mut ctrl = manifold_led::LedOutputController::new();
-            let native_device = self
-                .content_pipeline
-                .native_device()
+            let native_device = self.content_pipeline.native_device()
                 .expect("native device required for LED init");
             if ctrl.initialize(native_device, &settings) {
                 self.led_controller = Some(ctrl);
-                log::info!(
-                    "[LED] Auto-initialized: {}x{} LEDs, target={}:{}",
-                    settings.strip_count,
-                    settings.leds_per_strip,
-                    settings.artnet_ip,
-                    settings.artnet_port
-                );
+                log::info!("[LED] Auto-initialized: {}x{} LEDs, target={}:{}",
+                    settings.strip_count, settings.leds_per_strip,
+                    settings.artnet_ip, settings.artnet_port);
             } else {
                 log::warn!("[LED] Auto-init FAILED");
             }
@@ -306,573 +312,465 @@ impl ContentThread {
     /// Execute one content frame: tick engine, render, send state to UI.
     /// Separated from the main loop to allow wrapping in autoreleasepool on macOS.
     fn tick_frame(&mut self, state_tx: &Sender<ContentState>) {
-        let dt = self.timer.consume_tick();
-        let realtime = self.timer.realtime_since_start();
-        self.time_since_start = Seconds(realtime);
+            let dt = self.timer.consume_tick();
+            let realtime = self.timer.realtime_since_start();
+            self.time_since_start = Seconds(realtime);
 
-        // Refresh MIDI device list every ~2 seconds
-        if (self.time_since_start - self.last_midi_device_scan_time).0 >= 2.0 {
-            self.cached_midi_device_names =
-                manifold_playback::midi_clock_sync::MidiClockSyncController::available_source_names(
-                );
-            self.last_midi_device_scan_time = self.time_since_start;
-        }
+            // Refresh MIDI device list every ~2 seconds
+            if (self.time_since_start - self.last_midi_device_scan_time).0 >= 2.0 {
+                self.cached_midi_device_names =
+                    manifold_playback::midi_clock_sync::MidiClockSyncController::available_source_names();
+                self.last_midi_device_scan_time = self.time_since_start;
+            }
 
-        // Profiling: frame start timestamp
-        #[cfg(feature = "profiling")]
-        let _frame_start = std::time::Instant::now();
+            // Profiling: frame start timestamp
+            #[cfg(feature = "profiling")]
+            let _frame_start = std::time::Instant::now();
 
-        // 3. Process MIDI input (before engine tick — matches Unity Update() ordering).
-        // Drains hardware note events and routes them to ClipLauncher → LiveClipManager.
-        #[cfg(feature = "profiling")]
-        let _t0 = std::time::Instant::now();
+            // 3. Process MIDI input (before engine tick — matches Unity Update() ordering).
+            // Drains hardware note events and routes them to ClipLauncher → LiveClipManager.
+            #[cfg(feature = "profiling")]
+            let _t0 = std::time::Instant::now();
 
-        self.engine
-            .tick_midi_input(&mut self.midi_input, &mut self.clip_launcher, realtime);
-
-        #[cfg(feature = "profiling")]
-        let _midi_input_ms = _t0.elapsed().as_secs_f64() * 1000.0;
-
-        // 3b. Sync controller updates (before engine tick — Unity execution order -100).
-        // Link, MidiClock, and OSC poll their sources and issue gated transport
-        // commands via SyncArbiter. Snapshot read-only state before mutable borrows.
-        #[cfg(feature = "profiling")]
-        let _t0 = std::time::Instant::now();
-
-        self.tick_sync_controllers();
-
-        // 3c. External beat derivation + tempo recording/resolution.
-        // Port of C# PlaybackController.Update lines 1064-1099.
-        // Must run AFTER sync controllers (which set live external tempo)
-        // and BEFORE engine.tick() (which uses the derived beat).
-        let authority = self
-            .engine
-            .project()
-            .map_or(ClockAuthority::Internal, |p| p.settings.clock_authority);
-        self.derive_external_beat(authority);
-        self.update_recording_session_state(authority);
-        self.apply_resolved_tempo(authority);
-
-        #[cfg(feature = "profiling")]
-        let _sync_controllers_ms = _t0.elapsed().as_secs_f64() * 1000.0;
-
-        // 4. Tick engine
-        #[cfg(feature = "profiling")]
-        let _t0 = std::time::Instant::now();
-
-        let ctx = TickContext {
-            dt_seconds: Seconds(dt),
-            realtime_now: Seconds(realtime),
-            pre_render_dt: Seconds(dt),
-            frame_count: self.frame_count,
-            export_fixed_dt: Seconds::ZERO,
-        };
-        let tick_result = self.engine.tick(ctx);
-
-        // 4b. OscPositionSender (LateUpdate equivalent — after engine tick).
-        if self.transport_controller.osc_sender_enabled {
-            let bpm = self
-                .engine
-                .project()
-                .map_or(120.0_f32, |p| p.settings.bpm.0);
-            let seconds_per_beat = if bpm > 0.0 { 60.0 / bpm } else { 0.5 };
-            self.osc_sender.late_update(
-                self.engine.is_playing(),
-                self.engine.current_beat().as_f32(),
-                seconds_per_beat,
+            self.engine.tick_midi_input(
+                &mut self.midi_input,
+                &mut self.clip_launcher,
                 realtime,
-                &mut self.sync_arbiter,
             );
-        }
 
-        // 5. Audio sync
-        if let Some(ref mut audio_sync) = self.audio_sync {
-            audio_sync.update_sync(&mut self.engine);
-        }
+            #[cfg(feature = "profiling")]
+            let _midi_input_ms = _t0.elapsed().as_secs_f64() * 1000.0;
 
-        // 5b. Stem audio sync (after master — matches Unity Update() ordering).
-        if let Some(ref mut stem_audio) = self.stem_audio
-            && let Some(ref audio_sync) = self.audio_sync
-        {
-            stem_audio.update_sync(audio_sync, &self.engine);
-        }
+            // 3b. Sync controller updates (before engine tick — Unity execution order -100).
+            // Link, MidiClock, and OSC poll their sources and issue gated transport
+            // commands via SyncArbiter. Snapshot read-only state before mutable borrows.
+            #[cfg(feature = "profiling")]
+            let _t0 = std::time::Instant::now();
 
-        // 6. Percussion tick
-        let beat = self.engine.current_beat();
-        if let Some(p) = self.engine.project_mut() {
-            self.percussion_orchestrator.tick(
-                self.time_since_start.as_f32(),
-                p,
-                &mut self.editing_service,
-                beat.as_f32(),
-            );
-        }
+            self.tick_sync_controllers();
 
-        // 6b. Video prewarm — pass lookahead candidates to VideoRenderer
-        //     so decoders are opened before clips become active (prevents
-        //     black frames at clip start). Port of Unity WorkspaceController
-        //     → VideoPlayerPool.WarmCache(candidates).
-        if let Some(ref candidates) = tick_result.prewarm_candidates {
-            for renderer in self.engine.renderers_mut() {
-                if let Some(vid) = renderer
-                    .as_any_mut()
-                    .downcast_mut::<manifold_media::video_renderer::VideoRenderer>()
-                {
-                    vid.pre_warm_from_candidates(candidates);
-                    break;
+            // 3c. External beat derivation + tempo recording/resolution.
+            // Port of C# PlaybackController.Update lines 1064-1099.
+            // Must run AFTER sync controllers (which set live external tempo)
+            // and BEFORE engine.tick() (which uses the derived beat).
+            let authority = self.engine.project()
+                .map_or(ClockAuthority::Internal, |p| p.settings.clock_authority);
+            self.derive_external_beat(authority);
+            self.update_recording_session_state(authority);
+            self.apply_resolved_tempo(authority);
+
+            #[cfg(feature = "profiling")]
+            let _sync_controllers_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+
+            // 4. Tick engine
+            #[cfg(feature = "profiling")]
+            let _t0 = std::time::Instant::now();
+
+            let ctx = TickContext {
+                dt_seconds: Seconds(dt),
+                realtime_now: Seconds(realtime),
+                pre_render_dt: Seconds(dt),
+                frame_count: self.frame_count,
+                export_fixed_dt: Seconds::ZERO,
+            };
+            let tick_result = self.engine.tick(ctx);
+
+            // 4b. OscPositionSender (LateUpdate equivalent — after engine tick).
+            if self.transport_controller.osc_sender_enabled {
+                let bpm = self.engine.project().map_or(120.0_f32, |p| p.settings.bpm.0);
+                let seconds_per_beat = if bpm > 0.0 { 60.0 / bpm } else { 0.5 };
+                self.osc_sender.late_update(
+                    self.engine.is_playing(),
+                    self.engine.current_beat().as_f32(),
+                    seconds_per_beat,
+                    realtime,
+                    &mut self.sync_arbiter,
+                );
+            }
+
+            // 5. Audio sync
+            if let Some(ref mut audio_sync) = self.audio_sync {
+                audio_sync.update_sync(&mut self.engine);
+            }
+
+            // 5b. Stem audio sync (after master — matches Unity Update() ordering).
+            if let Some(ref mut stem_audio) = self.stem_audio
+                && let Some(ref audio_sync) = self.audio_sync {
+                    stem_audio.update_sync(audio_sync, &self.engine);
+                }
+
+            // 6. Percussion tick
+            let beat = self.engine.current_beat();
+            if let Some(p) = self.engine.project_mut() {
+                self.percussion_orchestrator.tick(
+                    self.time_since_start.as_f32(),
+                    p,
+                    &mut self.editing_service,
+                    beat.as_f32(),
+                );
+            }
+
+            // 6b. Video prewarm — pass lookahead candidates to VideoRenderer
+            //     so decoders are opened before clips become active (prevents
+            //     black frames at clip start). Port of Unity WorkspaceController
+            //     → VideoPlayerPool.WarmCache(candidates).
+            if let Some(ref candidates) = tick_result.prewarm_candidates {
+                for renderer in self.engine.renderers_mut() {
+                    if let Some(vid) = renderer
+                        .as_any_mut()
+                        .downcast_mut::<manifold_media::video_renderer::VideoRenderer>()
+                    {
+                        vid.pre_warm_from_candidates(candidates);
+                        break;
+                    }
                 }
             }
-        }
 
-        #[cfg(feature = "profiling")]
-        let _engine_tick_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+            #[cfg(feature = "profiling")]
+            let _engine_tick_ms = _t0.elapsed().as_secs_f64() * 1000.0;
 
-        // 7. Render content
-        #[cfg(feature = "profiling")]
-        let _t0 = std::time::Instant::now();
+            // 7. Render content
+            #[cfg(feature = "profiling")]
+            let _t0 = std::time::Instant::now();
 
-        let render_work_start = std::time::Instant::now();
-        self.content_pipeline.render_content(
-            &self.gpu,
-            &mut self.engine,
-            &tick_result,
-            dt,
-            self.frame_count,
-            false,
-        );
-        let _render_work_ms = render_work_start.elapsed().as_secs_f64() * 1000.0;
-
-        #[cfg(feature = "profiling")]
-        let _render_content_ms = _t0.elapsed().as_secs_f64() * 1000.0;
-        #[cfg(feature = "profiling")]
-        let _gpu_poll_ms = self.content_pipeline.last_gpu_poll_ms();
-
-        // 7b. Clean up per-owner effect state for clips that stopped this tick.
-        // Releases GPU textures/buffers (Feedback, Bloom, PixelSort, etc.)
-        // to prevent unbounded GPU memory growth.
-        #[cfg(feature = "profiling")]
-        let _t0 = std::time::Instant::now();
-
-        if !tick_result.stopped_clips.is_empty() {
-            self.content_pipeline
-                .cleanup_stopped_clips(&tick_result.stopped_clips);
-        }
-
-        // 7c. LED output — native Metal: dispatch edge-extend compute on
-        // compositor output, readback tiny pixel grid, send DMX/ArtNet.
-        // Uses a dedicated encoder (separate from the content frame).
-        if let Some(ref mut led) = self.led_controller {
-            // Poll previous frame's readback (send DMX if ready).
-            led.poll_readback();
-            // Submit new frame: edge-extend compute + readback copy.
-            let native_device = self.content_pipeline.native_device().unwrap();
-            let source = self.content_pipeline.led_source_texture();
-            led.process_frame(
-                native_device,
-                source,
-                tick_result.ready_clips.len(),
-                self.engine
-                    .project()
-                    .map_or(1.0, |p| p.settings.led_brightness),
+            let render_work_start = std::time::Instant::now();
+            self.content_pipeline.render_content(
+                &self.gpu, &mut self.engine, &tick_result, dt, self.frame_count,
+                false,
             );
-        }
+            let _render_work_ms = render_work_start.elapsed().as_secs_f64() * 1000.0;
 
-        #[cfg(feature = "profiling")]
-        let _cleanup_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+            #[cfg(feature = "profiling")]
+            let _render_content_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+            #[cfg(feature = "profiling")]
+            let _gpu_poll_ms = self.content_pipeline.last_gpu_poll_ms();
 
-        self.frame_count += 1;
+            // 7b. Clean up per-owner effect state for clips that stopped this tick.
+            // Releases GPU textures/buffers (Feedback, Bloom, PixelSort, etc.)
+            // to prevent unbounded GPU memory growth.
+            #[cfg(feature = "profiling")]
+            let _t0 = std::time::Instant::now();
 
-        // Profiling: record frame data
-        #[cfg(feature = "profiling")]
-        if let Some(ref mut profiler) = self.profiler
-            && profiler.is_recording()
-        {
-            let frame_wall_ms = _frame_start.elapsed().as_secs_f64() * 1000.0;
-            let current_beat = self.engine.current_beat();
-            let time_sig = self
-                .engine
-                .project()
-                .map_or(4, |p| p.settings.time_signature_numerator.max(1));
-            let bar = (current_beat / time_sig as f32).floor() as u32;
-            let budget_ms = 1000.0 / self.timer.target_fps();
-            let active_layers = self.engine.project().map_or(0, |p| p.timeline.layers.len());
-
-            // GPU pass-level profiling not yet available on native Metal.
-            let gpu_pass_count = 0u32;
-            let gpu_total_ms = 0.0f64;
-            let gpu_passes = Vec::new();
-
-            // Helper: build named params from values + registry
-            fn build_effect_params(
-                fx: &manifold_core::effects::EffectInstance,
-            ) -> Vec<manifold_profiler::NamedParam> {
-                let def = manifold_core::effect_definition_registry::try_get(fx.effect_type());
-                fx.param_values
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &v)| {
-                        let name = def
-                            .and_then(|d| d.param_defs.get(i))
-                            .map_or_else(|| format!("param_{}", i), |pd| pd.name.clone());
-                        manifold_profiler::NamedParam { name, value: v }
-                    })
-                    .collect()
+            if !tick_result.stopped_clips.is_empty() {
+                self.content_pipeline.cleanup_stopped_clips(&tick_result.stopped_clips);
             }
 
-            fn build_gen_params(
-                gen_type: &manifold_core::GeneratorTypeId,
-                values: &[f32],
-            ) -> Vec<manifold_profiler::NamedParam> {
-                let def = manifold_core::generator_definition_registry::try_get(gen_type);
-                values
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &v)| {
-                        let name = def
-                            .and_then(|d| d.param_defs.get(i))
-                            .map_or_else(|| format!("param_{}", i), |pd| pd.name.clone());
-                        manifold_profiler::NamedParam { name, value: v }
-                    })
-                    .collect()
+            // 7c. LED output — native Metal: dispatch edge-extend compute on
+            // compositor output, readback tiny pixel grid, send DMX/ArtNet.
+            // Uses a dedicated encoder (separate from the content frame).
+            if let Some(ref mut led) = self.led_controller {
+                // Poll previous frame's readback (send DMX if ready).
+                led.poll_readback();
+                // Submit new frame: edge-extend compute + readback copy.
+                let native_device = self.content_pipeline.native_device().unwrap();
+                let source = self.content_pipeline.led_source_texture();
+                led.process_frame(
+                    native_device,
+                    source,
+                    tick_result.ready_clips.len(),
+                    self.engine.project().map_or(1.0, |p| p.settings.led_brightness),
+                );
             }
 
-            // Get anim_progress from generator_renderer (mutable borrow, done first)
-            let anim_map: Vec<(String, f32)> = {
-                let (renderers, _) = self.engine.split_renderer_project();
-                let gen_renderer = renderers.iter().find_map(|r| {
+            #[cfg(feature = "profiling")]
+            let _cleanup_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+
+            self.frame_count += 1;
+
+            // Profiling: record frame data
+            #[cfg(feature = "profiling")]
+            if let Some(ref mut profiler) = self.profiler
+                && profiler.is_recording()
+            {
+                let frame_wall_ms = _frame_start.elapsed().as_secs_f64() * 1000.0;
+                let current_beat = self.engine.current_beat();
+                let time_sig = self.engine.project()
+                    .map_or(4, |p| p.settings.time_signature_numerator.max(1));
+                let bar = (current_beat / time_sig as f32).floor() as u32;
+                let budget_ms = 1000.0 / self.timer.target_fps();
+                let active_layers = self.engine.project()
+                    .map_or(0, |p| p.timeline.layers.len());
+
+                // GPU pass-level profiling not yet available on native Metal.
+                let gpu_pass_count = 0u32;
+                let gpu_total_ms = 0.0f64;
+                let gpu_passes = Vec::new();
+
+                // Helper: build named params from values + registry
+                fn build_effect_params(fx: &manifold_core::effects::EffectInstance) -> Vec<manifold_profiler::NamedParam> {
+                    let def = manifold_core::effect_definition_registry::try_get(fx.effect_type());
+                    fx.param_values.iter().enumerate().map(|(i, &v)| {
+                        let name = def.and_then(|d| d.param_defs.get(i))
+                            .map_or_else(|| format!("param_{}", i), |pd| pd.name.clone());
+                        manifold_profiler::NamedParam { name, value: v }
+                    }).collect()
+                }
+
+                fn build_gen_params(gen_type: &manifold_core::GeneratorTypeId, values: &[f32]) -> Vec<manifold_profiler::NamedParam> {
+                    let def = manifold_core::generator_definition_registry::try_get(gen_type);
+                    values.iter().enumerate().map(|(i, &v)| {
+                        let name = def.and_then(|d| d.param_defs.get(i))
+                            .map_or_else(|| format!("param_{}", i), |pd| pd.name.clone());
+                        manifold_profiler::NamedParam { name, value: v }
+                    }).collect()
+                }
+
+                // Get anim_progress from generator_renderer (mutable borrow, done first)
+                let anim_map: Vec<(String, f32)> = {
+                    let (renderers, _) = self.engine.split_renderer_project();
+                    let gen_renderer = renderers.iter().find_map(|r| {
                         r.as_any().downcast_ref::<manifold_renderer::generator_renderer::GeneratorRenderer>()
                     });
-                tick_result
-                    .ready_clips
-                    .iter()
-                    .map(|clip| {
+                    tick_result.ready_clips.iter().map(|clip| {
                         let progress = gen_renderer
                             .map_or(0.0, |gr| gr.get_clip_anim_progress(clip.id.as_str()));
                         (clip.id.to_string(), progress)
-                    })
-                    .collect()
-            };
+                    }).collect()
+                };
 
-            // Now borrow project immutably for layers, effects, params
-            let layers = self
-                .engine
-                .project()
-                .map(|p| p.timeline.layers.as_slice())
-                .unwrap_or(&[]);
+                // Now borrow project immutably for layers, effects, params
+                let layers = self.engine.project()
+                    .map(|p| p.timeline.layers.as_slice())
+                    .unwrap_or(&[]);
 
-            let active_clip_info: Vec<manifold_profiler::ActiveClipInfo> = tick_result
-                .ready_clips
-                .iter()
-                .enumerate()
-                .map(|(i, clip)| {
-                    let clip_layer_idx = self
-                        .engine
-                        .project()
-                        .and_then(|p| p.timeline.layer_index_for_id(&clip.layer_id))
-                        .unwrap_or(0);
-                    let gen_param_values = layers.get(clip_layer_idx).and_then(|l| l.gen_params());
-                    let gen_params = gen_param_values
-                        .map(|gp| build_gen_params(&clip.generator_type, &gp.param_values))
-                        .unwrap_or_default();
-                    let anim_progress = anim_map.get(i).map_or(0.0, |a| a.1);
-                    manifold_profiler::ActiveClipInfo {
-                        clip_id: clip.id.to_string(),
-                        generator_type: clip.generator_type.to_string(),
-                        layer_index: clip_layer_idx as i32,
-                        anim_progress,
-                        gen_params,
+                let active_clip_info: Vec<manifold_profiler::ActiveClipInfo> =
+                    tick_result.ready_clips.iter().enumerate().map(|(i, clip)| {
+                        let clip_layer_idx = self.engine.project()
+                            .and_then(|p| p.timeline.layer_index_for_id(&clip.layer_id))
+                            .unwrap_or(0);
+                        let gen_param_values = layers.get(clip_layer_idx)
+                            .and_then(|l| l.gen_params());
+                        let gen_params = gen_param_values
+                            .map(|gp| build_gen_params(&clip.generator_type, &gp.param_values))
+                            .unwrap_or_default();
+                        let anim_progress = anim_map.get(i).map_or(0.0, |a| a.1);
+                        manifold_profiler::ActiveClipInfo {
+                            clip_id: clip.id.to_string(),
+                            generator_type: clip.generator_type.to_string(),
+                            layer_index: clip_layer_idx as i32,
+                            anim_progress,
+                            gen_params,
+                        }
+                    }).collect();
+
+                // Collect active effect info with named live params + group_id
+                let mut active_effects: Vec<manifold_profiler::ActiveEffectInfo> = Vec::new();
+                for layer in layers {
+                    if let Some(layer_fxs) = layer.effects.as_deref() {
+                        for fx in layer_fxs {
+                            if fx.enabled {
+                                active_effects.push(manifold_profiler::ActiveEffectInfo {
+                                    effect_type: fx.effect_type().to_string(),
+                                    scope: format!("layer:{}", layer.index),
+                                    group_id: fx.group_id.as_ref().map(|g| g.to_string()),
+                                    params: build_effect_params(fx),
+                                });
+                            }
+                        }
                     }
-                })
-                .collect();
-
-            // Collect active effect info with named live params + group_id
-            let mut active_effects: Vec<manifold_profiler::ActiveEffectInfo> = Vec::new();
-            for layer in layers {
-                if let Some(layer_fxs) = layer.effects.as_deref() {
-                    for fx in layer_fxs {
+                }
+                if let Some(p) = self.engine.project() {
+                    for fx in &p.settings.master_effects {
                         if fx.enabled {
                             active_effects.push(manifold_profiler::ActiveEffectInfo {
                                 effect_type: fx.effect_type().to_string(),
-                                scope: format!("layer:{}", layer.index),
+                                scope: "master".to_string(),
                                 group_id: fx.group_id.as_ref().map(|g| g.to_string()),
                                 params: build_effect_params(fx),
                             });
                         }
                     }
                 }
+
+                // Layer states (opacity, mute, solo)
+                let layer_states: Vec<manifold_profiler::LayerState> = layers.iter()
+                    .map(|l| manifold_profiler::LayerState {
+                        index: l.index,
+                        opacity: l.opacity,
+                        is_muted: l.is_muted,
+                        is_solo: l.is_solo,
+                    })
+                    .collect();
+
+                // Memory estimate: compositor dimensions × 16 bytes (Rgba16Float) × buffer count
+                let (comp_w, comp_h) = self.content_pipeline.dimensions();
+                let bytes_per_pixel = 8u64; // Rgba16Float
+                let rt_count = tick_result.ready_clips.len() as u32 + 4; // clips + main + ping/pong + tonemap
+                let estimated_tex_bytes = comp_w as u64 * comp_h as u64 * bytes_per_pixel * rt_count as u64;
+
+                profiler.record_frame(manifold_profiler::FrameRecord {
+                    index: self.frame_count - 1,
+                    beat: current_beat,
+                    bar,
+                    wall_time_ms: frame_wall_ms,
+                    budget_exceeded: frame_wall_ms > budget_ms,
+                    content_thread: manifold_profiler::ContentTimings {
+                        total_ms: frame_wall_ms,
+                        midi_input_ms: _midi_input_ms,
+                        sync_controllers_ms: _sync_controllers_ms,
+                        engine_tick_ms: _engine_tick_ms,
+                        render_content_ms: _render_content_ms,
+                        gpu_poll_ms: _gpu_poll_ms,
+                        cleanup_ms: _cleanup_ms,
+                    },
+                    gpu_passes,
+                    active_clips: active_clip_info,
+                    active_effects,
+                    active_layer_count: active_layers,
+                    gpu_pass_count,
+                    gpu_total_ms,
+                    layer_states,
+                    missed_frames: self.timer.missed_ticks(),
+                    profiler_overhead_ms: 0.0,
+                    memory: manifold_profiler::MemorySnapshot {
+                        estimated_texture_bytes: estimated_tex_bytes,
+                        render_target_count: rt_count,
+                    },
+                });
             }
-            if let Some(p) = self.engine.project() {
-                for fx in &p.settings.master_effects {
-                    if fx.enabled {
-                        active_effects.push(manifold_profiler::ActiveEffectInfo {
-                            effect_type: fx.effect_type().to_string(),
-                            scope: "master".to_string(),
-                            group_id: fx.group_id.as_ref().map(|g| g.to_string()),
-                            params: build_effect_params(fx),
-                        });
-                    }
-                }
+
+            // 8. Push state to UI
+            let version = self.editing_service.data_version();
+            let version_changed = version != self.last_data_version;
+            if version_changed {
+                self.last_data_version = version;
+            }
+            // Send a project snapshot when data_version changes (editing commands)
+            // OR when modulation is active (LFO/envelope writes to param_values
+            // without bumping data_version — UI needs live modulated values).
+            let modulation_active = tick_result.modulation_active;
+
+            // Reclaim tick_result buffers (ready_clips, stopped_clips) for reuse
+            // on the next tick — avoids per-frame Vec allocation.
+            self.engine.reclaim_tick_result(tick_result);
+
+            // Arc<Project> snapshot: only deep-clone when data_version changes.
+            // Modulation frames send a lightweight ModulationSnapshot instead
+            // (just param_values Vec<f32> clones — no full Project clone).
+            let snapshot = if version_changed {
+                // Structural change — create a new Arc with a fresh clone.
+                let arc = self.engine.project()
+                    .map(|p| std::sync::Arc::new(p.clone()));
+                self.cached_project_snapshot = arc.clone();
+                arc
+            } else {
+                None
+            };
+
+            // Build lightweight modulation snapshot when drivers/envelopes are
+            // active — contains only the param_values that changed this frame.
+            let modulation_snapshot = if modulation_active {
+                self.engine.project()
+                    .map(crate::content_state::ModulationSnapshot::capture)
+            } else {
+                None
+            };
+
+            // Update cached strings only when underlying values change.
+            let new_pos = self.transport_controller.midi_clock_sync.as_ref()
+                .map_or("", |s| s.current_position_display());
+            if new_pos != self.cached_midi_clock_position {
+                self.cached_midi_clock_position.clear();
+                self.cached_midi_clock_position.push_str(new_pos);
+            }
+            let new_dev = self.transport_controller.midi_clock_sync.as_ref()
+                .map_or_else(String::new, |s| s.selected_source_name());
+            if new_dev != self.cached_midi_clock_device {
+                self.cached_midi_clock_device = new_dev;
+            }
+            if self.osc_sync.current_timecode_display != self.cached_osc_timecode {
+                self.cached_osc_timecode.clone_from(&self.osc_sync.current_timecode_display);
+            }
+            let new_perc = self.percussion_orchestrator.status_message();
+            if new_perc != self.cached_perc_message {
+                self.cached_perc_message.clear();
+                self.cached_perc_message.push_str(new_perc);
+            }
+            if self.cached_midi_device_names != self.last_sent_midi_device_names {
+                self.last_sent_midi_device_names.clone_from(&self.cached_midi_device_names);
             }
 
-            // Layer states (opacity, mute, solo)
-            let layer_states: Vec<manifold_profiler::LayerState> = layers
-                .iter()
-                .map(|l| manifold_profiler::LayerState {
-                    index: l.index,
-                    opacity: l.opacity,
-                    is_muted: l.is_muted,
-                    is_solo: l.is_solo,
-                })
-                .collect();
+            let perc_progress = self.percussion_orchestrator.status_progress01();
+            let perc_show = self.percussion_orchestrator.show_progress_bar()
+                && !self.cached_perc_message.is_empty();
 
-            // Memory estimate: compositor dimensions × 16 bytes (Rgba16Float) × buffer count
-            let (comp_w, comp_h) = self.content_pipeline.dimensions();
-            let bytes_per_pixel = 8u64; // Rgba16Float
-            let rt_count = tick_result.ready_clips.len() as u32 + 4; // clips + main + ping/pong + tonemap
-            let estimated_tex_bytes =
-                comp_w as u64 * comp_h as u64 * bytes_per_pixel * rt_count as u64;
-
-            profiler.record_frame(manifold_profiler::FrameRecord {
-                index: self.frame_count - 1,
-                beat: current_beat,
-                bar,
-                wall_time_ms: frame_wall_ms,
-                budget_exceeded: frame_wall_ms > budget_ms,
-                content_thread: manifold_profiler::ContentTimings {
-                    total_ms: frame_wall_ms,
-                    midi_input_ms: _midi_input_ms,
-                    sync_controllers_ms: _sync_controllers_ms,
-                    engine_tick_ms: _engine_tick_ms,
-                    render_content_ms: _render_content_ms,
-                    gpu_poll_ms: _gpu_poll_ms,
-                    cleanup_ms: _cleanup_ms,
-                },
-                gpu_passes,
-                active_clips: active_clip_info,
-                active_effects,
-                active_layer_count: active_layers,
-                gpu_pass_count,
-                gpu_total_ms,
-                layer_states,
-                missed_frames: self.timer.missed_ticks(),
-                profiler_overhead_ms: 0.0,
-                memory: manifold_profiler::MemorySnapshot {
-                    estimated_texture_bytes: estimated_tex_bytes,
-                    render_target_count: rt_count,
-                },
-            });
-        }
-
-        // 8. Push state to UI
-        let version = self.editing_service.data_version();
-        let version_changed = version != self.last_data_version;
-        if version_changed {
-            self.last_data_version = version;
-        }
-        // Send a project snapshot when data_version changes (editing commands)
-        // OR when modulation is active (LFO/envelope writes to param_values
-        // without bumping data_version — UI needs live modulated values).
-        let modulation_active = tick_result.modulation_active;
-
-        // Reclaim tick_result buffers (ready_clips, stopped_clips) for reuse
-        // on the next tick — avoids per-frame Vec allocation.
-        self.engine.reclaim_tick_result(tick_result);
-
-        // Arc<Project> snapshot: only deep-clone when data_version changes.
-        // Modulation frames send a lightweight ModulationSnapshot instead
-        // (just param_values Vec<f32> clones — no full Project clone).
-        let snapshot = if version_changed {
-            // Structural change — create a new Arc with a fresh clone.
-            let arc = self
-                .engine
-                .project()
-                .map(|p| std::sync::Arc::new(p.clone()));
-            self.cached_project_snapshot = arc.clone();
-            arc
-        } else {
-            None
-        };
-
-        // Build lightweight modulation snapshot when drivers/envelopes are
-        // active — contains only the param_values that changed this frame.
-        let modulation_snapshot = if modulation_active {
-            self.engine
-                .project()
-                .map(crate::content_state::ModulationSnapshot::capture)
-        } else {
-            None
-        };
-
-        // Update cached strings only when underlying values change.
-        let new_pos = self
-            .transport_controller
-            .midi_clock_sync
-            .as_ref()
-            .map_or("", |s| s.current_position_display());
-        if new_pos != self.cached_midi_clock_position {
-            self.cached_midi_clock_position.clear();
-            self.cached_midi_clock_position.push_str(new_pos);
-        }
-        let new_dev = self
-            .transport_controller
-            .midi_clock_sync
-            .as_ref()
-            .map_or_else(String::new, |s| s.selected_source_name());
-        if new_dev != self.cached_midi_clock_device {
-            self.cached_midi_clock_device = new_dev;
-        }
-        if self.osc_sync.current_timecode_display != self.cached_osc_timecode {
-            self.cached_osc_timecode
-                .clone_from(&self.osc_sync.current_timecode_display);
-        }
-        let new_perc = self.percussion_orchestrator.status_message();
-        if new_perc != self.cached_perc_message {
-            self.cached_perc_message.clear();
-            self.cached_perc_message.push_str(new_perc);
-        }
-        if self.cached_midi_device_names != self.last_sent_midi_device_names {
-            self.last_sent_midi_device_names
-                .clone_from(&self.cached_midi_device_names);
-        }
-
-        let perc_progress = self.percussion_orchestrator.status_progress01();
-        let perc_show = self.percussion_orchestrator.show_progress_bar()
-            && !self.cached_perc_message.is_empty();
-
-        let state = ContentState {
-            current_beat: self.engine.current_beat(),
-            current_time: self.engine.current_time(),
-            is_playing: self.engine.is_playing(),
-            is_recording: self.engine.is_recording(),
-            content_fps: self.timer.current_fps() as f32,
-            content_frame_time_ms: (self.timer.last_dt() * 1000.0) as f32,
-            active_clips: self.engine.active_clip_count(),
-            data_version: version,
-            editing_is_dirty: self.editing_service.is_dirty(),
-            bpm: self
-                .engine
-                .project()
-                .map_or(120.0, |p| p.settings.bpm.0 as f64),
-            frame_rate: self
-                .engine
-                .project()
-                .map_or(60.0, |p| p.settings.frame_rate as f64),
-            clock_authority: self
-                .engine
-                .project()
-                .map_or(manifold_core::types::ClockAuthority::Internal, |p| {
-                    p.settings.clock_authority
-                }),
-            time_signature_numerator: self
-                .engine
-                .project()
-                .map_or(4, |p| p.settings.time_signature_numerator),
-            link_enabled: self
-                .transport_controller
-                .link_sync
-                .as_ref()
-                .is_some_and(|s| s.is_link_enabled()),
-            link_tempo: self
-                .transport_controller
-                .link_sync
-                .as_ref()
-                .map_or(120.0, |s| s.link_tempo),
-            link_peers: self
-                .transport_controller
-                .link_sync
-                .as_ref()
-                .map_or(0, |s| s.num_peers),
-            link_is_playing: self
-                .transport_controller
-                .link_sync
-                .as_ref()
-                .is_some_and(|s| s.link_is_playing),
-            midi_clock_enabled: self
-                .transport_controller
-                .midi_clock_sync
-                .as_ref()
-                .is_some_and(|s| s.is_midi_clock_enabled()),
-            midi_clock_bpm: self
-                .transport_controller
-                .midi_clock_sync
-                .as_ref()
-                .map_or(Bpm(120.0), |s| Bpm(s.current_clock_bpm())),
-            midi_clock_position_display: self.cached_midi_clock_position.clone(),
-            midi_clock_receiving: self
-                .transport_controller
-                .midi_clock_sync
-                .as_ref()
-                .is_some_and(|s| s.is_receiving_clock()),
-            midi_clock_device_name: self.cached_midi_clock_device.clone(),
-            midi_device_names: self.last_sent_midi_device_names.clone(),
-            osc_sender_enabled: self.transport_controller.osc_sender_enabled,
-            osc_receiving_timecode: self.osc_sync.is_receiving_timecode,
-            osc_timecode_display: self.cached_osc_timecode.clone(),
-            stem_expanded: self.stem_audio.as_ref().is_some_and(|s| s.is_expanded()),
-            stem_ready: self.stem_audio.as_ref().is_some_and(|s| s.stems_ready()),
-            stem_muted: self
-                .stem_audio
-                .as_ref()
-                .map_or([false; manifold_playback::stem_audio::STEM_COUNT], |s| {
+            let state = ContentState {
+                current_beat: self.engine.current_beat(),
+                current_time: self.engine.current_time(),
+                is_playing: self.engine.is_playing(),
+                is_recording: self.engine.is_recording(),
+                content_fps: self.timer.current_fps() as f32,
+                content_frame_time_ms: (self.timer.last_dt() * 1000.0) as f32,
+                active_clips: self.engine.active_clip_count(),
+                data_version: version,
+                editing_is_dirty: self.editing_service.is_dirty(),
+                bpm: self.engine.project().map_or(120.0, |p| p.settings.bpm.0 as f64),
+                frame_rate: self.engine.project().map_or(60.0, |p| p.settings.frame_rate as f64),
+                clock_authority: self.engine.project()
+                    .map_or(manifold_core::types::ClockAuthority::Internal, |p| p.settings.clock_authority),
+                time_signature_numerator: self.engine.project()
+                    .map_or(4, |p| p.settings.time_signature_numerator),
+                link_enabled: self.transport_controller.link_sync.as_ref()
+                    .is_some_and(|s| s.is_link_enabled()),
+                link_tempo: self.transport_controller.link_sync.as_ref()
+                    .map_or(120.0, |s| s.link_tempo),
+                link_peers: self.transport_controller.link_sync.as_ref()
+                    .map_or(0, |s| s.num_peers),
+                link_is_playing: self.transport_controller.link_sync.as_ref()
+                    .is_some_and(|s| s.link_is_playing),
+                midi_clock_enabled: self.transport_controller.midi_clock_sync.as_ref()
+                    .is_some_and(|s| s.is_midi_clock_enabled()),
+                midi_clock_bpm: self.transport_controller.midi_clock_sync.as_ref()
+                    .map_or(Bpm(120.0), |s| Bpm(s.current_clock_bpm())),
+                midi_clock_position_display: self.cached_midi_clock_position.clone(),
+                midi_clock_receiving: self.transport_controller.midi_clock_sync.as_ref()
+                    .is_some_and(|s| s.is_receiving_clock()),
+                midi_clock_device_name: self.cached_midi_clock_device.clone(),
+                midi_device_names: self.last_sent_midi_device_names.clone(),
+                osc_sender_enabled: self.transport_controller.osc_sender_enabled,
+                osc_receiving_timecode: self.osc_sync.is_receiving_timecode,
+                osc_timecode_display: self.cached_osc_timecode.clone(),
+                stem_expanded: self.stem_audio.as_ref().is_some_and(|s| s.is_expanded()),
+                stem_ready: self.stem_audio.as_ref().is_some_and(|s| s.stems_ready()),
+                stem_muted: self.stem_audio.as_ref().map_or([false; manifold_playback::stem_audio::STEM_COUNT], |s| {
                     core::array::from_fn(|i| s.is_muted(i))
                 }),
-            stem_soloed: self
-                .stem_audio
-                .as_ref()
-                .map_or([false; manifold_playback::stem_audio::STEM_COUNT], |s| {
+                stem_soloed: self.stem_audio.as_ref().map_or([false; manifold_playback::stem_audio::STEM_COUNT], |s| {
                     core::array::from_fn(|i| s.is_soloed(i))
                 }),
-            stem_available: self
-                .stem_audio
-                .as_ref()
-                .map_or([false; manifold_playback::stem_audio::STEM_COUNT], |s| {
+                stem_available: self.stem_audio.as_ref().map_or([false; manifold_playback::stem_audio::STEM_COUNT], |s| {
                     core::array::from_fn(|i| s.is_stem_available(i))
                 }),
-            percussion_importing: self.percussion_orchestrator.is_import_in_progress(),
-            percussion_status_message: self.cached_perc_message.clone(),
-            percussion_progress: if perc_progress < 0.0 {
-                0.0
-            } else {
-                perc_progress.clamp(0.0, 1.0)
-            },
-            percussion_show_progress: perc_show,
-            profiling_active: {
-                #[cfg(feature = "profiling")]
-                {
-                    self.profiler.as_ref().is_some_and(|p| p.is_recording())
-                }
-                #[cfg(not(feature = "profiling"))]
-                {
-                    false
-                }
-            },
-            profiling_frame_count: {
-                #[cfg(feature = "profiling")]
-                {
-                    self.profiler.as_ref().map_or(0, |p| p.frame_count())
-                }
-                #[cfg(not(feature = "profiling"))]
-                {
-                    0
-                }
-            },
-            vsync_active: self.timer.is_vsync_mode(),
-            vsync_actual_fps: self.timer.actual_fps() as f32,
-            led_enabled: self.led_controller.as_ref().is_some_and(|c| c.is_enabled()),
-            led_initialized: self
-                .led_controller
-                .as_ref()
-                .is_some_and(|c| c.is_initialized()),
-            is_exporting: false,
-            export_progress: 0.0,
-            export_status: String::new(),
-            export_finished: None,
-            project_snapshot: snapshot,
-            modulation_snapshot,
-        };
+                percussion_importing: self.percussion_orchestrator.is_import_in_progress(),
+                percussion_status_message: self.cached_perc_message.clone(),
+                percussion_progress: if perc_progress < 0.0 { 0.0 } else { perc_progress.clamp(0.0, 1.0) },
+                percussion_show_progress: perc_show,
+                profiling_active: {
+                    #[cfg(feature = "profiling")]
+                    { self.profiler.as_ref().is_some_and(|p| p.is_recording()) }
+                    #[cfg(not(feature = "profiling"))]
+                    { false }
+                },
+                profiling_frame_count: {
+                    #[cfg(feature = "profiling")]
+                    { self.profiler.as_ref().map_or(0, |p| p.frame_count()) }
+                    #[cfg(not(feature = "profiling"))]
+                    { 0 }
+                },
+                vsync_active: self.timer.is_vsync_mode(),
+                vsync_actual_fps: self.timer.actual_fps() as f32,
+                led_enabled: self.led_controller.as_ref().is_some_and(|c| c.is_enabled()),
+                led_initialized: self.led_controller.as_ref().is_some_and(|c| c.is_initialized()),
+                is_exporting: false,
+                export_progress: 0.0,
+                export_status: String::new(),
+                export_finished: None,
+                project_snapshot: snapshot,
+                modulation_snapshot,
+            };
 
-        // Non-blocking send — if the UI is behind, drop the oldest state.
-        let _ = state_tx.try_send(state);
+            // Non-blocking send — if the UI is behind, drop the oldest state.
+            let _ = state_tx.try_send(state);
     }
 
     /// Tick all sync controllers once per frame. Called before engine tick.
@@ -887,19 +785,13 @@ impl ContentThread {
         // the authority — prevents one-frame mismatch where external_time_sync
         // or transport commands are incorrectly rejected.
         let authority = {
-            let auto = if self
-                .transport_controller
-                .midi_clock_sync
-                .as_ref()
+            let auto = if self.transport_controller.midi_clock_sync.as_ref()
                 .is_some_and(|s| s.is_midi_clock_enabled() && s.is_receiving_clock())
             {
                 ClockAuthority::MidiClock
             } else if self.osc_sync.is_receiving_timecode {
                 ClockAuthority::Osc
-            } else if self
-                .transport_controller
-                .link_sync
-                .as_ref()
+            } else if self.transport_controller.link_sync.as_ref()
                 .is_some_and(|s| s.is_link_enabled() && s.has_active_peers())
             {
                 ClockAuthority::Link
@@ -914,7 +806,11 @@ impl ContentThread {
 
         // Link sync — poll beat/phase/tempo from Ableton Link network.
         let link_has_tempo = if let Some(ref mut link) = self.transport_controller.link_sync {
-            link.update(&mut self.sync_arbiter, &mut self.engine, authority);
+            link.update(
+                &mut self.sync_arbiter,
+                &mut self.engine,
+                authority,
+            );
             // Link provides the most accurate BPM when peers are connected.
             if link.is_link_enabled() && link.has_active_peers() {
                 self.engine.set_live_external_tempo(
@@ -993,36 +889,24 @@ impl ContentThread {
                 if !self.sync_arbiter.manifold_owns_playback
                     && let Some(ref link) = self.transport_controller.link_sync
                     && link.is_link_enabled()
-                    && link.has_active_peers()
-                    && !self.link_beat_offset.is_nan()
-                {
-                    self.engine
-                        .set_beat(Beats(link.current_beat.0 - self.link_beat_offset));
-                    self.engine.sync_time_from_beat();
-                }
+                        && link.has_active_peers()
+                        && !self.link_beat_offset.is_nan()
+                    {
+                        self.engine
+                            .set_beat(Beats(link.current_beat.0 - self.link_beat_offset));
+                        self.engine.sync_time_from_beat();
+                    }
             }
             ClockAuthority::MidiClock => {
                 // MIDI Clock always drives position when active — suppressed only
                 // during seek cooldown (user scrubbing, Ableton hasn't caught up).
-                if !self
-                    .sync_arbiter
-                    .is_seek_cooldown_active(self.time_since_start)
+                if !self.sync_arbiter.is_seek_cooldown_active(self.time_since_start)
                     && let Some(ref clk) = self.transport_controller.midi_clock_sync
-                    && clk.is_midi_clock_enabled()
-                    && clk.is_receiving_clock()
-                {
-                    let clk_beat = clk.current_clock_beat();
-                    // If holding for a pending seek, skip until CLK confirms.
-                    if !self.sync_arbiter.should_hold_for_pending_seek(
-                        clk_beat,
-                        self.time_since_start,
-                    ) {
-                        self.engine
-                            .set_beat(Beats::from_f32(clk_beat));
-                        self.engine.sync_time_from_beat();
-                    }
-                }
-                // else: beat derived from time (engine handles this in advance_time)
+                        && clk.is_midi_clock_enabled() && clk.is_receiving_clock() {
+                            self.engine.set_beat(Beats::from_f32(clk.current_clock_beat()));
+                            self.engine.sync_time_from_beat();
+                        }
+                        // else: beat derived from time (engine handles this in advance_time)
             }
             // ClockAuthority::Internal | Osc: beat derived from time (engine handles this)
             _ => {}
@@ -1035,10 +919,8 @@ impl ContentThread {
     pub(crate) fn cache_link_beat_offset(&mut self) {
         if let Some(ref link) = self.transport_controller.link_sync {
             if link.is_link_enabled() {
-                let manifold_beat = self
-                    .engine
-                    .time_to_timeline_beat(self.engine.current_time())
-                    .0;
+                let manifold_beat =
+                    self.engine.time_to_timeline_beat(self.engine.current_time()).0;
                 self.link_beat_offset = link.current_beat.0 - manifold_beat;
             } else {
                 self.link_beat_offset = 0.0;
@@ -1098,8 +980,8 @@ impl ContentThread {
             return;
         }
 
-        let should_record =
-            self.engine.is_recording() && self.engine.current_state() == PlaybackState::Playing;
+        let should_record = self.engine.is_recording()
+            && self.engine.current_state() == PlaybackState::Playing;
 
         if !should_record {
             self.tempo_recorder.reset_tracking();
@@ -1121,50 +1003,49 @@ impl ContentThread {
         let mut tempo_map_changed = false;
 
         if let Some(project) = self.engine.project_mut()
-            && authority != ClockAuthority::Osc
-        {
-            if should_record {
-                // Studio recording: append tempo automation points over time.
-                // Port of C# ApplyResolvedTempo lines 1117-1122.
-                tempo_map_changed = self.tempo_recorder.try_record_tempo_point(
-                    &mut project.tempo_map,
-                    current_beat.as_f32(),
-                    current_time.as_f32(),
-                    bpm,
-                    source,
-                );
-                if tempo_map_changed {
-                    self.tempo_recorder.append_tempo_change(
-                        &mut project.recording_provenance,
-                        current_time.as_f32(),
+            && authority != ClockAuthority::Osc {
+                if should_record {
+                    // Studio recording: append tempo automation points over time.
+                    // Port of C# ApplyResolvedTempo lines 1117-1122.
+                    tempo_map_changed = self.tempo_recorder.try_record_tempo_point(
+                        &mut project.tempo_map,
                         current_beat.as_f32(),
+                        current_time.as_f32(),
                         bpm,
                         source,
                     );
-                }
-            } else if project.tempo_map.point_count() <= 1 && authority == ClockAuthority::Internal
-            {
-                // No automation lane authored and no external position source:
-                // treat tempo as a global master value.
-                // Compare quantized values so raw float jitter doesn't trigger writes.
-                // Port of C# ApplyResolvedTempo lines 1127-1134.
-                //
-                // When MidiClock or Link is active, do NOT write to the tempo map —
-                // the project BPM is updated via sync_project_bpm_from_current_beat()
-                // for display only. Writing the tempo map causes beat re-derivation
-                // from stale time values, which makes the timeline stutter.
-                let map_bpm = project
-                    .tempo_map
-                    .get_bpm_at_beat(Beats::ZERO, project.settings.bpm);
-                let q_resolved_bpm = BeatQuantizer::quantize_bpm(bpm);
-                if (map_bpm.0 - q_resolved_bpm).abs() >= TempoRecorder::BPM_THRESHOLD {
-                    project
-                        .tempo_map
-                        .add_or_replace_point(Beats::ZERO, Bpm(bpm), source, 0.001);
-                    tempo_map_changed = true;
+                    if tempo_map_changed {
+                        self.tempo_recorder.append_tempo_change(
+                            &mut project.recording_provenance,
+                            current_time.as_f32(),
+                            current_beat.as_f32(),
+                            bpm,
+                            source,
+                        );
+                    }
+                } else if project.tempo_map.point_count() <= 1
+                    && authority == ClockAuthority::Internal
+                {
+                    // No automation lane authored and no external position source:
+                    // treat tempo as a global master value.
+                    // Compare quantized values so raw float jitter doesn't trigger writes.
+                    // Port of C# ApplyResolvedTempo lines 1127-1134.
+                    //
+                    // When MidiClock or Link is active, do NOT write to the tempo map —
+                    // the project BPM is updated via sync_project_bpm_from_current_beat()
+                    // for display only. Writing the tempo map causes beat re-derivation
+                    // from stale time values, which makes the timeline stutter.
+                    let map_bpm =
+                        project.tempo_map.get_bpm_at_beat(Beats::ZERO, project.settings.bpm);
+                    let q_resolved_bpm = BeatQuantizer::quantize_bpm(bpm);
+                    if (map_bpm.0 - q_resolved_bpm).abs() >= TempoRecorder::BPM_THRESHOLD {
+                        project.tempo_map.add_or_replace_point(
+                            Beats::ZERO, Bpm(bpm), source, 0.001,
+                        );
+                        tempo_map_changed = true;
+                    }
                 }
             }
-        }
 
         if tempo_map_changed {
             // Re-derive beat from time after tempo map change.
@@ -1181,7 +1062,10 @@ impl ContentThread {
             return;
         }
 
-        let default_bpm = self.engine.project().map_or(120.0, |p| p.settings.bpm.0);
+        let default_bpm = self
+            .engine
+            .project()
+            .map_or(120.0, |p| p.settings.bpm.0);
         let live_tempo = self.engine.try_get_live_external_tempo();
         let get_source_at_beat = |_beat: f32| -> TempoPointSource {
             if let Some((_, source)) = live_tempo {
@@ -1200,4 +1084,5 @@ impl ContentThread {
             );
         }
     }
+
 }
