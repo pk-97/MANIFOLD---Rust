@@ -163,7 +163,7 @@ impl BlackHoleGenerator {
             "BlackHole Scatter",
         );
         let resolve_pipeline = device.create_compute_pipeline(
-            include_str!("shaders/black_hole_scatter.wgsl"),
+            include_str!("shaders/black_hole_resolve.wgsl"),
             "resolve",
             "BlackHole Resolve",
         );
@@ -324,8 +324,10 @@ impl Generator for BlackHoleGenerator {
         let uv_scale = if scale > 0.0 { 1.0 / scale } else { 1.0 };
         let tilt_rad = tilt_deg.to_radians();
         let orbit_angle = ctx.time as f32 * speed * 0.3;
+        // Start with 100K to verify scatter pipeline, scale up once stable
         let new_active = ((particle_millions * 1_000_000.0).round() as u32)
-            .clamp(100_000, MAX_PARTICLES);
+            .clamp(100_000, MAX_PARTICLES)
+            .min(100_000);
 
         // ── Ensure GPU resources ──
         self.ensure_deflection_map(gpu.device, ctx.width, ctx.height);
