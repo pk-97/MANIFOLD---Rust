@@ -1,10 +1,13 @@
-// Black Hole — Deflection Map Bake (dual crossing)
+// Black Hole — Volumetric Deflection Map
 //
-// Traces geodesics, records up to 2 disk crossings per ray.
-// Output 1 (first crossing):  R=final_r, G=disk_r, B=disk_angle, A=opacity
-// Output 2 (second crossing): R=0,       G=disk_r, B=disk_angle, A=opacity
+// Traces geodesics through a THICK disk slab (not a thin plane).
+// Accumulates density as the ray passes through the disk volume.
 //
-// Photon acceleration: a = -1.5 * h² / r⁵ * pos (rs=1, c=1)
+// Disk volume: |y| < thickness(r), where thickness increases with r.
+// Density profile: gaussian in y, concentrated at midplane.
+//
+// Output 1: (final_r, weighted_avg_r, weighted_avg_angle, total_density)
+// Output 2: reserved for future use
 
 struct Uniforms {
     aspect: f32,
@@ -20,6 +23,34 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var output1: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var output2: texture_storage_2d<rgba32float, write>;
+
+// Disk half-thickness as function of radius
+fn disk_height(r: f32) -> f32 {
+    let t = clamp((r - u.disk_inner) / (u.disk_outer - u.disk_inner), 0.0, 1.0);
+    // Inner edge thin (compressed by gravity), outer edge puffy
+    return 0.15 + 0.6 * t;
+}
+
+// Density at a point (gaussian in y, smooth radial profile)
+fn disk_density(r: f32, y: f32) -> f32 {
+    if r < u.disk_inner * 0.7 || r > u.disk_outer * 1.3 {
+        return 0.0;
+    }
+
+    let h = disk_height(r);
+    // Gaussian vertical profile
+    let y_density = exp(-(y * y) / (h * h));
+
+    // Soft radial edges
+    let inner_fade = smoothstep(u.disk_inner * 0.7, u.disk_inner * 1.05, r);
+    let outer_fade = 1.0 - smoothstep(u.disk_outer * 0.9, u.disk_outer * 1.3, r);
+
+    // Radial density: denser near inner edge (matter piles up)
+    let r_norm = (r - u.disk_inner) / (u.disk_outer - u.disk_inner);
+    let radial_density = 1.0 / (0.3 + r_norm * r_norm);
+
+    return y_density * inner_fade * outer_fade * radial_density;
+}
 
 @compute @workgroup_size(16, 16)
 fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -51,20 +82,17 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let max_steps = i32(u.steps);
     let escape_r = max(u.cam_dist * 3.0, 150.0);
-    // Step size scales with cam_dist so rays reach the disk efficiently
     let base_step = max(u.cam_dist * 0.02, 0.3);
 
-    var prev_y = pos.y;
     var final_r = 0.0;
 
-    // Store up to 2 crossings
-    var cross1_r = 0.0;
-    var cross1_angle = 0.0;
-    var cross1_opacity = 0.0;
-    var cross2_r = 0.0;
-    var cross2_angle = 0.0;
-    var cross2_opacity = 0.0;
-    var crossing_count = 0;
+    // Volumetric accumulation
+    var total_density = 0.0;
+    var weighted_r = 0.0;
+    var weighted_angle = 0.0;
+    // For angle averaging, accumulate sin/cos to avoid wrap issues
+    var weighted_cos_a = 0.0;
+    var weighted_sin_a = 0.0;
 
     for (var i = 0; i < max_steps; i++) {
         let r = length(pos);
@@ -79,13 +107,12 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             break;
         }
 
-        // Large steps far from hole, tiny steps near horizon
         let step = base_step * clamp(r * 0.08, 0.005, 1.0);
 
+        // Verlet integration
         let r2 = r * r;
         let r5 = r2 * r2 * r;
         let accel = -1.5 * h2 / r5 * pos;
-
         vel += accel * step * 0.5;
         pos += vel * step;
         let r_new = length(pos);
@@ -93,35 +120,33 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let r5_new = r2_new * r2_new * r_new;
         vel += -1.5 * h2 / r5_new * pos * step * 0.5;
 
-        let cur_y = pos.y;
-        if prev_y * cur_y < 0.0 {
-            let frac = abs(prev_y) / (abs(prev_y) + abs(cur_y) + 1e-8);
-            let cross_pos = pos - vel * step * (1.0 - frac);
-            let cross_r = length(cross_pos);
+        // ── Volumetric disk sampling ──
+        let r_xz = length(vec2<f32>(pos.x, pos.z));
+        let density = disk_density(r_xz, pos.y);
 
-            if cross_r > u.disk_inner * 0.8 && cross_r < u.disk_outer * 1.2 {
-                let angle = atan2(cross_pos.z, cross_pos.x);
-                // Soft edges: fade in/out at disk boundaries
-                let inner_fade = smoothstep(u.disk_inner * 0.8, u.disk_inner * 1.1, cross_r);
-                let outer_fade = 1.0 - smoothstep(u.disk_outer * 0.85, u.disk_outer * 1.2, cross_r);
-                let opacity = inner_fade * outer_fade;
+        if density > 0.001 {
+            let w = density * step;
+            let angle = atan2(pos.z, pos.x);
 
-                if crossing_count == 0 {
-                    cross1_r = cross_r;
-                    cross1_angle = angle;
-                    cross1_opacity = opacity;
-                } else if crossing_count == 1 {
-                    cross2_r = cross_r;
-                    cross2_angle = angle;
-                    cross2_opacity = opacity;
-                }
-                crossing_count++;
-            }
+            total_density += w;
+            weighted_r += r_xz * w;
+            weighted_cos_a += cos(angle) * w;
+            weighted_sin_a += sin(angle) * w;
         }
-        prev_y = cur_y;
+
         final_r = r;
     }
 
-    textureStore(output1, gid.xy, vec4<f32>(final_r, cross1_r, cross1_angle, cross1_opacity));
-    textureStore(output2, gid.xy, vec4<f32>(0.0, cross2_r, cross2_angle, cross2_opacity));
+    // Compute weighted averages
+    var avg_r = 0.0;
+    var avg_angle = 0.0;
+    if total_density > 0.001 {
+        avg_r = weighted_r / total_density;
+        avg_angle = atan2(weighted_sin_a, weighted_cos_a);
+        // Normalize density to useful range
+        total_density = min(total_density, 8.0);
+    }
+
+    textureStore(output1, gid.xy, vec4<f32>(final_r, avg_r, avg_angle, total_density));
+    textureStore(output2, gid.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));
 }
