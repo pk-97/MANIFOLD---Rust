@@ -10,6 +10,7 @@ pub mod generator_math;
 pub mod line_pipeline;
 pub mod lissajous;
 pub mod mesh_pipeline;
+pub mod metallic_glass;
 pub mod mri_volume;
 pub mod mri_volume_loader;
 pub mod mycelium;

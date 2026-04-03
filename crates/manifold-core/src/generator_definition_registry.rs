@@ -615,6 +615,27 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         create_def("Galactic Rock", false, "galacticRock", params),
     );
 
+    // ── MetallicGlass ──
+    let params = vec![
+        pd("Feedback", 0.9, 1.0, 0.98, Some("F3"), "feedback"),
+        pd("Noise Scale", 0.1, 2.0, 0.75, Some("F2"), "noiseScale"),
+        pd("Noise Speed", 0.01, 1.0, 0.1, Some("F3"), "noiseSpeed"),
+        pd("Edge Str", 0.5, 20.0, 5.0, Some("F1"), "edgeStr"),
+        pd("Mirror", 0.0, 90.0, 45.0, Some("F0"), "mirror"),
+        pd("Displace", 0.0, 0.5, 0.2, Some("F3"), "displace"),
+        pd("Roughness", 0.01, 1.0, 0.05, Some("F3"), "roughness"),
+        pd("Light Int", 0.1, 10.0, 3.5, Some("F1"), "lightInt"),
+        pd("Cam Dist", 0.5, 10.0, 2.5, Some("F2"), "camDist"),
+        pd("Cam Orbit", -180.0, 180.0, 0.0, Some("F0"), "camOrbit"),
+        pd("Cam Tilt", -90.0, 90.0, 25.0, Some("F0"), "camTilt"),
+        pd("Cam FOV", 20.0, 120.0, 35.0, Some("F0"), "camFov"),
+        pd("Look Y", -2.0, 2.0, 0.0, Some("F2"), "lookY"),
+    ];
+    m.insert(
+        GeneratorTypeId::METALLIC_GLASS,
+        create_def("Metallic Glass", false, "metallicGlass", params),
+    );
+
     m
 }
 

@@ -62,6 +62,7 @@ impl GeneratorTypeId {
     pub const MRI_VOLUME: Self = Self(Cow::Borrowed("MriVolume"));
     pub const BLACK_HOLE: Self = Self(Cow::Borrowed("BlackHole"));
     pub const GALACTIC_ROCK: Self = Self(Cow::Borrowed("GalacticRock"));
+    pub const METALLIC_GLASS: Self = Self(Cow::Borrowed("MetallicGlass"));
 }
 
 // ── Legacy discriminant mapping ─────────────────────────────────────────
@@ -93,6 +94,7 @@ impl GeneratorTypeId {
             20 => Self::MRI_VOLUME,
             21 => Self::BLACK_HOLE,
             22 => Self::GALACTIC_ROCK,
+            23 => Self::METALLIC_GLASS,
             _ => Self::NONE,
         }
     }
