@@ -62,8 +62,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let h_vec = cross(pos, vel);
     let h2 = dot(h_vec, h_vec);
 
-    let base_step = 0.15;
+    let base_step = 0.3;
     let max_steps = i32(u.steps);
+    // Escape radius must be well beyond camera to capture all lensing
+    let escape_r = max(u.cam_dist * 3.0, 150.0);
 
     var prev_y = pos.y;
     var best_disk_r = 0.0;
@@ -81,12 +83,13 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
 
         // Escape
-        if r > 100.0 {
+        if r > escape_r {
             final_r = r;
             break;
         }
 
-        let step = base_step * clamp(r * 0.1, 0.01, 1.0);
+        // Adaptive step: small near horizon, capped to avoid jumping over disk
+        let step = base_step * clamp(r * 0.05, 0.01, 0.5);
 
         let r2 = r * r;
         let r5 = r2 * r2 * r;
