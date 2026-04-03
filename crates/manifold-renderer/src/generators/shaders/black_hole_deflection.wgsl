@@ -20,7 +20,7 @@ struct Uniforms {
     disk_inner: f32,
     disk_outer: f32,
     uv_scale: f32,
-    orbit_angle: f32,
+    _pad0: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -37,16 +37,14 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let ndc = (uv * 2.0 - 1.0) * u.uv_scale;
     let screen = vec2<f32>(ndc.x * u.aspect, -ndc.y);
 
-    // Camera setup
+    // Camera setup — always baked at orbit_angle=0 (rotational symmetry)
     let cos_tilt = cos(u.tilt_rad);
     let sin_tilt = sin(u.tilt_rad);
-    let cos_orbit = cos(u.orbit_angle);
-    let sin_orbit = sin(u.orbit_angle);
 
     let cam_pos = vec3<f32>(
-        u.cam_dist * cos_tilt * cos_orbit,
+        u.cam_dist * cos_tilt,
         u.cam_dist * sin_tilt,
-        u.cam_dist * cos_tilt * sin_orbit,
+        0.0,
     );
 
     let fwd = normalize(-cam_pos);

@@ -1,7 +1,7 @@
 // Black Hole — Display Pass
 //
-// Samples the precomputed deflection map and the live particle density texture
-// to compose the final image. Per-frame cost: one texture read per pixel.
+// Samples the precomputed deflection map and applies dynamic disk coloring.
+// Per-frame cost: one texture read per pixel (cheap).
 //
 // Deflection map (Rgba32Float):
 //   R: final radius (0 = absorbed)
@@ -14,28 +14,57 @@ struct Uniforms {
     disk_inner: f32,
     disk_outer: f32,
     disk_glow: f32,
-    aspect: f32,
     orbit_angle: f32,
     _pad0: f32,
     _pad1: f32,
+    _pad2: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var deflection_map: texture_2d<f32>;
-@group(0) @binding(2) var disk_density: texture_2d<f32>;
-@group(0) @binding(3) var s_linear: sampler;
-@group(0) @binding(4) var output: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(2) var s_linear: sampler;
+@group(0) @binding(3) var output: texture_storage_2d<rgba16float, write>;
 
-// Star field (same as deflection pass, for escaped rays)
-fn star_field_from_angle(r: f32, seed_val: f32) -> vec3<f32> {
-    // Use the final radius and a seed to generate star pattern
-    let p = vec3<f32>(r * 10.0, seed_val * 400.0, r * seed_val * 7.0);
+// Star field background
+fn star_field(seed1: f32, seed2: f32) -> vec3<f32> {
+    let p = vec3<f32>(seed1 * 400.0, seed2 * 400.0, seed1 * seed2 * 200.0);
     let cell = floor(p);
     let f = fract(p) - 0.5;
     let h = fract(sin(dot(cell, vec3<f32>(127.1, 311.7, 74.7))) * 43758.5453);
     let star = step(0.985, h) * smoothstep(0.4, 0.0, length(f));
     let brightness = h * h * star * 0.3;
-    return vec3<f32>(brightness);
+    let tint = vec3<f32>(
+        0.8 + 0.2 * fract(h * 13.7),
+        0.8 + 0.2 * fract(h * 27.3),
+        0.9 + 0.1 * fract(h * 41.1),
+    );
+    return tint * brightness;
+}
+
+// Accretion disk color (procedural)
+fn disk_color(r: f32, angle: f32) -> vec3<f32> {
+    let t = clamp((r - u.disk_inner) / (u.disk_outer - u.disk_inner), 0.0, 1.0);
+
+    // Temperature gradient: white-hot inner → orange → deep red outer
+    let inner_col = vec3<f32>(1.0, 0.95, 0.85);
+    let mid_col = vec3<f32>(1.0, 0.55, 0.15);
+    let outer_col = vec3<f32>(0.6, 0.12, 0.02);
+
+    var col: vec3<f32>;
+    if t < 0.5 {
+        col = mix(inner_col, mid_col, t * 2.0);
+    } else {
+        col = mix(mid_col, outer_col, (t - 0.5) * 2.0);
+    }
+
+    // Radial intensity falloff
+    let intensity = u.disk_glow * (u.disk_inner * u.disk_inner) / (r * r);
+
+    // Procedural swirl texture
+    let noise1 = 0.7 + 0.3 * sin(angle * 8.0 + r * 1.5 - u.time_val * 0.4);
+    let noise2 = 0.85 + 0.15 * sin(angle * 20.0 - r * 3.0 + u.time_val * 0.7);
+
+    return col * intensity * noise1 * noise2;
 }
 
 @compute @workgroup_size(16, 16)
@@ -52,69 +81,31 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let defl = textureSampleLevel(deflection_map, s_linear, uv, 0.0);
     let final_r = defl.r;
     let disk_r = defl.g;
-    let disk_angle = defl.b;
+    let disk_angle_raw = defl.b;
     let disk_opacity = defl.a;
+
+    // Offset disk angle by orbit rotation
+    let disk_angle = disk_angle_raw + u.orbit_angle;
 
     var color = vec3<f32>(0.0);
 
-    // ── Event horizon (absorbed) ──
-    if final_r < 0.5 && disk_opacity < 0.01 {
-        // Pure black
-        textureStore(output, gid.xy, vec4<f32>(0.0, 0.0, 0.0, 1.0));
-        return;
-    }
-
-    // ── Disk hit — sample particle density texture ──
+    // Disk hit
     if disk_r > 0.1 {
-        // Offset angle by orbit rotation (deflection map baked at angle=0)
-        let rotated_angle = disk_angle + u.orbit_angle;
-        // Convert disk hit (r, angle) to density texture UV
-        let angle_norm = (rotated_angle + 3.14159265) / 6.28318530; // [0, 1]
-        let r_norm = clamp(
-            (disk_r - u.disk_inner) / (u.disk_outer - u.disk_inner),
-            0.0, 1.0,
-        );
-        let disk_uv = vec2<f32>(angle_norm, r_norm);
-
-        // Sample particle density (bilinear filtered)
-        let density_sample = textureSampleLevel(disk_density, s_linear, disk_uv, 0.0);
-        let particle_color = density_sample.rgb;
-        let particle_density = density_sample.a;
-
-        // If particles are present, use their color. Otherwise, use procedural fallback.
-        if particle_density > 0.001 {
-            color = particle_color * u.disk_glow;
-        } else {
-            // Procedural fallback for areas without particles
-            let t = r_norm;
-            let inner_col = vec3<f32>(1.0, 0.95, 0.85);
-            let mid_col = vec3<f32>(1.0, 0.55, 0.15);
-            let outer_col = vec3<f32>(0.6, 0.12, 0.02);
-            var fallback: vec3<f32>;
-            if t < 0.5 {
-                fallback = mix(inner_col, mid_col, t * 2.0);
-            } else {
-                fallback = mix(mid_col, outer_col, (t - 0.5) * 2.0);
-            }
-            let intensity = u.disk_glow * (u.disk_inner * u.disk_inner) / (disk_r * disk_r);
-            let swirl = 0.7 + 0.3 * sin(rotated_angle * 8.0 + disk_r * 1.5 - u.time_val * 0.4);
-            color = fallback * intensity * swirl * 0.3; // Dim fallback
-        }
-
-        color *= disk_opacity;
+        color = disk_color(disk_r, disk_angle) * disk_opacity;
     }
 
-    // ── Background stars (escaped rays) ──
+    // Background stars (escaped rays)
     if final_r > 1.0 {
-        let star_brightness = star_field_from_angle(final_r, disk_angle + uv.x * 100.0);
-        color += star_brightness * (1.0 - disk_opacity);
+        color += star_field(final_r * 0.01, disk_angle_raw + uv.x * 50.0) * (1.0 - disk_opacity);
     }
 
-    // ── Photon ring glow ──
+    // Photon ring glow
     if final_r > 1.0 && final_r < 5.0 {
         let ring_glow = exp(-(final_r - 1.5) * (final_r - 1.5) * 8.0) * 0.3;
         color += vec3<f32>(0.7, 0.8, 1.0) * ring_glow * (1.0 - disk_opacity);
     }
+
+    // Event horizon — pure black (absorbed rays have final_r < 0.5 and no disk hit)
 
     // ACES tone mapping
     let a = 2.51;
