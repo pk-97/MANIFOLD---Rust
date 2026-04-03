@@ -87,11 +87,15 @@ pub struct MetallicGlassGenerator {
     blend_pipeline: manifold_gpu::GpuComputePipeline,
     blur_pipeline: manifold_gpu::GpuComputePipeline,
     process_pipeline: manifold_gpu::GpuComputePipeline,
+    envmap_pipeline: manifold_gpu::GpuComputePipeline,
 
     // Render pipeline
     render_pipeline: manifold_gpu::GpuRenderPipeline,
     depth_stencil: manifold_gpu::GpuDepthStencilState,
     sampler: manifold_gpu::GpuSampler,
+
+    // Pre-baked HDR environment map (512×256 equirectangular)
+    env_map: manifold_gpu::GpuTexture,
 
     // Ping-pong feedback textures (persistent across frames)
     feedback_a: Option<manifold_gpu::GpuTexture>,
@@ -130,6 +134,24 @@ impl MetallicGlassGenerator {
             "MetallicGlass Process",
         );
 
+        let envmap_pipeline = device.create_compute_pipeline(
+            include_str!("shaders/metallic_glass_envmap.wgsl"),
+            "cs_main",
+            "MetallicGlass EnvMap",
+        );
+
+        // Pre-bake the HDR environment map (512×256 equirectangular)
+        let env_map = device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width: 512,
+            height: 256,
+            depth: 1,
+            format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::SHADER_READ
+                | manifold_gpu::GpuTextureUsage::SHADER_WRITE,
+            label: "MetallicGlass EnvMap",
+        });
+
         let render_pipeline = device.create_render_pipeline_depth(
             include_str!("shaders/metallic_glass_render.wgsl"),
             "vs_main",
@@ -161,9 +183,11 @@ impl MetallicGlassGenerator {
             blend_pipeline,
             blur_pipeline,
             process_pipeline,
+            envmap_pipeline,
             render_pipeline,
             depth_stencil,
             sampler,
+            env_map,
             feedback_a: None,
             feedback_b: None,
             blur_temp: None,
@@ -232,6 +256,19 @@ impl Generator for MetallicGlassGenerator {
         let width = ctx.width;
         let height = ctx.height;
         self.ensure_textures(gpu.device, width, height);
+
+        // Bake the HDR environment map on the first frame
+        if self.frame_count == 0 {
+            gpu.native_enc.dispatch_compute(
+                &self.envmap_pipeline,
+                &[manifold_gpu::GpuBinding::Texture {
+                    binding: 0,
+                    texture: &self.env_map,
+                }],
+                [512u32.div_ceil(16), 256u32.div_ceil(16), 1],
+                "MetallicGlass EnvMap Bake",
+            );
+        }
 
         let feedback_decay = ctx.params[P_FEEDBACK];
         let noise_scale = ctx.params[P_NOISE_SCALE];
@@ -442,6 +479,14 @@ impl Generator for MetallicGlassGenerator {
                 },
                 manifold_gpu::GpuBinding::Sampler {
                     binding: 2,
+                    sampler: &self.sampler,
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 3,
+                    texture: &self.env_map,
+                },
+                manifold_gpu::GpuBinding::Sampler {
+                    binding: 4,
                     sampler: &self.sampler,
                 },
             ],

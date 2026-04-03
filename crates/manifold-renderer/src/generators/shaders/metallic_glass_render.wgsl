@@ -23,6 +23,8 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var height_tex: texture_2d<f32>;
 @group(0) @binding(2) var tex_sampler: sampler;
+@group(0) @binding(3) var env_tex: texture_2d<f32>;
+@group(0) @binding(4) var env_sampler: sampler;
 
 struct VertexOutput {
     @builtin(position) clip_pos: vec4<f32>,
@@ -101,37 +103,21 @@ fn F_Schlick(cosTheta: f32, F0: vec3<f32>) -> vec3<f32> {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
-// ─── Procedural HDR Environment ────────────────────────────────────
-// Approximates a high-contrast studio interior HDR.
-// Raised ambient floor (0.15) so no direction reflects pure black —
-// real studio HDRs have bounced light everywhere.
+// ─── HDR Environment Map Sampling ──────────────────────────────────
+// Samples the pre-baked equirectangular HDR studio environment texture.
+
+const ENV_PI: f32 = 3.14159265;
 
 fn env_color(dir: vec3<f32>) -> vec3<f32> {
-    let up = dir.y;
     let azimuth = atan2(dir.z, dir.x);
+    let elevation = asin(clamp(dir.y, -1.0, 1.0));
 
-    // Studio ambient floor — no direction should be pure black
-    var color = vec3<f32>(0.15, 0.15, 0.17);
+    let env_uv = vec2<f32>(
+        azimuth / (2.0 * ENV_PI) + 0.5,
+        elevation / ENV_PI + 0.5,
+    );
 
-    // Large bright horizon band (studio windows / white cyclorama)
-    color += vec3(1.5, 1.45, 1.4) * exp(-15.0 * up * up);
-
-    // Overhead soft box
-    let overhead = smoothstep(0.35, 0.65, up) * smoothstep(0.95, 0.65, up);
-    color += vec3(2.5, 2.4, 2.3) * overhead;
-
-    // Floor fill (bounced light from below)
-    let floor_fill = smoothstep(-0.15, -0.45, up) * smoothstep(-0.85, -0.45, up);
-    color += vec3(0.4, 0.42, 0.45) * floor_fill;
-
-    // Two narrow strip lights (create chrome streaks)
-    color += vec3(3.5, 3.2, 2.8) * exp(-300.0 * pow(up - 0.12, 2.0));
-    color += vec3(1.5, 2.0, 3.0) * exp(-300.0 * pow(up + 0.08, 2.0));
-
-    // Azimuthal variation
-    color *= sin(azimuth * 2.0) * 0.12 + 1.0;
-
-    return color;
+    return textureSampleLevel(env_tex, env_sampler, env_uv, 0.0).rgb;
 }
 
 // ─── Fragment Shader ───────────────────────────────────────────────
