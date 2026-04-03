@@ -127,7 +127,7 @@ fn add_delete_clip_undo_roundtrip() {
 
     // Add
     let layer_id_0 = project.timeline.layers[0].layer_id.clone();
-    let mut add_cmd = AddClipCommand::new(new_clip, layer_id_0.clone());
+    let mut add_cmd = AddClipCommand::new(new_clip, layer_id_0.clone(), 0.5);
     add_cmd.execute(&mut project);
     assert_eq!(project.timeline.total_clip_count(), initial_count + 1);
 

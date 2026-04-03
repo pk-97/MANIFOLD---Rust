@@ -112,7 +112,6 @@ impl ProjectIOService {
     pub fn open_project(
         &mut self,
         user_prefs: &mut UserPrefs,
-        parent: Option<&winit::window::Window>,
     ) -> ProjectIOAction {
         let last_dir =
             dialog_path_memory::get_last_directory(DialogContext::ProjectOpen, user_prefs);
@@ -121,9 +120,6 @@ impl ProjectIOService {
             .set_title("Open MANIFOLD Project")
             .add_filter("MANIFOLD Project", &["json", "manifold"]);
 
-        if let Some(w) = parent {
-            dialog = dialog.set_parent(w);
-        }
         if !last_dir.is_empty() {
             dialog = dialog.set_directory(&last_dir);
         }
@@ -240,7 +236,7 @@ impl ProjectIOService {
             }
         } else {
             // No existing path → trigger Save As
-            self.save_project_as(project, current_time, editing_service, user_prefs, None)
+            self.save_project_as(project, current_time, editing_service, user_prefs)
         }
     }
 
@@ -251,7 +247,6 @@ impl ProjectIOService {
         current_time: f32,
         editing_service: &mut EditingService,
         user_prefs: &mut UserPrefs,
-        parent: Option<&winit::window::Window>,
     ) -> ProjectIOAction {
         // Sync playhead before save (Unity line 205)
         project.saved_playhead_time = current_time;
@@ -270,9 +265,6 @@ impl ProjectIOService {
             .add_filter("MANIFOLD Project", &["manifold"])
             .set_file_name(project_name);
 
-        if let Some(w) = parent {
-            dialog = dialog.set_parent(w);
-        }
         if !last_dir.is_empty() {
             dialog = dialog.set_directory(&last_dir);
         }
@@ -452,27 +444,16 @@ impl ProjectIOService {
                 ..TimelineClip::default()
             };
 
-            // Add clip to layer and immediately enforce non-overlap (Unity lines 309-312)
+            // AddClipCommand enforces non-overlap internally.
             let layer_idx = drop_layer_index as usize;
             if layer_idx < project.timeline.layers.len() {
-                project.timeline.layers[layer_idx].add_clip(timeline_clip.clone());
-                project.timeline.mark_clip_lookup_dirty();
-                drop_commands.push(Box::new(AddClipCommand::new(
-                    timeline_clip.clone(),
+                let mut add_cmd = AddClipCommand::new(
+                    timeline_clip,
                     drop_layer_id,
-                )));
-
-                let overlap_cmds = EditingService::enforce_non_overlap(
-                    project,
-                    &timeline_clip,
-                    layer_idx,
-                    &std::collections::HashSet::new(),
                     seconds_per_beat,
                 );
-                for mut cmd in overlap_cmds {
-                    cmd.execute(project);
-                    drop_commands.push(cmd);
-                }
+                add_cmd.execute(project);
+                drop_commands.push(Box::new(add_cmd));
             }
 
             placement_beat += duration_beats;
@@ -665,7 +646,7 @@ mod tests {
         project
             .timeline
             .insert_layer(0, Layer::new("Video 1".into(), LayerType::Video, 0));
-        project.timeline.layers[0].add_clip(TimelineClip {
+        project.timeline.layers[0].restore_clip(TimelineClip {
             video_clip_id: "existing".into(),
             start_beat: manifold_core::Beats::from_f32(0.0),
             duration_beats: manifold_core::Beats::from_f32(4.0),

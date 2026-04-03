@@ -199,38 +199,18 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         // Port of Unity EditingService.CreateClipAtPosition.
         // Beat arrives pre-snapped from the overlay. grid_step is the clip duration.
         let min_duration = Beats(0.25); // minimum 1/16th note
-        let mut duration = if grid_step < min_duration {
+        let duration = if grid_step < min_duration {
             min_duration
         } else {
             grid_step
         };
 
-        // Clamp duration to fit available gap — if the next clip on this layer
-        // starts before beat + duration, shrink the new clip to fill the gap
-        // instead of overlapping and destroying the neighbor.
-        if let Some(layer_ref) = self.project.timeline.layers.get(layer) {
-            let mut nearest_start = Beats(f64::MAX);
-            for clip in &layer_ref.clips {
-                if clip.start_beat > beat && clip.start_beat < nearest_start {
-                    nearest_start = clip.start_beat;
-                }
-            }
-            if nearest_start.0 < f64::MAX {
-                let available = Beats(nearest_start.0 - beat.0);
-                duration = if duration < available {
-                    duration
-                } else {
-                    available
-                };
-                if duration < min_duration {
-                    duration = min_duration;
-                }
-            }
-        }
-
         let clip_id = {
             let project = Some(&mut *self.project)?;
-            let (cmd, id) = EditingService::create_clip_at_position(project, beat, layer, duration);
+            let spb = 60.0 / project.settings.bpm.0.max(1.0);
+            // AddClipCommand enforces non-overlap internally.
+            let (cmd, id) =
+                EditingService::create_clip_at_position(project, beat, layer, duration, spb);
             {
                 let mut cmd = cmd;
                 cmd.execute(project);
@@ -241,40 +221,6 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             }
             id
         };
-        // Enforce non-overlap on the newly created clip (handles edge cases
-        // like the clamped clip still overlapping due to minimum duration)
-        let overlap_cmds = {
-            let project = Some(&*self.project)?;
-            let spb = self.get_seconds_per_beat();
-            let mut found: Option<(TimelineClip, usize)> = None;
-            for layer in &project.timeline.layers {
-                if let Some(clip) = layer.clips.iter().find(|c| c.id == clip_id) {
-                    let li = project
-                        .timeline
-                        .layer_index_for_id(&clip.layer_id)
-                        .unwrap_or(0);
-                    found = Some((clip.clone(), li));
-                    break;
-                }
-            }
-            if let Some((clip_clone, layer_idx)) = found {
-                let empty = HashSet::new();
-                EditingService::enforce_non_overlap(project, &clip_clone, layer_idx, &empty, spb)
-            } else {
-                Vec::new()
-            }
-        };
-        if !overlap_cmds.is_empty()
-            && let Some(project) = Some(&mut *self.project)
-        {
-            for mut c in overlap_cmds {
-                c.execute(project);
-                crate::content_command::ContentCommand::send(
-                    self.content_tx,
-                    crate::content_command::ContentCommand::Execute(c),
-                );
-            }
-        }
         *self.needs_structural_sync = true;
         Some(clip_id)
     }
@@ -317,11 +263,11 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                     return;
                 }
 
-                // Move clip between layers
+                // Move clip between layers (overlap handled by drag enforce).
                 let clip_id = ClipId::new(clip_id);
                 let clip = project.timeline.layers[src_layer].remove_clip(&clip_id);
                 if let Some(clip) = clip {
-                    project.timeline.layers[target_layer].add_clip(clip);
+                    project.timeline.layers[target_layer].restore_clip(clip);
                 }
                 project.timeline.mark_clip_lookup_dirty();
             }

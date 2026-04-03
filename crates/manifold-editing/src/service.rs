@@ -281,7 +281,11 @@ impl EditingService {
                     clip.in_point,
                     clip.in_point,
                 )));
-                commands.push(Box::new(AddClipCommand::new(tail, layer.layer_id.clone())));
+                commands.push(Box::new(AddClipCommand::new(
+                    tail,
+                    layer.layer_id.clone(),
+                    spb,
+                )));
             }
         }
 
@@ -435,15 +439,14 @@ impl EditingService {
             let mut new_clip = entry.source_clip.clone_with_new_id();
             new_clip.start_beat = paste_beat;
 
-            // Enforce non-overlap for the new clip
-            let empty_ignore = HashSet::new();
-            let overlap_cmds =
-                Self::enforce_non_overlap(project, &new_clip, paste_layer_idx, &empty_ignore, spb);
-            commands.extend(overlap_cmds);
-
             let paste_layer_id = layer.layer_id.clone();
             pasted_ids.push(new_clip.id.clone());
-            commands.push(Box::new(AddClipCommand::new(new_clip, paste_layer_id)));
+            // AddClipCommand enforces non-overlap internally.
+            commands.push(Box::new(AddClipCommand::new(
+                new_clip,
+                paste_layer_id,
+                spb,
+            )));
         }
 
         PasteResult {
@@ -602,6 +605,7 @@ impl EditingService {
         beat: Beats,
         layer_index: usize,
         duration_beats: Beats,
+        spb: f32,
     ) -> (Box<dyn Command>, ClipId) {
         let layer = project.timeline.layers.get(layer_index);
         let is_generator = layer.is_some_and(|l| l.layer_type == LayerType::Generator);
@@ -618,7 +622,7 @@ impl EditingService {
         };
 
         let clip_id = clip.id.clone();
-        (Box::new(AddClipCommand::new(clip, layer_id)), clip_id)
+        (Box::new(AddClipCommand::new(clip, layer_id, spb)), clip_id)
     }
 
     // ─── Duplicate ───
@@ -634,7 +638,6 @@ impl EditingService {
         spb: f32,
     ) -> Vec<Box<dyn Command>> {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
-        let empty_ignore = HashSet::new();
 
         if region.is_active {
             // Region mode: find ALL clips overlapping the region (Unity FillClipsInRegion),
@@ -659,13 +662,11 @@ impl EditingService {
                     let mut new_clip = trimmed;
                     new_clip.start_beat += offset;
 
-                    // Enforce non-overlap before adding the new clip
-                    let overlap_cmds =
-                        Self::enforce_non_overlap(project, &new_clip, li, &empty_ignore, spb);
-                    commands.extend(overlap_cmds);
+                    // AddClipCommand enforces non-overlap internally.
                     commands.push(Box::new(AddClipCommand::new(
                         new_clip,
                         layer.layer_id.clone(),
+                        spb,
                     )));
                 }
             }
@@ -693,17 +694,11 @@ impl EditingService {
                         let mut new_clip = clip.clone_with_new_id();
                         new_clip.start_beat += shift;
 
-                        let li = project
-                            .timeline
-                            .layer_index_for_id(&layer.layer_id)
-                            .unwrap_or(0);
-                        // Enforce non-overlap before adding the new clip
-                        let overlap_cmds =
-                            Self::enforce_non_overlap(project, &new_clip, li, &empty_ignore, spb);
-                        commands.extend(overlap_cmds);
+                        // AddClipCommand enforces non-overlap internally.
                         commands.push(Box::new(AddClipCommand::new(
                             new_clip,
                             layer.layer_id.clone(),
+                            spb,
                         )));
                     }
                 }

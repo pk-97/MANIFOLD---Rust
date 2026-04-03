@@ -55,16 +55,11 @@ impl Application {
         let current_time = self.content_state.current_time;
         self.local_project.saved_playhead_time = current_time.as_f32();
         self.save_viewport_state();
-        let parent_win = self
-            .primary_window_id
-            .and_then(|id| self.window_registry.get(&id))
-            .map(|ws| ws.window.as_ref());
         let action = self.project_io.save_project_as(
             &mut self.local_project,
             current_time.as_f32(),
             &mut EditingService::new(), // placeholder — mark clean via content thread
             &mut self.user_prefs,
-            parent_win,
         );
         self.send_content_cmd(ContentCommand::ResumeRendering);
         self.apply_project_io_action(action);
@@ -107,9 +102,6 @@ impl Application {
             .add_filter("MP4 Video", &["mp4"])
             .set_file_name(&default_name);
 
-        if let Some(w) = self.primary_window() {
-            dialog = dialog.set_parent(w);
-        }
         if !saved_dir.is_empty() {
             dialog = dialog.set_directory(&saved_dir);
         } else {
@@ -180,9 +172,6 @@ impl Application {
             .set_title("Import Video")
             .add_filter("Video Files", &["mp4", "mov", "webm", "avi"]);
 
-        if let Some(w) = self.primary_window() {
-            dialog = dialog.set_parent(w);
-        }
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
         let desktop = std::path::Path::new(&home).join("Desktop");
         if desktop.exists() {
@@ -287,7 +276,11 @@ impl Application {
                 );
 
                 commands.push(ContentCommand::Execute(Box::new(
-                    manifold_editing::commands::clip::AddClipCommand::new(clip, layer_id.clone()),
+                    manifold_editing::commands::clip::AddClipCommand::new(
+                        clip,
+                        layer_id.clone(),
+                        spb,
+                    ),
                 )));
 
                 log::warn!(
@@ -320,13 +313,9 @@ impl Application {
     /// Open. Delegates to ProjectIOService.open_project.
     pub(crate) fn open_project(&mut self) {
         self.send_content_cmd(ContentCommand::PauseRendering);
-        let parent_win = self
-            .primary_window_id
-            .and_then(|id| self.window_registry.get(&id))
-            .map(|ws| ws.window.as_ref());
         let action = self
             .project_io
-            .open_project(&mut self.user_prefs, parent_win);
+            .open_project(&mut self.user_prefs);
         self.send_content_cmd(ContentCommand::ResumeRendering);
         self.apply_project_io_action(action);
     }

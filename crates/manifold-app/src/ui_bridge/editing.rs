@@ -22,7 +22,6 @@ pub(super) fn dispatch_editing(
     selection: &mut SelectionState,
     active_layer: &mut Option<LayerId>,
     user_prefs: &mut UserPrefs,
-    parent_window: Option<&winit::window::Window>,
 ) -> DispatchResult {
     use crate::content_command::ContentCommand;
     match action {
@@ -101,43 +100,25 @@ pub(super) fn dispatch_editing(
             let grid_step = Beats::from_f32(ui.viewport.grid_step());
             let snapped = manifold_ui::snap::floor_beat_to_grid(Beats::from_f32(*beat), grid_step);
             {
-                let (cmd, _clip_id) = EditingService::create_clip_at_position(
+                let spb = 60.0 / project.settings.bpm.0.max(1.0);
+                // AddClipCommand enforces non-overlap internally.
+                let (cmd, clip_id) = EditingService::create_clip_at_position(
                     project,
                     snapped,
                     *layer,
                     Beats::from_f32(4.0),
+                    spb,
                 );
-                {
-                    ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
-                }
-                // Enforce non-overlap for the newly created clip
-                if let Some(new_layer) = project.timeline.layers.get(*layer)
-                    && let Some(new_clip) = new_layer.clips.last()
-                {
-                    let new_clip_clone = new_clip.clone();
-                    let ignore = std::collections::HashSet::new();
-                    let spb = 60.0 / project.settings.bpm.0;
-                    let overlap_cmds = EditingService::enforce_non_overlap(
-                        project,
-                        &new_clip_clone,
-                        *layer,
-                        &ignore,
-                        spb,
-                    );
-                    for cmd in overlap_cmds {
-                        {
-                            ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
-                        }
-                    }
-                    // Select the newly created clip
-                    let new_lid = project
-                        .timeline
-                        .layers
-                        .get(*layer)
-                        .map(|l| l.layer_id.clone())
-                        .unwrap_or_default();
-                    selection.select_clip(new_clip_clone.id, new_lid);
-                }
+                ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
+
+                // Select the newly created clip
+                let new_lid = project
+                    .timeline
+                    .layers
+                    .get(*layer)
+                    .map(|l| l.layer_id.clone())
+                    .unwrap_or_default();
+                selection.select_clip(clip_id, new_lid);
             }
             *active_layer = project
                 .timeline
@@ -202,9 +183,13 @@ pub(super) fn dispatch_editing(
                     spb,
                 );
                 if !commands.is_empty() {
-                    for c in commands {
-                        ContentCommand::send(content_tx, ContentCommand::Execute(c));
-                    }
+                    ContentCommand::send(
+                        content_tx,
+                        ContentCommand::ExecuteBatch(
+                            commands,
+                            "Duplicate clip".to_string(),
+                        ),
+                    );
                 }
             }
             DispatchResult::structural()
@@ -330,9 +315,6 @@ pub(super) fn dispatch_editing(
             let mut dialog = rfd::FileDialog::new()
                 .set_title("Import MIDI File")
                 .add_filter("MIDI Files", &["mid", "midi"]);
-            if let Some(w) = parent_window {
-                dialog = dialog.set_parent(w);
-            }
             if !last_dir.is_empty() {
                 dialog = dialog.set_directory(&last_dir);
             }

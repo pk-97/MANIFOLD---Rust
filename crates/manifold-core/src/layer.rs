@@ -4,11 +4,36 @@ use crate::effect_type_id::EffectTypeId;
 use crate::effects::{EffectGroup, EffectInstance, ParamEnvelope, ParameterDriver};
 use crate::generator::GeneratorParamState;
 use crate::generator_type_id::GeneratorTypeId;
-use crate::id::{EffectGroupId, LayerId};
+use crate::id::{ClipId, EffectGroupId, LayerId};
 use crate::types::{BlendMode, ClipDurationMode, LayerType};
-use crate::units::Beats;
+use crate::units::{Beats, Seconds};
 use ahash::AHashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+
+// ─── Overlap enforcement ───────────────────────────────────────────
+
+/// Describes an overlap resolution action performed by `add_clip` or
+/// `enforce_non_overlap_for`.  Callers use these to build undo commands.
+#[derive(Clone, Debug)]
+pub enum OverlapAction {
+    /// A clip was fully covered by the placed clip and removed from the layer.
+    Deleted(TimelineClip),
+    /// A clip was trimmed (start and/or end) to avoid overlap.
+    Trimmed {
+        clip_id: ClipId,
+        old_start_beat: Beats,
+        old_duration_beats: Beats,
+        old_in_point: Seconds,
+    },
+    /// A clip was split: its end was trimmed and a tail piece was added after
+    /// the placed clip.
+    Split {
+        clip_id: ClipId,
+        old_duration_beats: Beats,
+        tail_clip: TimelineClip,
+    },
+}
 
 /// A single layer in the timeline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -377,10 +402,138 @@ impl Layer {
         self.collect_active_clips_at_beat(beat, results);
     }
 
-    pub fn add_clip(&mut self, mut clip: TimelineClip) {
+    /// Add a clip with DaVinci-style overlap enforcement.
+    /// Trims or deletes existing clips that collide with the new clip.
+    /// Returns the actions taken so callers can build undo commands.
+    /// `spb` = seconds per beat (60.0 / bpm), used for video in_point trimming.
+    pub fn add_clip(&mut self, mut clip: TimelineClip, spb: f32) -> Vec<OverlapAction> {
+        clip.layer_id = self.layer_id.clone();
+        let clip_id = clip.id.clone();
+        self.clips.push(clip);
+        let actions =
+            self.enforce_non_overlap_for(&clip_id, &HashSet::new(), spb);
+        self.mark_clips_unsorted();
+        actions
+    }
+
+    /// Raw clip insertion — no overlap enforcement.
+    /// **Only for undo/restore paths** that reinstate a known-good prior state.
+    pub fn restore_clip(&mut self, mut clip: TimelineClip) {
         clip.layer_id = self.layer_id.clone();
         self.clips.push(clip);
         self.mark_clips_unsorted();
+    }
+
+    /// Enforce non-overlap for a clip that is **already on this layer**.
+    /// Used after position/duration changes (e.g. drag).
+    /// Returns the actions taken so callers can build undo commands.
+    pub fn enforce_non_overlap_for(
+        &mut self,
+        clip_id: &ClipId,
+        ignore_ids: &HashSet<ClipId>,
+        spb: f32,
+    ) -> Vec<OverlapAction> {
+        let mut actions = Vec::new();
+
+        // Get placed clip bounds.
+        let (placed_start, placed_end) =
+            match self.clips.iter().find(|c| &c.id == clip_id) {
+                Some(c) => (c.start_beat, c.end_beat()),
+                None => return actions,
+            };
+        let placed_id = clip_id.clone();
+
+        let mut to_delete: Vec<ClipId> = Vec::new();
+        let mut tails: Vec<TimelineClip> = Vec::new();
+
+        for clip in &mut self.clips {
+            if clip.id == placed_id || ignore_ids.contains(&clip.id) {
+                continue;
+            }
+
+            let clip_start = clip.start_beat;
+            let clip_end = clip.end_beat();
+
+            // No overlap
+            if clip_end <= placed_start || clip_start >= placed_end {
+                continue;
+            }
+
+            // Case 1: fully covered → delete
+            if placed_start <= clip_start && placed_end >= clip_end {
+                to_delete.push(clip.id.clone());
+                actions.push(OverlapAction::Deleted(clip.clone()));
+                continue;
+            }
+
+            // Case 2: covers start → trim start of existing
+            if placed_start <= clip_start && placed_end < clip_end {
+                let trim_beats = placed_end - clip_start;
+                let trim_seconds = Seconds(trim_beats.0 * spb as f64);
+                actions.push(OverlapAction::Trimmed {
+                    clip_id: clip.id.clone(),
+                    old_start_beat: clip.start_beat,
+                    old_duration_beats: clip.duration_beats,
+                    old_in_point: clip.in_point,
+                });
+                clip.in_point += trim_seconds;
+                clip.start_beat = placed_end;
+                clip.duration_beats -= trim_beats;
+                continue;
+            }
+
+            // Case 3: covers end → trim end of existing
+            if placed_start > clip_start && placed_end >= clip_end {
+                actions.push(OverlapAction::Trimmed {
+                    clip_id: clip.id.clone(),
+                    old_start_beat: clip.start_beat,
+                    old_duration_beats: clip.duration_beats,
+                    old_in_point: clip.in_point,
+                });
+                clip.duration_beats = placed_start - clip_start;
+                continue;
+            }
+
+            // Case 4: placed inside existing → split
+            if placed_start > clip_start && placed_end < clip_end {
+                let beats_elapsed = placed_end - clip_start;
+                let tail_in_point =
+                    clip.in_point + Seconds(beats_elapsed.0 * spb as f64);
+
+                let mut tail = clip.clone_with_new_id();
+                tail.start_beat = placed_end;
+                tail.duration_beats = clip_end - placed_end;
+                tail.in_point = tail_in_point;
+                tail.layer_id = self.layer_id.clone();
+
+                let old_duration = clip.duration_beats;
+                clip.duration_beats = placed_start - clip_start;
+
+                actions.push(OverlapAction::Split {
+                    clip_id: clip.id.clone(),
+                    old_duration_beats: old_duration,
+                    tail_clip: tail.clone(),
+                });
+
+                tails.push(tail);
+            }
+        }
+
+        // Remove fully-covered clips.
+        if !to_delete.is_empty() {
+            self.clips.retain(|c| !to_delete.contains(&c.id));
+        }
+
+        // Add tail clips from splits.
+        for tail in tails {
+            self.clips.push(tail);
+        }
+
+        if !actions.is_empty() {
+            self.mark_clips_unsorted();
+        }
+
+        actions
     }
 
     pub fn remove_clip(&mut self, clip_id: &str) -> Option<TimelineClip> {
@@ -404,14 +557,6 @@ impl Layer {
     /// Find clip index by ID.
     pub fn find_clip_index(&self, clip_id: &str) -> Option<usize> {
         self.clips.iter().position(|c| c.id == clip_id)
-    }
-
-    /// Insert a clip at a specific index.
-    pub fn insert_clip_at(&mut self, index: usize, mut clip: TimelineClip) {
-        let idx = index.min(self.clips.len());
-        clip.layer_id = self.layer_id.clone();
-        self.clips.insert(idx, clip);
-        self.mark_clips_unsorted();
     }
 
     /// Check whether any clips on this layer overlap in beat range.
@@ -703,9 +848,53 @@ mod tests {
     #[test]
     fn add_clip_syncs_clip_layer_id() {
         let mut layer = Layer::new("Video 1".into(), LayerType::Video, 0);
-        layer.add_clip(TimelineClip::default());
+        layer.add_clip(TimelineClip::default(), 0.5);
 
         assert_eq!(layer.clips.len(), 1);
         assert_eq!(layer.clips[0].layer_id, layer.layer_id);
+    }
+
+    #[test]
+    fn add_clip_enforces_non_overlap() {
+        let mut layer = Layer::new("Video 1".into(), LayerType::Video, 0);
+        // Existing clip at beats 0..4
+        layer.restore_clip(TimelineClip {
+            start_beat: Beats(0.0),
+            duration_beats: Beats(4.0),
+            ..TimelineClip::default()
+        });
+        // Add overlapping clip at beats 2..6 → should trim existing to 0..2
+        let actions = layer.add_clip(
+            TimelineClip {
+                start_beat: Beats(2.0),
+                duration_beats: Beats(4.0),
+                ..TimelineClip::default()
+            },
+            0.5,
+        );
+        assert_eq!(layer.clips.len(), 2);
+        assert!(!layer.has_overlapping_clips());
+        assert_eq!(actions.len(), 1);
+        // Existing clip was trimmed to end at beat 2
+        let existing = &layer.clips[0];
+        assert!((existing.duration_beats - Beats(2.0)).0.abs() < 0.001);
+    }
+
+    #[test]
+    fn restore_clip_bypasses_overlap_check() {
+        let mut layer = Layer::new("Video 1".into(), LayerType::Video, 0);
+        layer.restore_clip(TimelineClip {
+            start_beat: Beats(0.0),
+            duration_beats: Beats(4.0),
+            ..TimelineClip::default()
+        });
+        layer.restore_clip(TimelineClip {
+            start_beat: Beats(2.0),
+            duration_beats: Beats(4.0),
+            ..TimelineClip::default()
+        });
+        // restore_clip is raw — overlaps remain (used for undo).
+        assert_eq!(layer.clips.len(), 2);
+        assert!(layer.has_overlapping_clips());
     }
 }

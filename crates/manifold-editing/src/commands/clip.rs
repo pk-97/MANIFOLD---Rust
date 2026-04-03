@@ -1,5 +1,6 @@
 use crate::command::Command;
 use manifold_core::clip::TimelineClip;
+use manifold_core::layer::OverlapAction;
 use manifold_core::project::Project;
 use manifold_core::{Beats, ClipId, LayerId, Seconds};
 
@@ -48,12 +49,12 @@ impl Command for MoveClipCommand {
                 None
             };
 
-            // Add clip to target layer.
+            // Restore clip to target layer (overlap handled by batch).
             if let Some(c) = clip
                 && let Some(dst_idx) = dst
                 && let Some(layer) = project.timeline.layers.get_mut(dst_idx)
             {
-                layer.add_clip(c);
+                layer.restore_clip(c);
             }
         } else {
             // Same-layer move: just update start_beat.
@@ -96,12 +97,12 @@ impl Command for MoveClipCommand {
                 None
             };
 
-            // Add clip back to original layer.
+            // Restore clip to original layer (restoring known-good state).
             if let Some(c) = clip
                 && let Some(dst_idx) = dst
                 && let Some(layer) = project.timeline.layers.get_mut(dst_idx)
             {
-                layer.add_clip(c);
+                layer.restore_clip(c);
             }
         }
 
@@ -240,7 +241,7 @@ impl Command for DeleteClipCommand {
             if let Some(li) = project.timeline.layer_index_for_id(&self.layer_id)
                 && let Some(layer) = project.timeline.layers.get_mut(li)
             {
-                layer.add_clip(clip);
+                layer.restore_clip(clip);
             }
             project.timeline.mark_clip_lookup_dirty();
         }
@@ -251,16 +252,26 @@ impl Command for DeleteClipCommand {
     }
 }
 
-/// Add a clip to the timeline.
+/// Add a clip to the timeline with automatic overlap enforcement.
+/// On execute, trims/deletes existing clips that collide (DaVinci-style).
+/// On undo, reverses those overlap actions and removes the clip.
 #[derive(Debug)]
 pub struct AddClipCommand {
     clip: TimelineClip,
     layer_id: LayerId,
+    spb: f32,
+    /// Overlap actions performed during execute — reversed on undo.
+    overlap_actions: Vec<OverlapAction>,
 }
 
 impl AddClipCommand {
-    pub fn new(clip: TimelineClip, layer_id: LayerId) -> Self {
-        Self { clip, layer_id }
+    pub fn new(clip: TimelineClip, layer_id: LayerId, spb: f32) -> Self {
+        Self {
+            clip,
+            layer_id,
+            spb,
+            overlap_actions: Vec::new(),
+        }
     }
 }
 
@@ -269,7 +280,8 @@ impl Command for AddClipCommand {
         if let Some(li) = project.timeline.layer_index_for_id(&self.layer_id)
             && let Some(layer) = project.timeline.layers.get_mut(li)
         {
-            layer.add_clip(self.clip.clone());
+            self.overlap_actions =
+                layer.add_clip(self.clip.clone(), self.spb);
         }
         project.timeline.mark_clip_lookup_dirty();
     }
@@ -278,8 +290,44 @@ impl Command for AddClipCommand {
         if let Some(li) = project.timeline.layer_index_for_id(&self.layer_id)
             && let Some(layer) = project.timeline.layers.get_mut(li)
         {
+            // Remove the added clip.
             layer.remove_clip(&self.clip.id);
+
+            // Reverse overlap actions (in reverse order).
+            for action in self.overlap_actions.iter().rev() {
+                match action {
+                    OverlapAction::Deleted(clip) => {
+                        layer.restore_clip(clip.clone());
+                    }
+                    OverlapAction::Trimmed {
+                        clip_id,
+                        old_start_beat,
+                        old_duration_beats,
+                        old_in_point,
+                    } => {
+                        if let Some(c) = layer.find_clip_mut(clip_id) {
+                            c.start_beat = *old_start_beat;
+                            c.duration_beats = *old_duration_beats;
+                            c.in_point = *old_in_point;
+                        }
+                    }
+                    OverlapAction::Split {
+                        clip_id,
+                        old_duration_beats,
+                        tail_clip,
+                    } => {
+                        // Remove the tail that was added during the split.
+                        layer.remove_clip(&tail_clip.id);
+                        // Restore original duration.
+                        if let Some(c) = layer.find_clip_mut(clip_id) {
+                            c.duration_beats = *old_duration_beats;
+                        }
+                    }
+                }
+            }
+            layer.mark_clips_unsorted();
         }
+        self.overlap_actions.clear();
         project.timeline.mark_clip_lookup_dirty();
     }
 
@@ -549,11 +597,11 @@ impl Command for SplitClipCommand {
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             clip.duration_beats = self.new_duration_beats;
         }
-        // Add tail
+        // Restore tail (known non-overlapping — it's the remainder of the split).
         if let Some(li) = project.timeline.layer_index_for_id(&self.layer_id)
             && let Some(layer) = project.timeline.layers.get_mut(li)
         {
-            layer.add_clip(self.tail_clip.clone());
+            layer.restore_clip(self.tail_clip.clone());
         }
         project.timeline.mark_clip_lookup_dirty();
     }

@@ -57,7 +57,7 @@ fn add_clip(project: &mut Project, layer: usize, start: f32, dur: f32) -> ClipId
         ..Default::default()
     };
     let id = clip.id.clone();
-    project.timeline.layers[layer].add_clip(clip);
+    project.timeline.layers[layer].restore_clip(clip);
     project.timeline.mark_clip_lookup_dirty();
     id
 }
@@ -303,7 +303,7 @@ fn create_clip_at_position() {
     let initial = project.timeline.layers[0].clips.len();
 
     let (mut cmd, _clip_id) =
-        EditingService::create_clip_at_position(&mut project, Beats(2.0), 0, Beats(4.0));
+        EditingService::create_clip_at_position(&mut project, Beats(2.0), 0, Beats(4.0), 0.5);
     cmd.execute(&mut project);
     project.timeline.rebuild_clip_lookup();
 
@@ -344,6 +344,7 @@ fn multi_step_undo_redo() {
             Beats(i as f64 * 4.0),
             0,
             Beats(4.0),
+            0.5,
         );
         service.execute(cmd, &mut project);
     }
@@ -370,7 +371,7 @@ fn data_version_increments() {
     let mut service = EditingService::new();
     assert_eq!(service.data_version(), 0);
 
-    let (cmd, _) = EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(4.0));
+    let (cmd, _) = EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(4.0), 0.5);
     service.execute(cmd, &mut project);
     assert_eq!(service.data_version(), 1);
 
@@ -388,7 +389,7 @@ fn dirty_flag_tracks_saves() {
 
     assert!(!service.is_dirty());
 
-    let (cmd, _) = EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(4.0));
+    let (cmd, _) = EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(4.0), 0.5);
     service.execute(cmd, &mut project);
     assert!(service.is_dirty());
 
@@ -599,8 +600,8 @@ fn duplicate_clips_region_mode_trims() {
     let region = make_region(&project, 2.0, 6.0, 0, 0);
 
     let cmds = EditingService::duplicate_clips(&project, &[id1.clone()], &region, 0.5);
-    // 2 commands: overlap trim of original (0..8 → 0..6) + add duplicate (6..10)
-    assert_eq!(cmds.len(), 2);
+    // 1 command: AddClipCommand (overlap enforcement is internal)
+    assert_eq!(cmds.len(), 1);
 
     let mut service = EditingService::new();
     service.execute_batch(cmds, "dup".into(), &mut project);

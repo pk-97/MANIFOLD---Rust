@@ -54,8 +54,8 @@ fn make_test_project() -> Project {
         duration_beats: Beats(4.0),
         ..Default::default()
     };
-    project.timeline.layers[0].add_clip(clip1);
-    project.timeline.layers[0].add_clip(clip2);
+    project.timeline.layers[0].restore_clip(clip1);
+    project.timeline.layers[0].restore_clip(clip2);
 
     project.timeline.rebuild_clip_lookup();
     project

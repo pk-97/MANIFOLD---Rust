@@ -7,7 +7,7 @@ use manifold_core::types::{QuantizeMode, TempoPointSource};
 use manifold_core::{Beats, Bpm, ClipId, LayerId, Seconds};
 use manifold_editing::command::Command;
 use manifold_editing::commands::clip::AddClipCommand;
-use manifold_editing::service::EditingService;
+
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -786,30 +786,16 @@ impl LiveClipManager {
                 .unwrap_or_default();
             committed.layer_id = layer_lid.clone();
 
-            // Enforce non-overlap BEFORE adding the new clip (same pattern as
-            // paste_clips / duplicate_clips). Overlap commands trim/delete
-            // existing clips that the committed clip will collide with.
+            // AddClipCommand enforces non-overlap internally (trims/deletes
+            // existing clips that collide with the committed clip).
             let spb = 60.0 / host.get_bpm_at_beat(committed.start_beat).max(1.0);
-            let overlap_cmds = EditingService::enforce_non_overlap(
-                project,
-                &committed,
-                layer_index as usize,
-                &HashSet::new(),
-                spb,
-            );
-            for mut cmd in overlap_cmds {
-                cmd.execute(project);
-                host.record_command(cmd);
-            }
-
-            if let Some(layer) = project.timeline.layers.get_mut(layer_index as usize) {
-                layer.add_clip(committed.clone());
-            }
-            project.timeline.mark_clip_lookup_dirty();
+            let mut add_cmd =
+                AddClipCommand::new(committed.clone(), layer_lid, spb);
+            add_cmd.execute(project);
 
             host.register_clip_lookup(&committed.id, &committed);
-            committed_clip = Some(committed.clone());
-            host.record_command(Box::new(AddClipCommand::new(committed, layer_lid)));
+            committed_clip = Some(committed);
+            host.record_command(Box::new(add_cmd));
         }
 
         // Recording provenance finalization.

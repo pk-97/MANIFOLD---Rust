@@ -115,11 +115,11 @@ impl MidiImportService {
                 )
             };
 
-            project.timeline.layers[target_layer_index].add_clip(clip.clone());
-            commands.push(Box::new(AddClipCommand::new(
-                clip,
-                target_layer_lid.clone(),
-            )));
+            let spb = 60.0 / project.settings.bpm.0.max(1.0);
+            let mut add_cmd =
+                AddClipCommand::new(clip, target_layer_lid.clone(), spb);
+            add_cmd.execute(project);
+            commands.push(Box::new(add_cmd));
             result.added_clips += 1;
         }
 
