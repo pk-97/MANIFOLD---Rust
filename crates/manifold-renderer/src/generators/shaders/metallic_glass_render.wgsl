@@ -142,14 +142,22 @@ fn env_color(dir: vec3<f32>) -> vec3<f32> {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let V = normalize(u.camera_pos.xyz - in.world_pos);
 
-    let metallic = u.material.x;
-    let roughness = max(u.material.y, 0.01);
     let displacement = u.material.z;
 
-    // Per-pixel normal from height map finite differences.
-    // Use 4-texel epsilon to smooth over pixel-level noise in the
-    // edge-detected height map while keeping macro surface detail.
-    let texel = u.grid_info.y * 4.0;  // 4 texels wide
+    // Sample the processed texture: R = height, G = metallic variation
+    let proc_sample = textureSampleLevel(height_tex, tex_sampler, in.uv, 0.0);
+    let metallic_var = proc_sample.g;  // Edge-based vein detail
+
+    // Metallic: base from uniform, modulated by vein pattern
+    let metallic = u.material.x;
+    // Roughness: veins have higher roughness (less mirror-like at boundaries)
+    let base_roughness = max(u.material.y, 0.01);
+    let edge_amount = proc_sample.b;  // raw edge value
+    let roughness = mix(base_roughness, min(base_roughness * 4.0, 0.5), edge_amount);
+
+    // Per-pixel normal from height map (R channel) finite differences.
+    // 2-texel epsilon: smooth enough to avoid noise, fine enough for detail.
+    let texel = u.grid_info.y * 2.0;
     let h_px = textureSampleLevel(height_tex, tex_sampler, in.uv + vec2(texel, 0.0), 0.0).r;
     let h_nx = textureSampleLevel(height_tex, tex_sampler, in.uv - vec2(texel, 0.0), 0.0).r;
     let h_py = textureSampleLevel(height_tex, tex_sampler, in.uv + vec2(0.0, texel), 0.0).r;
