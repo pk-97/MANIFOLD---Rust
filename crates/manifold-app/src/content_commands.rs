@@ -96,6 +96,7 @@ impl ContentThread {
             }
             ContentCommand::SeekTo(t) => {
                 if self.engine.is_playing() && self.osc_sender.is_sender_enabled() {
+                    self.sync_arbiter.set_user_seek_time(self.time_since_start);
                     self.sync_arbiter.clear_ownership();
                 }
                 self.engine.seek_to(t);
@@ -103,6 +104,7 @@ impl ContentThread {
             }
             ContentCommand::SeekToBeat(beat) => {
                 if self.engine.is_playing() && self.osc_sender.is_sender_enabled() {
+                    self.sync_arbiter.set_user_seek_time(self.time_since_start);
                     self.sync_arbiter.clear_ownership();
                 }
                 let time = self.engine.beat_to_timeline_time(beat);

@@ -568,14 +568,16 @@ impl MidiClockSyncController {
         );
 
         // Suppress local deltaTime when CLK is active and playing.
-        // CLK is ALWAYS the position authority when receiving — no ownership
-        // or cooldown gates. If the engine advances time internally while CLK
-        // is nudging, they fight and the playhead jitters.
+        // Not gated on manifold_owns — MIDI Clock always drives timing when active.
+        // Gated on seek cooldown — during scrubs, engine advances internally until
+        // Ableton catches up to the new position.
         arbiter.set_external_time_sync(
             ClockAuthority::MidiClock,
             authority,
             arb_target,
-            has_recent_clock_activity && is_playing,
+            has_recent_clock_activity
+                && is_playing
+                && !arbiter.is_seek_cooldown_active(now),
         );
 
         // Transport sync — gated by manifold_owns to prevent echo loops.
@@ -606,34 +608,21 @@ impl MidiClockSyncController {
             arbiter.clear_ownership();
         }
 
-        // Position sync — ALWAYS when CLK is receiving.
-        // CLK is the authoritative position source.
-        //
-        // Exception: when Manifold just sent a seek to Ableton via SYNC,
-        // CLK briefly reports the OLD position (~10-50ms round trip).
-        // Hold the playhead at the seek target until CLK confirms it,
-        // preventing the visible snap-back-then-forward glitch.
-        if has_recent_clock_activity {
-            let clk_beat =
-                (pos_sixteenths as f32 + clock_tick as f32 / 6.0) / 4.0;
-
-            if arbiter.should_hold_for_pending_seek(clk_beat, now) {
-                // CLK hasn't caught up to the seek target yet — skip nudge.
-                // The engine stays at the seek position the user intended.
-                self.current_position_sixteenths = pos_sixteenths;
-                self.update_position_display(pos_sixteenths);
-            } else {
-                self.current_position_sixteenths = pos_sixteenths;
-                self.update_position_display(pos_sixteenths);
-                self.sync_position_to_playback(
-                    pos_sixteenths,
-                    clock_tick,
-                    arbiter,
-                    arb_target,
-                    sync_target,
-                    authority,
-                );
-            }
+        // Position sync — MIDI Clock always drives position when active.
+        // manifold_owns only gates transport (play/stop), not position.
+        // Suppressed during seek cooldown (user scrubbing the playhead — Ableton
+        // hasn't received the new position yet, so MIDI Clock is stale).
+        if has_recent_clock_activity && !arbiter.is_seek_cooldown_active(now) {
+            self.current_position_sixteenths = pos_sixteenths;
+            self.update_position_display(pos_sixteenths);
+            self.sync_position_to_playback(
+                pos_sixteenths,
+                clock_tick,
+                arbiter,
+                arb_target,
+                sync_target,
+                authority,
+            );
         }
     }
 

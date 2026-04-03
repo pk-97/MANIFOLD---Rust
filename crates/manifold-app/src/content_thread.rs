@@ -1002,24 +1002,24 @@ impl ContentThread {
                 }
             }
             ClockAuthority::MidiClock => {
-                if let Some(ref clk) = self.transport_controller.midi_clock_sync
+                // MIDI Clock always drives position when active — suppressed only
+                // during seek cooldown (user scrubbing, Ableton hasn't caught up).
+                if !self
+                    .sync_arbiter
+                    .is_seek_cooldown_active(self.time_since_start)
+                    && let Some(ref clk) = self.transport_controller.midi_clock_sync
                     && clk.is_midi_clock_enabled()
                     && clk.is_receiving_clock()
                 {
                     let clk_beat = clk.current_clock_beat();
-                    // Skip beat override if holding for a pending seek
-                    // (Manifold sent a seek to Ableton, waiting for CLK confirmation).
+                    // If holding for a pending seek, skip until CLK confirms.
                     if !self.sync_arbiter.should_hold_for_pending_seek(
                         clk_beat,
                         self.time_since_start,
                     ) {
                         self.engine
                             .set_beat(Beats::from_f32(clk_beat));
-                        // Do NOT call sync_time_from_beat() here.
-                        // Time is set by nudge_time() in sync_position_to_playback.
-                        // Calling both causes time to oscillate between two slightly
-                        // different values every frame (nudge vs beat→time conversion).
-                        // Unity only sets currentBeat here, not time.
+                        self.engine.sync_time_from_beat();
                     }
                 }
                 // else: beat derived from time (engine handles this in advance_time)

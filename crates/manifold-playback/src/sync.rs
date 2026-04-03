@@ -139,6 +139,18 @@ impl SyncArbiter {
         self.manifold_owns_playback = false;
     }
 
+    pub fn set_user_seek_time(&mut self, now: Seconds) {
+        self.pending_seek_time = now;
+    }
+
+    /// Whether the seek cooldown is active (MIDI Clock position sync should be suppressed).
+    /// During the cooldown, the engine advances internally while Ableton catches
+    /// up to the new position via OSC.
+    pub fn is_seek_cooldown_active(&self, now: Seconds) -> bool {
+        (now - self.pending_seek_time).0 < PENDING_SEEK_TIMEOUT
+            && self.pending_seek_beat.is_some()
+    }
+
     /// Record that Manifold just sent a seek to Ableton via SYNC.
     /// CLK will hold the local playhead at `beat` until CLK confirms
     /// the position (within tolerance) or the timeout expires.
