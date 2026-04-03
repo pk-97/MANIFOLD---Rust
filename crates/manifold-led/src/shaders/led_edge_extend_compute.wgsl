@@ -25,7 +25,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    let uv = (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(dims);
+    let raw_uv = (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(dims);
+    let uv = vec2<f32>(raw_uv.x, 1.0 - raw_uv.y);
 
     // Compute source U coordinate from edge-extend mapping
     var source_u: f32;
