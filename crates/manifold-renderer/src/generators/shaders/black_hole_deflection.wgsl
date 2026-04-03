@@ -19,8 +19,8 @@ struct Uniforms {
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
-@group(0) @binding(1) var output1: texture_storage_2d<rgba32float, write>;
-@group(0) @binding(2) var output2: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(1) var output1: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(2) var output2: texture_storage_2d<rgba16float, write>;
 
 fn disk_opacity(r: f32) -> f32 {
     let inner_fade = smoothstep(u.disk_inner * 0.8, u.disk_inner * 1.1, r);

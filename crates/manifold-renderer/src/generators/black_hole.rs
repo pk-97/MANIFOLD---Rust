@@ -120,7 +120,7 @@ impl BlackHoleGenerator {
                 width: w,
                 height: h,
                 depth: 1,
-                format: manifold_gpu::GpuTextureFormat::Rgba32Float,
+                format: manifold_gpu::GpuTextureFormat::Rgba16Float,
                 dimension: manifold_gpu::GpuTextureDimension::D2,
                 usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
                 label,
