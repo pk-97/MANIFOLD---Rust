@@ -156,8 +156,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let roughness = mix(base_roughness, min(base_roughness * 4.0, 0.5), edge_amount);
 
     // Per-pixel normal from height map (R channel) finite differences.
-    // 2-texel epsilon: smooth enough to avoid noise, fine enough for detail.
-    let texel = u.grid_info.y * 2.0;
+    // 1-texel epsilon for full-resolution normals. Safe now that the height
+    // comes from smooth feedback (not noisy edge detection).
+    let texel = u.grid_info.y;
     let h_px = textureSampleLevel(height_tex, tex_sampler, in.uv + vec2(texel, 0.0), 0.0).r;
     let h_nx = textureSampleLevel(height_tex, tex_sampler, in.uv - vec2(texel, 0.0), 0.0).r;
     let h_py = textureSampleLevel(height_tex, tex_sampler, in.uv + vec2(0.0, texel), 0.0).r;
