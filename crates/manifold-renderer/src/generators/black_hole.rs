@@ -53,6 +53,9 @@ struct DisplayUniforms {
     _pad2: f32,
 }
 
+// disk2_opacity not packed in deflection map — we use c2's presence (c2_r > 0) as indicator
+// and derive opacity from disk_opacity() in the display shader
+
 pub struct BlackHoleGenerator {
     deflection_pipeline: manifold_gpu::GpuComputePipeline,
     display_pipeline: manifold_gpu::GpuComputePipeline,

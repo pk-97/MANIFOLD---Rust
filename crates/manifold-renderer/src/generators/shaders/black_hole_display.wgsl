@@ -1,7 +1,8 @@
-// Black Hole — Cinematic Volumetric Display
+// Black Hole — Cinematic Display (dual crossing)
 //
-// Reads volumetric density accumulated by the deflection pass.
-// Deflection map: (final_r, avg_disk_r, avg_disk_angle, total_density)
+// Deflection map layout:
+//   output1: (final_r, disk1_r, cos_angle1, sin_angle1)
+//   output2: (disk1_opacity, disk2_r, cos_angle2, sin_angle2)
 
 struct Uniforms {
     time_val: f32,
@@ -37,6 +38,96 @@ fn noise2d(p: vec2<f32>) -> f32 {
     );
 }
 
+fn disk_opacity_from_r(r: f32) -> f32 {
+    let inner_fade = smoothstep(u.disk_inner * 0.8, u.disk_inner * 1.1, r);
+    let outer_fade = 1.0 - smoothstep(u.disk_outer * 0.85, u.disk_outer * 1.2, r);
+    return inner_fade * outer_fade;
+}
+
+fn shade_disk(disk_r: f32, cos_a: f32, sin_a: f32, is_secondary: bool) -> vec3<f32> {
+    let disk_range = u.disk_outer - u.disk_inner;
+    let t = clamp((disk_r - u.disk_inner) / disk_range, 0.0, 1.0);
+    let ring_r = t;
+    let r_norm = disk_r / u.disk_inner;
+
+    // Reconstruct angle and add orbital animation
+    let base_angle = atan2(sin_a, cos_a);
+
+    // Keplerian orbital motion: inner orbits faster
+    let orbital_speed = u.time_val * 0.4 * pow(r_norm, -1.5);
+    let angle = base_angle + orbital_speed + u.orbit_angle;
+
+    // Seamless angle coordinates for noise
+    let ca = cos(angle);
+    let sa = sin(angle);
+
+    // ── Temperature gradient ──
+    let inner_col = vec3<f32>(1.0, 0.95, 0.9);
+    let mid1_col = vec3<f32>(1.0, 0.65, 0.3);
+    let mid2_col = vec3<f32>(0.85, 0.3, 0.06);
+    let outer_col = vec3<f32>(0.35, 0.04, 0.0);
+
+    var base_col: vec3<f32>;
+    if t < 0.15 {
+        base_col = mix(inner_col, mid1_col, t / 0.15);
+    } else if t < 0.45 {
+        base_col = mix(mid1_col, mid2_col, (t - 0.15) / 0.3);
+    } else {
+        base_col = mix(mid2_col, outer_col, (t - 0.45) / 0.55);
+    }
+
+    // Radial intensity
+    let r_falloff = u.disk_glow * 0.5 / (r_norm * r_norm);
+
+    // Doppler beaming
+    let v_orb = 0.45 * inverseSqrt(r_norm);
+    let doppler = pow(max(1.0 + v_orb * cos(angle), 0.05), 3.5);
+
+    // Concentric rings (seamless)
+    let az1 = ca * 0.2 + sa * 0.15;
+    let az2 = ca * 0.1 - sa * 0.08;
+    let az3 = ca * 0.3 + sa * 0.2;
+    let az4 = ca * 0.05 + sa * 0.04;
+
+    let ring1 = noise2d(vec2<f32>(ring_r * 50.0, az1 + 10.0));
+    let ring2 = noise2d(vec2<f32>(ring_r * 100.0 + 5.0, az2 + 20.0));
+    let ring3 = noise2d(vec2<f32>(ring_r * 25.0, az3));
+    let ring4 = noise2d(vec2<f32>(ring_r * 200.0, az4 + 40.0));
+
+    let rings = ring1 * 0.35 + ring2 * 0.25 + ring3 * 0.2 + ring4 * 0.2;
+    let ring_mod = smoothstep(0.25, 0.6, rings);
+
+    // Orbiting clumps
+    let clump1 = smoothstep(0.5, 0.9, noise2d(vec2<f32>(
+        ca * 1.5 + sa * 0.8 + ring_r * 3.0,
+        sa * 1.2 + ca * 0.5 + 15.0,
+    )));
+    let clump2 = smoothstep(0.45, 0.85, noise2d(vec2<f32>(
+        ca * 1.2 + ring_r * 4.0 + 30.0,
+        sa * 1.0 + 25.0,
+    )));
+    let clump_brightness = 1.0 + (clump1 + clump2) * 0.5;
+
+    // Turbulent wisps
+    let wisp_az = cos(angle * 5.0) + sin(angle * 3.5) * 0.5;
+    let wisp = noise2d(vec2<f32>(wisp_az + 30.0, ring_r * 6.0));
+    let wisp_mod = 0.75 + 0.25 * wisp;
+
+    // Inner edge glow
+    let inner_glow = exp(-(t * t) * 6.0) * 0.8;
+
+    var emission = base_col * r_falloff * doppler
+        * (ring_mod * 0.6 + 0.4)
+        * wisp_mod
+        * clump_brightness
+        * (1.0 + inner_glow);
+
+    if is_secondary {
+        emission *= 0.4;
+    }
+
+    return emission;
+}
 
 @compute @workgroup_size(16, 16)
 fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -52,95 +143,33 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let d2 = textureSampleLevel(deflection2, s_linear, uv, 0.0);
 
     let final_r = d1.r;
-    let avg_r = d1.g;
-    let density = d1.b;
-    // Reconstruct angle from stored cos/sin (no atan2 seam)
-    let avg_angle = atan2(d2.g, d2.r) + u.orbit_angle;
+    let c1_r = d1.g;
+    let c1_ca = d1.b;
+    let c1_sa = d1.a;
+    let c1_op = d2.r;
+    let c2_r = d2.g;
+    let c2_ca = d2.b;
+    let c2_sa = d2.a;
 
     var color = vec3<f32>(0.0);
+    var total_opacity = 0.0;
 
-    if density > 0.01 && avg_r > 0.1 {
-        let disk_range = u.disk_outer - u.disk_inner;
-        let t = clamp((avg_r - u.disk_inner) / disk_range, 0.0, 1.0);
-        let ring_r = (avg_r - u.disk_inner) / disk_range;
-        let r_norm = avg_r / u.disk_inner;
-
-        // ── Keplerian orbital velocity: inner orbits faster ──
-        // v ∝ r^(-1.5) → angular velocity ∝ r^(-1.5)
-        let orbital_speed = u.time_val * 0.4 * pow(r_norm, -1.5);
-
-        // Angle with orbital motion applied
-        let orbit_a = avg_angle + orbital_speed;
-
-        // ── Temperature gradient ──
-        let inner_col = vec3<f32>(1.0, 0.95, 0.9);
-        let mid1_col = vec3<f32>(1.0, 0.65, 0.3);
-        let mid2_col = vec3<f32>(0.85, 0.3, 0.06);
-        let outer_col = vec3<f32>(0.35, 0.04, 0.0);
-
-        var base_col: vec3<f32>;
-        if t < 0.15 {
-            base_col = mix(inner_col, mid1_col, t / 0.15);
-        } else if t < 0.45 {
-            base_col = mix(mid1_col, mid2_col, (t - 0.15) / 0.3);
-        } else {
-            base_col = mix(mid2_col, outer_col, (t - 0.45) / 0.55);
-        }
-
-        // ── Radial intensity (toned down) ──
-        let r_falloff = u.disk_glow * 0.4 / (r_norm * r_norm);
-
-        // ── Doppler beaming (uses orbiting angle) ──
-        let v_orb = 0.45 * inverseSqrt(r_norm);
-        let doppler = pow(max(1.0 + v_orb * cos(orbit_a), 0.05), 3.5);
-
-        // ── Concentric ring structure with orbital motion ──
-        let ca = cos(orbit_a);
-        let sa = sin(orbit_a);
-
-        let ring1 = noise2d(vec2<f32>(ring_r * 50.0, ca * 0.2 + sa * 0.15 + 10.0));
-        let ring2 = noise2d(vec2<f32>(ring_r * 100.0 + 5.0, ca * 0.1 - sa * 0.08 + 20.0));
-        let ring3 = noise2d(vec2<f32>(ring_r * 25.0, ca * 0.3 + sa * 0.2));
-        let ring4 = noise2d(vec2<f32>(ring_r * 200.0, ca * 0.05 + sa * 0.04 + 40.0));
-
-        let rings = ring1 * 0.35 + ring2 * 0.25 + ring3 * 0.2 + ring4 * 0.2;
-        let ring_mod = smoothstep(0.25, 0.6, rings);
-
-        // ── Orbiting clumps — larger structures that visibly sweep around ──
-        // 3-5 major clumps at different radii, orbiting at Keplerian rates
-        let clump_a = orbit_a; // Already has differential rotation
-        let clump1 = smoothstep(0.5, 0.9, noise2d(vec2<f32>(
-            cos(clump_a * 2.0) * 1.5 + sin(clump_a * 1.5) * 0.8 + ring_r * 3.0,
-            sin(clump_a * 2.0) * 1.2 + cos(clump_a * 3.0) * 0.5 + 15.0,
-        )));
-        let clump2 = smoothstep(0.45, 0.85, noise2d(vec2<f32>(
-            cos(clump_a * 3.0) * 1.2 + ring_r * 4.0 + 30.0,
-            sin(clump_a * 2.5) * 1.0 + 25.0,
-        )));
-        // Combine clumps: bright knots of denser material
-        let clump_brightness = 1.0 + (clump1 + clump2) * 0.6;
-
-        // ── Turbulent wisps (orbiting) ──
-        let wisp_az = cos(orbit_a * 5.0) + sin(orbit_a * 3.5) * 0.5;
-        let wisp = noise2d(vec2<f32>(wisp_az + 30.0, ring_r * 6.0));
-        let wisp_mod = 0.75 + 0.25 * wisp;
-
-        // ── Inner edge brightening ──
-        let inner_glow = exp(-(t * t) * 6.0) * 0.8;
-
-        // ── Volumetric density → emission (Beer-Lambert) ──
-        let vol_emission = 1.0 - exp(-density * 0.8);
-
-        color = base_col * r_falloff * doppler
-            * (ring_mod * 0.6 + 0.4)
-            * wisp_mod
-            * clump_brightness
-            * (1.0 + inner_glow)
-            * vol_emission;
+    // First crossing (front disk)
+    if c1_r > 0.1 {
+        color += shade_disk(c1_r, c1_ca, c1_sa, false) * c1_op;
+        total_opacity = c1_op;
     }
 
-    // Photon ring glow
-    if final_r > 1.0 && final_r < 5.0 && density < 0.5 {
+    // Second crossing (lensed back)
+    if c2_r > 0.1 {
+        let c2_op = disk_opacity_from_r(c2_r);
+        let remaining = max(1.0 - total_opacity * 0.6, 0.0);
+        color += shade_disk(c2_r, c2_ca, c2_sa, true) * c2_op * remaining;
+        total_opacity = clamp(total_opacity + c2_op * 0.5, 0.0, 1.0);
+    }
+
+    // Photon ring
+    if final_r > 1.0 && final_r < 5.0 && total_opacity < 0.5 {
         let ring = exp(-(final_r - 1.5) * (final_r - 1.5) * 8.0) * 0.15;
         color += vec3<f32>(0.8, 0.85, 1.0) * ring;
     }
