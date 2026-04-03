@@ -1,4 +1,5 @@
-// Schwarzschild black hole generator — cinematic Interstellar-style.
+// Kerr black hole generator — cinematic Interstellar-style.
+// Spin parameter controls frame-dragging (0 = Schwarzschild, ±1 = extremal Kerr).
 //
 // Two-pass compute:
 //   1. Deflection map bake — volumetric geodesic trace, only on camera/param change.
@@ -19,6 +20,7 @@ const DISK_OUTER: usize = 6;
 const DISK_GLOW: usize = 7;
 const SCALE: usize = 8;
 const STARS: usize = 9;
+const SPIN: usize = 10;
 
 fn param(ctx: &GeneratorContext, idx: usize, default: f32) -> f32 {
     if ctx.param_count > idx as u32 {
@@ -37,8 +39,8 @@ struct DeflectionUniforms {
     rotate_rad: f32,
     steps: f32,
     uv_scale: f32,
+    spin: f32,
     _pad0: f32,
-    _pad1: f32,
 }
 
 #[repr(C)]
@@ -50,8 +52,8 @@ struct DisplayUniforms {
     disk_glow: f32,
     orbit_angle: f32,
     stars_brightness: f32,
+    spin: f32,
     _pad0: f32,
-    _pad1: f32,
 }
 
 pub struct BlackHoleGenerator {
@@ -70,6 +72,7 @@ pub struct BlackHoleGenerator {
     last_rotate: f32,
     last_scale: f32,
     last_steps: f32,
+    last_spin: f32,
 }
 
 impl BlackHoleGenerator {
@@ -100,6 +103,7 @@ impl BlackHoleGenerator {
             last_rotate: f32::MIN,
             last_scale: f32::MIN,
             last_steps: f32::MIN,
+            last_spin: f32::MIN,
         }
     }
 
@@ -134,13 +138,14 @@ impl BlackHoleGenerator {
         self.last_cam_dist = f32::MIN;
     }
 
-    fn needs_rebake(&self, cd: f32, t: f32, r: f32, s: f32, st: f32) -> bool {
+    fn needs_rebake(&self, cd: f32, t: f32, r: f32, s: f32, st: f32, spin: f32) -> bool {
         const EPS: f32 = 0.001;
         (self.last_cam_dist - cd).abs() > EPS
             || (self.last_tilt - t).abs() > EPS
             || (self.last_rotate - r).abs() > EPS
             || (self.last_scale - s).abs() > EPS
             || (self.last_steps - st).abs() > 0.5
+            || (self.last_spin - spin).abs() > EPS
     }
 }
 
@@ -169,6 +174,8 @@ impl Generator for BlackHoleGenerator {
         let disk_glow = param(ctx, DISK_GLOW, 2.0);
         let scale = param(ctx, SCALE, 1.0);
 
+        let spin = param(ctx, SPIN, 0.0);
+
         let uv_scale = if scale > 0.0 { 1.0 / scale } else { 1.0 };
         let tilt_rad = tilt_deg.to_radians();
         let rotate_rad = rotate_deg.to_radians();
@@ -183,7 +190,7 @@ impl Generator for BlackHoleGenerator {
         // ── Pass 1: Deflection Map (only on camera/scale/steps change) ──
         // disk_inner/disk_outer don't trigger rebake — crossing detection uses
         // fixed generous bounds, opacity is computed fresh in the display pass.
-        if self.needs_rebake(cam_dist, tilt_rad, rotate_rad, uv_scale, steps) {
+        if self.needs_rebake(cam_dist, tilt_rad, rotate_rad, uv_scale, steps, spin) {
             let defl_uniforms = DeflectionUniforms {
                 aspect: ctx.aspect,
                 cam_dist,
@@ -191,8 +198,8 @@ impl Generator for BlackHoleGenerator {
                 rotate_rad,
                 steps,
                 uv_scale,
+                spin,
                 _pad0: 0.0,
-                _pad1: 0.0,
             };
             gpu.native_enc.dispatch_compute(
                 &self.deflection_pipeline,
@@ -222,6 +229,7 @@ impl Generator for BlackHoleGenerator {
             self.last_rotate = rotate_rad;
             self.last_scale = uv_scale;
             self.last_steps = steps;
+            self.last_spin = spin;
         }
 
         // ── Pass 2: Display ──
@@ -233,8 +241,8 @@ impl Generator for BlackHoleGenerator {
             disk_glow,
             orbit_angle,
             stars_brightness: stars,
+            spin,
             _pad0: 0.0,
-            _pad1: 0.0,
         };
         gpu.native_enc.dispatch_compute(
             &self.display_pipeline,

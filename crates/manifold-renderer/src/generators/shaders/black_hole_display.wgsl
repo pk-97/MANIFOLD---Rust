@@ -12,8 +12,8 @@ struct Uniforms {
     disk_glow: f32,
     orbit_angle: f32,
     stars_brightness: f32,
+    spin: f32,
     _pad0: f32,
-    _pad1: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -132,8 +132,10 @@ fn shade_disk(disk_r: f32, cos_a: f32, sin_a: f32, is_secondary: bool) -> vec3<f
     // Reconstruct angle, add rotate offset + orbital animation
     let base_angle = atan2(sin_a, cos_a);
 
-    // Keplerian orbital motion: inner orbits faster
-    let orbital_speed = u.time_val * 0.4 * pow(r_norm, -1.5);
+    // Keplerian orbital motion + Kerr frame-dragging boost
+    // Frame dragging adds angular velocity ∝ a/r³, making inner gas orbit faster
+    let fd_boost = u.spin * 0.3 / (r_norm * r_norm * r_norm);
+    let orbital_speed = u.time_val * 0.4 * (pow(r_norm, -1.5) + fd_boost);
     let angle = base_angle + orbital_speed + u.orbit_angle;
 
     // Seamless angle coordinates for noise
@@ -158,8 +160,8 @@ fn shade_disk(disk_r: f32, cos_a: f32, sin_a: f32, is_secondary: bool) -> vec3<f
     // Radial intensity
     let r_falloff = u.disk_glow * 0.5 / (r_norm * r_norm);
 
-    // Doppler beaming
-    let v_orb = 0.45 * inverseSqrt(r_norm);
+    // Doppler beaming — frame dragging enhances orbital velocity
+    let v_orb = 0.45 * inverseSqrt(r_norm) + u.spin * 0.12 / (r_norm * r_norm);
     let doppler = pow(max(1.0 + v_orb * cos(angle), 0.05), 3.5);
 
     // Concentric rings (seamless)
