@@ -44,6 +44,7 @@ impl EdgeExtendBlit {
             address_mode_u: GpuAddressMode::ClampToEdge,
             address_mode_v: GpuAddressMode::ClampToEdge,
             address_mode_w: GpuAddressMode::ClampToEdge,
+            compare: None,
         });
 
         let output = device.create_texture(&GpuTextureDesc {

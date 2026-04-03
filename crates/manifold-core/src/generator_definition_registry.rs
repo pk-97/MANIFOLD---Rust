@@ -593,6 +593,28 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         create_def("Black Hole", false, "blackHole", params),
     );
 
+    // ── GalacticRock ──
+    let params = vec![
+        pd("Speed", 0.0, 5.0, 1.0, Some("F2"), "speed"),
+        pd("Wave Amp", 0.0, 0.5, 0.1, Some("F3"), "waveAmp"),
+        pd("Wave Freq", 0.1, 2.0, 0.5, Some("F2"), "waveFreq"),
+        pd("Twist", 0.0, 20.0, 10.0, Some("F1"), "twist"),
+        pd("Grain", 0.0, 0.01, 0.001, Some("F4"), "grain"),
+        pd("Roughness", 0.0, 1.0, 0.5, Some("F2"), "roughness"),
+        pd("Light Int", 0.1, 10.0, 2.5, Some("F1"), "lightInt"),
+        pd("Blur", 0.0, 20.0, 10.0, Some("F0"), "blur"),
+        pd("Cam Dist", 0.1, 10.0, 0.8, Some("F2"), "camDist"),
+        pd("Cam Orbit", -180.0, 180.0, 0.0, Some("F0"), "camOrbit"),
+        pd("Cam Tilt", -90.0, 90.0, 10.0, Some("F0"), "camTilt"),
+        pd("Cam FOV", 20.0, 120.0, 60.0, Some("F0"), "camFov"),
+        pd("Look Y", -2.0, 2.0, 0.0, Some("F2"), "lookY"),
+        pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
+    ];
+    m.insert(
+        GeneratorTypeId::GALACTIC_ROCK,
+        create_def("Galactic Rock", false, "galacticRock", params),
+    );
+
     m
 }
 

@@ -657,6 +657,125 @@ impl GpuEncoder {
         enc.end_encoding();
     }
 
+    /// Draw instanced geometry with depth testing.
+    ///
+    /// Renders to `target` (color) and `depth_target` (Depth32Float) with the given
+    /// depth-stencil state. Buffer/Bytes on both stages; Texture/Sampler fragment-only.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_instanced_depth(
+        &mut self,
+        pipeline: &GpuRenderPipeline,
+        target: &GpuTexture,
+        depth_target: &GpuTexture,
+        depth_stencil_state: &GpuDepthStencilState,
+        bindings: &[GpuBinding],
+        vertex_count: u32,
+        instance_count: u32,
+        load_action: crate::GpuLoadAction,
+        label: &str,
+    ) {
+        self.end_current();
+
+        let desc = metal::RenderPassDescriptor::new();
+
+        // Color attachment
+        let color = desc.color_attachments().object_at(0).unwrap();
+        color.set_texture(Some(&target.raw));
+        color.set_load_action(match load_action {
+            crate::GpuLoadAction::Clear => metal::MTLLoadAction::Clear,
+            crate::GpuLoadAction::Load => metal::MTLLoadAction::Load,
+            crate::GpuLoadAction::DontCare => metal::MTLLoadAction::DontCare,
+        });
+        color.set_store_action(metal::MTLStoreAction::Store);
+        color.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 0.0));
+
+        // Depth attachment
+        let depth = desc.depth_attachment().unwrap();
+        depth.set_texture(Some(&depth_target.raw));
+        depth.set_load_action(match load_action {
+            crate::GpuLoadAction::Clear => metal::MTLLoadAction::Clear,
+            crate::GpuLoadAction::Load => metal::MTLLoadAction::Load,
+            crate::GpuLoadAction::DontCare => metal::MTLLoadAction::DontCare,
+        });
+        depth.set_store_action(metal::MTLStoreAction::Store);
+        depth.set_clear_depth(1.0);
+
+        let enc = self.cmd_buf().new_render_command_encoder(desc);
+        enc.push_debug_group(label);
+        enc.set_render_pipeline_state(&pipeline.state);
+        enc.set_depth_stencil_state(&depth_stencil_state.raw);
+
+        // Set viewport with depth range
+        enc.set_viewport(metal::MTLViewport {
+            originX: 0.0,
+            originY: 0.0,
+            width: target.width as f64,
+            height: target.height as f64,
+            znear: 0.0,
+            zfar: 1.0,
+        });
+
+        for binding in bindings {
+            match binding {
+                GpuBinding::Buffer {
+                    binding: b,
+                    buffer,
+                    offset,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
+                    enc.set_vertex_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
+                    enc.set_fragment_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
+                }
+                GpuBinding::Texture {
+                    binding: b,
+                    texture,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
+                    enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
+                }
+                GpuBinding::Sampler {
+                    binding: b,
+                    sampler,
+                } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
+                    enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
+                }
+                GpuBinding::Bytes { binding: b, data } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else {
+                        continue;
+                    };
+                    enc.set_vertex_bytes(
+                        slot.metal_index as _,
+                        data.len() as _,
+                        data.as_ptr() as *const _,
+                    );
+                    enc.set_fragment_bytes(
+                        slot.metal_index as _,
+                        data.len() as _,
+                        data.as_ptr() as *const _,
+                    );
+                }
+            }
+        }
+
+        if instance_count > 0 {
+            enc.draw_primitives_instanced(
+                metal::MTLPrimitiveType::Triangle,
+                0,
+                vertex_count as u64,
+                instance_count as u64,
+            );
+        }
+        enc.pop_debug_group();
+        enc.end_encoding();
+    }
+
     /// Draw indexed geometry with a render pipeline and vertex/index buffers.
     ///
     /// Buffer/Bytes on both stages; Texture/Sampler fragment-only.

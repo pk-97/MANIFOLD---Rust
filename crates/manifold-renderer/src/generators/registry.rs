@@ -4,6 +4,7 @@ use super::concentric_tunnel::ConcentricTunnelGenerator;
 use super::duocylinder::DuocylinderGenerator;
 use super::fluid_simulation::FluidSimulationGenerator;
 use super::fluid_simulation_3d::FluidSimulation3DGenerator;
+use super::galactic_rock::GalacticRockGenerator;
 use super::lissajous::LissajousGenerator;
 use super::mri_volume::MriVolumeGenerator;
 use super::mycelium::MyceliumGenerator;
@@ -46,6 +47,7 @@ impl GeneratorRegistry {
             GeneratorTypeId::FLUID_SIMULATION_3D,
             GeneratorTypeId::MRI_VOLUME,
             GeneratorTypeId::BLACK_HOLE,
+            GeneratorTypeId::GALACTIC_ROCK,
         ];
         log::info!("Pre-warming {} generator pipelines...", all_types.len());
         for gen_type in &all_types {
@@ -89,6 +91,8 @@ impl GeneratorRegistry {
             Some(Box::new(MriVolumeGenerator::new(device)))
         } else if *gen_type == GeneratorTypeId::BLACK_HOLE {
             Some(Box::new(BlackHoleGenerator::new(device)))
+        } else if *gen_type == GeneratorTypeId::GALACTIC_ROCK {
+            Some(Box::new(GalacticRockGenerator::new(device)))
         } else {
             log::warn!("Generator type {:?} not yet implemented", gen_type);
             None

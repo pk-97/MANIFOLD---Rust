@@ -78,6 +78,7 @@ impl BlendResources {
             address_mode_u: manifold_gpu::GpuAddressMode::ClampToEdge,
             address_mode_v: manifold_gpu::GpuAddressMode::ClampToEdge,
             address_mode_w: manifold_gpu::GpuAddressMode::ClampToEdge,
+            compare: None,
         });
 
         Self {

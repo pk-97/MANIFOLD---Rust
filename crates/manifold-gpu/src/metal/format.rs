@@ -17,6 +17,7 @@ pub(crate) fn to_mtl_pixel_format(format: GpuTextureFormat) -> metal::MTLPixelFo
         GpuTextureFormat::Rgba8UnormSrgb => metal::MTLPixelFormat::RGBA8Unorm_sRGB,
         GpuTextureFormat::Bgra8Unorm => metal::MTLPixelFormat::BGRA8Unorm,
         GpuTextureFormat::R8Unorm => metal::MTLPixelFormat::R8Unorm,
+        GpuTextureFormat::Depth32Float => metal::MTLPixelFormat::Depth32Float,
     }
 }
 
@@ -81,6 +82,19 @@ pub(crate) fn to_mtl_vertex_format(fmt: GpuVertexFormat) -> metal::MTLVertexForm
         GpuVertexFormat::Float32x4 => metal::MTLVertexFormat::Float4,
         GpuVertexFormat::Uint32 => metal::MTLVertexFormat::UInt,
         GpuVertexFormat::Uint8x4 => metal::MTLVertexFormat::UChar4,
+    }
+}
+
+pub(crate) fn to_mtl_compare_function(func: GpuCompareFunction) -> metal::MTLCompareFunction {
+    match func {
+        GpuCompareFunction::Never => metal::MTLCompareFunction::Never,
+        GpuCompareFunction::Less => metal::MTLCompareFunction::Less,
+        GpuCompareFunction::Equal => metal::MTLCompareFunction::Equal,
+        GpuCompareFunction::LessEqual => metal::MTLCompareFunction::LessEqual,
+        GpuCompareFunction::Greater => metal::MTLCompareFunction::Greater,
+        GpuCompareFunction::NotEqual => metal::MTLCompareFunction::NotEqual,
+        GpuCompareFunction::GreaterEqual => metal::MTLCompareFunction::GreaterEqual,
+        GpuCompareFunction::Always => metal::MTLCompareFunction::Always,
     }
 }
 

@@ -15,6 +15,8 @@ pub enum GpuTextureFormat {
     Rgba8UnormSrgb,
     Bgra8Unorm,
     R8Unorm,
+    /// 32-bit floating-point depth format for depth-stencil attachments.
+    Depth32Float,
 }
 
 impl GpuTextureFormat {
@@ -29,6 +31,7 @@ impl GpuTextureFormat {
             Self::R16Float => 2,
             Self::Rg16Float => 4,
             Self::R8Unorm => 1,
+            Self::Depth32Float => 4,
         }
     }
 }
@@ -125,6 +128,9 @@ pub struct GpuSamplerDesc {
     pub address_mode_u: GpuAddressMode,
     pub address_mode_v: GpuAddressMode,
     pub address_mode_w: GpuAddressMode,
+    /// Comparison function for depth comparison samplers (WGSL `sampler_comparison`).
+    /// None for regular samplers.
+    pub compare: Option<GpuCompareFunction>,
 }
 
 impl Default for GpuSamplerDesc {
@@ -136,6 +142,7 @@ impl Default for GpuSamplerDesc {
             address_mode_u: GpuAddressMode::ClampToEdge,
             address_mode_v: GpuAddressMode::ClampToEdge,
             address_mode_w: GpuAddressMode::ClampToEdge,
+            compare: None,
         }
     }
 }
@@ -185,6 +192,28 @@ pub struct GpuBlendState {
     pub src_alpha_factor: GpuBlendFactor,
     pub dst_alpha_factor: GpuBlendFactor,
     pub alpha_operation: GpuBlendOp,
+}
+
+// ─── Depth-Stencil ──────────────────────────────────────────────────
+
+/// Depth compare function for depth testing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GpuCompareFunction {
+    Never,
+    Less,
+    Equal,
+    LessEqual,
+    Greater,
+    NotEqual,
+    GreaterEqual,
+    Always,
+}
+
+/// Depth-stencil configuration for render pipelines.
+#[derive(Clone, Copy, Debug)]
+pub struct GpuDepthStencilDesc {
+    pub compare: GpuCompareFunction,
+    pub write_enabled: bool,
 }
 
 // ─── Vertex Layout ───────────────────────────────────────────────────

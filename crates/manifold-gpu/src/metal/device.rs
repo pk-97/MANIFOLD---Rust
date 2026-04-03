@@ -66,7 +66,7 @@ impl ClearPipelines {
             Rg32Float => Some(&self.rg32float),
             R32Uint => Some(&self.r32uint),
             // No WGSL storage texture support for these formats.
-            R16Float | Rg16Float | R8Unorm | Rgba8UnormSrgb => None,
+            R16Float | Rg16Float | R8Unorm | Rgba8UnormSrgb | Depth32Float => None,
         }
     }
 }
@@ -218,6 +218,9 @@ impl GpuDevice {
         mtl_desc.set_address_mode_s(to_mtl_address(desc.address_mode_u));
         mtl_desc.set_address_mode_t(to_mtl_address(desc.address_mode_v));
         mtl_desc.set_address_mode_r(to_mtl_address(desc.address_mode_w));
+        if let Some(compare) = desc.compare {
+            mtl_desc.set_compare_function(to_mtl_compare_function(compare));
+        }
         let raw = self.device.new_sampler(&mtl_desc);
         GpuSampler { raw }
     }
@@ -857,6 +860,156 @@ impl GpuDevice {
             render_cache: RenderBindCache::new(),
             clear_pipelines: self.clear_pipelines() as *const ClearPipelines,
         }
+    }
+
+    /// Create a compiled depth-stencil state object.
+    pub fn create_depth_stencil_state(&self, desc: &GpuDepthStencilDesc) -> GpuDepthStencilState {
+        let ds_desc = metal::DepthStencilDescriptor::new();
+        ds_desc.set_depth_compare_function(to_mtl_compare_function(desc.compare));
+        ds_desc.set_depth_write_enabled(desc.write_enabled);
+        let state = self.device.new_depth_stencil_state(&ds_desc);
+        GpuDepthStencilState { raw: state }
+    }
+
+    /// Create a render pipeline configured for depth testing.
+    ///
+    /// Same as `create_render_pipeline_inner` but additionally sets the
+    /// depth attachment pixel format on the pipeline descriptor so Metal
+    /// knows to expect a depth attachment at draw time.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_render_pipeline_depth(
+        &self,
+        wgsl_source: &str,
+        vs_entry: &str,
+        fs_entry: &str,
+        color_format: GpuTextureFormat,
+        depth_format: GpuTextureFormat,
+        blend: Option<GpuBlendState>,
+        sample_count: u32,
+        label: &str,
+    ) -> GpuRenderPipeline {
+        // Include depth format and sample_count in cache key.
+        let base_hash = archive::render_pipeline_hash(wgsl_source, vs_entry, fs_entry);
+        let hash = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            base_hash.hash(&mut h);
+            sample_count.hash(&mut h);
+            depth_format.hash(&mut h);
+            "depth".hash(&mut h);
+            h.finish()
+        };
+        if let Some(cached) = self.render_cache.lock().unwrap().get(&hash) {
+            return cached.clone();
+        }
+
+        let (slot_map, vs_msl, fs_msl) = {
+            let mut msl_guard = self.msl_cache.lock().unwrap();
+            if let Some(ref mut cache) = *msl_guard
+                && let Some(entry) = cache.get_render(base_hash)
+            {
+                (entry.slot_map, entry.vs_msl, entry.fs_msl)
+            } else {
+                if let Some(ref mut cache) = *msl_guard {
+                    cache.record_miss();
+                }
+                drop(msl_guard);
+
+                let result = compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, label);
+
+                if let Some(ref cache) = *self.msl_cache.lock().unwrap() {
+                    cache.put_render(base_hash, &result.0, &result.1, &result.2);
+                }
+                result
+            }
+        };
+
+        let compile_opts = metal::CompileOptions::new();
+        compile_opts.set_language_version(metal::MTLLanguageVersion::V2_4);
+        compile_opts.set_fast_math_enabled(true);
+
+        let vs_library = self
+            .device
+            .new_library_with_source(&vs_msl, &compile_opts)
+            .unwrap_or_else(|e| {
+                panic!("{label}: MTL vertex library compile error: {e}\nMSL:\n{vs_msl}")
+            });
+        let fs_library = self
+            .device
+            .new_library_with_source(&fs_msl, &compile_opts)
+            .unwrap_or_else(|e| {
+                panic!("{label}: MTL fragment library compile error: {e}\nMSL:\n{fs_msl}")
+            });
+
+        let vs_available = vs_library.function_names();
+        let fs_available = fs_library.function_names();
+        let vs_func = find_entry_function(&vs_library, vs_entry, &vs_available, label, "vertex");
+        let fs_func = find_entry_function(&fs_library, fs_entry, &fs_available, label, "fragment");
+
+        let desc = metal::RenderPipelineDescriptor::new();
+        desc.set_vertex_function(Some(&vs_func));
+        desc.set_fragment_function(Some(&fs_func));
+        if sample_count > 1 {
+            desc.set_sample_count(sample_count as u64);
+        }
+
+        // Depth attachment pixel format — tells Metal this pipeline uses depth testing.
+        desc.set_depth_attachment_pixel_format(to_mtl_pixel_format(depth_format));
+
+        let color_attach = desc
+            .color_attachments()
+            .object_at(0)
+            .expect("color attachment 0");
+        color_attach.set_pixel_format(to_mtl_pixel_format(color_format));
+
+        if let Some(blend) = blend {
+            color_attach.set_blending_enabled(true);
+            color_attach.set_rgb_blend_operation(to_mtl_blend_op(blend.operation));
+            color_attach.set_alpha_blend_operation(to_mtl_blend_op(blend.alpha_operation));
+            color_attach.set_source_rgb_blend_factor(to_mtl_blend_factor(blend.src_factor));
+            color_attach.set_destination_rgb_blend_factor(to_mtl_blend_factor(blend.dst_factor));
+            color_attach.set_source_alpha_blend_factor(to_mtl_blend_factor(blend.src_alpha_factor));
+            color_attach
+                .set_destination_alpha_blend_factor(to_mtl_blend_factor(blend.dst_alpha_factor));
+        }
+
+        let mut archive_guard = self.archive.lock().unwrap();
+        let state = if let Some(ref mut arch) = *archive_guard {
+            desc.set_binary_archives(&[arch.raw_archive()]);
+
+            let state = self
+                .device
+                .new_render_pipeline_state(&desc)
+                .unwrap_or_else(|e| panic!("{label}: MTL render PSO error: {e}"));
+
+            if !arch.was_added(hash) {
+                if let Err(e) = arch
+                    .raw_archive()
+                    .add_render_pipeline_functions_with_descriptor(&desc)
+                {
+                    log::warn!("{label}: failed to add render PSO to binary archive: {e}");
+                } else {
+                    arch.mark_added(hash);
+                }
+            }
+            state
+        } else {
+            self.device
+                .new_render_pipeline_state(&desc)
+                .unwrap_or_else(|e| panic!("{label}: MTL render PSO error: {e}"))
+        };
+        drop(archive_guard);
+
+        let pipeline = GpuRenderPipeline {
+            state,
+            slot_map,
+            label: label.to_string(),
+        };
+        self.render_cache
+            .lock()
+            .unwrap()
+            .insert(hash, pipeline.clone());
+        pipeline
     }
 
     /// Create a shared event for CPU↔GPU synchronization.

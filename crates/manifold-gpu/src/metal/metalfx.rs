@@ -55,6 +55,7 @@ fn to_mtl_pixel_format(fmt: GpuTextureFormat) -> u64 {
         GpuTextureFormat::R32Uint => 53,      // MTLPixelFormatR32Uint
         GpuTextureFormat::Rgba8UnormSrgb => 71, // MTLPixelFormatRGBA8Unorm_sRGB
         GpuTextureFormat::R8Unorm => 10,      // MTLPixelFormatR8Unorm
+        GpuTextureFormat::Depth32Float => 252, // MTLPixelFormatDepth32Float
     }
 }
 

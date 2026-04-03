@@ -174,6 +174,24 @@ impl Clone for GpuRenderPipeline {
 unsafe impl Send for GpuRenderPipeline {}
 unsafe impl Sync for GpuRenderPipeline {}
 
+// ─── GpuDepthStencilState ────────────────────────────────────────────
+
+/// Compiled depth-stencil state object (MTLDepthStencilState).
+/// Created once, set on the render encoder for depth-tested draws.
+pub struct GpuDepthStencilState {
+    pub(crate) raw: metal::DepthStencilState,
+}
+
+unsafe impl Send for GpuDepthStencilState {}
+unsafe impl Sync for GpuDepthStencilState {}
+
+impl GpuDepthStencilState {
+    /// Raw Metal depth-stencil state reference.
+    pub fn raw(&self) -> &metal::DepthStencilStateRef {
+        &self.raw
+    }
+}
+
 // ─── GpuEvent ─────────────────────────────────────────────────────────
 
 /// GPU↔CPU synchronization via MTLSharedEvent.
