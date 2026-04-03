@@ -1072,7 +1072,7 @@ impl InspectorCompositePanel {
         if let Some(target) = self.find_target_for_node(node_id) {
             self.update_last_effect_tab(&target);
             match target {
-                PressedTarget::Macros => Vec::new(), // macros use PointerDown/Drag, not Click
+                PressedTarget::Macros => self.macros_panel.handle_click(node_id),
                 PressedTarget::MasterChrome => self.master_chrome.handle_click(node_id),
                 PressedTarget::LayerChrome => self.layer_chrome.handle_click(node_id),
                 PressedTarget::ClipChrome => self.clip_chrome.handle_click(node_id),

@@ -151,6 +151,19 @@ impl MacrosPanel {
         Vec::new()
     }
 
+    /// Handle click — label click copies OSC address to clipboard.
+    pub fn handle_click(&self, node_id: u32) -> Vec<PanelAction> {
+        for (i, s) in self.sliders.iter().enumerate() {
+            if let Some(ids) = s.ids()
+                && ids.label >= 0 && node_id == ids.label as u32
+            {
+                let addr = format!("/macro/{}", i + 1);
+                return vec![PanelAction::CopyOscAddress(addr)];
+            }
+        }
+        Vec::new()
+    }
+
     /// Handle right-click — reset to 0.
     pub fn handle_right_click(&self, node_id: u32) -> Vec<PanelAction> {
         for (i, s) in self.sliders.iter().enumerate() {
