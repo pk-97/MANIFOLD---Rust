@@ -76,8 +76,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let spin_axis = vec3<f32>(0.0, 1.0, 0.0);
 
     let max_steps = i32(u.steps);
-    let escape_r = max(u.cam_dist * 3.0, 150.0);
-    let base_step = max(u.cam_dist * 0.02, 0.3);
+    let escape_r = max(u.cam_dist * 3.0, 40.0);
+    let base_step = max(u.cam_dist * 0.02, 0.15);
 
     var prev_y = pos.y;
     var final_r = 0.0;
@@ -97,6 +97,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         if r_bl < r_horizon { final_r = 0.0; absorbed = true; break; }
         if r > escape_r { final_r = r; break; }
+        // Early escape: ray beyond r=8 moving outward has negligible bending
+        if r > 8.0 && dot(pos, vel) > 0.0 { final_r = r; break; }
 
         let step = base_step * clamp(r * 0.08, 0.005, 1.0);
 
