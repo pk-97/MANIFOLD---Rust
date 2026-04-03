@@ -1,11 +1,11 @@
 // Black Hole — Cinematic Display (Interstellar-style)
 //
-// Multi-layered disk shading:
-//   - Multi-octave noise for turbulent gas streaks
-//   - Doppler beaming (approaching side brighter)
-//   - Volumetric depth (disk has thickness, density tapers)
+// Key visual elements from reference:
+//   - Tight CONCENTRIC rings (not radial), following orbital paths
+//   - Smooth luminosity gradient with subtle banding
+//   - Doppler beaming (one side brighter)
+//   - Soft feathered edges
 //   - Dual disk crossings (front + lensed back)
-//   - Temperature gradient (white-hot inner → orange → deep red outer)
 
 struct Uniforms {
     time_val: f32,
@@ -24,7 +24,7 @@ struct Uniforms {
 @group(0) @binding(3) var s_linear: sampler;
 @group(0) @binding(4) var output: texture_storage_2d<rgba16float, write>;
 
-// ── Noise functions ──
+// ── Noise ──
 
 fn hash21(p: vec2<f32>) -> f32 {
     var p3 = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);
@@ -43,35 +43,15 @@ fn noise2d(p: vec2<f32>) -> f32 {
     );
 }
 
-// Fractal Brownian Motion — turbulent streaky noise
-fn fbm(p_in: vec2<f32>, octaves: i32) -> f32 {
-    var p = p_in;
-    var val = 0.0;
-    var amp = 0.5;
-    var freq = 1.0;
-    for (var i = 0; i < octaves; i++) {
-        val += amp * noise2d(p * freq);
-        freq *= 2.1;
-        amp *= 0.48;
-        // Rotate each octave slightly for organic feel
-        let c = cos(0.5);
-        let s = sin(0.5);
-        p = vec2<f32>(p.x * c - p.y * s, p.x * s + p.y * c);
-    }
-    return val;
-}
-
-// ── Star field ──
-
 fn star_field(seed1: f32, seed2: f32) -> vec3<f32> {
     let p = vec3<f32>(seed1 * 400.0, seed2 * 400.0, seed1 * seed2 * 200.0);
     let cell = floor(p);
     let f = fract(p) - 0.5;
     let h = fract(sin(dot(cell, vec3<f32>(127.1, 311.7, 74.7))) * 43758.5453);
     let star = step(0.985, h) * smoothstep(0.4, 0.0, length(f));
-    return vec3<f32>(h * h * star * 0.3) * vec3<f32>(
+    return vec3<f32>(h * h * star * 0.25) * vec3<f32>(
         0.8 + 0.2 * fract(h * 13.7),
-        0.8 + 0.2 * fract(h * 27.3),
+        0.85 + 0.15 * fract(h * 27.3),
         0.9 + 0.1 * fract(h * 41.1),
     );
 }
@@ -82,61 +62,53 @@ fn shade_disk(disk_r: f32, disk_angle: f32, is_secondary: bool) -> vec3<f32> {
     let disk_range = u.disk_outer - u.disk_inner;
     let t = clamp((disk_r - u.disk_inner) / disk_range, 0.0, 1.0);
 
-    // ── Temperature gradient ──
-    let inner_col = vec3<f32>(1.0, 0.97, 0.92);  // White-hot
-    let mid_col = vec3<f32>(1.0, 0.6, 0.18);      // Orange
-    let outer_col = vec3<f32>(0.5, 0.08, 0.01);   // Deep ember
+    // ── Temperature gradient (reference: bright white center → orange → dark red) ──
+    let inner_col = vec3<f32>(1.0, 0.95, 0.9);
+    let mid1_col = vec3<f32>(1.0, 0.7, 0.35);
+    let mid2_col = vec3<f32>(0.9, 0.35, 0.08);
+    let outer_col = vec3<f32>(0.4, 0.05, 0.0);
 
     var base_col: vec3<f32>;
-    if t < 0.3 {
-        base_col = mix(inner_col, mid_col, t / 0.3);
+    if t < 0.15 {
+        base_col = mix(inner_col, mid1_col, t / 0.15);
+    } else if t < 0.45 {
+        base_col = mix(mid1_col, mid2_col, (t - 0.15) / 0.3);
     } else {
-        base_col = mix(mid_col, outer_col, (t - 0.3) / 0.7);
+        base_col = mix(mid2_col, outer_col, (t - 0.45) / 0.55);
     }
 
-    // ── Radial intensity falloff (inverse r) ──
-    let r_falloff = u.disk_glow * u.disk_inner / disk_r;
+    // ── Radial intensity: steep inverse-r falloff ──
+    let r_norm = disk_r / u.disk_inner;
+    let r_falloff = u.disk_glow / (r_norm * r_norm);
 
-    // ── Doppler beaming ──
-    // Matter orbits counter-clockwise; approaching side is brighter
-    // Relativistic beaming ~ (1 + v*cos(angle))^3 simplified
-    let v_orbital = 0.4 * sqrt(u.disk_inner / disk_r); // Keplerian, sub-c
+    // ── Doppler beaming: (1 + v·cos(θ))³ ──
+    let v_orbital = 0.35 * inverseSqrt(r_norm);
     let doppler = pow(1.0 + v_orbital * cos(disk_angle), 3.0);
 
-    // ── Multi-octave turbulent noise ──
-    // Streaky in azimuthal direction, layered radially
-    let noise_uv = vec2<f32>(
-        disk_angle * 3.0 + u.time_val * 0.15,
-        (disk_r - u.disk_inner) * 4.0 / disk_range,
-    );
+    // ── Concentric ring structure (KEY: noise mapped along radius, not angle) ──
+    // Primary rings: high frequency in r, very low in angle
+    let ring_r = (disk_r - u.disk_inner) / disk_range;
+    let ring1 = noise2d(vec2<f32>(ring_r * 40.0, disk_angle * 0.3 + 10.0));
+    let ring2 = noise2d(vec2<f32>(ring_r * 80.0 + 5.0, disk_angle * 0.15 + 20.0));
+    let ring3 = noise2d(vec2<f32>(ring_r * 20.0 - u.time_val * 0.05, disk_angle * 0.5));
 
-    // Primary large-scale gas structure
-    let gas_structure = fbm(noise_uv * 2.0, 5);
+    // Combine: mostly concentric bands with subtle azimuthal variation
+    let rings = ring1 * 0.5 + ring2 * 0.3 + ring3 * 0.2;
+    // Map to luminosity variation (subtle, not splotchy)
+    let ring_modulation = 0.6 + 0.4 * smoothstep(0.3, 0.7, rings);
 
-    // Fine turbulent detail
-    let fine_detail = fbm(
-        vec2<f32>(disk_angle * 12.0 - u.time_val * 0.3, disk_r * 1.5) + 100.0,
-        4,
-    );
-
-    // Streaks — elongated in orbital direction
-    let streak_uv = vec2<f32>(disk_angle * 20.0 + u.time_val * 0.2, disk_r * 0.8);
-    let streaks = smoothstep(0.35, 0.65, noise2d(streak_uv));
-
-    // Combine noise layers
-    let gas = gas_structure * 0.6 + fine_detail * 0.25 + streaks * 0.15;
-    let density = smoothstep(0.15, 0.85, gas);
-
-    // ── Volumetric depth (disk thickness) ──
-    // Inner edge is thinner (compressed by gravity), outer is puffier
-    let thickness_factor = 0.7 + 0.3 * t;
+    // ── Fine turbulent wisps (very subtle) ──
+    let wisp = noise2d(vec2<f32>(
+        disk_angle * 6.0 + u.time_val * 0.1,
+        ring_r * 8.0 + u.time_val * 0.03,
+    ));
+    let wisp_mod = 0.9 + 0.1 * wisp;
 
     // ── Combine ──
-    var emission = base_col * r_falloff * doppler * density * thickness_factor;
+    var emission = base_col * r_falloff * doppler * ring_modulation * wisp_mod;
 
-    // Secondary (lensed back) crossing is dimmer — light traveled longer path
     if is_secondary {
-        emission *= 0.5;
+        emission *= 0.45;
     }
 
     return emission;
@@ -152,7 +124,6 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let uv = vec2<f32>(f32(gid.x) + 0.5, f32(gid.y) + 0.5)
         / vec2<f32>(f32(dims.x), f32(dims.y));
 
-    // Sample both deflection maps
     let d1 = textureSampleLevel(deflection1, s_linear, uv, 0.0);
     let d2 = textureSampleLevel(deflection2, s_linear, uv, 0.0);
 
@@ -167,32 +138,32 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var color = vec3<f32>(0.0);
     var total_opacity = 0.0;
 
-    // ── First disk crossing (usually the front of the disk) ──
+    // First crossing (front disk)
     if disk1_r > 0.1 {
-        let emit = shade_disk(disk1_r, disk1_angle, false);
-        color += emit * disk1_opacity;
+        color += shade_disk(disk1_r, disk1_angle, false) * disk1_opacity;
         total_opacity = disk1_opacity;
     }
 
-    // ── Second disk crossing (lensed back, visible above/below hole) ──
+    // Second crossing (lensed back)
     if disk2_r > 0.1 {
-        let emit = shade_disk(disk2_r, disk2_angle, true);
-        color += emit * disk2_opacity * (1.0 - total_opacity * 0.5);
+        let remaining = max(1.0 - total_opacity * 0.6, 0.0);
+        color += shade_disk(disk2_r, disk2_angle, true) * disk2_opacity * remaining;
         total_opacity = clamp(total_opacity + disk2_opacity * 0.5, 0.0, 1.0);
     }
 
-    // ── Background stars ──
+    // Stars
     if final_r > 1.0 {
-        color += star_field(final_r * 0.01, d1.b + uv.x * 50.0) * max(1.0 - total_opacity, 0.0);
+        color += star_field(final_r * 0.01, d1.b + uv.x * 50.0)
+            * max(1.0 - total_opacity, 0.0);
     }
 
-    // ── Photon ring ──
+    // Photon ring
     if final_r > 1.0 && final_r < 5.0 {
         let ring = exp(-(final_r - 1.5) * (final_r - 1.5) * 8.0) * 0.2;
         color += vec3<f32>(0.8, 0.85, 1.0) * ring * max(1.0 - total_opacity, 0.0);
     }
 
-    // ── ACES tone mapping ──
+    // ACES
     let a = 2.51; let b = 0.03; let c = 2.43; let d = 0.59; let e = 0.14;
     color = clamp((color * (a * color + b)) / (color * (c * color + d) + e),
         vec3<f32>(0.0), vec3<f32>(1.0));

@@ -97,10 +97,12 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let cross_pos = pos - vel * step * (1.0 - frac);
             let cross_r = length(cross_pos);
 
-            if cross_r > u.disk_inner && cross_r < u.disk_outer {
+            if cross_r > u.disk_inner * 0.8 && cross_r < u.disk_outer * 1.2 {
                 let angle = atan2(cross_pos.z, cross_pos.x);
-                let opacity = 0.5 + 0.4 * (1.0 - (cross_r - u.disk_inner)
-                    / (u.disk_outer - u.disk_inner));
+                // Soft edges: fade in/out at disk boundaries
+                let inner_fade = smoothstep(u.disk_inner * 0.8, u.disk_inner * 1.1, cross_r);
+                let outer_fade = 1.0 - smoothstep(u.disk_outer * 0.85, u.disk_outer * 1.2, cross_r);
+                let opacity = inner_fade * outer_fade;
 
                 if crossing_count == 0 {
                     cross1_r = cross_r;
