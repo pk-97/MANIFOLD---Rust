@@ -1434,10 +1434,8 @@ impl Panel for InspectorCompositePanel {
             },
         ) as i32;
 
-        // ── MACROS STRIP (full width, above columns) ────────────────
+        // Macros height for column offset — panel built AFTER columns for z-order
         let macros_h = MacrosPanel::height();
-        let macros_rect = Rect::new(left_x, rect.y, rect.width - COLUMN_PAD * 2.0, macros_h);
-        self.macros_panel.build(tree, macros_rect);
         let columns_y = rect.y + macros_h + 2.0; // 2px gap
         let columns_h = rect.height - macros_h - 2.0;
         self.columns_y = columns_y;
@@ -1668,6 +1666,10 @@ impl Panel for InspectorCompositePanel {
             },
             "",
         ) as i32;
+
+        // ── MACROS STRIP (built last so it renders on top of columns) ──
+        let macros_rect = Rect::new(left_x, rect.y, rect.width - COLUMN_PAD * 2.0, macros_h);
+        self.macros_panel.build(tree, macros_rect);
 
         self.update_scroll_bounds();
         self.update_scrollbar(tree);
