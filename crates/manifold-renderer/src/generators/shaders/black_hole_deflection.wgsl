@@ -97,10 +97,12 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         if r_bl < r_horizon { final_r = 0.0; absorbed = true; break; }
         if r > escape_r { final_r = r; break; }
-        // Early escape: ray beyond r=8 moving outward has negligible bending
-        if r > 8.0 && dot(pos, vel) > 0.0 { final_r = r; break; }
+        // Early escape: ray well beyond camera and moving outward — negligible bending
+        if r > max(u.cam_dist * 2.0, 15.0) && dot(pos, vel) > 0.0 {
+            final_r = r; break;
+        }
 
-        let step = base_step * clamp(r * 0.08, 0.005, 1.0);
+        let step = base_step * clamp(r * 0.1, 0.005, 2.0);
 
         // ── Schwarzschild gravitational acceleration ──
         let r2 = r * r;
