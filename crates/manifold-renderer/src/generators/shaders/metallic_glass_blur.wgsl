@@ -1,8 +1,8 @@
 // Metallic Glass — Pass 2/3: Separable Gaussian blur.
 //
-// Two-pass separable blur (H then V) applied to the feedback buffer.
-// Radius 8 pixels (17-tap kernel) for smooth liquid-like feedback patterns.
-// Higher radius prevents high-frequency noise accumulation in the feedback loop.
+// Replicates TD Blur TOP: Filter Size = 4, Pre-Shrink = 1.
+// Filter Size 4 → radius 4 pixels → 9-tap separable Gaussian, sigma ~2.0.
+// Applied as two passes (H then V) to the feedback buffer each frame.
 
 struct Uniforms {
     direction: f32,   // 0.0 = horizontal, 1.0 = vertical
@@ -15,18 +15,13 @@ struct Uniforms {
 @group(0) @binding(1) var src_tex: texture_2d<f32>;
 @group(0) @binding(2) var dst_tex: texture_storage_2d<rgba16float, write>;
 
-// 17-tap Gaussian weights (sigma ~3.5, radius 8)
-// Pre-normalized (sum = 1.0)
-const W: array<f32, 9> = array<f32, 9>(
-    0.10855,   // center
-    0.10534,   // ±1
-    0.09634,   // ±2
-    0.08310,   // ±3
-    0.06762,   // ±4
-    0.05192,   // ±5
-    0.03763,   // ±6
-    0.02575,   // ±7
-    0.01662,   // ±8
+// 9-tap Gaussian weights (sigma = 2.0, radius 4, pre-normalized)
+const W: array<f32, 5> = array<f32, 5>(
+    0.20236,   // center (offset 0)
+    0.17820,   // ±1
+    0.12162,   // ±2
+    0.06433,   // ±3
+    0.02637,   // ±4
 );
 
 @compute @workgroup_size(16, 16)
@@ -41,7 +36,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     var color = textureLoad(src_tex, pos, 0) * W[0];
 
-    for (var i = 1; i <= 8; i++) {
+    for (var i = 1; i <= 4; i++) {
         let pa = clamp(pos + dir * i, vec2(0), bounds);
         let pb = clamp(pos - dir * i, vec2(0), bounds);
         color += (textureLoad(src_tex, pa, 0) + textureLoad(src_tex, pb, 0)) * W[i];

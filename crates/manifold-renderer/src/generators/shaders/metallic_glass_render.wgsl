@@ -1,19 +1,20 @@
-// Metallic Glass — Pass 5: Displaced grid rendering with Cook-Torrance PBR.
+// Metallic Glass — Pass 5: Displaced grid + PBR rendering.
 //
-// Renders a 300×300 vertex grid displaced along Y by the height map.
-// PBR shading with metallic=1.0, roughness=0.05, and procedural IBL
-// for the chrome-like glass reflections.
-//
-// Grid is procedurally generated from vertex_index:
-//   299×299 quads × 6 vertices = 536,406 vertices total.
+// Replicates TD rendering chain:
+//   Grid SOP: 300×300 vertices
+//   Displacement: Height Map × 0.2 along normals
+//   PBR MAT: Metallic 1.0, Roughness 0.05
+//   Point Light: Intensity 3.5, Position (-2, 2, 5)
+//   Environment Light: HDR studio (procedural approximation)
+//   Camera: 35mm focal length (~54° FOV), looking slightly up at grid
 
 struct Uniforms {
     view_proj: mat4x4<f32>,
     camera_pos: vec4<f32>,
-    light_pos: vec4<f32>,
-    light_color: vec4<f32>,     // rgb = color, a = intensity
-    material: vec4<f32>,        // x = metallic, y = roughness, z = displacement, w = unused
-    grid_info: vec4<f32>,       // x = grid_size (300), y = texel_size (1/width), z = unused, w = unused
+    light_pos: vec4<f32>,       // TD: X=-2, Y=2, Z=5
+    light_color: vec4<f32>,     // rgb = color, a = intensity (TD: 3.5)
+    material: vec4<f32>,        // x = metallic (1.0), y = roughness (0.05), z = displacement (0.2), w = unused
+    grid_info: vec4<f32>,       // x = grid_size (300)
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -35,16 +36,15 @@ fn sample_height(uv: vec2<f32>) -> f32 {
 
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
-    let grid_size = u32(u.grid_info.x);   // 300
-    let quads = grid_size - 1u;            // 299
+    let grid_size = u32(u.grid_info.x);
+    let quads = grid_size - 1u;
 
-    // Decode vertex_index → quad + corner
     let quad_idx = vertex_index / 6u;
     let corner = vertex_index % 6u;
     let quad_x = quad_idx % quads;
     let quad_y = quad_idx / quads;
 
-    // Corner offsets: triangle 1 (0,0)(1,0)(0,1), triangle 2 (0,1)(1,0)(1,1)
+    // Two triangles per quad: (0,0)(1,0)(0,1) and (0,1)(1,0)(1,1)
     var dx: u32;
     var dy: u32;
     switch corner {
@@ -65,21 +65,18 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     let world_x = uv.x * 2.0 - 1.0;
     let world_z = uv.y * 2.0 - 1.0;
 
-    // Displacement along Y from height map
+    // Displace along Y (TD: Height Map × Displacement weight)
     let displacement = u.material.z;
     let h = sample_height(uv) * displacement;
-
     let world_pos = vec3<f32>(world_x, h, world_z);
 
-    // Compute normal via finite differences on the height map.
-    // Use 2-cell epsilon for smoother normals (reduces faceting).
-    let eps = 2.0 / f32(quads);
+    // Normal reconstruction via finite differences (TD: Compute Normals = On)
+    let eps = 1.0 / f32(quads);
     let h_px = sample_height(uv + vec2(eps, 0.0)) * displacement;
     let h_nx = sample_height(uv - vec2(eps, 0.0)) * displacement;
     let h_py = sample_height(uv + vec2(0.0, eps)) * displacement;
     let h_ny = sample_height(uv - vec2(0.0, eps)) * displacement;
 
-    // Tangent vectors in world space (grid spans 2 units, so dx = 2*eps)
     let dx_world = 2.0 * eps;
     let tangent_x = vec3<f32>(dx_world, h_px - h_nx, 0.0);
     let tangent_z = vec3<f32>(0.0, h_py - h_ny, dx_world);
@@ -97,7 +94,6 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 
 const PI: f32 = 3.14159265358979;
 
-// GGX Normal Distribution Function
 fn D_GGX(NdotH: f32, roughness: f32) -> f32 {
     let a = roughness * roughness;
     let a2 = a * a;
@@ -105,7 +101,6 @@ fn D_GGX(NdotH: f32, roughness: f32) -> f32 {
     return a2 / (PI * denom * denom);
 }
 
-// Smith's Geometry Function (Schlick-GGX)
 fn G_SchlickGGX(NdotV: f32, roughness: f32) -> f32 {
     let r = roughness + 1.0;
     let k = (r * r) / 8.0;
@@ -116,46 +111,41 @@ fn G_Smith(NdotV: f32, NdotL: f32, roughness: f32) -> f32 {
     return G_SchlickGGX(NdotV, roughness) * G_SchlickGGX(NdotL, roughness);
 }
 
-// Schlick Fresnel
 fn F_Schlick(cosTheta: f32, F0: vec3<f32>) -> vec3<f32> {
-    return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
+    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
-// ─── Procedural Environment ────────────────────────────────────────
-// HDR studio environment for chrome/mirror reflections.
-// High contrast between bright panels and dark gaps is critical —
-// metallic surfaces derive ALL their color from the environment.
+// ─── Procedural HDR Environment ────────────────────────────────────
+// Approximates a high-contrast studio interior HDR environment map.
+// TD spec: "Environment Light COMP: Requires a high-contrast HDR image
+// (e.g., a studio interior or night city)."
+// We can't load external files, so this procedurally generates the
+// equivalent studio lighting setup.
 
 fn env_color(dir: vec3<f32>) -> vec3<f32> {
     let up = dir.y;
-
-    // --- Dark base (studio backdrop) ---
-    var color = vec3<f32>(0.02, 0.02, 0.03);
-
-    // --- Main horizon band (large studio window / cyclorama) ---
-    let horizon_mask = exp(-20.0 * up * up);
-    color += vec3(1.8, 1.7, 1.6) * horizon_mask;
-
-    // --- Overhead soft box (key light) ---
-    let overhead = smoothstep(0.4, 0.7, up) * smoothstep(1.0, 0.7, up);
-    color += vec3(3.0, 2.8, 2.6) * overhead;
-
-    // --- Floor reflection panel (fill from below) ---
-    let floor = smoothstep(-0.2, -0.5, up) * smoothstep(-0.9, -0.5, up);
-    color += vec3(0.4, 0.45, 0.5) * floor;
-
-    // --- Accent strip lights (create metallic streaks) ---
-    // Two narrow bands at different angles for visual interest
-    let strip1 = exp(-200.0 * pow(up - 0.15, 2.0));
-    color += vec3(4.0, 3.5, 3.0) * strip1;
-
-    let strip2 = exp(-200.0 * pow(up + 0.1, 2.0));
-    color += vec3(2.0, 2.5, 3.5) * strip2;
-
-    // --- Angular variation (break uniformity) ---
     let azimuth = atan2(dir.z, dir.x);
-    let az_mod = sin(azimuth * 3.0) * 0.15 + 1.0;
-    color *= az_mod;
+
+    // Dark studio base
+    var color = vec3<f32>(0.01, 0.01, 0.015);
+
+    // Large bright horizon band (studio windows / white wall)
+    color += vec3(1.5, 1.45, 1.4) * exp(-15.0 * up * up);
+
+    // Overhead soft box (sharp bright panel above)
+    let overhead = smoothstep(0.35, 0.65, up) * smoothstep(0.95, 0.65, up);
+    color += vec3(2.5, 2.4, 2.3) * overhead;
+
+    // Floor reflection (subtle fill from below)
+    let floor_fill = smoothstep(-0.15, -0.45, up) * smoothstep(-0.85, -0.45, up);
+    color += vec3(0.3, 0.35, 0.4) * floor_fill;
+
+    // Two narrow strip lights at specific elevations (create metallic streaks)
+    color += vec3(3.5, 3.2, 2.8) * exp(-300.0 * pow(up - 0.12, 2.0));
+    color += vec3(1.5, 2.0, 3.0) * exp(-300.0 * pow(up + 0.08, 2.0));
+
+    // Break azimuthal uniformity (studio isn't perfectly cylindrical)
+    color *= sin(azimuth * 2.0) * 0.12 + 1.0;
 
     return color;
 }
@@ -167,55 +157,49 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let N = normalize(in.world_normal);
     let V = normalize(u.camera_pos.xyz - in.world_pos);
 
+    // TD PBR MAT: Metallic 1.0, Roughness 0.05
     let metallic = u.material.x;
     let roughness = max(u.material.y, 0.01);
 
-    // Base color for metallic surface (silver/chrome)
-    let base_color = vec3<f32>(0.8, 0.8, 0.85);
-
-    // F0: for metals, F0 = base_color
+    // Base color: neutral silver for chrome (metallic F0 = base_color)
+    let base_color = vec3<f32>(0.8, 0.8, 0.82);
     let F0 = mix(vec3(0.04), base_color, metallic);
 
     let NdotV = max(dot(N, V), 0.001);
 
-    // ── Direct lighting ──
+    // ── Direct lighting (TD Point Light) ──
     let L = normalize(u.light_pos.xyz - in.world_pos);
     let H = normalize(V + L);
     let NdotL = max(dot(N, L), 0.0);
     let NdotH = max(dot(N, H), 0.0);
     let VdotH = max(dot(V, H), 0.001);
 
+    // Light attenuation (TD Distance = 5.0)
+    let light_dist = length(u.light_pos.xyz - in.world_pos);
+    let attenuation = 1.0 / (1.0 + light_dist * light_dist / 25.0);
+
     let D = D_GGX(NdotH, roughness);
     let G = G_Smith(NdotV, NdotL, roughness);
     let F = F_Schlick(VdotH, F0);
 
-    let numerator = D * G * F;
-    let denominator = 4.0 * NdotV * NdotL + 0.0001;
-    let specular = numerator / denominator;
-
-    // For metals, there is no diffuse component (all energy is specular)
+    let spec = (D * G * F) / (4.0 * NdotV * NdotL + 0.0001);
     let kD = (1.0 - F) * (1.0 - metallic);
     let diffuse = kD * base_color / PI;
 
     let light_intensity = u.light_color.a;
-    let direct = (diffuse + specular) * u.light_color.rgb * light_intensity * NdotL;
+    let direct = (diffuse + spec) * u.light_color.rgb * light_intensity * NdotL * attenuation;
 
-    // ── Image-Based Lighting (procedural environment) ──
+    // ── Environment IBL (TD Environment Light COMP) ──
     let R = reflect(-V, N);
     let env = env_color(R);
-
-    // Fresnel for environment reflection
     let F_env = F_Schlick(NdotV, F0);
-
-    // Approximate environment BRDF integration
-    // For low roughness, environment reflection is dominant
-    let env_roughness_scale = 1.0 - roughness * 0.7;
-    let ibl = env * F_env * env_roughness_scale;
+    let env_scale = 1.0 - roughness * 0.7;
+    let ibl = env * F_env * env_scale;
 
     // ── Combine ──
     let color = direct + ibl;
 
-    // Simple Reinhard tonemap
+    // Reinhard tonemap
     let mapped = color / (color + vec3(1.0));
 
     return vec4<f32>(mapped, 1.0);

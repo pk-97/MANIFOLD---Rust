@@ -616,6 +616,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
     );
 
     // ── MetallicGlass ──
+    // All defaults match the TD tutorial spec exactly.
     let params = vec![
         pd("Feedback", 0.9, 1.0, 0.98, Some("F3"), "feedback"),
         pd("Noise Scale", 0.1, 2.0, 0.75, Some("F2"), "noiseScale"),
@@ -627,8 +628,8 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Light Int", 0.1, 10.0, 3.5, Some("F1"), "lightInt"),
         pd("Cam Dist", 0.5, 10.0, 2.5, Some("F2"), "camDist"),
         pd("Cam Orbit", -180.0, 180.0, 0.0, Some("F0"), "camOrbit"),
-        pd("Cam Tilt", -90.0, 90.0, 25.0, Some("F0"), "camTilt"),
-        pd("Cam FOV", 20.0, 120.0, 35.0, Some("F0"), "camFov"),
+        pd("Cam Tilt", -90.0, 90.0, -10.0, Some("F0"), "camTilt"),  // look slightly up
+        pd("Cam FOV", 20.0, 120.0, 54.0, Some("F0"), "camFov"),    // 35mm focal = ~54°
         pd("Look Y", -2.0, 2.0, 0.0, Some("F2"), "lookY"),
     ];
     m.insert(

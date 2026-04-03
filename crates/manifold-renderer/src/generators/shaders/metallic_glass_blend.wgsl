@@ -1,14 +1,16 @@
-// Metallic Glass — Pass 1: Feedback blend.
+// Metallic Glass — Pass 1: Feedback blend (Pseudo Liquid).
 //
-// Generates 3D simplex noise, computes absolute difference with the previous
-// frame's feedback buffer, and applies decay. This creates the evolving
-// "pseudo liquid" interference pattern.
+// Replicates the TD Feedback→Composite→Blur loop:
+//   1. Generate Simplex noise (amplitude 0.3, offset 0.5, Z = absTime.seconds * 0.1)
+//   2. Composite(Negate, opacity 0.98): prev*(1-0.98) + |noise - prev|*0.98
+//
+// Blur is a separate pass (metallic_glass_blur.wgsl).
 
 struct Uniforms {
     time: f32,
-    noise_scale: f32,     // period/frequency of simplex noise (default 0.75)
-    noise_speed: f32,     // Z translation speed (default 0.1)
-    feedback_decay: f32,  // persistence multiplier (default 0.98)
+    noise_scale: f32,     // TD Noise Period (default 0.75)
+    noise_speed: f32,     // TD Translate Z multiplier (default 0.1)
+    feedback_decay: f32,  // TD Composite opacity (default 0.98)
     width: f32,
     height: f32,
     _pad0: f32,
@@ -94,22 +96,21 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let uv = vec2<f32>(f32(gid.x) / u.width, f32(gid.y) / u.height);
 
-    // Generate 3D simplex noise at this UV position.
-    // The Z axis is animated by time for evolution.
+    // TD Noise TOP: period = noise_scale, amplitude = 0.3, offset = 0.5
+    // Translate Z = absTime.seconds * noise_speed
     let noise_pos = vec3<f32>(
         uv.x / u.noise_scale,
         uv.y / u.noise_scale,
         u.time * u.noise_speed,
     );
-    // Noise returns [-1, 1], remap to [0, 1] with full amplitude
-    let noise_val = simplex3d(noise_pos) * 0.5 + 0.5;
+    // simplex3d returns [-1, 1]. Apply TD amplitude (0.3) and offset (0.5).
+    let noise_val = simplex3d(noise_pos) * 0.3 + 0.5;
 
-    // Read previous frame's feedback value
+    // Read previous frame's feedback (post-blur from last frame)
     let prev = textureLoad(feedback_prev, vec2<i32>(gid.xy), 0);
 
-    // TD Composite: Negate blend with opacity.
+    // TD Composite TOP: Operation = Negate, Opacity = 0.98
     // result = prev * (1 - opacity) + |noise - prev| * opacity
-    // The (1-opacity) persistence term is what allows patterns to accumulate.
     let opacity = u.feedback_decay;
     let diff = abs(vec4<f32>(noise_val) - prev);
     let result = prev * (1.0 - opacity) + diff * opacity;
