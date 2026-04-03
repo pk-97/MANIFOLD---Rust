@@ -49,9 +49,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let h_vec = cross(pos, vel);
     let h2 = dot(h_vec, h_vec);
 
-    let base_step = 0.3;
     let max_steps = i32(u.steps);
     let escape_r = max(u.cam_dist * 3.0, 150.0);
+    // Step size scales with cam_dist so rays reach the disk efficiently
+    let base_step = max(u.cam_dist * 0.02, 0.3);
 
     var prev_y = pos.y;
     var final_r = 0.0;
@@ -78,7 +79,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             break;
         }
 
-        let step = base_step * clamp(r * 0.05, 0.01, 0.5);
+        // Large steps far from hole, tiny steps near horizon
+        let step = base_step * clamp(r * 0.08, 0.005, 1.0);
 
         let r2 = r * r;
         let r5 = r2 * r2 * r;

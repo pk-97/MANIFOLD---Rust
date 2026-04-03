@@ -81,34 +81,56 @@ fn shade_disk(disk_r: f32, disk_angle: f32, is_secondary: bool) -> vec3<f32> {
     let r_norm = disk_r / u.disk_inner;
     let r_falloff = u.disk_glow / (r_norm * r_norm);
 
-    // ── Doppler beaming: (1 + v·cos(θ))³ ──
-    let v_orbital = 0.35 * inverseSqrt(r_norm);
-    let doppler = pow(1.0 + v_orbital * cos(disk_angle), 3.0);
+    // ── Doppler beaming: STRONG asymmetry ──
+    // Keplerian orbital velocity, relativistic boosting
+    let v_orbital = 0.5 * inverseSqrt(r_norm);
+    let doppler_raw = 1.0 + v_orbital * cos(disk_angle);
+    // Cube for relativistic beaming + extra contrast
+    let doppler = pow(max(doppler_raw, 0.05), 4.0);
 
-    // ── Concentric ring structure (KEY: noise mapped along radius, not angle) ──
-    // Primary rings: high frequency in r, very low in angle
+    // ── Concentric ring structure ──
     let ring_r = (disk_r - u.disk_inner) / disk_range;
-    let ring1 = noise2d(vec2<f32>(ring_r * 40.0, disk_angle * 0.3 + 10.0));
-    let ring2 = noise2d(vec2<f32>(ring_r * 80.0 + 5.0, disk_angle * 0.15 + 20.0));
-    let ring3 = noise2d(vec2<f32>(ring_r * 20.0 - u.time_val * 0.05, disk_angle * 0.5));
 
-    // Combine: mostly concentric bands with subtle azimuthal variation
-    let rings = ring1 * 0.5 + ring2 * 0.3 + ring3 * 0.2;
-    // Map to luminosity variation (subtle, not splotchy)
-    let ring_modulation = 0.6 + 0.4 * smoothstep(0.3, 0.7, rings);
+    // Use sin/cos of angle for seamless wrapping (no atan2 discontinuity)
+    let ca = cos(disk_angle);
+    let sa = sin(disk_angle);
+    // Seamless azimuthal coordinate: low frequency variation from angle
+    let az1 = ca * 0.2 + sa * 0.15;
+    let az2 = ca * 0.1 - sa * 0.08;
+    let az3 = ca * 0.3 + sa * 0.2;
+    let az4 = ca * 0.05 + sa * 0.04;
 
-    // ── Fine turbulent wisps (very subtle) ──
-    let wisp = noise2d(vec2<f32>(
-        disk_angle * 6.0 + u.time_val * 0.1,
-        ring_r * 8.0 + u.time_val * 0.03,
-    ));
-    let wisp_mod = 0.9 + 0.1 * wisp;
+    // Sharp concentric bands at multiple scales
+    let ring1 = noise2d(vec2<f32>(ring_r * 50.0, az1 + 10.0));
+    let ring2 = noise2d(vec2<f32>(ring_r * 100.0 + 5.0, az2 + 20.0));
+    let ring3 = noise2d(vec2<f32>(ring_r * 25.0 - u.time_val * 0.06, az3));
+    // Ultra-fine hot filaments
+    let ring4 = noise2d(vec2<f32>(ring_r * 200.0 + 2.0, az4 + 40.0));
+
+    let rings = ring1 * 0.35 + ring2 * 0.25 + ring3 * 0.2 + ring4 * 0.2;
+    // Sharper contrast: dark gaps between bright rings
+    let ring_modulation = smoothstep(0.25, 0.6, rings);
+
+    // ── Turbulent wisps — streaky hot gas (seamless angle) ──
+    let wisp_az1 = cos(disk_angle * 4.0 + u.time_val * 0.12)
+        + sin(disk_angle * 3.0 + u.time_val * 0.1) * 0.5;
+    let wisp1 = noise2d(vec2<f32>(wisp_az1 + 30.0, ring_r * 6.0 + u.time_val * 0.04));
+    let wisp_az2 = cos(disk_angle * 7.0 - u.time_val * 0.08)
+        + sin(disk_angle * 5.0) * 0.3;
+    let wisp2 = noise2d(vec2<f32>(wisp_az2 + 50.0, ring_r * 3.0));
+    let wisp_mod = 0.7 + 0.3 * (wisp1 * 0.6 + wisp2 * 0.4);
+
+    // ── Inner edge brightening (hot accretion glow) ──
+    let inner_glow = exp(-(t * t) * 8.0) * 1.5;
 
     // ── Combine ──
-    var emission = base_col * r_falloff * doppler * ring_modulation * wisp_mod;
+    var emission = base_col * r_falloff * doppler
+        * (ring_modulation * 0.7 + 0.3)
+        * wisp_mod
+        * (1.0 + inner_glow);
 
     if is_secondary {
-        emission *= 0.45;
+        emission *= 0.4;
     }
 
     return emission;
