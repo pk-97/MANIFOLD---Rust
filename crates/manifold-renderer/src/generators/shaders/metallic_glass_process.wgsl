@@ -64,7 +64,9 @@ fn mirror_uv(uv: vec2<f32>, angle: f32) -> vec2<f32> {
         -folded.x * sa + folded.y * ca,
     );
 
-    return unrotated + vec2(0.5);
+    // Wrap result into [0,1] using fract to prevent hard clipping at borders.
+    // This creates seamless tiling instead of abrupt cutoffs.
+    return fract(unrotated + vec2(0.5));
 }
 
 // ─── Levels (TD Level TOPs) ────────────────────────────────────────

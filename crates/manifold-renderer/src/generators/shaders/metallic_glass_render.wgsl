@@ -147,14 +147,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let displacement = u.material.z;
 
     // Per-pixel normal from height map finite differences.
-    // Uses texture texel size for full-resolution normal detail.
-    let texel = u.grid_info.y;  // 1.0 / texture_width
+    // Use 4-texel epsilon to smooth over pixel-level noise in the
+    // edge-detected height map while keeping macro surface detail.
+    let texel = u.grid_info.y * 4.0;  // 4 texels wide
     let h_px = textureSampleLevel(height_tex, tex_sampler, in.uv + vec2(texel, 0.0), 0.0).r;
     let h_nx = textureSampleLevel(height_tex, tex_sampler, in.uv - vec2(texel, 0.0), 0.0).r;
     let h_py = textureSampleLevel(height_tex, tex_sampler, in.uv + vec2(0.0, texel), 0.0).r;
     let h_ny = textureSampleLevel(height_tex, tex_sampler, in.uv - vec2(0.0, texel), 0.0).r;
 
-    // World-space tangent vectors (grid spans 2 units, texel = 1/tex_width)
+    // World-space tangent vectors (grid spans 2 units)
     let dx_world = 2.0 * texel;
     let dh_x = (h_px - h_nx) * displacement;
     let dh_z = (h_py - h_ny) * displacement;
