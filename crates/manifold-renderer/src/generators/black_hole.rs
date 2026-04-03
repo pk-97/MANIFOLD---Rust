@@ -286,7 +286,7 @@ impl Generator for BlackHoleGenerator {
         // ── Particle debugging: seed + simulate with 1K particles ──
         self.ensure_particle_buffer(gpu.device);
         if !self.particles_initialized {
-            self.active_count = 100_000;
+            self.active_count = 2_000_000;
             self.seed_particles(gpu, disk_inner, disk_outer);
             self.particles_initialized = true;
             log::info!("BlackHole: seeded {} particles", self.active_count);
