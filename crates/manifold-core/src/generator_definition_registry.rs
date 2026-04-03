@@ -580,7 +580,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
     let params = vec![
         pd("Speed", 0.0, 5.0, 0.3, Some("F2"), "speed"),
         pd("Cam Dist", 5.0, 50.0, 20.0, Some("F1"), "camDist"),
-        pd("Tilt", 0.0, 90.0, 75.0, Some("F0"), "tilt"),
+        pd("Tilt", 0.0, 90.0, 15.0, Some("F0"), "tilt"),
         pd("Rotate", -180.0, 180.0, 0.0, Some("F0"), "rotate"),
         pd_whole("Steps", 50.0, 500.0, 200.0, "steps"),
         pd("Disk Inner", 2.0, 6.0, 3.0, Some("F1"), "diskInner"),
