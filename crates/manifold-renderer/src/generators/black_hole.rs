@@ -1,15 +1,8 @@
-// Schwarzschild black hole generator — analytic deflection LUT.
+// Schwarzschild black hole generator — single-pass, every-frame integration.
 //
-// Architecture:
-//   Startup: precompute 1D deflection LUT on CPU (512 entries).
-//            Maps impact parameter b → total deflection angle.
-//   Every frame: single compute dispatch. Per pixel:
-//     1. Camera matrix → ray direction → impact parameter
-//     2. Sample LUT → deflection angle
-//     3. Analytic disk intersection from deflection + camera geometry
-//     4. Shade with noise/Doppler/rings
-//
-// All camera/disk param changes are instant — no rebaking.
+// Runs a short geodesic integration (50 steps) per pixel every frame.
+// No deflection map, no rebaking. All params are instant.
+// 50 steps at 0.75x resolution ≈ 25M iterations/frame — fast on Apple Silicon.
 
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
@@ -21,16 +14,11 @@ const CAM_DIST: usize = 1;
 const TILT: usize = 2;
 const ROTATE: usize = 3;
 #[allow(dead_code)]
-const STEPS: usize = 4; // Kept for param index alignment
+const STEPS: usize = 4;
 const DISK_INNER: usize = 5;
 const DISK_OUTER: usize = 6;
 const DISK_GLOW: usize = 7;
 const SCALE: usize = 8;
-
-const LUT_SIZE: u32 = 512;
-// Impact parameter range: from just outside photon sphere (b=2.6rs) to far field
-const B_MIN: f32 = 2.598; // Critical impact parameter (photon sphere capture)
-const B_MAX: f32 = 30.0;
 
 fn param(ctx: &GeneratorContext, idx: usize, default: f32) -> f32 {
     if ctx.param_count > idx as u32 {
@@ -38,71 +26,6 @@ fn param(ctx: &GeneratorContext, idx: usize, default: f32) -> f32 {
     } else {
         default
     }
-}
-
-/// Numerically compute the total deflection angle for a photon with
-/// impact parameter `b` in Schwarzschild spacetime (rs = 1).
-/// Uses the effective potential approach with Verlet integration.
-fn compute_deflection(b: f32) -> f32 {
-    // Integrate in polar coords: u = 1/r, du/dphi = ...
-    // The equation of motion for u(phi) is:
-    //   d²u/dφ² = -u + 1.5 * u²  (Schwarzschild, rs = 1)
-    // with u(0) = 0, du/dφ(0) = 1/b (ray from infinity)
-
-    let mut u = 0.0001_f32; // u = 1/r, start near infinity
-    let mut du = 1.0 / b; // du/dphi at infinity
-    let mut phi = 0.0_f32;
-    let dphi = 0.001_f32; // integration step in phi
-
-    // Integrate until u starts decreasing (ray has passed closest approach)
-    // and then continues to infinity, or u diverges (captured)
-    let mut max_u = 0.0_f32;
-    let mut passed_closest = false;
-
-    for _ in 0..50_000 {
-        // Verlet integration of d²u/dφ² = -u + 1.5 * u²
-        let accel = -u + 1.5 * u * u;
-        du += accel * dphi;
-        u += du * dphi;
-        phi += dphi;
-
-        if u > max_u {
-            max_u = u;
-        } else if !passed_closest {
-            passed_closest = true;
-        }
-
-        // Ray captured (hit horizon)
-        if u > 1.0 {
-            return std::f32::consts::PI * 10.0; // Sentinel: captured
-        }
-
-        // Ray escaped back to infinity
-        if passed_closest && u < 0.0001 {
-            break;
-        }
-
-        // Safety: don't integrate forever
-        if phi > 4.0 * std::f32::consts::PI {
-            break;
-        }
-    }
-
-    // Total deflection = phi - pi (pi is the straight-line baseline)
-    phi - std::f32::consts::PI
-}
-
-/// Build the 1D deflection LUT as f32 array.
-fn build_deflection_lut() -> Vec<f32> {
-    let mut lut = Vec::with_capacity(LUT_SIZE as usize);
-    for i in 0..LUT_SIZE {
-        let t = i as f32 / (LUT_SIZE - 1) as f32;
-        // Non-linear mapping: more samples near b_min where deflection changes rapidly
-        let b = B_MIN + (B_MAX - B_MIN) * t * t; // Quadratic spacing
-        let deflection = compute_deflection(b);
-        lut.push(deflection);
-    }
-    lut
 }
 
 #[repr(C)]
@@ -118,38 +41,22 @@ struct Uniforms {
     disk_glow: f32,
     uv_scale: f32,
     orbit_angle: f32,
-    b_min: f32,
-    b_max: f32,
+    _pad0: f32,
+    _pad1: f32,
 }
 
 pub struct BlackHoleGenerator {
     pipeline: manifold_gpu::GpuComputePipeline,
-    lut_buffer: manifold_gpu::GpuBuffer,
 }
 
 impl BlackHoleGenerator {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
-        let pipeline = device.create_compute_pipeline(
-            include_str!("shaders/black_hole_compute.wgsl"),
-            "cs_main",
-            "BlackHole",
-        );
-
-        // Precompute deflection LUT on CPU and upload to shared buffer
-        let lut_data = build_deflection_lut();
-        let lut_buffer = device.create_buffer_shared((LUT_SIZE as u64) * 4);
-        unsafe {
-            let ptr = lut_buffer.mapped_ptr().unwrap();
-            std::ptr::copy_nonoverlapping(
-                lut_data.as_ptr() as *const u8,
-                ptr,
-                (LUT_SIZE as usize) * 4,
-            );
-        }
-
         Self {
-            pipeline,
-            lut_buffer,
+            pipeline: device.create_compute_pipeline(
+                include_str!("shaders/black_hole_compute.wgsl"),
+                "cs_main",
+                "BlackHole",
+            ),
         }
     }
 }
@@ -189,8 +96,8 @@ impl Generator for BlackHoleGenerator {
             disk_glow,
             uv_scale: if scale > 0.0 { 1.0 / scale } else { 1.0 },
             orbit_angle: ctx.time as f32 * speed * 0.3,
-            b_min: B_MIN,
-            b_max: B_MAX,
+            _pad0: 0.0,
+            _pad1: 0.0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -200,13 +107,8 @@ impl Generator for BlackHoleGenerator {
                     binding: 0,
                     data: bytemuck::bytes_of(&uniforms),
                 },
-                manifold_gpu::GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: &self.lut_buffer,
-                    offset: 0,
-                },
                 manifold_gpu::GpuBinding::Texture {
-                    binding: 2,
+                    binding: 1,
                     texture: target,
                 },
             ],
