@@ -386,7 +386,7 @@ impl Generator for MetallicGlassGenerator {
             light_pos,
             light_color: [1.0, 1.0, 1.0, light_int],
             material: [1.0, roughness, displacement, 0.0], // metallic=1.0 always
-            grid_info: [GRID_SIZE as f32, 0.0, 0.0, 0.0],
+            grid_info: [GRID_SIZE as f32, 1.0 / width as f32, 0.0, 0.0],
         };
 
         let depth_tex = self.depth_texture.as_ref().unwrap();
