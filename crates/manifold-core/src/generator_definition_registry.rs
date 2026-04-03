@@ -586,8 +586,6 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Disk Outer", 5.0, 20.0, 10.0, Some("F1"), "diskOuter"),
         pd("Disk Glow", 0.5, 5.0, 2.0, Some("F1"), "diskGlow"),
         pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
-        pd("Count (M)", 0.1, 4.0, 2.0, Some("F1"), "count"),
-        pd("Turbulence", 0.0, 1.0, 0.3, Some("F2"), "turbulence"),
     ];
     m.insert(
         GeneratorTypeId::BLACK_HOLE,

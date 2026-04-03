@@ -1,16 +1,10 @@
-// Black Hole — Deflection Map Bake
+// Black Hole — Deflection Map Bake (dual crossing)
 //
-// Traces geodesics once per camera configuration, storing results
-// in a deflection texture. This eliminates per-frame ray integration.
+// Traces geodesics, records up to 2 disk crossings per ray.
+// Output 1 (first crossing):  R=final_r, G=disk_r, B=disk_angle, A=opacity
+// Output 2 (second crossing): R=0,       G=disk_r, B=disk_angle, A=opacity
 //
-// Output (Rgba32Float):
-//   R: final radius at termination (0 = absorbed by horizon)
-//   G: disk crossing radius (0 = no disk hit)
-//   B: disk crossing angle (atan2 in world XZ plane)
-//   A: accumulated disk opacity (0-1)
-//
-// The photon acceleration in Schwarzschild geometry (rs = 1, c = 1):
-//   a = -1.5 * h² / r⁵ * pos
+// Photon acceleration: a = -1.5 * h² / r⁵ * pos (rs=1, c=1)
 
 struct Uniforms {
     aspect: f32,
@@ -24,11 +18,12 @@ struct Uniforms {
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
-@group(0) @binding(1) var output: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(1) var output1: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(2) var output2: texture_storage_2d<rgba32float, write>;
 
 @compute @workgroup_size(16, 16)
 fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let dims = textureDimensions(output);
+    let dims = textureDimensions(output1);
     if gid.x >= dims.x || gid.y >= dims.y {
         return;
     }
@@ -37,16 +32,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let ndc = (uv * 2.0 - 1.0) * u.uv_scale;
     let screen = vec2<f32>(ndc.x * u.aspect, -ndc.y);
 
-    // Camera setup — always baked at orbit_angle=0 (rotational symmetry)
     let cos_tilt = cos(u.tilt_rad);
     let sin_tilt = sin(u.tilt_rad);
 
-    let cam_pos = vec3<f32>(
-        u.cam_dist * cos_tilt,
-        u.cam_dist * sin_tilt,
-        0.0,
-    );
-
+    let cam_pos = vec3<f32>(u.cam_dist * cos_tilt, u.cam_dist * sin_tilt, 0.0);
     let fwd = normalize(-cam_pos);
     let world_up = vec3<f32>(0.0, 1.0, 0.0);
     let right = normalize(cross(fwd, world_up));
@@ -55,40 +44,40 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let fov_factor = 1.2;
     let ray_dir = normalize(fwd + screen.x * right * fov_factor + screen.y * up * fov_factor);
 
-    // 3D Cartesian geodesic integration
     var pos = cam_pos;
     var vel = ray_dir;
-
     let h_vec = cross(pos, vel);
     let h2 = dot(h_vec, h_vec);
 
     let base_step = 0.3;
     let max_steps = i32(u.steps);
-    // Escape radius must be well beyond camera to capture all lensing
     let escape_r = max(u.cam_dist * 3.0, 150.0);
 
     var prev_y = pos.y;
-    var best_disk_r = 0.0;
-    var best_disk_angle = 0.0;
-    var disk_alpha = 0.0;
     var final_r = 0.0;
+
+    // Store up to 2 crossings
+    var cross1_r = 0.0;
+    var cross1_angle = 0.0;
+    var cross1_opacity = 0.0;
+    var cross2_r = 0.0;
+    var cross2_angle = 0.0;
+    var cross2_opacity = 0.0;
+    var crossing_count = 0;
 
     for (var i = 0; i < max_steps; i++) {
         let r = length(pos);
 
-        // Event horizon
         if r < 1.0 {
             final_r = 0.0;
             break;
         }
 
-        // Escape
         if r > escape_r {
             final_r = r;
             break;
         }
 
-        // Adaptive step: small near horizon, capped to avoid jumping over disk
         let step = base_step * clamp(r * 0.05, 0.01, 0.5);
 
         let r2 = r * r;
@@ -97,14 +86,11 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         vel += accel * step * 0.5;
         pos += vel * step;
-
         let r_new = length(pos);
         let r2_new = r_new * r_new;
         let r5_new = r2_new * r2_new * r_new;
-        let accel_new = -1.5 * h2 / r5_new * pos;
-        vel += accel_new * step * 0.5;
+        vel += -1.5 * h2 / r5_new * pos * step * 0.5;
 
-        // Disk crossing
         let cur_y = pos.y;
         if prev_y * cur_y < 0.0 {
             let frac = abs(prev_y) / (abs(prev_y) + abs(cur_y) + 1e-8);
@@ -113,25 +99,25 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
             if cross_r > u.disk_inner && cross_r < u.disk_outer {
                 let angle = atan2(cross_pos.z, cross_pos.x);
-                let opacity = 0.6 + 0.3 * (1.0 - (cross_r - u.disk_inner)
+                let opacity = 0.5 + 0.4 * (1.0 - (cross_r - u.disk_inner)
                     / (u.disk_outer - u.disk_inner));
 
-                // Store the strongest (closest to inner) disk hit
-                if disk_alpha < 0.01 || cross_r < best_disk_r {
-                    best_disk_r = cross_r;
-                    best_disk_angle = angle;
+                if crossing_count == 0 {
+                    cross1_r = cross_r;
+                    cross1_angle = angle;
+                    cross1_opacity = opacity;
+                } else if crossing_count == 1 {
+                    cross2_r = cross_r;
+                    cross2_angle = angle;
+                    cross2_opacity = opacity;
                 }
-                disk_alpha = clamp(disk_alpha + opacity * 0.7, 0.0, 1.0);
-
-                if disk_alpha > 0.95 {
-                    final_r = cross_r;
-                    break;
-                }
+                crossing_count++;
             }
         }
         prev_y = cur_y;
         final_r = r;
     }
 
-    textureStore(output, gid.xy, vec4<f32>(final_r, best_disk_r, best_disk_angle, disk_alpha));
+    textureStore(output1, gid.xy, vec4<f32>(final_r, cross1_r, cross1_angle, cross1_opacity));
+    textureStore(output2, gid.xy, vec4<f32>(0.0, cross2_r, cross2_angle, cross2_opacity));
 }
