@@ -222,14 +222,20 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let uv = vec2<f32>(f32(gid.x) + 0.5, f32(gid.y) + 0.5)
         / vec2<f32>(f32(dims.x), f32(dims.y));
 
-    // Bilinear for all deflection data — gives smooth shadow edge and smooth
-    // disk edges. disk_opacity_from_r naturally zeros out interpolation artifacts
-    // at the disk outer boundary.
-    let d1 = textureSampleLevel(deflection1, s_linear, uv, 0.0);
-    let d2 = textureSampleLevel(deflection2, s_linear, uv, 0.0);
+    // Bilinear for final_r (smooth shadow boundary), nearest-neighbor for
+    // crossing data (prevents outer-edge ring artifact from interpolation).
+    let d1_smooth = textureSampleLevel(deflection1, s_linear, uv, 0.0);
+    let final_r = d1_smooth.r;
+
+    let defl_dims = textureDimensions(deflection1);
+    let defl_coord = vec2<i32>(
+        clamp(i32(uv.x * f32(defl_dims.x)), 0, i32(defl_dims.x) - 1),
+        clamp(i32(uv.y * f32(defl_dims.y)), 0, i32(defl_dims.y) - 1),
+    );
+    let d1 = textureLoad(deflection1, defl_coord, 0);
+    let d2 = textureLoad(deflection2, defl_coord, 0);
     let sky = textureSampleLevel(sky_dir_tex, s_linear, uv, 0.0);
 
-    let final_r = d1.r;
     let c1_r = d1.g;
     let c1_ca = d1.b;
     let c1_sa = d1.a;
@@ -238,23 +244,28 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let c2_ca = d2.b;
     let c2_sa = d2.a;
 
+    // Shadow fade: bilinear final_r smoothly transitions from 0 (absorbed)
+    // to ~15-40 (escaped). Wide smoothstep covers the full gradient.
+    let shadow_fade = smoothstep(0.5, 12.0, final_r);
+
     // ── Star field background (gravitationally lensed) ──
     var color = vec3<f32>(0.0);
     if sky.w > 0.5 {
-        color = star_field(normalize(sky.xyz), u.stars_brightness);
+        color = star_field(normalize(sky.xyz), u.stars_brightness) * shadow_fade;
     }
     var total_opacity = 0.0;
 
     // ── First crossing (front disk) — composited over stars ──
     if c1_r > 0.1 {
-        let disk_col = shade_disk(c1_r, c1_ca, c1_sa, false) * c1_op;
-        color = color * (1.0 - c1_op * 0.85) + disk_col;
-        total_opacity = c1_op;
+        let faded_op = c1_op * shadow_fade;
+        let disk_col = shade_disk(c1_r, c1_ca, c1_sa, false) * faded_op;
+        color = color * (1.0 - faded_op * 0.85) + disk_col;
+        total_opacity = faded_op;
     }
 
     // ── Second crossing (lensed back) ──
     if c2_r > 0.1 {
-        let c2_op = disk_opacity_from_r(c2_r);
+        let c2_op = disk_opacity_from_r(c2_r) * shadow_fade;
         let remaining = max(1.0 - total_opacity * 0.6, 0.0);
         let disk_col = shade_disk(c2_r, c2_ca, c2_sa, true) * c2_op * remaining;
         color = color * (1.0 - c2_op * remaining * 0.5) + disk_col;
