@@ -651,6 +651,10 @@ pub struct ParamEnvelope {
     /// Rising edge detection: was a clip active on the previous frame?
     #[serde(skip)]
     pub was_clip_active: bool,
+    /// Previous frame's elapsed beats within the active clip. Used by Random
+    /// mode to detect clip restarts and loop points (elapsed decreases).
+    #[serde(skip)]
+    pub last_elapsed: f32,
 }
 
 impl ParamEnvelope {
@@ -670,6 +674,7 @@ impl ParamEnvelope {
             current_level: 0.0,
             walk_value: -1.0,
             was_clip_active: false,
+            last_elapsed: -1.0,
         }
     }
 
@@ -689,6 +694,7 @@ impl ParamEnvelope {
             current_level: 0.0,
             walk_value: -1.0,
             was_clip_active: false,
+            last_elapsed: -1.0,
         }
     }
 

@@ -1309,7 +1309,8 @@ pub(super) fn dispatch_inspector(
                     };
                     // Reset rising edge + walk state so Random mode triggers immediately
                     env.was_clip_active = false;
-                    env.walk_value = -1.0; // sentinel: re-seed from current param
+                    env.walk_value = -1.0;
+                    env.last_elapsed = -1.0; // sentinel: re-seed from current param
                     let new_mode = env.mode;
                     // Sync to content thread
                     let et2 = et.clone();
@@ -1327,6 +1328,7 @@ pub(super) fn dispatch_inspector(
                                     env.mode = new_mode;
                                     env.was_clip_active = false;
                                     env.walk_value = -1.0;
+                                    env.last_elapsed = -1.0;
                                 }
                             }
                         })),
@@ -2102,6 +2104,7 @@ pub(super) fn dispatch_inspector(
                             env.mode = new_mode;
                             env.was_clip_active = false;
                             env.walk_value = -1.0;
+                    env.last_elapsed = -1.0;
                         }
                     })),
                 );

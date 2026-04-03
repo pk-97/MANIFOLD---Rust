@@ -325,6 +325,7 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> boo
                 random_jump,
                 walk_value,
                 was_active,
+                last_elapsed,
             ) = {
                 let env = &layer.envelopes.as_ref().unwrap()[ei];
                 (
@@ -340,6 +341,7 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> boo
                     env.random_jump,
                     env.walk_value,
                     env.was_clip_active,
+                    env.last_elapsed,
                 )
             };
 
@@ -353,10 +355,15 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> boo
             }
 
             // ── Random mode: sample & hold ─────────────────────────
-            // On rising edge, latch a new value. Hold it every frame.
-            // No ADSR — the value IS the param value directly.
+            // Trigger conditions (same events that restart an ADSR envelope):
+            //   1. Clip becomes active after being inactive (!was_active)
+            //   2. Elapsed decreases — new clip started on the same layer
+            //      (sequential clips each reset elapsed to 0) or loop restart
+            //   3. First evaluation after mode switch (last_elapsed sentinel)
             if mode == EnvelopeMode::Random {
-                let rising_edge = clip_active && !was_active;
+                let elapsed_f = active_elapsed.as_f32();
+                let trigger = clip_active
+                    && (last_elapsed < 0.0 || elapsed_f < last_elapsed || !was_active);
 
                 let layer_effects = match &mut layer.effects {
                     Some(effects) => effects,
@@ -401,31 +408,27 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> boo
                 let (min, max) = (pd.min, pd.max);
                 let whole = pd.whole_numbers || pd.value_labels.is_some();
 
-                // Seed from current param value if uninitialized
-                let seeded = if walk_value < 0.0 {
-                    if (max - min).abs() > f32::EPSILON {
-                        ((fx.param_values[idx] - min) / (max - min)).clamp(0.0, 1.0)
+                let new_walk = if trigger {
+                    if walk_value < 0.0 {
+                        compute_random_step(0.5, 1.0, true, whole, min, max)
                     } else {
-                        0.5
+                        // Step = 15% of range per trigger
+                        compute_random_step(
+                            walk_value, 0.15, random_jump, whole, min, max,
+                        )
                     }
+                } else if walk_value < 0.0 {
+                    if let Some(envs) = &mut layer.envelopes
+                        && let Some(env) = envs.get_mut(ei)
+                    {
+                        env.was_clip_active = clip_active;
+                        env.last_elapsed = elapsed_f;
+                    }
+                    continue;
                 } else {
                     walk_value
                 };
 
-                let new_walk = if rising_edge {
-                    compute_random_step(
-                        seeded,
-                        target_norm.clamp(0.0, 1.0),
-                        random_jump,
-                        whole,
-                        min,
-                        max,
-                    )
-                } else {
-                    seeded
-                };
-
-                // Sample & hold: write the latched value every frame
                 let held = min + (max - min) * new_walk;
                 let held = if whole {
                     held.round().clamp(min, max)
@@ -439,6 +442,7 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> boo
                     env.walk_value = new_walk;
                     env.current_level = new_walk;
                     env.was_clip_active = clip_active;
+                    env.last_elapsed = elapsed_f;
                 }
 
                 fx.param_values[idx] = held;
@@ -575,6 +579,7 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: Beats) 
                 random_jump,
                 walk_value,
                 was_active,
+                last_elapsed,
             ) = {
                 let env = &gp.envelopes.as_ref().unwrap()[ei];
                 (
@@ -589,6 +594,7 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: Beats) 
                     env.random_jump,
                     env.walk_value,
                     env.was_clip_active,
+                    env.last_elapsed,
                 )
             };
 
@@ -615,31 +621,34 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: Beats) 
             let (min, max) = (pd.min, pd.max);
 
             // ── Random mode: sample & hold ─────────────────────────
+            // Trigger conditions (same events that restart an ADSR envelope):
+            //   1. Clip becomes active after being inactive (!was_active)
+            //   2. Elapsed decreases — new sequential clip or loop restart
+            //   3. First evaluation after mode switch (last_elapsed sentinel)
             if mode == EnvelopeMode::Random {
-                let rising_edge = clip_active && !was_active;
+                let elapsed_f = active_elapsed.as_f32();
+                let trigger = clip_active
+                    && (last_elapsed < 0.0 || elapsed_f < last_elapsed || !was_active);
                 let whole = pd.whole_numbers || pd.value_labels.is_some();
 
-                let seeded = if walk_value < 0.0 {
-                    if (max - min).abs() > f32::EPSILON {
-                        ((gp.param_values[idx] - min) / (max - min)).clamp(0.0, 1.0)
+                let new_walk = if trigger {
+                    if walk_value < 0.0 {
+                        compute_random_step(0.5, 1.0, true, whole, min, max)
                     } else {
-                        0.5
+                        compute_random_step(
+                            walk_value, 0.15, random_jump, whole, min, max,
+                        )
                     }
+                } else if walk_value < 0.0 {
+                    if let Some(envs) = &mut gp.envelopes
+                        && let Some(env) = envs.get_mut(ei)
+                    {
+                        env.was_clip_active = clip_active;
+                        env.last_elapsed = elapsed_f;
+                    }
+                    continue;
                 } else {
                     walk_value
-                };
-
-                let new_walk = if rising_edge {
-                    compute_random_step(
-                        seeded,
-                        target_norm.clamp(0.0, 1.0),
-                        random_jump,
-                        whole,
-                        min,
-                        max,
-                    )
-                } else {
-                    seeded
                 };
 
                 let held = min + (max - min) * new_walk;
@@ -655,6 +664,7 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: Beats) 
                     env.walk_value = new_walk;
                     env.current_level = new_walk;
                     env.was_clip_active = clip_active;
+                    env.last_elapsed = elapsed_f;
                 }
 
                 gp.param_values[idx] = held;
