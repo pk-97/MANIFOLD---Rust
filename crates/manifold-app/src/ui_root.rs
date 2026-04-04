@@ -158,6 +158,8 @@ pub struct UIRoot {
     pub macro_labels: [String; manifold_core::MACRO_COUNT],
     /// Cached macro mapping descriptions per slot (for context menu).
     pub macro_mapping_descs: [Vec<String>; manifold_core::MACRO_COUNT],
+    /// Whether each macro slot has an Ableton mapping (for "Remove" menu item).
+    pub macro_ableton_mapped: [bool; manifold_core::MACRO_COUNT],
 
     /// Node ID for the video/timeline split handle (color feedback on hover/drag).
     /// From Unity PanelResizeHandle.cs — idle/hover/drag color states.
@@ -217,6 +219,7 @@ impl UIRoot {
             last_right_click_pos: Vec2::new(0.0, 0.0),
             macro_labels: std::array::from_fn(|_| String::new()),
             macro_mapping_descs: std::array::from_fn(|_| Vec::new()),
+            macro_ableton_mapped: [false; manifold_core::MACRO_COUNT],
             split_handle_id: -1,
             inspector_handle_id: -1,
             overlay_drag_active: false,
@@ -570,6 +573,11 @@ impl UIRoot {
                                         AbletonPickerContext::GenParam { param_idx } => {
                                             actions.push(PanelAction::MapGenParamToAbleton(
                                                 param_idx, addr,
+                                            ));
+                                        }
+                                        AbletonPickerContext::MacroSlot { slot_idx } => {
+                                            actions.push(PanelAction::MapMacroToAbleton(
+                                                slot_idx, addr,
                                             ));
                                         }
                                     }
@@ -1167,28 +1175,40 @@ impl UIRoot {
                 let descs = &self.macro_mapping_descs[*macro_idx];
                 let mut rename = DropdownItem::new("Rename");
                 rename.separator_after = true;
+                let mut items = vec![rename];
                 if descs.is_empty() {
-                    // No mappings — show a disabled "No mappings" item
                     let mut item = DropdownItem::new("No mappings");
                     item.enabled = false;
-                    self.dropdown_context = Some(DropdownContext::MacroSlotContext(*macro_idx));
-                    self.dropdown
-                        .open_context(vec![rename, item], right_click_pos, &mut self.tree);
+                    items.push(item);
                 } else {
-                    // List each mapping with a "Remove" prefix
-                    let mut items: Vec<DropdownItem> =
-                        descs.iter().map(|desc| DropdownItem::new(desc)).collect();
-                    items.insert(0, rename);
+                    for desc in descs {
+                        items.push(DropdownItem::new(desc));
+                    }
                     if descs.len() > 1 {
                         if let Some(last) = items.last_mut() {
                             last.separator_after = true;
                         }
                         items.push(DropdownItem::new("Clear All"));
                     }
-                    self.dropdown_context = Some(DropdownContext::MacroSlotContext(*macro_idx));
-                    self.dropdown
-                        .open_context(items, right_click_pos, &mut self.tree);
                 }
+                // Ableton section — same pattern as effect/gen param dropdowns
+                if let Some(last) = items.last_mut() {
+                    last.separator_after = true;
+                }
+                if self.ableton_session.is_some() {
+                    items.push(DropdownItem::new("Map to Ableton Macro\u{2026}"));
+                } else {
+                    let mut item = DropdownItem::new("Ableton not connected");
+                    item.enabled = false;
+                    items.push(item);
+                }
+                // "Remove Ableton Mapping" if this macro is mapped
+                if self.macro_ableton_mapped[*macro_idx] {
+                    items.push(DropdownItem::new("Remove Ableton Mapping"));
+                }
+                self.dropdown_context = Some(DropdownContext::MacroSlotContext(*macro_idx));
+                self.dropdown
+                    .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
             PanelAction::GenCardRightClicked => {
@@ -1220,6 +1240,18 @@ impl UIRoot {
                 if let Some(session) = &self.ableton_session {
                     self.ableton_picker_context = Some(AbletonPickerContext::GenParam {
                         param_idx: *param_idx,
+                    });
+                    self.ableton_picker
+                        .open(build_picker_session(session), right_click_pos);
+                    self.overlay_dirty = true;
+                }
+                true
+            }
+            PanelAction::OpenAbletonPickerForMacro(slot_idx) => {
+                use manifold_ui::panels::ableton_picker::AbletonPickerContext;
+                if let Some(session) = &self.ableton_session {
+                    self.ableton_picker_context = Some(AbletonPickerContext::MacroSlot {
+                        slot_idx: *slot_idx,
                     });
                     self.ableton_picker
                         .open(build_picker_session(session), right_click_pos);
@@ -1335,15 +1367,17 @@ impl UIRoot {
             }
             DropdownContext::MacroSlotContext(macro_idx) => {
                 let mapping_count = self.macro_mapping_descs[macro_idx].len();
+                // Match by label to avoid brittle index math with variable Ableton items
+                let label = self.dropdown.item_label(index);
                 if index == 0 {
                     Some(PanelAction::MacroLabelRename(macro_idx))
-                } else if mapping_count == 0 {
-                    None // "No mappings" item — disabled, shouldn't fire
-                } else if mapping_count > 1 && index == mapping_count + 1 {
-                    // "Clear All" item (after all mappings + separator)
+                } else if label == Some("Map to Ableton Macro\u{2026}") {
+                    Some(PanelAction::OpenAbletonPickerForMacro(macro_idx))
+                } else if label == Some("Remove Ableton Mapping") {
+                    Some(PanelAction::UnmapMacroAbleton(macro_idx))
+                } else if label == Some("Clear All") {
                     Some(PanelAction::ClearMacroMappings(macro_idx))
                 } else if index > 0 && index <= mapping_count {
-                    // Remove specific mapping
                     Some(PanelAction::UnmapMacro(macro_idx, index - 1))
                 } else {
                     None

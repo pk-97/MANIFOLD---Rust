@@ -553,7 +553,25 @@ pub fn push_state(
         .macro_bank
         .slots
         .iter()
-        .map(|slot| slot.label.clone())
+        .enumerate()
+        .map(|(i, slot)| {
+            let base = if slot.label.is_empty() {
+                format!("M{}", i + 1)
+            } else {
+                slot.label.clone()
+            };
+            if let Some(mapping) = &slot.ableton_mapping {
+                use manifold_core::ableton_mapping::AbletonMappingStatus;
+                let suffix = match mapping.status {
+                    AbletonMappingStatus::Active => "[ABL]",
+                    AbletonMappingStatus::Dormant => "[ABL-]",
+                    AbletonMappingStatus::Ambiguous => "[ABL?]",
+                };
+                format!("{base} {suffix}")
+            } else {
+                base
+            }
+        })
         .collect();
     ui.inspector
         .macros_panel_mut()
@@ -566,6 +584,7 @@ pub fn push_state(
                 .iter()
                 .map(|m| describe_macro_mapping(&m.target, project))
                 .collect();
+            ui.macro_ableton_mapped[i] = slot.ableton_mapping.is_some();
         }
     }
 

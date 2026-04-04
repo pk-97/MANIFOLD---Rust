@@ -271,6 +271,10 @@ pub enum PanelAction {
     OpenAbletonPickerForEffect(InspectorTab, usize, usize), // tab, fx_idx, param_idx
     /// Open the Ableton picker popup for a generator parameter.
     OpenAbletonPickerForGen(usize), // param_idx
+    /// Ableton mapping for macro slots.
+    MapMacroToAbleton(usize, manifold_core::ableton_mapping::AbletonMacroAddress),
+    UnmapMacroAbleton(usize),
+    OpenAbletonPickerForMacro(usize),
 
     // Reset macro from context menu (distinct from MacroRightClick to avoid re-triggering dropdown)
     MacroReset(usize), // macro_idx — reset to 0 from context menu

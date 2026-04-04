@@ -2676,6 +2676,30 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
 
+        PanelAction::MapMacroToAbleton(slot_idx, address) => {
+            use manifold_core::ableton_mapping::AbletonMappingTarget;
+            let target = AbletonMappingTarget::MacroSlot { slot_index: *slot_idx };
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::AbletonMapParam {
+                    target,
+                    address: address.clone(),
+                },
+            );
+            DispatchResult::handled()
+        }
+        PanelAction::UnmapMacroAbleton(slot_idx) => {
+            use manifold_core::ableton_mapping::AbletonMappingTarget;
+            let target = AbletonMappingTarget::MacroSlot { slot_index: *slot_idx };
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::AbletonUnmapParam { target },
+            );
+            DispatchResult::handled()
+        }
+        // Picker open is consumed by try_open_dropdown — never reaches dispatch.
+        PanelAction::OpenAbletonPickerForMacro(_) => DispatchResult::handled(),
+
         _ => DispatchResult::unhandled(),
     }
 }

@@ -473,6 +473,11 @@ impl AbletonBridge {
                     gp.set_param_base(param_index, value);
                 }
             }
+            AbletonMappingTarget::MacroSlot { slot_index } => {
+                manifold_core::macro_bank::MacroBank::apply_macro(
+                    project, *slot_index, value,
+                );
+            }
         }
     }
 
@@ -1053,6 +1058,13 @@ impl AbletonBridge {
                 }
             }
         }
+
+        // Validate macro slots
+        for slot in &mut project.settings.macro_bank.slots {
+            if let Some(mapping) = &mut slot.ableton_mapping {
+                mapping.status = self.validate_single_mapping(mapping);
+            }
+        }
     }
 
     fn validate_single_mapping(
@@ -1154,6 +1166,11 @@ impl AbletonBridge {
                 for m in mappings.iter_mut() {
                     m.status = status;
                 }
+            }
+        }
+        for slot in &mut project.settings.macro_bank.slots {
+            if let Some(m) = &mut slot.ableton_mapping {
+                m.status = status;
             }
         }
     }
@@ -1330,6 +1347,40 @@ impl AbletonBridge {
                             param_max: pmax,
                         });
                 }
+            }
+        }
+
+        // Collect from macro slots
+        for (i, slot) in project.settings.macro_bank.slots.iter().enumerate() {
+            if let Some(mapping) = &slot.ableton_mapping {
+                if mapping.status != AbletonMappingStatus::Active {
+                    continue;
+                }
+                let key = (
+                    mapping.address.track_id,
+                    mapping.address.device_id,
+                    mapping.address.param_id,
+                );
+                needed.insert(key);
+                let (abl_min, abl_max) = self.ableton_param_range(
+                    mapping.address.track_id,
+                    mapping.address.device_id,
+                    mapping.address.param_id,
+                );
+
+                new_write_targets
+                    .entry(key)
+                    .or_default()
+                    .push(WriteTarget {
+                        target: AbletonMappingTarget::MacroSlot { slot_index: i },
+                        param_index: 0,
+                        ableton_min: abl_min,
+                        ableton_max: abl_max,
+                        range_min: mapping.range_min,
+                        range_max: mapping.range_max,
+                        param_min: 0.0,
+                        param_max: 1.0,
+                    });
             }
         }
 

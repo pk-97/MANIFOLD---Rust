@@ -97,6 +97,9 @@ pub struct MacroSlot {
     pub label: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mappings: Vec<MacroMapping>,
+    /// Ableton Live macro mapped to this slot (drives `value` when active).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ableton_mapping: Option<crate::ableton_mapping::AbletonParamMapping>,
 }
 
 impl Default for MacroSlot {
@@ -105,6 +108,7 @@ impl Default for MacroSlot {
             value: 0.0,
             label: String::new(),
             mappings: Vec::new(),
+            ableton_mapping: None,
         }
     }
 }

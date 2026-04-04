@@ -104,6 +104,9 @@ pub enum AbletonPickerContext {
     GenParam {
         param_idx: usize,
     },
+    MacroSlot {
+        slot_idx: usize,
+    },
 }
 
 pub struct AbletonPickerPopup {

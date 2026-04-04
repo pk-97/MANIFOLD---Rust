@@ -114,6 +114,9 @@ pub enum AbletonMappingTarget {
         layer_id: LayerId,
         param_index: usize,
     },
+    MacroSlot {
+        slot_index: usize,
+    },
 }
 
 // ── Set context ───────────────────────────────────────────────────

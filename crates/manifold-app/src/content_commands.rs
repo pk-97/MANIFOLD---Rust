@@ -515,6 +515,7 @@ impl ContentThread {
                         AbletonMappingTarget::MasterEffect { param_index, .. }
                         | AbletonMappingTarget::LayerEffect { param_index, .. }
                         | AbletonMappingTarget::GenParam { param_index, .. } => *param_index,
+                        AbletonMappingTarget::MacroSlot { slot_index } => *slot_index,
                     };
                     let new_mapping = AbletonParamMapping {
                         param_index: pi,
@@ -525,6 +526,13 @@ impl ContentThread {
                         status: AbletonMappingStatus::Active,
                     };
                     match &target {
+                        AbletonMappingTarget::MacroSlot { slot_index } => {
+                            if let Some(slot) =
+                                p.settings.macro_bank.slots.get_mut(*slot_index)
+                            {
+                                slot.ableton_mapping = Some(new_mapping);
+                            }
+                        }
                         AbletonMappingTarget::MasterEffect { effect_type, .. } => {
                             if let Some(fx) = p
                                 .settings
@@ -588,6 +596,13 @@ impl ContentThread {
                         }
                     };
                     match &target {
+                        AbletonMappingTarget::MacroSlot { slot_index } => {
+                            if let Some(slot) =
+                                p.settings.macro_bank.slots.get_mut(*slot_index)
+                            {
+                                slot.ableton_mapping = None;
+                            }
+                        }
                         AbletonMappingTarget::MasterEffect {
                             effect_type,
                             param_index,
