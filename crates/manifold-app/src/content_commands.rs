@@ -639,17 +639,11 @@ impl ContentThread {
                 }
                 if self.ableton_bridge.is_transport_enabled() {
                     self.ableton_bridge.disable_transport_sync();
-                    log::info!(
-                        "[ContentThread] AbletonOSC transport sync disabled"
-                    );
                 } else {
                     if !self.ableton_bridge.is_connected() {
                         self.ableton_bridge.connect();
                     }
                     self.ableton_bridge.enable_transport_sync();
-                    log::info!(
-                        "[ContentThread] AbletonOSC transport sync enabled"
-                    );
                 }
             }
 

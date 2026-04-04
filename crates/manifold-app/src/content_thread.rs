@@ -830,17 +830,8 @@ impl ContentThread {
                 },
                 ableton_connected: self.ableton_bridge.is_connected(),
                 ableton_transport_enabled: self.ableton_bridge.is_transport_enabled(),
-                osc_sync_mode: {
-                    let mode = self.engine.project()
-                        .map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode);
-                    if self.ableton_bridge.is_transport_enabled() {
-                        eprintln!(
-                            "[SYNC STATE] mode={:?} transport_enabled=true connected={}",
-                            mode, self.ableton_bridge.is_connected(),
-                        );
-                    }
-                    mode
-                },
+                osc_sync_mode: self.engine.project()
+                    .map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode),
                 project_snapshot: snapshot,
                 modulation_snapshot,
             };
@@ -991,10 +982,8 @@ impl ContentThread {
                 self.sync_arbiter.suppress_next_transport = true;
                 if playing {
                     self.engine.play();
-                    eprintln!("[SYNC] Ableton → MANIFOLD: PLAY");
                 } else {
                     self.engine.pause();
-                    eprintln!("[SYNC] Ableton → MANIFOLD: STOP");
                 }
             }
 
