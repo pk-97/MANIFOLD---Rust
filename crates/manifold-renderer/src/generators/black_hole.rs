@@ -118,7 +118,7 @@ impl BlackHoleGenerator {
                 width: w,
                 height: h,
                 depth: 1,
-                format: manifold_gpu::GpuTextureFormat::Rgba32Float,
+                format: manifold_gpu::GpuTextureFormat::Rgba16Float,
                 dimension: manifold_gpu::GpuTextureDimension::D2,
                 usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
                 label,
@@ -181,10 +181,10 @@ impl Generator for BlackHoleGenerator {
         let rotate_rad = rotate_deg.to_radians();
         let orbit_angle = ctx.time as f32 * speed * 0.3;
 
-        // Half-res deflection maps — geodesic data is smooth, bilinear interpolation
+        // Quarter-res deflection maps — geodesic data is smooth, bilinear interpolation
         // in the display pass is visually lossless.
-        let defl_w = (ctx.width / 2).max(1);
-        let defl_h = (ctx.height / 2).max(1);
+        let defl_w = (ctx.width / 4).max(1);
+        let defl_h = (ctx.height / 4).max(1);
         self.ensure_deflection_maps(gpu.device, defl_w, defl_h);
 
         // ── Pass 1: Deflection Map (only on camera/scale/steps change) ──

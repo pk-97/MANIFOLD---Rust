@@ -1175,7 +1175,11 @@ impl Panel for TimelineViewportPanel {
                     return vec![PanelAction::OverviewScrub(norm)];
                 }
                 if self.drag_mode == ViewportDragMode::RulerScrub {
-                    let raw = self.pixel_to_beat(pos.x);
+                    // Clamp pixel to ruler rect so dragging outside the viewport
+                    // doesn't seek to extreme positions.
+                    let clamped_x =
+                        pos.x.clamp(self.ruler_rect.x, self.ruler_rect.x + self.ruler_rect.width);
+                    let raw = self.pixel_to_beat(clamped_x);
                     let beat = self.scrub_snap_beat(raw, self.scrub_free);
                     return vec![PanelAction::Seek(beat.as_f32())];
                 }

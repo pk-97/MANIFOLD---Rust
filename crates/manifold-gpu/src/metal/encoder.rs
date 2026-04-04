@@ -1333,6 +1333,24 @@ impl GpuEncoder {
         self.cmd_buf().add_completed_handler(&block);
     }
 
+    /// Register a diagnostic completed handler that logs GPU errors.
+    /// The `label` identifies which command buffer errored in logs.
+    pub fn add_completed_handler_with_status(&self, label: &str) {
+        let label = label.to_string();
+        let block =
+            block::ConcreteBlock::new(move |buf: &metal::CommandBufferRef| {
+                let status = buf.status();
+                if status == metal::MTLCommandBufferStatus::Error {
+                    log::error!(
+                        "[GPU] Command buffer '{}' failed with status Error",
+                        label,
+                    );
+                }
+            });
+        let block = block.copy();
+        self.cmd_buf().add_completed_handler(&block);
+    }
+
     /// Commit the command buffer to the GPU queue.
     /// Ends any active encoder and commits. Consumes the encoder.
     pub fn commit(mut self) {

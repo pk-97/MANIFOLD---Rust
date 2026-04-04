@@ -222,16 +222,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let uv = vec2<f32>(f32(gid.x) + 0.5, f32(gid.y) + 0.5)
         / vec2<f32>(f32(dims.x), f32(dims.y));
 
-    // Nearest-neighbor for deflection maps — crossing data is binary (happened
-    // or didn't), bilinear interpolation creates fake crossings at disk edges.
-    // Sky direction stays bilinear since it varies smoothly.
-    let defl_dims = textureDimensions(deflection1);
-    let defl_coord = vec2<i32>(
-        clamp(i32(uv.x * f32(defl_dims.x)), 0, i32(defl_dims.x) - 1),
-        clamp(i32(uv.y * f32(defl_dims.y)), 0, i32(defl_dims.y) - 1),
-    );
-    let d1 = textureLoad(deflection1, defl_coord, 0);
-    let d2 = textureLoad(deflection2, defl_coord, 0);
+    // Bilinear for all deflection maps — smooth upscale from quarter-res.
+    // disk_opacity_from_r naturally fades fake crossings at disk edges.
+    let d1 = textureSampleLevel(deflection1, s_linear, uv, 0.0);
+    let d2 = textureSampleLevel(deflection2, s_linear, uv, 0.0);
     let sky = textureSampleLevel(sky_dir_tex, s_linear, uv, 0.0);
 
     let final_r = d1.r;
@@ -251,14 +245,18 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var total_opacity = 0.0;
 
     // ── First crossing (front disk) — composited over stars ──
-    if c1_r > 0.1 {
+    // Reject fake crossings from bilinear upscale: real crossings have
+    // cos²+sin² ≈ 1, fake ones interpolated from zero have magnitude < 1.
+    let c1_mag2 = c1_ca * c1_ca + c1_sa * c1_sa;
+    if c1_r > 0.1 && c1_mag2 > 0.25 {
         let disk_col = shade_disk(c1_r, c1_ca, c1_sa, false) * c1_op;
         color = color * (1.0 - c1_op * 0.85) + disk_col;
         total_opacity = c1_op;
     }
 
     // ── Second crossing (lensed back) ──
-    if c2_r > 0.1 {
+    let c2_mag2 = c2_ca * c2_ca + c2_sa * c2_sa;
+    if c2_r > 0.1 && c2_mag2 > 0.25 {
         let c2_op = disk_opacity_from_r(c2_r);
         let remaining = max(1.0 - total_opacity * 0.6, 0.0);
         let disk_col = shade_disk(c2_r, c2_ca, c2_sa, true) * c2_op * remaining;

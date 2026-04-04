@@ -25,8 +25,8 @@ struct Uniforms {
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
-@group(0) @binding(1) var output1: texture_storage_2d<rgba32float, write>;
-@group(0) @binding(2) var output2: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(1) var output1: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(2) var output2: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(3) var output3: texture_storage_2d<rgba16float, write>;
 
 // Fixed generous crossing bounds — covers full param ranges
