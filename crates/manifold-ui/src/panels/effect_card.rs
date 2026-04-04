@@ -178,6 +178,8 @@ pub struct EffectCardPanel {
 
     // Param value cache (NaN = needs sync)
     param_cache: Vec<f32>,
+    // Per-param label cache — detects ableton_label changes without full rebuild
+    label_cache: Vec<Option<String>>,
 
     // Node range
     first_node: usize,
@@ -226,6 +228,7 @@ impl EffectCardPanel {
             copied_flash: CopyToClipboardLabelState::default(),
             drag: ParamDragState::new(),
             param_cache: Vec::new(),
+            label_cache: Vec::new(),
             first_node: 0,
             node_count: 0,
             card_y: 0.0,
@@ -293,6 +296,7 @@ impl EffectCardPanel {
         self.envelope_range_ids = Vec::new();
         self.envelope_range_ids.resize_with(n, || None);
         self.param_cache = vec![f32::NAN; n];
+        self.label_cache = vec![None; n];
     }
 
     pub fn effect_index(&self) -> usize {
@@ -428,6 +432,7 @@ impl EffectCardPanel {
         self.first_node = tree.count();
         self.card_y = rect.y;
         self.param_cache.iter_mut().for_each(|v| *v = f32::NAN);
+        self.label_cache.iter_mut().for_each(|v| *v = None);
 
         let effect_name = self.effect_name.clone();
 
@@ -920,12 +925,26 @@ impl EffectCardPanel {
             return;
         }
 
-        // Per-param slider values (dirty-check via param_cache)
+        // Per-param slider values + label (dirty-check via param_cache / label_cache)
         for (i, &val) in values.iter().enumerate().take(self.param_info.len()) {
+            let info = &self.param_info[i];
+            let new_label = info.ableton_label.clone().or_else(|| Some(info.name.clone()));
+
+            // Label dirty-check — catches ableton_label appearing/disappearing
+            if self.label_cache[i] != new_label {
+                self.label_cache[i] = new_label.clone();
+                if let Some(ref ids) = self.slider_ids[i]
+                    && ids.label >= 0
+                {
+                    let text = new_label.as_deref().unwrap_or(&info.name);
+                    tree.set_text(ids.label as u32, text);
+                }
+            }
+
+            // Value dirty-check
             if val != self.param_cache[i] || self.param_cache[i].is_nan() {
                 self.param_cache[i] = val;
                 if let Some(ref ids) = self.slider_ids[i] {
-                    let info = &self.param_info[i];
                     let norm = BitmapSlider::value_to_normalized(val, info.min, info.max);
                     let text = format_param_value(
                         val,

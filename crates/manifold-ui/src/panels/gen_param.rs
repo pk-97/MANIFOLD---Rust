@@ -146,6 +146,7 @@ pub struct GenParamPanel {
     // Cache
     param_cache: Vec<f32>,
     toggle_cache: Vec<bool>,
+    label_cache: Vec<Option<String>>,
 
     // Node range
     first_node: usize,
@@ -184,6 +185,7 @@ impl GenParamPanel {
             drag: ParamDragState::new(),
             param_cache: Vec::new(),
             toggle_cache: Vec::new(),
+            label_cache: Vec::new(),
             first_node: 0,
             node_count: 0,
         }
@@ -243,6 +245,7 @@ impl GenParamPanel {
         self.envelope_range_ids.resize_with(n, || None);
         self.param_cache = vec![f32::NAN; n];
         self.toggle_cache = vec![false; n];
+        self.label_cache = vec![None; n];
     }
 
     pub fn first_node(&self) -> usize {
@@ -339,6 +342,7 @@ impl GenParamPanel {
         self.first_node = tree.count();
         self.param_cache.iter_mut().for_each(|v| *v = f32::NAN);
         self.toggle_cache.iter_mut().for_each(|v| *v = false);
+        self.label_cache.iter_mut().for_each(|v| *v = None);
 
         let total_h = self.compute_height() - CARD_BOTTOM_MARGIN;
 
@@ -746,6 +750,21 @@ impl GenParamPanel {
 
         for (i, &val) in values.iter().enumerate().take(self.param_info.len()) {
             let info = &self.param_info[i];
+
+            // Label dirty-check — catches ableton_label appearing/disappearing
+            if !info.is_toggle {
+                let new_label = info.ableton_label.clone().or_else(|| Some(info.name.clone()));
+                if self.label_cache[i] != new_label {
+                    self.label_cache[i] = new_label.clone();
+                    if let Some(ref ids) = self.slider_ids[i]
+                        && ids.label >= 0
+                    {
+                        let text = new_label.as_deref().unwrap_or(&info.name);
+                        tree.set_text(ids.label as u32, text);
+                    }
+                }
+            }
+
             if info.is_toggle {
                 let on = val > 0.5;
                 if on != self.toggle_cache[i] {
