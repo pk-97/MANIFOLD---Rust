@@ -243,6 +243,10 @@ pub fn dispatch(
         | PanelAction::ClearMacroMappings(_)
         | PanelAction::EffectParamLabelRightClick(..)
         | PanelAction::GenParamLabelRightClick(_)
+        | PanelAction::MapEffectParamToAbleton(..)
+        | PanelAction::MapGenParamToAbleton(..)
+        | PanelAction::UnmapEffectParamAbleton(..)
+        | PanelAction::UnmapGenParamAbleton(_)
         | PanelAction::AddEffect(..)
         | PanelAction::PasteEffects => inspector::dispatch_inspector(
             action,

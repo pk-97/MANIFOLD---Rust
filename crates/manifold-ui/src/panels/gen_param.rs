@@ -39,6 +39,8 @@ pub struct GenParamInfo {
     /// When present, clicking the param label copies this address to clipboard.
     /// Unity: UIElementBuilder.CopyToClipboardLabel.
     pub osc_address: Option<String>,
+    /// When set, overrides the slider label with an Ableton mapping indicator.
+    pub ableton_label: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -508,12 +510,16 @@ impl GenParamPanel {
                         info.whole_numbers,
                         info.value_labels.as_deref(),
                     );
+                    let label = info
+                        .ableton_label
+                        .as_deref()
+                        .unwrap_or(&info.name);
                     let slider_rect = Rect::new(cx, cy, slider_w, ROW_HEIGHT);
                     self.slider_ids[i] = Some(BitmapSlider::build(
                         tree,
                         -1,
                         slider_rect,
-                        Some(&info.name),
+                        Some(label),
                         norm,
                         &val_text,
                         &SliderColors::default_slider(),
@@ -521,9 +527,8 @@ impl GenParamPanel {
                         crate::slider::DEFAULT_LABEL_WIDTH,
                     ));
 
-                    // Make label interactive for click-to-copy OSC address
-                    if self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some()
-                        && let Some(ids) = &self.slider_ids[i]
+                    // Make label interactive for Ableton mapping + OSC address copy
+                    if let Some(ids) = &self.slider_ids[i]
                         && ids.label >= 0
                     {
                         tree.set_flag(ids.label as u32, UIFlags::INTERACTIVE);
@@ -1330,6 +1335,7 @@ mod tests {
                     is_toggle: false,
                     value_labels: None,
                     osc_address: None,
+                    ableton_label: None,
                 },
                 GenParamInfo {
                     name: "Invert".into(),
@@ -1340,6 +1346,7 @@ mod tests {
                     is_toggle: true,
                     value_labels: None,
                     osc_address: None,
+                    ableton_label: None,
                 },
                 GenParamInfo {
                     name: "Scale".into(),
@@ -1350,6 +1357,7 @@ mod tests {
                     is_toggle: false,
                     value_labels: None,
                     osc_address: None,
+                    ableton_label: None,
                 },
             ],
             string_params: vec![],

@@ -249,9 +249,23 @@ pub enum PanelAction {
     UnmapMacro(usize, usize),                                 // macro_idx, mapping_idx
     ClearMacroMappings(usize),                                // macro_idx
 
-    // Param label right-click → opens "Map to Macro" context menu
+    // Param label right-click → opens "Map to Macro" / "Map from Ableton" context menu
     EffectParamLabelRightClick(usize, usize), // fx_idx, param_idx
     GenParamLabelRightClick(usize),           // param_idx
+
+    // Ableton mapping (from context menu on param right-click)
+    MapEffectParamToAbleton(
+        InspectorTab,
+        usize,
+        usize,
+        manifold_core::ableton_mapping::AbletonMacroAddress,
+    ), // tab, fx_idx, param_idx, address
+    MapGenParamToAbleton(
+        usize,
+        manifold_core::ableton_mapping::AbletonMacroAddress,
+    ), // param_idx, address
+    UnmapEffectParamAbleton(InspectorTab, usize, usize), // tab, fx_idx, param_idx
+    UnmapGenParamAbleton(usize),                         // param_idx
 
     // Reset macro from context menu (distinct from MacroRightClick to avoid re-triggering dropdown)
     MacroReset(usize), // macro_idx — reset to 0 from context menu

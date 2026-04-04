@@ -119,6 +119,12 @@ pub struct UIRoot {
     /// regardless of cursor position — prevents trim/move events from being
     /// lost when the cursor moves outside the tracks rect.
     overlay_drag_active: bool,
+
+    /// Cached Ableton session for right-click dropdown population.
+    pub ableton_session:
+        Option<std::sync::Arc<manifold_playback::ableton_bridge::AbletonSession>>,
+    /// Parallel map: dropdown item index → Ableton macro address (None for disabled headers).
+    ableton_dropdown_targets: Vec<Option<manifold_core::ableton_mapping::AbletonMacroAddress>>,
 }
 
 impl UIRoot {
@@ -161,6 +167,8 @@ impl UIRoot {
             split_handle_id: -1,
             inspector_handle_id: -1,
             overlay_drag_active: false,
+            ableton_session: None,
+            ableton_dropdown_targets: Vec::new(),
         }
     }
 
@@ -965,7 +973,7 @@ impl UIRoot {
             }
             PanelAction::EffectParamLabelRightClick(fx_idx, param_idx) => {
                 let tab = self.inspector.last_effect_tab();
-                let mut items = Vec::with_capacity(manifold_core::MACRO_COUNT);
+                let mut items = Vec::with_capacity(manifold_core::MACRO_COUNT + 8);
                 for i in 0..manifold_core::MACRO_COUNT {
                     let label = {
                         let slot = &self.macro_labels[i];
@@ -977,15 +985,17 @@ impl UIRoot {
                     };
                     items.push(DropdownItem::new(&label));
                 }
+                // Ableton section
+                self.build_ableton_dropdown_items(&mut items);
                 self.dropdown_context = Some(DropdownContext::EffectParamContext(
-                    tab, *fx_idx, *param_idx, 0.0, // default_val unused for label right-click
+                    tab, *fx_idx, *param_idx, 0.0,
                 ));
                 self.dropdown
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
             PanelAction::GenParamLabelRightClick(param_idx) => {
-                let mut items = Vec::with_capacity(manifold_core::MACRO_COUNT);
+                let mut items = Vec::with_capacity(manifold_core::MACRO_COUNT + 8);
                 for i in 0..manifold_core::MACRO_COUNT {
                     let label = {
                         let slot = &self.macro_labels[i];
@@ -997,8 +1007,10 @@ impl UIRoot {
                     };
                     items.push(DropdownItem::new(&label));
                 }
+                // Ableton section
+                self.build_ableton_dropdown_items(&mut items);
                 self.dropdown_context = Some(DropdownContext::GenParamContext(
-                    *param_idx, 0.0, // default_val unused for label right-click
+                    *param_idx, 0.0,
                 ));
                 self.dropdown
                     .open_context(items, right_click_pos, &mut self.tree);
@@ -1126,6 +1138,20 @@ impl UIRoot {
                     Some(PanelAction::MapEffectParamToMacro(
                         tab, fx_idx, param_idx, index,
                     ))
+                } else if let Some(Some(addr)) =
+                    self.ableton_dropdown_targets.get(index)
+                {
+                    Some(PanelAction::MapEffectParamToAbleton(
+                        tab,
+                        fx_idx,
+                        param_idx,
+                        addr.clone(),
+                    ))
+                } else if self.dropdown.item_label(index) == Some("Remove Ableton Mapping")
+                {
+                    Some(PanelAction::UnmapEffectParamAbleton(
+                        tab, fx_idx, param_idx,
+                    ))
                 } else {
                     None
                 }
@@ -1133,6 +1159,14 @@ impl UIRoot {
             DropdownContext::GenParamContext(param_idx, _default_val) => {
                 if index < manifold_core::MACRO_COUNT {
                     Some(PanelAction::MapGenParamToMacro(param_idx, index))
+                } else if let Some(Some(addr)) =
+                    self.ableton_dropdown_targets.get(index)
+                {
+                    Some(PanelAction::MapGenParamToAbleton(param_idx, addr.clone()))
+                } else if self.dropdown.item_label(index)
+                    == Some("Remove Ableton Mapping")
+                {
+                    Some(PanelAction::UnmapGenParamAbleton(param_idx))
                 } else {
                     None
                 }
@@ -1165,6 +1199,84 @@ impl UIRoot {
                 Some(PanelAction::SetLedExitIndex(exit_index))
             }
         }
+    }
+
+    /// Build Ableton dropdown items and populate `ableton_dropdown_targets`.
+    /// Called from `try_open_dropdown` for effect/gen param label right-clicks.
+    fn build_ableton_dropdown_items(&mut self, items: &mut Vec<DropdownItem>) {
+        use manifold_core::ableton_mapping::{AbletonDeviceIdentity, AbletonMacroAddress};
+
+        // Reset targets — indexed parallel to `items`, starting at MACRO_COUNT
+        self.ableton_dropdown_targets.clear();
+        // Fill None entries for the macro items that precede the Ableton section
+        self.ableton_dropdown_targets
+            .resize(items.len(), None);
+
+        // Separator before Ableton section
+        if let Some(last) = items.last_mut() {
+            last.separator_after = true;
+        }
+
+        if let Some(session) = &self.ableton_session {
+            if session.connected && !session.tracks.is_empty() {
+                for track in &session.tracks {
+                    let has_macros = track
+                        .devices
+                        .iter()
+                        .any(|d| !d.macros.is_empty());
+                    if !has_macros {
+                        continue;
+                    }
+
+                    // Track header (disabled)
+                    items.push(DropdownItem::disabled(&format!(
+                        "{}:",
+                        track.name
+                    )));
+                    self.ableton_dropdown_targets.push(None);
+
+                    for device in &track.devices {
+                        if device.macros.is_empty() {
+                            continue;
+                        }
+                        for mac in &device.macros {
+                            let label =
+                                format!("  {} > {}", device.name, mac.name);
+                            items.push(DropdownItem::new(&label));
+                            self.ableton_dropdown_targets.push(Some(
+                                AbletonMacroAddress {
+                                    track_id: track.track_id,
+                                    device_id: device.device_id,
+                                    param_id: mac.param_id,
+                                    device_identity: AbletonDeviceIdentity {
+                                        device_class_name: device
+                                            .class_name
+                                            .clone(),
+                                    },
+                                    track_name: track.name.clone(),
+                                    device_name: device.name.clone(),
+                                    macro_name: mac.name.clone(),
+                                },
+                            ));
+                        }
+                    }
+
+                    // Separator after each track
+                    if let Some(last) = items.last_mut() {
+                        last.separator_after = true;
+                    }
+                }
+            } else {
+                items.push(DropdownItem::disabled("Ableton not connected"));
+                self.ableton_dropdown_targets.push(None);
+            }
+        } else {
+            items.push(DropdownItem::disabled("Ableton not connected"));
+            self.ableton_dropdown_targets.push(None);
+        }
+
+        // TODO: "Remove Ableton Mapping" item when already mapped
+        // (requires checking the project — deferred to Phase 5 label work)
     }
 
     /// Convert a color swatch selection into the appropriate PanelAction.

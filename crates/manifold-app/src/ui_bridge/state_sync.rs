@@ -243,6 +243,11 @@ pub fn push_state(
         ui.midi_device_names
             .clone_from(&content_state.midi_device_names);
 
+        // Cache Ableton session for parameter mapping dropdown
+        if let Some(session) = &content_state.ableton_session {
+            ui.ableton_session = Some(std::sync::Arc::clone(session));
+        }
+
         // Sync source status — driven by content_state from transport controller
         // Link
         if !content_state.link_enabled {
@@ -1078,6 +1083,20 @@ fn effects_to_configs(
                             )
                         }
                     };
+                    // Check for Ableton mapping on this param
+                    let ableton_label = fx
+                        .ableton_mappings
+                        .as_ref()
+                        .and_then(|mappings| mappings.iter().find(|m| m.param_index == pi))
+                        .map(|mapping| {
+                            use manifold_core::ableton_mapping::AbletonMappingStatus;
+                            let suffix = match mapping.status {
+                                AbletonMappingStatus::Active => "[ABL]",
+                                AbletonMappingStatus::Dormant => "[ABL-]",
+                                AbletonMappingStatus::Ambiguous => "[ABL?]",
+                            };
+                            format!("{} {suffix}", mapping.address.macro_name)
+                        });
                     EffectParamInfo {
                         name: pd.name.clone(),
                         min: pd.min,
@@ -1086,6 +1105,7 @@ fn effects_to_configs(
                         whole_numbers: pd.whole_numbers,
                         value_labels: pd.value_labels.clone(),
                         osc_address,
+                        ableton_label,
                     }
                 })
                 .collect();
@@ -1249,6 +1269,19 @@ fn gen_params_to_config(
                     layer_id,
                     pi,
                 );
+            let ableton_label = gp
+                .ableton_mappings
+                .as_ref()
+                .and_then(|mappings| mappings.iter().find(|m| m.param_index == pi))
+                .map(|mapping| {
+                    use manifold_core::ableton_mapping::AbletonMappingStatus;
+                    let suffix = match mapping.status {
+                        AbletonMappingStatus::Active => "[ABL]",
+                        AbletonMappingStatus::Dormant => "[ABL-]",
+                        AbletonMappingStatus::Ambiguous => "[ABL?]",
+                    };
+                    format!("{} {suffix}", mapping.address.macro_name)
+                });
             GenParamInfo {
                 name: pd.name.clone(),
                 min: pd.min,
@@ -1258,6 +1291,7 @@ fn gen_params_to_config(
                 is_toggle: pd.is_toggle,
                 value_labels: pd.value_labels.clone(),
                 osc_address,
+                ableton_label,
             }
         })
         .collect();

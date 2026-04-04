@@ -42,6 +42,9 @@ pub struct EffectParamInfo {
     /// When present, clicking the param label copies this address to clipboard.
     /// Unity: UIElementBuilder.CopyToClipboardLabel.
     pub osc_address: Option<String>,
+    /// When set, overrides the slider label with an Ableton mapping indicator.
+    /// e.g. "Filter [ABL]", "Filter [ABL-]", "Filter [ABL?]"
+    pub ableton_label: Option<String>,
 }
 
 /// Configuration for creating an effect card.
@@ -667,13 +670,17 @@ impl EffectCardPanel {
                 info.value_labels.as_deref(),
             );
 
-            // Param slider
+            // Param slider — use Ableton label override when mapped
+            let label = info
+                .ableton_label
+                .as_deref()
+                .unwrap_or(&info.name);
             let slider_rect = Rect::new(x + PADDING, cy, slider_w, ROW_HEIGHT);
             self.slider_ids[i] = Some(BitmapSlider::build(
                 tree,
                 parent,
                 slider_rect,
-                Some(&info.name),
+                Some(label),
                 norm,
                 &val_text,
                 &SliderColors::default_slider(),
@@ -681,9 +688,8 @@ impl EffectCardPanel {
                 crate::slider::DEFAULT_LABEL_WIDTH,
             ));
 
-            // Make label interactive for click-to-copy OSC address
-            if self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some()
-                && let Some(ids) = &self.slider_ids[i]
+            // Make label interactive for click-to-copy OSC address + Ableton mapping
+            if let Some(ids) = &self.slider_ids[i]
                 && ids.label >= 0
             {
                 tree.set_flag(ids.label as u32, UIFlags::INTERACTIVE);
@@ -1567,6 +1573,7 @@ mod tests {
                     whole_numbers: true,
                     value_labels: None,
                     osc_address: None,
+                    ableton_label: None,
                 },
                 EffectParamInfo {
                     name: "Strength".into(),
@@ -1576,6 +1583,7 @@ mod tests {
                     whole_numbers: false,
                     value_labels: None,
                     osc_address: None,
+                    ableton_label: None,
                 },
             ],
             has_drv: false,

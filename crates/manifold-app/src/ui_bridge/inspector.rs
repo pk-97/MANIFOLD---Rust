@@ -2557,6 +2557,125 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
 
+        // ── Ableton mapping ────────────────────────────────────────
+        PanelAction::MapEffectParamToAbleton(tab, fx_idx, param_idx, address) => {
+            use manifold_core::ableton_mapping::AbletonMappingTarget;
+            let tab = *tab;
+            let fx_idx = *fx_idx;
+            let param_idx = *param_idx;
+            let address = address.clone();
+
+            let (effects_ref, _) =
+                resolve_effects_read(tab, project, active_layer, selection);
+            if let Some(effects) = effects_ref
+                && let Some(fx) = effects.get(fx_idx)
+            {
+                let effect_type = fx.effect_type().clone();
+                let target = match tab {
+                    InspectorTab::Master => AbletonMappingTarget::MasterEffect {
+                        effect_type,
+                        param_index: param_idx,
+                    },
+                    InspectorTab::Layer | InspectorTab::Clip => {
+                        let layer_id = active_layer.clone().unwrap_or_else(|| {
+                            project
+                                .timeline
+                                .layers
+                                .first()
+                                .map(|l| l.layer_id.clone())
+                                .unwrap_or_default()
+                        });
+                        AbletonMappingTarget::LayerEffect {
+                            layer_id,
+                            effect_type,
+                            param_index: param_idx,
+                        }
+                    }
+                };
+                ContentCommand::send(
+                    content_tx,
+                    ContentCommand::AbletonMapParam { target, address },
+                );
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::MapGenParamToAbleton(param_idx, address) => {
+            use manifold_core::ableton_mapping::AbletonMappingTarget;
+            let param_idx = *param_idx;
+            let address = address.clone();
+            let layer_idx = super::resolve_active_layer_index(active_layer, project);
+            if let Some(layer_idx) = layer_idx
+                && let Some(layer) = project.timeline.layers.get(layer_idx)
+            {
+                let target = AbletonMappingTarget::GenParam {
+                    layer_id: layer.layer_id.clone(),
+                    param_index: param_idx,
+                };
+                ContentCommand::send(
+                    content_tx,
+                    ContentCommand::AbletonMapParam { target, address },
+                );
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::UnmapEffectParamAbleton(tab, fx_idx, param_idx) => {
+            use manifold_core::ableton_mapping::AbletonMappingTarget;
+            let tab = *tab;
+            let fx_idx = *fx_idx;
+            let param_idx = *param_idx;
+            let (effects_ref, _) =
+                resolve_effects_read(tab, project, active_layer, selection);
+            if let Some(effects) = effects_ref
+                && let Some(fx) = effects.get(fx_idx)
+            {
+                let effect_type = fx.effect_type().clone();
+                let target = match tab {
+                    InspectorTab::Master => AbletonMappingTarget::MasterEffect {
+                        effect_type,
+                        param_index: param_idx,
+                    },
+                    InspectorTab::Layer | InspectorTab::Clip => {
+                        let layer_id = active_layer.clone().unwrap_or_else(|| {
+                            project
+                                .timeline
+                                .layers
+                                .first()
+                                .map(|l| l.layer_id.clone())
+                                .unwrap_or_default()
+                        });
+                        AbletonMappingTarget::LayerEffect {
+                            layer_id,
+                            effect_type,
+                            param_index: param_idx,
+                        }
+                    }
+                };
+                ContentCommand::send(
+                    content_tx,
+                    ContentCommand::AbletonUnmapParam { target },
+                );
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::UnmapGenParamAbleton(param_idx) => {
+            use manifold_core::ableton_mapping::AbletonMappingTarget;
+            let param_idx = *param_idx;
+            let layer_idx = super::resolve_active_layer_index(active_layer, project);
+            if let Some(layer_idx) = layer_idx
+                && let Some(layer) = project.timeline.layers.get(layer_idx)
+            {
+                let target = AbletonMappingTarget::GenParam {
+                    layer_id: layer.layer_id.clone(),
+                    param_index: param_idx,
+                };
+                ContentCommand::send(
+                    content_tx,
+                    ContentCommand::AbletonUnmapParam { target },
+                );
+            }
+            DispatchResult::handled()
+        }
+
         _ => DispatchResult::unhandled(),
     }
 }
