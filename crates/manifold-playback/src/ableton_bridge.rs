@@ -474,10 +474,6 @@ impl AbletonBridge {
                 }
             }
             AbletonMappingTarget::MacroSlot { slot_index } => {
-                eprintln!(
-                    "[AbletonBridge] MacroSlot write: slot={}, value={:.3}",
-                    slot_index, value
-                );
                 manifold_core::macro_bank::MacroBank::apply_macro(
                     project, *slot_index, value,
                 );
