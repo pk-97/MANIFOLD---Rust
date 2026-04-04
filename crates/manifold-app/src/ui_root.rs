@@ -175,7 +175,7 @@ pub struct UIRoot {
     pub ableton_session:
         Option<std::sync::Arc<manifold_playback::ableton_bridge::AbletonSession>>,
     /// Two-column Ableton macro picker popup (replaces flat dropdown Ableton section).
-    ableton_picker: manifold_ui::panels::ableton_picker::AbletonPickerPopup,
+    pub ableton_picker: manifold_ui::panels::ableton_picker::AbletonPickerPopup,
     /// Which param triggered the picker — resolved when picker returns Selected.
     ableton_picker_context: Option<manifold_ui::panels::ableton_picker::AbletonPickerContext>,
 }
@@ -663,9 +663,11 @@ impl UIRoot {
             {
                 match dd_action {
                     DropdownAction::Selected(index) => {
+                        eprintln!("[Dropdown] Selected index={index} label={:?}", self.dropdown.item_label(index));
                         if let Some(ctx) = self.dropdown_context.take()
                             && let Some(action) = self.dropdown_to_action(ctx, index)
                         {
+                            eprintln!("[Dropdown] → action={:?}", std::mem::discriminant(&action));
                             actions.push(action);
                         }
                     }
@@ -859,8 +861,8 @@ impl UIRoot {
             filtered.push(action);
         }
 
-        // If popup was just opened, flag for rebuild so nodes appear this frame
-        if !popup_open_before && self.browser_popup.is_open() {
+        // If a popup was just opened, flag for rebuild so nodes appear this frame.
+        if !popup_open_before && (self.browser_popup.is_open() || self.ableton_picker.is_open()) {
             self.overlay_dirty = true;
         }
 
@@ -1309,31 +1311,26 @@ impl UIRoot {
                     Some(PanelAction::MapEffectParamToMacro(
                         tab, fx_idx, param_idx, index,
                     ))
+                } else if index == manifold_core::MACRO_COUNT {
+                    // "Map to Ableton Macro…" (only reached if Ableton connected — item is
+                    // disabled otherwise and won't fire Selected).
+                    Some(PanelAction::OpenAbletonPickerForEffect(tab, fx_idx, param_idx))
+                } else if index == manifold_core::MACRO_COUNT + 1 {
+                    // "Remove Ableton Mapping" (only present when param is mapped)
+                    Some(PanelAction::UnmapEffectParamAbleton(tab, fx_idx, param_idx))
                 } else {
-                    match self.dropdown.item_label(index) {
-                        Some("Map to Ableton Macro…") => Some(
-                            PanelAction::OpenAbletonPickerForEffect(tab, fx_idx, param_idx),
-                        ),
-                        Some("Remove Ableton Mapping") => {
-                            Some(PanelAction::UnmapEffectParamAbleton(tab, fx_idx, param_idx))
-                        }
-                        _ => None,
-                    }
+                    None
                 }
             }
             DropdownContext::GenParamContext(param_idx, _default_val) => {
                 if index < manifold_core::MACRO_COUNT {
                     Some(PanelAction::MapGenParamToMacro(param_idx, index))
+                } else if index == manifold_core::MACRO_COUNT {
+                    Some(PanelAction::OpenAbletonPickerForGen(param_idx))
+                } else if index == manifold_core::MACRO_COUNT + 1 {
+                    Some(PanelAction::UnmapGenParamAbleton(param_idx))
                 } else {
-                    match self.dropdown.item_label(index) {
-                        Some("Map to Ableton Macro…") => {
-                            Some(PanelAction::OpenAbletonPickerForGen(param_idx))
-                        }
-                        Some("Remove Ableton Mapping") => {
-                            Some(PanelAction::UnmapGenParamAbleton(param_idx))
-                        }
-                        _ => None,
-                    }
+                    None
                 }
             }
             DropdownContext::MacroSlotContext(macro_idx) => {

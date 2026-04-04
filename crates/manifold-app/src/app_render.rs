@@ -1338,6 +1338,8 @@ impl Application {
                     self.ui_root.dropdown.first_node()
                 } else if self.ui_root.browser_popup.is_open() {
                     self.ui_root.browser_popup.first_node()
+                } else if self.ui_root.ableton_picker.is_open() {
+                    self.ui_root.ableton_picker.first_node()
                 } else {
                     usize::MAX
                 };
@@ -1350,6 +1352,9 @@ impl Application {
                 ui.render_overlay(&self.ui_root.tree, start);
             } else if self.ui_root.browser_popup.is_open() {
                 let start = self.ui_root.browser_popup.first_node();
+                ui.render_overlay(&self.ui_root.tree, start);
+            } else if self.ui_root.ableton_picker.is_open() {
+                let start = self.ui_root.ableton_picker.first_node();
                 ui.render_overlay(&self.ui_root.tree, start);
             }
 

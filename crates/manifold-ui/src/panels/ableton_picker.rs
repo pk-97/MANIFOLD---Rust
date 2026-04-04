@@ -155,6 +155,10 @@ impl AbletonPickerPopup {
         self.is_open
     }
 
+    pub fn first_node(&self) -> usize {
+        self.first_node
+    }
+
     pub fn set_screen_size(&mut self, w: f32, h: f32) {
         self.screen_w = w;
         self.screen_h = h;

@@ -330,11 +330,6 @@ impl AbletonBridge {
     ) {
         match packet {
             rosc::OscPacket::Message(msg) => {
-                eprintln!(
-                    "[AbletonBridge] Recv: {} ({} args)",
-                    msg.addr,
-                    msg.args.len()
-                );
                 queue.lock().messages.push(OscMessage {
                     address: msg.addr,
                     args: msg.args,
@@ -372,10 +367,6 @@ impl AbletonBridge {
 
         // Heartbeat
         if realtime - self.last_heartbeat >= HEARTBEAT_INTERVAL_SECS {
-            eprintln!(
-                "[AbletonBridge] Heartbeat → /live/song/get/num_tracks (connected={})",
-                self.connected
-            );
             self.send_osc("/live/song/get/num_tracks", &[]);
             self.last_heartbeat = realtime;
         }
@@ -493,7 +484,6 @@ impl AbletonBridge {
         if !self.connected {
             self.connected = true;
             self.session.connected = true;
-            eprintln!("[AbletonBridge] Ableton Live detected");
             self.start_discovery(realtime);
         }
 
@@ -523,13 +513,8 @@ impl AbletonBridge {
                 self.handle_param_max(msg, realtime);
             }
             "/live/error" => {
-                let err_str: String = msg
-                    .args
-                    .iter()
-                    .map(|a| format!("{a:?}"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                eprintln!("[AbletonBridge] Ableton error: {err_str}");
+                // Ableton reported an error — ignore silently
+                let _ = &msg.args;
             }
             _ => {}
         }
@@ -558,10 +543,6 @@ impl AbletonBridge {
 
     fn handle_track_count(&mut self, msg: &OscMessage, realtime: f64) {
         let count = msg.args.first().and_then(osc_arg_int).unwrap_or(0);
-        eprintln!(
-            "[AbletonBridge] Track count = {count}, state = {:?}",
-            std::mem::discriminant(&self.discovery_state)
-        );
 
         // Check if track count changed (re-discovery needed)
         if matches!(self.discovery_state, DiscoveryState::Idle | DiscoveryState::Complete)
@@ -581,7 +562,6 @@ impl AbletonBridge {
                 self.finish_discovery(Vec::new());
                 return;
             }
-            eprintln!("[AbletonBridge] Querying {count} track names in burst");
             self.discovery_state = DiscoveryState::QueryingTracks {
                 expected_count: count,
                 tracks: Vec::with_capacity(count as usize),
@@ -620,20 +600,12 @@ impl AbletonBridge {
 
         tracks.push((track_id, name.clone()));
         *next_track = track_id + 1;
-        eprintln!(
-            "[AbletonBridge] Track name {track_id}='{name}' ({}/{expected_count})",
-            tracks.len()
-        );
 
         *started = realtime;
         if tracks.len() as i32 >= expected_count {
             // All names received — sort by track_id and burst-query devices
             let mut track_list: Vec<(i32, String)> = tracks.clone();
             track_list.sort_by_key(|(id, _)| *id);
-            eprintln!(
-                "[AbletonBridge] All {} track names received — querying devices in burst",
-                track_list.len()
-            );
             // Send device name + class_name queries for all tracks
             for (tid, _) in &track_list {
                 send_osc_to(
@@ -831,12 +803,6 @@ impl AbletonBridge {
             }
         }
 
-        let rack_count = all_racks.len();
-        let track_count = final_tracks.len();
-        eprintln!(
-            "[AbletonBridge] All {track_count} tracks' devices received — {rack_count} rack devices"
-        );
-
         if all_racks.is_empty() {
             // No rack devices — discovery complete
             self.finish_discovery(final_tracks);
@@ -1005,11 +971,6 @@ impl AbletonBridge {
             return;
         };
         let final_tracks = tracks.clone();
-
-        eprintln!(
-            "[AbletonBridge] All rack params received — {} racks complete",
-            pending_racks.len()
-        );
         self.finish_discovery(final_tracks);
     }
 
@@ -1018,16 +979,6 @@ impl AbletonBridge {
         self.session.connected = true;
         self.session_version += 1;
         self.discovery_state = DiscoveryState::Complete;
-        eprintln!(
-            "[AbletonBridge] Discovery complete — {} tracks, {} rack devices",
-            self.session.tracks.len(),
-            self.session
-                .tracks
-                .iter()
-                .flat_map(|t| &t.devices)
-                .filter(|d| is_rack_device(&d.class_name))
-                .count()
-        );
     }
 
     // ── Structural validation ─────────────────────────────────────
