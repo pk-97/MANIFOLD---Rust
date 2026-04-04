@@ -493,6 +493,147 @@ impl ContentThread {
                 }
             }
 
+            // ── Ableton bridge ──────────────────────────���──────────
+            ContentCommand::AbletonConnect => {
+                self.ableton_bridge.connect();
+            }
+            ContentCommand::AbletonDisconnect => {
+                self.ableton_bridge.disconnect();
+            }
+            ContentCommand::AbletonMapParam { target, address } => {
+                use manifold_core::ableton_mapping::{
+                    AbletonMappingStatus, AbletonMappingTarget, AbletonParamMapping,
+                };
+                if let Some(p) = self.engine.project_mut() {
+                    let pi = match &target {
+                        AbletonMappingTarget::MasterEffect { param_index, .. }
+                        | AbletonMappingTarget::LayerEffect { param_index, .. }
+                        | AbletonMappingTarget::GenParam { param_index, .. } => *param_index,
+                    };
+                    let new_mapping = AbletonParamMapping {
+                        param_index: pi,
+                        address,
+                        range_min: 0.0,
+                        range_max: 1.0,
+                        last_value: 0.0,
+                        status: AbletonMappingStatus::Active,
+                    };
+                    match &target {
+                        AbletonMappingTarget::MasterEffect { effect_type, .. } => {
+                            if let Some(fx) = p
+                                .settings
+                                .master_effects
+                                .iter_mut()
+                                .find(|f| f.effect_type() == effect_type)
+                            {
+                                let m = fx.ableton_mappings.get_or_insert_with(Vec::new);
+                                m.retain(|x| x.param_index != pi);
+                                m.push(new_mapping);
+                            }
+                        }
+                        AbletonMappingTarget::LayerEffect {
+                            layer_id,
+                            effect_type,
+                            ..
+                        } => {
+                            if let Some((_, layer)) =
+                                p.timeline.find_layer_by_id_mut(layer_id.as_str())
+                                && let Some(effects) = &mut layer.effects
+                                && let Some(fx) = effects
+                                    .iter_mut()
+                                    .find(|f| f.effect_type() == effect_type)
+                            {
+                                let m = fx.ableton_mappings.get_or_insert_with(Vec::new);
+                                m.retain(|x| x.param_index != pi);
+                                m.push(new_mapping);
+                            }
+                        }
+                        AbletonMappingTarget::GenParam { layer_id, .. } => {
+                            if let Some((_, layer)) =
+                                p.timeline.find_layer_by_id_mut(layer_id.as_str())
+                                && let Some(gp) = layer.gen_params_mut()
+                            {
+                                let m = gp.ableton_mappings.get_or_insert_with(Vec::new);
+                                m.retain(|x| x.param_index != pi);
+                                m.push(new_mapping);
+                            }
+                        }
+                    }
+                    self.ableton_bridge.rebuild_listeners(p);
+                    p.settings.ableton_set_context =
+                        Some(self.ableton_bridge.build_set_context());
+                }
+                self.engine.mark_sync_dirty();
+            }
+            ContentCommand::AbletonUnmapParam { target } => {
+                use manifold_core::ableton_mapping::AbletonMappingTarget;
+                if let Some(p) = self.engine.project_mut() {
+                    let remove = |mappings: &mut Option<
+                        Vec<manifold_core::ableton_mapping::AbletonParamMapping>,
+                    >,
+                                  pi: usize| {
+                        if let Some(m) = mappings {
+                            m.retain(|x| x.param_index != pi);
+                            if m.is_empty() {
+                                *mappings = None;
+                            }
+                        }
+                    };
+                    match &target {
+                        AbletonMappingTarget::MasterEffect {
+                            effect_type,
+                            param_index,
+                        } => {
+                            if let Some(fx) = p
+                                .settings
+                                .master_effects
+                                .iter_mut()
+                                .find(|f| f.effect_type() == effect_type)
+                            {
+                                remove(&mut fx.ableton_mappings, *param_index);
+                            }
+                        }
+                        AbletonMappingTarget::LayerEffect {
+                            layer_id,
+                            effect_type,
+                            param_index,
+                        } => {
+                            if let Some((_, layer)) =
+                                p.timeline.find_layer_by_id_mut(layer_id.as_str())
+                                && let Some(effects) = &mut layer.effects
+                                && let Some(fx) = effects
+                                    .iter_mut()
+                                    .find(|f| f.effect_type() == effect_type)
+                            {
+                                remove(&mut fx.ableton_mappings, *param_index);
+                            }
+                        }
+                        AbletonMappingTarget::GenParam {
+                            layer_id,
+                            param_index,
+                        } => {
+                            if let Some((_, layer)) =
+                                p.timeline.find_layer_by_id_mut(layer_id.as_str())
+                                && let Some(gp) = layer.gen_params_mut()
+                            {
+                                remove(&mut gp.ableton_mappings, *param_index);
+                            }
+                        }
+                    }
+                    self.ableton_bridge.rebuild_listeners(p);
+                }
+                self.engine.mark_sync_dirty();
+            }
+            ContentCommand::AbletonRebind => {
+                if let Some(p) = self.engine.project_mut() {
+                    self.ableton_bridge.validate_mappings(p);
+                    self.ableton_bridge.rebuild_listeners(p);
+                    p.settings.ableton_set_context =
+                        Some(self.ableton_bridge.build_set_context());
+                }
+                self.engine.mark_sync_dirty();
+            }
+
             // ── Compositor ─────────────────────────────────────────
             ContentCommand::MarkCompositorDirty => {
                 self.engine.mark_compositor_dirty(Seconds::ZERO);

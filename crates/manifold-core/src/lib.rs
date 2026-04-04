@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod ableton_mapping;
 pub mod clip;
 pub mod color;
 pub mod effect_category_registry;

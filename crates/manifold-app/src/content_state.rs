@@ -103,6 +103,13 @@ pub struct ContentState {
     /// Set once when export finishes (success or failure).
     pub export_finished: Option<ExportFinishedEvent>,
 
+    // ── Ableton bridge ──────────────────────────────────────────
+    /// Ableton session data for UI dropdown population.
+    pub ableton_session:
+        Option<Arc<manifold_playback::ableton_bridge::AbletonSession>>,
+    /// Whether the Ableton bridge is currently connected.
+    pub ableton_connected: bool,
+
     // ── Project snapshot ──────────────────────────────────────────
     /// Sent when data_version changes so the UI thread can update its
     /// local_project. Only created on structural changes (editing commands,
@@ -278,6 +285,8 @@ impl Default for ContentState {
             export_progress: 0.0,
             export_status: String::new(),
             export_finished: None,
+            ableton_session: None,
+            ableton_connected: false,
             project_snapshot: None,
             modulation_snapshot: None,
         }

@@ -101,6 +101,8 @@ pub struct EffectInstance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drivers: Option<Vec<ParameterDriver>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_id: Option<EffectGroupId>,
 
     // Legacy flat param fields (V1.0.0 format)
@@ -126,6 +128,7 @@ impl EffectInstance {
             param_values: Vec::new(),
             base_param_values: None,
             drivers: None,
+            ableton_mappings: None,
             group_id: None,
             legacy_param0: None,
             legacy_param1: None,

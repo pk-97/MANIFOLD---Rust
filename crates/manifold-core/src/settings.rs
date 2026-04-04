@@ -77,6 +77,9 @@ pub struct ProjectSettings {
     #[serde(default)]
     pub macro_bank: MacroBank,
 
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ableton_set_context: Option<crate::ableton_mapping::AbletonSetContext>,
+
     #[serde(default = "default_neg_one_f")]
     pub inspector_width: f32,
     #[serde(default = "default_neg_one_f")]
@@ -234,6 +237,7 @@ impl Default for ProjectSettings {
             clock_authority: ClockAuthority::Internal,
             osc_send_port: 9001,
             macro_bank: MacroBank::default(),
+            ableton_set_context: None,
             inspector_width: -1.0,
             timeline_height_percent: -1.0,
             effect_browser_width: -1.0,

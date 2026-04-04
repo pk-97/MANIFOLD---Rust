@@ -18,6 +18,8 @@ pub struct GeneratorParamState {
     pub drivers: Option<Vec<ParameterDriver>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub envelopes: Option<Vec<ParamEnvelope>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
 
     // Legacy flat fields from V1.0.0 (before genParams nesting)
     #[serde(

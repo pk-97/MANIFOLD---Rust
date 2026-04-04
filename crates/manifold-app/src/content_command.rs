@@ -127,6 +127,23 @@ pub enum ContentCommand {
     /// Port of Unity: percussionImportController.ResetImportedPercussionAlignment().
     PercussionResetAlignment,
 
+    // ── Ableton bridge ─────────────────────────────────────────────
+    /// Connect to Ableton Live via AbletonOSC.
+    AbletonConnect,
+    /// Disconnect from Ableton Live.
+    AbletonDisconnect,
+    /// Map an Ableton macro to a MANIFOLD parameter.
+    AbletonMapParam {
+        target: manifold_core::ableton_mapping::AbletonMappingTarget,
+        address: manifold_core::ableton_mapping::AbletonMacroAddress,
+    },
+    /// Remove an Ableton mapping from a parameter.
+    AbletonUnmapParam {
+        target: manifold_core::ableton_mapping::AbletonMappingTarget,
+    },
+    /// Re-validate all Ableton mappings against current session.
+    AbletonRebind,
+
     // ── Compositor ────────────────────────────────────────────────
     MarkCompositorDirty,
 

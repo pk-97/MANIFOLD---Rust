@@ -1,3 +1,4 @@
+pub mod ableton_bridge;
 pub mod active_window;
 pub mod audio_decoder;
 pub mod audio_sync;

@@ -4,6 +4,7 @@
 //! The content thread owns all authoritative state: the engine (which owns the
 //! project), the editing service (undo/redo), audio sync, percussion, and the
 //! GPU content pipeline (generators + compositor).
+use std::sync::Arc;
 use crossbeam_channel::{Receiver, Sender};
 
 use manifold_core::math::BeatQuantizer;
@@ -75,6 +76,8 @@ pub struct ContentThread {
     /// Port of Unity's MasterEffectOscBridge + LayerOscBridge + LayerEffectOscBridge
     /// + GeneratorOscBridge as a single data-driven unit.
     pub osc_param_router: manifold_playback::osc_param_router::OscParamRouter,
+    /// Ableton Live OSC bridge — discovers session, pushes macro values.
+    pub ableton_bridge: manifold_playback::ableton_bridge::AbletonBridge,
 
     // ── Tempo recording (port of C# PlaybackController fields) ──
     /// Tempo recording/provenance — tracks external tempo for tempo automation.
@@ -765,6 +768,12 @@ impl ContentThread {
                 export_progress: 0.0,
                 export_status: String::new(),
                 export_finished: None,
+                ableton_session: if self.ableton_bridge.session_changed() {
+                    Some(Arc::new(self.ableton_bridge.session().clone()))
+                } else {
+                    None
+                },
+                ableton_connected: self.ableton_bridge.is_connected(),
                 project_snapshot: snapshot,
                 modulation_snapshot,
             };
@@ -854,6 +863,12 @@ impl ContentThread {
         // OSC parameter router — apply any pending param writes from OSC messages.
         if let Some(p) = self.engine.project_mut() {
             self.osc_param_router.apply(p);
+        }
+
+        // Ableton bridge — drain AbletonOSC replies and apply macro values.
+        self.ableton_bridge.update(self.time_since_start.0);
+        if let Some(p) = self.engine.project_mut() {
+            self.ableton_bridge.apply(p);
         }
 
         // OSC timecode sync — process pending timecode, manage transport.
