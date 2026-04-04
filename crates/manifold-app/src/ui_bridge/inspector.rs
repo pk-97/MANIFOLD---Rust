@@ -2701,13 +2701,14 @@ pub(super) fn dispatch_inspector(
         PanelAction::OpenAbletonPickerForMacro(_) => DispatchResult::handled(),
 
         // Ableton trim handles — update range_min/range_max on the mapping.
-        PanelAction::AbletonTrimChanged(tab, fx_idx, param_idx, min, max) => {
+        PanelAction::AbletonTrimChanged(fx_idx, param_idx, min, max) => {
+            let tab = ui.inspector.last_effect_tab();
             let param_idx = *param_idx;
             let min = *min;
             let max = *max;
             let fx_idx = *fx_idx;
             // Update local project
-            let effect_type = match *tab {
+            let effect_type = match tab {
                 InspectorTab::Master => {
                     let fx = project.settings.master_effects.get_mut(fx_idx);
                     if let Some(fx) = fx
@@ -2741,7 +2742,6 @@ pub(super) fn dispatch_inspector(
                 InspectorTab::Clip => None,
             };
             // Sync to content thread
-            let tab = *tab;
             let layer_id = active_layer.clone();
             if let Some(et) = effect_type {
                 ContentCommand::send(

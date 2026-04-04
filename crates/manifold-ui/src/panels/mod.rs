@@ -277,9 +277,9 @@ pub enum PanelAction {
     OpenAbletonPickerForMacro(usize),
 
     // Ableton trim handles (range_min / range_max adjustment)
-    AbletonTrimSnapshot(InspectorTab, usize, usize), // tab, fx_idx, param_idx
-    AbletonTrimChanged(InspectorTab, usize, usize, f32, f32), // tab, fx_idx, param_idx, min, max
-    AbletonTrimCommit(InspectorTab, usize, usize), // tab, fx_idx, param_idx
+    AbletonTrimSnapshot(usize, usize), // fx_idx, param_idx
+    AbletonTrimChanged(usize, usize, f32, f32), // fx_idx, param_idx, min, max
+    AbletonTrimCommit(usize, usize), // fx_idx, param_idx
     AbletonGenTrimSnapshot(usize), // param_idx
     AbletonGenTrimChanged(usize, f32, f32), // param_idx, min, max
     AbletonGenTrimCommit(usize), // param_idx

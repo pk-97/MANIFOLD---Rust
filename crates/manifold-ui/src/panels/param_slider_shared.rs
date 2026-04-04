@@ -195,6 +195,8 @@ pub(crate) struct ParamDragState {
     pub(crate) dragging_target_param: i32,
     pub(crate) dragging_range_param: i32,
     pub(crate) dragging_range_is_min: bool,
+    pub(crate) dragging_ableton_trim_param: i32,
+    pub(crate) dragging_ableton_trim_is_min: bool,
 }
 
 impl ParamDragState {
@@ -208,6 +210,8 @@ impl ParamDragState {
             dragging_target_param: -1,
             dragging_range_param: -1,
             dragging_range_is_min: false,
+            dragging_ableton_trim_param: -1,
+            dragging_ableton_trim_is_min: false,
         }
     }
 
@@ -217,6 +221,7 @@ impl ParamDragState {
             || self.dragging_trim_param >= 0
             || self.dragging_target_param >= 0
             || self.dragging_range_param >= 0
+            || self.dragging_ableton_trim_param >= 0
     }
 }
 

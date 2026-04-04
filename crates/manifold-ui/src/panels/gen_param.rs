@@ -1362,6 +1362,7 @@ mod tests {
                     value_labels: None,
                     osc_address: None,
                     ableton_label: None,
+                    ableton_range: None,
                 },
                 GenParamInfo {
                     name: "Invert".into(),
@@ -1373,6 +1374,7 @@ mod tests {
                     value_labels: None,
                     osc_address: None,
                     ableton_label: None,
+                    ableton_range: None,
                 },
                 GenParamInfo {
                     name: "Scale".into(),
@@ -1384,6 +1386,7 @@ mod tests {
                     value_labels: None,
                     osc_address: None,
                     ableton_label: None,
+                    ableton_range: None,
                 },
             ],
             string_params: vec![],
