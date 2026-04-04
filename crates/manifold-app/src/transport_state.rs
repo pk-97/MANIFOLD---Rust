@@ -5,7 +5,7 @@
 //! Throttled to TRANSPORT_UPDATE_INTERVAL (0.25s) except for per-frame items
 //! like time display.
 
-use manifold_core::types::{ClockAuthority, PlaybackState};
+use manifold_core::types::{ClockAuthority, OscSyncMode, PlaybackState};
 use manifold_ui::color;
 
 use crate::ui_root::UIRoot;
@@ -27,6 +27,7 @@ pub struct TransportStateCache {
     clk_receiving: bool,
     clk_position: String,
     sync_enabled: bool,
+    sync_mode: OscSyncMode,
     last_update_time: f32,
 }
 
@@ -44,6 +45,7 @@ impl TransportStateCache {
             clk_receiving: false,
             clk_position: String::new(),
             sync_enabled: false,
+            sync_mode: OscSyncMode::M4L,
             last_update_time: -1.0,
         }
     }
@@ -313,15 +315,16 @@ impl TransportStateCache {
         content_state: &crate::content_state::ContentState,
         _project: &manifold_core::project::Project,
     ) {
-        use manifold_core::types::OscSyncMode;
-        let enabled = match content_state.osc_sync_mode {
+        let mode = content_state.osc_sync_mode;
+        let enabled = match mode {
             OscSyncMode::AbletonOsc => content_state.ableton_transport_enabled,
             OscSyncMode::M4L => content_state.osc_sender_enabled,
         };
-        if enabled == self.sync_enabled {
+        if enabled == self.sync_enabled && mode == self.sync_mode {
             return;
         }
         self.sync_enabled = enabled;
+        self.sync_mode = mode;
 
         let tree = &mut ui.tree;
         if !enabled {
@@ -333,7 +336,7 @@ impl TransportStateCache {
                 color::TEXT_DIMMED_C32,
             );
         } else {
-            let status = match content_state.osc_sync_mode {
+            let status = match mode {
                 OscSyncMode::AbletonOsc => "ABL".to_string(),
                 OscSyncMode::M4L => format!(":{}", _project.settings.osc_send_port),
             };

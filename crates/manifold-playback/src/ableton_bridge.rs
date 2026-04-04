@@ -1532,7 +1532,14 @@ impl AbletonBridge {
     /// Subscribe to transport listeners on Ableton.
     /// Call when entering AbletonOSC sync mode while connected.
     pub fn enable_transport_sync(&mut self) {
-        if self.transport_enabled || self.send_socket.is_none() {
+        if self.transport_enabled {
+            log::info!("[AbletonBridge] Transport sync already enabled");
+            return;
+        }
+        if self.send_socket.is_none() {
+            log::warn!(
+                "[AbletonBridge] Cannot enable transport sync — no send socket"
+            );
             return;
         }
         self.transport_enabled = true;
