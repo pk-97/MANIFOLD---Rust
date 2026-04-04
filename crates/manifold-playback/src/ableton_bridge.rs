@@ -273,6 +273,10 @@ impl AbletonBridge {
         self.connected
     }
 
+    pub fn has_send_socket(&self) -> bool {
+        self.send_socket.is_some()
+    }
+
     pub fn session(&self) -> &AbletonSession {
         &self.session
     }
@@ -1653,13 +1657,14 @@ impl AbletonBridge {
             }
 
             if is_playing {
-                // Seek Ableton to current position, then play
-                let current_seconds = current_beat * seconds_per_beat;
+                // Play first, then seek — matches M4L device which does
+                // api.call("start_playing") then deferred api.set("current_song_time").
+                // current_song_time takes beats (not seconds).
+                self.send_osc("/live/song/start_playing", &[]);
                 self.send_osc(
                     "/live/song/set/current_song_time",
-                    &[rosc::OscType::Float(current_seconds)],
+                    &[rosc::OscType::Float(current_beat)],
                 );
-                self.send_osc("/live/song/start_playing", &[]);
                 arbiter.set_manifold_owns_at(Seconds(now));
             } else {
                 self.send_osc("/live/song/stop_playing", &[]);
@@ -1680,10 +1685,10 @@ impl AbletonBridge {
             let beat_delta = (current_beat - expected_beat).abs();
 
             if beat_delta > SEEK_THRESHOLD_BEATS {
-                let current_seconds = current_beat * seconds_per_beat;
+                // current_song_time takes beats (not seconds).
                 self.send_osc(
                     "/live/song/set/current_song_time",
-                    &[rosc::OscType::Float(current_seconds)],
+                    &[rosc::OscType::Float(current_beat)],
                 );
                 self.transport_last_sent_beat = current_beat;
                 self.transport_last_sent_realtime = now;
