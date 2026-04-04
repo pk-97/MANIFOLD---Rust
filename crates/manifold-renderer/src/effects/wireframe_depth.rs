@@ -141,7 +141,7 @@ struct OwnerState {
     mesh_coord_tex: RenderTarget,        // ARGBHalf → Rgba16Float
     semantic_tex: RenderTarget,          // ARGBHalf → Rgba16Float
     surface_cache_tex: RenderTarget,     // ARGBHalf → Rgba16Float
-    dnn_input_tex: RenderTarget,         // ARGB32 → Rgba8Unorm, COPY_SRC for readback
+    dnn_input_tex: RenderTarget,         // Rgba8Unorm (matches analysis_rt for blit copy)
     // DNN depth CPU path
     dnn_readback_pending: bool,
     dnn_has_depth: bool,
@@ -583,7 +583,7 @@ impl WireframeDepthFX {
             gpu.device,
             aw,
             ah,
-            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            manifold_gpu::GpuTextureFormat::Rgba8Unorm,
             &format!("WireframeDepthDnnInput_{owner_key}"),
         );
 
@@ -1103,7 +1103,7 @@ impl WireframeDepthFX {
         }
 
         // WireframeDepthFX.cs line 483-494: blit source → dnnInputTex, then readback
-        // Copy source → dnn_input_tex via blit (both Rgba16Float)
+        // Copy source → dnn_input_tex via blit (both Rgba8Unorm)
         let copy_aw = state.analysis_width;
         let copy_ah = state.analysis_height;
         Self::encode_copy(

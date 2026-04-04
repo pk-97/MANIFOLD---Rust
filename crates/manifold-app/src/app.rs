@@ -2221,10 +2221,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     // ── Shortcut dispatch via InputHandler ──
                     // Port of Unity InputHandler.HandleKeyboardInput().
                     // All viewport access goes through the TimelineInputHost trait.
-                    if !consumed {
+                    if !consumed && let Some(content_tx) = self.content_tx.as_ref() {
                         let mut host = crate::input_host::AppInputHost {
                             project: &mut self.local_project,
-                            content_tx: self.content_tx.as_ref().unwrap(),
+                            content_tx,
                             content_state: &self.content_state,
                             ui_root: &mut self.ui_root,
                             selection: &mut self.selection,

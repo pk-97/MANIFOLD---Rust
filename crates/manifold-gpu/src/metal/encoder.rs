@@ -1333,17 +1333,43 @@ impl GpuEncoder {
         self.cmd_buf().add_completed_handler(&block);
     }
 
-    /// Register a diagnostic completed handler that logs GPU errors.
-    /// The `label` identifies which command buffer errored in logs.
+    /// Register a diagnostic completed handler that logs GPU errors with
+    /// the Metal error code and description.
     pub fn add_completed_handler_with_status(&self, label: &str) {
         let label = label.to_string();
         let block =
             block::ConcreteBlock::new(move |buf: &metal::CommandBufferRef| {
                 let status = buf.status();
                 if status == metal::MTLCommandBufferStatus::Error {
+                    // Extract NSError via ObjC runtime — not exposed by metal-rs.
+                    let (code, desc) = unsafe {
+                        let err: *const objc::runtime::Object =
+                            objc::msg_send![buf, error];
+                        if err.is_null() {
+                            (-1i64, String::from("(nil)"))
+                        } else {
+                            let code: i64 = objc::msg_send![err, code];
+                            let ns_desc: *const objc::runtime::Object =
+                                objc::msg_send![err, localizedDescription];
+                            let desc = if ns_desc.is_null() {
+                                String::from("(no description)")
+                            } else {
+                                let cstr: *const std::ffi::c_char =
+                                    objc::msg_send![ns_desc, UTF8String];
+                                if cstr.is_null() {
+                                    String::from("(UTF8 nil)")
+                                } else {
+                                    std::ffi::CStr::from_ptr(cstr)
+                                        .to_string_lossy()
+                                        .into_owned()
+                                }
+                            };
+                            (code, desc)
+                        }
+                    };
                     log::error!(
-                        "[GPU] Command buffer '{}' failed with status Error",
-                        label,
+                        "[GPU] Command buffer '{}' error (code={}): {}",
+                        label, code, desc,
                     );
                 }
             });
