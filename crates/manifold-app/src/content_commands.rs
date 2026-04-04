@@ -416,6 +416,13 @@ impl ContentThread {
                         renderer.on_project_loaded(&project_clone);
                     }
                 }
+                // Rebuild Ableton listeners so trim range changes take effect
+                // immediately (WriteTarget caches range_min/range_max).
+                if self.ableton_bridge.is_connected()
+                    && let Some(p) = self.engine.project()
+                {
+                    self.ableton_bridge.rebuild_listeners(p);
+                }
             }
 
             // ── Save support ───────────────────────────────────────
