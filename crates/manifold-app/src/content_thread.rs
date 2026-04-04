@@ -830,8 +830,17 @@ impl ContentThread {
                 },
                 ableton_connected: self.ableton_bridge.is_connected(),
                 ableton_transport_enabled: self.ableton_bridge.is_transport_enabled(),
-                osc_sync_mode: self.engine.project()
-                    .map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode),
+                osc_sync_mode: {
+                    let mode = self.engine.project()
+                        .map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode);
+                    if self.ableton_bridge.is_transport_enabled() {
+                        eprintln!(
+                            "[SYNC STATE] mode={:?} transport_enabled=true connected={}",
+                            mode, self.ableton_bridge.is_connected(),
+                        );
+                    }
+                    mode
+                },
                 project_snapshot: snapshot,
                 modulation_snapshot,
             };
@@ -854,11 +863,12 @@ impl ContentThread {
         let osc_sync_mode = self.engine.project()
             .map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode);
         let authority = {
+            // AbletonOSC transport is a command channel, not a clock source —
+            // it must NOT claim authority. Only M4L timecode claims OSC authority
+            // (because it was an actual timing source). MIDI Clock handles timing.
             let osc_receiving = match osc_sync_mode {
                 OscSyncMode::M4L => self.osc_sync.is_receiving_timecode,
-                OscSyncMode::AbletonOsc => {
-                    self.ableton_bridge.is_transport_receiving(now.0)
-                }
+                OscSyncMode::AbletonOsc => false,
             };
             let auto = if self.transport_controller.midi_clock_sync.as_ref()
                 .is_some_and(|s| s.is_midi_clock_enabled() && s.is_receiving_clock())
@@ -965,7 +975,9 @@ impl ContentThread {
         }
 
         // AbletonOSC transport sync — transport commands only (play/stop).
-        // Position/timing sync is handled by MIDI Clock, not AbletonOSC.
+        // This is a command channel, NOT a clock source. It does not claim
+        // authority and bypasses the arbiter — MIDI Clock remains the timing
+        // authority. Think of it as a remote play/stop button.
         if osc_sync_mode == OscSyncMode::AbletonOsc
             && self.ableton_bridge.is_transport_receiving(now.0)
         {
@@ -973,19 +985,16 @@ impl ContentThread {
             if let Some(playing) =
                 self.ableton_bridge.transport_changed_externally(now.0)
             {
+                // Bypass arbiter — this is a transport command, not clock sync.
+                // Set suppress flag so OscPositionSender / late_update_transport
+                // doesn't echo it back.
+                self.sync_arbiter.suppress_next_transport = true;
                 if playing {
-                    self.sync_arbiter.play(
-                        ClockAuthority::Osc,
-                        authority,
-                        &mut self.engine,
-                    );
+                    self.engine.play();
+                    eprintln!("[SYNC] Ableton → MANIFOLD: PLAY");
                 } else {
-                    self.sync_arbiter.pause(
-                        ClockAuthority::Osc,
-                        authority,
-                        &mut self.engine,
-                        false,
-                    );
+                    self.engine.pause();
+                    eprintln!("[SYNC] Ableton → MANIFOLD: STOP");
                 }
             }
 
