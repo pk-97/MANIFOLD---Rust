@@ -255,6 +255,12 @@ impl ContentThread {
                     self.osc_param_router.rebuild(p, &mut self.osc_receiver);
                 }
                 self.osc_receiver.start_listening();
+                // Auto-connect Ableton bridge — silently stays disconnected if
+                // Ableton isn't running. Heartbeat will detect connection later.
+                self.ableton_bridge.connect();
+                if let Some(p) = self.engine.project() {
+                    self.ableton_bridge.rebuild_listeners(p);
+                }
             }
             // ── Settings ───────────────────────────────────────────
             ContentCommand::SetBpm(bpm) => {
