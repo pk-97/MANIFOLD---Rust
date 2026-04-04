@@ -1,3 +1,4 @@
+pub mod ableton;
 pub mod clip;
 pub mod drivers;
 pub mod effect_groups;

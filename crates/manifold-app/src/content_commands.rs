@@ -9,6 +9,43 @@ use manifold_playback::transport_controller::TransportController;
 use crate::content_command::ContentCommand;
 use crate::content_thread::ContentThread;
 
+/// Look up the existing Ableton mapping for a target (for undo snapshot).
+fn get_existing_mapping(
+    project: &manifold_core::project::Project,
+    target: &manifold_core::ableton_mapping::AbletonMappingTarget,
+    param_index: usize,
+) -> Option<manifold_core::ableton_mapping::AbletonParamMapping> {
+    use manifold_core::ableton_mapping::AbletonMappingTarget;
+    match target {
+        AbletonMappingTarget::MasterEffect { effect_type, .. } => {
+            project.settings.master_effects.iter()
+                .find(|f| f.effect_type() == effect_type)
+                .and_then(|fx| fx.ableton_mappings.as_ref())
+                .and_then(|ms| ms.iter().find(|m| m.param_index == param_index))
+                .cloned()
+        }
+        AbletonMappingTarget::LayerEffect { layer_id, effect_type, .. } => {
+            project.timeline.find_layer_by_id(layer_id.as_str())
+                .and_then(|(_, l)| l.effects.as_ref())
+                .and_then(|es| es.iter().find(|f| f.effect_type() == effect_type))
+                .and_then(|fx| fx.ableton_mappings.as_ref())
+                .and_then(|ms| ms.iter().find(|m| m.param_index == param_index))
+                .cloned()
+        }
+        AbletonMappingTarget::GenParam { layer_id, .. } => {
+            project.timeline.find_layer_by_id(layer_id.as_str())
+                .and_then(|(_, l)| l.gen_params())
+                .and_then(|gp| gp.ableton_mappings.as_ref())
+                .and_then(|ms| ms.iter().find(|m| m.param_index == param_index))
+                .cloned()
+        }
+        AbletonMappingTarget::MacroSlot { slot_index } => {
+            project.settings.macro_bank.slots.get(*slot_index)
+                .and_then(|s| s.ableton_mapping.clone())
+        }
+    }
+}
+
 impl ContentThread {
     /// Handle a single command. Returns true if Shutdown.
     pub(crate) fn handle_command(&mut self, cmd: ContentCommand) -> bool {
@@ -109,6 +146,7 @@ impl ContentThread {
                 // Rebuild OSC routes — command may have added/removed layers or effects.
                 if let Some(p) = self.engine.project() {
                     self.osc_param_router.rebuild(p, &mut self.osc_receiver);
+                    self.ableton_bridge.rebuild_listeners(p);
                 }
             }
             ContentCommand::ExecuteBatch(cmds, desc) => {
@@ -155,6 +193,7 @@ impl ContentThread {
                 }
                 if let Some(p) = self.engine.project() {
                     self.osc_param_router.rebuild(p, &mut self.osc_receiver);
+                    self.ableton_bridge.rebuild_listeners(p);
                 }
             }
             ContentCommand::Redo => {
@@ -190,6 +229,7 @@ impl ContentThread {
                 }
                 if let Some(p) = self.engine.project() {
                     self.osc_param_router.rebuild(p, &mut self.osc_receiver);
+                    self.ableton_bridge.rebuild_listeners(p);
                 }
             }
             ContentCommand::SetProject => {
@@ -517,12 +557,24 @@ impl ContentThread {
                 use manifold_core::ableton_mapping::{
                     AbletonMappingStatus, AbletonMappingTarget, AbletonParamMapping,
                 };
+                use manifold_editing::commands::ableton::ChangeAbletonMappingCommand;
                 if let Some(p) = self.engine.project_mut() {
                     let pi = match &target {
                         AbletonMappingTarget::MasterEffect { param_index, .. }
                         | AbletonMappingTarget::LayerEffect { param_index, .. }
                         | AbletonMappingTarget::GenParam { param_index, .. } => *param_index,
                         AbletonMappingTarget::MacroSlot { slot_index } => *slot_index,
+                    };
+                    // Capture old state for undo
+                    let old_mapping = get_existing_mapping(p, &target, pi);
+                    let (old_label, new_label) = match &target {
+                        AbletonMappingTarget::MacroSlot { slot_index } => {
+                            let old = p.settings.macro_bank.slots.get(*slot_index)
+                                .map(|s| s.label.clone());
+                            let new = Some(address.macro_name.clone());
+                            (old, new)
+                        }
+                        _ => (None, None),
                     };
                     let new_mapping = AbletonParamMapping {
                         param_index: pi,
@@ -532,131 +584,33 @@ impl ContentThread {
                         last_value: 0.0,
                         status: AbletonMappingStatus::Active,
                     };
-                    match &target {
-                        AbletonMappingTarget::MacroSlot { slot_index } => {
-                            if let Some(slot) =
-                                p.settings.macro_bank.slots.get_mut(*slot_index)
-                            {
-                                // Rename macro slot to match the Ableton macro name.
-                                slot.label = new_mapping.address.macro_name.clone();
-                                slot.ableton_mapping = Some(new_mapping);
-                            }
-                        }
-                        AbletonMappingTarget::MasterEffect { effect_type, .. } => {
-                            if let Some(fx) = p
-                                .settings
-                                .master_effects
-                                .iter_mut()
-                                .find(|f| f.effect_type() == effect_type)
-                            {
-                                let m = fx.ableton_mappings.get_or_insert_with(Vec::new);
-                                m.retain(|x| x.param_index != pi);
-                                m.push(new_mapping);
-                            }
-                        }
-                        AbletonMappingTarget::LayerEffect {
-                            layer_id,
-                            effect_type,
-                            ..
-                        } => {
-                            if let Some((_, layer)) =
-                                p.timeline.find_layer_by_id_mut(layer_id.as_str())
-                                && let Some(effects) = &mut layer.effects
-                                && let Some(fx) = effects
-                                    .iter_mut()
-                                    .find(|f| f.effect_type() == effect_type)
-                            {
-                                let m = fx.ableton_mappings.get_or_insert_with(Vec::new);
-                                m.retain(|x| x.param_index != pi);
-                                m.push(new_mapping);
-                            }
-                        }
-                        AbletonMappingTarget::GenParam { layer_id, .. } => {
-                            if let Some((_, layer)) =
-                                p.timeline.find_layer_by_id_mut(layer_id.as_str())
-                                && let Some(gp) = layer.gen_params_mut()
-                            {
-                                let m = gp.ableton_mappings.get_or_insert_with(Vec::new);
-                                m.retain(|x| x.param_index != pi);
-                                m.push(new_mapping);
-                            }
-                        }
-                    }
+                    let cmd = ChangeAbletonMappingCommand::map(
+                        target, new_mapping, old_mapping, old_label, new_label,
+                    );
+                    self.editing_service.execute(Box::new(cmd), p);
                     self.ableton_bridge.rebuild_listeners(p);
                     p.settings.ableton_set_context =
                         Some(self.ableton_bridge.build_set_context());
                 }
                 self.engine.mark_sync_dirty();
-                // Bump data_version so UI sees the new [ABL] label immediately.
-                self.editing_service.notify_external_change();
             }
             ContentCommand::AbletonUnmapParam { target } => {
                 use manifold_core::ableton_mapping::AbletonMappingTarget;
+                use manifold_editing::commands::ableton::ChangeAbletonMappingCommand;
                 if let Some(p) = self.engine.project_mut() {
-                    let remove = |mappings: &mut Option<
-                        Vec<manifold_core::ableton_mapping::AbletonParamMapping>,
-                    >,
-                                  pi: usize| {
-                        if let Some(m) = mappings {
-                            m.retain(|x| x.param_index != pi);
-                            if m.is_empty() {
-                                *mappings = None;
-                            }
-                        }
+                    let pi = match &target {
+                        AbletonMappingTarget::MasterEffect { param_index, .. }
+                        | AbletonMappingTarget::LayerEffect { param_index, .. }
+                        | AbletonMappingTarget::GenParam { param_index, .. } => *param_index,
+                        AbletonMappingTarget::MacroSlot { slot_index } => *slot_index,
                     };
-                    match &target {
-                        AbletonMappingTarget::MacroSlot { slot_index } => {
-                            if let Some(slot) =
-                                p.settings.macro_bank.slots.get_mut(*slot_index)
-                            {
-                                slot.ableton_mapping = None;
-                            }
-                        }
-                        AbletonMappingTarget::MasterEffect {
-                            effect_type,
-                            param_index,
-                        } => {
-                            if let Some(fx) = p
-                                .settings
-                                .master_effects
-                                .iter_mut()
-                                .find(|f| f.effect_type() == effect_type)
-                            {
-                                remove(&mut fx.ableton_mappings, *param_index);
-                            }
-                        }
-                        AbletonMappingTarget::LayerEffect {
-                            layer_id,
-                            effect_type,
-                            param_index,
-                        } => {
-                            if let Some((_, layer)) =
-                                p.timeline.find_layer_by_id_mut(layer_id.as_str())
-                                && let Some(effects) = &mut layer.effects
-                                && let Some(fx) = effects
-                                    .iter_mut()
-                                    .find(|f| f.effect_type() == effect_type)
-                            {
-                                remove(&mut fx.ableton_mappings, *param_index);
-                            }
-                        }
-                        AbletonMappingTarget::GenParam {
-                            layer_id,
-                            param_index,
-                        } => {
-                            if let Some((_, layer)) =
-                                p.timeline.find_layer_by_id_mut(layer_id.as_str())
-                                && let Some(gp) = layer.gen_params_mut()
-                            {
-                                remove(&mut gp.ableton_mappings, *param_index);
-                            }
-                        }
+                    if let Some(old) = get_existing_mapping(p, &target, pi) {
+                        let cmd = ChangeAbletonMappingCommand::unmap(target, old);
+                        self.editing_service.execute(Box::new(cmd), p);
+                        self.ableton_bridge.rebuild_listeners(p);
                     }
-                    self.ableton_bridge.rebuild_listeners(p);
                 }
                 self.engine.mark_sync_dirty();
-                // Bump data_version so UI sees the removed label immediately.
-                self.editing_service.notify_external_change();
             }
             ContentCommand::AbletonRebind => {
                 if let Some(p) = self.engine.project_mut() {
