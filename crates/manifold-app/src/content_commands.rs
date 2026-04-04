@@ -530,6 +530,8 @@ impl ContentThread {
                             if let Some(slot) =
                                 p.settings.macro_bank.slots.get_mut(*slot_index)
                             {
+                                // Rename macro slot to match the Ableton macro name.
+                                slot.label = new_mapping.address.macro_name.clone();
                                 slot.ableton_mapping = Some(new_mapping);
                             }
                         }

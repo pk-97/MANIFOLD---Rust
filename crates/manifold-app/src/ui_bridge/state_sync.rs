@@ -548,7 +548,9 @@ pub fn push_state(
         .iter()
         .map(|s| s.value)
         .collect();
-    let macro_labels: Vec<String> = project
+    // Display labels include [ABL] suffix — used for slider display only.
+    // Raw slot.label is stored separately in ui.macro_labels for dropdown menus.
+    let macro_display_labels: Vec<String> = project
         .settings
         .macro_bank
         .slots
@@ -575,7 +577,7 @@ pub fn push_state(
         .collect();
     ui.inspector
         .macros_panel_mut()
-        .sync_values(tree, &macro_vals, &macro_labels);
+        .sync_values(tree, &macro_vals, &macro_display_labels);
     for (i, slot) in project.settings.macro_bank.slots.iter().enumerate() {
         if i < manifold_core::MACRO_COUNT {
             ui.macro_labels[i].clone_from(&slot.label);
