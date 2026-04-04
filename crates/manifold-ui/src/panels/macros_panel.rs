@@ -5,6 +5,9 @@
 
 use super::PanelAction;
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
+use super::param_slider_shared::{
+    TrimHandleIds, build_trim_handles_explicit, OVERLAY_INSET, TRIM_BAR_W,
+};
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderDragState};
@@ -36,6 +39,13 @@ pub struct MacrosPanel {
     first_node: usize,
     node_count: usize,
     copied_flash: CopyToClipboardLabelState,
+    /// Ableton trim handle node IDs per macro slot.
+    ableton_trim_ids: [Option<TrimHandleIds>; MACRO_COUNT],
+    /// Cached Ableton range per slot (for drag updates + build).
+    ableton_ranges: [Option<(f32, f32)>; MACRO_COUNT],
+    /// Which macro slot's Ableton trim bar is being dragged (-1 = none).
+    dragging_ableton_trim: i32,
+    dragging_ableton_trim_is_min: bool,
 }
 
 impl Default for MacrosPanel {
@@ -59,6 +69,10 @@ impl MacrosPanel {
             first_node: usize::MAX,
             node_count: 0,
             copied_flash: CopyToClipboardLabelState::default(),
+            ableton_trim_ids: std::array::from_fn(|_| None),
+            ableton_ranges: [None; MACRO_COUNT],
+            dragging_ableton_trim: -1,
+            dragging_ableton_trim_is_min: false,
         }
     }
 
@@ -72,6 +86,13 @@ impl MacrosPanel {
 
     pub fn first_node(&self) -> usize {
         self.first_node
+    }
+
+    /// Set Ableton trim ranges per macro slot (call before build or sync).
+    pub fn set_ableton_ranges(&mut self, ranges: &[Option<(f32, f32)>]) {
+        for (i, r) in ranges.iter().enumerate().take(MACRO_COUNT) {
+            self.ableton_ranges[i] = *r;
+        }
     }
     pub fn node_count(&self) -> usize {
         self.node_count
@@ -167,14 +188,47 @@ impl MacrosPanel {
             );
 
             self.sliders[i].set_ids(ids);
+
+            // Ableton trim handles (when macro has an Ableton mapping)
+            if let Some((amin, amax)) = self.ableton_ranges[i] {
+                self.ableton_trim_ids[i] = Some(build_trim_handles_explicit(
+                    tree,
+                    ids.track as i32,
+                    ids.track_rect,
+                    amin,
+                    amax,
+                    color::ABL_TRIM_BAR_C32,
+                    color::ABL_TRIM_BAR_HOVER_C32,
+                    color::ABL_TRIM_FILL_C32,
+                ));
+            } else {
+                self.ableton_trim_ids[i] = None;
+            }
+
             cy += ROW_HEIGHT + ROW_SPACING;
         }
 
         self.node_count = tree.count() - self.first_node;
     }
 
-    /// Handle press on a slider track. Returns Snapshot action if hit.
+    /// Handle press on a slider track or trim bar.
     pub fn handle_press(&mut self, node_id: u32, pos_x: f32) -> Vec<PanelAction> {
+        // Check Ableton trim bars first (higher z-order)
+        for (i, trim) in self.ableton_trim_ids.iter().enumerate() {
+            if let Some(t) = trim {
+                if node_id as i32 == t.min_bar_id {
+                    self.dragging_ableton_trim = i as i32;
+                    self.dragging_ableton_trim_is_min = true;
+                    return vec![PanelAction::AbletonMacroTrimSnapshot(i)];
+                }
+                if node_id as i32 == t.max_bar_id {
+                    self.dragging_ableton_trim = i as i32;
+                    self.dragging_ableton_trim_is_min = false;
+                    return vec![PanelAction::AbletonMacroTrimSnapshot(i)];
+                }
+            }
+        }
+        // Slider track drag
         for (i, s) in self.sliders.iter_mut().enumerate() {
             if let Some(val) = s.try_start_drag(node_id, pos_x) {
                 return vec![
@@ -188,6 +242,61 @@ impl MacrosPanel {
 
     /// Handle drag (pointer move while pressed).
     pub fn handle_drag(&mut self, pos_x: f32, tree: &mut UITree) -> Vec<PanelAction> {
+        // Ableton trim drag
+        if self.dragging_ableton_trim >= 0 {
+            let i = self.dragging_ableton_trim as usize;
+            if let Some((cur_min, cur_max)) = self.ableton_ranges[i]
+                && let Some(ids) = self.sliders[i].ids()
+            {
+                let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos_x);
+                let (new_min, new_max) = if self.dragging_ableton_trim_is_min {
+                    (norm.clamp(0.0, cur_max), cur_max)
+                } else {
+                    (cur_min, norm.clamp(cur_min, 1.0))
+                };
+                self.ableton_ranges[i] = Some((new_min, new_max));
+
+                if let Some(t) = &self.ableton_trim_ids[i] {
+                    let usable = ids.track_rect.width - OVERLAY_INSET * 2.0;
+                    let base_x = ids.track_rect.x + OVERLAY_INSET;
+                    let fill_x = base_x + new_min * usable;
+                    let fill_w = (new_max - new_min) * usable;
+                    let fill_h = ids.track_rect.height - OVERLAY_INSET * 2.0;
+                    tree.set_bounds(
+                        t.fill_id as u32,
+                        Rect::new(
+                            fill_x,
+                            ids.track_rect.y + OVERLAY_INSET,
+                            fill_w,
+                            fill_h,
+                        ),
+                    );
+                    tree.set_bounds(
+                        t.min_bar_id as u32,
+                        Rect::new(
+                            base_x + new_min * usable - TRIM_BAR_W * 0.5,
+                            ids.track_rect.y,
+                            TRIM_BAR_W,
+                            ids.track_rect.height,
+                        ),
+                    );
+                    tree.set_bounds(
+                        t.max_bar_id as u32,
+                        Rect::new(
+                            base_x + new_max * usable - TRIM_BAR_W * 0.5,
+                            ids.track_rect.y,
+                            TRIM_BAR_W,
+                            ids.track_rect.height,
+                        ),
+                    );
+                }
+
+                return vec![PanelAction::AbletonMacroTrimChanged(
+                    i, new_min, new_max,
+                )];
+            }
+        }
+        // Slider drag
         for (i, s) in self.sliders.iter_mut().enumerate() {
             if let Some(val) = s.apply_drag(pos_x, tree, &fmt_macro) {
                 return vec![PanelAction::MacroChanged(i, val)];
@@ -198,6 +307,11 @@ impl MacrosPanel {
 
     /// Handle pointer up — commit the drag.
     pub fn handle_release(&mut self) -> Vec<PanelAction> {
+        if self.dragging_ableton_trim >= 0 {
+            let i = self.dragging_ableton_trim as usize;
+            self.dragging_ableton_trim = -1;
+            return vec![PanelAction::AbletonMacroTrimCommit(i)];
+        }
         for (i, s) in self.sliders.iter_mut().enumerate() {
             if s.end_drag() {
                 return vec![PanelAction::MacroCommit(i)];

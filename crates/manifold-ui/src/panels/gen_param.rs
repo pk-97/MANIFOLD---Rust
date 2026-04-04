@@ -132,6 +132,7 @@ pub struct GenParamPanel {
     trim_ids: Vec<Option<TrimHandleIds>>,
     target_ids: Vec<Option<EnvelopeTargetIds>>,
     envelope_range_ids: Vec<Option<TrimHandleIds>>,
+    ableton_trim_ids: Vec<Option<TrimHandleIds>>,
 
     // String params (text fields below sliders)
     string_param_info: Vec<GenStringParamInfo>,
@@ -180,6 +181,7 @@ impl GenParamPanel {
             trim_ids: Vec::new(),
             target_ids: Vec::new(),
             envelope_range_ids: Vec::new(),
+            ableton_trim_ids: Vec::new(),
             string_param_info: Vec::new(),
             string_param_btn_ids: Vec::new(),
             osc_addresses: Vec::new(),
@@ -245,6 +247,8 @@ impl GenParamPanel {
         self.target_ids.resize_with(n, || None);
         self.envelope_range_ids = Vec::new();
         self.envelope_range_ids.resize_with(n, || None);
+        self.ableton_trim_ids = Vec::new();
+        self.ableton_trim_ids.resize_with(n, || None);
         self.param_cache = vec![f32::NAN; n];
         self.toggle_cache = vec![false; n];
         self.label_cache = vec![None; n];
@@ -599,6 +603,22 @@ impl GenParamPanel {
                                 i,
                             ));
                         }
+                    }
+
+                    // Ableton trim handles
+                    if let Some((amin, amax)) = self.param_info[i].ableton_range
+                        && let Some(ref slider) = self.slider_ids[i]
+                    {
+                        self.ableton_trim_ids[i] = Some(build_trim_handles_explicit(
+                            tree,
+                            slider.track as i32,
+                            slider.track_rect,
+                            amin,
+                            amax,
+                            color::ABL_TRIM_BAR_C32,
+                            color::ABL_TRIM_BAR_HOVER_C32,
+                            color::ABL_TRIM_FILL_C32,
+                        ));
                     }
 
                     // D/E buttons
@@ -1020,6 +1040,22 @@ impl GenParamPanel {
             }
         }
 
+        // Check Ableton trim bars
+        for (pi, trim) in self.ableton_trim_ids.iter().enumerate() {
+            if let Some(t) = trim {
+                if node_id as i32 == t.min_bar_id {
+                    self.drag.dragging_ableton_trim_param = pi as i32;
+                    self.drag.dragging_ableton_trim_is_min = true;
+                    return vec![PanelAction::AbletonGenTrimSnapshot(pi)];
+                }
+                if node_id as i32 == t.max_bar_id {
+                    self.drag.dragging_ableton_trim_param = pi as i32;
+                    self.drag.dragging_ableton_trim_is_min = false;
+                    return vec![PanelAction::AbletonGenTrimSnapshot(pi)];
+                }
+            }
+        }
+
         // Check ADSR slider tracks
         for (pi, env_cfg) in self.envelope_config_ids.iter().enumerate() {
             if let Some(c) = env_cfg {
@@ -1229,6 +1265,64 @@ impl GenParamPanel {
             }
         }
 
+        // Ableton trim bar drag
+        if self.drag.dragging_ableton_trim_param >= 0 {
+            let pi = self.drag.dragging_ableton_trim_param as usize;
+            if let Some(slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref())
+                && let Some((cur_min, cur_max)) = self.param_info[pi].ableton_range
+            {
+                let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
+                let (new_min, new_max) = if self.drag.dragging_ableton_trim_is_min {
+                    (norm.clamp(0.0, cur_max), cur_max)
+                } else {
+                    (cur_min, norm.clamp(cur_min, 1.0))
+                };
+                self.param_info[pi].ableton_range = Some((new_min, new_max));
+
+                if let Some(t) =
+                    self.ableton_trim_ids.get(pi).and_then(|t| t.as_ref())
+                {
+                    let usable = slider.track_rect.width - OVERLAY_INSET * 2.0;
+                    let base_x = slider.track_rect.x + OVERLAY_INSET;
+                    let fill_x = base_x + new_min * usable;
+                    let fill_w = (new_max - new_min) * usable;
+                    let fill_h =
+                        slider.track_rect.height - OVERLAY_INSET * 2.0;
+                    tree.set_bounds(
+                        t.fill_id as u32,
+                        Rect::new(
+                            fill_x,
+                            slider.track_rect.y + OVERLAY_INSET,
+                            fill_w,
+                            fill_h,
+                        ),
+                    );
+                    tree.set_bounds(
+                        t.min_bar_id as u32,
+                        Rect::new(
+                            base_x + new_min * usable - TRIM_BAR_W * 0.5,
+                            slider.track_rect.y,
+                            TRIM_BAR_W,
+                            slider.track_rect.height,
+                        ),
+                    );
+                    tree.set_bounds(
+                        t.max_bar_id as u32,
+                        Rect::new(
+                            base_x + new_max * usable - TRIM_BAR_W * 0.5,
+                            slider.track_rect.y,
+                            TRIM_BAR_W,
+                            slider.track_rect.height,
+                        ),
+                    );
+                }
+
+                return vec![PanelAction::AbletonGenTrimChanged(
+                    pi, new_min, new_max,
+                )];
+            }
+        }
+
         // ADSR drag
         if self.drag.dragging_env_param >= 0 {
             let pi = self.drag.dragging_env_param as usize;
@@ -1286,6 +1380,11 @@ impl GenParamPanel {
             let pi = self.drag.dragging_trim_param as usize;
             self.drag.dragging_trim_param = -1;
             return vec![PanelAction::GenTrimCommit(pi)];
+        }
+        if self.drag.dragging_ableton_trim_param >= 0 {
+            let pi = self.drag.dragging_ableton_trim_param as usize;
+            self.drag.dragging_ableton_trim_param = -1;
+            return vec![PanelAction::AbletonGenTrimCommit(pi)];
         }
         if self.drag.dragging_env_param >= 0 {
             let pi = self.drag.dragging_env_param as usize;

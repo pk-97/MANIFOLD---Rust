@@ -575,6 +575,17 @@ pub fn push_state(
             }
         })
         .collect();
+    // Set Ableton trim ranges before sync so build can use them.
+    let macro_abl_ranges: Vec<Option<(f32, f32)>> = project
+        .settings
+        .macro_bank
+        .slots
+        .iter()
+        .map(|slot| slot.ableton_mapping.as_ref().map(|m| (m.range_min, m.range_max)))
+        .collect();
+    ui.inspector
+        .macros_panel_mut()
+        .set_ableton_ranges(&macro_abl_ranges);
     ui.inspector
         .macros_panel_mut()
         .sync_values(tree, &macro_vals, &macro_display_labels);
