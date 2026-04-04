@@ -1,6 +1,8 @@
 use crate::effects::{EffectGroup, EffectInstance};
 use crate::macro_bank::MacroBank;
-use crate::types::{ClockAuthority, QuantizeMode, ResolutionPreset, TonemapCurve, UpscaleMode};
+use crate::types::{
+    ClockAuthority, OscSyncMode, QuantizeMode, ResolutionPreset, TonemapCurve, UpscaleMode,
+};
 use crate::units::{Beats, Bpm};
 use serde::{Deserialize, Serialize};
 
@@ -73,6 +75,8 @@ pub struct ProjectSettings {
     pub clock_authority: ClockAuthority,
     #[serde(default = "default_9001")]
     pub osc_send_port: i32,
+    #[serde(default)]
+    pub osc_sync_mode: OscSyncMode,
 
     #[serde(default)]
     pub macro_bank: MacroBank,
@@ -236,6 +240,7 @@ impl Default for ProjectSettings {
             midi_clock_source_name: None,
             clock_authority: ClockAuthority::Internal,
             osc_send_port: 9001,
+            osc_sync_mode: OscSyncMode::M4L,
             macro_bank: MacroBank::default(),
             ableton_set_context: None,
             inspector_width: -1.0,

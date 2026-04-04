@@ -549,6 +549,15 @@ impl ContentThread {
             // ── Ableton bridge ──────────────────────────���──────────
             ContentCommand::AbletonConnect => {
                 self.ableton_bridge.connect();
+                // Auto-enable transport sync if mode is AbletonOSC
+                if self.engine.project()
+                    .is_some_and(|p| {
+                        p.settings.osc_sync_mode
+                            == manifold_core::types::OscSyncMode::AbletonOsc
+                    })
+                {
+                    self.ableton_bridge.enable_transport_sync();
+                }
             }
             ContentCommand::AbletonDisconnect => {
                 self.ableton_bridge.disconnect();
@@ -620,6 +629,28 @@ impl ContentThread {
                         Some(self.ableton_bridge.build_set_context());
                 }
                 self.engine.mark_sync_dirty();
+            }
+            ContentCommand::ToggleOscSyncMode => {
+                use manifold_core::types::OscSyncMode;
+                if let Some(p) = self.engine.project_mut() {
+                    let new_mode = p.settings.osc_sync_mode.next();
+                    p.settings.osc_sync_mode = new_mode;
+                    log::info!(
+                        "[ContentThread] OSC sync mode: {}",
+                        new_mode.display_name()
+                    );
+                    match new_mode {
+                        OscSyncMode::AbletonOsc => {
+                            // Enable transport listeners if bridge is connected
+                            if self.ableton_bridge.is_connected() {
+                                self.ableton_bridge.enable_transport_sync();
+                            }
+                        }
+                        OscSyncMode::M4L => {
+                            self.ableton_bridge.disable_transport_sync();
+                        }
+                    }
+                }
             }
 
             // ── Compositor ─────────────────────────────────────────

@@ -217,6 +217,59 @@ impl<'de> Deserialize<'de> for ClockAuthority {
     }
 }
 
+// ─── OSC Sync Mode ───
+
+/// Selects which OSC transport sync path to use when `ClockAuthority::Osc` is active.
+/// - `M4L`: Legacy Max4Live MANIFOLD Sync device (timecode on port 9000/9001)
+/// - `AbletonOsc`: AbletonOSC remote script (listener-based on port 11000/11001)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum OscSyncMode {
+    #[default]
+    M4L = 0,
+    AbletonOsc = 1,
+}
+
+impl OscSyncMode {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::M4L => "M4L",
+            Self::AbletonOsc => "AbletonOSC",
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            Self::M4L => Self::AbletonOsc,
+            Self::AbletonOsc => Self::M4L,
+        }
+    }
+}
+
+impl Serialize for OscSyncMode {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_i32(*self as i32)
+    }
+}
+
+impl<'de> Deserialize<'de> for OscSyncMode {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(match &value {
+            serde_json::Value::Number(n) => match n.as_i64().unwrap_or(0) as i32 {
+                0 => OscSyncMode::M4L,
+                1 => OscSyncMode::AbletonOsc,
+                _ => OscSyncMode::M4L,
+            },
+            serde_json::Value::String(s) => match s.as_str() {
+                "M4L" => OscSyncMode::M4L,
+                "AbletonOsc" => OscSyncMode::AbletonOsc,
+                _ => OscSyncMode::M4L,
+            },
+            _ => OscSyncMode::M4L,
+        })
+    }
+}
+
 // ─── Quantize Mode ───
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -409,6 +462,7 @@ pub enum TempoPointSource {
     Link = 2,
     MidiClock = 3,
     Recorded = 4,
+    AbletonOsc = 5,
 }
 
 impl Serialize for TempoPointSource {
@@ -427,6 +481,7 @@ impl<'de> Deserialize<'de> for TempoPointSource {
                 2 => TempoPointSource::Link,
                 3 => TempoPointSource::MidiClock,
                 4 => TempoPointSource::Recorded,
+                5 => TempoPointSource::AbletonOsc,
                 _ => TempoPointSource::Unknown,
             },
             serde_json::Value::String(s) => match s.as_str() {
@@ -435,6 +490,7 @@ impl<'de> Deserialize<'de> for TempoPointSource {
                 "Link" => TempoPointSource::Link,
                 "MidiClock" => TempoPointSource::MidiClock,
                 "Recorded" => TempoPointSource::Recorded,
+                "AbletonOsc" => TempoPointSource::AbletonOsc,
                 _ => TempoPointSource::Unknown,
             },
             _ => TempoPointSource::Unknown,

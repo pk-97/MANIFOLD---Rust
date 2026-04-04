@@ -5,7 +5,7 @@
 //! PlaybackEngine or EditingService directly.
 
 use manifold_core::project::Project;
-use manifold_core::types::{ClockAuthority, LayerType};
+use manifold_core::types::{ClockAuthority, LayerType, OscSyncMode};
 use manifold_core::{Beats, Bpm, Seconds};
 use manifold_playback::stem_audio::STEM_COUNT;
 use std::sync::Arc;
@@ -109,6 +109,7 @@ pub struct ContentState {
         Option<Arc<manifold_playback::ableton_bridge::AbletonSession>>,
     /// Whether the Ableton bridge is currently connected.
     pub ableton_connected: bool,
+    pub osc_sync_mode: OscSyncMode,
 
     // ── Project snapshot ──────────────────────────────────────────
     /// Sent when data_version changes so the UI thread can update its
@@ -287,6 +288,7 @@ impl Default for ContentState {
             export_finished: None,
             ableton_session: None,
             ableton_connected: false,
+            osc_sync_mode: OscSyncMode::M4L,
             project_snapshot: None,
             modulation_snapshot: None,
         }

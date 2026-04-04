@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crossbeam_channel::{Receiver, Sender};
 
 use manifold_core::math::BeatQuantizer;
-use manifold_core::types::{ClockAuthority, PlaybackState, TempoPointSource};
+use manifold_core::types::{ClockAuthority, OscSyncMode, PlaybackState, TempoPointSource};
 use manifold_core::{Beats, Bpm, Seconds};
 use manifold_editing::service::EditingService;
 use manifold_playback::audio_sync::ImportedAudioSyncController;
@@ -410,9 +410,27 @@ impl ContentThread {
             };
             let tick_result = self.engine.tick(ctx);
 
-            // 4b. OscPositionSender (LateUpdate equivalent — after engine tick).
-            if self.transport_controller.osc_sender_enabled {
-                let bpm = self.engine.project().map_or(120.0_f32, |p| p.settings.bpm.0);
+            // 4b. Transport output (LateUpdate equivalent — after engine tick).
+            // In M4L mode: OscPositionSender sends /manifold/* to M4L device.
+            // In AbletonOSC mode: AbletonBridge sends /live/song/* to AbletonOSC.
+            let osc_sync_mode = self.engine.project()
+                .map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode);
+            if osc_sync_mode == OscSyncMode::AbletonOsc
+                && self.ableton_bridge.is_transport_enabled()
+            {
+                let bpm = self.engine.project()
+                    .map_or(120.0_f32, |p| p.settings.bpm.0);
+                let seconds_per_beat = if bpm > 0.0 { 60.0 / bpm } else { 0.5 };
+                self.ableton_bridge.late_update_transport(
+                    self.engine.is_playing(),
+                    self.engine.current_beat().as_f32(),
+                    seconds_per_beat,
+                    realtime,
+                    &mut self.sync_arbiter,
+                );
+            } else if self.transport_controller.osc_sender_enabled {
+                let bpm = self.engine.project()
+                    .map_or(120.0_f32, |p| p.settings.bpm.0);
                 let seconds_per_beat = if bpm > 0.0 { 60.0 / bpm } else { 0.5 };
                 self.osc_sender.late_update(
                     self.engine.is_playing(),
@@ -811,6 +829,8 @@ impl ContentThread {
                     None
                 },
                 ableton_connected: self.ableton_bridge.is_connected(),
+                osc_sync_mode: self.engine.project()
+                    .map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode),
                 project_snapshot: snapshot,
                 modulation_snapshot,
             };
@@ -830,12 +850,20 @@ impl ContentThread {
         // last frame). This ensures the SyncArbiter gates are consistent with
         // the authority — prevents one-frame mismatch where external_time_sync
         // or transport commands are incorrectly rejected.
+        let osc_sync_mode = self.engine.project()
+            .map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode);
         let authority = {
+            let osc_receiving = match osc_sync_mode {
+                OscSyncMode::M4L => self.osc_sync.is_receiving_timecode,
+                OscSyncMode::AbletonOsc => {
+                    self.ableton_bridge.is_transport_receiving(now.0)
+                }
+            };
             let auto = if self.transport_controller.midi_clock_sync.as_ref()
                 .is_some_and(|s| s.is_midi_clock_enabled() && s.is_receiving_clock())
             {
                 ClockAuthority::MidiClock
-            } else if self.osc_sync.is_receiving_timecode {
+            } else if osc_receiving {
                 ClockAuthority::Osc
             } else if self.transport_controller.link_sync.as_ref()
                 .is_some_and(|s| s.is_link_enabled() && s.has_active_peers())
@@ -923,8 +951,8 @@ impl ContentThread {
         };
         self.ableton_active_last_frame = ableton_active;
 
-        // OSC timecode sync — process pending timecode, manage transport.
-        {
+        // OSC timecode sync — M4L mode only.
+        if osc_sync_mode == OscSyncMode::M4L {
             let snap = SyncTargetSnapshot::from_engine(&self.engine);
             self.osc_sync.update(
                 now,
@@ -932,6 +960,89 @@ impl ContentThread {
                 &mut self.sync_arbiter,
                 &mut self.engine,
                 authority,
+            );
+        }
+
+        // AbletonOSC transport sync — process is_playing/position/tempo from bridge.
+        if osc_sync_mode == OscSyncMode::AbletonOsc
+            && self.ableton_bridge.is_transport_receiving(now.0)
+        {
+            // External time sync: suppress deltaTime advancement when OSC is authority.
+            self.sync_arbiter.set_external_time_sync(
+                ClockAuthority::Osc,
+                authority,
+                &mut self.engine,
+                true,
+            );
+
+            // Transport change detection (Ableton → MANIFOLD).
+            if let Some(playing) =
+                self.ableton_bridge.transport_changed_externally(now.0)
+            {
+                if playing {
+                    self.sync_arbiter.play(
+                        ClockAuthority::Osc,
+                        authority,
+                        &mut self.engine,
+                    );
+                } else {
+                    self.sync_arbiter.pause(
+                        ClockAuthority::Osc,
+                        authority,
+                        &mut self.engine,
+                        false,
+                    );
+                }
+            }
+
+            // Position sync — same delta logic as OscSyncController.
+            let osc_time = Seconds(self.ableton_bridge.ableton_song_time());
+            let current_time = self.engine.current_time();
+            let delta = (osc_time - current_time).abs();
+
+            if delta.0 > 0.001 {
+                if self.engine.is_playing() {
+                    if delta.0 < 0.5 {
+                        self.sync_arbiter.nudge_time(
+                            ClockAuthority::Osc,
+                            authority,
+                            &mut self.engine,
+                            osc_time,
+                        );
+                    } else {
+                        self.sync_arbiter.seek(
+                            ClockAuthority::Osc,
+                            authority,
+                            &mut self.engine,
+                            osc_time,
+                        );
+                    }
+                } else if delta.0 > 0.05 {
+                    self.sync_arbiter.seek(
+                        ClockAuthority::Osc,
+                        authority,
+                        &mut self.engine,
+                        osc_time,
+                    );
+                }
+            }
+
+            // Tempo feed.
+            let abl_tempo = self.ableton_bridge.ableton_tempo();
+            if abl_tempo > 0.0 {
+                self.engine.set_live_external_tempo(
+                    true,
+                    Bpm(abl_tempo),
+                    TempoPointSource::AbletonOsc,
+                );
+            }
+        } else if osc_sync_mode == OscSyncMode::AbletonOsc {
+            // Bridge not receiving — clear external time sync.
+            self.sync_arbiter.set_external_time_sync(
+                ClockAuthority::Osc,
+                authority,
+                &mut self.engine,
+                false,
             );
         }
     }
