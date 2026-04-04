@@ -332,25 +332,34 @@ pub fn push_state(
             );
         }
 
-        // OSC Sync output
-        if !content_state.osc_sender_enabled {
-            ui.transport.set_sync_state(
-                tree,
-                false,
-                color::STATUS_DOT_INACTIVE,
-                "Off",
-                color::TEXT_DIMMED_C32,
-            );
-        } else {
-            let port = project.settings.osc_send_port;
-            let status = format!(":{}", port);
-            ui.transport.set_sync_state(
-                tree,
-                true,
-                color::STATUS_DOT_GREEN,
-                &status,
-                color::TEXT_WHITE_C32,
-            );
+        // OSC Sync output — show AbletonOSC transport or legacy M4L sender state.
+        {
+            use manifold_core::types::OscSyncMode;
+            let sync_enabled = match content_state.osc_sync_mode {
+                OscSyncMode::AbletonOsc => content_state.ableton_transport_enabled,
+                OscSyncMode::M4L => content_state.osc_sender_enabled,
+            };
+            if !sync_enabled {
+                ui.transport.set_sync_state(
+                    tree,
+                    false,
+                    color::STATUS_DOT_INACTIVE,
+                    "Off",
+                    color::TEXT_DIMMED_C32,
+                );
+            } else {
+                let status = match content_state.osc_sync_mode {
+                    OscSyncMode::AbletonOsc => "ABL",
+                    OscSyncMode::M4L => "M4L",
+                };
+                ui.transport.set_sync_state(
+                    tree,
+                    true,
+                    color::STATUS_DOT_GREEN,
+                    status,
+                    color::TEXT_WHITE_C32,
+                );
+            }
         }
 
         // Record state — disabled when OSC is clock authority (Unity invariant)
