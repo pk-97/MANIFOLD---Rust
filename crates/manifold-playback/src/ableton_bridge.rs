@@ -886,13 +886,15 @@ impl AbletonBridge {
         if let Some(track) = tracks.iter_mut().find(|t| t.track_id == tid)
             && let Some(device) = track.devices.iter_mut().find(|d| d.device_id == did)
         {
-            // Ensure we have macro entries (limited to RACK_MACRO_COUNT)
-            for (i, name) in names.iter().take(RACK_MACRO_COUNT).enumerate() {
+            // Skip param 0 ("Device On") — rack macros are at indices 1-8.
+            for (i, name) in names.iter().skip(1).take(RACK_MACRO_COUNT).enumerate() {
+                let param_id = (i + 1) as i32; // 1-based index in Ableton
                 if i < device.macros.len() {
                     device.macros[i].name = name.clone();
+                    device.macros[i].param_id = param_id;
                 } else {
                     device.macros.push(AbletonMacro {
-                        param_id: i as i32,
+                        param_id,
                         name: name.clone(),
                         value: 0.0,
                         min: 0.0,
@@ -926,7 +928,8 @@ impl AbletonBridge {
         if let Some(track) = tracks.iter_mut().find(|t| t.track_id == tid)
             && let Some(device) = track.devices.iter_mut().find(|d| d.device_id == did)
         {
-            for (i, &min_val) in mins.iter().take(RACK_MACRO_COUNT).enumerate() {
+            // Skip param 0 ("Device On") — macros start at index 1.
+            for (i, &min_val) in mins.iter().skip(1).take(RACK_MACRO_COUNT).enumerate() {
                 if i < device.macros.len() {
                     device.macros[i].min = min_val;
                 }
@@ -957,7 +960,8 @@ impl AbletonBridge {
         if let Some(track) = tracks.iter_mut().find(|t| t.track_id == tid)
             && let Some(device) = track.devices.iter_mut().find(|d| d.device_id == did)
         {
-            for (i, &max_val) in maxs.iter().take(RACK_MACRO_COUNT).enumerate() {
+            // Skip param 0 ("Device On") — macros start at index 1.
+            for (i, &max_val) in maxs.iter().skip(1).take(RACK_MACRO_COUNT).enumerate() {
                 if i < device.macros.len() {
                     device.macros[i].max = max_val;
                 }
