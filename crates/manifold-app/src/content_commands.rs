@@ -631,25 +631,25 @@ impl ContentThread {
                 self.engine.mark_sync_dirty();
             }
             ContentCommand::ToggleOscSyncMode => {
-                use manifold_core::types::OscSyncMode;
+                // Toggle AbletonOSC transport sync on/off.
+                // Sets mode to AbletonOsc and enables/disables transport listeners.
                 if let Some(p) = self.engine.project_mut() {
-                    let new_mode = p.settings.osc_sync_mode.next();
-                    p.settings.osc_sync_mode = new_mode;
+                    p.settings.osc_sync_mode =
+                        manifold_core::types::OscSyncMode::AbletonOsc;
+                }
+                if self.ableton_bridge.is_transport_enabled() {
+                    self.ableton_bridge.disable_transport_sync();
                     log::info!(
-                        "[ContentThread] OSC sync mode: {}",
-                        new_mode.display_name()
+                        "[ContentThread] AbletonOSC transport sync disabled"
                     );
-                    match new_mode {
-                        OscSyncMode::AbletonOsc => {
-                            // Enable transport listeners if bridge is connected
-                            if self.ableton_bridge.is_connected() {
-                                self.ableton_bridge.enable_transport_sync();
-                            }
-                        }
-                        OscSyncMode::M4L => {
-                            self.ableton_bridge.disable_transport_sync();
-                        }
+                } else {
+                    if !self.ableton_bridge.is_connected() {
+                        self.ableton_bridge.connect();
                     }
+                    self.ableton_bridge.enable_transport_sync();
+                    log::info!(
+                        "[ContentThread] AbletonOSC transport sync enabled"
+                    );
                 }
             }
 

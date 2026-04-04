@@ -311,9 +311,13 @@ impl TransportStateCache {
         &mut self,
         ui: &mut UIRoot,
         content_state: &crate::content_state::ContentState,
-        project: &manifold_core::project::Project,
+        _project: &manifold_core::project::Project,
     ) {
-        let enabled = content_state.osc_sender_enabled;
+        use manifold_core::types::OscSyncMode;
+        let enabled = match content_state.osc_sync_mode {
+            OscSyncMode::AbletonOsc => content_state.ableton_transport_enabled,
+            OscSyncMode::M4L => content_state.osc_sender_enabled,
+        };
         if enabled == self.sync_enabled {
             return;
         }
@@ -329,8 +333,10 @@ impl TransportStateCache {
                 color::TEXT_DIMMED_C32,
             );
         } else {
-            let port = project.settings.osc_send_port;
-            let status = format!(":{}", port);
+            let status = match content_state.osc_sync_mode {
+                OscSyncMode::AbletonOsc => "ABL".to_string(),
+                OscSyncMode::M4L => format!(":{}", _project.settings.osc_send_port),
+            };
             ui.transport.set_sync_state(
                 tree,
                 true,

@@ -610,7 +610,7 @@ impl Application {
                     continue;
                 }
                 PanelAction::ToggleSyncOutput => {
-                    self.send_content_cmd(ContentCommand::ToggleSyncOutput);
+                    self.send_content_cmd(ContentCommand::ToggleOscSyncMode);
                     continue;
                 }
                 PanelAction::SetMidiClockDevice(index) => {

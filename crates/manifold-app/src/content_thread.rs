@@ -829,6 +829,7 @@ impl ContentThread {
                     None
                 },
                 ableton_connected: self.ableton_bridge.is_connected(),
+                ableton_transport_enabled: self.ableton_bridge.is_transport_enabled(),
                 osc_sync_mode: self.engine.project()
                     .map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode),
                 project_snapshot: snapshot,

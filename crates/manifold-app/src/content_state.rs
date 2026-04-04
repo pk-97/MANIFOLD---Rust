@@ -109,6 +109,7 @@ pub struct ContentState {
         Option<Arc<manifold_playback::ableton_bridge::AbletonSession>>,
     /// Whether the Ableton bridge is currently connected.
     pub ableton_connected: bool,
+    pub ableton_transport_enabled: bool,
     pub osc_sync_mode: OscSyncMode,
 
     // ── Project snapshot ──────────────────────────────────────────
@@ -288,6 +289,7 @@ impl Default for ContentState {
             export_finished: None,
             ableton_session: None,
             ableton_connected: false,
+            ableton_transport_enabled: false,
             osc_sync_mode: OscSyncMode::M4L,
             project_snapshot: None,
             modulation_snapshot: None,
