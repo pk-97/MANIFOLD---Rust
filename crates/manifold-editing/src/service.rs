@@ -144,6 +144,13 @@ impl EditingService {
         self.data_version
     }
 
+    /// Bump data_version for external mutations that bypass the undo system
+    /// (e.g. Ableton bridge mapping changes). This notifies the UI that the
+    /// project structure changed without creating an undo entry.
+    pub fn notify_external_change(&mut self) {
+        self.data_version += 1;
+    }
+
     // ─── Clip lookup ───
 
     pub fn find_clip_by_id<'a>(

@@ -570,8 +570,8 @@ impl ContentThread {
                         Some(self.ableton_bridge.build_set_context());
                 }
                 self.engine.mark_sync_dirty();
-                // Force project snapshot so UI sees the new [ABL] label immediately.
-                self.last_data_version = self.last_data_version.wrapping_sub(1);
+                // Bump data_version so UI sees the new [ABL] label immediately.
+                self.editing_service.notify_external_change();
             }
             ContentCommand::AbletonUnmapParam { target } => {
                 use manifold_core::ableton_mapping::AbletonMappingTarget;
@@ -631,8 +631,8 @@ impl ContentThread {
                     self.ableton_bridge.rebuild_listeners(p);
                 }
                 self.engine.mark_sync_dirty();
-                // Force project snapshot so UI sees the removed label immediately.
-                self.last_data_version = self.last_data_version.wrapping_sub(1);
+                // Bump data_version so UI sees the removed label immediately.
+                self.editing_service.notify_external_change();
             }
             ContentCommand::AbletonRebind => {
                 if let Some(p) = self.engine.project_mut() {

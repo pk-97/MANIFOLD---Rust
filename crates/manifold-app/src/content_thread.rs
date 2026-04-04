@@ -912,8 +912,8 @@ impl ContentThread {
                 self.ableton_bridge.validate_mappings(p);
                 self.ableton_bridge.rebuild_listeners(p);
             }
-            // Force project snapshot this frame regardless of data_version.
-            self.last_data_version = self.last_data_version.wrapping_sub(1);
+            // Bump data_version so UI sees updated [ABL] statuses.
+            self.editing_service.notify_external_change();
         }
 
         let ableton_active = if let Some(p) = self.engine.project_mut() {
