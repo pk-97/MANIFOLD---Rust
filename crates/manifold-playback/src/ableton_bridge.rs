@@ -102,7 +102,6 @@ struct AbletonPendingValue {
 #[derive(Default)]
 struct PendingTransportState {
     is_playing: Option<bool>,
-    song_time: Option<f64>,
     tempo: Option<f32>,
 }
 
@@ -223,8 +222,6 @@ pub struct AbletonBridge {
     ableton_is_playing: bool,
     /// Previous frame's is_playing — for edge detection.
     ableton_was_playing: bool,
-    /// Latest song time from Ableton (seconds).
-    ableton_song_time: f64,
     /// Latest tempo from Ableton.
     ableton_tempo: f32,
     /// Wall-clock time of last transport message from Ableton.
@@ -263,7 +260,6 @@ impl AbletonBridge {
             transport_enabled: false,
             ableton_is_playing: false,
             ableton_was_playing: false,
-            ableton_song_time: 0.0,
             ableton_tempo: 120.0,
             transport_last_received: 0.0,
             transport_last_was_playing: false,
@@ -393,7 +389,6 @@ impl AbletonBridge {
         self.transport_enabled = false;
         self.ableton_is_playing = false;
         self.ableton_was_playing = false;
-        self.ableton_song_time = 0.0;
         self.transport_last_received = 0.0;
         self.suppress_is_playing_until = 0.0;
         *self.pending_transport.lock() = PendingTransportState::default();
@@ -597,12 +592,6 @@ impl AbletonBridge {
                 "/live/song/get/is_playing" => {
                     if let Some(val) = msg.args.first().and_then(osc_arg_int) {
                         self.pending_transport.lock().is_playing = Some(val != 0);
-                    }
-                    return;
-                }
-                "/live/song/get/current_song_time" => {
-                    if let Some(val) = msg.args.first().and_then(osc_arg_float) {
-                        self.pending_transport.lock().song_time = Some(val as f64);
                     }
                     return;
                 }
@@ -1548,8 +1537,7 @@ impl AbletonBridge {
         // Seed initial state
         self.send_osc("/live/song/get/is_playing", &[]);
         self.send_osc("/live/song/get/tempo", &[]);
-        self.send_osc("/live/song/get/current_song_time", &[]);
-        log::info!("[AbletonBridge] Transport sync enabled");
+        log::info!("[AbletonBridge] Transport sync enabled (commands + tempo only, MIDI CLK handles timing)");
     }
 
     /// Unsubscribe transport listeners.
@@ -1587,10 +1575,6 @@ impl AbletonBridge {
         self.ableton_is_playing
     }
 
-    pub fn ableton_song_time(&self) -> f64 {
-        self.ableton_song_time
-    }
-
     pub fn ableton_tempo(&self) -> f32 {
         self.ableton_tempo
     }
@@ -1606,16 +1590,11 @@ impl AbletonBridge {
             let mut pt = self.pending_transport.lock();
             PendingTransportState {
                 is_playing: pt.is_playing.take(),
-                song_time: pt.song_time.take(),
                 tempo: pt.tempo.take(),
             }
         };
 
-        let had_data = pending.is_playing.is_some()
-            || pending.song_time.is_some()
-            || pending.tempo.is_some();
-
-        if had_data {
+        if pending.is_playing.is_some() || pending.tempo.is_some() {
             self.transport_last_received = realtime;
         }
 
@@ -1624,18 +1603,8 @@ impl AbletonBridge {
             self.ableton_is_playing = playing;
         }
 
-        if let Some(time) = pending.song_time {
-            self.ableton_song_time = time;
-        }
-
         if let Some(tempo) = pending.tempo {
             self.ableton_tempo = tempo;
-        }
-
-        // Poll position each frame while connected and transport is enabled.
-        // This gives us sub-beat resolution between beat listener events.
-        if self.connected {
-            self.send_osc("/live/song/get/current_song_time", &[]);
         }
     }
 

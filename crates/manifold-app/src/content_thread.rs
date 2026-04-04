@@ -964,18 +964,11 @@ impl ContentThread {
             );
         }
 
-        // AbletonOSC transport sync — process is_playing/position/tempo from bridge.
+        // AbletonOSC transport sync — transport commands only (play/stop).
+        // Position/timing sync is handled by MIDI Clock, not AbletonOSC.
         if osc_sync_mode == OscSyncMode::AbletonOsc
             && self.ableton_bridge.is_transport_receiving(now.0)
         {
-            // External time sync: suppress deltaTime advancement when OSC is authority.
-            self.sync_arbiter.set_external_time_sync(
-                ClockAuthority::Osc,
-                authority,
-                &mut self.engine,
-                true,
-            );
-
             // Transport change detection (Ableton → MANIFOLD).
             if let Some(playing) =
                 self.ableton_bridge.transport_changed_externally(now.0)
@@ -996,39 +989,7 @@ impl ContentThread {
                 }
             }
 
-            // Position sync — same delta logic as OscSyncController.
-            let osc_time = Seconds(self.ableton_bridge.ableton_song_time());
-            let current_time = self.engine.current_time();
-            let delta = (osc_time - current_time).abs();
-
-            if delta.0 > 0.001 {
-                if self.engine.is_playing() {
-                    if delta.0 < 0.5 {
-                        self.sync_arbiter.nudge_time(
-                            ClockAuthority::Osc,
-                            authority,
-                            &mut self.engine,
-                            osc_time,
-                        );
-                    } else {
-                        self.sync_arbiter.seek(
-                            ClockAuthority::Osc,
-                            authority,
-                            &mut self.engine,
-                            osc_time,
-                        );
-                    }
-                } else if delta.0 > 0.05 {
-                    self.sync_arbiter.seek(
-                        ClockAuthority::Osc,
-                        authority,
-                        &mut self.engine,
-                        osc_time,
-                    );
-                }
-            }
-
-            // Tempo feed.
+            // Tempo feed — Ableton tempo changes are still useful.
             let abl_tempo = self.ableton_bridge.ableton_tempo();
             if abl_tempo > 0.0 {
                 self.engine.set_live_external_tempo(
@@ -1037,14 +998,6 @@ impl ContentThread {
                     TempoPointSource::AbletonOsc,
                 );
             }
-        } else if osc_sync_mode == OscSyncMode::AbletonOsc {
-            // Bridge not receiving — clear external time sync.
-            self.sync_arbiter.set_external_time_sync(
-                ClockAuthority::Osc,
-                authority,
-                &mut self.engine,
-                false,
-            );
         }
     }
 
