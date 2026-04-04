@@ -247,6 +247,8 @@ pub fn dispatch(
         | PanelAction::MapGenParamToAbleton(..)
         | PanelAction::UnmapEffectParamAbleton(..)
         | PanelAction::UnmapGenParamAbleton(_)
+        | PanelAction::OpenAbletonPickerForEffect(..)
+        | PanelAction::OpenAbletonPickerForGen(_)
         | PanelAction::AddEffect(..)
         | PanelAction::PasteEffects => inspector::dispatch_inspector(
             action,

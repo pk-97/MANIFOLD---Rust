@@ -1,3 +1,4 @@
+pub mod ableton_picker;
 pub mod browser_popup;
 pub mod clip_chrome;
 pub mod copy_to_clipboard_label;
@@ -266,6 +267,10 @@ pub enum PanelAction {
     ), // param_idx, address
     UnmapEffectParamAbleton(InspectorTab, usize, usize), // tab, fx_idx, param_idx
     UnmapGenParamAbleton(usize),                         // param_idx
+    /// Open the Ableton picker popup for an effect parameter.
+    OpenAbletonPickerForEffect(InspectorTab, usize, usize), // tab, fx_idx, param_idx
+    /// Open the Ableton picker popup for a generator parameter.
+    OpenAbletonPickerForGen(usize), // param_idx
 
     // Reset macro from context menu (distinct from MacroRightClick to avoid re-triggering dropdown)
     MacroReset(usize), // macro_idx — reset to 0 from context menu

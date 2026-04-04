@@ -313,6 +313,21 @@ impl InspectorCompositePanel {
         self.gen_params.as_mut()
     }
 
+    /// Returns the Ableton label for an effect param if currently mapped.
+    /// Searches master then layer effect cards by `fx_idx`.
+    pub fn get_effect_ableton_label(&self, fx_idx: usize, param_idx: usize) -> Option<&str> {
+        let card = self
+            .master_effects
+            .get(fx_idx)
+            .or_else(|| self.layer_effects.get(fx_idx))?;
+        card.param_ableton_label(param_idx)
+    }
+
+    /// Returns the Ableton label for a gen param if currently mapped.
+    pub fn get_gen_ableton_label(&self, param_idx: usize) -> Option<&str> {
+        self.gen_params.as_ref()?.param_ableton_label(param_idx)
+    }
+
     pub fn master_effect_mut(&mut self, idx: usize) -> Option<&mut EffectCardPanel> {
         self.master_effects.get_mut(idx)
     }

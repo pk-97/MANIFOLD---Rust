@@ -298,6 +298,11 @@ impl GenParamPanel {
     pub fn is_collapsed(&self) -> bool {
         self.is_collapsed
     }
+
+    /// Returns the Ableton label for `param_idx`, if that param is currently mapped.
+    pub fn param_ableton_label(&self, param_idx: usize) -> Option<&str> {
+        self.param_info.get(param_idx)?.ableton_label.as_deref()
+    }
     pub fn set_collapsed(&mut self, v: bool) {
         self.is_collapsed = v;
     }

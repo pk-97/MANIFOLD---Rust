@@ -4,9 +4,60 @@
 //! and the dropdown overlay. The app layer creates one UIRoot per
 //! workspace window and forwards winit events through it.
 
+use manifold_playback::ableton_bridge::AbletonSession;
 use manifold_ui::input::{Key, Modifiers, PointerAction, UIEvent};
 use manifold_ui::node::{Rect, Vec2};
 use manifold_ui::*;
+
+/// Convert an AbletonSession into the picker's thin data struct.
+fn build_picker_session(
+    session: &AbletonSession,
+) -> manifold_ui::panels::ableton_picker::AbletonPickerSession {
+    use manifold_ui::panels::ableton_picker::{AbletonPickerSession, PickerDevice, PickerMacro, PickerTrack};
+
+    const RACK_CLASSES: &[&str] = &[
+        "InstrumentGroupDevice",
+        "DrumGroupDevice",
+        "AudioEffectGroupDevice",
+        "MidiEffectGroupDevice",
+    ];
+
+    let rack_tracks = session
+        .tracks
+        .iter()
+        .filter_map(|track| {
+            let devices: Vec<PickerDevice> = track
+                .devices
+                .iter()
+                .filter(|d| RACK_CLASSES.contains(&d.class_name.as_str()) && !d.macros.is_empty())
+                .map(|d| PickerDevice {
+                    device_id: d.device_id,
+                    device_name: d.name.clone(),
+                    device_class_name: d.class_name.clone(),
+                    macros: d
+                        .macros
+                        .iter()
+                        .map(|m| PickerMacro {
+                            param_id: m.param_id,
+                            name: m.name.clone(),
+                        })
+                        .collect(),
+                })
+                .collect();
+            if devices.is_empty() {
+                None
+            } else {
+                Some(PickerTrack {
+                    track_id: track.track_id,
+                    track_name: track.name.clone(),
+                    devices,
+                })
+            }
+        })
+        .collect();
+
+    AbletonPickerSession { rack_tracks }
+}
 
 /// What the currently-open dropdown is selecting for.
 #[derive(Debug, Clone)]
@@ -120,11 +171,13 @@ pub struct UIRoot {
     /// lost when the cursor moves outside the tracks rect.
     overlay_drag_active: bool,
 
-    /// Cached Ableton session for right-click dropdown population.
+    /// Cached Ableton session for the picker popup.
     pub ableton_session:
         Option<std::sync::Arc<manifold_playback::ableton_bridge::AbletonSession>>,
-    /// Parallel map: dropdown item index → Ableton macro address (None for disabled headers).
-    ableton_dropdown_targets: Vec<Option<manifold_core::ableton_mapping::AbletonMacroAddress>>,
+    /// Two-column Ableton macro picker popup (replaces flat dropdown Ableton section).
+    ableton_picker: manifold_ui::panels::ableton_picker::AbletonPickerPopup,
+    /// Which param triggered the picker — resolved when picker returns Selected.
+    ableton_picker_context: Option<manifold_ui::panels::ableton_picker::AbletonPickerContext>,
 }
 
 impl UIRoot {
@@ -168,7 +221,8 @@ impl UIRoot {
             inspector_handle_id: -1,
             overlay_drag_active: false,
             ableton_session: None,
-            ableton_dropdown_targets: Vec::new(),
+            ableton_picker: manifold_ui::panels::ableton_picker::AbletonPickerPopup::new(),
+            ableton_picker_context: None,
         }
     }
 
@@ -408,6 +462,12 @@ impl UIRoot {
         if self.browser_popup.is_open() {
             self.browser_popup.build(&mut self.tree);
         }
+
+        self.ableton_picker
+            .set_screen_size(self.screen_width, self.screen_height);
+        if self.ableton_picker.is_open() {
+            self.ableton_picker.build(&mut self.tree);
+        }
     }
 
     /// Handle a resize event. Rebuilds all panels.
@@ -481,6 +541,54 @@ impl UIRoot {
             }
             if let UIEvent::RightClick { pos, .. } = event {
                 self.last_right_click_pos = *pos;
+            }
+
+            // Ableton picker popup — highest z-order (opened from dropdown).
+            if self.ableton_picker.is_open() {
+                use manifold_ui::panels::ableton_picker::AbletonPickerAction;
+                let mut consumed = false;
+
+                if let UIEvent::KeyDown { key: Key::Escape, .. } = event
+                    && self.ableton_picker.handle_escape().is_some()
+                {
+                    self.overlay_dirty = true;
+                    consumed = true;
+                }
+
+                if let UIEvent::Click { node_id, .. } = event {
+                    if let Some(picker_action) = self.ableton_picker.handle_click(*node_id) {
+                        match picker_action {
+                            AbletonPickerAction::Selected(addr) => {
+                                if let Some(ctx) = self.ableton_picker_context.take() {
+                                    use manifold_ui::panels::ableton_picker::AbletonPickerContext;
+                                    match ctx {
+                                        AbletonPickerContext::EffectParam { tab, fx_idx, param_idx } => {
+                                            actions.push(PanelAction::MapEffectParamToAbleton(
+                                                tab, fx_idx, param_idx, addr,
+                                            ));
+                                        }
+                                        AbletonPickerContext::GenParam { param_idx } => {
+                                            actions.push(PanelAction::MapGenParamToAbleton(
+                                                param_idx, addr,
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            AbletonPickerAction::Dismissed => {}
+                        }
+                        self.overlay_dirty = true;
+                        consumed = true;
+                    } else if self.ableton_picker.contains_node(*node_id) {
+                        // Track-selection click — redraw right column next frame.
+                        self.overlay_dirty = true;
+                        consumed = true;
+                    }
+                }
+
+                if consumed {
+                    continue;
+                }
             }
 
             // Browser popup gets first crack (higher z-order than dropdown).
@@ -973,7 +1081,7 @@ impl UIRoot {
             }
             PanelAction::EffectParamLabelRightClick(fx_idx, param_idx) => {
                 let tab = self.inspector.last_effect_tab();
-                let mut items = Vec::with_capacity(manifold_core::MACRO_COUNT + 8);
+                let mut items = Vec::with_capacity(manifold_core::MACRO_COUNT + 3);
                 for i in 0..manifold_core::MACRO_COUNT {
                     let label = {
                         let slot = &self.macro_labels[i];
@@ -985,8 +1093,27 @@ impl UIRoot {
                     };
                     items.push(DropdownItem::new(&label));
                 }
-                // Ableton section
-                self.build_ableton_dropdown_items(&mut items);
+                // Ableton picker entry
+                if let Some(last) = items.last_mut() {
+                    last.separator_after = true;
+                }
+                let ableton_connected = self
+                    .ableton_session
+                    .as_ref()
+                    .is_some_and(|s| s.connected);
+                if ableton_connected {
+                    items.push(DropdownItem::new("Map to Ableton Macro…"));
+                } else {
+                    items.push(DropdownItem::disabled("Ableton not connected"));
+                }
+                // "Remove Ableton Mapping" when param is already mapped
+                let is_ableton_mapped = self
+                    .inspector
+                    .get_effect_ableton_label(*fx_idx, *param_idx)
+                    .is_some();
+                if is_ableton_mapped {
+                    items.push(DropdownItem::new("Remove Ableton Mapping"));
+                }
                 self.dropdown_context = Some(DropdownContext::EffectParamContext(
                     tab, *fx_idx, *param_idx, 0.0,
                 ));
@@ -995,7 +1122,7 @@ impl UIRoot {
                 true
             }
             PanelAction::GenParamLabelRightClick(param_idx) => {
-                let mut items = Vec::with_capacity(manifold_core::MACRO_COUNT + 8);
+                let mut items = Vec::with_capacity(manifold_core::MACRO_COUNT + 3);
                 for i in 0..manifold_core::MACRO_COUNT {
                     let label = {
                         let slot = &self.macro_labels[i];
@@ -1007,8 +1134,26 @@ impl UIRoot {
                     };
                     items.push(DropdownItem::new(&label));
                 }
-                // Ableton section
-                self.build_ableton_dropdown_items(&mut items);
+                // Ableton picker entry
+                if let Some(last) = items.last_mut() {
+                    last.separator_after = true;
+                }
+                let ableton_connected = self
+                    .ableton_session
+                    .as_ref()
+                    .is_some_and(|s| s.connected);
+                if ableton_connected {
+                    items.push(DropdownItem::new("Map to Ableton Macro…"));
+                } else {
+                    items.push(DropdownItem::disabled("Ableton not connected"));
+                }
+                let is_ableton_mapped = self
+                    .inspector
+                    .get_gen_ableton_label(*param_idx)
+                    .is_some();
+                if is_ableton_mapped {
+                    items.push(DropdownItem::new("Remove Ableton Mapping"));
+                }
                 self.dropdown_context = Some(DropdownContext::GenParamContext(
                     *param_idx, 0.0,
                 ));
@@ -1052,6 +1197,32 @@ impl UIRoot {
                 self.dropdown_context = Some(DropdownContext::GenCardContext);
                 self.dropdown
                     .open_context(items, right_click_pos, &mut self.tree);
+                true
+            }
+            PanelAction::OpenAbletonPickerForEffect(tab, fx_idx, param_idx) => {
+                use manifold_ui::panels::ableton_picker::AbletonPickerContext;
+                if let Some(session) = &self.ableton_session {
+                    self.ableton_picker_context = Some(AbletonPickerContext::EffectParam {
+                        tab: *tab,
+                        fx_idx: *fx_idx,
+                        param_idx: *param_idx,
+                    });
+                    self.ableton_picker
+                        .open(build_picker_session(session), right_click_pos);
+                    self.overlay_dirty = true;
+                }
+                true
+            }
+            PanelAction::OpenAbletonPickerForGen(param_idx) => {
+                use manifold_ui::panels::ableton_picker::AbletonPickerContext;
+                if let Some(session) = &self.ableton_session {
+                    self.ableton_picker_context = Some(AbletonPickerContext::GenParam {
+                        param_idx: *param_idx,
+                    });
+                    self.ableton_picker
+                        .open(build_picker_session(session), right_click_pos);
+                    self.overlay_dirty = true;
+                }
                 true
             }
             _ => false,
@@ -1138,37 +1309,31 @@ impl UIRoot {
                     Some(PanelAction::MapEffectParamToMacro(
                         tab, fx_idx, param_idx, index,
                     ))
-                } else if let Some(Some(addr)) =
-                    self.ableton_dropdown_targets.get(index)
-                {
-                    Some(PanelAction::MapEffectParamToAbleton(
-                        tab,
-                        fx_idx,
-                        param_idx,
-                        addr.clone(),
-                    ))
-                } else if self.dropdown.item_label(index) == Some("Remove Ableton Mapping")
-                {
-                    Some(PanelAction::UnmapEffectParamAbleton(
-                        tab, fx_idx, param_idx,
-                    ))
                 } else {
-                    None
+                    match self.dropdown.item_label(index) {
+                        Some("Map to Ableton Macro…") => Some(
+                            PanelAction::OpenAbletonPickerForEffect(tab, fx_idx, param_idx),
+                        ),
+                        Some("Remove Ableton Mapping") => {
+                            Some(PanelAction::UnmapEffectParamAbleton(tab, fx_idx, param_idx))
+                        }
+                        _ => None,
+                    }
                 }
             }
             DropdownContext::GenParamContext(param_idx, _default_val) => {
                 if index < manifold_core::MACRO_COUNT {
                     Some(PanelAction::MapGenParamToMacro(param_idx, index))
-                } else if let Some(Some(addr)) =
-                    self.ableton_dropdown_targets.get(index)
-                {
-                    Some(PanelAction::MapGenParamToAbleton(param_idx, addr.clone()))
-                } else if self.dropdown.item_label(index)
-                    == Some("Remove Ableton Mapping")
-                {
-                    Some(PanelAction::UnmapGenParamAbleton(param_idx))
                 } else {
-                    None
+                    match self.dropdown.item_label(index) {
+                        Some("Map to Ableton Macro…") => {
+                            Some(PanelAction::OpenAbletonPickerForGen(param_idx))
+                        }
+                        Some("Remove Ableton Mapping") => {
+                            Some(PanelAction::UnmapGenParamAbleton(param_idx))
+                        }
+                        _ => None,
+                    }
                 }
             }
             DropdownContext::MacroSlotContext(macro_idx) => {
@@ -1201,83 +1366,6 @@ impl UIRoot {
         }
     }
 
-    /// Build Ableton dropdown items and populate `ableton_dropdown_targets`.
-    /// Called from `try_open_dropdown` for effect/gen param label right-clicks.
-    fn build_ableton_dropdown_items(&mut self, items: &mut Vec<DropdownItem>) {
-        use manifold_core::ableton_mapping::{AbletonDeviceIdentity, AbletonMacroAddress};
-
-        // Reset targets — indexed parallel to `items`, starting at MACRO_COUNT
-        self.ableton_dropdown_targets.clear();
-        // Fill None entries for the macro items that precede the Ableton section
-        self.ableton_dropdown_targets
-            .resize(items.len(), None);
-
-        // Separator before Ableton section
-        if let Some(last) = items.last_mut() {
-            last.separator_after = true;
-        }
-
-        if let Some(session) = &self.ableton_session {
-            if session.connected && !session.tracks.is_empty() {
-                for track in &session.tracks {
-                    let has_macros = track
-                        .devices
-                        .iter()
-                        .any(|d| !d.macros.is_empty());
-                    if !has_macros {
-                        continue;
-                    }
-
-                    // Track header (disabled)
-                    items.push(DropdownItem::disabled(&format!(
-                        "{}:",
-                        track.name
-                    )));
-                    self.ableton_dropdown_targets.push(None);
-
-                    for device in &track.devices {
-                        if device.macros.is_empty() {
-                            continue;
-                        }
-                        for mac in &device.macros {
-                            let label =
-                                format!("  {} > {}", device.name, mac.name);
-                            items.push(DropdownItem::new(&label));
-                            self.ableton_dropdown_targets.push(Some(
-                                AbletonMacroAddress {
-                                    track_id: track.track_id,
-                                    device_id: device.device_id,
-                                    param_id: mac.param_id,
-                                    device_identity: AbletonDeviceIdentity {
-                                        device_class_name: device
-                                            .class_name
-                                            .clone(),
-                                    },
-                                    track_name: track.name.clone(),
-                                    device_name: device.name.clone(),
-                                    macro_name: mac.name.clone(),
-                                },
-                            ));
-                        }
-                    }
-
-                    // Separator after each track
-                    if let Some(last) = items.last_mut() {
-                        last.separator_after = true;
-                    }
-                }
-            } else {
-                items.push(DropdownItem::disabled("Ableton not connected"));
-                self.ableton_dropdown_targets.push(None);
-            }
-        } else {
-            items.push(DropdownItem::disabled("Ableton not connected"));
-            self.ableton_dropdown_targets.push(None);
-        }
-
-        // TODO: "Remove Ableton Mapping" item when already mapped
-        // (requires checking the project — deferred to Phase 5 label work)
-    }
 
     /// Convert a color swatch selection into the appropriate PanelAction.
     fn dropdown_color_to_action(

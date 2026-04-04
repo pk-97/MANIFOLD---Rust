@@ -391,6 +391,11 @@ impl EffectCardPanel {
         self.drag_icon_id
     }
 
+    /// Returns the Ableton label for `param_idx`, if that param is currently mapped.
+    pub fn param_ableton_label(&self, param_idx: usize) -> Option<&str> {
+        self.param_info.get(param_idx)?.ableton_label.as_deref()
+    }
+
     /// Unity EffectCardBitmapPanel.IsDragHandle (line 228)
     pub fn is_drag_handle(&self, node_id: u32) -> bool {
         self.drag_icon_id >= 0 && node_id == self.drag_icon_id as u32
