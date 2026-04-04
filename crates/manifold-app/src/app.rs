@@ -1541,6 +1541,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // Save pipeline archive after all pipelines have been created.
             native_device.save_pipeline_archive();
             native_device.log_msl_cache_stats();
+            // Set device-level capture scope so Xcode GPU frame capture
+            // grabs command buffers from both content and UI threads.
+            native_device.install_device_capture_scope();
             // Transfer native device ownership to content pipeline.
             content_pipeline.set_native_gpu(native_device);
             // Give the content pipeline all IOSurface textures for triple-buffered async output.

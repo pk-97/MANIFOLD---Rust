@@ -130,6 +130,19 @@ impl GpuDevice {
         }
     }
 
+    /// Set the default Metal capture scope to the device so that Xcode's
+    /// GPU frame capture grabs command buffers from ALL threads (content +
+    /// UI), not just the main thread's command queue.
+    pub fn install_device_capture_scope(&self) {
+        unsafe {
+            let manager: *mut objc::runtime::Object =
+                objc::msg_send![objc::class!(MTLCaptureManager), sharedCaptureManager];
+            let scope: *mut objc::runtime::Object =
+                objc::msg_send![manager, newCaptureScopeWithDevice: self.raw_device_ptr()];
+            let _: () = objc::msg_send![manager, setDefaultCaptureScope: scope];
+        }
+    }
+
     /// Raw Metal device reference (for advanced interop).
     pub fn raw_device(&self) -> &metal::DeviceRef {
         &self.device
