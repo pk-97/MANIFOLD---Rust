@@ -583,7 +583,7 @@ impl WireframeDepthFX {
             gpu.device,
             aw,
             ah,
-            manifold_gpu::GpuTextureFormat::Rgba8Unorm,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
             &format!("WireframeDepthDnnInput_{owner_key}"),
         );
 
@@ -1103,7 +1103,7 @@ impl WireframeDepthFX {
         }
 
         // WireframeDepthFX.cs line 483-494: blit source → dnnInputTex, then readback
-        // Copy source → dnn_input_tex via blit (both are Rgba8Unorm)
+        // Copy source → dnn_input_tex via blit (both Rgba16Float)
         let copy_aw = state.analysis_width;
         let copy_ah = state.analysis_height;
         Self::encode_copy(

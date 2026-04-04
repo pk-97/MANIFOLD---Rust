@@ -223,7 +223,7 @@ impl DepthOfFieldFX {
             width: aw,
             height: ah,
             depth: 1,
-            format: manifold_gpu::GpuTextureFormat::Rgba8Unorm,
+            format: manifold_gpu::GpuTextureFormat::Rgba16Float,
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL
                 | manifold_gpu::GpuTextureUsage::CPU_UPLOAD,
@@ -264,7 +264,7 @@ impl DepthOfFieldFX {
             pool.acquire(
                 aw,
                 ah,
-                manifold_gpu::GpuTextureFormat::Rgba8Unorm,
+                manifold_gpu::GpuTextureFormat::Rgba16Float,
                 manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
                 "DofDepthStaging",
             )
@@ -273,7 +273,7 @@ impl DepthOfFieldFX {
                 width: aw,
                 height: ah,
                 depth: 1,
-                format: manifold_gpu::GpuTextureFormat::Rgba8Unorm,
+                format: manifold_gpu::GpuTextureFormat::Rgba16Float,
                 dimension: manifold_gpu::GpuTextureDimension::D2,
                 usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
                 label: "DofDepthStaging",

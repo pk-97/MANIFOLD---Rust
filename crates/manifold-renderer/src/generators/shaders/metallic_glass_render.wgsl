@@ -69,7 +69,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     let world_z = uv.y * 2.0 - 1.0;
 
     let displacement = u.material.z;
-    let h = sample_height(uv) * displacement;
+    let h = (sample_height(uv) - 0.5) * displacement;
     let world_pos = vec3<f32>(world_x, h, world_z);
 
     var out: VertexOutput;

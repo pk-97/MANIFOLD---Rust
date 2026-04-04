@@ -100,7 +100,10 @@ impl PostProcessEffect for TransformFX {
             let tx = p.first().copied().unwrap_or(0.0);
             let ty = p.get(1).copied().unwrap_or(0.0);
             let sc = p.get(2).copied().unwrap_or(1.0);
-            let rot = p.get(3).copied().unwrap_or(0.0) * DEG2RAD;
+            // Negate: Unity UVs are Y-up (0 at bottom), compute shader
+            // pixel coords are Y-down (id.y=0 at top). Same rotation matrix
+            // spins the opposite direction visually, so flip the sign.
+            let rot = -(p.get(3).copied().unwrap_or(0.0) * DEG2RAD);
             (tx, ty, sc, rot)
         };
 

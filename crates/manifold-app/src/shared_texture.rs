@@ -84,7 +84,9 @@ impl SharedTextureBridge {
 
     /// Create an IOSurface for Rgba16Float at the given dimensions.
     fn create_io_surface(width: u32, height: u32) -> io_surface::IOSurface {
-        let bytes_per_row = width * BPP;
+        // Align bytes_per_row to 256 bytes — Metal validation rejects IOSurface-backed
+        // textures whose stride doesn't meet the GPU's minimum linear texture alignment.
+        let bytes_per_row = (width * BPP + 255) & !255;
         let total_bytes = bytes_per_row * height;
 
         let mut props = CFMutableDictionary::new();
@@ -132,10 +134,13 @@ impl SharedTextureBridge {
                 surface_index < SURFACE_COUNT,
                 "surface_index must be 0..{SURFACE_COUNT}"
             );
+            // Acquire the read lock BEFORE loading dimensions — resize()
+            // updates width/height under the write lock, so holding the read
+            // lock here guarantees we see dimensions that match the surfaces.
+            let io_surfaces_guard = self.io_surfaces.read();
             let width = self.width.load(Ordering::Acquire);
             let height = self.height.load(Ordering::Acquire);
 
-            let io_surfaces_guard = self.io_surfaces.read();
             let io_surface_ref =
                 io_surfaces_guard[surface_index].as_concrete_TypeRef() as *const std::ffi::c_void;
             let texture = device.create_texture_from_io_surface(
@@ -159,10 +164,13 @@ impl SharedTextureBridge {
         let surface_c = Self::create_io_surface(width, height);
         {
             let mut guard = self.io_surfaces.write();
+            // Update dimensions while holding the write lock so that
+            // import_texture_native() (which reads width/height then acquires
+            // the read lock) never sees new surfaces with stale dimensions.
+            self.width.store(width, Ordering::Release);
+            self.height.store(height, Ordering::Release);
             *guard = [surface_a, surface_b, surface_c];
         }
-        self.width.store(width, Ordering::Release);
-        self.height.store(height, Ordering::Release);
         self.front_index.store(0, Ordering::Release);
         self.generation.fetch_add(1, Ordering::Release);
         log::info!(
