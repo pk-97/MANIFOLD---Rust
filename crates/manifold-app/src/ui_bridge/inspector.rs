@@ -2700,6 +2700,141 @@ pub(super) fn dispatch_inspector(
         // Picker open is consumed by try_open_dropdown — never reaches dispatch.
         PanelAction::OpenAbletonPickerForMacro(_) => DispatchResult::handled(),
 
+        // Ableton trim handles — update range_min/range_max on the mapping.
+        PanelAction::AbletonTrimChanged(tab, fx_idx, param_idx, min, max) => {
+            let param_idx = *param_idx;
+            let min = *min;
+            let max = *max;
+            let fx_idx = *fx_idx;
+            // Update local project
+            let effect_type = match *tab {
+                InspectorTab::Master => {
+                    let fx = project.settings.master_effects.get_mut(fx_idx);
+                    if let Some(fx) = fx
+                        && let Some(ms) = &mut fx.ableton_mappings
+                        && let Some(m) = ms.iter_mut().find(|m| m.param_index == param_idx)
+                    {
+                        m.range_min = min;
+                        m.range_max = max;
+                    }
+                    project.settings.master_effects.get(fx_idx)
+                        .map(|f| f.effect_type().clone())
+                }
+                InspectorTab::Layer => {
+                    let layer_idx = super::resolve_active_layer_index(active_layer, project);
+                    if let Some(li) = layer_idx
+                        && let Some(layer) = project.timeline.layers.get_mut(li)
+                        && let Some(effects) = &mut layer.effects
+                        && let Some(fx) = effects.get_mut(fx_idx)
+                        && let Some(ms) = &mut fx.ableton_mappings
+                        && let Some(m) = ms.iter_mut().find(|m| m.param_index == param_idx)
+                    {
+                        m.range_min = min;
+                        m.range_max = max;
+                    }
+                    layer_idx
+                        .and_then(|li| project.timeline.layers.get(li))
+                        .and_then(|l| l.effects.as_ref())
+                        .and_then(|e| e.get(fx_idx))
+                        .map(|f| f.effect_type().clone())
+                }
+                InspectorTab::Clip => None,
+            };
+            // Sync to content thread
+            let tab = *tab;
+            let layer_id = active_layer.clone();
+            if let Some(et) = effect_type {
+                ContentCommand::send(
+                    content_tx,
+                    ContentCommand::MutateProject(Box::new(move |p| {
+                        let effects: Option<&mut Vec<_>> = match tab {
+                            InspectorTab::Master => Some(&mut p.settings.master_effects),
+                            InspectorTab::Clip => None,
+                            InspectorTab::Layer => layer_id.as_ref().and_then(|lid| {
+                                p.timeline.find_layer_by_id_mut(lid.as_str())
+                                    .and_then(|(_, l)| l.effects.as_mut())
+                            }),
+                        };
+                        if let Some(effects) = effects
+                            && let Some(fx) = effects.iter_mut().find(|f| f.effect_type() == &et)
+                            && let Some(ms) = &mut fx.ableton_mappings
+                            && let Some(m) = ms.iter_mut().find(|m| m.param_index == param_idx)
+                        {
+                            m.range_min = min;
+                            m.range_max = max;
+                        }
+                    })),
+                );
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::AbletonTrimSnapshot(..)
+        | PanelAction::AbletonTrimCommit(..) => {
+            // Trim snapshots/commits for undo are deferred to a future iteration.
+            DispatchResult::handled()
+        }
+
+        PanelAction::AbletonGenTrimChanged(param_idx, min, max) => {
+            let param_idx = *param_idx;
+            let min = *min;
+            let max = *max;
+            let layer_idx = super::resolve_active_layer_index(active_layer, project);
+            if let Some(layer_idx) = layer_idx
+                && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
+                && let Some(gp) = layer.gen_params_mut()
+                && let Some(mappings) = &mut gp.ableton_mappings
+                && let Some(m) = mappings.iter_mut().find(|m| m.param_index == param_idx)
+            {
+                m.range_min = min;
+                m.range_max = max;
+                let layer_id = layer.layer_id.clone();
+                ContentCommand::send(
+                    content_tx,
+                    ContentCommand::MutateProject(Box::new(move |p| {
+                        if let Some((_, layer)) =
+                            p.timeline.find_layer_by_id_mut(layer_id.as_str())
+                            && let Some(gp) = layer.gen_params_mut()
+                            && let Some(ms) = &mut gp.ableton_mappings
+                            && let Some(m) =
+                                ms.iter_mut().find(|m| m.param_index == param_idx)
+                        {
+                            m.range_min = min;
+                            m.range_max = max;
+                        }
+                    })),
+                );
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::AbletonGenTrimSnapshot(_)
+        | PanelAction::AbletonGenTrimCommit(_) => DispatchResult::handled(),
+
+        PanelAction::AbletonMacroTrimChanged(slot_idx, min, max) => {
+            let slot_idx = *slot_idx;
+            let min = *min;
+            let max = *max;
+            if let Some(slot) = project.settings.macro_bank.slots.get_mut(slot_idx)
+                && let Some(m) = &mut slot.ableton_mapping
+            {
+                m.range_min = min;
+                m.range_max = max;
+            }
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::MutateProject(Box::new(move |p| {
+                    if let Some(slot) = p.settings.macro_bank.slots.get_mut(slot_idx)
+                        && let Some(m) = &mut slot.ableton_mapping
+                    {
+                        m.range_min = min;
+                        m.range_max = max;
+                    }
+                })),
+            );
+            DispatchResult::handled()
+        }
+        PanelAction::AbletonMacroTrimSnapshot(_)
+        | PanelAction::AbletonMacroTrimCommit(_) => DispatchResult::handled(),
+
         _ => DispatchResult::unhandled(),
     }
 }

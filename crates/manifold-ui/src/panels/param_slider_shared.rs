@@ -765,6 +765,74 @@ pub(crate) fn build_trim_handles(
     }
 }
 
+/// Build trim handles from explicit min/max values (used by Ableton mappings).
+/// Same visual as driver trim handles but with configurable colors.
+#[allow(dead_code)] // used once effect_card build wiring is added
+pub(crate) fn build_trim_handles_explicit(
+    tree: &mut UITree,
+    track_parent: i32,
+    track_rect: Rect,
+    min: f32,
+    max: f32,
+    bar_color: Color32,
+    bar_hover: Color32,
+    fill_color: Color32,
+) -> TrimHandleIds {
+    let usable = track_rect.width - OVERLAY_INSET * 2.0;
+
+    let fill_x = track_rect.x + OVERLAY_INSET + min * usable;
+    let fill_w = (max - min) * usable;
+    let fill_id = tree.add_panel(
+        track_parent,
+        fill_x,
+        track_rect.y + OVERLAY_INSET,
+        fill_w,
+        track_rect.height - OVERLAY_INSET * 2.0,
+        UIStyle {
+            bg_color: fill_color,
+            ..UIStyle::default()
+        },
+    ) as i32;
+
+    let min_x = fill_x - TRIM_BAR_W * 0.5;
+    let min_bar_id = tree.add_button(
+        track_parent,
+        min_x,
+        track_rect.y,
+        TRIM_BAR_W,
+        track_rect.height,
+        UIStyle {
+            bg_color: bar_color,
+            hover_bg_color: bar_hover,
+            corner_radius: 1.0,
+            ..UIStyle::default()
+        },
+        "",
+    ) as i32;
+
+    let max_x = track_rect.x + OVERLAY_INSET + max * usable - TRIM_BAR_W * 0.5;
+    let max_bar_id = tree.add_button(
+        track_parent,
+        max_x,
+        track_rect.y,
+        TRIM_BAR_W,
+        track_rect.height,
+        UIStyle {
+            bg_color: bar_color,
+            hover_bg_color: bar_hover,
+            corner_radius: 1.0,
+            ..UIStyle::default()
+        },
+        "",
+    ) as i32;
+
+    TrimHandleIds {
+        fill_id,
+        min_bar_id,
+        max_bar_id,
+    }
+}
+
 pub(crate) fn build_envelope_target(
     tree: &mut UITree,
     track_parent: i32,

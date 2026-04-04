@@ -252,6 +252,15 @@ pub fn dispatch(
         | PanelAction::MapMacroToAbleton(..)
         | PanelAction::UnmapMacroAbleton(_)
         | PanelAction::OpenAbletonPickerForMacro(_)
+        | PanelAction::AbletonTrimSnapshot(..)
+        | PanelAction::AbletonTrimChanged(..)
+        | PanelAction::AbletonTrimCommit(..)
+        | PanelAction::AbletonGenTrimSnapshot(_)
+        | PanelAction::AbletonGenTrimChanged(..)
+        | PanelAction::AbletonGenTrimCommit(_)
+        | PanelAction::AbletonMacroTrimSnapshot(_)
+        | PanelAction::AbletonMacroTrimChanged(..)
+        | PanelAction::AbletonMacroTrimCommit(_)
         | PanelAction::AddEffect(..)
         | PanelAction::PasteEffects => inspector::dispatch_inspector(
             action,

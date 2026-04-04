@@ -1110,19 +1110,21 @@ fn effects_to_configs(
                         }
                     };
                     // Check for Ableton mapping on this param
-                    let ableton_label = fx
+                    let abl_mapping = fx
                         .ableton_mappings
                         .as_ref()
-                        .and_then(|mappings| mappings.iter().find(|m| m.param_index == pi))
-                        .map(|mapping| {
-                            use manifold_core::ableton_mapping::AbletonMappingStatus;
-                            let suffix = match mapping.status {
-                                AbletonMappingStatus::Active => "[ABL]",
-                                AbletonMappingStatus::Dormant => "[ABL-]",
-                                AbletonMappingStatus::Ambiguous => "[ABL?]",
-                            };
-                            format!("{} {suffix}", mapping.address.macro_name)
-                        });
+                        .and_then(|mappings| mappings.iter().find(|m| m.param_index == pi));
+                    let ableton_label = abl_mapping.map(|mapping| {
+                        use manifold_core::ableton_mapping::AbletonMappingStatus;
+                        let suffix = match mapping.status {
+                            AbletonMappingStatus::Active => "[ABL]",
+                            AbletonMappingStatus::Dormant => "[ABL-]",
+                            AbletonMappingStatus::Ambiguous => "[ABL?]",
+                        };
+                        format!("{} {suffix}", mapping.address.macro_name)
+                    });
+                    let ableton_range =
+                        abl_mapping.map(|m| (m.range_min, m.range_max));
                     EffectParamInfo {
                         name: pd.name.clone(),
                         min: pd.min,
@@ -1132,6 +1134,7 @@ fn effects_to_configs(
                         value_labels: pd.value_labels.clone(),
                         osc_address,
                         ableton_label,
+                        ableton_range,
                     }
                 })
                 .collect();
@@ -1295,19 +1298,20 @@ fn gen_params_to_config(
                     layer_id,
                     pi,
                 );
-            let ableton_label = gp
+            let abl_mapping = gp
                 .ableton_mappings
                 .as_ref()
-                .and_then(|mappings| mappings.iter().find(|m| m.param_index == pi))
-                .map(|mapping| {
-                    use manifold_core::ableton_mapping::AbletonMappingStatus;
-                    let suffix = match mapping.status {
-                        AbletonMappingStatus::Active => "[ABL]",
-                        AbletonMappingStatus::Dormant => "[ABL-]",
-                        AbletonMappingStatus::Ambiguous => "[ABL?]",
-                    };
-                    format!("{} {suffix}", mapping.address.macro_name)
-                });
+                .and_then(|mappings| mappings.iter().find(|m| m.param_index == pi));
+            let ableton_label = abl_mapping.map(|mapping| {
+                use manifold_core::ableton_mapping::AbletonMappingStatus;
+                let suffix = match mapping.status {
+                    AbletonMappingStatus::Active => "[ABL]",
+                    AbletonMappingStatus::Dormant => "[ABL-]",
+                    AbletonMappingStatus::Ambiguous => "[ABL?]",
+                };
+                format!("{} {suffix}", mapping.address.macro_name)
+            });
+            let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
             GenParamInfo {
                 name: pd.name.clone(),
                 min: pd.min,
@@ -1318,6 +1322,7 @@ fn gen_params_to_config(
                 value_labels: pd.value_labels.clone(),
                 osc_address,
                 ableton_label,
+                ableton_range,
             }
         })
         .collect();

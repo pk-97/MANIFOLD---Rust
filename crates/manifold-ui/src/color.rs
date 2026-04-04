@@ -431,6 +431,11 @@ pub const TRIM_FILL_C32: Color32 = Color32::new(20, 166, 191, 38);
 pub const TRIM_BAR_HOVER_C32: Color32 = Color32::new(40, 186, 211, 255);
 pub const TARGET_BAR_HOVER_C32: Color32 = Color32::new(211, 135, 40, 255);
 
+// Ableton trim handles — purple tint to distinguish from driver cyan
+pub const ABL_TRIM_BAR_C32: Color32 = Color32::new(140, 80, 200, 255);
+pub const ABL_TRIM_BAR_HOVER_C32: Color32 = Color32::new(165, 105, 225, 255);
+pub const ABL_TRIM_FILL_C32: Color32 = Color32::new(140, 80, 200, 38);
+
 // ── Bitmap Effect Card ──────────────────────────────────────────────
 pub const EFFECT_CARD_INNER_BG_C32: Color32 = Color32::new(19, 19, 20, 255);
 pub const CARD_BORDER_C32: Color32 = Color32::new(55, 55, 60, 255);

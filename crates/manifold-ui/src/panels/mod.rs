@@ -276,6 +276,17 @@ pub enum PanelAction {
     UnmapMacroAbleton(usize),
     OpenAbletonPickerForMacro(usize),
 
+    // Ableton trim handles (range_min / range_max adjustment)
+    AbletonTrimSnapshot(InspectorTab, usize, usize), // tab, fx_idx, param_idx
+    AbletonTrimChanged(InspectorTab, usize, usize, f32, f32), // tab, fx_idx, param_idx, min, max
+    AbletonTrimCommit(InspectorTab, usize, usize), // tab, fx_idx, param_idx
+    AbletonGenTrimSnapshot(usize), // param_idx
+    AbletonGenTrimChanged(usize, f32, f32), // param_idx, min, max
+    AbletonGenTrimCommit(usize), // param_idx
+    AbletonMacroTrimSnapshot(usize), // slot_idx
+    AbletonMacroTrimChanged(usize, f32, f32), // slot_idx, min, max
+    AbletonMacroTrimCommit(usize), // slot_idx
+
     // Reset macro from context menu (distinct from MacroRightClick to avoid re-triggering dropdown)
     MacroReset(usize), // macro_idx — reset to 0 from context menu
 

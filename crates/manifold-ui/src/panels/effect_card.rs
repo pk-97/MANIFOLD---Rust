@@ -45,6 +45,8 @@ pub struct EffectParamInfo {
     /// When set, overrides the slider label with an Ableton mapping indicator.
     /// e.g. "Filter [ABL]", "Filter [ABL-]", "Filter [ABL?]"
     pub ableton_label: Option<String>,
+    /// Ableton trim range (range_min, range_max). When present, trim handles are shown.
+    pub ableton_range: Option<(f32, f32)>,
 }
 
 /// Configuration for creating an effect card.
