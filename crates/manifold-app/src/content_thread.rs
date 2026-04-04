@@ -78,6 +78,10 @@ pub struct ContentThread {
     pub osc_param_router: manifold_playback::osc_param_router::OscParamRouter,
     /// Ableton Live OSC bridge — discovers session, pushes macro values.
     pub ableton_bridge: manifold_playback::ableton_bridge::AbletonBridge,
+    /// Set to true when Ableton wrote param values last frame, so the state-push
+    /// in the FOLLOWING frame forces a modulation snapshot (bridge apply runs after
+    /// the state push in the same frame, so we need a 1-frame sticky signal).
+    pub ableton_active_last_frame: bool,
 
     // ── Tempo recording (port of C# PlaybackController fields) ──
     /// Tempo recording/provenance — tracks external tempo for tempo automation.
@@ -669,7 +673,12 @@ impl ContentThread {
             // Send a project snapshot when data_version changes (editing commands)
             // OR when modulation is active (LFO/envelope writes to param_values
             // without bumping data_version — UI needs live modulated values).
-            let modulation_active = tick_result.modulation_active;
+            // Include Ableton as a modulation source. Bridge apply() runs after this
+            // state push (same frame), so we use last frame's flag — on the following
+            // frame, evaluate_modulation will have already reset param_values from the
+            // updated base_param_values, so the snapshot will contain Ableton values.
+            let modulation_active =
+                tick_result.modulation_active || self.ableton_active_last_frame;
 
             // Reclaim tick_result buffers (ready_clips, stopped_clips) for reuse
             // on the next tick — avoids per-frame Vec allocation.
@@ -797,13 +806,7 @@ impl ContentThread {
                 export_status: String::new(),
                 export_finished: None,
                 ableton_session: if self.ableton_bridge.session_changed() {
-                    let s = self.ableton_bridge.session();
-                    eprintln!(
-                        "[AbletonBridge] Pushing session to UI: {} tracks, connected={}",
-                        s.tracks.len(),
-                        s.connected
-                    );
-                    Some(Arc::new(s.clone()))
+                    Some(Arc::new(self.ableton_bridge.session().clone()))
                 } else {
                     None
                 },
@@ -901,9 +904,24 @@ impl ContentThread {
 
         // Ableton bridge — drain AbletonOSC replies and apply macro values.
         self.ableton_bridge.update(self.time_since_start.0);
-        if let Some(p) = self.engine.project_mut() {
-            self.ableton_bridge.apply(p);
+
+        // When discovery just completed, validate mappings and force a full
+        // project snapshot so the UI receives updated [ABL]/[ABL-]/[ABL?] statuses.
+        if self.ableton_bridge.take_validation_dirty() {
+            if let Some(p) = self.engine.project_mut() {
+                self.ableton_bridge.validate_mappings(p);
+                self.ableton_bridge.rebuild_listeners(p);
+            }
+            // Force project snapshot this frame regardless of data_version.
+            self.last_data_version = self.last_data_version.wrapping_sub(1);
         }
+
+        let ableton_active = if let Some(p) = self.engine.project_mut() {
+            self.ableton_bridge.apply(p)
+        } else {
+            false
+        };
+        self.ableton_active_last_frame = ableton_active;
 
         // OSC timecode sync — process pending timecode, manage transport.
         {

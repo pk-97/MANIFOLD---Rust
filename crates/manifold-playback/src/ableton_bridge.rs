@@ -181,6 +181,11 @@ pub struct AbletonBridge {
 
     // ── Dispatch buffer (avoid alloc per frame)
     dispatch_buffer: Vec<OscMessage>,
+
+    // ── Dirty flags for content thread
+    /// Set when discovery completes so the content thread knows to call
+    /// `validate_mappings` + `rebuild_listeners` and force a project snapshot.
+    validation_dirty: bool,
 }
 
 impl AbletonBridge {
@@ -202,6 +207,7 @@ impl AbletonBridge {
             write_targets: AHashMap::new(),
             active_listeners: AHashSet::new(),
             dispatch_buffer: Vec::new(),
+            validation_dirty: false,
         }
     }
 
@@ -384,10 +390,12 @@ impl AbletonBridge {
     }
 
     /// Apply pending Ableton values to project parameters.
-    pub fn apply(&self, project: &mut Project) {
+    /// Returns `true` if any values were written (so the content thread can
+    /// flag `modulation_active` and send a UI update this frame).
+    pub fn apply(&self, project: &mut Project) -> bool {
         let mut pending = self.pending_values.lock();
         if pending.is_empty() {
-            return;
+            return false;
         }
 
         for pv in pending.drain(..) {
@@ -401,6 +409,7 @@ impl AbletonBridge {
                 }
             }
         }
+        true
     }
 
     fn write_to_project(
@@ -979,6 +988,15 @@ impl AbletonBridge {
         self.session.connected = true;
         self.session_version += 1;
         self.discovery_state = DiscoveryState::Complete;
+        self.validation_dirty = true;
+    }
+
+    /// Returns true (and clears the flag) when discovery just completed and the
+    /// caller should run `validate_mappings` + `rebuild_listeners`.
+    pub fn take_validation_dirty(&mut self) -> bool {
+        let dirty = self.validation_dirty;
+        self.validation_dirty = false;
+        dirty
     }
 
     // ── Structural validation ─────────────────────────────────────
