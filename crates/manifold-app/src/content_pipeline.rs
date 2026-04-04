@@ -287,6 +287,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     pending,
                     native_event.signaled_value(),
                 );
+                // After a GPU timeout, clear the stale signal so we don't block
+                // indefinitely on subsequent frames waiting for a value that will
+                // never be signaled (e.g. if the command buffer errored out).
+                self.surface_signal_values[self.write_surface_index] = 0;
             }
         }
     }
@@ -456,6 +460,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     }
                 }
             }
+            gen_enc.add_completed_handler_with_status("Generators");
             gen_enc.commit();
         }
         let _gen_ms = _t0.elapsed().as_secs_f64() * 1000.0;
@@ -679,6 +684,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let native_event = self.native_event.as_ref().unwrap();
         native_enc.signal_event(native_event);
         self.native_signal_value = native_event.current_value();
+        native_enc.add_completed_handler_with_status("Compositor");
         native_enc.commit();
         let _comp_ms = _t0.elapsed().as_secs_f64() * 1000.0;
 

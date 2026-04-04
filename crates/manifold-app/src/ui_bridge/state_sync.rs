@@ -245,6 +245,11 @@ pub fn push_state(
 
         // Cache Ableton session for parameter mapping dropdown
         if let Some(session) = &content_state.ableton_session {
+            eprintln!(
+                "[AbletonBridge] UI received session: {} tracks, connected={}",
+                session.tracks.len(),
+                session.connected
+            );
             ui.ableton_session = Some(std::sync::Arc::clone(session));
         }
 

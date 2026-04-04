@@ -22,8 +22,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 const ABLETON_SEND_PORT: u16 = 11000;
 const ABLETON_RECV_PORT: u16 = 11001;
-const HEARTBEAT_INTERVAL_SECS: f64 = 2.0;
-const CONNECTION_TIMEOUT_SECS: f64 = 3.0;
+const HEARTBEAT_INTERVAL_SECS: f64 = 0.75;
+const CONNECTION_TIMEOUT_SECS: f64 = 1.5;
 /// Timeout per discovery step before falling back to idle.
 const DISCOVERY_STEP_TIMEOUT_SECS: f64 = 3.0;
 
@@ -133,7 +133,6 @@ enum DiscoveryState {
     QueryingDevices {
         tracks: Vec<AbletonTrack>,
         pending_tracks: Vec<(i32, String)>,
-        current_track_id: i32,
         started: f64,
     },
     /// Querying macro parameters for rack devices.
@@ -141,8 +140,6 @@ enum DiscoveryState {
         tracks: Vec<AbletonTrack>,
         /// (track_id, device_id, device_name, class_name) for remaining racks.
         pending_racks: Vec<(i32, i32, String, String)>,
-        current_track_id: i32,
-        current_device_id: i32,
         started: f64,
     },
     /// Discovery complete.
@@ -333,6 +330,11 @@ impl AbletonBridge {
     ) {
         match packet {
             rosc::OscPacket::Message(msg) => {
+                eprintln!(
+                    "[AbletonBridge] Recv: {} ({} args)",
+                    msg.addr,
+                    msg.args.len()
+                );
                 queue.lock().messages.push(OscMessage {
                     address: msg.addr,
                     args: msg.args,
@@ -370,6 +372,10 @@ impl AbletonBridge {
 
         // Heartbeat
         if realtime - self.last_heartbeat >= HEARTBEAT_INTERVAL_SECS {
+            eprintln!(
+                "[AbletonBridge] Heartbeat → /live/song/get/num_tracks (connected={})",
+                self.connected
+            );
             self.send_osc("/live/song/get/num_tracks", &[]);
             self.last_heartbeat = realtime;
         }
@@ -483,12 +489,11 @@ impl AbletonBridge {
     fn handle_message(&mut self, msg: &OscMessage, realtime: f64) {
         self.last_response = realtime;
 
-        // If we weren't connected, we are now
+        // If we weren't connected, we are now — always re-discover after any disconnect.
         if !self.connected {
             self.connected = true;
             self.session.connected = true;
-            log::info!("[AbletonBridge] Ableton Live detected");
-            // Start discovery on first connection
+            eprintln!("[AbletonBridge] Ableton Live detected");
             self.start_discovery(realtime);
         }
 
@@ -504,12 +509,27 @@ impl AbletonBridge {
         match addr {
             "/live/song/get/num_tracks" => self.handle_track_count(msg, realtime),
             "/live/track/get/name" => self.handle_track_name(msg, realtime),
-            "/live/track/get/devices" => self.handle_devices(msg, realtime),
-            "/live/device/get/parameters" => self.handle_parameters(msg, realtime),
+            "/live/track/get/devices/name" => self.handle_device_names(msg, realtime),
+            "/live/track/get/devices/class_name" => {
+                self.handle_device_classes(msg, realtime);
+            }
+            "/live/device/get/parameters/name" => {
+                self.handle_param_names(msg, realtime);
+            }
+            "/live/device/get/parameters/min" => {
+                self.handle_param_min(msg, realtime);
+            }
+            "/live/device/get/parameters/max" => {
+                self.handle_param_max(msg, realtime);
+            }
             "/live/error" => {
-                if let Some(err) = msg.args.first() {
-                    log::warn!("[AbletonBridge] Ableton error: {err:?}");
-                }
+                let err_str: String = msg
+                    .args
+                    .iter()
+                    .map(|a| format!("{a:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                eprintln!("[AbletonBridge] Ableton error: {err_str}");
             }
             _ => {}
         }
@@ -538,6 +558,10 @@ impl AbletonBridge {
 
     fn handle_track_count(&mut self, msg: &OscMessage, realtime: f64) {
         let count = msg.args.first().and_then(osc_arg_int).unwrap_or(0);
+        eprintln!(
+            "[AbletonBridge] Track count = {count}, state = {:?}",
+            std::mem::discriminant(&self.discovery_state)
+        );
 
         // Check if track count changed (re-discovery needed)
         if matches!(self.discovery_state, DiscoveryState::Idle | DiscoveryState::Complete)
@@ -557,16 +581,21 @@ impl AbletonBridge {
                 self.finish_discovery(Vec::new());
                 return;
             }
+            eprintln!("[AbletonBridge] Querying {count} track names in burst");
             self.discovery_state = DiscoveryState::QueryingTracks {
                 expected_count: count,
                 tracks: Vec::with_capacity(count as usize),
-                next_track: 0,
+                next_track: count, // all sent
                 started: realtime,
             };
-            self.send_osc(
-                "/live/track/get/name",
-                &[rosc::OscType::Int(0)],
-            );
+            // Send ALL name queries at once — don't wait for each response
+            for i in 0..count {
+                send_osc_to(
+                    &self.send_socket,
+                    "/live/track/get/name",
+                    &[rosc::OscType::Int(i)],
+                );
+            }
         }
     }
 
@@ -589,184 +618,399 @@ impl AbletonBridge {
             .and_then(osc_arg_string)
             .unwrap_or_default();
 
-        tracks.push((track_id, name));
+        tracks.push((track_id, name.clone()));
         *next_track = track_id + 1;
+        eprintln!(
+            "[AbletonBridge] Track name {track_id}='{name}' ({}/{expected_count})",
+            tracks.len()
+        );
 
+        *started = realtime;
         if tracks.len() as i32 >= expected_count {
-            let track_list: Vec<(i32, String)> = tracks.clone();
-            let pending: Vec<(i32, String)> =
-                track_list.into_iter().rev().collect();
-            if let Some((tid, _)) = pending.last() {
-                let tid = *tid;
+            // All names received — sort by track_id and burst-query devices
+            let mut track_list: Vec<(i32, String)> = tracks.clone();
+            track_list.sort_by_key(|(id, _)| *id);
+            eprintln!(
+                "[AbletonBridge] All {} track names received — querying devices in burst",
+                track_list.len()
+            );
+            // Send device name + class_name queries for all tracks
+            for (tid, _) in &track_list {
                 send_osc_to(
                     &self.send_socket,
-                    "/live/track/get/devices",
-                    &[rosc::OscType::Int(tid)],
+                    "/live/track/get/devices/name",
+                    &[rosc::OscType::Int(*tid)],
                 );
-                self.discovery_state = DiscoveryState::QueryingDevices {
-                    tracks: Vec::new(),
-                    pending_tracks: pending,
-                    current_track_id: tid,
-                    started: realtime,
-                };
+                send_osc_to(
+                    &self.send_socket,
+                    "/live/track/get/devices/class_name",
+                    &[rosc::OscType::Int(*tid)],
+                );
             }
-        } else {
-            let next = *next_track;
-            *started = realtime;
-            send_osc_to(
-                &self.send_socket,
-                "/live/track/get/name",
-                &[rosc::OscType::Int(next)],
-            );
+            let pending: Vec<(i32, String)> =
+                track_list.into_iter().rev().collect();
+            self.discovery_state = DiscoveryState::QueryingDevices {
+                tracks: Vec::new(),
+                pending_tracks: pending,
+                started: realtime,
+            };
         }
     }
 
-    fn handle_devices(&mut self, msg: &OscMessage, realtime: f64) {
+    /// Handle `/live/track/get/devices/name` response.
+    /// Stores device names keyed by track_id in the pending state.
+    fn handle_device_names(&mut self, msg: &OscMessage, realtime: f64) {
         let DiscoveryState::QueryingDevices {
             ref mut tracks,
             ref mut pending_tracks,
-            ref mut current_track_id,
             ref mut started,
+            ..
         } = self.discovery_state
         else {
             return;
         };
 
-        // Parse devices: first arg is track_id, then groups of 3 (name, type, class_name)
-        let mut devices = Vec::new();
-        if msg.args.len() > 1 {
-            let device_args = &msg.args[1..];
-            let mut i = 0;
-            let mut did = 0;
-            while i + 2 < device_args.len() {
-                let name = osc_arg_string(&device_args[i]).unwrap_or_default();
-                let class_name =
-                    osc_arg_string(&device_args[i + 2]).unwrap_or_default();
-                devices.push(AbletonDevice {
-                    device_id: did,
-                    name,
-                    class_name,
-                    macros: Vec::new(),
-                });
-                did += 1;
-                i += 3;
+        let tid = msg.args.first().and_then(osc_arg_int).unwrap_or(-1);
+        let names: Vec<String> = msg.args[1..]
+            .iter()
+            .filter_map(osc_arg_string)
+            .collect();
+
+        // Store names on the track entry (create if needed)
+        if let Some(track) = tracks.iter_mut().find(|t| t.track_id == tid) {
+            // Names arrived first or second — merge
+            for (i, name) in names.iter().enumerate() {
+                if i < track.devices.len() {
+                    track.devices[i].name = name.clone();
+                } else {
+                    track.devices.push(AbletonDevice {
+                        device_id: i as i32,
+                        name: name.clone(),
+                        class_name: String::new(),
+                        macros: Vec::new(),
+                    });
+                }
+            }
+        } else {
+            // First response for this track — create entry
+            let track_name = pending_tracks
+                .iter()
+                .find(|(id, _)| *id == tid)
+                .map(|(_, n)| n.clone())
+                .unwrap_or_default();
+            tracks.push(AbletonTrack {
+                track_id: tid,
+                name: track_name,
+                devices: names
+                    .iter()
+                    .enumerate()
+                    .map(|(i, n)| AbletonDevice {
+                        device_id: i as i32,
+                        name: n.clone(),
+                        class_name: String::new(),
+                        macros: Vec::new(),
+                    })
+                    .collect(),
+            });
+        }
+        *started = realtime;
+        self.try_finish_device_query();
+    }
+
+    /// Handle `/live/track/get/devices/class_name` response.
+    fn handle_device_classes(&mut self, msg: &OscMessage, realtime: f64) {
+        let DiscoveryState::QueryingDevices {
+            ref mut tracks,
+            ref mut pending_tracks,
+            ref mut started,
+            ..
+        } = self.discovery_state
+        else {
+            return;
+        };
+
+        let tid = msg.args.first().and_then(osc_arg_int).unwrap_or(-1);
+        let classes: Vec<String> = msg.args[1..]
+            .iter()
+            .filter_map(osc_arg_string)
+            .collect();
+
+        if let Some(track) = tracks.iter_mut().find(|t| t.track_id == tid) {
+            for (i, cls) in classes.iter().enumerate() {
+                if i < track.devices.len() {
+                    track.devices[i].class_name = cls.clone();
+                } else {
+                    track.devices.push(AbletonDevice {
+                        device_id: i as i32,
+                        name: String::new(),
+                        class_name: cls.clone(),
+                        macros: Vec::new(),
+                    });
+                }
+            }
+        } else {
+            let track_name = pending_tracks
+                .iter()
+                .find(|(id, _)| *id == tid)
+                .map(|(_, n)| n.clone())
+                .unwrap_or_default();
+            tracks.push(AbletonTrack {
+                track_id: tid,
+                name: track_name,
+                devices: classes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| AbletonDevice {
+                        device_id: i as i32,
+                        name: String::new(),
+                        class_name: c.clone(),
+                        macros: Vec::new(),
+                    })
+                    .collect(),
+            });
+        }
+        *started = realtime;
+        self.try_finish_device_query();
+    }
+
+    /// Check if all device name + class_name responses have arrived.
+    /// We expect 2 responses per track (name + class_name). When all tracks
+    /// have devices with non-empty class_names, device query is complete.
+    fn try_finish_device_query(&mut self) {
+        let DiscoveryState::QueryingDevices {
+            ref tracks,
+            ref pending_tracks,
+            ..
+        } = self.discovery_state
+        else {
+            return;
+        };
+
+        // We need responses for every track in pending_tracks
+        let all_received = pending_tracks.iter().all(|(tid, _)| {
+            tracks.iter().any(|t| {
+                t.track_id == *tid
+                    && !t.devices.is_empty()
+                    && t.devices.iter().all(|d| !d.class_name.is_empty())
+            })
+        });
+
+        // Also accept if we have as many track entries as pending
+        // (tracks with zero devices won't have class_names)
+        let count_match = tracks.len() >= pending_tracks.len();
+
+        if !all_received && !count_match {
+            return;
+        }
+
+        // Extract state for the transition
+        let DiscoveryState::QueryingDevices {
+            tracks: ref final_tracks,
+            pending_tracks: _,
+            started,
+            ..
+        } = self.discovery_state
+        else {
+            return;
+        };
+        let realtime = started;
+        let final_tracks = final_tracks.clone();
+
+        // Collect ALL rack devices across all tracks for param queries
+        let mut all_racks: Vec<(i32, i32, String, String)> = Vec::new();
+        for track in &final_tracks {
+            for device in &track.devices {
+                if is_rack_device(&device.class_name) {
+                    all_racks.push((
+                        track.track_id,
+                        device.device_id,
+                        device.name.clone(),
+                        device.class_name.clone(),
+                    ));
+                }
             }
         }
 
-        let tid = *current_track_id;
-        let (_, track_name) =
-            pending_tracks.pop().unwrap_or((tid, String::new()));
+        let rack_count = all_racks.len();
+        let track_count = final_tracks.len();
+        eprintln!(
+            "[AbletonBridge] All {track_count} tracks' devices received — {rack_count} rack devices"
+        );
 
-        // Collect rack devices needing param queries
-        let rack_devices: Vec<(i32, i32, String, String)> = devices
-            .iter()
-            .filter(|d| is_rack_device(&d.class_name))
-            .map(|d| (tid, d.device_id, d.name.clone(), d.class_name.clone()))
-            .collect();
-
-        tracks.push(AbletonTrack {
-            track_id: tid,
-            name: track_name,
-            devices,
-        });
-
-        if !rack_devices.is_empty() {
-            let tracks_snapshot = tracks.clone();
+        if all_racks.is_empty() {
+            // No rack devices — discovery complete
+            self.finish_discovery(final_tracks);
+        } else {
+            // Burst-send param name/min/max queries for ALL rack devices
+            for (rtid, rdid, _, _) in &all_racks {
+                let args = &[rosc::OscType::Int(*rtid), rosc::OscType::Int(*rdid)];
+                send_osc_to(
+                    &self.send_socket,
+                    "/live/device/get/parameters/name",
+                    args,
+                );
+                send_osc_to(
+                    &self.send_socket,
+                    "/live/device/get/parameters/min",
+                    args,
+                );
+                send_osc_to(
+                    &self.send_socket,
+                    "/live/device/get/parameters/max",
+                    args,
+                );
+            }
             let pending_racks: Vec<(i32, i32, String, String)> =
-                rack_devices.into_iter().rev().collect();
-            let (rtid, rdid, _, _) = pending_racks.last().unwrap().clone();
-            send_osc_to(
-                &self.send_socket,
-                "/live/device/get/parameters",
-                &[rosc::OscType::Int(rtid), rosc::OscType::Int(rdid)],
-            );
+                all_racks.into_iter().rev().collect();
             self.discovery_state = DiscoveryState::QueryingParams {
-                tracks: tracks_snapshot,
+                tracks: final_tracks,
                 pending_racks,
-                current_track_id: rtid,
-                current_device_id: rdid,
                 started: realtime,
             };
-        } else if let Some((next_tid, _)) = pending_tracks.last() {
-            let next_tid = *next_tid;
-            *current_track_id = next_tid;
-            *started = realtime;
-            send_osc_to(
-                &self.send_socket,
-                "/live/track/get/devices",
-                &[rosc::OscType::Int(next_tid)],
-            );
-        } else {
-            let final_tracks = tracks.clone();
-            self.finish_discovery(final_tracks);
         }
     }
 
-    fn handle_parameters(&mut self, msg: &OscMessage, realtime: f64) {
+    /// Handle `/live/device/get/parameters/name` — store macro names on device.
+    fn handle_param_names(&mut self, msg: &OscMessage, realtime: f64) {
         let DiscoveryState::QueryingParams {
             ref mut tracks,
-            ref mut pending_racks,
-            ref mut current_track_id,
-            ref mut current_device_id,
             ref mut started,
+            ..
         } = self.discovery_state
         else {
             return;
         };
 
-        // Parse params: track_id, device_id, then groups of 5
-        // (name, value, min, max, is_quantized)
-        let mut macros = Vec::new();
-        if msg.args.len() > 2 {
-            let param_args = &msg.args[2..];
-            let mut i = 0;
-            let mut pid = 0i32;
-            while i + 4 < param_args.len() && pid < RACK_MACRO_COUNT as i32 {
-                let name = osc_arg_string(&param_args[i]).unwrap_or_default();
-                let value = osc_arg_float(&param_args[i + 1]).unwrap_or(0.0);
-                let min = osc_arg_float(&param_args[i + 2]).unwrap_or(0.0);
-                let max = osc_arg_float(&param_args[i + 3]).unwrap_or(1.0);
-                macros.push(AbletonMacro {
-                    param_id: pid,
-                    name,
-                    value,
-                    min,
-                    max,
-                });
-                pid += 1;
-                i += 5;
+        let tid = msg.args.first().and_then(osc_arg_int).unwrap_or(-1);
+        let did = msg.args.get(1).and_then(osc_arg_int).unwrap_or(-1);
+        let names: Vec<String> = msg.args[2..]
+            .iter()
+            .filter_map(osc_arg_string)
+            .collect();
+
+        if let Some(track) = tracks.iter_mut().find(|t| t.track_id == tid)
+            && let Some(device) = track.devices.iter_mut().find(|d| d.device_id == did)
+        {
+            // Ensure we have macro entries (limited to RACK_MACRO_COUNT)
+            for (i, name) in names.iter().take(RACK_MACRO_COUNT).enumerate() {
+                if i < device.macros.len() {
+                    device.macros[i].name = name.clone();
+                } else {
+                    device.macros.push(AbletonMacro {
+                        param_id: i as i32,
+                        name: name.clone(),
+                        value: 0.0,
+                        min: 0.0,
+                        max: 1.0,
+                    });
+                }
             }
         }
+        *started = realtime;
+        self.try_finish_param_query();
+    }
 
-        let tid = *current_track_id;
-        let did = *current_device_id;
+    /// Handle `/live/device/get/parameters/min` — store min values.
+    fn handle_param_min(&mut self, msg: &OscMessage, realtime: f64) {
+        let DiscoveryState::QueryingParams {
+            ref mut tracks,
+            ref mut started,
+            ..
+        } = self.discovery_state
+        else {
+            return;
+        };
 
-        // Assign macros to the correct device
+        let tid = msg.args.first().and_then(osc_arg_int).unwrap_or(-1);
+        let did = msg.args.get(1).and_then(osc_arg_int).unwrap_or(-1);
+        let mins: Vec<f32> = msg.args[2..]
+            .iter()
+            .filter_map(osc_arg_float)
+            .collect();
+
         if let Some(track) = tracks.iter_mut().find(|t| t.track_id == tid)
-            && let Some(device) =
-                track.devices.iter_mut().find(|d| d.device_id == did)
+            && let Some(device) = track.devices.iter_mut().find(|d| d.device_id == did)
         {
-            device.macros = macros;
+            for (i, &min_val) in mins.iter().take(RACK_MACRO_COUNT).enumerate() {
+                if i < device.macros.len() {
+                    device.macros[i].min = min_val;
+                }
+            }
+        }
+        *started = realtime;
+        self.try_finish_param_query();
+    }
+
+    /// Handle `/live/device/get/parameters/max` — store max values.
+    fn handle_param_max(&mut self, msg: &OscMessage, realtime: f64) {
+        let DiscoveryState::QueryingParams {
+            ref mut tracks,
+            ref mut started,
+            ..
+        } = self.discovery_state
+        else {
+            return;
+        };
+
+        let tid = msg.args.first().and_then(osc_arg_int).unwrap_or(-1);
+        let did = msg.args.get(1).and_then(osc_arg_int).unwrap_or(-1);
+        let maxs: Vec<f32> = msg.args[2..]
+            .iter()
+            .filter_map(osc_arg_float)
+            .collect();
+
+        if let Some(track) = tracks.iter_mut().find(|t| t.track_id == tid)
+            && let Some(device) = track.devices.iter_mut().find(|d| d.device_id == did)
+        {
+            for (i, &max_val) in maxs.iter().take(RACK_MACRO_COUNT).enumerate() {
+                if i < device.macros.len() {
+                    device.macros[i].max = max_val;
+                }
+            }
+        }
+        *started = realtime;
+        self.try_finish_param_query();
+    }
+
+    /// Check if all param name/min/max responses have arrived for all rack devices.
+    /// We sent 3 queries per rack (name, min, max). A rack is "complete" when
+    /// its macros have non-empty names (name response arrived).
+    fn try_finish_param_query(&mut self) {
+        let DiscoveryState::QueryingParams {
+            ref tracks,
+            ref pending_racks,
+            ..
+        } = self.discovery_state
+        else {
+            return;
+        };
+
+        // Check if all racks have macros with names filled in
+        let all_done = pending_racks.iter().all(|(rtid, rdid, _, _)| {
+            tracks
+                .iter()
+                .find(|t| t.track_id == *rtid)
+                .and_then(|t| t.devices.iter().find(|d| d.device_id == *rdid))
+                .is_some_and(|d| !d.macros.is_empty() && d.macros.iter().all(|m| !m.name.is_empty()))
+        });
+
+        if !all_done {
+            return;
         }
 
-        pending_racks.pop();
+        let DiscoveryState::QueryingParams {
+            ref tracks, ..
+        } = self.discovery_state
+        else {
+            return;
+        };
+        let final_tracks = tracks.clone();
 
-        if let Some((next_tid, next_did, _, _)) = pending_racks.last() {
-            *current_track_id = *next_tid;
-            *current_device_id = *next_did;
-            *started = realtime;
-            send_osc_to(
-                &self.send_socket,
-                "/live/device/get/parameters",
-                &[
-                    rosc::OscType::Int(*next_tid),
-                    rosc::OscType::Int(*next_did),
-                ],
-            );
-        } else {
-            let final_tracks = tracks.clone();
-            self.finish_discovery(final_tracks);
-        }
+        eprintln!(
+            "[AbletonBridge] All rack params received — {} racks complete",
+            pending_racks.len()
+        );
+        self.finish_discovery(final_tracks);
     }
 
     fn finish_discovery(&mut self, tracks: Vec<AbletonTrack>) {
@@ -774,7 +1018,7 @@ impl AbletonBridge {
         self.session.connected = true;
         self.session_version += 1;
         self.discovery_state = DiscoveryState::Complete;
-        log::info!(
+        eprintln!(
             "[AbletonBridge] Discovery complete — {} tracks, {} rack devices",
             self.session.tracks.len(),
             self.session

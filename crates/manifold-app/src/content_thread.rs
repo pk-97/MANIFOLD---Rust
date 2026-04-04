@@ -228,13 +228,34 @@ impl ContentThread {
         }
 
         loop {
-            // 1. Drain ALL pending commands
+            // 1. Drain ALL pending commands, coalescing consecutive seeks.
+            // During scrubbing the UI sends a SeekTo/SeekToBeat per mouse-move
+            // event — at high polling rates this floods the channel. Only the
+            // final seek in a burst matters, so we defer it and overwrite.
+            let mut pending_seek: Option<ContentCommand> = None;
             loop {
                 match cmd_rx.try_recv() {
                     Ok(ContentCommand::StartExport(config)) => {
+                        // Flush any pending seek before entering export.
+                        if let Some(seek) = pending_seek.take() {
+                            let _ = self.handle_command(seek);
+                        }
                         self.run_export(*config, &cmd_rx, &state_tx);
                     }
+                    Ok(cmd @ ContentCommand::SeekTo(_))
+                    | Ok(cmd @ ContentCommand::SeekToBeat(_)) => {
+                        // Coalesce: overwrite previous pending seek.
+                        pending_seek = Some(cmd);
+                    }
                     Ok(cmd) => {
+                        // Flush any pending seek before a non-seek command
+                        // to preserve ordering (e.g. Seek then Play).
+                        if let Some(seek) = pending_seek.take()
+                            && self.handle_command(seek)
+                        {
+                            log::info!("[ContentThread] shutdown received");
+                            return;
+                        }
                         if self.handle_command(cmd) {
                             log::info!("[ContentThread] shutdown received");
                             return;
@@ -246,6 +267,13 @@ impl ContentThread {
                         return;
                     }
                 }
+            }
+            // Apply the final coalesced seek (if any).
+            if let Some(seek) = pending_seek.take()
+                && self.handle_command(seek)
+            {
+                log::info!("[ContentThread] shutdown received");
+                return;
             }
 
             // 2. Wait for next content frame (skip tick+render when paused)
@@ -769,7 +797,13 @@ impl ContentThread {
                 export_status: String::new(),
                 export_finished: None,
                 ableton_session: if self.ableton_bridge.session_changed() {
-                    Some(Arc::new(self.ableton_bridge.session().clone()))
+                    let s = self.ableton_bridge.session();
+                    eprintln!(
+                        "[AbletonBridge] Pushing session to UI: {} tracks, connected={}",
+                        s.tracks.len(),
+                        s.connected
+                    );
+                    Some(Arc::new(s.clone()))
                 } else {
                     None
                 },
