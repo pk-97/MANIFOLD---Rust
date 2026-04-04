@@ -91,8 +91,14 @@ struct AbletonPendingValue {
 struct WriteTarget {
     target: AbletonMappingTarget,
     param_index: usize,
+    /// Ableton parameter range — the raw value arrives in [ableton_min, ableton_max]
+    /// and must be normalized to 0-1 before applying range_min/range_max trim.
+    ableton_min: f32,
+    ableton_max: f32,
+    /// User trim handles (0-1 normalized, applied after Ableton normalization).
     range_min: f32,
     range_max: f32,
+    /// MANIFOLD parameter range — final 0-1 maps into [param_min, param_max].
     param_min: f32,
     param_max: f32,
 }
@@ -402,8 +408,17 @@ impl AbletonBridge {
             let key = (pv.track_id, pv.device_id, pv.param_id);
             if let Some(targets) = self.write_targets.get(&key) {
                 for wt in targets {
-                    let mapped = wt.range_min
-                        + (wt.range_max - wt.range_min) * pv.value.clamp(0.0, 1.0);
+                    // Normalize Ableton raw value into 0-1.
+                    let span = wt.ableton_max - wt.ableton_min;
+                    let normalized = if span > f32::EPSILON {
+                        ((pv.value - wt.ableton_min) / span).clamp(0.0, 1.0)
+                    } else {
+                        pv.value.clamp(0.0, 1.0)
+                    };
+                    // Apply user trim handles.
+                    let mapped =
+                        wt.range_min + (wt.range_max - wt.range_min) * normalized;
+                    // Map into MANIFOLD parameter range.
                     let value = wt.param_min + (wt.param_max - wt.param_min) * mapped;
                     Self::write_to_project(project, &wt.target, wt.param_index, value);
                 }
@@ -1145,6 +1160,24 @@ impl AbletonBridge {
 
     // ── Listener management ──────────────��────────────────────────
 
+    /// Look up the [min, max] range that AbletonOSC uses for a given parameter.
+    /// Rack macros are typically 0-127 (raw MIDI) but may have custom ranges.
+    fn ableton_param_range(&self, track_id: i32, device_id: i32, param_id: i32) -> (f32, f32) {
+        for track in &self.session.tracks {
+            if track.track_id != track_id { continue; }
+            for device in &track.devices {
+                if device.device_id != device_id { continue; }
+                for mac in &device.macros {
+                    if mac.param_id == param_id {
+                        let hi = if mac.max > mac.min { mac.max } else { mac.min + 1.0 };
+                        return (mac.min, hi);
+                    }
+                }
+            }
+        }
+        (0.0, 1.0) // unknown — treat as already normalized
+    }
+
     /// Scan all Active mappings in the project and subscribe/unsubscribe accordingly.
     pub fn rebuild_listeners(&mut self, project: &Project) {
         let mut needed: AHashSet<(i32, i32, i32)> = AHashSet::new();
@@ -1172,6 +1205,11 @@ impl AbletonBridge {
                     let (pmin, pmax) = param_def
                         .map(|pd| (pd.min, pd.max))
                         .unwrap_or((0.0, 1.0));
+                    let (abl_min, abl_max) = self.ableton_param_range(
+                        mapping.address.track_id,
+                        mapping.address.device_id,
+                        mapping.address.param_id,
+                    );
 
                     new_write_targets
                         .entry(key)
@@ -1182,6 +1220,8 @@ impl AbletonBridge {
                                 param_index: mapping.param_index,
                             },
                             param_index: mapping.param_index,
+                            ableton_min: abl_min,
+                            ableton_max: abl_max,
                             range_min: mapping.range_min,
                             range_max: mapping.range_max,
                             param_min: pmin,
@@ -1217,6 +1257,11 @@ impl AbletonBridge {
                             let (pmin, pmax) = param_def
                                 .map(|pd| (pd.min, pd.max))
                                 .unwrap_or((0.0, 1.0));
+                            let (abl_min, abl_max) = self.ableton_param_range(
+                                mapping.address.track_id,
+                                mapping.address.device_id,
+                                mapping.address.param_id,
+                            );
 
                             new_write_targets
                                 .entry(key)
@@ -1228,6 +1273,8 @@ impl AbletonBridge {
                                         param_index: mapping.param_index,
                                     },
                                     param_index: mapping.param_index,
+                                    ableton_min: abl_min,
+                                    ableton_max: abl_max,
                                     range_min: mapping.range_min,
                                     range_max: mapping.range_max,
                                     param_min: pmin,
@@ -1260,6 +1307,11 @@ impl AbletonBridge {
                     let (pmin, pmax) = param_def
                         .map(|pd| (pd.min, pd.max))
                         .unwrap_or((0.0, 1.0));
+                    let (abl_min, abl_max) = self.ableton_param_range(
+                        mapping.address.track_id,
+                        mapping.address.device_id,
+                        mapping.address.param_id,
+                    );
 
                     new_write_targets
                         .entry(key)
@@ -1270,6 +1322,8 @@ impl AbletonBridge {
                                 param_index: mapping.param_index,
                             },
                             param_index: mapping.param_index,
+                            ableton_min: abl_min,
+                            ableton_max: abl_max,
                             range_min: mapping.range_min,
                             range_max: mapping.range_max,
                             param_min: pmin,
@@ -1435,17 +1489,25 @@ mod tests {
                 param_index: 0,
             },
             param_index: 0,
+            // Rack macros send 0-127 from Ableton
+            ableton_min: 0.0,
+            ableton_max: 127.0,
             range_min: 0.25,
             range_max: 0.75,
             param_min: 0.0,
             param_max: 2.0,
         };
-        // Ableton sends 0.5 → mapped = 0.25 + 0.5 * 0.5 = 0.5
-        // value = 0 + 2 * 0.5 = 1.0
-        let ableton_val = 0.5_f32;
-        let mapped = wt.range_min + (wt.range_max - wt.range_min) * ableton_val;
+        // Ableton sends 63.5 (50% of 0-127)
+        // → normalized = 0.5
+        // → mapped = 0.25 + 0.5 * 0.5 = 0.5
+        // → value = 0 + 2 * 0.5 = 1.0
+        let ableton_val = 63.5_f32;
+        let span = wt.ableton_max - wt.ableton_min;
+        let normalized = ((ableton_val - wt.ableton_min) / span).clamp(0.0, 1.0);
+        let mapped = wt.range_min + (wt.range_max - wt.range_min) * normalized;
         let value = wt.param_min + (wt.param_max - wt.param_min) * mapped;
-        assert!((mapped - 0.5).abs() < f32::EPSILON);
-        assert!((value - 1.0).abs() < f32::EPSILON);
+        assert!((normalized - 0.5).abs() < 0.01);
+        assert!((mapped - 0.5).abs() < 0.01);
+        assert!((value - 1.0).abs() < 0.01);
     }
 }
