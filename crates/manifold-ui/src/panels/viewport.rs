@@ -1728,21 +1728,6 @@ impl TimelineViewportPanel {
         let tr_top = tr.y;
         let tr_bottom = tr.y + tr.height;
 
-        // Top separator: border between ruler and first track
-        if !self.tracks.is_empty() {
-            tree.add_panel(
-                -1,
-                tr.x,
-                tr_top,
-                tr.width,
-                color::TRACK_SEPARATOR_HEIGHT,
-                UIStyle {
-                    bg_color: color::SEPARATOR_COLOR,
-                    ..UIStyle::default()
-                },
-            );
-        }
-
         // Pre-allocate ALL tracks (including off-screen) for update-in-place.
         // Off-screen tracks get set_visible(false).
         for (i, track) in self.tracks.iter().enumerate() {
@@ -1833,6 +1818,28 @@ impl TimelineViewportPanel {
                 accent_id,
                 separator_id,
             });
+        }
+
+        // Top separator: drawn AFTER track backgrounds so it's not covered.
+        // Uses group style if the first track is a group.
+        if !self.tracks.is_empty() {
+            let first_is_group = self.tracks[0].is_group;
+            let (sep_h, sep_color) = if first_is_group {
+                (color::GROUP_SEPARATOR_HEIGHT, color::GROUP_SEPARATOR_COLOR)
+            } else {
+                (color::TRACK_SEPARATOR_HEIGHT, color::SEPARATOR_COLOR)
+            };
+            tree.add_panel(
+                -1,
+                tr.x,
+                tr_top,
+                tr.width,
+                sep_h,
+                UIStyle {
+                    bg_color: sep_color,
+                    ..UIStyle::default()
+                },
+            );
         }
     }
 

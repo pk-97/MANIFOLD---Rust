@@ -592,9 +592,21 @@ fn paint_tint_bands(
     let beats_per_bar = time_sig_numerator as f32;
     let tint = color::GRID_TINT_BAND;
 
-    // Adaptive interval: use beats when zoomed in enough, bars when zoomed out
-    let use_beats = logical_ppb >= 20.0;
-    let interval = if use_beats { 1.0 } else { beats_per_bar };
+    // Adaptive interval: use beats when zoomed in, bars when zoomed out,
+    // multi-bar groups at extreme zoom-out (keeps tint regions wide enough
+    // to be visible).
+    let bar_px = logical_ppb * beats_per_bar;
+    let interval = if logical_ppb >= 20.0 {
+        1.0 // Per-beat
+    } else if bar_px >= 8.0 {
+        beats_per_bar // Per-bar
+    } else if bar_px >= 4.0 {
+        beats_per_bar * 2.0 // Every 2 bars
+    } else if bar_px >= 2.0 {
+        beats_per_bar * 4.0 // Every 4 bars
+    } else {
+        beats_per_bar * 8.0 // Every 8 bars
+    };
 
     // Find the first interval boundary at or before viewport start
     let first = (viewport_min_beat / interval).floor() * interval;
