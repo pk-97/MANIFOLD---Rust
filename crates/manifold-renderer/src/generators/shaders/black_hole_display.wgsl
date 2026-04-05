@@ -252,7 +252,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let c2_ca = d2.b;
     let c2_sa = d2.a;
 
-    // ── Star field background (gravitationally lensed) ──
+    // ── Star field background ──
     var color = vec3<f32>(0.0);
     if sky.w > 0.5 {
         color = star_field(normalize(sky.xyz), u.stars_brightness);

@@ -188,8 +188,6 @@ impl Generator for BlackHoleGenerator {
         self.ensure_deflection_maps(gpu.device, defl_w, defl_h);
 
         // ── Pass 1: Deflection Map (only on camera/scale/steps change) ──
-        // disk_inner/disk_outer don't trigger rebake — crossing detection uses
-        // fixed generous bounds, opacity is computed fresh in the display pass.
         if self.needs_rebake(cam_dist, tilt_rad, rotate_rad, uv_scale, steps, spin) {
             let defl_uniforms = DeflectionUniforms {
                 aspect: ctx.aspect,
