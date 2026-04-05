@@ -13,7 +13,6 @@ pub mod midi_parser;
 pub mod modulation;
 pub mod osc_param_router;
 pub mod osc_receiver;
-pub mod osc_registry;
 pub mod osc_sender;
 pub mod osc_sync;
 pub mod percussion_alignment;

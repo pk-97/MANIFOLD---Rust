@@ -140,7 +140,6 @@ pub struct AbletonTrackSignature {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AbletonSetContext {
-    pub set_file_path: String,
     pub track_signatures: Vec<AbletonTrackSignature>,
 }
 
@@ -254,7 +253,6 @@ mod tests {
     #[test]
     fn serde_roundtrip_set_context() {
         let ctx = AbletonSetContext {
-            set_file_path: "/path/to/set.als".to_string(),
             track_signatures: vec![
                 AbletonTrackSignature {
                     device_classes: vec![

@@ -66,7 +66,6 @@ const PLAY_SEEK_DELAY_SECS: f64 = 0.015;
 #[derive(Debug, Clone, Default)]
 pub struct AbletonSession {
     pub connected: bool,
-    pub set_file_path: String,
     pub tracks: Vec<AbletonTrack>,
 }
 
@@ -98,14 +97,10 @@ fn is_rack_device(class_name: &str) -> bool {
     RACK_CLASS_NAMES.contains(&class_name)
 }
 
-// ── Pending value from Ableton ────────────────────────────────────
-
-struct AbletonPendingValue {
-    track_id: i32,
-    device_id: i32,
-    param_id: i32,
-    value: f32,
-}
+// ── Pending values from Ableton ───────────────────────────────────
+// Keyed by (track_id, device_id, param_id) → latest raw value.
+// Only the latest value per parameter is kept (backpressure).
+type PendingValueMap = AHashMap<(i32, i32, i32), f32>;
 
 // ── Pending transport state from Ableton ──────────────────────────
 
@@ -130,6 +125,8 @@ struct WriteTarget {
     /// User trim handles (0-1 normalized, applied after Ableton normalization).
     range_min: f32,
     range_max: f32,
+    /// When true, the normalized value is inverted (1.0 - v) before trim mapping.
+    inverted: bool,
     /// MANIFOLD parameter range — final 0-1 maps into [param_min, param_max].
     param_min: f32,
     param_max: f32,
@@ -209,16 +206,15 @@ pub struct AbletonBridge {
     last_response: f64,
 
     // ── Parameter values from Ableton (content thread drains these)
-    pending_values: Arc<Mutex<Vec<AbletonPendingValue>>>,
+    /// Keyed by (track_id, device_id, param_id) → latest raw value.
+    /// Only the most recent value per parameter is kept (backpressure).
+    pending_values: Arc<Mutex<PendingValueMap>>,
 
     // ── Pre-built fast lookup: (track_id, device_id, param_id) → write targets
     write_targets: AHashMap<(i32, i32, i32), Vec<WriteTarget>>,
 
     // ── Active listener subscriptions
     active_listeners: AHashSet<(i32, i32, i32)>,
-
-    // ── Dispatch buffer (avoid alloc per frame)
-    dispatch_buffer: Vec<OscMessage>,
 
     // ── Dirty flags for content thread
     /// Set when discovery completes so the content thread knows to call
@@ -271,10 +267,9 @@ impl AbletonBridge {
             connected: false,
             last_heartbeat: 0.0,
             last_response: 0.0,
-            pending_values: Arc::new(Mutex::new(Vec::new())),
+            pending_values: Arc::new(Mutex::new(AHashMap::new())),
             write_targets: AHashMap::new(),
             active_listeners: AHashSet::new(),
-            dispatch_buffer: Vec::new(),
             validation_dirty: false,
             pending_transport: Arc::new(Mutex::new(PendingTransportState::default())),
             transport_enabled: false,
@@ -412,6 +407,7 @@ impl AbletonBridge {
         self.write_targets.clear();
         self.message_queue.lock().messages.clear();
         self.pending_values.lock().clear();
+
         // Clear transport state
         self.transport_enabled = false;
         self.ableton_is_playing = false;
@@ -452,18 +448,16 @@ impl AbletonBridge {
             return;
         }
 
-        // Drain received messages
-        {
+        // Drain received messages — take ownership to avoid per-message clone.
+        let messages = {
             let mut q = self.message_queue.lock();
-            self.dispatch_buffer.append(&mut q.messages);
-        }
+            std::mem::take(&mut q.messages)
+        };
 
-        // Process messages
-        for i in 0..self.dispatch_buffer.len() {
-            let msg = self.dispatch_buffer[i].clone();
-            self.handle_message(&msg, realtime);
+        // Process messages — we own the Vec, no clone needed.
+        for msg in &messages {
+            self.handle_message(msg, realtime);
         }
-        self.dispatch_buffer.clear();
 
         // Heartbeat
         if realtime - self.last_heartbeat >= HEARTBEAT_INTERVAL_SECS {
@@ -495,17 +489,20 @@ impl AbletonBridge {
             return false;
         }
 
-        for pv in pending.drain(..) {
-            let key = (pv.track_id, pv.device_id, pv.param_id);
+        for (key, raw_value) in pending.drain() {
             if let Some(targets) = self.write_targets.get(&key) {
                 for wt in targets {
                     // Normalize Ableton raw value into 0-1.
                     let span = wt.ableton_max - wt.ableton_min;
-                    let normalized = if span > f32::EPSILON {
-                        ((pv.value - wt.ableton_min) / span).clamp(0.0, 1.0)
+                    let mut normalized = if span > f32::EPSILON {
+                        ((raw_value - wt.ableton_min) / span).clamp(0.0, 1.0)
                     } else {
-                        pv.value.clamp(0.0, 1.0)
+                        raw_value.clamp(0.0, 1.0)
                     };
+                    // Apply inversion before trim range mapping.
+                    if wt.inverted {
+                        normalized = 1.0 - normalized;
+                    }
                     // Apply user trim handles.
                     let mapped =
                         wt.range_min + (wt.range_max - wt.range_min) * normalized;
@@ -671,12 +668,7 @@ impl AbletonBridge {
 
         let key = (track_id, device_id, param_id);
         if self.write_targets.contains_key(&key) {
-            self.pending_values.lock().push(AbletonPendingValue {
-                track_id,
-                device_id,
-                param_id,
-                value,
-            });
+            self.pending_values.lock().insert(key, value);
         }
     }
 
@@ -1355,6 +1347,7 @@ impl AbletonBridge {
                             ableton_max: abl_max,
                             range_min: mapping.range_min,
                             range_max: mapping.range_max,
+                            inverted: mapping.inverted,
                             param_min: pmin,
                             param_max: pmax,
                         });
@@ -1408,6 +1401,7 @@ impl AbletonBridge {
                                     ableton_max: abl_max,
                                     range_min: mapping.range_min,
                                     range_max: mapping.range_max,
+                                    inverted: mapping.inverted,
                                     param_min: pmin,
                                     param_max: pmax,
                                 });
@@ -1457,6 +1451,7 @@ impl AbletonBridge {
                             ableton_max: abl_max,
                             range_min: mapping.range_min,
                             range_max: mapping.range_max,
+                            inverted: mapping.inverted,
                             param_min: pmin,
                             param_max: pmax,
                         });
@@ -1492,6 +1487,7 @@ impl AbletonBridge {
                         ableton_max: abl_max,
                         range_min: mapping.range_min,
                         range_max: mapping.range_max,
+                        inverted: mapping.inverted,
                         param_min: 0.0,
                         param_max: 1.0,
                     });
@@ -1533,7 +1529,6 @@ impl AbletonBridge {
     /// Build an `AbletonSetContext` from the current session for project storage.
     pub fn build_set_context(&self) -> AbletonSetContext {
         AbletonSetContext {
-            set_file_path: self.session.set_file_path.clone(),
             track_signatures: self
                 .session
                 .tracks
@@ -1680,7 +1675,7 @@ impl AbletonBridge {
                 self.transport_last_was_playing = is_playing;
                 self.transport_last_sent_beat = current_beat;
                 self.transport_last_sent_realtime = now;
-                eprintln!(
+                log::debug!(
                     "[ABL-TRANSPORT] SUPPRESSED (external sync, playing={})",
                     is_playing
                 );
@@ -1696,7 +1691,7 @@ impl AbletonBridge {
                 }
                 self.pending_play_seek = Some((current_beat, now));
                 arbiter.set_manifold_owns_at(Seconds(now));
-                eprintln!(
+                log::debug!(
                     "[ABL-TRANSPORT] PLAY beat={:.1} (3x, seek deferred)",
                     current_beat
                 );
@@ -1706,7 +1701,7 @@ impl AbletonBridge {
                 for _ in 0..TRANSPORT_SEND_COUNT {
                     self.send_osc("/live/song/stop_playing", &[]);
                 }
-                eprintln!(
+                log::debug!(
                     "[ABL-TRANSPORT] STOP (3x, beat was {:.1})",
                     current_beat
                 );
@@ -1755,7 +1750,7 @@ impl AbletonBridge {
             self.pending_play_seek = None;
             self.transport_last_sent_beat = beat;
             self.transport_last_sent_realtime = now;
-            eprintln!(
+            log::debug!(
                 "[ABL-TRANSPORT] DEFERRED SEEK beat={:.1} ({:.0}ms after play)",
                 beat,
                 (now - play_sent_at) * 1000.0
@@ -1924,6 +1919,7 @@ mod tests {
             ableton_max: 127.0,
             range_min: 0.25,
             range_max: 0.75,
+            inverted: false,
             param_min: 0.0,
             param_max: 2.0,
         };

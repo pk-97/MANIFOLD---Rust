@@ -16,7 +16,8 @@ use crate::osc_receiver::OscReceiver;
 use manifold_core::EffectTypeId;
 use manifold_core::LayerId;
 use manifold_core::project::Project;
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 // ── Target descriptor ───────────────────────────────────────────
 
@@ -93,9 +94,7 @@ impl OscParamRouter {
             receiver.unsubscribe_all(addr);
         }
         self.registered_addresses.clear();
-        if let Ok(mut p) = self.pending.lock() {
-            p.clear();
-        }
+        self.pending.lock().clear();
 
         // Macro sliders: /macro/1 through /macro/8
         for i in 0..manifold_core::macro_bank::MACRO_COUNT {
@@ -259,12 +258,10 @@ impl OscParamRouter {
                         // Unity: Mathf.Lerp(min, max, v) — clamps t to 0-1
                         min + (max - min) * v.clamp(0.0, 1.0)
                     };
-                    if let Ok(mut buf) = pending.lock() {
-                        buf.push(PendingWrite {
-                            target: target_clone.clone(),
-                            value: mapped,
-                        });
-                    }
+                    pending.lock().push(PendingWrite {
+                        target: target_clone.clone(),
+                        value: mapped,
+                    });
                 }
             }),
         );
@@ -275,10 +272,7 @@ impl OscParamRouter {
     /// Apply all pending OSC parameter writes to the project.
     /// Call immediately after `osc_receiver.update()` in the content thread tick.
     pub fn apply(&self, project: &mut Project) {
-        let mut pending = match self.pending.lock() {
-            Ok(p) => p,
-            Err(_) => return,
-        };
+        let mut pending = self.pending.lock();
         if pending.is_empty() {
             return;
         }
