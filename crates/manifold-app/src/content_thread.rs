@@ -413,6 +413,8 @@ impl ContentThread {
             // 4b. Transport output (LateUpdate equivalent — after engine tick).
             // In M4L mode: OscPositionSender sends /manifold/* to M4L device.
             // In AbletonOSC mode: AbletonBridge sends /live/song/* to AbletonOSC.
+            // Outbound transport: AbletonOSC mode uses bridge, M4L mode uses
+            // OscPositionSender. Both use the same fire-and-forget pattern.
             let osc_sync_mode = self.engine.project()
                 .map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode);
             if osc_sync_mode == OscSyncMode::AbletonOsc
@@ -965,38 +967,14 @@ impl ContentThread {
             );
         }
 
-        // AbletonOSC transport sync — transport commands only (play/stop).
-        // This is a command channel, NOT a clock source. It does not claim
-        // authority and bypasses the arbiter — MIDI Clock remains the timing
-        // authority. Think of it as a remote play/stop button.
-        if osc_sync_mode == OscSyncMode::AbletonOsc
-            && self.ableton_bridge.is_transport_receiving(now.0)
-        {
-            // Transport change detection (Ableton → MANIFOLD).
-            if let Some(playing) =
-                self.ableton_bridge.transport_changed_externally(now.0)
-            {
-                // Bypass arbiter — this is a transport command, not clock sync.
-                // Set suppress flag so OscPositionSender / late_update_transport
-                // doesn't echo it back.
-                self.sync_arbiter.suppress_next_transport = true;
-                if playing {
-                    self.engine.play();
-                } else {
-                    self.engine.pause();
-                }
-            }
-
-            // Tempo feed — Ableton tempo changes are still useful.
-            let abl_tempo = self.ableton_bridge.ableton_tempo();
-            if abl_tempo > 0.0 {
-                self.engine.set_live_external_tempo(
-                    true,
-                    Bpm(abl_tempo),
-                    TempoPointSource::AbletonOsc,
-                );
-            }
-        }
+        // AbletonOSC inbound transport relay — DISABLED pending investigation.
+        // The is_playing listener echoes were causing play/pause loops and
+        // audio stutters. For now, M4L OscPositionSender handles outbound
+        // and MIDI CLK handles inbound transport state.
+        // TODO: Re-enable once echo suppression is reliable.
+        // if osc_sync_mode == OscSyncMode::AbletonOsc
+        //     && self.ableton_bridge.is_transport_receiving(now.0)
+        // { ... }
     }
 
     // ═══════════════════════════════════════════════════════════════

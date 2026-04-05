@@ -57,7 +57,9 @@ impl ContentThread {
                 // User-initiated transport: clear any stale suppress flag so
                 // OscPositionSender doesn't silently swallow this change.
                 // Also claim ownership so MIDI Clock doesn't fight us.
-                if self.osc_sender.is_sender_enabled() {
+                if self.osc_sender.is_sender_enabled()
+                    || self.ableton_bridge.is_transport_enabled()
+                {
                     self.sync_arbiter.suppress_next_transport = false;
                     self.sync_arbiter.set_manifold_owns_at(self.time_since_start);
                 }
@@ -78,7 +80,9 @@ impl ContentThread {
                 self.cache_link_beat_offset();
             }
             ContentCommand::Pause => {
-                if self.osc_sender.is_sender_enabled() {
+                if self.osc_sender.is_sender_enabled()
+                    || self.ableton_bridge.is_transport_enabled()
+                {
                     self.sync_arbiter.suppress_next_transport = false;
                     self.sync_arbiter.set_manifold_owns_at(self.time_since_start);
                 }
@@ -88,7 +92,9 @@ impl ContentThread {
                 self.engine.pause();
             }
             ContentCommand::Stop => {
-                if self.osc_sender.is_sender_enabled() {
+                if self.osc_sender.is_sender_enabled()
+                    || self.ableton_bridge.is_transport_enabled()
+                {
                     self.sync_arbiter.suppress_next_transport = false;
                     self.sync_arbiter.set_manifold_owns_at(self.time_since_start);
                 }
@@ -98,7 +104,9 @@ impl ContentThread {
                 self.link_beat_offset = f64::NAN;
             }
             ContentCommand::TogglePlayback => {
-                if self.osc_sender.is_sender_enabled() {
+                if self.osc_sender.is_sender_enabled()
+                    || self.ableton_bridge.is_transport_enabled()
+                {
                     self.sync_arbiter.suppress_next_transport = false;
                     self.sync_arbiter.set_manifold_owns_at(self.time_since_start);
                 }

@@ -40,16 +40,25 @@ const RACK_CLASS_NAMES: &[&str] = &[
 /// Number of macro parameters on a rack device (always 0-7).
 const RACK_MACRO_COUNT: usize = 8;
 
-/// State machine retry timeout — resend command if no confirmation after this.
-const SM_RETRY_TIMEOUT_SECS: f64 = 0.050;
-/// Maximum retries before giving up on a transport/seek command.
-const SM_MAX_RETRIES: u8 = 3;
-/// Beat tolerance for seek confirmation (position response within this = confirmed).
-const SEEK_CONFIRM_TOLERANCE: f32 = 0.5;
-/// Interval for position monitor polling (Ableton-initiated seek detection).
-const POSITION_POLL_INTERVAL_SECS: f64 = 0.250;
-/// Beat delta threshold for position monitor to trigger an inbound seek relay.
-const POSITION_RELAY_THRESHOLD: f32 = 0.5;
+/// After sending play/stop to Ableton, ignore inbound is_playing changes for
+/// this many seconds. Prevents echo loops (MANIFOLD → Ableton → MANIFOLD).
+const TRANSPORT_ECHO_WINDOW_SECS: f64 = 0.5;
+/// Minimum beat delta to trigger a seek message (same as OscPositionSender).
+const SEEK_THRESHOLD_BEATS: f32 = 0.5;
+/// Timeout for considering transport listeners as "receiving" from Ableton.
+const TRANSPORT_TIMEOUT_SECS: f64 = 2.0;
+/// Number of redundant sends for transport state changes (play/stop).
+/// UDP is fire-and-forget; redundancy guards against packet loss on localhost
+/// under load (Ableton + MIDI + OSC traffic). Matches OscPositionSender.
+const TRANSPORT_SEND_COUNT: u8 = 3;
+/// After a transport change, re-confirm for this many seconds.
+/// If the engine state still diverges from what was last sent, re-send.
+/// Covers AbletonOSC scheduler misses. Matches OscPositionSender.
+const CONFIRM_WINDOW_SECS: f64 = 0.3;
+/// Delay between start_playing and set/current_song_time (seconds).
+/// Matches M4L device which used seekTask.schedule(10) — Ableton needs
+/// a tick between play and position set to accept the seek.
+const PLAY_SEEK_DELAY_SECS: f64 = 0.015;
 
 // ── Session model (runtime only) ──────────────────────────────────
 
@@ -106,55 +115,6 @@ struct AbletonPendingValue {
 struct PendingTransportState {
     is_playing: Option<bool>,
     tempo: Option<f32>,
-    current_song_time: Option<f32>,
-}
-
-// ── Transport state machine types ────────────────────────────────
-
-/// Actions the content thread should apply to the engine after
-/// `process_transport()`. No heap allocation — at most one play/pause
-/// and one seek per frame.
-pub struct TransportActions {
-    pub play: bool,
-    pub pause: bool,
-    pub seek_beat: Option<f32>,
-}
-
-impl TransportActions {
-    fn none() -> Self {
-        Self { play: false, pause: false, seek_beat: None }
-    }
-}
-
-/// Transport (play/stop) state machine.
-/// Tracks pending outbound commands and waits for confirmation from Ableton.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum TransportCommand {
-    Idle,
-    PlaySent {
-        sent_at: f64,
-        retries: u8,
-        /// Beat position sent alongside play (for retries).
-        beat: f32,
-    },
-    StopSent {
-        sent_at: f64,
-        retries: u8,
-        /// Beat position sent alongside stop (to preserve position on retries).
-        beat: f32,
-    },
-}
-
-/// Seek (position) state machine.
-/// Tracks pending outbound seek commands and waits for position confirmation.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum SeekCommand {
-    Idle,
-    Sent {
-        target_beat: f32,
-        sent_at: f64,
-        retries: u8,
-    },
 }
 
 // ── Write target (pre-built lookup for hot path) ──────────────────
@@ -265,31 +225,35 @@ pub struct AbletonBridge {
     /// `validate_mappings` + `rebuild_listeners` and force a project snapshot.
     validation_dirty: bool,
 
-    // ── Transport sync (state machine) ─────────────────────────────
+    // ── Transport sync ───────────────────────────────────────────
     /// Pending transport state from receiver thread.
     pending_transport: Arc<Mutex<PendingTransportState>>,
     /// Whether transport listeners are subscribed.
     transport_enabled: bool,
-    /// Current is_playing state from Ableton (updated each frame by drain).
+    /// Last known is_playing state from Ableton.
     ableton_is_playing: bool,
-    /// Previous frame's Ableton is_playing — for edge detection.
-    last_ableton_is_playing: bool,
+    /// Previous frame's is_playing — for edge detection.
+    ableton_was_playing: bool,
     /// Latest tempo from Ableton.
     ableton_tempo: f32,
-    /// Latest position from Ableton (beats), from position polls.
-    ableton_position_beats: f32,
     /// Wall-clock time of last transport message from Ableton.
     transport_last_received: f64,
-    /// Transport (play/stop) state machine.
-    transport_sm: TransportCommand,
-    /// Seek (position) state machine.
-    seek_sm: SeekCommand,
-    /// What the SM expects MANIFOLD's play state to be.
-    /// Updated on relay (external→engine) and on outbound detection.
-    /// Prevents echoing relayed events back as outbound commands.
-    last_known_manifold_playing: bool,
-    /// Wall-clock time of last position monitor poll.
-    last_position_poll_time: f64,
+    /// Outbound: last known MANIFOLD play state (for change detection).
+    transport_last_was_playing: bool,
+    /// Outbound: last sent beat position.
+    transport_last_sent_beat: f32,
+    /// Outbound: wall-clock time of last sent beat.
+    transport_last_sent_realtime: f64,
+    /// Echo suppression: ignore inbound is_playing until this wall-clock time.
+    suppress_is_playing_until: f64,
+    /// The transport state we last told Ableton about (for confirmation window).
+    last_sent_playing: Option<bool>,
+    /// Wall-clock time of the last transport send (for confirmation window).
+    last_transport_send_time: f64,
+    /// Deferred seek after play: (beat, wall-clock time play was sent).
+    /// Matches M4L's seekTask.schedule(10) — Ableton needs a tick between
+    /// start_playing and set/current_song_time to accept the seek.
+    pending_play_seek: Option<(f32, f64)>,
 }
 
 impl AbletonBridge {
@@ -315,14 +279,16 @@ impl AbletonBridge {
             pending_transport: Arc::new(Mutex::new(PendingTransportState::default())),
             transport_enabled: false,
             ableton_is_playing: false,
-            last_ableton_is_playing: false,
+            ableton_was_playing: false,
             ableton_tempo: 120.0,
-            ableton_position_beats: 0.0,
             transport_last_received: 0.0,
-            transport_sm: TransportCommand::Idle,
-            seek_sm: SeekCommand::Idle,
-            last_known_manifold_playing: false,
-            last_position_poll_time: 0.0,
+            transport_last_was_playing: false,
+            transport_last_sent_beat: 0.0,
+            transport_last_sent_realtime: 0.0,
+            suppress_is_playing_until: 0.0,
+            last_sent_playing: None,
+            last_transport_send_time: 0.0,
+            pending_play_seek: None,
         }
     }
 
@@ -446,19 +412,15 @@ impl AbletonBridge {
         self.write_targets.clear();
         self.message_queue.lock().messages.clear();
         self.pending_values.lock().clear();
-        // Clear transport state — reset SMs to Idle
+        // Clear transport state
         self.transport_enabled = false;
         self.ableton_is_playing = false;
-        self.last_ableton_is_playing = false;
-        self.ableton_tempo = 120.0;
-        self.ableton_position_beats = 0.0;
+        self.ableton_was_playing = false;
         self.transport_last_received = 0.0;
-        self.transport_sm = TransportCommand::Idle;
-        self.seek_sm = SeekCommand::Idle;
-        self.last_known_manifold_playing = false;
-        self.last_position_poll_time = 0.0;
+        self.suppress_is_playing_until = 0.0;
+        self.last_sent_playing = None;
+        self.last_transport_send_time = 0.0;
         *self.pending_transport.lock() = PendingTransportState::default();
-        eprintln!("[ABL-TRANSPORT] Disconnected, all SMs → Idle");
         log::info!("[AbletonBridge] Disconnected");
     }
 
@@ -519,6 +481,9 @@ impl AbletonBridge {
 
         // Discovery timeout
         self.check_discovery_timeout(realtime);
+
+        // Drain pending transport state from receiver thread
+        self.drain_transport(realtime);
     }
 
     /// Apply pending Ableton values to project parameters.
@@ -652,40 +617,16 @@ impl AbletonBridge {
 
         // Route transport listener updates to pending transport state
         if self.transport_enabled {
-            // Debug: log any is_playing or transport-related messages
-            if addr.contains("is_playing") || addr.contains("start_playing")
-                || addr.contains("stop_playing")
-            {
-                eprintln!(
-                    "[ABL-DEBUG] Received transport msg: addr={} args={:?}",
-                    addr, msg.args
-                );
-            }
             match addr {
                 "/live/song/get/is_playing" => {
                     if let Some(val) = msg.args.first().and_then(osc_arg_int) {
                         self.pending_transport.lock().is_playing = Some(val != 0);
-                        eprintln!(
-                            "[ABL-DEBUG] is_playing routed: val={}",
-                            val != 0
-                        );
-                    } else {
-                        eprintln!(
-                            "[ABL-DEBUG] is_playing arg parse FAILED: {:?}",
-                            msg.args
-                        );
                     }
                     return;
                 }
                 "/live/song/get/tempo" => {
                     if let Some(val) = msg.args.first().and_then(osc_arg_float) {
                         self.pending_transport.lock().tempo = Some(val);
-                    }
-                    return;
-                }
-                "/live/song/get/current_song_time" => {
-                    if let Some(val) = msg.args.first().and_then(osc_arg_float) {
-                        self.pending_transport.lock().current_song_time = Some(val);
                     }
                     return;
                 }
@@ -1620,20 +1561,12 @@ impl AbletonBridge {
             return;
         }
         self.transport_enabled = true;
-        // Reset SMs for clean start
-        self.transport_sm = TransportCommand::Idle;
-        self.seek_sm = SeekCommand::Idle;
-        self.last_known_manifold_playing = false;
-        self.last_ableton_is_playing = false;
-        self.ableton_position_beats = 0.0;
-        self.last_position_poll_time = 0.0;
         self.send_osc("/live/song/start_listen/is_playing", &[]);
         self.send_osc("/live/song/start_listen/tempo", &[]);
         // Seed initial state
         self.send_osc("/live/song/get/is_playing", &[]);
         self.send_osc("/live/song/get/tempo", &[]);
-        eprintln!("[ABL-TRANSPORT] Transport sync enabled, SMs → Idle");
-        log::info!("[AbletonBridge] Transport sync enabled");
+        log::info!("[AbletonBridge] Transport sync enabled (commands + tempo only, MIDI CLK handles timing)");
     }
 
     /// Unsubscribe transport listeners.
@@ -1648,16 +1581,12 @@ impl AbletonBridge {
         }
         self.transport_enabled = false;
         self.ableton_is_playing = false;
-        self.last_ableton_is_playing = false;
-        self.ableton_tempo = 120.0;
-        self.ableton_position_beats = 0.0;
+        self.ableton_was_playing = false;
         self.transport_last_received = 0.0;
-        self.transport_sm = TransportCommand::Idle;
-        self.seek_sm = SeekCommand::Idle;
-        self.last_known_manifold_playing = false;
-        self.last_position_poll_time = 0.0;
+        self.suppress_is_playing_until = 0.0;
+        self.last_sent_playing = None;
+        self.last_transport_send_time = 0.0;
         *self.pending_transport.lock() = PendingTransportState::default();
-        eprintln!("[ABL-TRANSPORT] Transport sync disabled, all SMs → Idle");
         log::info!("[AbletonBridge] Transport sync disabled");
     }
 
@@ -1665,555 +1594,198 @@ impl AbletonBridge {
         self.transport_enabled
     }
 
+    /// Whether transport data is actively arriving from Ableton.
+    pub fn is_transport_receiving(&self, realtime: f64) -> bool {
+        self.transport_enabled
+            && self.connected
+            && self.transport_last_received > 0.0
+            && realtime - self.transport_last_received < TRANSPORT_TIMEOUT_SECS
+    }
+
+    pub fn ableton_is_playing(&self) -> bool {
+        self.ableton_is_playing
+    }
+
     pub fn ableton_tempo(&self) -> f32 {
         self.ableton_tempo
     }
 
-    // ── State machine: drain + process ───────────────────────────
-
     /// Drain pending transport state from the receiver thread.
-    /// Updates ableton_is_playing, ableton_tempo, ableton_position_beats.
-    fn drain_pending(&mut self, realtime: f64) {
+    /// Call once per frame from `update()`.
+    pub fn drain_transport(&mut self, realtime: f64) {
+        if !self.transport_enabled {
+            return;
+        }
+
         let pending = {
             let mut pt = self.pending_transport.lock();
             PendingTransportState {
                 is_playing: pt.is_playing.take(),
                 tempo: pt.tempo.take(),
-                current_song_time: pt.current_song_time.take(),
             }
         };
 
-        if pending.is_playing.is_some()
-            || pending.tempo.is_some()
-            || pending.current_song_time.is_some()
-        {
+        if pending.is_playing.is_some() || pending.tempo.is_some() {
             self.transport_last_received = realtime;
         }
 
         if let Some(playing) = pending.is_playing {
+            self.ableton_was_playing = self.ableton_is_playing;
             self.ableton_is_playing = playing;
         }
+
         if let Some(tempo) = pending.tempo {
             self.ableton_tempo = tempo;
         }
-        if let Some(pos) = pending.current_song_time {
-            self.ableton_position_beats = pos;
-        }
     }
 
-    /// Main per-frame transport state machine tick. Called once per frame
-    /// from tick_sync_controllers (BEFORE engine tick).
+    /// Returns true if `is_playing` changed this frame AND is NOT within the
+    /// echo suppression window (i.e. this is a genuine external transport change
+    /// from Ableton, not our own command echoing back).
+    pub fn transport_changed_externally(&self, realtime: f64) -> Option<bool> {
+        if self.ableton_is_playing == self.ableton_was_playing {
+            return None;
+        }
+        // Echo suppression: ignore if we recently sent a transport command
+        if realtime < self.suppress_is_playing_until {
+            return None;
+        }
+        Some(self.ableton_is_playing)
+    }
+
+    /// Outbound transport: detect MANIFOLD transport changes and send to Ableton.
+    /// Called after engine tick (same timing slot as OscPositionSender::late_update).
     ///
-    /// Handles bidirectional play/stop/seek between MANIFOLD and Ableton:
-    /// - Detects MANIFOLD-initiated transport changes → sends commands to Ableton
-    /// - Detects Ableton-initiated transport changes → returns actions for engine
-    /// - Confirms pending commands via listener responses
-    /// - Retries on timeout, gives up after SM_MAX_RETRIES
-    /// - Polls position for Ableton-initiated seek detection (when CLK off)
-    pub fn process_transport(
+    /// Mirrors the logic of OscPositionSender but sends AbletonOSC commands
+    /// instead of M4L-specific addresses.
+    pub fn late_update_transport(
         &mut self,
-        manifold_is_playing: bool,
-        manifold_beat: f32,
-        _bpm: f32,
+        is_playing: bool,
+        current_beat: f32,
+        seconds_per_beat: f32,
         realtime: f64,
-        midi_clk_active: bool,
         arbiter: &mut SyncArbiter,
-    ) -> TransportActions {
-        if !self.transport_enabled {
-            return TransportActions::none();
-        }
-
-        // 1. Drain pending OSC responses from receiver thread
-        self.drain_pending(realtime);
-
-        let mut actions = TransportActions::none();
-
-        // 2. Detect edges
-        let ableton_edge = if self.ableton_is_playing
-            != self.last_ableton_is_playing
-        {
-            Some(self.ableton_is_playing)
-        } else {
-            None
-        };
-        let manifold_edge = manifold_is_playing
-            != self.last_known_manifold_playing;
-
-        // 3. Process transport SM
-        self.process_transport_sm(
-            manifold_is_playing,
-            manifold_beat,
-            realtime,
-            ableton_edge,
-            manifold_edge,
-            arbiter,
-            &mut actions,
-        );
-
-        // 4. Process seek SM (confirmations, timeouts, retries)
-        self.process_seek_sm(realtime, &mut actions);
-
-        // 5. Position monitor (Ableton-initiated seek detection)
-        if !midi_clk_active && matches!(self.seek_sm, SeekCommand::Idle) {
-            self.poll_position_monitor(
-                manifold_beat,
-                realtime,
-                &mut actions,
-            );
-        }
-
-        // 6. Update tracking for next frame
-        self.last_ableton_is_playing = self.ableton_is_playing;
-
-        actions
-    }
-
-    /// Transport (play/stop) state machine transitions.
-    ///
-    /// Play sends start_playing + set/current_song_time in one burst.
-    /// Stop sends stop_playing + set/current_song_time to preserve position.
-    /// (Ableton's stop_playing resets playhead; start_playing plays from 0:00.)
-    fn process_transport_sm(
-        &mut self,
-        manifold_is_playing: bool,
-        manifold_beat: f32,
-        realtime: f64,
-        ableton_edge: Option<bool>,
-        manifold_edge: bool,
-        arbiter: &mut SyncArbiter,
-        actions: &mut TransportActions,
     ) {
-        match self.transport_sm {
-            TransportCommand::Idle => {
-                // Check MANIFOLD-initiated change FIRST
-                if manifold_edge {
-                    if manifold_is_playing {
-                        // MANIFOLD started playing → play + seek together
-                        self.send_play_with_position(manifold_beat);
-                        arbiter.set_manifold_owns_at(Seconds(realtime));
-                        self.transport_sm = TransportCommand::PlaySent {
-                            sent_at: realtime,
-                            retries: 0,
-                            beat: manifold_beat,
-                        };
-                        self.last_known_manifold_playing = true;
-                        eprintln!(
-                            "[ABL-TRANSPORT] Idle → PlaySent \
-                             (MANIFOLD initiated, beat={:.1})",
-                            manifold_beat
-                        );
-                        eprintln!(
-                            "[ABL-TRANSPORT] SEND start_playing + \
-                             set/current_song_time({:.1}) (retry 0/{})",
-                            manifold_beat, SM_MAX_RETRIES
-                        );
-                    } else {
-                        // MANIFOLD stopped → stop + preserve position
-                        self.send_stop_with_position(manifold_beat);
-                        self.transport_sm = TransportCommand::StopSent {
-                            sent_at: realtime,
-                            retries: 0,
-                            beat: manifold_beat,
-                        };
-                        self.last_known_manifold_playing = false;
-                        eprintln!(
-                            "[ABL-TRANSPORT] Idle → StopSent \
-                             (MANIFOLD initiated, beat={:.1})",
-                            manifold_beat
-                        );
-                        eprintln!(
-                            "[ABL-TRANSPORT] SEND stop_playing + \
-                             set/current_song_time({:.1}) (retry 0/{})",
-                            manifold_beat, SM_MAX_RETRIES
-                        );
-                    }
-                }
-
-                // Check Ableton-initiated change
-                if let Some(playing) = ableton_edge {
-                    match self.transport_sm {
-                        TransportCommand::Idle => {
-                            if playing {
-                                actions.play = true;
-                                self.last_known_manifold_playing = true;
-                                eprintln!(
-                                    "[ABL-TRANSPORT] RELAY Ableton play \
-                                     → engine.play()"
-                                );
-                            } else {
-                                actions.pause = true;
-                                self.last_known_manifold_playing = false;
-                                eprintln!(
-                                    "[ABL-TRANSPORT] RELAY Ableton stop \
-                                     → engine.pause()"
-                                );
-                            }
-                        }
-                        TransportCommand::PlaySent { .. } => {
-                            if playing {
-                                self.confirm_play_sent(realtime);
-                            } else {
-                                eprintln!(
-                                    "[ABL-TRANSPORT] Stale is_playing=false \
-                                     while in PlaySent, ignoring"
-                                );
-                            }
-                        }
-                        TransportCommand::StopSent { .. } => {
-                            if !playing {
-                                self.confirm_stop_sent(realtime);
-                            } else {
-                                eprintln!(
-                                    "[ABL-TRANSPORT] Stale is_playing=true \
-                                     while in StopSent, ignoring"
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
-            TransportCommand::PlaySent {
-                sent_at, retries, beat,
-            } => {
-                // MANIFOLD interrupt: user hit stop
-                if manifold_edge && !manifold_is_playing {
-                    self.send_stop_with_position(manifold_beat);
-                    self.transport_sm = TransportCommand::StopSent {
-                        sent_at: realtime,
-                        retries: 0,
-                        beat: manifold_beat,
-                    };
-                    self.last_known_manifold_playing = false;
-                    eprintln!(
-                        "[ABL-TRANSPORT] PlaySent CANCELLED → StopSent \
-                         (MANIFOLD stopped, beat={:.1})",
-                        manifold_beat
-                    );
-                    return;
-                }
-
-                // Ableton confirmation
-                if let Some(playing) = ableton_edge {
-                    if playing {
-                        self.confirm_play_sent(realtime);
-                    } else {
-                        eprintln!(
-                            "[ABL-TRANSPORT] Stale is_playing=false \
-                             while in PlaySent, ignoring"
-                        );
-                    }
-                    return;
-                }
-
-                // Timeout → retry (resend play + position together)
-                if realtime - sent_at >= SM_RETRY_TIMEOUT_SECS {
-                    if retries < SM_MAX_RETRIES {
-                        let r = retries + 1;
-                        self.send_play_with_position(beat);
-                        self.transport_sm = TransportCommand::PlaySent {
-                            sent_at: realtime,
-                            retries: r,
-                            beat,
-                        };
-                        eprintln!(
-                            "[ABL-TRANSPORT] TIMEOUT PlaySent, retry {}/{} \
-                             — SEND start_playing + set/current_song_time({:.1})",
-                            r, SM_MAX_RETRIES, beat
-                        );
-                    } else {
-                        self.transport_sm = TransportCommand::Idle;
-                        eprintln!(
-                            "[ABL-TRANSPORT] FAILED PlaySent after {} \
-                             retries, giving up (MANIFOLD keeps playing)",
-                            SM_MAX_RETRIES
-                        );
-                    }
-                }
-            }
-
-            TransportCommand::StopSent {
-                sent_at, retries, beat,
-            } => {
-                // MANIFOLD interrupt: user hit play
-                if manifold_edge && manifold_is_playing {
-                    self.send_play_with_position(manifold_beat);
-                    arbiter.set_manifold_owns_at(Seconds(realtime));
-                    self.transport_sm = TransportCommand::PlaySent {
-                        sent_at: realtime,
-                        retries: 0,
-                        beat: manifold_beat,
-                    };
-                    self.last_known_manifold_playing = true;
-                    eprintln!(
-                        "[ABL-TRANSPORT] StopSent CANCELLED → PlaySent \
-                         (MANIFOLD plays, beat={:.1})",
-                        manifold_beat
-                    );
-                    return;
-                }
-
-                // Ableton confirmation
-                if let Some(playing) = ableton_edge {
-                    if !playing {
-                        self.confirm_stop_sent(realtime);
-                    } else {
-                        eprintln!(
-                            "[ABL-TRANSPORT] Stale is_playing=true \
-                             while in StopSent, ignoring"
-                        );
-                    }
-                    return;
-                }
-
-                // Timeout → retry (resend stop + position together)
-                if realtime - sent_at >= SM_RETRY_TIMEOUT_SECS {
-                    if retries < SM_MAX_RETRIES {
-                        let r = retries + 1;
-                        self.send_stop_with_position(beat);
-                        self.transport_sm = TransportCommand::StopSent {
-                            sent_at: realtime,
-                            retries: r,
-                            beat,
-                        };
-                        eprintln!(
-                            "[ABL-TRANSPORT] TIMEOUT StopSent, retry {}/{} \
-                             — SEND stop_playing + set/current_song_time({:.1})",
-                            r, SM_MAX_RETRIES, beat
-                        );
-                    } else {
-                        self.transport_sm = TransportCommand::Idle;
-                        eprintln!(
-                            "[ABL-TRANSPORT] FAILED StopSent after {} \
-                             retries, giving up",
-                            SM_MAX_RETRIES
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    /// Confirm PlaySent → Idle.
-    fn confirm_play_sent(&mut self, realtime: f64) {
-        if let TransportCommand::PlaySent { sent_at, .. } =
-            self.transport_sm
-        {
-            let latency_ms = (realtime - sent_at) * 1000.0;
-            eprintln!(
-                "[ABL-TRANSPORT] CONFIRMED is_playing=true \
-                 (latency={:.0}ms)",
-                latency_ms
-            );
-        }
-        self.transport_sm = TransportCommand::Idle;
-    }
-
-    /// Confirm StopSent → Idle.
-    fn confirm_stop_sent(&mut self, realtime: f64) {
-        if let TransportCommand::StopSent { sent_at, .. } =
-            self.transport_sm
-        {
-            let latency_ms = (realtime - sent_at) * 1000.0;
-            eprintln!(
-                "[ABL-TRANSPORT] CONFIRMED is_playing=false \
-                 (latency={:.0}ms)",
-                latency_ms
-            );
-        }
-        self.transport_sm = TransportCommand::Idle;
-    }
-
-    /// Seek state machine: check confirmation, timeout, retry.
-    fn process_seek_sm(
-        &mut self,
-        realtime: f64,
-        actions: &mut TransportActions,
-    ) {
-        let _ = actions; // seek SM only generates actions via position monitor
-        match self.seek_sm {
-            SeekCommand::Idle => {}
-            SeekCommand::Sent {
-                target_beat,
-                sent_at,
-                retries,
-            } => {
-                // Check if we got a position response this frame
-                // (drain_pending already updated ableton_position_beats)
-                if self.transport_last_received >= sent_at {
-                    let delta =
-                        (self.ableton_position_beats - target_beat).abs();
-                    if delta < SEEK_CONFIRM_TOLERANCE {
-                        let latency_ms =
-                            (realtime - sent_at) * 1000.0;
-                        self.seek_sm = SeekCommand::Idle;
-                        eprintln!(
-                            "[ABL-SEEK] CONFIRMED target={:.1} \
-                             actual={:.1} (latency={:.0}ms)",
-                            target_beat,
-                            self.ableton_position_beats,
-                            latency_ms
-                        );
-                        return;
-                    }
-                }
-
-                // Check for timeout
-                if realtime - sent_at >= SM_RETRY_TIMEOUT_SECS {
-                    if retries < SM_MAX_RETRIES {
-                        let new_retries = retries + 1;
-                        self.send_osc(
-                            "/live/song/set/current_song_time",
-                            &[rosc::OscType::Float(target_beat)],
-                        );
-                        self.send_osc(
-                            "/live/song/get/current_song_time",
-                            &[],
-                        );
-                        self.seek_sm = SeekCommand::Sent {
-                            target_beat,
-                            sent_at: realtime,
-                            retries: new_retries,
-                        };
-                        eprintln!(
-                            "[ABL-SEEK] TIMEOUT after {:.0}ms, \
-                             retry {}/{}",
-                            SM_RETRY_TIMEOUT_SECS * 1000.0,
-                            new_retries,
-                            SM_MAX_RETRIES
-                        );
-                        eprintln!(
-                            "[ABL-SEEK] SEND set/current_song_time({:.1}) \
-                             + poll (retry {}/{})",
-                            target_beat, new_retries, SM_MAX_RETRIES
-                        );
-                    } else {
-                        self.seek_sm = SeekCommand::Idle;
-                        eprintln!(
-                            "[ABL-SEEK] FAILED after {} retries, giving up",
-                            SM_MAX_RETRIES
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    /// Position monitor: poll Ableton's position periodically and relay
-    /// large deltas as Ableton-initiated seeks.
-    /// Only active when MIDI CLK is off and Seek SM is Idle.
-    fn poll_position_monitor(
-        &mut self,
-        manifold_beat: f32,
-        realtime: f64,
-        actions: &mut TransportActions,
-    ) {
-        // Rate limit polling
-        if realtime - self.last_position_poll_time
-            < POSITION_POLL_INTERVAL_SECS
-        {
+        if !self.transport_enabled || self.send_socket.is_none() {
             return;
         }
 
-        let poll_sent_time = self.last_position_poll_time;
-        self.last_position_poll_time = realtime;
+        let now = realtime;
 
-        // Only act on position responses that arrived AFTER our last poll
-        // was sent (avoids stale data from before a MANIFOLD-initiated seek).
-        // Also require at least 2 poll cycles before acting (avoids startup
-        // spike where ableton_position_beats is from an initial seed).
-        if poll_sent_time > 0.0
-            && self.transport_last_received > poll_sent_time
-            && self.ableton_position_beats > 0.0
-        {
-            let delta =
-                (self.ableton_position_beats - manifold_beat).abs();
-            if delta > POSITION_RELAY_THRESHOLD {
-                actions.seek_beat = Some(self.ableton_position_beats);
+        // 1. Transport state change
+        if is_playing != self.transport_last_was_playing {
+            // External sync triggered this — don't echo back
+            if arbiter.suppress_next_transport {
+                arbiter.suppress_next_transport = false;
+                self.transport_last_was_playing = is_playing;
+                self.transport_last_sent_beat = current_beat;
+                self.transport_last_sent_realtime = now;
                 eprintln!(
-                    "[ABL-SEEK] MONITOR delta={:.1} beats → relay \
-                     engine.seek({:.1})",
-                    delta, self.ableton_position_beats
+                    "[ABL-TRANSPORT] SUPPRESSED (external sync, playing={})",
+                    is_playing
+                );
+                return;
+            }
+
+            if is_playing {
+                // Play sent redundantly, seek deferred ~15ms.
+                // Matches M4L: api.call("start_playing") then
+                // seekTask.schedule(10) → api.set("current_song_time").
+                for _ in 0..TRANSPORT_SEND_COUNT {
+                    self.send_osc("/live/song/start_playing", &[]);
+                }
+                self.pending_play_seek = Some((current_beat, now));
+                arbiter.set_manifold_owns_at(Seconds(now));
+                eprintln!(
+                    "[ABL-TRANSPORT] PLAY beat={:.1} (3x, seek deferred)",
+                    current_beat
+                );
+            } else {
+                // Bare stop — matches M4L exactly. Cancel pending seek.
+                self.pending_play_seek = None;
+                for _ in 0..TRANSPORT_SEND_COUNT {
+                    self.send_osc("/live/song/stop_playing", &[]);
+                }
+                eprintln!(
+                    "[ABL-TRANSPORT] STOP (3x, beat was {:.1})",
+                    current_beat
                 );
             }
-        }
 
-        // Send poll for next check
-        self.send_osc("/live/song/get/current_song_time", &[]);
-    }
-
-    /// Notify the bridge that MANIFOLD initiated a seek (from content
-    /// commands: SeekTo, SeekToBeat, ruler scrub, etc.).
-    /// Enters Seek::Sent and sends position + confirmation poll.
-    pub fn notify_manifold_seek(
-        &mut self,
-        target_beat: f32,
-        realtime: f64,
-    ) {
-        if !self.transport_enabled {
+            self.last_sent_playing = Some(is_playing);
+            self.last_transport_send_time = now;
+            self.suppress_is_playing_until = now + TRANSPORT_ECHO_WINDOW_SECS;
+            self.transport_last_was_playing = is_playing;
+            self.transport_last_sent_beat = current_beat;
+            self.transport_last_sent_realtime = now;
             return;
         }
 
-        match self.seek_sm {
-            SeekCommand::Sent {
-                target_beat: old_target,
-                ..
-            } => {
-                eprintln!(
-                    "[ABL-SEEK] Sent(target={:.1}) → Sent(target={:.1}) \
-                     (new seek, reset retries)",
-                    old_target, target_beat
-                );
-            }
-            SeekCommand::Idle => {
-                eprintln!(
-                    "[ABL-SEEK] Idle → Sent (target={:.1})",
-                    target_beat
-                );
+        // 1b. Confirmation: re-send transport if engine state still diverges
+        // from what Ableton was last told, within the confirmation window.
+        if let Some(sent_playing) = self.last_sent_playing {
+            if (now - self.last_transport_send_time) < CONFIRM_WINDOW_SECS {
+                if is_playing != sent_playing {
+                    // Engine changed again — send the new state
+                    if is_playing {
+                        self.send_osc("/live/song/start_playing", &[]);
+                        self.pending_play_seek = Some((current_beat, now));
+                    } else {
+                        self.pending_play_seek = None;
+                        self.send_osc("/live/song/stop_playing", &[]);
+                    }
+                    self.last_sent_playing = Some(is_playing);
+                    self.last_transport_send_time = now;
+                }
+            } else {
+                // Confirmation window expired — stop checking
+                self.last_sent_playing = None;
             }
         }
 
-        self.send_seek(target_beat, realtime);
-    }
+        // 1c. Deferred play seek — send position after delay.
+        // Matches M4L: seekTask.schedule(10) after start_playing.
+        if let Some((beat, play_sent_at)) = self.pending_play_seek
+            && now - play_sent_at >= PLAY_SEEK_DELAY_SECS
+        {
+            self.send_osc(
+                "/live/song/set/current_song_time",
+                &[rosc::OscType::Float(beat)],
+            );
+            self.pending_play_seek = None;
+            self.transport_last_sent_beat = beat;
+            self.transport_last_sent_realtime = now;
+            eprintln!(
+                "[ABL-TRANSPORT] DEFERRED SEEK beat={:.1} ({:.0}ms after play)",
+                beat,
+                (now - play_sent_at) * 1000.0
+            );
+        }
 
-    /// Send play + position in one burst. Ableton's start_playing resets
-    /// the playhead, so we immediately follow with set/current_song_time.
-    fn send_play_with_position(&self, beat: f32) {
-        self.send_osc("/live/song/start_playing", &[]);
-        self.send_osc(
-            "/live/song/set/current_song_time",
-            &[rosc::OscType::Float(beat)],
-        );
-    }
+        // 2. Seek detection: compare current beat to expected beat
+        if is_playing && seconds_per_beat > 0.0 {
+            let elapsed = (now - self.transport_last_sent_realtime) as f32;
+            let expected_beat =
+                self.transport_last_sent_beat + elapsed / seconds_per_beat;
+            let beat_delta = (current_beat - expected_beat).abs();
 
-    /// Send stop + restore position. Ableton's stop_playing resets the
-    /// playhead to the start, so we immediately follow with
-    /// set/current_song_time to preserve MANIFOLD's position.
-    fn send_stop_with_position(&self, beat: f32) {
-        self.send_osc("/live/song/stop_playing", &[]);
-        self.send_osc(
-            "/live/song/set/current_song_time",
-            &[rosc::OscType::Float(beat)],
-        );
-    }
+            if beat_delta > SEEK_THRESHOLD_BEATS {
+                // current_song_time takes beats (not seconds).
+                self.send_osc(
+                    "/live/song/set/current_song_time",
+                    &[rosc::OscType::Float(current_beat)],
+                );
+                self.transport_last_sent_beat = current_beat;
+                self.transport_last_sent_realtime = now;
+                return;
+            }
+        }
 
-    /// Common seek send + state update.
-    fn send_seek(&mut self, target_beat: f32, realtime: f64) {
-        self.send_osc(
-            "/live/song/set/current_song_time",
-            &[rosc::OscType::Float(target_beat)],
-        );
-        self.send_osc("/live/song/get/current_song_time", &[]);
-        self.seek_sm = SeekCommand::Sent {
-            target_beat,
-            sent_at: realtime,
-            retries: 0,
-        };
-        eprintln!(
-            "[ABL-SEEK] SEND set/current_song_time({:.1}) + poll \
-             (retry 0/{})",
-            target_beat, SM_MAX_RETRIES
-        );
+        // 3. Track position for next frame's expected-beat calculation
+        if is_playing {
+            self.transport_last_sent_beat = current_beat;
+            self.transport_last_sent_realtime = now;
+        }
     }
 
     // ── OSC send helper ───────────────────────────────────────────
@@ -2318,197 +1890,25 @@ mod tests {
         assert_eq!(osc_arg_string(&rosc::OscType::Int(0)), None);
     }
 
-    /// Helper: create a bridge with transport enabled for SM tests.
-    /// No real socket, so send_osc calls are silently dropped.
-    fn test_bridge() -> AbletonBridge {
-        let mut b = AbletonBridge::new();
-        b.transport_enabled = true;
-        b
-    }
-
-    /// Helper: create a no-op arbiter for SM tests.
-    fn test_arbiter() -> SyncArbiter {
-        SyncArbiter::new()
-    }
-
     #[test]
-    fn transport_sm_manifold_play() {
-        let mut bridge = test_bridge();
-        let mut arb = test_arbiter();
-        // MANIFOLD starts playing at beat 5
-        let actions = bridge.process_transport(
-            true, 5.0, 120.0, 1.0, false, &mut arb,
-        );
-        // No relay action (MANIFOLD already playing)
-        assert!(!actions.play);
-        assert!(!actions.pause);
-        // SM should be in PlaySent
-        assert!(matches!(
-            bridge.transport_sm,
-            TransportCommand::PlaySent { beat, .. } if beat > 0.0
-        ));
-    }
+    fn transport_echo_suppression() {
+        let mut bridge = AbletonBridge::new();
+        bridge.transport_enabled = true;
 
-    #[test]
-    fn transport_sm_play_confirmed() {
-        let mut bridge = test_bridge();
-        let mut arb = test_arbiter();
-        // Enter PlaySent
-        bridge.process_transport(true, 5.0, 120.0, 1.0, false, &mut arb);
-        assert!(matches!(bridge.transport_sm, TransportCommand::PlaySent { .. }));
+        // Simulate: MANIFOLD just sent play → suppress window active
+        bridge.suppress_is_playing_until = 10.5;
+        bridge.ableton_was_playing = false;
+        bridge.ableton_is_playing = true; // Ableton echoed back
 
-        // Inject Ableton confirmation
-        bridge.pending_transport.lock().is_playing = Some(true);
-        let actions = bridge.process_transport(
-            true, 5.1, 120.0, 1.05, false, &mut arb,
-        );
-        // No relay (engine already playing), SM back to Idle
-        assert!(!actions.play);
-        assert!(matches!(bridge.transport_sm, TransportCommand::Idle));
-    }
+        // Within suppression window → should return None (suppressed)
+        assert_eq!(bridge.transport_changed_externally(10.2), None);
 
-    #[test]
-    fn transport_sm_ableton_play() {
-        let mut bridge = test_bridge();
-        let mut arb = test_arbiter();
-        // Inject Ableton play (while MANIFOLD is stopped)
-        bridge.pending_transport.lock().is_playing = Some(true);
-        let actions = bridge.process_transport(
-            false, 0.0, 120.0, 1.0, false, &mut arb,
-        );
-        // Should relay play to engine
-        assert!(actions.play);
-        assert!(!actions.pause);
-        // SM stays Idle (no outbound command needed)
-        assert!(matches!(bridge.transport_sm, TransportCommand::Idle));
-    }
+        // After suppression window → should return Some(true)
+        assert_eq!(bridge.transport_changed_externally(11.0), Some(true));
 
-    #[test]
-    fn transport_sm_play_timeout_retry() {
-        let mut bridge = test_bridge();
-        let mut arb = test_arbiter();
-        // Enter PlaySent at t=1.0
-        bridge.process_transport(true, 5.0, 120.0, 1.0, false, &mut arb);
-
-        // Advance past timeout (50ms) with no Ableton response
-        let actions = bridge.process_transport(
-            true, 5.1, 120.0, 1.06, false, &mut arb,
-        );
-        assert!(!actions.play);
-        // Should still be PlaySent with retries incremented
-        if let TransportCommand::PlaySent { retries, .. } = bridge.transport_sm
-        {
-            assert_eq!(retries, 1);
-        } else {
-            panic!("Expected PlaySent after timeout");
-        }
-    }
-
-    #[test]
-    fn transport_sm_play_max_retries() {
-        let mut bridge = test_bridge();
-        let mut arb = test_arbiter();
-        // Manually set PlaySent with max retries
-        bridge.transport_sm = TransportCommand::PlaySent {
-            sent_at: 0.0,
-            retries: SM_MAX_RETRIES,
-            beat: 5.0,
-        };
-        bridge.last_known_manifold_playing = true;
-        // Advance past timeout
-        let actions = bridge.process_transport(
-            true, 5.0, 120.0, 0.1, false, &mut arb,
-        );
-        // Should give up → Idle, no engine change
-        assert!(!actions.play);
-        assert!(!actions.pause);
-        assert!(matches!(bridge.transport_sm, TransportCommand::Idle));
-    }
-
-    #[test]
-    fn transport_sm_cancel_play() {
-        let mut bridge = test_bridge();
-        let mut arb = test_arbiter();
-        // Enter PlaySent
-        bridge.process_transport(true, 5.0, 120.0, 1.0, false, &mut arb);
-        assert!(matches!(bridge.transport_sm, TransportCommand::PlaySent { .. }));
-
-        // MANIFOLD stops (user interrupt)
-        let actions = bridge.process_transport(
-            false, 5.0, 120.0, 1.01, false, &mut arb,
-        );
-        assert!(!actions.play);
-        assert!(!actions.pause);
-        // Should transition to StopSent
-        assert!(matches!(bridge.transport_sm, TransportCommand::StopSent { .. }));
-    }
-
-    #[test]
-    fn seek_sm_manifold_seek() {
-        let mut bridge = test_bridge();
-        bridge.notify_manifold_seek(32.0, 1.0);
-        assert!(matches!(
-            bridge.seek_sm,
-            SeekCommand::Sent { target_beat, .. } if (target_beat - 32.0).abs() < 0.01
-        ));
-    }
-
-    #[test]
-    fn seek_sm_confirmed() {
-        let mut bridge = test_bridge();
-        let mut arb = test_arbiter();
-        bridge.notify_manifold_seek(32.0, 1.0);
-
-        // Inject position response near target
-        bridge.pending_transport.lock().current_song_time = Some(32.1);
-        bridge.last_known_manifold_playing = false;
-        let actions = bridge.process_transport(
-            false, 32.0, 120.0, 1.02, false, &mut arb,
-        );
-        assert!(actions.seek_beat.is_none());
-        assert!(matches!(bridge.seek_sm, SeekCommand::Idle));
-    }
-
-    #[test]
-    fn seek_sm_new_target_during_sent() {
-        let mut bridge = test_bridge();
-        bridge.notify_manifold_seek(20.0, 1.0);
-        assert!(matches!(
-            bridge.seek_sm,
-            SeekCommand::Sent { target_beat, .. } if (target_beat - 20.0).abs() < 0.01
-        ));
-
-        // New seek while still Sent → update target, reset retries
-        bridge.notify_manifold_seek(35.0, 1.01);
-        if let SeekCommand::Sent {
-            target_beat,
-            retries,
-            ..
-        } = bridge.seek_sm
-        {
-            assert!((target_beat - 35.0).abs() < 0.01);
-            assert_eq!(retries, 0);
-        } else {
-            panic!("Expected Seek::Sent");
-        }
-    }
-
-    #[test]
-    fn position_monitor_detects_delta() {
-        let mut bridge = test_bridge();
-        let mut arb = test_arbiter();
-        // Simulate: a previous poll was sent at t=0.5
-        bridge.last_position_poll_time = 0.5;
-        // Position response arrived at t=0.6 (after the poll)
-        bridge.ableton_position_beats = 47.0;
-        bridge.transport_last_received = 0.6;
-        // Process at t=1.0 (>250ms after last poll, so new poll fires)
-        // MANIFOLD is at beat 30
-        let actions = bridge.process_transport(
-            false, 30.0, 120.0, 1.0, false, &mut arb,
-        );
-        // Delta = 17 > threshold → should relay seek
-        assert_eq!(actions.seek_beat, Some(47.0));
+        // No change → should return None
+        bridge.ableton_was_playing = true;
+        assert_eq!(bridge.transport_changed_externally(11.0), None);
     }
 
     #[test]
