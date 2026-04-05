@@ -559,6 +559,7 @@ pub const INSPECTOR_GAP: f32 = 4.0;
 // ── Group layout ────────────────────────────────────────────────────
 pub const GROUP_CHILD_INDENT_PX: f32 = 20.0;
 pub const COLLAPSED_GROUP_TRACK_HEIGHT: f32 = 70.0;
+pub const EXPANDED_GROUP_TRACK_HEIGHT: f32 = 70.0;
 pub const GROUP_ACCENT_BAR_WIDTH: f32 = 5.0;
 pub const GROUP_BOTTOM_BORDER_HEIGHT: f32 = 2.0;
 

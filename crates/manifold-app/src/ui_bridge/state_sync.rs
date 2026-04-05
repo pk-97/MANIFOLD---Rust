@@ -854,6 +854,9 @@ pub fn sync_project_data(
                     }
                 } else if layer.is_group() && layer.is_collapsed {
                     color::COLLAPSED_GROUP_TRACK_HEIGHT
+                } else if layer.is_group() {
+                    // Expanded group: slim header, children take the space
+                    color::EXPANDED_GROUP_TRACK_HEIGHT
                 } else if !layer.is_group() && layer.is_collapsed {
                     if layer.layer_type == manifold_core::types::LayerType::Generator {
                         color::COLLAPSED_GEN_TRACK_HEIGHT

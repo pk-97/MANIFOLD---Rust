@@ -156,6 +156,8 @@ impl CoordinateMapper {
                 };
             } else if layer.is_group() && layer.is_collapsed {
                 height = color::COLLAPSED_GROUP_TRACK_HEIGHT;
+            } else if layer.is_group() {
+                height = color::EXPANDED_GROUP_TRACK_HEIGHT;
             } else if !layer.is_group() && layer.is_collapsed {
                 height = if layer.layer_type == LayerType::Generator {
                     color::COLLAPSED_GEN_TRACK_HEIGHT
