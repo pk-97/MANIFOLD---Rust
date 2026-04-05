@@ -1089,6 +1089,7 @@ impl NativeTextRenderer {
             0,
             ibuf,
             self.prepared_index_count,
+            0,
             None,
             "TextRenderer",
         );

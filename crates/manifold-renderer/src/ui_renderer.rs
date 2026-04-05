@@ -112,6 +112,27 @@ struct RectCommand {
     border_color: [f32; 4],
 }
 
+/// A batch of rects sharing the same scissor state.
+/// Accumulated during tree traversal, converted to PreparedBatch during prepare.
+struct ScissorBatch {
+    /// Scissor rect in logical coordinates. None = no clip (full viewport).
+    scissor: Option<Rect>,
+    /// Index of the first rect_command in this batch.
+    rect_start: usize,
+    /// Number of rects in this batch.
+    rect_count: usize,
+}
+
+/// GPU-ready batch with physical pixel scissor coordinates.
+struct PreparedBatch {
+    /// Scissor rect in physical pixels. None = full viewport.
+    scissor: Option<[u32; 4]>,
+    /// Byte offset into the index buffer.
+    index_offset: u64,
+    /// Number of indices to draw.
+    index_count: u32,
+}
+
 /// Initial vertex/index buffer capacities (vertices / indices).
 const INITIAL_VERTEX_CAPACITY: usize = 1024;
 const INITIAL_INDEX_CAPACITY: usize = 1536;
@@ -148,8 +169,17 @@ pub struct UIRenderer {
     /// [viewport_w, viewport_h, offset_x, offset_y] — passed as inline uniform.
     prepared_globals: [f32; 4],
 
-    // Clip stack for render_tree (mathematical clipping).
+    // Clip stack for render_tree — used for text clip_bounds and scissor batching.
     clip_stack: Vec<Rect>,
+    // Scissor batches accumulated during tree traversal.
+    scissor_batches: Vec<ScissorBatch>,
+    // Index into rect_commands where the current batch started.
+    current_batch_start: usize,
+    // GPU-ready batches produced by prepare().
+    prepared_batches: Vec<PreparedBatch>,
+    // Physical dimensions of the render target (for full-viewport scissor reset).
+    prepared_physical_w: u32,
+    prepared_physical_h: u32,
 }
 
 impl UIRenderer {
@@ -222,6 +252,11 @@ impl UIRenderer {
             prepared_index_count: 0,
             prepared_globals: [0.0; 4],
             clip_stack: Vec::with_capacity(8),
+            scissor_batches: Vec::with_capacity(8),
+            current_batch_start: 0,
+            prepared_batches: Vec::with_capacity(8),
+            prepared_physical_w: 0,
+            prepared_physical_h: 0,
         }
     }
 
@@ -295,13 +330,52 @@ impl UIRenderer {
             .draw_text(x, y, text, font_size, color, FontWeight::Medium, None);
     }
 
+    // ── Scissor batch helpers ───────────────────────────────────────
+
+    /// Begin scissor batch tracking for a new traversal.
+    fn begin_scissor_tracking(&mut self) {
+        self.clip_stack.clear();
+        self.scissor_batches.clear();
+        self.current_batch_start = self.rect_commands.len();
+    }
+
+    /// Flush the current scissor batch (if it has any rects).
+    fn flush_scissor_batch(&mut self) {
+        let count = self.rect_commands.len() - self.current_batch_start;
+        if count > 0 {
+            self.scissor_batches.push(ScissorBatch {
+                scissor: self.clip_stack.last().copied(),
+                rect_start: self.current_batch_start,
+                rect_count: count,
+            });
+        }
+        self.current_batch_start = self.rect_commands.len();
+    }
+
+    /// Handle a PushClip event: flush current batch, push clip, start new batch.
+    fn handle_push_clip(&mut self, rect: Rect) {
+        self.flush_scissor_batch();
+        let clipped = if let Some(current) = self.clip_stack.last() {
+            intersect_rects(*current, rect)
+        } else {
+            rect
+        };
+        self.clip_stack.push(clipped);
+    }
+
+    /// Handle a PopClip event: flush current batch, pop clip, start new batch.
+    fn handle_pop_clip(&mut self) {
+        self.flush_scissor_batch();
+        self.clip_stack.pop();
+    }
+
     // ── UITree rendering ────────────────────────────────────────────
 
     /// Render a UITree. When `skip_from` is `Some(n)`, nodes with
     /// `id >= n` are skipped (used to exclude dropdown overlay nodes
     /// that render in a separate pass via `render_overlay`).
     pub fn render_tree(&mut self, tree: &UITree, skip_from: Option<usize>) {
-        self.clip_stack.clear();
+        self.begin_scissor_tracking();
 
         tree.traverse(|event| match event {
             TraversalEvent::Node(node) => {
@@ -312,18 +386,11 @@ impl UIRenderer {
                 }
                 self.draw_node(node);
             }
-            TraversalEvent::PushClip(rect) => {
-                let clipped = if let Some(current) = self.clip_stack.last() {
-                    intersect_rects(*current, rect)
-                } else {
-                    rect
-                };
-                self.clip_stack.push(clipped);
-            }
-            TraversalEvent::PopClip => {
-                self.clip_stack.pop();
-            }
+            TraversalEvent::PushClip(rect) => self.handle_push_clip(rect),
+            TraversalEvent::PopClip => self.handle_pop_clip(),
         });
+
+        self.flush_scissor_batch();
     }
 
     /// Render only the overlay/dropdown nodes (from `start_node` onwards).
@@ -336,24 +403,15 @@ impl UIRenderer {
     /// Uses `traverse_range` to only walk root nodes in the given range,
     /// avoiding a full-tree traversal for each overlay section.
     pub fn render_overlay_range(&mut self, tree: &UITree, start_node: usize, end_node: usize) {
-        self.clip_stack.clear();
+        self.begin_scissor_tracking();
 
         tree.traverse_range(start_node, end_node, |event| match event {
-            TraversalEvent::Node(node) => {
-                self.draw_node(node);
-            }
-            TraversalEvent::PushClip(rect) => {
-                let clipped = if let Some(current) = self.clip_stack.last() {
-                    intersect_rects(*current, rect)
-                } else {
-                    rect
-                };
-                self.clip_stack.push(clipped);
-            }
-            TraversalEvent::PopClip => {
-                self.clip_stack.pop();
-            }
+            TraversalEvent::Node(node) => self.draw_node(node),
+            TraversalEvent::PushClip(rect) => self.handle_push_clip(rect),
+            TraversalEvent::PopClip => self.handle_pop_clip(),
         });
+
+        self.flush_scissor_batch();
     }
 
     /// Render a sub-region using flat sequential traversal.
@@ -364,37 +422,36 @@ impl UIRenderer {
     /// contains previous content via LoadOp::Load, so non-dirty nodes are
     /// preserved. Clip events are always processed for correctness.
     pub fn render_sub_region(&mut self, tree: &UITree, start: usize, end: usize, dirty_only: bool) {
-        self.clip_stack.clear();
+        self.begin_scissor_tracking();
 
         tree.traverse_flat_range(start, end, dirty_only, |event| match event {
-            TraversalEvent::Node(node) => {
-                self.draw_node(node);
-            }
-            TraversalEvent::PushClip(rect) => {
-                let clipped = if let Some(current) = self.clip_stack.last() {
-                    intersect_rects(*current, rect)
-                } else {
-                    rect
-                };
-                self.clip_stack.push(clipped);
-            }
-            TraversalEvent::PopClip => {
-                self.clip_stack.pop();
-            }
+            TraversalEvent::Node(node) => self.draw_node(node),
+            TraversalEvent::PushClip(rect) => self.handle_push_clip(rect),
+            TraversalEvent::PopClip => self.handle_pop_clip(),
         });
+
+        self.flush_scissor_batch();
     }
 
     /// Draw a single UI node — resolves effective colors and emits commands.
+    /// Uses original node bounds (no geometry clamping). Scissor rects handle
+    /// pixel-level clipping at the GPU level.
     fn draw_node(&mut self, node: &UINode) {
         let style = &node.style;
-        let bounds = if let Some(clip) = self.clip_stack.last() {
-            clamp_rect_to_clip(node.bounds, *clip)
-        } else {
-            node.bounds
-        };
+        let bounds = node.bounds;
 
         // Skip zero-area rects
         if bounds.width <= 0.0 || bounds.height <= 0.0 {
+            return;
+        }
+
+        // Early out: skip nodes entirely outside the clip region.
+        if let Some(clip) = self.clip_stack.last()
+            && (bounds.x >= clip.x_max()
+                || bounds.x_max() <= clip.x
+                || bounds.y >= clip.y_max()
+                || bounds.y_max() <= clip.y)
+        {
             return;
         }
 
@@ -610,6 +667,9 @@ impl UIRenderer {
         scale_factor: f64,
     ) -> bool {
         self.prepared_globals = [viewport_w as f32, viewport_h as f32, offset_x, offset_y];
+        let sf = scale_factor as f32;
+        self.prepared_physical_w = (viewport_w as f32 * sf).ceil() as u32;
+        self.prepared_physical_h = (viewport_h as f32 * sf).ceil() as u32;
 
         // Build vertex/index data from rect commands.
         self.vertices.clear();
@@ -652,6 +712,44 @@ impl UIRenderer {
 
             self.indices
                 .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        }
+
+        // Build prepared batches from scissor batches.
+        // Each rect generates 6 indices (2 triangles, u32 each = 24 bytes).
+        self.prepared_batches.clear();
+        if self.scissor_batches.is_empty() {
+            // No scissor tracking (immediate-mode draws like playhead).
+            // Single batch covering all rects, no scissor.
+            if !self.rect_commands.is_empty() {
+                self.prepared_batches.push(PreparedBatch {
+                    scissor: None,
+                    index_offset: 0,
+                    index_count: self.indices.len() as u32,
+                });
+            }
+        } else {
+            let pw = self.prepared_physical_w;
+            let ph = self.prepared_physical_h;
+            for batch in &self.scissor_batches {
+                if batch.rect_count == 0 {
+                    continue;
+                }
+                let idx_start = batch.rect_start * 6;
+                let idx_count = batch.rect_count * 6;
+                let scissor = batch.scissor.map(|r| {
+                    // Convert logical clip rect to physical pixels.
+                    let x0 = ((r.x - offset_x) * sf).floor().max(0.0) as u32;
+                    let y0 = ((r.y - offset_y) * sf).floor().max(0.0) as u32;
+                    let x1 = ((r.x + r.width - offset_x) * sf).ceil() as u32;
+                    let y1 = ((r.y + r.height - offset_y) * sf).ceil() as u32;
+                    [x0.min(pw), y0.min(ph), (x1 - x0).min(pw - x0.min(pw)), (y1 - y0).min(ph - y0.min(ph))]
+                });
+                self.prepared_batches.push(PreparedBatch {
+                    scissor,
+                    index_offset: (idx_start * std::mem::size_of::<u32>()) as u64,
+                    index_count: idx_count as u32,
+                });
+            }
         }
 
         // Ring-buffered GPU buffers: each prepare() call advances to the next
@@ -702,6 +800,7 @@ impl UIRenderer {
         let has_text = false;
 
         self.rect_commands.clear();
+        self.scissor_batches.clear();
 
         self.prepared_index_count > 0 || has_text
     }
@@ -728,19 +827,49 @@ impl UIRenderer {
         if self.prepared_index_count > 0 {
             let vbuf = self.vbuf_ring[self.prepared_slot].as_ref().unwrap();
             let ibuf = self.ibuf_ring[self.prepared_slot].as_ref().unwrap();
-            encoder.draw_in_render_pass(
-                &self.pipeline,
-                &[GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&self.prepared_globals),
-                }],
-                vbuf,
-                0,
-                ibuf,
-                self.prepared_index_count,
-                None,
-                "UI Rects",
-            );
+            let globals = &[GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&self.prepared_globals),
+            }];
+
+            if self.prepared_batches.is_empty() {
+                // Fallback: no batches, draw everything in one call.
+                encoder.draw_in_render_pass(
+                    &self.pipeline,
+                    globals,
+                    vbuf,
+                    0,
+                    ibuf,
+                    self.prepared_index_count,
+                    0,
+                    None,
+                    "UI Rects",
+                );
+            } else {
+                let pw = self.prepared_physical_w;
+                let ph = self.prepared_physical_h;
+                for batch in &self.prepared_batches {
+                    // Set scissor rect for this batch.
+                    if let Some([x, y, w, h]) = batch.scissor {
+                        encoder.set_scissor_rect(x, y, w, h);
+                    } else {
+                        encoder.set_scissor_rect(0, 0, pw, ph);
+                    }
+                    encoder.draw_in_render_pass(
+                        &self.pipeline,
+                        globals,
+                        vbuf,
+                        0,
+                        ibuf,
+                        batch.index_count,
+                        batch.index_offset,
+                        None,
+                        "UI Rects",
+                    );
+                }
+                // Reset scissor to full viewport after batched draws.
+                encoder.set_scissor_rect(0, 0, pw, ph);
+            }
         }
 
         #[cfg(target_os = "macos")]
@@ -779,13 +908,3 @@ fn intersect_rects(a: Rect, b: Rect) -> Rect {
     Rect::new(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
 }
 
-/// Clamp a rect to a clip region (mathematical clipping).
-/// Fixes the Unity "ClipsChildren broken" bug by clamping geometry instead
-/// of relying on a flat-loop push/pop.
-fn clamp_rect_to_clip(r: Rect, clip: Rect) -> Rect {
-    let x0 = r.x.max(clip.x);
-    let y0 = r.y.max(clip.y);
-    let x1 = r.x_max().min(clip.x_max());
-    let y1 = r.y_max().min(clip.y_max());
-    Rect::new(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
-}

@@ -307,6 +307,7 @@ impl LayerBitmapGpu {
                 vertex_offset,
                 &self.index_buf,
                 6,
+                0,
                 None,
                 "Bitmap Layer",
             );

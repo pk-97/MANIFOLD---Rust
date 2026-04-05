@@ -431,6 +431,27 @@ impl UITree {
         // Stack of (node_index, bounds) for active CLIPS_CHILDREN ancestors.
         let mut clip_stack: Vec<(usize, Rect)> = Vec::new();
 
+        // Pre-push ancestor clip regions that are outside this range.
+        // Without this, sub-region rendering (e.g. a single effect card)
+        // misses the parent ClipRegion node and draws without clip context,
+        // causing content to render outside its scroll container.
+        if start < self.count {
+            let mut ancestors: Vec<(usize, Rect)> = Vec::new();
+            let mut idx = self.parent_index[start];
+            while idx >= 0 {
+                let node = &self.nodes[idx as usize];
+                if node.flags.contains(UIFlags::CLIPS_CHILDREN) {
+                    ancestors.push((idx as usize, node.bounds));
+                }
+                idx = self.parent_index[idx as usize];
+            }
+            // Push outermost first (reverse order of discovery).
+            for &(ci, bounds) in ancestors.iter().rev() {
+                visitor(TraversalEvent::PushClip(bounds));
+                clip_stack.push((ci, bounds));
+            }
+        }
+
         for i in start..end {
             let node = &self.nodes[i];
             if !node.flags.contains(UIFlags::VISIBLE) {

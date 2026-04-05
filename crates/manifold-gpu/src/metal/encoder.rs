@@ -976,6 +976,7 @@ impl GpuEncoder {
         vertex_offset: u64,
         index_buffer: &GpuBuffer,
         index_count: u32,
+        index_buffer_offset: u64,
         viewport: Option<(f32, f32, f32, f32)>,
         label: &str,
     ) {
@@ -1106,10 +1107,25 @@ impl GpuEncoder {
             index_count as u64,
             metal::MTLIndexType::UInt32,
             &index_buffer.raw,
-            0,
+            index_buffer_offset,
         );
         enc.pop_debug_group();
         // Do NOT end encoding — pass stays alive for more draws.
+    }
+
+    /// Set the scissor rectangle on the active render pass.
+    /// Coordinates are in physical pixels of the render target.
+    pub fn set_scissor_rect(&mut self, x: u32, y: u32, w: u32, h: u32) {
+        let EncoderState::Render(ptr) = self.state else {
+            panic!("set_scissor_rect called without active render pass");
+        };
+        let enc = unsafe { &*ptr };
+        enc.set_scissor_rect(metal::MTLScissorRect {
+            x: x as u64,
+            y: y as u64,
+            width: w as u64,
+            height: h as u64,
+        });
     }
 
     /// End the active render pass (started by `begin_render_pass`).
