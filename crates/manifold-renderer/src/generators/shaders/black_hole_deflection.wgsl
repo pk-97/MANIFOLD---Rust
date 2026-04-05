@@ -10,7 +10,7 @@
 //   - Event horizon: r_H = 0.5(1 + √(1 - a²)) in our units (r_s = 1)
 //
 // Output 1: (final_r, disk1_r, cos_angle1, sin_angle1)
-// Output 2: (unused, disk2_r, cos_angle2, sin_angle2)
+// Output 2: (vol_accum, disk2_r, cos_angle2, sin_angle2)
 // Output 3: (sky_dir.xyz, escaped_flag)
 
 struct Uniforms {
@@ -86,6 +86,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var c1_r = 0.0; var c1_ca = 0.0; var c1_sa = 0.0;
     var c2_r = 0.0; var c2_ca = 0.0; var c2_sa = 0.0;
     var crossing_count = 0;
+    var vol_accum = 0.0;
 
     for (var i = 0; i < max_steps; i++) {
         let r = length(pos);
@@ -131,6 +132,16 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let accel_drag2 = a / r3_new * cross(spin_axis, vel);
         vel += (accel_grav2 + accel_drag2) * step * 0.5;
 
+        // ── Volumetric density accumulation ──
+        // Gaussian vertical profile: rays near the disk plane accumulate density.
+        // Path integral gives volumetric thickness for edge-on viewing.
+        let disk_r_xz = length(vec2<f32>(pos.x, pos.z));
+        if disk_r_xz > CROSS_INNER && disk_r_xz < CROSS_OUTER {
+            let half_thick = 0.12 * disk_r_xz;
+            let y_norm = pos.y / half_thick;
+            vol_accum += exp(-y_norm * y_norm * 2.0) * step;
+        }
+
         // ── Disk crossing detection ──
         let cur_y = pos.y;
         if prev_y * cur_y < 0.0 {
@@ -156,7 +167,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     textureStore(output1, gid.xy, vec4<f32>(final_r, c1_r, c1_ca, c1_sa));
-    textureStore(output2, gid.xy, vec4<f32>(0.0, c2_r, c2_ca, c2_sa));
+    textureStore(output2, gid.xy, vec4<f32>(vol_accum, c2_r, c2_ca, c2_sa));
 
     if absorbed {
         textureStore(output3, gid.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));

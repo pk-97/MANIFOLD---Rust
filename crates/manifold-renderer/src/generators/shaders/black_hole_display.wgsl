@@ -2,7 +2,7 @@
 //
 // Deflection map layout:
 //   output1: (final_r, disk1_r, cos_angle1, sin_angle1)
-//   output2: (unused, disk2_r, cos_angle2, sin_angle2)
+//   output2: (vol_accum, disk2_r, cos_angle2, sin_angle2)
 //   output3: (sky_dir.xyz, escaped_flag)
 
 struct Uniforms {
@@ -42,11 +42,17 @@ fn noise2d(p: vec2<f32>) -> f32 {
     );
 }
 
+fn fbm(p: vec2<f32>) -> f32 {
+    var val = noise2d(p) * 0.5;
+    val += noise2d(p * 2.03 + vec2<f32>(1.7, -1.3)) * 0.25;
+    val += noise2d(p * 4.07 + vec2<f32>(3.4, -2.6)) * 0.125;
+    return val;
+}
+
 // ── Procedural star field ──
 
 fn star_layer(theta: f32, phi: f32, scale: f32, threshold: f32,
               intensity_mult: f32, seed: f32) -> vec3<f32> {
-    // Map spherical coords to grid. phi/2pi and theta/pi give [0,1] range.
     let uv = vec2<f32>(phi * scale * 0.15915, theta * scale * 0.31831);
     let cell = floor(uv);
     let f = fract(uv);
@@ -63,26 +69,25 @@ fn star_layer(theta: f32, phi: f32, scale: f32, threshold: f32,
                 let d = f - vec2<f32>(f32(i), f32(j)) - vec2<f32>(sx, sy);
                 let dist2 = dot(d, d);
 
+                // Steeper power law — many faint, very few bright
                 let norm_bright = (h - threshold) / (1.0 - threshold);
-                let star_intensity = pow(norm_bright, 0.35) * intensity_mult;
+                let star_intensity = pow(norm_bright, 1.5) * intensity_mult;
 
-                // Point spread: sharp core + soft halo on bright stars
-                let core = exp(-dist2 * 900.0);
-                let halo = exp(-dist2 * 90.0) * norm_bright * 0.15;
+                // Tight point spread — sharp pinpoints, not blobs
+                let core = exp(-dist2 * 6000.0);
+                let halo = exp(-dist2 * 800.0) * norm_bright * norm_bright * 0.06;
 
-                // Spectral class color
+                // Desaturated spectral colors — subtle tint, mostly white
                 let temp = hash21(neighbor * 3.46 + seed + 27.0);
                 var star_col: vec3<f32>;
                 if temp > 0.82 {
-                    star_col = vec3<f32>(0.7, 0.85, 1.4);   // O/B hot blue
-                } else if temp > 0.65 {
-                    star_col = vec3<f32>(0.95, 0.97, 1.15);  // A white-blue
-                } else if temp > 0.4 {
-                    star_col = vec3<f32>(1.0, 0.98, 0.9);    // F/G solar
-                } else if temp > 0.2 {
-                    star_col = vec3<f32>(1.1, 0.88, 0.65);   // K orange
+                    star_col = vec3<f32>(0.88, 0.92, 1.15);  // O/B cool blue tint
+                } else if temp > 0.55 {
+                    star_col = vec3<f32>(0.97, 0.98, 1.05);  // A/F near-white
+                } else if temp > 0.25 {
+                    star_col = vec3<f32>(1.0, 0.97, 0.93);   // G solar
                 } else {
-                    star_col = vec3<f32>(1.15, 0.7, 0.45);   // M red-orange
+                    star_col = vec3<f32>(1.05, 0.92, 0.82);  // K/M warm tint
                 }
 
                 light += star_col * star_intensity * (core + halo);
@@ -90,6 +95,18 @@ fn star_layer(theta: f32, phi: f32, scale: f32, threshold: f32,
         }
     }
     return light;
+}
+
+// Faint nebulosity — large-scale dust/gas clouds for depth
+fn nebula(dir: vec3<f32>) -> vec3<f32> {
+    let n1 = fbm(dir.xz * 1.5 + dir.y * 0.5);
+    let n2 = noise2d(dir.xz * 3.0 + vec2<f32>(10.0, 20.0));
+    let density = max(n1 * 0.7 + n2 * 0.3 - 0.35, 0.0);
+
+    let tint = noise2d(dir.xz * 0.8 + vec2<f32>(50.0, 60.0));
+    let warm = vec3<f32>(0.15, 0.06, 0.03);
+    let cool = vec3<f32>(0.04, 0.06, 0.12);
+    return mix(cool, warm, tint) * density;
 }
 
 fn star_field(dir: vec3<f32>, brightness: f32) -> vec3<f32> {
@@ -101,16 +118,19 @@ fn star_field(dir: vec3<f32>, brightness: f32) -> vec3<f32> {
     var stars = vec3<f32>(0.0);
 
     // Layer 1: bright stars
-    stars += star_layer(theta, phi, 20.0, 0.85, 2.5, 0.0);
+    stars += star_layer(theta, phi, 20.0, 0.82, 3.0, 0.0);
 
     // Layer 2: medium density
-    stars += star_layer(theta, phi, 45.0, 0.85, 1.0, 100.0);
+    stars += star_layer(theta, phi, 50.0, 0.80, 1.2, 100.0);
 
     // Layer 3: dense field
-    stars += star_layer(theta, phi, 90.0, 0.88, 0.4, 200.0);
+    stars += star_layer(theta, phi, 100.0, 0.84, 0.5, 200.0);
 
-    // Layer 4: very dense faint background
-    stars += star_layer(theta, phi, 160.0, 0.90, 0.15, 300.0);
+    // Layer 4: faint background dust
+    stars += star_layer(theta, phi, 180.0, 0.88, 0.15, 300.0);
+
+    // Background nebulosity
+    stars += nebula(dir) * brightness;
 
     return stars * brightness;
 }
@@ -118,8 +138,10 @@ fn star_field(dir: vec3<f32>, brightness: f32) -> vec3<f32> {
 // ── Accretion disk shading ──
 
 fn disk_opacity_from_r(r: f32) -> f32 {
-    let inner_fade = smoothstep(u.disk_inner * 0.8, u.disk_inner * 1.1, r);
-    let outer_fade = 1.0 - smoothstep(u.disk_outer * 0.85, u.disk_outer * 1.2, r);
+    // Wide, soft transitions — volumetric torus appearance.
+    // Inner edge extends close to horizon for plunging-region glow.
+    let inner_fade = smoothstep(u.disk_inner * 0.25, u.disk_inner * 1.3, r);
+    let outer_fade = 1.0 - smoothstep(u.disk_outer * 0.7, u.disk_outer * 1.5, r);
     return inner_fade * outer_fade;
 }
 
@@ -129,79 +151,74 @@ fn shade_disk(disk_r: f32, cos_a: f32, sin_a: f32, is_secondary: bool) -> vec3<f
     let ring_r = t;
     let r_norm = disk_r / u.disk_inner;
 
-    // Reconstruct angle, add rotate offset + orbital animation
+    // Reconstruct angle
     let base_angle = atan2(sin_a, cos_a);
 
-    // Keplerian orbital motion + Kerr frame-dragging boost
-    // Frame dragging adds angular velocity ∝ a/r³, making inner gas orbit faster
+    // ── Structure angle: gentle differential shear for noise ──
+    let shear = u.time_val * 0.05 / sqrt(r_norm);
+    let angle_struct = base_angle + shear + u.orbit_angle;
+    let cs = cos(angle_struct);
+    let ss = sin(angle_struct);
+
+    // ── Doppler beaming (fixed in camera frame) ──
     let fd_boost = u.spin * 0.3 / (r_norm * r_norm * r_norm);
-    let orbital_speed = u.time_val * 0.4 * (pow(r_norm, -1.5) + fd_boost);
-    let angle = base_angle + orbital_speed + u.orbit_angle;
+    let v_orb = 0.45 * inverseSqrt(r_norm) + u.spin * 0.12 / (r_norm * r_norm);
+    let raw_doppler = pow(max(1.0 + v_orb * cos(base_angle), 0.05), 3.0);
+    let doppler = mix(1.0, raw_doppler, 0.6);
 
-    // Seamless angle coordinates for noise
-    let ca = cos(angle);
-    let sa = sin(angle);
+    // ── Temperature gradient (noise-perturbed for organic color variation) ──
+    let t_warp = fbm(vec2<f32>(cs * 2.0 + ring_r * 1.5, ss * 1.5 + 50.0));
+    let tc = clamp(t + (t_warp - 0.4) * 0.25, 0.0, 1.0);
 
-    // ── Temperature gradient ──
     let inner_col = vec3<f32>(1.0, 0.95, 0.9);
     let mid1_col = vec3<f32>(1.0, 0.65, 0.3);
     let mid2_col = vec3<f32>(0.85, 0.3, 0.06);
     let outer_col = vec3<f32>(0.35, 0.04, 0.0);
 
     var base_col: vec3<f32>;
-    if t < 0.15 {
-        base_col = mix(inner_col, mid1_col, t / 0.15);
-    } else if t < 0.45 {
-        base_col = mix(mid1_col, mid2_col, (t - 0.15) / 0.3);
+    if tc < 0.15 {
+        base_col = mix(inner_col, mid1_col, tc / 0.15);
+    } else if tc < 0.45 {
+        base_col = mix(mid1_col, mid2_col, (tc - 0.15) / 0.3);
     } else {
-        base_col = mix(mid2_col, outer_col, (t - 0.45) / 0.55);
+        base_col = mix(mid2_col, outer_col, (tc - 0.45) / 0.55);
     }
 
     // Radial intensity
     let r_falloff = u.disk_glow * 0.5 / (r_norm * r_norm);
 
-    // Doppler beaming — frame dragging enhances orbital velocity
-    let v_orb = 0.45 * inverseSqrt(r_norm) + u.spin * 0.12 / (r_norm * r_norm);
-    let doppler = pow(max(1.0 + v_orb * cos(angle), 0.05), 3.5);
+    // ── Domain-warped FBM density ──
+    let warp_x = noise2d(vec2<f32>(cs * 2.0 + ring_r + 10.0, ss * 2.0 + 20.0)) - 0.5;
+    let warp_y = noise2d(vec2<f32>(cs * 2.0 + ring_r + 30.0, ss * 2.0 + 40.0)) - 0.5;
+    let wcs = cs + warp_x * 1.5;
+    let wss = ss + warp_y * 1.5;
 
-    // Concentric rings (seamless)
-    let az1 = ca * 0.2 + sa * 0.15;
-    let az2 = ca * 0.1 - sa * 0.08;
-    let az3 = ca * 0.3 + sa * 0.2;
-    let az4 = ca * 0.05 + sa * 0.04;
+    // Large-scale: spiral arms, hot spots
+    let density_large = fbm(vec2<f32>(
+        wcs * 4.0 + wss * 3.0 + ring_r * 1.5,
+        wss * 3.5 - wcs * 2.0 + 5.0,
+    ));
+    // Medium-scale: turbulent eddies, dark lanes
+    let density_med = fbm(vec2<f32>(
+        wcs * 8.0 + wss * 5.0 + ring_r * 2.0 + 15.0,
+        wss * 6.0 + wcs * 3.0 + 25.0,
+    ));
 
-    let ring1 = noise2d(vec2<f32>(ring_r * 50.0, az1 + 10.0));
-    let ring2 = noise2d(vec2<f32>(ring_r * 100.0 + 5.0, az2 + 20.0));
-    let ring3 = noise2d(vec2<f32>(ring_r * 25.0, az3));
-    let ring4 = noise2d(vec2<f32>(ring_r * 200.0, az4 + 40.0));
+    let density = density_large * 0.55 + density_med * 0.45;
+    let density_mod = smoothstep(0.15, 0.6, density);
 
-    let rings = ring1 * 0.35 + ring2 * 0.25 + ring3 * 0.2 + ring4 * 0.2;
-    let ring_mod = smoothstep(0.25, 0.6, rings);
+    // Inner edge glow — wider spread for volumetric feel
+    let inner_glow = exp(-(t * t) * 4.0) * 1.2;
 
-    // Orbiting clumps
-    let clump1 = smoothstep(0.5, 0.9, noise2d(vec2<f32>(
-        ca * 1.5 + sa * 0.8 + ring_r * 3.0,
-        sa * 1.2 + ca * 0.5 + 15.0,
-    )));
-    let clump2 = smoothstep(0.45, 0.85, noise2d(vec2<f32>(
-        ca * 1.2 + ring_r * 4.0 + 30.0,
-        sa * 1.0 + 25.0,
-    )));
-    let clump_brightness = 1.0 + (clump1 + clump2) * 0.5;
-
-    // Turbulent wisps
-    let wisp_az = cos(angle * 5.0) + sin(angle * 3.5) * 0.5;
-    let wisp = noise2d(vec2<f32>(wisp_az + 30.0, ring_r * 6.0));
-    let wisp_mod = 0.75 + 0.25 * wisp;
-
-    // Inner edge glow
-    let inner_glow = exp(-(t * t) * 6.0) * 0.8;
+    // Plunging region: gas inside ISCO spiraling into the hole.
+    let plunge = max(1.0 - r_norm, 0.0);
+    let redshift = exp(-plunge * 3.0);
+    let plunge_col = vec3<f32>(0.8, 0.25, 0.03) * plunge * redshift * 2.0;
 
     var emission = base_col * r_falloff * doppler
-        * (ring_mod * 0.6 + 0.4)
-        * wisp_mod
-        * clump_brightness
-        * (1.0 + inner_glow);
+        * (density_mod * 0.75 + 0.25)
+        * (1.0 + inner_glow)
+        + plunge_col;
 
     if is_secondary {
         emission *= 0.4;
@@ -222,8 +239,6 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let uv = vec2<f32>(f32(gid.x) + 0.5, f32(gid.y) + 0.5)
         / vec2<f32>(f32(dims.x), f32(dims.y));
 
-    // Bilinear for all deflection maps — smooth upscale from quarter-res.
-    // disk_opacity_from_r naturally fades fake crossings at disk edges.
     let d1 = textureSampleLevel(deflection1, s_linear, uv, 0.0);
     let d2 = textureSampleLevel(deflection2, s_linear, uv, 0.0);
     let sky = textureSampleLevel(sky_dir_tex, s_linear, uv, 0.0);
@@ -244,9 +259,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     var total_opacity = 0.0;
 
-    // ── First crossing (front disk) — composited over stars ──
-    // Reject fake crossings from bilinear upscale: real crossings have
-    // cos²+sin² ≈ 1, fake ones interpolated from zero have magnitude < 1.
+    // ── First crossing (front disk) ──
     let c1_mag2 = c1_ca * c1_ca + c1_sa * c1_sa;
     if c1_r > 0.1 && c1_mag2 > 0.25 {
         let disk_col = shade_disk(c1_r, c1_ca, c1_sa, false) * c1_op;
@@ -264,16 +277,35 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         total_opacity = clamp(total_opacity + c2_op * 0.5, 0.0, 1.0);
     }
 
-    // ── Photon ring ──
-    if final_r > 1.0 && final_r < 5.0 && total_opacity < 0.5 {
-        let ring = exp(-(final_r - 1.5) * (final_r - 1.5) * 8.0) * 0.15;
-        color += vec3<f32>(0.8, 0.85, 1.0) * ring;
+    // ── Photon ring (visible even over disk, softens shadow boundary) ──
+    if final_r > 1.0 && final_r < 5.0 {
+        let ring = exp(-(final_r - 1.5) * (final_r - 1.5) * 6.0);
+        let ring_vis = ring * mix(0.6, 0.15, clamp(total_opacity, 0.0, 1.0));
+        color += vec3<f32>(0.9, 0.85, 0.7) * ring_vis;
     }
 
-    // ── ACES tonemapping ──
-    let a = 2.51; let b = 0.03; let c = 2.43; let d = 0.59; let e = 0.14;
-    color = clamp((color * (a * color + b)) / (color * (c * color + d) + e),
-        vec3<f32>(0.0), vec3<f32>(1.0));
+    // ── Volumetric emission (path integral through disk atmosphere) ──
+    let vol = d2.r;
+    if vol > 0.01 {
+        let vol_opacity = 1.0 - exp(-vol * 0.3);
+        let vol_r = select(c1_r, (u.disk_inner + u.disk_outer) * 0.5, c1_r < 0.1);
+        let vol_t = clamp(
+            (vol_r - u.disk_inner) / (u.disk_outer - u.disk_inner), 0.0, 1.0);
+        let vol_col = mix(
+            vec3<f32>(1.0, 0.85, 0.6),
+            vec3<f32>(0.5, 0.12, 0.02),
+            vol_t,
+        );
+        let vol_fade = smoothstep(0.0, 0.15, vol);
+        color += vol_col * vol_opacity * vol_fade * u.disk_glow * 0.15;
+    }
+
+    // ── Soft knee compression (HDR-preserving) ──
+    let peak = max(max(color.r, color.g), max(color.b, 0.001));
+    if peak > 0.8 {
+        let compressed = 0.8 * (1.0 + log(peak / 0.8));
+        color = color * (compressed / peak);
+    }
 
     textureStore(output, gid.xy, vec4<f32>(color, 1.0));
 }
