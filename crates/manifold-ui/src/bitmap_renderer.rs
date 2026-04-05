@@ -339,6 +339,12 @@ impl LayerBitmapRenderer {
             }
         }
 
+        // Paint range: full buffer on full repaint, exposed strip only on pixel-shift.
+        let (paint_x0, paint_x1) = match strip_x {
+            Some((start, width)) => (start, (start + width).min(tex_w)),
+            None => (0, tex_w),
+        };
+
         // Paint alternating tint bands BEFORE grid lines and clips
         paint_tint_bands(
             &mut self.pixel_buffer,
@@ -348,11 +354,11 @@ impl LayerBitmapRenderer {
             ppb,
             scaled_ppb,
             time_sig_numerator,
+            paint_x0,
+            paint_x1,
         );
 
-        // Paint grid lines BEFORE clips (Unity line 201)
-        // Grid must be repainted across full width (even after shift) because
-        // grid lines don't align to pixel boundaries after arbitrary scroll.
+        // Paint grid lines BEFORE clips — only in the paint range.
         paint_grid_lines(
             &mut self.pixel_buffer,
             tex_w,
@@ -361,6 +367,8 @@ impl LayerBitmapRenderer {
             ppb,
             scaled_ppb,
             time_sig_numerator,
+            paint_x0,
+            paint_x1,
         );
 
         // Clip vertical inset (Unity lines 204-207)
@@ -369,6 +377,7 @@ impl LayerBitmapRenderer {
         let clip_h = tex_h as i32 - pad_px * 2;
 
         // Paint clips on top of grid (Unity lines 210-232)
+        // On pixel-shift, only repaint clips that overlap the exposed strip.
         for clip in clips {
             let clip_start_f32 = clip.start_beat.as_f32();
             let end_beat = clip_start_f32 + clip.duration_beats.as_f32();
@@ -387,6 +396,11 @@ impl LayerBitmapRenderer {
                 Some(v) => v,
                 None => continue,
             };
+
+            // Skip clips entirely outside the paint range
+            if (x + w) <= paint_x0 as i32 || x >= paint_x1 as i32 {
+                continue;
+            }
 
             // Visual state
             let is_selected = (state.is_selected)(&clip.clip_id);
@@ -472,7 +486,7 @@ impl LayerBitmapRenderer {
                 continue;
             }
             let mx = ((beat - viewport_min_beat) * scaled_ppb).round() as i32;
-            if mx >= 0 && mx < tex_w as i32 {
+            if mx >= paint_x0 as i32 && mx < paint_x1 as i32 {
                 bitmap_painter::fill_rect(
                     &mut self.pixel_buffer,
                     tex_w,
@@ -568,8 +582,10 @@ fn paint_tint_bands(
     logical_ppb: f32,
     scaled_ppb: f32,
     time_sig_numerator: u32,
+    paint_x0: usize,
+    paint_x1: usize,
 ) {
-    if scaled_ppb < 1.0 || time_sig_numerator < 1 {
+    if scaled_ppb < 1.0 || time_sig_numerator < 1 || paint_x0 >= paint_x1 {
         return;
     }
 
@@ -588,22 +604,20 @@ fn paint_tint_bands(
         let px_start = ((beat - viewport_min_beat) * scaled_ppb).round() as i32;
         let px_end = ((beat + interval - viewport_min_beat) * scaled_ppb).round() as i32;
 
-        if px_start >= tex_w as i32 {
+        if px_start >= paint_x1 as i32 {
             break;
         }
 
         // Determine which interval index this is (for even/odd)
         let idx = (beat / interval).round() as i32;
-        let x0 = px_start.max(0) as usize;
-        let x1 = (px_end as usize).min(tex_w);
+        let x0 = (px_start.max(0) as usize).max(paint_x0);
+        let x1 = (px_end as usize).min(tex_w).min(paint_x1);
         if x0 < x1 {
             let color = if idx % 2 != 0 {
                 tint
             } else {
                 Color32::TRANSPARENT
             };
-            // Direct write — no alpha_blend, avoids accumulation on
-            // pixel-shifted frames.
             for y in 0..tex_h {
                 let row = y * tex_w;
                 for x in x0..x1 {
@@ -626,8 +640,10 @@ fn paint_grid_lines(
     logical_ppb: f32,
     scaled_ppb: f32,
     time_sig_numerator: u32,
+    paint_x0: usize,
+    paint_x1: usize,
 ) {
-    if scaled_ppb < 1.0 || time_sig_numerator < 1 {
+    if scaled_ppb < 1.0 || time_sig_numerator < 1 || paint_x0 >= paint_x1 {
         return;
     }
 
@@ -664,10 +680,10 @@ fn paint_grid_lines(
     loop {
         let px = (subdiv_beat - viewport_min_beat) * scaled_ppb;
         let col = px.round() as i32;
-        if col >= tex_w as i32 {
+        if col >= paint_x1 as i32 {
             break;
         }
-        if col < 0 {
+        if col < 0 || (col as usize) < paint_x0 {
             subdiv_beat += step;
             continue;
         }
@@ -693,12 +709,10 @@ fn paint_grid_lines(
             (sixteenth_color, 1)
         };
 
-        // Paint vertical column — direct write (straight alpha).
-        // Buffer is clear at this point; no need for AlphaBlend.
-        // Unity lines 418-423.
+        // Paint vertical column — direct write.
         for lx in 0..line_width {
             let cx = col + lx;
-            if cx >= tex_w as i32 {
+            if cx >= paint_x1 as i32 {
                 break;
             }
             let cx = cx as usize;
@@ -893,7 +907,7 @@ mod tests {
     #[test]
     fn grid_lines_painted() {
         let mut buf = vec![Color32::TRANSPARENT; 400 * 20];
-        paint_grid_lines(&mut buf, 400, 20, 0.0, 100.0, 100.0, 4);
+        paint_grid_lines(&mut buf, 400, 20, 0.0, 100.0, 100.0, 4, 0, 400);
         // At ppb=100, bar lines at beat 0 should be painted
         // Check pixel column 0 has something (bar line)
         assert_ne!(buf[0], Color32::TRANSPARENT);
