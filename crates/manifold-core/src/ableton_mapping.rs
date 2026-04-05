@@ -67,6 +67,9 @@ pub struct AbletonParamMapping {
     /// Normalized 0–1 trim high (maps Ableton 1 to this point in param range).
     #[serde(default = "default_one")]
     pub range_max: f32,
+    /// When true, the Ableton value is inverted (1.0 - v) before trim range mapping.
+    #[serde(default)]
+    pub inverted: bool,
     /// Last received value from Ableton (0–1, pre-range-mapping). Runtime only.
     #[serde(skip)]
     pub last_value: f32,
@@ -83,7 +86,10 @@ impl AbletonParamMapping {
     /// Map an incoming Ableton value (0–1) through the trim range to produce
     /// a normalized 0–1 output within `[range_min, range_max]`.
     pub fn map_value(&self, ableton_value: f32) -> f32 {
-        let v = ableton_value.clamp(0.0, 1.0);
+        let mut v = ableton_value.clamp(0.0, 1.0);
+        if self.inverted {
+            v = 1.0 - v;
+        }
         self.range_min + (self.range_max - self.range_min) * v
     }
 
@@ -151,6 +157,7 @@ mod tests {
             address: test_address(),
             range_min: 0.0,
             range_max: 1.0,
+            inverted: false,
             last_value: 0.0,
             status: AbletonMappingStatus::Active,
         };
@@ -164,6 +171,7 @@ mod tests {
             address: test_address(),
             range_min: 0.25,
             range_max: 0.75,
+            inverted: false,
             last_value: 0.0,
             status: AbletonMappingStatus::Active,
         };
@@ -180,6 +188,7 @@ mod tests {
             address: test_address(),
             range_min: 0.0,
             range_max: 1.0,
+            inverted: false,
             last_value: 0.0,
             status: AbletonMappingStatus::Active,
         };
@@ -189,12 +198,30 @@ mod tests {
     }
 
     #[test]
+    fn map_value_inverted() {
+        let mapping = AbletonParamMapping {
+            param_index: 0,
+            address: test_address(),
+            range_min: 0.25,
+            range_max: 0.75,
+            inverted: true,
+            last_value: 0.0,
+            status: AbletonMappingStatus::Active,
+        };
+        // Inverted: 0.0 → 1.0 → 0.75, 1.0 → 0.0 → 0.25
+        assert!((mapping.map_value(0.0) - 0.75).abs() < f32::EPSILON);
+        assert!((mapping.map_value(1.0) - 0.25).abs() < f32::EPSILON);
+        assert!((mapping.map_value(0.5) - 0.50).abs() < f32::EPSILON);
+    }
+
+    #[test]
     fn map_value_clamps_input() {
         let mapping = AbletonParamMapping {
             param_index: 0,
             address: test_address(),
             range_min: 0.0,
             range_max: 1.0,
+            inverted: false,
             last_value: 0.0,
             status: AbletonMappingStatus::Active,
         };
@@ -209,6 +236,7 @@ mod tests {
             address: test_address(),
             range_min: 0.1,
             range_max: 0.9,
+            inverted: true,
             last_value: 0.5,
             status: AbletonMappingStatus::Active,
         };
@@ -217,6 +245,7 @@ mod tests {
         assert_eq!(back.param_index, 2);
         assert!((back.range_min - 0.1).abs() < f32::EPSILON);
         assert!((back.range_max - 0.9).abs() < f32::EPSILON);
+        assert!(back.inverted);
         // Runtime fields should be default after deser
         assert!(back.last_value.abs() < f32::EPSILON);
         assert_eq!(back.status, AbletonMappingStatus::Dormant);

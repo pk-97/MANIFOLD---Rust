@@ -598,6 +598,7 @@ impl ContentThread {
                         address,
                         range_min: 0.0,
                         range_max: 1.0,
+                        inverted: false,
                         last_value: 0.0,
                         status: AbletonMappingStatus::Active,
                     };

@@ -1142,6 +1142,7 @@ fn effects_to_configs(
                         AbletonMappingDisplay {
                             macro_name: mapping.address.macro_name.clone(),
                             status: mapping.status,
+                            inverted: mapping.inverted,
                         }
                     });
                     let ableton_range =
@@ -1330,6 +1331,7 @@ fn gen_params_to_config(
                 AbletonMappingDisplay {
                     macro_name: mapping.address.macro_name.clone(),
                     status: mapping.status,
+                    inverted: mapping.inverted,
                 }
             });
             let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));

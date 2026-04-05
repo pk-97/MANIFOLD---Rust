@@ -287,6 +287,10 @@ pub enum PanelAction {
     AbletonMacroTrimChanged(usize, f32, f32), // slot_idx, min, max
     AbletonMacroTrimCommit(usize), // slot_idx
 
+    // Ableton config actions
+    AbletonInvertToggle(usize, usize),    // fx_idx, param_idx
+    AbletonGenInvertToggle(usize),        // param_idx
+
     // Reset macro from context menu (distinct from MacroRightClick to avoid re-triggering dropdown)
     MacroReset(usize), // macro_idx — reset to 0 from context menu
 

@@ -1110,6 +1110,13 @@ impl EffectCardPanel {
             }
         }
 
+        // Ableton config buttons
+        if let Some((pi, AbletonConfigClick::Invert)) =
+            check_ableton_config_click(id, &self.ableton_config_ids)
+        {
+            return vec![PanelAction::AbletonInvertToggle(ei, pi)];
+        }
+
         // Param label click → copy OSC address to clipboard
         for (pi, slider) in self.slider_ids.iter().enumerate() {
             if let Some(ids) = slider

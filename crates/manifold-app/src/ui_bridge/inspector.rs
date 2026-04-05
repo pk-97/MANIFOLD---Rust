@@ -2835,6 +2835,103 @@ pub(super) fn dispatch_inspector(
         PanelAction::AbletonMacroTrimSnapshot(_)
         | PanelAction::AbletonMacroTrimCommit(_) => DispatchResult::handled(),
 
+        PanelAction::AbletonInvertToggle(fx_idx, param_idx) => {
+            let tab = ui.inspector.last_effect_tab();
+            let param_idx = *param_idx;
+            let fx_idx = *fx_idx;
+            let effect_type = match tab {
+                InspectorTab::Master => {
+                    let fx = project.settings.master_effects.get_mut(fx_idx);
+                    if let Some(fx) = fx
+                        && let Some(ms) = &mut fx.ableton_mappings
+                        && let Some(m) = ms.iter_mut().find(|m| m.param_index == param_idx)
+                    {
+                        m.inverted = !m.inverted;
+                    }
+                    project
+                        .settings
+                        .master_effects
+                        .get(fx_idx)
+                        .map(|f| f.effect_type().clone())
+                }
+                InspectorTab::Layer => {
+                    let layer_idx = super::resolve_active_layer_index(active_layer, project);
+                    if let Some(li) = layer_idx
+                        && let Some(layer) = project.timeline.layers.get_mut(li)
+                        && let Some(effects) = &mut layer.effects
+                        && let Some(fx) = effects.get_mut(fx_idx)
+                        && let Some(ms) = &mut fx.ableton_mappings
+                        && let Some(m) = ms.iter_mut().find(|m| m.param_index == param_idx)
+                    {
+                        m.inverted = !m.inverted;
+                    }
+                    layer_idx
+                        .and_then(|li| project.timeline.layers.get(li))
+                        .and_then(|l| l.effects.as_ref())
+                        .and_then(|e| e.get(fx_idx))
+                        .map(|f| f.effect_type().clone())
+                }
+                InspectorTab::Clip => None,
+            };
+            let layer_id = active_layer.clone();
+            if let Some(et) = effect_type {
+                ContentCommand::send(
+                    content_tx,
+                    ContentCommand::MutateProject(Box::new(move |p| {
+                        let effects: Option<&mut Vec<_>> = match tab {
+                            InspectorTab::Master => Some(&mut p.settings.master_effects),
+                            InspectorTab::Clip => None,
+                            InspectorTab::Layer => layer_id.as_ref().and_then(|lid| {
+                                p.timeline
+                                    .find_layer_by_id_mut(lid.as_str())
+                                    .and_then(|(_, l)| l.effects.as_mut())
+                            }),
+                        };
+                        if let Some(effects) = effects
+                            && let Some(fx) =
+                                effects.iter_mut().find(|f| f.effect_type() == &et)
+                            && let Some(ms) = &mut fx.ableton_mappings
+                            && let Some(m) =
+                                ms.iter_mut().find(|m| m.param_index == param_idx)
+                        {
+                            m.inverted = !m.inverted;
+                        }
+                    })),
+                );
+            }
+            DispatchResult::handled()
+        }
+
+        PanelAction::AbletonGenInvertToggle(param_idx) => {
+            let param_idx = *param_idx;
+            let layer_idx = super::resolve_active_layer_index(active_layer, project);
+            if let Some(layer_idx) = layer_idx
+                && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
+                && let Some(gp) = layer.gen_params_mut()
+                && let Some(mappings) = &mut gp.ableton_mappings
+                && let Some(m) = mappings.iter_mut().find(|m| m.param_index == param_idx)
+            {
+                m.inverted = !m.inverted;
+            }
+            let layer_id = active_layer.clone();
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::MutateProject(Box::new(move |p| {
+                    if let Some((_, layer)) = layer_id
+                        .as_ref()
+                        .and_then(|lid| p.timeline.find_layer_by_id_mut(lid.as_str()))
+                        && let Some(gp) = layer.gen_params_mut()
+                        && let Some(mappings) = &mut gp.ableton_mappings
+                        && let Some(m) =
+                            mappings.iter_mut().find(|m| m.param_index == param_idx)
+                    {
+                        m.inverted = !m.inverted;
+                    }
+                })),
+            );
+            DispatchResult::handled()
+        }
+
         _ => DispatchResult::unhandled(),
     }
 }

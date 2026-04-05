@@ -261,6 +261,8 @@ pub fn dispatch(
         | PanelAction::AbletonMacroTrimSnapshot(_)
         | PanelAction::AbletonMacroTrimChanged(..)
         | PanelAction::AbletonMacroTrimCommit(_)
+        | PanelAction::AbletonInvertToggle(..)
+        | PanelAction::AbletonGenInvertToggle(_)
         | PanelAction::AddEffect(..)
         | PanelAction::PasteEffects => inspector::dispatch_inspector(
             action,

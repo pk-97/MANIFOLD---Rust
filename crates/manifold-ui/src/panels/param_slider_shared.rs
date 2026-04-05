@@ -92,6 +92,7 @@ pub(crate) struct AbletonConfigIds {
     pub(crate) _container_id: i32,
     pub(crate) _status_dot_id: i32,
     pub(crate) _macro_label_id: i32,
+    pub(crate) invert_btn_id: i32,
 }
 
 /// Display data for an Ableton-mapped parameter.
@@ -100,6 +101,7 @@ pub(crate) struct AbletonConfigIds {
 pub struct AbletonMappingDisplay {
     pub macro_name: String,
     pub status: AbletonMappingStatus,
+    pub inverted: bool,
 }
 
 // ── Shared modulation state ─────────────────────────────────────
@@ -305,6 +307,47 @@ pub(crate) fn config_btn_style(active: bool, font_size: u16) -> UIStyle {
             bg_color: color::DRIVER_ACTIVE_C32,
             hover_bg_color: color::DRIVER_ACTIVE_HOVER_C32,
             pressed_bg_color: color::DRIVER_ACTIVE_PRESS_C32,
+            text_color: color::TEXT_WHITE_C32,
+            font_size,
+            corner_radius: 1.0,
+            text_align: TextAlign::Center,
+            ..UIStyle::default()
+        }
+    } else {
+        UIStyle {
+            bg_color: color::CONFIG_BTN_INACTIVE_C32,
+            hover_bg_color: color::CONFIG_BTN_HOVER_C32,
+            pressed_bg_color: color::CONFIG_BTN_PRESSED_C32,
+            text_color: color::TEXT_DIMMED_C32,
+            font_size,
+            corner_radius: 1.0,
+            text_align: TextAlign::Center,
+            ..UIStyle::default()
+        }
+    }
+}
+
+/// Like `config_btn_style` but uses a custom active color (e.g. Ableton purple).
+pub(crate) fn config_btn_style_colored(
+    active: bool,
+    active_color: Color32,
+    font_size: u16,
+) -> UIStyle {
+    if active {
+        UIStyle {
+            bg_color: active_color,
+            hover_bg_color: Color32::new(
+                active_color.r.saturating_add(20),
+                active_color.g.saturating_add(20),
+                active_color.b.saturating_add(20),
+                active_color.a,
+            ),
+            pressed_bg_color: Color32::new(
+                active_color.r.saturating_sub(10),
+                active_color.g.saturating_sub(10),
+                active_color.b.saturating_sub(10),
+                active_color.a,
+            ),
             text_color: color::TEXT_WHITE_C32,
             font_size,
             corner_radius: 1.0,
@@ -973,9 +1016,28 @@ pub(crate) fn build_ableton_config(
         },
     ) as i32;
 
+    // INV button (right-aligned)
+    let inv_btn_w = 28.0_f32;
+    let inv_btn_h = 16.0_f32;
+    let inv_btn_x = x + w - pad - inv_btn_w;
+    let inv_btn_y = y + (ABL_CONFIG_HEIGHT - inv_btn_h) * 0.5;
+    let invert_btn_id = tree.add_button(
+        container_id,
+        inv_btn_x,
+        inv_btn_y,
+        inv_btn_w,
+        inv_btn_h,
+        config_btn_style_colored(
+            display.inverted,
+            color::ABL_BADGE_C32,
+            color::FONT_CAPTION,
+        ),
+        "INV",
+    ) as i32;
+
     let label_x = x + pad + dot_size + 4.0;
     let label_y = y + (ABL_CONFIG_HEIGHT - 12.0) * 0.5;
-    let label_w = w - pad * 2.0 - dot_size - 4.0;
+    let label_w = inv_btn_x - label_x - 4.0;
     let macro_label_id = tree.add_label(
         container_id,
         label_x,
@@ -995,5 +1057,25 @@ pub(crate) fn build_ableton_config(
         _container_id: container_id,
         _status_dot_id: status_dot_id,
         _macro_label_id: macro_label_id,
+        invert_btn_id,
     }
+}
+
+/// Check if a click hit an Ableton config button. Returns param index if matched.
+pub(crate) fn check_ableton_config_click(
+    node_id: i32,
+    ableton_config_ids: &[Option<AbletonConfigIds>],
+) -> Option<(usize, AbletonConfigClick)> {
+    for (pi, ids) in ableton_config_ids.iter().enumerate() {
+        if let Some(c) = ids
+            && node_id == c.invert_btn_id
+        {
+            return Some((pi, AbletonConfigClick::Invert));
+        }
+    }
+    None
+}
+
+pub(crate) enum AbletonConfigClick {
+    Invert,
 }

@@ -999,6 +999,13 @@ impl GenParamPanel {
             }
         }
 
+        // Ableton config buttons
+        if let Some((pi, AbletonConfigClick::Invert)) =
+            check_ableton_config_click(id, &self.ableton_config_ids)
+        {
+            return vec![PanelAction::AbletonGenInvertToggle(pi)];
+        }
+
         // String param buttons → open text input
         for (si, &btn_id) in self.string_param_btn_ids.iter().enumerate() {
             if id == btn_id {
