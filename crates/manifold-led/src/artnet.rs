@@ -41,9 +41,11 @@ pub struct ArtNetOutput {
 
     initialized: bool,
 
-    // Warning throttle
-    next_send_warning: Instant,
-    suppressed_warnings: u32,
+    // Connection health — pause GPU work when host is unreachable
+    consecutive_failures: u32,
+    /// When true, skip GPU work (process_frame/poll_readback) until a probe succeeds.
+    disconnected: bool,
+    last_probe: Instant,
 
     // Debug: log first successful send
     sent_first_packet: bool,
@@ -75,8 +77,9 @@ impl ArtNetOutput {
             universe_count: 0,
             strip_start_channels: Vec::new(),
             initialized: false,
-            next_send_warning: Instant::now(),
-            suppressed_warnings: 0,
+            consecutive_failures: 0,
+            disconnected: false,
+            last_probe: Instant::now(),
             sent_first_packet: false,
             readback_count: 0,
         }
@@ -157,6 +160,11 @@ impl ArtNetOutput {
         self.initialized
     }
 
+    /// Returns true if the host is currently unreachable (GPU work paused).
+    pub fn is_disconnected(&self) -> bool {
+        self.disconnected
+    }
+
     /// Dispatch edge-extend compute and submit GPU readback.
     /// Uses a dedicated native Metal encoder (separate from the content frame).
     /// `signal_value` is the GpuEvent value that will be signaled after this
@@ -169,7 +177,7 @@ impl ArtNetOutput {
         signal_value: u64,
         event: &manifold_gpu::GpuEvent,
     ) {
-        if !self.initialized {
+        if !self.initialized || self.disconnected {
             return;
         }
         if self.readback.is_pending() {
@@ -210,7 +218,7 @@ impl ArtNetOutput {
 
     /// Check if readback completed and send DMX data if so.
     pub fn poll_readback(&mut self, event: &manifold_gpu::GpuEvent) {
-        if !self.initialized {
+        if !self.initialized || self.disconnected {
             return;
         }
         if let Some(pixels) = self.readback.try_read(event) {
@@ -309,6 +317,39 @@ impl ArtNetOutput {
         }
     }
 
+    /// How many consecutive send failures before we pause GPU work.
+    const DISCONNECT_THRESHOLD: u32 = 30;
+    /// How often to send a probe packet when disconnected (seconds).
+    const PROBE_INTERVAL_SECS: u64 = 3;
+
+    /// Try to reconnect by sending a single blackout packet.
+    /// Called from the controller on every tick when disconnected.
+    pub fn try_probe(&mut self) {
+        if !self.disconnected || !self.initialized {
+            return;
+        }
+        let now = Instant::now();
+        if now.duration_since(self.last_probe).as_secs() < Self::PROBE_INTERVAL_SECS {
+            return;
+        }
+        self.last_probe = now;
+
+        // Send a single zero-filled packet as a probe
+        let socket = match self.udp_socket.as_ref() {
+            Some(s) => s,
+            None => return,
+        };
+        if self.artnet_packets.is_empty() {
+            return;
+        }
+        let probe = &self.artnet_packets[0];
+        if socket.send_to(probe, self.endpoint).is_ok() {
+            eprintln!("[ArtNet] Host reachable — resuming LED output");
+            self.disconnected = false;
+            self.consecutive_failures = 0;
+        }
+    }
+
     fn send_packet(&mut self, packet: &[u8]) {
         let socket = match self.udp_socket.as_ref() {
             Some(s) => s,
@@ -317,6 +358,7 @@ impl ArtNetOutput {
 
         match socket.send_to(packet, self.endpoint) {
             Ok(_) => {
+                self.consecutive_failures = 0;
                 if !self.sent_first_packet {
                     self.sent_first_packet = true;
                     eprintln!(
@@ -327,22 +369,14 @@ impl ArtNetOutput {
                 }
             }
             Err(e) => {
-                // Throttled warning — keep trying (no backoff without probe to recover)
-                let now = Instant::now();
-                if now >= self.next_send_warning {
-                    let suffix = if self.suppressed_warnings > 0 {
-                        format!(
-                            " (suppressed {} identical warnings)",
-                            self.suppressed_warnings
-                        )
-                    } else {
-                        String::new()
-                    };
-                    eprintln!("[ArtNet] Send failed: {}{}", e, suffix);
-                    self.next_send_warning = now + std::time::Duration::from_secs(5);
-                    self.suppressed_warnings = 0;
-                } else {
-                    self.suppressed_warnings += 1;
+                self.consecutive_failures += 1;
+                if self.consecutive_failures == Self::DISCONNECT_THRESHOLD {
+                    eprintln!(
+                        "[ArtNet] Host unreachable ({e}) — pausing LED output, \
+                         will probe every {}s",
+                        Self::PROBE_INTERVAL_SECS
+                    );
+                    self.disconnected = true;
                 }
             }
         }
