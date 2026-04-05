@@ -101,6 +101,15 @@ struct MarkerNodeGroup {
     label_id: i32,   // -1 if no name
 }
 
+// ── Track background node group for update-in-place ────────────
+
+/// Structured storage for one track's background nodes.
+struct TrackBgGroup {
+    bg_id: i32,
+    accent_id: i32,    // -1 if no accent bar
+    separator_id: i32,
+}
+
 // ── Collapsed group bitmap ──────────────────────────────────────
 
 /// CPU pixel buffer for a single collapsed group's clip preview.
@@ -198,6 +207,7 @@ pub struct TimelineViewportPanel {
     ruler_label_ids: Vec<i32>,
     // grid_line_ids: removed — grid painted into bitmap
     track_bg_ids: Vec<i32>,
+    track_bg_groups: Vec<TrackBgGroup>,
     // clip_bg_ids, clip_label_ids, clip_border_ids, clip_trim_handle_ids: removed — painted into bitmap
 
     // Node range
@@ -295,6 +305,7 @@ impl TimelineViewportPanel {
             ruler_tick_ids: Vec::new(),
             ruler_label_ids: Vec::new(),
             track_bg_ids: Vec::new(),
+            track_bg_groups: Vec::new(),
             first_node: 0,
             node_count: 0,
             drag_mode: ViewportDragMode::None,
@@ -1696,26 +1707,21 @@ impl TimelineViewportPanel {
 
     fn build_track_backgrounds(&mut self, tree: &mut UITree) {
         self.track_bg_ids.clear();
+        self.track_bg_groups.clear();
 
         let tr = &self.tracks_rect;
         let tr_top = tr.y;
         let tr_bottom = tr.y + tr.height;
 
+        // Pre-allocate ALL tracks (including off-screen) for update-in-place.
+        // Off-screen tracks get set_visible(false).
         for (i, track) in self.tracks.iter().enumerate() {
             let y = self.track_y(i);
             let h = track.height;
 
-            // Skip if completely outside viewport
-            if y + h < tr_top || y > tr_bottom {
-                continue;
-            }
-
-            // Clamp to tracks_rect bounds (prevents bleeding into video area)
             let clamped_y = y.max(tr_top);
             let clamped_h = (y + h).min(tr_bottom) - clamped_y;
-            if clamped_h <= 0.0 {
-                continue;
-            }
+            let visible = clamped_h > 0.0 && y + h >= tr_top && y <= tr_bottom;
 
             let bg_color = if i % 2 == 0 {
                 color::TRACK_BG
@@ -1726,57 +1732,77 @@ impl TimelineViewportPanel {
                 bg_color,
                 ..UIStyle::default()
             };
-
-            // Dim muted tracks
             if track.is_muted {
                 style.bg_color =
                     Color32::new(bg_color.r / 2, bg_color.g / 2, bg_color.b / 2, bg_color.a);
             }
 
-            let id = tree.add_panel(-1, tr.x, clamped_y, tr.width, clamped_h, style) as i32;
-            self.track_bg_ids.push(id);
+            let bg_id = tree.add_panel(
+                -1,
+                tr.x,
+                if visible { clamped_y } else { tr_top },
+                tr.width,
+                if visible { clamped_h } else { 0.0 },
+                style,
+            ) as i32;
+            if !visible {
+                tree.set_visible(bg_id as u32, false);
+            }
+            self.track_bg_ids.push(bg_id);
 
-            // Group child accent bar (only if top is visible)
-            if !track.is_group
-                && y >= tr_top
-                && let Some(accent) = track.accent_color
-            {
-                tree.add_panel(
+            // Group child accent bar — always allocated
+            let accent_id = if let Some(accent) = track.accent_color.filter(|_| !track.is_group) {
+                let aid = tree.add_panel(
                     -1,
                     tr.x,
-                    clamped_y,
+                    if visible { clamped_y } else { tr_top },
                     color::GROUP_ACCENT_BAR_WIDTH,
-                    clamped_h,
+                    if visible { clamped_h } else { 0.0 },
                     UIStyle {
                         bg_color: accent,
                         ..UIStyle::default()
                     },
-                );
-            }
+                ) as i32;
+                if !visible || y < tr_top {
+                    tree.set_visible(aid as u32, false);
+                }
+                aid
+            } else {
+                -1
+            };
 
-            // Collapsed group preview is now bitmap-based — repainted in
-            // repaint_collapsed_groups() and rendered via the layer bitmap GPU path.
-
-            // Bottom separator — thicker for group boundaries
+            // Bottom separator — always allocated
             let (sep_h, sep_color) = if track.is_group {
                 (color::GROUP_SEPARATOR_HEIGHT, color::GROUP_SEPARATOR_COLOR)
             } else {
                 (color::TRACK_SEPARATOR_HEIGHT, color::SEPARATOR_COLOR)
             };
             let sep_y = y + h - sep_h;
-            if sep_y + sep_h > tr_top && sep_y < tr_bottom {
-                tree.add_panel(
-                    -1,
-                    tr.x,
-                    sep_y.max(tr_top),
-                    tr.width,
-                    (sep_y + sep_h).min(tr_bottom) - sep_y.max(tr_top),
-                    UIStyle {
-                        bg_color: sep_color,
-                        ..UIStyle::default()
-                    },
-                );
+            let sep_vis = visible && sep_y + sep_h > tr_top && sep_y < tr_bottom;
+            let separator_id = tree.add_panel(
+                -1,
+                tr.x,
+                if sep_vis { sep_y.max(tr_top) } else { tr_top },
+                tr.width,
+                if sep_vis {
+                    (sep_y + sep_h).min(tr_bottom) - sep_y.max(tr_top)
+                } else {
+                    0.0
+                },
+                UIStyle {
+                    bg_color: sep_color,
+                    ..UIStyle::default()
+                },
+            ) as i32;
+            if !sep_vis {
+                tree.set_visible(separator_id as u32, false);
             }
+
+            self.track_bg_groups.push(TrackBgGroup {
+                bg_id,
+                accent_id,
+                separator_id,
+            });
         }
     }
 
@@ -2406,6 +2432,79 @@ impl TimelineViewportPanel {
 
         // ── Update insert cursor ──
         self.sync_insert_cursor_ruler(tree);
+
+        true
+    }
+
+    // ── Update-in-place (Phase 2: vertical scroll) ─────────────
+
+    /// Try to update track background Y positions in-place for vertical scroll.
+    /// Returns `true` if successful, `false` if full rebuild needed.
+    pub fn try_update_vertical_scroll(&mut self, tree: &mut UITree) -> bool {
+        // Guard: must match current track count
+        if self.track_bg_groups.len() != self.tracks.len()
+            || self.track_bg_groups.is_empty()
+        {
+            return false;
+        }
+
+        let tr = &self.tracks_rect;
+        let tr_top = tr.y;
+        let tr_bottom = tr.y + tr.height;
+        let tr_x = tr.x;
+        let tr_w = tr.width;
+
+        for (i, track) in self.tracks.iter().enumerate() {
+            let group = &self.track_bg_groups[i];
+            let y = self.track_y(i);
+            let h = track.height;
+
+            let clamped_y = y.max(tr_top);
+            let clamped_h = (y + h).min(tr_bottom) - clamped_y;
+            let visible = clamped_h > 0.0 && y + h >= tr_top && y <= tr_bottom;
+
+            // Background
+            tree.set_visible(group.bg_id as u32, visible);
+            if visible {
+                tree.set_bounds(
+                    group.bg_id as u32,
+                    Rect::new(tr_x, clamped_y, tr_w, clamped_h),
+                );
+            }
+
+            // Accent bar
+            if group.accent_id >= 0 {
+                let accent_vis = visible && y >= tr_top;
+                tree.set_visible(group.accent_id as u32, accent_vis);
+                if accent_vis {
+                    tree.set_bounds(
+                        group.accent_id as u32,
+                        Rect::new(tr_x, clamped_y, color::GROUP_ACCENT_BAR_WIDTH, clamped_h),
+                    );
+                }
+            }
+
+            // Separator
+            let sep_h = if track.is_group {
+                color::GROUP_SEPARATOR_HEIGHT
+            } else {
+                color::TRACK_SEPARATOR_HEIGHT
+            };
+            let sep_y = y + h - sep_h;
+            let sep_vis = visible && sep_y + sep_h > tr_top && sep_y < tr_bottom;
+            tree.set_visible(group.separator_id as u32, sep_vis);
+            if sep_vis {
+                tree.set_bounds(
+                    group.separator_id as u32,
+                    Rect::new(
+                        tr_x,
+                        sep_y.max(tr_top),
+                        tr_w,
+                        (sep_y + sep_h).min(tr_bottom) - sep_y.max(tr_top),
+                    ),
+                );
+            }
+        }
 
         true
     }

@@ -396,6 +396,39 @@ struct LayerRowIds {
     ch_dropdown: i32,
 }
 
+impl LayerRowIds {
+    /// Iterate all valid (>= 0) node IDs in this row.
+    fn for_each_id(&self, mut f: impl FnMut(i32)) {
+        for &id in &[
+            self.bg,
+            self.chevron,
+            self.name,
+            self.drag_handle,
+            self.mute,
+            self.solo,
+            self.blend_mode,
+            self.separator,
+            self.info,
+            self.accent_bar,
+            self.connector,
+            self.bottom_border,
+            self.folder,
+            self.path_label,
+            self.new_clip,
+            self.gen_type,
+            self.add_gen_clip,
+            self.midi_label,
+            self.midi_input,
+            self.ch_label,
+            self.ch_dropdown,
+        ] {
+            if id >= 0 {
+                f(id);
+            }
+        }
+    }
+}
+
 impl Default for LayerRowIds {
     fn default() -> Self {
         Self {
@@ -1309,6 +1342,51 @@ impl LayerHeaderPanel {
         }
         Vec::new()
     }
+
+    // ── Update-in-place (vertical scroll) ─────────────────────
+
+    /// Try to update layer row Y positions in-place for vertical scroll.
+    /// Computes the Y delta from the new scroll offset and shifts all node
+    /// positions. Returns `true` if successful, `false` if full rebuild needed.
+    pub fn try_update_vertical_scroll(
+        &mut self,
+        tree: &mut UITree,
+        layout: &ScreenLayout,
+    ) -> bool {
+        // Guard: must have been built
+        if self.rows.is_empty() || self.rows.len() != self.layers.len() {
+            return false;
+        }
+
+        let lc = layout.layer_controls();
+        let header_spacer = layout.track_header_height();
+        let new_origin_y = lc.y + header_spacer - self.scroll.scroll_offset();
+        let delta_y = new_origin_y - self.panel_origin.y;
+
+        // Nothing changed
+        if delta_y.abs() < 0.001 {
+            return true;
+        }
+
+        // Update all node positions by delta_y
+        for row in &self.rows {
+            row.for_each_id(|id| {
+                let mut bounds = tree.get_bounds(id as u32);
+                bounds.y += delta_y;
+                tree.set_bounds(id as u32, bounds);
+            });
+        }
+
+        // Also shift insert indicator
+        if self.insert_indicator_id >= 0 {
+            let mut bounds = tree.get_bounds(self.insert_indicator_id as u32);
+            bounds.y += delta_y;
+            tree.set_bounds(self.insert_indicator_id as u32, bounds);
+        }
+
+        self.panel_origin.y = new_origin_y;
+        true
+    }
 }
 
 impl Default for LayerHeaderPanel {
@@ -1362,24 +1440,15 @@ impl Panel for LayerHeaderPanel {
         // (takes O(1), avoids cloning the entire Vec)
         let layers_snapshot = std::mem::take(&mut self.layers);
 
-        // Clip bounds: layer rows are only visible within the scrollable area
-        // (below the header spacer, above the footer). Rows outside are skipped.
-        let clip_top = lc.y + header_spacer;
-        let clip_bottom = lc.y + lc.height;
-
         for i in 0..layer_count {
             let layer = &layers_snapshot[i];
             if layer.height <= 0.0 {
                 continue;
             }
 
-            // Check if this layer row is within the visible clip bounds
-            let row_screen_y = self.panel_origin.y + layer.y_offset;
-            let row_screen_bottom = row_screen_y + layer.height;
-            if row_screen_bottom < clip_top || row_screen_y > clip_bottom {
-                // Entirely outside visible area — skip
-                continue;
-            }
+            // Build ALL rows (including off-screen) for update-in-place.
+            // The CLIPS_CHILDREN clip region handles visual clipping, and
+            // the renderer early-outs for nodes outside the clip bounds.
 
             let is_child = layer.parent_layer_id.is_some();
             let is_last_child = if is_child {

@@ -100,9 +100,9 @@ impl ScrollDirty {
         self.scroll_y || self.zoom || self.visual
     }
 
-    /// True if only horizontal scroll changed — enables update-in-place fast-path.
-    pub fn is_horizontal_only(&self) -> bool {
-        self.scroll_x && !self.scroll_y && !self.zoom && !self.visual
+    /// True if only scroll axes changed (no zoom, no visual) — enables update-in-place.
+    pub fn is_scroll_only(&self) -> bool {
+        (self.scroll_x || self.scroll_y) && !self.zoom && !self.visual
     }
 
     pub fn clear(&mut self) {
@@ -464,12 +464,28 @@ impl UIRoot {
             return self.build();
         }
 
-        // Fast-path: horizontal-only scroll — update positions in-place.
+        // Fast-path: scroll-only (no zoom, no visual) — update positions in-place.
         // No tree truncation, no hover invalidation, no node recreation.
-        if dirty.is_horizontal_only()
-            && self.viewport.try_update_horizontal_scroll(&mut self.tree)
-        {
-            return;
+        if dirty.is_scroll_only() {
+            let mut ok = true;
+
+            // Horizontal: update ruler ticks, markers, export markers
+            if dirty.scroll_x {
+                ok = self.viewport.try_update_horizontal_scroll(&mut self.tree);
+            }
+
+            // Vertical: update track bg Y positions + layer header Y positions
+            if ok && dirty.scroll_y {
+                ok = self
+                    .layer_headers
+                    .try_update_vertical_scroll(&mut self.tree, &self.layout)
+                    && self.viewport.try_update_vertical_scroll(&mut self.tree);
+            }
+
+            if ok {
+                return;
+            }
+            // Fallback: count mismatch or never-built — do normal rebuild below.
         }
 
         if dirty.needs_layer_headers() {
