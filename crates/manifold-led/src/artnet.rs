@@ -46,6 +46,11 @@ pub struct ArtNetOutput {
     /// When true, skip GPU work (process_frame/poll_readback) until a probe succeeds.
     disconnected: bool,
     last_probe: Instant,
+    probe_interval_secs: u64,
+    /// Successful sends since last resume from disconnected state.
+    sends_since_resume: u32,
+    /// Whether the initial disconnect has been logged (suppress flap spam).
+    logged_disconnect: bool,
 
     // Debug: log first successful send
     sent_first_packet: bool,
@@ -80,6 +85,9 @@ impl ArtNetOutput {
             consecutive_failures: 0,
             disconnected: false,
             last_probe: Instant::now(),
+            probe_interval_secs: Self::PROBE_INTERVAL_BASE_SECS,
+            sends_since_resume: 0,
+            logged_disconnect: false,
             sent_first_packet: false,
             readback_count: 0,
         }
@@ -319,22 +327,24 @@ impl ArtNetOutput {
 
     /// How many consecutive send failures before we pause GPU work.
     const DISCONNECT_THRESHOLD: u32 = 30;
-    /// How often to send a probe packet when disconnected (seconds).
-    const PROBE_INTERVAL_SECS: u64 = 3;
+    /// Base probe interval (seconds). Doubles on each flap, caps at MAX.
+    const PROBE_INTERVAL_BASE_SECS: u64 = 3;
+    const PROBE_INTERVAL_MAX_SECS: u64 = 60;
+    /// Successful sends needed after resume to consider connection stable.
+    const STABLE_THRESHOLD: u32 = 120;
 
-    /// Try to reconnect by sending a single blackout packet.
+    /// Try to reconnect by sending a single packet.
     /// Called from the controller on every tick when disconnected.
     pub fn try_probe(&mut self) {
         if !self.disconnected || !self.initialized {
             return;
         }
         let now = Instant::now();
-        if now.duration_since(self.last_probe).as_secs() < Self::PROBE_INTERVAL_SECS {
+        if now.duration_since(self.last_probe).as_secs() < self.probe_interval_secs {
             return;
         }
         self.last_probe = now;
 
-        // Send a single zero-filled packet as a probe
         let socket = match self.udp_socket.as_ref() {
             Some(s) => s,
             None => return,
@@ -344,9 +354,11 @@ impl ArtNetOutput {
         }
         let probe = &self.artnet_packets[0];
         if socket.send_to(probe, self.endpoint).is_ok() {
-            eprintln!("[ArtNet] Host reachable — resuming LED output");
+            // UDP send_to "succeeds" even for unreachable hosts (ARP queued).
+            // Don't log yet — wait for sustained successful sends in send_packet.
             self.disconnected = false;
             self.consecutive_failures = 0;
+            self.sends_since_resume = 0;
         }
     }
 
@@ -359,6 +371,7 @@ impl ArtNetOutput {
         match socket.send_to(packet, self.endpoint) {
             Ok(_) => {
                 self.consecutive_failures = 0;
+                self.sends_since_resume += 1;
                 if !self.sent_first_packet {
                     self.sent_first_packet = true;
                     eprintln!(
@@ -367,15 +380,30 @@ impl ArtNetOutput {
                         packet.len(),
                     );
                 }
+                // Connection confirmed stable — log resume and reset backoff
+                if self.logged_disconnect
+                    && self.sends_since_resume == Self::STABLE_THRESHOLD
+                {
+                    eprintln!("[ArtNet] Host reachable — resumed LED output");
+                    self.logged_disconnect = false;
+                    self.probe_interval_secs = Self::PROBE_INTERVAL_BASE_SECS;
+                }
             }
             Err(e) => {
                 self.consecutive_failures += 1;
                 if self.consecutive_failures == Self::DISCONNECT_THRESHOLD {
-                    eprintln!(
-                        "[ArtNet] Host unreachable ({e}) — pausing LED output, \
-                         will probe every {}s",
-                        Self::PROBE_INTERVAL_SECS
-                    );
+                    if self.sends_since_resume < Self::STABLE_THRESHOLD {
+                        // Flap: probe succeeded but real sends failed.
+                        // Back off silently.
+                        self.probe_interval_secs = (self.probe_interval_secs * 2)
+                            .min(Self::PROBE_INTERVAL_MAX_SECS);
+                    }
+                    if !self.logged_disconnect {
+                        eprintln!(
+                            "[ArtNet] Host unreachable ({e}) — pausing LED output"
+                        );
+                        self.logged_disconnect = true;
+                    }
                     self.disconnected = true;
                 }
             }
