@@ -201,8 +201,8 @@ pub const GRID_BEAT_LINE: Color32 = Color32::new(82, 82, 87, 77);
 pub const GRID_SUBDIVISION_LINE: Color32 = Color32::new(71, 71, 77, 38);
 pub const GRID_SIXTEENTH_LINE: Color32 = Color32::new(71, 71, 77, 20);
 
-/// Alternating bar/beat tint band (subtle lighten on every other interval).
-pub const GRID_TINT_BAND: Color32 = Color32::new(255, 255, 255, 8);
+/// Alternating bar/beat tint band (premultiplied: subtle lighten on every other interval).
+pub const GRID_TINT_BAND: Color32 = Color32::new(4, 4, 4, 4);
 
 // ── Layer color picker palette ──────────────────────────────────────
 // 7 columns × 10 rows = 70 high-contrast colors. Modeled after Ableton's
