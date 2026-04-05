@@ -265,7 +265,7 @@ impl Application {
                     &mut self.active_layer_id,
                     &mut self.needs_rebuild,
                     &mut self.needs_structural_sync,
-                    &mut self.needs_scroll_rebuild,
+                    &mut self.scroll_dirty,
                     &mut self.invalidate_layers,
                     &mut self.pre_drag_commands,
                 );
@@ -729,7 +729,7 @@ impl Application {
                     &mut self.active_layer_id,
                     &mut self.needs_rebuild,
                     &mut self.needs_structural_sync,
-                    &mut self.needs_scroll_rebuild,
+                    &mut self.scroll_dirty,
                     &mut self.invalidate_layers,
                     &mut self.pre_drag_commands,
                 );
@@ -756,29 +756,34 @@ impl Application {
             &self.content_state,
             &self.local_project,
         );
+        // Auto-scroll during playback is horizontal-only.
+        if auto_scroll_changed {
+            self.scroll_dirty.scroll_x = true;
+        }
         let overlay_changed = self.ui_root.overlay_dirty;
         self.ui_root.overlay_dirty = false;
-        let scroll_changed = auto_scroll_changed || self.needs_scroll_rebuild || overlay_changed;
-        self.needs_scroll_rebuild = false;
+        if overlay_changed {
+            self.scroll_dirty.visual = true;
+        }
+        let scroll_dirty = self.scroll_dirty;
+        self.scroll_dirty.clear();
 
         // 3. Rebuild if needed
         // Full rebuild: structural changes, data mutations, or explicit needs_rebuild.
         // Partial rebuild: only scroll/zoom changed — rebuild viewport + layer_headers,
         // preserve transport, header, footer, inspector nodes.
-        // From Unity: CheckScrollAndInvalidate only repaints affected layers.
+        // Horizontal-only scroll skips layer header rebuild entirely.
         //
         // GUARD: If the inspector has an active drag (slider being dragged), defer
         // the rebuild to prevent node destruction mid-drag which causes snap-back.
-        // Unity avoids this because rebuilds only happen on structural changes and
-        // SyncValues() dirty-checks against the data model without rebuilding.
         let inspector_dragging = self.ui_root.inspector.is_dragging();
         let layer_dragging = self.ui_root.layer_headers.is_dragging();
         if self.needs_rebuild || needs_structural_sync {
             if inspector_dragging {
                 // Defer — keep needs_rebuild set so it fires after drag ends
                 // But still rebuild scroll panels if needed (they're separate from inspector)
-                if scroll_changed {
-                    self.ui_root.rebuild_scroll_panels();
+                if scroll_dirty.any() {
+                    self.ui_root.rebuild_scroll_panels(scroll_dirty);
                     if let Some(cm) = &mut self.ui_cache_manager {
                         cm.invalidate_scroll_panels();
                     }
@@ -798,8 +803,8 @@ impl Application {
                     cm.invalidate_all();
                 }
             }
-        } else if scroll_changed && !layer_dragging {
-            self.ui_root.rebuild_scroll_panels();
+        } else if scroll_dirty.any() && !layer_dragging {
+            self.ui_root.rebuild_scroll_panels(scroll_dirty);
             if let Some(cm) = &mut self.ui_cache_manager {
                 cm.invalidate_scroll_panels();
             }

@@ -206,10 +206,16 @@ pub struct TimelineViewportPanel {
 
     // Overview bitmap — CPU pixel buffer for the full-timeline minimap.
     // Replaces per-clip panel nodes with a single texture (no clip cap).
+    // Two-layer design: cached clip layer + lightweight overlay compositing.
     overview_pixels: Vec<Color32>,
+    /// Cached clip-only layer — only repainted when clip data changes.
+    /// On scroll/playhead changes, this is copied and the overlay is composited on top.
+    overview_clip_pixels: Vec<Color32>,
     overview_tex_w: usize,
     overview_tex_h: usize,
     overview_dirty: bool,
+    /// True when clip data changed and clip layer needs full repaint.
+    overview_clips_dirty: bool,
     overview_last_clip_fingerprint: u64,
     overview_last_playhead: f32,
     overview_last_scroll_x: f32,
@@ -284,9 +290,11 @@ impl TimelineViewportPanel {
             scrub_free: false,
             cached_fingerprint: 0,
             overview_pixels: Vec::new(),
+            overview_clip_pixels: Vec::new(),
             overview_tex_w: 0,
             overview_tex_h: 0,
             overview_dirty: true,
+            overview_clips_dirty: true,
             overview_last_clip_fingerprint: 0,
             overview_last_playhead: 0.0,
             overview_last_scroll_x: 0.0,
@@ -372,6 +380,8 @@ impl TimelineViewportPanel {
 
     pub fn set_tracks(&mut self, tracks: Vec<TrackInfo>) {
         self.tracks = tracks;
+        // Track layout changed — overview clip layer needs full repaint
+        self.overview_clips_dirty = true;
         // Recompute cumulative Y offsets from track heights
         self.track_y_offsets.clear();
         let mut y = 0.0;
@@ -433,6 +443,9 @@ impl TimelineViewportPanel {
             clip_fp = clip_fp
                 .wrapping_mul(31)
                 .wrapping_add(c.layer_index as u64);
+        }
+        if clip_fp != self.overview_last_clip_fingerprint {
+            self.overview_clips_dirty = true;
         }
         self.overview_last_clip_fingerprint = clip_fp;
         self.overview_dirty = true;
@@ -1353,13 +1366,12 @@ impl TimelineViewportPanel {
         let tex_w = (self.overview_rect.width * scale).round().max(1.0) as usize;
         let tex_h = (self.overview_rect.height * scale).round().max(1.0) as usize;
 
-        // Dirty-checking: skip if nothing changed.
+        // Dirty-checking: skip if nothing changed at all.
         let ppb = self.mapper.pixels_per_beat();
         let scroll_x = self.scroll_x_beats.as_f32();
         let playhead = self.playhead_beat.as_f32();
-        let clip_fp = self.overview_last_clip_fingerprint;
         if !self.overview_dirty
-            && clip_fp == self.overview_last_clip_fingerprint
+            && !self.overview_clips_dirty
             && self.overview_last_playhead == playhead
             && self.overview_last_scroll_x == scroll_x
             && self.overview_last_ppb == ppb
@@ -1368,20 +1380,26 @@ impl TimelineViewportPanel {
         {
             return;
         }
+
+        // Check if clip layer needs repaint (expensive) vs overlay-only (cheap).
+        let size_changed = tex_w != self.overview_tex_w || tex_h != self.overview_tex_h;
+        let clips_need_repaint = self.overview_clips_dirty
+            || size_changed
+            || self.overview_last_track_count != self.tracks.len();
+
         self.overview_last_playhead = playhead;
         self.overview_last_scroll_x = scroll_x;
         self.overview_last_ppb = ppb;
         self.overview_last_track_count = self.tracks.len();
         self.overview_last_width = self.overview_rect.width;
-
-        // Resize buffer
-        let total = tex_w * tex_h;
-        self.overview_pixels.resize(total, Color32::TRANSPARENT);
-        self.overview_pixels.fill(Color32::TRANSPARENT);
         self.overview_tex_w = tex_w;
         self.overview_tex_h = tex_h;
 
+        let total = tex_w * tex_h;
+
         if self.clips.is_empty() || self.tracks.is_empty() {
+            self.overview_pixels.resize(total, Color32::TRANSPARENT);
+            self.overview_pixels.fill(Color32::TRANSPARENT);
             self.overview_dirty = true;
             return;
         }
@@ -1395,54 +1413,65 @@ impl TimelineViewportPanel {
             }
         }
         if max_beat <= 0.0 {
+            self.overview_pixels.resize(total, Color32::TRANSPARENT);
+            self.overview_pixels.fill(Color32::TRANSPARENT);
             self.overview_dirty = true;
             return;
         }
 
-        // Remap: skip group layers
-        let mut non_group_row: Vec<Option<usize>> = Vec::with_capacity(self.tracks.len());
-        let mut non_group_count: usize = 0;
-        for track in &self.tracks {
-            if track.is_group {
-                non_group_row.push(None);
-            } else {
-                non_group_row.push(Some(non_group_count));
-                non_group_count += 1;
+        // ── Layer 1: Clip layer (cached, only repainted on clip data change) ──
+        if clips_need_repaint {
+            self.overview_clip_pixels.resize(total, Color32::TRANSPARENT);
+            self.overview_clip_pixels.fill(Color32::TRANSPARENT);
+
+            // Remap: skip group layers
+            let mut non_group_row: Vec<Option<usize>> =
+                Vec::with_capacity(self.tracks.len());
+            let mut non_group_count: usize = 0;
+            for track in &self.tracks {
+                if track.is_group {
+                    non_group_row.push(None);
+                } else {
+                    non_group_row.push(Some(non_group_count));
+                    non_group_count += 1;
+                }
             }
-        }
-        if non_group_count == 0 {
-            self.overview_dirty = true;
-            return;
+
+            if non_group_count > 0 {
+                let row_h = tex_h as f32 / non_group_count as f32;
+
+                for clip in &self.clips {
+                    let row = match non_group_row.get(clip.layer_index).copied().flatten() {
+                        Some(r) => r,
+                        None => continue,
+                    };
+                    let start_norm = clip.start_beat.as_f32() / max_beat;
+                    let end_norm =
+                        (clip.start_beat.as_f32() + clip.duration_beats.as_f32()) / max_beat;
+                    let x = (start_norm * tex_w as f32).round() as i32;
+                    let w =
+                        ((end_norm - start_norm) * tex_w as f32).round().max(1.0) as i32;
+                    let y = (row as f32 * row_h).round() as i32;
+                    let h = row_h.round().max(1.0) as i32;
+
+                    bitmap_painter::fill_rect(
+                        &mut self.overview_clip_pixels,
+                        tex_w,
+                        tex_h,
+                        x,
+                        y,
+                        w,
+                        h,
+                        clip.color,
+                    );
+                }
+            }
+            self.overview_clips_dirty = false;
         }
 
-        let row_h = tex_h as f32 / non_group_count as f32;
-
-        // Paint all clips — no cap
-        for clip in &self.clips {
-            let row = match non_group_row.get(clip.layer_index).copied().flatten() {
-                Some(r) => r,
-                None => continue,
-            };
-            let start_norm = clip.start_beat.as_f32() / max_beat;
-            let end_norm =
-                (clip.start_beat.as_f32() + clip.duration_beats.as_f32()) / max_beat;
-            let x = (start_norm * tex_w as f32).round() as i32;
-            let w = ((end_norm - start_norm) * tex_w as f32).round().max(1.0) as i32;
-            // Layer 0 at top (matches timeline track order)
-            let y = (row as f32 * row_h).round() as i32;
-            let h = row_h.round().max(1.0) as i32;
-
-            bitmap_painter::fill_rect(
-                &mut self.overview_pixels,
-                tex_w,
-                tex_h,
-                x,
-                y,
-                w,
-                h,
-                clip.color,
-            );
-        }
+        // ── Layer 2: Composite — copy cached clips, then overlay indicator + playhead ──
+        self.overview_pixels.resize(total, Color32::TRANSPARENT);
+        self.overview_pixels.copy_from_slice(&self.overview_clip_pixels);
 
         // Viewport indicator (semi-transparent blue)
         if ppb > 0.0 {

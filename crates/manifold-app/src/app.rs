@@ -372,9 +372,9 @@ pub struct Application {
     pub(crate) pending_close_output: bool,
     pub(crate) pending_export: bool,
     pub(crate) needs_rebuild: bool,
-    /// Set by scroll/zoom events that only affect viewport + layer_headers.
-    /// Uses the partial rebuild path (rebuild_scroll_panels) instead of full build.
-    pub(crate) needs_scroll_rebuild: bool,
+    /// Fine-grained scroll dirty flags — tracks which axis changed to enable
+    /// skipping layer header rebuild on horizontal-only scroll.
+    pub(crate) scroll_dirty: crate::ui_root::ScrollDirty,
     /// Set by keyboard shortcuts that mutate project data (undo, delete, etc.).
     /// Consumed by tick_and_render to trigger sync_project_data + rebuild.
     pub(crate) needs_structural_sync: bool,
@@ -489,7 +489,7 @@ impl Application {
             pending_export: false,
             pending_close_output: false,
             needs_rebuild: false,
-            needs_scroll_rebuild: false,
+            scroll_dirty: crate::ui_root::ScrollDirty::default(),
             needs_structural_sync: false,
         }
     }
@@ -1832,7 +1832,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                 &mut self.active_layer_id,
                                 &mut self.needs_rebuild,
                                 &mut self.needs_structural_sync,
-                                &mut self.needs_scroll_rebuild,
+                                &mut self.scroll_dirty,
                                 &mut self.invalidate_layers,
                                 &mut self.pre_drag_commands,
                             );
@@ -2080,7 +2080,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                     new_scroll.max(0.0),
                                     self.ui_root.viewport.scroll_y_px(),
                                 );
-                                self.needs_scroll_rebuild = true;
+                                self.scroll_dirty.zoom = true;
                             }
                         } else if self.modifiers.shift {
                             // Shift + scroll Y → horizontal pan
@@ -2094,7 +2094,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                 .viewport
                                 .set_scroll(new_x, self.ui_root.viewport.scroll_y_px())
                             {
-                                self.needs_scroll_rebuild = true;
+                                self.scroll_dirty.scroll_x = true;
                             }
                         } else {
                             // Plain scroll → vertical track scroll
@@ -2108,7 +2108,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                 self.ui_root
                                     .layer_headers
                                     .set_scroll_y(self.ui_root.viewport.scroll_y_px());
-                                self.needs_scroll_rebuild = true;
+                                self.scroll_dirty.scroll_y = true;
                             }
                         }
                         // Native horizontal scroll (trackpad two-finger swipe)
@@ -2123,7 +2123,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                 .viewport
                                 .set_scroll(new_x, self.ui_root.viewport.scroll_y_px())
                             {
-                                self.needs_scroll_rebuild = true;
+                                self.scroll_dirty.scroll_x = true;
                             }
                         }
                     }
@@ -2231,7 +2231,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             active_layer: &mut self.active_layer_id,
                             needs_rebuild: &mut self.needs_rebuild,
                             needs_structural_sync: &mut self.needs_structural_sync,
-                            needs_scroll_rebuild: &mut self.needs_scroll_rebuild,
+                            scroll_dirty: &mut self.scroll_dirty,
                             current_project_path: &self.current_project_path,
                             has_output_window: self.window_registry.has_output_window(),
                             pending_close_output: &mut self.pending_close_output,
@@ -2347,7 +2347,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     // Clear clip hover so bitmap doesn't stay painted in hover state
                     if self.selection.hovered_clip_id.is_some() {
                         self.selection.hovered_clip_id = None;
-                        self.needs_scroll_rebuild = true;
+                        self.scroll_dirty.visual = true;
                     }
                 }
             }
@@ -2374,7 +2374,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     // Clear clip hover so bitmap doesn't stay painted in hover state
                     if self.selection.hovered_clip_id.is_some() {
                         self.selection.hovered_clip_id = None;
-                        self.needs_scroll_rebuild = true;
+                        self.scroll_dirty.visual = true;
                     }
                 }
             }

@@ -79,6 +79,32 @@ pub enum DropdownContext {
     MacroSlotContext(usize),  // macro_index (right-click on macro slider)
 }
 
+/// Fine-grained tracking of what scroll-related state changed.
+/// Enables skipping expensive rebuilds when only horizontal scroll moved.
+#[derive(Default, Clone, Copy)]
+pub struct ScrollDirty {
+    pub scroll_x: bool,
+    pub scroll_y: bool,
+    pub zoom: bool,
+    /// Non-axis visual changes: hover, selection, overlay state.
+    pub visual: bool,
+}
+
+impl ScrollDirty {
+    pub fn any(&self) -> bool {
+        self.scroll_x || self.scroll_y || self.zoom || self.visual
+    }
+
+    /// Layer headers only depend on scroll_y, zoom, or visual changes — not scroll_x.
+    pub fn needs_layer_headers(&self) -> bool {
+        self.scroll_y || self.zoom || self.visual
+    }
+
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
+
 /// Owns all UI state for one window.
 pub struct UIRoot {
     // Core
@@ -110,6 +136,9 @@ pub struct UIRoot {
     /// Everything before this index is "static" (transport, header, footer, inspector)
     /// and preserved during scroll-only rebuilds via tree.truncate_from().
     scroll_panels_start: usize,
+    /// Tree index where viewport panels begin (after layer_headers).
+    /// On horizontal-only scroll, truncate from here to skip layer header rebuild.
+    viewport_panels_start: usize,
 
     /// Context for the currently-open dropdown (set before open, read on selection).
     dropdown_context: Option<DropdownContext>,
@@ -204,6 +233,7 @@ impl UIRoot {
             screen_height: 720.0,
             time_accumulator: 0.0,
             scroll_panels_start: 0,
+            viewport_panels_start: 0,
             dropdown_context: None,
             display_resolutions: Vec::new(),
             master_effect_names: Vec::new(),
@@ -422,25 +452,71 @@ impl UIRoot {
 
     /// Rebuild only scroll-affected panels (layer_headers, viewport, perf_hud).
     /// Static panels (transport, header, footer, inspector) keep their tree nodes.
-    /// From Unity's pattern: CheckScrollAndInvalidate only repaints dirty layers,
-    /// not the entire UI.
-    pub fn rebuild_scroll_panels(&mut self) {
+    ///
+    /// Uses `dirty` flags to skip layer header rebuild on horizontal-only scroll.
+    pub fn rebuild_scroll_panels(&mut self, dirty: ScrollDirty) {
         if !self.built {
             return self.build();
         }
-        self.tree.truncate_from(self.scroll_panels_start);
-        // Invalidate hover — scroll panel node IDs are now stale
-        self.input.invalidate_hover();
-        self.build_scroll_panels();
+        if dirty.needs_layer_headers() {
+            // Full scroll rebuild — includes layer headers
+            self.tree.truncate_from(self.scroll_panels_start);
+            self.input.invalidate_hover();
+            self.build_scroll_panels();
+        } else {
+            // Horizontal-only — skip layer headers, rebuild viewport + rest
+            self.tree.truncate_from(self.viewport_panels_start);
+            self.input.invalidate_hover();
+            self.build_viewport_panels();
+        }
     }
 
     /// Internal: build the scroll-affected panel group.
     fn build_scroll_panels(&mut self) {
         self.layer_headers.build(&mut self.tree, &self.layout);
+        // Record boundary between layer headers and viewport panels.
+        self.viewport_panels_start = self.tree.count();
         self.viewport.build(&mut self.tree, &self.layout);
 
         // Waveform & stem lane UITree nodes — must be after viewport.build()
         // so waveform_lane_rect()/stem_lanes_rect() have valid rects.
+        {
+            let wf_rect = self.viewport.waveform_lane_rect();
+            if wf_rect.width > 0.0 && wf_rect.height > 0.0 {
+                self.waveform_lane.build_nodes(&mut self.tree, wf_rect);
+            }
+            let sl_rect = self.viewport.stem_lanes_rect();
+            if sl_rect.width > 0.0 && sl_rect.height > 0.0 {
+                self.stem_lanes.build_nodes(&mut self.tree, sl_rect);
+            }
+        }
+
+        self.perf_hud.build(&mut self.tree, &self.layout);
+
+        self.dropdown
+            .set_screen_size(self.screen_width, self.screen_height);
+        if self.dropdown.is_open() {
+            self.dropdown.rebuild_nodes(&mut self.tree);
+        }
+
+        self.browser_popup
+            .set_screen_size(self.screen_width, self.screen_height);
+        if self.browser_popup.is_open() {
+            self.browser_popup.build(&mut self.tree);
+        }
+
+        self.ableton_picker
+            .set_screen_size(self.screen_width, self.screen_height);
+        if self.ableton_picker.is_open() {
+            self.ableton_picker.build(&mut self.tree);
+        }
+    }
+
+    /// Internal: build viewport + remaining scroll panels (skip layer headers).
+    /// Used on horizontal-only scroll where layer headers don't change.
+    fn build_viewport_panels(&mut self) {
+        self.viewport.build(&mut self.tree, &self.layout);
+
         {
             let wf_rect = self.viewport.waveform_lane_rect();
             if wf_rect.width > 0.0 && wf_rect.height > 0.0 {

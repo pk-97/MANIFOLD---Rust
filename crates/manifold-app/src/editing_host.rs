@@ -36,7 +36,7 @@ pub struct AppEditingHost<'a> {
     pub active_layer: &'a mut Option<LayerId>,
     pub needs_rebuild: &'a mut bool,
     pub needs_structural_sync: &'a mut bool,
-    pub needs_scroll_rebuild: &'a mut bool,
+    pub scroll_dirty: &'a mut crate::ui_root::ScrollDirty,
     /// Per-layer bitmap invalidation targets. Drained in app_render.rs.
     pub invalidate_layers: &'a mut Vec<usize>,
 
@@ -62,7 +62,7 @@ impl<'a> AppEditingHost<'a> {
         active_layer: &'a mut Option<LayerId>,
         needs_rebuild: &'a mut bool,
         needs_structural_sync: &'a mut bool,
-        needs_scroll_rebuild: &'a mut bool,
+        scroll_dirty: &'a mut crate::ui_root::ScrollDirty,
         invalidate_layers: &'a mut Vec<usize>,
         pre_drag_commands: &'a mut Vec<Box<dyn Command>>,
     ) -> Self {
@@ -74,7 +74,7 @@ impl<'a> AppEditingHost<'a> {
             active_layer,
             needs_rebuild,
             needs_structural_sync,
-            needs_scroll_rebuild,
+            scroll_dirty,
             invalidate_layers,
             command_batch: Vec::new(),
             pre_drag_commands,
@@ -328,7 +328,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     }
 
     fn invalidate_all_layer_bitmaps(&mut self) {
-        *self.needs_scroll_rebuild = true;
+        self.scroll_dirty.visual = true;
     }
 
     fn mark_dirty(&mut self) {

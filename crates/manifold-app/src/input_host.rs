@@ -29,7 +29,7 @@ pub struct AppInputHost<'a> {
     pub active_layer: &'a mut Option<LayerId>,
     pub needs_rebuild: &'a mut bool,
     pub needs_structural_sync: &'a mut bool,
-    pub needs_scroll_rebuild: &'a mut bool,
+    pub scroll_dirty: &'a mut crate::ui_root::ScrollDirty,
     #[allow(dead_code)]
     pub current_project_path: &'a Option<std::path::PathBuf>,
     pub has_output_window: bool,
@@ -123,7 +123,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         self.ui_root.inspector.clear_effect_selection();
         *self.needs_rebuild = true;
         *self.needs_structural_sync = true;
-        *self.needs_scroll_rebuild = true;
+        self.scroll_dirty.visual = true;
     }
 
     fn mark_compositor_dirty(&mut self) {
@@ -134,7 +134,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn invalidate_all_layer_bitmaps(&mut self) {
-        *self.needs_scroll_rebuild = true;
+        self.scroll_dirty.visual = true;
     }
 
     fn update_zoom_label(&mut self) {
@@ -1226,7 +1226,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         }
 
         *self.needs_rebuild = true;
-        *self.needs_scroll_rebuild = true;
+        self.scroll_dirty.visual = true;
     }
 
     // ── UIState delegation ──────────────────────────────────────
@@ -1306,7 +1306,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             let default_idx = levels.len() / 2; // middle of zoom range
             self.ui_root.viewport.set_zoom(levels[default_idx]);
             self.ui_root.viewport.set_scroll(0.0, 0.0);
-            *self.needs_scroll_rebuild = true;
+            self.scroll_dirty.zoom = true;
             return;
         }
 
@@ -1327,7 +1327,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         let scroll_beat = ((center_pixel - viewport_width * 0.5) / ideal_ppb).max(0.0);
         self.ui_root.viewport.set_scroll(scroll_beat, 0.0);
 
-        *self.needs_scroll_rebuild = true;
+        self.scroll_dirty.zoom = true;
     }
 
     // ── Percussion alignment (Unity InputHandler lines 262-286) ──
