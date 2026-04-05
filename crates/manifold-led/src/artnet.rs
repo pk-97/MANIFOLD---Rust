@@ -329,7 +329,7 @@ impl ArtNetOutput {
     const DISCONNECT_THRESHOLD: u32 = 30;
     /// Base probe interval (seconds). Doubles on each flap, caps at MAX.
     const PROBE_INTERVAL_BASE_SECS: u64 = 3;
-    const PROBE_INTERVAL_MAX_SECS: u64 = 60;
+    const PROBE_INTERVAL_MAX_SECS: u64 = 10;
     /// Successful sends needed after resume to consider connection stable.
     const STABLE_THRESHOLD: u32 = 120;
 
