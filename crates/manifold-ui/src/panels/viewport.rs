@@ -381,10 +381,10 @@ impl TimelineViewportPanel {
         }
         self.total_tracks_height = y;
 
-        // Create/resize bitmap renderers (one per non-group layer)
+        // Create/resize bitmap renderers (one per visible layer, including groups)
         self.bitmap_renderers.clear();
         for (i, track) in self.tracks.iter().enumerate() {
-            if track.is_group || track.height <= 0.0 {
+            if track.height <= 0.0 {
                 self.bitmap_renderers.push(None);
             } else {
                 self.bitmap_renderers
