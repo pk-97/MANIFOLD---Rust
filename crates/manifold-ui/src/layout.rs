@@ -170,7 +170,9 @@ impl ScreenLayout {
     /// and the scrollable track area. If they diverge, layer controls will be
     /// vertically misaligned with their tracks.
     pub fn track_header_height(&self) -> f32 {
-        let mut h = color::OVERVIEW_STRIP_HEIGHT + color::RULER_HEIGHT;
+        let mut h = color::OVERVIEW_STRIP_HEIGHT
+            + color::RULER_HEIGHT
+            + color::TRACK_SEPARATOR_HEIGHT; // top separator between ruler and tracks
         if self.waveform_lane_visible {
             h += color::WAVEFORM_LANE_HEIGHT;
         }
