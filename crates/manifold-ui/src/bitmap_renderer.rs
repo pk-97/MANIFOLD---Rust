@@ -345,6 +345,11 @@ impl LayerBitmapRenderer {
             None => (0, tex_w),
         };
 
+        // Separator height in texture pixels — tint bands must stop before this
+        // region so the UITree separator nodes remain visible.
+        let sep_px = (color::TRACK_SEPARATOR_HEIGHT * self.render_scale)
+            .ceil() as usize;
+
         // Paint alternating tint bands BEFORE grid lines and clips
         paint_tint_bands(
             &mut self.pixel_buffer,
@@ -356,6 +361,7 @@ impl LayerBitmapRenderer {
             time_sig_numerator,
             paint_x0,
             paint_x1,
+            sep_px,
         );
 
         // Paint grid lines BEFORE clips — only in the paint range.
@@ -599,6 +605,7 @@ fn paint_tint_bands(
     time_sig_numerator: u32,
     paint_x0: usize,
     paint_x1: usize,
+    separator_px: usize,
 ) {
     if scaled_ppb < 1.0 || time_sig_numerator < 1 || paint_x0 >= paint_x1 {
         return;
@@ -646,7 +653,10 @@ fn paint_tint_bands(
             } else {
                 Color32::TRANSPARENT
             };
-            for y in 0..tex_h {
+            // Stop before the bottom separator region so the UITree
+            // separator node remains visible through transparent bitmap pixels.
+            let y_end = tex_h.saturating_sub(separator_px);
+            for y in 0..y_end {
                 let row = y * tex_w;
                 for x in x0..x1 {
                     buffer[row + x] = color;

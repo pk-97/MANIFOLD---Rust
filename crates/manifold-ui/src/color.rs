@@ -201,8 +201,9 @@ pub const GRID_BEAT_LINE: Color32 = Color32::new(82, 82, 87, 77);
 pub const GRID_SUBDIVISION_LINE: Color32 = Color32::new(71, 71, 77, 38);
 pub const GRID_SIXTEENTH_LINE: Color32 = Color32::new(71, 71, 77, 20);
 
-/// Alternating bar/beat tint band (premultiplied: subtle lighten on every other interval).
-pub const GRID_TINT_BAND: Color32 = Color32::new(12, 12, 12, 12);
+/// Alternating bar/beat tint band (fully opaque, slightly brighter than track backgrounds).
+/// Track BG is (36,36,37) / (27,27,28) — this sits just above both.
+pub const GRID_TINT_BAND: Color32 = Color32::new(40, 40, 42, 255);
 
 // ── Layer color picker palette ──────────────────────────────────────
 // 7 columns × 10 rows = 70 high-contrast colors. Modeled after Ableton's
