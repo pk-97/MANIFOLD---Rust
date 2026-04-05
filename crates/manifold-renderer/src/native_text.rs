@@ -889,34 +889,55 @@ impl NativeTextRenderer {
                 let x1 = x0 + bw;
                 let y1 = y0 + bh;
 
-                // Clip: skip glyph if entirely outside clip rect.
-                // clip_bounds is [x_min, y_min, x_max, y_max] from UIRenderer.
-                if let Some([clip_x0, clip_y0, clip_x1, clip_y1]) = cmd.clip_bounds
-                    && (x1 < clip_x0 || y1 < clip_y0 || x0 > clip_x1 || y0 > clip_y1)
-                {
-                    continue;
+                // Clip glyph to clip bounds — partial pixel-level clipping.
+                // Adjusts quad positions and UVs so glyphs are cut cleanly
+                // at the clip boundary instead of popping in/out whole.
+                let (mut qx0, mut qy0, mut qx1, mut qy1) = (x0, y0, x1, y1);
+                let (mut u0, mut v0) = (info.uv_x, info.uv_y);
+                let (mut u1, mut v1) = (info.uv_x + info.uv_w, info.uv_y + info.uv_h);
+                if let Some([clip_x0, clip_y0, clip_x1, clip_y1]) = cmd.clip_bounds {
+                    if x1 <= clip_x0 || y1 <= clip_y0 || x0 >= clip_x1 || y0 >= clip_y1 {
+                        continue;
+                    }
+                    let gw = x1 - x0;
+                    let gh = y1 - y0;
+                    if qx0 < clip_x0 {
+                        u0 = info.uv_x + (clip_x0 - x0) / gw * info.uv_w;
+                        qx0 = clip_x0;
+                    }
+                    if qy0 < clip_y0 {
+                        v0 = info.uv_y + (clip_y0 - y0) / gh * info.uv_h;
+                        qy0 = clip_y0;
+                    }
+                    if qx1 > clip_x1 {
+                        u1 = info.uv_x + (clip_x1 - x0) / gw * info.uv_w;
+                        qx1 = clip_x1;
+                    }
+                    if qy1 > clip_y1 {
+                        v1 = info.uv_y + (clip_y1 - y0) / gh * info.uv_h;
+                        qy1 = clip_y1;
+                    }
                 }
 
                 let base = self.vertices.len() as u32;
-                // v0=top-left, v1=top-right, v2=bottom-right, v3=bottom-left.
                 self.vertices.push(TextVertex {
-                    position: [x0, y0],
-                    uv: [info.uv_x, info.uv_y],
+                    position: [qx0, qy0],
+                    uv: [u0, v0],
                     color,
                 });
                 self.vertices.push(TextVertex {
-                    position: [x1, y0],
-                    uv: [info.uv_x + info.uv_w, info.uv_y],
+                    position: [qx1, qy0],
+                    uv: [u1, v0],
                     color,
                 });
                 self.vertices.push(TextVertex {
-                    position: [x1, y1],
-                    uv: [info.uv_x + info.uv_w, info.uv_y + info.uv_h],
+                    position: [qx1, qy1],
+                    uv: [u1, v1],
                     color,
                 });
                 self.vertices.push(TextVertex {
-                    position: [x0, y1],
-                    uv: [info.uv_x, info.uv_y + info.uv_h],
+                    position: [qx0, qy1],
+                    uv: [u0, v1],
                     color,
                 });
                 self.indices.extend_from_slice(&[
@@ -947,32 +968,53 @@ impl NativeTextRenderer {
             ];
             let (x0, y0, x1, y1) = (cmd.x, cmd.y, cmd.x + cmd.w, cmd.y + cmd.h);
 
-            // Clip check — clip_bounds is [x_min, y_min, x_max, y_max].
-            if let Some([clip_x0, clip_y0, clip_x1, clip_y1]) = cmd.clip_bounds
-                && (x1 < clip_x0 || y1 < clip_y0 || x0 > clip_x1 || y0 > clip_y1)
-            {
-                continue;
+            // Clip icon to clip bounds — partial pixel-level clipping.
+            let (mut qx0, mut qy0, mut qx1, mut qy1) = (x0, y0, x1, y1);
+            let (mut u0, mut v0) = (info.uv_x, info.uv_y);
+            let (mut u1, mut v1) = (info.uv_x + info.uv_w, info.uv_y + info.uv_h);
+            if let Some([clip_x0, clip_y0, clip_x1, clip_y1]) = cmd.clip_bounds {
+                if x1 <= clip_x0 || y1 <= clip_y0 || x0 >= clip_x1 || y0 >= clip_y1 {
+                    continue;
+                }
+                let gw = x1 - x0;
+                let gh = y1 - y0;
+                if qx0 < clip_x0 {
+                    u0 = info.uv_x + (clip_x0 - x0) / gw * info.uv_w;
+                    qx0 = clip_x0;
+                }
+                if qy0 < clip_y0 {
+                    v0 = info.uv_y + (clip_y0 - y0) / gh * info.uv_h;
+                    qy0 = clip_y0;
+                }
+                if qx1 > clip_x1 {
+                    u1 = info.uv_x + (clip_x1 - x0) / gw * info.uv_w;
+                    qx1 = clip_x1;
+                }
+                if qy1 > clip_y1 {
+                    v1 = info.uv_y + (clip_y1 - y0) / gh * info.uv_h;
+                    qy1 = clip_y1;
+                }
             }
 
             let base = self.vertices.len() as u32;
             self.vertices.push(TextVertex {
-                position: [x0, y0],
-                uv: [info.uv_x, info.uv_y],
+                position: [qx0, qy0],
+                uv: [u0, v0],
                 color,
             });
             self.vertices.push(TextVertex {
-                position: [x1, y0],
-                uv: [info.uv_x + info.uv_w, info.uv_y],
+                position: [qx1, qy0],
+                uv: [u1, v0],
                 color,
             });
             self.vertices.push(TextVertex {
-                position: [x1, y1],
-                uv: [info.uv_x + info.uv_w, info.uv_y + info.uv_h],
+                position: [qx1, qy1],
+                uv: [u1, v1],
                 color,
             });
             self.vertices.push(TextVertex {
-                position: [x0, y1],
-                uv: [info.uv_x, info.uv_y + info.uv_h],
+                position: [qx0, qy1],
+                uv: [u0, v1],
                 color,
             });
             self.indices
