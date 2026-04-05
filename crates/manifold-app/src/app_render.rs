@@ -1002,6 +1002,26 @@ impl Application {
                     }
                 }
             }
+
+            // 6f. Repaint + upload overview strip bitmap
+            self.ui_root.viewport.repaint_overview();
+            if let Some((pixels, tw, th)) = self.ui_root.viewport.overview_bitmap() {
+                bitmap_gpu.upload_layer(&gpu.device, 1002, pixels, tw as u32, th as u32);
+            }
+
+            // 6g. Repaint + upload collapsed group bitmaps
+            self.ui_root.viewport.repaint_collapsed_groups();
+            for (track_idx, pixels, tw, th) in
+                self.ui_root.viewport.dirty_collapsed_group_iter()
+            {
+                bitmap_gpu.upload_layer(
+                    &gpu.device,
+                    2000 + track_idx,
+                    pixels,
+                    tw as u32,
+                    th as u32,
+                );
+            }
         }
 
         let gpu = match &self.gpu {
@@ -1286,6 +1306,14 @@ impl Application {
                     rects.push((1001, sl_rect));
                 }
             }
+
+            let ov_rect = self.ui_root.viewport.overview_rect();
+            if ov_rect.width > 0.0 && ov_rect.height > 0.0 {
+                rects.push((1002, ov_rect));
+            }
+
+            // Collapsed group bitmaps
+            rects.extend(self.ui_root.viewport.collapsed_group_rects());
 
             if !rects.is_empty() {
                 bitmap_gpu.render_layers(

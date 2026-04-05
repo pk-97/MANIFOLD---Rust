@@ -1,4 +1,5 @@
 use super::{Panel, PanelAction};
+use crate::bitmap_painter;
 use crate::color;
 use crate::coordinate_mapper::CoordinateMapper;
 use crate::input::UIEvent;
@@ -90,6 +91,37 @@ impl Default for TrackInfo {
     }
 }
 
+// ── Collapsed group bitmap ──────────────────────────────────────
+
+/// CPU pixel buffer for a single collapsed group's clip preview.
+struct CollapsedGroupBitmap {
+    pixels: Vec<Color32>,
+    tex_w: usize,
+    tex_h: usize,
+    dirty: bool,
+    last_min_beat: f32,
+    last_max_beat: f32,
+    last_viewport_w: f32,
+    last_track_h: f32,
+    last_clip_count: usize,
+}
+
+impl CollapsedGroupBitmap {
+    fn new() -> Self {
+        Self {
+            pixels: Vec::new(),
+            tex_w: 0,
+            tex_h: 0,
+            dirty: true,
+            last_min_beat: 0.0,
+            last_max_beat: 0.0,
+            last_viewport_w: 0.0,
+            last_track_h: 0.0,
+            last_clip_count: 0,
+        }
+    }
+}
+
 // ── TimelineViewportPanel ───────────────────────────────────────
 
 pub struct TimelineViewportPanel {
@@ -172,6 +204,23 @@ pub struct TimelineViewportPanel {
     // From Unity LayerBitmapRenderer dirty-checking (lines 99-186).
     cached_fingerprint: u64,
 
+    // Overview bitmap — CPU pixel buffer for the full-timeline minimap.
+    // Replaces per-clip panel nodes with a single texture (no clip cap).
+    overview_pixels: Vec<Color32>,
+    overview_tex_w: usize,
+    overview_tex_h: usize,
+    overview_dirty: bool,
+    overview_last_clip_fingerprint: u64,
+    overview_last_playhead: f32,
+    overview_last_scroll_x: f32,
+    overview_last_ppb: f32,
+    overview_last_track_count: usize,
+    overview_last_width: f32,
+
+    // Collapsed group bitmaps — one per group track (None for non-groups).
+    // Replaces per-clip panel nodes with per-group textures.
+    collapsed_group_bitmaps: Vec<Option<CollapsedGroupBitmap>>,
+
     // Timeline markers
     markers: Vec<TimelineMarker>,
     selected_marker_ids: Vec<MarkerId>,
@@ -234,6 +283,17 @@ impl TimelineViewportPanel {
             drag_mode: ViewportDragMode::None,
             scrub_free: false,
             cached_fingerprint: 0,
+            overview_pixels: Vec::new(),
+            overview_tex_w: 0,
+            overview_tex_h: 0,
+            overview_dirty: true,
+            overview_last_clip_fingerprint: 0,
+            overview_last_playhead: 0.0,
+            overview_last_scroll_x: 0.0,
+            overview_last_ppb: 0.0,
+            overview_last_track_count: 0,
+            overview_last_width: 0.0,
+            collapsed_group_bitmaps: Vec::new(),
             markers: Vec::new(),
             selected_marker_ids: Vec::new(),
             marker_flag_rects: Vec::new(),
@@ -334,6 +394,16 @@ impl TimelineViewportPanel {
                         track.height,
                         CLIP_VERTICAL_PAD,
                     )));
+            }
+        }
+
+        // Collapsed group bitmap slots (one per track, None for non-groups)
+        self.collapsed_group_bitmaps.clear();
+        for track in &self.tracks {
+            if track.is_group && track.is_collapsed && !track.child_layer_indices.is_empty() {
+                self.collapsed_group_bitmaps.push(Some(CollapsedGroupBitmap::new()));
+            } else {
+                self.collapsed_group_bitmaps.push(None);
             }
         }
     }
@@ -1032,8 +1102,9 @@ impl Panel for TimelineViewportPanel {
             "",
         ) as i32;
 
-        // Overview clip miniatures (from Unity OverviewStripPanel.BuildPanel lines 218-238)
-        self.build_overview_clips(tree, overview_rect);
+        // Overview strip bitmap — repainted in repaint_overview() each frame,
+        // uploaded and rendered via the layer bitmap GPU path (index 1002).
+        self.overview_dirty = true;
 
         // Ruler background — INTERACTIVE so clicks register for playhead scrubbing
         self.ruler_bg_id = tree.add_button(
@@ -1245,12 +1316,61 @@ impl TimelineViewportPanel {
     /// From Unity OverviewStripPanel.BuildPanel (lines 218-270).
     /// Renders small colored rects for each clip, a viewport indicator,
     /// and the playhead position.
-    fn build_overview_clips(&self, tree: &mut UITree, overview_rect: Rect) {
+    /// Repaint the overview strip bitmap. Call once per frame before GPU upload.
+    /// Paints ALL clips (no cap) into a small CPU pixel buffer, then overlays
+    /// the viewport indicator and playhead. Group layers are excluded.
+    pub fn repaint_overview(&mut self) {
+        let scale = self.render_scale;
+        let tex_w = (self.overview_rect.width * scale).round().max(1.0) as usize;
+        let tex_h = (self.overview_rect.height * scale).round().max(1.0) as usize;
+
+        // Dirty-checking: skip if nothing changed
+        let ppb = self.mapper.pixels_per_beat();
+        let scroll_x = self.scroll_x_beats.as_f32();
+        let playhead = self.playhead_beat.as_f32();
+        // Clip fingerprint: hash of count + positions + colors
+        let mut clip_fp: u64 = self.clips.len() as u64;
+        for c in &self.clips {
+            clip_fp = clip_fp
+                .wrapping_mul(31)
+                .wrapping_add(c.start_beat.as_f32().to_bits() as u64);
+            clip_fp = clip_fp
+                .wrapping_mul(31)
+                .wrapping_add(c.duration_beats.as_f32().to_bits() as u64);
+            clip_fp = clip_fp
+                .wrapping_mul(31)
+                .wrapping_add(c.layer_index as u64);
+        }
+        if !self.overview_dirty
+            && self.overview_last_clip_fingerprint == clip_fp
+            && self.overview_last_playhead == playhead
+            && self.overview_last_scroll_x == scroll_x
+            && self.overview_last_ppb == ppb
+            && self.overview_last_track_count == self.tracks.len()
+            && self.overview_last_width == self.overview_rect.width
+        {
+            return;
+        }
+        self.overview_last_clip_fingerprint = clip_fp;
+        self.overview_last_playhead = playhead;
+        self.overview_last_scroll_x = scroll_x;
+        self.overview_last_ppb = ppb;
+        self.overview_last_track_count = self.tracks.len();
+        self.overview_last_width = self.overview_rect.width;
+
+        // Resize buffer
+        let total = tex_w * tex_h;
+        self.overview_pixels.resize(total, Color32::TRANSPARENT);
+        self.overview_pixels.fill(Color32::TRANSPARENT);
+        self.overview_tex_w = tex_w;
+        self.overview_tex_h = tex_h;
+
         if self.clips.is_empty() || self.tracks.is_empty() {
+            self.overview_dirty = true;
             return;
         }
 
-        // Compute total content duration for normalization
+        // Content duration for normalization
         let mut max_beat = 0.0f32;
         for clip in &self.clips {
             let end = clip.start_beat.as_f32() + clip.duration_beats.as_f32();
@@ -1259,80 +1379,262 @@ impl TimelineViewportPanel {
             }
         }
         if max_beat <= 0.0 {
+            self.overview_dirty = true;
             return;
         }
 
-        let layer_count = self.tracks.len();
-        let row_h = overview_rect.height / layer_count as f32;
-
-        // Clip miniatures — cap to avoid thousands of nodes at low zoom.
-        // At 1258 clips, uncapped overview creates 1258 panel nodes.
-        const MAX_OVERVIEW_CLIPS: usize = 200;
-        for (overview_count, clip) in self.clips.iter().enumerate() {
-            if overview_count >= MAX_OVERVIEW_CLIPS {
-                break;
+        // Remap: skip group layers
+        let mut non_group_row: Vec<Option<usize>> = Vec::with_capacity(self.tracks.len());
+        let mut non_group_count: usize = 0;
+        for track in &self.tracks {
+            if track.is_group {
+                non_group_row.push(None);
+            } else {
+                non_group_row.push(Some(non_group_count));
+                non_group_count += 1;
             }
-            let start_f32 = clip.start_beat.as_f32();
-            let start_norm = start_f32 / max_beat;
-            let end_norm = (start_f32 + clip.duration_beats.as_f32()) / max_beat;
-            let x = overview_rect.x + start_norm * overview_rect.width;
-            let w = ((end_norm - start_norm) * overview_rect.width).max(1.0);
-            // Layer 0 at bottom, layer N-1 at top (matching Unity line 230)
-            let y = overview_rect.y
-                + (layer_count
-                    .saturating_sub(1)
-                    .saturating_sub(clip.layer_index)) as f32
-                    * row_h;
+        }
+        if non_group_count == 0 {
+            self.overview_dirty = true;
+            return;
+        }
 
-            tree.add_panel(
-                -1,
+        let row_h = tex_h as f32 / non_group_count as f32;
+
+        // Paint all clips — no cap
+        for clip in &self.clips {
+            let row = match non_group_row.get(clip.layer_index).copied().flatten() {
+                Some(r) => r,
+                None => continue,
+            };
+            let start_norm = clip.start_beat.as_f32() / max_beat;
+            let end_norm =
+                (clip.start_beat.as_f32() + clip.duration_beats.as_f32()) / max_beat;
+            let x = (start_norm * tex_w as f32).round() as i32;
+            let w = ((end_norm - start_norm) * tex_w as f32).round().max(1.0) as i32;
+            // Layer 0 at top (matches timeline track order)
+            let y = (row as f32 * row_h).round() as i32;
+            let h = row_h.round().max(1.0) as i32;
+
+            bitmap_painter::fill_rect(
+                &mut self.overview_pixels,
+                tex_w,
+                tex_h,
                 x,
                 y,
                 w,
-                row_h,
-                UIStyle {
-                    bg_color: clip.color,
-                    ..UIStyle::default()
-                },
+                h,
+                clip.color,
             );
         }
 
-        // Viewport indicator (semi-transparent blue showing visible portion)
-        let ppb = self.mapper.pixels_per_beat();
+        // Viewport indicator (semi-transparent blue)
         if ppb > 0.0 {
             let viewport_width_beats = self.tracks_rect.width / ppb;
-            let vp_start_norm = self.scroll_x_beats.as_f32() / max_beat;
+            let vp_start_norm = scroll_x / max_beat;
             let vp_width_norm = viewport_width_beats / max_beat;
-            let vp_x = overview_rect.x + vp_start_norm * overview_rect.width;
-            let vp_w = (vp_width_norm * overview_rect.width).min(overview_rect.width);
-            tree.add_panel(
-                -1,
+            let vp_x = (vp_start_norm * tex_w as f32).round() as i32;
+            let vp_w = (vp_width_norm * tex_w as f32)
+                .round()
+                .min(tex_w as f32) as i32;
+            bitmap_painter::fill_rect(
+                &mut self.overview_pixels,
+                tex_w,
+                tex_h,
                 vp_x,
-                overview_rect.y,
+                0,
                 vp_w,
-                overview_rect.height,
-                UIStyle {
-                    bg_color: color::OVERVIEW_VIEWPORT,
-                    ..UIStyle::default()
-                },
+                tex_h as i32,
+                color::OVERVIEW_VIEWPORT,
             );
         }
 
-        // Playhead in overview
-        let ph_norm = self.playhead_beat.as_f32() / max_beat;
-        let ph_x =
-            overview_rect.x + (ph_norm * overview_rect.width).clamp(0.0, overview_rect.width);
-        tree.add_panel(
-            -1,
+        // Playhead (red line, 1-2px)
+        let ph_norm = playhead / max_beat;
+        let ph_x = (ph_norm * tex_w as f32).round().clamp(0.0, tex_w as f32) as i32;
+        let ph_w = (1.0 * scale).round().max(1.0) as i32;
+        bitmap_painter::fill_rect(
+            &mut self.overview_pixels,
+            tex_w,
+            tex_h,
             ph_x,
-            overview_rect.y,
-            1.0,
-            overview_rect.height,
-            UIStyle {
-                bg_color: color::OVERVIEW_PLAYHEAD,
-                ..UIStyle::default()
-            },
+            0,
+            ph_w,
+            tex_h as i32,
+            color::OVERVIEW_PLAYHEAD,
         );
+
+        self.overview_dirty = true;
+    }
+
+    /// Overview bitmap data for GPU upload. Returns (pixels, w, h) if dirty.
+    pub fn overview_bitmap(&mut self) -> Option<(&[Color32], usize, usize)> {
+        if self.overview_dirty
+            && self.overview_tex_w > 0
+            && self.overview_tex_h > 0
+        {
+            self.overview_dirty = false;
+            Some((
+                &self.overview_pixels,
+                self.overview_tex_w,
+                self.overview_tex_h,
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Overview rect (screen-space) for GPU rendering.
+    pub fn overview_rect(&self) -> Rect {
+        self.overview_rect
+    }
+
+    /// Repaint collapsed group bitmaps. Call once per frame before GPU upload.
+    pub fn repaint_collapsed_groups(&mut self) {
+        let (min_beat, max_beat) = self.visible_beat_range();
+        let viewport_w = self.tracks_rect.width;
+        let scale = self.render_scale;
+
+        for (i, bmp_opt) in self.collapsed_group_bitmaps.iter_mut().enumerate() {
+            let bmp = match bmp_opt.as_mut() {
+                Some(b) => b,
+                None => continue,
+            };
+            let track = &self.tracks[i];
+            if !track.is_group || !track.is_collapsed || track.child_layer_indices.is_empty() {
+                continue;
+            }
+
+            let track_h = track.height;
+            if track_h <= 0.0 || viewport_w <= 0.0 {
+                continue;
+            }
+
+            // Count child clips for dirty check
+            let mut child_clip_count = 0usize;
+            for &ci in &track.child_layer_indices {
+                if ci < self.clips_by_layer.len() {
+                    child_clip_count += self.clips_by_layer[ci].len();
+                }
+            }
+
+            // Dirty-checking
+            if !bmp.dirty
+                && bmp.last_min_beat == min_beat
+                && bmp.last_max_beat == max_beat
+                && bmp.last_viewport_w == viewport_w
+                && bmp.last_track_h == track_h
+                && bmp.last_clip_count == child_clip_count
+            {
+                continue;
+            }
+            bmp.last_min_beat = min_beat;
+            bmp.last_max_beat = max_beat;
+            bmp.last_viewport_w = viewport_w;
+            bmp.last_track_h = track_h;
+            bmp.last_clip_count = child_clip_count;
+
+            let tex_w = (viewport_w * scale).round().max(1.0) as usize;
+            let tex_h = (track_h * scale).round().max(1.0) as usize;
+            let total = tex_w * tex_h;
+            bmp.pixels.resize(total, Color32::TRANSPARENT);
+            bmp.pixels.fill(Color32::TRANSPARENT);
+            bmp.tex_w = tex_w;
+            bmp.tex_h = tex_h;
+
+            let child_count = track.child_layer_indices.len();
+            let rows_per_child = tex_h as f32 / child_count.max(1) as f32;
+            let beat_range = max_beat - min_beat;
+            if beat_range <= 0.0 {
+                bmp.dirty = true;
+                continue;
+            }
+
+            for (ci, &child_idx) in track.child_layer_indices.iter().enumerate() {
+                let child_y = (ci as f32 * rows_per_child).round() as i32;
+                let child_h = rows_per_child.round().max(1.0) as i32;
+
+                let child_clips = if child_idx < self.clips_by_layer.len() {
+                    &self.clips_by_layer[child_idx]
+                } else {
+                    continue;
+                };
+
+                for clip in child_clips {
+                    let clip_start = clip.start_beat.as_f32();
+                    let clip_end = clip_start + clip.duration_beats.as_f32();
+                    if clip_end < min_beat || clip_start > max_beat {
+                        continue;
+                    }
+
+                    let x_norm = (clip_start - min_beat) / beat_range;
+                    let x2_norm = (clip_end - min_beat) / beat_range;
+                    let x = (x_norm * tex_w as f32).round().max(0.0) as i32;
+                    let w = ((x2_norm - x_norm) * tex_w as f32)
+                        .round()
+                        .max(1.0) as i32;
+
+                    bitmap_painter::fill_rect(
+                        &mut bmp.pixels,
+                        tex_w,
+                        tex_h,
+                        x,
+                        child_y,
+                        w,
+                        child_h,
+                        clip.color,
+                    );
+                }
+            }
+            bmp.dirty = true;
+        }
+    }
+
+    /// Iterate collapsed group bitmaps that need GPU upload.
+    /// Yields (track_index, pixels, tex_w, tex_h) for dirty groups.
+    pub fn dirty_collapsed_group_iter(
+        &mut self,
+    ) -> impl Iterator<Item = (usize, &[Color32], usize, usize)> {
+        self.collapsed_group_bitmaps
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(i, opt)| {
+                opt.as_mut().and_then(|bmp| {
+                    if bmp.dirty && bmp.tex_w > 0 && bmp.tex_h > 0 {
+                        bmp.dirty = false;
+                        Some((i, bmp.pixels.as_slice(), bmp.tex_w, bmp.tex_h))
+                    } else {
+                        None
+                    }
+                })
+            })
+    }
+
+    /// Screen-space rects for collapsed group bitmaps (for GPU rendering).
+    /// Returns (layer_index_offset, rect) where layer_index_offset = 2000 + track_index.
+    pub fn collapsed_group_rects(&self) -> Vec<(usize, Rect)> {
+        let tr = &self.tracks_rect;
+        let tr_top = tr.y;
+        let tr_bottom = tr.y + tr.height;
+
+        let mut rects = Vec::new();
+        for (i, bmp_opt) in self.collapsed_group_bitmaps.iter().enumerate() {
+            if bmp_opt.is_none() {
+                continue;
+            }
+            let track = &self.tracks[i];
+            if track.height <= 0.0 {
+                continue;
+            }
+            let y = self.track_y(i);
+            let clamped_y = y.max(tr_top);
+            let clamped_h = (y + track.height).min(tr_bottom) - clamped_y;
+            if clamped_h <= 0.0 {
+                continue;
+            }
+            rects.push((2000 + i, Rect::new(tr.x, clamped_y, tr.width, clamped_h)));
+        }
+        rects
     }
 
     fn build_track_backgrounds(&mut self, tree: &mut UITree) {
@@ -1395,49 +1697,8 @@ impl TimelineViewportPanel {
                 );
             }
 
-            // Collapsed group preview: miniature clip rects of child layers.
-            // From Unity ViewportManager.GenerateCollapsedGroupTexture (lines 700-770).
-            if track.is_group && track.is_collapsed && !track.child_layer_indices.is_empty() {
-                let child_count = track.child_layer_indices.len();
-                let rows_per_child = clamped_h / child_count.max(1) as f32;
-                let (min_beat, max_beat) = self.visible_beat_range();
-
-                for (ci, &child_idx) in track.child_layer_indices.iter().enumerate() {
-                    let child_y = clamped_y + ci as f32 * rows_per_child;
-
-                    // Render clips of this child layer as tiny rects
-                    let child_clips = if child_idx < self.clips_by_layer.len() {
-                        &self.clips_by_layer[child_idx]
-                    } else {
-                        continue;
-                    };
-                    for clip in child_clips {
-                        let clip_start_f32 = clip.start_beat.as_f32();
-                        let clip_end = clip_start_f32 + clip.duration_beats.as_f32();
-                        if clip_end < min_beat || clip_start_f32 > max_beat {
-                            continue;
-                        }
-
-                        let cx = self.beat_to_pixel(clip.start_beat).max(tr.x);
-                        let cx2 = self
-                            .beat_to_pixel(Beats::from_f32(clip_end))
-                            .min(tr.x + tr.width);
-                        let cw = (cx2 - cx).max(1.0);
-
-                        tree.add_panel(
-                            -1,
-                            cx,
-                            child_y,
-                            cw,
-                            rows_per_child,
-                            UIStyle {
-                                bg_color: clip.color,
-                                ..UIStyle::default()
-                            },
-                        );
-                    }
-                }
-            }
+            // Collapsed group preview is now bitmap-based — repainted in
+            // repaint_collapsed_groups() and rendered via the layer bitmap GPU path.
 
             // Bottom separator (only if bottom edge is visible)
             let sep_y = y + h - 1.0;
