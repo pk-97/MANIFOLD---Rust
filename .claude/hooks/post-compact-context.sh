@@ -1,46 +1,46 @@
 #!/bin/bash
 # Re-injects critical context after context compaction.
-# The agent loses CLAUDE.md details after compaction —
-# this reload prevents drift in long sessions.
+# Keep this aligned with CLAUDE.md — lean identity + rules only.
 
 cat <<'EOF'
 === MANIFOLD — POST-COMPACTION CONTEXT RELOAD ===
 
-This is a native Rust application (Edition 2024, wgpu 28, winit 0.30).
-Unity source at /Users/peterkiemann/MANIFOLD - Render Engine/ is the
-BEHAVIORAL REFERENCE for remaining parity gaps (~44 tracked).
+Visual DAW for live video performance. Rust codebase is authoritative (no Unity).
 
 ARCHITECTURE:
 - Two-thread model: content thread (PlaybackEngine, EditingService, ContentPipeline)
-  + UI thread (winit event loop, UIRoot, UIBridge)
-- Communication: ContentCommand (UI→Content) + ContentState (Content→UI) via crossbeam
-- Typed IDs: ClipId, LayerId, EffectGroupId (newtypes wrapping String)
-- AHashMap on hot paths, parking_lot mutexes, lock-free MIDI (AtomicU64 CAS)
+  + UI thread (winit event loop)
+- Communication: ContentCommand (UI→Content, bounded 64) + ContentState (Content→UI, bounded 4) via crossbeam
+- GPU output: IOSurface zero-copy triple-buffer with atomic front_index
+- Project owned exclusively by content thread. UI gets Arc<Project> snapshots.
+- All mutations via EditingService → UndoRedoManager → Command
 
-PERFORMANCE: No per-frame allocations on hot paths. Pre-allocated scratch buffers.
-AHashMap for all clip/effect lookups. Static sort comparisons.
+PATTERNS:
+- Edition 2024, native Metal GPU (zero wgpu), winit 0.30
+- Typed IDs: ClipId, LayerId, EffectGroupId (String newtypes, #[serde(transparent)])
+- Typed time: Beats(f64), Seconds(f64), Bpm(f32) — never raw floats in signatures
+- AHashMap on hot paths, parking_lot mutexes, lock-free MIDI (AtomicU64 CAS)
+- No per-frame allocations. Pre-allocated scratch buffers. Dirty-checking via DataVersion.
+
+GPU:
+- Uniform structs: 16-byte aligned, #[repr(C)], _pad fields, field order matches WGSL
+- R32Float NOT filterable. R16Float no STORAGE_BINDING. NEVER introduce wgpu.
+
+SERIALIZATION:
+- #[serde(rename_all = "camelCase")] on all serialized structs
+- #[serde(transparent)] on typed IDs, #[serde(skip)] for runtime-only fields
+
+REFERENCE DOCS (read on-demand):
+- docs/MANIFOLD_GPU_ARCHITECTURE.md — GPU, effects, generators, compute
+- docs/VSYNC_AND_FRAME_PACING.md — frame pacing, display links
+- docs/ADDING_EFFECTS_AND_GENERATORS.md — effect/generator recipes
+- docs/DEVELOPMENT_REFERENCE.md — texture formats, math gotchas, module layout
 
 DEVELOPMENT:
-- cargo clippy --workspace -- -D warnings (before commit)
-- cargo test --workspace (before commit)
-- Commit to main, push. CI confirms.
-- #[serde(rename_all = "camelCase")] on all serialized structs
-- Uniform structs: 16-byte aligned, #[repr(C)], field order matches WGSL
+- cargo clippy --workspace -- -D warnings + cargo test --workspace before commit
+- COMMIT AND PUSH after completing features or fixes
+- Runtime bugs: instrument with println, ask user to reproduce, read logs, fix
 
-FOR PARITY GAP WORK (porting from Unity):
-1. READ the Unity .cs source FIRST — HALT if you haven't read it
-2. TRANSLATE line-by-line — same logic, same edge cases, same constants
-3. VERIFY value-level parity — every constant, format, math op matches exactly
-4. UPDATE docs/parity_tracker.json + docs/PORT_STATUS.md
-
-FAILURE MODES (most common drift after compaction):
-- FM-1: NEVER synthesize from docs — only from .cs source files
-- FM-9: NEVER invent platform limits — use Unity's exact values
-- FM-10: Match texture formats exactly — RFloat→R32Float (not Rgba16Float)
-- FM-12: Match math ops — RoundToInt→.round(), Lerp clamps t, Repeat≠modulo
-- FM-14: Port services as COMPLETE UNITS, not scattered inline
-
-FROZEN: docs/DEFINITIVE_PARITY_AUDIT.md — DO NOT EDIT
-Full contract: CLAUDE.md — re-read if uncertain about any decision.
+Re-read CLAUDE.md if uncertain about any decision.
 EOF
 exit 0
