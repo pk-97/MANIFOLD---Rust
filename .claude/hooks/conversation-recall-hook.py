@@ -59,11 +59,14 @@ def index_new_conversations():
         pass  # Don't block on indexing failures
 
 
-def get_recent_sessions():
-    """Get recent conversation digests."""
+def get_recent_sessions(prompt=""):
+    """Get recent conversation digests, with optional prompt for continuation detection."""
     try:
+        cmd = [sys.executable, str(HOOKS_DIR / "search-conversations.py")]
+        if prompt:
+            cmd.append(prompt)
         result = subprocess.run(
-            [sys.executable, str(HOOKS_DIR / "search-conversations.py")],
+            cmd,
             capture_output=True,
             text=True,
             timeout=5,
@@ -99,8 +102,8 @@ def main():
     # Incremental index (only processes new .jsonl files)
     index_new_conversations()
 
-    # Always return recent sessions
-    context = get_recent_sessions()
+    # Always return recent sessions, pass prompt for continuation detection
+    context = get_recent_sessions(prompt)
 
     if context:
         output = {
