@@ -933,6 +933,7 @@ impl Application {
             let ppb = self.ui_root.viewport.pixels_per_beat();
             let sel_ver = self.selection.selection_version;
 
+            let marker_lines = self.ui_root.viewport.marker_line_data();
             let state = manifold_ui::BitmapRepaintState {
                 selection_version: sel_ver,
                 is_selected: &|id: &str| self.selection.is_selected(id),
@@ -943,6 +944,7 @@ impl Application {
                 insert_cursor_beat,
                 insert_cursor_layer: insert_layer,
                 pixels_per_beat: ppb,
+                markers: &marker_lines,
             };
             self.ui_root.viewport.repaint_dirty_layers(&state);
         }

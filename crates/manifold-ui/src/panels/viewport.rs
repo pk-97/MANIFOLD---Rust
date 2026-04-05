@@ -613,6 +613,19 @@ impl TimelineViewportPanel {
         self.markers = markers;
     }
 
+    /// Marker positions and colors for bitmap rendering (beat, color with line alpha).
+    pub fn marker_line_data(&self) -> Vec<(f32, Color32)> {
+        self.markers
+            .iter()
+            .map(|m| {
+                let mc = color::marker_color_to_color32(m.color);
+                let line_color =
+                    Color32::new(mc.r, mc.g, mc.b, color::MARKER_LINE_ALPHA);
+                (m.beat.as_f32(), line_color)
+            })
+            .collect()
+    }
+
     pub fn set_selected_marker_ids(&mut self, ids: Vec<MarkerId>) {
         self.selected_marker_ids = ids;
     }
@@ -1960,8 +1973,6 @@ impl TimelineViewportPanel {
 
         let flag_w = color::MARKER_FLAG_WIDTH;
         let flag_h = color::MARKER_FLAG_HEIGHT;
-        let line_w = color::MARKER_LINE_WIDTH;
-        let total_line_h = self.ruler_rect.height + self.tracks_rect.height;
 
         for marker in &self.markers {
             let px = self.beat_to_pixel(marker.beat);
@@ -1972,20 +1983,7 @@ impl TimelineViewportPanel {
             let mc = color::marker_color_to_color32(marker.color);
             let is_selected = self.selected_marker_ids.contains(&marker.id);
 
-            // Vertical line spanning ruler + tracks
-            let line_color = Color32::new(mc.r, mc.g, mc.b, color::MARKER_LINE_ALPHA);
-            let line_id = tree.add_panel(
-                -1,
-                px - line_w * 0.5,
-                self.ruler_rect.y,
-                line_w,
-                total_line_h,
-                UIStyle {
-                    bg_color: line_color,
-                    ..UIStyle::default()
-                },
-            ) as i32;
-            self.marker_node_ids.push(line_id);
+            // Vertical line through tracks is now painted into per-layer bitmaps.
 
             // Flag in ruler (small colored rectangle at top)
             let flag_x = px - flag_w * 0.5;

@@ -34,6 +34,8 @@ pub struct BitmapRepaintState<'a> {
     pub insert_cursor_beat: f32,
     pub insert_cursor_layer: Option<usize>,
     pub pixels_per_beat: f32,
+    /// Timeline marker positions (beat, color with alpha) for painting vertical lines.
+    pub markers: &'a [(f32, Color32)],
 }
 
 /// Manages a single CPU pixel buffer for one layer track.
@@ -59,6 +61,7 @@ pub struct LayerBitmapRenderer {
     last_hover_on_this_layer: bool,
     last_hovered_clip_id: Option<String>,
     last_muted_state: bool,
+    last_marker_count: usize,
     force_dirty: bool,
 
     // Repaint result flag
@@ -93,6 +96,7 @@ impl LayerBitmapRenderer {
             last_hover_on_this_layer: false,
             last_hovered_clip_id: None,
             last_muted_state: false,
+            last_marker_count: 0,
             force_dirty: true,
             was_dirty: false,
             render_scale,
@@ -243,13 +247,18 @@ impl LayerBitmapRenderer {
         // 5. Mute state
         let mute_dirty = is_muted != self.last_muted_state;
 
-        // 6. Force dirty (explicit invalidation)
+        // 6. Marker count change (positions repaint via viewport_dirty)
+        let marker_dirty = state.markers.len() != self.last_marker_count;
+        self.last_marker_count = state.markers.len();
+
+        // 7. Force dirty (explicit invalidation)
         if !self.force_dirty
             && !viewport_dirty
             && !sel_dirty
             && !hover_dirty
             && !clip_data_dirty
             && !mute_dirty
+            && !marker_dirty
         {
             return false;
         }
@@ -441,6 +450,27 @@ impl LayerBitmapRenderer {
                     cursor_w,
                     tex_h as i32,
                     INSERT_CURSOR_COLOR,
+                );
+            }
+        }
+
+        // Paint timeline marker vertical lines
+        let marker_w = (1.0_f32 * self.render_scale).round().max(1.0) as i32;
+        for &(beat, color) in state.markers {
+            if beat < viewport_min_beat || beat > viewport_max_beat {
+                continue;
+            }
+            let mx = ((beat - viewport_min_beat) * scaled_ppb).round() as i32;
+            if mx >= 0 && mx < tex_w as i32 {
+                bitmap_painter::fill_rect(
+                    &mut self.pixel_buffer,
+                    tex_w,
+                    tex_h,
+                    mx,
+                    0,
+                    marker_w,
+                    tex_h as i32,
+                    color,
                 );
             }
         }
@@ -644,6 +674,7 @@ mod tests {
             insert_cursor_beat: 0.0,
             insert_cursor_layer: None,
             pixels_per_beat: 100.0,
+            markers: &[],
         }
     }
 
