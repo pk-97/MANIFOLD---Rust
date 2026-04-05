@@ -339,6 +339,14 @@ impl UIRenderer {
         self.current_batch_start = self.rect_commands.len();
     }
 
+    /// Begin scissor tracking for an additional sub-region within the same
+    /// prepare/draw cycle. Resets clip context without discarding scissor
+    /// batches accumulated by previous sub-regions.
+    fn begin_scissor_tracking_additive(&mut self) {
+        self.clip_stack.clear();
+        self.current_batch_start = self.rect_commands.len();
+    }
+
     /// Flush the current scissor batch (if it has any rects).
     fn flush_scissor_batch(&mut self) {
         let count = self.rect_commands.len() - self.current_batch_start;
@@ -422,7 +430,12 @@ impl UIRenderer {
     /// contains previous content via LoadOp::Load, so non-dirty nodes are
     /// preserved. Clip events are always processed for correctness.
     pub fn render_sub_region(&mut self, tree: &UITree, start: usize, end: usize, dirty_only: bool) {
-        self.begin_scissor_tracking();
+        // Use additive tracking to preserve scissor batches accumulated by
+        // previous sub-regions in the same prepare/draw cycle. The caller
+        // (ui_cache_manager) may render multiple sub-regions before a single
+        // prepare_and_draw(); clearing scissor_batches here would discard
+        // earlier sub-regions' rect geometry, causing text ghosting.
+        self.begin_scissor_tracking_additive();
 
         tree.traverse_flat_range(start, end, dirty_only, |event| match event {
             TraversalEvent::Node(node) => self.draw_node(node),

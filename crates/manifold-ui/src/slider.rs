@@ -49,7 +49,7 @@ pub struct SliderColors {
 }
 
 impl SliderColors {
-    /// Default slider colors from UIConstants.
+    /// Default slider colors (effect cards).
     pub fn default_slider() -> Self {
         Self {
             track: color::SLIDER_TRACK_C32,
@@ -59,6 +59,19 @@ impl SliderColors {
             thumb: color::SLIDER_THUMB_C32,
             text: color::SLIDER_TEXT_C32,
             value_bg: color::EFFECT_CARD_INNER_BG_C32,
+        }
+    }
+
+    /// Generator param slider colors (uses gen card background).
+    pub fn gen_param() -> Self {
+        Self {
+            track: color::SLIDER_TRACK_C32,
+            track_hover: color::SLIDER_TRACK_HOVER_C32,
+            track_pressed: color::SLIDER_TRACK_PRESSED_C32,
+            fill: color::SLIDER_FILL_C32,
+            thumb: color::SLIDER_THUMB_C32,
+            text: color::SLIDER_TEXT_C32,
+            value_bg: color::GEN_CARD_INNER_BG_C32,
         }
     }
 

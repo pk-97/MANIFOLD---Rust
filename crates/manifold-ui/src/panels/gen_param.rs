@@ -542,7 +542,7 @@ impl GenParamPanel {
                         Some(&info.name),
                         norm,
                         &val_text,
-                        &SliderColors::default_slider(),
+                        &SliderColors::gen_param(),
                         FONT_SIZE,
                         crate::slider::DEFAULT_LABEL_WIDTH,
                     ));
