@@ -32,29 +32,50 @@ HOME = str(Path.home())
 PROJECT_ROOT = "MANIFOLD - Rust"
 
 # --- Sentiment keywords ---
+#
+# IMPORTANT: These detect the USER's attitude toward the COLLABORATION,
+# not the state of the software. "The app crashes" is a bug report, not
+# frustration. "You keep breaking it" is frustration.
+#
+# The key distinction: is the user talking ABOUT a problem, or talking
+# TO Claude about Claude's behavior?
 
-CORRECTION_WORDS = [
-    "no ", "no,", "not that", "wrong", "stop", "I said", "I told you",
-    "that's not", "thats not", "don't ", "didn't ask", "not what I",
-    "why did you", "why are you", "undo that", "the exact opposite",
-    "that's incorrect", "not what I asked",
+# Direct corrections of Claude's behavior (high signal)
+CORRECTION_PHRASES = [
+    "I said", "I told you", "I already said", "I just said",
+    "that's not what I asked", "not what I asked", "not what I meant",
+    "that's incorrect", "that's wrong", "you're wrong",
+    "why did you", "why are you", "why would you",
+    "undo that", "revert that", "put it back", "the exact opposite",
+    "didn't ask for", "don't do that", "stop doing",
+    "read it again", "re-read", "look again",
+    "I specifically said", "I explicitly",
 ]
-FRUSTRATION_WORDS = [
-    "CRITICAL", "worse", "broken", "locks up", "lock up", "nothing works",
-    "not working", "still broken", "doesn't work", "failed", "crashes",
-    "crash", "panic", "everything is", "completely", "terrible", "unusable",
-    "catastrophic", "heart breaking", "kills Manifold", "kinda kills",
-    "HARD LOCK", "Are you serious", "Ugh",
+
+# Genuine interpersonal frustration (not bug descriptions)
+FRUSTRATION_PHRASES = [
+    "are you serious", "seriously?",
+    "this is getting nowhere", "going in circles",
+    "you keep", "you already", "you just did",
+    "that made it worse", "you broke", "you're breaking",
+    "completely wrong", "totally wrong",
+    "heart breaking", "catastrophic",
+    "unusable", "terrible",
 ]
-AFFIRMATION_WORDS = [
-    "perfect", "exactly", "nice", "cool", "good", "great", "yes please",
-    "looks good", "that's it", "that was it", "works", "working",
-    "nailed it", "love it", "sounds good", "yes!", "awesome",
-    "very very nice", "let's go for it", "really nice",
+
+# Positive collaboration signals
+AFFIRMATION_PHRASES = [
+    "perfect", "exactly", "nailed it", "love it", "awesome",
+    "that's it", "that was it", "that fixed it",
+    "looks good", "works", "working now",
+    "nice", "great", "yes please", "sounds good",
+    "very nice", "let's go", "spot on",
+    "much better", "way better",
 ]
+
 ABANDONMENT_SIGNALS = [
     "never mind", "nevermind", "forget it", "let's move on", "skip this",
-    "not now", "later", "stop",
+    "not now", "drop it",
 ]
 
 # Crate name to short area tag
@@ -263,36 +284,60 @@ def derive_areas(files_touched):
     return sorted(areas)
 
 
+def strip_technical_content(text):
+    """Remove content that looks like code, errors, or file paths.
+
+    Bug reports contain words like 'crash', 'broken', 'failed' — these
+    describe the SOFTWARE, not the user's attitude toward the collaboration.
+    By stripping code blocks, error output, and file paths, we only score
+    the user's direct conversational speech.
+    """
+    # Remove code blocks (``` ... ```)
+    text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
+    # Remove inline code (`...`)
+    text = re.sub(r"`[^`]+`", "", text)
+    # Remove file paths
+    text = re.sub(r"[\w/\\.-]+\.(rs|wgsl|toml|json|md|py|sh)\b", "", text)
+    # Remove lines that look like error/log output (start with thread, error[, warning[, etc.)
+    text = re.sub(r"^.*(?:thread '|error\[|warning\[|panicked at|SIGABRT|EXC_BAD).*$",
+                  "", text, flags=re.MULTILINE)
+    # Remove lines that look like shell commands
+    text = re.sub(r"^.*(?:cargo |git |rm |ls |cat ).*$", "", text, flags=re.MULTILINE)
+    return text
+
+
 def score_sentiment(user_messages):
-    """Score conversation sentiment from user messages."""
-    all_text = " ".join(user_messages).lower()
-    all_text_original = " ".join(user_messages)
+    """Score conversation sentiment based on user's attitude toward Claude.
 
-    corrections = sum(1 for w in CORRECTION_WORDS if w.lower() in all_text)
-    frustrations = sum(1 for w in FRUSTRATION_WORDS if w.lower() in all_text)
-    affirmations = sum(1 for w in AFFIRMATION_WORDS if w.lower() in all_text)
-    # Check for ALL CAPS words (frustration signal) — but not acronyms
-    caps_words = len(re.findall(r"\b[A-Z]{4,}\b", all_text_original))
-    # Discount common acronyms
-    acronyms = len(re.findall(
-        r"\b(?:MIDI|WGSL|GPU|CPU|FPS|HDR|SDR|VSync|ACES|LLM|API|OSC|UI|PR)\b",
-        all_text_original
-    ))
-    caps_frustration = max(0, caps_words - acronyms)
+    Only scores direct conversational speech (code/errors/paths stripped).
+    Distinguishes 'the app crashes' (bug report) from 'you keep breaking it'
+    (interpersonal frustration).
+    """
+    # Only score the user's conversational text, not technical content
+    cleaned = strip_technical_content(" ".join(user_messages))
+    text_lower = cleaned.lower()
 
-    neg_score = corrections * 2 + frustrations * 3 + caps_frustration
+    corrections = sum(1 for p in CORRECTION_PHRASES if p.lower() in text_lower)
+    frustrations = sum(1 for p in FRUSTRATION_PHRASES if p.lower() in text_lower)
+    affirmations = sum(1 for p in AFFIRMATION_PHRASES if p.lower() in text_lower)
+
+    # Corrections are the strongest signal — user directly telling Claude
+    # it did the wrong thing. Frustration phrases amplify but don't dominate.
+    neg_score = corrections * 3 + frustrations * 2
     pos_score = affirmations * 2
 
     if neg_score == 0 and pos_score == 0:
         return "neutral", "standard session"
 
-    if neg_score > 6 and pos_score > 4:
+    # Need substantial evidence — a single "that's wrong" in a 20-message
+    # session is normal, not a pattern
+    if neg_score >= 10 and pos_score >= 6:
         return "frustrating-then-resolved", "rough start but got there"
-    if neg_score > 6:
-        return "frustrating", "multiple corrections or failures"
-    if neg_score > 2 and pos_score > neg_score:
+    if neg_score >= 10:
+        return "frustrating", "repeated corrections needed"
+    if neg_score >= 4 and pos_score > neg_score:
         return "mixed-productive", "some friction but overall positive"
-    if pos_score > 4:
+    if pos_score >= 6:
         return "smooth", "clean progression"
     if pos_score > 0:
         return "productive", "generally positive"
