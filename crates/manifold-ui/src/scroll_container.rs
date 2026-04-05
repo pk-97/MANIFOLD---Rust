@@ -16,10 +16,10 @@
 use crate::node::*;
 use crate::tree::UITree;
 
-/// Scroll speed in logical pixels per normalized scroll unit.
-/// Consistent across all panels. winit LineDelta provides 1.0 per notch
-/// (already normalized), so 30.0 gives a natural scroll feel.
-pub const SCROLL_SPEED: f32 = 30.0;
+/// Scroll speed multiplier applied to incoming delta values.
+/// The app layer already normalizes scroll delta (LineDelta × 20px),
+/// so this is a final sensitivity multiplier, not a raw-to-pixel conversion.
+pub const SCROLL_SPEED: f32 = 1.0;
 
 /// Default scrollbar width.
 pub const SCROLLBAR_W: f32 = 4.0;
