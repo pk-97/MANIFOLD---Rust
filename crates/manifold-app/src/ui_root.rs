@@ -100,6 +100,11 @@ impl ScrollDirty {
         self.scroll_y || self.zoom || self.visual
     }
 
+    /// True if only horizontal scroll changed — enables update-in-place fast-path.
+    pub fn is_horizontal_only(&self) -> bool {
+        self.scroll_x && !self.scroll_y && !self.zoom && !self.visual
+    }
+
     pub fn clear(&mut self) {
         *self = Self::default();
     }
@@ -458,13 +463,22 @@ impl UIRoot {
         if !self.built {
             return self.build();
         }
+
+        // Fast-path: horizontal-only scroll — update positions in-place.
+        // No tree truncation, no hover invalidation, no node recreation.
+        if dirty.is_horizontal_only()
+            && self.viewport.try_update_horizontal_scroll(&mut self.tree)
+        {
+            return;
+        }
+
         if dirty.needs_layer_headers() {
             // Full scroll rebuild — includes layer headers
             self.tree.truncate_from(self.scroll_panels_start);
             self.input.invalidate_hover();
             self.build_scroll_panels();
         } else {
-            // Horizontal-only — skip layer headers, rebuild viewport + rest
+            // Horizontal-only (fallback) — skip layer headers, rebuild viewport + rest
             self.tree.truncate_from(self.viewport_panels_start);
             self.input.invalidate_hover();
             self.build_viewport_panels();

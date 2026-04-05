@@ -91,6 +91,16 @@ impl Default for TrackInfo {
     }
 }
 
+// ── Marker node group for update-in-place ──────────────────────
+
+/// Structured storage for one timeline marker's nodes.
+/// Enables update-in-place by providing a 1:1 mapping between markers and their node IDs.
+struct MarkerNodeGroup {
+    flag_id: i32,
+    outline_id: i32, // -1 if not selected
+    label_id: i32,   // -1 if no name
+}
+
 // ── Collapsed group bitmap ──────────────────────────────────────
 
 /// CPU pixel buffer for a single collapsed group's clip preview.
@@ -228,6 +238,7 @@ pub struct TimelineViewportPanel {
     collapsed_group_bitmaps: Vec<Option<CollapsedGroupBitmap>>,
 
     // Timeline markers
+    marker_groups: Vec<MarkerNodeGroup>,
     markers: Vec<TimelineMarker>,
     selected_marker_ids: Vec<MarkerId>,
     marker_flag_rects: Vec<(MarkerId, Rect)>,
@@ -302,6 +313,7 @@ impl TimelineViewportPanel {
             overview_last_track_count: 0,
             overview_last_width: 0.0,
             collapsed_group_bitmaps: Vec::new(),
+            marker_groups: Vec::new(),
             markers: Vec::new(),
             selected_marker_ids: Vec::new(),
             marker_flag_rects: Vec::new(),
@@ -1903,80 +1915,72 @@ impl TimelineViewportPanel {
     // per-layer bitmaps by LayerBitmapRenderer (matching Unity exactly).
 
     fn build_export_markers(&mut self, tree: &mut UITree) {
-        // Unity behavior:
-        // - HasExportRange (exportRangeEnabled): show in-marker
-        // - HasExportOut (exportOutBeat > exportInBeat): also show out-marker + range highlight
-        if !self.export_range_enabled {
-            self.export_range_id = -1;
-            self.export_in_marker_id = -1;
-            self.export_out_marker_id = -1;
-            return;
-        }
-
+        // Always pre-allocate all 3 export marker nodes for update-in-place.
+        // Use set_visible(false) when not needed.
         let marker_w = 2.0;
-        let has_out = self.export_out_beat > self.export_in_beat;
+        let marker_h = self.ruler_rect.height + self.tracks_rect.height;
+        let marker_style = UIStyle {
+            bg_color: color::EXPORT_MARKER_COLOR,
+            ..UIStyle::default()
+        };
 
-        // In marker (vertical line on ruler + tracks) — always shown if range enabled
+        // In marker
         let in_px = self.beat_to_pixel(self.export_in_beat);
-        let in_visible = in_px >= self.tracks_rect.x && in_px <= self.tracks_rect.x_max();
-        if in_visible {
-            self.export_in_marker_id = tree.add_panel(
-                -1,
-                in_px - marker_w * 0.5,
-                self.ruler_rect.y,
-                marker_w,
-                self.ruler_rect.height + self.tracks_rect.height,
-                UIStyle {
-                    bg_color: color::EXPORT_MARKER_COLOR,
-                    ..UIStyle::default()
-                },
-            ) as i32;
-        } else {
-            self.export_in_marker_id = -1;
+        self.export_in_marker_id = tree.add_panel(
+            -1,
+            in_px - marker_w * 0.5,
+            self.ruler_rect.y,
+            marker_w,
+            marker_h,
+            marker_style,
+        ) as i32;
+
+        // Range highlight
+        let out_px = self.beat_to_pixel(self.export_out_beat);
+        let range_left = in_px.max(self.tracks_rect.x);
+        let range_right = out_px.min(self.tracks_rect.x_max());
+        let range_w = (range_right - range_left).max(0.0);
+        self.export_range_id = tree.add_panel(
+            -1,
+            range_left,
+            self.tracks_rect.y,
+            range_w,
+            self.tracks_rect.height,
+            UIStyle {
+                bg_color: color::EXPORT_RANGE_HIGHLIGHT,
+                ..UIStyle::default()
+            },
+        ) as i32;
+
+        // Out marker
+        self.export_out_marker_id = tree.add_panel(
+            -1,
+            out_px - marker_w * 0.5,
+            self.ruler_rect.y,
+            marker_w,
+            marker_h,
+            marker_style,
+        ) as i32;
+
+        // Apply visibility
+        let enabled = self.export_range_enabled;
+        let has_out = self.export_out_beat > self.export_in_beat;
+        let in_visible =
+            enabled && in_px >= self.tracks_rect.x && in_px <= self.tracks_rect.x_max();
+        let out_visible = enabled
+            && has_out
+            && out_px >= self.tracks_rect.x
+            && out_px <= self.tracks_rect.x_max();
+        let range_visible = enabled && has_out && range_w > 0.0;
+
+        if !in_visible {
+            tree.set_visible(self.export_in_marker_id as u32, false);
         }
-
-        if has_out {
-            let out_px = self.beat_to_pixel(self.export_out_beat);
-
-            // Range highlight across tracks
-            let range_left = in_px.max(self.tracks_rect.x);
-            let range_right = out_px.min(self.tracks_rect.x_max());
-            if range_right > range_left {
-                self.export_range_id = tree.add_panel(
-                    -1,
-                    range_left,
-                    self.tracks_rect.y,
-                    range_right - range_left,
-                    self.tracks_rect.height,
-                    UIStyle {
-                        bg_color: color::EXPORT_RANGE_HIGHLIGHT,
-                        ..UIStyle::default()
-                    },
-                ) as i32;
-            } else {
-                self.export_range_id = -1;
-            }
-
-            // Out marker
-            let out_visible = out_px >= self.tracks_rect.x && out_px <= self.tracks_rect.x_max();
-            if out_visible {
-                self.export_out_marker_id = tree.add_panel(
-                    -1,
-                    out_px - marker_w * 0.5,
-                    self.ruler_rect.y,
-                    marker_w,
-                    self.ruler_rect.height + self.tracks_rect.height,
-                    UIStyle {
-                        bg_color: color::EXPORT_MARKER_COLOR,
-                        ..UIStyle::default()
-                    },
-                ) as i32;
-            } else {
-                self.export_out_marker_id = -1;
-            }
-        } else {
-            self.export_range_id = -1;
-            self.export_out_marker_id = -1;
+        if !range_visible {
+            tree.set_visible(self.export_range_id as u32, false);
+        }
+        if !out_visible {
+            tree.set_visible(self.export_out_marker_id as u32, false);
         }
     }
 
@@ -2007,20 +2011,20 @@ impl TimelineViewportPanel {
     fn build_markers(&mut self, tree: &mut UITree) {
         self.marker_flag_rects.clear();
         self.marker_node_ids.clear();
+        self.marker_groups.clear();
 
         let flag_w = color::MARKER_FLAG_WIDTH;
         let flag_h = color::MARKER_FLAG_HEIGHT;
 
+        // Pre-allocate ALL markers (including off-screen) for update-in-place.
+        // Off-screen markers get set_visible(false).
         for marker in &self.markers {
             let px = self.beat_to_pixel(marker.beat);
-            if px < self.tracks_rect.x - flag_w || px > self.tracks_rect.x_max() + flag_w {
-                continue;
-            }
+            let in_view =
+                px >= self.tracks_rect.x - flag_w && px <= self.tracks_rect.x_max() + flag_w;
 
             let mc = color::marker_color_to_color32(marker.color);
             let is_selected = self.selected_marker_ids.contains(&marker.id);
-
-            // Vertical line through tracks is now painted into per-layer bitmaps.
 
             // Flag in ruler (small colored rectangle at top)
             let flag_x = px - flag_w * 0.5;
@@ -2046,50 +2050,364 @@ impl TimelineViewportPanel {
                     ..UIStyle::default()
                 },
             ) as i32;
+            if !in_view {
+                tree.set_visible(flag_id as u32, false);
+            }
             self.marker_node_ids.push(flag_id);
 
-            // Selection outline
-            if is_selected {
-                let outline_id = tree.add_panel(
-                    -1,
-                    flag_x - 1.0,
-                    flag_y - 1.0,
-                    flag_w + 2.0,
-                    flag_h + 2.0,
-                    UIStyle {
-                        bg_color: color::MARKER_SELECTED_OUTLINE,
-                        ..UIStyle::default()
-                    },
-                ) as i32;
-                self.marker_node_ids.push(outline_id);
+            // Selection outline — always allocated, hidden if not selected
+            let outline_id = tree.add_panel(
+                -1,
+                flag_x - 1.0,
+                flag_y - 1.0,
+                flag_w + 2.0,
+                flag_h + 2.0,
+                UIStyle {
+                    bg_color: color::MARKER_SELECTED_OUTLINE,
+                    ..UIStyle::default()
+                },
+            ) as i32;
+            if !is_selected || !in_view {
+                tree.set_visible(outline_id as u32, false);
             }
+            self.marker_node_ids.push(outline_id);
 
-            // Label (marker name, to the right of the flag)
-            if !marker.name.is_empty() {
-                let label_x = flag_x + flag_w + 2.0;
-                let label_y = flag_y + (flag_h - color::MARKER_LABEL_HEIGHT) * 0.5;
-                let label_id = tree.add_label(
-                    -1,
-                    label_x,
-                    label_y,
-                    color::MARKER_LABEL_WIDTH,
-                    color::MARKER_LABEL_HEIGHT,
-                    &marker.name,
-                    UIStyle {
-                        bg_color: color::MARKER_LABEL_BG,
-                        text_color: mc,
-                        font_size: RULER_FONT_SIZE,
-                        text_align: TextAlign::Left,
-                        ..UIStyle::default()
-                    },
-                ) as i32;
-                self.marker_node_ids.push(label_id);
+            // Label — always allocated, hidden if empty or off-screen
+            let label_x = flag_x + flag_w + 2.0;
+            let label_y = flag_y + (flag_h - color::MARKER_LABEL_HEIGHT) * 0.5;
+            let label_id = tree.add_label(
+                -1,
+                label_x,
+                label_y,
+                color::MARKER_LABEL_WIDTH,
+                color::MARKER_LABEL_HEIGHT,
+                if marker.name.is_empty() { "" } else { &marker.name },
+                UIStyle {
+                    bg_color: color::MARKER_LABEL_BG,
+                    text_color: mc,
+                    font_size: RULER_FONT_SIZE,
+                    text_align: TextAlign::Left,
+                    ..UIStyle::default()
+                },
+            ) as i32;
+            if marker.name.is_empty() || !in_view {
+                tree.set_visible(label_id as u32, false);
             }
+            self.marker_node_ids.push(label_id);
+
+            self.marker_groups.push(MarkerNodeGroup {
+                flag_id,
+                outline_id,
+                label_id,
+            });
 
             // Store flag rect for hit-testing
             self.marker_flag_rects
                 .push((marker.id.clone(), Rect::new(flag_x, flag_y, flag_w, flag_h)));
         }
+    }
+
+    // ── Update-in-place (Phase 1: horizontal scroll) ───────────
+
+    /// Try to update ruler ticks, labels, markers, and export markers in-place
+    /// for a horizontal-only scroll. Returns `true` if successful, `false` if
+    /// a full rebuild is needed (count mismatch or never built).
+    pub fn try_update_horizontal_scroll(&mut self, tree: &mut UITree) -> bool {
+        // Guard: must have been built at least once
+        if self.ruler_tick_ids.is_empty() {
+            return false;
+        }
+
+        // ── Recompute ruler parameters (same logic as build_ruler) ──
+
+        let (min_beat, max_beat) = self.visible_beat_range();
+        let bpb = self.beats_per_bar as f32;
+        let ppb = self.mapper.pixels_per_beat();
+        let subdiv = self.grid_subdivision();
+
+        let tick_step = match subdiv {
+            GridSubdivision::Bar => bpb,
+            GridSubdivision::Beat => 1.0,
+            GridSubdivision::Eighth => 0.5,
+            GridSubdivision::Sixteenth => 0.25,
+        };
+
+        const MIN_LABEL_SPACING: f32 = 50.0;
+        let label_step: f32 = if ppb >= MIN_LABEL_SPACING {
+            1.0
+        } else if bpb * ppb >= MIN_LABEL_SPACING {
+            bpb
+        } else {
+            let bar_px = bpb * ppb;
+            let mut n_bars = 2.0_f32;
+            while n_bars * bar_px < MIN_LABEL_SPACING && n_bars <= 1024.0 {
+                n_bars *= 2.0;
+            }
+            bpb * n_bars
+        };
+
+        let ruler_bottom = self.ruler_rect.y + self.ruler_rect.height;
+        let start = (min_beat / tick_step).floor() * tick_step;
+        let label_y = self.ruler_rect.y + 2.0;
+
+        // ── Count ticks and labels, collect update data ──
+
+        let mut tick_count = 0usize;
+        let mut label_count = 0usize;
+        let mut beat = start;
+
+        // First pass: count only (to compare with existing)
+        while beat <= max_beat && tick_count < MAX_RULER_TICKS {
+            let px = self.beat_to_pixel(Beats::from_f32(beat));
+            if px >= self.ruler_rect.x && px <= self.ruler_rect.x_max() {
+                tick_count += 1;
+
+                if (beat % label_step).abs() < 0.001
+                    && !self.markers.iter().any(|m| {
+                        (m.beat.as_f32() - beat).abs() < 0.001 && !m.name.is_empty()
+                    })
+                {
+                    label_count += 1;
+                }
+            }
+            beat += tick_step;
+        }
+
+        // Count mismatch → fallback to full rebuild
+        if tick_count != self.ruler_tick_ids.len()
+            || label_count != self.ruler_label_ids.len()
+        {
+            return false;
+        }
+
+        // Marker count changed → fallback
+        if self.marker_groups.len() != self.markers.len() {
+            return false;
+        }
+
+        // ── Second pass: update tick and label nodes in-place ──
+
+        let mut tick_idx = 0usize;
+        let mut label_idx = 0usize;
+        beat = start;
+
+        while beat <= max_beat && tick_idx < tick_count {
+            let px = self.beat_to_pixel(Beats::from_f32(beat));
+            if px >= self.ruler_rect.x && px <= self.ruler_rect.x_max() {
+                let is_bar = (beat % bpb).abs() < 0.001;
+                let is_beat = (beat % 1.0).abs() < 0.001;
+                let is_label_beat = (beat % label_step).abs() < 0.001;
+
+                let tick_h = if is_label_beat && is_bar {
+                    RULER_BAR_TICK_H + 4.0
+                } else if is_bar {
+                    RULER_BAR_TICK_H
+                } else if is_beat {
+                    RULER_BEAT_TICK_H
+                } else {
+                    4.0
+                };
+
+                let tick_color = if is_label_beat && is_bar {
+                    color::TEXT_NORMAL
+                } else if is_bar {
+                    color::TEXT_SUBTLE
+                } else {
+                    color::TEXT_FAINT
+                };
+
+                let id = self.ruler_tick_ids[tick_idx] as u32;
+                tree.set_bounds(
+                    id,
+                    Rect::new(px, ruler_bottom - tick_h, RULER_TICK_W, tick_h),
+                );
+                tree.set_style(
+                    id,
+                    UIStyle {
+                        bg_color: tick_color,
+                        ..UIStyle::default()
+                    },
+                );
+                tick_idx += 1;
+
+                // Update label
+                let has_marker_at_beat = self
+                    .markers
+                    .iter()
+                    .any(|m| (m.beat.as_f32() - beat).abs() < 0.001 && !m.name.is_empty());
+                if is_label_beat && !has_marker_at_beat && label_idx < label_count {
+                    let bar_num = (beat / bpb).floor() as i32 + 1;
+                    let beat_in_bar = ((beat % bpb) + 0.001).floor() as i32 + 1;
+                    let label = if is_bar {
+                        format!("{}", bar_num)
+                    } else {
+                        format!("{}.{}", bar_num, beat_in_bar)
+                    };
+
+                    let lid = self.ruler_label_ids[label_idx] as u32;
+                    tree.set_bounds(
+                        lid,
+                        Rect::new(px + 2.0, label_y, RULER_LABEL_W, RULER_LABEL_H),
+                    );
+                    tree.set_text(lid, &label);
+                    tree.set_style(
+                        lid,
+                        UIStyle {
+                            text_color: if is_bar {
+                                color::TEXT_NORMAL
+                            } else {
+                                color::TEXT_DIMMED
+                            },
+                            font_size: RULER_FONT_SIZE,
+                            text_align: TextAlign::Left,
+                            ..UIStyle::default()
+                        },
+                    );
+                    label_idx += 1;
+                }
+            }
+            beat += tick_step;
+        }
+
+        // ── Update export markers in-place ──
+
+        if self.export_in_marker_id >= 0 {
+            let marker_w = 2.0;
+            let marker_h = self.ruler_rect.height + self.tracks_rect.height;
+            let enabled = self.export_range_enabled;
+            let has_out = self.export_out_beat > self.export_in_beat;
+
+            let in_px = self.beat_to_pixel(self.export_in_beat);
+            let in_vis = enabled
+                && in_px >= self.tracks_rect.x
+                && in_px <= self.tracks_rect.x_max();
+            tree.set_visible(self.export_in_marker_id as u32, in_vis);
+            if in_vis {
+                tree.set_bounds(
+                    self.export_in_marker_id as u32,
+                    Rect::new(
+                        in_px - marker_w * 0.5,
+                        self.ruler_rect.y,
+                        marker_w,
+                        marker_h,
+                    ),
+                );
+            }
+
+            let out_px = self.beat_to_pixel(self.export_out_beat);
+            let range_left = in_px.max(self.tracks_rect.x);
+            let range_right = out_px.min(self.tracks_rect.x_max());
+            let range_w = (range_right - range_left).max(0.0);
+            let range_vis = enabled && has_out && range_w > 0.0;
+            tree.set_visible(self.export_range_id as u32, range_vis);
+            if range_vis {
+                tree.set_bounds(
+                    self.export_range_id as u32,
+                    Rect::new(
+                        range_left,
+                        self.tracks_rect.y,
+                        range_w,
+                        self.tracks_rect.height,
+                    ),
+                );
+            }
+
+            let out_vis = enabled
+                && has_out
+                && out_px >= self.tracks_rect.x
+                && out_px <= self.tracks_rect.x_max();
+            tree.set_visible(self.export_out_marker_id as u32, out_vis);
+            if out_vis {
+                tree.set_bounds(
+                    self.export_out_marker_id as u32,
+                    Rect::new(
+                        out_px - marker_w * 0.5,
+                        self.ruler_rect.y,
+                        marker_w,
+                        marker_h,
+                    ),
+                );
+            }
+        }
+
+        // ── Update timeline markers in-place ──
+
+        let flag_w = color::MARKER_FLAG_WIDTH;
+        let flag_h = color::MARKER_FLAG_HEIGHT;
+        self.marker_flag_rects.clear();
+
+        for (i, marker) in self.markers.iter().enumerate() {
+            let group = &self.marker_groups[i];
+            let px = self.beat_to_pixel(marker.beat);
+            let in_view =
+                px >= self.tracks_rect.x - flag_w && px <= self.tracks_rect.x_max() + flag_w;
+
+            let mc = color::marker_color_to_color32(marker.color);
+            let is_selected = self.selected_marker_ids.contains(&marker.id);
+            let flag_x = px - flag_w * 0.5;
+            let flag_y = self.ruler_rect.y;
+
+            // Flag
+            tree.set_visible(group.flag_id as u32, in_view);
+            if in_view {
+                let flag_color = if is_selected {
+                    Color32::new(
+                        mc.r.saturating_add(40),
+                        mc.g.saturating_add(40),
+                        mc.b.saturating_add(40),
+                        255,
+                    )
+                } else {
+                    mc
+                };
+                tree.set_bounds(
+                    group.flag_id as u32,
+                    Rect::new(flag_x, flag_y, flag_w, flag_h),
+                );
+                tree.set_style(
+                    group.flag_id as u32,
+                    UIStyle {
+                        bg_color: flag_color,
+                        ..UIStyle::default()
+                    },
+                );
+            }
+
+            // Outline
+            tree.set_visible(group.outline_id as u32, in_view && is_selected);
+            if in_view && is_selected {
+                tree.set_bounds(
+                    group.outline_id as u32,
+                    Rect::new(flag_x - 1.0, flag_y - 1.0, flag_w + 2.0, flag_h + 2.0),
+                );
+            }
+
+            // Label
+            let has_name = !marker.name.is_empty();
+            tree.set_visible(group.label_id as u32, in_view && has_name);
+            if in_view && has_name {
+                let label_x = flag_x + flag_w + 2.0;
+                let label_y_m =
+                    flag_y + (flag_h - color::MARKER_LABEL_HEIGHT) * 0.5;
+                tree.set_bounds(
+                    group.label_id as u32,
+                    Rect::new(
+                        label_x,
+                        label_y_m,
+                        color::MARKER_LABEL_WIDTH,
+                        color::MARKER_LABEL_HEIGHT,
+                    ),
+                );
+            }
+
+            self.marker_flag_rects
+                .push((marker.id.clone(), Rect::new(flag_x, flag_y, flag_w, flag_h)));
+        }
+
+        // ── Update insert cursor ──
+        self.sync_insert_cursor_ruler(tree);
+
+        true
     }
 }
 
