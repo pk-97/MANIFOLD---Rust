@@ -9,6 +9,7 @@ use super::InspectorTab;
 use crate::color;
 use crate::node::Color32;
 use crate::node::*;
+use crate::scroll_container::ScrollContainer;
 use crate::tree::UITree;
 use manifold_core::LayerId;
 
@@ -31,7 +32,6 @@ const CHIP_SPACING: f32 = 5.0;
 const CHIP_FONT: f32 = 12.5;
 const CELL_FONT: u16 = color::FONT_LABEL;
 const SEARCH_FONT: u16 = color::FONT_LABEL;
-const SCROLL_SPEED: f32 = 12.5;
 const ACCENT_BAR_W: f32 = 3.0;
 
 // ── Colors ──
@@ -121,7 +121,7 @@ pub struct BrowserPopupPanel {
     popup_y: f32,
 
     // Scroll
-    scroll_offset: f32,
+    scroll: ScrollContainer,
 
     // Node IDs
     backdrop_id: i32,
@@ -164,7 +164,7 @@ impl BrowserPopupPanel {
             total_height: 300.0,
             popup_x: 100.0,
             popup_y: 100.0,
-            scroll_offset: 0.0,
+            scroll: ScrollContainer::new(),
             backdrop_id: -1,
             search_bar_id: -1,
             chip_all_id: -1,
@@ -211,7 +211,7 @@ impl BrowserPopupPanel {
         self.paste_count = req.paste_count;
         self.active_category = None;
         self.current_filter.clear();
-        self.scroll_offset = 0.0;
+        self.scroll.reset();
         self.rebuild_filtered_list();
         self.compute_layout(req.screen_anchor);
     }
@@ -231,7 +231,7 @@ impl BrowserPopupPanel {
     /// Called when the search filter changes (from TextInputManager commit).
     pub fn set_filter(&mut self, filter: String) {
         self.current_filter = filter;
-        self.scroll_offset = 0.0;
+        self.scroll.reset();
         self.rebuild_filtered_list();
         // Recompute layout height with new count
         self.recompute_height();
@@ -239,7 +239,7 @@ impl BrowserPopupPanel {
 
     pub fn set_category(&mut self, category: Option<String>) {
         self.active_category = category;
-        self.scroll_offset = 0.0;
+        self.scroll.reset();
         self.rebuild_filtered_list();
         self.recompute_height();
     }
@@ -487,20 +487,15 @@ impl BrowserPopupPanel {
         let vp_top = cy;
         let vp_h = self.grid_viewport_height;
 
-        let clip_id = tree.add_node(
-            -1,
-            Rect::new(cx, vp_top, content_w, vp_h),
-            UINodeType::ClipRegion,
-            UIStyle::default(),
-            None,
-            UIFlags::VISIBLE | UIFlags::CLIPS_CHILDREN,
-        ) as i32;
+        let clip_id = self
+            .scroll
+            .begin(tree, Rect::new(cx, vp_top, content_w, vp_h));
 
         for (fi, &src_idx) in self.filtered_indices.iter().enumerate() {
             let col = fi % self.columns;
             let row = fi / self.columns;
             // Relative Y for culling check (viewport-local)
-            let rel_y = row as f32 * (CELL_HEIGHT + CELL_SPACING) - self.scroll_offset;
+            let rel_y = row as f32 * (CELL_HEIGHT + CELL_SPACING) - self.scroll.scroll_offset();
 
             // Cull cells entirely outside viewport
             if rel_y + CELL_HEIGHT < 0.0 || rel_y > vp_h {
@@ -675,8 +670,8 @@ impl BrowserPopupPanel {
         }
         let rows = (self.filtered_indices.len() + self.columns - 1) / self.columns.max(1);
         let content_h = rows as f32 * (CELL_HEIGHT + CELL_SPACING) - CELL_SPACING;
-        let max_scroll = (content_h - self.grid_viewport_height).max(0.0);
-        self.scroll_offset = (self.scroll_offset - delta * SCROLL_SPEED).clamp(0.0, max_scroll);
+        self.scroll.set_content_height(content_h);
+        self.scroll.apply_scroll_delta(delta);
     }
 
     /// Check if a node belongs to this popup.

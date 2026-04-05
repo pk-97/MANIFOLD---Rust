@@ -3,6 +3,7 @@ use crate::color;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
 use crate::node::*;
+use crate::scroll_container::ScrollContainer;
 use crate::tree::UITree;
 use manifold_core::LayerId;
 
@@ -494,11 +495,9 @@ pub struct LayerHeaderPanel {
     panel_origin: Vec2,
     panel_width: f32,
 
-    // Vertical scroll offset — synchronized with viewport scroll_y_px
-    scroll_y_px: f32,
-
-    // Scroll container for clipping layer rows to the visible area
-    scroll_clip_id: i32,
+    // Scroll container for clipping layer rows to the visible area.
+    // Scroll offset is set externally via set_scroll_y() (synced with viewport).
+    scroll: ScrollContainer,
 
     // Cache tracking
     cache_first_node: usize,
@@ -524,8 +523,7 @@ impl LayerHeaderPanel {
             pending_active_layers: None,
             panel_origin: Vec2::ZERO,
             panel_width: 0.0,
-            scroll_y_px: 0.0,
-            scroll_clip_id: -1,
+            scroll: ScrollContainer::new(),
             cache_first_node: usize::MAX,
             cache_node_count: 0,
         }
@@ -533,7 +531,7 @@ impl LayerHeaderPanel {
 
     /// Set vertical scroll offset (synchronized with viewport).
     pub fn set_scroll_y(&mut self, y: f32) {
-        self.scroll_y_px = y;
+        self.scroll.set_scroll_offset(y);
     }
 
     /// Set the layer data snapshot. Must be called before build().
@@ -1317,7 +1315,7 @@ impl Panel for LayerHeaderPanel {
         // so they align vertically with the track content area.
         // INVARIANT: this MUST match viewport.rs header_h computation exactly.
         let header_spacer = layout.track_header_height();
-        self.panel_origin = Vec2::new(lc.x, lc.y + header_spacer - self.scroll_y_px);
+        self.panel_origin = Vec2::new(lc.x, lc.y + header_spacer - self.scroll.scroll_offset());
         self.panel_width = lc.width;
 
         // Full-area background (prevents compositor blit bleed-through)
@@ -1333,20 +1331,11 @@ impl Panel for LayerHeaderPanel {
             },
         );
 
-        // Create a clip region for the scrollable layer rows area.
-        // This prevents layer content from overflowing into the header or footer.
-        // The clip rect covers from below the header spacer to the bottom of the body.
+        // Clip region for scrollable layer rows — prevents overflow into header/footer.
         let clip_top = lc.y + header_spacer;
         let clip_height = (lc.height - header_spacer).max(0.0);
-        let clip_rect = Rect::new(lc.x, clip_top, lc.width, clip_height);
-        self.scroll_clip_id = tree.add_node(
-            -1,
-            clip_rect,
-            UINodeType::ClipRegion,
-            UIStyle::default(),
-            None,
-            UIFlags::VISIBLE | UIFlags::CLIPS_CHILDREN,
-        ) as i32;
+        self.scroll
+            .begin(tree, Rect::new(lc.x, clip_top, lc.width, clip_height));
 
         let layer_count = self.layers.len();
         self.rows = vec![LayerRowIds::default(); layer_count];
@@ -1402,7 +1391,7 @@ impl Panel for LayerHeaderPanel {
                 layer.is_group && !layer.is_collapsed,
             );
 
-            self.build_layer_row(tree, i, layer, row, self.panel_origin, self.scroll_clip_id);
+            self.build_layer_row(tree, i, layer, row, self.panel_origin, self.scroll.clip_node_id());
             self.cached_mute[i] = layer.is_muted;
             self.cached_solo[i] = layer.is_solo;
             self.cached_selected[i] = layer.is_selected;
@@ -1411,7 +1400,7 @@ impl Panel for LayerHeaderPanel {
 
         // Insert indicator (hidden off-screen)
         self.insert_indicator_id = tree.add_panel(
-            self.scroll_clip_id,
+            self.scroll.clip_node_id(),
             lc.x,
             lc.y - 10.0,
             lc.width,
