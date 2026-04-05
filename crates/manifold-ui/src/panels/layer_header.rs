@@ -507,6 +507,7 @@ pub struct LayerHeaderPanel {
     // Cache tracking
     cache_first_node: usize,
     cache_node_count: usize,
+
 }
 
 impl LayerHeaderPanel {
@@ -1348,7 +1349,8 @@ impl Panel for LayerHeaderPanel {
             .begin(tree, Rect::new(lc.x, clip_top, lc.width, clip_height));
 
         let layer_count = self.layers.len();
-        self.rows = vec![LayerRowIds::default(); layer_count];
+        self.rows.clear();
+        self.rows.resize(layer_count, LayerRowIds::default());
         // Only resize cached state vectors if layer count changed —
         // preserve existing values to keep dirty-check logic correct.
         self.cached_mute.resize(layer_count, false);
@@ -1356,8 +1358,9 @@ impl Panel for LayerHeaderPanel {
         self.cached_selected.resize(layer_count, false);
         self.cached_colors.resize(layer_count, Color32::TRANSPARENT);
 
-        // Clone layers to avoid borrow conflict in build_layer_row
-        let layers_snapshot = self.layers.clone();
+        // Swap layers out to avoid borrow conflict in build_layer_row
+        // (takes O(1), avoids cloning the entire Vec)
+        let layers_snapshot = std::mem::take(&mut self.layers);
 
         // Clip bounds: layer rows are only visible within the scrollable area
         // (below the header spacer, above the footer). Rows outside are skipped.
@@ -1407,6 +1410,9 @@ impl Panel for LayerHeaderPanel {
             self.cached_selected[i] = layer.is_selected;
             self.cached_colors[i] = layer.color;
         }
+
+        // Swap layers back
+        self.layers = layers_snapshot;
 
         // Tell ScrollContainer the total content height so set_scroll_offset
         // clamps correctly. The viewport drives the offset, but ScrollContainer

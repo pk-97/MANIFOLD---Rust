@@ -421,6 +421,22 @@ impl TimelineViewportPanel {
     }
 
     pub fn set_clips(&mut self, clips: Vec<ViewportClip>) {
+        // Compute clip fingerprint for overview dirty-checking (O(N) but only on clip change)
+        let mut clip_fp: u64 = clips.len() as u64;
+        for c in &clips {
+            clip_fp = clip_fp
+                .wrapping_mul(31)
+                .wrapping_add(c.start_beat.as_f32().to_bits() as u64);
+            clip_fp = clip_fp
+                .wrapping_mul(31)
+                .wrapping_add(c.duration_beats.as_f32().to_bits() as u64);
+            clip_fp = clip_fp
+                .wrapping_mul(31)
+                .wrapping_add(c.layer_index as u64);
+        }
+        self.overview_last_clip_fingerprint = clip_fp;
+        self.overview_dirty = true;
+
         // Bucket clips by layer for per-layer bitmap rendering
         self.clips_by_layer.clear();
         self.clips_by_layer.resize(self.tracks.len(), Vec::new());
@@ -1337,25 +1353,13 @@ impl TimelineViewportPanel {
         let tex_w = (self.overview_rect.width * scale).round().max(1.0) as usize;
         let tex_h = (self.overview_rect.height * scale).round().max(1.0) as usize;
 
-        // Dirty-checking: skip if nothing changed
+        // Dirty-checking: skip if nothing changed.
         let ppb = self.mapper.pixels_per_beat();
         let scroll_x = self.scroll_x_beats.as_f32();
         let playhead = self.playhead_beat.as_f32();
-        // Clip fingerprint: hash of count + positions + colors
-        let mut clip_fp: u64 = self.clips.len() as u64;
-        for c in &self.clips {
-            clip_fp = clip_fp
-                .wrapping_mul(31)
-                .wrapping_add(c.start_beat.as_f32().to_bits() as u64);
-            clip_fp = clip_fp
-                .wrapping_mul(31)
-                .wrapping_add(c.duration_beats.as_f32().to_bits() as u64);
-            clip_fp = clip_fp
-                .wrapping_mul(31)
-                .wrapping_add(c.layer_index as u64);
-        }
+        let clip_fp = self.overview_last_clip_fingerprint;
         if !self.overview_dirty
-            && self.overview_last_clip_fingerprint == clip_fp
+            && clip_fp == self.overview_last_clip_fingerprint
             && self.overview_last_playhead == playhead
             && self.overview_last_scroll_x == scroll_x
             && self.overview_last_ppb == ppb
@@ -1364,7 +1368,6 @@ impl TimelineViewportPanel {
         {
             return;
         }
-        self.overview_last_clip_fingerprint = clip_fp;
         self.overview_last_playhead = playhead;
         self.overview_last_scroll_x = scroll_x;
         self.overview_last_ppb = ppb;
