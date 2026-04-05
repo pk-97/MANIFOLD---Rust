@@ -1398,6 +1398,16 @@ impl Panel for LayerHeaderPanel {
             self.cached_colors[i] = layer.color;
         }
 
+        // Tell ScrollContainer the total content height so set_scroll_offset
+        // clamps correctly. The viewport drives the offset, but ScrollContainer
+        // acts as a safety net — clamping to known content bounds.
+        let content_h = self
+            .layers
+            .last()
+            .map(|l| l.y_offset + l.height)
+            .unwrap_or(0.0);
+        self.scroll.set_content_height(content_h);
+
         // Insert indicator (hidden off-screen)
         self.insert_indicator_id = tree.add_panel(
             self.scroll.clip_node_id(),
