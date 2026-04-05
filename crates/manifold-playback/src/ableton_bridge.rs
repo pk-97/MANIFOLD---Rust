@@ -343,6 +343,7 @@ impl AbletonBridge {
                     return;
                 }
                 let queue = Arc::clone(&self.message_queue);
+                let pending_values = Arc::clone(&self.pending_values);
                 let shutdown = Arc::clone(&self.shutdown_flag);
                 self.shutdown_flag.store(false, Ordering::Relaxed);
 
@@ -365,6 +366,17 @@ impl AbletonBridge {
                                 continue;
                             }
                         };
+                        // Fast path: parse parameter value updates directly
+                        // from raw bytes — zero allocation, bypasses rosc +
+                        // message queue entirely.
+                        if let Some((tid, did, pid, val)) =
+                            try_parse_param_value_fast(&buf[..size])
+                        {
+                            pending_values.lock().insert((tid, did, pid), val);
+                            continue;
+                        }
+                        // Slow path: full rosc decode for discovery, transport,
+                        // and any other message types.
                         match rosc::decoder::decode_udp(&buf[..size]) {
                             Ok((_, packet)) => {
                                 Self::handle_packet_static(packet, &queue);
@@ -1849,6 +1861,60 @@ fn osc_arg_string(arg: &rosc::OscType) -> Option<String> {
     }
 }
 
+// ── Zero-alloc fast-path decoder for parameter values ────────────
+
+/// OSC address for parameter value listener updates.
+/// 32 chars + null = 33 bytes. We match these 33 bytes; the 3 pad bytes
+/// after the null are always zero but we don't need to check them.
+const PARAM_VALUE_ADDR: &[u8] = b"/live/device/get/parameter/value\0";
+/// Byte offset where the type tag starts: 33 bytes padded to 36.
+const PARAM_VALUE_TAG_OFFSET: usize = 36;
+/// Byte offset where arguments start (after address + padded type tag).
+/// Type tag is `,iiif\0` or `,iiii\0` = 6 bytes, padded to 8.
+const PARAM_VALUE_ARGS_OFFSET: usize = 44;
+/// Minimum packet size: address(36) + type_tag(8) + 4 args × 4 bytes(16) = 60.
+const PARAM_VALUE_MIN_SIZE: usize = 60;
+
+/// Try to parse a `/live/device/get/parameter/value` message directly from
+/// raw UDP bytes without any heap allocation. Returns `(track_id, device_id,
+/// param_id, value)` on success, or `None` to fall through to `rosc`.
+fn try_parse_param_value_fast(buf: &[u8]) -> Option<(i32, i32, i32, f32)> {
+    if buf.len() < PARAM_VALUE_MIN_SIZE {
+        return None;
+    }
+    // Check address prefix (including null terminator).
+    if &buf[..PARAM_VALUE_ADDR.len()] != PARAM_VALUE_ADDR {
+        return None;
+    }
+    // Verify type tag starts with ','.
+    if buf[PARAM_VALUE_TAG_OFFSET] != b',' {
+        return None;
+    }
+
+    let args = PARAM_VALUE_ARGS_OFFSET;
+    let track_id = i32::from_be_bytes([buf[args], buf[args + 1], buf[args + 2], buf[args + 3]]);
+    let device_id =
+        i32::from_be_bytes([buf[args + 4], buf[args + 5], buf[args + 6], buf[args + 7]]);
+    let param_id =
+        i32::from_be_bytes([buf[args + 8], buf[args + 9], buf[args + 10], buf[args + 11]]);
+
+    // The value arg may be float ('f') or int ('i') depending on the parameter.
+    let value_type = buf[PARAM_VALUE_TAG_OFFSET + 4]; // 4th type char after ','
+    let value_bytes = [buf[args + 12], buf[args + 13], buf[args + 14], buf[args + 15]];
+    let value = match value_type {
+        b'f' => f32::from_be_bytes(value_bytes),
+        b'i' => i32::from_be_bytes(value_bytes) as f32,
+        b'd' if buf.len() >= PARAM_VALUE_ARGS_OFFSET + 20 => {
+            // Double is 8 bytes — need 4 more bytes than the minimum size.
+            let d_bytes: [u8; 8] = buf[args + 12..args + 20].try_into().ok()?;
+            f64::from_be_bytes(d_bytes) as f32
+        }
+        _ => return None, // Unknown type — fall through to rosc
+    };
+
+    Some((track_id, device_id, param_id, value))
+}
+
 // ── Tests ─────────────────────────────���───────────────────────────
 
 #[cfg(test)]
@@ -1935,5 +2001,94 @@ mod tests {
         assert!((normalized - 0.5).abs() < 0.01);
         assert!((mapped - 0.5).abs() < 0.01);
         assert!((value - 1.0).abs() < 0.01);
+    }
+
+    // ── Fast-path decoder tests ──────────────────────────────────
+
+    /// Build a raw OSC packet for `/live/device/get/parameter/value`
+    /// with args (int, int, int, float).
+    fn build_param_value_packet(
+        track_id: i32,
+        device_id: i32,
+        param_id: i32,
+        value: f32,
+    ) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(64);
+        // Address: 32 chars + null = 33 bytes, padded to 36
+        buf.extend_from_slice(b"/live/device/get/parameter/value\0\0\0\0");
+        // Type tag: ",iiif\0" padded to 8 bytes
+        buf.extend_from_slice(b",iiif\0\0\0");
+        // Arguments: 3 ints + 1 float, big-endian
+        buf.extend_from_slice(&track_id.to_be_bytes());
+        buf.extend_from_slice(&device_id.to_be_bytes());
+        buf.extend_from_slice(&param_id.to_be_bytes());
+        buf.extend_from_slice(&value.to_be_bytes());
+        assert_eq!(buf.len(), 60); // sanity check
+        buf
+    }
+
+    #[test]
+    fn fast_parse_param_value_float() {
+        let packet = build_param_value_packet(3, 1, 5, 0.75);
+        let result = try_parse_param_value_fast(&packet);
+        assert_eq!(result, Some((3, 1, 5, 0.75)));
+    }
+
+    #[test]
+    fn fast_parse_param_value_int_arg() {
+        let mut buf = Vec::with_capacity(64);
+        // Address: 32 chars + null = 33 bytes, padded to 36
+        buf.extend_from_slice(b"/live/device/get/parameter/value\0\0\0\0");
+        // Type tag with int value: ",iiii\0" padded to 8
+        buf.extend_from_slice(b",iiii\0\0\0");
+        buf.extend_from_slice(&2_i32.to_be_bytes());
+        buf.extend_from_slice(&0_i32.to_be_bytes());
+        buf.extend_from_slice(&3_i32.to_be_bytes());
+        buf.extend_from_slice(&64_i32.to_be_bytes()); // int 64 → 64.0
+        let result = try_parse_param_value_fast(&buf);
+        assert_eq!(result, Some((2, 0, 3, 64.0)));
+    }
+
+    #[test]
+    fn fast_parse_rejects_wrong_address() {
+        let mut buf = Vec::with_capacity(64);
+        // Different address (track name)
+        buf.extend_from_slice(b"/live/track/get/name\0\0\0\0");
+        buf.extend_from_slice(b",is\0");
+        buf.extend_from_slice(&0_i32.to_be_bytes());
+        buf.extend_from_slice(b"Bass\0\0\0\0");
+        assert_eq!(try_parse_param_value_fast(&buf), None);
+    }
+
+    #[test]
+    fn fast_parse_rejects_short_packet() {
+        let buf = b"/live/device/get/parameter/value\0,iiif\0\0\0";
+        // Only 44 bytes — missing args
+        assert_eq!(try_parse_param_value_fast(buf), None);
+    }
+
+    #[test]
+    fn fast_parse_matches_rosc_decode() {
+        // Verify fast path produces the same result as rosc for the same packet.
+        let packet = build_param_value_packet(5, 2, 7, 0.333);
+
+        // Fast path
+        let fast = try_parse_param_value_fast(&packet).unwrap();
+
+        // rosc path
+        let (_, osc_packet) = rosc::decoder::decode_udp(&packet).unwrap();
+        let msg = match osc_packet {
+            rosc::OscPacket::Message(m) => m,
+            _ => panic!("expected message"),
+        };
+        let rosc_tid = osc_arg_int(&msg.args[0]).unwrap();
+        let rosc_did = osc_arg_int(&msg.args[1]).unwrap();
+        let rosc_pid = osc_arg_int(&msg.args[2]).unwrap();
+        let rosc_val = osc_arg_float(&msg.args[3]).unwrap();
+
+        assert_eq!(fast.0, rosc_tid);
+        assert_eq!(fast.1, rosc_did);
+        assert_eq!(fast.2, rosc_pid);
+        assert!((fast.3 - rosc_val).abs() < f32::EPSILON);
     }
 }
