@@ -8,6 +8,7 @@ use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
 use crate::tree::UITree;
+pub use manifold_core::ableton_mapping::AbletonMappingStatus;
 pub use manifold_core::effects::EnvelopeMode;
 
 // ── Shared layout constants ─────────────────────────────────────
@@ -29,6 +30,8 @@ pub(crate) const BEAT_DIV_SPACING: f32 = 1.0;
 pub(crate) const DRIVER_PAD_H: f32 = 5.0;
 pub(crate) const BEAT_DIV_COUNT: usize = 11;
 pub(crate) const WAVEFORM_COUNT: usize = 5;
+
+pub(crate) const ABL_CONFIG_HEIGHT: f32 = 24.0;
 
 pub(crate) const ENV_CONFIG_HEIGHT: f32 = 55.0;
 pub(crate) const ENV_ROW_HEIGHT: f32 = 22.0;
@@ -83,6 +86,20 @@ pub(crate) struct TrimHandleIds {
 
 pub(crate) struct EnvelopeTargetIds {
     pub(crate) target_bar_id: i32,
+}
+
+pub(crate) struct AbletonConfigIds {
+    pub(crate) _container_id: i32,
+    pub(crate) _status_dot_id: i32,
+    pub(crate) _macro_label_id: i32,
+}
+
+/// Display data for an Ableton-mapped parameter.
+/// Constructed in state_sync, consumed by effect_card and gen_param.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AbletonMappingDisplay {
+    pub macro_name: String,
+    pub status: AbletonMappingStatus,
 }
 
 // ── Shared modulation state ─────────────────────────────────────
@@ -910,4 +927,73 @@ pub(crate) fn check_driver_config_click(
         }
     }
     None
+}
+
+// ── Ableton config drawer ───────────────────────────────────────
+
+pub(crate) fn build_ableton_config(
+    tree: &mut UITree,
+    parent: i32,
+    x: f32,
+    y: f32,
+    w: f32,
+    display: &AbletonMappingDisplay,
+) -> AbletonConfigIds {
+    let container_id = tree.add_panel(
+        parent,
+        x,
+        y,
+        w,
+        ABL_CONFIG_HEIGHT,
+        UIStyle {
+            bg_color: color::CONFIG_BG_C32,
+            corner_radius: 2.0,
+            ..UIStyle::default()
+        },
+    ) as i32;
+
+    let dot_size = 6.0_f32;
+    let pad = 6.0_f32;
+    let dot_y = y + (ABL_CONFIG_HEIGHT - dot_size) * 0.5;
+    let dot_color = match display.status {
+        AbletonMappingStatus::Active => color::STATUS_DOT_GREEN,
+        AbletonMappingStatus::Dormant => color::STATUS_DOT_YELLOW,
+        AbletonMappingStatus::Ambiguous => color::STATUS_BAD,
+    };
+    let status_dot_id = tree.add_panel(
+        container_id,
+        x + pad,
+        dot_y,
+        dot_size,
+        dot_size,
+        UIStyle {
+            bg_color: dot_color,
+            corner_radius: dot_size * 0.5,
+            ..UIStyle::default()
+        },
+    ) as i32;
+
+    let label_x = x + pad + dot_size + 4.0;
+    let label_y = y + (ABL_CONFIG_HEIGHT - 12.0) * 0.5;
+    let label_w = w - pad * 2.0 - dot_size - 4.0;
+    let macro_label_id = tree.add_label(
+        container_id,
+        label_x,
+        label_y,
+        label_w,
+        12.0,
+        &display.macro_name,
+        UIStyle {
+            text_color: color::TEXT_DIMMED_C32,
+            font_size: color::FONT_CAPTION,
+            text_align: TextAlign::Left,
+            ..UIStyle::default()
+        },
+    ) as i32;
+
+    AbletonConfigIds {
+        _container_id: container_id,
+        _status_dot_id: status_dot_id,
+        _macro_label_id: macro_label_id,
+    }
 }

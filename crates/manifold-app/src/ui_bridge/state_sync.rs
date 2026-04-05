@@ -9,6 +9,7 @@ use manifold_ui::color;
 use manifold_ui::node::Color32;
 use manifold_ui::panels::effect_card::{EffectCardConfig, EffectParamInfo};
 use manifold_ui::panels::gen_param::{GenParamConfig, GenParamInfo, GenStringParamInfo};
+use manifold_ui::panels::param_slider_shared::AbletonMappingDisplay;
 use manifold_ui::panels::layer_header::LayerInfo;
 use manifold_ui::panels::viewport::TrackInfo;
 
@@ -1137,14 +1138,11 @@ fn effects_to_configs(
                         .ableton_mappings
                         .as_ref()
                         .and_then(|mappings| mappings.iter().find(|m| m.param_index == pi));
-                    let ableton_label = abl_mapping.map(|mapping| {
-                        use manifold_core::ableton_mapping::AbletonMappingStatus;
-                        let suffix = match mapping.status {
-                            AbletonMappingStatus::Active => "[ABL]",
-                            AbletonMappingStatus::Dormant => "[ABL-]",
-                            AbletonMappingStatus::Ambiguous => "[ABL?]",
-                        };
-                        format!("{} {suffix}", mapping.address.macro_name)
+                    let ableton_display = abl_mapping.map(|mapping| {
+                        AbletonMappingDisplay {
+                            macro_name: mapping.address.macro_name.clone(),
+                            status: mapping.status,
+                        }
                     });
                     let ableton_range =
                         abl_mapping.map(|m| (m.range_min, m.range_max));
@@ -1156,7 +1154,7 @@ fn effects_to_configs(
                         whole_numbers: pd.whole_numbers,
                         value_labels: pd.value_labels.clone(),
                         osc_address,
-                        ableton_label,
+                        ableton_display,
                         ableton_range,
                     }
                 })
@@ -1223,6 +1221,8 @@ fn effects_to_configs(
                 }
             }
 
+            let has_abl = params.iter().any(|p| p.ableton_display.is_some());
+
             Some(EffectCardConfig {
                 effect_index: i,
                 effect_id: fx.id.clone(),
@@ -1234,6 +1234,7 @@ fn effects_to_configs(
                 params,
                 has_drv,
                 has_env,
+                has_abl,
                 driver_active,
                 envelope_active,
                 trim_min,
@@ -1325,14 +1326,11 @@ fn gen_params_to_config(
                 .ableton_mappings
                 .as_ref()
                 .and_then(|mappings| mappings.iter().find(|m| m.param_index == pi));
-            let ableton_label = abl_mapping.map(|mapping| {
-                use manifold_core::ableton_mapping::AbletonMappingStatus;
-                let suffix = match mapping.status {
-                    AbletonMappingStatus::Active => "[ABL]",
-                    AbletonMappingStatus::Dormant => "[ABL-]",
-                    AbletonMappingStatus::Ambiguous => "[ABL?]",
-                };
-                format!("{} {suffix}", mapping.address.macro_name)
+            let ableton_display = abl_mapping.map(|mapping| {
+                AbletonMappingDisplay {
+                    macro_name: mapping.address.macro_name.clone(),
+                    status: mapping.status,
+                }
             });
             let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
             GenParamInfo {
@@ -1344,7 +1342,7 @@ fn gen_params_to_config(
                 is_toggle: pd.is_toggle,
                 value_labels: pd.value_labels.clone(),
                 osc_address,
-                ableton_label,
+                ableton_display,
                 ableton_range,
             }
         })

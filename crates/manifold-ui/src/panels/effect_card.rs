@@ -42,9 +42,8 @@ pub struct EffectParamInfo {
     /// When present, clicking the param label copies this address to clipboard.
     /// Unity: UIElementBuilder.CopyToClipboardLabel.
     pub osc_address: Option<String>,
-    /// When set, overrides the slider label with an Ableton mapping indicator.
-    /// e.g. "Filter [ABL]", "Filter [ABL-]", "Filter [ABL?]"
-    pub ableton_label: Option<String>,
+    /// When set, an Ableton mapping sub-section is shown below the slider.
+    pub ableton_display: Option<AbletonMappingDisplay>,
     /// Ableton trim range (range_min, range_max). When present, trim handles are shown.
     pub ableton_range: Option<(f32, f32)>,
 }
@@ -64,6 +63,8 @@ pub struct EffectCardConfig {
     pub has_drv: bool,
     /// Aggregate: true if ANY param has an active envelope.
     pub has_env: bool,
+    /// Aggregate: true if ANY param has an Ableton mapping.
+    pub has_abl: bool,
     /// Per-param: true if driver exists and is enabled (Unity: driverExpanded[]).
     pub driver_active: Vec<bool>,
     /// Per-param: true if envelope exists and is enabled (Unity: envelopeExpanded[]).
@@ -107,6 +108,8 @@ pub struct EffectCardState {
     pub has_drv: bool,
     /// Aggregate: any param has active envelope. Used for ENV badge.
     pub has_env: bool,
+    /// Aggregate: any param has Ableton mapping. Used for ABL badge.
+    pub has_abl: bool,
     /// Shared per-param modulation state (driver/envelope expansion, trim, target, ADSR, driver config).
     pub mod_state: ParamModState,
 }
@@ -116,6 +119,7 @@ impl EffectCardState {
         Self {
             has_drv: false,
             has_env: false,
+            has_abl: false,
             mod_state: ParamModState::allocate(param_count),
         }
     }
@@ -147,6 +151,7 @@ pub struct EffectCardPanel {
     cached_enabled: bool,
     cached_has_env: bool,
     cached_has_drv: bool,
+    cached_has_abl: bool,
 
     // Node IDs — header
     header_bg_id: i32,
@@ -154,6 +159,8 @@ pub struct EffectCardPanel {
     name_label_id: i32,
     toggle_btn_id: i32,
     chevron_btn_id: i32,
+    abl_badge_bg_id: i32,
+    abl_badge_text_id: i32,
     env_badge_bg_id: i32,
     env_badge_text_id: i32,
     drv_badge_bg_id: i32,
@@ -170,6 +177,7 @@ pub struct EffectCardPanel {
     target_ids: Vec<Option<EnvelopeTargetIds>>,
     envelope_range_ids: Vec<Option<TrimHandleIds>>,
     ableton_trim_ids: Vec<Option<TrimHandleIds>>,
+    ableton_config_ids: Vec<Option<AbletonConfigIds>>,
 
     // Per-param OSC addresses (for click-to-copy). Indexed by param index.
     osc_addresses: Vec<Option<String>>,
@@ -181,7 +189,7 @@ pub struct EffectCardPanel {
 
     // Param value cache (NaN = needs sync)
     param_cache: Vec<f32>,
-    // Per-param label cache — detects ableton_label changes without full rebuild
+    // Per-param label cache — detects name changes without full rebuild
     label_cache: Vec<Option<String>>,
 
     // Node range
@@ -207,6 +215,7 @@ impl EffectCardPanel {
             cached_enabled: true,
             cached_has_env: false,
             cached_has_drv: false,
+            cached_has_abl: false,
             border_id: -1,
             inner_bg_id: -1,
             header_bg_id: -1,
@@ -214,6 +223,8 @@ impl EffectCardPanel {
             name_label_id: -1,
             toggle_btn_id: -1,
             chevron_btn_id: -1,
+            abl_badge_bg_id: -1,
+            abl_badge_text_id: -1,
             env_badge_bg_id: -1,
             env_badge_text_id: -1,
             drv_badge_bg_id: -1,
@@ -228,6 +239,7 @@ impl EffectCardPanel {
             target_ids: Vec::new(),
             envelope_range_ids: Vec::new(),
             ableton_trim_ids: Vec::new(),
+            ableton_config_ids: Vec::new(),
             osc_addresses: Vec::new(),
             copied_flash: CopyToClipboardLabelState::default(),
             drag: ParamDragState::new(),
@@ -257,6 +269,7 @@ impl EffectCardPanel {
         // Sync modulation state from config (Unity: SyncFromDataModel)
         self.state.has_drv = config.has_drv;
         self.state.has_env = config.has_env;
+        self.state.has_abl = config.has_abl;
         self.state.mod_state.sync_from_config(
             n,
             &config.driver_active,
@@ -301,6 +314,8 @@ impl EffectCardPanel {
         self.envelope_range_ids.resize_with(n, || None);
         self.ableton_trim_ids = Vec::new();
         self.ableton_trim_ids.resize_with(n, || None);
+        self.ableton_config_ids = Vec::new();
+        self.ableton_config_ids.resize_with(n, || None);
         self.param_cache = vec![f32::NAN; n];
         self.label_cache = vec![None; n];
     }
@@ -392,6 +407,9 @@ impl EffectCardPanel {
                 {
                     h += ENV_CONFIG_HEIGHT;
                 }
+                if self.param_info[i].ableton_display.is_some() {
+                    h += ABL_CONFIG_HEIGHT;
+                }
             }
         }
         h + CARD_BOTTOM_MARGIN
@@ -401,9 +419,11 @@ impl EffectCardPanel {
         self.drag_icon_id
     }
 
-    /// Returns the Ableton label for `param_idx`, if that param is currently mapped.
-    pub fn param_ableton_label(&self, param_idx: usize) -> Option<&str> {
-        self.param_info.get(param_idx)?.ableton_label.as_deref()
+    /// Returns true if the param at `param_idx` has an Ableton mapping.
+    pub fn param_has_ableton_mapping(&self, param_idx: usize) -> bool {
+        self.param_info
+            .get(param_idx)
+            .is_some_and(|p| p.ableton_display.is_some())
     }
 
     /// Unity EffectCardBitmapPanel.IsDragHandle (line 228)
@@ -518,8 +538,9 @@ impl EffectCardPanel {
         let toggle_x = chevron_x - GAP - TOGGLE_W;
         let drv_x = toggle_x - GAP - BADGE_W;
         let env_x = drv_x - GAP - BADGE_W;
+        let abl_x = env_x - GAP - BADGE_W;
         let name_x = x + PADDING + DRAG_HANDLE_W + GAP;
-        let name_w = (env_x - GAP - name_x).max(10.0);
+        let name_w = (abl_x - GAP - name_x).max(10.0);
         let elem_y = y + (HEADER_HEIGHT - 16.0) * 0.5;
         let badge_y = y + (HEADER_HEIGHT - BADGE_H) * 0.5;
 
@@ -570,6 +591,37 @@ impl EffectCardPanel {
                 ..UIStyle::default()
             },
         ) as i32;
+
+        // ABL badge — visibility synced from state.has_abl via sync_badges()
+        let show_abl = self.state.has_abl;
+        self.abl_badge_bg_id = tree.add_panel(
+            self.header_bg_id,
+            abl_x,
+            badge_y,
+            BADGE_W,
+            BADGE_H,
+            UIStyle {
+                bg_color: color::ABL_BADGE_C32,
+                corner_radius: BADGE_RADIUS,
+                ..UIStyle::default()
+            },
+        ) as i32;
+        self.abl_badge_text_id = tree.add_label(
+            self.abl_badge_bg_id,
+            abl_x,
+            badge_y,
+            BADGE_W,
+            BADGE_H,
+            "ABL",
+            UIStyle {
+                text_color: color::TEXT_WHITE_C32,
+                font_size: color::FONT_CAPTION,
+                text_align: TextAlign::Center,
+                ..UIStyle::default()
+            },
+        ) as i32;
+        tree.set_visible(self.abl_badge_bg_id as u32, show_abl);
+        tree.set_visible(self.abl_badge_text_id as u32, show_abl);
 
         // ENV badge — visibility synced from state.has_env via sync_badges()
         let show_env = self.state.has_env;
@@ -634,6 +686,7 @@ impl EffectCardPanel {
         tree.set_visible(self.drv_badge_text_id as u32, show_drv);
         self.cached_has_env = show_env;
         self.cached_has_drv = show_drv;
+        self.cached_has_abl = show_abl;
         self.cached_enabled = self.enabled;
 
         // Toggle button (ON/OFF)
@@ -686,17 +739,13 @@ impl EffectCardPanel {
                 info.value_labels.as_deref(),
             );
 
-            // Param slider — use Ableton label override when mapped
-            let label = info
-                .ableton_label
-                .as_deref()
-                .unwrap_or(&info.name);
+            // Param slider — always shows MANIFOLD param name
             let slider_rect = Rect::new(x + PADDING, cy, slider_w, ROW_HEIGHT);
             self.slider_ids[i] = Some(BitmapSlider::build(
                 tree,
                 parent,
                 slider_rect,
-                Some(label),
+                Some(&info.name),
                 norm,
                 &val_text,
                 &SliderColors::default_slider(),
@@ -896,6 +945,19 @@ impl EffectCardPanel {
                 ));
                 cy += DRIVER_CONFIG_HEIGHT;
             }
+
+            // Ableton config drawer (auto-shows when mapping exists)
+            if let Some(ref display) = self.param_info[i].ableton_display {
+                self.ableton_config_ids[i] = Some(build_ableton_config(
+                    tree,
+                    parent,
+                    x + PADDING,
+                    cy,
+                    config_w,
+                    display,
+                ));
+                cy += ABL_CONFIG_HEIGHT;
+            }
         }
     }
 
@@ -933,9 +995,15 @@ impl EffectCardPanel {
         }
 
         // Badge visibility dirty-check (Unity: ApplyModulationVisuals)
-        if self.state.has_env != self.cached_has_env || self.state.has_drv != self.cached_has_drv {
+        if self.state.has_env != self.cached_has_env
+            || self.state.has_drv != self.cached_has_drv
+            || self.state.has_abl != self.cached_has_abl
+        {
             self.cached_has_env = self.state.has_env;
             self.cached_has_drv = self.state.has_drv;
+            self.cached_has_abl = self.state.has_abl;
+            tree.set_visible(self.abl_badge_bg_id as u32, self.cached_has_abl);
+            tree.set_visible(self.abl_badge_text_id as u32, self.cached_has_abl);
             tree.set_visible(self.env_badge_bg_id as u32, self.cached_has_env);
             tree.set_visible(self.env_badge_text_id as u32, self.cached_has_env);
             tree.set_visible(self.drv_badge_bg_id as u32, self.cached_has_drv);
@@ -950,16 +1018,15 @@ impl EffectCardPanel {
         // Per-param slider values + label (dirty-check via param_cache / label_cache)
         for (i, &val) in values.iter().enumerate().take(self.param_info.len()) {
             let info = &self.param_info[i];
-            let new_label = info.ableton_label.clone().or_else(|| Some(info.name.clone()));
+            let new_label = Some(info.name.clone());
 
-            // Label dirty-check — catches ableton_label appearing/disappearing
+            // Label dirty-check
             if self.label_cache[i] != new_label {
-                self.label_cache[i] = new_label.clone();
+                self.label_cache[i] = new_label;
                 if let Some(ref ids) = self.slider_ids[i]
                     && ids.label >= 0
                 {
-                    let text = new_label.as_deref().unwrap_or(&info.name);
-                    tree.set_text(ids.label as u32, text);
+                    tree.set_text(ids.label as u32, &info.name);
                 }
             }
 
@@ -1693,7 +1760,7 @@ mod tests {
                     whole_numbers: true,
                     value_labels: None,
                     osc_address: None,
-                    ableton_label: None,
+                    ableton_display: None,
                     ableton_range: None,
                 },
                 EffectParamInfo {
@@ -1704,12 +1771,13 @@ mod tests {
                     whole_numbers: false,
                     value_labels: None,
                     osc_address: None,
-                    ableton_label: None,
+                    ableton_display: None,
                     ableton_range: None,
                 },
             ],
             has_drv: false,
             has_env: false,
+            has_abl: false,
             driver_active: vec![false; n],
             envelope_active: vec![false; n],
             trim_min: vec![0.0; n],

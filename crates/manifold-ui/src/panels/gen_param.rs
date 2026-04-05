@@ -39,8 +39,8 @@ pub struct GenParamInfo {
     /// When present, clicking the param label copies this address to clipboard.
     /// Unity: UIElementBuilder.CopyToClipboardLabel.
     pub osc_address: Option<String>,
-    /// When set, overrides the slider label with an Ableton mapping indicator.
-    pub ableton_label: Option<String>,
+    /// When set, an Ableton mapping sub-section is shown below the slider.
+    pub ableton_display: Option<AbletonMappingDisplay>,
     /// Ableton trim range (range_min, range_max). When present, trim handles are shown.
     pub ableton_range: Option<(f32, f32)>,
 }
@@ -133,6 +133,7 @@ pub struct GenParamPanel {
     target_ids: Vec<Option<EnvelopeTargetIds>>,
     envelope_range_ids: Vec<Option<TrimHandleIds>>,
     ableton_trim_ids: Vec<Option<TrimHandleIds>>,
+    ableton_config_ids: Vec<Option<AbletonConfigIds>>,
 
     // String params (text fields below sliders)
     string_param_info: Vec<GenStringParamInfo>,
@@ -182,6 +183,7 @@ impl GenParamPanel {
             target_ids: Vec::new(),
             envelope_range_ids: Vec::new(),
             ableton_trim_ids: Vec::new(),
+            ableton_config_ids: Vec::new(),
             string_param_info: Vec::new(),
             string_param_btn_ids: Vec::new(),
             osc_addresses: Vec::new(),
@@ -249,6 +251,8 @@ impl GenParamPanel {
         self.envelope_range_ids.resize_with(n, || None);
         self.ableton_trim_ids = Vec::new();
         self.ableton_trim_ids.resize_with(n, || None);
+        self.ableton_config_ids = Vec::new();
+        self.ableton_config_ids.resize_with(n, || None);
         self.param_cache = vec![f32::NAN; n];
         self.toggle_cache = vec![false; n];
         self.label_cache = vec![None; n];
@@ -295,6 +299,9 @@ impl GenParamPanel {
                     {
                         h += ENV_CONFIG_HEIGHT;
                     }
+                    if info.ableton_display.is_some() {
+                        h += ABL_CONFIG_HEIGHT;
+                    }
                 }
             }
             if !self.param_info.is_empty() {
@@ -309,8 +316,10 @@ impl GenParamPanel {
     }
 
     /// Returns the Ableton label for `param_idx`, if that param is currently mapped.
-    pub fn param_ableton_label(&self, param_idx: usize) -> Option<&str> {
-        self.param_info.get(param_idx)?.ableton_label.as_deref()
+    pub fn param_has_ableton_mapping(&self, param_idx: usize) -> bool {
+        self.param_info
+            .get(param_idx)
+            .is_some_and(|p| p.ableton_display.is_some())
     }
     pub fn set_collapsed(&mut self, v: bool) {
         self.is_collapsed = v;
@@ -525,16 +534,12 @@ impl GenParamPanel {
                         info.whole_numbers,
                         info.value_labels.as_deref(),
                     );
-                    let label = info
-                        .ableton_label
-                        .as_deref()
-                        .unwrap_or(&info.name);
                     let slider_rect = Rect::new(cx, cy, slider_w, ROW_HEIGHT);
                     self.slider_ids[i] = Some(BitmapSlider::build(
                         tree,
                         -1,
                         slider_rect,
-                        Some(label),
+                        Some(&info.name),
                         norm,
                         &val_text,
                         &SliderColors::default_slider(),
@@ -727,6 +732,14 @@ impl GenParamPanel {
                         ));
                         cy += DRIVER_CONFIG_HEIGHT;
                     }
+
+                    // Ableton config drawer (auto-shows when mapping exists)
+                    if let Some(ref display) = self.param_info[i].ableton_display {
+                        self.ableton_config_ids[i] = Some(build_ableton_config(
+                            tree, -1, cx, cy, config_w, display,
+                        ));
+                        cy += ABL_CONFIG_HEIGHT;
+                    }
                 }
             }
 
@@ -773,16 +786,15 @@ impl GenParamPanel {
         for (i, &val) in values.iter().enumerate().take(self.param_info.len()) {
             let info = &self.param_info[i];
 
-            // Label dirty-check — catches ableton_label appearing/disappearing
+            // Label dirty-check
             if !info.is_toggle {
-                let new_label = info.ableton_label.clone().or_else(|| Some(info.name.clone()));
+                let new_label = Some(info.name.clone());
                 if self.label_cache[i] != new_label {
-                    self.label_cache[i] = new_label.clone();
+                    self.label_cache[i] = new_label;
                     if let Some(ref ids) = self.slider_ids[i]
                         && ids.label >= 0
                     {
-                        let text = new_label.as_deref().unwrap_or(&info.name);
-                        tree.set_text(ids.label as u32, text);
+                        tree.set_text(ids.label as u32, &info.name);
                     }
                 }
             }
@@ -1460,7 +1472,7 @@ mod tests {
                     is_toggle: false,
                     value_labels: None,
                     osc_address: None,
-                    ableton_label: None,
+                    ableton_display: None,
                     ableton_range: None,
                 },
                 GenParamInfo {
@@ -1472,7 +1484,7 @@ mod tests {
                     is_toggle: true,
                     value_labels: None,
                     osc_address: None,
-                    ableton_label: None,
+                    ableton_display: None,
                     ableton_range: None,
                 },
                 GenParamInfo {
@@ -1484,7 +1496,7 @@ mod tests {
                     is_toggle: false,
                     value_labels: None,
                     osc_address: None,
-                    ableton_label: None,
+                    ableton_display: None,
                     ableton_range: None,
                 },
             ],
