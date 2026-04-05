@@ -307,9 +307,14 @@ fn compute_layer_row(
     y += BTN_H + 2.0;
 
     // ── Collapsed non-group: skip detail controls ──
+    let sep_h = if is_group {
+        color::GROUP_SEPARATOR_HEIGHT
+    } else {
+        SEP_H
+    };
     d.has_expanded_controls = !is_collapsed || is_group;
     if !d.has_expanded_controls {
-        d.separator = Rect::new(0.0, y_offset + height - SEP_H, w, SEP_H);
+        d.separator = Rect::new(0.0, y_offset + height - sep_h, w, sep_h);
         return d;
     }
 
@@ -360,7 +365,7 @@ fn compute_layer_row(
     }
 
     let _ = y; // suppress unused
-    d.separator = Rect::new(0.0, y_offset + height - SEP_H, w, SEP_H);
+    d.separator = Rect::new(0.0, y_offset + height - sep_h, w, sep_h);
     d
 }
 
@@ -1068,8 +1073,13 @@ impl LayerHeaderPanel {
             &layer.blend_mode,
         ) as i32;
 
-        // Separator
+        // Separator — thicker for group layers
         let sepr = s(row.separator);
+        let sep_color = if layer.is_group {
+            color::GROUP_SEPARATOR_COLOR
+        } else {
+            SEP_COLOR
+        };
         ids.separator = tree.add_panel(
             clip_parent,
             sepr.x,
@@ -1077,7 +1087,7 @@ impl LayerHeaderPanel {
             sepr.width,
             sepr.height,
             UIStyle {
-                bg_color: SEP_COLOR,
+                bg_color: sep_color,
                 ..UIStyle::default()
             },
         ) as i32;

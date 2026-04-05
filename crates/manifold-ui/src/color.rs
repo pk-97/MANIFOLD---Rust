@@ -69,6 +69,9 @@ pub const BUTTON_DIM: Color32 = Color32::new(71, 71, 74, 255);
 pub const BUTTON_HIGHLIGHTED: Color32 = Color32::new(87, 87, 89, 255);
 pub const BUTTON_PRESSED: Color32 = Color32::new(46, 46, 48, 255);
 pub const SEPARATOR_COLOR: Color32 = Color32::new(15, 15, 17, 255);
+pub const TRACK_SEPARATOR_HEIGHT: f32 = 2.0;
+pub const GROUP_SEPARATOR_HEIGHT: f32 = 3.0;
+pub const GROUP_SEPARATOR_COLOR: Color32 = Color32::new(10, 10, 12, 255);
 pub const DIVIDER_COLOR: Color32 = Color32::new(56, 56, 60, 255);
 pub const HANDLE_BG: Color32 = Color32::new(59, 59, 61, 255);
 pub const CHEVRON_COLOR: Color32 = Color32::new(102, 102, 107, 179);
@@ -197,6 +200,9 @@ pub const GRID_BAR_LINE: Color32 = Color32::new(107, 107, 112, 128);
 pub const GRID_BEAT_LINE: Color32 = Color32::new(82, 82, 87, 77);
 pub const GRID_SUBDIVISION_LINE: Color32 = Color32::new(71, 71, 77, 38);
 pub const GRID_SIXTEENTH_LINE: Color32 = Color32::new(71, 71, 77, 20);
+
+/// Alternating bar/beat tint band (subtle lighten on every other interval).
+pub const GRID_TINT_BAND: Color32 = Color32::new(255, 255, 255, 8);
 
 // ── Layer color picker palette ──────────────────────────────────────
 // 7 columns × 10 rows = 70 high-contrast colors. Modeled after Ableton's
@@ -604,7 +610,7 @@ pub const LAYER_CTRL_ROW_STEP: f32 = 23.0;
 pub const LAYER_CTRL_MUTE_SOLO_BTN_WIDTH: f32 = 28.0;
 pub const LAYER_CTRL_BTN_HEIGHT: f32 = 18.0;
 pub const LAYER_CTRL_INFO_ROW_HEIGHT: f32 = 14.0;
-pub const LAYER_CTRL_SEPARATOR_HEIGHT: f32 = 1.0;
+pub const LAYER_CTRL_SEPARATOR_HEIGHT: f32 = 2.0;
 pub const LAYER_CTRL_RIGHT_GUTTER: f32 = 10.0;
 pub const LAYER_CTRL_TOP_ROW_GAP: f32 = 2.0;
 pub const LAYER_CTRL_FOLDER_BTN_WIDTH: f32 = 42.0;

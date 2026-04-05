@@ -1713,17 +1713,22 @@ impl TimelineViewportPanel {
             // Collapsed group preview is now bitmap-based — repainted in
             // repaint_collapsed_groups() and rendered via the layer bitmap GPU path.
 
-            // Bottom separator (only if bottom edge is visible)
-            let sep_y = y + h - 1.0;
-            if sep_y >= tr_top && sep_y < tr_bottom {
+            // Bottom separator — thicker for group boundaries
+            let (sep_h, sep_color) = if track.is_group {
+                (color::GROUP_SEPARATOR_HEIGHT, color::GROUP_SEPARATOR_COLOR)
+            } else {
+                (color::TRACK_SEPARATOR_HEIGHT, color::SEPARATOR_COLOR)
+            };
+            let sep_y = y + h - sep_h;
+            if sep_y + sep_h > tr_top && sep_y < tr_bottom {
                 tree.add_panel(
                     -1,
                     tr.x,
-                    sep_y,
+                    sep_y.max(tr_top),
                     tr.width,
-                    1.0,
+                    (sep_y + sep_h).min(tr_bottom) - sep_y.max(tr_top),
                     UIStyle {
-                        bg_color: color::SEPARATOR_COLOR,
+                        bg_color: sep_color,
                         ..UIStyle::default()
                     },
                 );

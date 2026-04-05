@@ -339,6 +339,17 @@ impl LayerBitmapRenderer {
             }
         }
 
+        // Paint alternating tint bands BEFORE grid lines and clips
+        paint_tint_bands(
+            &mut self.pixel_buffer,
+            tex_w,
+            tex_h,
+            viewport_min_beat,
+            ppb,
+            scaled_ppb,
+            time_sig_numerator,
+        );
+
         // Paint grid lines BEFORE clips (Unity line 201)
         // Grid must be repainted across full width (even after shift) because
         // grid lines don't align to pixel boundaries after arbitrary scroll.
@@ -542,6 +553,69 @@ fn compute_clip_pixel_rect(
 /// Matches GridOverlay's subdivision logic so clips occlude grid lines.
 /// Unity: LayerBitmapRenderer.PaintGridLines (lines 352-425).
 ///
+/// Paint alternating tint bands behind grid lines and clips.
+/// Adapts to zoom: at low zoom tints alternate per bar, at high zoom per beat.
+/// Matches Ableton's zebra-stripe pattern.
+///
+/// IMPORTANT: writes tint color directly (not alpha_blend) to avoid
+/// accumulation on pixel-shifted frames. Also clears non-tinted columns
+/// to transparent so shifted stale data doesn't persist.
+fn paint_tint_bands(
+    buffer: &mut [Color32],
+    tex_w: usize,
+    tex_h: usize,
+    viewport_min_beat: f32,
+    logical_ppb: f32,
+    scaled_ppb: f32,
+    time_sig_numerator: u32,
+) {
+    if scaled_ppb < 1.0 || time_sig_numerator < 1 {
+        return;
+    }
+
+    let beats_per_bar = time_sig_numerator as f32;
+    let tint = color::GRID_TINT_BAND;
+
+    // Adaptive interval: use beats when zoomed in enough, bars when zoomed out
+    let use_beats = logical_ppb >= 20.0;
+    let interval = if use_beats { 1.0 } else { beats_per_bar };
+
+    // Find the first interval boundary at or before viewport start
+    let first = (viewport_min_beat / interval).floor() * interval;
+
+    let mut beat = first;
+    loop {
+        let px_start = ((beat - viewport_min_beat) * scaled_ppb).round() as i32;
+        let px_end = ((beat + interval - viewport_min_beat) * scaled_ppb).round() as i32;
+
+        if px_start >= tex_w as i32 {
+            break;
+        }
+
+        // Determine which interval index this is (for even/odd)
+        let idx = (beat / interval).round() as i32;
+        let x0 = px_start.max(0) as usize;
+        let x1 = (px_end as usize).min(tex_w);
+        if x0 < x1 {
+            let color = if idx % 2 != 0 {
+                tint
+            } else {
+                Color32::TRANSPARENT
+            };
+            // Direct write — no alpha_blend, avoids accumulation on
+            // pixel-shifted frames.
+            for y in 0..tex_h {
+                let row = y * tex_w;
+                for x in x0..x1 {
+                    buffer[row + x] = color;
+                }
+            }
+        }
+
+        beat += interval;
+    }
+}
+
 /// `logical_ppb`: logical pixels-per-beat (for subdivision threshold decisions).
 /// `scaled_ppb`: texture pixels-per-beat (for pixel positioning in the buffer).
 fn paint_grid_lines(
