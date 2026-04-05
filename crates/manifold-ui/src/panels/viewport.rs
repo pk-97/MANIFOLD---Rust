@@ -1042,6 +1042,21 @@ impl TimelineViewportPanel {
         Beats(self.beats_per_bar as f64)
     }
 
+    /// At extreme zoom-out, bar lines are too dense. Returns the number of
+    /// bars to skip between visible bar lines (1 = show every bar).
+    fn bar_skip(&self) -> u32 {
+        let bar_px = self.mapper.pixels_per_beat() * self.beats_per_bar as f32;
+        if bar_px >= 8.0 {
+            1
+        } else if bar_px >= 4.0 {
+            2
+        } else if bar_px >= 2.0 {
+            4
+        } else {
+            8
+        }
+    }
+
     // ── Grid subdivision ──────────────────────────────────────────
 
     /// Determine visual grid subdivision level based on zoom.
@@ -1713,6 +1728,21 @@ impl TimelineViewportPanel {
         let tr_top = tr.y;
         let tr_bottom = tr.y + tr.height;
 
+        // Top separator: border between ruler and first track
+        if !self.tracks.is_empty() {
+            tree.add_panel(
+                -1,
+                tr.x,
+                tr_top,
+                tr.width,
+                color::TRACK_SEPARATOR_HEIGHT,
+                UIStyle {
+                    bg_color: color::SEPARATOR_COLOR,
+                    ..UIStyle::default()
+                },
+            );
+        }
+
         // Pre-allocate ALL tracks (including off-screen) for update-in-place.
         // Off-screen tracks get set_visible(false).
         for (i, track) in self.tracks.iter().enumerate() {
@@ -1846,6 +1876,7 @@ impl TimelineViewportPanel {
             bpb * n_bars
         };
 
+        let bar_skip = self.bar_skip();
         let start = (min_beat / tick_step).floor() * tick_step;
         let mut beat = start;
         let mut count = 0;
@@ -1857,6 +1888,15 @@ impl TimelineViewportPanel {
                 let is_bar = (beat % bpb).abs() < 0.001;
                 let is_beat = (beat % 1.0).abs() < 0.001;
                 let is_label_beat = (beat % label_step).abs() < 0.001;
+
+                // Skip intermediate bars at extreme zoom-out
+                if is_bar && bar_skip > 1 {
+                    let bar_num = (beat / bpb).round() as u32;
+                    if !bar_num.is_multiple_of(bar_skip) {
+                        beat += tick_step;
+                        continue;
+                    }
+                }
 
                 // Labeled bars get taller ticks for visual anchoring
                 let tick_h = if is_label_beat && is_bar {
@@ -2172,6 +2212,7 @@ impl TimelineViewportPanel {
             bpb * n_bars
         };
 
+        let bar_skip = self.bar_skip();
         let ruler_bottom = self.ruler_rect.y + self.ruler_rect.height;
         let start = (min_beat / tick_step).floor() * tick_step;
         let label_y = self.ruler_rect.y + 2.0;
@@ -2186,6 +2227,17 @@ impl TimelineViewportPanel {
         while beat <= max_beat && tick_count < MAX_RULER_TICKS {
             let px = self.beat_to_pixel(Beats::from_f32(beat));
             if px >= self.ruler_rect.x && px <= self.ruler_rect.x_max() {
+                let is_bar = (beat % bpb).abs() < 0.001;
+
+                // Skip intermediate bars at extreme zoom-out
+                if is_bar && bar_skip > 1 {
+                    let bar_num = (beat / bpb).round() as u32;
+                    if !bar_num.is_multiple_of(bar_skip) {
+                        beat += tick_step;
+                        continue;
+                    }
+                }
+
                 tick_count += 1;
 
                 if (beat % label_step).abs() < 0.001
@@ -2221,6 +2273,16 @@ impl TimelineViewportPanel {
             let px = self.beat_to_pixel(Beats::from_f32(beat));
             if px >= self.ruler_rect.x && px <= self.ruler_rect.x_max() {
                 let is_bar = (beat % bpb).abs() < 0.001;
+
+                // Skip intermediate bars at extreme zoom-out
+                if is_bar && bar_skip > 1 {
+                    let bar_num = (beat / bpb).round() as u32;
+                    if !bar_num.is_multiple_of(bar_skip) {
+                        beat += tick_step;
+                        continue;
+                    }
+                }
+
                 let is_beat = (beat % 1.0).abs() < 0.001;
                 let is_label_beat = (beat % label_step).abs() < 0.001;
 

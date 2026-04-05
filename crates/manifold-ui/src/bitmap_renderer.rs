@@ -659,6 +659,20 @@ fn paint_grid_lines(
     };
     let show_beat_lines = logical_ppb >= 6.0;
 
+    // At very zoomed-out levels, bar lines themselves become too dense.
+    // Skip bars to maintain minimum spacing (adaptive multi-bar grid).
+    let beats_per_bar = time_sig_numerator as f32;
+    let bar_px = logical_ppb * beats_per_bar;
+    let bar_skip: u32 = if bar_px >= 8.0 {
+        1 // Show every bar
+    } else if bar_px >= 4.0 {
+        2 // Every 2 bars
+    } else if bar_px >= 2.0 {
+        4 // Every 4 bars
+    } else {
+        8 // Every 8 bars
+    };
+
     let bar_color = color::GRID_BAR_LINE;
     let beat_color = color::GRID_BEAT_LINE;
     let eighth_color = color::GRID_SUBDIVISION_LINE;
@@ -671,7 +685,6 @@ fn paint_grid_lines(
     }
 
     // Find the first subdivision at or before viewport start
-    let beats_per_bar = time_sig_numerator as f32;
     let step = 1.0 / subdivisions_per_beat as f32;
     let first_subdiv_beat =
         (viewport_min_beat * subdivisions_per_beat as f32).floor() / subdivisions_per_beat as f32;
@@ -694,6 +707,15 @@ fn paint_grid_lines(
         let is_beat = (subdiv_beat - subdiv_beat.round()).abs() < 0.001;
 
         let (line_color, line_width) = if is_bar {
+            // At extreme zoom-out, skip intermediate bars
+            if bar_skip > 1 {
+                let bar_num =
+                    (subdiv_beat / beats_per_bar).round() as u32;
+                if !bar_num.is_multiple_of(bar_skip) {
+                    subdiv_beat += step;
+                    continue;
+                }
+            }
             (bar_color, 2.min(tex_w as i32 - col))
         } else if is_beat {
             if !show_beat_lines {
