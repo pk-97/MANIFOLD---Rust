@@ -1352,7 +1352,7 @@ impl Panel for InspectorCompositePanel {
         ) as i32;
 
         // Macros height for column offset — panel built AFTER columns for z-order
-        let macros_h = MacrosPanel::height();
+        let macros_h = self.macros_panel.height();
         let columns_y = rect.y + macros_h + 2.0; // 2px gap
         let columns_h = rect.height - macros_h - 2.0;
         self.columns_y = columns_y;

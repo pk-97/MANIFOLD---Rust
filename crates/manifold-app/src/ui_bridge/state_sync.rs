@@ -585,7 +585,23 @@ pub fn push_state(
             }
         })
         .collect();
-    // Set Ableton trim ranges before sync so build can use them.
+    // Set Ableton display data + trim ranges before sync so build can use them.
+    let macro_abl_displays: Vec<Option<AbletonMappingDisplay>> = project
+        .settings
+        .macro_bank
+        .slots
+        .iter()
+        .map(|slot| {
+            slot.ableton_mapping.as_ref().map(|m| AbletonMappingDisplay {
+                macro_name: m.address.macro_name.clone(),
+                status: m.status,
+                inverted: m.inverted,
+            })
+        })
+        .collect();
+    ui.inspector
+        .macros_panel_mut()
+        .set_ableton_displays(&macro_abl_displays);
     let macro_abl_ranges: Vec<Option<(f32, f32)>> = project
         .settings
         .macro_bank

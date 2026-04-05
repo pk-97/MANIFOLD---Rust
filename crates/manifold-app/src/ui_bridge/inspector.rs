@@ -2932,6 +2932,26 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
 
+        PanelAction::AbletonMacroInvertToggle(slot_idx) => {
+            let slot_idx = *slot_idx;
+            if let Some(slot) = project.settings.macro_bank.slots.get_mut(slot_idx)
+                && let Some(m) = &mut slot.ableton_mapping
+            {
+                m.inverted = !m.inverted;
+            }
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::MutateProject(Box::new(move |p| {
+                    if let Some(slot) = p.settings.macro_bank.slots.get_mut(slot_idx)
+                        && let Some(m) = &mut slot.ableton_mapping
+                    {
+                        m.inverted = !m.inverted;
+                    }
+                })),
+            );
+            DispatchResult::handled()
+        }
+
         _ => DispatchResult::unhandled(),
     }
 }

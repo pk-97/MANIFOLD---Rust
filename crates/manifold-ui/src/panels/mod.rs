@@ -290,6 +290,7 @@ pub enum PanelAction {
     // Ableton config actions
     AbletonInvertToggle(usize, usize),    // fx_idx, param_idx
     AbletonGenInvertToggle(usize),        // param_idx
+    AbletonMacroInvertToggle(usize),      // slot_idx
 
     // Reset macro from context menu (distinct from MacroRightClick to avoid re-triggering dropdown)
     MacroReset(usize), // macro_idx — reset to 0 from context menu

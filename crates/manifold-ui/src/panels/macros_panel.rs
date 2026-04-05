@@ -6,7 +6,9 @@
 use super::PanelAction;
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_slider_shared::{
-    TrimHandleIds, build_trim_handles_explicit, OVERLAY_INSET, TRIM_BAR_W,
+    ABL_CONFIG_HEIGHT, AbletonConfigIds, AbletonConfigClick, AbletonMappingDisplay,
+    TrimHandleIds, build_ableton_config, build_trim_handles_explicit,
+    check_ableton_config_click, OVERLAY_INSET, TRIM_BAR_W,
 };
 use crate::color;
 use crate::node::*;
@@ -41,6 +43,10 @@ pub struct MacrosPanel {
     copied_flash: CopyToClipboardLabelState,
     /// Ableton trim handle node IDs per macro slot.
     ableton_trim_ids: [Option<TrimHandleIds>; MACRO_COUNT],
+    /// Ableton config drawer node IDs per macro slot (status dot + name + INV).
+    ableton_config_ids: [Option<AbletonConfigIds>; MACRO_COUNT],
+    /// Cached Ableton display data per slot (for build).
+    ableton_displays: [Option<AbletonMappingDisplay>; MACRO_COUNT],
     /// Cached Ableton range per slot (for drag updates + build).
     ableton_ranges: [Option<(f32, f32)>; MACRO_COUNT],
     /// Which macro slot's Ableton trim bar is being dragged (-1 = none).
@@ -70,6 +76,8 @@ impl MacrosPanel {
             node_count: 0,
             copied_flash: CopyToClipboardLabelState::default(),
             ableton_trim_ids: std::array::from_fn(|_| None),
+            ableton_config_ids: std::array::from_fn(|_| None),
+            ableton_displays: std::array::from_fn(|_| None),
             ableton_ranges: [None; MACRO_COUNT],
             dragging_ableton_trim: -1,
             dragging_ableton_trim_is_min: false,
@@ -77,15 +85,30 @@ impl MacrosPanel {
     }
 
     /// Total height of the macros panel (for inspector column Y offset).
-    pub fn height() -> f32 {
-        PAD_TOP
-            + MACRO_COUNT as f32 * ROW_HEIGHT
-            + (MACRO_COUNT - 1) as f32 * ROW_SPACING
-            + PAD_BOTTOM
+    /// Dynamic: includes Ableton config drawers for mapped slots.
+    pub fn height(&self) -> f32 {
+        let mut h = PAD_TOP + PAD_BOTTOM;
+        for i in 0..MACRO_COUNT {
+            h += ROW_HEIGHT;
+            if self.ableton_displays[i].is_some() {
+                h += ABL_CONFIG_HEIGHT;
+            }
+            if i + 1 < MACRO_COUNT {
+                h += ROW_SPACING;
+            }
+        }
+        h
     }
 
     pub fn first_node(&self) -> usize {
         self.first_node
+    }
+
+    /// Set Ableton display data per macro slot (call before build).
+    pub fn set_ableton_displays(&mut self, displays: &[Option<AbletonMappingDisplay>]) {
+        for (i, d) in displays.iter().enumerate().take(MACRO_COUNT) {
+            self.ableton_displays[i] = d.clone();
+        }
     }
 
     /// Set Ableton trim ranges per macro slot (call before build or sync).
@@ -205,7 +228,21 @@ impl MacrosPanel {
                 self.ableton_trim_ids[i] = None;
             }
 
-            cy += ROW_HEIGHT + ROW_SPACING;
+            cy += ROW_HEIGHT;
+
+            // Ableton config drawer (status dot + macro name + INV button)
+            if let Some(ref display) = self.ableton_displays[i] {
+                self.ableton_config_ids[i] = Some(build_ableton_config(
+                    tree, -1, inner_x, cy, inner_w, display,
+                ));
+                cy += ABL_CONFIG_HEIGHT;
+            } else {
+                self.ableton_config_ids[i] = None;
+            }
+
+            if i + 1 < MACRO_COUNT {
+                cy += ROW_SPACING;
+            }
         }
 
         self.node_count = tree.count() - self.first_node;
@@ -320,8 +357,15 @@ impl MacrosPanel {
         Vec::new()
     }
 
-    /// Handle click — label click copies OSC address to clipboard.
+    /// Handle click — label click copies OSC address, INV button toggles invert.
     pub fn handle_click(&mut self, node_id: u32) -> Vec<PanelAction> {
+        // Ableton config INV button
+        if let Some((slot_idx, AbletonConfigClick::Invert)) =
+            check_ableton_config_click(node_id as i32, &self.ableton_config_ids)
+        {
+            return vec![PanelAction::AbletonMacroInvertToggle(slot_idx)];
+        }
+
         for (i, s) in self.sliders.iter().enumerate() {
             if let Some(ids) = s.ids()
                 && ids.label >= 0
