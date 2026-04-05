@@ -1,16 +1,14 @@
 ---
-name: manifold-gpu Native Backend Architecture
-description: Decision to build manifold-gpu crate — native Metal content thread, wgpu UI thread + Windows fallback. Full phase roadmap through raw Metal optimization.
+name: manifold-gpu Native Metal Architecture
+description: manifold-gpu crate architecture — native Metal on all threads, zero wgpu. Phase roadmap through raw Metal optimization.
 type: project
 ---
 
 ## Decision: 2026-03-25
 
-Replace wgpu on the content thread hot path with a purpose-built `manifold-gpu` crate. Native Metal on macOS, wgpu backend for Windows. UI thread stays wgpu on all platforms.
+Purpose-built `manifold-gpu` crate wrapping the `metal` crate directly. Native Metal on all threads (content + UI). Zero wgpu anywhere in the codebase.
 
-**Why:** Every optimization since Phase 2 has been bypassing wgpu (hal encoding, shared-memory buffers, MTLSharedEvent, compute migration). The hybrid wgpu+hal architecture adds snatch locks, dual pipeline creation, encoder split constraints, and `#[cfg]` branches everywhere. Professional tools (Resolume Arena, TouchDesigner) use native GPU APIs directly.
-
-**Why:** Windows is a confirmed shipping target (VJ community uses high-end GPUs on Windows).
+**Why:** wgpu submission overhead was 8-15ms. Native Metal brought it to 4.5-5.5ms. Professional tools (Resolume Arena, TouchDesigner) use native GPU APIs directly.
 
 ## Architecture
 
@@ -29,20 +27,18 @@ manifold-gpu/
 │   ├── heap.rs         — GpuHeap (MTLHeap — memoryless, aliasing, lossy compression)
 │   ├── mps.rs          — MPS blur, Sobel, scale kernels
 │   ├── metalfx.rs      — MetalFX Spatial/Temporal scalers
-│   └── archive.rs      — MTLBinaryArchive (pipeline caching)
-└── wgpu_backend/       — wgpu fallback (Windows/Linux + macOS UI thread)
-    ├── device.rs       — same API, backed by wgpu::Device
-    ├── encoder.rs      — same API, backed by wgpu::CommandEncoder
-    └── ...
+│   ├── msl_cache.rs    — WGSL→MSL compilation cache on disk
+│   ├── vsync.rs        — GpuVsyncSignal / GpuVsyncWaiter (CVDisplayLink)
+│   └── archive.rs      — MTLBinaryArchive (compiled pipeline caching)
 ```
 
 **Compile-time selection:** `#[cfg(target_os = "macos")] pub use metal::*;` — consumer code uses `GpuDevice`, `GpuTexture`, etc. without knowing the backend. Zero overhead.
 
 **API surface:** ~15 methods total. create_texture, create_buffer, create_pipeline, create_sampler, dispatch_compute, begin/end_render_pass, copy_texture, clear_texture, submit, signal_event. Purpose-built for MANIFOLD, not general-purpose.
 
-**Shaders:** WGSL everywhere. On Metal: WGSL → naga → SPIR-V → spirv-opt (22 optimization passes) → SPIRV-Cross → MSL. On wgpu: WGSL→SPIR-V/HLSL via naga. Compilation runs at pipeline creation (startup), not per-frame. MTLBinaryArchive caches compiled GPU binaries to disk.
+**Shaders:** WGSL everywhere. Pipeline: WGSL -> naga -> SPIR-V -> spirv-opt (22 optimization passes) -> SPIRV-Cross -> MSL. Intermediate MSL cached on disk (`msl_cache.rs`). Compiled GPU binaries cached via MTLBinaryArchive. Compilation runs at pipeline creation (startup), not per-frame.
 
-**UI thread:** Stays on wgpu directly on all platforms. Separate device, separate concern. Does not use manifold-gpu.
+**All threads use manifold-gpu.** Content thread and UI thread both use native Metal. Zero wgpu anywhere in the codebase.
 
 ## Phase Roadmap
 

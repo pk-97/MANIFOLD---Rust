@@ -63,12 +63,12 @@ actual_fps = display_hz / divisor
 ### Fallback Chain
 
 1. VSync signal present + Hz > 0 → vsync-driven pacing
-2. VSync signal present but Hz = 0 → wait for first callback (32ms timeout)
+2. VSync signal present but Hz = 0 → wait for first callback (100ms timeout)
 3. No VSync signal (export mode, headless, non-macOS) → timer-based sleep pacing
 
 ### VSync Wait Timeout
 
-The condvar wait has a **32ms timeout** (~1 frame at 30Hz). During display transitions (fullscreen animation, display sleep/disconnect), the CVDisplayLink may stop firing temporarily. The short timeout ensures the content thread degrades gracefully to timer-based pacing instead of stalling.
+The condvar wait has a **100ms timeout**. During display transitions (fullscreen animation, display sleep/disconnect), the CVDisplayLink may stop firing temporarily. The short timeout ensures the content thread degrades gracefully to timer-based pacing instead of stalling.
 
 ## Output Presenter (DisplayLinkPresenter)
 
