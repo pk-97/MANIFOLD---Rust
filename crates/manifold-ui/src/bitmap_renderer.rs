@@ -371,6 +371,21 @@ impl LayerBitmapRenderer {
             paint_x1,
         );
 
+        // Top separator: paint a horizontal line at Y=0 for the first layer
+        // (matching the bottom separators between tracks). Painted into the bitmap
+        // because bitmaps render on top of UITree panel nodes in a later GPU pass.
+        if self.layer_index == 0 {
+            let sep_h = (color::TRACK_SEPARATOR_HEIGHT * self.render_scale)
+                .round()
+                .max(1.0) as usize;
+            for y in 0..sep_h.min(tex_h) {
+                let row = y * tex_w;
+                for x in paint_x0..paint_x1 {
+                    self.pixel_buffer[row + x] = color::SEPARATOR_COLOR;
+                }
+            }
+        }
+
         // Clip vertical inset (Unity lines 204-207)
         let pad_px = (tex_h as f32 * self.clip_vertical_padding / self.track_height).round() as i32;
         let clip_y = pad_px;
@@ -596,16 +611,17 @@ fn paint_tint_bands(
     // to be visible). Tint intensity scales up at wider intervals to stay
     // perceptible (the wider region makes stronger tint acceptable).
     let bar_px = logical_ppb * beats_per_bar;
-    let (interval, tint) = if logical_ppb >= 20.0 {
-        (1.0, color::GRID_TINT_BAND) // Per-beat
+    let tint = color::GRID_TINT_BAND;
+    let interval = if logical_ppb >= 20.0 {
+        1.0 // Per-beat
     } else if bar_px >= 8.0 {
-        (beats_per_bar, color::GRID_TINT_BAND) // Per-bar
+        beats_per_bar // Per-bar
     } else if bar_px >= 4.0 {
-        (beats_per_bar * 2.0, Color32::new(6, 6, 6, 6)) // Every 2 bars
+        beats_per_bar * 2.0 // Every 2 bars
     } else if bar_px >= 2.0 {
-        (beats_per_bar * 4.0, Color32::new(8, 8, 8, 8)) // Every 4 bars
+        beats_per_bar * 4.0 // Every 4 bars
     } else {
-        (beats_per_bar * 8.0, Color32::new(10, 10, 10, 10)) // Every 8 bars
+        beats_per_bar * 8.0 // Every 8 bars
     };
 
     // Find the first interval boundary at or before viewport start

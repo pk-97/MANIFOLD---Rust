@@ -1820,22 +1820,9 @@ impl TimelineViewportPanel {
             });
         }
 
-        // Top separator: sits in the gap between ruler and tracks area
-        // (track_header_height includes TRACK_SEPARATOR_HEIGHT for this gap).
-        {
-            let sep_h = color::TRACK_SEPARATOR_HEIGHT;
-            tree.add_panel(
-                -1,
-                tr.x,
-                tr_top - sep_h,
-                tr.width,
-                sep_h,
-                UIStyle {
-                    bg_color: color::SEPARATOR_COLOR,
-                    ..UIStyle::default()
-                },
-            );
-        }
+        // Top separator is painted into the first layer's bitmap (not a UITree node)
+        // because the layer bitmap textures render on top of UITree panels in a later
+        // GPU pass, covering any UITree-based separator.
     }
 
     // build_grid_lines: REMOVED — grid lines are now painted into per-layer bitmaps
