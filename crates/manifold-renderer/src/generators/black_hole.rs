@@ -151,15 +151,22 @@ impl BlackHoleGenerator {
     fn drain_pending_uploads(&mut self, device: &manifold_gpu::GpuDevice, tex_bytes: usize) {
         for slot in 0..4 {
             let pending = self.cache_loader.take_pending_upload(slot);
-            if let Some(data) = pending {
-                debug_assert_eq!(data.len(), tex_bytes * 3);
-                let textures = self.neighbor_textures[slot]
-                    .as_ref()
-                    .expect("neighbor textures allocated");
-                device.upload_texture(&textures[0], &data[0..tex_bytes]);
-                device.upload_texture(&textures[1], &data[tex_bytes..2 * tex_bytes]);
-                device.upload_texture(&textures[2], &data[2 * tex_bytes..3 * tex_bytes]);
+            let Some(data) = pending else { continue };
+            if data.len() != tex_bytes * 3 {
+                log::error!(
+                    "BlackHole cache slot {} bad data length {} (expected {})",
+                    slot,
+                    data.len(),
+                    tex_bytes * 3,
+                );
+                continue;
             }
+            let textures = self.neighbor_textures[slot]
+                .as_ref()
+                .expect("neighbor textures allocated");
+            device.upload_texture(&textures[0], &data[0..tex_bytes]);
+            device.upload_texture(&textures[1], &data[tex_bytes..2 * tex_bytes]);
+            device.upload_texture(&textures[2], &data[2 * tex_bytes..3 * tex_bytes]);
         }
     }
 }

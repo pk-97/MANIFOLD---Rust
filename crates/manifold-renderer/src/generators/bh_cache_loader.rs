@@ -177,20 +177,10 @@ impl BhCacheLoader {
 
     fn spawn_load(&mut self, grid_index: usize, slot: usize) {
         let tx = self.tx.clone();
-        let reader = match self.reader.try_clone_for_thread() {
-            Ok(r) => r,
-            Err(e) => {
-                let _ = tx.send(LoadResult {
-                    grid_index,
-                    slot,
-                    data: Err(format!("clone reader: {e}")),
-                });
-                return;
-            }
-        };
+        // Cheap Arc clone — fd is shared, reads are positioned (pread).
+        let reader = self.reader.clone();
         self.in_flight += 1;
         std::thread::spawn(move || {
-            let mut reader = reader;
             let res = reader
                 .read_entry(grid_index)
                 .map_err(|e| format!("read_entry({grid_index}): {e}"));

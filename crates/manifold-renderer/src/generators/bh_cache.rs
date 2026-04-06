@@ -14,7 +14,9 @@
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::unix::fs::FileExt;
 use std::path::Path;
+use std::sync::Arc;
 
 pub const BH_CACHE_MAGIC: [u8; 4] = *b"BHCA";
 pub const BH_CACHE_VERSION: u32 = 1;
@@ -319,10 +321,16 @@ impl BhCacheWriter {
 
 /// Random-access reader for a `.bhcache` file. Header and offset table are
 /// loaded eagerly; entries are decompressed on demand.
+///
+/// Reads use positioned `pread(2)` (`read_at`) so multiple threads can share
+/// a single file descriptor without locking and without corrupting each other's
+/// seek positions. Cloning is therefore free — `Arc<File>` increments a refcount.
+#[derive(Clone)]
 pub struct BhCacheReader {
-    file: File,
+    file: Arc<File>,
     header: BhCacheHeader,
-    offset_table: Vec<(u64, u32)>,
+    offset_table: Arc<Vec<(u64, u32)>>,
+    expected_entry_bytes: usize,
 }
 
 impl BhCacheReader {
@@ -336,10 +344,12 @@ impl BhCacheReader {
             let size = read_u32(&mut file)?;
             offset_table.push((offset, size));
         }
+        let expected_entry_bytes = header.entry_bytes();
         Ok(Self {
-            file,
+            file: Arc::new(file),
             header,
-            offset_table,
+            offset_table: Arc::new(offset_table),
+            expected_entry_bytes,
         })
     }
 
@@ -347,25 +357,49 @@ impl BhCacheReader {
         &self.header
     }
 
-    /// Read and decompress entry `index`. Returns the raw concatenated texture data.
-    pub fn read_entry(&mut self, index: usize) -> std::io::Result<Vec<u8>> {
+    /// Read and decompress entry `index`. Thread-safe via positioned reads —
+    /// does not mutate any shared seek state.
+    pub fn read_entry(&self, index: usize) -> std::io::Result<Vec<u8>> {
         let (offset, size) = self.offset_table[index];
-        self.file.seek(SeekFrom::Start(offset))?;
         let mut compressed = vec![0u8; size as usize];
-        self.file.read_exact(&mut compressed)?;
-        lz4_flex::decompress_size_prepended(&compressed)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        // pread loop — partial reads are possible on very large files.
+        let mut filled = 0usize;
+        while filled < compressed.len() {
+            let n = self
+                .file
+                .read_at(&mut compressed[filled..], offset + filled as u64)?;
+            if n == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    format!(
+                        "short read at offset {} (got {} of {})",
+                        offset,
+                        filled,
+                        compressed.len()
+                    ),
+                ));
+            }
+            filled += n;
+        }
+        let decompressed = lz4_flex::decompress_size_prepended(&compressed)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        if decompressed.len() != self.expected_entry_bytes {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "entry {} decompressed to {} bytes, expected {}",
+                    index,
+                    decompressed.len(),
+                    self.expected_entry_bytes,
+                ),
+            ));
+        }
+        Ok(decompressed)
     }
 
-    /// Clone the file handle so that loads from a background thread can use
-    /// an independent seek position. Returns a parallel reader sharing the
-    /// in-memory header and offset table.
+    /// Cheap clone — shares the underlying fd and offset table via Arc.
     pub fn try_clone_for_thread(&self) -> std::io::Result<BhCacheReader> {
-        Ok(BhCacheReader {
-            file: self.file.try_clone()?,
-            header: self.header.clone(),
-            offset_table: self.offset_table.clone(),
-        })
+        Ok(self.clone())
     }
 }
 
@@ -476,6 +510,63 @@ mod tests {
         let compressed = lz4_flex::compress_prepend_size(&data);
         let decompressed = lz4_flex::decompress_size_prepended(&compressed).unwrap();
         assert_eq!(data, decompressed);
+    }
+
+    #[test]
+    fn concurrent_reads_do_not_interfere() {
+        // Build a small cache, then hammer it from 8 threads in parallel.
+        // Without positioned reads (read_at), shared seek state on the same fd
+        // would cause threads to read each other's bytes — this test would fail.
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("bhcache_concurrent_{}.bhcache", std::process::id()));
+
+        let header = BhCacheHeader {
+            grid_rows: 4,
+            grid_cols: 4,
+            tex_width: 32,
+            tex_height: 32,
+            tex_count: 3,
+            spin: 0.0,
+            steps: 50.0,
+            cam_dist_values: vec![1.5, 5.0, 15.0, 50.0],
+            tilt_values: vec![0.0, 30.0, 60.0, 90.0],
+        };
+        let entry_bytes = header.entry_bytes();
+        let mut writer = BhCacheWriter::create(&path, header.clone()).unwrap();
+        for i in 0..16 {
+            let mut data = vec![0u8; entry_bytes];
+            // Tag every byte with a per-entry pattern so we can detect cross-talk.
+            for (j, b) in data.iter_mut().enumerate() {
+                *b = ((i * 31 + j) % 251) as u8;
+            }
+            writer.write_entry(&data).unwrap();
+        }
+        writer.finish().unwrap();
+
+        let reader = BhCacheReader::open(&path).unwrap();
+        let mut handles = Vec::new();
+        for thread_id in 0..8 {
+            let r = reader.clone();
+            handles.push(std::thread::spawn(move || {
+                for round in 0..32 {
+                    let i = (thread_id * 7 + round * 3) % 16;
+                    let data = r.read_entry(i).expect("read_entry");
+                    assert_eq!(data.len(), entry_bytes);
+                    for (j, b) in data.iter().enumerate() {
+                        assert_eq!(
+                            *b as usize,
+                            (i * 31 + j) % 251,
+                            "thread {thread_id} round {round} entry {i} byte {j}",
+                        );
+                    }
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
