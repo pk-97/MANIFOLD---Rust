@@ -19,5 +19,6 @@ pub mod parametric_surface;
 pub mod plasma;
 pub mod registry;
 pub mod stateful_base;
+pub mod strange_attractor;
 pub mod tesseract;
 pub mod wireframe_zoo;

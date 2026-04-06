@@ -38,6 +38,7 @@ fn build_registry() -> Vec<GeneratorTypeRegistration> {
         reg(G::BLACK_HOLE, "Black Hole", true),
         reg(G::GALACTIC_ROCK, "Galactic Rock", true),
         reg(G::METALLIC_GLASS, "Metallic Glass", true),
+        reg(G::COMPUTE_STRANGE_ATTRACTOR, "Strange Attractor", true),
     ]
 }
 

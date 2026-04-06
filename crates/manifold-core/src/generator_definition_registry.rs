@@ -639,6 +639,32 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         create_def("Metallic Glass", false, "metallicGlass", params),
     );
 
+    // ── ComputeStrangeAttractor ──
+    let params = vec![
+        pd_whole_labels(
+            "Type",
+            0.0,
+            4.0,
+            0.0,
+            &["Lorenz", "Rossler", "Aizawa", "Thomas", "Halvorsen"],
+            "type",
+        ),
+        pd("Contrast", 1.0, 8.0, 3.5, Some("F1"), "contrast"),
+        pd("Chaos", 0.0, 1.0, 0.0, Some("F2"), "chaos"),
+        pd("Speed", 0.1, 5.0, 1.0, Some("F1"), "speed"),
+        pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
+        pd_toggle("Snap", 0.0, 1.0, 0.0, "snap"),
+        pd("Count (M)", 0.1, 2.0, 0.5, Some("F1"), "count"),
+        pd("Diffusion", 0.0, 0.05, 0.0, Some("F3"), "diffusion"),
+        pd("Tilt", -1.0, 1.0, 0.3, Some("F2"), "tilt"),
+        pd("Size", 1.0, 8.0, 3.0, Some("F1"), "size"),
+        pd_toggle("Invert", 0.0, 1.0, 0.0, "invert"),
+    ];
+    m.insert(
+        GeneratorTypeId::COMPUTE_STRANGE_ATTRACTOR,
+        create_def("Strange Attractor", false, "strangeAttractor", params),
+    );
+
     m
 }
 

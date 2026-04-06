@@ -12,6 +12,7 @@ use super::mycelium::MyceliumGenerator;
 use super::oscilloscope_xy::OscilloscopeXYGenerator;
 use super::parametric_surface::ParametricSurfaceGenerator;
 use super::plasma::PlasmaGenerator;
+use super::strange_attractor::StrangeAttractorGenerator;
 use super::tesseract::TesseractGenerator;
 use super::wireframe_zoo::WireframeZooGenerator;
 use crate::generator::Generator;
@@ -50,6 +51,7 @@ impl GeneratorRegistry {
             GeneratorTypeId::BLACK_HOLE,
             GeneratorTypeId::GALACTIC_ROCK,
             GeneratorTypeId::METALLIC_GLASS,
+            GeneratorTypeId::COMPUTE_STRANGE_ATTRACTOR,
         ];
         log::info!("Pre-warming {} generator pipelines...", all_types.len());
         for gen_type in &all_types {
@@ -97,6 +99,8 @@ impl GeneratorRegistry {
             Some(Box::new(GalacticRockGenerator::new(device)))
         } else if *gen_type == GeneratorTypeId::METALLIC_GLASS {
             Some(Box::new(MetallicGlassGenerator::new(device)))
+        } else if *gen_type == GeneratorTypeId::COMPUTE_STRANGE_ATTRACTOR {
+            Some(Box::new(StrangeAttractorGenerator::new(device)))
         } else {
             log::warn!("Generator type {:?} not yet implemented", gen_type);
             None
