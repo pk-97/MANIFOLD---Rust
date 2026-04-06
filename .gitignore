@@ -5,6 +5,7 @@
 .codex/scratch/
 .codex/*.local.md
 assets/mri-data/
+*.bhcache
 profiling_sessions/
 __pycache__/
 .venv/

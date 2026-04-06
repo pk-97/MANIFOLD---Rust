@@ -4,6 +4,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 mod app;
 mod app_lifecycle;
 mod app_render;
+mod bake_black_hole;
 mod content_command;
 mod content_commands;
 mod content_export;
@@ -30,7 +31,66 @@ mod ui_root;
 mod user_prefs;
 mod window_registry;
 
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(name = "manifold", about = "MANIFOLD — Visual DAW for live performance")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Pre-bake the Black Hole deflection map cache.
+    BakeBlackHole {
+        /// Output path for the .bhcache file.
+        #[arg(short, long, default_value = "assets/black-hole.bhcache")]
+        output: std::path::PathBuf,
+        /// Bake resolution (square). Default 2048.
+        #[arg(short, long, default_value_t = 2048)]
+        resolution: u32,
+        /// Kerr spin parameter [-1, 1]. 0 = Schwarzschild.
+        #[arg(long, default_value_t = 0.0)]
+        spin: f32,
+        /// Geodesic integration steps per ray.
+        #[arg(long, default_value_t = 200.0)]
+        steps: f32,
+        /// Grid size (NxN samples). Default 10.
+        #[arg(short, long, default_value_t = 10)]
+        grid_size: u32,
+    },
+}
+
 fn main() {
+    // --- CLI parsing (must come before any winit / panic-hook setup so the
+    // bake subcommand can run headless without polluting logs / acquiring locks) ---
+    let cli = Cli::parse();
+    if let Some(Commands::BakeBlackHole {
+        output,
+        resolution,
+        spin,
+        steps,
+        grid_size,
+    }) = cli.command
+    {
+        env_logger::init();
+        let args = bake_black_hole::BakeArgs {
+            output,
+            resolution,
+            spin,
+            steps,
+            grid_size,
+        };
+        match bake_black_hole::run(args) {
+            Ok(()) => std::process::exit(0),
+            Err(e) => {
+                eprintln!("bake-black-hole failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     // --- Panic hook (10.1, 10.12) ---
     // Install before anything else so even early panics get logged to disk.
     // Critical with `panic=abort` + stripped symbols in release builds.

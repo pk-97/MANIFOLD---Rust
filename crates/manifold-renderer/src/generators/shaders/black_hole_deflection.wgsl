@@ -44,22 +44,45 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let ndc = (uv * 2.0 - 1.0) * u.uv_scale;
     let screen = vec2<f32>(ndc.x * u.aspect, -ndc.y);
 
+    // ── Camera physics ──
+    // Schwarzschild radius is 1.0 in our units (M = 0.5).
+    // Event horizon for Kerr: r_H = M + √(M² - a²M²) = 0.5(1 + √(1 - a²)).
+    let a = u.spin;
+    let a2 = a * a;
+    let r_horizon = 0.5 * (1.0 + sqrt(max(1.0 - a2, 0.0)));
+
+    // Clamp camera distance just outside the horizon — physical observers
+    // cannot hover inside the event horizon. A small epsilon prevents the
+    // ZAMO factor from going to zero (which would collapse the FOV).
+    let safe_cam_dist = max(u.cam_dist, r_horizon + 0.05);
+
+    // ZAMO (Zero Angular Momentum Observer) frame correction.
+    // Near the horizon, the proper-frame solid angle subtended by infinity
+    // shrinks by ≈ √(1 − r_s/r). The aperture must widen to compensate so
+    // that distant features stay roughly the same angular size in the image.
+    let metric_factor = sqrt(max(1.0 - 1.0 / safe_cam_dist, 0.05));
+    let fov_factor = 1.2 / metric_factor;
+
+    // Gravitational redshift between observer at safe_cam_dist and infinity.
+    // Stored multiplied into final_r so the display pass can dim escaping
+    // light by the right amount when the camera is deep in the well.
+    let redshift_factor = metric_factor;
+
     let cos_tilt = cos(u.tilt_rad);
     let sin_tilt = sin(u.tilt_rad);
     let cos_rot = cos(u.rotate_rad);
     let sin_rot = sin(u.rotate_rad);
 
     let cam_pos = vec3<f32>(
-        u.cam_dist * cos_tilt * cos_rot,
-        u.cam_dist * sin_tilt,
-        u.cam_dist * cos_tilt * sin_rot,
+        safe_cam_dist * cos_tilt * cos_rot,
+        safe_cam_dist * sin_tilt,
+        safe_cam_dist * cos_tilt * sin_rot,
     );
     let fwd = normalize(-cam_pos);
     let world_up = vec3<f32>(0.0, 1.0, 0.0);
     let right = normalize(cross(fwd, world_up));
     let up = cross(right, fwd);
 
-    let fov_factor = 1.2;
     let ray_dir = normalize(fwd + screen.x * right * fov_factor + screen.y * up * fov_factor);
 
     var pos = cam_pos;
@@ -67,17 +90,12 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let h_vec = cross(pos, vel);
     let h2 = dot(h_vec, h_vec);
 
-    // ── Kerr spin setup ──
-    let a = u.spin;
-    let a2 = a * a;
-    // Event horizon: r_H = M + √(M² - a²M²) where M=0.5 (r_s = 1)
-    // = 0.5(1 + √(1 - a²))
-    let r_horizon = 0.5 * (1.0 + sqrt(max(1.0 - a2, 0.0)));
+    // ── Kerr spin axis (a, a2, r_horizon already computed above) ──
     let spin_axis = vec3<f32>(0.0, 1.0, 0.0);
 
     let max_steps = i32(u.steps);
-    let escape_r = max(u.cam_dist * 3.0, 40.0);
-    let base_step = max(u.cam_dist * 0.02, 0.15);
+    let escape_r = max(safe_cam_dist * 3.0, 40.0);
+    let base_step = max(safe_cam_dist * 0.02, 0.15);
 
     var prev_y = pos.y;
     var final_r = 0.0;
@@ -99,7 +117,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if r_bl < r_horizon { final_r = 0.0; absorbed = true; break; }
         if r > escape_r { final_r = r; break; }
         // Early escape: ray well beyond camera and moving outward — negligible bending
-        if r > max(u.cam_dist * 2.0, 15.0) && dot(pos, vel) > 0.0 {
+        if r > max(safe_cam_dist * 2.0, 15.0) && dot(pos, vel) > 0.0 {
             final_r = r; break;
         }
 
@@ -166,7 +184,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         final_r = r;
     }
 
-    textureStore(output1, gid.xy, vec4<f32>(final_r, c1_r, c1_ca, c1_sa));
+    // Apply gravitational redshift to escaping rays — far-field intensity
+    // dims by the metric factor when the camera is deep in the well.
+    let final_r_redshifted = final_r * redshift_factor;
+    textureStore(output1, gid.xy, vec4<f32>(final_r_redshifted, c1_r, c1_ca, c1_sa));
     textureStore(output2, gid.xy, vec4<f32>(vol_accum, c2_r, c2_ca, c2_sa));
 
     if absorbed {
