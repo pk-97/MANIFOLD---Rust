@@ -28,8 +28,6 @@ mimalloc = "0.1"
 libc = "0.2"
 parking_lot = { workspace = true }
 arboard = "3"
-clap = { version = "4", features = ["derive"] }
-bytemuck = { version = "1", features = ["derive"] }
 manifold-profiler = { path = "../manifold-profiler", optional = true }
 
 # macOS platform dependencies
