@@ -579,7 +579,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
     // ── BlackHole ──
     let params = vec![
         pd("Speed", 0.0, 5.0, 0.3, Some("F2"), "speed"),
-        pd("Cam Dist", 1.5, 50.0, 20.0, Some("F1"), "camDist"),
+        pd("Cam Dist", 0.1, 50.0, 20.0, Some("F1"), "camDist"),
         pd("Tilt", 0.0, 90.0, 15.0, Some("F0"), "tilt"),
         pd("Rotate", -180.0, 180.0, 0.0, Some("F0"), "rotate"),
         pd_whole("Steps", 50.0, 500.0, 150.0, "steps"),

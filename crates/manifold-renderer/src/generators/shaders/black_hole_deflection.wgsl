@@ -53,16 +53,21 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let spin_axis = vec3<f32>(0.0, 1.0, 0.0);
 
     // ── Camera physics ──
-    // Physical observers cannot hover inside the event horizon — clamp the
-    // requested cam_dist just outside it. The epsilon also keeps the ZAMO
-    // metric factor away from zero (where the FOV would diverge).
-    let safe_cam_dist = max(u.cam_dist, r_horizon + 0.05);
+    // The camera is allowed to fly through the event horizon for the trippy
+    // "fall into a black hole" effect. The clamp here is purely numerical
+    // safety to keep ratios finite very near the singularity — physical
+    // correctness is not enforced inside the horizon (real observers can't
+    // hover there, but this is a visual tool).
+    let safe_cam_dist = max(u.cam_dist, 0.05);
+    let camera_inside_horizon = safe_cam_dist < r_horizon;
 
     // ZAMO (Zero Angular Momentum Observer) frame correction.
-    // Near the horizon, the proper-frame solid angle subtended by infinity
-    // shrinks by ≈ √(1 − r_s/r). Widen the camera aperture by 1/that so
-    // distant features stay roughly the same angular size as the camera
-    // descends into the gravitational well.
+    // Outside the horizon: the proper-frame solid angle subtended by infinity
+    // shrinks by ≈ √(1 − r_s/r), so the aperture widens by 1/that to keep
+    // distant features at a consistent angular size as the camera descends.
+    // Inside the horizon: 1 − r_s/r is negative, the max() floor keeps the
+    // metric factor at its minimum (0.05), giving a fully-saturated wide
+    // aperture (~5×) for the "fallen in" view.
     let metric_factor = sqrt(max(1.0 - 1.0 / safe_cam_dist, 0.05));
     let fov_factor = 1.2 / metric_factor;
 
@@ -114,7 +119,18 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let r_bl = sqrt(max(0.5 * w2 + sqrt(max(0.25 * w2 * w2
             + a2 * pos.y * pos.y, 0.0)), 1e-8));
 
-        if r_bl < r_horizon { final_r = 0.0; absorbed = true; break; }
+        // Singularity check — terminate any ray that reaches the center.
+        // This also prevents 1/r⁵ NaNs in the gravitational acceleration.
+        if r < 0.1 { final_r = 0.0; absorbed = true; break; }
+
+        // Horizon absorption — only applied when the camera is OUTSIDE the
+        // horizon. If the camera is inside, every ray starts inside the
+        // horizon by definition, and we don't want them all self-absorbing
+        // at step 0; let them fall to the singularity instead.
+        if !camera_inside_horizon && r_bl < r_horizon {
+            final_r = 0.0; absorbed = true; break;
+        }
+
         if r > escape_r { final_r = r; break; }
         // Early escape: ray well beyond camera and moving outward — negligible bending
         if r > max(safe_cam_dist * 2.0, 15.0) && dot(pos, vel) > 0.0 {
