@@ -1225,7 +1225,7 @@ impl UIRoot {
                 // "Remove Ableton Mapping" when param is already mapped
                 let is_ableton_mapped = self
                     .inspector
-                    .is_effect_ableton_mapped(*fx_idx, *param_idx);
+                    .is_effect_ableton_mapped(tab, *fx_idx, *param_idx);
                 if is_ableton_mapped {
                     items.push(DropdownItem::new("Remove Ableton Mapping"));
                 }

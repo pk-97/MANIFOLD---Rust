@@ -296,10 +296,20 @@ impl InspectorCompositePanel {
     }
 
     /// Returns true if the effect param at `fx_idx`, `param_idx` has an Ableton mapping.
-    pub fn is_effect_ableton_mapped(&self, fx_idx: usize, param_idx: usize) -> bool {
-        self.master_effects
+    /// `tab` disambiguates master vs layer effect lookups — both lists use 0-based
+    /// indexing, so falling back from one to the other returns the wrong card.
+    pub fn is_effect_ableton_mapped(
+        &self,
+        tab: InspectorTab,
+        fx_idx: usize,
+        param_idx: usize,
+    ) -> bool {
+        let cards = match tab {
+            InspectorTab::Master => &self.master_effects,
+            InspectorTab::Layer | InspectorTab::Clip => &self.layer_effects,
+        };
+        cards
             .get(fx_idx)
-            .or_else(|| self.layer_effects.get(fx_idx))
             .is_some_and(|card| card.param_has_ableton_mapping(param_idx))
     }
 
@@ -1289,8 +1299,11 @@ impl InspectorCompositePanel {
         }
     }
 
-    fn route_right_click(&self, node_id: u32) -> Vec<PanelAction> {
+    fn route_right_click(&mut self, node_id: u32) -> Vec<PanelAction> {
         if let Some(target) = self.find_target_for_node(node_id) {
+            // Right-click also targets a sub-panel — keep last_effect_tab in sync
+            // so dispatch routes UnmapEffectParamAbleton etc. to the correct list.
+            self.update_last_effect_tab(&target);
             match target {
                 PressedTarget::Macros => self.macros_panel.handle_right_click(node_id),
                 PressedTarget::MasterChrome => self.master_chrome.handle_right_click(node_id),
