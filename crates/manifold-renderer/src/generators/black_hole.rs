@@ -3,13 +3,7 @@
 //
 // Two-pass compute:
 //   1. Deflection map bake — volumetric geodesic trace, only on camera/param change.
-//      Runs at half output resolution. The geodesic field is smooth so the
-//      display pass upsamples with a small Gaussian kernel.
 //   2. Display — samples deflection map, applies cinematic disk shading.
-//
-// Camera physics in the deflection shader: event horizon clamp, ZAMO frame
-// correction (FOV widens near the horizon), gravitational redshift on the
-// final escape radius.
 
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
@@ -46,11 +40,7 @@ struct DeflectionUniforms {
     steps: f32,
     uv_scale: f32,
     spin: f32,
-    disk_inner: f32,
-    disk_outer: f32,
     _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
 }
 
 #[repr(C)]
@@ -83,8 +73,6 @@ pub struct BlackHoleGenerator {
     last_scale: f32,
     last_steps: f32,
     last_spin: f32,
-    last_disk_inner: f32,
-    last_disk_outer: f32,
 }
 
 impl BlackHoleGenerator {
@@ -116,8 +104,6 @@ impl BlackHoleGenerator {
             last_scale: f32::MIN,
             last_steps: f32::MIN,
             last_spin: f32::MIN,
-            last_disk_inner: f32::MIN,
-            last_disk_outer: f32::MIN,
         }
     }
 
@@ -152,18 +138,7 @@ impl BlackHoleGenerator {
         self.last_cam_dist = f32::MIN;
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn needs_rebake(
-        &self,
-        cd: f32,
-        t: f32,
-        r: f32,
-        s: f32,
-        st: f32,
-        spin: f32,
-        di: f32,
-        d_o: f32,
-    ) -> bool {
+    fn needs_rebake(&self, cd: f32, t: f32, r: f32, s: f32, st: f32, spin: f32) -> bool {
         const EPS: f32 = 0.001;
         (self.last_cam_dist - cd).abs() > EPS
             || (self.last_tilt - t).abs() > EPS
@@ -171,8 +146,6 @@ impl BlackHoleGenerator {
             || (self.last_scale - s).abs() > EPS
             || (self.last_steps - st).abs() > 0.5
             || (self.last_spin - spin).abs() > EPS
-            || (self.last_disk_inner - di).abs() > EPS
-            || (self.last_disk_outer - d_o).abs() > EPS
     }
 }
 
@@ -208,17 +181,14 @@ impl Generator for BlackHoleGenerator {
         let rotate_rad = rotate_deg.to_radians();
         let orbit_angle = ctx.time as f32 * speed * 0.3;
 
-        // Half-res deflection maps — geodesic data is smooth, the display
-        // pass's small Gaussian upsample is visually lossless at 1/2 scale.
-        // Adaptive termination in the deflection shader keeps cost reasonable.
-        let defl_w = (ctx.width / 2).max(1);
-        let defl_h = (ctx.height / 2).max(1);
+        // Quarter-res deflection maps — geodesic data is smooth, bilinear interpolation
+        // in the display pass is visually lossless.
+        let defl_w = (ctx.width / 4).max(1);
+        let defl_h = (ctx.height / 4).max(1);
         self.ensure_deflection_maps(gpu.device, defl_w, defl_h);
 
-        // ── Pass 1: Deflection Map (only on camera/scale/steps/disk change) ──
-        if self.needs_rebake(
-            cam_dist, tilt_rad, rotate_rad, uv_scale, steps, spin, disk_inner, disk_outer,
-        ) {
+        // ── Pass 1: Deflection Map (only on camera/scale/steps change) ──
+        if self.needs_rebake(cam_dist, tilt_rad, rotate_rad, uv_scale, steps, spin) {
             let defl_uniforms = DeflectionUniforms {
                 aspect: ctx.aspect,
                 cam_dist,
@@ -227,11 +197,7 @@ impl Generator for BlackHoleGenerator {
                 steps,
                 uv_scale,
                 spin,
-                disk_inner,
-                disk_outer,
                 _pad0: 0.0,
-                _pad1: 0.0,
-                _pad2: 0.0,
             };
             gpu.native_enc.dispatch_compute(
                 &self.deflection_pipeline,
@@ -262,8 +228,6 @@ impl Generator for BlackHoleGenerator {
             self.last_scale = uv_scale;
             self.last_steps = steps;
             self.last_spin = spin;
-            self.last_disk_inner = disk_inner;
-            self.last_disk_outer = disk_outer;
         }
 
         // ── Pass 2: Display ──
@@ -314,7 +278,7 @@ impl Generator for BlackHoleGenerator {
     }
 
     fn resize(&mut self, _device: &manifold_gpu::GpuDevice, _width: u32, _height: u32) {
-        // Deflection maps recreated in ensure_deflection_maps when ctx dims change.
+        // Deflection maps at half res — recreated in ensure_deflection_maps
     }
 
     fn internal_resolution_scale(&self) -> f32 {
