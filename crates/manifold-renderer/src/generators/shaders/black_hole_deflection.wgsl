@@ -21,17 +21,17 @@ struct Uniforms {
     steps: f32,
     uv_scale: f32,
     spin: f32,
+    disk_inner: f32,
+    disk_outer: f32,
     _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var output1: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(2) var output2: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(3) var output3: texture_storage_2d<rgba16float, write>;
-
-// Fixed generous crossing bounds — covers full param ranges
-const CROSS_INNER: f32 = 0.5;
-const CROSS_OUTER: f32 = 25.0;
 
 @compute @workgroup_size(16, 16)
 fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -93,7 +93,33 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // ── Kerr spin axis (a, a2, r_horizon already computed above) ──
     let spin_axis = vec3<f32>(0.0, 1.0, 0.0);
 
-    let max_steps = i32(u.steps);
+    // ── Disk region — gated by the user's actual disk_inner/disk_outer with
+    // a small margin so the display shader's smoothstep fades line up. The
+    // bake stops tracking crossings and volumetric density outside this band,
+    // which makes the orange volumetric "ellipse" match the visible disk.
+    // Lower bound is also clamped above the photon sphere so we never record
+    // crossings inside the strong-lensing region.
+    let cross_inner = max(u.disk_inner * 0.25, 0.5);
+    let cross_outer = u.disk_outer * 1.5;
+
+    // ── Adaptive step budget by impact parameter ──
+    // For unit |vel|, |h| = b (impact parameter). Photon sphere is at b ≈ 2.6.
+    //   b > 10 → essentially straight ray, 40 steps is plenty
+    //   b > 5  → moderate bending, 80 steps
+    //   b > 3  → strong bending, 120 steps
+    //   b ≤ 3  → near-photon-sphere, full user-requested step budget
+    let b_param = sqrt(h2);
+    let user_steps = i32(u.steps);
+    var step_budget = user_steps;
+    if b_param > 10.0 {
+        step_budget = min(40, user_steps);
+    } else if b_param > 5.0 {
+        step_budget = min(80, user_steps);
+    } else if b_param > 3.0 {
+        step_budget = min(120, user_steps);
+    }
+    let max_steps = step_budget;
+
     let escape_r = max(safe_cam_dist * 3.0, 40.0);
     let base_step = max(safe_cam_dist * 0.02, 0.15);
 
@@ -105,6 +131,12 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var c2_r = 0.0; var c2_ca = 0.0; var c2_sa = 0.0;
     var crossing_count = 0;
     var vol_accum = 0.0;
+
+    // ── Convergence tracking ──
+    // Snapshot the velocity every 8 steps after step 20. If the direction
+    // hasn't changed by more than ~0.5° over an interval AND we're past the
+    // camera shell, the ray has stopped bending and can be terminated as escaped.
+    var vel_prev = vel;
 
     for (var i = 0; i < max_steps; i++) {
         let r = length(pos);
@@ -152,9 +184,11 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         // ── Volumetric density accumulation ──
         // Gaussian vertical profile: rays near the disk plane accumulate density.
-        // Path integral gives volumetric thickness for edge-on viewing.
+        // Path integral gives volumetric thickness for edge-on viewing. Gated
+        // to the user's disk range so the orange volumetric glow only shows
+        // where the disk actually is.
         let disk_r_xz = length(vec2<f32>(pos.x, pos.z));
-        if disk_r_xz > CROSS_INNER && disk_r_xz < CROSS_OUTER {
+        if disk_r_xz > cross_inner && disk_r_xz < cross_outer {
             let half_thick = 0.12 * disk_r_xz;
             let y_norm = pos.y / half_thick;
             vol_accum += exp(-y_norm * y_norm * 2.0) * step;
@@ -167,7 +201,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let cross_pos = pos - vel * step * (1.0 - frac);
             let cross_r = length(cross_pos);
 
-            if cross_r > CROSS_INNER && cross_r < CROSS_OUTER {
+            if cross_r > cross_inner && cross_r < cross_outer {
                 let angle = atan2(cross_pos.z, cross_pos.x);
                 let ca = cos(angle);
                 let sa = sin(angle);
@@ -182,6 +216,18 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         prev_y = cur_y;
         final_r = r;
+
+        // ── Convergence early-out ──
+        // Sample velocity direction every 8 steps after step 20. If the ray
+        // hasn't bent in this interval and we're past the camera shell, it's
+        // going straight — no point integrating further.
+        if i >= 20 && (i & 7) == 7 {
+            let cos_change = dot(normalize(vel), normalize(vel_prev));
+            if cos_change > 0.99996 && r > safe_cam_dist {
+                break;
+            }
+            vel_prev = vel;
+        }
     }
 
     // Apply gravitational redshift to escaping rays — far-field intensity

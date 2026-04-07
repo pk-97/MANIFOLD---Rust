@@ -46,7 +46,11 @@ struct DeflectionUniforms {
     steps: f32,
     uv_scale: f32,
     spin: f32,
+    disk_inner: f32,
+    disk_outer: f32,
     _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 #[repr(C)]
@@ -79,6 +83,8 @@ pub struct BlackHoleGenerator {
     last_scale: f32,
     last_steps: f32,
     last_spin: f32,
+    last_disk_inner: f32,
+    last_disk_outer: f32,
 }
 
 impl BlackHoleGenerator {
@@ -110,6 +116,8 @@ impl BlackHoleGenerator {
             last_scale: f32::MIN,
             last_steps: f32::MIN,
             last_spin: f32::MIN,
+            last_disk_inner: f32::MIN,
+            last_disk_outer: f32::MIN,
         }
     }
 
@@ -144,7 +152,18 @@ impl BlackHoleGenerator {
         self.last_cam_dist = f32::MIN;
     }
 
-    fn needs_rebake(&self, cd: f32, t: f32, r: f32, s: f32, st: f32, spin: f32) -> bool {
+    #[allow(clippy::too_many_arguments)]
+    fn needs_rebake(
+        &self,
+        cd: f32,
+        t: f32,
+        r: f32,
+        s: f32,
+        st: f32,
+        spin: f32,
+        di: f32,
+        d_o: f32,
+    ) -> bool {
         const EPS: f32 = 0.001;
         (self.last_cam_dist - cd).abs() > EPS
             || (self.last_tilt - t).abs() > EPS
@@ -152,6 +171,8 @@ impl BlackHoleGenerator {
             || (self.last_scale - s).abs() > EPS
             || (self.last_steps - st).abs() > 0.5
             || (self.last_spin - spin).abs() > EPS
+            || (self.last_disk_inner - di).abs() > EPS
+            || (self.last_disk_outer - d_o).abs() > EPS
     }
 }
 
@@ -194,8 +215,10 @@ impl Generator for BlackHoleGenerator {
         let defl_h = (ctx.height / 2).max(1);
         self.ensure_deflection_maps(gpu.device, defl_w, defl_h);
 
-        // ── Pass 1: Deflection Map (only on camera/scale/steps change) ──
-        if self.needs_rebake(cam_dist, tilt_rad, rotate_rad, uv_scale, steps, spin) {
+        // ── Pass 1: Deflection Map (only on camera/scale/steps/disk change) ──
+        if self.needs_rebake(
+            cam_dist, tilt_rad, rotate_rad, uv_scale, steps, spin, disk_inner, disk_outer,
+        ) {
             let defl_uniforms = DeflectionUniforms {
                 aspect: ctx.aspect,
                 cam_dist,
@@ -204,7 +227,11 @@ impl Generator for BlackHoleGenerator {
                 steps,
                 uv_scale,
                 spin,
+                disk_inner,
+                disk_outer,
                 _pad0: 0.0,
+                _pad1: 0.0,
+                _pad2: 0.0,
             };
             gpu.native_enc.dispatch_compute(
                 &self.deflection_pipeline,
@@ -235,6 +262,8 @@ impl Generator for BlackHoleGenerator {
             self.last_scale = uv_scale;
             self.last_steps = steps;
             self.last_spin = spin;
+            self.last_disk_inner = disk_inner;
+            self.last_disk_outer = disk_outer;
         }
 
         // ── Pass 2: Display ──
