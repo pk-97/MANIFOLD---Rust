@@ -93,14 +93,26 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // ── Kerr spin axis (a, a2, r_horizon already computed above) ──
     let spin_axis = vec3<f32>(0.0, 1.0, 0.0);
 
-    // ── Disk region — gated by the user's actual disk_inner/disk_outer with
-    // a small margin so the display shader's smoothstep fades line up. The
-    // bake stops tracking crossings and volumetric density outside this band,
-    // which makes the orange volumetric "ellipse" match the visible disk.
-    // Lower bound is also clamped above the photon sphere so we never record
-    // crossings inside the strong-lensing region.
-    let cross_inner = max(u.disk_inner * 0.25, 0.5);
-    let cross_outer = u.disk_outer * 1.5;
+    // ── Disk region bounds ──
+    // Two separate bands: a wide one for crossings, a tight one for volumetrics.
+    //
+    // Crossings (cross_*) must extend BEYOND the visible disk fade range. The
+    // display shader's 5×5 Gaussian blur samples neighboring deflection texels
+    // and bilinear-interpolates between "ray crossed at r" and "ray didn't
+    // cross" pixels — that interpolation produces fake intermediate c1_r
+    // values which would render as half-opaque disk fragments if they fell
+    // inside the visible fade range. Keeping the cutoff well past the fade
+    // (≥ 25, scaled with disk_outer) ensures every fake intermediate lands at
+    // an r where disk_opacity_from_r is already zero, hiding the artifact.
+    //
+    // Volumetric (vol_*) is gated tight to the user's actual disk range so
+    // the orange glow matches the visible disk. vol_accum varies geometrically
+    // and continuously with ray geometry (it's a path integral, not a binary
+    // event) so the bilinear-blur boundary issue doesn't bite the same way.
+    let cross_inner = 0.5;
+    let cross_outer = max(25.0, u.disk_outer * 2.0);
+    let vol_inner = max(u.disk_inner * 0.25, 0.5);
+    let vol_outer = u.disk_outer * 1.5;
 
     // ── Adaptive step budget by impact parameter ──
     // For unit |vel|, |h| = b (impact parameter). Photon sphere is at b ≈ 2.6.
@@ -185,10 +197,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // ── Volumetric density accumulation ──
         // Gaussian vertical profile: rays near the disk plane accumulate density.
         // Path integral gives volumetric thickness for edge-on viewing. Gated
-        // to the user's disk range so the orange volumetric glow only shows
-        // where the disk actually is.
+        // to the user's disk range (vol_inner/vol_outer) so the orange
+        // volumetric glow only shows where the disk actually is.
         let disk_r_xz = length(vec2<f32>(pos.x, pos.z));
-        if disk_r_xz > cross_inner && disk_r_xz < cross_outer {
+        if disk_r_xz > vol_inner && disk_r_xz < vol_outer {
             let half_thick = 0.12 * disk_r_xz;
             let y_norm = pos.y / half_thick;
             vol_accum += exp(-y_norm * y_norm * 2.0) * step;
