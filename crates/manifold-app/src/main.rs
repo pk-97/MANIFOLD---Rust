@@ -59,6 +59,10 @@ enum Commands {
         /// Grid size (NxN samples). Default 10.
         #[arg(short, long, default_value_t = 10)]
         grid_size: u32,
+        /// Half-extent of the screen-space ray field to bake.
+        /// 2.0 covers 16:9 with headroom; raise for ultrawide or zoom-out.
+        #[arg(long, default_value_t = 2.0)]
+        bake_fov_half: f32,
     },
 }
 
@@ -72,6 +76,7 @@ fn main() {
         spin,
         steps,
         grid_size,
+        bake_fov_half,
     }) = cli.command
     {
         env_logger::init();
@@ -81,6 +86,7 @@ fn main() {
             spin,
             steps,
             grid_size,
+            bake_fov_half,
         };
         match bake_black_hole::run(args) {
             Ok(()) => std::process::exit(0),

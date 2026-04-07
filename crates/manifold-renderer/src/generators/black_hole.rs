@@ -55,7 +55,7 @@ struct CachedDisplayUniforms {
     w_tr: f32,
     w_bl: f32,
     w_br: f32,
-    _pad0: f32,
+    bake_fov_half: f32,
 }
 
 pub struct BlackHoleGenerator {
@@ -236,6 +236,7 @@ impl Generator for BlackHoleGenerator {
         let neighbors = *self.cache_loader.last_neighbors().unwrap();
         let weights = neighbors.weights();
         let tilt_mirror = if neighbors.tilt_mirrored { -1.0 } else { 1.0 };
+        let bake_fov_half = self.cache_loader.header().bake_fov_half;
 
         let uniforms = CachedDisplayUniforms {
             time_val: ctx.time as f32,
@@ -253,7 +254,7 @@ impl Generator for BlackHoleGenerator {
             w_tr: weights[1],
             w_bl: weights[2],
             w_br: weights[3],
-            _pad0: 0.0,
+            bake_fov_half,
         };
 
         let tl = self.neighbor_textures[0].as_ref().unwrap();

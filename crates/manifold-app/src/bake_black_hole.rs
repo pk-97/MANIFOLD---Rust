@@ -39,14 +39,22 @@ pub struct BakeArgs {
     pub spin: f32,
     pub steps: f32,
     pub grid_size: u32,
+    /// Half-extent of the screen-space ray field to bake (square).
+    /// 2.0 covers a 16:9 view at zoom 1 with headroom on all sides.
+    pub bake_fov_half: f32,
 }
 
 pub fn run(args: BakeArgs) -> Result<(), String> {
     let start = std::time::Instant::now();
 
     eprintln!(
-        "manifold bake-black-hole — resolution={}, grid={}x{}, spin={}, steps={}",
-        args.resolution, args.grid_size, args.grid_size, args.spin, args.steps,
+        "manifold bake-black-hole — resolution={}, grid={}x{}, spin={}, steps={}, fov_half={}",
+        args.resolution,
+        args.grid_size,
+        args.grid_size,
+        args.spin,
+        args.steps,
+        args.bake_fov_half,
     );
     eprintln!("output: {}", args.output.display());
 
@@ -66,6 +74,7 @@ pub fn run(args: BakeArgs) -> Result<(), String> {
         tex_count: 3,
         spin: args.spin,
         steps: args.steps,
+        bake_fov_half: args.bake_fov_half,
         cam_dist_values: cam_dist_values.clone(),
         tilt_values: tilt_values.clone(),
     };
@@ -135,12 +144,15 @@ pub fn run(args: BakeArgs) -> Result<(), String> {
             let tilt_rad = tilt_deg.to_radians();
 
             let uniforms = DeflectionUniforms {
-                aspect: 1.0,    // square bake
+                aspect: 1.0, // square bake
                 cam_dist,
                 tilt_rad,
                 rotate_rad: 0.0,
                 steps: args.steps,
-                uv_scale: 1.0,
+                // uv_scale here scales NDC, widening the screen-space ray
+                // field that the bake covers. With aspect=1 the bake screen
+                // ranges over [-bake_fov_half, +bake_fov_half] in both axes.
+                uv_scale: args.bake_fov_half,
                 spin: args.spin,
                 _pad0: 0.0,
             };

@@ -19,7 +19,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 pub const BH_CACHE_MAGIC: [u8; 4] = *b"BHCA";
-pub const BH_CACHE_VERSION: u32 = 1;
+pub const BH_CACHE_VERSION: u32 = 2;
 
 /// Header describing a baked black hole cache file.
 #[derive(Debug, Clone)]
@@ -31,6 +31,10 @@ pub struct BhCacheHeader {
     pub tex_count: u32, // always 3 (deflection1, deflection2, sky_dir)
     pub spin: f32,
     pub steps: f32,
+    /// Half-extent of the screen-space ray field covered by the bake.
+    /// Bake screen.x ∈ [-bake_fov_half, +bake_fov_half] (square).
+    /// Display shader divides its lookup NDC by this to land inside [0,1].
+    pub bake_fov_half: f32,
     pub cam_dist_values: Vec<f32>,
     pub tilt_values: Vec<f32>,
 }
@@ -179,8 +183,7 @@ fn write_header<W: Write>(w: &mut W, h: &BhCacheHeader) -> std::io::Result<()> {
     w.write_all(&h.tex_count.to_le_bytes())?;
     w.write_all(&h.spin.to_le_bytes())?;
     w.write_all(&h.steps.to_le_bytes())?;
-    // 4 bytes reserved
-    w.write_all(&0u32.to_le_bytes())?;
+    w.write_all(&h.bake_fov_half.to_le_bytes())?;
     for v in &h.cam_dist_values {
         w.write_all(&v.to_le_bytes())?;
     }
@@ -213,7 +216,7 @@ fn read_header<R: Read>(r: &mut R) -> std::io::Result<BhCacheHeader> {
     let tex_count = read_u32(r)?;
     let spin = read_f32(r)?;
     let steps = read_f32(r)?;
-    let _reserved = read_u32(r)?;
+    let bake_fov_half = read_f32(r)?;
     let mut cam_dist_values = Vec::with_capacity(grid_rows as usize);
     for _ in 0..grid_rows {
         cam_dist_values.push(read_f32(r)?);
@@ -230,6 +233,7 @@ fn read_header<R: Read>(r: &mut R) -> std::io::Result<BhCacheHeader> {
         tex_count,
         spin,
         steps,
+        bake_fov_half,
         cam_dist_values,
         tilt_values,
     })
@@ -442,6 +446,7 @@ mod tests {
             tex_count: 3,
             spin: 0.5,
             steps: 100.0,
+            bake_fov_half: 2.0,
             cam_dist_values: grid_cam_dist_values(4),
             tilt_values: grid_tilt_values(4),
         }
@@ -528,6 +533,7 @@ mod tests {
             tex_count: 3,
             spin: 0.0,
             steps: 50.0,
+            bake_fov_half: 2.0,
             cam_dist_values: vec![1.5, 5.0, 15.0, 50.0],
             tilt_values: vec![0.0, 30.0, 60.0, 90.0],
         };
@@ -604,6 +610,7 @@ mod tests {
             tex_count: 3,
             spin: 0.0,
             steps: 50.0,
+            bake_fov_half: 2.0,
             cam_dist_values: vec![1.5, 50.0],
             tilt_values: vec![0.0, 90.0],
         };

@@ -31,7 +31,11 @@ struct Uniforms {
     w_tr: f32,
     w_bl: f32,
     w_br: f32,
-    _pad0: f32,
+    /// Half-extent of the screen-space ray field that the bake covers.
+    /// Bake screen.x and screen.y both range over [-bake_fov_half, +bake_fov_half].
+    /// Display divides the lookup NDC by this so the bake covers the visible
+    /// rectangle even at wide aspect ratios and zoomed-out scales.
+    bake_fov_half: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -248,7 +252,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         / vec2<f32>(f32(dims.x), f32(dims.y));
 
     // Output pixel → bake-space UV.
-    // Bake was rendered with aspect=1.0, uv_scale=1.0, rotate=0.
+    // Bake was rendered with aspect=1.0, rotate=0, and uv_scale=bake_fov_half
+    // (so the bake covers screen-space rays in [-bake_fov_half, +bake_fov_half]).
     // We map current params (aspect, uv_scale, rotate) into the same square.
     let ndc = out_uv * 2.0 - 1.0;
     let screen = vec2<f32>(ndc.x * u.aspect * u.uv_scale, ndc.y * u.uv_scale);
@@ -261,8 +266,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         screen.x * sin_r + screen.y * cos_r,
     );
 
-    // Map screen-space [-1, 1] back to bake UV [0, 1].
-    let bake_uv = rotated * 0.5 + 0.5;
+    // Bake covers screen-space [-bake_fov_half, +bake_fov_half] → texture [0, 1].
+    let bake_uv = rotated * (0.5 / u.bake_fov_half) + 0.5;
 
     // Sample all 4 neighbors with bilinear filtering.
     let d1_tl = textureSampleLevel(tl_defl1, s_linear, bake_uv, 0.0);
