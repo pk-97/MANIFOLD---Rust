@@ -40,7 +40,12 @@ struct Uniforms {
 @group(0) @binding(1) var<storage, read_write> particles: array<Particle>;
 
 const STEPS_PER_ADVANCE: i32 = 8;
-const WARMUP_STEPS: i32 = 50;
+// Warmup for escape-respawn (cheap, called per particle per escape event).
+const RESPAWN_WARMUP: i32 = 50;
+// Minimum integration time for initial seed — ensures all attractor types
+// have converged onto their manifold before the first rendered frame.
+// Dynamic step count = SEED_MIN_TIME / dt, capped at 2000.
+const SEED_MIN_TIME: f32 = 5.0;
 
 // ── Hashing (Wang hash — deterministic, fast, no sin()) ──
 
@@ -171,7 +176,7 @@ fn respawn_near_center(id: u32, center: vec3<f32>, scl: f32,
     let seed = hash_float3(id * 1664525u + 12345u) * 2.0 - 1.0;
     var state = center + seed * scl * 0.15;
 
-    for (var w = 0; w < WARMUP_STEPS; w++) {
+    for (var w = 0; w < RESPAWN_WARMUP; w++) {
         state = attractor_step(atype, state, dt, chaos);
     }
     return state;
@@ -249,9 +254,12 @@ fn cs_seed(@builtin(global_invocation_id) id: vec3<u32>) {
     let rnd = hash_float3(seed) * 2.0 - 1.0;
     var state = center + rnd * scl * 0.15;
 
-    // Warmup to escape transient (doubled dt like Unity SeedKernel)
+    // Warmup to escape transient (doubled dt like Unity SeedKernel).
+    // Step count is time-based so all attractor types get equivalent
+    // convergence time regardless of their dt (Lorenz: ~834, Thomas: ~84).
     let dt = u.attractor_dt * 2.0;
-    for (var w = 0; w < WARMUP_STEPS; w++) {
+    let warmup_steps = clamp(i32(SEED_MIN_TIME / dt) + 1, RESPAWN_WARMUP, 2000);
+    for (var w = 0; w < warmup_steps; w++) {
         state = attractor_step(u.attractor_type, state, dt, u.chaos);
     }
 
