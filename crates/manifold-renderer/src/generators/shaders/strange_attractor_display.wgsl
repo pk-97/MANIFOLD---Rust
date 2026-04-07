@@ -23,7 +23,12 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let uv_raw = (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(dims);
     let uv = (uv_raw - vec2<f32>(0.5)) / max(params.uv_scale, 0.001) + vec2<f32>(0.5);
 
-    let density = textureSampleLevel(t_density, s_density, uv, 0.0).r;
+    // Out-of-bounds UV reads black — prevents ClampToEdge from stretching
+    // the attractor edge when scale > 1 zooms the view outside [0,1].
+    var density = 0.0;
+    if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {
+        density = textureSampleLevel(t_density, s_density, uv, 0.0).r;
+    }
 
     // Extended Reinhard tone curve: x*(1 + x/W^2) / (1 + x), W = 3.0
     let x = density * params.intensity * params.contrast;
