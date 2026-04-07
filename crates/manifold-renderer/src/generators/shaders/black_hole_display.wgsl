@@ -239,9 +239,31 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let uv = vec2<f32>(f32(gid.x) + 0.5, f32(gid.y) + 0.5)
         / vec2<f32>(f32(dims.x), f32(dims.y));
 
-    let d1 = textureSampleLevel(deflection1, s_linear, uv, 0.0);
-    let d2 = textureSampleLevel(deflection2, s_linear, uv, 0.0);
-    let sky = textureSampleLevel(sky_dir_tex, s_linear, uv, 0.0);
+    // ── Gaussian-blurred upscale of all deflection data ──
+    // 5×5 Gaussian blur at deflection texel scale.
+    // Smooths the shadow boundary discontinuity while preserving
+    // disk detail (neighbors are similar away from boundary).
+    let dp = 1.0 / vec2<f32>(textureDimensions(deflection1));
+    var d1 = vec4<f32>(0.0);
+    var d2 = vec4<f32>(0.0);
+    var sky = vec4<f32>(0.0);
+    for (var dy = -2; dy <= 2; dy++) {
+        for (var dx = -2; dx <= 2; dx++) {
+            let offset = vec2<f32>(f32(dx), f32(dy)) * dp;
+            // Gaussian weights (sigma ≈ 1.0 texel)
+            let dist2 = f32(dx * dx + dy * dy);
+            let w = exp(-dist2 * 0.5);
+            d1 += textureSampleLevel(deflection1, s_linear, uv + offset, 0.0) * w;
+            d2 += textureSampleLevel(deflection2, s_linear, uv + offset, 0.0) * w;
+            sky += textureSampleLevel(sky_dir_tex, s_linear, uv + offset, 0.0) * w;
+        }
+    }
+    // Normalize (sum of 5×5 Gaussian weights with sigma=1)
+    let w_total = 1.0 + 4.0 * exp(-0.5) + 4.0 * exp(-1.0) + 4.0 * exp(-2.0)
+        + 8.0 * exp(-2.5) + 4.0 * exp(-4.0);
+    d1 /= w_total;
+    d2 /= w_total;
+    sky /= w_total;
 
     let final_r = d1.r;
     let c1_r = d1.g;
@@ -254,8 +276,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // ── Star field background ──
     var color = vec3<f32>(0.0);
-    if sky.w > 0.5 {
-        color = star_field(normalize(sky.xyz), u.stars_brightness);
+    if sky.w > 0.3 {
+        color = star_field(normalize(sky.xyz), u.stars_brightness) * sky.w;
     }
     var total_opacity = 0.0;
 
