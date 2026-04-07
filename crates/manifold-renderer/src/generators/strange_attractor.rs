@@ -32,7 +32,6 @@ const PARTICLE_SIZE_BYTES: u64 = std::mem::size_of::<Particle>() as u64;
 const SCATTER_REFERENCE_AREA: f32 = 1920.0 * 1080.0;
 
 const DENSITY_FORMAT: manifold_gpu::GpuTextureFormat = manifold_gpu::GpuTextureFormat::Rgba16Float;
-const BLUR_RADIUS: f32 = 3.0;
 
 fn param(ctx: &GeneratorContext, idx: usize, default: f32) -> f32 {
     if ctx.param_count > idx as u32 {
@@ -90,25 +89,12 @@ struct DisplayUniforms {
     invert: f32,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct BlurUniforms {
-    direction: [f32; 2],
-    radius: f32,
-    texel_x: f32,
-    texel_y: f32,
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
-}
-
 pub struct StrangeAttractorGenerator {
     // Compute pipelines
     simulate_pipeline: manifold_gpu::GpuComputePipeline,
     seed_pipeline: manifold_gpu::GpuComputePipeline,
     splat_pipeline: manifold_gpu::GpuComputePipeline,
     resolve_pipeline: manifold_gpu::GpuComputePipeline,
-    blur_pipeline: manifold_gpu::GpuComputePipeline,
     display_pipeline: manifold_gpu::GpuComputePipeline,
     sampler: manifold_gpu::GpuSampler,
 
@@ -116,7 +102,6 @@ pub struct StrangeAttractorGenerator {
     particle_buffer: Option<manifold_gpu::GpuBuffer>,
     scatter_accum: Option<manifold_gpu::GpuBuffer>,
     density_tex: Option<manifold_gpu::GpuTexture>,
-    blur_tex: Option<manifold_gpu::GpuTexture>,
 
     // State
     active_count: u32,
@@ -146,11 +131,6 @@ impl StrangeAttractorGenerator {
             "resolve_main",
             "Attractor Resolve",
         );
-        let blur_pipeline = device.create_compute_pipeline(
-            include_str!("shaders/gaussian_blur_compute.wgsl"),
-            "cs_main",
-            "Attractor Blur",
-        );
         let display_pipeline = device.create_compute_pipeline(
             include_str!("shaders/strange_attractor_display.wgsl"),
             "cs_main",
@@ -169,13 +149,11 @@ impl StrangeAttractorGenerator {
             seed_pipeline,
             splat_pipeline,
             resolve_pipeline,
-            blur_pipeline,
             display_pipeline,
             sampler,
             particle_buffer: None,
             scatter_accum: None,
             density_tex: None,
-            blur_tex: None,
             active_count: 0,
             scatter_width: 0,
             scatter_height: 0,
@@ -212,62 +190,6 @@ impl StrangeAttractorGenerator {
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
             label: "Attractor Density",
         }));
-        self.blur_tex = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
-            width: w,
-            height: h,
-            depth: 1,
-            format: DENSITY_FORMAT,
-            dimension: manifold_gpu::GpuTextureDimension::D2,
-            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
-            label: "Attractor Blur Temp",
-        }));
-    }
-
-    fn dispatch_blur(
-        &self,
-        gpu: &mut GpuEncoder,
-        source: &manifold_gpu::GpuTexture,
-        target_tex: &manifold_gpu::GpuTexture,
-        direction: [f32; 2],
-        radius: f32,
-        texel_x: f32,
-        texel_y: f32,
-        target_w: u32,
-        target_h: u32,
-        label: &str,
-    ) {
-        let uniforms = BlurUniforms {
-            direction,
-            radius,
-            texel_x,
-            texel_y,
-            _pad0: 0.0,
-            _pad1: 0.0,
-            _pad2: 0.0,
-        };
-        gpu.native_enc.dispatch_compute(
-            &self.blur_pipeline,
-            &[
-                manifold_gpu::GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                manifold_gpu::GpuBinding::Texture {
-                    binding: 1,
-                    texture: source,
-                },
-                manifold_gpu::GpuBinding::Sampler {
-                    binding: 2,
-                    sampler: &self.sampler,
-                },
-                manifold_gpu::GpuBinding::Texture {
-                    binding: 3,
-                    texture: target_tex,
-                },
-            ],
-            [target_w.div_ceil(16), target_h.div_ceil(16), 1],
-            label,
-        );
     }
 
     fn dispatch_seed(&self, gpu: &mut GpuEncoder, uniforms: &SimulateUniforms) {
@@ -428,8 +350,10 @@ impl Generator for StrangeAttractorGenerator {
 
         gpu.native_enc.clear_buffer(scatter_accum);
 
-        let scaled_energy =
-            (splat_size * super::compute_common::FIXED_POINT_SCALE).round() as u32;
+        // Normalize energy by particle count so brightness stays constant as
+        // count changes — matches fluid sim formula exactly.
+        let energy = 0.005 * splat_size / 3.0 * (1_000_000.0 / active_count as f32);
+        let scaled_energy = (energy * 4096.0 + 0.5) as u32;
         let splat_uniforms = SplatUniforms {
             active_count,
             width: sw,
@@ -487,43 +411,7 @@ impl Generator for StrangeAttractorGenerator {
         );
 
         // ================================================================
-        // PHASE 3: Blur — separable Gaussian to smooth particle density
-        // ================================================================
-
-        let blur_tex = self.blur_tex.as_ref().unwrap();
-        let texel_x = 1.0 / sw as f32;
-        let texel_y = 1.0 / sh as f32;
-
-        // H blur: density_tex -> blur_tex
-        self.dispatch_blur(
-            gpu,
-            density_tex,
-            blur_tex,
-            [1.0, 0.0],
-            BLUR_RADIUS,
-            texel_x,
-            texel_y,
-            sw,
-            sh,
-            "Attractor Blur H",
-        );
-
-        // V blur: blur_tex -> density_tex
-        self.dispatch_blur(
-            gpu,
-            blur_tex,
-            density_tex,
-            [0.0, 1.0],
-            BLUR_RADIUS,
-            texel_x,
-            texel_y,
-            sw,
-            sh,
-            "Attractor Blur V",
-        );
-
-        // ================================================================
-        // PHASE 4: Display — extended Reinhard tone mapping
+        // PHASE 3: Display — extended Reinhard tone mapping
         // ================================================================
 
         let area_scale = (sw as f32 * sh as f32) / SCATTER_REFERENCE_AREA;
@@ -565,7 +453,6 @@ impl Generator for StrangeAttractorGenerator {
         // Invalidate scatter resources (output dimensions changed) but keep particles alive.
         self.scatter_accum = None;
         self.density_tex = None;
-        self.blur_tex = None;
         self.scatter_width = 0;
         self.scatter_height = 0;
     }
@@ -576,7 +463,6 @@ impl Generator for StrangeAttractorGenerator {
         self.particle_buffer = None;
         self.scatter_accum = None;
         self.density_tex = None;
-        self.blur_tex = None;
         self.scatter_width = 0;
         self.scatter_height = 0;
         self.last_attractor_type = -1;
