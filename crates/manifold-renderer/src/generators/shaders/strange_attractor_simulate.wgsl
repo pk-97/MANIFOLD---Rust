@@ -42,10 +42,12 @@ struct Uniforms {
 const STEPS_PER_ADVANCE: i32 = 8;
 // Warmup for escape-respawn (cheap, called per particle per escape event).
 const RESPAWN_WARMUP: i32 = 50;
-// Minimum integration time for initial seed — ensures all attractor types
-// have converged onto their manifold before the first rendered frame.
-// Dynamic step count = SEED_MIN_TIME / dt, capped at 2000.
-const SEED_MIN_TIME: f32 = 5.0;
+// Minimum integration time for initial seed convergence onto the manifold.
+// A second SEED_MIN_TIME span is added as a stagger (0..N extra steps spread
+// across particles) so particles land at different attractor phases and the
+// full structure is visible from the first rendered frame.
+// Total steps per particle: 1x..2x (SEED_MIN_TIME/dt), capped at 4000.
+const SEED_MIN_TIME: f32 = 10.0;
 
 // ── Hashing (Wang hash — deterministic, fast, no sin()) ──
 
@@ -255,10 +257,13 @@ fn cs_seed(@builtin(global_invocation_id) id: vec3<u32>) {
     var state = center + rnd * scl * 0.15;
 
     // Warmup to escape transient (doubled dt like Unity SeedKernel).
-    // Step count is time-based so all attractor types get equivalent
-    // convergence time regardless of their dt (Lorenz: ~834, Thomas: ~84).
+    // converge_steps: time-based so all types get equivalent convergence.
+    // phase_steps: stagger across particles (0..converge_steps extra) so
+    //   they span the full attractor cycle and fill the structure instantly.
     let dt = u.attractor_dt * 2.0;
-    let warmup_steps = clamp(i32(SEED_MIN_TIME / dt) + 1, RESPAWN_WARMUP, 2000);
+    let converge_steps = clamp(i32(SEED_MIN_TIME / dt) + 1, RESPAWN_WARMUP, 2000);
+    let phase_steps = converge_steps * i32(i % 997u) / 997;
+    let warmup_steps = min(converge_steps + phase_steps, 4000);
     for (var w = 0; w < warmup_steps; w++) {
         state = attractor_step(u.attractor_type, state, dt, u.chaos);
     }
