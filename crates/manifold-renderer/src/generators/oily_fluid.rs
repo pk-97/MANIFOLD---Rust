@@ -32,6 +32,9 @@ const CURL: usize = 4;
 const RELIEF: usize = 5;
 const CHROMA: usize = 6;
 const CONTRAST: usize = 7;
+const HUE: usize = 8;
+const SATURATION: usize = 9;
+const BRIGHTNESS: usize = 10;
 
 const STATE_FORMAT: manifold_gpu::GpuTextureFormat = manifold_gpu::GpuTextureFormat::Rgba16Float;
 const BLUR_RADIUS: f32 = 12.0; // spec: filter size 12
@@ -94,9 +97,9 @@ struct RenderUniforms {
     normal_z_scale: f32,
     chroma: f32,
     contrast: f32,
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
+    hue_shift: f32,
+    saturation: f32,
+    brightness: f32,
 }
 
 // Matches gaussian_blur_compute.wgsl's BlurUniforms exactly (32 bytes).
@@ -268,6 +271,9 @@ impl Generator for OilyFluidGenerator {
         let relief = param(ctx, RELIEF, 0.5);
         let chroma = param(ctx, CHROMA, 2.0);
         let contrast = param(ctx, CONTRAST, 1.4);
+        let hue_shift = param(ctx, HUE, 0.0);
+        let saturation = param(ctx, SATURATION, 1.0);
+        let brightness = param(ctx, BRIGHTNESS, 1.0);
 
         let fw = ctx.width as f32;
         let fh = ctx.height as f32;
@@ -479,9 +485,9 @@ impl Generator for OilyFluidGenerator {
             normal_z_scale: relief,
             chroma,
             contrast,
-            _pad0: 0.0,
-            _pad1: 0.0,
-            _pad2: 0.0,
+            hue_shift,
+            saturation,
+            brightness,
         };
         gpu.native_enc.dispatch_compute(
             &self.render_pipeline,

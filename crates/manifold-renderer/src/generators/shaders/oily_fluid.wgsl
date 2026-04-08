@@ -206,9 +206,9 @@ struct RenderUniforms {
     normal_z_scale: f32,      // 0.5
     chroma: f32,              // chromatic aberration master scale
     contrast: f32,            // 1.4
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
+    hue_shift: f32,           // [0, 1] — hue rotation in turns (0.5 = 180°)
+    saturation: f32,          // 0..2 (1 = neutral)
+    brightness: f32,          // 0..2 (1 = neutral)
 };
 
 @group(0) @binding(0) var<uniform> rnd_u: RenderUniforms;
@@ -271,6 +271,14 @@ fn cs_render(@builtin(global_invocation_id) gid: vec3<u32>) {
     var col = abs(recombined);
     col = (col - 0.5) * rnd_u.contrast + 0.5;
     col = clamp(col, vec3<f32>(0.0), vec3<f32>(1.0));
+
+    // Color grading: hue rotate → saturation → brightness. Done in HSV so
+    // hue is a proper rotation instead of a per-channel multiply.
+    var hsv = rgb_to_hsv(col);
+    hsv.x = fract(hsv.x + rnd_u.hue_shift + 1.0);
+    hsv.y = clamp(hsv.y * rnd_u.saturation, 0.0, 1.0);
+    col = hsv_to_rgb(hsv.x, hsv.y, hsv.z);
+    col = clamp(col * rnd_u.brightness, vec3<f32>(0.0), vec3<f32>(1.0));
 
     textureStore(rnd_out, vec2<i32>(gid.xy), vec4<f32>(col, 1.0));
 }

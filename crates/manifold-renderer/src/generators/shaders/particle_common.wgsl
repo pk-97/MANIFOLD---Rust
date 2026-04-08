@@ -182,6 +182,30 @@ fn simplex_noise_3d(p: vec3<f32>) -> f32 {
     return mix(nxy0, nxy1, u.z);
 }
 
+// ── RGB to HSV ──────────────────────────────────────────────────────
+
+fn rgb_to_hsv(c: vec3<f32>) -> vec3<f32> {
+    let cmax = max(c.r, max(c.g, c.b));
+    let cmin = min(c.r, min(c.g, c.b));
+    let d = cmax - cmin;
+    var h: f32 = 0.0;
+    if d > 1e-6 {
+        if cmax == c.r {
+            h = ((c.g - c.b) / d) % 6.0;
+        } else if cmax == c.g {
+            h = (c.b - c.r) / d + 2.0;
+        } else {
+            h = (c.r - c.g) / d + 4.0;
+        }
+        h = h / 6.0;
+        if h < 0.0 {
+            h = h + 1.0;
+        }
+    }
+    let s = select(0.0, d / cmax, cmax > 1e-6);
+    return vec3<f32>(h, s, cmax);
+}
+
 // ── HSV to RGB ──────────────────────────────────────────────────────
 
 fn hsv_to_rgb(h: f32, s: f32, v: f32) -> vec3<f32> {
