@@ -313,11 +313,13 @@ impl Generator for BlackHoleGenerator {
         let rotate_rad = rotate_deg.to_radians();
         let orbit_angle = ctx.time as f32 * speed * 0.3;
 
-        // Eighth-res deflection maps — geodesic data is smooth and the
-        // wider gaussian in display.wgsl handles upsampling. Cost of the
-        // bake drops 4× compared to quarter-res.
-        let defl_w = (ctx.width / 8).max(1);
-        let defl_h = (ctx.height / 8).max(1);
+        // Quarter-res deflection maps. Higher resolution than the
+        // eighth-res experiment because mipmap box-filtering produces
+        // visibly grainy blur at higher levels — finer source data
+        // means lower mip levels suffice in the display sample, which
+        // hides the box-filter quantization.
+        let defl_w = (ctx.width / 4).max(1);
+        let defl_h = (ctx.height / 4).max(1);
         self.ensure_deflection_maps(gpu.device, defl_w, defl_h);
 
         // ── Pass 1: Deflection Map (only on camera/scale/steps change) ──
