@@ -152,6 +152,7 @@ pub fn dispatch(
         | PanelAction::MasterExitPathClicked
         | PanelAction::SetLedExitIndex(_)
         | PanelAction::MasterOpacityRightClick
+        | PanelAction::LedEnabledToggle
         | PanelAction::LedBrightnessSnapshot
         | PanelAction::LedBrightnessChanged(_)
         | PanelAction::LedBrightnessCommit

@@ -34,7 +34,7 @@ pub(super) fn dispatch_inspector(
     action: &PanelAction,
     project: &mut Project,
     content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
-    _content_state: &crate::content_state::ContentState,
+    content_state: &crate::content_state::ContentState,
     ui: &mut UIRoot,
     selection: &mut SelectionState,
     active_layer: &mut Option<LayerId>,
@@ -168,6 +168,13 @@ pub(super) fn dispatch_inspector(
                 ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
             }
             *active_inspector_drag = None;
+            DispatchResult::handled()
+        }
+
+        // ── LED enabled toggle ───────────────────────────────────
+        PanelAction::LedEnabledToggle => {
+            let new_enabled = !content_state.led_enabled;
+            ContentCommand::send(content_tx, ContentCommand::SetLedEnabled(new_enabled));
             DispatchResult::handled()
         }
 

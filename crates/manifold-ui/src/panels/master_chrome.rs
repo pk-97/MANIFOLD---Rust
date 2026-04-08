@@ -15,6 +15,7 @@ const PAD_V: f32 = 2.0;
 const GAP: f32 = 4.0;
 const CHEVRON_W: f32 = 18.0;
 const LED_LABEL_W: f32 = 28.0;
+const LED_TOGGLE_W: f32 = 28.0;
 const LED_SLIDER_W: f32 = 80.0;
 const OPACITY_LABEL_W: f32 = 50.0;
 const FONT_SIZE: u16 = color::FONT_BODY;
@@ -35,6 +36,7 @@ pub struct MasterChromePanel {
     chevron_btn_id: i32,
     exit_path_label_id: i32,
     exit_path_btn_id: i32,
+    led_toggle_btn_id: i32,
     divider_ids: [i32; 3],
 
     // Sliders — single source of truth for drag state + cache
@@ -44,6 +46,7 @@ pub struct MasterChromePanel {
     // State
     is_collapsed: bool,
     cached_exit_path: String,
+    cached_led_enabled: bool,
 
     // Node range for ownership checking
     first_node: usize,
@@ -57,11 +60,13 @@ impl MasterChromePanel {
             chevron_btn_id: -1,
             exit_path_label_id: -1,
             exit_path_btn_id: -1,
+            led_toggle_btn_id: -1,
             divider_ids: [-1; 3],
             opacity: SliderDragState::default(),
             led_brightness: SliderDragState::default(),
             is_collapsed: false,
             cached_exit_path: "Default".into(),
+            cached_led_enabled: false,
             first_node: 0,
             node_count: 0,
         }
@@ -178,7 +183,7 @@ impl MasterChromePanel {
         ) as i32;
         cy += DIVIDER_H;
 
-        // LED row: [LED label] [exit path dropdown] [mini brightness slider]
+        // LED row: [LED label] [exit path dropdown] [ON/OFF toggle] [mini brightness slider]
         let led_val = self.led_brightness.cached_value();
         let led_brightness = if led_val.is_nan() { 1.0 } else { led_val };
 
@@ -199,7 +204,8 @@ impl MasterChromePanel {
 
         // Dropdown button — fills middle space
         let btn_x = cx + LED_LABEL_W + GAP;
-        let btn_w = (content_w - LED_LABEL_W - GAP - GAP - LED_SLIDER_W).max(20.0);
+        let btn_w =
+            (content_w - LED_LABEL_W - GAP - GAP - LED_TOGGLE_W - GAP - LED_SLIDER_W).max(20.0);
         self.exit_path_btn_id = tree.add_button(
             -1,
             btn_x,
@@ -219,8 +225,21 @@ impl MasterChromePanel {
             &exit_path,
         ) as i32;
 
+        // ON/OFF toggle button
+        let toggle_x = btn_x + btn_w + GAP;
+        let toggle_h = 18.0;
+        self.led_toggle_btn_id = tree.add_button(
+            -1,
+            toggle_x,
+            cy + (EXIT_PATH_ROW_H - toggle_h) * 0.5,
+            LED_TOGGLE_W,
+            toggle_h,
+            self.led_toggle_style(),
+            if self.cached_led_enabled { "ON" } else { "OFF" },
+        ) as i32;
+
         // Mini brightness slider (no label, inline)
-        let slider_x = btn_x + btn_w + GAP;
+        let slider_x = toggle_x + LED_TOGGLE_W + GAP;
         let led_slider_rect = Rect::new(
             slider_x,
             cy + (EXIT_PATH_ROW_H - SLIDER_ROW_H) * 0.5,
@@ -299,6 +318,46 @@ impl MasterChromePanel {
         self.led_brightness.sync(tree, value, &fmt_opacity);
     }
 
+    pub fn sync_led_enabled(&mut self, tree: &mut UITree, enabled: bool) {
+        if enabled == self.cached_led_enabled {
+            return;
+        }
+        self.cached_led_enabled = enabled;
+        if self.led_toggle_btn_id >= 0 {
+            tree.set_style(self.led_toggle_btn_id as u32, self.led_toggle_style());
+            tree.set_text(
+                self.led_toggle_btn_id as u32,
+                if enabled { "ON" } else { "OFF" },
+            );
+        }
+    }
+
+    fn led_toggle_style(&self) -> UIStyle {
+        if self.cached_led_enabled {
+            UIStyle {
+                bg_color: color::PLAY_GREEN,
+                hover_bg_color: color::PLAY_ACTIVE,
+                pressed_bg_color: color::BUTTON_PRESSED,
+                text_color: color::TEXT_WHITE_C32,
+                font_size: FONT_SIZE,
+                corner_radius: color::SMALL_RADIUS,
+                text_align: TextAlign::Center,
+                ..UIStyle::default()
+            }
+        } else {
+            UIStyle {
+                bg_color: color::BUTTON_INACTIVE,
+                hover_bg_color: color::BUTTON_DIM,
+                pressed_bg_color: color::BUTTON_PRESSED,
+                text_color: color::TEXT_DIMMED_C32,
+                font_size: FONT_SIZE,
+                corner_radius: color::SMALL_RADIUS,
+                text_align: TextAlign::Center,
+                ..UIStyle::default()
+            }
+        }
+    }
+
     pub fn sync_exit_path(&mut self, tree: &mut UITree, path: &str) {
         self.cached_exit_path = path.into();
         if self.exit_path_btn_id >= 0 {
@@ -325,6 +384,9 @@ impl MasterChromePanel {
         }
         if id == self.exit_path_btn_id {
             return vec![PanelAction::MasterExitPathClicked];
+        }
+        if id == self.led_toggle_btn_id {
+            return vec![PanelAction::LedEnabledToggle];
         }
         Vec::new()
     }

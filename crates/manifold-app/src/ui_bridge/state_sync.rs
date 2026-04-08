@@ -643,6 +643,9 @@ pub fn push_state(
             ui.inspector
                 .master_chrome_mut()
                 .sync_led_brightness(tree, project.settings.led_brightness);
+            ui.inspector
+                .master_chrome_mut()
+                .sync_led_enabled(tree, content_state.led_enabled);
 
             // LED exit path label + cached effect names for dropdown
             let exit_label = super::led_exit_path_label(

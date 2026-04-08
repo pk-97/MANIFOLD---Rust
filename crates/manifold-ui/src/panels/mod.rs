@@ -122,7 +122,8 @@ pub enum PanelAction {
     MasterOpacityCommit,
     MasterOpacityRightClick,
 
-    // Inspector chrome — LED Brightness
+    // Inspector chrome — LED
+    LedEnabledToggle,
     LedBrightnessSnapshot,
     LedBrightnessChanged(f32),
     LedBrightnessCommit,
