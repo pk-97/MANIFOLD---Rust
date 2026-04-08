@@ -33,13 +33,6 @@ struct Uniforms {
 //   1.0 = top-biased, 0.0 = bottom-biased. The other side still
 //   contributes (at 0.6×) so the disk feels volumetric instead of
 //   showing only one face.
-//
-// The polar texture uses uniform angular bins. At small radii each
-// bin covers a tiny arc length but maps to a wide screen-space
-// wedge, so a single bright inner-disk cell projects to a long
-// radial streak. The returned density is multiplied by an
-// area-correcting factor (~r/outer) to keep inner-disk particle
-// contributions visually proportional to their physical density.
 fn sample_particle_density(
     disk_r: f32, cos_a: f32, sin_a: f32, near_bias: f32,
 ) -> f32 {
@@ -54,10 +47,7 @@ fn sample_particle_density(
     let d_bot = textureSampleLevel(particle_density_bottom, s_linear, uv, 0.0).r;
     let near_w = mix(0.6, 1.0, near_bias);
     let far_w  = mix(1.0, 0.6, near_bias);
-    let raw = d_top * near_w + d_bot * far_w;
-    // Area correction: inner cells are over-represented per screen pixel.
-    let area_w = mix(0.35, 1.0, r_norm);
-    return raw * area_w;
+    return d_top * near_w + d_bot * far_w;
 }
 
 // ── Hash functions ──
@@ -325,7 +315,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if u.particle_strength > 0.001 {
             // First crossing is the front disk — bias toward the top layer.
             let d1 = sample_particle_density(c1_r, c1_ca, c1_sa, 1.0);
-            disk_col = disk_col * (1.0 + d1 * u.particle_strength * 2.5);
+            disk_col = disk_col * (1.0 + d1 * u.particle_strength * 5.0);
         }
         color = color * (1.0 - c1_op * 0.85) + disk_col;
         total_opacity = c1_op;
@@ -340,7 +330,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if u.particle_strength > 0.001 {
             // Second crossing is the lensed back of the disk — bias toward bottom.
             let d2v = sample_particle_density(c2_r, c2_ca, c2_sa, 0.0);
-            disk_col = disk_col * (1.0 + d2v * u.particle_strength * 2.5);
+            disk_col = disk_col * (1.0 + d2v * u.particle_strength * 5.0);
         }
         color = color * (1.0 - c2_op * remaining * 0.5) + disk_col;
         total_opacity = clamp(total_opacity + c2_op * 0.5, 0.0, 1.0);

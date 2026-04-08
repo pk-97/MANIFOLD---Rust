@@ -25,5 +25,10 @@ fn resolve(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     textureStore(density_out, gid.xy, vec4<f32>(density, 0.0, 0.0, 1.0));
 
-    atomicStore(&accum[idx], 0u);
+    // Temporal decay instead of clearing. Particles accumulate over many
+    // frames in cells they repeatedly visit, building crisp orbital
+    // streak filaments instead of per-frame point noise. ~92% retention
+    // gives streaks ~12 frames long at 60fps.
+    let decayed = (raw * 92u) / 100u;
+    atomicStore(&accum[idx], decayed);
 }
