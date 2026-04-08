@@ -33,6 +33,24 @@ struct Uniforms {
 //   1.0 = top-biased, 0.0 = bottom-biased. The other side still
 //   contributes (at 0.6×) so the disk feels volumetric instead of
 //   showing only one face.
+//
+// The polar texture uses uniform angular bins, so at small radii a
+// single cell covers a tiny arc length but maps to a wide screen-
+// space wedge. A bright inner cell projects to a long radial streak
+// across many screen pixels. To kill the streak artifact we do TWO
+// things: (a) area-correct the density so inner cells contribute
+// less per pixel, AND (b) at small r, average multiple adjacent
+// angular cells so no single cell can dominate a wedge. The
+// angular blur radius scales as 1/r — wide at the inner edge,
+// vanishing at the outer edge.
+fn sample_one(uv: vec2<f32>, near_bias: f32) -> f32 {
+    let d_top = textureSampleLevel(particle_density_top, s_linear, uv, 0.0).r;
+    let d_bot = textureSampleLevel(particle_density_bottom, s_linear, uv, 0.0).r;
+    let near_w = mix(0.6, 1.0, near_bias);
+    let far_w  = mix(1.0, 0.6, near_bias);
+    return d_top * near_w + d_bot * far_w;
+}
+
 fn sample_particle_density(
     disk_r: f32, cos_a: f32, sin_a: f32, near_bias: f32,
 ) -> f32 {
@@ -42,12 +60,31 @@ fn sample_particle_density(
         (disk_r - u.disk_inner) / (u.disk_outer - u.disk_inner),
         0.0, 1.0,
     );
-    let uv = vec2<f32>(ang_norm, r_norm);
-    let d_top = textureSampleLevel(particle_density_top, s_linear, uv, 0.0).r;
-    let d_bot = textureSampleLevel(particle_density_bottom, s_linear, uv, 0.0).r;
-    let near_w = mix(0.6, 1.0, near_bias);
-    let far_w  = mix(1.0, 0.6, near_bias);
-    return d_top * near_w + d_bot * far_w;
+
+    // Angular blur radius (in normalized texture coordinates) scales
+    // inverse-linearly with r_norm. At the inner edge we average over
+    // ~3% of the angular axis (~60 cells at width 2048), at the outer
+    // edge it collapses to a single sample.
+    let blur_radius = mix(0.030, 0.0, r_norm);
+
+    // 7-tap blur — symmetric, weights normalize automatically.
+    var raw = 0.0;
+    var wsum = 0.0;
+    for (var i: i32 = -3; i <= 3; i = i + 1) {
+        let off = f32(i) * (blur_radius / 3.0);
+        let w = exp(-f32(i * i) * 0.5);
+        let uv = vec2<f32>(fract(ang_norm + off + 1.0), r_norm);
+        raw = raw + sample_one(uv, near_bias) * w;
+        wsum = wsum + w;
+    }
+    raw = raw / wsum;
+
+    // Area correction: inner cells are still over-represented per
+    // screen pixel even after the blur. Stronger than before — fades
+    // toward 0 at the inner edge so the very innermost ring can't
+    // produce streaks at all.
+    let area_w = smoothstep(0.0, 0.4, r_norm);
+    return raw * area_w;
 }
 
 // ── Hash functions ──
@@ -315,7 +352,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if u.particle_strength > 0.001 {
             // First crossing is the front disk — bias toward the top layer.
             let d1 = sample_particle_density(c1_r, c1_ca, c1_sa, 1.0);
-            disk_col = disk_col * (1.0 + d1 * u.particle_strength * 5.0);
+            disk_col = disk_col * (1.0 + d1 * u.particle_strength * 2.5);
         }
         color = color * (1.0 - c1_op * 0.85) + disk_col;
         total_opacity = c1_op;
@@ -330,7 +367,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if u.particle_strength > 0.001 {
             // Second crossing is the lensed back of the disk — bias toward bottom.
             let d2v = sample_particle_density(c2_r, c2_ca, c2_sa, 0.0);
-            disk_col = disk_col * (1.0 + d2v * u.particle_strength * 5.0);
+            disk_col = disk_col * (1.0 + d2v * u.particle_strength * 2.5);
         }
         color = color * (1.0 - c2_op * remaining * 0.5) + disk_col;
         total_opacity = clamp(total_opacity + c2_op * 0.5, 0.0, 1.0);

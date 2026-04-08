@@ -25,7 +25,7 @@ const SPIN: usize = 10;
 const PARTICLE_STRENGTH: usize = 11;
 const PARTICLE_TURBULENCE: usize = 12;
 
-const PARTICLE_COUNT: u32 = 2_500_000;
+const PARTICLE_COUNT: u32 = 800_000;
 const POLAR_W: u32 = 2048;
 const POLAR_H: u32 = 1024;
 
@@ -410,16 +410,14 @@ impl Generator for BlackHoleGenerator {
             "BlackHole Particles Sim",
         );
 
-        // Do NOT clear the accum buffers each frame — the resolve shader
-        // applies temporal decay (92% retention) so particles accumulate
-        // into crisp orbital streak filaments over many frames.
+        gpu.native_enc.clear_buffer(accum_top);
+        gpu.native_enc.clear_buffer(accum_bot);
 
-        // Energy per particle. With 92% temporal decay in resolve, each
-        // cell's value reaches steady state ≈ 12.5× the per-frame splat
-        // contribution, so we scale energy down to compensate. Without
-        // this, accumulated values would saturate the polar texture
-        // within seconds.
-        let energy = 0.005 * (1_000_000.0 / PARTICLE_COUNT as f32);
+        // Energy per particle: target peak densities ~1.0 in clumps. The
+        // 4× factor compensates for the 4× larger cell count at 2048×1024
+        // — without it, finer cells would each see fewer particles and
+        // average density would drop proportionally.
+        let energy = 0.05 * 4.0 * (1_000_000.0 / PARTICLE_COUNT as f32);
         let scaled_energy = (energy * FIXED_POINT_SCALE + 0.5) as u32;
         let scatter_uniforms = ScatterUniforms {
             active_count: PARTICLE_COUNT,
@@ -551,6 +549,6 @@ impl Generator for BlackHoleGenerator {
     }
 
     fn internal_resolution_scale(&self) -> f32 {
-        1.0
+        0.75
     }
 }

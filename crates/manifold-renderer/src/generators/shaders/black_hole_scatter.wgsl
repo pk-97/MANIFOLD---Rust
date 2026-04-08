@@ -66,8 +66,10 @@ fn splat(@builtin(global_invocation_id) gid: vec3<u32>) {
     let py = u32(r_norm * f32(params.tex_h)) % params.tex_h;
     let idx = py * params.tex_w + px;
 
-    // Single-cell splat. Crispness comes from temporal accumulation in
-    // the resolve pass (92% retention), not from spatial smoothing.
+    // Two-layer polar: split by signed disk-plane height. Particles above the
+    // plane go into the top texture, below go into the bottom. The display
+    // shader blends them with a bias so each disk crossing favors its own
+    // side, giving the disk a sense of thickness.
     if pos.y >= 0.0 {
         atomicAdd(&accum_top[idx], params.scaled_energy);
     } else {
