@@ -122,12 +122,12 @@ impl StrangeAttractorGenerator {
             device.create_compute_pipeline(sim_src, "cs_seed", "Attractor Seed");
 
         let splat_pipeline = device.create_compute_pipeline(
-            include_str!("shaders/fluid_scatter.wgsl"),
+            include_str!("shaders/strange_attractor_scatter.wgsl"),
             "splat_main",
             "Attractor Splat",
         );
         let resolve_pipeline = device.create_compute_pipeline(
-            include_str!("shaders/fluid_scatter.wgsl"),
+            include_str!("shaders/strange_attractor_scatter.wgsl"),
             "resolve_main",
             "Attractor Resolve",
         );
