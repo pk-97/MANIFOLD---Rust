@@ -83,7 +83,7 @@ pub struct LedSettings {
 impl Default for LedSettings {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             output_type: ExternalOutputType::ArtNet,
             left_edge_width: 0.2,
             right_edge_width: 0.2,

@@ -5,7 +5,6 @@
 //! Unity equivalent: ArtNetOutput.cs
 
 use std::net::{SocketAddr, UdpSocket};
-use std::time::Instant;
 
 use manifold_gpu::{GpuDevice, GpuTexture};
 
@@ -41,17 +40,6 @@ pub struct ArtNetOutput {
 
     initialized: bool,
 
-    // Connection health — pause GPU work when host is unreachable
-    consecutive_failures: u32,
-    /// When true, skip GPU work (process_frame/poll_readback) until a probe succeeds.
-    disconnected: bool,
-    last_probe: Instant,
-    probe_interval_secs: u64,
-    /// Successful sends since last resume from disconnected state.
-    sends_since_resume: u32,
-    /// Whether the initial disconnect has been logged (suppress flap spam).
-    logged_disconnect: bool,
-
     // Debug: log first successful send
     sent_first_packet: bool,
     readback_count: u64,
@@ -82,12 +70,6 @@ impl ArtNetOutput {
             universe_count: 0,
             strip_start_channels: Vec::new(),
             initialized: false,
-            consecutive_failures: 0,
-            disconnected: false,
-            last_probe: Instant::now(),
-            probe_interval_secs: Self::PROBE_INTERVAL_BASE_SECS,
-            sends_since_resume: 0,
-            logged_disconnect: false,
             sent_first_packet: false,
             readback_count: 0,
         }
@@ -168,11 +150,6 @@ impl ArtNetOutput {
         self.initialized
     }
 
-    /// Returns true if the host is currently unreachable (GPU work paused).
-    pub fn is_disconnected(&self) -> bool {
-        self.disconnected
-    }
-
     /// Dispatch edge-extend compute and submit GPU readback.
     /// Uses a dedicated native Metal encoder (separate from the content frame).
     /// `signal_value` is the GpuEvent value that will be signaled after this
@@ -185,7 +162,7 @@ impl ArtNetOutput {
         signal_value: u64,
         event: &manifold_gpu::GpuEvent,
     ) {
-        if !self.initialized || self.disconnected {
+        if !self.initialized {
             return;
         }
         if self.readback.is_pending() {
@@ -226,7 +203,7 @@ impl ArtNetOutput {
 
     /// Check if readback completed and send DMX data if so.
     pub fn poll_readback(&mut self, event: &manifold_gpu::GpuEvent) {
-        if !self.initialized || self.disconnected {
+        if !self.initialized {
             return;
         }
         if let Some(pixels) = self.readback.try_read(event) {
@@ -325,43 +302,6 @@ impl ArtNetOutput {
         }
     }
 
-    /// How many consecutive send failures before we pause GPU work.
-    const DISCONNECT_THRESHOLD: u32 = 30;
-    /// Base probe interval (seconds). Doubles on each flap, caps at MAX.
-    const PROBE_INTERVAL_BASE_SECS: u64 = 3;
-    const PROBE_INTERVAL_MAX_SECS: u64 = 10;
-    /// Successful sends needed after resume to consider connection stable.
-    const STABLE_THRESHOLD: u32 = 120;
-
-    /// Try to reconnect by sending a single packet.
-    /// Called from the controller on every tick when disconnected.
-    pub fn try_probe(&mut self) {
-        if !self.disconnected || !self.initialized {
-            return;
-        }
-        let now = Instant::now();
-        if now.duration_since(self.last_probe).as_secs() < self.probe_interval_secs {
-            return;
-        }
-        self.last_probe = now;
-
-        let socket = match self.udp_socket.as_ref() {
-            Some(s) => s,
-            None => return,
-        };
-        if self.artnet_packets.is_empty() {
-            return;
-        }
-        let probe = &self.artnet_packets[0];
-        if socket.send_to(probe, self.endpoint).is_ok() {
-            // UDP send_to "succeeds" even for unreachable hosts (ARP queued).
-            // Don't log yet — wait for sustained successful sends in send_packet.
-            self.disconnected = false;
-            self.consecutive_failures = 0;
-            self.sends_since_resume = 0;
-        }
-    }
-
     fn send_packet(&mut self, packet: &[u8]) {
         let socket = match self.udp_socket.as_ref() {
             Some(s) => s,
@@ -370,8 +310,6 @@ impl ArtNetOutput {
 
         match socket.send_to(packet, self.endpoint) {
             Ok(_) => {
-                self.consecutive_failures = 0;
-                self.sends_since_resume += 1;
                 if !self.sent_first_packet {
                     self.sent_first_packet = true;
                     eprintln!(
@@ -380,32 +318,9 @@ impl ArtNetOutput {
                         packet.len(),
                     );
                 }
-                // Connection confirmed stable — log resume and reset backoff
-                if self.logged_disconnect
-                    && self.sends_since_resume == Self::STABLE_THRESHOLD
-                {
-                    eprintln!("[ArtNet] Host reachable — resumed LED output");
-                    self.logged_disconnect = false;
-                    self.probe_interval_secs = Self::PROBE_INTERVAL_BASE_SECS;
-                }
             }
             Err(e) => {
-                self.consecutive_failures += 1;
-                if self.consecutive_failures == Self::DISCONNECT_THRESHOLD {
-                    if self.sends_since_resume < Self::STABLE_THRESHOLD {
-                        // Flap: probe succeeded but real sends failed.
-                        // Back off silently.
-                        self.probe_interval_secs = (self.probe_interval_secs * 2)
-                            .min(Self::PROBE_INTERVAL_MAX_SECS);
-                    }
-                    if !self.logged_disconnect {
-                        eprintln!(
-                            "[ArtNet] Host unreachable ({e}) — pausing LED output"
-                        );
-                        self.logged_disconnect = true;
-                    }
-                    self.disconnected = true;
-                }
+                eprintln!("[ArtNet] Send error: {e}");
             }
         }
     }

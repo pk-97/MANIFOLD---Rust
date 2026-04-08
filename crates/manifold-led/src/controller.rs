@@ -88,12 +88,6 @@ impl LedOutputController {
             return;
         }
 
-        // Host unreachable — skip GPU work, just probe periodically
-        if self.output.is_disconnected() {
-            self.output.try_probe();
-            return;
-        }
-
         // No active content → blackout
         if active_clip_count == 0 {
             if !self.sent_blackout {
