@@ -304,23 +304,23 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         / vec2<f32>(f32(dims.x), f32(dims.y));
 
     // ── Gaussian-blurred upscale of all deflection data ──
-    // 9×9 Gaussian blur at deflection texel scale, sigma ≈ 2.0. The
-    // deflection bake is at quarter resolution, so a single deflection
-    // texel covers ~4 full-res pixels. A wider blur is needed to hide
-    // the underlying quarter-res grid at the shadow boundary; the
-    // previous 5×5 σ=1 kernel softened only ~1.25 full-res pixels,
-    // which left visible blockiness on the silhouette edge.
+    // 13×13 Gaussian blur at deflection texel scale, sigma ≈ 3.0. The
+    // deflection bake is at eighth resolution, so a single deflection
+    // texel covers ~8 full-res pixels — the wider kernel is needed to
+    // hide the underlying eighth-res grid. Sigma=3 in deflection-texel
+    // units corresponds to ~24 full-res pixels of softening, well
+    // above the 8-pixel texel size.
     let dp = 1.0 / vec2<f32>(textureDimensions(deflection1));
     var d1 = vec4<f32>(0.0);
     var d2 = vec4<f32>(0.0);
     var sky = vec4<f32>(0.0);
     var w_total = 0.0;
-    for (var dy = -4; dy <= 4; dy++) {
-        for (var dx = -4; dx <= 4; dx++) {
+    for (var dy = -6; dy <= 6; dy++) {
+        for (var dx = -6; dx <= 6; dx++) {
             let offset = vec2<f32>(f32(dx), f32(dy)) * dp;
             let dist2 = f32(dx * dx + dy * dy);
-            // sigma = 2.0 → divisor = 2σ² = 8
-            let w = exp(-dist2 / 8.0);
+            // sigma = 3.0 → divisor = 2σ² = 18
+            let w = exp(-dist2 / 18.0);
             d1 += textureSampleLevel(deflection1, s_linear, uv + offset, 0.0) * w;
             d2 += textureSampleLevel(deflection2, s_linear, uv + offset, 0.0) * w;
             sky += textureSampleLevel(sky_dir_tex, s_linear, uv + offset, 0.0) * w;
