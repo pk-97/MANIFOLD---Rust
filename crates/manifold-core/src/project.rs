@@ -117,6 +117,12 @@ impl Project {
         // Align all effect params to current definitions
         self.align_all_effect_params();
 
+        // Migrate generator param arrays to current registry length, preserving
+        // every existing value. Without this, the first slider interaction on a
+        // clip whose generator gained a parameter since save time would wipe
+        // every value to defaults.
+        self.migrate_all_generator_params();
+
         // Rebuild layer index cache + sync layer.index
         self.timeline.reindex_layers();
     }
@@ -133,6 +139,17 @@ impl Project {
                 for fx in effects.iter_mut() {
                     fx.align_to_definition();
                 }
+            }
+        }
+    }
+
+    /// Migrate every layer's generator param arrays to the current registry
+    /// length, preserving existing values and filling new tail entries from
+    /// the registry's defaults.
+    fn migrate_all_generator_params(&mut self) {
+        for layer in &mut self.timeline.layers {
+            if let Some(gp) = layer.gen_params_mut() {
+                gp.migrate_to_registry_length();
             }
         }
     }

@@ -68,13 +68,52 @@ impl GeneratorParamState {
         use crate::generator_definition_registry;
         if let Some(def) = generator_definition_registry::try_get(&self.generator_type) {
             if self.param_values.len() != def.param_count {
-                let gt = self.generator_type.clone();
-                self.init_defaults_for_type(gt);
+                self.migrate_to_registry_length();
             }
             if index < self.param_values.len() {
                 self.param_values[index] =
                     generator_definition_registry::clamp_param(&self.generator_type, index, value);
             }
+        }
+    }
+
+    /// Migrate `param_values` (and `base_param_values`, if present) to match
+    /// the current registry's parameter count for this generator type, while
+    /// preserving every existing value. Missing tail entries are filled from
+    /// the registry's default values; excess entries are truncated.
+    ///
+    /// This is what makes adding a new parameter to a generator non-destructive
+    /// for projects saved before the parameter existed. Without this migration,
+    /// the first slider interaction on an old clip would call
+    /// `init_defaults_for_type` and wipe every saved value.
+    pub fn migrate_to_registry_length(&mut self) {
+        use crate::generator_definition_registry;
+        let Some(def) = generator_definition_registry::try_get(&self.generator_type) else {
+            return;
+        };
+        let target = def.param_count;
+        if self.param_values.len() != target {
+            let mut migrated = Vec::with_capacity(target);
+            for i in 0..target {
+                let v = self
+                    .param_values
+                    .get(i)
+                    .copied()
+                    .unwrap_or(def.param_defs[i].default_value);
+                migrated.push(v);
+            }
+            self.param_values = migrated;
+        }
+        if let Some(base) = &self.base_param_values
+            && base.len() != target
+        {
+            let old = base.clone();
+            let mut migrated = Vec::with_capacity(target);
+            for i in 0..target {
+                let v = old.get(i).copied().unwrap_or(def.param_defs[i].default_value);
+                migrated.push(v);
+            }
+            self.base_param_values = Some(migrated);
         }
     }
 
@@ -95,8 +134,7 @@ impl GeneratorParamState {
         use crate::generator_definition_registry;
         if let Some(def) = generator_definition_registry::try_get(&self.generator_type) {
             if self.param_values.len() != def.param_count {
-                let gt = self.generator_type.clone();
-                self.init_defaults_for_type(gt);
+                self.migrate_to_registry_length();
             }
             self.ensure_base_values();
             if index < self.param_values.len() {
@@ -328,5 +366,80 @@ impl ParamSource for GeneratorParamState {
         if let Some(drivers) = &mut self.drivers {
             drivers.retain(|d| d.param_index != param_index);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::generator_definition_registry;
+
+    #[test]
+    fn migrate_pads_short_param_arrays_with_defaults_preserving_existing() {
+        let gt = GeneratorTypeId::BLACK_HOLE;
+        let target_count = generator_definition_registry::try_get(&gt)
+            .expect("BLACK_HOLE registered")
+            .param_count;
+        assert!(
+            target_count >= 4,
+            "test assumes BLACK_HOLE has at least 4 params"
+        );
+
+        // Simulate a project saved when BLACK_HOLE had only 3 params.
+        let mut state = GeneratorParamState {
+            param_values: vec![1.5, 2.5, 3.5],
+            base_param_values: Some(vec![1.5, 2.5, 3.5]),
+            ..Default::default()
+        };
+        state.generator_type = gt.clone();
+
+        state.migrate_to_registry_length();
+
+        assert_eq!(state.param_values.len(), target_count);
+        assert_eq!(state.param_values[0], 1.5);
+        assert_eq!(state.param_values[1], 2.5);
+        assert_eq!(state.param_values[2], 3.5);
+
+        // The new tail entries should match the registry defaults exactly.
+        let def = generator_definition_registry::try_get(&gt).unwrap();
+        for i in 3..target_count {
+            assert_eq!(
+                state.param_values[i], def.param_defs[i].default_value,
+                "tail index {i} should be registry default"
+            );
+        }
+
+        let base = state.base_param_values.as_ref().unwrap();
+        assert_eq!(base.len(), target_count);
+        assert_eq!(base[0], 1.5);
+        assert_eq!(base[1], 2.5);
+        assert_eq!(base[2], 3.5);
+    }
+
+    #[test]
+    fn set_param_after_registry_growth_does_not_wipe_existing_values() {
+        // Regression test for the bug where set_param's length-mismatch branch
+        // called init_defaults_for_type, wiping every saved value.
+        let gt = GeneratorTypeId::BLACK_HOLE;
+        let target_count = generator_definition_registry::try_get(&gt)
+            .expect("BLACK_HOLE registered")
+            .param_count;
+
+        // Use values inside each param's clamp range:
+        //   Speed 0..5, Cam Dist 0.1..50, Tilt 0..90.
+        let mut state = GeneratorParamState {
+            param_values: vec![2.5, 8.0, 9.0],
+            base_param_values: Some(vec![2.5, 8.0, 9.0]),
+            ..Default::default()
+        };
+        state.generator_type = gt;
+
+        // Touch the first slider — this previously wiped everything.
+        state.set_param_base(0, 2.5);
+
+        assert_eq!(state.param_values.len(), target_count);
+        assert_eq!(state.param_values[0], 2.5);
+        assert_eq!(state.param_values[1], 8.0);
+        assert_eq!(state.param_values[2], 9.0);
     }
 }
