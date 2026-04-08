@@ -9,6 +9,7 @@ use super::metallic_glass::MetallicGlassGenerator;
 use super::lissajous::LissajousGenerator;
 use super::mri_volume::MriVolumeGenerator;
 use super::mycelium::MyceliumGenerator;
+use super::oily_fluid::OilyFluidGenerator;
 use super::oscilloscope_xy::OscilloscopeXYGenerator;
 use super::parametric_surface::ParametricSurfaceGenerator;
 use super::plasma::PlasmaGenerator;
@@ -52,6 +53,7 @@ impl GeneratorRegistry {
             GeneratorTypeId::GALACTIC_ROCK,
             GeneratorTypeId::METALLIC_GLASS,
             GeneratorTypeId::COMPUTE_STRANGE_ATTRACTOR,
+            GeneratorTypeId::OILY_FLUID,
         ];
         log::info!("Pre-warming {} generator pipelines...", all_types.len());
         for gen_type in &all_types {
@@ -101,6 +103,8 @@ impl GeneratorRegistry {
             Some(Box::new(MetallicGlassGenerator::new(device)))
         } else if *gen_type == GeneratorTypeId::COMPUTE_STRANGE_ATTRACTOR {
             Some(Box::new(StrangeAttractorGenerator::new(device)))
+        } else if *gen_type == GeneratorTypeId::OILY_FLUID {
+            Some(Box::new(OilyFluidGenerator::new(device)))
         } else {
             log::warn!("Generator type {:?} not yet implemented", gen_type);
             None

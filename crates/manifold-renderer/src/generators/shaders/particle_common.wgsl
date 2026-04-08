@@ -111,6 +111,77 @@ fn fbm_noise_2d(p_in: vec2<f32>, octaves: i32) -> f32 {
     return val;
 }
 
+// ── 3D Perlin-style gradient noise ──────────────────────────────────
+// Spec-compliant "3D Simplex or Perlin noise function" per the Oily Fluid
+// reference. Returns approximately [-1, 1] (Perlin 3D theoretical bound
+// ~0.866). Uses 16 edge-centered gradients and Perlin's quintic fade.
+// Self-contained: depends only on wang_hash().
+
+fn perlin3_hash(ix: i32, iy: i32, iz: i32) -> u32 {
+    let x = u32(ix + 10000) * 73856093u;
+    let y = u32(iy + 10000) * 19349663u;
+    let z = u32(iz + 10000) * 83492791u;
+    return wang_hash(x ^ y ^ z);
+}
+
+fn perlin3_grad(h: u32) -> vec3<f32> {
+    // 16 gradient directions on cube edges (12 unique + 4 repeated for
+    // power-of-two hash). Matches Ken Perlin's "improved noise" table.
+    let sel = h & 15u;
+    switch sel {
+        case 0u:  { return vec3<f32>( 1.0,  1.0,  0.0); }
+        case 1u:  { return vec3<f32>(-1.0,  1.0,  0.0); }
+        case 2u:  { return vec3<f32>( 1.0, -1.0,  0.0); }
+        case 3u:  { return vec3<f32>(-1.0, -1.0,  0.0); }
+        case 4u:  { return vec3<f32>( 1.0,  0.0,  1.0); }
+        case 5u:  { return vec3<f32>(-1.0,  0.0,  1.0); }
+        case 6u:  { return vec3<f32>( 1.0,  0.0, -1.0); }
+        case 7u:  { return vec3<f32>(-1.0,  0.0, -1.0); }
+        case 8u:  { return vec3<f32>( 0.0,  1.0,  1.0); }
+        case 9u:  { return vec3<f32>( 0.0, -1.0,  1.0); }
+        case 10u: { return vec3<f32>( 0.0,  1.0, -1.0); }
+        case 11u: { return vec3<f32>( 0.0, -1.0, -1.0); }
+        case 12u: { return vec3<f32>( 1.0,  1.0,  0.0); }
+        case 13u: { return vec3<f32>(-1.0,  1.0,  0.0); }
+        case 14u: { return vec3<f32>( 0.0, -1.0,  1.0); }
+        default:  { return vec3<f32>( 0.0, -1.0, -1.0); }
+    }
+}
+
+fn perlin3_grad_dot(ix: i32, iy: i32, iz: i32, fx: f32, fy: f32, fz: f32) -> f32 {
+    let h = perlin3_hash(ix, iy, iz);
+    let g = perlin3_grad(h);
+    return g.x * fx + g.y * fy + g.z * fz;
+}
+
+fn simplex_noise_3d(p: vec3<f32>) -> f32 {
+    let i = floor(p);
+    let f = p - i;
+    // Perlin quintic fade: 6t^5 - 15t^4 + 10t^3
+    let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+
+    let ix = i32(i.x);
+    let iy = i32(i.y);
+    let iz = i32(i.z);
+
+    let n000 = perlin3_grad_dot(ix,     iy,     iz,     f.x,       f.y,       f.z);
+    let n100 = perlin3_grad_dot(ix + 1, iy,     iz,     f.x - 1.0, f.y,       f.z);
+    let n010 = perlin3_grad_dot(ix,     iy + 1, iz,     f.x,       f.y - 1.0, f.z);
+    let n110 = perlin3_grad_dot(ix + 1, iy + 1, iz,     f.x - 1.0, f.y - 1.0, f.z);
+    let n001 = perlin3_grad_dot(ix,     iy,     iz + 1, f.x,       f.y,       f.z - 1.0);
+    let n101 = perlin3_grad_dot(ix + 1, iy,     iz + 1, f.x - 1.0, f.y,       f.z - 1.0);
+    let n011 = perlin3_grad_dot(ix,     iy + 1, iz + 1, f.x,       f.y - 1.0, f.z - 1.0);
+    let n111 = perlin3_grad_dot(ix + 1, iy + 1, iz + 1, f.x - 1.0, f.y - 1.0, f.z - 1.0);
+
+    let nx00 = mix(n000, n100, u.x);
+    let nx10 = mix(n010, n110, u.x);
+    let nx01 = mix(n001, n101, u.x);
+    let nx11 = mix(n011, n111, u.x);
+    let nxy0 = mix(nx00, nx10, u.y);
+    let nxy1 = mix(nx01, nx11, u.y);
+    return mix(nxy0, nxy1, u.z);
+}
+
 // ── HSV to RGB ──────────────────────────────────────────────────────
 
 fn hsv_to_rgb(h: f32, s: f32, v: f32) -> vec3<f32> {

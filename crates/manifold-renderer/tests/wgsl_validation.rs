@@ -28,7 +28,7 @@ fn find_wgsl_files(dir: &std::path::Path) -> Vec<PathBuf> {
 
 /// Files that are partials (no entry points, included by other shaders).
 /// These won't validate standalone — skip them.
-const PARTIAL_SHADERS: &[&str] = &["particle_common.wgsl"];
+const PARTIAL_SHADERS: &[&str] = &["particle_common.wgsl", "oily_fluid.wgsl"];
 
 fn is_partial(path: &std::path::Path) -> bool {
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
@@ -99,4 +99,24 @@ fn all_wgsl_shaders_validate() {
     );
 
     eprintln!("Validated {validated} shaders, skipped {skipped} partials");
+}
+
+/// Validates the composed (particle_common + oily_fluid) source as dispatched
+/// at runtime. Skipped by the standalone sweep because it depends on
+/// particle_common for `simplex_noise_3d` / `wang_hash`.
+#[test]
+fn oily_fluid_composed_validates() {
+    let common = include_str!("../src/generators/shaders/particle_common.wgsl");
+    let oily = include_str!("../src/generators/shaders/oily_fluid.wgsl");
+    let composed = format!("{common}\n{oily}");
+
+    let module = naga::front::wgsl::parse_str(&composed)
+        .unwrap_or_else(|e| panic!("oily_fluid composed parse error: {e}"));
+    let mut validator = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    );
+    validator
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("oily_fluid composed validation error: {e}"));
 }

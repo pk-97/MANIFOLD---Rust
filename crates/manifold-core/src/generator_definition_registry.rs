@@ -665,6 +665,24 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         create_def("Strange Attractor", false, "strangeAttractor", params),
     );
 
+    // ── OilyFluid ──
+    // Faithful port of Bileam Tschepe's "red oily fluid" TouchDesigner tutorial.
+    // All defaults match the source material exactly.
+    let params = vec![
+        pd("Speed", 0.1, 4.0, 1.0, Some("F2"), "speed"),
+        pd("Feedback", 0.95, 0.9999, 0.998, Some("F4"), "feedback"),
+        pd("Noise", 0.0, 0.02, 0.002, Some("F4"), "noise"),
+        pd("VelDamp", 0.85, 0.999, 0.98, Some("F3"), "veldamp"),
+        pd("Curl", 0.0, 1.0, 0.2, Some("F2"), "curl"),
+        pd("Relief", 0.05, 2.0, 0.5, Some("F2"), "relief"),
+        pd("Chroma", 0.0, 8.0, 2.0, Some("F2"), "chroma"),
+        pd("Contrast", 0.5, 3.0, 1.4, Some("F2"), "contrast"),
+    ];
+    m.insert(
+        GeneratorTypeId::OILY_FLUID,
+        create_def("Oily Fluid", false, "oilyFluid", params),
+    );
+
     m
 }
 
