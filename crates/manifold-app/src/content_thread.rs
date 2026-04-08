@@ -949,7 +949,7 @@ impl ContentThread {
         }
 
         let ableton_active = if let Some(p) = self.engine.project_mut() {
-            self.ableton_bridge.apply(p)
+            self.ableton_bridge.apply(p, self.time_since_start.0)
         } else {
             false
         };

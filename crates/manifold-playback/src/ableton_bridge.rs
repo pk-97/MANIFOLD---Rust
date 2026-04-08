@@ -102,6 +102,94 @@ fn is_rack_device(class_name: &str) -> bool {
 // Only the latest value per parameter is kept (backpressure).
 type PendingValueMap = AHashMap<(i32, i32, i32), f32>;
 
+// ── 1€ filter ─────────────────────────────────────────────────────
+// Adaptive low-pass: heavy smoothing when the signal is slow (kills the
+// ~10 Hz stair-stepping from Ableton automation listeners), near pass-through
+// when the signal is fast (knob flicks stay snappy).
+//
+// Reference: Casiez et al., "1€ Filter: A Simple Speed-based Low-pass
+// Filter for Noisy Input in Interactive Systems" (CHI 2012).
+#[derive(Debug, Clone)]
+struct OneEuroFilter {
+    /// Cutoff at zero velocity (Hz). Lower → smoother slow signals, more lag.
+    min_cutoff: f32,
+    /// Speed coefficient. Higher → faster response when input is moving fast.
+    beta: f32,
+    /// Cutoff for the derivative low-pass (Hz).
+    d_cutoff: f32,
+    x_prev: f32,
+    dx_prev: f32,
+    last_time: f64,
+    initialized: bool,
+}
+
+impl OneEuroFilter {
+    fn new() -> Self {
+        // Tuned for AbletonOSC: ~10 Hz automation cadence, 60 Hz knob input.
+        // min_cutoff=1.5 → slow signals smoothed with ~100 ms lag.
+        // beta=0.05 → fast signals (high derivative) pass through near-instantly.
+        Self {
+            min_cutoff: 1.5,
+            beta: 0.05,
+            d_cutoff: 1.0,
+            x_prev: 0.0,
+            dx_prev: 0.0,
+            last_time: 0.0,
+            initialized: false,
+        }
+    }
+
+    fn alpha(cutoff: f32, dt: f32) -> f32 {
+        let tau = 1.0 / (2.0 * std::f32::consts::PI * cutoff);
+        1.0 / (1.0 + tau / dt)
+    }
+
+    fn filter(&mut self, x: f32, now: f64) -> f32 {
+        if !self.initialized {
+            self.initialized = true;
+            self.x_prev = x;
+            self.dx_prev = 0.0;
+            self.last_time = now;
+            return x;
+        }
+        let dt = (now - self.last_time) as f32;
+        self.last_time = now;
+        if dt <= 0.0 {
+            return self.x_prev;
+        }
+        let dx = (x - self.x_prev) / dt;
+        let a_d = Self::alpha(self.d_cutoff, dt);
+        let dx_hat = a_d * dx + (1.0 - a_d) * self.dx_prev;
+        let cutoff = self.min_cutoff + self.beta * dx_hat.abs();
+        let a = Self::alpha(cutoff, dt);
+        let x_hat = a * x + (1.0 - a) * self.x_prev;
+        self.x_prev = x_hat;
+        self.dx_prev = dx_hat;
+        x_hat
+    }
+}
+
+/// Per-source filter state. We filter the raw Ableton value once per
+/// (track, device, param), then fan it out to every WriteTarget.
+#[derive(Debug, Clone)]
+struct FilteredSource {
+    filter: OneEuroFilter,
+    /// Latest raw value received from Ableton (the filter target).
+    target_raw: f32,
+    /// Last filtered output we wrote to the project — used to decide whether
+    /// the filter has settled and we can stop ticking this source.
+    last_output: f32,
+    /// Wall-clock time of the most recent inbound value. We keep ticking for
+    /// a short window after the last update so the filter has time to settle.
+    last_update: f64,
+}
+
+/// How long after the last inbound value we keep ticking the filter.
+/// 0.5 s is comfortably longer than the filter's settling time at min_cutoff=1.5.
+const FILTER_SETTLE_WINDOW_SECS: f64 = 0.5;
+/// Output delta below this is considered "settled" — we stop writing.
+const FILTER_SETTLE_EPSILON: f32 = 1.0e-5;
+
 // ── Pending transport state from Ableton ──────────────────────────
 
 /// Transport values received from AbletonOSC listener updates.
@@ -213,6 +301,11 @@ pub struct AbletonBridge {
     // ── Pre-built fast lookup: (track_id, device_id, param_id) → write targets
     write_targets: AHashMap<(i32, i32, i32), Vec<WriteTarget>>,
 
+    // ── 1€ filter state per (track_id, device_id, param_id).
+    // Smooths Ableton's ~10 Hz automation cadence to 60 Hz without adding
+    // perceptible latency to fast knob moves.
+    filtered_sources: AHashMap<(i32, i32, i32), FilteredSource>,
+
     // ── Active listener subscriptions
     active_listeners: AHashSet<(i32, i32, i32)>,
 
@@ -269,6 +362,7 @@ impl AbletonBridge {
             last_response: 0.0,
             pending_values: Arc::new(Mutex::new(AHashMap::new())),
             write_targets: AHashMap::new(),
+            filtered_sources: AHashMap::new(),
             active_listeners: AHashSet::new(),
             validation_dirty: false,
             pending_transport: Arc::new(Mutex::new(PendingTransportState::default())),
@@ -417,6 +511,7 @@ impl AbletonBridge {
         self.discovery_state = DiscoveryState::Idle;
         self.active_listeners.clear();
         self.write_targets.clear();
+        self.filtered_sources.clear();
         self.message_queue.lock().messages.clear();
         self.pending_values.lock().clear();
 
@@ -493,23 +588,74 @@ impl AbletonBridge {
     }
 
     /// Apply pending Ableton values to project parameters.
+    ///
+    /// Drains inbound values into per-source 1€ filters, then ticks every
+    /// active filter at the content-thread rate (~60 Hz). This smooths the
+    /// ~10 Hz cadence of AbletonOSC automation listeners into a continuous
+    /// 60 Hz signal without adding perceptible latency to fast knob moves
+    /// (the filter's adaptive cutoff lets fast input through near-instantly).
+    ///
     /// Returns `true` if any values were written (so the content thread can
     /// flag `modulation_active` and send a UI update this frame).
-    pub fn apply(&self, project: &mut Project) -> bool {
-        let mut pending = self.pending_values.lock();
-        if pending.is_empty() {
+    pub fn apply(&mut self, project: &mut Project, now: f64) -> bool {
+        // 1. Drain inbound raw values into the per-source filter targets.
+        {
+            let mut pending = self.pending_values.lock();
+            for (key, raw_value) in pending.drain() {
+                // Only track sources we actually have mappings for.
+                if !self.write_targets.contains_key(&key) {
+                    continue;
+                }
+                let entry = self.filtered_sources.entry(key).or_insert_with(|| {
+                    FilteredSource {
+                        filter: OneEuroFilter::new(),
+                        target_raw: raw_value,
+                        last_output: f32::NAN,
+                        last_update: now,
+                    }
+                });
+                entry.target_raw = raw_value;
+                entry.last_update = now;
+            }
+        }
+
+        if self.filtered_sources.is_empty() {
             return false;
         }
 
-        for (key, raw_value) in pending.drain() {
-            if let Some(targets) = self.write_targets.get(&key) {
+        // 2. Tick every active filter and write the smoothed value out.
+        let mut wrote_any = false;
+        let mut to_remove: Vec<(i32, i32, i32)> = Vec::new();
+
+        for (key, src) in self.filtered_sources.iter_mut() {
+            let smoothed = src.filter.filter(src.target_raw, now);
+            let delta = (smoothed - src.last_output).abs();
+            let settled = delta < FILTER_SETTLE_EPSILON
+                && (src.target_raw - smoothed).abs() < FILTER_SETTLE_EPSILON;
+            let stale = now - src.last_update > FILTER_SETTLE_WINDOW_SECS;
+
+            // Stop ticking once the filter has settled AND no new input has
+            // arrived for the settle window — keeps the map bounded.
+            if settled && stale {
+                to_remove.push(*key);
+                continue;
+            }
+
+            // Skip the project write if the output hasn't moved meaningfully
+            // (avoids redundant set_base_param calls + UI dirty flags).
+            if !src.last_output.is_nan() && delta < FILTER_SETTLE_EPSILON {
+                continue;
+            }
+            src.last_output = smoothed;
+
+            if let Some(targets) = self.write_targets.get(key) {
                 for wt in targets {
                     // Normalize Ableton raw value into 0-1.
                     let span = wt.ableton_max - wt.ableton_min;
                     let mut normalized = if span > f32::EPSILON {
-                        ((raw_value - wt.ableton_min) / span).clamp(0.0, 1.0)
+                        ((smoothed - wt.ableton_min) / span).clamp(0.0, 1.0)
                     } else {
-                        raw_value.clamp(0.0, 1.0)
+                        smoothed.clamp(0.0, 1.0)
                     };
                     // Apply inversion before trim range mapping.
                     if wt.inverted {
@@ -522,9 +668,15 @@ impl AbletonBridge {
                     let value = wt.param_min + (wt.param_max - wt.param_min) * mapped;
                     Self::write_to_project(project, &wt.target, wt.param_index, value);
                 }
+                wrote_any = true;
             }
         }
-        true
+
+        for key in &to_remove {
+            self.filtered_sources.remove(key);
+        }
+
+        wrote_any
     }
 
     fn write_to_project(
@@ -1536,6 +1688,9 @@ impl AbletonBridge {
 
         self.active_listeners = needed;
         self.write_targets = new_write_targets;
+        // Drop filter state for sources that no longer have a write target.
+        self.filtered_sources
+            .retain(|key, _| self.write_targets.contains_key(key));
     }
 
     /// Build an `AbletonSetContext` from the current session for project storage.

@@ -381,12 +381,17 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // ── Volumetric emission (path integral through disk atmosphere) ──
     // The deflection bake stores `vol_accum` — a Gaussian-weighted line
     // integral of the disk's vertical thickness profile along the ray.
-    // Multiplying by polar particle density at the volumetric radius
-    // turns flat clumps into truly volumetric thickness modulation:
-    // where particles are clustered, the path integral *and* the
-    // azimuthal density both spike, so the disk visibly bulges.
+    // BUT vol_accum is non-zero for any ray that passes near the disk
+    // plane, even rays that miss the disk entirely (because the
+    // Gaussian half-thickness extends in y by 0.12*r). Then the
+    // gaussian blur on d2.r smears those values further outward,
+    // producing a soft warm halo around the disk that becomes obvious
+    // when stars are bright (high contrast with the dark sky behind).
+    //
+    // Gate vol_emit by c1_visible so it only contributes where the
+    // ray actually crosses the disk silhouette.
     let vol = d2.r;
-    if vol > 0.01 {
+    if vol > 0.01 && c1_visible > 0.001 {
         let vol_opacity = 1.0 - exp(-vol * 0.3);
         let vol_r = select(c1_r, (u.disk_inner + u.disk_outer) * 0.5, c1_r < 0.1);
         let vol_t = clamp(
@@ -397,7 +402,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             vol_t,
         );
         let vol_fade = smoothstep(0.0, 0.15, vol);
-        var vol_emit = vol_col * vol_opacity * vol_fade * u.disk_glow * 0.15;
+        var vol_emit = vol_col * vol_opacity * vol_fade * u.disk_glow * 0.15
+            * c1_visible;
         if u.particle_strength > 0.001 && c1_r > 0.1 && c1_mag2 > 0.25 {
             // Sample both layers symmetrically — volumetric emission spans
             // the full disk thickness, so neither side is "near" or "far".
