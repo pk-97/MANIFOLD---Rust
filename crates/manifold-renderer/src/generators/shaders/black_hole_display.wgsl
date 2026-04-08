@@ -213,7 +213,12 @@ fn shade_disk(disk_r: f32, cos_a: f32, sin_a: f32, is_secondary: bool) -> vec3<f
     let disk_range = u.disk_outer - u.disk_inner;
     let t = clamp((disk_r - u.disk_inner) / disk_range, 0.0, 1.0);
     let ring_r = t;
-    let r_norm = disk_r / u.disk_inner;
+    // Clamp r_norm to >= 1.0. The deflection bake's gaussian upsample
+    // produces partial-blur disk_r values at the silhouette boundary
+    // (averaging real crossings with zero-crossings). Without this
+    // clamp, the 1/r² falloff in the brightness term blows up as
+    // disk_r → 0 and produces a bright fringe along the silhouette.
+    let r_norm = max(disk_r / u.disk_inner, 1.0);
 
     // Reconstruct angle
     let base_angle = atan2(sin_a, cos_a);
@@ -362,7 +367,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // boundaries; smoothstep gives a soft silhouette edge so the disk
     // fades into the star field instead of cutting hard.
     let c1_mag2 = c1_ca * c1_ca + c1_sa * c1_sa;
-    let c1_visible = smoothstep(0.25, 0.85, c1_mag2);
+    let c1_visible = smoothstep(0.08, 0.95, c1_mag2);
     let c1_op_eff = c1_op * c1_visible;
     if c1_r > 0.1 && c1_op_eff > 0.001 {
         var disk_col = shade_disk(c1_r, c1_ca, c1_sa, false) * c1_op_eff;
@@ -377,7 +382,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // ── Second crossing (lensed back) ──
     let c2_mag2 = c2_ca * c2_ca + c2_sa * c2_sa;
-    let c2_visible = smoothstep(0.25, 0.85, c2_mag2);
+    let c2_visible = smoothstep(0.08, 0.95, c2_mag2);
     if c2_r > 0.1 && c2_visible > 0.001 {
         let c2_op = disk_opacity_from_r(c2_r) * c2_visible;
         let remaining = max(1.0 - total_opacity * 0.6, 0.0);
@@ -392,9 +397,14 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // ── Photon ring (visible even over disk, softens shadow boundary) ──
-    if final_r > 1.0 && final_r < 5.0 {
+    // No hard gate on final_r — replaced with smoothstep so the ring
+    // fades in/out instead of clipping at 1.0 and 5.0. The exp() is
+    // already a soft falloff in the middle of the band, but the hard
+    // < 1.0 cutoff produced a discontinuous edge against the shadow.
+    {
+        let ring_band = smoothstep(0.5, 1.2, final_r) * (1.0 - smoothstep(4.0, 6.0, final_r));
         let ring = exp(-(final_r - 1.5) * (final_r - 1.5) * 6.0);
-        let ring_vis = ring * mix(0.6, 0.15, clamp(total_opacity, 0.0, 1.0));
+        let ring_vis = ring * ring_band * mix(0.6, 0.15, clamp(total_opacity, 0.0, 1.0));
         color += vec3<f32>(0.9, 0.85, 0.7) * ring_vis;
     }
 
