@@ -409,11 +409,25 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         color += vol_emit;
     }
 
-    // ── Soft knee compression (HDR-preserving) ──
-    let peak = max(max(color.r, color.g), max(color.b, 0.001));
-    if peak > 0.8 {
-        let compressed = 0.8 * (1.0 + log(peak / 0.8));
-        color = color * (compressed / peak);
+    // ── Hue-preserving HDR rolloff ──
+    // The previous soft-knee compression rescaled by peak channel,
+    // which is luminance-preserving but lets individual channels
+    // saturate to 1.0 independently — bright orange ends up white
+    // because R hits 1 first, then G catches up, then B, and the
+    // ratio drifts toward (1,1,1).
+    //
+    // Instead, find the brightest channel and apply a Reinhard-style
+    // rolloff to it; scale all channels by the same ratio so the
+    // hue is preserved exactly. Bright disk regions stay warm orange/
+    // yellow instead of blowing out to white.
+    let max_c = max(max(color.r, color.g), max(color.b, 1e-4));
+    if max_c > 1.0 {
+        // Reinhard with adjustable shoulder. White point of 4.0 means
+        // input value 4.0 maps to output 1.0; everything below
+        // compresses smoothly. Tune for taste.
+        let white = 4.0;
+        let mapped = (max_c * (1.0 + max_c / (white * white))) / (1.0 + max_c);
+        color = color * (mapped / max_c);
     }
 
     textureStore(output, gid.xy, vec4<f32>(color, 1.0));
