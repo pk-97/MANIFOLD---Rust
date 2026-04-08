@@ -175,10 +175,15 @@ fn star_field(dir: vec3<f32>, brightness: f32) -> vec3<f32> {
 // ── Accretion disk shading ──
 
 fn disk_opacity_from_r(r: f32) -> f32 {
-    // Wide, soft transitions — volumetric torus appearance.
-    // Inner edge extends close to horizon for plunging-region glow.
+    // Inner edge fades close to horizon for plunging-region glow.
+    // Outer edge tightened: previously this fade ran from disk_outer*0.7
+    // to disk_outer*1.5, painting a wide warm halo 50% beyond the
+    // nominal radius. Against bright stars the halo became a visible
+    // "thicker band outside the disk". Tightened to (0.95, 1.05) so
+    // the disk ends close to disk_outer with just enough antialiasing
+    // softness to avoid a hard pixel edge.
     let inner_fade = smoothstep(u.disk_inner * 0.25, u.disk_inner * 1.3, r);
-    let outer_fade = 1.0 - smoothstep(u.disk_outer * 0.7, u.disk_outer * 1.5, r);
+    let outer_fade = 1.0 - smoothstep(u.disk_outer * 0.95, u.disk_outer * 1.05, r);
     return inner_fade * outer_fade;
 }
 
