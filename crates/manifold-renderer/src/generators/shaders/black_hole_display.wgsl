@@ -359,8 +359,11 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         var disk_col = shade_disk(c1_r, c1_ca, c1_sa, false) * c1_op_eff;
         if u.particle_strength > 0.001 {
             // First crossing is the front disk — bias toward the top layer.
+            // Clamp the boost so polar cell clumps can't produce extreme
+            // wedge spikes that ACES can't compress without losing color.
             let d1 = sample_particle_density(c1_r, c1_ca, c1_sa, 1.0);
-            disk_col = disk_col * (1.0 + d1 * u.particle_strength * 2.5);
+            let boost = min(d1 * u.particle_strength * 2.5, 1.2);
+            disk_col = disk_col * (1.0 + boost);
         }
         color = color * (1.0 - c1_op_eff * 0.85) + disk_col;
         total_opacity = c1_op_eff;
@@ -376,7 +379,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if u.particle_strength > 0.001 {
             // Second crossing is the lensed back of the disk — bias toward bottom.
             let d2v = sample_particle_density(c2_r, c2_ca, c2_sa, 0.0);
-            disk_col = disk_col * (1.0 + d2v * u.particle_strength * 2.5);
+            let boost = min(d2v * u.particle_strength * 2.5, 1.2);
+            disk_col = disk_col * (1.0 + boost);
         }
         color = color * (1.0 - c2_op * remaining * 0.5) + disk_col;
         total_opacity = clamp(total_opacity + c2_op * 0.5, 0.0, 1.0);
@@ -413,7 +417,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // Sample both layers symmetrically — volumetric emission spans
             // the full disk thickness, so neither side is "near" or "far".
             let dv = sample_particle_density(c1_r, c1_ca, c1_sa, 0.5);
-            vol_emit = vol_emit * (1.0 + dv * u.particle_strength * 2.0);
+            let boost = min(dv * u.particle_strength * 2.0, 1.0);
+            vol_emit = vol_emit * (1.0 + boost);
         }
         color += vol_emit;
     }
