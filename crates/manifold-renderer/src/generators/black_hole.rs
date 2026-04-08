@@ -102,8 +102,19 @@ struct ResolveUniforms {
     _pad1: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct BlurUniforms {
+    width: u32,
+    height: u32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
 pub struct BlackHoleGenerator {
     deflection_pipeline: manifold_gpu::GpuComputePipeline,
+    blur_h_pipeline: manifold_gpu::GpuComputePipeline,
+    blur_v_pipeline: manifold_gpu::GpuComputePipeline,
     display_pipeline: manifold_gpu::GpuComputePipeline,
     particles_seed_pipeline: manifold_gpu::GpuComputePipeline,
     particles_sim_pipeline: manifold_gpu::GpuComputePipeline,
@@ -114,6 +125,9 @@ pub struct BlackHoleGenerator {
     deflection_map: Option<manifold_gpu::GpuTexture>,
     deflection_map2: Option<manifold_gpu::GpuTexture>,
     sky_dir_map: Option<manifold_gpu::GpuTexture>,
+    h_blur1: Option<manifold_gpu::GpuTexture>,
+    h_blur2: Option<manifold_gpu::GpuTexture>,
+    h_blur_sky: Option<manifold_gpu::GpuTexture>,
     defl_w: u32,
     defl_h: u32,
 
@@ -140,6 +154,11 @@ impl BlackHoleGenerator {
             "cs_main",
             "BlackHole Deflection",
         );
+        let blur_src = include_str!("shaders/black_hole_blur.wgsl");
+        let blur_h_pipeline =
+            device.create_compute_pipeline(blur_src, "blur_h", "BlackHole Blur H");
+        let blur_v_pipeline =
+            device.create_compute_pipeline(blur_src, "blur_v", "BlackHole Blur V");
         let display_pipeline = device.create_compute_pipeline(
             include_str!("shaders/black_hole_display.wgsl"),
             "cs_main",
@@ -163,15 +182,12 @@ impl BlackHoleGenerator {
             "resolve",
             "BlackHole Particles Resolve",
         );
-        // Linear mip filter so display can sample fractional mip levels of
-        // the deflection chain (single-tap wide blur).
-        let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
-            mip_filter: manifold_gpu::GpuFilterMode::Linear,
-            ..Default::default()
-        });
+        let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc::default());
 
         Self {
             deflection_pipeline,
+            blur_h_pipeline,
+            blur_v_pipeline,
             display_pipeline,
             particles_seed_pipeline,
             particles_sim_pipeline,
@@ -181,6 +197,9 @@ impl BlackHoleGenerator {
             deflection_map: None,
             deflection_map2: None,
             sky_dir_map: None,
+            h_blur1: None,
+            h_blur2: None,
+            h_blur_sky: None,
             defl_w: 0,
             defl_h: 0,
             particle_buffer: None,
@@ -237,12 +256,6 @@ impl BlackHoleGenerator {
         }
         self.defl_w = w;
         self.defl_h = h;
-        // Mipmap chain for cheap wide-blur upsampling. Each mip level
-        // is a hardware-generated 2× downsample of the previous, so
-        // sampling mip k in the display shader returns a 2^k×2^k
-        // box-blurred value in a single tap. We bake at eighth res
-        // (mip 0), then mip 1 = 16×, mip 2 = 32×, mip 3 = 64×.
-        let mips = manifold_gpu::GpuTextureDesc::max_mip_levels(w, h).min(4);
         let make = |label| {
             device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width: w,
@@ -252,21 +265,18 @@ impl BlackHoleGenerator {
                 dimension: manifold_gpu::GpuTextureDimension::D2,
                 usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
                 label,
-                mip_levels: mips,
+                mip_levels: 1,
             })
         };
         self.deflection_map = Some(make("BlackHole Deflection1"));
         self.deflection_map2 = Some(make("BlackHole Deflection2"));
-        self.sky_dir_map = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
-            width: w,
-            height: h,
-            depth: 1,
-            format: manifold_gpu::GpuTextureFormat::Rgba16Float,
-            dimension: manifold_gpu::GpuTextureDimension::D2,
-            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
-            label: "BlackHole SkyDir",
-            mip_levels: mips,
-        }));
+        self.sky_dir_map = Some(make("BlackHole SkyDir"));
+        // Intermediate textures for the horizontal pass of the
+        // separable gaussian. Same resolution as the bake — the blur
+        // happens entirely at quarter-res so it's cheap.
+        self.h_blur1 = Some(make("BlackHole H-Blur 1"));
+        self.h_blur2 = Some(make("BlackHole H-Blur 2"));
+        self.h_blur_sky = Some(make("BlackHole H-Blur Sky"));
         self.last_cam_dist = f32::MIN;
     }
 
@@ -358,12 +368,86 @@ impl Generator for BlackHoleGenerator {
                 "BlackHole Deflection",
             );
 
-            // Build the mipmap chain for cheap wide-blur upsampling.
-            // Display samples a higher mip level instead of running an
-            // inline 13×13 gaussian — single tap, ~80× cheaper.
-            gpu.native_enc.generate_mipmaps(self.deflection_map.as_ref().unwrap());
-            gpu.native_enc.generate_mipmaps(self.deflection_map2.as_ref().unwrap());
-            gpu.native_enc.generate_mipmaps(self.sky_dir_map.as_ref().unwrap());
+            // Separable 21-tap σ=4 gaussian blur over the deflection
+            // textures. Runs entirely at quarter-res so it's cheap, but
+            // the full true-gaussian quality reaches the display pass.
+            // H pass: deflection_map* → h_blur*
+            // V pass: h_blur* → deflection_map* (in place)
+            let blur_uniforms = BlurUniforms {
+                width: self.defl_w,
+                height: self.defl_h,
+                _pad0: 0,
+                _pad1: 0,
+            };
+            let blur_groups = [self.defl_w.div_ceil(16), self.defl_h.div_ceil(16), 1];
+
+            // Horizontal pass × 3 textures
+            for (src, dst, label) in [
+                (
+                    self.deflection_map.as_ref().unwrap(),
+                    self.h_blur1.as_ref().unwrap(),
+                    "BlackHole Blur H1",
+                ),
+                (
+                    self.deflection_map2.as_ref().unwrap(),
+                    self.h_blur2.as_ref().unwrap(),
+                    "BlackHole Blur H2",
+                ),
+                (
+                    self.sky_dir_map.as_ref().unwrap(),
+                    self.h_blur_sky.as_ref().unwrap(),
+                    "BlackHole Blur H Sky",
+                ),
+            ] {
+                gpu.native_enc.dispatch_compute(
+                    &self.blur_h_pipeline,
+                    &[
+                        manifold_gpu::GpuBinding::Bytes {
+                            binding: 0,
+                            data: bytemuck::bytes_of(&blur_uniforms),
+                        },
+                        manifold_gpu::GpuBinding::Texture { binding: 1, texture: src },
+                        manifold_gpu::GpuBinding::Sampler { binding: 2, sampler: &self.sampler },
+                        manifold_gpu::GpuBinding::Texture { binding: 3, texture: dst },
+                    ],
+                    blur_groups,
+                    label,
+                );
+            }
+
+            // Vertical pass × 3 textures, writing back into the deflection textures
+            for (src, dst, label) in [
+                (
+                    self.h_blur1.as_ref().unwrap(),
+                    self.deflection_map.as_ref().unwrap(),
+                    "BlackHole Blur V1",
+                ),
+                (
+                    self.h_blur2.as_ref().unwrap(),
+                    self.deflection_map2.as_ref().unwrap(),
+                    "BlackHole Blur V2",
+                ),
+                (
+                    self.h_blur_sky.as_ref().unwrap(),
+                    self.sky_dir_map.as_ref().unwrap(),
+                    "BlackHole Blur V Sky",
+                ),
+            ] {
+                gpu.native_enc.dispatch_compute(
+                    &self.blur_v_pipeline,
+                    &[
+                        manifold_gpu::GpuBinding::Bytes {
+                            binding: 0,
+                            data: bytemuck::bytes_of(&blur_uniforms),
+                        },
+                        manifold_gpu::GpuBinding::Texture { binding: 1, texture: src },
+                        manifold_gpu::GpuBinding::Sampler { binding: 2, sampler: &self.sampler },
+                        manifold_gpu::GpuBinding::Texture { binding: 3, texture: dst },
+                    ],
+                    blur_groups,
+                    label,
+                );
+            }
 
             self.last_cam_dist = cam_dist;
             self.last_tilt = tilt_rad;
