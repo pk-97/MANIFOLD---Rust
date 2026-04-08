@@ -109,8 +109,10 @@ impl InputHandler {
             return true;
         }
 
-        // ── Undo: Cmd+Shift+Z (Unity line 235) ──
-        if matches!(logical_key, Key::Character(c) if c.as_str() == "z") && m.is_command_shift() {
+        // ── Redo: Cmd+Shift+Z (with Shift, winit reports "Z") ──
+        if matches!(logical_key, Key::Character(c) if c.as_str().eq_ignore_ascii_case("z"))
+            && m.is_command_shift()
+        {
             host.redo();
             host.on_undo_redo();
             return true;
