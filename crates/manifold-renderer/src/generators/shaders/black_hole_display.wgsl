@@ -346,22 +346,30 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var total_opacity = 0.0;
 
     // ── First crossing (front disk) ──
+    // c1_mag2 = squared magnitude of (cos_a, sin_a) — ~1.0 for a real
+    // crossing, 0 for a non-crossing pixel. The 5×5 gaussian blur over
+    // the quarter-res deflection bake produces fractional values at
+    // boundaries; smoothstep gives a soft silhouette edge so the disk
+    // fades into the star field instead of cutting hard.
     let c1_mag2 = c1_ca * c1_ca + c1_sa * c1_sa;
-    if c1_r > 0.1 && c1_mag2 > 0.25 {
-        var disk_col = shade_disk(c1_r, c1_ca, c1_sa, false) * c1_op;
+    let c1_visible = smoothstep(0.25, 0.85, c1_mag2);
+    let c1_op_eff = c1_op * c1_visible;
+    if c1_r > 0.1 && c1_op_eff > 0.001 {
+        var disk_col = shade_disk(c1_r, c1_ca, c1_sa, false) * c1_op_eff;
         if u.particle_strength > 0.001 {
             // First crossing is the front disk — bias toward the top layer.
             let d1 = sample_particle_density(c1_r, c1_ca, c1_sa, 1.0);
             disk_col = disk_col * (1.0 + d1 * u.particle_strength * 2.5);
         }
-        color = color * (1.0 - c1_op * 0.85) + disk_col;
-        total_opacity = c1_op;
+        color = color * (1.0 - c1_op_eff * 0.85) + disk_col;
+        total_opacity = c1_op_eff;
     }
 
     // ── Second crossing (lensed back) ──
     let c2_mag2 = c2_ca * c2_ca + c2_sa * c2_sa;
-    if c2_r > 0.1 && c2_mag2 > 0.25 {
-        let c2_op = disk_opacity_from_r(c2_r);
+    let c2_visible = smoothstep(0.25, 0.85, c2_mag2);
+    if c2_r > 0.1 && c2_visible > 0.001 {
+        let c2_op = disk_opacity_from_r(c2_r) * c2_visible;
         let remaining = max(1.0 - total_opacity * 0.6, 0.0);
         var disk_col = shade_disk(c2_r, c2_ca, c2_sa, true) * c2_op * remaining;
         if u.particle_strength > 0.001 {
