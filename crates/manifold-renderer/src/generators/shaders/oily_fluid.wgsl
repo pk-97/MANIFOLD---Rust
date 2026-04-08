@@ -229,8 +229,10 @@ fn render_normal(uv: vec2<f32>, texel: vec2<f32>, z_scale: f32) -> vec3<f32> {
     let hU = render_height(uv + vec2<f32>(0.0, texel.y));
     let gx = (hR - hL) * 0.5;
     let gy = (hU - hD) * 0.5;
-    let n = normalize(vec3<f32>(-gx, -gy, max(z_scale, 1e-4)));
-    return n * 0.5 + 0.5; // pack to [0, 1]
+    // Signed tangent-space normal ([-1, 1] per component). The subsequent
+    // abs() in cs_render operates on these signed values — packing to [0, 1]
+    // here would neutralize abs() and leave the scene a flat purple.
+    return normalize(vec3<f32>(-gx, -gy, max(z_scale, 1e-4)));
 }
 
 @compute @workgroup_size(16, 16, 1)
