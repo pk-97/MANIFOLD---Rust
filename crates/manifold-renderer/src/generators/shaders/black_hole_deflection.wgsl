@@ -21,7 +21,11 @@ struct Uniforms {
     steps: f32,
     uv_scale: f32,
     spin: f32,
+    cam_velocity: f32,
+    cam_freefall: f32,
     _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -91,7 +95,44 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let right = normalize(cross(fwd, world_up));
     let up = cross(right, fwd);
 
-    let ray_dir = normalize(fwd + screen.x * right * fov_factor + screen.y * up * fov_factor);
+    var ray_dir = normalize(fwd + screen.x * right * fov_factor + screen.y * up * fov_factor);
+
+    // ── Relativistic aberration ──
+    // Compose ZAMO → freefall-observer frame with a pure SR boost.
+    // The observer's velocity is radial-inward (v̂ = fwd). In the
+    // moving observer's frame, rays are pulled toward the forward
+    // direction, so to convert a moving-frame ray to its ZAMO-frame
+    // equivalent we use the INVERSE aberration transform:
+    //
+    //     cos θ = (cos θ' − β) / (1 − β cos θ')
+    //
+    // where θ is the angle between the ray and v̂ in the ZAMO frame
+    // and θ' is the same angle in the moving frame.
+    //
+    // Cinematic mode: β = user slider (cam_velocity).
+    // Freefall mode: β = √(r_s/r) (radial infall from rest at infinity),
+    // clamped to 0.99 to keep the formula well-defined.
+    var beta = u.cam_velocity;
+    if u.cam_freefall > 0.5 {
+        beta = clamp(sqrt(1.0 / safe_cam_dist), 0.0, 0.99);
+    }
+    if beta > 1e-4 {
+        let v_dir = fwd; // radial-inward at cam_pos
+        let cos_tp = dot(ray_dir, v_dir);
+        let denom = 1.0 - beta * cos_tp;
+        let cos_t = (cos_tp - beta) / denom;
+        // Perpendicular component scaling: sin θ / sin θ'. Derivable
+        // from requiring |ray_dir_static| = 1.
+        let sin_tp2 = max(1.0 - cos_tp * cos_tp, 0.0);
+        let sin_t2 = max(1.0 - cos_t * cos_t, 0.0);
+        let perp_scale = select(
+            1.0,
+            sqrt(sin_t2 / sin_tp2),
+            sin_tp2 > 1e-8,
+        );
+        let ray_perp = ray_dir - v_dir * cos_tp;
+        ray_dir = normalize(v_dir * cos_t + ray_perp * perp_scale);
+    }
 
     var pos = cam_pos;
     var vel = ray_dir;

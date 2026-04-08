@@ -24,6 +24,8 @@ const STARS: usize = 9;
 const SPIN: usize = 10;
 const PARTICLE_STRENGTH: usize = 11;
 const PARTICLE_TURBULENCE: usize = 12;
+const CAM_VELOCITY: usize = 13;
+const CAM_FREEFALL: usize = 14;
 
 const PARTICLE_COUNT: u32 = 800_000;
 const POLAR_W: u32 = 2048;
@@ -47,7 +49,11 @@ struct DeflectionUniforms {
     steps: f32,
     uv_scale: f32,
     spin: f32,
+    cam_velocity: f32,
+    cam_freefall: f32,
     _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 #[repr(C)]
@@ -147,6 +153,8 @@ pub struct BlackHoleGenerator {
     last_scale: f32,
     last_steps: f32,
     last_spin: f32,
+    last_cam_velocity: f32,
+    last_cam_freefall: f32,
 }
 
 impl BlackHoleGenerator {
@@ -219,6 +227,8 @@ impl BlackHoleGenerator {
             last_scale: f32::MIN,
             last_steps: f32::MIN,
             last_spin: f32::MIN,
+            last_cam_velocity: f32::MIN,
+            last_cam_freefall: f32::MIN,
         }
     }
 
@@ -291,7 +301,18 @@ impl BlackHoleGenerator {
         self.last_cam_dist = f32::MIN;
     }
 
-    fn needs_rebake(&self, cd: f32, t: f32, r: f32, s: f32, st: f32, spin: f32) -> bool {
+    #[allow(clippy::too_many_arguments)]
+    fn needs_rebake(
+        &self,
+        cd: f32,
+        t: f32,
+        r: f32,
+        s: f32,
+        st: f32,
+        spin: f32,
+        cam_v: f32,
+        cam_ff: f32,
+    ) -> bool {
         const EPS: f32 = 0.001;
         (self.last_cam_dist - cd).abs() > EPS
             || (self.last_tilt - t).abs() > EPS
@@ -299,6 +320,8 @@ impl BlackHoleGenerator {
             || (self.last_scale - s).abs() > EPS
             || (self.last_steps - st).abs() > 0.5
             || (self.last_spin - spin).abs() > EPS
+            || (self.last_cam_velocity - cam_v).abs() > EPS
+            || (self.last_cam_freefall - cam_ff).abs() > 0.5
     }
 }
 
@@ -328,6 +351,8 @@ impl Generator for BlackHoleGenerator {
         let scale = param(ctx, SCALE, 1.0);
 
         let spin = param(ctx, SPIN, 0.0);
+        let cam_velocity = param(ctx, CAM_VELOCITY, 0.0).clamp(0.0, 0.99);
+        let cam_freefall = param(ctx, CAM_FREEFALL, 0.0);
 
         let uv_scale = if scale > 0.0 { 1.0 / scale } else { 1.0 };
         let tilt_rad = tilt_deg.to_radians();
@@ -344,7 +369,16 @@ impl Generator for BlackHoleGenerator {
         self.ensure_deflection_maps(gpu.device, defl_w, defl_h);
 
         // ── Pass 1: Deflection Map (only on camera/scale/steps change) ──
-        if self.needs_rebake(cam_dist, tilt_rad, rotate_rad, uv_scale, steps, spin) {
+        if self.needs_rebake(
+            cam_dist,
+            tilt_rad,
+            rotate_rad,
+            uv_scale,
+            steps,
+            spin,
+            cam_velocity,
+            cam_freefall,
+        ) {
             let defl_uniforms = DeflectionUniforms {
                 aspect: ctx.aspect,
                 cam_dist,
@@ -353,7 +387,11 @@ impl Generator for BlackHoleGenerator {
                 steps,
                 uv_scale,
                 spin,
+                cam_velocity,
+                cam_freefall,
                 _pad0: 0.0,
+                _pad1: 0.0,
+                _pad2: 0.0,
             };
             gpu.native_enc.dispatch_compute(
                 &self.deflection_pipeline,
@@ -466,6 +504,8 @@ impl Generator for BlackHoleGenerator {
             self.last_scale = uv_scale;
             self.last_steps = steps;
             self.last_spin = spin;
+            self.last_cam_velocity = cam_velocity;
+            self.last_cam_freefall = cam_freefall;
         }
 
         // ── Pass 2: Particles (sim → scatter → resolve) ──

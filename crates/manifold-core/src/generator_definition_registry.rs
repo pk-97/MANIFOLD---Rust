@@ -591,6 +591,8 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Spin", -1.0, 1.0, 0.0, Some("F2"), "spin"),
         pd("Particles", 0.0, 1.0, 0.0, Some("F2"), "particles"),
         pd("Turbulence", 0.0, 5.0, 0.5, Some("F2"), "turbulence"),
+        pd("Cam Velocity", 0.0, 0.99, 0.0, Some("F2"), "camVelocity"),
+        pd("Freefall", 0.0, 1.0, 0.0, Some("F0"), "freefall"),
     ];
     m.insert(
         GeneratorTypeId::BLACK_HOLE,
