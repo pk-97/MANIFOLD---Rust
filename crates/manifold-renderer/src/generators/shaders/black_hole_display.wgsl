@@ -409,26 +409,18 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         color += vol_emit;
     }
 
-    // ── Hue-preserving HDR rolloff ──
-    // The previous soft-knee compression rescaled by peak channel,
-    // which is luminance-preserving but lets individual channels
-    // saturate to 1.0 independently — bright orange ends up white
-    // because R hits 1 first, then G catches up, then B, and the
-    // ratio drifts toward (1,1,1).
+    // ── HDR output ──
+    // No tonemapping in this shader. The output buffer is Rgba16Float
+    // and the rest of the MANIFOLD pipeline (bloom prefilter at 0.42,
+    // halation, EDR display presenter) is fully HDR-aware. Bright
+    // disk regions are emitted with R/G/B values well above 1.0; bloom
+    // catches them as highlights and EDR displays them at cinematic
+    // brightness. Tonemapping inside this shader was the source of
+    // the white-blowout bug — it pre-compressed every value down to
+    // ~1.0 and forced channel saturation to converge on (1,1,1).
     //
-    // Instead, find the brightest channel and apply a Reinhard-style
-    // rolloff to it; scale all channels by the same ratio so the
-    // hue is preserved exactly. Bright disk regions stay warm orange/
-    // yellow instead of blowing out to white.
-    let max_c = max(max(color.r, color.g), max(color.b, 1e-4));
-    if max_c > 1.0 {
-        // Reinhard with adjustable shoulder. White point of 4.0 means
-        // input value 4.0 maps to output 1.0; everything below
-        // compresses smoothly. Tune for taste.
-        let white = 4.0;
-        let mapped = (max_c * (1.0 + max_c / (white * white))) / (1.0 + max_c);
-        color = color * (mapped / max_c);
-    }
+    // Sanity floor only — guard against any NaN or negative leakage.
+    color = max(color, vec3<f32>(0.0));
 
     textureStore(output, gid.xy, vec4<f32>(color, 1.0));
 }
