@@ -680,6 +680,16 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Hue", 0.0, 1.0, 0.0, Some("F2"), "hue"),
         pd("Sat", 0.0, 2.0, 1.0, Some("F2"), "sat"),
         pd("Bright", 0.0, 2.0, 1.0, Some("F2"), "bright"),
+        pd("VelDisp", 0.1, 10.0, 1.0, Some("F2"), "velDisp"),
+        pd("ColDisp", 0.1, 10.0, 1.0, Some("F2"), "colDisp"),
+        pd_whole_labels(
+            "Mode",
+            0.0,
+            4.0,
+            0.0,
+            &["Oil Slick", "Flow Field", "Height Map", "PBR", "Lines"],
+            "mode",
+        ),
     ];
     m.insert(
         GeneratorTypeId::OILY_FLUID,

@@ -35,6 +35,9 @@ const CONTRAST: usize = 7;
 const HUE: usize = 8;
 const SATURATION: usize = 9;
 const BRIGHTNESS: usize = 10;
+const VEL_DISP: usize = 11;
+const COL_DISP: usize = 12;
+const MODE: usize = 13;
 
 const STATE_FORMAT: manifold_gpu::GpuTextureFormat = manifold_gpu::GpuTextureFormat::Rgba16Float;
 const BLUR_RADIUS: f32 = 12.0; // spec: filter size 12
@@ -50,6 +53,9 @@ fn param(ctx: &GeneratorContext, idx: usize, default: f32) -> f32 {
 
 // ── Uniform structs (all 32 bytes to satisfy Naga multi-entry-point rule) ──
 
+// All uniform structs are 48 bytes (12 f32s) to satisfy Naga's
+// multi-entry-point same-size-at-same-binding rule.
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct DownsampleUniforms {
@@ -61,6 +67,10 @@ struct DownsampleUniforms {
     _pad1: f32,
     _pad2: f32,
     _pad3: f32,
+    _pad4: f32,
+    _pad5: f32,
+    _pad6: f32,
+    _pad7: f32,
 }
 
 #[repr(C)]
@@ -71,9 +81,13 @@ struct VelocityUniforms {
     grad_attenuation: f32,
     velocity_damping: f32,
     self_advect_scale: f32,
+    vel_disp: f32,
     _pad0: f32,
     _pad1: f32,
     _pad2: f32,
+    _pad3: f32,
+    _pad4: f32,
+    _pad5: f32,
 }
 
 #[repr(C)]
@@ -85,8 +99,12 @@ struct ColorUniforms {
     noise_injection: f32,
     noise_time: f32,
     aspect: f32,
+    col_disp: f32,
     _pad0: f32,
     _pad1: f32,
+    _pad2: f32,
+    _pad3: f32,
+    _pad4: f32,
 }
 
 #[repr(C)]
@@ -100,6 +118,10 @@ struct RenderUniforms {
     hue_shift: f32,
     saturation: f32,
     brightness: f32,
+    mode: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 // Matches gaussian_blur_compute.wgsl's BlurUniforms exactly (32 bytes).
@@ -274,6 +296,9 @@ impl Generator for OilyFluidGenerator {
         let hue_shift = param(ctx, HUE, 0.0);
         let saturation = param(ctx, SATURATION, 1.0);
         let brightness = param(ctx, BRIGHTNESS, 1.0);
+        let vel_disp = param(ctx, VEL_DISP, 1.0);
+        let col_disp = param(ctx, COL_DISP, 1.0);
+        let mode = param(ctx, MODE, 0.0);
 
         let fw = ctx.width as f32;
         let fh = ctx.height as f32;
@@ -299,6 +324,10 @@ impl Generator for OilyFluidGenerator {
             _pad1: 0.0,
             _pad2: 0.0,
             _pad3: 0.0,
+            _pad4: 0.0,
+            _pad5: 0.0,
+            _pad6: 0.0,
+            _pad7: 0.0,
         };
         gpu.native_enc.dispatch_compute(
             &self.downsample_pipeline,
@@ -401,9 +430,13 @@ impl Generator for OilyFluidGenerator {
             grad_attenuation: curl,
             velocity_damping: vel_damp,
             self_advect_scale: 0.5,
+            vel_disp,
             _pad0: 0.0,
             _pad1: 0.0,
             _pad2: 0.0,
+            _pad3: 0.0,
+            _pad4: 0.0,
+            _pad5: 0.0,
         };
         gpu.native_enc.dispatch_compute(
             &self.velocity_pipeline,
@@ -447,8 +480,12 @@ impl Generator for OilyFluidGenerator {
             noise_injection,
             noise_time,
             aspect: ctx.aspect,
+            col_disp,
             _pad0: 0.0,
             _pad1: 0.0,
+            _pad2: 0.0,
+            _pad3: 0.0,
+            _pad4: 0.0,
         };
         gpu.native_enc.dispatch_compute(
             &self.color_pipeline,
@@ -488,6 +525,10 @@ impl Generator for OilyFluidGenerator {
             hue_shift,
             saturation,
             brightness,
+            mode,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
         gpu.native_enc.dispatch_compute(
             &self.render_pipeline,

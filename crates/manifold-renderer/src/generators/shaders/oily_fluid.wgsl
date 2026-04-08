@@ -28,6 +28,10 @@ struct DownsampleUniforms {
     _pad1: f32,
     _pad2: f32,
     _pad3: f32,
+    _pad4: f32,
+    _pad5: f32,
+    _pad6: f32,
+    _pad7: f32,
 };
 
 @group(0) @binding(0) var<uniform> down_u: DownsampleUniforms;
@@ -74,10 +78,14 @@ struct VelocityUniforms {
     height: f32,
     grad_attenuation: f32,    // 0.2
     velocity_damping: f32,    // 0.98
-    self_advect_scale: f32,   // 0.5
+    self_advect_scale: f32,   // 0.5 (base constant from spec)
+    vel_disp: f32,            // VEL DISP multiplier (1.0 = spec default)
     _pad0: f32,
     _pad1: f32,
     _pad2: f32,
+    _pad3: f32,
+    _pad4: f32,
+    _pad5: f32,
 };
 
 @group(0) @binding(0) var<uniform> vel_u: VelocityUniforms;
@@ -127,7 +135,7 @@ fn cs_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // 5. Self-advect the BLURRED velocity by the UNBLURRED velocity.
     let v_unblurred = textureSampleLevel(vel_velocity, vel_samp, uv, 0.0).rg;
-    let adv_uv = uv - v_unblurred * (vel_u.self_advect_scale * texel);
+    let adv_uv = uv - v_unblurred * (vel_u.self_advect_scale * vel_u.vel_disp * texel);
     let v_blurred_advected = textureSampleLevel(vel_blurred, vel_samp, adv_uv, 0.0).rg;
 
     // 6. Dampen and add curl forcing.
@@ -151,8 +159,12 @@ struct ColorUniforms {
     noise_injection: f32,     // 0.002
     noise_time: f32,          // internal_frame * 0.01 * speed
     aspect: f32,
+    col_disp: f32,            // COL DISP multiplier (1.0 = spec default)
     _pad0: f32,
     _pad1: f32,
+    _pad2: f32,
+    _pad3: f32,
+    _pad4: f32,
 };
 
 @group(0) @binding(0) var<uniform> col_u: ColorUniforms;
@@ -174,7 +186,7 @@ fn cs_color(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Spec: advUV = uv - velocity / resolution, boundary = GL_REPEAT
     let velocity = textureSampleLevel(col_velocity, col_samp, uv, 0.0).rg;
-    let adv_uv = uv - velocity * texel;
+    let adv_uv = uv - velocity * (col_u.col_disp * texel);
     let advected_color = textureSampleLevel(col_prev, col_samp, adv_uv, 0.0).rg;
 
     // Inline 3D noise — aspect-corrected so the pattern stays isotropic on
@@ -206,9 +218,13 @@ struct RenderUniforms {
     normal_z_scale: f32,      // 0.5
     chroma: f32,              // chromatic aberration master scale
     contrast: f32,            // 1.4
-    hue_shift: f32,           // [0, 1] — hue rotation in turns (0.5 = 180°)
+    hue_shift: f32,           // [0, 1] — hue rotation in turns
     saturation: f32,          // 0..2 (1 = neutral)
     brightness: f32,          // 0..2 (1 = neutral)
+    mode: f32,                // 0=OilSlick, 1=FlowField, 2=HeightMap, 3=PBR, 4=Lines
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 };
 
 @group(0) @binding(0) var<uniform> rnd_u: RenderUniforms;
@@ -235,6 +251,141 @@ fn render_normal(uv: vec2<f32>, texel: vec2<f32>, z_scale: f32) -> vec3<f32> {
     return normalize(vec3<f32>(-gx, -gy, max(z_scale, 1e-4)));
 }
 
+// ── Render mode helpers ────────────────────────────────────────────
+
+// Oil Slick: signed-normal + chromatic aberration + abs + level grade.
+fn mode_oil_slick(uv: vec2<f32>, texel: vec2<f32>) -> vec3<f32> {
+    let v = textureSampleLevel(rnd_velocity, rnd_samp, uv, 0.0).rg;
+    let ab = rnd_u.chroma;
+    let disp_r = v * (-ab * texel);
+    let disp_b = v * ( ab * texel);
+
+    let n_r = render_normal(uv + disp_r, texel, rnd_u.normal_z_scale).r;
+    let n_g = render_normal(uv,          texel, rnd_u.normal_z_scale).g;
+    let n_b = render_normal(uv + disp_b, texel, rnd_u.normal_z_scale).b;
+
+    var col = abs(vec3<f32>(n_r, n_g, n_b));
+    col = (col - 0.5) * rnd_u.contrast + 0.5;
+    return clamp(col, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+// Flow Field: N-step walk along velocity, accumulate heightmap (LIC-lite).
+fn mode_flow_field(uv: vec2<f32>, texel: vec2<f32>) -> vec3<f32> {
+    let steps: i32 = 16;
+    let dt = 2.0 * texel;
+    var sum: f32 = render_height(uv);
+    var w_total: f32 = 1.0;
+
+    var walker = uv;
+    for (var i: i32 = 1; i <= steps; i = i + 1) {
+        let v = textureSampleLevel(rnd_velocity, rnd_samp, walker, 0.0).rg;
+        let vn = v / max(length(v), 1e-4);
+        walker = walker + vn * dt;
+        let w = 1.0 - f32(i) / f32(steps);
+        sum = sum + render_height(walker) * w;
+        w_total = w_total + w;
+    }
+    walker = uv;
+    for (var i: i32 = 1; i <= steps; i = i + 1) {
+        let v = textureSampleLevel(rnd_velocity, rnd_samp, walker, 0.0).rg;
+        let vn = v / max(length(v), 1e-4);
+        walker = walker - vn * dt;
+        let w = 1.0 - f32(i) / f32(steps);
+        sum = sum + render_height(walker) * w;
+        w_total = w_total + w;
+    }
+    let acc = sum / w_total;
+    let lum = clamp(acc * rnd_u.contrast * 3.0, 0.0, 1.0);
+    // Warm sepia tint (sand / skin tone) with slight curve
+    return vec3<f32>(lum, lum * 0.7, lum * 0.5);
+}
+
+// Height Map: dramatic z-scaled normal + lambert directional light.
+fn mode_height_map(uv: vec2<f32>, texel: vec2<f32>) -> vec3<f32> {
+    let n = render_normal(uv, texel, rnd_u.normal_z_scale * 0.2);
+    let light_dir = normalize(vec3<f32>(0.4, 0.6, 0.7));
+    let lambert = max(dot(n, light_dir), 0.0);
+    let ambient = 0.1;
+    let v = lambert * 0.9 + ambient;
+    // Slight high-frequency detail from the raw fluid field
+    let h = render_height(uv);
+    let final_v = clamp((v + h * 0.05) * rnd_u.contrast, 0.0, 1.0);
+    return vec3<f32>(final_v);
+}
+
+// PBR: analytical matcap + fresnel rim + blinn spec. No actual texture asset.
+fn mode_pbr(uv: vec2<f32>, texel: vec2<f32>) -> vec3<f32> {
+    let n = render_normal(uv, texel, rnd_u.normal_z_scale);
+    let view = vec3<f32>(0.0, 0.0, 1.0);
+
+    // Matcap-style two-tone gradient sampled by normal.xy (sphere in NDC)
+    let mc_uv = n.xy * 0.5 + 0.5;
+    let base = mix(
+        vec3<f32>(0.08, 0.05, 0.22),   // deep purple shadow
+        vec3<f32>(0.55, 0.75, 0.95),   // pale blue highlight
+        clamp(mc_uv.y, 0.0, 1.0),
+    );
+    let side = mix(
+        vec3<f32>(0.25, 0.10, 0.45),   // magenta
+        vec3<f32>(0.15, 0.55, 0.60),   // teal
+        clamp(mc_uv.x, 0.0, 1.0),
+    );
+    var col = (base + side) * 0.5;
+
+    // Fresnel rim (iridescent edge highlight)
+    let fresnel = pow(1.0 - max(dot(n, view), 0.0), 3.0);
+    col = col + fresnel * vec3<f32>(0.55, 0.30, 0.85);
+
+    // Blinn spec — light positioned over the shoulder
+    let light = normalize(vec3<f32>(0.35, 0.55, 0.75));
+    let h = normalize(light + view);
+    let spec = pow(max(dot(n, h), 0.0), 48.0);
+    col = col + spec * vec3<f32>(1.0, 0.95, 1.0);
+
+    col = (col - 0.5) * rnd_u.contrast + 0.5;
+    return clamp(col, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+// Lines (LAJNS): Line Integral Convolution streamlines along the velocity
+// field, using a hash-noise texture as the ink source.
+fn lines_ink(p: vec2<f32>) -> f32 {
+    // Deterministic hash noise at high frequency. Anchored to UV so the
+    // pattern stays stable across frames.
+    let q = vec2<u32>(u32(p.x * 1024.0 + 4096.0), u32(p.y * 1024.0 + 4096.0));
+    let h = wang_hash(q.x * 73856093u ^ q.y * 19349663u);
+    return f32(h) / 4294967296.0;
+}
+
+fn mode_lines(uv: vec2<f32>, texel: vec2<f32>) -> vec3<f32> {
+    let steps: i32 = 20;
+    let dt = 1.5 * texel;
+    var sum: f32 = lines_ink(uv);
+    var w_total: f32 = 1.0;
+
+    var walker = uv;
+    for (var i: i32 = 1; i <= steps; i = i + 1) {
+        let v = textureSampleLevel(rnd_velocity, rnd_samp, walker, 0.0).rg;
+        let vn = v / max(length(v), 1e-4);
+        walker = walker + vn * dt;
+        let w = 1.0 - f32(i) / f32(steps);
+        sum = sum + lines_ink(walker) * w;
+        w_total = w_total + w;
+    }
+    walker = uv;
+    for (var i: i32 = 1; i <= steps; i = i + 1) {
+        let v = textureSampleLevel(rnd_velocity, rnd_samp, walker, 0.0).rg;
+        let vn = v / max(length(v), 1e-4);
+        walker = walker - vn * dt;
+        let w = 1.0 - f32(i) / f32(steps);
+        sum = sum + lines_ink(walker) * w;
+        w_total = w_total + w;
+    }
+    let lic = sum / w_total;
+    // Threshold + contrast so only aligned streaks survive.
+    let line = smoothstep(0.45, 0.62, lic * rnd_u.contrast);
+    return vec3<f32>(line);
+}
+
 @compute @workgroup_size(16, 16, 1)
 fn cs_render(@builtin(global_invocation_id) gid: vec3<u32>) {
     let W = u32(rnd_u.width);
@@ -246,34 +397,22 @@ fn cs_render(@builtin(global_invocation_id) gid: vec3<u32>) {
     let texel = vec2<f32>(1.0 / rnd_u.width, 1.0 / rnd_u.height);
     let uv = (vec2<f32>(gid.xy) + 0.5) * texel;
 
-    // Velocity drives chromatic aberration displacement.
-    let v = textureSampleLevel(rnd_velocity, rnd_samp, uv, 0.0).rg;
+    let mode_i = i32(round(rnd_u.mode));
+    var col: vec3<f32>;
+    if mode_i == 1 {
+        col = mode_flow_field(uv, texel);
+    } else if mode_i == 2 {
+        col = mode_height_map(uv, texel);
+    } else if mode_i == 3 {
+        col = mode_pbr(uv, texel);
+    } else if mode_i == 4 {
+        col = mode_lines(uv, texel);
+    } else {
+        col = mode_oil_slick(uv, texel);
+    }
 
-    // Per-channel displacement scales (symmetric split around green).
-    let ab = rnd_u.chroma;
-    let scale_r = -ab;
-    let scale_g =  0.0;
-    let scale_b =  ab;
-
-    // Displacement in UV space = velocity * scale * texel (keeps effect
-    // resolution-invariant: spec's "three separate displacement lookups").
-    let disp_r = v * (scale_r * texel);
-    let disp_g = v * (scale_g * texel);
-    let disp_b = v * (scale_b * texel);
-
-    let n_r = render_normal(uv + disp_r, texel, rnd_u.normal_z_scale).r;
-    let n_g = render_normal(uv + disp_g, texel, rnd_u.normal_z_scale).g;
-    let n_b = render_normal(uv + disp_b, texel, rnd_u.normal_z_scale).b;
-
-    let recombined = vec3<f32>(n_r, n_g, n_b);
-
-    // Spec: abs() of recombined RGB → contrast grade (lower exposure, red-oily).
-    var col = abs(recombined);
-    col = (col - 0.5) * rnd_u.contrast + 0.5;
-    col = clamp(col, vec3<f32>(0.0), vec3<f32>(1.0));
-
-    // Color grading: hue rotate → saturation → brightness. Done in HSV so
-    // hue is a proper rotation instead of a per-channel multiply.
+    // Shared color grading tail (hue / saturation / brightness). Applies to
+    // every mode so users can re-tint any preset with the existing controls.
     var hsv = rgb_to_hsv(col);
     hsv.x = fract(hsv.x + rnd_u.hue_shift + 1.0);
     hsv.y = clamp(hsv.y * rnd_u.saturation, 0.0, 1.0);
