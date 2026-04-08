@@ -46,6 +46,18 @@ fn splat(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
+    // Vertical cull. The deflection bake's volumetric integral uses a
+    // Gaussian profile with half-thickness 0.12*r — beyond ~2 sigma the
+    // contribution is negligible. Without this cull, particles that
+    // drift far above or below the plane still splat into their (angle,
+    // radius) cell and create phantom radial streaks because they
+    // persistently illuminate a single polar column from outside the
+    // disk volume.
+    let half_thick = 0.24 * r;
+    if abs(pos.y) > half_thick {
+        return;
+    }
+
     let angle = atan2(pos.z, pos.x) + 3.14159265;
     let angle_norm = angle / 6.28318530;
     let r_norm = (r - params.disk_inner) / (params.disk_outer - params.disk_inner);

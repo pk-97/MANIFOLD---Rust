@@ -191,9 +191,12 @@ fn simulate(@builtin(global_invocation_id) gid: vec3<u32>) {
         * params.turbulence * 0.01;
 
     // ── Disk confinement (soft push toward y=0) ──
-    // Weak pull so particles bob meaningfully above and below the plane;
-    // the two-layer top/bottom split needs real vertical motion to read.
-    let disk_push = vec3<f32>(0.0, -pos.y * 0.6, 0.0);
+    // Moderate pull — particles bob meaningfully above and below the
+    // plane (so the two-layer top/bottom split has signal), but they
+    // don't drift so far that they leave the disk's volumetric extent.
+    // The scatter shader culls particles outside |y| < 0.24*r anyway,
+    // so this just keeps the population concentrated where it counts.
+    let disk_push = vec3<f32>(0.0, -pos.y * 1.5, 0.0);
 
     // ── Velocity update (Verlet) ──
     p.velocity += (total_accel + turbulence_force + disk_push) * dt;
