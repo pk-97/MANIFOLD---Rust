@@ -304,27 +304,29 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         / vec2<f32>(f32(dims.x), f32(dims.y));
 
     // ── Gaussian-blurred upscale of all deflection data ──
-    // 5×5 Gaussian blur at deflection texel scale.
-    // Smooths the shadow boundary discontinuity while preserving
-    // disk detail (neighbors are similar away from boundary).
+    // 9×9 Gaussian blur at deflection texel scale, sigma ≈ 2.0. The
+    // deflection bake is at quarter resolution, so a single deflection
+    // texel covers ~4 full-res pixels. A wider blur is needed to hide
+    // the underlying quarter-res grid at the shadow boundary; the
+    // previous 5×5 σ=1 kernel softened only ~1.25 full-res pixels,
+    // which left visible blockiness on the silhouette edge.
     let dp = 1.0 / vec2<f32>(textureDimensions(deflection1));
     var d1 = vec4<f32>(0.0);
     var d2 = vec4<f32>(0.0);
     var sky = vec4<f32>(0.0);
-    for (var dy = -2; dy <= 2; dy++) {
-        for (var dx = -2; dx <= 2; dx++) {
+    var w_total = 0.0;
+    for (var dy = -4; dy <= 4; dy++) {
+        for (var dx = -4; dx <= 4; dx++) {
             let offset = vec2<f32>(f32(dx), f32(dy)) * dp;
-            // Gaussian weights (sigma ≈ 1.0 texel)
             let dist2 = f32(dx * dx + dy * dy);
-            let w = exp(-dist2 * 0.5);
+            // sigma = 2.0 → divisor = 2σ² = 8
+            let w = exp(-dist2 / 8.0);
             d1 += textureSampleLevel(deflection1, s_linear, uv + offset, 0.0) * w;
             d2 += textureSampleLevel(deflection2, s_linear, uv + offset, 0.0) * w;
             sky += textureSampleLevel(sky_dir_tex, s_linear, uv + offset, 0.0) * w;
+            w_total += w;
         }
     }
-    // Normalize (sum of 5×5 Gaussian weights with sigma=1)
-    let w_total = 1.0 + 4.0 * exp(-0.5) + 4.0 * exp(-1.0) + 4.0 * exp(-2.0)
-        + 8.0 * exp(-2.5) + 4.0 * exp(-4.0);
     d1 /= w_total;
     d2 /= w_total;
     sky /= w_total;
@@ -339,9 +341,17 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let c2_sa = d2.a;
 
     // ── Star field background ──
+    // sky.w is the escaped/absorbed flag from the deflection bake — 1.0
+    // for rays that escaped, 0.0 for rays absorbed by the horizon. The
+    // 5×5 gaussian above produces fractional values across the shadow
+    // boundary; smoothstep gives a soft shadow edge instead of a hard
+    // pixelated cutoff. The previous `if sky.w > 0.3` was the source
+    // of the "blocky shadow" — the gaussian was working, we were just
+    // re-thresholding it back into a binary signal.
     var color = vec3<f32>(0.0);
-    if sky.w > 0.3 {
-        color = star_field(normalize(sky.xyz), u.stars_brightness) * sky.w;
+    let escape_w = smoothstep(0.15, 0.65, sky.w);
+    if escape_w > 0.001 {
+        color = star_field(normalize(sky.xyz), u.stars_brightness) * escape_w;
     }
     var total_opacity = 0.0;
 
