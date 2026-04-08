@@ -186,16 +186,13 @@ fn shade_disk(disk_r: f32, cos_a: f32, sin_a: f32, is_secondary: bool) -> vec3<f
     let disk_range = u.disk_outer - u.disk_inner;
     let t = clamp((disk_r - u.disk_inner) / disk_range, 0.0, 1.0);
     let ring_r = t;
-    // Clamp r_norm to >= 1.0 to bound the worst-case HDR brightness.
-    // The separable blur over the deflection bake produces partial
-    // disk_r values at the silhouette boundary (averaging real
-    // crossings with non-crossings); without this clamp, the inverse-
-    // square `r_falloff` term explodes as disk_r → 0, producing
-    // pixels in the 50–100× range that defeat ACES tonemap (every
-    // channel saturates and color converges to white). With the
-    // clamp the worst case stays around 5× — well within ACES's
-    // shoulder range, so warm hue is preserved through compression.
-    let r_norm = max(disk_r / u.disk_inner, 1.0);
+    // Compute r_norm normally — DO NOT clamp. The previous max(.., 1.0)
+    // clamp produced a step function at the boundary that turned
+    // ripples in the gaussian-blurred c1_r into radial brightness
+    // spikes around the silhouette. Brightness is bounded at the END
+    // of this function with a smooth output cap that preserves the
+    // continuity of r_falloff across the boundary.
+    let r_norm = disk_r / u.disk_inner;
 
     // Reconstruct angle
     let base_angle = atan2(sin_a, cos_a);
@@ -270,16 +267,22 @@ fn shade_disk(disk_r: f32, cos_a: f32, sin_a: f32, is_secondary: bool) -> vec3<f
         emission *= 0.4;
     }
 
-    // Edge fade based on the *actual* disk_r (not the clamped r_norm).
-    // At silhouette boundary pixels the gaussian-blurred c1_r drops
-    // below disk_inner, but our r_norm clamp would otherwise render
-    // them as full-bright inner-edge pixels — including the FBM noise
-    // pattern at ring_r=0 varying with angle, which produced visible
-    // radial line artifacts along the silhouette. This fade kills the
-    // boundary contribution without affecting real inner-edge pixels
-    // (which have disk_r >= disk_inner and stay at fade = 1.0).
-    let edge_fade = smoothstep(u.disk_inner * 0.6, u.disk_inner * 1.0, disk_r);
-    return emission * edge_fade;
+    // Hue-preserving emission cap. Instead of clamping r_norm or
+    // hard-fading boundary pixels (both of which produce visible
+    // step transitions and radial spikes from gaussian blur ripples),
+    // bound the maximum brightness at the output and scale all
+    // channels by the same ratio so warm color is preserved. The
+    // shoulder is smooth so r_falloff's natural curve stays
+    // continuous across the boundary — no spikes.
+    let max_b = max(emission.r, max(emission.g, emission.b));
+    let cap = 6.0;
+    if max_b > cap {
+        // Soft rolloff above cap — Reinhard-style asymptote
+        let new_max = cap + (max_b - cap) / (1.0 + (max_b - cap) / cap);
+        emission = emission * (new_max / max_b);
+    }
+
+    return emission;
 }
 
 // ── Main ──
