@@ -25,9 +25,9 @@ const SPIN: usize = 10;
 const PARTICLE_STRENGTH: usize = 11;
 const PARTICLE_TURBULENCE: usize = 12;
 
-const PARTICLE_COUNT: u32 = 200_000;
-const POLAR_W: u32 = 512;
-const POLAR_H: u32 = 256;
+const PARTICLE_COUNT: u32 = 500_000;
+const POLAR_W: u32 = 1024;
+const POLAR_H: u32 = 512;
 
 fn param(ctx: &GeneratorContext, idx: usize, default: f32) -> f32 {
     if ctx.param_count > idx as u32 {
@@ -118,8 +118,10 @@ pub struct BlackHoleGenerator {
     defl_h: u32,
 
     particle_buffer: Option<manifold_gpu::GpuBuffer>,
-    scatter_accum: Option<manifold_gpu::GpuBuffer>,
-    polar_density: Option<manifold_gpu::GpuTexture>,
+    scatter_accum_top: Option<manifold_gpu::GpuBuffer>,
+    scatter_accum_bottom: Option<manifold_gpu::GpuBuffer>,
+    polar_density_top: Option<manifold_gpu::GpuTexture>,
+    polar_density_bottom: Option<manifold_gpu::GpuTexture>,
     particles_initialized: bool,
     frame_count: u64,
 
@@ -177,8 +179,10 @@ impl BlackHoleGenerator {
             defl_w: 0,
             defl_h: 0,
             particle_buffer: None,
-            scatter_accum: None,
-            polar_density: None,
+            scatter_accum_top: None,
+            scatter_accum_bottom: None,
+            polar_density_top: None,
+            polar_density_bottom: None,
             particles_initialized: false,
             frame_count: 0,
             last_cam_dist: f32::MIN,
@@ -195,20 +199,29 @@ impl BlackHoleGenerator {
             let buf_size = PARTICLE_COUNT as u64 * std::mem::size_of::<Particle>() as u64;
             self.particle_buffer = Some(device.create_buffer(buf_size));
         }
-        if self.scatter_accum.is_none() {
-            let accum_size = (POLAR_W as u64) * (POLAR_H as u64) * 4;
-            self.scatter_accum = Some(device.create_buffer(accum_size));
+        let accum_size = (POLAR_W as u64) * (POLAR_H as u64) * 4;
+        if self.scatter_accum_top.is_none() {
+            self.scatter_accum_top = Some(device.create_buffer(accum_size));
         }
-        if self.polar_density.is_none() {
-            self.polar_density = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
+        if self.scatter_accum_bottom.is_none() {
+            self.scatter_accum_bottom = Some(device.create_buffer(accum_size));
+        }
+        let make_density = |label| {
+            device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width: POLAR_W,
                 height: POLAR_H,
                 depth: 1,
                 format: manifold_gpu::GpuTextureFormat::Rgba16Float,
                 dimension: manifold_gpu::GpuTextureDimension::D2,
                 usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
-                label: "BlackHole Polar Density",
-            }));
+                label,
+            })
+        };
+        if self.polar_density_top.is_none() {
+            self.polar_density_top = Some(make_density("BlackHole Polar Density Top"));
+        }
+        if self.polar_density_bottom.is_none() {
+            self.polar_density_bottom = Some(make_density("BlackHole Polar Density Bottom"));
         }
     }
 
@@ -340,8 +353,10 @@ impl Generator for BlackHoleGenerator {
         let particle_turbulence = param(ctx, PARTICLE_TURBULENCE, 0.5);
         self.ensure_particle_resources(gpu.device);
         let part_buf = self.particle_buffer.as_ref().unwrap();
-        let accum_buf = self.scatter_accum.as_ref().unwrap();
-        let polar_tex = self.polar_density.as_ref().unwrap();
+        let accum_top = self.scatter_accum_top.as_ref().unwrap();
+        let accum_bot = self.scatter_accum_bottom.as_ref().unwrap();
+        let polar_top = self.polar_density_top.as_ref().unwrap();
+        let polar_bot = self.polar_density_bottom.as_ref().unwrap();
 
         let sim_uniforms = ParticleSimUniforms {
             active_count: PARTICLE_COUNT,
@@ -395,7 +410,8 @@ impl Generator for BlackHoleGenerator {
             "BlackHole Particles Sim",
         );
 
-        gpu.native_enc.clear_buffer(accum_buf);
+        gpu.native_enc.clear_buffer(accum_top);
+        gpu.native_enc.clear_buffer(accum_bot);
 
         // Energy per particle: target ~average density 0.05 in cells with
         // a few particles, peaks of ~1.0 in clumps.
@@ -421,11 +437,16 @@ impl Generator for BlackHoleGenerator {
                 },
                 manifold_gpu::GpuBinding::Buffer {
                     binding: 1,
-                    buffer: accum_buf,
+                    buffer: accum_top,
+                    offset: 0,
+                },
+                manifold_gpu::GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: accum_bot,
                     offset: 0,
                 },
                 manifold_gpu::GpuBinding::Bytes {
-                    binding: 2,
+                    binding: 3,
                     data: bytemuck::bytes_of(&scatter_uniforms),
                 },
             ],
@@ -439,26 +460,31 @@ impl Generator for BlackHoleGenerator {
             _pad0: 0,
             _pad1: 0,
         };
-        gpu.native_enc.dispatch_compute(
-            &self.particles_resolve_pipeline,
-            &[
-                manifold_gpu::GpuBinding::Buffer {
-                    binding: 0,
-                    buffer: accum_buf,
-                    offset: 0,
-                },
-                manifold_gpu::GpuBinding::Texture {
-                    binding: 1,
-                    texture: polar_tex,
-                },
-                manifold_gpu::GpuBinding::Bytes {
-                    binding: 2,
-                    data: bytemuck::bytes_of(&resolve_uniforms),
-                },
-            ],
-            [POLAR_W.div_ceil(16), POLAR_H.div_ceil(16), 1],
-            "BlackHole Particles Resolve",
-        );
+        for (accum, polar, label) in [
+            (accum_top, polar_top, "BlackHole Particles Resolve Top"),
+            (accum_bot, polar_bot, "BlackHole Particles Resolve Bottom"),
+        ] {
+            gpu.native_enc.dispatch_compute(
+                &self.particles_resolve_pipeline,
+                &[
+                    manifold_gpu::GpuBinding::Buffer {
+                        binding: 0,
+                        buffer: accum,
+                        offset: 0,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1,
+                        texture: polar,
+                    },
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 2,
+                        data: bytemuck::bytes_of(&resolve_uniforms),
+                    },
+                ],
+                [POLAR_W.div_ceil(16), POLAR_H.div_ceil(16), 1],
+                label,
+            );
+        }
 
         // ── Pass 3: Display ──
         let stars = param(ctx, STARS, 0.5);
@@ -501,7 +527,11 @@ impl Generator for BlackHoleGenerator {
                 },
                 manifold_gpu::GpuBinding::Texture {
                     binding: 6,
-                    texture: polar_tex,
+                    texture: polar_top,
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 7,
+                    texture: polar_bot,
                 },
             ],
             [ctx.width.div_ceil(16), ctx.height.div_ceil(16), 1],

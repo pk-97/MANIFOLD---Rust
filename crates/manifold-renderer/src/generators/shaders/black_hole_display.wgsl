@@ -22,21 +22,32 @@ struct Uniforms {
 @group(0) @binding(3) var s_linear: sampler;
 @group(0) @binding(4) var output: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(5) var sky_dir_tex: texture_2d<f32>;
-@group(0) @binding(6) var particle_density: texture_2d<f32>;
+@group(0) @binding(6) var particle_density_top: texture_2d<f32>;
+@group(0) @binding(7) var particle_density_bottom: texture_2d<f32>;
 
 // Sample particle density at a disk hit point. Polar coords:
 //   X = angle / 2π (wrapped)
 //   Y = (r - inner) / (outer - inner) (clamped)
-fn sample_particle_density(disk_r: f32, cos_a: f32, sin_a: f32) -> f32 {
+//
+// `near_bias` selects which side of the disk plane this hit favors:
+//   1.0 = top-biased, 0.0 = bottom-biased. The other side still
+//   contributes (at 0.6×) so the disk feels volumetric instead of
+//   showing only one face.
+fn sample_particle_density(
+    disk_r: f32, cos_a: f32, sin_a: f32, near_bias: f32,
+) -> f32 {
     let angle = atan2(sin_a, cos_a);
     let ang_norm = fract(angle / 6.28318530 + 1.0);
     let r_norm = clamp(
         (disk_r - u.disk_inner) / (u.disk_outer - u.disk_inner),
         0.0, 1.0,
     );
-    return textureSampleLevel(
-        particle_density, s_linear, vec2<f32>(ang_norm, r_norm), 0.0,
-    ).r;
+    let uv = vec2<f32>(ang_norm, r_norm);
+    let d_top = textureSampleLevel(particle_density_top, s_linear, uv, 0.0).r;
+    let d_bot = textureSampleLevel(particle_density_bottom, s_linear, uv, 0.0).r;
+    let near_w = mix(0.6, 1.0, near_bias);
+    let far_w  = mix(1.0, 0.6, near_bias);
+    return d_top * near_w + d_bot * far_w;
 }
 
 // ── Hash functions ──
@@ -302,8 +313,9 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if c1_r > 0.1 && c1_mag2 > 0.25 {
         var disk_col = shade_disk(c1_r, c1_ca, c1_sa, false) * c1_op;
         if u.particle_strength > 0.001 {
-            let d1 = sample_particle_density(c1_r, c1_ca, c1_sa);
-            disk_col = disk_col * (1.0 + d1 * u.particle_strength * 6.0);
+            // First crossing is the front disk — bias toward the top layer.
+            let d1 = sample_particle_density(c1_r, c1_ca, c1_sa, 1.0);
+            disk_col = disk_col * (1.0 + d1 * u.particle_strength * 4.0);
         }
         color = color * (1.0 - c1_op * 0.85) + disk_col;
         total_opacity = c1_op;
@@ -316,8 +328,9 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let remaining = max(1.0 - total_opacity * 0.6, 0.0);
         var disk_col = shade_disk(c2_r, c2_ca, c2_sa, true) * c2_op * remaining;
         if u.particle_strength > 0.001 {
-            let d2v = sample_particle_density(c2_r, c2_ca, c2_sa);
-            disk_col = disk_col * (1.0 + d2v * u.particle_strength * 6.0);
+            // Second crossing is the lensed back of the disk — bias toward bottom.
+            let d2v = sample_particle_density(c2_r, c2_ca, c2_sa, 0.0);
+            disk_col = disk_col * (1.0 + d2v * u.particle_strength * 4.0);
         }
         color = color * (1.0 - c2_op * remaining * 0.5) + disk_col;
         total_opacity = clamp(total_opacity + c2_op * 0.5, 0.0, 1.0);

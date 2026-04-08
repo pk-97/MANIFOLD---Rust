@@ -24,8 +24,9 @@ struct ScatterUniforms {
 };
 
 @group(0) @binding(0) var<storage, read> particles: array<Particle>;
-@group(0) @binding(1) var<storage, read_write> accum: array<atomic<u32>>;
-@group(0) @binding(2) var<uniform> params: ScatterUniforms;
+@group(0) @binding(1) var<storage, read_write> accum_top: array<atomic<u32>>;
+@group(0) @binding(2) var<storage, read_write> accum_bottom: array<atomic<u32>>;
+@group(0) @binding(3) var<uniform> params: ScatterUniforms;
 
 @compute @workgroup_size(256)
 fn splat(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -53,5 +54,13 @@ fn splat(@builtin(global_invocation_id) gid: vec3<u32>) {
     let py = u32(r_norm * f32(params.tex_h)) % params.tex_h;
     let idx = py * params.tex_w + px;
 
-    atomicAdd(&accum[idx], params.scaled_energy);
+    // Two-layer polar: split by signed disk-plane height. Particles above the
+    // plane go into the top texture, below go into the bottom. The display
+    // shader blends them with a bias so each disk crossing favors its own
+    // side, giving the disk a sense of thickness.
+    if pos.y >= 0.0 {
+        atomicAdd(&accum_top[idx], params.scaled_energy);
+    } else {
+        atomicAdd(&accum_bottom[idx], params.scaled_energy);
+    }
 }
