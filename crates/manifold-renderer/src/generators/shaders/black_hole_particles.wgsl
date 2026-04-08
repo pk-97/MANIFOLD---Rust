@@ -97,17 +97,22 @@ fn simplex_noise_2d(v: vec2<f32>) -> f32 {
     return clamp((n0 + n1 + n2) * 35.0 + 0.5, 0.0, 1.0);
 }
 
-// Spawn a new particle at the disk outer edge
+// Spawn a new particle anywhere across the disk so respawned particles
+// repopulate the inner regions, not just the outer rim. Without this,
+// the entire population eventually concentrates in the outer 20% of
+// the disk (because the original spawn zone was 0.8..1.0 of outer).
 fn spawn_particle(idx: u32) -> Particle {
     let seed = wang_hash(idx * 1099u + params.frame_count * 7919u);
     let rng = hash_float3(seed);
 
     // Random angle in disk plane
     let angle = rng.x * 6.2831853;
-    // Random radius biased toward outer edge (spawn zone)
-    let spawn_r = params.disk_outer * (0.8 + 0.2 * rng.y);
-    // Slight vertical spread
-    let y_offset = (rng.z - 0.5) * 0.3;
+    // Random radius across the full disk (linear in r — gives roughly
+    // even visual density, since outer regions have more area but we
+    // want the inner regions to remain populated).
+    let spawn_r = params.disk_inner + rng.y * (params.disk_outer - params.disk_inner);
+    // Slight vertical spread, scaled by radius so it matches disk thickness
+    let y_offset = (rng.z - 0.5) * 0.1 * spawn_r;
 
     let pos = vec3<f32>(
         cos(angle) * spawn_r,
@@ -220,10 +225,11 @@ fn simulate(@builtin(global_invocation_id) gid: vec3<u32>) {
     if new_r > params.disk_outer * 2.0 {
         p.life = 0.0;
     }
-    // Too old
-    if p.age > 30.0 {
-        p.life = 0.0;
-    }
+    // No age cap. Particles live until they actually fall into the hole
+    // or escape — killing healthy orbiting particles by age was emptying
+    // the inner disk, since freshly-respawned particles take time to
+    // spiral inward and the old spawn zone (0.8..1.0 of outer) meant
+    // nothing ever populated the inner radii in the first place.
 
     // ── Color based on radius (temperature) ──
     let t = clamp((new_r - params.disk_inner) / (params.disk_outer - params.disk_inner), 0.0, 1.0);
