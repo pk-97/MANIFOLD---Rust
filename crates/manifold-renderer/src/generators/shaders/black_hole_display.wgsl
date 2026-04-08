@@ -213,7 +213,16 @@ fn shade_disk(disk_r: f32, cos_a: f32, sin_a: f32, is_secondary: bool) -> vec3<f
     let disk_range = u.disk_outer - u.disk_inner;
     let t = clamp((disk_r - u.disk_inner) / disk_range, 0.0, 1.0);
     let ring_r = t;
-    let r_norm = disk_r / u.disk_inner;
+    // Clamp r_norm to >= 1.0 to bound the worst-case HDR brightness.
+    // The separable blur over the deflection bake produces partial
+    // disk_r values at the silhouette boundary (averaging real
+    // crossings with non-crossings); without this clamp, the inverse-
+    // square `r_falloff` term explodes as disk_r → 0, producing
+    // pixels in the 50–100× range that defeat ACES tonemap (every
+    // channel saturates and color converges to white). With the
+    // clamp the worst case stays around 5× — well within ACES's
+    // shoulder range, so warm hue is preserved through compression.
+    let r_norm = max(disk_r / u.disk_inner, 1.0);
 
     // Reconstruct angle
     let base_angle = atan2(sin_a, cos_a);
