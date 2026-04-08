@@ -270,7 +270,16 @@ fn shade_disk(disk_r: f32, cos_a: f32, sin_a: f32, is_secondary: bool) -> vec3<f
         emission *= 0.4;
     }
 
-    return emission;
+    // Edge fade based on the *actual* disk_r (not the clamped r_norm).
+    // At silhouette boundary pixels the gaussian-blurred c1_r drops
+    // below disk_inner, but our r_norm clamp would otherwise render
+    // them as full-bright inner-edge pixels — including the FBM noise
+    // pattern at ring_r=0 varying with angle, which produced visible
+    // radial line artifacts along the silhouette. This fade kills the
+    // boundary contribution without affecting real inner-edge pixels
+    // (which have disk_r >= disk_inner and stay at fade = 1.0).
+    let edge_fade = smoothstep(u.disk_inner * 0.6, u.disk_inner * 1.0, disk_r);
+    return emission * edge_fade;
 }
 
 // ── Main ──
