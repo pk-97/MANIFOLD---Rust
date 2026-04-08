@@ -191,7 +191,9 @@ fn simulate(@builtin(global_invocation_id) gid: vec3<u32>) {
         * params.turbulence * 0.01;
 
     // ── Disk confinement (soft push toward y=0) ──
-    let disk_push = vec3<f32>(0.0, -pos.y * 2.0, 0.0);
+    // Weak pull so particles bob meaningfully above and below the plane;
+    // the two-layer top/bottom split needs real vertical motion to read.
+    let disk_push = vec3<f32>(0.0, -pos.y * 0.6, 0.0);
 
     // ── Velocity update (Verlet) ──
     p.velocity += (total_accel + turbulence_force + disk_push) * dt;

@@ -344,6 +344,12 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // ── Volumetric emission (path integral through disk atmosphere) ──
+    // The deflection bake stores `vol_accum` — a Gaussian-weighted line
+    // integral of the disk's vertical thickness profile along the ray.
+    // Multiplying by polar particle density at the volumetric radius
+    // turns flat clumps into truly volumetric thickness modulation:
+    // where particles are clustered, the path integral *and* the
+    // azimuthal density both spike, so the disk visibly bulges.
     let vol = d2.r;
     if vol > 0.01 {
         let vol_opacity = 1.0 - exp(-vol * 0.3);
@@ -356,7 +362,14 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             vol_t,
         );
         let vol_fade = smoothstep(0.0, 0.15, vol);
-        color += vol_col * vol_opacity * vol_fade * u.disk_glow * 0.15;
+        var vol_emit = vol_col * vol_opacity * vol_fade * u.disk_glow * 0.15;
+        if u.particle_strength > 0.001 && c1_r > 0.1 && c1_mag2 > 0.25 {
+            // Sample both layers symmetrically — volumetric emission spans
+            // the full disk thickness, so neither side is "near" or "far".
+            let dv = sample_particle_density(c1_r, c1_ca, c1_sa, 0.5);
+            vol_emit = vol_emit * (1.0 + dv * u.particle_strength * 5.0);
+        }
+        color += vol_emit;
     }
 
     // ── Soft knee compression (HDR-preserving) ──
