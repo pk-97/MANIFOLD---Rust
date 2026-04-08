@@ -64,6 +64,7 @@ impl ParametricSurfaceGenerator {
             dimension: manifold_gpu::GpuTextureDimension::D3,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
             label: "ParametricSurface Volume",
+            mip_levels: 1,
         });
 
         let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {

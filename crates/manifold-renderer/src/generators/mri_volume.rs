@@ -136,6 +136,7 @@ impl MriVolumeGenerator {
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL
                 | manifold_gpu::GpuTextureUsage::CPU_UPLOAD,
             label: "MRI Slice 2D",
+            mip_levels: 1,
         });
         self.slice_texture = Some(texture);
         self.current_tex_dims = (width, height);

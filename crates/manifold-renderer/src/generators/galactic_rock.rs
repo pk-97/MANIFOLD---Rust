@@ -151,6 +151,7 @@ impl GalacticRockGenerator {
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
                 | manifold_gpu::GpuTextureUsage::SHADER_READ,
             label: "GalacticRock Shadow0",
+            mip_levels: 1,
         });
         let shadow_map_1 = device.create_texture(&manifold_gpu::GpuTextureDesc {
             width: SHADOW_MAP_SIZE,
@@ -161,6 +162,7 @@ impl GalacticRockGenerator {
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
                 | manifold_gpu::GpuTextureUsage::SHADER_READ,
             label: "GalacticRock Shadow1",
+            mip_levels: 1,
         });
         // Color target for shadow passes — must match shadow map dimensions.
         // Color output is discarded (DontCare store) but Metal requires matching sizes.
@@ -172,6 +174,7 @@ impl GalacticRockGenerator {
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET,
             label: "GalacticRock ShadowColor",
+            mip_levels: 1,
         });
 
         // ── Main render pipeline ──
@@ -246,6 +249,7 @@ impl GalacticRockGenerator {
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET,
             label: "GalacticRock Depth",
+            mip_levels: 1,
         }));
         self.blur_temp = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
             width,
@@ -256,6 +260,7 @@ impl GalacticRockGenerator {
             usage: manifold_gpu::GpuTextureUsage::SHADER_READ
                 | manifold_gpu::GpuTextureUsage::SHADER_WRITE,
             label: "GalacticRock BlurTemp",
+            mip_levels: 1,
         }));
         self.depth_width = width;
         self.depth_height = height;

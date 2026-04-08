@@ -103,6 +103,7 @@ impl MeshPipeline {
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET,
             label: "Mesh Depth",
+            mip_levels: 1,
         }));
         self.depth_width = width;
         self.depth_height = height;

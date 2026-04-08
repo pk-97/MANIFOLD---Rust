@@ -190,6 +190,7 @@ impl GlyphAtlas {
             dimension: GpuTextureDimension::D2,
             usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::CPU_UPLOAD,
             label: "TextAtlas",
+            mip_levels: 1,
         });
         Self {
             texture: Some(texture),

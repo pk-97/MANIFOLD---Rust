@@ -1208,6 +1208,23 @@ impl GpuEncoder {
         enc.end_encoding();
     }
 
+    /// Generate the mipmap chain for a texture using Metal's optimized
+    /// blit-encoder path. The texture must have been created with
+    /// `mip_levels > 1` and a usage that allows GPU read+write of all
+    /// mip levels (the standard `RENDER_TARGET_FULL` set is enough).
+    /// Apple Silicon implements this in hardware.
+    ///
+    /// Single-tap mip sampling in shaders becomes the cheapest possible
+    /// wide-blur primitive: each mip level k stores the average of a
+    /// 2^k × 2^k region of the source, so `textureSampleLevel(.., k)`
+    /// gives a 2^(k+1)-pixel-wide box-blurred value in one fetch.
+    pub fn generate_mipmaps(&mut self, texture: &GpuTexture) {
+        self.end_current();
+        let enc = self.cmd_buf().new_blit_command_encoder();
+        enc.generate_mipmaps(&texture.raw);
+        enc.end_encoding();
+    }
+
     /// Copy texture to texture via blit encoder.
     pub fn copy_texture_to_texture(
         &mut self,

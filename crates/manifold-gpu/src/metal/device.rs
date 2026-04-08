@@ -1069,7 +1069,7 @@ impl GpuDevice {
         } else {
             mtl_desc.set_storage_mode(metal::MTLStorageMode::Private);
         }
-        mtl_desc.set_mipmap_level_count(1);
+        mtl_desc.set_mipmap_level_count(desc.mip_levels.max(1) as u64);
         mtl_desc.set_sample_count(1);
         // allowGPUOptimizedContents defaults to true in Metal — we never
         // disable it. This enables lossy GPU compression for Private-storage

@@ -55,6 +55,7 @@ impl EdgeExtendBlit {
             dimension: GpuTextureDimension::D2,
             usage: GpuTextureUsage::RENDER_TARGET_FULL,
             label: "LED_SampleRT",
+            mip_levels: 1,
         });
 
         Self {

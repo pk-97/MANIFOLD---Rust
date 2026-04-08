@@ -437,6 +437,7 @@ impl FluidSimulation3DGenerator {
                 dimension: manifold_gpu::GpuTextureDimension::D3,
                 usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
                 label,
+                mip_levels: 1,
             })
         };
         self.density_volume = Some(make_vol(DENSITY_3D_FORMAT, "FluidSim3D DensityVolume"));
@@ -463,6 +464,7 @@ impl FluidSimulation3DGenerator {
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
             label: "FluidSim3D DisplayDensity",
+            mip_levels: 1,
         }));
     }
 

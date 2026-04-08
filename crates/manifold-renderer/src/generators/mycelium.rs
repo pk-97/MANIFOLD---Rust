@@ -182,6 +182,7 @@ impl MyceliumGenerator {
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
             label: "Mycelium Trail A",
+            mip_levels: 1,
         });
         let trail_b = device.create_texture(&manifold_gpu::GpuTextureDesc {
             width: tw,
@@ -191,6 +192,7 @@ impl MyceliumGenerator {
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
             label: "Mycelium Trail B",
+            mip_levels: 1,
         });
 
         self.agent_buffer = Some(agent_buffer);

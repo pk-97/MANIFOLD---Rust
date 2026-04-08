@@ -291,6 +291,7 @@ mod tests {
             dimension: GpuTextureDimension::D2,
             usage: GpuTextureUsage::RENDER_TARGET | GpuTextureUsage::SHADER_READ,
             label: "test target",
+            mip_levels: 1,
         });
 
         // 3. Define vertex layout: position (Float32x2) + color (Float32x4)

@@ -54,6 +54,7 @@ impl InfraredFX {
                 usage: manifold_gpu::GpuTextureUsage::SHADER_READ
                     | manifold_gpu::GpuTextureUsage::CPU_UPLOAD,
                 label: "Infrared LUT",
+                mip_levels: 1,
             });
             let f16_data = pixels_to_f16(&pixels);
             enc.upload_texture(&tex, LUT_SIZE, 1, 1, &f16_data);

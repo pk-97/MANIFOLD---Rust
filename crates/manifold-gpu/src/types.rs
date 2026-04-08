@@ -86,6 +86,22 @@ pub struct GpuTextureDesc<'a> {
     pub dimension: GpuTextureDimension,
     pub usage: GpuTextureUsage,
     pub label: &'a str,
+    /// Number of mipmap levels. 1 = no mipmaps (default). Higher values
+    /// create a mipmap chain that can be populated with
+    /// `GpuEncoder::generate_mipmaps` and sampled at any level via
+    /// WGSL's `textureSampleLevel(tex, sampler, uv, mip)`. Mipmap-aware
+    /// textures must be created with usages that allow both write
+    /// (storage or render target) and shader read.
+    pub mip_levels: u32,
+}
+
+impl<'a> GpuTextureDesc<'a> {
+    /// Maximum number of mip levels for the given dimensions
+    /// (1 + floor(log2(max(width, height)))).
+    pub fn max_mip_levels(width: u32, height: u32) -> u32 {
+        let m = width.max(height).max(1);
+        32 - m.leading_zeros()
+    }
 }
 
 /// Buffer storage mode.

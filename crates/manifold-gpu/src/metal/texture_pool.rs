@@ -121,6 +121,7 @@ impl TexturePool {
             dimension: GpuTextureDimension::D2,
             usage,
             label: _label,
+            mip_levels: 1,
         };
         let mtl_desc = GpuDevice::build_mtl_texture_desc(&desc);
         let raw = inner.device.new_texture(&mtl_desc);

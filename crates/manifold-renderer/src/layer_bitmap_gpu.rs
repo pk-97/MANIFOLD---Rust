@@ -192,6 +192,7 @@ impl LayerBitmapGpu {
                 dimension: GpuTextureDimension::D2,
                 usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::CPU_UPLOAD,
                 label: &format!("Layer Bitmap {layer_index}"),
+                mip_levels: 1,
             });
             self.textures[layer_index] = Some(LayerTexture {
                 texture,

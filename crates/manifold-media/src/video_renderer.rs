@@ -51,6 +51,7 @@ impl VideoRenderTarget {
             dimension: GpuTextureDimension::D2,
             usage: GpuTextureUsage::RENDER_TARGET_FULL,
             label: &label,
+            mip_levels: 1,
         });
         Self { texture }
     }

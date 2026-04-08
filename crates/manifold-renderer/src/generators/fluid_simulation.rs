@@ -294,6 +294,7 @@ impl FluidSimulationGenerator {
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
             label: "FluidSim Density",
+            mip_levels: 1,
         });
 
         // Blur + vector field textures: half scatter resolution, capped at 480x270
@@ -307,6 +308,7 @@ impl FluidSimulationGenerator {
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
             label: "FluidSim Blur Density",
+            mip_levels: 1,
         });
         let vector_field_tex = device.create_texture(&manifold_gpu::GpuTextureDesc {
             width: bw,
@@ -316,6 +318,7 @@ impl FluidSimulationGenerator {
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
             label: "FluidSim Vector Field",
+            mip_levels: 1,
         });
         let blur_temp_tex = device.create_texture(&manifold_gpu::GpuTextureDesc {
             width: bw,
@@ -325,6 +328,7 @@ impl FluidSimulationGenerator {
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
             label: "FluidSim Blur Temp",
+            mip_levels: 1,
         });
 
         self.scatter_accum = Some(scatter_accum);

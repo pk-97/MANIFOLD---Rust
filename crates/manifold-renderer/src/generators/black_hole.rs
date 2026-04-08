@@ -163,7 +163,12 @@ impl BlackHoleGenerator {
             "resolve",
             "BlackHole Particles Resolve",
         );
-        let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc::default());
+        // Linear mip filter so display can sample fractional mip levels of
+        // the deflection chain (single-tap wide blur).
+        let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+            mip_filter: manifold_gpu::GpuFilterMode::Linear,
+            ..Default::default()
+        });
 
         Self {
             deflection_pipeline,
@@ -215,6 +220,7 @@ impl BlackHoleGenerator {
                 dimension: manifold_gpu::GpuTextureDimension::D2,
                 usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
                 label,
+                mip_levels: 1,
             })
         };
         if self.polar_density_top.is_none() {
@@ -231,6 +237,12 @@ impl BlackHoleGenerator {
         }
         self.defl_w = w;
         self.defl_h = h;
+        // Mipmap chain for cheap wide-blur upsampling. Each mip level
+        // is a hardware-generated 2× downsample of the previous, so
+        // sampling mip k in the display shader returns a 2^k×2^k
+        // box-blurred value in a single tap. We bake at eighth res
+        // (mip 0), then mip 1 = 16×, mip 2 = 32×, mip 3 = 64×.
+        let mips = manifold_gpu::GpuTextureDesc::max_mip_levels(w, h).min(4);
         let make = |label| {
             device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width: w,
@@ -240,6 +252,7 @@ impl BlackHoleGenerator {
                 dimension: manifold_gpu::GpuTextureDimension::D2,
                 usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
                 label,
+                mip_levels: mips,
             })
         };
         self.deflection_map = Some(make("BlackHole Deflection1"));
@@ -252,6 +265,7 @@ impl BlackHoleGenerator {
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
             label: "BlackHole SkyDir",
+            mip_levels: mips,
         }));
         self.last_cam_dist = f32::MIN;
     }
@@ -341,6 +355,14 @@ impl Generator for BlackHoleGenerator {
                 [self.defl_w.div_ceil(16), self.defl_h.div_ceil(16), 1],
                 "BlackHole Deflection",
             );
+
+            // Build the mipmap chain for cheap wide-blur upsampling.
+            // Display samples a higher mip level instead of running an
+            // inline 13×13 gaussian — single tap, ~80× cheaper.
+            gpu.native_enc.generate_mipmaps(self.deflection_map.as_ref().unwrap());
+            gpu.native_enc.generate_mipmaps(self.deflection_map2.as_ref().unwrap());
+            gpu.native_enc.generate_mipmaps(self.sky_dir_map.as_ref().unwrap());
+
             self.last_cam_dist = cam_dist;
             self.last_tilt = tilt_rad;
             self.last_rotate = rotate_rad;

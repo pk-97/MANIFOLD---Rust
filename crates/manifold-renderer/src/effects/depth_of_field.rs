@@ -228,6 +228,7 @@ impl DepthOfFieldFX {
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL
                 | manifold_gpu::GpuTextureUsage::CPU_UPLOAD,
             label: &format!("DofDepth_{owner_key}"),
+            mip_levels: 1,
         });
 
         self.depth_states.insert(
@@ -277,6 +278,7 @@ impl DepthOfFieldFX {
                 dimension: manifold_gpu::GpuTextureDimension::D2,
                 usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
                 label: "DofDepthStaging",
+                mip_levels: 1,
             })
         };
 

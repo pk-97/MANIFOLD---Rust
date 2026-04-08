@@ -150,6 +150,7 @@ impl MetallicGlassGenerator {
             usage: manifold_gpu::GpuTextureUsage::SHADER_READ
                 | manifold_gpu::GpuTextureUsage::SHADER_WRITE,
             label: "MetallicGlass EnvMap",
+            mip_levels: 1,
         });
 
         let render_pipeline = device.create_render_pipeline_depth(
@@ -216,6 +217,7 @@ impl MetallicGlassGenerator {
                 usage: manifold_gpu::GpuTextureUsage::SHADER_READ
                     | manifold_gpu::GpuTextureUsage::SHADER_WRITE,
                 label,
+                mip_levels: 1,
             })
         };
 
@@ -234,6 +236,7 @@ impl MetallicGlassGenerator {
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET,
             label: "MetallicGlass Depth",
+            mip_levels: 1,
         }));
 
         self.tex_width = width;

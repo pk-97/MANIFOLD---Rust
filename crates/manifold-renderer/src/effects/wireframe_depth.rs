@@ -275,6 +275,7 @@ impl WireframeDepthFX {
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
             label: "WireframeDepth Dummy",
+            mip_levels: 1,
         });
 
         // WireframeDepthFX.cs line 96-101 — try to create native backend
@@ -473,6 +474,7 @@ impl WireframeDepthFX {
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL
                 | manifold_gpu::GpuTextureUsage::CPU_UPLOAD,
             label,
+            mip_levels: 1,
         })
     }
 

@@ -1047,6 +1047,7 @@ fn create_font_atlas(device: &GpuDevice) -> GpuTexture {
             | GpuTextureUsage::COPY_DST
             | GpuTextureUsage::CPU_UPLOAD,
         label: "BlobTracking FontAtlas",
+        mip_levels: 1,
     });
 
     // Upload pixel data via GpuDevice::upload_texture (Metal replace_region).

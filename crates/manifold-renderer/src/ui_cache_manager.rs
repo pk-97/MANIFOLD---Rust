@@ -121,6 +121,7 @@ impl UICacheManager {
             dimension: GpuTextureDimension::D2,
             usage: GpuTextureUsage::RENDER_TARGET | GpuTextureUsage::SHADER_READ,
             label: "UI Atlas",
+            mip_levels: 1,
         });
         self.atlas_texture = Some(texture);
         self.atlas_physical_w = w;
