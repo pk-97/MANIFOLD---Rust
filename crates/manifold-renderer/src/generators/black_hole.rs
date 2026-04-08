@@ -107,8 +107,8 @@ struct ResolveUniforms {
 struct BlurUniforms {
     width: u32,
     height: u32,
+    inv2sig2: f32,
     _pad0: u32,
-    _pad1: u32,
 }
 
 pub struct BlackHoleGenerator {
@@ -136,6 +136,8 @@ pub struct BlackHoleGenerator {
     scatter_accum_bottom: Option<manifold_gpu::GpuBuffer>,
     polar_density_top: Option<manifold_gpu::GpuTexture>,
     polar_density_bottom: Option<manifold_gpu::GpuTexture>,
+    polar_h_top: Option<manifold_gpu::GpuTexture>,
+    polar_h_bot: Option<manifold_gpu::GpuTexture>,
     particles_initialized: bool,
     frame_count: u64,
 
@@ -207,6 +209,8 @@ impl BlackHoleGenerator {
             scatter_accum_bottom: None,
             polar_density_top: None,
             polar_density_bottom: None,
+            polar_h_top: None,
+            polar_h_bot: None,
             particles_initialized: false,
             frame_count: 0,
             last_cam_dist: f32::MIN,
@@ -247,6 +251,13 @@ impl BlackHoleGenerator {
         }
         if self.polar_density_bottom.is_none() {
             self.polar_density_bottom = Some(make_density("BlackHole Polar Density Bottom"));
+        }
+        // Intermediate textures for the H pass of the polar density blur.
+        if self.polar_h_top.is_none() {
+            self.polar_h_top = Some(make_density("BlackHole Polar H Top"));
+        }
+        if self.polar_h_bot.is_none() {
+            self.polar_h_bot = Some(make_density("BlackHole Polar H Bottom"));
         }
     }
 
@@ -376,8 +387,8 @@ impl Generator for BlackHoleGenerator {
             let blur_uniforms = BlurUniforms {
                 width: self.defl_w,
                 height: self.defl_h,
+                inv2sig2: 1.0 / 32.0, // sigma = 4
                 _pad0: 0,
-                _pad1: 0,
             };
             let blur_groups = [self.defl_w.div_ceil(16), self.defl_h.div_ceil(16), 1];
 
@@ -593,6 +604,60 @@ impl Generator for BlackHoleGenerator {
                     },
                 ],
                 [POLAR_W.div_ceil(16), POLAR_H.div_ceil(16), 1],
+                label,
+            );
+        }
+
+        // ── Pass 2.5: Polar density blur ──
+        // Reuse the separable gaussian blur shader to smooth the polar
+        // density texture before display reads it. Without this, single
+        // bright cells project as visible radial wedges into the disk.
+        let polar_h_top_tex = self.polar_h_top.as_ref().unwrap();
+        let polar_h_bot_tex = self.polar_h_bot.as_ref().unwrap();
+        let polar_blur_uniforms = BlurUniforms {
+            width: POLAR_W,
+            height: POLAR_H,
+            inv2sig2: 1.0 / 32.0, // sigma = 4 — moderate smoothing
+            _pad0: 0,
+        };
+        let polar_blur_groups = [POLAR_W.div_ceil(16), POLAR_H.div_ceil(16), 1];
+        // H pass: polar_density → polar_h
+        for (src, dst, label) in [
+            (polar_top, polar_h_top_tex, "BlackHole Polar Blur H Top"),
+            (polar_bot, polar_h_bot_tex, "BlackHole Polar Blur H Bottom"),
+        ] {
+            gpu.native_enc.dispatch_compute(
+                &self.blur_h_pipeline,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&polar_blur_uniforms),
+                    },
+                    manifold_gpu::GpuBinding::Texture { binding: 1, texture: src },
+                    manifold_gpu::GpuBinding::Sampler { binding: 2, sampler: &self.sampler },
+                    manifold_gpu::GpuBinding::Texture { binding: 3, texture: dst },
+                ],
+                polar_blur_groups,
+                label,
+            );
+        }
+        // V pass: polar_h → polar_density (in place)
+        for (src, dst, label) in [
+            (polar_h_top_tex, polar_top, "BlackHole Polar Blur V Top"),
+            (polar_h_bot_tex, polar_bot, "BlackHole Polar Blur V Bottom"),
+        ] {
+            gpu.native_enc.dispatch_compute(
+                &self.blur_v_pipeline,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&polar_blur_uniforms),
+                    },
+                    manifold_gpu::GpuBinding::Texture { binding: 1, texture: src },
+                    manifold_gpu::GpuBinding::Sampler { binding: 2, sampler: &self.sampler },
+                    manifold_gpu::GpuBinding::Texture { binding: 3, texture: dst },
+                ],
+                polar_blur_groups,
                 label,
             );
         }

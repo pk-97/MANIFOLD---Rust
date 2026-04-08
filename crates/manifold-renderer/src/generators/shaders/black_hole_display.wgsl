@@ -34,23 +34,13 @@ struct Uniforms {
 //   contributes (at 0.6×) so the disk feels volumetric instead of
 //   showing only one face.
 //
-// The polar texture uses uniform angular bins, so at small radii a
-// single cell covers a tiny arc length but maps to a wide screen-
-// space wedge. A bright inner cell projects to a long radial streak
-// across many screen pixels. To kill the streak artifact we do TWO
-// things: (a) area-correct the density so inner cells contribute
-// less per pixel, AND (b) at small r, average multiple adjacent
-// angular cells so no single cell can dominate a wedge. The
-// angular blur radius scales as 1/r — wide at the inner edge,
-// vanishing at the outer edge.
-fn sample_one(uv: vec2<f32>, near_bias: f32) -> f32 {
-    let d_top = textureSampleLevel(particle_density_top, s_linear, uv, 0.0).r;
-    let d_bot = textureSampleLevel(particle_density_bottom, s_linear, uv, 0.0).r;
-    let near_w = mix(0.6, 1.0, near_bias);
-    let far_w  = mix(1.0, 0.6, near_bias);
-    return d_top * near_w + d_bot * far_w;
-}
-
+// The polar density textures are now pre-blurred by a separable
+// gaussian compute pass before display reads them, so single-tap
+// bilinear sampling is sufficient — no inline blur needed. Inner
+// cells still need an area-correction weight because per-cell
+// arc length grows with r, and without it inner clumps still spike
+// brighter per screen pixel than outer ones for the same particle
+// count.
 fn sample_particle_density(
     disk_r: f32, cos_a: f32, sin_a: f32, near_bias: f32,
 ) -> f32 {
@@ -60,29 +50,12 @@ fn sample_particle_density(
         (disk_r - u.disk_inner) / (u.disk_outer - u.disk_inner),
         0.0, 1.0,
     );
-
-    // Angular blur radius (in normalized texture coordinates) scales
-    // inverse-linearly with r_norm. At the inner edge we average over
-    // ~3% of the angular axis (~60 cells at width 2048), at the outer
-    // edge it collapses to a single sample.
-    let blur_radius = mix(0.030, 0.0, r_norm);
-
-    // 7-tap blur — symmetric, weights normalize automatically.
-    var raw = 0.0;
-    var wsum = 0.0;
-    for (var i: i32 = -3; i <= 3; i = i + 1) {
-        let off = f32(i) * (blur_radius / 3.0);
-        let w = exp(-f32(i * i) * 0.5);
-        let uv = vec2<f32>(fract(ang_norm + off + 1.0), r_norm);
-        raw = raw + sample_one(uv, near_bias) * w;
-        wsum = wsum + w;
-    }
-    raw = raw / wsum;
-
-    // Area correction: inner cells are still over-represented per
-    // screen pixel even after the blur. Stronger than before — fades
-    // toward 0 at the inner edge so the very innermost ring can't
-    // produce streaks at all.
+    let uv = vec2<f32>(ang_norm, r_norm);
+    let d_top = textureSampleLevel(particle_density_top, s_linear, uv, 0.0).r;
+    let d_bot = textureSampleLevel(particle_density_bottom, s_linear, uv, 0.0).r;
+    let near_w = mix(0.6, 1.0, near_bias);
+    let far_w  = mix(1.0, 0.6, near_bias);
+    let raw = d_top * near_w + d_bot * far_w;
     let area_w = smoothstep(0.0, 0.4, r_norm);
     return raw * area_w;
 }
