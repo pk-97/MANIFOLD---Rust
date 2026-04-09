@@ -81,24 +81,23 @@ impl Application {
         let beats_per_bar = self.content_state.time_signature_numerator.max(1) as u32;
         let is_playing = self.content_state.is_playing;
         let ableton_connected = self.content_state.ableton_connected;
-        // Cue points come from the persistent ui_root.ableton_session cache,
-        // not content_state — content_state.ableton_session is edge-triggered
-        // (Some only on the frame the bridge published a change).
-        let cue_points: Vec<manifold_playback::ableton_bridge::CuePoint> = self
-            .ui_root
-            .ableton_session
+        // Snapshot the session Arc (atomic refcount bump, zero data copy).
+        // All cue/track/macro reads below borrow from this snapshot, avoiding
+        // per-frame clones of cue_points, track names, etc.
+        let session_snapshot = self.ui_root.ableton_session.clone();
+        let cue_points: &[manifold_playback::ableton_bridge::CuePoint] = session_snapshot
             .as_ref()
-            .map(|s| s.cue_points.clone())
-            .unwrap_or_default();
-        let analysis = cue::analyze(&cue_points, current_beat);
+            .map(|s| s.cue_points.as_slice())
+            .unwrap_or(&[]);
+        let analysis = cue::analyze(cue_points, current_beat);
         let current_name = analysis
             .current
-            .map(|c| c.name.clone())
-            .unwrap_or_else(|| "—".to_string());
+            .map(|c| c.name.as_str())
+            .unwrap_or("—");
         let next_name = analysis
             .next
-            .map(|c| c.name.clone())
-            .unwrap_or_else(|| "—".to_string());
+            .map(|c| c.name.as_str())
+            .unwrap_or("—");
         let countdown = analysis
             .beats_to_next
             .map(|b| cue::format_countdown(b, beats_per_bar));
@@ -111,20 +110,19 @@ impl Application {
 
         // Tracks playing in the *current* section: any non-muted clip
         // overlapping `[current.time, next.time)` (variant (a)).
-        let now_section_tracks: Vec<String> = if let Some(cur_cue) = analysis.current {
+        let now_section_tracks: Vec<&str> = if let Some(cur_cue) = analysis.current {
             let section_end = analysis
                 .next
                 .map(|c| c.time)
                 .unwrap_or(f64::INFINITY);
-            self.ui_root
-                .ableton_session
+            session_snapshot
                 .as_ref()
                 .and_then(|s| s.play_group.as_ref())
                 .map(|g| {
                     g.tracks
                         .iter()
                         .filter(|t| tracks::plays_in_range(t, cur_cue.time, section_end))
-                        .map(|t| t.name.clone())
+                        .map(|t| t.name.as_str())
                         .collect()
                 })
                 .unwrap_or_default()
@@ -135,21 +133,20 @@ impl Application {
         // Tracks playing in the *next* section (variant (a): any non-muted
         // clip overlapping `[next.time, section_end)`, including straddlers).
         // Section end = the cue after `next`, or +∞ if `next` is the last.
-        let next_section_tracks: Vec<String> = if let Some(next_cue) = analysis.next {
+        let next_section_tracks: Vec<&str> = if let Some(next_cue) = analysis.next {
             let section_end = cue_points
                 .iter()
                 .find(|c| c.time > next_cue.time)
                 .map(|c| c.time)
                 .unwrap_or(f64::INFINITY);
-            self.ui_root
-                .ableton_session
+            session_snapshot
                 .as_ref()
                 .and_then(|s| s.play_group.as_ref())
                 .map(|g| {
                     g.tracks
                         .iter()
                         .filter(|t| tracks::plays_in_range(t, next_cue.time, section_end))
-                        .map(|t| t.name.clone())
+                        .map(|t| t.name.as_str())
                         .collect()
                 })
                 .unwrap_or_default()
@@ -160,9 +157,7 @@ impl Application {
 // Macros: snapshot mapped Ableton macros for the left column.
         // Top-N for now to avoid overflowing tall projects with many macros.
         const MACRO_DISPLAY_LIMIT: usize = 12;
-        let macros_snapshot: Vec<perform_macros::MacroDisplay> = self
-            .ui_root
-            .ableton_session
+        let macros_snapshot: Vec<perform_macros::MacroDisplay> = session_snapshot
             .as_ref()
             .map(|s| {
                 perform_macros::snapshot(&self.local_project, s, MACRO_DISPLAY_LIMIT)
@@ -188,8 +183,8 @@ impl Application {
                 ui,
                 lw,
                 lh,
-                &current_name,
-                &next_name,
+                current_name,
+                next_name,
                 countdown.as_ref(),
                 section_progress,
                 &bar_beat,
@@ -384,8 +379,8 @@ fn draw_cue_hud(
     countdown: Option<&cue::CountdownDisplay>,
     section_progress: Option<f64>,
     bar_beat: &cue::BarBeatDisplay,
-    now_section_tracks: &[String],
-    next_section_tracks: &[String],
+    now_section_tracks: &[&str],
+    next_section_tracks: &[&str],
     bpm: f64,
     is_playing: bool,
     ableton_connected: bool,
