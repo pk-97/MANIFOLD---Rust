@@ -72,6 +72,46 @@ pub struct AbletonSession {
     /// re-discovery. Used by performance-mode HUD to compute current section
     /// and countdown to next cue.
     pub cue_points: Vec<CuePoint>,
+    /// Leaf tracks belonging to a hard-coded "PLAY" group, with their
+    /// arrangement clip layouts. Populated after discovery if the project
+    /// contains a top-level group track named "PLAY". The perform-mode HUD
+    /// derives "currently playing" from these locally each frame.
+    pub play_group: Option<GroupTracks>,
+}
+
+/// Tracks belonging to a named Ableton group, in display order.
+#[derive(Debug, Clone)]
+pub struct GroupTracks {
+    pub name: String,
+    pub tracks: Vec<TrackArrangement>,
+}
+
+/// One leaf track inside a group, with its static arrangement clip layout.
+///
+/// Both track-level and clip-level mute are honored when computing playback
+/// state. Clip ranges are absolute beats from the start of the song.
+///
+/// Requires the AbletonOSC `arrangement_clips/end_time` and
+/// `arrangement_clips/muted` endpoints — see
+/// `assets/abletonosc-patches/README.md`.
+#[derive(Debug, Clone)]
+pub struct TrackArrangement {
+    pub track_id: i32,
+    pub name: String,
+    pub muted: bool,
+    pub clips: Vec<ArrangementClip>,
+}
+
+/// One clip inside a `TrackArrangement`.
+///
+/// `start` and `end` are absolute beat positions (Ableton's `clip.start_time`
+/// and `clip.end_time`). `end` is the *visible* arrangement footprint of the
+/// clip — for looped clips this is greater than `clip.length`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrangementClip {
+    pub start: f64,
+    pub end: f64,
+    pub muted: bool,
 }
 
 /// An Ableton Live locator (cue point). Times are absolute beats from the
@@ -358,6 +398,48 @@ pub struct AbletonBridge {
     /// Matches M4L's seekTask.schedule(10) — Ableton needs a tick between
     /// start_playing and set/current_song_time to accept the seek.
     pending_play_seek: Option<(f32, f64)>,
+
+    /// PLAY-group discovery accumulator. Populated after main discovery
+    /// completes; the resulting `GroupTracks` is published into
+    /// `session.play_group` once both phases are complete.
+    play_group_discovery: PlayGroupDiscovery,
+}
+
+/// Hard-coded name of the Ableton group track we surface in the perform
+/// HUD. The user can rename their group in Ableton to opt in/out.
+const PLAY_GROUP_NAME: &str = "PLAY";
+
+/// Two-phase accumulator for fetching the PLAY group's leaf tracks and
+/// their arrangement clip layouts.
+///
+/// Phase 1: query `is_foldable` + `is_grouped` for every track in the
+/// session. Once both maps are full, derive PLAY's leaf descendants by
+/// walking the flat track list.
+///
+/// Phase 2: query `mute` and `arrangement_clips/{name,length,start_time}`
+/// for each leaf. Once all four maps are complete for every leaf, build
+/// the final `GroupTracks` and publish it into the session.
+#[derive(Default)]
+struct PlayGroupDiscovery {
+    /// True while we're actively fetching. Cleared on completion or reset.
+    in_progress: bool,
+    /// Total tracks expected in the session (from `session.tracks.len()`
+    /// at the moment we kick off).
+    track_count: i32,
+    // ── Phase 1: structure ────────────────────────────────────────
+    foldable: AHashMap<i32, bool>,
+    grouped: AHashMap<i32, bool>,
+    structure_complete: bool,
+    // ── Phase 2: leaf details ─────────────────────────────────────
+    /// Leaf track indices (in display order) computed at end of phase 1.
+    leaf_indices: Vec<i32>,
+    /// Leaf names — copied from `session.tracks` (already known from main discovery).
+    leaf_names: AHashMap<i32, String>,
+    mutes: AHashMap<i32, bool>,
+    clip_names: AHashMap<i32, Vec<String>>,
+    clip_starts: AHashMap<i32, Vec<f64>>,
+    clip_ends: AHashMap<i32, Vec<f64>>,
+    clip_muted: AHashMap<i32, Vec<bool>>,
 }
 
 impl AbletonBridge {
@@ -393,6 +475,7 @@ impl AbletonBridge {
             last_sent_playing: None,
             last_transport_send_time: 0.0,
             pending_play_seek: None,
+            play_group_discovery: PlayGroupDiscovery::default(),
         }
     }
 
@@ -529,6 +612,7 @@ impl AbletonBridge {
         self.filtered_sources.clear();
         self.message_queue.lock().messages.clear();
         self.pending_values.lock().clear();
+        self.play_group_discovery = PlayGroupDiscovery::default();
 
         // Clear transport state
         self.transport_enabled = false;
@@ -828,6 +912,36 @@ impl AbletonBridge {
                 self.handle_param_max(msg, realtime);
             }
             "/live/song/get/cue_points" => self.handle_cue_points(msg),
+            // PLAY-group discovery responses (only routed when actively fetching).
+            "/live/track/get/is_foldable" if self.play_group_discovery.in_progress => {
+                self.handle_play_group_bool(msg, /*is_foldable=*/ true);
+            }
+            "/live/track/get/is_grouped" if self.play_group_discovery.in_progress => {
+                self.handle_play_group_bool(msg, /*is_foldable=*/ false);
+            }
+            "/live/track/get/mute" if self.play_group_discovery.in_progress => {
+                self.handle_play_group_mute(msg);
+            }
+            "/live/track/get/arrangement_clips/name"
+                if self.play_group_discovery.in_progress =>
+            {
+                self.handle_play_group_clip_names(msg);
+            }
+            "/live/track/get/arrangement_clips/start_time"
+                if self.play_group_discovery.in_progress =>
+            {
+                self.handle_play_group_clip_starts(msg);
+            }
+            "/live/track/get/arrangement_clips/end_time"
+                if self.play_group_discovery.in_progress =>
+            {
+                self.handle_play_group_clip_ends(msg);
+            }
+            "/live/track/get/arrangement_clips/muted"
+                if self.play_group_discovery.in_progress =>
+            {
+                self.handle_play_group_clip_muted(msg);
+            }
             // We use the binary parameter value (handled via fast path), not
             // the formatted string. Drop these silently — AbletonOSC sends
             // them whenever a parameter listener fires.
@@ -883,6 +997,117 @@ impl AbletonBridge {
         eprintln!("[AbletonBridge] Parsed {} cue point(s)", cues.len());
         self.session.cue_points = cues;
         self.session_version += 1;
+    }
+
+    // ── PLAY-group discovery handlers ─────────────────────────────
+
+    /// Phase 1 response: `(track_id, value)` for is_foldable or is_grouped.
+    fn handle_play_group_bool(&mut self, msg: &OscMessage, is_foldable: bool) {
+        if msg.args.len() < 2 {
+            return;
+        }
+        let Some(tid) = osc_arg_int(&msg.args[0]) else {
+            return;
+        };
+        let val = osc_arg_int(&msg.args[1]).map(|v| v != 0).unwrap_or(false);
+        if is_foldable {
+            self.play_group_discovery.foldable.insert(tid, val);
+        } else {
+            self.play_group_discovery.grouped.insert(tid, val);
+        }
+        self.maybe_advance_play_group_phase_1();
+    }
+
+    /// Phase 2 response: `(track_id, mute_value)`.
+    fn handle_play_group_mute(&mut self, msg: &OscMessage) {
+        if msg.args.len() < 2 {
+            return;
+        }
+        let Some(tid) = osc_arg_int(&msg.args[0]) else {
+            return;
+        };
+        if !self.play_group_discovery.leaf_indices.contains(&tid) {
+            return; // not one of ours
+        }
+        let val = osc_arg_int(&msg.args[1]).map(|v| v != 0).unwrap_or(false);
+        self.play_group_discovery.mutes.insert(tid, val);
+        self.maybe_advance_play_group_phase_2();
+    }
+
+    /// Phase 2 response: `(track_id, name1, name2, ...)`.
+    fn handle_play_group_clip_names(&mut self, msg: &OscMessage) {
+        if msg.args.is_empty() {
+            return;
+        }
+        let Some(tid) = osc_arg_int(&msg.args[0]) else {
+            return;
+        };
+        if !self.play_group_discovery.leaf_indices.contains(&tid) {
+            return;
+        }
+        let names: Vec<String> = msg.args[1..]
+            .iter()
+            .filter_map(osc_arg_string)
+            .collect();
+        self.play_group_discovery.clip_names.insert(tid, names);
+        self.maybe_advance_play_group_phase_2();
+    }
+
+    /// Phase 2 response: `(track_id, end1, end2, ...)`.
+    fn handle_play_group_clip_ends(&mut self, msg: &OscMessage) {
+        if msg.args.is_empty() {
+            return;
+        }
+        let Some(tid) = osc_arg_int(&msg.args[0]) else {
+            return;
+        };
+        if !self.play_group_discovery.leaf_indices.contains(&tid) {
+            return;
+        }
+        let ends: Vec<f64> = msg.args[1..]
+            .iter()
+            .filter_map(|a| osc_arg_float(a).map(|v| v as f64))
+            .collect();
+        self.play_group_discovery.clip_ends.insert(tid, ends);
+        self.maybe_advance_play_group_phase_2();
+    }
+
+    /// Phase 2 response: `(track_id, muted1, muted2, ...)`.
+    fn handle_play_group_clip_muted(&mut self, msg: &OscMessage) {
+        if msg.args.is_empty() {
+            return;
+        }
+        let Some(tid) = osc_arg_int(&msg.args[0]) else {
+            return;
+        };
+        if !self.play_group_discovery.leaf_indices.contains(&tid) {
+            return;
+        }
+        let muted: Vec<bool> = msg.args[1..]
+            .iter()
+            .filter_map(|a| osc_arg_int(a).map(|v| v != 0))
+            .collect();
+        self.play_group_discovery.clip_muted.insert(tid, muted);
+        self.maybe_advance_play_group_phase_2();
+    }
+
+    /// Phase 2 response: `(track_id, start1, start2, ...)`.
+    fn handle_play_group_clip_starts(&mut self, msg: &OscMessage) {
+        if msg.args.is_empty() {
+            return;
+        }
+        let Some(tid) = osc_arg_int(&msg.args[0]) else {
+            return;
+        };
+        if !self.play_group_discovery.leaf_indices.contains(&tid) {
+            return;
+        }
+        let starts: Vec<f64> = msg.args[1..]
+            .iter()
+            .filter_map(|a| osc_arg_float(a).map(|v| v as f64))
+            .collect();
+        self.play_group_discovery.clip_starts.insert(tid, starts);
+        self.maybe_advance_play_group_phase_2();
     }
 
     fn handle_param_value(&self, msg: &OscMessage) {
@@ -1350,6 +1575,243 @@ impl AbletonBridge {
         // in handle_message → handle_cue_points.
         eprintln!("[AbletonBridge] Requesting cue points (/live/song/get/cue_points)");
         send_osc_to(&self.send_socket, "/live/song/get/cue_points", &[]);
+
+        // Kick off PLAY-group discovery in parallel.
+        self.start_play_group_discovery();
+    }
+
+    /// Phase 1 of PLAY-group discovery: query is_foldable + is_grouped for
+    /// every track. Once both maps are full we identify PLAY's leaf
+    /// descendants and advance to phase 2.
+    fn start_play_group_discovery(&mut self) {
+        let n = self.session.tracks.len() as i32;
+        if n == 0 {
+            return;
+        }
+        self.play_group_discovery = PlayGroupDiscovery {
+            in_progress: true,
+            track_count: n,
+            ..Default::default()
+        };
+        // Cache leaf names from the main discovery's track list.
+        for t in &self.session.tracks {
+            self.play_group_discovery
+                .leaf_names
+                .insert(t.track_id, t.name.clone());
+        }
+        eprintln!(
+            "[AbletonBridge] Starting PLAY-group discovery (querying is_foldable + is_grouped for {n} tracks)"
+        );
+        for tid in 0..n {
+            send_osc_to(
+                &self.send_socket,
+                "/live/track/get/is_foldable",
+                &[rosc::OscType::Int(tid)],
+            );
+            send_osc_to(
+                &self.send_socket,
+                "/live/track/get/is_grouped",
+                &[rosc::OscType::Int(tid)],
+            );
+        }
+    }
+
+    /// Called whenever a phase 1 response arrives. If both maps are now
+    /// complete, derive PLAY's leaves and start phase 2.
+    fn maybe_advance_play_group_phase_1(&mut self) {
+        let pg = &self.play_group_discovery;
+        if !pg.in_progress || pg.structure_complete {
+            return;
+        }
+        let n = pg.track_count as usize;
+        if pg.foldable.len() < n || pg.grouped.len() < n {
+            return;
+        }
+        // Both structure maps are full — derive leaves.
+        let leaves = self.derive_play_group_leaves();
+        let pg = &mut self.play_group_discovery;
+        pg.structure_complete = true;
+        pg.leaf_indices = leaves.clone();
+        eprintln!(
+            "[AbletonBridge] PLAY-group structure complete: {} leaf track(s)",
+            leaves.len()
+        );
+        if leaves.is_empty() {
+            // No PLAY group (or it's empty) — finalize as None.
+            self.finalize_play_group_discovery();
+            return;
+        }
+        // Phase 2: query mute + arrangement clips (start, end, muted, name) for each leaf.
+        for tid in &leaves {
+            let arg = [rosc::OscType::Int(*tid)];
+            send_osc_to(&self.send_socket, "/live/track/get/mute", &arg);
+            send_osc_to(
+                &self.send_socket,
+                "/live/track/get/arrangement_clips/name",
+                &arg,
+            );
+            send_osc_to(
+                &self.send_socket,
+                "/live/track/get/arrangement_clips/start_time",
+                &arg,
+            );
+            send_osc_to(
+                &self.send_socket,
+                "/live/track/get/arrangement_clips/end_time",
+                &arg,
+            );
+            send_osc_to(
+                &self.send_socket,
+                "/live/track/get/arrangement_clips/muted",
+                &arg,
+            );
+        }
+    }
+
+    /// Walk the flat track list and find leaf (non-foldable) descendants
+    /// of the first top-level group whose normalized name matches
+    /// `PLAY_GROUP_NAME`. Normalization strips leading digits + whitespace
+    /// so "1 PLAY", "12 PLAY", and "PLAY" all match — users commonly
+    /// number-prefix track names in Ableton.
+    fn derive_play_group_leaves(&self) -> Vec<i32> {
+        let pg = &self.play_group_discovery;
+        let tracks = &self.session.tracks;
+
+        // Diagnostic: list every top-level foldable track's normalized name.
+        let candidates: Vec<(i32, String, String)> = tracks
+            .iter()
+            .filter(|t| {
+                pg.foldable.get(&t.track_id).copied().unwrap_or(false)
+                    && !pg.grouped.get(&t.track_id).copied().unwrap_or(false)
+            })
+            .map(|t| (t.track_id, t.name.clone(), normalize_group_name(&t.name)))
+            .collect();
+        eprintln!(
+            "[AbletonBridge] PLAY-group: top-level foldable candidates = {candidates:?}"
+        );
+
+        let play_idx = tracks.iter().position(|t| {
+            pg.foldable.get(&t.track_id).copied().unwrap_or(false)
+                && !pg.grouped.get(&t.track_id).copied().unwrap_or(false)
+                && normalize_group_name(&t.name).eq_ignore_ascii_case(PLAY_GROUP_NAME)
+        });
+        let Some(play_pos) = play_idx else {
+            return Vec::new();
+        };
+        // Walk forward from PLAY+1; collect leaf descendants until we hit
+        // a track that's back at the top level (is_grouped=false).
+        let mut leaves = Vec::new();
+        for t in tracks.iter().skip(play_pos + 1) {
+            let is_grouped = pg.grouped.get(&t.track_id).copied().unwrap_or(false);
+            if !is_grouped {
+                break;
+            }
+            let is_foldable = pg.foldable.get(&t.track_id).copied().unwrap_or(false);
+            if !is_foldable {
+                leaves.push(t.track_id);
+            }
+        }
+        leaves
+    }
+
+    /// Called whenever a phase 2 response arrives. If all required maps are
+    /// complete for every leaf, build the GroupTracks and publish it.
+    fn maybe_advance_play_group_phase_2(&mut self) {
+        let pg = &self.play_group_discovery;
+        if !pg.in_progress || !pg.structure_complete {
+            return;
+        }
+        let needed = pg.leaf_indices.len();
+        if pg.mutes.len() < needed
+            || pg.clip_names.len() < needed
+            || pg.clip_starts.len() < needed
+            || pg.clip_ends.len() < needed
+            || pg.clip_muted.len() < needed
+        {
+            return;
+        }
+        self.finalize_play_group_discovery();
+    }
+
+    fn finalize_play_group_discovery(&mut self) {
+        let pg = &mut self.play_group_discovery;
+        if !pg.in_progress {
+            return;
+        }
+        let mut tracks: Vec<TrackArrangement> = Vec::with_capacity(pg.leaf_indices.len());
+        for tid in &pg.leaf_indices {
+            let name = pg.leaf_names.get(tid).cloned().unwrap_or_default();
+            let muted = pg.mutes.get(tid).copied().unwrap_or(false);
+            let starts = pg.clip_starts.get(tid).cloned().unwrap_or_default();
+            let ends = pg.clip_ends.get(tid).cloned().unwrap_or_default();
+            let clip_muted = pg.clip_muted.get(tid).cloned().unwrap_or_default();
+            // Parallel arrays — zip on the shortest. AbletonOSC should
+            // always return matching lengths but we defend against
+            // partial responses (UDP loss / response truncation).
+            let count = starts.len().min(ends.len()).min(clip_muted.len());
+            let mut clips: Vec<ArrangementClip> = Vec::with_capacity(count);
+            for i in 0..count {
+                clips.push(ArrangementClip {
+                    start: starts[i],
+                    end: ends[i],
+                    muted: clip_muted[i],
+                });
+            }
+            tracks.push(TrackArrangement {
+                track_id: *tid,
+                name,
+                muted,
+                clips,
+            });
+        }
+        let group = if tracks.is_empty() {
+            None
+        } else {
+            Some(GroupTracks {
+                name: PLAY_GROUP_NAME.to_string(),
+                tracks,
+            })
+        };
+        let n_tracks = group.as_ref().map(|g| g.tracks.len()).unwrap_or(0);
+        let n_clips: usize = group
+            .as_ref()
+            .map(|g| g.tracks.iter().map(|t| t.clips.len()).sum())
+            .unwrap_or(0);
+        eprintln!(
+            "[AbletonBridge] PLAY-group complete: {n_tracks} track(s), {n_clips} clip(s) total"
+        );
+        // One-shot dump of every parsed track's clip ranges so we can
+        // compare directly against Ableton's arrangement view and spot
+        // any data corruption.
+        if let Some(ref g) = group {
+            for t in &g.tracks {
+                let clips_str: String = t
+                    .clips
+                    .iter()
+                    .map(|c| {
+                        let m = if c.muted { "M" } else { "" };
+                        format!("[{:.2}, {:.2}){}", c.start, c.end, m)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                eprintln!(
+                    "[AbletonBridge]   tid={} muted={} \"{}\" clips({})={}",
+                    t.track_id,
+                    t.muted,
+                    t.name,
+                    t.clips.len(),
+                    if clips_str.is_empty() {
+                        "<none>".to_string()
+                    } else {
+                        clips_str
+                    }
+                );
+            }
+        }
+        self.session.play_group = group;
+        self.session_version += 1;
+        // Reset accumulator so a future re-discovery starts fresh.
+        self.play_group_discovery = PlayGroupDiscovery::default();
     }
 
     /// Returns true (and clears the flag) when discovery just completed and the
@@ -2060,6 +2522,31 @@ fn send_osc_to(socket: &Option<UdpSocket>, address: &str, args: &[rosc::OscType]
             }
         }
     }
+}
+
+/// Strip a leading "N " or "N. " prefix from an Ableton track name so the
+/// PLAY group lookup matches both "PLAY" and "1 PLAY".
+fn normalize_group_name(s: &str) -> String {
+    let mut chars = s.chars().peekable();
+    let mut consumed_digit = false;
+    while let Some(&c) = chars.peek() {
+        if c.is_ascii_digit() {
+            chars.next();
+            consumed_digit = true;
+        } else {
+            break;
+        }
+    }
+    if !consumed_digit {
+        return s.trim().to_string();
+    }
+    // Optional separator after the digits.
+    if let Some(&c) = chars.peek()
+        && (c == '.' || c == ':' || c == '-')
+    {
+        chars.next();
+    }
+    chars.collect::<String>().trim().to_string()
 }
 
 fn osc_arg_int(arg: &rosc::OscType) -> Option<i32> {

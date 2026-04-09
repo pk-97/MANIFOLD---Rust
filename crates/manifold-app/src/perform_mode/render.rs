@@ -4,7 +4,7 @@ use manifold_renderer::ui_renderer::UIRenderer;
 use manifold_ui::node::FontWeight;
 
 use crate::app::Application;
-use crate::perform_mode::cue;
+use crate::perform_mode::{cue, tracks};
 
 impl Application {
     /// Performance mode tick: drains content state, polls output window
@@ -100,6 +100,23 @@ impl Application {
             .beats_to_next
             .map(|b| cue::format_countdown(b, beats_per_bar));
 
+        // PLAY-group tracks: snapshot from the persistent ui_root cache.
+        // We compute (name, is_playing) up-front so the renderer doesn't
+        // need to hold a borrow on `self.ui_root` while it borrows
+        // `self.ui_renderer`.
+        let play_tracks: Vec<(String, bool)> = self
+            .ui_root
+            .ableton_session
+            .as_ref()
+            .and_then(|s| s.play_group.as_ref())
+            .map(|g| {
+                g.tracks
+                    .iter()
+                    .map(|t| (t.name.clone(), tracks::is_playing(t, current_beat)))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         // Skip drawable acquisition on resize frames (same rule as the
         // normal present path).
         if self.surface_resized_this_frame {
@@ -128,6 +145,10 @@ impl Application {
                 ableton_connected,
                 cue_points.is_empty(),
             );
+
+            if !play_tracks.is_empty() {
+                draw_play_group_column(ui, lw, lh, &play_tracks);
+            }
 
             draw_exit_button(
                 ui,
@@ -256,6 +277,77 @@ fn draw_numeric_text(
         }
     }
     cur_x - x
+}
+
+/// Draw the PLAY-group track column on the right side of the HUD.
+///
+/// Each track is rendered with a small accent dot (when playing) plus
+/// the track name. Playing tracks render in white at full opacity;
+/// non-playing tracks render dim. The column is fixed-width and
+/// right-anchored to the screen edge with a small inner pad.
+///
+/// Caller must have already called `ui.begin_frame()`.
+fn draw_play_group_column(
+    ui: &mut UIRenderer,
+    lw: f32,
+    lh: f32,
+    tracks: &[(String, bool)],
+) {
+    let dim = [110u8, 110u8, 115u8, 255u8];
+    let white = [240u8, 240u8, 240u8, 255u8];
+    let accent_f = [1.0, 0.35, 0.27, 1.0]; // dot fill
+    let accent_text = [255u8, 90u8, 70u8, 255u8];
+
+    let label_size: u16 = 18;
+    let track_size: u16 = 18;
+    let line_h: f32 = (track_size as f32) + 8.0;
+    let dot_d: f32 = 8.0;
+    let dot_text_gap: f32 = 10.0;
+    let right_pad: f32 = 32.0;
+
+    // Column width: enough for the longest track name + dot + padding.
+    // Pre-measure with the widest realistic name to keep the column anchor
+    // independent of which tracks happen to be playing this frame.
+    let max_name_w = tracks
+        .iter()
+        .map(|(n, _)| {
+            ui.measure_text_cached(n, track_size, FontWeight::Medium)
+                .x
+        })
+        .fold(0.0_f32, f32::max);
+    let col_w = max_name_w + dot_d + dot_text_gap;
+    let col_x = lw - right_pad - col_w;
+    // Vertically center the block within the upper portion of the screen
+    // so it lines up roughly with the cue HUD's "NOW" / "NEXT" stack.
+    let total_h = line_h * tracks.len() as f32;
+    let label_text = "PLAY";
+    let label_dim = ui.measure_text_cached(label_text, label_size, FontWeight::Medium);
+    let label_y = lh * 0.18;
+    // Right-align the label to the column right edge for visual symmetry.
+    let label_x = col_x + col_w - label_dim.x;
+    ui.draw_text(label_x, label_y, label_text, label_size as f32, dim);
+
+    let block_y = label_y + label_size as f32 + 12.0;
+    // Cap block height — if there are too many tracks to fit, just let
+    // them extend toward the status row. The exit button has its own
+    // safe zone below the status row.
+    let max_block_h = lh * 0.70 - block_y;
+    let _ = max_block_h; // (informational; we currently don't truncate)
+    let _ = total_h;
+
+    for (i, (name, playing)) in tracks.iter().enumerate() {
+        let y = block_y + line_h * i as f32;
+        let text_color = if *playing { white } else { dim };
+        // Dot — left-anchored at col_x
+        if *playing {
+            // Center dot vertically against the text x-height (≈ 60% of line_h).
+            let dot_y = y + (track_size as f32 - dot_d) * 0.5 + 2.0;
+            ui.draw_rounded_rect(col_x, dot_y, dot_d, dot_d, accent_f, dot_d * 0.5);
+        }
+        let text_x = col_x + dot_d + dot_text_gap;
+        ui.draw_text(text_x, y, name, track_size as f32, text_color);
+    }
+    let _ = accent_text; // reserved for future use
 }
 
 /// Draw the bottom-center "EXIT PERFORMANCE MODE" button.

@@ -88,6 +88,17 @@ The Rust codebase is the complete, authoritative implementation. The Unity codeb
 - `rustfmt.toml`: `max_width = 100`, `use_field_init_shorthand = true`
 - Release: `lto = "thin"`, `codegen-units = 1`, `strip = "symbols"`, `panic = "abort"`
 
+## EXTERNAL DEPENDENCIES
+
+### AbletonOSC patch (perform-mode HUD)
+
+Perform-mode's PLAY-group track HUD requires two AbletonOSC endpoints that are NOT in the stock release:
+
+- `/live/track/get/arrangement_clips/end_time`
+- `/live/track/get/arrangement_clips/muted`
+
+Patch lives at `assets/abletonosc-patches/`. Install with `./scripts/install-abletonosc-patch.sh` (idempotent, backs up to `track.py.bak`). Restart Ableton Live after installing. Without the patch, the perform-mode track display will be wrong for looped clips and will not honor clip-level mute. The cue-points HUD works without the patch.
+
 ## COMMIT AND PUSH
 
 YOU MUST COMMIT AND PUSH CODE CHANGES AFTER COMPLETING FEATURES OR FIXES.
