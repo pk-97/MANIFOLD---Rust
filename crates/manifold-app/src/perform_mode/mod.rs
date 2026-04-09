@@ -21,6 +21,7 @@
 pub(crate) mod cue;
 pub(crate) mod input;
 pub(crate) mod lifecycle;
+pub(crate) mod macros;
 pub(crate) mod render;
 pub(crate) mod state;
 pub(crate) mod tracks;

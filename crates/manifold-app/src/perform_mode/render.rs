@@ -4,7 +4,7 @@ use manifold_renderer::ui_renderer::UIRenderer;
 use manifold_ui::node::FontWeight;
 
 use crate::app::Application;
-use crate::perform_mode::{cue, tracks};
+use crate::perform_mode::{cue, macros as perform_macros, tracks};
 
 impl Application {
     /// Performance mode tick: drains content state, polls output window
@@ -63,12 +63,15 @@ impl Application {
         let lw = logical_w as f32;
         let lh = logical_h as f32;
 
-        // Exit button — bottom-center, smaller than before so the cue HUD
-        // owns the screen real estate. Always reachable.
-        let btn_w = 280.0_f32;
-        let btn_h = 64.0_f32;
+        // Exit button — small and intentionally hard to hit accidentally.
+        // Bottom-center with generous padding above. Tighter dimensions
+        // and smaller font; the click target is still finger-sized but
+        // it does NOT dominate the screen the way an emergency button
+        // might (which would invite accidental presses during a show).
+        let btn_w = 180.0_f32;
+        let btn_h = 36.0_f32;
         let btn_x = (lw - btn_w) * 0.5;
-        let btn_y = lh - btn_h - 32.0;
+        let btn_y = lh - btn_h - 24.0;
         self.perform.exit_button_rect =
             manifold_ui::node::Rect::new(btn_x, btn_y, btn_w, btn_h);
 
@@ -99,6 +102,12 @@ impl Application {
         let countdown = analysis
             .beats_to_next
             .map(|b| cue::format_countdown(b, beats_per_bar));
+        let section_progress = cue::section_progress(
+            analysis.current,
+            analysis.next,
+            current_beat,
+        );
+        let bar_beat = cue::format_bar_beat(current_beat, beats_per_bar);
 
         // PLAY-group tracks: snapshot from the persistent ui_root cache.
         // We compute (name, is_playing) up-front so the renderer doesn't
@@ -114,6 +123,18 @@ impl Application {
                     .iter()
                     .map(|t| (t.name.clone(), tracks::is_playing(t, current_beat)))
                     .collect()
+            })
+            .unwrap_or_default();
+
+        // Macros: snapshot mapped Ableton macros for the left column.
+        // Top-N for now to avoid overflowing tall projects with many macros.
+        const MACRO_DISPLAY_LIMIT: usize = 12;
+        let macros_snapshot: Vec<perform_macros::MacroDisplay> = self
+            .ui_root
+            .ableton_session
+            .as_ref()
+            .map(|s| {
+                perform_macros::snapshot(&self.local_project, s, MACRO_DISPLAY_LIMIT)
             })
             .unwrap_or_default();
 
@@ -139,8 +160,9 @@ impl Application {
                 &current_name,
                 &next_name,
                 countdown.as_ref(),
+                section_progress,
+                &bar_beat,
                 bpm,
-                current_beat,
                 is_playing,
                 ableton_connected,
                 cue_points.is_empty(),
@@ -148,6 +170,10 @@ impl Application {
 
             if !play_tracks.is_empty() {
                 draw_play_group_column(ui, lw, lh, &play_tracks);
+            }
+
+            if !macros_snapshot.is_empty() {
+                draw_macros_column(ui, lh, &macros_snapshot);
             }
 
             draw_exit_button(
@@ -350,7 +376,9 @@ fn draw_play_group_column(
     let _ = accent_text; // reserved for future use
 }
 
-/// Draw the bottom-center "EXIT PERFORMANCE MODE" button.
+/// Draw the bottom-center exit button. Intentionally small so it cannot
+/// be clicked accidentally during a performance — the cue HUD is the
+/// primary visual, and the exit affordance is deliberate-only.
 /// Caller must have already called `ui.begin_frame()`.
 fn draw_exit_button(
     ui: &mut UIRenderer,
@@ -360,38 +388,34 @@ fn draw_exit_button(
     btn_h: f32,
     hover: bool,
 ) {
+    // Muted bg by default; brighter on hover so the user gets visual
+    // confirmation they're aiming at it before pressing.
     let bg = if hover {
-        [0.85, 0.18, 0.18, 1.0]
+        [0.55, 0.10, 0.10, 1.0]
     } else {
-        [0.62, 0.12, 0.12, 1.0]
+        [0.20, 0.06, 0.06, 1.0]
     };
-    ui.draw_rounded_rect(btn_x, btn_y, btn_w, btn_h, bg, 10.0);
+    ui.draw_rounded_rect(btn_x, btn_y, btn_w, btn_h, bg, 6.0);
 
-    let label = "EXIT PERFORMANCE MODE";
-    let font_size_px: u16 = 16;
+    let label = "EXIT";
+    let font_size_px: u16 = 12;
     let text_size = ui.measure_text_cached(label, font_size_px, FontWeight::Medium);
     let text_x = btn_x + (btn_w - text_size.x) * 0.5;
     let text_y = btn_y + (btn_h - text_size.y) * 0.5;
-    ui.draw_text(
-        text_x,
-        text_y,
-        label,
-        font_size_px as f32,
-        [255, 255, 255, 255],
-    );
+    let text_color = if hover {
+        [255u8, 220u8, 220u8, 255u8]
+    } else {
+        [180u8, 140u8, 140u8, 255u8]
+    };
+    ui.draw_text(text_x, text_y, label, font_size_px as f32, text_color);
 }
 
-/// Draw the cue HUD: top-third "NOW", middle-third "NEXT" + countdown,
-/// bottom-status row above the exit button (BPM, beat, connection state).
-/// Caller must have already called `ui.begin_frame()`.
+/// Draw the center column of the perform-mode HUD: NOW + NEXT + big
+/// countdown number + locator countdown bar + bar.beat readout, plus the
+/// slim status row at the bottom (BPM, transport, Ableton state — no
+/// BEAT, since bar.beat replaces it).
 ///
-/// The countdown is laid out around a **fixed center axis** (`lw / 2`):
-/// the number is right-aligned to the left of the axis, the unit is
-/// left-aligned to the right. This eliminates the per-frame position
-/// jitter that comes from re-centering a string whose width changes when
-/// digits roll over. Only the (invisible) left edge of the number ever
-/// moves; the right edge of the number and the left edge of the unit
-/// stay locked.
+/// Caller must have already called `ui.begin_frame()`.
 #[allow(clippy::too_many_arguments)]
 fn draw_cue_hud(
     ui: &mut UIRenderer,
@@ -400,8 +424,9 @@ fn draw_cue_hud(
     current_name: &str,
     next_name: &str,
     countdown: Option<&cue::CountdownDisplay>,
+    section_progress: Option<f64>,
+    bar_beat: &cue::BarBeatDisplay,
     bpm: f64,
-    current_beat: f64,
     is_playing: bool,
     ableton_connected: bool,
     cues_empty: bool,
@@ -410,6 +435,8 @@ fn draw_cue_hud(
     let dim = [140u8, 140u8, 145u8, 255u8];
     let white = [240u8, 240u8, 240u8, 255u8];
     let accent = [255u8, 90u8, 70u8, 255u8];
+    let accent_f = [1.0, 0.35, 0.27, 1.0];
+    let bar_bg = [0.10, 0.10, 0.12, 1.0];
     let warn = [240u8, 200u8, 60u8, 255u8];
 
     // ── NOW ────────────────────────────────────────────────────────
@@ -418,7 +445,7 @@ fn draw_cue_hud(
     let now_size: u16 = 64;
     let label_dim = ui.measure_text_cached(label_now, label_size, FontWeight::Medium);
     let now_dim = ui.measure_text_cached(current_name, now_size, FontWeight::Medium);
-    let now_top = lh * 0.18;
+    let now_top = lh * 0.14;
     ui.draw_text(
         (lw - label_dim.x) * 0.5,
         now_top,
@@ -440,7 +467,7 @@ fn draw_cue_hud(
     let countdown_size: u16 = 96;
     let label_next_dim = ui.measure_text_cached(label_next, label_size, FontWeight::Medium);
     let next_name_dim = ui.measure_text_cached(next_name, next_size, FontWeight::Medium);
-    let next_top = lh * 0.46;
+    let next_top = lh * 0.38;
     ui.draw_text(
         (lw - label_next_dim.x) * 0.5,
         next_top,
@@ -456,13 +483,7 @@ fn draw_cue_hud(
         white,
     );
 
-    // ── Countdown — anchored on a fixed center axis ─────────────────
-    //
-    // The number is rendered digit-by-digit in fixed columns (constant
-    // width regardless of which digits), then right-aligned to a fixed
-    // anchor at `lw/2 - gap/2`. The unit is left-aligned at `lw/2 + gap/2`.
-    // Both anchors are immovable, and because the number's pixel width is
-    // now constant, even the LEFT edge of the number stays put.
+    // ── Countdown number (fixed-column digits, anchored center axis) ─
     let countdown_y = next_top + label_size as f32 + next_size as f32 + 16.0;
     if let Some(cd) = countdown {
         let gap = 24.0_f32;
@@ -499,17 +520,62 @@ fn draw_cue_hud(
         );
     }
 
-    // ── Bottom status row (above exit button) ───────────────────────
+    // ── Locator countdown bar — directly under the countdown number ─
     //
-    // Layout: 4 fixed cells, each rendering a tight (label + value) pair
-    // centered on the cell's center. Numeric values use fixed-column
-    // digits for constant width. Non-numeric values reserve their
-    // longest-possible-string width as a fixed slot so transitions
-    // (PLAYING ↔ STOPPED, OK ↔ DISCONNECTED) don't shift the cell.
+    // Hidden when there's no next cue (we're past the last locator) so
+    // the absence is meaningful. When present, fills left→right as the
+    // playhead progresses through the current section.
+    if let Some(p) = section_progress {
+        let bar_w = (lw * 0.32).clamp(220.0, 480.0);
+        let bar_h = 14.0_f32;
+        let bar_x = (lw - bar_w) * 0.5;
+        let bar_y = countdown_y + countdown_size as f32 + 18.0;
+        // Background
+        ui.draw_rounded_rect(bar_x, bar_y, bar_w, bar_h, bar_bg, bar_h * 0.5);
+        // Fill — width proportional to progress through section
+        let fill_w = (bar_w * p as f32).max(0.0);
+        if fill_w > 1.0 {
+            ui.draw_rounded_rect(bar_x, bar_y, fill_w, bar_h, accent_f, bar_h * 0.5);
+        }
+    }
+
+    // ── BAR.BEAT.SIXTEENTH readout (Ableton transport style) ────────
+    //
+    // Three fixed-column numeric fields separated by spaced dots. The
+    // central dot pair is anchored to `lw/2`, so values shift only on
+    // their off-center edges as digit counts change. Reads at a glance
+    // as "where am I in the song" — replaces the old decimal `BEAT`
+    // value in the status row.
+    let bb_size: u16 = 36;
+    let bb_y = countdown_y + countdown_size as f32 + 56.0;
+    {
+        let dot = " . ";
+        let dot_w = ui.measure_text_cached(dot, bb_size, FontWeight::Medium).x;
+        let bar_w = numeric_text_width(ui, &bar_beat.bar, bb_size);
+        let beat_w = numeric_text_width(ui, &bar_beat.beat, bb_size);
+        let six_w = numeric_text_width(ui, &bar_beat.sixteenth, bb_size);
+        let total_w = bar_w + dot_w + beat_w + dot_w + six_w;
+        let start_x = (lw - total_w) * 0.5;
+
+        let mut x = start_x;
+        draw_numeric_text(ui, x, bb_y, &bar_beat.bar, bb_size, white);
+        x += bar_w;
+        ui.draw_text(x, bb_y, dot, bb_size as f32, dim);
+        x += dot_w;
+        draw_numeric_text(ui, x, bb_y, &bar_beat.beat, bb_size, white);
+        x += beat_w;
+        ui.draw_text(x, bb_y, dot, bb_size as f32, dim);
+        x += dot_w;
+        draw_numeric_text(ui, x, bb_y, &bar_beat.sixteenth, bb_size, white);
+    }
+
+    // ── Slim status row above the exit button ───────────────────────
+    //
+    // BEAT moved into the bar.beat readout above, so the row is just
+    // BPM + transport + Ableton state. 3 fixed cells across the row.
     let status_size: u16 = 16;
-    let status_y = lh - 64.0 - 32.0 - 28.0;
+    let status_y = lh - 36.0 - 24.0 - 28.0; // above the smaller exit button
     let bpm_value = format!("{:.1}", bpm);
-    let beat_value = format!("{:.1}", current_beat);
     let play_value = if is_playing { "▶ PLAYING" } else { "■ STOPPED" };
     let conn_value = if !ableton_connected {
         "DISCONNECTED"
@@ -524,21 +590,18 @@ fn draw_cue_hud(
         dim
     };
 
-    // Cell layout: 4 evenly-spaced cells across the row.
-    let n = 4.0_f32;
-    let outer_pad = 48.0_f32;
+    let n = 3.0_f32;
+    let outer_pad = 64.0_f32;
     let usable = lw - outer_pad * 2.0;
     let cell_w = usable / n;
-    let cell_centers: [f32; 4] = [
+    let cell_centers: [f32; 3] = [
         outer_pad + cell_w * 0.5,
         outer_pad + cell_w * 1.5,
         outer_pad + cell_w * 2.5,
-        outer_pad + cell_w * 3.5,
     ];
 
     let label_value_gap = 8.0_f32;
 
-    // Helper: draw a (label, numeric_value) pair centered on a cell center.
     let draw_numeric_cell =
         |ui: &mut UIRenderer, center_x: f32, label: &str, value: &str| {
             let label_w = ui
@@ -558,9 +621,6 @@ fn draw_cue_hud(
             );
         };
 
-    // Helper: draw a value that may switch between several strings,
-    // reserving a fixed slot equal to the widest possible content. The
-    // value is centered within the slot.
     let draw_slotted_cell =
         |ui: &mut UIRenderer,
          center_x: f32,
@@ -586,31 +646,72 @@ fn draw_cue_hud(
             if !label.is_empty() {
                 ui.draw_text(start_x, status_y, label, status_size as f32, dim);
             }
-            // Center the actual value within the reserved slot.
             let value_x = start_x + label_w + gap + (slot_w - value_w) * 0.5;
             ui.draw_text(value_x, status_y, value, status_size as f32, color);
         };
 
-    // Cell 0: BPM <numeric>
     draw_numeric_cell(ui, cell_centers[0], "BPM", &bpm_value);
-    // Cell 1: BEAT <numeric>
-    draw_numeric_cell(ui, cell_centers[1], "BEAT", &beat_value);
-    // Cell 2: PLAYING / STOPPED (max width = "▶ PLAYING")
     draw_slotted_cell(
         ui,
-        cell_centers[2],
+        cell_centers[1],
         "",
         play_value,
         "▶ PLAYING",
         dim,
     );
-    // Cell 3: ABLETON <state> (max width = "DISCONNECTED")
     draw_slotted_cell(
         ui,
-        cell_centers[3],
+        cell_centers[2],
         "ABLETON",
         conn_value,
         "DISCONNECTED",
         conn_color,
     );
+}
+
+/// Draw the macros bar-graph column on the LEFT side of the HUD.
+///
+/// Each entry is a label (the macro's Ableton name) above a horizontal
+/// progress bar showing the macro's current 0..=1 value. The column is
+/// fixed-width and left-anchored with a small inner pad. Hidden by the
+/// caller when the snapshot is empty (no macros mapped).
+///
+/// Caller must have already called `ui.begin_frame()`.
+fn draw_macros_column(
+    ui: &mut UIRenderer,
+    lh: f32,
+    macros: &[perform_macros::MacroDisplay],
+) {
+    let dim = [140u8, 140u8, 145u8, 255u8];
+    let white = [240u8, 240u8, 240u8, 255u8];
+    let accent_f = [1.0, 0.35, 0.27, 1.0];
+    let bar_bg = [0.10, 0.10, 0.12, 1.0];
+
+    let label_size: u16 = 18;
+    let name_size: u16 = 16;
+    let bar_w = 220.0_f32;
+    let bar_h = 10.0_f32;
+    let line_h: f32 = (name_size as f32) + bar_h + 14.0;
+    let left_pad = 48.0_f32;
+
+    // Header
+    let header = "MACROS";
+    let header_y = lh * 0.14;
+    ui.draw_text(left_pad, header_y, header, label_size as f32, dim);
+
+    let block_y = header_y + label_size as f32 + 18.0;
+
+    for (i, m) in macros.iter().enumerate() {
+        let row_top = block_y + line_h * i as f32;
+        // Name (left-aligned)
+        ui.draw_text(left_pad, row_top, &m.name, name_size as f32, white);
+        // Bar background
+        let bar_y = row_top + name_size as f32 + 6.0;
+        ui.draw_rounded_rect(left_pad, bar_y, bar_w, bar_h, bar_bg, bar_h * 0.5);
+        // Bar fill
+        let fill_w = (bar_w * m.value.clamp(0.0, 1.0)).max(0.0);
+        if fill_w > 1.0 {
+            ui.draw_rounded_rect(left_pad, bar_y, fill_w, bar_h, accent_f, bar_h * 0.5);
+        }
+    }
 }

@@ -45,6 +45,60 @@ pub(crate) struct CountdownDisplay {
     pub unit: String,
 }
 
+/// Compute the linear progress (0..=1) of `current_beat` through the
+/// section bounded by `current_section` and `next_section`. Returns `None`
+/// if either bound is missing or the section has zero length.
+pub(crate) fn section_progress(
+    current_section: Option<&CuePoint>,
+    next_section: Option<&CuePoint>,
+    current_beat: f64,
+) -> Option<f64> {
+    let cur = current_section?;
+    let nxt = next_section?;
+    let len = nxt.time - cur.time;
+    if len <= 0.0 {
+        return None;
+    }
+    let p = (current_beat - cur.time) / len;
+    Some(p.clamp(0.0, 1.0))
+}
+
+/// Format an absolute beat position as Ableton-style `BAR.BEAT.SIXTEENTH`,
+/// 1-indexed (Ableton's transport readout convention).
+///
+/// In 4/4 with 4 sixteenths per beat:
+/// - beat 0.0   → "1.1.1"
+/// - beat 4.0   → "2.1.1"  (start of bar 2)
+/// - beat 5.5   → "2.2.3"  (bar 2, beat 2, third sixteenth)
+/// - beat 167.0 → "42.4.1" (bar 42, beat 4)
+///
+/// Negative beats clamp to zero. The result is returned as three separate
+/// fields so the renderer can lay them out with fixed-column digits and
+/// dot separators that don't shift as values tick over.
+pub(crate) fn format_bar_beat(current_beat: f64, beats_per_bar: u32) -> BarBeatDisplay {
+    let beat = current_beat.max(0.0);
+    let bpb = beats_per_bar.max(1) as f64;
+    let bar_idx = (beat / bpb).floor() as i64;
+    let beat_in_bar = beat - (bar_idx as f64 * bpb);
+    let beat_idx_in_bar = beat_in_bar.floor() as i64;
+    let frac = beat_in_bar - beat_idx_in_bar as f64;
+    let sixteenth_idx = (frac * 4.0).floor() as i64;
+    BarBeatDisplay {
+        bar: (bar_idx + 1).to_string(),
+        beat: (beat_idx_in_bar + 1).to_string(),
+        sixteenth: (sixteenth_idx + 1).to_string(),
+    }
+}
+
+/// 1-indexed bar/beat/sixteenth strings ready for the fixed-column digit
+/// renderer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BarBeatDisplay {
+    pub bar: String,
+    pub beat: String,
+    pub sixteenth: String,
+}
+
 /// Format a beats-remaining countdown as a smoothly-updating decimal in
 /// bars. Always reports in bars so the readout never switches units —
 /// sub-bar values render as "0.5 BARS", "0.2 BARS", etc.
@@ -169,5 +223,98 @@ mod tests {
         assert_eq!(format_countdown(6.0, 3), cd("2.0", "BARS"));
         // 2 beats / 3 bpb = 0.666… → "0.7"
         assert_eq!(format_countdown(2.0, 3), cd("0.7", "BARS"));
+    }
+
+    // ── section_progress ──────────────────────────────────────────
+
+    #[test]
+    fn section_progress_basic() {
+        let a = cue(0.0, "A");
+        let b = cue(16.0, "B");
+        assert_eq!(section_progress(Some(&a), Some(&b), 0.0), Some(0.0));
+        assert_eq!(section_progress(Some(&a), Some(&b), 8.0), Some(0.5));
+        assert_eq!(section_progress(Some(&a), Some(&b), 16.0), Some(1.0));
+    }
+
+    #[test]
+    fn section_progress_clamps() {
+        let a = cue(0.0, "A");
+        let b = cue(16.0, "B");
+        // Before the section starts (shouldn't normally happen but be safe).
+        assert_eq!(section_progress(Some(&a), Some(&b), -5.0), Some(0.0));
+        // After the section ends.
+        assert_eq!(section_progress(Some(&a), Some(&b), 100.0), Some(1.0));
+    }
+
+    #[test]
+    fn section_progress_missing_bounds() {
+        let a = cue(0.0, "A");
+        assert_eq!(section_progress(None, Some(&a), 0.0), None);
+        assert_eq!(section_progress(Some(&a), None, 0.0), None);
+        assert_eq!(section_progress(None, None, 0.0), None);
+    }
+
+    #[test]
+    fn section_progress_zero_length() {
+        let a = cue(8.0, "A");
+        let b = cue(8.0, "B");
+        assert_eq!(section_progress(Some(&a), Some(&b), 8.0), None);
+    }
+
+    // ── format_bar_beat ───────────────────────────────────────────
+
+    fn bb(bar: &str, beat: &str, sixteenth: &str) -> BarBeatDisplay {
+        BarBeatDisplay {
+            bar: bar.to_string(),
+            beat: beat.to_string(),
+            sixteenth: sixteenth.to_string(),
+        }
+    }
+
+    #[test]
+    fn bar_beat_zero() {
+        assert_eq!(format_bar_beat(0.0, 4), bb("1", "1", "1"));
+    }
+
+    #[test]
+    fn bar_beat_bar_boundaries() {
+        // Start of bar 2 in 4/4
+        assert_eq!(format_bar_beat(4.0, 4), bb("2", "1", "1"));
+        // Start of bar 42 in 4/4 (beat 164)
+        assert_eq!(format_bar_beat(164.0, 4), bb("42", "1", "1"));
+    }
+
+    #[test]
+    fn bar_beat_beats_within_bar() {
+        // Bar 2, beat 2 (1-indexed)
+        assert_eq!(format_bar_beat(5.0, 4), bb("2", "2", "1"));
+        // Bar 2, beat 4 (1-indexed)
+        assert_eq!(format_bar_beat(7.0, 4), bb("2", "4", "1"));
+    }
+
+    #[test]
+    fn bar_beat_sixteenths() {
+        // Beat 0.0 → 1.1.1
+        // Beat 0.25 → 1.1.2 (second sixteenth)
+        // Beat 0.5 → 1.1.3 (third sixteenth)
+        // Beat 0.75 → 1.1.4 (fourth sixteenth)
+        assert_eq!(format_bar_beat(0.0, 4), bb("1", "1", "1"));
+        assert_eq!(format_bar_beat(0.25, 4), bb("1", "1", "2"));
+        assert_eq!(format_bar_beat(0.5, 4), bb("1", "1", "3"));
+        assert_eq!(format_bar_beat(0.75, 4), bb("1", "1", "4"));
+    }
+
+    #[test]
+    fn bar_beat_three_four_time() {
+        // 3/4 time: bars are 3 beats long
+        assert_eq!(format_bar_beat(0.0, 3), bb("1", "1", "1"));
+        assert_eq!(format_bar_beat(3.0, 3), bb("2", "1", "1"));
+        assert_eq!(format_bar_beat(6.0, 3), bb("3", "1", "1"));
+        assert_eq!(format_bar_beat(7.5, 3), bb("3", "2", "3"));
+    }
+
+    #[test]
+    fn bar_beat_negative_clamps_to_one_one_one() {
+        assert_eq!(format_bar_beat(-5.0, 4), bb("1", "1", "1"));
     }
 }
