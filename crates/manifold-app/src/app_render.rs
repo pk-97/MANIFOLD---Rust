@@ -19,6 +19,14 @@ impl Application {
         let realtime = self.frame_timer.realtime_since_start();
         self.time_since_start = realtime as f32;
 
+        // Performance mode: skip the entire normal UI tick path. The content
+        // thread keeps running (independent), the output window keeps presenting
+        // (own display link), and the main window draws only the perform HUD.
+        if self.perform.active {
+            self.tick_perform_mode();
+            return;
+        }
+
         // Content rendering now runs on dedicated thread — no cadence check needed here.
 
         // 1. Drain state from content thread
@@ -366,6 +374,10 @@ impl Application {
                 }
                 PanelAction::ToggleMonitor => {
                     self.pending_toggle_output = true;
+                    continue;
+                }
+                PanelAction::EnterPerformMode => {
+                    self.perform.pending_enter = true;
                     continue;
                 }
                 PanelAction::SaveProject => {

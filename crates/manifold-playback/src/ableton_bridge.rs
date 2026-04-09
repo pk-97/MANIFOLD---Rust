@@ -67,6 +67,21 @@ const PLAY_SEEK_DELAY_SECS: f64 = 0.015;
 pub struct AbletonSession {
     pub connected: bool,
     pub tracks: Vec<AbletonTrack>,
+    /// Locators / cue points fetched from Ableton, sorted by `time` ascending.
+    /// `time` is in beats (absolute song position). Refreshed on connect /
+    /// re-discovery. Used by performance-mode HUD to compute current section
+    /// and countdown to next cue.
+    pub cue_points: Vec<CuePoint>,
+}
+
+/// An Ableton Live locator (cue point). Times are absolute beats from the
+/// start of the song.
+#[derive(Debug, Clone)]
+pub struct CuePoint {
+    /// Absolute beat position in the Ableton song.
+    pub time: f64,
+    /// User-set locator name (e.g. "Drop", "Verse 2").
+    pub name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -812,12 +827,62 @@ impl AbletonBridge {
             "/live/device/get/parameters/max" => {
                 self.handle_param_max(msg, realtime);
             }
+            "/live/song/get/cue_points" => self.handle_cue_points(msg),
+            // We use the binary parameter value (handled via fast path), not
+            // the formatted string. Drop these silently — AbletonOSC sends
+            // them whenever a parameter listener fires.
+            "/live/device/get/parameter/value_string" => {}
             "/live/error" => {
-                // Ableton reported an error — ignore silently
-                let _ = &msg.args;
+                let detail = msg
+                    .args
+                    .first()
+                    .and_then(osc_arg_string)
+                    .unwrap_or_else(|| "(no detail)".to_string());
+                eprintln!("[AbletonBridge] /live/error: {detail}");
             }
-            _ => {}
+            other => {
+                eprintln!(
+                    "[AbletonBridge] unhandled inbound address: {other} (args={})",
+                    msg.args.len()
+                );
+            }
         }
+    }
+
+    /// Parse a `/live/song/get/cue_points` reply.
+    ///
+    /// AbletonOSC sends cue points as a flat list of alternating values.
+    /// To stay tolerant of either ordering, we walk the args in pairs and
+    /// classify each element as time-or-name by its OSC type rather than
+    /// position. This way `[name, time, name, time, ...]` and
+    /// `[time, name, time, name, ...]` both parse correctly.
+    fn handle_cue_points(&mut self, msg: &OscMessage) {
+        eprintln!(
+            "[AbletonBridge] /live/song/get/cue_points response: {} arg(s)",
+            msg.args.len()
+        );
+        let mut cues: Vec<CuePoint> = Vec::with_capacity(msg.args.len() / 2);
+        let mut i = 0;
+        while i + 1 < msg.args.len() {
+            let a = &msg.args[i];
+            let b = &msg.args[i + 1];
+            let (time, name) = match (osc_arg_string(a), osc_arg_float(b)) {
+                (Some(name), Some(time)) => (time as f64, name),
+                _ => match (osc_arg_float(a), osc_arg_string(b)) {
+                    (Some(time), Some(name)) => (time as f64, name),
+                    _ => {
+                        i += 2;
+                        continue;
+                    }
+                },
+            };
+            cues.push(CuePoint { time, name });
+            i += 2;
+        }
+        cues.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
+        eprintln!("[AbletonBridge] Parsed {} cue point(s)", cues.len());
+        self.session.cue_points = cues;
+        self.session_version += 1;
     }
 
     fn handle_param_value(&self, msg: &OscMessage) {
@@ -1279,6 +1344,12 @@ impl AbletonBridge {
         self.session_version += 1;
         self.discovery_state = DiscoveryState::Complete;
         self.validation_dirty = true;
+
+        // Fetch locators / cue points so the perform-mode HUD has them.
+        // Reply arrives async on /live/song/get/cue_points and is handled
+        // in handle_message → handle_cue_points.
+        eprintln!("[AbletonBridge] Requesting cue points (/live/song/get/cue_points)");
+        send_osc_to(&self.send_socket, "/live/song/get/cue_points", &[]);
     }
 
     /// Returns true (and clears the flag) when discovery just completed and the

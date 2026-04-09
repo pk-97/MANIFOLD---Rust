@@ -371,6 +371,8 @@ pub struct Application {
     pub(crate) pending_toggle_output: bool,
     pub(crate) pending_close_output: bool,
     pub(crate) pending_export: bool,
+    /// Performance mode state — see `crate::perform_mode`.
+    pub(crate) perform: crate::perform_mode::PerformModeState,
     pub(crate) needs_rebuild: bool,
     /// Fine-grained scroll dirty flags — tracks which axis changed to enable
     /// skipping layer header rebuild on horizontal-only scroll.
@@ -488,6 +490,7 @@ impl Application {
             pending_toggle_output: false,
             pending_export: false,
             pending_close_output: false,
+            perform: crate::perform_mode::PerformModeState::new(),
             needs_rebuild: false,
             scroll_dirty: crate::ui_root::ScrollDirty::default(),
             needs_structural_sync: false,
@@ -1735,6 +1738,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     }
                     self.window_registry.remove(&window_id);
                     log::info!("Closed output window");
+                    self.perform_on_output_window_closed();
                 }
             }
 
@@ -1797,6 +1801,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         position.x as f32 / scale as f32,
                         position.y as f32 / scale as f32,
                     );
+
+                    if self.perform_handle_cursor_moved(self.cursor_pos) {
+                        return;
+                    }
 
                     // Split handle drag takes highest priority
                     // From Unity PanelResizeHandle.OnDrag
@@ -1869,6 +1877,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             }
 
             WindowEvent::MouseInput { button, state, .. } => {
+                if is_primary && self.perform_handle_mouse_input(button, state) {
+                    return;
+                }
                 if is_primary {
                     match button {
                         MouseButton::Left => {
@@ -2016,6 +2027,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             // ── Mouse wheel (scroll / zoom) ──────────────────────────
             WindowEvent::MouseWheel { delta, .. } => {
+                if is_primary && self.perform_handle_mouse_wheel() {
+                    return;
+                }
                 if is_primary {
                     // Convert line deltas (mouse wheel notches) to logical pixels.
                     // Each downstream consumer applies its own speed constant on top.
@@ -2152,6 +2166,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     },
                 ..
             } => {
+                if is_primary && self.perform_handle_key(&logical_key) {
+                    return;
+                }
                 // App-level shortcuts (handled before UI forwarding)
                 let mut consumed = false;
                 let data_version_before = self.content_state.data_version;
@@ -2326,11 +2343,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     }
                     self.window_registry.remove(&window_id);
                     log::info!("Closed output window");
+                    self.perform_on_output_window_closed();
                 }
             }
 
             // ── Cursor left window → cancel in-progress drags ────────
             WindowEvent::CursorLeft { .. } => {
+                if is_primary && self.perform_handle_cursor_left() {
+                    return;
+                }
                 if is_primary {
                     if self.mouse_pressed {
                         log::debug!("Cursor left window — synthesizing PointerUp to cancel drag");
@@ -2483,6 +2504,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 self.open_output_window(event_loop, "Output", None, false);
             }
         }
+
+        // Performance mode entry/exit (see crate::perform_mode::lifecycle).
+        self.handle_perform_mode_pending(event_loop);
 
         // Check if a screen change notification fired — update EDR headroom
         // per-window and retarget CVDisplayLinks.

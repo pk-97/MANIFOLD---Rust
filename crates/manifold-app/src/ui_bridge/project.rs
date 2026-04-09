@@ -67,6 +67,11 @@ pub(super) fn dispatch_project(
             structural_change: false,
             resolution_changed: false,
         },
+        PanelAction::EnterPerformMode => DispatchResult {
+            handled: true,
+            structural_change: false,
+            resolution_changed: false,
+        },
 
         PanelAction::NewProject
         | PanelAction::OpenProject

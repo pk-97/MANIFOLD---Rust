@@ -81,6 +81,7 @@ pub enum PanelAction {
     ZoomIn,
     ZoomOut,
     ToggleMonitor,
+    EnterPerformMode,
 
     // Footer
     CycleQuantize,

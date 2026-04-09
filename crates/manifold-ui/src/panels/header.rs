@@ -21,6 +21,7 @@ const PROGRESS_BAR_INSET: f32 = 5.0;
 const ZOOM_BUTTON_W: f32 = 28.0;
 const ZOOM_LABEL_W: f32 = 70.0;
 const MONITOR_BUTTON_W: f32 = 60.0;
+const PERFORM_BUTTON_W: f32 = 60.0;
 
 const TIME_DISPLAY_W: f32 = 260.0;
 
@@ -49,6 +50,7 @@ struct HeaderLayout {
     zoom_label: Rect,
     zoom_in: Rect,
     monitor_button: Rect,
+    perform_button: Rect,
 }
 
 impl HeaderLayout {
@@ -89,6 +91,10 @@ impl HeaderLayout {
         self.monitor_button = Rect::new(rx, elem_y, MONITOR_BUTTON_W, elem_h);
         rx -= GROUP_SPACING;
 
+        rx -= PERFORM_BUTTON_W;
+        self.perform_button = Rect::new(rx, elem_y, PERFORM_BUTTON_W, elem_h);
+        rx -= GROUP_SPACING;
+
         rx -= ZOOM_BUTTON_W;
         self.zoom_in = Rect::new(rx, elem_y, ZOOM_BUTTON_W, elem_h);
 
@@ -115,6 +121,7 @@ pub struct HeaderPanel {
     zoom_out_id: i32,
     zoom_in_id: i32,
     monitor_btn_id: i32,
+    perform_btn_id: i32,
 
     // State
     project_name: String,
@@ -143,6 +150,7 @@ impl HeaderPanel {
             zoom_out_id: -1,
             zoom_in_id: -1,
             monitor_btn_id: -1,
+            perform_btn_id: -1,
             project_name: "My Project".into(),
             import_status: String::new(),
             import_progress: 0.0,
@@ -218,6 +226,19 @@ impl HeaderPanel {
         }
     }
 
+    fn perform_style(&self) -> UIStyle {
+        UIStyle {
+            bg_color: color::BUTTON_INACTIVE_C32,
+            hover_bg_color: BUTTON_HOVER_H,
+            pressed_bg_color: BUTTON_PRESSED_H,
+            text_color: color::TEXT_WHITE_C32,
+            font_size: color::FONT_HEADING,
+            corner_radius: color::BUTTON_RADIUS,
+            text_align: TextAlign::Center,
+            ..UIStyle::default()
+        }
+    }
+
     fn monitor_style(&self) -> UIStyle {
         if self.monitor_active {
             UIStyle {
@@ -254,6 +275,9 @@ impl HeaderPanel {
         }
         if id == self.monitor_btn_id {
             return vec![PanelAction::ToggleMonitor];
+        }
+        if id == self.perform_btn_id {
+            return vec![PanelAction::EnterPerformMode];
         }
         Vec::new()
     }
@@ -422,6 +446,16 @@ impl Panel for HeaderPanel {
             self.layout.monitor_button.height,
             self.monitor_style(),
             "Monitor",
+        ) as i32;
+
+        self.perform_btn_id = tree.add_button(
+            bg,
+            self.layout.perform_button.x,
+            self.layout.perform_button.y,
+            self.layout.perform_button.width,
+            self.layout.perform_button.height,
+            self.perform_style(),
+            "Perform",
         ) as i32;
 
         self.cache_node_count = tree.count() - self.cache_first_node;

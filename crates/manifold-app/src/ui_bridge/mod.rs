@@ -326,6 +326,7 @@ pub fn dispatch(
         PanelAction::ToggleHdr
         | PanelAction::TogglePercussion
         | PanelAction::ToggleMonitor
+        | PanelAction::EnterPerformMode
         | PanelAction::NewProject
         | PanelAction::OpenProject
         | PanelAction::OpenRecent
