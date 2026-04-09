@@ -219,10 +219,15 @@ def build_model() -> AdaINStyleTransfer:
 # ─── ONNX export ───
 
 def export_onnx(model: AdaINStyleTransfer, output_path: Path, size: int = 256):
-    """Export the model to ONNX with dynamic spatial axes."""
+    """Export the model to ONNX with fixed spatial dimensions.
+
+    CoreML (Apple Neural Engine) requires fixed input shapes — dynamic
+    axes cause zero-dim compilation failures. We export separate models
+    for each resolution (256, 512).
+    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Dummy inputs
+    # Dummy inputs at the exact target size (no dynamic axes).
     content = torch.randn(1, 3, size, size)
     style = torch.randn(1, 3, size, size)
 
@@ -232,11 +237,6 @@ def export_onnx(model: AdaINStyleTransfer, output_path: Path, size: int = 256):
         str(output_path),
         input_names=["content", "style"],
         output_names=["output"],
-        dynamic_axes={
-            "content": {2: "height", 3: "width"},
-            "style": {2: "style_height", 3: "style_width"},
-            "output": {2: "height", 3: "width"},
-        },
         opset_version=17,
         do_constant_folding=True,
         dynamo=False,
@@ -315,8 +315,11 @@ def main():
     args = parser.parse_args()
 
     model = build_model()
-    output_path = ASSETS_DIR / "adain_style_transfer.onnx"
-    export_onnx(model, output_path, size=args.size)
+
+    # Export fixed-size models for CoreML compatibility.
+    for size in [256, 512]:
+        output_path = ASSETS_DIR / f"adain_style_transfer_{size}.onnx"
+        export_onnx(model, output_path, size=size)
 
     if args.verify:
         verify(model, args.verify[0], args.verify[1])

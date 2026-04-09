@@ -64,8 +64,11 @@ struct BlendUniforms {
 
 pub struct NeuralStyleFX {
     blend_helper: ComputeDualBlitHelper,
-    worker: Option<BackgroundWorker<StyleRequest, StyleResponse>>,
-    /// True after we've attempted (and possibly failed) to create the worker.
+    /// Separate workers for 256 and 512 resolution models.
+    /// CoreML requires fixed input shapes, so we load one model per size.
+    worker_256: Option<BackgroundWorker<StyleRequest, StyleResponse>>,
+    worker_512: Option<BackgroundWorker<StyleRequest, StyleResponse>>,
+    /// True after we've attempted (and possibly failed) to create workers.
     /// Prevents retrying every frame.
     worker_init_attempted: bool,
     owner_states: AHashMap<i64, OwnerState>,
@@ -92,7 +95,8 @@ impl NeuralStyleFX {
 
         Self {
             blend_helper,
-            worker: None,
+            worker_256: None,
+            worker_512: None,
             worker_init_attempted: false,
             owner_states: AHashMap::new(),
             loaded_style_path: None,
@@ -151,7 +155,7 @@ impl NeuralStyleFX {
     /// Deferred from new() because ort throws uncatchable C++ exceptions
     /// during init, and we must not crash the app at startup.
     fn ensure_worker(&mut self) {
-        if self.worker.is_some() || self.worker_init_attempted {
+        if self.worker_init_attempted {
             return;
         }
         self.worker_init_attempted = true;
@@ -164,59 +168,67 @@ impl NeuralStyleFX {
             return;
         };
 
-        // SAFETY: called from content thread before worker thread exists.
+        // SAFETY: called from content thread before worker threads exist.
         unsafe { std::env::set_var("ORT_DYLIB_PATH", &dylib_path) };
         log::info!("[NeuralStyleFX] Found ONNX Runtime at: {dylib_path}");
 
-        self.worker = BackgroundWorker::try_new(|| {
-            let session = create_ort_session()?;
+        // Create workers for both resolutions (CoreML needs fixed input shapes).
+        self.worker_256 = BackgroundWorker::try_new(|| {
+            let session = create_ort_session(256)?;
+            Some(move |req: StyleRequest| -> StyleResponse {
+                run_inference(&session, req)
+            })
+        });
+        self.worker_512 = BackgroundWorker::try_new(|| {
+            let session = create_ort_session(512)?;
             Some(move |req: StyleRequest| -> StyleResponse {
                 run_inference(&session, req)
             })
         });
 
-        if self.worker.is_none() {
+        if self.worker_256.is_none() && self.worker_512.is_none() {
             log::warn!(
-                "[NeuralStyleFX] Failed to create ONNX session. \
-                 Run tools/export_adain_onnx.py to export the model."
+                "[NeuralStyleFX] Failed to create ONNX sessions. \
+                 Run tools/export_adain_onnx.py to export the models."
+            );
+        } else {
+            log::info!(
+                "[NeuralStyleFX] Workers ready: 256={}, 512={}",
+                self.worker_256.is_some(),
+                self.worker_512.is_some(),
             );
         }
     }
 
-    /// Poll the background worker and GPU readback.
-    fn poll_readback(&mut self, device: &GpuDevice, owner_key: i64) {
-        // ── Phase 1: check if the background worker has a result ──
-        if let Some(worker) = &mut self.worker
-            && let Some(response) = worker.try_recv()
-            && let Some(state) = self.owner_states.get_mut(&response.owner_key)
-        {
-            // Create or recreate result texture if size changed.
-            if state.result_rt.is_none()
-                || state.current_inference_size != response.width
+    /// Poll both workers for completed results.
+    fn poll_worker_results(&mut self, device: &GpuDevice) {
+        // Poll both 256 and 512 workers for results.
+        for worker in [&mut self.worker_256, &mut self.worker_512].into_iter().flatten() {
+            if let Some(response) = worker.try_recv()
+                && let Some(state) = self.owner_states.get_mut(&response.owner_key)
             {
-                state.result_rt = Some(RenderTarget::new(
-                    device,
-                    response.width,
-                    response.height,
-                    GpuTextureFormat::Rgba8Unorm,
-                    &format!("NeuralStyle_Result_{}", response.owner_key),
-                ));
-                state.current_inference_size = response.width;
-            }
-
-            // Upload stylized pixels to GPU texture.
-            if let Some(rt) = &state.result_rt {
-                device.upload_texture(&rt.texture, &response.stylized_pixels);
-                state.has_result = true;
+                if state.result_rt.is_none()
+                    || state.current_inference_size != response.width
+                {
+                    state.result_rt = Some(RenderTarget::new(
+                        device,
+                        response.width,
+                        response.height,
+                        GpuTextureFormat::Rgba8Unorm,
+                        &format!("NeuralStyle_Result_{}", response.owner_key),
+                    ));
+                    state.current_inference_size = response.width;
+                }
+                if let Some(rt) = &state.result_rt {
+                    device.upload_texture(&rt.texture, &response.stylized_pixels);
+                    state.has_result = true;
+                }
             }
         }
+    }
 
-        // ── Phase 2: check for new pixel data from GPU readback ──
-        let Some(worker) = &self.worker else { return };
-        if worker.is_busy() {
-            return;
-        }
-
+    /// Submit a readback result to the appropriate worker.
+    fn try_submit_inference(&mut self, owner_key: i64) {
         let Some(style_pixels) = &self.style_pixels else {
             return;
         };
@@ -229,14 +241,31 @@ impl NeuralStyleFX {
         };
         let inference_size = state.current_inference_size.max(256);
 
+        // Check if the right worker is busy.
+        let worker = if inference_size >= 512 {
+            self.worker_512.as_ref().or(self.worker_256.as_ref())
+        } else {
+            self.worker_256.as_ref().or(self.worker_512.as_ref())
+        };
+        if worker.is_none_or(|w| w.is_busy()) {
+            return;
+        }
+
+        // Re-borrow state mutably for readback.
+        let Some(state) = self.owner_states.get_mut(&owner_key) else {
+            return;
+        };
         let pixels = match state.readback.try_read() {
             Some(p) => p,
             None => return,
         };
 
-        let Some(worker) = &mut self.worker else {
-            return;
+        let worker = if inference_size >= 512 {
+            self.worker_512.as_mut().or(self.worker_256.as_mut())
+        } else {
+            self.worker_256.as_mut().or(self.worker_512.as_mut())
         };
+        let Some(worker) = worker else { return };
 
         worker.submit(StyleRequest {
             owner_key,
@@ -286,8 +315,9 @@ impl PostProcessEffect for NeuralStyleFX {
         // Reload style image if path changed.
         self.maybe_reload_style_image(fx.style_image_path.as_ref());
 
-        // Poll worker result and GPU readback.
-        self.poll_readback(gpu.device, ctx.owner_key);
+        // Poll worker results and try to submit new inference.
+        self.poll_worker_results(gpu.device);
+        self.try_submit_inference(ctx.owner_key);
 
         // Ensure owner state exists and update inference size.
         let owner_key = ctx.owner_key;
@@ -366,7 +396,10 @@ impl PostProcessEffect for NeuralStyleFX {
     }
 
     fn flush_background_work(&mut self) {
-        if let Some(worker) = &mut self.worker {
+        if let Some(worker) = &mut self.worker_256 {
+            worker.recv_blocking();
+        }
+        if let Some(worker) = &mut self.worker_512 {
             worker.recv_blocking();
         }
     }
@@ -433,37 +466,40 @@ fn find_ort_dylib() -> Option<String> {
     None
 }
 
-/// Resolve the path to the ONNX model file.
-fn resolve_model_path() -> Option<std::path::PathBuf> {
+/// Resolve the path to the ONNX model file for a given resolution.
+fn resolve_model_path(size: u32) -> Option<std::path::PathBuf> {
+    let filename = format!("adain_style_transfer_{size}.onnx");
+
     // Try: relative to executable (app bundle)
-    if let Ok(exe) = std::env::current_exe() {
-        let bundle_path = exe
-            .parent()?
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(parent) = exe.parent()
+    {
+        let bundle_path = parent
             .parent()
-            .unwrap_or(exe.parent()?)
-            .join("Resources/models/adain_style_transfer.onnx");
+            .unwrap_or(parent)
+            .join("Resources/models")
+            .join(&filename);
         if bundle_path.exists() {
             return Some(bundle_path);
         }
-        // Alongside executable
-        let sibling = exe.parent()?.join("adain_style_transfer.onnx");
+        let sibling = parent.join(&filename);
         if sibling.exists() {
             return Some(sibling);
         }
     }
 
     // Try: project root assets
-    let project_assets = std::path::Path::new("assets/models/adain_style_transfer.onnx");
+    let project_assets = std::path::Path::new("assets/models").join(&filename);
     if project_assets.exists() {
-        return Some(project_assets.to_path_buf());
+        return Some(project_assets);
     }
 
     None
 }
 
 /// Create an ONNX Runtime session with CoreML + CPU fallback.
-fn create_ort_session() -> Option<ort::session::Session> {
-    let model_path = resolve_model_path()?;
+fn create_ort_session(size: u32) -> Option<ort::session::Session> {
+    let model_path = resolve_model_path(size)?;
     log::info!(
         "[NeuralStyleFX] Loading ONNX model from: {}",
         model_path.display()
@@ -477,10 +513,9 @@ fn create_ort_session() -> Option<ort::session::Session> {
         }
     };
 
-    // CoreML EP can't handle dynamic spatial axes (produces zero-dim shapes).
-    // Use CPU provider for now — still fast enough at 256x256 (~15ms).
-    // TODO: export fixed-size models to enable CoreML/ANE acceleration.
     let builder = match builder.with_execution_providers([
+        #[cfg(target_os = "macos")]
+        ort::execution_providers::CoreMLExecutionProvider::default().build(),
         ort::execution_providers::CPUExecutionProvider::default().build(),
     ]) {
         Ok(b) => b,
