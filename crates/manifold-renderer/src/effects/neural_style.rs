@@ -43,6 +43,8 @@ struct StyleResponse {
 // ── Per-owner state ──
 
 struct OwnerState {
+    /// Downsampled source at inference resolution for readback.
+    downsample_rt: Option<RenderTarget>,
     readback: ReadbackRequest,
     /// GPU texture holding the latest inference result, uploaded from CPU.
     result_rt: Option<RenderTarget>,
@@ -322,6 +324,7 @@ impl PostProcessEffect for NeuralStyleFX {
         // Ensure owner state exists and update inference size.
         let owner_key = ctx.owner_key;
         let state = self.owner_states.entry(owner_key).or_insert_with(|| OwnerState {
+            downsample_rt: None,
             readback: ReadbackRequest::new(),
             result_rt: None,
             has_result: false,
@@ -336,9 +339,50 @@ impl PostProcessEffect for NeuralStyleFX {
             && has_style
             && ctx.frame_count - state.last_readback_frame >= 1
         {
+            // Create or resize downsample target.
+            if state.downsample_rt.is_none()
+                || state.downsample_rt.as_ref().unwrap().width != inference_size
+            {
+                state.downsample_rt = Some(RenderTarget::new(
+                    gpu.device,
+                    inference_size,
+                    inference_size,
+                    GpuTextureFormat::Rgba8Unorm,
+                    &format!("NeuralStyle_Down_{owner_key}"),
+                ));
+            }
+
+            // Downsample source to inference resolution via the blend shader
+            // in passthrough mode. The sampler handles bilinear scaling.
+            let ds_uniforms = BlendUniforms {
+                strength: 0.0,
+                has_result: 0,
+                _pad: [0.0; 2],
+            };
+            let ds_bytes = unsafe {
+                std::slice::from_raw_parts(
+                    &ds_uniforms as *const BlendUniforms as *const u8,
+                    std::mem::size_of::<BlendUniforms>(),
+                )
+            };
+            let ds_tex = &state.downsample_rt.as_ref().unwrap().texture
+                as *const manifold_gpu::GpuTexture;
+            let ds_ref = unsafe { &*ds_tex };
+            self.blend_helper.dispatch_a_only(
+                gpu,
+                source,
+                ds_ref,
+                ds_bytes,
+                "NeuralStyle Downsample",
+                inference_size,
+                inference_size,
+            );
+
+            // Readback from the downsample target (correct size, not the source).
+            let ds_tex_ref = unsafe { &*ds_tex };
             state
                 .readback
-                .submit(gpu, source, inference_size, inference_size);
+                .submit(gpu, ds_tex_ref, inference_size, inference_size);
             state.last_readback_frame = ctx.frame_count;
         }
 
