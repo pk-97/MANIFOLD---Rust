@@ -775,6 +775,50 @@ impl AbletonBridge {
             self.filtered_sources.remove(key);
         }
 
+        // Mirror current filter outputs into the session macro values so
+        // the perform-mode HUD (and any other consumer that reads
+        // `session.tracks[*].devices[*].macros[*].value`) sees fresh
+        // data without subscribing to OSC directly. We mirror the
+        // *smoothed* value rather than the raw inbound value so the
+        // displayed bars track what's actually being applied to MANIFOLD
+        // parameters, not the noisy underlying signal.
+        //
+        // Only bump session_version when at least one macro value moved
+        // by a perceptible amount (~1/256 of full range) — bumping every
+        // frame would force a per-frame Arc clone of the entire session
+        // (28 tracks + devices) onto the UI channel. By gating the bump
+        // we keep the cost paid only when the user is actually moving a
+        // controller.
+        const MACRO_MIRROR_EPSILON: f32 = 1.0 / 256.0;
+        if !self.filtered_sources.is_empty() {
+            let mut any_moved = false;
+            for ((tid, did, pid), src) in self.filtered_sources.iter() {
+                if src.last_output.is_nan() {
+                    continue;
+                }
+                if let Some(track) = self
+                    .session
+                    .tracks
+                    .iter_mut()
+                    .find(|t| t.track_id == *tid)
+                    && let Some(device) =
+                        track.devices.iter_mut().find(|d| d.device_id == *did)
+                    && let Some(macro_) =
+                        device.macros.iter_mut().find(|m| m.param_id == *pid)
+                {
+                    let span = (macro_.max - macro_.min).abs().max(f32::EPSILON);
+                    let normalized_delta = (macro_.value - src.last_output).abs() / span;
+                    if normalized_delta > MACRO_MIRROR_EPSILON {
+                        macro_.value = src.last_output;
+                        any_moved = true;
+                    }
+                }
+            }
+            if any_moved {
+                self.session_version += 1;
+            }
+        }
+
         wrote_any
     }
 

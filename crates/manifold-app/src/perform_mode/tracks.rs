@@ -23,6 +23,25 @@ pub(crate) fn is_playing(track: &TrackArrangement, current_beat: f64) -> bool {
         .any(|c| !c.muted && c.start <= current_beat && current_beat < c.end)
 }
 
+/// Returns `true` if the track is unmuted AND has at least one unmuted
+/// clip whose `[start, end)` interval overlaps the half-open beat range
+/// `[range_start, range_end)`. Used for "what plays in the next section"
+/// — variant (a): straddlers (clips that started before `range_start` and
+/// continue into the range) count as active.
+pub(crate) fn plays_in_range(
+    track: &TrackArrangement,
+    range_start: f64,
+    range_end: f64,
+) -> bool {
+    if track.muted || !(range_end > range_start) {
+        return false;
+    }
+    track
+        .clips
+        .iter()
+        .any(|c| !c.muted && c.start < range_end && c.end > range_start)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

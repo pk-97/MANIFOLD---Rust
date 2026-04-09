@@ -109,6 +109,54 @@ impl Application {
         );
         let bar_beat = cue::format_bar_beat(current_beat, beats_per_bar);
 
+        // Tracks playing in the *current* section: any non-muted clip
+        // overlapping `[current.time, next.time)` (variant (a)).
+        let now_section_tracks: Vec<String> = if let Some(cur_cue) = analysis.current {
+            let section_end = analysis
+                .next
+                .map(|c| c.time)
+                .unwrap_or(f64::INFINITY);
+            self.ui_root
+                .ableton_session
+                .as_ref()
+                .and_then(|s| s.play_group.as_ref())
+                .map(|g| {
+                    g.tracks
+                        .iter()
+                        .filter(|t| tracks::plays_in_range(t, cur_cue.time, section_end))
+                        .map(|t| t.name.clone())
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        // Tracks playing in the *next* section (variant (a): any non-muted
+        // clip overlapping `[next.time, section_end)`, including straddlers).
+        // Section end = the cue after `next`, or +∞ if `next` is the last.
+        let next_section_tracks: Vec<String> = if let Some(next_cue) = analysis.next {
+            let section_end = cue_points
+                .iter()
+                .find(|c| c.time > next_cue.time)
+                .map(|c| c.time)
+                .unwrap_or(f64::INFINITY);
+            self.ui_root
+                .ableton_session
+                .as_ref()
+                .and_then(|s| s.play_group.as_ref())
+                .map(|g| {
+                    g.tracks
+                        .iter()
+                        .filter(|t| tracks::plays_in_range(t, next_cue.time, section_end))
+                        .map(|t| t.name.clone())
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
         // PLAY-group tracks: snapshot from the persistent ui_root cache.
         // We compute (name, is_playing) up-front so the renderer doesn't
         // need to hold a borrow on `self.ui_root` while it borrows
@@ -162,6 +210,8 @@ impl Application {
                 countdown.as_ref(),
                 section_progress,
                 &bar_beat,
+                &now_section_tracks,
+                &next_section_tracks,
                 bpm,
                 is_playing,
                 ableton_connected,
@@ -426,6 +476,8 @@ fn draw_cue_hud(
     countdown: Option<&cue::CountdownDisplay>,
     section_progress: Option<f64>,
     bar_beat: &cue::BarBeatDisplay,
+    now_section_tracks: &[String],
+    next_section_tracks: &[String],
     bpm: f64,
     is_playing: bool,
     ableton_connected: bool,
@@ -460,6 +512,18 @@ fn draw_cue_hud(
         now_size as f32,
         white,
     );
+
+    // ── NOW track list (vertical, centered, under the NOW name) ────
+    if !now_section_tracks.is_empty() {
+        let nl_size: u16 = 18;
+        let line_h = nl_size as f32 + 6.0;
+        let mut ny = now_top + label_size as f32 + 8.0 + now_size as f32 + 12.0;
+        for name in now_section_tracks {
+            let w = ui.measure_text_cached(name, nl_size, FontWeight::Medium).x;
+            ui.draw_text((lw - w) * 0.5, ny, name, nl_size as f32, white);
+            ny += line_h;
+        }
+    }
 
     // ── NEXT ───────────────────────────────────────────────────────
     let label_next = "NEXT";
@@ -567,6 +631,23 @@ fn draw_cue_hud(
         ui.draw_text(x, bb_y, dot, bb_size as f32, dim);
         x += dot_w;
         draw_numeric_text(ui, x, bb_y, &bar_beat.sixteenth, bb_size, white);
+    }
+
+    // ── "NEXT:" mini-list of tracks active in the upcoming section ──
+    //
+    // Single line, dim, centered. Variant (a): includes straddlers, so
+    // any track that has at least one non-muted clip overlapping the
+    // next section's beat range is shown. Hidden when there's no next
+    // cue OR no tracks are active there (the absence is meaningful).
+    if !next_section_tracks.is_empty() {
+        let nl_size: u16 = 18;
+        let line_h = nl_size as f32 + 6.0;
+        let mut ny = bb_y + bb_size as f32 + 18.0;
+        for name in next_section_tracks {
+            let w = ui.measure_text_cached(name, nl_size, FontWeight::Medium).x;
+            ui.draw_text((lw - w) * 0.5, ny, name, nl_size as f32, white);
+            ny += line_h;
+        }
     }
 
     // ── Slim status row above the exit button ───────────────────────
