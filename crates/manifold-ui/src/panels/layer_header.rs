@@ -1368,12 +1368,10 @@ impl LayerHeaderPanel {
             return true;
         }
 
-        // Update all node positions by delta_y
+        // Update all node positions (and their children) by delta_y
         for row in &self.rows {
             row.for_each_id(|id| {
-                let mut bounds = tree.get_bounds(id as u32);
-                bounds.y += delta_y;
-                tree.set_bounds(id as u32, bounds);
+                tree.offset_node_and_children(id as u32, delta_y);
             });
         }
 

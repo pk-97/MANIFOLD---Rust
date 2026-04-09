@@ -224,6 +224,25 @@ impl UITree {
         }
     }
 
+    /// Offset the Y position of node `id` and all its descendants by `dy`.
+    /// Uses the existing first_child / next_sibling linked list — no allocation.
+    /// Nesting depth is bounded by tree depth (max ~2 in practice).
+    pub fn offset_node_and_children(&mut self, id: u32, dy: f32) {
+        let idx = id as usize;
+        if idx >= self.count {
+            return;
+        }
+        self.nodes[idx].bounds.y += dy;
+        self.nodes[idx].flags |= UIFlags::DIRTY;
+        self.has_dirty = true;
+
+        let mut child = self.first_child[idx];
+        while child >= 0 {
+            self.offset_node_and_children(child as u32, dy);
+            child = self.next_sibling[child as usize];
+        }
+    }
+
     // ── Mutation (O(1), marks dirty) ────────────────────────────────
 
     pub fn set_bounds(&mut self, id: u32, bounds: Rect) {
@@ -775,5 +794,47 @@ mod tests {
         tree.truncate_from(5);
         assert_eq!(tree.count(), 1);
         assert!(!tree.has_dirty());
+    }
+
+    #[test]
+    fn offset_node_and_children_shifts_subtree() {
+        let mut tree = UITree::new();
+        let parent = tree.add_panel(-1, 10.0, 20.0, 100.0, 30.0, default_style());
+        let c1 = tree.add_panel(parent as i32, 15.0, 25.0, 10.0, 2.0, default_style());
+        let c2 = tree.add_panel(parent as i32, 15.0, 29.0, 10.0, 2.0, default_style());
+        let c3 = tree.add_panel(parent as i32, 15.0, 33.0, 10.0, 2.0, default_style());
+        tree.clear_dirty();
+
+        tree.offset_node_and_children(parent, 50.0);
+
+        assert!((tree.get_bounds(parent).y - 70.0).abs() < 0.001);
+        assert!((tree.get_bounds(c1).y - 75.0).abs() < 0.001);
+        assert!((tree.get_bounds(c2).y - 79.0).abs() < 0.001);
+        assert!((tree.get_bounds(c3).y - 83.0).abs() < 0.001);
+        assert!(tree.has_dirty());
+    }
+
+    #[test]
+    fn offset_node_and_children_leaf_only() {
+        let mut tree = UITree::new();
+        let leaf = tree.add_panel(-1, 0.0, 10.0, 50.0, 20.0, default_style());
+        tree.clear_dirty();
+
+        tree.offset_node_and_children(leaf, -5.0);
+
+        assert!((tree.get_bounds(leaf).y - 5.0).abs() < 0.001);
+        assert!(tree.has_dirty());
+    }
+
+    #[test]
+    fn offset_node_and_children_does_not_affect_siblings() {
+        let mut tree = UITree::new();
+        let a = tree.add_panel(-1, 0.0, 10.0, 50.0, 20.0, default_style());
+        let b = tree.add_panel(-1, 0.0, 40.0, 50.0, 20.0, default_style());
+
+        tree.offset_node_and_children(a, 100.0);
+
+        assert!((tree.get_bounds(a).y - 110.0).abs() < 0.001);
+        assert!((tree.get_bounds(b).y - 40.0).abs() < 0.001); // unchanged
     }
 }
