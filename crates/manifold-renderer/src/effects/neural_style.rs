@@ -77,14 +77,35 @@ unsafe impl Send for NeuralStyleFX {}
 
 impl NeuralStyleFX {
     pub fn new(device: &GpuDevice) -> Self {
-        let worker = BackgroundWorker::try_new(|| {
-            let session = create_ort_session()?;
-            Some(move |req: StyleRequest| -> StyleResponse { run_inference(&session, req) })
-        });
+        // Probe for the ONNX Runtime dylib BEFORE ever calling into ort.
+        // ort panics with uncatchable C++ exceptions if the dylib is
+        // missing or broken — we must not let that crash the app.
+        let worker = match find_ort_dylib() {
+            Some(dylib_path) => {
+                // SAFETY: called once during single-threaded effect registry init,
+                // before any worker threads that might read env vars.
+                unsafe { std::env::set_var("ORT_DYLIB_PATH", &dylib_path) };
+                log::info!("[NeuralStyleFX] Found ONNX Runtime at: {}", dylib_path);
+
+                BackgroundWorker::try_new(|| {
+                    let session = create_ort_session()?;
+                    Some(move |req: StyleRequest| -> StyleResponse {
+                        run_inference(&session, req)
+                    })
+                })
+            }
+            None => {
+                log::warn!(
+                    "[NeuralStyleFX] libonnxruntime.dylib not found. \
+                     Install via `brew install onnxruntime` or set ORT_DYLIB_PATH."
+                );
+                None
+            }
+        };
         if worker.is_none() {
             log::warn!(
-                "[NeuralStyleFX] ONNX model or runtime not found. \
-                 Run tools/export_adain_onnx.py and ensure libonnxruntime.dylib is available."
+                "[NeuralStyleFX] Neural Style effect disabled — \
+                 ONNX model or runtime not available."
             );
         }
 
@@ -357,6 +378,45 @@ impl StatefulEffect for NeuralStyleFX {
 }
 
 // ── ONNX Runtime integration ──
+
+/// Probe for the ONNX Runtime dylib on disk before touching ort.
+/// Returns the path if found, None if not. This prevents ort from
+/// panicking with an uncatchable C++ exception at init time.
+fn find_ort_dylib() -> Option<String> {
+    // 1. Explicit env var (user override)
+    if let Ok(path) = std::env::var("ORT_DYLIB_PATH")
+        && std::path::Path::new(&path).exists()
+    {
+        return Some(path);
+    }
+
+    // 2. Homebrew (Apple Silicon)
+    let brew = "/opt/homebrew/lib/libonnxruntime.dylib";
+    if std::path::Path::new(brew).exists() {
+        return Some(brew.to_string());
+    }
+
+    // 3. Homebrew (Intel Mac)
+    let brew_intel = "/usr/local/lib/libonnxruntime.dylib";
+    if std::path::Path::new(brew_intel).exists() {
+        return Some(brew_intel.to_string());
+    }
+
+    // 4. App bundle Frameworks
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(parent) = exe.parent()
+    {
+        let bundle = parent
+            .parent()
+            .unwrap_or(parent)
+            .join("Frameworks/libonnxruntime.dylib");
+        if bundle.exists() {
+            return Some(bundle.to_string_lossy().to_string());
+        }
+    }
+
+    None
+}
 
 /// Resolve the path to the ONNX model file.
 fn resolve_model_path() -> Option<std::path::PathBuf> {
