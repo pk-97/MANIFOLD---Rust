@@ -8,3 +8,5 @@ assets/mri-data/
 profiling_sessions/
 __pycache__/
 .venv/
+assets/models/*.onnx
+tools/weights/

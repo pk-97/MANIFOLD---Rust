@@ -28,8 +28,8 @@ import torch.nn.functional as F
 
 # ─── Pretrained weight URLs (from naoto0804/pytorch-AdaIN releases) ───
 
-VGG_URL = "https://github.com/naoto0804/pytorch-AdaIN/raw/master/models/vgg_normalised.pth"
-DECODER_URL = "https://github.com/naoto0804/pytorch-AdaIN/raw/master/models/decoder.pth"
+VGG_URL = "https://github.com/naoto0804/pytorch-AdaIN/releases/download/v0.0.0/vgg_normalised.pth"
+DECODER_URL = "https://github.com/naoto0804/pytorch-AdaIN/releases/download/v0.0.0/decoder.pth"
 
 WEIGHTS_DIR = Path(__file__).parent / "weights"
 ASSETS_DIR = Path(__file__).parent.parent / "assets" / "models"
@@ -201,10 +201,11 @@ def build_model() -> AdaINStyleTransfer:
     encoder = VGGEncoder()
     decoder = Decoder()
 
-    # Load VGG encoder weights (naoto0804 format: Sequential state_dict)
+    # Load VGG encoder weights (naoto0804 format: Sequential state_dict).
+    # The weights file contains the full VGG up to relu5_1 but our encoder
+    # only goes to relu4_1, so use strict=False to ignore extra layers.
     vgg_state = torch.load(vgg_path, map_location="cpu", weights_only=True)
-    # Map naoto0804 sequential keys (e.g., "0.weight") to our layers
-    encoder.layers.load_state_dict(vgg_state)
+    encoder.layers.load_state_dict(vgg_state, strict=False)
 
     # Load decoder weights
     decoder_state = torch.load(decoder_path, map_location="cpu", weights_only=True)
@@ -238,6 +239,7 @@ def export_onnx(model: AdaINStyleTransfer, output_path: Path, size: int = 256):
         },
         opset_version=17,
         do_constant_folding=True,
+        dynamo=False,
     )
     print(f"Exported ONNX model to {output_path}")
     print(f"  File size: {output_path.stat().st_size / 1024 / 1024:.1f} MB")
