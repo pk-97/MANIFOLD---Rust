@@ -43,9 +43,9 @@ struct StyleResponse {
 // ── Per-owner state ──
 
 struct OwnerState {
-    /// Downsampled source at inference resolution for readback.
-    downsample_rt: Option<RenderTarget>,
     readback: ReadbackRequest,
+    readback_w: u32,
+    readback_h: u32,
     /// GPU texture holding the latest inference result.
     result_rt: Option<RenderTarget>,
     /// Shared-memory buffer with inference result, pending blit to result_rt.
@@ -296,11 +296,17 @@ impl NeuralStyleFX {
         };
         let Some(worker) = worker else { return };
 
+        // Get the readback dimensions before submitting.
+        let (rw, rh) = {
+            let s = self.owner_states.get(&owner_key).unwrap();
+            (s.readback_w, s.readback_h)
+        };
+
         worker.submit(StyleRequest {
             owner_key,
             content_pixels: pixels,
-            content_w: inference_size,
-            content_h: inference_size,
+            content_w: rw,
+            content_h: rh,
             style_pixels,
             style_w,
             style_h,
@@ -351,8 +357,9 @@ impl PostProcessEffect for NeuralStyleFX {
         // Ensure owner state exists and update inference size.
         let owner_key = ctx.owner_key;
         self.owner_states.entry(owner_key).or_insert_with(|| OwnerState {
-            downsample_rt: None,
             readback: ReadbackRequest::new(),
+            readback_w: 0,
+            readback_h: 0,
             result_rt: None,
             pending_upload: None,
             has_result: false,
@@ -380,7 +387,9 @@ impl PostProcessEffect for NeuralStyleFX {
             state.has_result = true;
         }
 
-        // Submit readback if not pending and enough time has passed.
+        // Submit readback from source at native resolution.
+        // The CPU-side tensor conversion handles resizing to inference_size.
+        // This avoids the downsample pass complexity and format issues.
         let has_style = self.style_pixels.is_some();
         {
             let state = self.owner_states.get_mut(&owner_key).unwrap();
@@ -388,63 +397,13 @@ impl PostProcessEffect for NeuralStyleFX {
                 && has_style
                 && ctx.frame_count - state.last_readback_frame >= 1
             {
-                // Create or resize downsample target.
-                if state.downsample_rt.is_none()
-                    || state.downsample_rt.as_ref().unwrap().width != inference_size
-                {
-                    state.downsample_rt = Some(RenderTarget::new(
-                        gpu.device,
-                        inference_size,
-                        inference_size,
-                        GpuTextureFormat::Rgba16Float,
-                        &format!("NeuralStyle_Down_{owner_key}"),
-                    ));
-                }
+                state.readback_w = ctx.width;
+                state.readback_h = ctx.height;
+                state
+                    .readback
+                    .submit(gpu, source, ctx.width, ctx.height);
+                state.last_readback_frame = ctx.frame_count;
             }
-        }
-
-        // Downsample + readback (separate scope to release owner borrow for dispatch).
-        let need_downsample = {
-            let state = self.owner_states.get(&owner_key).unwrap();
-            !state.readback.is_pending()
-                && has_style
-                && state.downsample_rt.is_some()
-                && ctx.frame_count - state.last_readback_frame >= 1
-        };
-        if need_downsample {
-            let ds_uniforms = BlendUniforms {
-                strength: 0.0,
-                has_result: 0,
-                _pad: [0.0; 2],
-            };
-            let ds_bytes = unsafe {
-                std::slice::from_raw_parts(
-                    &ds_uniforms as *const BlendUniforms as *const u8,
-                    std::mem::size_of::<BlendUniforms>(),
-                )
-            };
-            // Downsample via blend shader passthrough.
-            // Extract raw texture pointer — safe because we don't mutate owner_states
-            // during the dispatch, only blend_helper is borrowed.
-            let ds_tex_ptr = {
-                let state = self.owner_states.get(&owner_key).unwrap();
-                &state.downsample_rt.as_ref().unwrap().texture
-                    as *const manifold_gpu::GpuTexture
-            };
-            self.blend_helper.dispatch_a_only(
-                gpu,
-                source,
-                unsafe { &*ds_tex_ptr },
-                ds_bytes,
-                "NeuralStyle Downsample",
-                inference_size,
-                inference_size,
-            );
-            // Readback from the downsample target.
-            let state = self.owner_states.get_mut(&owner_key).unwrap();
-            let ds_tex = unsafe { &*ds_tex_ptr };
-            state.readback.submit(gpu, ds_tex, inference_size, inference_size);
-            state.last_readback_frame = ctx.frame_count;
         }
 
         // Blend pass: mix original with stylized result.
@@ -652,6 +611,19 @@ fn create_ort_session(size: u32) -> Option<ort::session::Session> {
 fn run_inference(session: &ort::session::Session, req: StyleRequest) -> StyleResponse {
     let size = req.inference_size as usize;
 
+    // Debug: check readback pixel range
+    if !req.content_pixels.is_empty() {
+        let avg: f32 =
+            req.content_pixels.iter().map(|&b| b as f32).sum::<f32>()
+                / req.content_pixels.len() as f32;
+        log::info!(
+            "[NeuralStyleFX] Content readback: {} bytes, avg={avg:.1}, \
+             first 8={:?}",
+            req.content_pixels.len(),
+            &req.content_pixels[..8.min(req.content_pixels.len())],
+        );
+    }
+
     // Preprocess content: RGBA8 → f32 RGB [0,1], reshape to [1, 3, H, W]
     let content_tensor = rgba8_to_nchw(&req.content_pixels, req.content_w, req.content_h, size);
 
@@ -700,6 +672,21 @@ fn run_inference(session: &ort::session::Session, req: StyleRequest) -> StyleRes
         }
     };
     let output_view = output_tensor.view();
+
+    // Debug: log output stats on first inference
+    {
+        let slice = output_view.as_slice().unwrap_or(&[]);
+        if !slice.is_empty() {
+            let min = slice.iter().cloned().fold(f32::INFINITY, f32::min);
+            let max = slice.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            let mean = slice.iter().sum::<f32>() / slice.len() as f32;
+            log::info!(
+                "[NeuralStyleFX] Inference output: min={min:.3}, max={max:.3}, \
+                 mean={mean:.3}, size={size}x{size}"
+            );
+        }
+    }
+
     let stylized_pixels = nchw_to_rgba8(&output_view, size);
 
     StyleResponse {
