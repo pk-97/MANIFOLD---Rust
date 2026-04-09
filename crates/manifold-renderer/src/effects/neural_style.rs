@@ -46,8 +46,10 @@ struct OwnerState {
     /// Downsampled source at inference resolution for readback.
     downsample_rt: Option<RenderTarget>,
     readback: ReadbackRequest,
-    /// GPU texture holding the latest inference result, uploaded from CPU.
+    /// GPU texture holding the latest inference result.
     result_rt: Option<RenderTarget>,
+    /// Shared-memory buffer with inference result, pending blit to result_rt.
+    pending_upload: Option<manifold_gpu::GpuBuffer>,
     has_result: bool,
     current_inference_size: u32,
     last_readback_frame: i64,
@@ -224,8 +226,22 @@ impl NeuralStyleFX {
                 if let Some(rt) = &state.result_rt {
                     let expected = (rt.width * rt.height * 4) as usize;
                     if response.stylized_pixels.len() == expected {
-                        device.upload_texture(&rt.texture, &response.stylized_pixels);
-                        state.has_result = true;
+                        // Use a shared-memory buffer for safe CPU→GPU upload.
+                        // Direct replace_region on private textures can segfault
+                        // on Apple Silicon when called from a non-GPU thread.
+                        let buf = device.create_buffer_shared(expected as u64);
+                        if let Some(ptr) = buf.mapped_ptr() {
+                            unsafe {
+                                std::ptr::copy_nonoverlapping(
+                                    response.stylized_pixels.as_ptr(),
+                                    ptr,
+                                    expected,
+                                );
+                            }
+                        }
+                        // Store buffer + mark for blit upload on next apply().
+                        state.pending_upload = Some(buf);
+                        state.has_result = false; // Will be set true after blit
                     } else {
                         log::error!(
                             "[NeuralStyleFX] Pixel buffer size mismatch: got {}, expected {} ({}x{})",
@@ -334,37 +350,67 @@ impl PostProcessEffect for NeuralStyleFX {
 
         // Ensure owner state exists and update inference size.
         let owner_key = ctx.owner_key;
-        let state = self.owner_states.entry(owner_key).or_insert_with(|| OwnerState {
+        self.owner_states.entry(owner_key).or_insert_with(|| OwnerState {
             downsample_rt: None,
             readback: ReadbackRequest::new(),
             result_rt: None,
+            pending_upload: None,
             has_result: false,
             current_inference_size: inference_size,
             last_readback_frame: 0,
         });
-        state.current_inference_size = inference_size;
+        // Use index access to avoid holding a mutable borrow across dispatch calls.
+        self.owner_states.get_mut(&owner_key).unwrap().current_inference_size = inference_size;
+
+        // Upload pending inference result via encoder (on GPU timeline).
+        if let Some(state) = self.owner_states.get_mut(&owner_key)
+            && let Some(pixels) = state.pending_upload.take()
+            && let Some(rt) = &state.result_rt
+        {
+            let w = rt.width;
+            let h = rt.height;
+            let expected = (w * h * 4) as usize;
+            if let Some(ptr) = pixels.mapped_ptr() {
+                let data =
+                    unsafe { std::slice::from_raw_parts(ptr as *const u8, expected) };
+                gpu.native_enc
+                    .upload_texture(&rt.texture, w, h, 1, data);
+                state.has_result = true;
+            }
+        }
 
         // Submit readback if not pending and enough time has passed.
         let has_style = self.style_pixels.is_some();
-        if !state.readback.is_pending()
-            && has_style
-            && ctx.frame_count - state.last_readback_frame >= 1
         {
-            // Create or resize downsample target.
-            if state.downsample_rt.is_none()
-                || state.downsample_rt.as_ref().unwrap().width != inference_size
+            let state = self.owner_states.get_mut(&owner_key).unwrap();
+            if !state.readback.is_pending()
+                && has_style
+                && ctx.frame_count - state.last_readback_frame >= 1
             {
-                state.downsample_rt = Some(RenderTarget::new(
-                    gpu.device,
-                    inference_size,
-                    inference_size,
-                    GpuTextureFormat::Rgba16Float,
-                    &format!("NeuralStyle_Down_{owner_key}"),
-                ));
+                // Create or resize downsample target.
+                if state.downsample_rt.is_none()
+                    || state.downsample_rt.as_ref().unwrap().width != inference_size
+                {
+                    state.downsample_rt = Some(RenderTarget::new(
+                        gpu.device,
+                        inference_size,
+                        inference_size,
+                        GpuTextureFormat::Rgba16Float,
+                        &format!("NeuralStyle_Down_{owner_key}"),
+                    ));
+                }
             }
+        }
 
-            // Downsample source to inference resolution via the blend shader
-            // in passthrough mode. The sampler handles bilinear scaling.
+        // Downsample + readback (separate scope to release owner borrow for dispatch).
+        let need_downsample = {
+            let state = self.owner_states.get(&owner_key).unwrap();
+            !state.readback.is_pending()
+                && has_style
+                && state.downsample_rt.is_some()
+                && ctx.frame_count - state.last_readback_frame >= 1
+        };
+        if need_downsample {
             let ds_uniforms = BlendUniforms {
                 strength: 0.0,
                 has_result: 0,
@@ -376,29 +422,41 @@ impl PostProcessEffect for NeuralStyleFX {
                     std::mem::size_of::<BlendUniforms>(),
                 )
             };
-            let ds_tex = &state.downsample_rt.as_ref().unwrap().texture
-                as *const manifold_gpu::GpuTexture;
-            let ds_ref = unsafe { &*ds_tex };
+            // Downsample via blend shader passthrough.
+            // Extract raw texture pointer — safe because we don't mutate owner_states
+            // during the dispatch, only blend_helper is borrowed.
+            let ds_tex_ptr = {
+                let state = self.owner_states.get(&owner_key).unwrap();
+                &state.downsample_rt.as_ref().unwrap().texture
+                    as *const manifold_gpu::GpuTexture
+            };
             self.blend_helper.dispatch_a_only(
                 gpu,
                 source,
-                ds_ref,
+                unsafe { &*ds_tex_ptr },
                 ds_bytes,
                 "NeuralStyle Downsample",
                 inference_size,
                 inference_size,
             );
-
-            // Readback from the downsample target (correct size, not the source).
-            let ds_tex_ref = unsafe { &*ds_tex };
-            state
-                .readback
-                .submit(gpu, ds_tex_ref, inference_size, inference_size);
+            // Readback from the downsample target.
+            let state = self.owner_states.get_mut(&owner_key).unwrap();
+            let ds_tex = unsafe { &*ds_tex_ptr };
+            state.readback.submit(gpu, ds_tex, inference_size, inference_size);
             state.last_readback_frame = ctx.frame_count;
         }
 
         // Blend pass: mix original with stylized result.
-        let has_result = state.has_result;
+        // Extract state needed for dispatch before borrowing blend_helper.
+        let (has_result, result_tex_ptr) = {
+            let state = self.owner_states.get(&owner_key).unwrap();
+            let ptr = state
+                .result_rt
+                .as_ref()
+                .map(|rt| &rt.texture as *const manifold_gpu::GpuTexture);
+            (state.has_result, ptr)
+        };
+
         let uniforms = BlendUniforms {
             strength,
             has_result: u32::from(has_result),
@@ -412,36 +470,29 @@ impl PostProcessEffect for NeuralStyleFX {
         };
 
         if has_result
-            && let Some(rt) = &state.result_rt
+            && let Some(tex_ptr) = result_tex_ptr
         {
-            // Extract texture ref before dropping state borrow.
-            let tex = &rt.texture as *const manifold_gpu::GpuTexture;
-            // SAFETY: rt.texture lives in self.owner_states which we won't
-            // mutate during the dispatch call.
-            let tex_ref = unsafe { &*tex };
             self.blend_helper.dispatch(
                 gpu,
                 source,
-                tex_ref,
+                unsafe { &*tex_ptr },
                 target,
                 uniform_bytes,
                 "NeuralStyle Blend",
                 ctx.width,
                 ctx.height,
             );
-            return;
+        } else {
+            self.blend_helper.dispatch_a_only(
+                gpu,
+                source,
+                target,
+                uniform_bytes,
+                "NeuralStyle Passthrough",
+                ctx.width,
+                ctx.height,
+            );
         }
-
-        // No result yet — pass through source via a_only dispatch.
-        self.blend_helper.dispatch_a_only(
-            gpu,
-            source,
-            target,
-            uniform_bytes,
-            "NeuralStyle Passthrough",
-            ctx.width,
-            ctx.height,
-        );
     }
 
     fn clear_state(&mut self) {
