@@ -44,6 +44,7 @@ pub(super) fn dispatch_inspector(
     target_snapshot: &mut Option<f32>,
     range_snapshot: &mut Option<(f32, f32)>,
     active_inspector_drag: &mut Option<crate::app::ActiveInspectorDrag>,
+    user_prefs: &mut crate::user_prefs::UserPrefs,
 ) -> DispatchResult {
     use crate::content_command::ContentCommand;
     match action {
@@ -580,6 +581,62 @@ pub(super) fn dispatch_inspector(
             let inspector = &mut ui.inspector;
             inspector.apply_selection_visuals(tree);
             DispatchResult::handled()
+        }
+        PanelAction::EffectSelectStyleImage(fx_idx) => {
+            let tab = ui.inspector.last_effect_tab();
+            let last_dir = crate::dialog_path_memory::get_last_directory(
+                crate::dialog_path_memory::DialogContext::StyleImageImport,
+                user_prefs,
+            );
+            let mut dialog = rfd::FileDialog::new()
+                .set_title("Select Style Image")
+                .add_filter("Images", &["png", "jpg", "jpeg"]);
+            if !last_dir.is_empty() {
+                dialog = dialog.set_directory(&last_dir);
+            }
+            if let Some(path) = dialog.pick_file() {
+                let path_str = path.to_string_lossy().to_string();
+                crate::dialog_path_memory::remember_directory(
+                    crate::dialog_path_memory::DialogContext::StyleImageImport,
+                    &path_str,
+                    user_prefs,
+                );
+                // Update on UI project copy
+                let fi = *fx_idx;
+                {
+                    let (effects_mut, _) =
+                        resolve_effects_mut(tab, project, active_layer, selection);
+                    if let Some(effects) = effects_mut
+                        && let Some(fx) = effects.get_mut(fi)
+                    {
+                        fx.style_image_path = Some(path_str.clone());
+                    }
+                }
+                // Mirror to content thread
+                let layer_id = active_layer.clone().unwrap_or_default();
+                let clip_id = selection.primary_selected_clip_id.clone();
+                ContentCommand::send(
+                    content_tx,
+                    ContentCommand::MutateProject(Box::new(move |p| {
+                        let effects: Option<&mut Vec<EffectInstance>> = match tab {
+                            InspectorTab::Master => Some(&mut p.settings.master_effects),
+                            InspectorTab::Layer => p
+                                .timeline
+                                .find_layer_by_id_mut(&layer_id)
+                                .map(|(_, l)| l.effects_mut()),
+                            InspectorTab::Clip => clip_id.as_ref().and_then(|cid| {
+                                p.timeline.find_clip_by_id_mut(cid).map(|c| &mut c.effects)
+                            }),
+                        };
+                        if let Some(effects) = effects
+                            && let Some(fx) = effects.get_mut(fi)
+                        {
+                            fx.style_image_path = Some(path_str);
+                        }
+                    })),
+                );
+            }
+            DispatchResult::structural()
         }
         PanelAction::EffectParamRightClick(fx_idx, param_idx, default_val) => {
             let tab = ui.inspector.last_effect_tab();

@@ -699,6 +699,20 @@ fn build_definitions() -> HashMap<EffectTypeId, EffectDef> {
         },
     );
 
+    // NeuralStyle — real-time AdaIN neural style transfer
+    m.insert(
+        EffectTypeId::NEURAL_STYLE,
+        EffectDef {
+            display_name: "Neural Style",
+            param_count: 2,
+            param_defs: vec![
+                pd("Strength", 0.0, 1.0, 0.5),
+                pd_whole_labels("Resolution", 0.0, 1.0, 0.0, &["256", "512"], "resolution"),
+            ],
+            osc_prefix: Some("neuralStyle"),
+        },
+    );
+
     // Corruption
     m.insert(
         EffectTypeId::CORRUPTION,

@@ -72,6 +72,7 @@ impl EffectTypeId {
     pub const DEPTH_OF_FIELD: Self = Self(Cow::Borrowed("DepthOfField"));
     pub const HDR_BOOST: Self = Self(Cow::Borrowed("HdrBoost"));
     pub const AUTO_GAIN: Self = Self(Cow::Borrowed("AutoGain"));
+    pub const NEURAL_STYLE: Self = Self(Cow::Borrowed("NeuralStyle"));
 
     /// Placeholder for unrecognized/removed effect types.
     /// Renderers skip this — it never applies any GPU work.
@@ -118,6 +119,7 @@ impl EffectTypeId {
             39 => Self::REDACTION,
             40 => Self::DEPTH_OF_FIELD,
             41 => Self::AUTO_GAIN,
+            42 => Self::NEURAL_STYLE,
             _ => Self::UNKNOWN,
         }
     }

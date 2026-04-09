@@ -98,6 +98,9 @@ pub struct EffectCardConfig {
     pub driver_dotted: Vec<bool>,
     /// Per-param driver triplet modifier active.
     pub driver_triplet: Vec<bool>,
+    /// Style image filename label (only for NeuralStyle effects).
+    /// When `Some`, renders a "Select Image" button below the param sliders.
+    pub style_image_label: Option<String>,
 }
 
 /// Per-parameter expansion and modulation state.
@@ -179,6 +182,10 @@ pub struct EffectCardPanel {
     ableton_trim_ids: Vec<Option<TrimHandleIds>>,
     ableton_config_ids: Vec<Option<AbletonConfigIds>>,
 
+    // Style image button (NeuralStyle only)
+    style_btn_id: i32,
+    style_image_label: Option<String>,
+
     // Per-param OSC addresses (for click-to-copy). Indexed by param index.
     osc_addresses: Vec<Option<String>>,
 
@@ -240,6 +247,8 @@ impl EffectCardPanel {
             envelope_range_ids: Vec::new(),
             ableton_trim_ids: Vec::new(),
             ableton_config_ids: Vec::new(),
+            style_btn_id: -1,
+            style_image_label: None,
             osc_addresses: Vec::new(),
             copied_flash: CopyToClipboardLabelState::default(),
             drag: ParamDragState::new(),
@@ -296,6 +305,8 @@ impl EffectCardPanel {
             .iter()
             .map(|p| p.osc_address.clone())
             .collect();
+        self.style_image_label = config.style_image_label.clone();
+        self.style_btn_id = -1;
         self.copied_flash.clear();
         self.slider_ids = vec![None; n];
         self.driver_btn_ids = vec![-1; n];
@@ -383,7 +394,18 @@ impl EffectCardPanel {
     }
 
     pub fn compute_height(&self) -> f32 {
-        let mut h = BORDER_W * 2.0 + HEADER_HEIGHT;
+        let mut h = self.content_height_without_style_btn();
+        // Style image button row (NeuralStyle only).
+        if !self.is_collapsed && self.style_image_label.is_some() {
+            h += ROW_HEIGHT + ROW_SPACING;
+        }
+        h + BORDER_W * 2.0 + CARD_BOTTOM_MARGIN
+    }
+
+    /// Height of content area (header + sliders) without the style button row.
+    /// Used for positioning the style button.
+    fn content_height_without_style_btn(&self) -> f32 {
+        let mut h = HEADER_HEIGHT;
         if !self.is_collapsed && !self.param_info.is_empty() {
             for i in 0..self.param_info.len() {
                 h += ROW_HEIGHT + ROW_SPACING;
@@ -412,7 +434,7 @@ impl EffectCardPanel {
                 }
             }
         }
-        h + CARD_BOTTOM_MARGIN
+        h
     }
 
     pub fn drag_handle_id(&self) -> i32 {
@@ -512,6 +534,25 @@ impl EffectCardPanel {
         // Param sliders
         if !self.is_collapsed && !self.param_info.is_empty() {
             self.build_sliders(tree, parent, inner.x, inner.y + HEADER_HEIGHT, inner_w);
+        }
+
+        // Style image button (NeuralStyle effect only)
+        if !self.is_collapsed
+            && let Some(label) = &self.style_image_label
+        {
+            let btn_y = inner.y + self.content_height_without_style_btn();
+            let btn_x = inner.x + PADDING;
+            let btn_w = inner_w - PADDING * 2.0;
+            let btn_h = ROW_HEIGHT;
+            self.style_btn_id = tree.add_button(
+                parent,
+                btn_x,
+                btn_y,
+                btn_w,
+                btn_h,
+                config_btn_style(false, color::FONT_CAPTION),
+                label,
+            ) as i32;
         }
 
         self.node_count = tree.count() - self.first_node;
@@ -1127,6 +1168,11 @@ impl EffectCardPanel {
                 self.copied_flash.trigger(ids.label as u32);
                 return vec![PanelAction::CopyOscAddress(addr)];
             }
+        }
+
+        // Style image button
+        if self.style_btn_id >= 0 && id == self.style_btn_id {
+            return vec![PanelAction::EffectSelectStyleImage(ei)];
         }
 
         // Card selection — any click on card background, border, or header triggers selection
@@ -1803,6 +1849,7 @@ mod tests {
             driver_reversed: vec![false; n],
             driver_dotted: vec![false; n],
             driver_triplet: vec![false; n],
+            style_image_label: None,
         }
     }
 

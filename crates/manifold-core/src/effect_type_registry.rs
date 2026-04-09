@@ -71,6 +71,7 @@ fn build_registry() -> Vec<EffectTypeRegistration> {
         reg(E::DEPTH_OF_FIELD, "Depth of Field", FILMIC, true),
         reg(E::HDR_BOOST, "HDR Boost", FILMIC, true),
         reg(E::AUTO_GAIN, "Auto Gain", POST_PROCESS, true),
+        reg(E::NEURAL_STYLE, "Neural Style", POST_PROCESS, true),
         // Surveillance
         reg(E::CORRUPTION, "Corruption", SURVEILLANCE, false),
         reg(E::INFRARED, "Infrared", SURVEILLANCE, true),
