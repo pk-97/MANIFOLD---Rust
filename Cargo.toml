@@ -34,9 +34,6 @@ kira = "0.9"
 symphonia = { version = "0.5", features = ["all"] }
 ahash = "0.8"
 parking_lot = "0.12"
-ort = { git = "https://github.com/pykeio/ort.git", tag = "v2.0.0-rc.9", default-features = false, features = ["load-dynamic", "ndarray"] }
-ndarray = "0.16"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 # Optimise audio decoding even in debug builds — pure-Rust symphonia is 10-50x
 # slower without optimisation, and kira uses it internally for decoding.
@@ -53,12 +50,6 @@ opt-level = 2
 [profile.dev.package.symphonia-format-ogg]
 opt-level = 2
 [profile.dev.package.symphonia-codec-aac]
-opt-level = 2
-
-# Optimise ONNX Runtime and image processing even in debug builds.
-[profile.dev.package.ort]
-opt-level = 2
-[profile.dev.package.ndarray]
 opt-level = 2
 
 # Release profile — optimise for runtime performance and binary size.

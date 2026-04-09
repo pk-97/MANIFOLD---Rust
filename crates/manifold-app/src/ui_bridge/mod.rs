@@ -200,7 +200,6 @@ pub fn dispatch(
         | PanelAction::AddEffectClicked(_)
         | PanelAction::BrowserSearchClicked
         | PanelAction::RemoveEffect(_)
-        | PanelAction::EffectSelectStyleImage(..)
         | PanelAction::EffectReorder(..)
         | PanelAction::EffectReorderGroup(..)
         | PanelAction::GenTypeClicked(_)
@@ -281,7 +280,6 @@ pub fn dispatch(
             target_snapshot,
             range_snapshot,
             active_inspector_drag,
-            user_prefs,
         ),
 
         // ── Layer operations ──────────────────────────────────────

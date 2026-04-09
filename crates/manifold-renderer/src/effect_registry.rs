@@ -15,7 +15,6 @@ use crate::effects::infrared::InfraredFX;
 use crate::effects::invert_colors::InvertColorsFX;
 use crate::effects::kaleidoscope::KaleidoscopeFX;
 use crate::effects::mirror::MirrorFX;
-use crate::effects::neural_style::NeuralStyleFX;
 use crate::effects::quad_mirror::QuadMirrorFX;
 use crate::effects::strobe::StrobeFX;
 use crate::effects::stylized_feedback::StylizedFeedbackFX;
@@ -93,10 +92,6 @@ impl EffectRegistry {
         );
         processors.insert(EffectTypeId::HDR_BOOST, Box::new(HdrBoostFX::new(device)));
         processors.insert(EffectTypeId::AUTO_GAIN, Box::new(AutoGainFX::new(device)));
-        processors.insert(
-            EffectTypeId::NEURAL_STYLE,
-            Box::new(NeuralStyleFX::new(device)),
-        );
         Self { processors }
     }
 

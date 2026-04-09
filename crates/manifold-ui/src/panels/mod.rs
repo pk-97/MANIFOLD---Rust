@@ -186,8 +186,6 @@ pub enum PanelAction {
     EffectEnvRangeSnapshot(usize, usize),
     /// Commit envelope range drag (record undo command).
     EffectEnvRangeCommit(usize, usize),
-    /// Neural Style: user clicked "Select Image" button on an effect card.
-    EffectSelectStyleImage(usize), // effect_index
     /// Reorder effect card: move from_index to to_index.
     /// Unity: EffectsListBitmapPanel.onCardReorder.
     EffectReorder(usize, usize),

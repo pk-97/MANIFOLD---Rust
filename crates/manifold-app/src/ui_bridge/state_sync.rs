@@ -1272,22 +1272,6 @@ fn effects_to_configs(
                 driver_reversed,
                 driver_dotted,
                 driver_triplet,
-                style_image_label: if *fx.effect_type()
-                    == manifold_core::EffectTypeId::NEURAL_STYLE
-                {
-                    Some(
-                        fx.style_image_path
-                            .as_ref()
-                            .and_then(|p| {
-                                std::path::Path::new(p)
-                                    .file_name()
-                                    .map(|f| f.to_string_lossy().to_string())
-                            })
-                            .unwrap_or_else(|| "Select Image...".into()),
-                    )
-                } else {
-                    None
-                },
             })
         })
         .collect()

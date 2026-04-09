@@ -104,9 +104,6 @@ pub struct EffectInstance {
     pub ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_id: Option<EffectGroupId>,
-    /// File path to a style reference image (used by NeuralStyle effect).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub style_image_path: Option<String>,
 
     // Legacy flat param fields (V1.0.0 format)
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "param0")]
@@ -133,7 +130,6 @@ impl EffectInstance {
             drivers: None,
             ableton_mappings: None,
             group_id: None,
-            style_image_path: None,
             legacy_param0: None,
             legacy_param1: None,
             legacy_param2: None,

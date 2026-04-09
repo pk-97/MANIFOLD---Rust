@@ -20,7 +20,6 @@ pub enum DialogContext {
     ExportResolveXML,
     MidiImport,
     PercussionImport,
-    StyleImageImport,
 }
 
 // ── Constants — same as Unity DialogPathMemory.cs ────────────────────

@@ -1540,8 +1540,6 @@ dependencies = [
  "num-traits",
  "png",
  "tiff 0.11.3",
- "zune-core",
- "zune-jpeg",
 ]
 
 [[package]]
@@ -1977,7 +1975,6 @@ dependencies = [
  "core-graphics",
  "core-text",
  "half",
- "image",
  "log",
  "manifold-core",
  "manifold-gpu",
@@ -1986,9 +1983,7 @@ dependencies = [
  "manifold-ui",
  "metal",
  "naga",
- "ndarray",
  "objc",
- "ort",
  "serde_json",
  "tiff 0.9.1",
 ]
@@ -1999,16 +1994,6 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.11.0",
  "manifold-core",
-]
-
-[[package]]
-name = "matrixmultiply"
-version = "0.3.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a06de3016e9fae57a36fd14dba131fccf49f74b40b7fbdb472f96e361ec71a08"
-dependencies = [
- "autocfg",
- "rawpointer",
 ]
 
 [[package]]
@@ -2134,21 +2119,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ndarray"
-version = "0.16.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "882ed72dce9365842bf196bdeedf5055305f11fc8c03dee7bb0194a6cad34841"
-dependencies = [
- "matrixmultiply",
- "num-complex",
- "num-integer",
- "num-traits",
- "portable-atomic",
- "portable-atomic-util",
- "rawpointer",
-]
-
-[[package]]
 name = "ndk"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2223,15 +2193,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "num-complex"
-version = "0.4.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73f88a1307638156682bada9d7604135552957b7818057dcef22705b4d509495"
-dependencies = [
- "num-traits",
-]
-
-[[package]]
 name = "num-conv"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2246,15 +2207,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "num-integer"
-version = "0.1.46"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7969661fd2958a5cb096e56c8e1ad0444ac2bbcd0061bd28660485a44879858f"
-dependencies = [
- "num-traits",
 ]
 
 [[package]]
@@ -2625,25 +2577,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ort"
-version = "2.0.0-rc.9"
-source = "git+https://github.com/pykeio/ort.git?tag=v2.0.0-rc.9#123c449e9a4a3249d92ac16262b08ab11eda5668"
-dependencies = [
- "libloading",
- "ndarray",
- "ort-sys",
- "tracing",
-]
-
-[[package]]
-name = "ort-sys"
-version = "2.0.0-rc.9"
-source = "git+https://github.com/pykeio/ort.git?tag=v2.0.0-rc.9#123c449e9a4a3249d92ac16262b08ab11eda5668"
-dependencies = [
- "pkg-config",
-]
-
-[[package]]
 name = "owned_ttf_parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2934,12 +2867,6 @@ name = "raw-window-handle"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
-
-[[package]]
-name = "rawpointer"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60a357793950651c4ed0f3f52338f53b2f809f32d83a07f72909fa13e4c6c1e3"
 
 [[package]]
 name = "redox_syscall"
