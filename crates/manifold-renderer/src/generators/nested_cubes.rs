@@ -3,7 +3,7 @@
 //! Replicates the TouchDesigner "Primitive SOP + instancing + Filter CHOP" pattern:
 //! - 6 unwelded quads scaled 0.5 from face centers (gap-face cube)
 //! - 5 instances with ramp scaling (1.0 → 2.0) and lagged Y-axis rotation
-//! - Two-pass rendering: solid black occluders + white wireframe edges
+//! - Two-pass rendering: solid black occluders + white quad-edge lines
 //! - Isometric orthographic camera
 
 use crate::generator::Generator;
@@ -15,7 +15,10 @@ use manifold_core::GeneratorTypeId;
 const SHADER: &str = include_str!("shaders/nested_cubes.wgsl");
 
 const INSTANCE_COUNT: u32 = 5;
-const CUBE_VERTEX_COUNT: u32 = 36;
+/// 6 faces × 2 triangles × 3 vertices
+const TRI_VERTEX_COUNT: u32 = 36;
+/// 6 faces × 4 edges × 2 endpoints
+const EDGE_VERTEX_COUNT: u32 = 48;
 
 /// Instance sizes: linear ramp from 1.0 to 2.0.
 const INSTANCE_SIZES: [f32; 5] = [1.0, 1.25, 1.5, 1.75, 2.0];
@@ -31,7 +34,10 @@ struct NestedCubesUniforms {
 }
 
 pub struct NestedCubesGenerator {
-    pipeline: manifold_gpu::GpuRenderPipeline,
+    /// Pass 1: triangle fill (vs_main + fs_main)
+    fill_pipeline: manifold_gpu::GpuRenderPipeline,
+    /// Pass 2: line edges (vs_edges + fs_main)
+    edge_pipeline: manifold_gpu::GpuRenderPipeline,
     depth_stencil_write: manifold_gpu::GpuDepthStencilState,
     depth_stencil_read: manifold_gpu::GpuDepthStencilState,
     depth_texture: Option<manifold_gpu::GpuTexture>,
@@ -43,7 +49,7 @@ pub struct NestedCubesGenerator {
 
 impl NestedCubesGenerator {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
-        let pipeline = device.create_render_pipeline_depth(
+        let fill_pipeline = device.create_render_pipeline_depth(
             SHADER,
             "vs_main",
             "fs_main",
@@ -51,7 +57,18 @@ impl NestedCubesGenerator {
             manifold_gpu::GpuTextureFormat::Depth32Float,
             None,
             1,
-            "Nested Cubes",
+            "Nested Cubes Fill",
+        );
+
+        let edge_pipeline = device.create_render_pipeline_depth(
+            SHADER,
+            "vs_edges",
+            "fs_main",
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            manifold_gpu::GpuTextureFormat::Depth32Float,
+            None,
+            1,
+            "Nested Cubes Edges",
         );
 
         let depth_stencil_write =
@@ -67,7 +84,8 @@ impl NestedCubesGenerator {
             });
 
         Self {
-            pipeline,
+            fill_pipeline,
+            edge_pipeline,
             depth_stencil_write,
             depth_stencil_read,
             depth_texture: None,
@@ -139,8 +157,7 @@ impl Generator for NestedCubesGenerator {
         // EMA: current = mix(current, target, 1 - exp(-dt * filter_width))
         let alpha = 1.0 - (-dt * filter_width).exp();
         for i in 0..5 {
-            let target_angle =
-                (i as f32 / 4.0) * 360.0 + time * 36.0 * speed;
+            let target_angle = (i as f32 / 4.0) * 360.0 + time * 36.0 * speed;
             self.current_angles[i] += alpha * (target_angle - self.current_angles[i]);
         }
 
@@ -174,9 +191,9 @@ impl Generator for NestedCubesGenerator {
         self.ensure_depth_texture(gpu.device, ctx.width, ctx.height);
         let depth_tex = self.depth_texture.as_ref().unwrap();
 
-        // Pass 1: Solid black occluders (fill, depth write, depth bias)
+        // Pass 1: Solid black occluders (triangles, depth write, depth bias)
         gpu.native_enc.draw_instanced_depth_ex(
-            &self.pipeline,
+            &self.fill_pipeline,
             target,
             depth_tex,
             &self.depth_stencil_write,
@@ -184,35 +201,37 @@ impl Generator for NestedCubesGenerator {
                 binding: 0,
                 data: bytemuck::bytes_of(&uniforms),
             }],
-            CUBE_VERTEX_COUNT,
+            TRI_VERTEX_COUNT,
             INSTANCE_COUNT,
             manifold_gpu::GpuLoadAction::Clear,
             manifold_gpu::GpuTriangleFillMode::Fill,
+            manifold_gpu::GpuPrimitiveType::Triangle,
             Some((1.0, 1.0, 0.0)),
             "Nested Cubes Fill",
         );
 
-        // Pass 2: White wireframe edges (lines, depth read only, no bias)
-        let wireframe_uniforms = NestedCubesUniforms {
+        // Pass 2: White quad-edge lines (line primitives, depth read only, no bias)
+        let edge_uniforms = NestedCubesUniforms {
             extra: [sizes[4], self.current_angles[4], 1.0, 0.0],
             ..uniforms
         };
 
         gpu.native_enc.draw_instanced_depth_ex(
-            &self.pipeline,
+            &self.edge_pipeline,
             target,
             depth_tex,
             &self.depth_stencil_read,
             &[manifold_gpu::GpuBinding::Bytes {
                 binding: 0,
-                data: bytemuck::bytes_of(&wireframe_uniforms),
+                data: bytemuck::bytes_of(&edge_uniforms),
             }],
-            CUBE_VERTEX_COUNT,
+            EDGE_VERTEX_COUNT,
             INSTANCE_COUNT,
             manifold_gpu::GpuLoadAction::Load,
-            manifold_gpu::GpuTriangleFillMode::Lines,
+            manifold_gpu::GpuTriangleFillMode::Fill,
+            manifold_gpu::GpuPrimitiveType::Line,
             None,
-            "Nested Cubes Wireframe",
+            "Nested Cubes Edges",
         );
 
         ctx.anim_progress

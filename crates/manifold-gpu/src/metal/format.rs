@@ -92,6 +92,13 @@ pub(crate) fn to_mtl_triangle_fill_mode(mode: GpuTriangleFillMode) -> metal::MTL
     }
 }
 
+pub(crate) fn to_mtl_primitive_type(prim: GpuPrimitiveType) -> metal::MTLPrimitiveType {
+    match prim {
+        GpuPrimitiveType::Triangle => metal::MTLPrimitiveType::Triangle,
+        GpuPrimitiveType::Line => metal::MTLPrimitiveType::Line,
+    }
+}
+
 pub(crate) fn to_mtl_compare_function(func: GpuCompareFunction) -> metal::MTLCompareFunction {
     match func {
         GpuCompareFunction::Never => metal::MTLCompareFunction::Never,

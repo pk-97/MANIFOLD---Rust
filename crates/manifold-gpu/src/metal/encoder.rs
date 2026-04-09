@@ -813,6 +813,7 @@ impl GpuEncoder {
         instance_count: u32,
         load_action: crate::GpuLoadAction,
         fill_mode: crate::GpuTriangleFillMode,
+        primitive_type: crate::GpuPrimitiveType,
         depth_bias: Option<(f32, f32, f32)>,
         label: &str,
     ) {
@@ -915,7 +916,7 @@ impl GpuEncoder {
 
         if instance_count > 0 {
             enc.draw_primitives_instanced(
-                metal::MTLPrimitiveType::Triangle,
+                format::to_mtl_primitive_type(primitive_type),
                 0,
                 vertex_count as u64,
                 instance_count as u64,

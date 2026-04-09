@@ -241,6 +241,13 @@ pub enum GpuTriangleFillMode {
     Lines,
 }
 
+/// Primitive type for draw calls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GpuPrimitiveType {
+    Triangle,
+    Line,
+}
+
 // ─── Vertex Layout ───────────────────────────────────────────────────
 
 /// Vertex attribute format.
