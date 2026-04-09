@@ -17,7 +17,16 @@ pub struct GeneratorTypeRegistration {
 
 // ── Registry ────────────────────────────────────────────────────────────
 
-static REGISTRY: LazyLock<Vec<GeneratorTypeRegistration>> = LazyLock::new(build_registry);
+static REGISTRY: LazyLock<Vec<GeneratorTypeRegistration>> = LazyLock::new(|| {
+    let mut v = build_registry();
+    for meta in inventory::iter::<crate::generator_registration::GeneratorMetadata> {
+        // Skip if already registered by legacy path
+        if !v.iter().any(|r| r.id == meta.id) {
+            v.push(meta.to_type_registration());
+        }
+    }
+    v
+});
 
 fn build_registry() -> Vec<GeneratorTypeRegistration> {
     use GeneratorTypeId as G;
@@ -40,7 +49,6 @@ fn build_registry() -> Vec<GeneratorTypeRegistration> {
         reg(G::METALLIC_GLASS, "Metallic Glass", true),
         reg(G::COMPUTE_STRANGE_ATTRACTOR, "Strange Attractor", true),
         reg(G::OILY_FLUID, "Oily Fluid", true),
-        reg(G::NESTED_CUBES, "Nested Cubes", true),
     ]
 }
 

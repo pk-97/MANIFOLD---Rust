@@ -9,8 +9,35 @@
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use crate::generators::mesh_pipeline::{look_at_rh, mat4_mul};
+use crate::generators::registration::GeneratorFactory;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::GeneratorTypeId;
+use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
+
+inventory::submit! {
+    GeneratorMetadata {
+        id: GeneratorTypeId::NESTED_CUBES,
+        display_name: "Nested Cubes",
+        is_line_based: false,
+        available: true,
+        osc_prefix: "nestedCubes",
+        legacy_discriminant: Some(25),
+        params: &[
+            ParamSpec::continuous("Speed", 0.1, 5.0, 1.0, "F1", "speed"),
+            ParamSpec::continuous("Filter", 0.1, 10.0, 2.0, "F1", "filter"),
+            ParamSpec::continuous("Scale", 0.25, 3.0, 1.0, "F2", "scale"),
+            ParamSpec::continuous("Scatter", 0.0, 1.0, 0.0, "F2", "scatter"),
+        ],
+        string_params: &[],
+    }
+}
+
+inventory::submit! {
+    GeneratorFactory {
+        id: GeneratorTypeId::NESTED_CUBES,
+        create: |device| Box::new(NestedCubesGenerator::new(device)),
+    }
+}
 
 const SHADER: &str = include_str!("shaders/nested_cubes.wgsl");
 

@@ -92,6 +92,14 @@ impl EffectRegistry {
         );
         processors.insert(EffectTypeId::HDR_BOOST, Box::new(HdrBoostFX::new(device)));
         processors.insert(EffectTypeId::AUTO_GAIN, Box::new(AutoGainFX::new(device)));
+
+        // Collect inventory-registered effects
+        for factory in inventory::iter::<crate::effects::registration::EffectFactory> {
+            if !processors.contains_key(&factory.id) {
+                processors.insert(factory.id.clone(), (factory.create)(device));
+            }
+        }
+
         Self { processors }
     }
 

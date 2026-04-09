@@ -17,7 +17,13 @@ pub struct EffectDef {
 
 // ─── Static Registry ───
 
-static DEFINITIONS: LazyLock<HashMap<EffectTypeId, EffectDef>> = LazyLock::new(build_definitions);
+static DEFINITIONS: LazyLock<HashMap<EffectTypeId, EffectDef>> = LazyLock::new(|| {
+    let mut m = build_definitions();
+    for meta in inventory::iter::<crate::effect_registration::EffectMetadata> {
+        m.insert(meta.id.clone(), meta.to_effect_def());
+    }
+    m
+});
 
 // ─── ParamDef Helpers ───
 

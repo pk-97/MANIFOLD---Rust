@@ -27,7 +27,15 @@ pub const ALL_CATEGORIES: &[&str] = &[SPATIAL, POST_PROCESS, FILMIC, SURVEILLANC
 
 // ── Registry ────────────────────────────────────────────────────────────
 
-static REGISTRY: LazyLock<Vec<EffectTypeRegistration>> = LazyLock::new(build_registry);
+static REGISTRY: LazyLock<Vec<EffectTypeRegistration>> = LazyLock::new(|| {
+    let mut v = build_registry();
+    for meta in inventory::iter::<crate::effect_registration::EffectMetadata> {
+        if !v.iter().any(|r| r.id == meta.id) {
+            v.push(meta.to_type_registration());
+        }
+    }
+    v
+});
 
 fn build_registry() -> Vec<EffectTypeRegistration> {
     use EffectTypeId as E;

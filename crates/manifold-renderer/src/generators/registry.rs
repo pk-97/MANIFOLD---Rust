@@ -9,7 +9,6 @@ use super::metallic_glass::MetallicGlassGenerator;
 use super::lissajous::LissajousGenerator;
 use super::mri_volume::MriVolumeGenerator;
 use super::mycelium::MyceliumGenerator;
-use super::nested_cubes::NestedCubesGenerator;
 use super::oily_fluid::OilyFluidGenerator;
 use super::oscilloscope_xy::OscilloscopeXYGenerator;
 use super::parametric_surface::ParametricSurfaceGenerator;
@@ -55,10 +54,21 @@ impl GeneratorRegistry {
             GeneratorTypeId::METALLIC_GLASS,
             GeneratorTypeId::COMPUTE_STRANGE_ATTRACTOR,
             GeneratorTypeId::OILY_FLUID,
-            GeneratorTypeId::NESTED_CUBES,
         ];
-        log::info!("Pre-warming {} generator pipelines...", all_types.len());
+        // Also include inventory-registered generators
+        let mut extra_types: Vec<GeneratorTypeId> = Vec::new();
+        for factory in inventory::iter::<super::registration::GeneratorFactory> {
+            if !all_types.contains(&factory.id) {
+                extra_types.push(factory.id.clone());
+            }
+        }
+
+        let total = all_types.len() + extra_types.len();
+        log::info!("Pre-warming {} generator pipelines...", total);
         for gen_type in &all_types {
+            let _ = self.create(device, gen_type);
+        }
+        for gen_type in &extra_types {
             let _ = self.create(device, gen_type);
         }
         log::info!("Generator pipeline pre-warm complete");
@@ -107,9 +117,13 @@ impl GeneratorRegistry {
             Some(Box::new(StrangeAttractorGenerator::new(device)))
         } else if *gen_type == GeneratorTypeId::OILY_FLUID {
             Some(Box::new(OilyFluidGenerator::new(device)))
-        } else if *gen_type == GeneratorTypeId::NESTED_CUBES {
-            Some(Box::new(NestedCubesGenerator::new(device)))
         } else {
+            // Check inventory-registered generators
+            for factory in inventory::iter::<super::registration::GeneratorFactory> {
+                if factory.id == *gen_type {
+                    return Some((factory.create)(device));
+                }
+            }
             log::warn!("Generator type {:?} not yet implemented", gen_type);
             None
         }

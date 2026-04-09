@@ -8,6 +8,7 @@ pub mod bloom;
 pub mod chromatic_aberration;
 pub mod color_grade;
 pub mod compute_blit_helper;
+pub mod registration;
 pub mod compute_dual_blit_helper;
 pub mod depth_of_field;
 pub mod dither;

@@ -19,6 +19,11 @@ pub struct EffectTypeId(Cow<'static, str>);
 // ── Construction ────────────────────────────────────────────────────────
 
 impl EffectTypeId {
+    /// Create from a static string (compile-time constant).
+    pub const fn new(s: &'static str) -> Self {
+        Self(Cow::Borrowed(s))
+    }
+
     /// Create from a runtime string (e.g. plugin-provided ID).
     pub fn from_string(s: String) -> Self {
         Self(Cow::Owned(s))
@@ -118,7 +123,14 @@ impl EffectTypeId {
             39 => Self::REDACTION,
             40 => Self::DEPTH_OF_FIELD,
             41 => Self::AUTO_GAIN,
-            _ => Self::UNKNOWN,
+            _ => {
+                for meta in inventory::iter::<crate::effect_registration::EffectMetadata> {
+                    if meta.legacy_discriminant == Some(v) {
+                        return meta.id.clone();
+                    }
+                }
+                Self::UNKNOWN
+            }
         }
     }
 }

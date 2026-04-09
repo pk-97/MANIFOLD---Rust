@@ -19,6 +19,7 @@ pub mod oily_fluid;
 pub mod oscilloscope_xy;
 pub mod parametric_surface;
 pub mod plasma;
+pub mod registration;
 pub mod registry;
 pub mod stateful_base;
 pub mod strange_attractor;

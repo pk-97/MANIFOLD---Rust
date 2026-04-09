@@ -19,6 +19,11 @@ pub struct GeneratorTypeId(Cow<'static, str>);
 // ── Construction ────────────────────────────────────────────────────────
 
 impl GeneratorTypeId {
+    /// Create from a static string (compile-time constant).
+    pub const fn new(s: &'static str) -> Self {
+        Self(Cow::Borrowed(s))
+    }
+
     /// Create from a runtime string (e.g. plugin-provided ID).
     pub fn from_string(s: String) -> Self {
         Self(Cow::Owned(s))
@@ -99,7 +104,17 @@ impl GeneratorTypeId {
             23 => Self::METALLIC_GLASS,
             24 => Self::OILY_FLUID,
             25 => Self::NESTED_CUBES,
-            _ => Self::NONE,
+            _ => {
+                // Check inventory-registered generators for new discriminants
+                for meta in
+                    inventory::iter::<crate::generator_registration::GeneratorMetadata>
+                {
+                    if meta.legacy_discriminant == Some(v) {
+                        return meta.id.clone();
+                    }
+                }
+                Self::NONE
+            }
         }
     }
 }

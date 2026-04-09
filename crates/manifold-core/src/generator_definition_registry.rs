@@ -29,8 +29,13 @@ pub struct GeneratorDef {
 
 // ─── Static Registry ───
 
-static DEFINITIONS: LazyLock<HashMap<GeneratorTypeId, GeneratorDef>> =
-    LazyLock::new(build_definitions);
+static DEFINITIONS: LazyLock<HashMap<GeneratorTypeId, GeneratorDef>> = LazyLock::new(|| {
+    let mut m = build_definitions();
+    for meta in inventory::iter::<crate::generator_registration::GeneratorMetadata> {
+        m.insert(meta.id.clone(), meta.to_generator_def());
+    }
+    m
+});
 
 static MAX_PARAM_COUNT: LazyLock<usize> = LazyLock::new(|| {
     DEFINITIONS
@@ -698,18 +703,6 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
     m.insert(
         GeneratorTypeId::OILY_FLUID,
         create_def("Oily Fluid", false, "oilyFluid", params),
-    );
-
-    // ── Nested Cubes ──
-    let params = vec![
-        pd("Speed", 0.1, 5.0, 1.0, Some("F1"), "speed"),
-        pd("Filter", 0.1, 10.0, 2.0, Some("F1"), "filter"),
-        pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
-        pd("Scatter", 0.0, 1.0, 0.0, Some("F2"), "scatter"),
-    ];
-    m.insert(
-        GeneratorTypeId::NESTED_CUBES,
-        create_def("Nested Cubes", false, "nestedCubes", params),
     );
 
     m
