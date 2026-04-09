@@ -394,10 +394,33 @@ fn draw_cue_hud(
     // Color palette.
     let dim = [140u8, 140u8, 145u8, 255u8];
     let white = [240u8, 240u8, 240u8, 255u8];
-    let accent = [255u8, 90u8, 70u8, 255u8];
-    let accent_f = [1.0, 0.35, 0.27, 1.0];
     let bar_bg = [0.10, 0.10, 0.12, 1.0];
     let warn = [240u8, 200u8, 60u8, 255u8];
+
+    // Traffic-light palette:
+    //   Green  = NOW (safe, this is playing)
+    //   Yellow→Red = NEXT countdown (urgency ramp as bars approach 0)
+    let now_green = [60u8, 220u8, 90u8, 255u8];
+    let now_green_dim = [50u8, 170u8, 70u8, 255u8];
+
+    // Countdown urgency: lerp yellow→red based on bars remaining.
+    // >4 bars = pure yellow, <2 bars = pure red, linear blend between.
+    let bars_remaining = countdown
+        .map(|cd| cd.number.parse::<f32>().unwrap_or(99.0))
+        .unwrap_or(99.0);
+    let urgency = ((4.0 - bars_remaining) / 2.0).clamp(0.0, 1.0); // 0=yellow, 1=red
+    let next_color = [
+        (240.0 + (255.0 - 240.0) * urgency) as u8,  // R: 240→255
+        (200.0 - 140.0 * urgency) as u8,              // G: 200→60
+        (60.0 - 30.0 * urgency) as u8,                // B: 60→30
+        255u8,
+    ];
+    let next_color_f = [
+        next_color[0] as f32 / 255.0,
+        next_color[1] as f32 / 255.0,
+        next_color[2] as f32 / 255.0,
+        1.0,
+    ];
 
     // ── NOW ────────────────────────────────────────────────────────
     let label_now = "NOW";
@@ -411,14 +434,14 @@ fn draw_cue_hud(
         now_top,
         label_now,
         label_size as f32,
-        dim,
+        now_green_dim,
     );
     ui.draw_text(
         (lw - now_dim.x) * 0.5,
         now_top + label_size as f32 + 8.0,
         current_name,
         now_size as f32,
-        white,
+        now_green,
     );
 
     // ── NOW track list (vertical, centered, under the NOW name) ────
@@ -428,7 +451,7 @@ fn draw_cue_hud(
         let mut ny = now_top + label_size as f32 + 8.0 + now_size as f32 + 12.0;
         for name in now_section_tracks {
             let w = ui.measure_text_cached(name, nl_size, FontWeight::Medium).x;
-            ui.draw_text((lw - w) * 0.5, ny, name, nl_size as f32, white);
+            ui.draw_text((lw - w) * 0.5, ny, name, nl_size as f32, now_green_dim);
             ny += line_h;
         }
     }
@@ -445,14 +468,14 @@ fn draw_cue_hud(
         next_top,
         label_next,
         label_size as f32,
-        dim,
+        next_color,
     );
     ui.draw_text(
         (lw - next_name_dim.x) * 0.5,
         next_top + label_size as f32 + 8.0,
         next_name,
         next_size as f32,
-        white,
+        next_color,
     );
 
     // ── Countdown number (fixed-column digits, anchored center axis) ─
@@ -470,14 +493,14 @@ fn draw_cue_hud(
             countdown_y,
             &cd.number,
             countdown_size,
-            accent,
+            next_color,
         );
         ui.draw_text(
             unit_left,
             countdown_y,
             &cd.unit,
             countdown_size as f32,
-            accent,
+            next_color,
         );
     } else {
         // No next cue — show a centered em-dash placeholder.
@@ -488,7 +511,7 @@ fn draw_cue_hud(
             countdown_y,
             placeholder,
             countdown_size as f32,
-            accent,
+            next_color,
         );
     }
 
@@ -507,7 +530,7 @@ fn draw_cue_hud(
         // Fill — width proportional to progress through section
         let fill_w = (bar_w * p as f32).max(0.0);
         if fill_w > 1.0 {
-            ui.draw_rounded_rect(bar_x, bar_y, fill_w, bar_h, accent_f, bar_h * 0.5);
+            ui.draw_rounded_rect(bar_x, bar_y, fill_w, bar_h, next_color_f, bar_h * 0.5);
         }
     }
 
@@ -518,7 +541,7 @@ fn draw_cue_hud(
         let mut ny = countdown_y + countdown_size as f32 + 56.0;
         for name in next_section_tracks {
             let w = ui.measure_text_cached(name, nl_size, FontWeight::Medium).x;
-            ui.draw_text((lw - w) * 0.5, ny, name, nl_size as f32, white);
+            ui.draw_text((lw - w) * 0.5, ny, name, nl_size as f32, next_color);
             ny += line_h;
         }
     }
