@@ -147,14 +147,15 @@ impl Generator for NestedCubesGenerator {
         // Scaled sizes
         let sizes: [f32; 5] = std::array::from_fn(|i| INSTANCE_SIZES[i] * scale);
 
-        // Isometric orthographic camera
+        // Isometric orthographic camera — ortho width 3.41, aspect-corrected height
         let half_w = 1.705;
+        let half_h = half_w / ctx.aspect;
         let view = look_at_rh(
             [2.887, 2.887, 2.887], // ~5 * normalize(1,1,1)
             [0.0, 0.0, 0.0],
             [0.0, 1.0, 0.0],
         );
-        let proj = ortho_rh(half_w, half_w, 0.1, 20.0);
+        let proj = ortho_rh(half_w, half_h, 0.1, 20.0);
         let view_proj = mat4_mul(proj, view);
 
         // Build uniforms
