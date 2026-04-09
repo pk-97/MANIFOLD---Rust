@@ -12,18 +12,6 @@
 use manifold_playback::ableton_bridge::TrackArrangement;
 
 /// Returns `true` if the track is unmuted AND has at least one unmuted
-/// clip whose `[start, end)` interval contains `current_beat`.
-pub(crate) fn is_playing(track: &TrackArrangement, current_beat: f64) -> bool {
-    if track.muted {
-        return false;
-    }
-    track
-        .clips
-        .iter()
-        .any(|c| !c.muted && c.start <= current_beat && current_beat < c.end)
-}
-
-/// Returns `true` if the track is unmuted AND has at least one unmuted
 /// clip whose `[start, end)` interval overlaps the half-open beat range
 /// `[range_start, range_end)`. Used for "what plays in the next section"
 /// — variant (a): straddlers (clips that started before `range_start` and
@@ -33,7 +21,7 @@ pub(crate) fn plays_in_range(
     range_start: f64,
     range_end: f64,
 ) -> bool {
-    if track.muted || !(range_end > range_start) {
+    if track.muted || range_end <= range_start {
         return false;
     }
     track
@@ -75,90 +63,55 @@ mod tests {
     #[test]
     fn empty_clip_list_never_plays() {
         let t = track_with(false, vec![]);
-        assert!(!is_playing(&t, 0.0));
-        assert!(!is_playing(&t, 100.0));
+        assert!(!plays_in_range(&t, 0.0, 16.0));
     }
 
     #[test]
-    fn muted_track_never_plays_even_with_active_clip() {
+    fn muted_track_never_plays() {
         let t = track_with(true, vec![clip(0.0, 16.0)]);
-        assert!(!is_playing(&t, 8.0));
+        assert!(!plays_in_range(&t, 0.0, 16.0));
     }
 
     #[test]
-    fn muted_clip_never_plays() {
+    fn muted_clip_skipped() {
         let t = track_with(false, vec![muted_clip(0.0, 16.0)]);
-        assert!(!is_playing(&t, 8.0));
+        assert!(!plays_in_range(&t, 0.0, 16.0));
     }
 
     #[test]
-    fn muted_clip_does_not_block_unmuted_overlapping_clip() {
-        // Two clips at the same range, one muted, one not. Track plays.
-        let t = track_with(
-            false,
-            vec![muted_clip(0.0, 16.0), clip(0.0, 16.0)],
-        );
-        assert!(is_playing(&t, 8.0));
+    fn straddling_clip_counts() {
+        // Clip starts before the range but ends inside it: variant (a) → yes.
+        let t = track_with(false, vec![clip(0.0, 32.0)]);
+        assert!(plays_in_range(&t, 16.0, 48.0));
     }
 
     #[test]
-    fn inside_clip() {
+    fn fully_inside_range() {
+        let t = track_with(false, vec![clip(20.0, 28.0)]);
+        assert!(plays_in_range(&t, 16.0, 32.0));
+    }
+
+    #[test]
+    fn touching_boundary_excluded() {
+        // Clip ends exactly at range_start → no overlap (half-open).
         let t = track_with(false, vec![clip(0.0, 16.0)]);
-        assert!(is_playing(&t, 0.0));
-        assert!(is_playing(&t, 8.0));
-        assert!(is_playing(&t, 15.999));
+        assert!(!plays_in_range(&t, 16.0, 32.0));
+        // Clip starts exactly at range_end → no overlap.
+        let t = track_with(false, vec![clip(32.0, 48.0)]);
+        assert!(!plays_in_range(&t, 16.0, 32.0));
     }
 
     #[test]
-    fn at_clip_boundaries() {
-        let t = track_with(false, vec![clip(8.0, 16.0)]);
-        // Start is inclusive
-        assert!(is_playing(&t, 8.0));
-        // Just before start
-        assert!(!is_playing(&t, 7.999));
-        // End is exclusive
-        assert!(!is_playing(&t, 16.0));
-        // Just before end
-        assert!(is_playing(&t, 15.999));
+    fn empty_or_inverted_range_is_false() {
+        let t = track_with(false, vec![clip(0.0, 100.0)]);
+        assert!(!plays_in_range(&t, 16.0, 16.0));
+        assert!(!plays_in_range(&t, 32.0, 16.0));
     }
 
     #[test]
-    fn between_clips() {
-        let t = track_with(false, vec![clip(0.0, 8.0), clip(16.0, 24.0)]);
-        assert!(is_playing(&t, 4.0));
-        assert!(!is_playing(&t, 12.0));
-        assert!(is_playing(&t, 20.0));
-        assert!(!is_playing(&t, 30.0));
-    }
-
-    #[test]
-    fn looped_clip_full_arrangement_footprint() {
-        // Crucial test: a 1-bar MIDI loop dragged out to fill 16 bars in
-        // arrangement view. With the AbletonOSC patch, we get the full
-        // visible end_time (64 beats), not just the loop length (4 beats).
-        let t = track_with(false, vec![clip(0.0, 64.0)]);
-        // Should be playing throughout the entire visible footprint.
-        assert!(is_playing(&t, 0.0));
-        assert!(is_playing(&t, 4.0));   // past the original loop length
-        assert!(is_playing(&t, 32.0));
-        assert!(is_playing(&t, 63.999));
-        assert!(!is_playing(&t, 64.0));
-    }
-
-    #[test]
-    fn multiple_overlapping_clips() {
-        // Two clips overlap. As long as ONE unmuted clip contains the
-        // playhead, the track is playing.
-        let t = track_with(false, vec![clip(0.0, 16.0), clip(8.0, 24.0)]);
-        assert!(is_playing(&t, 4.0));  // only in clip 1
-        assert!(is_playing(&t, 12.0)); // in both
-        assert!(is_playing(&t, 20.0)); // only in clip 2
-        assert!(!is_playing(&t, 30.0));
-    }
-
-    #[test]
-    fn negative_current_beat_is_safe() {
-        let t = track_with(false, vec![clip(0.0, 16.0)]);
-        assert!(!is_playing(&t, -1.0));
+    fn infinite_range_end() {
+        // Final-section case: section_end is +∞.
+        let t = track_with(false, vec![clip(20.0, 28.0)]);
+        assert!(plays_in_range(&t, 16.0, f64::INFINITY));
     }
 }

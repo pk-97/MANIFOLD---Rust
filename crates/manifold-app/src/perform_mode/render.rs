@@ -157,24 +157,7 @@ impl Application {
             Vec::new()
         };
 
-        // PLAY-group tracks: snapshot from the persistent ui_root cache.
-        // We compute (name, is_playing) up-front so the renderer doesn't
-        // need to hold a borrow on `self.ui_root` while it borrows
-        // `self.ui_renderer`.
-        let play_tracks: Vec<(String, bool)> = self
-            .ui_root
-            .ableton_session
-            .as_ref()
-            .and_then(|s| s.play_group.as_ref())
-            .map(|g| {
-                g.tracks
-                    .iter()
-                    .map(|t| (t.name.clone(), tracks::is_playing(t, current_beat)))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        // Macros: snapshot mapped Ableton macros for the left column.
+// Macros: snapshot mapped Ableton macros for the left column.
         // Top-N for now to avoid overflowing tall projects with many macros.
         const MACRO_DISPLAY_LIMIT: usize = 12;
         let macros_snapshot: Vec<perform_macros::MacroDisplay> = self
@@ -217,10 +200,6 @@ impl Application {
                 ableton_connected,
                 cue_points.is_empty(),
             );
-
-            if !play_tracks.is_empty() {
-                draw_play_group_column(ui, lw, lh, &play_tracks);
-            }
 
             if !macros_snapshot.is_empty() {
                 draw_macros_column(ui, lh, &macros_snapshot);
@@ -355,77 +334,6 @@ fn draw_numeric_text(
     cur_x - x
 }
 
-/// Draw the PLAY-group track column on the right side of the HUD.
-///
-/// Each track is rendered with a small accent dot (when playing) plus
-/// the track name. Playing tracks render in white at full opacity;
-/// non-playing tracks render dim. The column is fixed-width and
-/// right-anchored to the screen edge with a small inner pad.
-///
-/// Caller must have already called `ui.begin_frame()`.
-fn draw_play_group_column(
-    ui: &mut UIRenderer,
-    lw: f32,
-    lh: f32,
-    tracks: &[(String, bool)],
-) {
-    let dim = [110u8, 110u8, 115u8, 255u8];
-    let white = [240u8, 240u8, 240u8, 255u8];
-    let accent_f = [1.0, 0.35, 0.27, 1.0]; // dot fill
-    let accent_text = [255u8, 90u8, 70u8, 255u8];
-
-    let label_size: u16 = 18;
-    let track_size: u16 = 18;
-    let line_h: f32 = (track_size as f32) + 8.0;
-    let dot_d: f32 = 8.0;
-    let dot_text_gap: f32 = 10.0;
-    let right_pad: f32 = 32.0;
-
-    // Column width: enough for the longest track name + dot + padding.
-    // Pre-measure with the widest realistic name to keep the column anchor
-    // independent of which tracks happen to be playing this frame.
-    let max_name_w = tracks
-        .iter()
-        .map(|(n, _)| {
-            ui.measure_text_cached(n, track_size, FontWeight::Medium)
-                .x
-        })
-        .fold(0.0_f32, f32::max);
-    let col_w = max_name_w + dot_d + dot_text_gap;
-    let col_x = lw - right_pad - col_w;
-    // Vertically center the block within the upper portion of the screen
-    // so it lines up roughly with the cue HUD's "NOW" / "NEXT" stack.
-    let total_h = line_h * tracks.len() as f32;
-    let label_text = "PLAY";
-    let label_dim = ui.measure_text_cached(label_text, label_size, FontWeight::Medium);
-    let label_y = lh * 0.18;
-    // Right-align the label to the column right edge for visual symmetry.
-    let label_x = col_x + col_w - label_dim.x;
-    ui.draw_text(label_x, label_y, label_text, label_size as f32, dim);
-
-    let block_y = label_y + label_size as f32 + 12.0;
-    // Cap block height — if there are too many tracks to fit, just let
-    // them extend toward the status row. The exit button has its own
-    // safe zone below the status row.
-    let max_block_h = lh * 0.70 - block_y;
-    let _ = max_block_h; // (informational; we currently don't truncate)
-    let _ = total_h;
-
-    for (i, (name, playing)) in tracks.iter().enumerate() {
-        let y = block_y + line_h * i as f32;
-        let text_color = if *playing { white } else { dim };
-        // Dot — left-anchored at col_x
-        if *playing {
-            // Center dot vertically against the text x-height (≈ 60% of line_h).
-            let dot_y = y + (track_size as f32 - dot_d) * 0.5 + 2.0;
-            ui.draw_rounded_rect(col_x, dot_y, dot_d, dot_d, accent_f, dot_d * 0.5);
-        }
-        let text_x = col_x + dot_d + dot_text_gap;
-        ui.draw_text(text_x, y, name, track_size as f32, text_color);
-    }
-    let _ = accent_text; // reserved for future use
-}
-
 /// Draw the bottom-center exit button. Intentionally small so it cannot
 /// be clicked accidentally during a performance — the cue HUD is the
 /// primary visual, and the exit affordance is deliberate-only.
@@ -515,8 +423,8 @@ fn draw_cue_hud(
 
     // ── NOW track list (vertical, centered, under the NOW name) ────
     if !now_section_tracks.is_empty() {
-        let nl_size: u16 = 18;
-        let line_h = nl_size as f32 + 6.0;
+        let nl_size: u16 = 28;
+        let line_h = nl_size as f32 + 8.0;
         let mut ny = now_top + label_size as f32 + 8.0 + now_size as f32 + 12.0;
         for name in now_section_tracks {
             let w = ui.measure_text_cached(name, nl_size, FontWeight::Medium).x;
@@ -603,15 +511,33 @@ fn draw_cue_hud(
         }
     }
 
+    // ── NEXT track list (vertical, centered, under the countdown bar) ──
+    if !next_section_tracks.is_empty() {
+        let nl_size: u16 = 28;
+        let line_h = nl_size as f32 + 8.0;
+        let mut ny = countdown_y + countdown_size as f32 + 56.0;
+        for name in next_section_tracks {
+            let w = ui.measure_text_cached(name, nl_size, FontWeight::Medium).x;
+            ui.draw_text((lw - w) * 0.5, ny, name, nl_size as f32, white);
+            ny += line_h;
+        }
+    }
+
+    // ── Slim status row, raised away from the exit button ───────────
+    //
+    // Just BPM + transport + Ableton state. 3 fixed cells across.
+    let status_size: u16 = 16;
+    // Exit button bottom-anchored at lh - 36 - 24. Push status row well
+    // above it so the two never feel coupled.
+    let status_y = lh - 36.0 - 24.0 - 64.0;
+
     // ── BAR.BEAT.SIXTEENTH readout (Ableton transport style) ────────
     //
-    // Three fixed-column numeric fields separated by spaced dots. The
-    // central dot pair is anchored to `lw/2`, so values shift only on
-    // their off-center edges as digit counts change. Reads at a glance
-    // as "where am I in the song" — replaces the old decimal `BEAT`
-    // value in the status row.
+    // Sits directly above the status row's PLAYING line so the "where am
+    // I in the song" indicator anchors to the bottom rather than floating
+    // in the middle of the HUD.
     let bb_size: u16 = 36;
-    let bb_y = countdown_y + countdown_size as f32 + 56.0;
+    let bb_y = status_y - bb_size as f32 - 16.0;
     {
         let dot = " . ";
         let dot_w = ui.measure_text_cached(dot, bb_size, FontWeight::Medium).x;
@@ -633,29 +559,6 @@ fn draw_cue_hud(
         draw_numeric_text(ui, x, bb_y, &bar_beat.sixteenth, bb_size, white);
     }
 
-    // ── "NEXT:" mini-list of tracks active in the upcoming section ──
-    //
-    // Single line, dim, centered. Variant (a): includes straddlers, so
-    // any track that has at least one non-muted clip overlapping the
-    // next section's beat range is shown. Hidden when there's no next
-    // cue OR no tracks are active there (the absence is meaningful).
-    if !next_section_tracks.is_empty() {
-        let nl_size: u16 = 18;
-        let line_h = nl_size as f32 + 6.0;
-        let mut ny = bb_y + bb_size as f32 + 18.0;
-        for name in next_section_tracks {
-            let w = ui.measure_text_cached(name, nl_size, FontWeight::Medium).x;
-            ui.draw_text((lw - w) * 0.5, ny, name, nl_size as f32, white);
-            ny += line_h;
-        }
-    }
-
-    // ── Slim status row above the exit button ───────────────────────
-    //
-    // BEAT moved into the bar.beat readout above, so the row is just
-    // BPM + transport + Ableton state. 3 fixed cells across the row.
-    let status_size: u16 = 16;
-    let status_y = lh - 36.0 - 24.0 - 28.0; // above the smaller exit button
     let bpm_value = format!("{:.1}", bpm);
     let play_value = if is_playing { "▶ PLAYING" } else { "■ STOPPED" };
     let conn_value = if !ableton_connected {
@@ -765,7 +668,9 @@ fn draw_macros_column(
 ) {
     let dim = [140u8, 140u8, 145u8, 255u8];
     let white = [240u8, 240u8, 240u8, 255u8];
-    let accent_f = [1.0, 0.35, 0.27, 1.0];
+    // Ableton purple — matches the macro accent used elsewhere in the
+    // main UI (see ABL_BADGE_C32 / ABL_TRIM_BAR_C32 in manifold-ui::color).
+    let macro_fill = [140.0 / 255.0, 80.0 / 255.0, 200.0 / 255.0, 1.0];
     let bar_bg = [0.10, 0.10, 0.12, 1.0];
 
     let label_size: u16 = 18;
@@ -792,7 +697,7 @@ fn draw_macros_column(
         // Bar fill
         let fill_w = (bar_w * m.value.clamp(0.0, 1.0)).max(0.0);
         if fill_w > 1.0 {
-            ui.draw_rounded_rect(left_pad, bar_y, fill_w, bar_h, accent_f, bar_h * 0.5);
+            ui.draw_rounded_rect(left_pad, bar_y, fill_w, bar_h, macro_fill, bar_h * 0.5);
         }
     }
 }

@@ -1914,38 +1914,148 @@ impl AbletonBridge {
         }
     }
 
+    /// Resolve a mapping against the current session and update its
+    /// numeric IDs in place. Names are the canonical identity; IDs are a
+    /// frame-local cache that can shift whenever the user edits the
+    /// Ableton project.
+    ///
+    /// Resolution order (each step is logged when it fires):
+    ///
+    /// 1. **Canonical: by name + slot.** Find the track named
+    ///    `track_name`, then the device named `device_name` inside it
+    ///    (with matching class), then macro at slot `param_id`. Survives
+    ///    track reorders, device reorders, and macro renames.
+    /// 2. **By name + macro name.** Same lookup but the macro is found
+    ///    by `macro_name` instead of slot — handles the case where the
+    ///    user reordered macros inside the rack.
+    /// 3. **Legacy: stored IDs + class.** The pre-name resolver. Used
+    ///    only when names are empty (legacy projects) — resolves and
+    ///    backfills the names so the next save persists them.
+    /// 4. **Class-only fuzzy search.** Last resort when nothing else
+    ///    matches: a unique device of the right class with a macro at
+    ///    the same slot. Predates the rename clue but kept for parity
+    ///    with the previous resolver's "auto-update on structural
+    ///    change" behavior.
+    /// 5. **Dormant** — none of the above resolved. Mapping is visibly
+    ///    broken; no parameter writes will fire for it.
     fn validate_single_mapping(
         &self,
         mapping: &mut AbletonParamMapping,
     ) -> AbletonMappingStatus {
-        let stored_track_id = mapping.address.track_id;
-        let stored_device_id = mapping.address.device_id;
-        let stored_param_id = mapping.address.param_id;
         let target_class = mapping.address.device_identity.device_class_name.clone();
+        let stored_track_name = mapping.address.track_name.clone();
+        let stored_device_name = mapping.address.device_name.clone();
+        let stored_macro_name = mapping.address.macro_name.clone();
+        let stored_param_id = mapping.address.param_id;
 
-        // 1. Check if track at stored index has the right device at stored index
-        if let Some(track) = self
-            .session
-            .tracks
-            .iter()
-            .find(|t| t.track_id == stored_track_id)
+        let have_names = !stored_track_name.is_empty()
+            && !stored_device_name.is_empty();
+
+        // ── 1+2. Canonical: by (track_name, device_name) then macro ──
+        //
+        // Inside the resolved device we disambiguate two cases that both
+        // change `macros[stored_param_id].name`:
+        //
+        // - **Rename:** the user renamed the macro at the stored slot.
+        //   The original `macro_name` does NOT appear elsewhere in the
+        //   rack, so we trust the slot and update the cached name.
+        //
+        // - **Reorder:** the user dragged macros around inside the rack.
+        //   The original `macro_name` still exists in the device — at a
+        //   different slot — so we follow the *name* and update the slot.
+        //
+        // Either way, the user's intent ("the macro I clicked on") is
+        // preserved.
+        if have_names
+            && let Some(track) = self
+                .session
+                .tracks
+                .iter()
+                .find(|t| t.name == stored_track_name)
             && let Some(device) = track
                 .devices
                 .iter()
-                .find(|d| d.device_id == stored_device_id)
-            && device.class_name == target_class
+                .find(|d| d.name == stored_device_name && d.class_name == target_class)
         {
-            mapping.address.track_name = track.name.clone();
-            mapping.address.device_name = device.name.clone();
+            // Look for the macro by NAME first — if it's still there
+            // under the original name, that's the canonical match
+            // regardless of which slot it lives in now.
+            if !stored_macro_name.is_empty()
+                && let Some(mac) =
+                    device.macros.iter().find(|m| m.name == stored_macro_name)
+            {
+                let slot_changed = mac.param_id != stored_param_id;
+                mapping.address.track_id = track.track_id;
+                mapping.address.device_id = device.device_id;
+                mapping.address.param_id = mac.param_id;
+                if slot_changed {
+                    log::info!(
+                        "[AbletonBridge] Macro slot moved: \
+                         {stored_track_name} > {stored_device_name} > \
+                         {stored_macro_name} (slot {stored_param_id} → {})",
+                        mac.param_id,
+                    );
+                }
+                return AbletonMappingStatus::Active;
+            }
+            // Original macro_name not found in the device → either it
+            // was renamed (trust the slot) or removed entirely.
             if let Some(mac) =
                 device.macros.iter().find(|m| m.param_id == stored_param_id)
             {
+                if mac.name != stored_macro_name {
+                    log::info!(
+                        "[AbletonBridge] Macro renamed: \
+                         {stored_track_name} > {stored_device_name} > \
+                         '{stored_macro_name}' → '{}'",
+                        mac.name,
+                    );
+                }
+                mapping.address.track_id = track.track_id;
+                mapping.address.device_id = device.device_id;
                 mapping.address.macro_name = mac.name.clone();
+                return AbletonMappingStatus::Active;
             }
-            return AbletonMappingStatus::Active;
         }
 
-        // 2. Track/device not at expected index — search for unique structural match
+        // ── 3. Legacy backfill: stored numeric IDs + class match ────
+        // Only for projects saved before name-based resolution existed.
+        // On success, backfill the names so the next save migrates the
+        // mapping forward and never falls back here again.
+        if !have_names {
+            let stored_track_id = mapping.address.track_id;
+            let stored_device_id = mapping.address.device_id;
+            if let Some(track) = self
+                .session
+                .tracks
+                .iter()
+                .find(|t| t.track_id == stored_track_id)
+                && let Some(device) = track
+                    .devices
+                    .iter()
+                    .find(|d| d.device_id == stored_device_id && d.class_name == target_class)
+            {
+                mapping.address.track_name = track.name.clone();
+                mapping.address.device_name = device.name.clone();
+                if let Some(mac) =
+                    device.macros.iter().find(|m| m.param_id == stored_param_id)
+                {
+                    mapping.address.macro_name = mac.name.clone();
+                }
+                log::info!(
+                    "[AbletonBridge] Backfilled legacy mapping with names: \
+                     {} > {}",
+                    mapping.address.track_name,
+                    mapping.address.device_name,
+                );
+                return AbletonMappingStatus::Active;
+            }
+        }
+
+        // ── 4. Class-only fuzzy search (last resort) ────────────────
+        // Used when names exist but no track/device matches them — a
+        // track or device was renamed in Ableton. We accept the match
+        // ONLY if it's unique; otherwise the user must re-link by hand.
         let mut matches: Vec<(i32, i32, String, String, String)> = Vec::new();
         for track in &self.session.tracks {
             for device in &track.devices {
@@ -1967,7 +2077,6 @@ impl AbletonBridge {
         match matches.len() {
             0 => AbletonMappingStatus::Dormant,
             1 => {
-                // Unambiguous — auto-update indices and names
                 let (tid, did, tname, dname, mname) = &matches[0];
                 mapping.address.track_id = *tid;
                 mapping.address.device_id = *did;
@@ -1975,13 +2084,15 @@ impl AbletonBridge {
                 mapping.address.device_name = dname.clone();
                 mapping.address.macro_name = mname.clone();
                 log::info!(
-                    "[AbletonBridge] Auto-resolved mapping: {tname} > {dname} > {mname}",
+                    "[AbletonBridge] Fuzzy auto-resolved (class-only): \
+                     {tname} > {dname} > {mname}",
                 );
                 AbletonMappingStatus::Active
             }
             _ => {
                 log::warn!(
-                    "[AbletonBridge] Ambiguous mapping: {} matches for class '{target_class}'",
+                    "[AbletonBridge] Ambiguous mapping for '{stored_track_name}' > \
+                     '{stored_device_name}': {} class-only matches — re-link required",
                     matches.len(),
                 );
                 AbletonMappingStatus::Ambiguous
@@ -2686,6 +2797,220 @@ mod tests {
         assert!(is_rack_device("MidiEffectGroupDevice"));
         assert!(!is_rack_device("OriginalSimpler"));
         assert!(!is_rack_device("Compressor2"));
+    }
+
+    // ── Resolver fixtures ──────────────────────────────────────────
+
+    fn macro_(param_id: i32, name: &str) -> AbletonMacro {
+        AbletonMacro {
+            param_id,
+            name: name.to_string(),
+            value: 0.0,
+            min: 0.0,
+            max: 1.0,
+        }
+    }
+
+    fn device_(device_id: i32, name: &str, class: &str, macros: Vec<AbletonMacro>) -> AbletonDevice {
+        AbletonDevice {
+            device_id,
+            name: name.to_string(),
+            class_name: class.to_string(),
+            macros,
+        }
+    }
+
+    fn track_(track_id: i32, name: &str, devices: Vec<AbletonDevice>) -> AbletonTrack {
+        AbletonTrack {
+            track_id,
+            name: name.to_string(),
+            devices,
+        }
+    }
+
+    fn bridge_with_session(tracks: Vec<AbletonTrack>) -> AbletonBridge {
+        let mut b = AbletonBridge::new();
+        b.session.tracks = tracks;
+        b.session.connected = true;
+        b
+    }
+
+    fn mapping_(
+        track_id: i32,
+        device_id: i32,
+        param_id: i32,
+        track_name: &str,
+        device_name: &str,
+        macro_name: &str,
+        class: &str,
+    ) -> AbletonParamMapping {
+        use manifold_core::ableton_mapping::{AbletonDeviceIdentity, AbletonMacroAddress};
+        AbletonParamMapping {
+            param_index: 0,
+            address: AbletonMacroAddress {
+                track_id,
+                device_id,
+                param_id,
+                device_identity: AbletonDeviceIdentity {
+                    device_class_name: class.to_string(),
+                },
+                track_name: track_name.to_string(),
+                device_name: device_name.to_string(),
+                macro_name: macro_name.to_string(),
+            },
+            range_min: 0.0,
+            range_max: 1.0,
+            inverted: false,
+            last_value: 0.0,
+            status: AbletonMappingStatus::Dormant,
+        }
+    }
+
+    // ── Resolver: canonical name path ──────────────────────────────
+
+    #[test]
+    fn resolver_finds_by_name_when_ids_have_shifted() {
+        // Original: track_id=2, device_id=1. After Ableton edit, the
+        // same rack lives at track_id=5, device_id=3. Resolver should
+        // find it via name and update the IDs.
+        let bridge = bridge_with_session(vec![
+            track_(0, "Bass", vec![]),  // unrelated
+            track_(5, "Lead Synth", vec![
+                device_(0, "Compressor", "Compressor2", vec![]),
+                device_(3, "SERUM CHORDS", "InstrumentGroupDevice", vec![
+                    macro_(1, "LFO (X)"),
+                    macro_(2, "DETUNE (Y)"),
+                ]),
+            ]),
+        ]);
+        let mut m = mapping_(2, 1, 1, "Lead Synth", "SERUM CHORDS", "LFO (X)", "InstrumentGroupDevice");
+        let s = bridge.validate_single_mapping(&mut m);
+        assert_eq!(s, AbletonMappingStatus::Active);
+        assert_eq!(m.address.track_id, 5);
+        assert_eq!(m.address.device_id, 3);
+        assert_eq!(m.address.param_id, 1);
+        assert_eq!(m.address.macro_name, "LFO (X)");
+    }
+
+    #[test]
+    fn resolver_does_not_silently_grab_wrong_rack_at_same_id() {
+        // The bug from the user's project: a totally different rack now
+        // lives at the stored numeric ID. Old resolver passed the
+        // class_name check and silently rebound. New resolver uses
+        // names, so the wrong-rack-at-same-id is rejected and we fall
+        // through to fuzzy search (which here finds the right one).
+        let bridge = bridge_with_session(vec![
+            track_(5, "Some Other Track", vec![
+                // Same class as the original, same numeric IDs, but wrong
+                // names. This is what the broken resolver was matching.
+                device_(2, "Wrong Rack", "InstrumentGroupDevice", vec![
+                    macro_(1, "Macro 1"),
+                ]),
+            ]),
+            track_(7, "Lead Synth", vec![
+                device_(0, "SERUM CHORDS", "InstrumentGroupDevice", vec![
+                    macro_(1, "LFO (X)"),
+                ]),
+            ]),
+        ]);
+        let mut m = mapping_(5, 2, 1, "Lead Synth", "SERUM CHORDS", "LFO (X)", "InstrumentGroupDevice");
+        let s = bridge.validate_single_mapping(&mut m);
+        assert_eq!(s, AbletonMappingStatus::Active);
+        assert_eq!(m.address.track_id, 7);
+        assert_eq!(m.address.device_id, 0);
+        assert_eq!(m.address.macro_name, "LFO (X)");
+    }
+
+    #[test]
+    fn resolver_handles_macro_reorder_within_rack() {
+        // User dragged macros around in the rack. Slot index changed but
+        // the macro name is still findable in the same rack.
+        let bridge = bridge_with_session(vec![
+            track_(5, "Lead Synth", vec![
+                device_(0, "SERUM CHORDS", "InstrumentGroupDevice", vec![
+                    // "LFO (X)" used to be slot 1, now it's slot 4
+                    macro_(1, "DETUNE (Y)"),
+                    macro_(2, "PHASE"),
+                    macro_(3, "DELAY"),
+                    macro_(4, "LFO (X)"),
+                ]),
+            ]),
+        ]);
+        let mut m = mapping_(5, 0, 1, "Lead Synth", "SERUM CHORDS", "LFO (X)", "InstrumentGroupDevice");
+        let s = bridge.validate_single_mapping(&mut m);
+        assert_eq!(s, AbletonMappingStatus::Active);
+        assert_eq!(m.address.param_id, 4); // slot updated
+        assert_eq!(m.address.macro_name, "LFO (X)");
+    }
+
+    #[test]
+    fn resolver_handles_macro_rename_in_place() {
+        // Macro at the stored slot was renamed. Original name no longer
+        // appears in the rack at all. Resolver trusts the slot and
+        // updates the cached name.
+        let bridge = bridge_with_session(vec![
+            track_(5, "Lead Synth", vec![
+                device_(0, "SERUM CHORDS", "InstrumentGroupDevice", vec![
+                    macro_(1, "OSC LFO"),  // was "LFO (X)"
+                ]),
+            ]),
+        ]);
+        let mut m = mapping_(5, 0, 1, "Lead Synth", "SERUM CHORDS", "LFO (X)", "InstrumentGroupDevice");
+        let s = bridge.validate_single_mapping(&mut m);
+        assert_eq!(s, AbletonMappingStatus::Active);
+        assert_eq!(m.address.param_id, 1);  // slot unchanged
+        assert_eq!(m.address.macro_name, "OSC LFO");  // name updated
+    }
+
+    #[test]
+    fn resolver_legacy_backfills_names_from_ids() {
+        // Project saved before name-resolution existed: names are empty.
+        // Resolver falls back to numeric IDs + class match and writes
+        // the names so the next save migrates the mapping forward.
+        let bridge = bridge_with_session(vec![
+            track_(5, "Lead Synth", vec![
+                device_(2, "SERUM CHORDS", "InstrumentGroupDevice", vec![
+                    macro_(1, "LFO (X)"),
+                ]),
+            ]),
+        ]);
+        let mut m = mapping_(5, 2, 1, "", "", "", "InstrumentGroupDevice");
+        let s = bridge.validate_single_mapping(&mut m);
+        assert_eq!(s, AbletonMappingStatus::Active);
+        assert_eq!(m.address.track_name, "Lead Synth");
+        assert_eq!(m.address.device_name, "SERUM CHORDS");
+        assert_eq!(m.address.macro_name, "LFO (X)");
+    }
+
+    #[test]
+    fn resolver_dormant_when_track_renamed_and_class_ambiguous() {
+        // User renamed the track. Names don't match anymore. Multiple
+        // racks of the same class exist, so the fuzzy search is
+        // ambiguous → mapping is marked Ambiguous (not silently rebound).
+        let bridge = bridge_with_session(vec![
+            track_(0, "Lead (renamed)", vec![
+                device_(0, "Rack A", "InstrumentGroupDevice", vec![macro_(1, "X")]),
+            ]),
+            track_(1, "Bass", vec![
+                device_(0, "Rack B", "InstrumentGroupDevice", vec![macro_(1, "Y")]),
+            ]),
+        ]);
+        let mut m = mapping_(0, 0, 1, "Lead Synth", "SERUM CHORDS", "LFO (X)", "InstrumentGroupDevice");
+        let s = bridge.validate_single_mapping(&mut m);
+        assert_eq!(s, AbletonMappingStatus::Ambiguous);
+    }
+
+    #[test]
+    fn resolver_dormant_when_no_match_at_all() {
+        // Mapping references a class that doesn't exist in the session.
+        let bridge = bridge_with_session(vec![
+            track_(0, "Bass", vec![
+                device_(0, "Compressor", "Compressor2", vec![]),
+            ]),
+        ]);
+        let mut m = mapping_(0, 0, 1, "Lead Synth", "SERUM CHORDS", "LFO (X)", "InstrumentGroupDevice");
+        let s = bridge.validate_single_mapping(&mut m);
+        assert_eq!(s, AbletonMappingStatus::Dormant);
     }
 
     #[test]
