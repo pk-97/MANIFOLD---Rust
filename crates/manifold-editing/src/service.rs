@@ -67,6 +67,8 @@ impl EditingService {
 
         #[cfg(debug_assertions)]
         Self::warn_overlapping_clips(&project.timeline.layers);
+        #[cfg(debug_assertions)]
+        project.timeline.debug_assert_tree_order();
     }
 
     /// Debug-only check: log a warning if any layer has overlapping clips.
@@ -95,6 +97,8 @@ impl EditingService {
     pub fn undo(&mut self, project: &mut Project) -> bool {
         if self.undo_manager.undo(project) {
             self.data_version += 1;
+            #[cfg(debug_assertions)]
+            project.timeline.debug_assert_tree_order();
             true
         } else {
             false
@@ -106,6 +110,8 @@ impl EditingService {
     pub fn redo(&mut self, project: &mut Project) -> bool {
         if self.undo_manager.redo(project) {
             self.data_version += 1;
+            #[cfg(debug_assertions)]
+            project.timeline.debug_assert_tree_order();
             true
         } else {
             false

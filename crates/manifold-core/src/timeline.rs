@@ -180,7 +180,7 @@ impl Timeline {
         let idx = index.min(self.layers.len());
         layer.index = idx as i32;
         self.layers.insert(idx, layer);
-        self.reindex_layers();
+        self.enforce_tree_order();
     }
 
     /// Remove a layer at the given index, reindexing remaining layers.
@@ -189,7 +189,7 @@ impl Timeline {
             return None;
         }
         let layer = self.layers.remove(index);
-        self.reindex_layers();
+        self.enforce_tree_order();
         self.mark_clip_lookup_dirty();
         Some(layer)
     }
@@ -197,8 +197,141 @@ impl Timeline {
     /// Atomically replace the entire layer order.
     pub fn replace_layer_order(&mut self, new_order: Vec<Layer>) {
         self.layers = new_order;
-        self.reindex_layers();
+        self.enforce_tree_order();
         self.mark_clip_lookup_dirty();
+    }
+
+    /// Reorder `self.layers` into pre-order DFS traversal of the parent→child
+    /// forest, so every group is immediately followed by its descendants
+    /// (preserving sibling order). Idempotent and stable.
+    ///
+    /// Invariant: for every layer L, all layers whose `parent_layer_id == L.layer_id`
+    /// form a contiguous run immediately after L (recursively). The flat
+    /// `layers` Vec is a serialization of the layer tree.
+    ///
+    /// Orphans (children whose parent_layer_id points to a missing layer) are
+    /// promoted to roots in their original position to avoid data loss.
+    ///
+    /// Always finishes by calling `reindex_layers()`.
+    pub fn enforce_tree_order(&mut self) {
+        let n = self.layers.len();
+        if n == 0 {
+            self.reindex_layers();
+            return;
+        }
+
+        // Build children map (parent_id → ordered child indices) and collect
+        // root indices in their original order. A "root" is any layer with no
+        // parent_layer_id, or whose parent_layer_id does not match an existing
+        // layer in this timeline (orphan rescue).
+        let id_set: ahash::AHashSet<&LayerId> =
+            self.layers.iter().map(|l| &l.layer_id).collect();
+
+        let mut children: AHashMap<LayerId, Vec<usize>> = AHashMap::new();
+        let mut roots: Vec<usize> = Vec::with_capacity(n);
+        for (i, layer) in self.layers.iter().enumerate() {
+            match &layer.parent_layer_id {
+                Some(pid) if id_set.contains(pid) => {
+                    children.entry(pid.clone()).or_default().push(i);
+                }
+                _ => roots.push(i),
+            }
+        }
+
+        // Pre-order DFS, iterative to support arbitrary nesting safely.
+        let mut new_order: Vec<usize> = Vec::with_capacity(n);
+        let mut stack: Vec<usize> = roots.iter().rev().copied().collect();
+        let mut visited = vec![false; n];
+        while let Some(idx) = stack.pop() {
+            if visited[idx] {
+                continue;
+            }
+            visited[idx] = true;
+            new_order.push(idx);
+            let layer_id = &self.layers[idx].layer_id;
+            if let Some(child_idxs) = children.get(layer_id) {
+                for &child_idx in child_idxs.iter().rev() {
+                    if !visited[child_idx] {
+                        stack.push(child_idx);
+                    }
+                }
+            }
+        }
+
+        // Safety net: if any layer was somehow not visited (cycles, etc.),
+        // append it at the end as a root rather than dropping it.
+        if new_order.len() != n {
+            for (i, &was_visited) in visited.iter().enumerate() {
+                if !was_visited {
+                    new_order.push(i);
+                }
+            }
+        }
+
+        // Fast path: already in tree order — skip the rebuild.
+        if new_order.iter().enumerate().all(|(new_i, &old_i)| new_i == old_i) {
+            self.reindex_layers();
+            return;
+        }
+
+        // Permute self.layers into the new order without cloning Layer.
+        let mut taken: Vec<Option<Layer>> = self.layers.drain(..).map(Some).collect();
+        let mut reordered: Vec<Layer> = Vec::with_capacity(n);
+        for &old_i in &new_order {
+            reordered.push(taken[old_i].take().expect("each index visited once"));
+        }
+        self.layers = reordered;
+        self.reindex_layers();
+    }
+
+    /// Debug-only invariant check: every group's children form a contiguous
+    /// run immediately after the group in `self.layers`. Panics on violation.
+    #[cfg(debug_assertions)]
+    pub fn debug_assert_tree_order(&self) {
+        let id_to_index: AHashMap<&LayerId, usize> = self
+            .layers
+            .iter()
+            .enumerate()
+            .map(|(i, l)| (&l.layer_id, i))
+            .collect();
+        for (i, layer) in self.layers.iter().enumerate() {
+            if let Some(pid) = &layer.parent_layer_id
+                && let Some(&parent_i) = id_to_index.get(pid)
+            {
+                assert!(
+                    parent_i < i,
+                    "tree-order violation: child '{}' at {} appears before parent '{}' at {}",
+                    layer.layer_id.as_str(),
+                    i,
+                    pid.as_str(),
+                    parent_i,
+                );
+                // All layers between parent_i+1 and i must be descendants of parent_i.
+                for between in (parent_i + 1)..i {
+                    let mut cur = self.layers[between].parent_layer_id.as_ref();
+                    let mut ok = false;
+                    while let Some(c) = cur {
+                        if c == pid {
+                            ok = true;
+                            break;
+                        }
+                        cur = id_to_index
+                            .get(c)
+                            .and_then(|&idx| self.layers[idx].parent_layer_id.as_ref());
+                    }
+                    assert!(
+                        ok,
+                        "tree-order violation: non-descendant '{}' at {} sits between parent '{}' at {} and child '{}' at {}",
+                        self.layers[between].layer_id.as_str(),
+                        between,
+                        pid.as_str(),
+                        parent_i,
+                        layer.layer_id.as_str(),
+                        i,
+                    );
+                }
+            }
+        }
     }
 
     /// Add a named layer with the given type and optional generator type.
@@ -435,5 +568,142 @@ impl Timeline {
                 .partial_cmp(&b.beat)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+    }
+}
+
+#[cfg(test)]
+mod enforce_tree_order_tests {
+    use super::*;
+    use crate::layer::Layer;
+    use crate::types::LayerType;
+
+    fn mk(name: &str) -> Layer {
+        Layer::new(name.into(), LayerType::Video, 0)
+    }
+    fn mk_group(name: &str) -> Layer {
+        Layer::new(name.into(), LayerType::Group, 0)
+    }
+    fn names(t: &Timeline) -> Vec<&str> {
+        t.layers.iter().map(|l| l.name.as_str()).collect()
+    }
+
+    fn parent(child: &mut Layer, parent: &Layer) {
+        child.parent_layer_id = Some(parent.layer_id.clone());
+    }
+
+    #[test]
+    fn reproduces_screenshot_bug() {
+        // Flat order: BASALT, Group, Gen19, Gen14, ChildA, ChildB
+        // ChildA/ChildB are children of Group but appear after non-children.
+        let mut t = Timeline::default();
+        let basalt = mk("BASALT");
+        let group = mk_group("Group");
+        let gen19 = mk("Gen19");
+        let gen14 = mk("Gen14");
+        let mut child_a = mk("ChildA");
+        let mut child_b = mk("ChildB");
+        parent(&mut child_a, &group);
+        parent(&mut child_b, &group);
+        t.layers = vec![basalt, group, gen19, gen14, child_a, child_b];
+
+        t.enforce_tree_order();
+
+        assert_eq!(
+            names(&t),
+            vec!["BASALT", "Group", "ChildA", "ChildB", "Gen19", "Gen14"]
+        );
+    }
+
+    #[test]
+    fn idempotent() {
+        let mut t = Timeline::default();
+        let group = mk_group("G");
+        let mut a = mk("A");
+        let mut b = mk("B");
+        parent(&mut a, &group);
+        parent(&mut b, &group);
+        t.layers = vec![mk("Top"), group, mk("Mid"), a, b, mk("Bot")];
+        t.enforce_tree_order();
+        let after_first: Vec<String> =
+            t.layers.iter().map(|l| l.name.clone()).collect();
+        t.enforce_tree_order();
+        let after_second: Vec<String> =
+            t.layers.iter().map(|l| l.name.clone()).collect();
+        assert_eq!(after_first, after_second);
+    }
+
+    #[test]
+    fn already_ordered_is_unchanged() {
+        let mut t = Timeline::default();
+        let group = mk_group("G");
+        let mut a = mk("A");
+        let mut b = mk("B");
+        parent(&mut a, &group);
+        parent(&mut b, &group);
+        t.layers = vec![mk("Top"), group, a, b, mk("Bot")];
+        t.enforce_tree_order();
+        assert_eq!(names(&t), vec!["Top", "G", "A", "B", "Bot"]);
+    }
+
+    #[test]
+    fn two_interleaved_groups() {
+        let mut t = Timeline::default();
+        let g1 = mk_group("G1");
+        let g2 = mk_group("G2");
+        let mut a1 = mk("A1");
+        let mut a2 = mk("A2");
+        let mut b1 = mk("B1");
+        let mut b2 = mk("B2");
+        parent(&mut a1, &g1);
+        parent(&mut a2, &g1);
+        parent(&mut b1, &g2);
+        parent(&mut b2, &g2);
+        // Interleaved: G1, G2, A1, B1, A2, B2
+        t.layers = vec![g1, g2, a1, b1, a2, b2];
+        t.enforce_tree_order();
+        assert_eq!(names(&t), vec!["G1", "A1", "A2", "G2", "B1", "B2"]);
+    }
+
+    #[test]
+    fn nested_groups_pre_order() {
+        let mut t = Timeline::default();
+        let outer = mk_group("Outer");
+        let inner = mk_group("Inner");
+        let mut leaf1 = mk("Leaf1");
+        let mut leaf2 = mk("Leaf2");
+        let mut sib = mk("Sib");
+        let mut inner_clone = inner.clone();
+        parent(&mut inner_clone, &outer);
+        parent(&mut leaf1, &inner_clone);
+        parent(&mut leaf2, &inner_clone);
+        parent(&mut sib, &outer);
+        // Scrambled order
+        t.layers = vec![leaf1, sib, outer, mk("After"), inner_clone, leaf2];
+        t.enforce_tree_order();
+        // Outer's children appear in their original relative order (Sib at
+        // idx 1 came before Inner at idx 4 in the input).
+        assert_eq!(
+            names(&t),
+            vec!["Outer", "Sib", "Inner", "Leaf1", "Leaf2", "After"]
+        );
+    }
+
+    #[test]
+    fn orphan_child_kept_as_root() {
+        let mut t = Timeline::default();
+        let mut orphan = mk("Orphan");
+        // parent_layer_id points to a layer that does not exist
+        orphan.parent_layer_id = Some(crate::id::LayerId::from("ghost".to_string()));
+        t.layers = vec![mk("Top"), orphan, mk("Bot")];
+        t.enforce_tree_order();
+        // Orphan is treated as a root and not lost
+        assert_eq!(names(&t), vec!["Top", "Orphan", "Bot"]);
+    }
+
+    #[test]
+    fn empty_timeline_is_safe() {
+        let mut t = Timeline::default();
+        t.enforce_tree_order();
+        assert!(t.layers.is_empty());
     }
 }

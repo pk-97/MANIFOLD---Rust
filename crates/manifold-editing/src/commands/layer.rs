@@ -129,6 +129,7 @@ impl Command for DeleteLayerCommand {
                     child.parent_layer_id = old_parent.clone();
                 }
             }
+            project.timeline.enforce_tree_order();
         }
     }
 
@@ -243,6 +244,7 @@ impl Command for GroupLayersCommand {
                 layer.parent_layer_id = Some(group_id.clone());
             }
         }
+        project.timeline.enforce_tree_order();
     }
 
     fn undo(&mut self, project: &mut Project) {
@@ -262,6 +264,7 @@ impl Command for GroupLayersCommand {
                 layer.parent_layer_id = parent_id.clone();
             }
         }
+        project.timeline.enforce_tree_order();
     }
 
     fn description(&self) -> &str {

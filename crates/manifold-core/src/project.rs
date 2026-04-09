@@ -123,8 +123,9 @@ impl Project {
         // every value to defaults.
         self.migrate_all_generator_params();
 
-        // Rebuild layer index cache + sync layer.index
-        self.timeline.reindex_layers();
+        // Normalize layer order into tree pre-order (group children contiguous
+        // immediately after parent). Also reindexes.
+        self.timeline.enforce_tree_order();
     }
 
     /// Resize all effect param arrays to match their definitions.
