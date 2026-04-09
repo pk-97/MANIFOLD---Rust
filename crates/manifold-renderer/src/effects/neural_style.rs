@@ -477,9 +477,10 @@ fn create_ort_session() -> Option<ort::session::Session> {
         }
     };
 
+    // CoreML EP can't handle dynamic spatial axes (produces zero-dim shapes).
+    // Use CPU provider for now — still fast enough at 256x256 (~15ms).
+    // TODO: export fixed-size models to enable CoreML/ANE acceleration.
     let builder = match builder.with_execution_providers([
-        #[cfg(target_os = "macos")]
-        ort::execution_providers::CoreMLExecutionProvider::default().build(),
         ort::execution_providers::CPUExecutionProvider::default().build(),
     ]) {
         Ok(b) => b,
