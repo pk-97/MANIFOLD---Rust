@@ -259,9 +259,9 @@ impl PostProcessEffect for NeuralStyleFX {
     }
 
     fn should_skip(&self, fx: &EffectInstance) -> bool {
-        // Skip if strength is 0, or no worker, or no style image.
+        // Skip if strength is 0 or no style image selected.
+        // Don't check worker here — it's lazily created in apply().
         fx.param_values.first().copied().unwrap_or(0.0) <= 0.0
-            || self.worker.is_none()
             || fx.style_image_path.is_none()
     }
 
