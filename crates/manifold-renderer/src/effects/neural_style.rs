@@ -65,6 +65,9 @@ struct BlendUniforms {
 pub struct NeuralStyleFX {
     blend_helper: ComputeDualBlitHelper,
     worker: Option<BackgroundWorker<StyleRequest, StyleResponse>>,
+    /// True after we've attempted (and possibly failed) to create the worker.
+    /// Prevents retrying every frame.
+    worker_init_attempted: bool,
     owner_states: AHashMap<i64, OwnerState>,
     // Cached style image (shared across all owners).
     loaded_style_path: Option<String>,
@@ -77,37 +80,9 @@ unsafe impl Send for NeuralStyleFX {}
 
 impl NeuralStyleFX {
     pub fn new(device: &GpuDevice) -> Self {
-        // Probe for the ONNX Runtime dylib BEFORE ever calling into ort.
-        // ort panics with uncatchable C++ exceptions if the dylib is
-        // missing or broken — we must not let that crash the app.
-        let worker = match find_ort_dylib() {
-            Some(dylib_path) => {
-                // SAFETY: called once during single-threaded effect registry init,
-                // before any worker threads that might read env vars.
-                unsafe { std::env::set_var("ORT_DYLIB_PATH", &dylib_path) };
-                log::info!("[NeuralStyleFX] Found ONNX Runtime at: {}", dylib_path);
-
-                BackgroundWorker::try_new(|| {
-                    let session = create_ort_session()?;
-                    Some(move |req: StyleRequest| -> StyleResponse {
-                        run_inference(&session, req)
-                    })
-                })
-            }
-            None => {
-                log::warn!(
-                    "[NeuralStyleFX] libonnxruntime.dylib not found. \
-                     Install via `brew install onnxruntime` or set ORT_DYLIB_PATH."
-                );
-                None
-            }
-        };
-        if worker.is_none() {
-            log::warn!(
-                "[NeuralStyleFX] Neural Style effect disabled — \
-                 ONNX model or runtime not available."
-            );
-        }
+        // Do NOT initialize ort here. ONNX Runtime throws uncatchable C++
+        // exceptions during init if anything goes wrong (version mismatch,
+        // missing providers, etc). Worker is created lazily on first use.
 
         let blend_helper = ComputeDualBlitHelper::new(
             device,
@@ -117,7 +92,8 @@ impl NeuralStyleFX {
 
         Self {
             blend_helper,
-            worker,
+            worker: None,
+            worker_init_attempted: false,
             owner_states: AHashMap::new(),
             loaded_style_path: None,
             style_pixels: None,
@@ -168,6 +144,42 @@ impl NeuralStyleFX {
                 self.loaded_style_path = None;
                 self.style_pixels = None;
             }
+        }
+    }
+
+    /// Lazily create the ONNX Runtime worker on first use.
+    /// Deferred from new() because ort throws uncatchable C++ exceptions
+    /// during init, and we must not crash the app at startup.
+    fn ensure_worker(&mut self) {
+        if self.worker.is_some() || self.worker_init_attempted {
+            return;
+        }
+        self.worker_init_attempted = true;
+
+        let Some(dylib_path) = find_ort_dylib() else {
+            log::warn!(
+                "[NeuralStyleFX] libonnxruntime.dylib not found. \
+                 Install via `brew install onnxruntime` or set ORT_DYLIB_PATH."
+            );
+            return;
+        };
+
+        // SAFETY: called from content thread before worker thread exists.
+        unsafe { std::env::set_var("ORT_DYLIB_PATH", &dylib_path) };
+        log::info!("[NeuralStyleFX] Found ONNX Runtime at: {dylib_path}");
+
+        self.worker = BackgroundWorker::try_new(|| {
+            let session = create_ort_session()?;
+            Some(move |req: StyleRequest| -> StyleResponse {
+                run_inference(&session, req)
+            })
+        });
+
+        if self.worker.is_none() {
+            log::warn!(
+                "[NeuralStyleFX] Failed to create ONNX session. \
+                 Run tools/export_adain_onnx.py to export the model."
+            );
         }
     }
 
@@ -261,6 +273,9 @@ impl PostProcessEffect for NeuralStyleFX {
         fx: &EffectInstance,
         ctx: &EffectContext,
     ) {
+        // Lazy-init the ONNX worker on first apply (not at startup).
+        self.ensure_worker();
+
         let strength = fx.param_values.first().copied().unwrap_or(0.5);
         let inference_size = if fx.param_values.get(1).copied().unwrap_or(0.0) > 0.5 {
             512
