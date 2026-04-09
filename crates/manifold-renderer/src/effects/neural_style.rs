@@ -469,19 +469,40 @@ fn create_ort_session() -> Option<ort::session::Session> {
         model_path.display()
     );
 
-    let session = ort::session::Session::builder()
-        .ok()?
-        .with_execution_providers([
-            #[cfg(target_os = "macos")]
-            ort::execution_providers::CoreMLExecutionProvider::default().build(),
-            ort::execution_providers::CPUExecutionProvider::default().build(),
-        ])
-        .ok()?
-        .commit_from_file(&model_path)
-        .ok()?;
+    let builder = match ort::session::Session::builder() {
+        Ok(b) => b,
+        Err(e) => {
+            log::error!("[NeuralStyleFX] Session::builder() failed: {e}");
+            return None;
+        }
+    };
 
-    log::info!("[NeuralStyleFX] ONNX session created successfully.");
-    Some(session)
+    let builder = match builder.with_execution_providers([
+        #[cfg(target_os = "macos")]
+        ort::execution_providers::CoreMLExecutionProvider::default().build(),
+        ort::execution_providers::CPUExecutionProvider::default().build(),
+    ]) {
+        Ok(b) => b,
+        Err(e) => {
+            log::error!("[NeuralStyleFX] with_execution_providers() failed: {e}");
+            return None;
+        }
+    };
+
+    match builder.commit_from_file(&model_path) {
+        Ok(session) => {
+            log::info!("[NeuralStyleFX] ONNX session created successfully.");
+            Some(session)
+        }
+        Err(e) => {
+            log::error!(
+                "[NeuralStyleFX] commit_from_file() failed: {e}\n  \
+                 Model path: {}",
+                model_path.display()
+            );
+            None
+        }
+    }
 }
 
 /// Run AdaIN inference on the worker thread.
