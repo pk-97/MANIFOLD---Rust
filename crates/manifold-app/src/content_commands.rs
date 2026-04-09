@@ -306,7 +306,12 @@ impl ContentThread {
                 // Auto-connect Ableton bridge — silently stays disconnected if
                 // Ableton isn't running. Heartbeat will detect connection later.
                 self.ableton_bridge.connect();
-                if let Some(p) = self.engine.project() {
+                // Re-validate mappings against the current Ableton session so
+                // they don't sit at default Dormant after a project load.
+                // Discovery may already be complete from a prior connect, in
+                // which case `take_validation_dirty` won't fire on its own.
+                if let Some(p) = self.engine.project_mut() {
+                    self.ableton_bridge.validate_mappings(p);
                     self.ableton_bridge.rebuild_listeners(p);
                 }
             }
