@@ -246,11 +246,6 @@ pub fn push_state(
 
         // Cache Ableton session for parameter mapping dropdown
         if let Some(session) = &content_state.ableton_session {
-            eprintln!(
-                "[AbletonBridge] UI received session: {} tracks, connected={}",
-                session.tracks.len(),
-                session.connected
-            );
             ui.ableton_session = Some(std::sync::Arc::clone(session));
         }
 
@@ -594,6 +589,8 @@ pub fn push_state(
         .map(|slot| {
             slot.ableton_mapping.as_ref().map(|m| AbletonMappingDisplay {
                 macro_name: m.address.macro_name.clone(),
+                track_name: m.address.track_name.clone(),
+                device_name: m.address.device_name.clone(),
                 status: m.status,
                 inverted: m.inverted,
             })
@@ -1160,6 +1157,8 @@ fn effects_to_configs(
                     let ableton_display = abl_mapping.map(|mapping| {
                         AbletonMappingDisplay {
                             macro_name: mapping.address.macro_name.clone(),
+                            track_name: mapping.address.track_name.clone(),
+                            device_name: mapping.address.device_name.clone(),
                             status: mapping.status,
                             inverted: mapping.inverted,
                         }
@@ -1349,6 +1348,8 @@ fn gen_params_to_config(
             let ableton_display = abl_mapping.map(|mapping| {
                 AbletonMappingDisplay {
                     macro_name: mapping.address.macro_name.clone(),
+                    track_name: mapping.address.track_name.clone(),
+                    device_name: mapping.address.device_name.clone(),
                     status: mapping.status,
                     inverted: mapping.inverted,
                 }

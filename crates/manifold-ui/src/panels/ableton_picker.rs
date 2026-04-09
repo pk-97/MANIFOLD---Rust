@@ -8,7 +8,9 @@
 //! Does NOT depend on manifold_playback — callers pass `AbletonPickerSession`
 //! which is constructed from the bridge session in manifold-app.
 
-use manifold_core::ableton_mapping::{AbletonDeviceIdentity, AbletonMacroAddress};
+use manifold_core::ableton_mapping::{
+    AbletonDeviceIdentity, AbletonMacroAddress, is_default_macro_name,
+};
 
 use crate::color;
 use crate::node::*;
@@ -404,6 +406,12 @@ impl AbletonPickerPopup {
                 let track_name = track.track_name.clone();
 
                 for (di, device) in track.devices.iter().enumerate() {
+                    // Skip the entire device if no macros are renamed —
+                    // a device of nothing-but-defaults has no mappable
+                    // surface and shouldn't take up picker space.
+                    if device.macros.iter().all(|m| is_default_macro_name(&m.name)) {
+                        continue;
+                    }
                     // Device name section header (non-interactive)
                     tree.add_label(
                         -1,
@@ -422,6 +430,19 @@ impl AbletonPickerPopup {
                     ry += SECTION_H + 2.0;
 
                     for mac in &device.macros {
+                        // Skip unrenamed default macros ("Macro 1".."Macro 8").
+                        // Mapping these is what corrupts projects: a previous
+                        // resolver could silently rebind a stale "Macro N"
+                        // mapping to a totally different rack at the same
+                        // numeric coordinates, baking the wrong names into the
+                        // file. By forbidding them here we make every stored
+                        // mapping name a hand-typed user choice — which means
+                        // the resolver's name-based lookups can never land on
+                        // the wrong rack by accident. Rename the macro in
+                        // Ableton (right-click → Rename) to make it mappable.
+                        if is_default_macro_name(&mac.name) {
+                            continue;
+                        }
                         let addr = AbletonMacroAddress {
                             track_id: track.track_id,
                             device_id: device.device_id,

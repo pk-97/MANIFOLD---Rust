@@ -100,6 +100,13 @@ pub(crate) struct AbletonConfigIds {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AbletonMappingDisplay {
     pub macro_name: String,
+    /// Stored target track name from the mapping address. Surfaced in
+    /// the UI so corrupt mappings (where the stored target doesn't match
+    /// what the user intended) are visible at a glance — see the
+    /// "make corruption visible" thread in feature/unit-types.
+    pub track_name: String,
+    /// Stored target device name (rack name in Ableton).
+    pub device_name: String,
     pub status: AbletonMappingStatus,
     pub inverted: bool,
 }
@@ -1035,6 +1042,22 @@ pub(crate) fn build_ableton_config(
         "INV",
     ) as i32;
 
+    // Compose the label as "macro_name  ·  track > device" so the user
+    // can see the actual stored target rack at a glance. This makes
+    // corrupted mappings (where the stored target doesn't match what
+    // was originally mapped) immediately visible without changing any
+    // routing — the values still flow wherever the resolver landed,
+    // but the user can audit it from the effect card.
+    let composite_label = if display.track_name.is_empty()
+        && display.device_name.is_empty()
+    {
+        display.macro_name.clone()
+    } else {
+        format!(
+            "{}  ·  {} > {}",
+            display.macro_name, display.track_name, display.device_name
+        )
+    };
     let label_x = x + pad + dot_size + 4.0;
     let label_y = y + (ABL_CONFIG_HEIGHT - 12.0) * 0.5;
     let label_w = inv_btn_x - label_x - 4.0;
@@ -1044,7 +1067,7 @@ pub(crate) fn build_ableton_config(
         label_y,
         label_w,
         12.0,
-        &display.macro_name,
+        &composite_label,
         UIStyle {
             text_color: color::TEXT_DIMMED_C32,
             font_size: color::FONT_CAPTION,

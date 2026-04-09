@@ -100,6 +100,22 @@ impl AbletonParamMapping {
     }
 }
 
+// ── Default-name detection ────────────────────────────────────────
+
+/// `true` if `name` is one of Ableton's default rack-macro labels
+/// (`"Macro 1"`..=`"Macro 8"`). Used to forbid mapping against
+/// unrenamed macros — see `crates/manifold-ui/src/panels/ableton_picker.rs`
+/// for the reasoning. The check is intentionally strict: only the literal
+/// patterns count as defaults; a user-typed `"Macro 1 (Filter)"` is fine.
+pub fn is_default_macro_name(name: &str) -> bool {
+    if let Some(rest) = name.strip_prefix("Macro ")
+        && let Ok(n) = rest.parse::<u32>()
+    {
+        return (1..=8).contains(&n);
+    }
+    false
+}
+
 // ── Mapping target ────────────────────────────────────────────────
 
 /// Which MANIFOLD parameter an Ableton mapping targets.

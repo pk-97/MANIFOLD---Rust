@@ -996,10 +996,15 @@ impl AbletonBridge {
                     .first()
                     .and_then(osc_arg_string)
                     .unwrap_or_else(|| "(no detail)".to_string());
-                eprintln!("[AbletonBridge] /live/error: {detail}");
+                // AbletonOSC emits "Observer not connected" repeatedly for
+                // benign listener teardown races during discovery. Suppress
+                // those; surface anything else.
+                if !detail.contains("Observer not connected") {
+                    eprintln!("[AbletonBridge] /live/error: {detail}");
+                }
             }
             other => {
-                eprintln!(
+                log::debug!(
                     "[AbletonBridge] unhandled inbound address: {other} (args={})",
                     msg.args.len()
                 );
@@ -1015,7 +1020,7 @@ impl AbletonBridge {
     /// position. This way `[name, time, name, time, ...]` and
     /// `[time, name, time, name, ...]` both parse correctly.
     fn handle_cue_points(&mut self, msg: &OscMessage) {
-        eprintln!(
+        log::debug!(
             "[AbletonBridge] /live/song/get/cue_points response: {} arg(s)",
             msg.args.len()
         );
@@ -1038,7 +1043,7 @@ impl AbletonBridge {
             i += 2;
         }
         cues.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
-        eprintln!("[AbletonBridge] Parsed {} cue point(s)", cues.len());
+        log::info!("[AbletonBridge] Parsed {} cue point(s)", cues.len());
         self.session.cue_points = cues;
         self.session_version += 1;
     }
@@ -1617,7 +1622,7 @@ impl AbletonBridge {
         // Fetch locators / cue points so the perform-mode HUD has them.
         // Reply arrives async on /live/song/get/cue_points and is handled
         // in handle_message → handle_cue_points.
-        eprintln!("[AbletonBridge] Requesting cue points (/live/song/get/cue_points)");
+        log::debug!("[AbletonBridge] Requesting cue points (/live/song/get/cue_points)");
         send_osc_to(&self.send_socket, "/live/song/get/cue_points", &[]);
 
         // Kick off PLAY-group discovery in parallel.
@@ -1643,7 +1648,7 @@ impl AbletonBridge {
                 .leaf_names
                 .insert(t.track_id, t.name.clone());
         }
-        eprintln!(
+        log::debug!(
             "[AbletonBridge] Starting PLAY-group discovery (querying is_foldable + is_grouped for {n} tracks)"
         );
         for tid in 0..n {
@@ -1676,7 +1681,7 @@ impl AbletonBridge {
         let pg = &mut self.play_group_discovery;
         pg.structure_complete = true;
         pg.leaf_indices = leaves.clone();
-        eprintln!(
+        log::info!(
             "[AbletonBridge] PLAY-group structure complete: {} leaf track(s)",
             leaves.len()
         );
@@ -1730,7 +1735,7 @@ impl AbletonBridge {
             })
             .map(|t| (t.track_id, t.name.clone(), normalize_group_name(&t.name)))
             .collect();
-        eprintln!(
+        log::debug!(
             "[AbletonBridge] PLAY-group: top-level foldable candidates = {candidates:?}"
         );
 
@@ -1821,37 +1826,9 @@ impl AbletonBridge {
             .as_ref()
             .map(|g| g.tracks.iter().map(|t| t.clips.len()).sum())
             .unwrap_or(0);
-        eprintln!(
+        log::info!(
             "[AbletonBridge] PLAY-group complete: {n_tracks} track(s), {n_clips} clip(s) total"
         );
-        // One-shot dump of every parsed track's clip ranges so we can
-        // compare directly against Ableton's arrangement view and spot
-        // any data corruption.
-        if let Some(ref g) = group {
-            for t in &g.tracks {
-                let clips_str: String = t
-                    .clips
-                    .iter()
-                    .map(|c| {
-                        let m = if c.muted { "M" } else { "" };
-                        format!("[{:.2}, {:.2}){}", c.start, c.end, m)
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                eprintln!(
-                    "[AbletonBridge]   tid={} muted={} \"{}\" clips({})={}",
-                    t.track_id,
-                    t.muted,
-                    t.name,
-                    t.clips.len(),
-                    if clips_str.is_empty() {
-                        "<none>".to_string()
-                    } else {
-                        clips_str
-                    }
-                );
-            }
-        }
         self.session.play_group = group;
         self.session_version += 1;
         // Reset accumulator so a future re-discovery starts fresh.
@@ -1871,6 +1848,7 @@ impl AbletonBridge {
     /// Validate all Ableton mappings in the project against the current session.
     /// Auto-updates when unambiguous, flags when ambiguous.
     pub fn validate_mappings(&self, project: &mut Project) {
+
         if !self.connected || self.session.tracks.is_empty() {
             // Mark all dormant
             Self::set_all_mapping_status(project, AbletonMappingStatus::Dormant);
