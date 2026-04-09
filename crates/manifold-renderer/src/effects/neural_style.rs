@@ -222,8 +222,19 @@ impl NeuralStyleFX {
                     state.current_inference_size = response.width;
                 }
                 if let Some(rt) = &state.result_rt {
-                    device.upload_texture(&rt.texture, &response.stylized_pixels);
-                    state.has_result = true;
+                    let expected = (rt.width * rt.height * 4) as usize;
+                    if response.stylized_pixels.len() == expected {
+                        device.upload_texture(&rt.texture, &response.stylized_pixels);
+                        state.has_result = true;
+                    } else {
+                        log::error!(
+                            "[NeuralStyleFX] Pixel buffer size mismatch: got {}, expected {} ({}x{})",
+                            response.stylized_pixels.len(),
+                            expected,
+                            rt.width,
+                            rt.height,
+                        );
+                    }
                 }
             }
         }
@@ -347,7 +358,7 @@ impl PostProcessEffect for NeuralStyleFX {
                     gpu.device,
                     inference_size,
                     inference_size,
-                    GpuTextureFormat::Rgba8Unorm,
+                    GpuTextureFormat::Rgba16Float,
                     &format!("NeuralStyle_Down_{owner_key}"),
                 ));
             }
