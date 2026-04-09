@@ -362,21 +362,22 @@ impl PostProcessEffect for NeuralStyleFX {
         // Use index access to avoid holding a mutable borrow across dispatch calls.
         self.owner_states.get_mut(&owner_key).unwrap().current_inference_size = inference_size;
 
-        // Upload pending inference result via encoder (on GPU timeline).
+        // Blit pending inference result from shared buffer to result texture.
+        // Uses copy_buffer_to_texture (blit encoder) — properly serialized on
+        // the GPU timeline, unlike replace_region which races with reads.
         if let Some(state) = self.owner_states.get_mut(&owner_key)
-            && let Some(pixels) = state.pending_upload.take()
+            && let Some(buf) = state.pending_upload.take()
             && let Some(rt) = &state.result_rt
         {
-            let w = rt.width;
-            let h = rt.height;
-            let expected = (w * h * 4) as usize;
-            if let Some(ptr) = pixels.mapped_ptr() {
-                let data =
-                    unsafe { std::slice::from_raw_parts(ptr as *const u8, expected) };
-                gpu.native_enc
-                    .upload_texture(&rt.texture, w, h, 1, data);
-                state.has_result = true;
-            }
+            let bpp = rt.format.bytes_per_pixel();
+            gpu.native_enc.copy_buffer_to_texture(
+                &buf,
+                &rt.texture,
+                rt.width,
+                rt.height,
+                rt.width * bpp,
+            );
+            state.has_result = true;
         }
 
         // Submit readback if not pending and enough time has passed.

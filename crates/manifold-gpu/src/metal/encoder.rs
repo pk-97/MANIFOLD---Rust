@@ -1408,6 +1408,36 @@ impl GpuEncoder {
         enc.end_encoding();
     }
 
+    /// Copy from a shared-memory buffer to a texture via blit encoder.
+    /// Properly serialized on the GPU command buffer timeline — safe for
+    /// textures that may be read by subsequent render/compute passes.
+    pub fn copy_buffer_to_texture(
+        &mut self,
+        src: &GpuBuffer,
+        dst: &GpuTexture,
+        width: u32,
+        height: u32,
+        bytes_per_row: u32,
+    ) {
+        self.end_current();
+        let enc = self.cmd_buf().new_blit_command_encoder();
+        let dst_size = metal::MTLSize::new(width as _, height as _, 1);
+        let dst_origin = metal::MTLOrigin { x: 0, y: 0, z: 0 };
+        enc.copy_from_buffer_to_texture(
+            &src.raw,
+            0,                    // source_offset
+            bytes_per_row as u64, // source_bytes_per_row
+            bytes_per_row as u64 * height as u64, // source_bytes_per_image
+            dst_size,
+            &dst.raw,
+            0, // destination_slice
+            0, // destination_level
+            dst_origin,
+            metal::MTLBlitOption::empty(),
+        );
+        enc.end_encoding();
+    }
+
     /// Upload CPU data to a 2D texture region via blit encoder.
     /// `bytes_per_pixel` is inferred from the texture format.
     pub fn upload_texture(
