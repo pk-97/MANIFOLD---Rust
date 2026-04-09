@@ -17,7 +17,33 @@ use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::EffectTypeId;
+use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::generator_registration::ParamSpec;
 use manifold_core::effects::EffectInstance;
+use crate::effects::registration::EffectFactory;
+
+inventory::submit! {
+    EffectMetadata {
+        id: EffectTypeId::TRANSFORM,
+        display_name: "Transform",
+        category: "Spatial",
+        available: true,
+        osc_prefix: "transform",
+        legacy_discriminant: Some(0),
+        params: &[
+            ParamSpec::continuous("X", -1.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::continuous("Y", -1.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::continuous("Zoom", 0.1, 5.0, 1.0, "F2", ""),
+            ParamSpec::continuous("Rot", -180.0, 180.0, 0.0, "F2", ""),
+        ],
+    }
+}
+inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::TRANSFORM,
+        create: |device| Box::new(TransformFX::new(device)),
+    }
+}
 
 const DEG2RAD: f32 = std::f32::consts::PI / 180.0;
 

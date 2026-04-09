@@ -2,7 +2,34 @@ use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::EffectTypeId;
+use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::generator_registration::ParamSpec;
 use manifold_core::effects::EffectInstance;
+use crate::effects::registration::EffectFactory;
+
+inventory::submit! {
+    EffectMetadata {
+        id: EffectTypeId::GLITCH,
+        display_name: "Glitch",
+        category: "Filmic",
+        available: true,
+        osc_prefix: "glitch",
+        legacy_discriminant: Some(32),
+        params: &[
+            ParamSpec::continuous("Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::whole("Block", 4.0, 64.0, 16.0, "BlockSize"),
+            ParamSpec::continuous("RGB Shift", 0.0, 0.05, 0.01, "F2", "RGBShift"),
+            ParamSpec::continuous("Scanline", 0.0, 1.0, 0.3, "F2", "Scanline"),
+            ParamSpec::continuous("Speed", 0.1, 10.0, 2.0, "F2", "Speed"),
+        ],
+    }
+}
+inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::GLITCH,
+        create: |device| Box::new(GlitchFX::new(device)),
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]

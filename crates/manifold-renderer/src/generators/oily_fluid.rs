@@ -23,6 +23,43 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use manifold_core::GeneratorTypeId;
 
+use crate::generators::registration::GeneratorFactory;
+use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
+
+inventory::submit! {
+    GeneratorMetadata {
+        id: GeneratorTypeId::OILY_FLUID,
+        display_name: "Oily Fluid",
+        is_line_based: false,
+        available: true,
+        osc_prefix: "oilyFluid",
+        legacy_discriminant: Some(24),
+        params: &[
+            ParamSpec::continuous("Speed", 0.1, 4.0, 1.0, "F2", "speed"),
+            ParamSpec::continuous("Feedback", 0.95, 0.9999, 0.998, "F4", "feedback"),
+            ParamSpec::continuous("Noise", 0.0, 0.02, 0.002, "F4", "noise"),
+            ParamSpec::continuous("VelDamp", 0.85, 0.999, 0.98, "F3", "veldamp"),
+            ParamSpec::continuous("Curl", 0.0, 1.0, 0.2, "F2", "curl"),
+            ParamSpec::continuous("Relief", 0.05, 2.0, 0.5, "F2", "relief"),
+            ParamSpec::continuous("Chroma", 0.0, 8.0, 2.0, "F2", "chroma"),
+            ParamSpec::continuous("Contrast", 0.5, 3.0, 1.4, "F2", "contrast"),
+            ParamSpec::continuous("Hue", 0.0, 1.0, 0.0, "F2", "hue"),
+            ParamSpec::continuous("Sat", 0.0, 2.0, 1.0, "F2", "sat"),
+            ParamSpec::continuous("Bright", 0.0, 2.0, 1.0, "F2", "bright"),
+            ParamSpec::continuous("VelDisp", 0.1, 10.0, 1.0, "F2", "velDisp"),
+            ParamSpec::continuous("ColDisp", 0.1, 10.0, 1.0, "F2", "colDisp"),
+            ParamSpec::whole_labels("Mode", 0.0, 4.0, 0.0, &["Oil Slick", "Flow Field", "Height Map", "PBR", "Lines"], "mode"),
+        ],
+        string_params: &[],
+    }
+}
+inventory::submit! {
+    GeneratorFactory {
+        id: GeneratorTypeId::OILY_FLUID,
+        create: |device| Box::new(OilyFluidGenerator::new(device)),
+    }
+}
+
 // Parameter indices (must match generator_definition_registry order).
 const SPEED: usize = 0;
 const FEEDBACK: usize = 1;

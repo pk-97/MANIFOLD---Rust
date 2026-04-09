@@ -10,6 +10,41 @@ use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::GeneratorTypeId;
 
+use crate::generators::registration::GeneratorFactory;
+use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
+
+inventory::submit! {
+    GeneratorMetadata {
+        id: GeneratorTypeId::MYCELIUM,
+        display_name: "Mycelium",
+        is_line_based: false,
+        available: true,
+        osc_prefix: "mycelium",
+        legacy_discriminant: Some(17),
+        params: &[
+            ParamSpec::continuous("SensDist", 0.005, 0.1, 0.02, "F3", "sensdist"),
+            ParamSpec::continuous("SensAngle", 0.1, 1.5, 0.8, "F2", "sensangle"),
+            ParamSpec::continuous("Turn", 0.05, 1.5, 0.4, "F2", "turn"),
+            ParamSpec::continuous("Step", 0.0002, 0.005, 0.001, "F4", "step"),
+            ParamSpec::continuous("Deposit", 0.1, 5.0, 1.5, "F1", "deposit"),
+            ParamSpec::continuous("Decay", 0.85, 1.0, 0.98, "F3", "decay"),
+            ParamSpec::continuous("Color", 0.0, 1.0, 0.08, "F2", "color"),
+            ParamSpec::continuous("Glow", 0.0, 3.0, 1.0, "F1", "glow"),
+            ParamSpec::continuous("Reactivity", 0.0, 1.0, 0.5, "F2", "reactivity"),
+            ParamSpec::whole("Agents", 10.0, 500.0, 200.0, "agents"),
+            ParamSpec::continuous("Scale", 0.1, 2.0, 1.0, "F2", "scale"),
+            ParamSpec::whole("Seeds", 1.0, 5.0, 1.0, "seeds"),
+        ],
+        string_params: &[],
+    }
+}
+inventory::submit! {
+    GeneratorFactory {
+        id: GeneratorTypeId::MYCELIUM,
+        create: |device| Box::new(MyceliumGenerator::new(device)),
+    }
+}
+
 // Parameter indices matching types.rs param_defs
 const SENS_DIST: usize = 0;
 const SENS_ANGLE: usize = 1;

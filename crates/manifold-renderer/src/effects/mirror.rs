@@ -2,7 +2,31 @@ use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::EffectTypeId;
+use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::generator_registration::ParamSpec;
 use manifold_core::effects::EffectInstance;
+use crate::effects::registration::EffectFactory;
+
+inventory::submit! {
+    EffectMetadata {
+        id: EffectTypeId::MIRROR,
+        display_name: "Mirror",
+        category: "Post-Process",
+        available: true,
+        osc_prefix: "mirror",
+        legacy_discriminant: Some(21),
+        params: &[
+            ParamSpec::continuous("Amount", 0.0, 1.0, 1.0, "F2", ""),
+            ParamSpec::whole_labels("Mode", 0.0, 2.0, 0.0, &["Horiz", "Vert", "Both"], "Mode"),
+        ],
+    }
+}
+inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::MIRROR,
+        create: |device| Box::new(MirrorFX::new(device)),
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]

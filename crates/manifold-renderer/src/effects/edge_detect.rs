@@ -2,7 +2,32 @@ use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::EffectTypeId;
+use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::generator_registration::ParamSpec;
 use manifold_core::effects::EffectInstance;
+use crate::effects::registration::EffectFactory;
+
+inventory::submit! {
+    EffectMetadata {
+        id: EffectTypeId::EDGE_DETECT,
+        display_name: "Edge Detect",
+        category: "Post-Process",
+        available: true,
+        osc_prefix: "edgeDetect",
+        legacy_discriminant: Some(25),
+        params: &[
+            ParamSpec::continuous("Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::continuous("Thresh", 0.0, 1.0, 0.1, "F2", "Threshold"),
+            ParamSpec::whole_labels("Mode", 0.0, 2.0, 0.0, &["Sobel", "Laplacian", "Frei-Chen"], "Mode"),
+        ],
+    }
+}
+inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::EDGE_DETECT,
+        create: |device| Box::new(EdgeDetectFX::new(device)),
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]

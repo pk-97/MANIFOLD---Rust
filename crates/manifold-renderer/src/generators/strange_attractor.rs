@@ -13,6 +13,40 @@ use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::GeneratorTypeId;
 
+use crate::generators::registration::GeneratorFactory;
+use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
+
+inventory::submit! {
+    GeneratorMetadata {
+        id: GeneratorTypeId::COMPUTE_STRANGE_ATTRACTOR,
+        display_name: "Strange Attractor",
+        is_line_based: false,
+        available: true,
+        osc_prefix: "strangeAttractor",
+        legacy_discriminant: Some(18),
+        params: &[
+            ParamSpec::whole_labels("Type", 0.0, 4.0, 0.0, &["Lorenz", "Rossler", "Aizawa", "Thomas", "Halvorsen"], "type"),
+            ParamSpec::continuous("Contrast", 1.0, 8.0, 3.5, "F1", "contrast"),
+            ParamSpec::continuous("Chaos", 0.0, 1.0, 0.0, "F2", "chaos"),
+            ParamSpec::continuous("Speed", 0.1, 5.0, 1.0, "F1", "speed"),
+            ParamSpec::continuous("Scale", 0.25, 3.0, 1.0, "F2", "scale"),
+            ParamSpec::toggle("Snap", 0.0, 1.0, 0.0, "snap"),
+            ParamSpec::continuous("Count (M)", 0.1, 2.0, 0.5, "F1", "count"),
+            ParamSpec::continuous("Diffusion", 0.0, 0.05, 0.0, "F3", "diffusion"),
+            ParamSpec::continuous("Tilt", -1.0, 1.0, 0.3, "F2", "tilt"),
+            ParamSpec::continuous("Size", 1.0, 8.0, 3.0, "F1", "size"),
+            ParamSpec::toggle("Invert", 0.0, 1.0, 0.0, "invert"),
+        ],
+        string_params: &[],
+    }
+}
+inventory::submit! {
+    GeneratorFactory {
+        id: GeneratorTypeId::COMPUTE_STRANGE_ATTRACTOR,
+        create: |device| Box::new(StrangeAttractorGenerator::new(device)),
+    }
+}
+
 // Parameter indices (match generator_definition_registry order)
 const TYPE: usize = 0;
 const CONTRAST: usize = 1;

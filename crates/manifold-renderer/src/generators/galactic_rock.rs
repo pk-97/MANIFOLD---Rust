@@ -12,6 +12,43 @@ use crate::generators::mesh_pipeline;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::GeneratorTypeId;
 
+use crate::generators::registration::GeneratorFactory;
+use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
+
+inventory::submit! {
+    GeneratorMetadata {
+        id: GeneratorTypeId::GALACTIC_ROCK,
+        display_name: "Galactic Rock",
+        is_line_based: false,
+        available: true,
+        osc_prefix: "galacticRock",
+        legacy_discriminant: Some(22),
+        params: &[
+            ParamSpec::continuous("Speed", 0.0, 5.0, 1.0, "F2", "speed"),
+            ParamSpec::continuous("Wave Amp", 0.0, 0.5, 0.1, "F3", "waveAmp"),
+            ParamSpec::continuous("Wave Freq", 0.1, 2.0, 0.5, "F2", "waveFreq"),
+            ParamSpec::continuous("Twist", 0.0, 20.0, 10.0, "F1", "twist"),
+            ParamSpec::continuous("Grain", 0.0, 0.01, 0.001, "F4", "grain"),
+            ParamSpec::continuous("Roughness", 0.0, 1.0, 0.5, "F2", "roughness"),
+            ParamSpec::continuous("Light Int", 0.1, 10.0, 2.5, "F1", "lightInt"),
+            ParamSpec::continuous("Blur", 0.0, 20.0, 10.0, "F0", "blur"),
+            ParamSpec::continuous("Cam Dist", 0.1, 10.0, 0.8, "F2", "camDist"),
+            ParamSpec::continuous("Cam Orbit", -180.0, 180.0, 0.0, "F0", "camOrbit"),
+            ParamSpec::continuous("Cam Tilt", -90.0, 90.0, 10.0, "F0", "camTilt"),
+            ParamSpec::continuous("Cam FOV", 20.0, 120.0, 60.0, "F0", "camFov"),
+            ParamSpec::continuous("Look Y", -2.0, 2.0, 0.0, "F2", "lookY"),
+            ParamSpec::continuous("Scale", 0.25, 3.0, 1.0, "F2", "scale"),
+        ],
+        string_params: &[],
+    }
+}
+inventory::submit! {
+    GeneratorFactory {
+        id: GeneratorTypeId::GALACTIC_ROCK,
+        create: |device| Box::new(GalacticRockGenerator::new(device)),
+    }
+}
+
 const INSTANCE_COUNT: u32 = 100_000;
 const INSTANCE_STRIDE: u64 = 32; // 2 × vec4<f32>
 const SHADOW_MAP_SIZE: u32 = 2048;

@@ -2,7 +2,30 @@ use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::EffectTypeId;
+use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::generator_registration::ParamSpec;
 use manifold_core::effects::EffectInstance;
+use crate::effects::registration::EffectFactory;
+
+inventory::submit! {
+    EffectMetadata {
+        id: EffectTypeId::INVERT_COLORS,
+        display_name: "Invert Colors",
+        category: "Spatial",
+        available: true,
+        osc_prefix: "invert",
+        legacy_discriminant: Some(1),
+        params: &[
+            ParamSpec::continuous("Amount", 0.0, 1.0, 1.0, "F2", ""),
+        ],
+    }
+}
+inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::INVERT_COLORS,
+        create: |device| Box::new(InvertColorsFX::new(device)),
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]

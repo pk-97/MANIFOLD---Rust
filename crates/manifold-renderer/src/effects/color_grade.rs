@@ -5,7 +5,38 @@ use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::EffectTypeId;
+use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::generator_registration::ParamSpec;
 use manifold_core::effects::EffectInstance;
+use crate::effects::registration::EffectFactory;
+
+inventory::submit! {
+    EffectMetadata {
+        id: EffectTypeId::COLOR_GRADE,
+        display_name: "Color Grade",
+        category: "Post-Process",
+        available: true,
+        osc_prefix: "colorGrade",
+        legacy_discriminant: Some(28),
+        params: &[
+            ParamSpec::continuous("Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::continuous("Gain", 0.0, 2.0, 1.0, "F2", "Gain"),
+            ParamSpec::continuous("Sat", 0.0, 2.0, 1.0, "F2", "Saturation"),
+            ParamSpec::continuous("Hue", -180.0, 180.0, 0.0, "F2", "Hue"),
+            ParamSpec::continuous("Contrast", 0.0, 2.0, 1.0, "F2", "Contrast"),
+            ParamSpec::continuous("Colorize", 0.0, 1.0, 0.0, "F2", "Colorize"),
+            ParamSpec::whole("TintHue", 0.0, 360.0, 0.0, "TintHue"),
+            ParamSpec::continuous("TintSat", 0.0, 2.0, 1.0, "F2", "TintSaturation"),
+            ParamSpec::continuous("Focus", 0.0, 1.0, 0.75, "F2", "ColorizeFocus"),
+        ],
+    }
+}
+inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::COLOR_GRADE,
+        create: |device| Box::new(ColorGradeFX::new(device)),
+    }
+}
 
 // ColorGradeFX.cs line 11
 const EPSILON: f32 = 0.001;

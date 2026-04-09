@@ -12,12 +12,39 @@ use crate::gpu_readback::ReadbackRequest;
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
+use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::generator_registration::ParamSpec;
 use manifold_core::effects::EffectInstance;
+use crate::effects::registration::EffectFactory;
 use manifold_gpu::{
     GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer, GpuComputePipeline,
     GpuDevice, GpuFilterMode, GpuLoadAction, GpuRenderPipeline, GpuSampler, GpuSamplerDesc,
     GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
+
+inventory::submit! {
+    EffectMetadata {
+        id: EffectTypeId::BLOB_TRACKING,
+        display_name: "Blob Tracking",
+        category: "Post-Process",
+        available: true,
+        osc_prefix: "blobTracking",
+        legacy_discriminant: Some(22),
+        params: &[
+            ParamSpec::continuous("Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::continuous("Thresh", 0.05, 0.9, 0.65, "F2", "Threshold"),
+            ParamSpec::continuous("Sens", 0.2, 1.0, 0.85, "F2", "Sensitivity"),
+            ParamSpec::continuous("Smooth", 0.0, 1.0, 0.7, "F2", "Smoothing"),
+            ParamSpec::continuous("Connect", 0.0, 1.0, 0.35, "F2", "Connect"),
+        ],
+    }
+}
+inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::BLOB_TRACKING,
+        create: |device| Box::new(BlobTrackingFX::new(device)),
+    }
+}
 
 // Request/response types for the background blob detection worker.
 struct BlobRequest {

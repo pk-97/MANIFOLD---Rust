@@ -11,6 +11,42 @@ use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::GeneratorTypeId;
 
+use crate::generators::registration::GeneratorFactory;
+use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
+
+inventory::submit! {
+    GeneratorMetadata {
+        id: GeneratorTypeId::FLUID_SIMULATION,
+        display_name: "Fluid Simulation",
+        is_line_based: false,
+        available: true,
+        osc_prefix: "fluidSimulation",
+        legacy_discriminant: Some(15),
+        params: &[
+            ParamSpec::continuous("Flow", -0.1, -0.001, -0.01, "F3", "flow"),
+            ParamSpec::whole("Feather", 4.0, 60.0, 20.0, "feather"),
+            ParamSpec::continuous("Curl", 30.0, 90.0, 85.0, "F0", "curl"),
+            ParamSpec::continuous("Turbulence", 0.0, 0.01, 0.001, "F4", "turbulence"),
+            ParamSpec::continuous("Speed", 0.1, 3.0, 1.0, "F1", "speed"),
+            ParamSpec::continuous("Contrast", 1.0, 8.0, 3.5, "F1", "contrast"),
+            ParamSpec::continuous("Scale", 0.25, 3.0, 1.0, "F2", "scale"),
+            ParamSpec::continuous("Count (M)", 0.1, 8.0, 2.0, "F1", "count"),
+            ParamSpec::toggle("Snap", 0.0, 1.0, 0.0, "snap"),
+            ParamSpec::whole_labels("Snap Mode", 0.0, 4.0, 0.0, &["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"], "snapMode"),
+            ParamSpec::continuous("Size", 1.0, 8.0, 3.0, "F1", "size"),
+            ParamSpec::continuous("Anti-Clump", 0.0, 60.0, 20.0, "F0", "antiClump"),
+            ParamSpec::continuous("Force", 0.0, 0.1, 0.005, "F3", "force"),
+        ],
+        string_params: &[],
+    }
+}
+inventory::submit! {
+    GeneratorFactory {
+        id: GeneratorTypeId::FLUID_SIMULATION,
+        create: |device| Box::new(FluidSimulationGenerator::new(device)),
+    }
+}
+
 // Parameter indices (15 params).
 // Removed: Invert, Field Res, Wander, Respawn, Dense Respawn.
 // Anti-Clump now drives both density_noise_gain and diffusion.

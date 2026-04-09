@@ -2,7 +2,34 @@ use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::EffectTypeId;
+use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::generator_registration::ParamSpec;
 use manifold_core::effects::EffectInstance;
+use crate::effects::registration::EffectFactory;
+
+inventory::submit! {
+    EffectMetadata {
+        id: EffectTypeId::CHROMATIC_ABERRATION,
+        display_name: "Chromatic Aberration",
+        category: "Filmic",
+        available: true,
+        osc_prefix: "chromAb",
+        legacy_discriminant: Some(30),
+        params: &[
+            ParamSpec::continuous("Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::continuous("Offset", 0.0, 0.05, 0.01, "F2", "Offset"),
+            ParamSpec::whole_labels("Mode", 0.0, 1.0, 0.0, &["Radial", "Linear"], "Mode"),
+            ParamSpec::whole("Angle", 0.0, 360.0, 0.0, "Angle"),
+            ParamSpec::continuous("Falloff", 0.0, 1.0, 0.5, "F2", "Falloff"),
+        ],
+    }
+}
+inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::CHROMATIC_ABERRATION,
+        create: |device| Box::new(ChromaticAberrationFX::new(device)),
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]

@@ -2,7 +2,32 @@ use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::EffectTypeId;
+use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::generator_registration::ParamSpec;
 use manifold_core::effects::EffectInstance;
+use crate::effects::registration::EffectFactory;
+
+inventory::submit! {
+    EffectMetadata {
+        id: EffectTypeId::INFRARED,
+        display_name: "Infrared",
+        category: "Surveillance",
+        available: true,
+        osc_prefix: "infrared",
+        legacy_discriminant: Some(37),
+        params: &[
+            ParamSpec::continuous("Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::whole_labels("Palette", 0.0, 9.0, 0.0, &["White Hot", "Black Hot", "Green NV", "Iron Bow", "Rainbow", "Lava", "Arctic", "Magenta", "Electric", "Toxic"], "Palette"),
+            ParamSpec::continuous("Contrast", 0.5, 3.0, 1.0, "F2", "Contrast"),
+        ],
+    }
+}
+inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::INFRARED,
+        create: |device| Box::new(InfraredFX::new(device)),
+    }
+}
 
 /// LUT resolution — 512 entries covering [0, 2] range.
 /// First 256 entries cover [0, 1] (normal palette), last 256 cover [1, 2]

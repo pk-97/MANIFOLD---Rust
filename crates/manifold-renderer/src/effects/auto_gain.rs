@@ -18,7 +18,36 @@ use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::gpu_encoder::GpuEncoder;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
+use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::generator_registration::ParamSpec;
 use manifold_core::effects::EffectInstance;
+use crate::effects::registration::EffectFactory;
+
+inventory::submit! {
+    EffectMetadata {
+        id: EffectTypeId::AUTO_GAIN,
+        display_name: "Auto Gain",
+        category: "Post-Process",
+        available: true,
+        osc_prefix: "autoGain",
+        legacy_discriminant: Some(41),
+        params: &[
+            ParamSpec::continuous("Amount", 0.0, 1.0, 0.5, "F2", ""),
+            ParamSpec::continuous("Ratio", 0.0, 1.0, 0.5, "F2", "Ratio"),
+            ParamSpec::continuous("Punch", 0.0, 1.0, 0.5, "F2", "Punch"),
+            ParamSpec::continuous("Target", 0.0, 1.0, 0.5, "F2", "Target"),
+            ParamSpec::continuous("HDR Ret", 0.0, 1.0, 0.5, "F2", "HdrRetention"),
+            ParamSpec::continuous("Color", -1.0, 1.0, 0.0, "F2", "ColorPush"),
+            ParamSpec::whole_labels("Char", 0.0, 4.0, 0.0, &["Clean", "Warm", "Film", "Vivid", "Grit"], "Character"),
+        ],
+    }
+}
+inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::AUTO_GAIN,
+        create: |device| Box::new(AutoGainFX::new(device)),
+    }
+}
 
 // ── Uniforms for the apply pass ────────────────────────────────────────
 

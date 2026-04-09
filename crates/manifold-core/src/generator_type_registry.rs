@@ -29,39 +29,9 @@ static REGISTRY: LazyLock<Vec<GeneratorTypeRegistration>> = LazyLock::new(|| {
 });
 
 fn build_registry() -> Vec<GeneratorTypeRegistration> {
-    use GeneratorTypeId as G;
-    vec![
-        reg(G::PLASMA, "Plasma", true),
-        reg(G::CONCENTRIC_TUNNEL, "Concentric Tunnel", true),
-        reg(G::LISSAJOUS, "Lissajous", true),
-        reg(G::FLUID_SIMULATION, "Fluid Simulation", true),
-        reg(G::FLUID_SIMULATION_3D, "Fluid Sim 3D", true),
-        reg(G::BASIC_SHAPES_SNAP, "Basic Shapes", true),
-        reg(G::DUOCYLINDER, "Duocylinder", true),
-        reg(G::TESSERACT, "Tesseract", true),
-        reg(G::OSCILLOSCOPE_XY, "Oscilloscope XY", true),
-        reg(G::WIREFRAME_ZOO, "Wireframe Zoo", true),
-        reg(G::PARAMETRIC_SURFACE, "Parametric Surface", true),
-        reg(G::MYCELIUM, "Mycelium", true),
-        reg(G::MRI_VOLUME, "MRI Volume", true),
-        reg(G::BLACK_HOLE, "Black Hole", true),
-        reg(G::GALACTIC_ROCK, "Galactic Rock", true),
-        reg(G::METALLIC_GLASS, "Metallic Glass", true),
-        reg(G::COMPUTE_STRANGE_ATTRACTOR, "Strange Attractor", true),
-        reg(G::OILY_FLUID, "Oily Fluid", true),
-    ]
-}
-
-fn reg(
-    id: GeneratorTypeId,
-    display_name: &'static str,
-    available: bool,
-) -> GeneratorTypeRegistration {
-    GeneratorTypeRegistration {
-        id,
-        display_name,
-        available,
-    }
+    // All generators are registered via inventory::submit! in their
+    // implementation files (manifold-renderer/src/generators/*.rs).
+    vec![]
 }
 
 // ── Public API ──────────────────────────────────────────────────────────

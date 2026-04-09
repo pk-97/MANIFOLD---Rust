@@ -6,7 +6,33 @@ use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::EffectTypeId;
+use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::generator_registration::ParamSpec;
 use manifold_core::effects::EffectInstance;
+use crate::effects::registration::EffectFactory;
+
+inventory::submit! {
+    EffectMetadata {
+        id: EffectTypeId::HDR_BOOST,
+        display_name: "HDR Boost",
+        category: "Filmic",
+        available: true,
+        osc_prefix: "hdrBoost",
+        legacy_discriminant: Some(41),
+        params: &[
+            ParamSpec::continuous("Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::continuous("Gain", 0.0, 5.0, 1.5, "F2", "Gain"),
+            ParamSpec::continuous("Thresh", 0.0, 1.0, 0.15, "F2", "Threshold"),
+            ParamSpec::continuous("Knee", 0.0, 1.0, 0.3, "F2", "Knee"),
+        ],
+    }
+}
+inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::HDR_BOOST,
+        create: |device| Box::new(HdrBoostFX::new(device)),
+    }
+}
 
 const EPSILON: f32 = 0.001;
 

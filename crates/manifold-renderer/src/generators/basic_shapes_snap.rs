@@ -3,6 +3,34 @@ use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::GeneratorTypeId;
 
+use crate::generators::registration::GeneratorFactory;
+use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
+
+inventory::submit! {
+    GeneratorMetadata {
+        id: GeneratorTypeId::BASIC_SHAPES_SNAP,
+        display_name: "Basic Shapes Snap",
+        is_line_based: false,
+        available: true,
+        osc_prefix: "basicShapesSnap",
+        legacy_discriminant: Some(2),
+        params: &[
+            ParamSpec::continuous("Line", 0.0005, 0.03, 0.015, "F4", "line"),
+            ParamSpec::whole_labels("Shape", 0.0, 2.0, 0.0, &["Square","Diamond","Octagon"], "shape"),
+            ParamSpec::continuous("Scale", 0.25, 3.0, 1.0, "F2", "scale"),
+            ParamSpec::whole_labels("Fill", 0.0, 2.0, 1.0, &["Solid","Mixed","Wireframe"], "fill"),
+        ],
+        string_params: &[],
+    }
+}
+
+inventory::submit! {
+    GeneratorFactory {
+        id: GeneratorTypeId::BASIC_SHAPES_SNAP,
+        create: |device| Box::new(BasicShapesSnapGenerator::new(device)),
+    }
+}
+
 const LINE: usize = 0;
 const SCALE: usize = 2;
 const FILL: usize = 3;

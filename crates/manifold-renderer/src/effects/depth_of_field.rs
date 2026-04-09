@@ -31,7 +31,37 @@ use crate::gpu_readback::ReadbackRequest;
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
+use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::generator_registration::ParamSpec;
 use manifold_core::effects::EffectInstance;
+use crate::effects::registration::EffectFactory;
+
+inventory::submit! {
+    EffectMetadata {
+        id: EffectTypeId::DEPTH_OF_FIELD,
+        display_name: "Depth of Field",
+        category: "Filmic",
+        available: true,
+        osc_prefix: "dof",
+        legacy_discriminant: Some(40),
+        params: &[
+            ParamSpec::continuous("Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::whole_labels("Mode", 0.0, 2.0, 0.0, &["Tilt-Shift", "Radial", "Depth"], "Mode"),
+            ParamSpec::continuous("Focus", 0.0, 1.0, 0.5, "F2", "FocusPosition"),
+            ParamSpec::continuous("Focus X", 0.0, 1.0, 0.5, "F2", "FocusX"),
+            ParamSpec::continuous("Width", 0.01, 0.5, 0.15, "F2", "FocusWidth"),
+            ParamSpec::continuous("Blur", 0.0, 1.0, 0.5, "F2", "BlurStrength"),
+            ParamSpec::whole("Angle", 0.0, 360.0, 0.0, "TiltAngle"),
+            ParamSpec::whole_labels("Quality", 0.0, 2.0, 1.0, &["Low", "Medium", "High"], "Quality"),
+        ],
+    }
+}
+inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::DEPTH_OF_FIELD,
+        create: |device| Box::new(DepthOfFieldFX::new(device)),
+    }
+}
 
 // ─── Depth worker types ───────────────────────────────────────────────
 

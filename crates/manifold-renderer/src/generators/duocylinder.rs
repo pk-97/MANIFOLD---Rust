@@ -5,6 +5,41 @@ use crate::generators::line_pipeline::{LineGeneratorHelper, LinePipeline};
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::GeneratorTypeId;
 
+use crate::generators::registration::GeneratorFactory;
+use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
+
+inventory::submit! {
+    GeneratorMetadata {
+        id: GeneratorTypeId::DUOCYLINDER,
+        display_name: "Duocylinder",
+        is_line_based: true,
+        available: true,
+        osc_prefix: "duocylinder",
+        legacy_discriminant: Some(3),
+        params: &[
+            ParamSpec::continuous("XY", 0.0, 2.0, 0.4, "F2", "rotXY"),
+            ParamSpec::continuous("ZW", 0.0, 2.0, 0.25, "F2", "rotZW"),
+            ParamSpec::continuous("XW", 0.0, 2.0, 0.15, "F2", "rotXW"),
+            ParamSpec::continuous("Line", 0.0005, 0.03, 0.0015, "F4", "line"),
+            ParamSpec::continuous("Dist", 1.0, 6.0, 3.0, "F1", "dist"),
+            ParamSpec::toggle("Verts", 0.0, 1.0, 1.0, "verts"),
+            ParamSpec::continuous("VSize", 0.1, 4.0, 1.0, "F1", "vsize"),
+            ParamSpec::toggle("Anim", 0.0, 1.0, 0.0, "anim"),
+            ParamSpec::continuous("Speed", 0.1, 5.0, 1.0, "F1", "speed"),
+            ParamSpec::continuous("Window", 0.01, 1.0, 0.1, "F2", "window"),
+            ParamSpec::continuous("Scale", 0.25, 3.0, 1.0, "F2", "scale"),
+        ],
+        string_params: &[],
+    }
+}
+
+inventory::submit! {
+    GeneratorFactory {
+        id: GeneratorTypeId::DUOCYLINDER,
+        create: |device| Box::new(DuocylinderGenerator::new(device)),
+    }
+}
+
 // Parameter indices matching Unity's DuocylinderGenerator
 const ROT_XY: usize = 0;
 const ROT_ZW: usize = 1;

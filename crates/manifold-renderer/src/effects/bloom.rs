@@ -8,7 +8,30 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
+use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::generator_registration::ParamSpec;
 use manifold_core::effects::EffectInstance;
+use crate::effects::registration::EffectFactory;
+
+inventory::submit! {
+    EffectMetadata {
+        id: EffectTypeId::BLOOM,
+        display_name: "Bloom",
+        category: "Post-Process",
+        available: true,
+        osc_prefix: "bloom",
+        legacy_discriminant: Some(12),
+        params: &[
+            ParamSpec::continuous("Amount", 0.0, 5.0, 0.187, "F2", ""),
+        ],
+    }
+}
+inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::BLOOM,
+        create: |device| Box::new(BloomFX::new(device)),
+    }
+}
 
 // BloomFX.cs lines 19-25 — constants
 const MAX_LEVELS: usize = 6;

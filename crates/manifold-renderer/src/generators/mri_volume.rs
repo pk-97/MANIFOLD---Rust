@@ -6,6 +6,38 @@ use manifold_core::GeneratorTypeId;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
+use crate::generators::registration::GeneratorFactory;
+use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
+
+inventory::submit! {
+    GeneratorMetadata {
+        id: GeneratorTypeId::MRI_VOLUME,
+        display_name: "MRI Volume",
+        is_line_based: false,
+        available: true,
+        osc_prefix: "mriVolume",
+        legacy_discriminant: Some(20),
+        params: &[
+            ParamSpec::whole_labels("Slice Axis", 0.0, 2.0, 0.0, &["Axial", "Sagittal", "Coronal"], "sliceAxis"),
+            ParamSpec::continuous("Slice Pos", 0.0, 1.0, 0.5, "F2", "slicePos"),
+            ParamSpec::continuous("Center", 0.0, 1.0, 0.5, "F2", "center"),
+            ParamSpec::continuous("Width", 0.01, 1.0, 0.8, "F2", "width"),
+            ParamSpec::continuous("Scale", 0.25, 3.0, 1.0, "F2", "scale"),
+            ParamSpec::toggle("Invert", 0.0, 1.0, 0.0, "invert"),
+            ParamSpec::continuous("Sharpen", 0.0, 3.0, 1.0, "F1", "sharpen"),
+            ParamSpec::whole_labels("Scan", 0.0, 2.0, 0.0, &["250\u{00B5}m 7T", "300\u{00B5}m HiRes", "Edlow 100\u{00B5}m"], "scan"),
+            ParamSpec::toggle("Snap", 0.0, 1.0, 0.0, "snap"),
+        ],
+        string_params: &[],
+    }
+}
+inventory::submit! {
+    GeneratorFactory {
+        id: GeneratorTypeId::MRI_VOLUME,
+        create: |device| Box::new(MriVolumeGenerator::new(device)),
+    }
+}
+
 // Parameter indices matching generator_definition_registry.rs
 const SLICE_AXIS: usize = 0;
 const SLICE_POS: usize = 1;

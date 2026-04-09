@@ -38,67 +38,9 @@ static REGISTRY: LazyLock<Vec<EffectTypeRegistration>> = LazyLock::new(|| {
 });
 
 fn build_registry() -> Vec<EffectTypeRegistration> {
-    use EffectTypeId as E;
-    vec![
-        // Spatial
-        reg(E::TRANSFORM, "Transform", SPATIAL, true),
-        reg(E::INVERT_COLORS, "Invert Colors", SPATIAL, true),
-        // Post-Process
-        reg(E::BLOOM, "Bloom", POST_PROCESS, true),
-        reg(E::INFINITE_ZOOM, "Infinite Zoom", POST_PROCESS, false),
-        reg(E::KALEIDOSCOPE, "Kaleidoscope", POST_PROCESS, true),
-        reg(E::EDGE_STRETCH, "Edge Stretch", POST_PROCESS, true),
-        reg(E::VORONOI_PRISM, "Voronoi Prism", POST_PROCESS, true),
-        reg(E::QUAD_MIRROR, "Quad Mirror", POST_PROCESS, true),
-        reg(E::DITHER, "Dither", POST_PROCESS, true),
-        reg(E::STROBE, "Strobe", POST_PROCESS, true),
-        reg(
-            E::STYLIZED_FEEDBACK,
-            "Stylized Feedback",
-            POST_PROCESS,
-            true,
-        ),
-        reg(E::MIRROR, "Mirror", POST_PROCESS, true),
-        reg(E::BLOB_TRACKING, "Blob Tracking", POST_PROCESS, true),
-        reg(E::FLUID_DISTORTION, "Fluid Distortion", POST_PROCESS, false),
-        reg(E::EDGE_DETECT, "Edge Detect", POST_PROCESS, true),
-        reg(E::DATAMOSH, "Datamosh", POST_PROCESS, false),
-        reg(E::SLIT_SCAN, "Slit Scan", POST_PROCESS, false),
-        reg(E::COLOR_GRADE, "Color Grade", POST_PROCESS, true),
-        reg(E::WIREFRAME_DEPTH, "Wireframe Depth", POST_PROCESS, true),
-        // Filmic
-        reg(
-            E::CHROMATIC_ABERRATION,
-            "Chromatic Aberration",
-            FILMIC,
-            true,
-        ),
-        reg(E::GRADIENT_MAP, "Gradient Map", FILMIC, false),
-        reg(E::GLITCH, "Glitch", FILMIC, true),
-        reg(E::HALATION, "Halation", FILMIC, true),
-        reg(E::DEPTH_OF_FIELD, "Depth of Field", FILMIC, true),
-        reg(E::HDR_BOOST, "HDR Boost", FILMIC, true),
-        reg(E::AUTO_GAIN, "Auto Gain", POST_PROCESS, true),
-        // Surveillance
-        reg(E::CORRUPTION, "Corruption", SURVEILLANCE, false),
-        reg(E::INFRARED, "Infrared", SURVEILLANCE, true),
-        reg(E::SURVEILLANCE, "Surveillance", SURVEILLANCE, false),
-        reg(E::REDACTION, "Redaction", SURVEILLANCE, false),
-    ]
-}
-
-fn reg(
-    id: EffectTypeId,
-    display_name: &'static str,
-    category: &'static str,
-    available: bool,
-) -> EffectTypeRegistration {
-    EffectTypeRegistration {
-        id,
-        display_name,
-        category,
-        available,
-    }
+    // All effects are registered via inventory::submit! in their
+    // implementation files (manifold-renderer/src/effects/*.rs).
+    vec![]
 }
 
 // ── Public API ──────────────────────────────────────────────────────────

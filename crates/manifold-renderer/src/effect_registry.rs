@@ -1,32 +1,12 @@
 use crate::effect::PostProcessEffect;
-use crate::effects::auto_gain::AutoGainFX;
-use crate::effects::blob_tracking::BlobTrackingFX;
-use crate::effects::bloom::BloomFX;
-use crate::effects::chromatic_aberration::ChromaticAberrationFX;
-use crate::effects::color_grade::ColorGradeFX;
-use crate::effects::depth_of_field::DepthOfFieldFX;
-use crate::effects::dither::DitherFX;
-use crate::effects::edge_detect::EdgeDetectFX;
-use crate::effects::edge_stretch::EdgeStretchFX;
-use crate::effects::glitch::GlitchFX;
-use crate::effects::halation::HalationFX;
-use crate::effects::hdr_boost::HdrBoostFX;
-use crate::effects::infrared::InfraredFX;
-use crate::effects::invert_colors::InvertColorsFX;
-use crate::effects::kaleidoscope::KaleidoscopeFX;
-use crate::effects::mirror::MirrorFX;
-use crate::effects::quad_mirror::QuadMirrorFX;
-use crate::effects::strobe::StrobeFX;
-use crate::effects::stylized_feedback::StylizedFeedbackFX;
-use crate::effects::transform::TransformFX;
-use crate::effects::voronoi_prism::VoronoiPrismFX;
-use crate::effects::wireframe_depth::WireframeDepthFX;
 use manifold_core::EffectTypeId;
 use manifold_gpu::GpuDevice;
 use std::collections::HashMap;
 
 /// Factory + singleton storage for all effect processors.
 /// One processor per EffectTypeId — per-owner state lives inside each processor.
+///
+/// All effects are registered via `inventory::submit!` in their implementation files.
 pub struct EffectRegistry {
     processors: HashMap<EffectTypeId, Box<dyn PostProcessEffect>>,
 }
@@ -34,70 +14,10 @@ pub struct EffectRegistry {
 impl EffectRegistry {
     pub fn new(device: &GpuDevice) -> Self {
         let mut processors: HashMap<EffectTypeId, Box<dyn PostProcessEffect>> = HashMap::new();
-        processors.insert(
-            EffectTypeId::INVERT_COLORS,
-            Box::new(InvertColorsFX::new(device)),
-        );
-        processors.insert(
-            EffectTypeId::COLOR_GRADE,
-            Box::new(ColorGradeFX::new(device)),
-        );
-        processors.insert(EffectTypeId::MIRROR, Box::new(MirrorFX::new(device)));
-        processors.insert(EffectTypeId::BLOOM, Box::new(BloomFX::new(device)));
-        processors.insert(
-            EffectTypeId::CHROMATIC_ABERRATION,
-            Box::new(ChromaticAberrationFX::new(device)),
-        );
-        processors.insert(EffectTypeId::GLITCH, Box::new(GlitchFX::new(device)));
-        processors.insert(EffectTypeId::DITHER, Box::new(DitherFX::new(device)));
-        processors.insert(EffectTypeId::HALATION, Box::new(HalationFX::new(device)));
-        processors.insert(
-            EffectTypeId::KALEIDOSCOPE,
-            Box::new(KaleidoscopeFX::new(device)),
-        );
-        processors.insert(
-            EffectTypeId::EDGE_STRETCH,
-            Box::new(EdgeStretchFX::new(device)),
-        );
-        processors.insert(
-            EffectTypeId::QUAD_MIRROR,
-            Box::new(QuadMirrorFX::new(device)),
-        );
-        processors.insert(EffectTypeId::STROBE, Box::new(StrobeFX::new(device)));
-        processors.insert(
-            EffectTypeId::STYLIZED_FEEDBACK,
-            Box::new(StylizedFeedbackFX::new(device)),
-        );
-        processors.insert(
-            EffectTypeId::EDGE_DETECT,
-            Box::new(EdgeDetectFX::new(device)),
-        );
-        processors.insert(EffectTypeId::TRANSFORM, Box::new(TransformFX::new(device)));
-        processors.insert(EffectTypeId::INFRARED, Box::new(InfraredFX::new(device)));
-        processors.insert(
-            EffectTypeId::VORONOI_PRISM,
-            Box::new(VoronoiPrismFX::new(device)),
-        );
-        processors.insert(
-            EffectTypeId::WIREFRAME_DEPTH,
-            Box::new(WireframeDepthFX::new(device)),
-        );
-        processors.insert(
-            EffectTypeId::BLOB_TRACKING,
-            Box::new(BlobTrackingFX::new(device)),
-        );
-        processors.insert(
-            EffectTypeId::DEPTH_OF_FIELD,
-            Box::new(DepthOfFieldFX::new(device)),
-        );
-        processors.insert(EffectTypeId::HDR_BOOST, Box::new(HdrBoostFX::new(device)));
-        processors.insert(EffectTypeId::AUTO_GAIN, Box::new(AutoGainFX::new(device)));
 
-        // Collect inventory-registered effects
+        // Collect all inventory-registered effects
         for factory in inventory::iter::<crate::effects::registration::EffectFactory> {
-            if !processors.contains_key(&factory.id) {
-                processors.insert(factory.id.clone(), (factory.create)(device));
-            }
+            processors.insert(factory.id.clone(), (factory.create)(device));
         }
 
         Self { processors }

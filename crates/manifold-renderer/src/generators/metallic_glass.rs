@@ -13,6 +13,42 @@ use crate::generators::mesh_pipeline;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::GeneratorTypeId;
 
+use crate::generators::registration::GeneratorFactory;
+use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
+
+inventory::submit! {
+    GeneratorMetadata {
+        id: GeneratorTypeId::METALLIC_GLASS,
+        display_name: "Metallic Glass",
+        is_line_based: false,
+        available: true,
+        osc_prefix: "metallicGlass",
+        legacy_discriminant: Some(23),
+        params: &[
+            ParamSpec::continuous("Feedback", 0.5, 1.0, 0.98, "F2", "feedback"),
+            ParamSpec::continuous("Noise Scale", 0.1, 2.0, 0.75, "F2", "noiseScale"),
+            ParamSpec::continuous("Noise Speed", 0.01, 1.0, 0.1, "F3", "noiseSpeed"),
+            ParamSpec::continuous("Edge Str", 0.5, 20.0, 5.0, "F1", "edgeStr"),
+            ParamSpec::continuous("Mirror", 0.0, 90.0, 45.0, "F0", "mirror"),
+            ParamSpec::continuous("Displace", 0.0, 0.5, 0.2, "F3", "displace"),
+            ParamSpec::continuous("Roughness", 0.01, 1.0, 0.05, "F3", "roughness"),
+            ParamSpec::continuous("Light Int", 0.1, 10.0, 3.5, "F1", "lightInt"),
+            ParamSpec::continuous("Cam Dist", 0.5, 10.0, 2.5, "F2", "camDist"),
+            ParamSpec::continuous("Cam Orbit", -180.0, 180.0, 0.0, "F0", "camOrbit"),
+            ParamSpec::continuous("Cam Tilt", -90.0, 90.0, -10.0, "F0", "camTilt"),
+            ParamSpec::continuous("Cam FOV", 20.0, 120.0, 54.0, "F0", "camFov"),
+            ParamSpec::continuous("Look Y", -2.0, 2.0, 0.0, "F2", "lookY"),
+        ],
+        string_params: &[],
+    }
+}
+inventory::submit! {
+    GeneratorFactory {
+        id: GeneratorTypeId::METALLIC_GLASS,
+        create: |device| Box::new(MetallicGlassGenerator::new(device)),
+    }
+}
+
 const GRID_SIZE: u32 = 500;
 const GRID_QUADS: u32 = GRID_SIZE - 1;
 const VERTEX_COUNT: u32 = GRID_QUADS * GRID_QUADS * 6; // 1,494,006

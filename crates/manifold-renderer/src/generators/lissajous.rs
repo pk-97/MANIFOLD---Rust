@@ -5,6 +5,41 @@ use crate::generators::line_pipeline::{LineGeneratorHelper, LinePipeline};
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::GeneratorTypeId;
 
+use crate::generators::registration::GeneratorFactory;
+use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
+
+inventory::submit! {
+    GeneratorMetadata {
+        id: GeneratorTypeId::LISSAJOUS,
+        display_name: "Lissajous",
+        is_line_based: true,
+        available: true,
+        osc_prefix: "lissajous",
+        legacy_discriminant: Some(7),
+        params: &[
+            ParamSpec::continuous("Freq X", 0.0, 2.0, 0.13, "F2", "freqX"),
+            ParamSpec::continuous("Freq Y", 0.0, 2.0, 0.09, "F2", "freqY"),
+            ParamSpec::continuous("Phase", 0.0, 2.0, 0.07, "F2", "phase"),
+            ParamSpec::continuous("Line", 0.0005, 0.03, 0.002, "F4", "line"),
+            ParamSpec::toggle("Verts", 0.0, 1.0, 0.0, "verts"),
+            ParamSpec::continuous("VSize", 0.1, 4.0, 0.5, "F1", "vsize"),
+            ParamSpec::toggle("Anim", 0.0, 1.0, 1.0, "anim"),
+            ParamSpec::continuous("Speed", 0.1, 5.0, 2.67, "F1", "speed"),
+            ParamSpec::continuous("Window", 0.01, 1.0, 0.74, "F2", "window"),
+            ParamSpec::continuous("Scale", 0.25, 3.0, 1.55, "F2", "scale"),
+            ParamSpec::toggle("Snap", 0.0, 1.0, 1.0, "snap"),
+        ],
+        string_params: &[],
+    }
+}
+
+inventory::submit! {
+    GeneratorFactory {
+        id: GeneratorTypeId::LISSAJOUS,
+        create: |device| Box::new(LissajousGenerator::new(device)),
+    }
+}
+
 // Parameter indices matching Unity's LissajousGenerator
 const FREQ_X: usize = 0;
 const FREQ_Y: usize = 1;

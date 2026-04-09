@@ -14,7 +14,34 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
+use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::generator_registration::ParamSpec;
 use manifold_core::effects::EffectInstance;
+use crate::effects::registration::EffectFactory;
+
+inventory::submit! {
+    EffectMetadata {
+        id: EffectTypeId::HALATION,
+        display_name: "Halation",
+        category: "Filmic",
+        available: true,
+        osc_prefix: "halation",
+        legacy_discriminant: Some(34),
+        params: &[
+            ParamSpec::continuous("Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::continuous("Thresh", 0.0, 1.0, 0.5, "F2", "Threshold"),
+            ParamSpec::continuous("Spread", 0.0, 1.0, 0.5, "F2", "Spread"),
+            ParamSpec::whole("Hue", 0.0, 360.0, 20.0, "Hue"),
+            ParamSpec::continuous("Sat", 0.0, 1.0, 0.6, "F2", "Saturation"),
+        ],
+    }
+}
+inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::HALATION,
+        create: |device| Box::new(HalationFX::new(device)),
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]

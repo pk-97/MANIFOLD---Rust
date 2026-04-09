@@ -373,6 +373,37 @@ impl ParamSource for GeneratorParamState {
 mod tests {
     use super::*;
     use crate::generator_definition_registry;
+    use crate::generator_registration::{GeneratorMetadata, ParamSpec};
+
+    // Test-only inventory submission — BLACK_HOLE isn't linked from manifold-renderer in unit tests.
+    inventory::submit! {
+        GeneratorMetadata {
+            id: GeneratorTypeId::BLACK_HOLE,
+            display_name: "Black Hole",
+            is_line_based: false,
+            available: true,
+            osc_prefix: "blackHole",
+            legacy_discriminant: Some(21),
+            params: &[
+                ParamSpec::continuous("Speed", 0.0, 5.0, 0.3, "F2", "speed"),
+                ParamSpec::continuous("Cam Dist", 0.1, 50.0, 20.0, "F1", "camDist"),
+                ParamSpec::continuous("Tilt", 0.0, 90.0, 15.0, "F0", "tilt"),
+                ParamSpec::continuous("Rotate", -180.0, 180.0, 0.0, "F0", "rotate"),
+                ParamSpec::whole("Steps", 50.0, 500.0, 150.0, "steps"),
+                ParamSpec::continuous("Disk Inner", 2.0, 6.0, 3.0, "F1", "diskInner"),
+                ParamSpec::continuous("Disk Outer", 5.0, 20.0, 10.0, "F1", "diskOuter"),
+                ParamSpec::continuous("Disk Glow", 0.5, 5.0, 2.0, "F1", "diskGlow"),
+                ParamSpec::continuous("Scale", 0.25, 3.0, 1.0, "F2", "scale"),
+                ParamSpec::continuous("Stars", 0.0, 2.0, 0.5, "F2", "stars"),
+                ParamSpec::continuous("Spin", -1.0, 1.0, 0.0, "F2", "spin"),
+                ParamSpec::continuous("Particles", 0.0, 1.0, 0.0, "F2", "particles"),
+                ParamSpec::continuous("Turbulence", 0.0, 5.0, 0.5, "F2", "turbulence"),
+                ParamSpec::continuous("Cam Velocity", 0.0, 0.99, 0.0, "F2", "camVelocity"),
+                ParamSpec::continuous("Freefall", 0.0, 1.0, 0.0, "F0", "freefall"),
+            ],
+            string_params: &[],
+        }
+    }
 
     #[test]
     fn migrate_pads_short_param_arrays_with_defaults_preserving_existing() {

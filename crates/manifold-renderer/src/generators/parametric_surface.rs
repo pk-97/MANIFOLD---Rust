@@ -3,6 +3,35 @@ use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::GeneratorTypeId;
 
+use crate::generators::registration::GeneratorFactory;
+use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
+
+inventory::submit! {
+    GeneratorMetadata {
+        id: GeneratorTypeId::PARAMETRIC_SURFACE,
+        display_name: "Parametric Surface",
+        is_line_based: false,
+        available: true,
+        osc_prefix: "parametricSurface",
+        legacy_discriminant: Some(13),
+        params: &[
+            ParamSpec::whole_labels("Shape", 0.0, 4.0, 0.0, &["Gyroid","Schwarz P","Schwarz D","Torus Knot","Klein"], "shape"),
+            ParamSpec::continuous("Morph", 0.0, 1.0, 0.0, "F2", "morph"),
+            ParamSpec::continuous("Speed", 0.1, 5.0, 1.0, "F1", "speed"),
+            ParamSpec::continuous("Scale", 0.25, 3.0, 1.0, "F2", "scale"),
+            ParamSpec::toggle("Snap", 0.0, 1.0, 1.0, "snap"),
+        ],
+        string_params: &[],
+    }
+}
+
+inventory::submit! {
+    GeneratorFactory {
+        id: GeneratorTypeId::PARAMETRIC_SURFACE,
+        create: |device| Box::new(ParametricSurfaceGenerator::new(device)),
+    }
+}
+
 // Parameter indices matching Unity ComputeParametricSurfaceGenerator
 const SHAPE: usize = 0;
 const MORPH: usize = 1;

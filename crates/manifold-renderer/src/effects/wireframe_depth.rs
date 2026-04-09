@@ -15,7 +15,41 @@ use crate::gpu_readback::ReadbackRequest;
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
+use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::generator_registration::ParamSpec;
 use manifold_core::effects::EffectInstance;
+use crate::effects::registration::EffectFactory;
+
+inventory::submit! {
+    EffectMetadata {
+        id: EffectTypeId::WIREFRAME_DEPTH,
+        display_name: "Wireframe Depth",
+        category: "Post-Process",
+        available: true,
+        osc_prefix: "wireframeDepth",
+        legacy_discriminant: Some(29),
+        params: &[
+            ParamSpec::continuous("Amount", 0.0, 1.0, 1.0, "F2", ""),
+            ParamSpec::whole("Density", 16.0, 280.0, 260.0, "Density"),
+            ParamSpec::continuous("Width", 0.4, 3.0, 1.335, "F2", "Width"),
+            ParamSpec::continuous("ZScale", 0.0, 2.5, 1.35, "F2", "ZScale"),
+            ParamSpec::continuous("Smooth", 0.0, 0.98, 0.90, "F2", "Smooth"),
+            ParamSpec::continuous("Subject", 0.0, 1.0, 0.52, "F2", "SubjectIsolation"),
+            ParamSpec::whole_labels("Blend", 0.0, 6.0, 6.0, &["Normal", "Add", "Multiply", "Screen", "Overlay", "Stencil", "Opaque"], "BlendMode"),
+            ParamSpec::continuous("WireRes", 0.5, 1.0, 1.0, "F2", "WireRes"),
+            ParamSpec::whole_labels("MeshRate", 1.0, 4.0, 1.0, &["Every", "Half", "Third", "Quarter"], "MeshRate"),
+            ParamSpec::whole_labels("Flow", 0.0, 1.0, 1.0, &["Off", "On"], "NativeFlow"),
+            ParamSpec::whole_labels("Lock", 0.0, 1.0, 1.0, &["Off", "On"], "FlowLock"),
+            ParamSpec::continuous("EdgeFollow", 0.0, 1.0, 0.5, "F2", "EdgeFollow"),
+        ],
+    }
+}
+inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::WIREFRAME_DEPTH,
+        create: |device| Box::new(WireframeDepthFX::new(device)),
+    }
+}
 
 // Request/response types for the background depth estimation worker.
 struct DepthRequest {

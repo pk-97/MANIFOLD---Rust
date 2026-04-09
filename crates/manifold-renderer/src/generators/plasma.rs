@@ -3,6 +3,36 @@ use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::GeneratorTypeId;
 
+use crate::generators::registration::GeneratorFactory;
+use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
+
+inventory::submit! {
+    GeneratorMetadata {
+        id: GeneratorTypeId::PLASMA,
+        display_name: "Plasma",
+        is_line_based: false,
+        available: true,
+        osc_prefix: "plasma",
+        legacy_discriminant: Some(6),
+        params: &[
+            ParamSpec::whole_labels("Pattern", 0.0, 7.0, 0.0, &["Classic","Rings","Diamond","Warp","Cells","Noise","Fractal","Lattice"], "pattern"),
+            ParamSpec::continuous("Complexity", 0.0, 1.0, 0.5, "F2", "complexity"),
+            ParamSpec::continuous("Contrast", 0.0, 1.0, 0.63, "F2", "contrast"),
+            ParamSpec::continuous("Speed", 0.1, 5.0, 1.0, "F1", "speed"),
+            ParamSpec::continuous("Scale", 0.25, 3.0, 1.0, "F2", "scale"),
+            ParamSpec::toggle("Snap", 0.0, 1.0, 1.0, "snap"),
+        ],
+        string_params: &[],
+    }
+}
+
+inventory::submit! {
+    GeneratorFactory {
+        id: GeneratorTypeId::PLASMA,
+        create: |device| Box::new(PlasmaGenerator::new(device)),
+    }
+}
+
 // Parameter indices matching Unity's PlasmaGenerator.cs
 const PATTERN: usize = 0;
 const COMPLEXITY: usize = 1;

@@ -7,7 +7,33 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
+use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::generator_registration::ParamSpec;
 use manifold_core::effects::EffectInstance;
+use crate::effects::registration::EffectFactory;
+
+inventory::submit! {
+    EffectMetadata {
+        id: EffectTypeId::STYLIZED_FEEDBACK,
+        display_name: "Stylized Feedback",
+        category: "Post-Process",
+        available: true,
+        osc_prefix: "stylizedFeedback",
+        legacy_discriminant: Some(20),
+        params: &[
+            ParamSpec::continuous("Amount", 0.0, 1.0, 0.5, "F2", ""),
+            ParamSpec::continuous("Zoom", 0.9, 1.1, 0.95, "F2", "Zoom"),
+            ParamSpec::continuous("Rotate", -10.0, 10.0, 0.0, "F2", "Rotate"),
+            ParamSpec::whole_labels("Mode", 0.0, 2.0, 0.0, &["Screen", "Add", "Max"], "Mode"),
+        ],
+    }
+}
+inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::STYLIZED_FEEDBACK,
+        create: |device| Box::new(StylizedFeedbackFX::new(device)),
+    }
+}
 
 // StylizedFeedbackFX.cs line 34 — Mathf.Deg2Rad
 const DEG_TO_RAD: f32 = std::f32::consts::PI / 180.0;
