@@ -705,6 +705,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Speed", 0.1, 5.0, 1.0, Some("F1"), "speed"),
         pd("Filter", 0.1, 10.0, 2.0, Some("F1"), "filter"),
         pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
+        pd("Scatter", 0.0, 1.0, 0.0, Some("F2"), "scatter"),
     ];
     m.insert(
         GeneratorTypeId::NESTED_CUBES,

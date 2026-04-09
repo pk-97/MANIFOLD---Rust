@@ -30,7 +30,10 @@ struct NestedCubesUniforms {
     view_proj: [[f32; 4]; 4],
     sizes_0_3: [f32; 4],
     angles_0_3: [f32; 4],
+    /// x: size[4], y: angle[4], z: color (0=black, 1=white), w: scatter (0..1)
     extra: [f32; 4],
+    /// x: time (seconds)
+    extra2: [f32; 4],
 }
 
 pub struct NestedCubesGenerator {
@@ -148,6 +151,11 @@ impl Generator for NestedCubesGenerator {
         } else {
             1.0
         };
+        let scatter = if ctx.param_count > 3 {
+            ctx.params[3]
+        } else {
+            0.0
+        };
 
         let time = ctx.time as f32;
         let dt = ctx.dt;
@@ -185,7 +193,8 @@ impl Generator for NestedCubesGenerator {
                 self.current_angles[2],
                 self.current_angles[3],
             ],
-            extra: [sizes[4], self.current_angles[4], 0.0, 0.0],
+            extra: [sizes[4], self.current_angles[4], 0.0, scatter],
+            extra2: [time, 0.0, 0.0, 0.0],
         };
 
         self.ensure_depth_texture(gpu.device, ctx.width, ctx.height);
@@ -212,7 +221,7 @@ impl Generator for NestedCubesGenerator {
 
         // Pass 2: White quad-edge lines (line primitives, depth read only, no bias)
         let edge_uniforms = NestedCubesUniforms {
-            extra: [sizes[4], self.current_angles[4], 1.0, 0.0],
+            extra: [sizes[4], self.current_angles[4], 1.0, scatter],
             ..uniforms
         };
 
