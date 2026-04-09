@@ -14,6 +14,7 @@ pub mod metallic_glass;
 pub mod mri_volume;
 pub mod mri_volume_loader;
 pub mod mycelium;
+pub mod nested_cubes;
 pub mod oily_fluid;
 pub mod oscilloscope_xy;
 pub mod parametric_surface;

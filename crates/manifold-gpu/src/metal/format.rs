@@ -85,6 +85,13 @@ pub(crate) fn to_mtl_vertex_format(fmt: GpuVertexFormat) -> metal::MTLVertexForm
     }
 }
 
+pub(crate) fn to_mtl_triangle_fill_mode(mode: GpuTriangleFillMode) -> metal::MTLTriangleFillMode {
+    match mode {
+        GpuTriangleFillMode::Fill => metal::MTLTriangleFillMode::Fill,
+        GpuTriangleFillMode::Lines => metal::MTLTriangleFillMode::Lines,
+    }
+}
+
 pub(crate) fn to_mtl_compare_function(func: GpuCompareFunction) -> metal::MTLCompareFunction {
     match func {
         GpuCompareFunction::Never => metal::MTLCompareFunction::Never,

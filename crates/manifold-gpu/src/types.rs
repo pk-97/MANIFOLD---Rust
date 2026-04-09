@@ -232,6 +232,15 @@ pub struct GpuDepthStencilDesc {
     pub write_enabled: bool,
 }
 
+/// Triangle fill mode for render pipelines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GpuTriangleFillMode {
+    /// Solid fill (default).
+    Fill,
+    /// Wireframe — draw triangle edges only.
+    Lines,
+}
+
 // ─── Vertex Layout ───────────────────────────────────────────────────
 
 /// Vertex attribute format.

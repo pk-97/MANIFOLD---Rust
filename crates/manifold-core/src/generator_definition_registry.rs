@@ -700,6 +700,17 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         create_def("Oily Fluid", false, "oilyFluid", params),
     );
 
+    // ── Nested Cubes ──
+    let params = vec![
+        pd("Speed", 0.1, 5.0, 1.0, Some("F1"), "speed"),
+        pd("Filter", 0.1, 10.0, 2.0, Some("F1"), "filter"),
+        pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
+    ];
+    m.insert(
+        GeneratorTypeId::NESTED_CUBES,
+        create_def("Nested Cubes", false, "nestedCubes", params),
+    );
+
     m
 }
 
