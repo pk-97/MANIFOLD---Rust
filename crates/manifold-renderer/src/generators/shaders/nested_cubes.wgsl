@@ -286,15 +286,17 @@ fn fs_intersect(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f
     let my_depth = frag_coord.z;
     let px = vec2<i32>(i32(frag_coord.x), i32(frag_coord.y));
     let stored_depth = textureLoad(depth_tex, px, 0);
-    let diff = abs(my_depth - stored_depth);
 
-    // Threshold: thin intersection line
-    let threshold = 0.0015;
-    if diff < 0.00001 || diff > threshold {
+    // Positive = this fragment is behind the stored surface.
+    // Pass 1's depth bias pushes stored values deeper, so self-fragments
+    // always have behind < 0 and get discarded.
+    let behind = my_depth - stored_depth;
+    let threshold = 0.002;
+    if behind < 0.0 || behind > threshold {
         discard;
     }
 
-    // Intensity falls off with distance from intersection
-    let intensity = 1.0 - (diff / threshold);
+    // Intensity peaks at the intersection line and falls off
+    let intensity = 1.0 - (behind / threshold);
     return vec4<f32>(intensity, intensity, intensity, intensity);
 }
