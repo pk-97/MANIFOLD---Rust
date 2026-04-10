@@ -90,8 +90,8 @@ fn star_layer(
     let f = fract(uv);
 
     // Density adjustment — shift threshold based on user param
-    // density=0 -> threshold+0.12 (sparser), density=1 -> threshold-0.06 (denser)
-    let adj_threshold = threshold + 0.12 - u.density * 0.18;
+    // density=0 -> threshold+0.12 (sparser), density=1 -> threshold-0.15 (denser)
+    let adj_threshold = threshold + 0.12 - u.density * 0.27;
 
     var light = vec3<f32>(0.0);
 
@@ -108,9 +108,9 @@ fn star_layer(
                 let d = vec2<f32>(d_raw.x * 2.0, d_raw.y);
                 let dist2 = dot(d, d);
 
-                // Power-law brightness — many faint, few bright
+                // Power-law brightness — many faint, very few bright
                 let norm_bright = (h - adj_threshold) / (1.0 - adj_threshold);
-                let star_intensity = pow(norm_bright, 1.5) * intensity_mult;
+                let star_intensity = pow(norm_bright, 2.5) * intensity_mult;
 
                 // Core + halo — scale falloff with cell density so stars
                 // stay sharp pinpoints regardless of layer scale.
@@ -191,7 +191,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Layer 1: bright foreground stars — most parallax
     let dir1 = normalize(cam_rot * rotation_y(drift_t * 0.4 * depth_scale) * raw_dir);
-    color += star_layer(dir1, 20.0, 0.82, 3.0, 0.0);
+    color += star_layer(dir1, 20.0, 0.82, 1.5, 0.0);
 
     // Layer 2: medium stars
     let dir2 = normalize(cam_rot * rotation_y(drift_t * 0.2 * depth_scale) * raw_dir);
