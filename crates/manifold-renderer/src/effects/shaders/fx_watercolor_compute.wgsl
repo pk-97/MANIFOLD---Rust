@@ -287,9 +287,16 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     } else if uniforms.mode == 3u {
         // ─── Mode 3: Flow Displacement ─────────────────────────────
-        // Displace max composite by half-res flow map (bilinear upsampled).
+        // Displace max composite by half-res flow map.
+        // 5-tap smooth on the flow map read eliminates half-res block edges.
         // source_a = max composite (temp_a), source_b = flow map (half-res)
-        let flow = textureSampleLevel(source_tex_b, tex_sampler, uv, 0.0);
+        let flow_dims = vec2<f32>(textureDimensions(source_tex_b));
+        let ft = 1.0 / flow_dims; // flow map texel size
+        var flow = textureSampleLevel(source_tex_b, tex_sampler, uv, 0.0) * 0.4;
+        flow += textureSampleLevel(source_tex_b, tex_sampler, uv + vec2<f32>( ft.x, 0.0), 0.0) * 0.15;
+        flow += textureSampleLevel(source_tex_b, tex_sampler, uv + vec2<f32>(-ft.x, 0.0), 0.0) * 0.15;
+        flow += textureSampleLevel(source_tex_b, tex_sampler, uv + vec2<f32>(0.0,  ft.y), 0.0) * 0.15;
+        flow += textureSampleLevel(source_tex_b, tex_sampler, uv + vec2<f32>(0.0, -ft.y), 0.0) * 0.15;
 
         // TD maps [0,1] color to [-weight, +weight] displacement
         let offset = (flow.rb - 0.5) * uniforms.displace_weight;
