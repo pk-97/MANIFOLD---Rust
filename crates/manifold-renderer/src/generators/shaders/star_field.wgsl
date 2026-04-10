@@ -115,8 +115,8 @@ fn star_layer(
                 // Core + halo — scale falloff with cell density so stars
                 // stay sharp pinpoints regardless of layer scale.
                 let s2 = scale * scale;
-                let core = exp(-dist2 * 15.0 * s2);
-                let halo_falloff = 4.0 * s2 / max(0.3 + u.glow * 2.0, 0.3);
+                let core = exp(-dist2 * 50.0 * s2);
+                let halo_falloff = 12.0 * s2 / max(0.3 + u.glow * 2.0, 0.3);
                 let halo = exp(-dist2 * halo_falloff)
                     * norm_bright * norm_bright * 0.04 * (0.3 + u.glow);
 
@@ -191,7 +191,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Layer 1: bright foreground stars — most parallax
     let dir1 = normalize(cam_rot * rotation_y(drift_t * 0.4 * depth_scale) * raw_dir);
-    color += star_layer(dir1, 20.0, 0.82, 1.5, 0.0);
+    color += star_layer(dir1, 40.0, 0.82, 1.5, 0.0);
 
     // Layer 2: medium stars
     let dir2 = normalize(cam_rot * rotation_y(drift_t * 0.2 * depth_scale) * raw_dir);
