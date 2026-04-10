@@ -1,0 +1,327 @@
+// Watercolor — multi-pass feedback effect simulating watercolor paint flow.
+// Ported from TouchDesigner watercolor tutorial signal chain.
+//
+// 7-pass pipeline per frame:
+//   Pass 0 (Grain):          source + white noise → grain_base
+//   Pass 1 (Max Composite):  max(grain_base, feedback) → temp_a
+//   Pass 2 (Flow Displace):  domain-warped fBM displaces temp_a → temp_b
+//   Pass 3 (Blur):           Gaussian blur temp_b → temp_a
+//   Pass 4 (Slope Displace): soft light → Sobel → displace temp_a → temp_b
+//   Pass 5 (Luma Blur):      variable blur with noise mask → feedback
+//   Pass 6 (Emboss):         emboss feedback → overlay → blend with source → target
+
+use super::compute_dual_blit_helper::ComputeDualBlitHelper;
+use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
+use crate::gpu_encoder::GpuEncoder;
+use crate::render_target::RenderTarget;
+use ahash::AHashMap;
+use manifold_core::EffectTypeId;
+use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::effects::EffectInstance;
+use manifold_core::generator_registration::ParamSpec;
+use crate::effects::registration::EffectFactory;
+
+inventory::submit! {
+    EffectMetadata {
+        id: EffectTypeId::new("Watercolor"),
+        display_name: "Watercolor",
+        category: "Post-Process",
+        available: true,
+        osc_prefix: "watercolor",
+        legacy_discriminant: None,
+        params: &[
+            ParamSpec::continuous("Amount", 0.0, 1.0, 0.5, "F2", ""),
+            ParamSpec::continuous("Displace", 0.0001, 0.01, 0.001, "F4", "displace"),
+            ParamSpec::continuous("Blur", 0.5, 8.0, 2.0, "F1", "blur"),
+            ParamSpec::continuous("Emboss", 0.0, 24.0, 12.0, "F1", "emboss"),
+        ],
+    }
+}
+inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::new("Watercolor"),
+        create: |device| Box::new(WatercolorFX::new(device)),
+    }
+}
+
+const WATERCOLOR_WGSL: &str =
+    include_str!("shaders/fx_watercolor_compute.wgsl");
+
+// Uniforms — 48 bytes, 16-byte aligned. Field order matches WGSL.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct WatercolorUniforms {
+    mode: u32,
+    time: f32,
+    width: f32,
+    height: f32,
+    displace_weight: f32,
+    blur_radius: f32,
+    emboss_strength: f32,
+    amount: f32,
+    slope_strength: f32,
+    slope_step: f32,
+    luma_blur_radius: f32,
+    grain_amount: f32,
+}
+
+/// Per-owner state: persistent feedback buffer + frame-lifetime intermediates.
+struct WatercolorState {
+    feedback: RenderTarget,   // Persistent across frames
+    grain_base: RenderTarget, // Grain-processed source (used in passes 0, 1, 4)
+    temp_a: RenderTarget,     // Intermediate A
+    temp_b: RenderTarget,     // Intermediate B
+}
+
+pub struct WatercolorFX {
+    helper: ComputeDualBlitHelper,
+    pipeline_grain: manifold_gpu::GpuComputePipeline,  // mode 0
+    pipeline_max: manifold_gpu::GpuComputePipeline,    // mode 1
+    pipeline_flow: manifold_gpu::GpuComputePipeline,   // mode 2
+    pipeline_blur: manifold_gpu::GpuComputePipeline,   // mode 3
+    pipeline_slope: manifold_gpu::GpuComputePipeline,  // mode 4
+    pipeline_luma: manifold_gpu::GpuComputePipeline,   // mode 5
+    pipeline_emboss: manifold_gpu::GpuComputePipeline, // mode 6
+    states: AHashMap<i64, WatercolorState>,
+    width: u32,
+    height: u32,
+}
+
+fn alloc_target(
+    device: &manifold_gpu::GpuDevice,
+    pool: Option<&manifold_gpu::TexturePool>,
+    w: u32,
+    h: u32,
+    label: &str,
+) -> RenderTarget {
+    let fmt = manifold_gpu::GpuTextureFormat::Rgba16Float;
+    if let Some(p) = pool {
+        RenderTarget::new_pooled(p, w, h, fmt, label)
+    } else {
+        RenderTarget::new(device, w, h, fmt, label)
+    }
+}
+
+impl WatercolorFX {
+    pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
+        let spec = |mode: &str, label: &str| {
+            device.create_specialized_compute_pipeline(
+                WATERCOLOR_WGSL,
+                "cs_main",
+                &[("uniforms.mode", mode)],
+                label,
+            )
+        };
+        Self {
+            helper: ComputeDualBlitHelper::new(
+                device,
+                WATERCOLOR_WGSL,
+                "Watercolor Compute",
+            ),
+            pipeline_grain: spec("0u", "WC Grain"),
+            pipeline_max: spec("1u", "WC Max"),
+            pipeline_flow: spec("2u", "WC Flow"),
+            pipeline_blur: spec("3u", "WC Blur"),
+            pipeline_slope: spec("4u", "WC Slope"),
+            pipeline_luma: spec("5u", "WC Luma"),
+            pipeline_emboss: spec("6u", "WC Emboss"),
+            states: AHashMap::new(),
+            width: 0,
+            height: 0,
+        }
+    }
+}
+
+impl PostProcessEffect for WatercolorFX {
+    fn effect_type(&self) -> &EffectTypeId {
+        &EffectTypeId::WATERCOLOR
+    }
+
+    fn apply(
+        &mut self,
+        gpu: &mut GpuEncoder,
+        source: &manifold_gpu::GpuTexture,
+        target: &manifold_gpu::GpuTexture,
+        fx: &EffectInstance,
+        ctx: &EffectContext,
+    ) {
+        self.width = ctx.width;
+        self.height = ctx.height;
+
+        // Ensure per-owner state exists — clear feedback to black on creation
+        if !self.states.contains_key(&ctx.owner_key)
+            && self.width > 0
+            && self.height > 0
+        {
+            let w = self.width;
+            let h = self.height;
+            let feedback = alloc_target(gpu.device, gpu.pool, w, h, "WC Feedback");
+            gpu.clear_texture(&feedback.texture, 0.0, 0.0, 0.0, 0.0);
+            self.states.insert(
+                ctx.owner_key,
+                WatercolorState {
+                    feedback,
+                    grain_base: alloc_target(
+                        gpu.device, gpu.pool, w, h, "WC GrainBase",
+                    ),
+                    temp_a: alloc_target(gpu.device, gpu.pool, w, h, "WC TempA"),
+                    temp_b: alloc_target(gpu.device, gpu.pool, w, h, "WC TempB"),
+                },
+            );
+        }
+
+        let w = ctx.width;
+        let h = ctx.height;
+        let state = self.states.get(&ctx.owner_key).unwrap();
+
+        // Extract user-facing parameters
+        let amount = fx.param_values.first().copied().unwrap_or(0.5);
+        let displace_weight = fx
+            .param_values
+            .get(1)
+            .copied()
+            .unwrap_or(0.001)
+            .clamp(0.0001, 0.01);
+        let blur_radius = fx
+            .param_values
+            .get(2)
+            .copied()
+            .unwrap_or(2.0)
+            .clamp(0.5, 8.0);
+        let emboss_strength = fx
+            .param_values
+            .get(3)
+            .copied()
+            .unwrap_or(12.0)
+            .clamp(0.0, 24.0);
+
+        let uniforms = WatercolorUniforms {
+            mode: 0, // overridden by function constants per pipeline
+            time: ctx.time,
+            width: w as f32,
+            height: h as f32,
+            displace_weight,
+            blur_radius,
+            emboss_strength,
+            amount,
+            slope_strength: 5.0,
+            slope_step: 5.0,
+            luma_blur_radius: 10.0,
+            grain_amount: 0.15,
+        };
+        let ubytes = bytemuck::bytes_of(&uniforms);
+
+        // Pass 0: Grain — source → grain_base
+        self.helper.dispatch_a_only_with(
+            &self.pipeline_grain,
+            gpu,
+            source,
+            &state.grain_base.texture,
+            ubytes,
+            "WC Grain",
+            w,
+            h,
+        );
+
+        // Pass 1: Max Composite — grain_base ⊕ feedback → temp_a
+        self.helper.dispatch_with(
+            &self.pipeline_max,
+            gpu,
+            &state.grain_base.texture,
+            &state.feedback.texture,
+            &state.temp_a.texture,
+            ubytes,
+            "WC Max",
+            w,
+            h,
+        );
+
+        // Pass 2: Flow Displacement — temp_a → temp_b (noise procedural)
+        self.helper.dispatch_a_only_with(
+            &self.pipeline_flow,
+            gpu,
+            &state.temp_a.texture,
+            &state.temp_b.texture,
+            ubytes,
+            "WC Flow",
+            w,
+            h,
+        );
+
+        // Pass 3: Edge Diffusion Blur — temp_b → temp_a
+        self.helper.dispatch_a_only_with(
+            &self.pipeline_blur,
+            gpu,
+            &state.temp_b.texture,
+            &state.temp_a.texture,
+            ubytes,
+            "WC Blur",
+            w,
+            h,
+        );
+
+        // Pass 4: Slope Displacement — grain_base + temp_a → temp_b
+        self.helper.dispatch_with(
+            &self.pipeline_slope,
+            gpu,
+            &state.grain_base.texture,
+            &state.temp_a.texture,
+            &state.temp_b.texture,
+            ubytes,
+            "WC Slope",
+            w,
+            h,
+        );
+
+        // Pass 5: Luma Blur — temp_b → feedback (persistent buffer)
+        self.helper.dispatch_a_only_with(
+            &self.pipeline_luma,
+            gpu,
+            &state.temp_b.texture,
+            &state.feedback.texture,
+            ubytes,
+            "WC Luma",
+            w,
+            h,
+        );
+
+        // Pass 6: Emboss — feedback + source → target (final output)
+        self.helper.dispatch_with(
+            &self.pipeline_emboss,
+            gpu,
+            &state.feedback.texture,
+            source,
+            target,
+            ubytes,
+            "WC Emboss",
+            w,
+            h,
+        );
+    }
+
+    fn clear_state(&mut self) {
+        self.states.clear();
+    }
+
+    fn resize(&mut self, _device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+        self.width = width;
+        self.height = height;
+        self.states.clear();
+    }
+
+    fn cleanup_owner_state(&mut self, owner_key: i64) {
+        self.states.remove(&owner_key);
+    }
+}
+
+impl StatefulEffect for WatercolorFX {
+    fn clear_state_for_owner(&mut self, owner_key: i64) {
+        self.states.remove(&owner_key);
+    }
+    fn cleanup_owner(&mut self, owner_key: i64) {
+        self.states.remove(&owner_key);
+    }
+    fn cleanup_all_owners(&mut self, _device: &manifold_gpu::GpuDevice) {
+        self.states.clear();
+    }
+}

@@ -26,4 +26,5 @@ pub mod strobe;
 pub mod stylized_feedback;
 pub mod transform;
 pub mod voronoi_prism;
+pub mod watercolor;
 pub mod wireframe_depth;

@@ -77,6 +77,7 @@ impl EffectTypeId {
     pub const DEPTH_OF_FIELD: Self = Self(Cow::Borrowed("DepthOfField"));
     pub const HDR_BOOST: Self = Self(Cow::Borrowed("HdrBoost"));
     pub const AUTO_GAIN: Self = Self(Cow::Borrowed("AutoGain"));
+    pub const WATERCOLOR: Self = Self(Cow::Borrowed("Watercolor"));
 
     /// Placeholder for unrecognized/removed effect types.
     /// Renderers skip this — it never applies any GPU work.
