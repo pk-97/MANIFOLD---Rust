@@ -139,7 +139,7 @@ fn noise3d(p: vec3<f32>) -> f32 {
 // 6 octaves: octaves 7–10 contribute <1% each (amp < 0.008).
 // ═══════════════════════════════════════════════════════════════════
 
-const FBM_OCTAVES: i32 = 6;
+const FBM_OCTAVES: i32 = 5;
 
 fn fbm3d(p_in: vec3<f32>) -> f32 {
     var val: f32 = 0.0;

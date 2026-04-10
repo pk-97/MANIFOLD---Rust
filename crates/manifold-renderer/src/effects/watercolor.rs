@@ -160,11 +160,11 @@ impl PostProcessEffect for WatercolorFX {
         self.width = ctx.width;
         self.height = ctx.height;
 
+        // Track whether this is a brand-new owner (flow map uninitialized)
+        let is_new_owner = !self.states.contains_key(&ctx.owner_key);
+
         // Ensure per-owner state exists — clear feedback to black on creation
-        if !self.states.contains_key(&ctx.owner_key)
-            && self.width > 0
-            && self.height > 0
-        {
+        if is_new_owner && self.width > 0 && self.height > 0 {
             let w = self.width;
             let h = self.height;
             let feedback =
@@ -267,16 +267,21 @@ impl PostProcessEffect for WatercolorFX {
         );
 
         // Pass 2: Flow Map — procedural noise → flow_map
-        self.helper.dispatch_a_only_with(
-            &self.pipeline_flow_gen,
-            gpu,
-            &state.grain_base.texture, // not read, just bound for layout
-            &state.flow_map.texture,
-            ubytes,
-            "WC FlowGen",
-            w,
-            h,
-        );
+        // Skip on alternate frames: noise evolves at time×0.01, so the
+        // per-frame Z-offset delta (~0.00017) is invisible. Halves the
+        // cost of the heaviest pass. Always generate on first frame.
+        if is_new_owner || ctx.frame_count % 2 == 0 {
+            self.helper.dispatch_a_only_with(
+                &self.pipeline_flow_gen,
+                gpu,
+                &state.grain_base.texture, // not read, just bound for layout
+                &state.flow_map.texture,
+                ubytes,
+                "WC FlowGen",
+                w,
+                h,
+            );
+        }
 
         // Pass 3: Displacement — temp_a + flow_map → temp_b
         self.helper.dispatch_with(
