@@ -27,6 +27,12 @@ inventory::submit! {
             ParamSpec::continuous("Filter", 0.1, 10.0, 2.0, "F1", "filter"),
             ParamSpec::continuous("Scale", 0.25, 3.0, 1.0, "F2", "scale"),
             ParamSpec::continuous("Scatter", 0.0, 1.0, 0.0, "F2", "scatter"),
+            ParamSpec::toggle("Snap", 0.0, 1.0, 0.0, "snap"),
+            ParamSpec::whole_labels(
+                "Snap Mode", 0.0, 1.0, 0.0,
+                &["Envelope", "Pose"],
+                "snapMode",
+            ),
         ],
         string_params: &[],
     }
@@ -49,6 +55,33 @@ const EDGE_VERTEX_COUNT: u32 = 48;
 
 /// Instance sizes: linear ramp from 1.0 to 2.0.
 const INSTANCE_SIZES: [f32; 5] = [1.0, 1.25, 1.5, 1.75, 2.0];
+
+// Param indices
+const SPEED: usize = 0;
+const FILTER: usize = 1;
+const SCALE: usize = 2;
+const SCATTER: usize = 3;
+const SNAP: usize = 4;
+const SNAP_MODE: usize = 5;
+
+const MODE_ENVELOPE: i32 = 0;
+const MODE_POSE: i32 = 1;
+
+/// Exponential decay rate for envelope mode (~300ms to near-zero).
+const SNAP_DECAY_RATE: f32 = 10.0;
+
+/// Number of preset poses for pose mode.
+const POSE_COUNT: u32 = 6;
+
+/// Preset angular arrangements (degrees) for each of the 5 instances.
+const POSES: [[f32; 5]; 6] = [
+    [0.0, 90.0, 180.0, 270.0, 360.0],     // cross
+    [0.0, 45.0, 90.0, 135.0, 180.0],       // fan
+    [0.0, 72.0, 144.0, 216.0, 288.0],      // pentagonal
+    [0.0, 30.0, 120.0, 210.0, 300.0],      // asymmetric star
+    [0.0, 60.0, 60.0, 120.0, 180.0],       // nested pairs
+    [0.0, 0.0, 90.0, 90.0, 180.0],         // stacked pairs
+];
 
 /// Uniform data matching the WGSL `Uniforms` struct.
 #[repr(C)]
@@ -75,6 +108,14 @@ pub struct NestedCubesGenerator {
     depth_height: u32,
     /// EMA-smoothed rotation angles per instance (degrees).
     current_angles: [f32; 5],
+    /// Committed target angles (what cubes settle to).
+    target_angles: [f32; 5],
+    /// Snap envelope (1.0 on trigger, decays to 0).
+    snap_envelope: f32,
+    /// Last seen trigger count for detecting new triggers.
+    last_trigger_count: i32,
+    /// Current pose index for pose mode.
+    pose_index: u32,
 }
 
 impl NestedCubesGenerator {
@@ -113,6 +154,9 @@ impl NestedCubesGenerator {
                 write_enabled: false,
             });
 
+        // Initial static spread: (i/4) * 360
+        let initial_angles: [f32; 5] = std::array::from_fn(|i| (i as f32 / 4.0) * 360.0);
+
         Self {
             fill_pipeline,
             edge_pipeline,
@@ -121,7 +165,11 @@ impl NestedCubesGenerator {
             depth_texture: None,
             depth_width: 0,
             depth_height: 0,
-            current_angles: [0.0; 5],
+            current_angles: initial_angles,
+            target_angles: initial_angles,
+            snap_envelope: 0.0,
+            last_trigger_count: -1,
+            pose_index: 0,
         }
     }
 
@@ -163,37 +211,74 @@ impl Generator for NestedCubesGenerator {
         target: &manifold_gpu::GpuTexture,
         ctx: &GeneratorContext,
     ) -> f32 {
-        let speed = if ctx.param_count > 0 {
-            ctx.params[0]
+        let speed = if ctx.param_count > SPEED as u32 {
+            ctx.params[SPEED]
         } else {
             1.0
         };
-        let filter_width = if ctx.param_count > 1 {
-            ctx.params[1]
+        let filter_width = if ctx.param_count > FILTER as u32 {
+            ctx.params[FILTER]
         } else {
             2.0
         };
-        let scale = if ctx.param_count > 2 {
-            ctx.params[2]
+        let scale = if ctx.param_count > SCALE as u32 {
+            ctx.params[SCALE]
         } else {
             1.0
         };
-        let scatter = if ctx.param_count > 3 {
-            ctx.params[3]
+        let scatter = if ctx.param_count > SCATTER as u32 {
+            ctx.params[SCATTER]
         } else {
             0.0
+        };
+        let snap_on = ctx.param_count > SNAP as u32 && ctx.params[SNAP] > 0.5;
+        let snap_mode = if ctx.param_count > SNAP_MODE as u32 {
+            (ctx.params[SNAP_MODE].round() as i32).clamp(MODE_ENVELOPE, MODE_POSE)
+        } else {
+            MODE_ENVELOPE
         };
 
         let time = ctx.time as f32;
         let dt = ctx.dt;
 
-        // Update EMA-smoothed angles per instance.
-        // Target: (i / 4.0) * 360.0 + time * 36.0 * speed
-        // EMA: current = mix(current, target, 1 - exp(-dt * filter_width))
+        // Detect new trigger
+        let trigger_count = ctx.trigger_count as i32;
+        if trigger_count != self.last_trigger_count {
+            let should_snap = snap_on && self.last_trigger_count >= 0;
+            self.last_trigger_count = trigger_count;
+
+            if should_snap {
+                match snap_mode {
+                    MODE_ENVELOPE => {
+                        // Kick envelope, advance targets by 90° * speed
+                        self.snap_envelope = 1.0;
+                        let rotation = 90.0 * speed;
+                        for i in 0..5 {
+                            self.target_angles[i] += rotation;
+                        }
+                    }
+                    MODE_POSE => {
+                        // Jump to next preset pose
+                        self.pose_index = (self.pose_index + 1) % POSE_COUNT;
+                        let pose = POSES[self.pose_index as usize];
+                        self.target_angles.copy_from_slice(&pose);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Decay envelope
+        if self.snap_envelope > 0.001 {
+            self.snap_envelope *= (-SNAP_DECAY_RATE * dt).exp();
+        } else {
+            self.snap_envelope = 0.0;
+        }
+
+        // EMA-smooth current angles toward targets
         let alpha = 1.0 - (-dt * filter_width).exp();
         for i in 0..5 {
-            let target_angle = (i as f32 / 4.0) * 360.0 + time * 36.0 * speed;
-            self.current_angles[i] += alpha * (target_angle - self.current_angles[i]);
+            self.current_angles[i] += alpha * (self.target_angles[i] - self.current_angles[i]);
         }
 
         // Scaled sizes
@@ -278,7 +363,12 @@ impl Generator for NestedCubesGenerator {
     }
 
     fn reset_state(&mut self, _device: &manifold_gpu::GpuDevice) {
-        self.current_angles = [0.0; 5];
+        let initial: [f32; 5] = std::array::from_fn(|i| (i as f32 / 4.0) * 360.0);
+        self.current_angles = initial;
+        self.target_angles = initial;
+        self.snap_envelope = 0.0;
+        self.last_trigger_count = -1;
+        self.pose_index = 0;
     }
 }
 
