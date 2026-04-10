@@ -161,13 +161,10 @@ fn fbm3d(p_in: vec3<f32>) -> f32 {
 const FLOW_SCALE: f32 = 4.0;
 
 fn flow_noise(uv: vec2<f32>, z: f32) -> vec2<f32> {
-    // Channel A (Red): base fBM → domain warp → second fBM
-    let n1a = fbm3d(vec3<f32>(uv * FLOW_SCALE, z));
-    let red = fbm3d(vec3<f32>(n1a, n1a, z));
-
-    // Channel B (Blue): offset seed, same domain-warp pattern
-    let n2a = fbm3d(vec3<f32>(uv * FLOW_SCALE + vec2<f32>(5.2, 1.3), z));
-    let blue = fbm3d(vec3<f32>(n2a, n2a, z));
+    // Two independent fBM channels with offset seeds.
+    // Direct evaluation (no domain warping) for performance.
+    let red = fbm3d(vec3<f32>(uv * FLOW_SCALE, z));
+    let blue = fbm3d(vec3<f32>(uv * FLOW_SCALE + vec2<f32>(5.2, 1.3), z));
 
     // Map [-1,1] → [0,1]
     return vec2<f32>(red * 0.5 + 0.5, blue * 0.5 + 0.5);
@@ -266,15 +263,19 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         textureStore(output_tex, vec2<i32>(gid.xy), color);
 
     } else if uniforms.mode == 1u {
-        // ─── Mode 1: Maximum Composite with Decay ──────────────────
-        // max(grain_base, feedback * decay)
-        // Decay prevents blowout on video — feedback energy dissipates.
-        // source_a = grain_base, source_b = feedback
-        let grain = textureSampleLevel(source_tex_a, tex_sampler, uv, 0.0);
+        // ─── Mode 1: Grain + Maximum Composite with Decay ──────────
+        // Inline grain: multiplicative noise on source, then max with
+        // decayed feedback. Eliminates separate grain pass + texture.
+        // source_a = original source, source_b = feedback
+        let source = textureSampleLevel(source_tex_a, tex_sampler, uv, 0.0);
+        let pixel_coord = uv * vec2<f32>(uniforms.width, uniforms.height);
+        let noise = white_noise(pixel_coord);
+        let grain_rgb = source.rgb * (1.0 - uniforms.grain_amount * (1.0 - noise));
+
         let feedback = textureSampleLevel(source_tex_b, tex_sampler, uv, 0.0) * uniforms.decay;
         let color = vec4<f32>(
-            max(grain.rgb, feedback.rgb),
-            max(grain.a, feedback.a),
+            max(grain_rgb, feedback.rgb),
+            max(source.a, feedback.a),
         );
         textureStore(output_tex, vec2<i32>(gid.xy), color);
 
@@ -324,7 +325,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     } else if uniforms.mode == 5u {
         // ─── Mode 5: Slope Displacement ────────────────────────────
         // Soft light blend → Sobel gradient → displace blurred result.
-        // source_a = grain_base, source_b = blurred (temp_a)
+        // source_a = original source, source_b = blurred (temp_a)
         let step_uv = vec2<f32>(uniforms.slope_step * texel.x, uniforms.slope_step * texel.y);
 
         // Sample grain_base and blurred at 5 positions, compute soft light

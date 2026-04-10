@@ -1,10 +1,9 @@
 // Watercolor — multi-pass feedback effect simulating watercolor paint flow.
 // Ported from TouchDesigner watercolor tutorial signal chain.
 //
-// 8-pass pipeline per frame:
-//   Pass 0 (Grain):          source + white noise → grain_base
-//   Pass 1 (Max Composite):  max(grain_base, feedback * decay) → temp_a
-//   Pass 2 (Flow Map):       domain-warped fBM → flow_map
+// 7-pass pipeline per frame (6 on alternate frames when flow map is reused):
+//   Pass 1 (Grain+Max):      source + grain + max(feedback * decay) → temp_a
+//   Pass 2 (Flow Map):       fBM noise → flow_map (skipped on odd frames)
 //   Pass 3 (Displacement):   displace temp_a by flow_map → temp_b
 //   Pass 4 (Blur):           Gaussian blur temp_b → temp_a
 //   Pass 5 (Slope Displace): soft light → Sobel → displace temp_a → temp_b
@@ -12,7 +11,9 @@
 //   Pass 7 (Emboss):         emboss feedback → overlay → blend with source → target
 //
 // Performance:
-//   - 6-octave fBM (vs 10 — octaves 7–10 contribute <1% each)
+//   - 5-octave fBM (vs 10 — octaves 6–10 contribute <3% combined)
+//   - Flow map reused on alternate frames (noise evolves at time×0.01)
+//   - Grain inlined into max composite (eliminates 1 dispatch + 1 texture)
 
 use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
@@ -76,23 +77,21 @@ struct WatercolorUniforms {
 
 /// Per-owner state: persistent feedback buffer + frame-lifetime intermediates.
 struct WatercolorState {
-    feedback: RenderTarget,   // Persistent across frames (Rgba16Float)
-    grain_base: RenderTarget, // Grain-processed source (used in passes 0, 1, 5)
-    flow_map: RenderTarget,   // Flow displacement map (RB channels)
-    temp_a: RenderTarget,     // Intermediate A (full-res)
-    temp_b: RenderTarget,     // Intermediate B (full-res)
+    feedback: RenderTarget, // Persistent across frames (Rgba16Float)
+    flow_map: RenderTarget, // Flow displacement map (RB channels)
+    temp_a: RenderTarget,   // Intermediate A (full-res)
+    temp_b: RenderTarget,   // Intermediate B (full-res)
 }
 
 pub struct WatercolorFX {
     helper: ComputeDualBlitHelper,
-    pipeline_grain: manifold_gpu::GpuComputePipeline,    // mode 0
-    pipeline_max: manifold_gpu::GpuComputePipeline,      // mode 1
-    pipeline_flow_gen: manifold_gpu::GpuComputePipeline, // mode 2
-    pipeline_displace: manifold_gpu::GpuComputePipeline, // mode 3
-    pipeline_blur: manifold_gpu::GpuComputePipeline,     // mode 4
-    pipeline_slope: manifold_gpu::GpuComputePipeline,    // mode 5
-    pipeline_luma: manifold_gpu::GpuComputePipeline,     // mode 6
-    pipeline_emboss: manifold_gpu::GpuComputePipeline,   // mode 7
+    pipeline_max: manifold_gpu::GpuComputePipeline,      // mode 1 (grain + max)
+    pipeline_flow_gen: manifold_gpu::GpuComputePipeline,  // mode 2
+    pipeline_displace: manifold_gpu::GpuComputePipeline,  // mode 3
+    pipeline_blur: manifold_gpu::GpuComputePipeline,      // mode 4
+    pipeline_slope: manifold_gpu::GpuComputePipeline,     // mode 5
+    pipeline_luma: manifold_gpu::GpuComputePipeline,      // mode 6
+    pipeline_emboss: manifold_gpu::GpuComputePipeline,    // mode 7
     states: AHashMap<i64, WatercolorState>,
     width: u32,
     height: u32,
@@ -129,8 +128,7 @@ impl WatercolorFX {
                 WATERCOLOR_WGSL,
                 "Watercolor Compute",
             ),
-            pipeline_grain: spec("0u", "WC Grain"),
-            pipeline_max: spec("1u", "WC Max"),
+            pipeline_max: spec("1u", "WC GrainMax"),
             pipeline_flow_gen: spec("2u", "WC FlowGen"),
             pipeline_displace: spec("3u", "WC Displace"),
             pipeline_blur: spec("4u", "WC Blur"),
@@ -174,9 +172,6 @@ impl PostProcessEffect for WatercolorFX {
                 ctx.owner_key,
                 WatercolorState {
                     feedback,
-                    grain_base: alloc_target(
-                        gpu.device, gpu.pool, w, h, "WC GrainBase",
-                    ),
                     flow_map: alloc_target(
                         gpu.device, gpu.pool, w, h, "WC FlowMap",
                     ),
@@ -241,27 +236,15 @@ impl PostProcessEffect for WatercolorFX {
         };
         let ubytes = bytemuck::bytes_of(&uniforms);
 
-        // Pass 0: Grain — source → grain_base
-        self.helper.dispatch_a_only_with(
-            &self.pipeline_grain,
-            gpu,
-            source,
-            &state.grain_base.texture,
-            ubytes,
-            "WC Grain",
-            w,
-            h,
-        );
-
-        // Pass 1: Max Composite — grain_base ⊕ (feedback * decay) → temp_a
+        // Pass 1: Grain + Max Composite — source ⊕ (feedback * decay) → temp_a
         self.helper.dispatch_with(
             &self.pipeline_max,
             gpu,
-            &state.grain_base.texture,
+            source,
             &state.feedback.texture,
             &state.temp_a.texture,
             ubytes,
-            "WC Max",
+            "WC GrainMax",
             w,
             h,
         );
@@ -274,7 +257,7 @@ impl PostProcessEffect for WatercolorFX {
             self.helper.dispatch_a_only_with(
                 &self.pipeline_flow_gen,
                 gpu,
-                &state.grain_base.texture, // not read, just bound for layout
+                source, // not read, just bound for layout
                 &state.flow_map.texture,
                 ubytes,
                 "WC FlowGen",
@@ -308,11 +291,11 @@ impl PostProcessEffect for WatercolorFX {
             h,
         );
 
-        // Pass 5: Slope Displacement — grain_base + temp_a → temp_b
+        // Pass 5: Slope Displacement — source + temp_a → temp_b
         self.helper.dispatch_with(
             &self.pipeline_slope,
             gpu,
-            &state.grain_base.texture,
+            source,
             &state.temp_a.texture,
             &state.temp_b.texture,
             ubytes,
