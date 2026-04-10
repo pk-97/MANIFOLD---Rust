@@ -415,15 +415,34 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     } else {
         // ─── Mode 7: Emboss Post-Process ───────────────────────────
-        // Emboss filter + overlay composite + amount blend with source.
+        // Sobel gradient → directional light projection → overlay composite.
         // source_a = feedback (watercolor result), source_b = original source
 
         let wc = textureSampleLevel(source_tex_a, tex_sampler, uv, 0.0);
 
-        // Emboss: directional derivative (top-left → bottom-right)
+        // 3×3 neighborhood for Sobel gradients
         let tl = textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(-texel.x, -texel.y), 0.0).rgb;
+        let tc = textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(     0.0, -texel.y), 0.0).rgb;
+        let tr = textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>( texel.x, -texel.y), 0.0).rgb;
+        let ml = textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(-texel.x,      0.0), 0.0).rgb;
+        let mr = textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>( texel.x,      0.0), 0.0).rgb;
+        let bl = textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(-texel.x,  texel.y), 0.0).rgb;
+        let bc = textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(     0.0,  texel.y), 0.0).rgb;
         let br = textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>( texel.x,  texel.y), 0.0).rgb;
-        let emboss = clamp((br - tl) * uniforms.emboss_strength + 0.5, vec3<f32>(0.0), vec3<f32>(1.0));
+
+        // Sobel X/Y gradients (luminance-weighted)
+        let luma = vec3<f32>(0.2126, 0.7152, 0.0722);
+        let gx = dot(-tl + tr - 2.0 * ml + 2.0 * mr - bl + br, luma) / 4.0;
+        let gy = dot(-tl - 2.0 * tc - tr + bl + 2.0 * bc + br, luma) / 4.0;
+
+        // Project gradient onto 45° light direction for emboss look
+        let light_dir = vec2<f32>(0.7071, 0.7071); // normalize(1, 1)
+        let emboss_val = clamp(
+            dot(vec2<f32>(gx, gy), light_dir) * uniforms.emboss_strength + 0.5,
+            0.0,
+            1.0,
+        );
+        let emboss = vec3<f32>(emboss_val, emboss_val, emboss_val);
 
         // Overlay composite: paint texture over watercolor result
         let composited = overlay(wc.rgb, emboss);

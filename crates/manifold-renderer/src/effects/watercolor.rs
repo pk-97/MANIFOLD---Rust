@@ -12,9 +12,7 @@
 //   Pass 7 (Emboss):         emboss feedback → overlay → blend with source → target
 //
 // Performance:
-//   - 6-octave fBM + half-precision ALU on flow map pass
 //   - 6-octave fBM (vs 10 — octaves 7–10 contribute <1% each)
-//   - Half-precision ALU on non-accumulative passes (2× throughput)
 
 use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
@@ -87,14 +85,14 @@ struct WatercolorState {
 
 pub struct WatercolorFX {
     helper: ComputeDualBlitHelper,
-    pipeline_grain: manifold_gpu::GpuComputePipeline,    // mode 0 (half)
-    pipeline_max: manifold_gpu::GpuComputePipeline,      // mode 1 (full — writes feedback path)
-    pipeline_flow_gen: manifold_gpu::GpuComputePipeline,  // mode 2 (half)
-    pipeline_displace: manifold_gpu::GpuComputePipeline, // mode 3 (half)
-    pipeline_blur: manifold_gpu::GpuComputePipeline,     // mode 4 (half)
-    pipeline_slope: manifold_gpu::GpuComputePipeline,    // mode 5 (half)
-    pipeline_luma: manifold_gpu::GpuComputePipeline,     // mode 6 (full — writes feedback)
-    pipeline_emboss: manifold_gpu::GpuComputePipeline,   // mode 7 (half)
+    pipeline_grain: manifold_gpu::GpuComputePipeline,    // mode 0
+    pipeline_max: manifold_gpu::GpuComputePipeline,      // mode 1
+    pipeline_flow_gen: manifold_gpu::GpuComputePipeline, // mode 2
+    pipeline_displace: manifold_gpu::GpuComputePipeline, // mode 3
+    pipeline_blur: manifold_gpu::GpuComputePipeline,     // mode 4
+    pipeline_slope: manifold_gpu::GpuComputePipeline,    // mode 5
+    pipeline_luma: manifold_gpu::GpuComputePipeline,     // mode 6
+    pipeline_emboss: manifold_gpu::GpuComputePipeline,   // mode 7
     states: AHashMap<i64, WatercolorState>,
     width: u32,
     height: u32,
@@ -117,18 +115,8 @@ fn alloc_target(
 
 impl WatercolorFX {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
-        // Full-precision for accumulative passes (feedback path)
         let spec = |mode: &str, label: &str| {
             device.create_specialized_compute_pipeline(
-                WATERCOLOR_WGSL,
-                "cs_main",
-                &[("uniforms.mode", mode)],
-                label,
-            )
-        };
-        // Half-precision for non-accumulative passes (2× ALU throughput)
-        let spec_half = |mode: &str, label: &str| {
-            device.create_specialized_compute_pipeline_half(
                 WATERCOLOR_WGSL,
                 "cs_main",
                 &[("uniforms.mode", mode)],
@@ -141,14 +129,14 @@ impl WatercolorFX {
                 WATERCOLOR_WGSL,
                 "Watercolor Compute",
             ),
-            pipeline_grain: spec_half("0u", "WC Grain"),
-            pipeline_max: spec("1u", "WC Max"),           // full — feedback path
-            pipeline_flow_gen: spec_half("2u", "WC FlowGen"),
-            pipeline_displace: spec_half("3u", "WC Displace"),
-            pipeline_blur: spec_half("4u", "WC Blur"),
-            pipeline_slope: spec_half("5u", "WC Slope"),
-            pipeline_luma: spec("6u", "WC Luma"),          // full — writes feedback
-            pipeline_emboss: spec_half("7u", "WC Emboss"),
+            pipeline_grain: spec("0u", "WC Grain"),
+            pipeline_max: spec("1u", "WC Max"),
+            pipeline_flow_gen: spec("2u", "WC FlowGen"),
+            pipeline_displace: spec("3u", "WC Displace"),
+            pipeline_blur: spec("4u", "WC Blur"),
+            pipeline_slope: spec("5u", "WC Slope"),
+            pipeline_luma: spec("6u", "WC Luma"),
+            pipeline_emboss: spec("7u", "WC Emboss"),
             states: AHashMap::new(),
             width: 0,
             height: 0,
