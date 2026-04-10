@@ -92,7 +92,7 @@ struct NestedCubesUniforms {
     angles_0_3: [f32; 4],
     /// x: size[4], y: angle[4], z: color (0=black, 1=white), w: scatter (0..1)
     extra: [f32; 4],
-    /// x: time (seconds)
+    /// x: time (seconds), y: snap_envelope (0..1)
     extra2: [f32; 4],
 }
 
@@ -306,7 +306,7 @@ impl Generator for NestedCubesGenerator {
                 self.current_angles[3],
             ],
             extra: [sizes[4], self.current_angles[4], 0.0, scatter],
-            extra2: [time, 0.0, 0.0, 0.0],
+            extra2: [time, self.snap_envelope, 0.0, 0.0],
         };
 
         self.ensure_depth_texture(gpu.device, ctx.width, ctx.height);

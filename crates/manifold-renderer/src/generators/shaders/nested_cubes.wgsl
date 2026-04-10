@@ -17,7 +17,7 @@ struct Uniforms {
     angles_0_3: vec4<f32>,
     // x: size[4], y: angle[4], z: color (0=black, 1=white), w: scatter (0..1)
     extra: vec4<f32>,
-    // x: time (seconds)
+    // x: time (seconds), y: snap_envelope (0..1)
     extra2: vec4<f32>,
 };
 
@@ -214,14 +214,20 @@ fn scatter_offset(face: u32, iid: u32, time: f32, scatter: f32) -> vec3<f32> {
 fn transform(pos: vec3<f32>, face: u32, iid: u32) -> vec4<f32> {
     let scatter = u.extra.w;
     let time = u.extra2.x;
+    let envelope = u.extra2.y;
     let offset = scatter_offset(face, iid, time, scatter);
     let displaced = pos + offset;
 
     let size = get_size(iid);
     let angle = get_angle(iid);
     let scaled = displaced * size;
-    let axis = face_axis(face, iid);
-    let rotated = rotation_axis(axis, angle) * scaled;
+
+    // Base rotation: Y-axis keeps cube structure intact at rest
+    let base = rotation_axis(vec3<f32>(0.0, 1.0, 0.0), angle);
+    // Snap kick: per-face random axis, 360° scaled by envelope (decays to identity)
+    let kick_axis = face_axis(face, iid);
+    let kick = rotation_axis(kick_axis, envelope * 360.0);
+    let rotated = kick * base * scaled;
 
     return u.view_proj * vec4<f32>(rotated, 1.0);
 }
