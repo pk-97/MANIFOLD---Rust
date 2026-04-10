@@ -1,20 +1,21 @@
 // Watercolor — multi-pass feedback effect simulating watercolor paint flow.
 // Ported from TouchDesigner watercolor tutorial signal chain.
 //
-// 7-pass pipeline per frame:
+// 8-pass pipeline per frame:
 //   Mode 0: Grain overlay (source + white noise)
-//   Mode 1: Maximum composite (grain_base max feedback)
-//   Mode 2: Flow displacement (domain-warped fBM noise + UV displace)
-//   Mode 3: Edge diffusion blur (Gaussian, radius 2)
-//   Mode 4: Slope displacement (soft light → Sobel → UV displace)
-//   Mode 5: Luma blur (variable blur with binary noise mask)
-//   Mode 6: Emboss post-process (emboss + overlay composite + amount blend)
+//   Mode 1: Maximum composite with decay (grain_base max feedback*decay)
+//   Mode 2: Flow map generation at half-res (domain-warped fBM → RB channels)
+//   Mode 3: Flow displacement (displace max result by flow map)
+//   Mode 4: Edge diffusion blur (Gaussian, radius 2)
+//   Mode 5: Slope displacement (soft light → Sobel → UV displace)
+//   Mode 6: Luma blur (variable blur with binary noise mask)
+//   Mode 7: Emboss post-process (emboss + overlay composite + amount blend)
 //
 // Binding layout: ComputeDualBlitHelper (5 bindings).
 // Single-input modes bind source_tex_a == source_tex_b.
 
 struct Uniforms {
-    mode:             u32,  // 0–6 (specialized via function constants)
+    mode:             u32,  // 0–7 (specialized via function constants)
     time:             f32,  // seconds — drives noise animation
     width:            f32,  // render width in pixels
     height:           f32,  // render height in pixels
@@ -26,6 +27,10 @@ struct Uniforms {
     slope_step:       f32,  // Sobel sample offset in pixels (default 5.0)
     luma_blur_radius: f32,  // heavy blur radius for dilution (default 10.0)
     grain_amount:     f32,  // noise grain strength (default 0.15)
+    decay:            f32,  // feedback energy dissipation (0.9–1.0, default 0.99)
+    _pad0:            f32,
+    _pad1:            f32,
+    _pad2:            f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -129,11 +134,12 @@ fn noise3d(p: vec3<f32>) -> f32 {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Fractal Brownian Motion — 10-octave 3D fBM
+// Fractal Brownian Motion — 6-octave 3D fBM
 // Returns approximately [-1, 1].
+// 6 octaves: octaves 7–10 contribute <1% each (amp < 0.008).
 // ═══════════════════════════════════════════════════════════════════
 
-const FBM_OCTAVES: i32 = 10;
+const FBM_OCTAVES: i32 = 6;
 
 fn fbm3d(p_in: vec3<f32>) -> f32 {
     var val: f32 = 0.0;
@@ -258,11 +264,12 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         textureStore(output_tex, vec2<i32>(gid.xy), color);
 
     } else if uniforms.mode == 1u {
-        // ─── Mode 1: Maximum Composite ─────────────────────────────
-        // max(grain_base, previous feedback)
+        // ─── Mode 1: Maximum Composite with Decay ──────────────────
+        // max(grain_base, feedback * decay)
+        // Decay prevents blowout on video — feedback energy dissipates.
         // source_a = grain_base, source_b = feedback
         let grain = textureSampleLevel(source_tex_a, tex_sampler, uv, 0.0);
-        let feedback = textureSampleLevel(source_tex_b, tex_sampler, uv, 0.0);
+        let feedback = textureSampleLevel(source_tex_b, tex_sampler, uv, 0.0) * uniforms.decay;
         let color = vec4<f32>(
             max(grain.rgb, feedback.rgb),
             max(grain.a, feedback.a),
@@ -270,21 +277,29 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         textureStore(output_tex, vec2<i32>(gid.xy), color);
 
     } else if uniforms.mode == 2u {
-        // ─── Mode 2: Flow Displacement ─────────────────────────────
-        // Domain-warped fBM noise drives UV displacement of max composite.
-        // source_a = max composite result
+        // ─── Mode 2: Flow Map Generation (half-res) ────────────────
+        // Domain-warped fBM noise → RB channels for displacement.
+        // Purely procedural — no input textures read.
+        // Dispatched at half resolution; bilinear sampled in mode 3.
         let z = uniforms.time * 0.01; // very slow noise evolution
         let flow = flow_noise(uv, z);
+        textureStore(output_tex, vec2<i32>(gid.xy), vec4<f32>(flow.x, 0.0, flow.y, 1.0));
+
+    } else if uniforms.mode == 3u {
+        // ─── Mode 3: Flow Displacement ─────────────────────────────
+        // Displace max composite by half-res flow map (bilinear upsampled).
+        // source_a = max composite (temp_a), source_b = flow map (half-res)
+        let flow = textureSampleLevel(source_tex_b, tex_sampler, uv, 0.0);
 
         // TD maps [0,1] color to [-weight, +weight] displacement
-        let offset = (flow - 0.5) * uniforms.displace_weight;
+        let offset = (flow.rb - 0.5) * uniforms.displace_weight;
         let displaced_uv = uv + offset;
 
         let color = textureSampleLevel(source_tex_a, tex_sampler, displaced_uv, 0.0);
         textureStore(output_tex, vec2<i32>(gid.xy), color);
 
-    } else if uniforms.mode == 3u {
-        // ─── Mode 3: Edge Diffusion Blur ───────────────────────────
+    } else if uniforms.mode == 4u {
+        // ─── Mode 4: Edge Diffusion Blur ───────────────────────────
         // 9-tap weighted Gaussian approximation.
         // source_a = flow-displaced result
         let r = texel * uniforms.blur_radius;
@@ -305,16 +320,13 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         textureStore(output_tex, vec2<i32>(gid.xy), acc);
 
-    } else if uniforms.mode == 4u {
-        // ─── Mode 4: Slope Displacement ────────────────────────────
+    } else if uniforms.mode == 5u {
+        // ─── Mode 5: Slope Displacement ────────────────────────────
         // Soft light blend → Sobel gradient → displace blurred result.
         // source_a = grain_base, source_b = blurred (temp_a)
         let step_uv = vec2<f32>(uniforms.slope_step * texel.x, uniforms.slope_step * texel.y);
 
         // Sample grain_base and blurred at 5 positions, compute soft light
-        let ga_c = textureSampleLevel(source_tex_a, tex_sampler, uv, 0.0).rgb;
-        let bl_c = textureSampleLevel(source_tex_b, tex_sampler, uv, 0.0).rgb;
-
         let ga_r = textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(step_uv.x, 0.0), 0.0).rgb;
         let bl_r = textureSampleLevel(source_tex_b, tex_sampler, uv + vec2<f32>(step_uv.x, 0.0), 0.0).rgb;
 
@@ -346,8 +358,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let color = textureSampleLevel(source_tex_b, tex_sampler, displaced_uv, 0.0);
         textureStore(output_tex, vec2<i32>(gid.xy), color);
 
-    } else if uniforms.mode == 5u {
-        // ─── Mode 5: Luma Blur (Dilution) ──────────────────────────
+    } else if uniforms.mode == 6u {
+        // ─── Mode 6: Luma Blur (Dilution) ──────────────────────────
         // Heavy blur masked by binary noise threshold.
         // source_a = slope-displaced result (temp_b)
 
@@ -393,8 +405,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(-r3.x, 0.0),  0.0) * 0.02;
         blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(0.0,  r3.y),  0.0) * 0.02;
         blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(0.0, -r3.y),  0.0) * 0.02;
-        // Weights: 0.1 + 4×0.07 + 4×0.04 + 4×0.05 + 4×0.025 + 4×0.02 = 0.1 + 0.28 + 0.16 + 0.20 + 0.10 + 0.08 = 0.92
-        // Normalize
+        // Weights: 0.1 + 4×0.07 + 4×0.04 + 4×0.05 + 4×0.025 + 4×0.02 = 0.92
         blurred = blurred / 0.92;
 
         // Mix sharp and blurred based on binary mask
@@ -404,7 +415,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         textureStore(output_tex, vec2<i32>(gid.xy), safe_clamp(color));
 
     } else {
-        // ─── Mode 6: Emboss Post-Process ───────────────────────────
+        // ─── Mode 7: Emboss Post-Process ───────────────────────────
         // Emboss filter + overlay composite + amount blend with source.
         // source_a = feedback (watercolor result), source_b = original source
 
