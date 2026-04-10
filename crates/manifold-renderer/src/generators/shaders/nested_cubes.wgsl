@@ -224,9 +224,9 @@ fn transform(pos: vec3<f32>, face: u32, iid: u32) -> vec4<f32> {
 
     // Base rotation: Y-axis keeps cube structure intact at rest
     let base = rotation_axis(vec3<f32>(0.0, 1.0, 0.0), angle);
-    // Snap kick: per-face random axis, 360° scaled by envelope (decays to identity)
+    // Snap kick: per-face random axis, 45° scaled by envelope (decays to identity)
     let kick_axis = face_axis(face, iid);
-    let kick = rotation_axis(kick_axis, envelope * 360.0);
+    let kick = rotation_axis(kick_axis, envelope * 45.0);
     let rotated = kick * base * scaled;
 
     return u.view_proj * vec4<f32>(rotated, 1.0);
