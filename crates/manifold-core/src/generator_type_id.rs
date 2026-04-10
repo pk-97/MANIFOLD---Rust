@@ -70,6 +70,7 @@ impl GeneratorTypeId {
     pub const METALLIC_GLASS: Self = Self(Cow::Borrowed("MetallicGlass"));
     pub const OILY_FLUID: Self = Self(Cow::Borrowed("OilyFluid"));
     pub const NESTED_CUBES: Self = Self(Cow::Borrowed("NestedCubes"));
+    pub const STAR_FIELD: Self = Self(Cow::Borrowed("StarField"));
 }
 
 // ── Legacy discriminant mapping ─────────────────────────────────────────

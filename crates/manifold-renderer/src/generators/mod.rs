@@ -21,6 +21,7 @@ pub mod parametric_surface;
 pub mod plasma;
 pub mod registration;
 pub mod registry;
+pub mod star_field;
 pub mod stateful_base;
 pub mod strange_attractor;
 pub mod tesseract;
