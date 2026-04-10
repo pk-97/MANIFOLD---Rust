@@ -109,10 +109,13 @@ fn star_layer(
                 let norm_bright = (h - adj_threshold) / (1.0 - adj_threshold);
                 let star_intensity = pow(norm_bright, 1.5) * intensity_mult;
 
-                // Core + halo (glow param scales halo width)
-                let core = exp(-dist2 * 6000.0);
-                let halo_width = 800.0 / max(0.3 + u.glow * 2.0, 0.3);
-                let halo = exp(-dist2 * halo_width)
+                // Core + halo — scale falloff with cell density so stars
+                // stay sharp pinpoints regardless of layer scale.
+                // scale² compensates for the angular size of each cell.
+                let s2 = scale * scale;
+                let core = exp(-dist2 * 15.0 * s2);
+                let halo_falloff = 2.0 * s2 / max(0.3 + u.glow * 2.0, 0.3);
+                let halo = exp(-dist2 * halo_falloff)
                     * norm_bright * norm_bright * 0.06 * (0.5 + u.glow * 1.5);
 
                 // Spectral color with warmth bias
@@ -128,11 +131,13 @@ fn star_layer(
                     star_col = vec3<f32>(1.05, 0.92, 0.82); // K/M warm
                 }
 
-                // Per-star twinkle — slow sinusoidal flicker
+                // Per-star twinkle — multi-frequency flicker for natural feel
                 let phase = hash21(neighbor * 5.13 + seed + 41.0) * 6.28318;
-                let freq = 0.4 + hash21(neighbor * 7.91 + seed + 53.0) * 0.6;
-                let twinkle_val = 1.0 - u.twinkle * 0.4
-                    * (0.5 + 0.5 * sin(u.time_val * freq + phase));
+                let freq = 0.3 + hash21(neighbor * 7.91 + seed + 53.0) * 0.7;
+                let phase2 = hash21(neighbor * 9.37 + seed + 67.0) * 6.28318;
+                let flicker = 0.5 + 0.3 * sin(u.time_val * freq + phase)
+                    + 0.2 * sin(u.time_val * freq * 2.7 + phase2);
+                let twinkle_val = 1.0 - u.twinkle * (1.0 - flicker);
 
                 light += star_col * star_intensity * (core + halo) * twinkle_val;
             }
