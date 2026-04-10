@@ -156,17 +156,32 @@ fn get_angle(i: u32) -> f32 {
     return u.extra.y;
 }
 
-// ─── Y-axis rotation matrix ───────────────────────────────────────
+// ─── Arbitrary-axis rotation (Rodrigues) ─────────────────────────
 
-fn rotation_y(angle_deg: f32) -> mat3x3<f32> {
+fn rotation_axis(axis: vec3<f32>, angle_deg: f32) -> mat3x3<f32> {
     let r = radians(angle_deg);
     let c = cos(r);
     let s = sin(r);
+    let t = 1.0 - c;
+    let a = normalize(axis);
     return mat3x3<f32>(
-        vec3<f32>( c, 0.0, s),
-        vec3<f32>(0.0, 1.0, 0.0),
-        vec3<f32>(-s, 0.0, c),
+        vec3<f32>(t * a.x * a.x + c,       t * a.x * a.y + s * a.z, t * a.x * a.z - s * a.y),
+        vec3<f32>(t * a.x * a.y - s * a.z,  t * a.y * a.y + c,       t * a.y * a.z + s * a.x),
+        vec3<f32>(t * a.x * a.z + s * a.y,  t * a.y * a.z - s * a.x, t * a.z * a.z + c),
     );
+}
+
+/// Deterministic random rotation axis per face+instance.
+fn face_axis(face: u32, iid: u32) -> vec3<f32> {
+    let seed = face * 5u + iid + 100u;
+    let ax = hash_f(seed * 13u + 7u);
+    let ay = hash_f(seed * 17u + 11u);
+    let az = hash_f(seed * 19u + 13u);
+    // Ensure non-zero length
+    let v = vec3<f32>(ax, ay, az);
+    let len = length(v);
+    if len < 0.001 { return vec3<f32>(0.0, 1.0, 0.0); }
+    return v / len;
 }
 
 // ─── Scatter: per-face random displacement with slow drift ────────
@@ -205,7 +220,8 @@ fn transform(pos: vec3<f32>, face: u32, iid: u32) -> vec4<f32> {
     let size = get_size(iid);
     let angle = get_angle(iid);
     let scaled = displaced * size;
-    let rotated = rotation_y(angle) * scaled;
+    let axis = face_axis(face, iid);
+    let rotated = rotation_axis(axis, angle) * scaled;
 
     return u.view_proj * vec4<f32>(rotated, 1.0);
 }
