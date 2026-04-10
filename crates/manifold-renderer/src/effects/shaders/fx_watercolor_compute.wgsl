@@ -257,8 +257,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let source = textureSampleLevel(source_tex_a, tex_sampler, uv, 0.0);
         let pixel_coord = uv * vec2<f32>(uniforms.width, uniforms.height);
         let noise = white_noise(pixel_coord);
+        // Multiplicative grain: black stays black, bright areas get texture.
+        // Simulates paper absorbing paint unevenly.
         let color = vec4<f32>(
-            source.rgb + vec3<f32>(noise) * uniforms.grain_amount,
+            source.rgb * (1.0 - uniforms.grain_amount * (1.0 - noise)),
             source.a,
         );
         textureStore(output_tex, vec2<i32>(gid.xy), color);
