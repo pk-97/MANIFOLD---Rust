@@ -99,7 +99,9 @@ struct NestedCubesUniforms {
 pub struct NestedCubesGenerator {
     /// Pass 1: triangle fill (vs_main + fs_main)
     fill_pipeline: manifold_gpu::GpuRenderPipeline,
-    /// Pass 2: line edges (vs_edges + fs_main)
+    /// Pass 2: intersection outlines (vs_intersect + fs_intersect)
+    intersect_pipeline: manifold_gpu::GpuRenderPipeline,
+    /// Pass 3: line edges (vs_edges + fs_main)
     edge_pipeline: manifold_gpu::GpuRenderPipeline,
     depth_stencil_write: manifold_gpu::GpuDepthStencilState,
     depth_stencil_read: manifold_gpu::GpuDepthStencilState,
@@ -131,6 +133,22 @@ impl NestedCubesGenerator {
             "Nested Cubes Fill",
         );
 
+        let intersect_pipeline = device.create_render_pipeline(
+            SHADER,
+            "vs_intersect",
+            "fs_intersect",
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            Some(manifold_gpu::GpuBlendState {
+                src_factor: manifold_gpu::GpuBlendFactor::One,
+                dst_factor: manifold_gpu::GpuBlendFactor::One,
+                operation: manifold_gpu::GpuBlendOp::Add,
+                src_alpha_factor: manifold_gpu::GpuBlendFactor::One,
+                dst_alpha_factor: manifold_gpu::GpuBlendFactor::One,
+                alpha_operation: manifold_gpu::GpuBlendOp::Add,
+            }),
+            "Nested Cubes Intersect",
+        );
+
         let edge_pipeline = device.create_render_pipeline_depth(
             SHADER,
             "vs_edges",
@@ -159,6 +177,7 @@ impl NestedCubesGenerator {
 
         Self {
             fill_pipeline,
+            intersect_pipeline,
             edge_pipeline,
             depth_stencil_write,
             depth_stencil_read,
@@ -191,7 +210,8 @@ impl NestedCubesGenerator {
             depth: 1,
             format: manifold_gpu::GpuTextureFormat::Depth32Float,
             dimension: manifold_gpu::GpuTextureDimension::D2,
-            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
+                | manifold_gpu::GpuTextureUsage::SHADER_READ,
             label: "Nested Cubes Depth",
             mip_levels: 1,
         }));
@@ -331,7 +351,28 @@ impl Generator for NestedCubesGenerator {
             "Nested Cubes Fill",
         );
 
-        // Pass 2: White quad-edge lines (line primitives, depth read only, no bias)
+        // Pass 2: Intersection outlines (no depth test, additive blend)
+        // Re-rasterizes triangles, fragment samples depth buffer to find intersections.
+        gpu.native_enc.draw_instanced(
+            &self.intersect_pipeline,
+            target,
+            &[
+                manifold_gpu::GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 1,
+                    texture: depth_tex,
+                },
+            ],
+            TRI_VERTEX_COUNT,
+            INSTANCE_COUNT,
+            manifold_gpu::GpuLoadAction::Load,
+            "Nested Cubes Intersect",
+        );
+
+        // Pass 3: White quad-edge lines (line primitives, depth read only, no bias)
         let edge_uniforms = NestedCubesUniforms {
             extra: [sizes[4], self.current_angles[4], 1.0, scatter],
             ..uniforms
