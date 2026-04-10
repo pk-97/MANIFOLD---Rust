@@ -27,13 +27,21 @@ fn plasma_classic(uv: vec2<f32>, t: f32, cx: f32) -> f32 {
     return (v1 + v2 + v3 + v4 + v5) / 5.0;
 }
 
-// ── Pattern 1: Rings — concentric radial waves ──
+// ── Pattern 1: Rings — asymmetric concentric radial waves ──
 fn plasma_rings(uv: vec2<f32>, t: f32, cx: f32) -> f32 {
     let freq = 4.0 + cx * 8.0;
-    let r = length(uv);
+    // Slowly rotating elliptical distortion breaks radial symmetry
+    let angle = t * 0.2;
+    let ca = cos(angle);
+    let sa = sin(angle);
+    let ruv = vec2<f32>(ca * uv.x - sa * uv.y, sa * uv.x + ca * uv.y);
+    let r = length(vec2<f32>(ruv.x * 1.0, ruv.y * 1.6));
     let v1 = sin(r * freq - t * 2.0);
     let v2 = sin(r * freq * 1.5 + t * 1.3);
-    let v3 = sin(atan2(uv.y, uv.x) * 3.0 + t * 0.7);
+    // Off-center secondary ring avoids origin singularity
+    let off = vec2<f32>(0.3 * sin(t * 0.4), 0.3 * cos(t * 0.5));
+    let r2 = length(uv - off);
+    let v3 = sin(r2 * freq * 0.8 + t * 0.7);
     return (v1 + v2 + v3) / 3.0;
 }
 
