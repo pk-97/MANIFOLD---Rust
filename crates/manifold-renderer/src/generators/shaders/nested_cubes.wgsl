@@ -291,12 +291,10 @@ fn fs_intersect(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f
     // Pass 1's depth bias pushes stored values deeper, so self-fragments
     // always have behind < 0 and get discarded.
     let behind = my_depth - stored_depth;
-    let threshold = 0.002;
+    let threshold = 0.0008;
     if behind < 0.0 || behind > threshold {
         discard;
     }
 
-    // Intensity peaks at the intersection line and falls off
-    let intensity = 1.0 - (behind / threshold);
-    return vec4<f32>(intensity, intensity, intensity, intensity);
+    return vec4<f32>(1.0, 1.0, 1.0, 1.0);
 }
