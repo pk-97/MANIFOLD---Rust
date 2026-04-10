@@ -297,7 +297,17 @@ impl GenParamPanel {
                         .copied()
                         .unwrap_or(false)
                     {
-                        h += ENV_CONFIG_HEIGHT;
+                        h += ENV_RANDOM_CONFIG_HEIGHT;
+                        let env_mode = self
+                            .state
+                            .mod_state
+                            .env_mode
+                            .get(i)
+                            .copied()
+                            .unwrap_or(EnvelopeMode::Adsr);
+                        if env_mode == EnvelopeMode::Adsr {
+                            h += ENV_CONFIG_HEIGHT;
+                        }
                     }
                     if info.ableton_display.is_some() {
                         h += ABL_CONFIG_HEIGHT;
