@@ -102,7 +102,10 @@ fn star_layer(
             if h > adj_threshold {
                 let sx = hash21(neighbor * 1.273 + seed + 7.0);
                 let sy = hash21(neighbor * 2.178 + seed + 13.0);
-                let d = f - vec2<f32>(f32(i), f32(j)) - vec2<f32>(sx, sy);
+                let d_raw = f - vec2<f32>(f32(i), f32(j)) - vec2<f32>(sx, sy);
+                // Correct for phi/theta UV aspect ratio (phi cells are 2x wider
+                // in angle than theta cells) so the gaussian is circular
+                let d = vec2<f32>(d_raw.x * 2.0, d_raw.y);
                 let dist2 = dot(d, d);
 
                 // Power-law brightness — many faint, few bright
@@ -111,12 +114,11 @@ fn star_layer(
 
                 // Core + halo — scale falloff with cell density so stars
                 // stay sharp pinpoints regardless of layer scale.
-                // scale² compensates for the angular size of each cell.
                 let s2 = scale * scale;
                 let core = exp(-dist2 * 15.0 * s2);
-                let halo_falloff = 2.0 * s2 / max(0.3 + u.glow * 2.0, 0.3);
+                let halo_falloff = 4.0 * s2 / max(0.3 + u.glow * 2.0, 0.3);
                 let halo = exp(-dist2 * halo_falloff)
-                    * norm_bright * norm_bright * 0.06 * (0.5 + u.glow * 1.5);
+                    * norm_bright * norm_bright * 0.04 * (0.3 + u.glow);
 
                 // Spectral color with warmth bias
                 let temp = hash21(neighbor * 3.46 + seed + 27.0) + u.warmth * 0.2;
