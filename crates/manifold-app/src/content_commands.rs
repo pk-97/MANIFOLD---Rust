@@ -635,6 +635,12 @@ impl ContentThread {
                 }
                 self.engine.mark_sync_dirty();
             }
+            ContentCommand::AbletonRediscover => {
+                if self.ableton_bridge.is_connected() {
+                    let realtime = self.timer.realtime_since_start();
+                    self.ableton_bridge.start_discovery(realtime);
+                }
+            }
             ContentCommand::AbletonRebind => {
                 if let Some(p) = self.engine.project_mut() {
                     self.ableton_bridge.validate_mappings(p);

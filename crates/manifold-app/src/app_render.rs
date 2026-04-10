@@ -357,6 +357,12 @@ impl Application {
         // Update effect clipboard count for browser popup
         self.ui_root.effect_clipboard_count = self.effect_clipboard.count();
 
+        // Trigger Ableton re-discovery when the picker opens so it shows fresh data.
+        if self.ui_root.ableton_rediscovery_needed {
+            self.ui_root.ableton_rediscovery_needed = false;
+            self.send_content_cmd(ContentCommand::AbletonRediscover);
+        }
+
         // Consume deferred structural sync flag (set by keyboard shortcuts)
         let mut needs_structural_sync = self.needs_structural_sync;
         self.needs_structural_sync = false;

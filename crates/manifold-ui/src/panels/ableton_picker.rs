@@ -178,6 +178,24 @@ impl AbletonPickerPopup {
         self.compute_layout(anchor);
     }
 
+    /// Refresh picker data while it's already open (e.g. after re-discovery).
+    /// Preserves the current track selection if the track still exists.
+    pub fn update_session(&mut self, session: AbletonPickerSession) {
+        if !self.is_open {
+            return;
+        }
+        let prev_track_name = self.selected_track_idx
+            .and_then(|i| self.rack_tracks.get(i))
+            .map(|t| t.track_name.clone());
+        self.rack_tracks = session.rack_tracks;
+        // Try to preserve selection by matching track name.
+        self.selected_track_idx = prev_track_name
+            .and_then(|name| {
+                self.rack_tracks.iter().position(|t| t.track_name == name)
+            })
+            .or(if self.rack_tracks.is_empty() { None } else { Some(0) });
+    }
+
     pub fn close(&mut self) {
         self.is_open = false;
         self.rack_tracks.clear();

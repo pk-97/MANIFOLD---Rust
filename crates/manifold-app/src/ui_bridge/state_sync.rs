@@ -247,6 +247,13 @@ pub fn push_state(
         // Cache Ableton session for parameter mapping dropdown
         if let Some(session) = &content_state.ableton_session {
             ui.ableton_session = Some(std::sync::Arc::clone(session));
+            // If the picker is open, refresh it with the updated session data.
+            if ui.ableton_picker.is_open() {
+                ui.ableton_picker.update_session(
+                    crate::ui_root::build_picker_session(session),
+                );
+                ui.overlay_dirty = true;
+            }
         }
 
         // Sync source status — driven by content_state from transport controller

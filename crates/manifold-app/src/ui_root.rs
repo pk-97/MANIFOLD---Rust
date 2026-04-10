@@ -10,7 +10,7 @@ use manifold_ui::node::{Rect, Vec2};
 use manifold_ui::*;
 
 /// Convert an AbletonSession into the picker's thin data struct.
-fn build_picker_session(
+pub(crate) fn build_picker_session(
     session: &AbletonSession,
 ) -> manifold_ui::panels::ableton_picker::AbletonPickerSession {
     use manifold_ui::panels::ableton_picker::{AbletonPickerSession, PickerDevice, PickerMacro, PickerTrack};
@@ -214,6 +214,9 @@ pub struct UIRoot {
     pub ableton_picker: manifold_ui::panels::ableton_picker::AbletonPickerPopup,
     /// Which param triggered the picker — resolved when picker returns Selected.
     ableton_picker_context: Option<manifold_ui::panels::ableton_picker::AbletonPickerContext>,
+    /// Set when the Ableton picker opens — drained by app_render to send
+    /// `AbletonRediscover` on the content thread so the picker shows fresh data.
+    pub ableton_rediscovery_needed: bool,
 }
 
 impl UIRoot {
@@ -261,6 +264,7 @@ impl UIRoot {
             ableton_session: None,
             ableton_picker: manifold_ui::panels::ableton_picker::AbletonPickerPopup::new(),
             ableton_picker_context: None,
+            ableton_rediscovery_needed: false,
         }
     }
 
@@ -1336,6 +1340,7 @@ impl UIRoot {
                     self.ableton_picker
                         .open(build_picker_session(session), right_click_pos);
                     self.overlay_dirty = true;
+                    self.ableton_rediscovery_needed = true;
                 }
                 true
             }
@@ -1348,6 +1353,7 @@ impl UIRoot {
                     self.ableton_picker
                         .open(build_picker_session(session), right_click_pos);
                     self.overlay_dirty = true;
+                    self.ableton_rediscovery_needed = true;
                 }
                 true
             }
@@ -1360,6 +1366,7 @@ impl UIRoot {
                     self.ableton_picker
                         .open(build_picker_session(session), right_click_pos);
                     self.overlay_dirty = true;
+                    self.ableton_rediscovery_needed = true;
                 }
                 true
             }

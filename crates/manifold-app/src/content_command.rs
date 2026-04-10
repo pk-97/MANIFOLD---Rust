@@ -143,6 +143,8 @@ pub enum ContentCommand {
     },
     /// Re-validate all Ableton mappings against current session.
     AbletonRebind,
+    /// Re-discover Ableton session structure (tracks, devices, macros).
+    AbletonRediscover,
     /// Toggle OSC sync mode between M4L and AbletonOSC.
     ToggleOscSyncMode,
 
