@@ -133,13 +133,13 @@ fn star_layer(
                     star_col = vec3<f32>(1.05, 0.92, 0.82); // K/M warm
                 }
 
-                // Per-star twinkle — multi-frequency flicker for natural feel
+                // Per-star twinkle — multi-frequency flicker
                 let phase = hash21(neighbor * 5.13 + seed + 41.0) * 6.28318;
-                let freq = 0.3 + hash21(neighbor * 7.91 + seed + 53.0) * 0.7;
+                let freq = 1.5 + hash21(neighbor * 7.91 + seed + 53.0) * 3.5;
                 let phase2 = hash21(neighbor * 9.37 + seed + 67.0) * 6.28318;
                 let flicker = 0.5 + 0.3 * sin(u.time_val * freq + phase)
                     + 0.2 * sin(u.time_val * freq * 2.7 + phase2);
-                let twinkle_val = 1.0 - u.twinkle * (1.0 - flicker);
+                let twinkle_val = mix(1.0, flicker, u.twinkle);
 
                 light += star_col * star_intensity * (core + halo) * twinkle_val;
             }
