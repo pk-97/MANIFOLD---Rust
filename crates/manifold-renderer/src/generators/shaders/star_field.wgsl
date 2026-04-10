@@ -115,8 +115,8 @@ fn star_layer(
                 // Core + halo — scale falloff with cell density so stars
                 // stay sharp pinpoints regardless of layer scale.
                 let s2 = scale * scale;
-                let core = exp(-dist2 * 50.0 * s2);
-                let halo_falloff = 12.0 * s2 / max(0.3 + u.glow * 2.0, 0.3);
+                let core = exp(-dist2 * 8.0 * s2);
+                let halo_falloff = 2.0 * s2 / max(0.3 + u.glow * 2.0, 0.3);
                 let halo = exp(-dist2 * halo_falloff)
                     * norm_bright * norm_bright * 0.04 * (0.3 + u.glow);
 
