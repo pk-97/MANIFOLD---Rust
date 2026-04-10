@@ -4,7 +4,7 @@
 // 8-pass pipeline per frame:
 //   Mode 0: Grain overlay (source + white noise)
 //   Mode 1: Maximum composite with decay (grain_base max feedback*decay)
-//   Mode 2: Flow map generation at half-res (domain-warped fBM → RB channels)
+//   Mode 2: Flow map generation (domain-warped fBM → RB channels)
 //   Mode 3: Flow displacement (displace max result by flow map)
 //   Mode 4: Edge diffusion blur (Gaussian, radius 2)
 //   Mode 5: Slope displacement (soft light → Sobel → UV displace)
@@ -277,26 +277,18 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         textureStore(output_tex, vec2<i32>(gid.xy), color);
 
     } else if uniforms.mode == 2u {
-        // ─── Mode 2: Flow Map Generation (half-res) ────────────────
+        // ─── Mode 2: Flow Map Generation ───────────────────────────
         // Domain-warped fBM noise → RB channels for displacement.
         // Purely procedural — no input textures read.
-        // Dispatched at half resolution; bilinear sampled in mode 3.
         let z = uniforms.time * 0.01; // very slow noise evolution
         let flow = flow_noise(uv, z);
         textureStore(output_tex, vec2<i32>(gid.xy), vec4<f32>(flow.x, 0.0, flow.y, 1.0));
 
     } else if uniforms.mode == 3u {
         // ─── Mode 3: Flow Displacement ─────────────────────────────
-        // Displace max composite by half-res flow map.
-        // 5-tap smooth on the flow map read eliminates half-res block edges.
-        // source_a = max composite (temp_a), source_b = flow map (half-res)
-        let flow_dims = vec2<f32>(textureDimensions(source_tex_b));
-        let ft = 1.0 / flow_dims; // flow map texel size
-        var flow = textureSampleLevel(source_tex_b, tex_sampler, uv, 0.0) * 0.4;
-        flow += textureSampleLevel(source_tex_b, tex_sampler, uv + vec2<f32>( ft.x, 0.0), 0.0) * 0.15;
-        flow += textureSampleLevel(source_tex_b, tex_sampler, uv + vec2<f32>(-ft.x, 0.0), 0.0) * 0.15;
-        flow += textureSampleLevel(source_tex_b, tex_sampler, uv + vec2<f32>(0.0,  ft.y), 0.0) * 0.15;
-        flow += textureSampleLevel(source_tex_b, tex_sampler, uv + vec2<f32>(0.0, -ft.y), 0.0) * 0.15;
+        // Displace max composite using flow map.
+        // source_a = max composite (temp_a), source_b = flow map
+        let flow = textureSampleLevel(source_tex_b, tex_sampler, uv, 0.0);
 
         // TD maps [0,1] color to [-weight, +weight] displacement
         let offset = (flow.rb - 0.5) * uniforms.displace_weight;

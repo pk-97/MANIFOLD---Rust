@@ -4,7 +4,7 @@
 // 8-pass pipeline per frame:
 //   Pass 0 (Grain):          source + white noise → grain_base
 //   Pass 1 (Max Composite):  max(grain_base, feedback * decay) → temp_a
-//   Pass 2 (Flow Map):       domain-warped fBM → flow_map (HALF-RES)
+//   Pass 2 (Flow Map):       domain-warped fBM → flow_map
 //   Pass 3 (Displacement):   displace temp_a by flow_map → temp_b
 //   Pass 4 (Blur):           Gaussian blur temp_b → temp_a
 //   Pass 5 (Slope Displace): soft light → Sobel → displace temp_a → temp_b
@@ -12,7 +12,7 @@
 //   Pass 7 (Emboss):         emboss feedback → overlay → blend with source → target
 //
 // Performance:
-//   - Flow map at half-res (4× fewer noise evaluations)
+//   - 6-octave fBM + half-precision ALU on flow map pass
 //   - 6-octave fBM (vs 10 — octaves 7–10 contribute <1% each)
 //   - Half-precision ALU on non-accumulative passes (2× throughput)
 
@@ -80,7 +80,7 @@ struct WatercolorUniforms {
 struct WatercolorState {
     feedback: RenderTarget,   // Persistent across frames (Rgba16Float)
     grain_base: RenderTarget, // Grain-processed source (used in passes 0, 1, 5)
-    flow_map: RenderTarget,   // Half-res flow displacement map
+    flow_map: RenderTarget,   // Flow displacement map (RB channels)
     temp_a: RenderTarget,     // Intermediate A (full-res)
     temp_b: RenderTarget,     // Intermediate B (full-res)
 }
@@ -89,7 +89,7 @@ pub struct WatercolorFX {
     helper: ComputeDualBlitHelper,
     pipeline_grain: manifold_gpu::GpuComputePipeline,    // mode 0 (half)
     pipeline_max: manifold_gpu::GpuComputePipeline,      // mode 1 (full — writes feedback path)
-    pipeline_flow_gen: manifold_gpu::GpuComputePipeline,  // mode 2 (half, half-res dispatch)
+    pipeline_flow_gen: manifold_gpu::GpuComputePipeline,  // mode 2 (half)
     pipeline_displace: manifold_gpu::GpuComputePipeline, // mode 3 (half)
     pipeline_blur: manifold_gpu::GpuComputePipeline,     // mode 4 (half)
     pipeline_slope: manifold_gpu::GpuComputePipeline,    // mode 5 (half)
@@ -179,8 +179,6 @@ impl PostProcessEffect for WatercolorFX {
         {
             let w = self.width;
             let h = self.height;
-            let hw = (w / 2).max(1);
-            let hh = (h / 2).max(1);
             let feedback =
                 alloc_target(gpu.device, gpu.pool, w, h, "WC Feedback");
             gpu.clear_texture(&feedback.texture, 0.0, 0.0, 0.0, 0.0);
@@ -192,7 +190,7 @@ impl PostProcessEffect for WatercolorFX {
                         gpu.device, gpu.pool, w, h, "WC GrainBase",
                     ),
                     flow_map: alloc_target(
-                        gpu.device, gpu.pool, hw, hh, "WC FlowMap",
+                        gpu.device, gpu.pool, w, h, "WC FlowMap",
                     ),
                     temp_a: alloc_target(
                         gpu.device, gpu.pool, w, h, "WC TempA",
@@ -280,9 +278,7 @@ impl PostProcessEffect for WatercolorFX {
             h,
         );
 
-        // Pass 2: Flow Map — procedural noise → flow_map (HALF-RES)
-        let hw = state.flow_map.width;
-        let hh = state.flow_map.height;
+        // Pass 2: Flow Map — procedural noise → flow_map
         self.helper.dispatch_a_only_with(
             &self.pipeline_flow_gen,
             gpu,
@@ -290,8 +286,8 @@ impl PostProcessEffect for WatercolorFX {
             &state.flow_map.texture,
             ubytes,
             "WC FlowGen",
-            hw,
-            hh,
+            w,
+            h,
         );
 
         // Pass 3: Displacement — temp_a + flow_map → temp_b
