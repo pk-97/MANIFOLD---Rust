@@ -191,11 +191,14 @@ impl TextRasterizer {
             return None;
         }
 
-        let num_lines = lines.len() as f32;
+        let num_lines = lines.len();
+        // Total height: first line = base_line_height, each additional line adds
+        // line_height. This way single-line text isn't padded by line_spacing.
+        let content_h = base_line_height + (num_lines.saturating_sub(1)) as f32 * line_height;
         let bitmap_w =
             (max_width.ceil() as u32 + PADDING * 2).min(MAX_BITMAP_DIM);
         let bitmap_h =
-            ((line_height * num_lines).ceil() as u32 + PADDING * 2).min(MAX_BITMAP_DIM);
+            (content_h.ceil() as u32 + PADDING * 2).min(MAX_BITMAP_DIM);
 
         if bitmap_w == 0 || bitmap_h == 0 {
             return None;
