@@ -781,11 +781,9 @@ impl UIRoot {
             {
                 match dd_action {
                     DropdownAction::Selected(index) => {
-                        eprintln!("[Dropdown] Selected index={index} label={:?}", self.dropdown.item_label(index));
                         if let Some(ctx) = self.dropdown_context.take()
                             && let Some(action) = self.dropdown_to_action(ctx, index)
                         {
-                            eprintln!("[Dropdown] → action={:?}", std::mem::discriminant(&action));
                             actions.push(action);
                         }
                     }
