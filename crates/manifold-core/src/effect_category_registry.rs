@@ -100,5 +100,6 @@ fn build_generator_categories() -> HashMap<GeneratorTypeId, &'static str> {
     m.insert(GeneratorTypeId::FLUID_SIMULATION, GENERATORS);
     m.insert(GeneratorTypeId::MYCELIUM, GENERATORS);
     m.insert(GeneratorTypeId::FLUID_SIMULATION_3D, GENERATORS);
+    m.insert(GeneratorTypeId::PARTICLE_TEXT, GENERATORS);
     m
 }
