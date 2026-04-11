@@ -70,6 +70,7 @@ impl TextRasterizer {
     /// Rasterize a text string at the given font size into an R8 grayscale bitmap.
     /// If `font_family` is provided, attempts to use that system font; falls back
     /// to the embedded Inter font if not found.
+    /// Supports multiline text (lines separated by `\n`).
     /// Returns `None` for empty or whitespace-only strings.
     pub fn rasterize(
         &self,
@@ -92,23 +93,62 @@ impl TextRasterizer {
             core_text::font::new_from_CGFont(&self.cg_font, font_size as f64)
         };
 
-        // Shape text to get glyph IDs and positions
-        let (glyph_ids, positions) = self.shape_line(&ct_font, trimmed)?;
+        // Split into lines and shape each one.
+        let lines: Vec<&str> = trimmed.split('\n').collect();
 
-        // Get typographic bounds for the full line
-        let line = self.make_ct_line(&ct_font, trimmed);
-        let bounds = line.get_typographic_bounds();
+        // Measure each line to find max width and per-line metrics.
+        struct LineMeasure {
+            glyphs: Vec<u16>,
+            positions: Vec<CGPoint>,
+        }
+        let mut line_measures: Vec<LineMeasure> = Vec::with_capacity(lines.len());
+        let mut max_width: f32 = 0.0;
 
-        let ascent = bounds.ascent as f32;
-        let descent = bounds.descent.abs() as f32; // descent is negative in CoreText
-        let bitmap_w = ((bounds.width as f32).ceil() as u32 + PADDING * 2).min(MAX_BITMAP_DIM);
-        let bitmap_h = ((ascent + descent).ceil() as u32 + PADDING * 2).min(MAX_BITMAP_DIM);
+        // Get font-level metrics (consistent across lines).
+        let sample_line = self.make_ct_line(&ct_font, "Hg");
+        let sample_bounds = sample_line.get_typographic_bounds();
+        let ascent = sample_bounds.ascent as f32;
+        let descent = sample_bounds.descent.abs() as f32;
+        let line_height = ascent + descent;
+
+        for line_text in &lines {
+            let line_text = line_text.trim_end();
+            if line_text.is_empty() {
+                line_measures.push(LineMeasure {
+                    glyphs: Vec::new(),
+                    positions: Vec::new(),
+                });
+                continue;
+            }
+            let ct_line = self.make_ct_line(&ct_font, line_text);
+            let bounds = ct_line.get_typographic_bounds();
+            let w = bounds.width as f32;
+            max_width = max_width.max(w);
+
+            if let Some((glyphs, positions)) = self.shape_line(&ct_font, line_text) {
+                line_measures.push(LineMeasure { glyphs, positions });
+            } else {
+                line_measures.push(LineMeasure {
+                    glyphs: Vec::new(),
+                    positions: Vec::new(),
+                });
+            }
+        }
+
+        if line_measures.iter().all(|m| m.glyphs.is_empty()) {
+            return None;
+        }
+
+        let num_lines = lines.len() as f32;
+        let bitmap_w =
+            (max_width.ceil() as u32 + PADDING * 2).min(MAX_BITMAP_DIM);
+        let bitmap_h =
+            ((line_height * num_lines).ceil() as u32 + PADDING * 2).min(MAX_BITMAP_DIM);
 
         if bitmap_w == 0 || bitmap_h == 0 {
             return None;
         }
 
-        // Rasterize into an 8-bit grayscale bitmap
         let w = bitmap_w as usize;
         let h = bitmap_h as usize;
         let mut pixels = vec![0u8; w * h];
@@ -118,27 +158,38 @@ impl TextRasterizer {
             Some(pixels.as_mut_ptr() as *mut std::ffi::c_void),
             w,
             h,
-            8,  // bits per component
-            w,  // bytes per row (1 byte per pixel, R8)
+            8,
+            w,
             &color_space,
-            0u32, // kCGImageAlphaNone
+            0u32,
         );
 
         ctx.set_rgb_fill_color(1.0, 1.0, 1.0, 1.0);
         ctx.set_allows_font_smoothing(false);
         ctx.set_should_smooth_fonts(false);
 
-        // CG y-up: y=0 at bottom. Place baseline so descent fits below.
-        let baseline_y = (descent + PADDING as f32) as f64;
         let origin_x = PADDING as f64;
 
-        // Offset all glyph positions by the baseline origin
-        let draw_positions: Vec<CGPoint> = positions
-            .iter()
-            .map(|p| CGPoint::new(p.x + origin_x, p.y + baseline_y))
-            .collect();
+        // CG is y-up: line 0 (top visually) has the highest CG y.
+        // Bottom of bitmap = CG y 0. Top of bitmap = CG y (h-1).
+        for (line_idx, measure) in line_measures.iter().enumerate() {
+            if measure.glyphs.is_empty() {
+                continue;
+            }
+            // Lines from top: line 0 is at top of bitmap.
+            // In CG coords, line 0 baseline = bitmap_h - PADDING - ascent
+            // Each subsequent line shifts down by line_height.
+            let baseline_y = (bitmap_h as f32 - PADDING as f32 - ascent
+                - line_idx as f32 * line_height) as f64;
 
-        ct_font.draw_glyphs(&glyph_ids, &draw_positions, ctx);
+            let draw_positions: Vec<CGPoint> = measure
+                .positions
+                .iter()
+                .map(|p| CGPoint::new(p.x + origin_x, p.y + baseline_y))
+                .collect();
+
+            ct_font.draw_glyphs(&measure.glyphs, &draw_positions, ctx.clone());
+        }
 
         Some(RasterizedText {
             pixels,
