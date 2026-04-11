@@ -2031,6 +2031,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     return;
                 }
                 if is_primary {
+                    // When the dropdown is open, route scroll to the UIEvent
+                    // pipeline so the dropdown can handle it.
+                    if self.ui_root.dropdown.is_open() {
+                        const LINE_DELTA_PX: f32 = 20.0;
+                        let (dx, dy) = match delta {
+                            winit::event::MouseScrollDelta::LineDelta(x, y) => {
+                                (x * LINE_DELTA_PX, y * LINE_DELTA_PX)
+                            }
+                            winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                                (pos.x as f32, pos.y as f32)
+                            }
+                        };
+                        self.ui_root
+                            .input
+                            .process_scroll(self.cursor_pos, Vec2::new(dx, dy));
+                        return;
+                    }
                     // Convert line deltas (mouse wheel notches) to logical pixels.
                     // Each downstream consumer applies its own speed constant on top.
                     const LINE_DELTA_PX: f32 = 20.0;
