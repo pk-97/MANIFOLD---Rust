@@ -581,7 +581,9 @@ impl DropdownPanel {
                         .clamp(0.0, self.content_height - self.viewport_height);
                     self.build_nodes(tree);
                 }
-                None
+                // Always consume scroll while open so it doesn't propagate
+                // to the viewport underneath.
+                Some(DropdownAction::Dismissed)
             }
             // Consume right-clicks and drags while open.
             UIEvent::RightClick { .. }
