@@ -67,10 +67,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     var y: f32;
     var placed = false;
 
-    // Rejection sampling: try up to 16 random positions within the text region.
+    // Rejection sampling: try up to 64 random positions within the text bitmap.
     // Accept if the corresponding texel is bright (> 0.1).
     var s = seed;
-    for (var attempt = 0; attempt < 16; attempt++) {
+    for (var attempt = 0; attempt < 64; attempt++) {
         let rx = hash_float(s);
         s = wang_hash(s);
         let ry = hash_float(s);
@@ -90,19 +90,21 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         }
     }
 
-    if !placed {
-        // Fallback: random position across full canvas
-        x = hash_float(s);
-        s = wang_hash(s);
-        y = hash_float(s);
-    }
-
     var p: Particle;
-    p.position = vec3<f32>(fract(x + 1.0), fract(y + 1.0), 0.0);
-    p.velocity = vec3<f32>(0.0);
-    p.life = 1.0;
-    p.age = -1.0; // uncolored marker
-    p.color = vec4<f32>(0.005, 0.005, 0.005, 1.0);
+    if placed {
+        p.position = vec3<f32>(fract(x + 1.0), fract(y + 1.0), 0.0);
+        p.velocity = vec3<f32>(0.0);
+        p.life = 1.0;
+        p.age = -1.0;
+        p.color = vec4<f32>(0.005, 0.005, 0.005, 1.0);
+    } else {
+        // Failed rejection — hide this particle
+        p.position = vec3<f32>(0.0);
+        p.velocity = vec3<f32>(0.0);
+        p.life = 0.0;
+        p.age = 0.0;
+        p.color = vec4<f32>(0.0);
+    }
 
     particles[i] = p;
 }
