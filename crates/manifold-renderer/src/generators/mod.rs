@@ -25,4 +25,5 @@ pub mod star_field;
 pub mod stateful_base;
 pub mod strange_attractor;
 pub mod tesseract;
+pub mod text;
 pub mod wireframe_zoo;

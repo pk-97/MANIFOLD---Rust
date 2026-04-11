@@ -314,7 +314,11 @@ impl GenParamPanel {
                     }
                 }
             }
-            if !self.param_info.is_empty() {
+            // String param rows (text fields)
+            for _ in &self.string_param_info {
+                h += ROW_HEIGHT + ROW_SPACING;
+            }
+            if !self.param_info.is_empty() || !self.string_param_info.is_empty() {
                 h += PADDING;
             }
         }
