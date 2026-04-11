@@ -3,19 +3,20 @@
 // Each thread handles one particle. Bright pixels in the text texture are
 // candidate spawn positions. Particles are distributed across the text shape
 // using a hash-based random UV, rejection-sampled against the bitmap.
-// Particles that fail rejection get random positions (ensures all particles
-// are placed).
+// Particles that fail rejection are hidden (life=0).
+//
+// Text region in UV space matches text_compute.wgsl exactly:
+//   extent = (tex_width / output_width) × (tex_height / output_height)
 
 struct TextSeedUniforms {
     active_count: u32,
     tex_width: u32,
     tex_height: u32,
     frame_seed: u32,
-    // Text placement: center UV and scale
-    center_x: f32,
-    center_y: f32,
-    text_scale: f32,
-    aspect_ratio: f32,
+    output_width: f32,
+    output_height: f32,
+    _pad0: f32,
+    _pad1: f32,
 };
 
 struct Particle {
@@ -55,13 +56,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let tw = params.tex_width;
     let th = params.tex_height;
 
-    // Aspect ratio of the text bitmap
-    let text_aspect = f32(tw) / f32(th);
-
-    // Text occupies a region in UV space centered at (center_x, center_y).
-    // Scale determines the height of the text region in UV units.
-    let region_h = params.text_scale;
-    let region_w = region_h * text_aspect / params.aspect_ratio;
+    // Text region in UV space — matches text_compute.wgsl mapping exactly.
+    // The bitmap is tex_width × tex_height pixels, centered at (0.5, 0.5).
+    let region_w = f32(tw) / params.output_width;
+    let region_h = f32(th) / params.output_height;
 
     var x: f32;
     var y: f32;
@@ -82,9 +80,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let texel = textureLoad(text_tex, vec2<u32>(tx, ty), 0).r;
 
         if texel > 0.1 {
-            // Map texel position to UV space
-            x = params.center_x + (rx - 0.5) * region_w;
-            y = params.center_y + (ry - 0.5) * region_h;
+            // Map texel position to output UV space (centered at 0.5, 0.5)
+            x = 0.5 + (rx - 0.5) * region_w;
+            y = 0.5 + (ry - 0.5) * region_h;
             placed = true;
             break;
         }

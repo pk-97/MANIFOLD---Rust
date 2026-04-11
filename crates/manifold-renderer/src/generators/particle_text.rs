@@ -58,10 +58,10 @@ struct TextSeedUniforms {
     tex_width: u32,
     tex_height: u32,
     frame_seed: u32,
-    center_x: f32,
-    center_y: f32,
-    text_scale: f32,
-    aspect_ratio: f32,
+    output_width: f32,
+    output_height: f32,
+    _pad0: f32,
+    _pad1: f32,
 }
 
 pub struct ParticleTextGenerator {
@@ -140,8 +140,8 @@ impl ParticleTextGenerator {
     fn dispatch_text_seed(
         &self,
         gpu: &mut GpuEncoder,
-        text_scale: f32,
-        aspect: f32,
+        output_width: u32,
+        output_height: u32,
     ) {
         let text_tex = match self.text_texture.as_ref() {
             Some(t) => t,
@@ -153,10 +153,10 @@ impl ParticleTextGenerator {
             tex_width: self.text_tex_dims.0,
             tex_height: self.text_tex_dims.1,
             frame_seed: self.core.frame_count as u32,
-            center_x: 0.5,
-            center_y: 0.5,
-            text_scale,
-            aspect_ratio: aspect,
+            output_width: output_width as f32,
+            output_height: output_height as f32,
+            _pad0: 0.0,
+            _pad1: 0.0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -280,7 +280,7 @@ impl Generator for ParticleTextGenerator {
 
         // Seed particles from text bitmap on clip edge or text change
         if self.needs_reseed && self.text_texture.is_some() {
-            self.dispatch_text_seed(gpu, text_size, ctx.aspect);
+            self.dispatch_text_seed(gpu, ctx.output_width, ctx.output_height);
             self.needs_reseed = false;
         }
 
