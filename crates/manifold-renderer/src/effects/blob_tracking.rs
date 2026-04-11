@@ -668,12 +668,9 @@ impl BlobTrackingFX {
                 );
             }
 
-            // (b) Crosshair — 2 quads (visually square regardless of aspect ratio)
-            let blob_w_px = half_size[0] * width as f32;
-            let blob_h_px = half_size[1] * height as f32;
-            let ch_px = blob_w_px.min(blob_h_px) * 0.3;
-            let ch_u = ch_px / width as f32;
-            let ch_v = ch_px / height as f32;
+            // (b) Crosshair — 2 quads (fixed size, visually square)
+            let ch_u = 12.0 * px_u;
+            let ch_v = 12.0 * px_v;
             // Horizontal crosshair (spans X, thickness in Y)
             push_solid(
                 quads,
