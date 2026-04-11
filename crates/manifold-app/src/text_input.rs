@@ -73,6 +73,8 @@ pub struct TextInputState {
     /// When true, the entire text is selected. First keystroke replaces all.
     /// Set on `begin()`, cleared on any edit action.
     pub select_all: bool,
+    /// When true, Shift+Enter inserts a newline instead of committing.
+    pub multiline: bool,
     /// MarkerId for MarkerName field (String not Copy, so stored separately).
     pub marker_id: Option<manifold_core::MarkerId>,
 }
@@ -87,6 +89,7 @@ impl TextInputState {
             anchor: AnchorRect::zero(),
             font_size: 12.0,
             select_all: false,
+            multiline: false,
             marker_id: None,
         }
     }
@@ -107,6 +110,7 @@ impl TextInputState {
         self.anchor = anchor;
         self.font_size = font_size;
         self.select_all = true;
+        self.multiline = matches!(field, TextInputField::GenStringParam(_));
     }
 
     /// Cancel editing without committing.
@@ -114,6 +118,7 @@ impl TextInputState {
         self.active = false;
         self.text.clear();
         self.select_all = false;
+        self.multiline = false;
     }
 
     /// Insert a character at the cursor position.

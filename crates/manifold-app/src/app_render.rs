@@ -1545,11 +1545,19 @@ fn render_text_input_overlay(
     let fs = ti.font_size;
     let pad_h = TEXT_INPUT_PAD_H;
     let pad_v = TEXT_INPUT_PAD_V;
+    let line_h = fs + 3.0; // line height with leading
 
     let bg_x = a.x;
     let bg_y = a.y;
     let bg_w = a.width.max(40.0);
-    let bg_h = a.height.max(fs + pad_v * 2.0);
+
+    // For multiline fields, compute height from line count (minimum 3 lines).
+    let line_count = if ti.multiline {
+        ti.text.split('\n').count().max(3)
+    } else {
+        1
+    };
+    let bg_h = (line_count as f32 * line_h + pad_v * 2.0).max(a.height.max(fs + pad_v * 2.0));
 
     ui.draw_bordered_rect(
         bg_x,
@@ -1571,32 +1579,63 @@ fn render_text_input_overlay(
             bg_x + pad_h,
             bg_y + pad_v,
             text_w.min(bg_w - pad_h * 2.0),
-            bg_h - pad_v * 2.0,
+            line_h,
             TEXT_INPUT_SELECT_BG,
         );
     }
 
-    // Text
     let text_x = bg_x + pad_h;
-    let text_y = bg_y + pad_v;
-    ui.draw_text(text_x, text_y, &ti.text, fs, TEXT_INPUT_FG);
 
-    // Blinking cursor
-    if !ti.select_all {
-        let elapsed = timer.realtime_since_start();
-        let blink_on = ((elapsed / TEXT_INPUT_BLINK_PERIOD) as u64).is_multiple_of(2);
-        if blink_on {
-            let before = &ti.text[..ti.cursor];
-            let cursor_x = text_x
-                + ui.measure_text_cached(before, fs as u16, FontWeight::Medium)
-                    .x;
-            ui.draw_rect(
-                cursor_x,
-                bg_y + pad_v,
-                TEXT_INPUT_CURSOR_W,
-                bg_h - pad_v * 2.0,
-                TEXT_INPUT_CURSOR,
-            );
+    if ti.multiline {
+        // Draw each line separately.
+        for (i, line) in ti.text.split('\n').enumerate() {
+            let ly = bg_y + pad_v + i as f32 * line_h;
+            ui.draw_text(text_x, ly, line, fs, TEXT_INPUT_FG);
+        }
+
+        // Blinking cursor — find which line the cursor is on.
+        if !ti.select_all {
+            let elapsed = timer.realtime_since_start();
+            let blink_on = ((elapsed / TEXT_INPUT_BLINK_PERIOD) as u64).is_multiple_of(2);
+            if blink_on {
+                let before = &ti.text[..ti.cursor];
+                let cursor_line = before.matches('\n').count();
+                let line_start = before.rfind('\n').map_or(0, |p| p + 1);
+                let before_on_line = &before[line_start..];
+                let cursor_x = text_x
+                    + ui.measure_text_cached(before_on_line, fs as u16, FontWeight::Medium)
+                        .x;
+                let cursor_y = bg_y + pad_v + cursor_line as f32 * line_h;
+                ui.draw_rect(
+                    cursor_x,
+                    cursor_y,
+                    TEXT_INPUT_CURSOR_W,
+                    line_h,
+                    TEXT_INPUT_CURSOR,
+                );
+            }
+        }
+    } else {
+        // Single-line rendering (original path).
+        let text_y = bg_y + pad_v;
+        ui.draw_text(text_x, text_y, &ti.text, fs, TEXT_INPUT_FG);
+
+        if !ti.select_all {
+            let elapsed = timer.realtime_since_start();
+            let blink_on = ((elapsed / TEXT_INPUT_BLINK_PERIOD) as u64).is_multiple_of(2);
+            if blink_on {
+                let before = &ti.text[..ti.cursor];
+                let cursor_x = text_x
+                    + ui.measure_text_cached(before, fs as u16, FontWeight::Medium)
+                        .x;
+                ui.draw_rect(
+                    cursor_x,
+                    bg_y + pad_v,
+                    TEXT_INPUT_CURSOR_W,
+                    bg_h - pad_v * 2.0,
+                    TEXT_INPUT_CURSOR,
+                );
+            }
         }
     }
 }

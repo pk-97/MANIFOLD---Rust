@@ -2198,8 +2198,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                 consumed = true;
                             }
                             Key::Named(NamedKey::Enter) => {
-                                let (field, text) = self.text_input.commit();
-                                self.handle_text_input_commit(field, &text);
+                                if self.text_input.multiline && self.modifiers.shift {
+                                    self.text_input.insert_char('\n');
+                                } else {
+                                    let (field, text) = self.text_input.commit();
+                                    self.handle_text_input_commit(field, &text);
+                                }
                                 consumed = true;
                             }
                             Key::Named(NamedKey::Backspace) => {
