@@ -82,10 +82,10 @@ pub struct ParticleTextGenerator {
     pending_text: String,
     pending_font_family: String,
 
-    // Track whether we need to re-seed after text change or clip restart
+    // Track whether we need to re-seed after text change
     needs_reseed: bool,
-    /// Previous frame's anim_progress — detects clip restart when it wraps.
-    last_anim_progress: f32,
+    /// Previous trigger_count — detects clip edge when it changes.
+    last_trigger_count: i32,
 }
 
 impl ParticleTextGenerator {
@@ -108,7 +108,7 @@ impl ParticleTextGenerator {
             pending_text: "HELLO".to_string(),
             pending_font_family: String::new(),
             needs_reseed: true,
-            last_anim_progress: 1.0, // start high so first frame (progress ~0) triggers seed
+            last_trigger_count: -1, // first trigger edge always seeds
         }
     }
 
@@ -271,13 +271,14 @@ impl Generator for ParticleTextGenerator {
             self.needs_reseed = true;
         }
 
-        // Detect clip restart: anim_progress wrapped back to near-zero
-        if ctx.anim_progress < self.last_anim_progress - 0.1 {
+        // Detect clip edge: trigger_count changes on note-on / clip start
+        let trigger = ctx.trigger_count as i32;
+        if trigger != self.last_trigger_count {
+            self.last_trigger_count = trigger;
             self.needs_reseed = true;
         }
-        self.last_anim_progress = ctx.anim_progress;
 
-        // Seed particles from text bitmap on clip start or text change
+        // Seed particles from text bitmap on clip edge or text change
         if self.needs_reseed && self.text_texture.is_some() {
             self.dispatch_text_seed(gpu, text_size, ctx.aspect);
             self.needs_reseed = false;
@@ -306,7 +307,7 @@ impl Generator for ParticleTextGenerator {
     fn reset_state(&mut self, _device: &manifold_gpu::GpuDevice) {
         self.core.reset_state();
         self.needs_reseed = true;
-        self.last_anim_progress = 1.0;
+        self.last_trigger_count = -1;
         self.cached_text.clear();
         self.cached_pixel_size = 0.0;
     }
