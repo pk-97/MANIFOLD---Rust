@@ -613,9 +613,13 @@ impl BlobTrackingFX {
         let dpi_scale = height as f32 / 1080.0;
         let px_u = (1.0 / width as f32) * dpi_scale;
         let px_v = (1.0 / height as f32) * dpi_scale;
-        let line_thick = 2.0 * px_u;
-        let thin_line = 1.5 * px_u;
-        let digit_size = px_u * 2.0;
+        // Per-axis thicknesses so overlays are aspect-ratio independent.
+        let thick_u = 2.0 * px_u;
+        let thick_v = 2.0 * px_v;
+        let thin_u = 1.5 * px_u;
+        let thin_v = 1.5 * px_v;
+        let digit_w = px_u * 2.0;
+        let digit_h = px_v * 2.0;
 
         // Per-blob overlays
         for b in 0..state.blob_count as usize {
@@ -634,7 +638,7 @@ impl BlobTrackingFX {
                     center[0] + half_size[0] * dir[0],
                     center[1] + half_size[1] * dir[1],
                 ];
-                // Horizontal arm
+                // Horizontal arm (spans X, thickness in Y)
                 let (hx0, hx1) = if dir[0] < 0.0 {
                     (corner[0], corner[0] + bracket_len)
                 } else {
@@ -643,12 +647,12 @@ impl BlobTrackingFX {
                 push_solid(
                     quads,
                     hx0,
-                    corner[1] - line_thick / 2.0,
+                    corner[1] - thick_v / 2.0,
                     hx1,
-                    corner[1] + line_thick / 2.0,
+                    corner[1] + thick_v / 2.0,
                     1.0,
                 );
-                // Vertical arm
+                // Vertical arm (spans Y, thickness in X)
                 let (vy0, vy1) = if dir[1] < 0.0 {
                     (corner[1], corner[1] + bracket_len)
                 } else {
@@ -656,9 +660,9 @@ impl BlobTrackingFX {
                 };
                 push_solid(
                     quads,
-                    corner[0] - line_thick / 2.0,
+                    corner[0] - thick_u / 2.0,
                     vy0,
-                    corner[0] + line_thick / 2.0,
+                    corner[0] + thick_u / 2.0,
                     vy1,
                     1.0,
                 );
@@ -666,31 +670,34 @@ impl BlobTrackingFX {
 
             // (b) Crosshair — 2 quads
             let ch_size = half_size[0].min(half_size[1]) * 0.3;
+            // Horizontal crosshair (spans X, thickness in Y)
             push_solid(
                 quads,
                 center[0] - ch_size,
-                center[1] - thin_line / 2.0,
+                center[1] - thin_v / 2.0,
                 center[0] + ch_size,
-                center[1] + thin_line / 2.0,
+                center[1] + thin_v / 2.0,
                 1.0,
             );
+            // Vertical crosshair (spans Y, thickness in X)
             push_solid(
                 quads,
-                center[0] - thin_line / 2.0,
+                center[0] - thin_u / 2.0,
                 center[1] - ch_size,
-                center[0] + thin_line / 2.0,
+                center[0] + thin_u / 2.0,
                 center[1] + ch_size,
                 1.0,
             );
 
-            // (c) Center dot — 1 quad
-            let dot_radius = px_u * 4.0;
+            // (c) Center dot — 1 quad (per-axis radii for visual circle)
+            let dot_ru = px_u * 4.0;
+            let dot_rv = px_v * 4.0;
             push_solid(
                 quads,
-                center[0] - dot_radius,
-                center[1] - dot_radius,
-                center[0] + dot_radius,
-                center[1] + dot_radius,
+                center[0] - dot_ru,
+                center[1] - dot_rv,
+                center[0] + dot_ru,
+                center[1] + dot_rv,
                 1.0,
             );
 
@@ -705,11 +712,11 @@ impl BlobTrackingFX {
             let lo = n % 16.0;
             // Chars: '0'(code 0), 'X'(code 16), hi digit, lo digit
             // at pixel offsets 0, 6, 13, 19
-            let glyph_w = 5.0 * digit_size;
-            let glyph_h = 7.0 * digit_size;
+            let glyph_w = 5.0 * digit_w;
+            let glyph_h = 7.0 * digit_h;
             for &(char_code, px_offset) in &[(0.0f32, 0.0f32), (16.0, 6.0), (hi, 13.0), (lo, 19.0)]
             {
-                let gx = hex_pos[0] + px_offset * digit_size;
+                let gx = hex_pos[0] + px_offset * digit_w;
                 let gy = hex_pos[1];
                 let atlas = glyph_atlas_rect(char_code);
                 push_textured(quads, gx, gy, gx + glyph_w, gy + glyph_h, atlas, 1.0);
@@ -738,7 +745,7 @@ impl BlobTrackingFX {
                 (y_t, 28.0),
                 (y_o, 34.0),
             ] {
-                let gx = coord_pos[0] + px_offset * digit_size;
+                let gx = coord_pos[0] + px_offset * digit_w;
                 let gy = coord_pos[1];
                 let atlas = glyph_atlas_rect(char_code);
                 push_textured(quads, gx, gy, gx + glyph_w, gy + glyph_h, atlas, 1.0);
@@ -758,39 +765,39 @@ impl BlobTrackingFX {
             let gy0 = gauge_pos[1];
             let gx1 = gauge_pos[0] + gauge_w;
             let gy1 = gauge_pos[1] - gauge_h;
-            // Top edge
+            // Top edge (horizontal, thickness in Y)
             push_solid(
                 quads,
                 gx0,
-                gy0 - thin_line / 2.0,
+                gy0 - thin_v / 2.0,
                 gx1,
-                gy0 + thin_line / 2.0,
+                gy0 + thin_v / 2.0,
                 1.0,
             );
-            // Bottom edge
+            // Bottom edge (horizontal, thickness in Y)
             push_solid(
                 quads,
                 gx0,
-                gy1 - thin_line / 2.0,
+                gy1 - thin_v / 2.0,
                 gx1,
-                gy1 + thin_line / 2.0,
+                gy1 + thin_v / 2.0,
                 1.0,
             );
-            // Left edge
+            // Left edge (vertical, thickness in X)
             push_solid(
                 quads,
-                gx0 - thin_line / 2.0,
+                gx0 - thin_u / 2.0,
                 gy1,
-                gx0 + thin_line / 2.0,
+                gx0 + thin_u / 2.0,
                 gy0,
                 1.0,
             );
-            // Right edge
+            // Right edge (vertical, thickness in X)
             push_solid(
                 quads,
-                gx1 - thin_line / 2.0,
+                gx1 - thin_u / 2.0,
                 gy1,
-                gx1 + thin_line / 2.0,
+                gx1 + thin_u / 2.0,
                 gy0,
                 1.0,
             );
@@ -808,12 +815,13 @@ impl BlobTrackingFX {
             for t in 0..4u32 {
                 let tick_y = tick_base[1] - tick_spacing * t as f32;
                 let tick_len = if t % 2 == 0 { 12.0 * px_u } else { 6.0 * px_u };
+                // Horizontal tick (thickness in Y)
                 push_solid(
                     quads,
                     tick_base[0],
-                    tick_y - thin_line / 2.0,
+                    tick_y - thin_v / 2.0,
                     tick_base[0] + tick_len,
-                    tick_y + thin_line / 2.0,
+                    tick_y + thin_v / 2.0,
                     0.5,
                 );
             }
@@ -840,7 +848,9 @@ impl BlobTrackingFX {
             let perp = [-dir[1], dir[0]];
             let dash_total = px_u * 12.0;
             let num_dashes = (len / dash_total).ceil() as u32;
-            let half_thick = thin_line / 2.0;
+            // Per-axis perpendicular expansion for uniform visual thickness.
+            let half_tu = thin_u / 2.0;
+            let half_tv = thin_v / 2.0;
 
             for d in 0..num_dashes {
                 if quads.len() >= MAX_OVERLAY_QUADS {
@@ -855,35 +865,38 @@ impl BlobTrackingFX {
                 // The compute shader uses step(0.4, dash_phase) which gives ~60% on
                 let p0 = [conn_a[0] + dir[0] * len * t0, conn_a[1] + dir[1] * len * t0];
                 let p1 = [conn_a[0] + dir[0] * len * t1, conn_a[1] + dir[1] * len * t1];
-                // Expand along perpendicular for thickness
-                let min_x = (p0[0] - perp[0] * half_thick)
-                    .min(p0[0] + perp[0] * half_thick)
-                    .min(p1[0] - perp[0] * half_thick)
-                    .min(p1[0] + perp[0] * half_thick);
-                let max_x = (p0[0] - perp[0] * half_thick)
-                    .max(p0[0] + perp[0] * half_thick)
-                    .max(p1[0] - perp[0] * half_thick)
-                    .max(p1[0] + perp[0] * half_thick);
-                let min_y = (p0[1] - perp[1] * half_thick)
-                    .min(p0[1] + perp[1] * half_thick)
-                    .min(p1[1] - perp[1] * half_thick)
-                    .min(p1[1] + perp[1] * half_thick);
-                let max_y = (p0[1] - perp[1] * half_thick)
-                    .max(p0[1] + perp[1] * half_thick)
-                    .max(p1[1] - perp[1] * half_thick)
-                    .max(p1[1] + perp[1] * half_thick);
+                // Expand along perpendicular with per-axis thickness
+                let exp_u = perp[0] * half_tu;
+                let exp_v = perp[1] * half_tv;
+                let min_x = (p0[0] - exp_u)
+                    .min(p0[0] + exp_u)
+                    .min(p1[0] - exp_u)
+                    .min(p1[0] + exp_u);
+                let max_x = (p0[0] - exp_u)
+                    .max(p0[0] + exp_u)
+                    .max(p1[0] - exp_u)
+                    .max(p1[0] + exp_u);
+                let min_y = (p0[1] - exp_v)
+                    .min(p0[1] + exp_v)
+                    .min(p1[1] - exp_v)
+                    .min(p1[1] + exp_v);
+                let max_y = (p0[1] - exp_v)
+                    .max(p0[1] + exp_v)
+                    .max(p1[1] - exp_v)
+                    .max(p1[1] + exp_v);
                 push_solid(quads, min_x, min_y, max_x, max_y, 0.5);
             }
 
-            // (i) Midpoint dot — 1 quad
+            // (i) Midpoint dot — 1 quad (per-axis radii for visual circle)
             let mid = [(conn_a[0] + conn_b[0]) * 0.5, (conn_a[1] + conn_b[1]) * 0.5];
-            let dot_r = px_u * 5.0;
+            let mid_ru = px_u * 5.0;
+            let mid_rv = px_v * 5.0;
             push_solid(
                 quads,
-                mid[0] - dot_r,
-                mid[1] - dot_r,
-                mid[0] + dot_r,
-                mid[1] + dot_r,
+                mid[0] - mid_ru,
+                mid[1] - mid_rv,
+                mid[0] + mid_ru,
+                mid[1] + mid_rv,
                 0.4,
             );
 
@@ -893,11 +906,12 @@ impl BlobTrackingFX {
             let hundreds = (dist_val / 100.0).floor();
             let tens = ((dist_val % 100.0) / 10.0).floor();
             let ones = dist_val % 10.0;
-            let small_digit = digit_size * 0.7;
-            let small_gw = 5.0 * small_digit;
-            let small_gh = 7.0 * small_digit;
+            let small_dw = digit_w * 0.7;
+            let small_dh = digit_h * 0.7;
+            let small_gw = 5.0 * small_dw;
+            let small_gh = 7.0 * small_dh;
             for &(char_code, px_offset) in &[(hundreds, 0.0f32), (tens, 6.0), (ones, 12.0)] {
-                let gx = dist_label_pos[0] + px_offset * small_digit;
+                let gx = dist_label_pos[0] + px_offset * small_dw;
                 let gy = dist_label_pos[1];
                 let atlas = glyph_atlas_rect(char_code);
                 push_textured(quads, gx, gy, gx + small_gw, gy + small_gh, atlas, 0.6);
