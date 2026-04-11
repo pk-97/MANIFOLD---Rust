@@ -4,31 +4,6 @@ use crate::gpu_encoder::GpuEncoder;
 use manifold_core::GeneratorTypeId;
 
 use crate::generators::registration::GeneratorFactory;
-use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
-
-inventory::submit! {
-    GeneratorMetadata {
-        id: GeneratorTypeId::STAR_FIELD,
-        display_name: "Star Field",
-        is_line_based: false,
-        available: true,
-        osc_prefix: "starField",
-        legacy_discriminant: None,
-        params: &[
-            ParamSpec::continuous("Density", 0.0, 1.0, 0.5, "F2", "density"),
-            ParamSpec::continuous("Brightness", 0.0, 2.0, 0.7, "F2", "brightness"),
-            ParamSpec::continuous("Depth", 0.0, 1.0, 0.5, "F2", "depth"),
-            ParamSpec::continuous("Drift Speed", 0.0, 1.0, 0.15, "F2", "driftSpeed"),
-            ParamSpec::continuous("Drift X", -1.0, 1.0, 0.3, "F2", "driftX"),
-            ParamSpec::continuous("Drift Y", -1.0, 1.0, 0.1, "F2", "driftY"),
-            ParamSpec::continuous("Twinkle", 0.0, 1.0, 0.3, "F2", "twinkle"),
-            ParamSpec::continuous("Warmth", -1.0, 1.0, 0.0, "F2", "warmth"),
-            ParamSpec::continuous("Nebula", 0.0, 1.0, 0.2, "F2", "nebula"),
-            ParamSpec::continuous("Glow", 0.0, 1.0, 0.3, "F2", "glow"),
-        ],
-        string_params: &[],
-    }
-}
 
 inventory::submit! {
     GeneratorFactory {

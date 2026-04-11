@@ -4,27 +4,6 @@ use crate::gpu_encoder::GpuEncoder;
 use manifold_core::GeneratorTypeId;
 
 use crate::generators::registration::GeneratorFactory;
-use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
-
-inventory::submit! {
-    GeneratorMetadata {
-        id: GeneratorTypeId::CONCENTRIC_TUNNEL,
-        display_name: "Concentric Tunnel",
-        is_line_based: false,
-        available: true,
-        osc_prefix: "concentricTunnel",
-        legacy_discriminant: Some(5),
-        params: &[
-            ParamSpec::whole_labels("Shape", 0.0, 5.0, 0.0, &["Circle","Triangle","Square","Pentagon","Hexagon","Star"], "shape"),
-            ParamSpec::continuous("Line", 0.0005, 0.03, 0.008, "F4", "line"),
-            ParamSpec::whole_labels("Rate", 0.0, 4.0, 2.0, &["1/4","1/2","1","2","4"], "speed"),
-            ParamSpec::continuous("Scale", 0.25, 3.0, 1.0, "F2", "scale"),
-            ParamSpec::toggle("Snap", 0.0, 1.0, 0.0, "snap"),
-            ParamSpec::whole_labels("Snap Mode", 0.0, 2.0, 0.0, &["Shape","Spawn","Both"], "snapmode"),
-        ],
-        string_params: &[],
-    }
-}
 
 inventory::submit! {
     GeneratorFactory {

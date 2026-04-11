@@ -6,29 +6,6 @@ use crate::gpu_encoder::GpuEncoder;
 use manifold_core::GeneratorTypeId;
 
 use crate::generators::registration::GeneratorFactory;
-use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
-
-inventory::submit! {
-    GeneratorMetadata {
-        id: GeneratorTypeId::WIREFRAME_ZOO,
-        display_name: "Wireframe Zoo",
-        is_line_based: true,
-        available: true,
-        osc_prefix: "wireframeZoo",
-        legacy_discriminant: Some(10),
-        params: &[
-            ParamSpec::continuous("XY", 0.0, 2.0, 0.5, "F2", "rotXY"),
-            ParamSpec::continuous("ZW", 0.0, 2.0, 0.3, "F2", "rotZW"),
-            ParamSpec::continuous("XW", 0.0, 2.0, 0.2, "F2", "rotXW"),
-            ParamSpec::continuous("Line", 0.0005, 0.03, 0.003, "F4", "line"),
-            ParamSpec::whole_labels("Shape", 0.0, 4.0, 0.0, &["Tetra","Cube","Octa","Icosa","Dodeca"], "shape"),
-            ParamSpec::toggle("Verts", 0.0, 1.0, 1.0, "verts"),
-            ParamSpec::continuous("VSize", 0.1, 4.0, 1.0, "F1", "vsize"),
-            ParamSpec::continuous("Scale", 0.25, 3.0, 1.0, "F2", "scale"),
-        ],
-        string_params: &[],
-    }
-}
 
 inventory::submit! {
     GeneratorFactory {

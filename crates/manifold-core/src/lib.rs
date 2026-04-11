@@ -11,6 +11,7 @@ pub mod effect_type_registry;
 pub mod effects;
 pub mod generator;
 pub mod generator_definition_registry;
+pub mod generator_metadata_submissions;
 pub mod generator_registration;
 pub mod generator_type_id;
 pub mod generator_type_registry;
