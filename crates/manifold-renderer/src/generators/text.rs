@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
-use crate::text_rasterizer::TextRasterizer;
+use crate::text_rasterizer::{HAlign, RasterizeOptions, TextRasterizer};
 use manifold_core::GeneratorTypeId;
 
 use crate::generators::registration::GeneratorFactory;
@@ -14,11 +14,15 @@ inventory::submit! {
     }
 }
 
-// Parameter indices
-const SIZE: usize = 0; // fraction of output height (0.25 = 25%)
+// Parameter indices (must match metadata order in generator_metadata_submissions.rs)
+const SIZE: usize = 0;
 const POS_X: usize = 1;
 const POS_Y: usize = 2;
 const SCALE: usize = 3;
+const H_ALIGN: usize = 4;
+const V_ALIGN: usize = 5;
+const LETTER_SPACING: usize = 6;
+const LINE_SPACING: usize = 7;
 
 const TEXT_WGSL: &str = include_str!("shaders/text_compute.wgsl");
 
@@ -34,6 +38,9 @@ struct TextUniforms {
     tex_height: f32,
     output_width: f32,
     output_height: f32,
+    // -- 16-byte boundary --
+    v_align: f32, // 0=Top, 1=Center, 2=Bottom
+    _pad: [f32; 3],
 }
 
 pub struct TextGenerator {
@@ -46,6 +53,9 @@ pub struct TextGenerator {
     cached_text: String,
     cached_pixel_size: f32,
     cached_font_family: String,
+    cached_h_align: f32,
+    cached_letter_spacing: f32,
+    cached_line_spacing: f32,
     // Pending values from set_string_params (consumed in render)
     pending_text: String,
     pending_font_family: String,
@@ -66,6 +76,9 @@ impl TextGenerator {
             cached_text: String::new(),
             cached_pixel_size: 0.0,
             cached_font_family: String::new(),
+            cached_h_align: -1.0,
+            cached_letter_spacing: f32::NAN,
+            cached_line_spacing: f32::NAN,
             pending_text: "HELLO".to_string(),
             pending_font_family: String::new(),
         }
@@ -118,41 +131,44 @@ impl Generator for TextGenerator {
         target: &manifold_gpu::GpuTexture,
         ctx: &GeneratorContext,
     ) -> f32 {
-        let size_frac = if ctx.param_count > SIZE as u32 {
-            ctx.params[SIZE].clamp(0.02, 1.0)
-        } else {
-            0.25
-        };
-        // Rasterize at output-resolution pixel density for crisp text
-        let font_size = size_frac * ctx.output_height as f32;
-        let pos_x = if ctx.param_count > POS_X as u32 {
-            ctx.params[POS_X]
-        } else {
-            0.0
-        };
-        let pos_y = if ctx.param_count > POS_Y as u32 {
-            ctx.params[POS_Y]
-        } else {
-            0.0
-        };
-        let scale = if ctx.param_count > SCALE as u32 {
-            ctx.params[SCALE].max(0.01)
-        } else {
-            1.0
+        let param = |idx: usize, default: f32| -> f32 {
+            if ctx.param_count > idx as u32 {
+                ctx.params[idx]
+            } else {
+                default
+            }
         };
 
-        // Dirty check: re-rasterize only when text, font, or pixel size changes
+        let size_frac = param(SIZE, 0.25).clamp(0.02, 1.0);
+        let font_size = size_frac * ctx.output_height as f32;
+        let pos_x = param(POS_X, 0.0);
+        let pos_y = param(POS_Y, 0.0);
+        let scale = param(SCALE, 1.0).max(0.01);
+        let h_align = param(H_ALIGN, 1.0);
+        let v_align = param(V_ALIGN, 1.0);
+        let letter_spacing = param(LETTER_SPACING, 0.0);
+        let line_spacing = param(LINE_SPACING, 1.2);
+
+        // Dirty check: re-rasterize when text, font, size, or styling changes
         let text_changed = self.pending_text != self.cached_text;
         let size_changed = (font_size - self.cached_pixel_size).abs() > 0.5;
         let font_changed = self.pending_font_family != self.cached_font_family;
+        let style_changed = (h_align - self.cached_h_align).abs() > 0.01
+            || (letter_spacing - self.cached_letter_spacing).abs() > 0.001
+            || (line_spacing - self.cached_line_spacing).abs() > 0.01;
 
-        if text_changed || size_changed || font_changed {
-            let font_family = if self.pending_font_family.is_empty() {
-                None
-            } else {
-                Some(self.pending_font_family.as_str())
+        if text_changed || size_changed || font_changed || style_changed {
+            let opts = RasterizeOptions {
+                font_family: if self.pending_font_family.is_empty() {
+                    None
+                } else {
+                    Some(self.pending_font_family.as_str())
+                },
+                h_align: HAlign::from_param(h_align),
+                letter_spacing,
+                line_spacing,
             };
-            match self.rasterizer.rasterize(&self.pending_text, font_size, font_family) {
+            match self.rasterizer.rasterize(&self.pending_text, font_size, &opts) {
                 Some(result) => {
                     self.ensure_texture(gpu.device, result.width, result.height);
                     if let Some(ref texture) = self.text_texture {
@@ -166,7 +182,6 @@ impl Generator for TextGenerator {
                     }
                 }
                 None => {
-                    // Empty text — drop the texture
                     self.text_texture = None;
                     self.text_tex_dims = (0, 0);
                 }
@@ -174,6 +189,9 @@ impl Generator for TextGenerator {
             self.cached_text = self.pending_text.clone();
             self.cached_pixel_size = font_size;
             self.cached_font_family = self.pending_font_family.clone();
+            self.cached_h_align = h_align;
+            self.cached_letter_spacing = letter_spacing;
+            self.cached_line_spacing = line_spacing;
         }
 
         // If no text texture, clear and return
@@ -191,6 +209,8 @@ impl Generator for TextGenerator {
             tex_height: self.text_tex_dims.1 as f32,
             output_width: ctx.width as f32,
             output_height: ctx.height as f32,
+            v_align,
+            _pad: [0.0; 3],
         };
 
         gpu.native_enc.dispatch_compute(

@@ -214,12 +214,15 @@ impl Generator for ParticleTextGenerator {
         let font_changed = self.pending_font_family != self.cached_font_family;
 
         if text_changed || size_changed || font_changed {
-            let font_family = if self.pending_font_family.is_empty() {
-                None
-            } else {
-                Some(self.pending_font_family.as_str())
+            let opts = crate::text_rasterizer::RasterizeOptions {
+                font_family: if self.pending_font_family.is_empty() {
+                    None
+                } else {
+                    Some(self.pending_font_family.as_str())
+                },
+                ..Default::default()
             };
-            match self.rasterizer.rasterize(&self.pending_text, font_size, font_family) {
+            match self.rasterizer.rasterize(&self.pending_text, font_size, &opts) {
                 Some(result) => {
                     self.ensure_text_texture(gpu.device, result.width, result.height);
                     if let Some(ref texture) = self.text_texture {

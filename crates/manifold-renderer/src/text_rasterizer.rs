@@ -26,6 +26,47 @@ use std::sync::Arc;
 const MAX_BITMAP_DIM: u32 = 4096;
 const PADDING: u32 = 4;
 
+/// Horizontal text alignment within the rasterized bitmap.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum HAlign {
+    Left,
+    Center,
+    Right,
+}
+
+impl HAlign {
+    pub fn from_param(v: f32) -> Self {
+        match v.round() as i32 {
+            0 => Self::Left,
+            2 => Self::Right,
+            _ => Self::Center,
+        }
+    }
+}
+
+/// Styling options for text rasterization.
+#[derive(Debug, Clone)]
+pub struct RasterizeOptions<'a> {
+    pub font_family: Option<&'a str>,
+    pub h_align: HAlign,
+    /// Extra spacing between glyphs as a fraction of font_size.
+    /// 0.0 = default, positive = wider, negative = tighter.
+    pub letter_spacing: f32,
+    /// Line height multiplier. 1.0 = tight (ascent+descent only), 1.2 = default.
+    pub line_spacing: f32,
+}
+
+impl<'a> Default for RasterizeOptions<'a> {
+    fn default() -> Self {
+        Self {
+            font_family: None,
+            h_align: HAlign::Center,
+            letter_spacing: 0.0,
+            line_spacing: 1.2,
+        }
+    }
+}
+
 /// Result of rasterizing a text string.
 pub struct RasterizedText {
     /// R8 grayscale pixel data (width * height bytes).
@@ -68,15 +109,13 @@ impl TextRasterizer {
     }
 
     /// Rasterize a text string at the given font size into an R8 grayscale bitmap.
-    /// If `font_family` is provided, attempts to use that system font; falls back
-    /// to the embedded Inter font if not found.
     /// Supports multiline text (lines separated by `\n`).
     /// Returns `None` for empty or whitespace-only strings.
     pub fn rasterize(
         &self,
         text: &str,
         font_size: f32,
-        font_family: Option<&str>,
+        opts: &RasterizeOptions,
     ) -> Option<RasterizedText> {
         let trimmed = text.trim();
         if trimmed.is_empty() {
@@ -84,7 +123,7 @@ impl TextRasterizer {
         }
 
         // Use system font by family name if provided, fall back to embedded Inter.
-        let ct_font = if let Some(family) = font_family {
+        let ct_font = if let Some(family) = opts.font_family {
             core_text::font::new_from_name(family, font_size as f64)
                 .unwrap_or_else(|()| {
                     core_text::font::new_from_CGFont(&self.cg_font, font_size as f64)
@@ -93,13 +132,15 @@ impl TextRasterizer {
             core_text::font::new_from_CGFont(&self.cg_font, font_size as f64)
         };
 
+        let letter_spacing_px = opts.letter_spacing * font_size;
+
         // Split into lines and shape each one.
         let lines: Vec<&str> = trimmed.split('\n').collect();
 
-        // Measure each line to find max width and per-line metrics.
         struct LineMeasure {
             glyphs: Vec<u16>,
             positions: Vec<CGPoint>,
+            width: f32,
         }
         let mut line_measures: Vec<LineMeasure> = Vec::with_capacity(lines.len());
         let mut max_width: f32 = 0.0;
@@ -109,7 +150,8 @@ impl TextRasterizer {
         let sample_bounds = sample_line.get_typographic_bounds();
         let ascent = sample_bounds.ascent as f32;
         let descent = sample_bounds.descent.abs() as f32;
-        let line_height = ascent + descent;
+        let base_line_height = ascent + descent;
+        let line_height = base_line_height * opts.line_spacing;
 
         for line_text in &lines {
             let line_text = line_text.trim_end();
@@ -117,20 +159,30 @@ impl TextRasterizer {
                 line_measures.push(LineMeasure {
                     glyphs: Vec::new(),
                     positions: Vec::new(),
+                    width: 0.0,
                 });
                 continue;
             }
-            let ct_line = self.make_ct_line(&ct_font, line_text);
-            let bounds = ct_line.get_typographic_bounds();
-            let w = bounds.width as f32;
-            max_width = max_width.max(w);
 
-            if let Some((glyphs, positions)) = self.shape_line(&ct_font, line_text) {
-                line_measures.push(LineMeasure { glyphs, positions });
+            if let Some((glyphs, mut positions)) = self.shape_line(&ct_font, line_text) {
+                // Apply letter spacing: shift each glyph by index * spacing
+                if letter_spacing_px.abs() > 0.001 {
+                    for (i, pos) in positions.iter_mut().enumerate() {
+                        pos.x += i as f64 * letter_spacing_px as f64;
+                    }
+                }
+                // Compute line width from last glyph position + font metrics
+                let ct_line = self.make_ct_line(&ct_font, line_text);
+                let bounds = ct_line.get_typographic_bounds();
+                let w = bounds.width as f32
+                    + (glyphs.len().saturating_sub(1)) as f32 * letter_spacing_px;
+                max_width = max_width.max(w);
+                line_measures.push(LineMeasure { glyphs, positions, width: w });
             } else {
                 line_measures.push(LineMeasure {
                     glyphs: Vec::new(),
                     positions: Vec::new(),
+                    width: 0.0,
                 });
             }
         }
@@ -168,14 +220,20 @@ impl TextRasterizer {
         ctx.set_allows_font_smoothing(false);
         ctx.set_should_smooth_fonts(false);
 
-        let origin_x = PADDING as f64;
-
         // CG is y-up: line 0 (top visually) has the highest CG y.
-        // Bottom of bitmap = CG y 0. Top of bitmap = CG y (h-1).
         for (line_idx, measure) in line_measures.iter().enumerate() {
             if measure.glyphs.is_empty() {
                 continue;
             }
+
+            // Horizontal alignment offset
+            let align_offset = match opts.h_align {
+                HAlign::Left => 0.0,
+                HAlign::Center => ((max_width - measure.width) * 0.5).max(0.0),
+                HAlign::Right => (max_width - measure.width).max(0.0),
+            };
+            let origin_x = PADDING as f64 + align_offset as f64;
+
             // Lines from top: line 0 is at top of bitmap.
             // In CG coords, line 0 baseline = bitmap_h - PADDING - ascent
             // Each subsequent line shifts down by line_height.
@@ -244,7 +302,7 @@ mod tests {
     #[test]
     fn test_rasterize_hello() {
         let rasterizer = TextRasterizer::new();
-        let result = rasterizer.rasterize("HELLO", 64.0, None);
+        let result = rasterizer.rasterize("HELLO", 64.0, &RasterizeOptions::default());
         assert!(result.is_some());
         let rt = result.unwrap();
         assert!(rt.width > 0);
@@ -256,22 +314,30 @@ mod tests {
     #[test]
     fn test_rasterize_empty_returns_none() {
         let rasterizer = TextRasterizer::new();
-        assert!(rasterizer.rasterize("", 64.0, None).is_none());
-        assert!(rasterizer.rasterize("   ", 64.0, None).is_none());
+        let opts = RasterizeOptions::default();
+        assert!(rasterizer.rasterize("", 64.0, &opts).is_none());
+        assert!(rasterizer.rasterize("   ", 64.0, &opts).is_none());
     }
 
     #[test]
     fn test_rasterize_with_system_font() {
         let rasterizer = TextRasterizer::new();
-        // Helvetica is always available on macOS
-        let result = rasterizer.rasterize("TEST", 64.0, Some("Helvetica"));
+        let opts = RasterizeOptions {
+            font_family: Some("Helvetica"),
+            ..Default::default()
+        };
+        let result = rasterizer.rasterize("TEST", 64.0, &opts);
         assert!(result.is_some());
     }
 
     #[test]
     fn test_rasterize_unknown_font_falls_back() {
         let rasterizer = TextRasterizer::new();
-        let result = rasterizer.rasterize("TEST", 64.0, Some("NonExistentFont12345"));
+        let opts = RasterizeOptions {
+            font_family: Some("NonExistentFont12345"),
+            ..Default::default()
+        };
+        let result = rasterizer.rasterize("TEST", 64.0, &opts);
         assert!(result.is_some()); // Falls back to Inter
     }
 
@@ -281,5 +347,64 @@ mod tests {
         assert!(!families.is_empty());
         // Helvetica should always be present on macOS
         assert!(families.iter().any(|f| f == "Helvetica"));
+    }
+
+    #[test]
+    fn test_letter_spacing_wider() {
+        let rasterizer = TextRasterizer::new();
+        let narrow = rasterizer
+            .rasterize("AB", 64.0, &RasterizeOptions::default())
+            .unwrap();
+        let wide = rasterizer
+            .rasterize(
+                "AB",
+                64.0,
+                &RasterizeOptions {
+                    letter_spacing: 1.0,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(wide.width > narrow.width);
+    }
+
+    #[test]
+    fn test_line_spacing_taller() {
+        let rasterizer = TextRasterizer::new();
+        let tight = rasterizer
+            .rasterize("A\nB", 64.0, &RasterizeOptions {
+                line_spacing: 1.0,
+                ..Default::default()
+            })
+            .unwrap();
+        let loose = rasterizer
+            .rasterize("A\nB", 64.0, &RasterizeOptions {
+                line_spacing: 2.0,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(loose.height > tight.height);
+    }
+
+    #[test]
+    fn test_h_align_left_vs_right() {
+        let rasterizer = TextRasterizer::new();
+        // Two lines of different widths — alignment should shift the shorter one
+        let left = rasterizer
+            .rasterize("AAAA\nB", 64.0, &RasterizeOptions {
+                h_align: HAlign::Left,
+                ..Default::default()
+            })
+            .unwrap();
+        let right = rasterizer
+            .rasterize("AAAA\nB", 64.0, &RasterizeOptions {
+                h_align: HAlign::Right,
+                ..Default::default()
+            })
+            .unwrap();
+        // Bitmaps should be the same size (max_width determines width)
+        assert_eq!(left.width, right.width);
+        // But the pixel content should differ (B is in different position)
+        assert_ne!(left.pixels, right.pixels);
     }
 }

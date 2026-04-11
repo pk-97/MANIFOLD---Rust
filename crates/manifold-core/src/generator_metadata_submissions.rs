@@ -530,6 +530,10 @@ inventory::submit! {
             ParamSpec::continuous("Position X", -1.0, 1.0, 0.0, "F2", "posX"),
             ParamSpec::continuous("Position Y", -1.0, 1.0, 0.0, "F2", "posY"),
             ParamSpec::continuous("Scale", 0.1, 5.0, 1.0, "F2", "scale"),
+            ParamSpec::whole_labels("H Align", 0.0, 2.0, 1.0, &["Left", "Center", "Right"], "hAlign"),
+            ParamSpec::whole_labels("V Align", 0.0, 2.0, 1.0, &["Top", "Center", "Bottom"], "vAlign"),
+            ParamSpec::continuous("Letter Spacing", -0.5, 2.0, 0.0, "F2", "letterSpacing"),
+            ParamSpec::continuous("Line Spacing", 0.5, 3.0, 1.2, "F1", "lineSpacing"),
         ],
         string_params: &[("Text", "text", "HELLO", false), ("Font", "fontFamily", "", true)],
     }
