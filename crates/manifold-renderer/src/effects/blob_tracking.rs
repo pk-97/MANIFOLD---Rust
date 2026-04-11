@@ -618,8 +618,8 @@ impl BlobTrackingFX {
         let thick_v = 2.0 * px_v;
         let thin_u = 1.5 * px_u;
         let thin_v = 1.5 * px_v;
-        let digit_w = px_u * 2.0;
-        let digit_h = px_v * 2.0;
+        let digit_w = px_u;
+        let digit_h = px_v;
 
         // Per-blob overlays
         for b in 0..state.blob_count as usize {
