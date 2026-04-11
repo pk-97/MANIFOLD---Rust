@@ -229,7 +229,9 @@ pub enum PanelAction {
     GenEnvRangeCommit(usize),
 
     // Generator string params (per-clip text, etc.)
-    GenStringParamClicked(usize), // string_param_index — open text input
+    GenStringParamClicked(usize),              // string_param_index — open text input
+    GenStringParamDropdownClicked(usize),      // string_param_index — open dropdown selector
+    GenStringParamSelected(usize, String),     // string_param_index, selected value
 
     // Generator card actions
     GenCollapseToggle,

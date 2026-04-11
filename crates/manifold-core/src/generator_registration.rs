@@ -143,7 +143,8 @@ pub struct GeneratorMetadata {
     pub osc_prefix: &'static str,
     pub legacy_discriminant: Option<i32>,
     pub params: &'static [ParamSpec],
-    pub string_params: &'static [(&'static str, &'static str, &'static str)],
+    /// String params: (name, key, default_value, use_dropdown).
+    pub string_params: &'static [(&'static str, &'static str, &'static str, bool)],
 }
 
 inventory::collect!(GeneratorMetadata);
@@ -156,10 +157,11 @@ impl GeneratorMetadata {
         let string_param_defs: Vec<StringParamDef> = self
             .string_params
             .iter()
-            .map(|(name, key, default)| StringParamDef {
+            .map(|(name, key, default, dropdown)| StringParamDef {
                 name,
                 key,
                 default_value: default,
+                use_dropdown: *dropdown,
             })
             .collect();
         GeneratorDef {

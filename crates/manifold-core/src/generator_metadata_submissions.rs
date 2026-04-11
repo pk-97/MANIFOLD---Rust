@@ -531,6 +531,6 @@ inventory::submit! {
             ParamSpec::continuous("Position Y", -1.0, 1.0, 0.0, "F2", "posY"),
             ParamSpec::continuous("Scale", 0.1, 5.0, 1.0, "F2", "scale"),
         ],
-        string_params: &[("Text", "text", "HELLO")],
+        string_params: &[("Text", "text", "HELLO", false), ("Font", "fontFamily", "", true)],
     }
 }

@@ -59,15 +59,38 @@ impl TextRasterizer {
         Self { cg_font }
     }
 
+    /// Enumerate all installed font family names, sorted alphabetically.
+    pub fn available_font_families() -> Vec<String> {
+        let cf_names = core_text::font_manager::copy_available_font_family_names();
+        let mut names: Vec<String> = cf_names.iter().map(|n| n.to_string()).collect();
+        names.sort_unstable_by_key(|a| a.to_lowercase());
+        names
+    }
+
     /// Rasterize a text string at the given font size into an R8 grayscale bitmap.
+    /// If `font_family` is provided, attempts to use that system font; falls back
+    /// to the embedded Inter font if not found.
     /// Returns `None` for empty or whitespace-only strings.
-    pub fn rasterize(&self, text: &str, font_size: f32) -> Option<RasterizedText> {
+    pub fn rasterize(
+        &self,
+        text: &str,
+        font_size: f32,
+        font_family: Option<&str>,
+    ) -> Option<RasterizedText> {
         let trimmed = text.trim();
         if trimmed.is_empty() {
             return None;
         }
 
-        let ct_font = core_text::font::new_from_CGFont(&self.cg_font, font_size as f64);
+        // Use system font by family name if provided, fall back to embedded Inter.
+        let ct_font = if let Some(family) = font_family {
+            core_text::font::new_from_name(family, font_size as f64)
+                .unwrap_or_else(|()| {
+                    core_text::font::new_from_CGFont(&self.cg_font, font_size as f64)
+                })
+        } else {
+            core_text::font::new_from_CGFont(&self.cg_font, font_size as f64)
+        };
 
         // Shape text to get glyph IDs and positions
         let (glyph_ids, positions) = self.shape_line(&ct_font, trimmed)?;
@@ -170,20 +193,42 @@ mod tests {
     #[test]
     fn test_rasterize_hello() {
         let rasterizer = TextRasterizer::new();
-        let result = rasterizer.rasterize("HELLO", 64.0);
+        let result = rasterizer.rasterize("HELLO", 64.0, None);
         assert!(result.is_some());
         let rt = result.unwrap();
         assert!(rt.width > 0);
         assert!(rt.height > 0);
         assert_eq!(rt.pixels.len(), (rt.width * rt.height) as usize);
-        // At least some pixels should be non-zero (text was drawn)
         assert!(rt.pixels.iter().any(|&p| p > 0));
     }
 
     #[test]
     fn test_rasterize_empty_returns_none() {
         let rasterizer = TextRasterizer::new();
-        assert!(rasterizer.rasterize("", 64.0).is_none());
-        assert!(rasterizer.rasterize("   ", 64.0).is_none());
+        assert!(rasterizer.rasterize("", 64.0, None).is_none());
+        assert!(rasterizer.rasterize("   ", 64.0, None).is_none());
+    }
+
+    #[test]
+    fn test_rasterize_with_system_font() {
+        let rasterizer = TextRasterizer::new();
+        // Helvetica is always available on macOS
+        let result = rasterizer.rasterize("TEST", 64.0, Some("Helvetica"));
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_rasterize_unknown_font_falls_back() {
+        let rasterizer = TextRasterizer::new();
+        let result = rasterizer.rasterize("TEST", 64.0, Some("NonExistentFont12345"));
+        assert!(result.is_some()); // Falls back to Inter
+    }
+
+    #[test]
+    fn test_available_font_families() {
+        let families = TextRasterizer::available_font_families();
+        assert!(!families.is_empty());
+        // Helvetica should always be present on macOS
+        assert!(families.iter().any(|f| f == "Helvetica"));
     }
 }

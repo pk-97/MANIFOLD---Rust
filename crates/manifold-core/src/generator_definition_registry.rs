@@ -15,6 +15,8 @@ pub struct StringParamDef {
     pub key: &'static str,
     /// Default value for new clips.
     pub default_value: &'static str,
+    /// If true, the inspector shows a dropdown selector instead of text input.
+    pub use_dropdown: bool,
 }
 
 #[derive(Debug, Clone)]

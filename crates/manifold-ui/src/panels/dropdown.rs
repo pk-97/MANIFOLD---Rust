@@ -21,7 +21,8 @@ const ITEM_HEIGHT: f32 = 24.0;
 const PADDING_H: f32 = 8.0;
 const PADDING_V: f32 = 4.0;
 const MIN_WIDTH: f32 = 120.0;
-const MAX_VISIBLE_ITEMS: usize = 40;
+const MAX_DROPDOWN_HEIGHT: f32 = 400.0;
+const SCROLL_SPEED: f32 = 3.0;
 const SEPARATOR_HEIGHT: f32 = 9.0; // pad + 1px line + pad
 const CHAR_WIDTH: f32 = 7.0; // approximate glyph width for width estimation
 
@@ -96,6 +97,12 @@ pub struct DropdownPanel {
     separator_ids: Vec<i32>,
     /// Index of currently hovered item (-1 = none).
     hovered_index: i32,
+    /// Scroll offset in pixels (0 = top, positive = scrolled down).
+    scroll_offset: f32,
+    /// Total content height of all items (may exceed container height).
+    content_height: f32,
+    /// Viewport height for items (container height minus padding).
+    viewport_height: f32,
     /// First node index in the tree (for node range checks).
     first_node: usize,
     node_count: usize,
@@ -121,6 +128,9 @@ impl DropdownPanel {
             item_ids: Vec::new(),
             separator_ids: Vec::new(),
             hovered_index: -1,
+            scroll_offset: 0.0,
+            content_height: 0.0,
+            viewport_height: 0.0,
             first_node: 0,
             node_count: 0,
             color_grid: Vec::new(),
@@ -207,10 +217,10 @@ impl DropdownPanel {
         self.items = items;
         self.min_width = min_width;
         self.hovered_index = -1;
+        self.scroll_offset = 0.0;
         self.is_open = true;
 
         // Compute content dimensions.
-        let visible_count = self.items.len().min(MAX_VISIBLE_ITEMS);
         let content_width = self.compute_content_width();
 
         // If we have a color grid, ensure the menu is wide enough for it.
@@ -223,16 +233,17 @@ impl DropdownPanel {
         };
         let w = content_width.max(self.min_width).max(grid_width);
 
-        let mut h = PADDING_V * 2.0;
-        for (i, item) in self.items.iter().enumerate() {
-            if i >= visible_count {
-                break;
-            }
-            h += ITEM_HEIGHT;
+        // Compute full content height (all items, no cap).
+        let mut items_h = 0.0f32;
+        for item in &self.items {
+            items_h += ITEM_HEIGHT;
             if item.separator_after {
-                h += SEPARATOR_HEIGHT;
+                items_h += SEPARATOR_HEIGHT;
             }
         }
+        self.content_height = items_h;
+
+        let mut h = items_h + PADDING_V * 2.0;
 
         // Add color grid height.
         if !self.color_grid.is_empty() && self.color_grid_cols > 0 {
@@ -243,9 +254,12 @@ impl DropdownPanel {
             h += SEPARATOR_HEIGHT + rows as f32 * (swatch + gap) - gap + PADDING_V;
         }
 
+        // Cap height at MAX_DROPDOWN_HEIGHT, then clamp to screen.
+        let h = h.min(MAX_DROPDOWN_HEIGHT).min(self.screen_height);
+        self.viewport_height = h - PADDING_V * 2.0;
+
         // Edge clamping — clamp both position AND size to screen.
         let w = w.min(self.screen_width);
-        let h = h.min(self.screen_height);
         let mut x = anchor.x;
         let mut y = anchor.y;
         if x + w > self.screen_width {
@@ -327,18 +341,23 @@ impl DropdownPanel {
             container_style,
         ) as i32;
 
-        // Build items — positions must be absolute screen coordinates
-        // (the tree does not offset children by parent position).
-        let mut cy = PADDING_V;
+        // Build items — positions offset by scroll. Items outside the
+        // viewport are created but hidden to preserve stable item_ids indices.
+        let mut cy = PADDING_V - self.scroll_offset;
         let item_w = bounds.width - PADDING_H * 2.0;
-        let visible_count = self.items.len().min(MAX_VISIBLE_ITEMS);
+        let viewport_top = PADDING_V;
+        let viewport_bottom = PADDING_V + self.viewport_height;
 
-        for i in 0..visible_count {
+        for i in 0..self.items.len() {
             let item = &self.items[i];
             let label = item.label.clone();
             let enabled = item.enabled;
             let checked = item.checked;
             let separator_after = item.separator_after;
+
+            // Is this item visible in the viewport?
+            let item_bottom = cy + ITEM_HEIGHT;
+            let visible = item_bottom > viewport_top && cy < viewport_bottom;
 
             let text_color = if enabled {
                 color::TEXT_NORMAL
@@ -379,11 +398,14 @@ impl DropdownPanel {
                 ..UIStyle::default()
             };
 
-            let flags = if enabled {
+            let mut flags = if enabled {
                 UIFlags::INTERACTIVE
             } else {
                 UIFlags::DISABLED
             };
+            if !visible {
+                flags &= !UIFlags::INTERACTIVE;
+            }
 
             let id = tree.add_node(
                 self.root_id,
@@ -393,11 +415,15 @@ impl DropdownPanel {
                 Some(&display_text),
                 flags,
             );
+            if !visible {
+                tree.set_visible(id, false);
+            }
             self.item_ids.push(id as i32);
             cy += ITEM_HEIGHT;
 
             if separator_after {
                 let sep_y = cy + SEPARATOR_HEIGHT / 2.0 - 0.5;
+                let sep_visible = (sep_y + 1.0) > viewport_top && sep_y < viewport_bottom;
                 let sep_style = UIStyle {
                     bg_color: color::DIVIDER_C32,
                     ..UIStyle::default()
@@ -410,6 +436,9 @@ impl DropdownPanel {
                     1.0,
                     sep_style,
                 );
+                if !sep_visible {
+                    tree.set_visible(sep_id, false);
+                }
                 self.separator_ids.push(sep_id as i32);
                 cy += SEPARATOR_HEIGHT;
             }
@@ -546,6 +575,14 @@ impl DropdownPanel {
                 }
                 _ => None,
             },
+            UIEvent::Scroll { delta, .. } => {
+                if self.content_height > self.viewport_height {
+                    self.scroll_offset = (self.scroll_offset - delta.y * SCROLL_SPEED)
+                        .clamp(0.0, self.content_height - self.viewport_height);
+                    self.build_nodes(tree);
+                }
+                None
+            }
             // Consume right-clicks and drags while open.
             UIEvent::RightClick { .. }
             | UIEvent::DragBegin { .. }
@@ -572,7 +609,7 @@ impl DropdownPanel {
         if self.items.is_empty() {
             return;
         }
-        let count = self.items.len().min(MAX_VISIBLE_ITEMS) as i32;
+        let count = self.items.len() as i32;
         let mut next = self.hovered_index + direction;
 
         // Wrap around.
@@ -588,6 +625,7 @@ impl DropdownPanel {
             if next >= 0 && (next as usize) < self.items.len() && self.items[next as usize].enabled
             {
                 self.hovered_index = next;
+                self.ensure_hovered_visible();
                 return;
             }
             next += direction;
@@ -599,6 +637,32 @@ impl DropdownPanel {
             if next == start {
                 break; // All disabled, bail.
             }
+        }
+    }
+
+    /// Auto-scroll so the hovered item is visible in the viewport.
+    fn ensure_hovered_visible(&mut self) {
+        if self.hovered_index < 0 || self.content_height <= self.viewport_height {
+            return;
+        }
+        // Compute the Y position of the hovered item in content space.
+        let mut item_y = 0.0f32;
+        for i in 0..self.hovered_index as usize {
+            item_y += ITEM_HEIGHT;
+            if self.items[i].separator_after {
+                item_y += SEPARATOR_HEIGHT;
+            }
+        }
+        let item_bottom = item_y + ITEM_HEIGHT;
+        let max_scroll = self.content_height - self.viewport_height;
+
+        // Scroll up if item is above viewport.
+        if item_y < self.scroll_offset {
+            self.scroll_offset = item_y.max(0.0);
+        }
+        // Scroll down if item is below viewport.
+        if item_bottom > self.scroll_offset + self.viewport_height {
+            self.scroll_offset = (item_bottom - self.viewport_height).min(max_scroll);
         }
     }
 

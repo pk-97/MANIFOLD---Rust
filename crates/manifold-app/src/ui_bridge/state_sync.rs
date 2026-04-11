@@ -1450,6 +1450,7 @@ fn gen_params_to_config(
                 name: sp_def.name.to_string(),
                 key: sp_def.key.to_string(),
                 value,
+                use_dropdown: sp_def.use_dropdown,
             }
         })
         .collect();

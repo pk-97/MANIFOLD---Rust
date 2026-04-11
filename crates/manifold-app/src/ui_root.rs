@@ -77,6 +77,7 @@ pub enum DropdownContext {
     EffectParamContext(InspectorTab, usize, usize, f32), // tab, fx_idx, param_idx, default_val
     GenParamContext(usize, f32), // param_idx, default_val
     MacroSlotContext(usize),  // macro_index (right-click on macro slider)
+    GenStringParamDropdown(usize), // string_param_index (dropdown selector)
 }
 
 /// Fine-grained tracking of what scroll-related state changed.
@@ -623,7 +624,7 @@ impl UIRoot {
     }
 
     /// Open a dropdown anchored below a trigger rect.
-    fn open_dropdown_at(
+    pub(crate) fn open_dropdown_at(
         &mut self,
         context: DropdownContext,
         items: Vec<DropdownItem>,
@@ -1491,6 +1492,10 @@ impl UIRoot {
                 } else {
                     None
                 }
+            }
+            DropdownContext::GenStringParamDropdown(sp_idx) => {
+                let label = self.dropdown.item_label(index)?;
+                Some(PanelAction::GenStringParamSelected(sp_idx, label.to_string()))
             }
             DropdownContext::MasterExitPath => {
                 // 0 = "After All FX" → led_exit_index -1

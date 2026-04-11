@@ -1602,8 +1602,47 @@ pub(super) fn dispatch_inspector(
         }
 
         // ── Generator card actions ─────────────────────────────────
-        PanelAction::GenStringParamClicked(_) => {
-            // Intercepted in app_render.rs to open text input.
+        PanelAction::GenStringParamClicked(_)
+        | PanelAction::GenStringParamDropdownClicked(_) => {
+            // Intercepted in app_render.rs to open text input / dropdown.
+            DispatchResult::handled()
+        }
+        PanelAction::GenStringParamSelected(sp_idx, selected_value) => {
+            // A dropdown string param was selected (e.g. font family).
+            // Commit it as a SetClipStringParamCommand.
+            let layer_idx = super::resolve_active_layer_index(active_layer, project);
+            if let Some(layer_idx) = layer_idx
+                && let Some(layer) = project.timeline.layers.get(layer_idx)
+            {
+                let gen_type = layer.generator_type();
+                if let Some(def) = manifold_core::generator_definition_registry::try_get(gen_type)
+                    && let Some(sp_def) = def.string_param_defs.get(*sp_idx)
+                {
+                    let key = sp_def.key.to_string();
+                    let new_value: Option<String> = if selected_value.is_empty() {
+                        None
+                    } else {
+                        Some(selected_value.clone())
+                    };
+
+                    // Find clip: selected clip on this layer, or first clip
+                    let clip = selection.primary_selected_clip_id.as_ref()
+                        .and_then(|sel_id| layer.clips.iter().find(|c| c.id == *sel_id))
+                        .or_else(|| layer.clips.first());
+                    if let Some(c) = clip {
+                        let old_value = c.string_params.as_ref()
+                            .and_then(|m| m.get(&key))
+                            .cloned();
+                        if old_value != new_value {
+                            let clip_id = c.id.clone();
+                            let cmd = manifold_editing::commands::clip::SetClipStringParamCommand::new(
+                                clip_id, key, old_value, new_value,
+                            );
+                            ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                        }
+                    }
+                }
+            }
             DispatchResult::handled()
         }
         PanelAction::GenCollapseToggle => {

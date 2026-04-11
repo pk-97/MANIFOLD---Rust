@@ -45,8 +45,10 @@ pub struct TextGenerator {
     // Dirty checking
     cached_text: String,
     cached_pixel_size: f32,
-    // Pending text from set_string_params (consumed in render)
+    cached_font_family: String,
+    // Pending values from set_string_params (consumed in render)
     pending_text: String,
+    pending_font_family: String,
 }
 
 impl TextGenerator {
@@ -63,7 +65,9 @@ impl TextGenerator {
             text_tex_dims: (0, 0),
             cached_text: String::new(),
             cached_pixel_size: 0.0,
+            cached_font_family: String::new(),
             pending_text: "HELLO".to_string(),
+            pending_font_family: String::new(),
         }
     }
 
@@ -98,10 +102,13 @@ impl Generator for TextGenerator {
     }
 
     fn set_string_params(&mut self, params: Option<&BTreeMap<String, String>>) {
-        if let Some(map) = params
-            && let Some(text) = map.get("text")
-        {
-            self.pending_text = text.clone();
+        if let Some(map) = params {
+            if let Some(text) = map.get("text") {
+                self.pending_text = text.clone();
+            }
+            if let Some(font) = map.get("fontFamily") {
+                self.pending_font_family = font.clone();
+            }
         }
     }
 
@@ -134,12 +141,18 @@ impl Generator for TextGenerator {
             1.0
         };
 
-        // Dirty check: re-rasterize only when text or pixel size changes
+        // Dirty check: re-rasterize only when text, font, or pixel size changes
         let text_changed = self.pending_text != self.cached_text;
         let size_changed = (font_size - self.cached_pixel_size).abs() > 0.5;
+        let font_changed = self.pending_font_family != self.cached_font_family;
 
-        if text_changed || size_changed {
-            match self.rasterizer.rasterize(&self.pending_text, font_size) {
+        if text_changed || size_changed || font_changed {
+            let font_family = if self.pending_font_family.is_empty() {
+                None
+            } else {
+                Some(self.pending_font_family.as_str())
+            };
+            match self.rasterizer.rasterize(&self.pending_text, font_size, font_family) {
                 Some(result) => {
                     self.ensure_texture(gpu.device, result.width, result.height);
                     if let Some(ref texture) = self.text_texture {
@@ -160,6 +173,7 @@ impl Generator for TextGenerator {
             }
             self.cached_text = self.pending_text.clone();
             self.cached_pixel_size = font_size;
+            self.cached_font_family = self.pending_font_family.clone();
         }
 
         // If no text texture, clear and return

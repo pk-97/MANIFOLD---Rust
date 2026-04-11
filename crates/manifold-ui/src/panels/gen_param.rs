@@ -50,6 +50,8 @@ pub struct GenStringParamInfo {
     pub name: String,
     pub key: String,
     pub value: String,
+    /// If true, clicking this param opens a dropdown instead of text input.
+    pub use_dropdown: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1020,9 +1022,12 @@ impl GenParamPanel {
             return vec![PanelAction::AbletonGenInvertToggle(pi)];
         }
 
-        // String param buttons → open text input
+        // String param buttons → open text input or dropdown
         for (si, &btn_id) in self.string_param_btn_ids.iter().enumerate() {
             if id == btn_id {
+                if self.string_param_info.get(si).is_some_and(|sp| sp.use_dropdown) {
+                    return vec![PanelAction::GenStringParamDropdownClicked(si)];
+                }
                 return vec![PanelAction::GenStringParamClicked(si)];
             }
         }

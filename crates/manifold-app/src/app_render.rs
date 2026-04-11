@@ -595,6 +595,36 @@ impl Application {
                     }
                     continue;
                 }
+                PanelAction::GenStringParamDropdownClicked(sp_idx) => {
+                    // Open a dropdown for a string param (e.g. font selector).
+                    if let Some(gp) = self.ui_root.inspector.gen_params()
+                        && let Some(sp) = gp.string_param(*sp_idx)
+                    {
+                        let key = sp.key.clone();
+                        if let Some(r) = gp.string_param_rect(&self.ui_root.tree, *sp_idx) {
+                            let items: Vec<manifold_ui::panels::dropdown::DropdownItem> =
+                                if key == "fontFamily" {
+                                    manifold_renderer::text_rasterizer::TextRasterizer::available_font_families()
+                                        .into_iter()
+                                        .map(|name| manifold_ui::panels::dropdown::DropdownItem::new(&name))
+                                        .collect()
+                                } else {
+                                    vec![]
+                                };
+                            if !items.is_empty() {
+                                let trigger = manifold_ui::node::Rect::new(
+                                    r.x, r.y, r.width, r.height,
+                                );
+                                self.ui_root.open_dropdown_at(
+                                    crate::ui_root::DropdownContext::GenStringParamDropdown(*sp_idx),
+                                    items,
+                                    trigger,
+                                );
+                            }
+                        }
+                    }
+                    continue;
+                }
                 PanelAction::MacroLabelRename(idx) => {
                     if let Some(slot) = self.local_project.settings.macro_bank.slots.get(*idx)
                         && let Some(r) = self

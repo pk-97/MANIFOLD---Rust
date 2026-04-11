@@ -226,6 +226,8 @@ pub fn dispatch(
         | PanelAction::GenEnvModeToggle(_)
         | PanelAction::GenEnvRandomJumpToggle(_)
         | PanelAction::GenStringParamClicked(_)
+        | PanelAction::GenStringParamDropdownClicked(_)
+        | PanelAction::GenStringParamSelected(..)
         | PanelAction::GenCollapseToggle
         | PanelAction::GenCardClicked
         | PanelAction::GenCardRightClicked
