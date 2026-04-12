@@ -50,7 +50,10 @@ fn plasma_diamond(uv: vec2<f32>, t: f32, cx: f32) -> f32 {
     let freq = 4.0 + cx * 6.0;
     let v1 = sin(uv.x * freq + t);
     let v2 = sin(uv.y * freq + t * 1.2);
-    let v3 = sin((abs(uv.x) + abs(uv.y)) * freq * 0.7 + t * 0.8);
+    // Smooth L1 distance — sqrt(x²+k) approximates abs(x) without derivative discontinuity
+    let k = 0.01;
+    let smooth_l1 = sqrt(uv.x * uv.x + k) + sqrt(uv.y * uv.y + k);
+    let v3 = sin(smooth_l1 * freq * 0.7 + t * 0.8);
     let v4 = sin((uv.x * uv.x + uv.y * uv.y) * freq * 0.3 + t * 1.5);
     return (v1 + v2 + v3 + v4) / 4.0;
 }
