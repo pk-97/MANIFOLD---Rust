@@ -52,6 +52,10 @@ const STATE_FORMAT: manifold_gpu::GpuTextureFormat = manifold_gpu::GpuTextureFor
 const BLUR_RADIUS: f32 = 12.0; // spec: filter size 12
 const BLUR_PRESHRINK: u32 = 4; // spec: pre-shrink 4
 
+/// Warmup iterations on fresh state so the feedback patterns are already
+/// interesting on first visible frame.
+const WARMUP_FRAMES: u64 = 120;
+
 fn param(ctx: &GeneratorContext, idx: usize, default: f32) -> f32 {
     if ctx.param_count > idx as u32 {
         ctx.params[idx]
@@ -276,38 +280,22 @@ impl OilyFluidGenerator {
     }
 }
 
-impl Generator for OilyFluidGenerator {
-    fn generator_type(&self) -> &GeneratorTypeId {
-        &GeneratorTypeId::OILY_FLUID
-    }
-
-    fn render(
+impl OilyFluidGenerator {
+    /// One simulation step: downsample → blur → velocity → color → swap.
+    /// Does NOT write to the output target (caller handles the render pass).
+    fn step_simulation(
         &mut self,
         gpu: &mut GpuEncoder,
-        target: &manifold_gpu::GpuTexture,
         ctx: &GeneratorContext,
-    ) -> f32 {
-        self.ensure_resources(gpu.device, ctx.width, ctx.height);
-
-        // Advance internal frame counter — decoupled from transport so the
-        // sim continues to simmer when playback is stopped.
+        speed: f32,
+        feedback: f32,
+        noise_injection: f32,
+        vel_damp: f32,
+        curl: f32,
+        vel_disp: f32,
+        col_disp: f32,
+    ) {
         self.internal_frame = self.internal_frame.wrapping_add(1);
-
-        // Read params (defaults match the TD reference exactly).
-        let speed = param(ctx, SPEED, 1.0);
-        let feedback = param(ctx, FEEDBACK, 0.998);
-        let noise_injection = param(ctx, NOISE_INJECT, 0.002);
-        let vel_damp = param(ctx, VEL_DAMP, 0.98);
-        let curl = param(ctx, CURL, 0.2);
-        let relief = param(ctx, RELIEF, 0.5);
-        let chroma = param(ctx, CHROMA, 2.0);
-        let contrast = param(ctx, CONTRAST, 1.4);
-        let hue_shift = param(ctx, HUE, 0.0);
-        let saturation = param(ctx, SATURATION, 1.0);
-        let brightness = param(ctx, BRIGHTNESS, 1.0);
-        let vel_disp = param(ctx, VEL_DISP, 1.0);
-        let col_disp = param(ctx, COL_DISP, 1.0);
-        let mode = param(ctx, MODE, 0.0);
 
         let fw = ctx.width as f32;
         let fh = ctx.height as f32;
@@ -432,7 +420,7 @@ impl Generator for OilyFluidGenerator {
             "OilyFluid Blur V",
         );
 
-        // ── 4. Velocity update: write to velocity_state.write() ──
+        // ── 4. Velocity update ──
         let vel_u = VelocityUniforms {
             width: fw,
             height: fh,
@@ -479,8 +467,7 @@ impl Generator for OilyFluidGenerator {
             "OilyFluid Velocity",
         );
 
-        // ── 5. Color feedback: write to color_state.write() ──
-        // Note: reads velocity_state.write() — the just-updated velocity.
+        // ── 5. Color feedback ──
         let noise_time = (self.internal_frame as f32) * 0.01 * speed;
         let col_u = ColorUniforms {
             width: fw,
@@ -524,7 +511,79 @@ impl Generator for OilyFluidGenerator {
             "OilyFluid Color",
         );
 
-        // ── 6. Render: write to target ──
+        // ── 6. Swap ping-pong states ──
+        self.color_state.as_mut().unwrap().swap();
+        self.velocity_state.as_mut().unwrap().swap();
+    }
+}
+
+impl Generator for OilyFluidGenerator {
+    fn generator_type(&self) -> &GeneratorTypeId {
+        &GeneratorTypeId::OILY_FLUID
+    }
+
+    fn render(
+        &mut self,
+        gpu: &mut GpuEncoder,
+        target: &manifold_gpu::GpuTexture,
+        ctx: &GeneratorContext,
+    ) -> f32 {
+        let fresh = self.color_state.is_none();
+        self.ensure_resources(gpu.device, ctx.width, ctx.height);
+
+        // Read params (defaults match the TD reference exactly).
+        let speed = param(ctx, SPEED, 1.0);
+        let feedback = param(ctx, FEEDBACK, 0.998);
+        let noise_injection = param(ctx, NOISE_INJECT, 0.002);
+        let vel_damp = param(ctx, VEL_DAMP, 0.98);
+        let curl = param(ctx, CURL, 0.2);
+        let relief = param(ctx, RELIEF, 0.5);
+        let chroma = param(ctx, CHROMA, 2.0);
+        let contrast = param(ctx, CONTRAST, 1.4);
+        let hue_shift = param(ctx, HUE, 0.0);
+        let saturation = param(ctx, SATURATION, 1.0);
+        let brightness = param(ctx, BRIGHTNESS, 1.0);
+        let vel_disp = param(ctx, VEL_DISP, 1.0);
+        let col_disp = param(ctx, COL_DISP, 1.0);
+        let mode = param(ctx, MODE, 0.0);
+
+        // On fresh state, run warmup iterations so the feedback patterns are
+        // already rich on the first visible frame.
+        if fresh {
+            for _ in 0..WARMUP_FRAMES {
+                self.step_simulation(
+                    gpu,
+                    ctx,
+                    speed,
+                    feedback,
+                    noise_injection,
+                    vel_damp,
+                    curl,
+                    vel_disp,
+                    col_disp,
+                );
+            }
+        }
+
+        // Normal simulation step.
+        self.step_simulation(
+            gpu,
+            ctx,
+            speed,
+            feedback,
+            noise_injection,
+            vel_damp,
+            curl,
+            vel_disp,
+            col_disp,
+        );
+
+        // ── Render pass: write to target ──
+        let fw = ctx.width as f32;
+        let fh = ctx.height as f32;
+        let color_state = self.color_state.as_ref().unwrap();
+        let velocity_state = self.velocity_state.as_ref().unwrap();
+
         let rnd_u = RenderUniforms {
             width: fw,
             height: fh,
@@ -548,11 +607,11 @@ impl Generator for OilyFluidGenerator {
                 },
                 manifold_gpu::GpuBinding::Texture {
                     binding: 1,
-                    texture: color_state.write_texture(),
+                    texture: color_state.read_texture(),
                 },
                 manifold_gpu::GpuBinding::Texture {
                     binding: 2,
-                    texture: velocity_state.write_texture(),
+                    texture: velocity_state.read_texture(),
                 },
                 manifold_gpu::GpuBinding::Sampler {
                     binding: 3,
@@ -566,10 +625,6 @@ impl Generator for OilyFluidGenerator {
             [ctx.width.div_ceil(16), ctx.height.div_ceil(16), 1],
             "OilyFluid Render",
         );
-
-        // ── 7. Swap ping-pong states ──
-        self.color_state.as_mut().unwrap().swap();
-        self.velocity_state.as_mut().unwrap().swap();
 
         ctx.anim_progress
     }
