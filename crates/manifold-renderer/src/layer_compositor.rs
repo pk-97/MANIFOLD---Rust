@@ -370,11 +370,14 @@ pub struct LayerCompositor {
     last_layer_buf_used: usize,
     /// How many effect_chains were actually used last frame.
     last_effect_chain_used: usize,
-    /// Scratch buffer for group compositing (lazy, transparent black init).
-    /// Reused across groups within a frame and across frames.
-    group_buf: Option<PingPong>,
-    /// Effect chain for group-level effects.
-    group_effect_chain: Option<EffectChain>,
+    /// Per-group scratch buffers (lazy, transparent black init).
+    /// One per active group — each group needs its own buffer because
+    /// LayerOutput raw pointers must remain valid until blend_layers.
+    group_bufs: Vec<PingPong>,
+    /// Per-group effect chains for group-level effects.
+    group_effect_chains: Vec<EffectChain>,
+    /// How many group_bufs / group_effect_chains were actually used last frame.
+    last_group_buf_used: usize,
 }
 
 impl LayerCompositor {
@@ -396,8 +399,9 @@ impl LayerCompositor {
             async_signal_base: 0,
             last_layer_buf_used: 0,
             last_effect_chain_used: 0,
-            group_buf: None,
-            group_effect_chain: None,
+            group_bufs: Vec::new(),
+            group_effect_chains: Vec::new(),
+            last_group_buf_used: 0,
         }
     }
 
@@ -445,6 +449,14 @@ impl LayerCompositor {
         let target_effect_chains = self.last_effect_chain_used.saturating_add(HEADROOM);
         if self.effect_chains.len() > target_effect_chains {
             self.effect_chains.truncate(target_effect_chains);
+        }
+
+        let target_group_bufs = self.last_group_buf_used.saturating_add(HEADROOM);
+        if self.group_bufs.len() > target_group_bufs {
+            self.group_bufs.truncate(target_group_bufs);
+        }
+        if self.group_effect_chains.len() > target_group_bufs {
+            self.group_effect_chains.truncate(target_group_bufs);
         }
     }
 
@@ -701,11 +713,13 @@ impl LayerCompositor {
     fn fold_groups(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) {
         // Early exit: no groups → nothing to fold
         if !frame.layers.iter().any(|l| l.is_group) {
+            self.last_group_buf_used = 0;
             return;
         }
 
         let width = self.main.width();
         let height = self.main.height();
+        let mut group_buf_idx = 0usize;
 
         // Process each group. Groups are processed in the order they appear in
         // frame.layers (which matches timeline order). Since outputs are sorted
@@ -736,17 +750,21 @@ impl LayerCompositor {
                 continue;
             }
 
-            // Ensure group buffer exists (lazy allocation)
-            if self.group_buf.is_none() {
-                self.group_buf = Some(PingPong::new(
+            // Each group gets its own PingPong — raw pointers from earlier
+            // groups must remain valid until blend_layers.
+            let gb_idx = group_buf_idx;
+            group_buf_idx += 1;
+            while self.group_bufs.len() <= gb_idx {
+                let idx = self.group_bufs.len();
+                self.group_bufs.push(PingPong::new(
                     gpu.device,
                     gpu.pool,
                     width,
                     height,
-                    "Group Scratch",
+                    &format!("Group Scratch {idx}"),
                 ));
             }
-            let group_buf = self.group_buf.as_mut().unwrap();
+            let group_buf = &mut self.group_bufs[gb_idx];
 
             // Clear to transparent
             group_buf.clear_source(gpu, false);
@@ -774,10 +792,11 @@ impl LayerCompositor {
             // Apply group-level effects (if any)
             let group_texture: *const GpuTexture =
                 if has_enabled_effects(group_desc.effects) {
-                    if self.group_effect_chain.is_none() {
-                        self.group_effect_chain = Some(EffectChain::new());
+                    // Each group gets its own effect chain too
+                    while self.group_effect_chains.len() <= gb_idx {
+                        self.group_effect_chains.push(EffectChain::new());
                     }
-                    let effect_chain = self.group_effect_chain.as_mut().unwrap();
+                    let effect_chain = &mut self.group_effect_chains[gb_idx];
                     let ctx = EffectContext {
                         time: frame.time,
                         beat: frame.beat,
@@ -791,6 +810,7 @@ impl LayerCompositor {
                         edge_stretch_width: 0.5625,
                         frame_count: frame.frame_count as i64,
                     };
+                    let group_buf = &self.group_bufs[gb_idx];
                     let result = Self::apply_effects(
                         effect_chain,
                         &mut self.effect_registry,
@@ -805,7 +825,7 @@ impl LayerCompositor {
                         t as *const _
                     })
                 } else {
-                    group_buf.source_texture()
+                    self.group_bufs[gb_idx].source_texture()
                 };
 
             // Replace child outputs with a single group output.
@@ -823,6 +843,8 @@ impl LayerCompositor {
                 self.layer_outputs_scratch.remove(pos);
             }
         }
+
+        self.last_group_buf_used = group_buf_idx;
     }
 
     /// Serial composite path: single encoder for all work.
@@ -1199,10 +1221,10 @@ impl Compositor for LayerCompositor {
         }
         self.effect_registry.resize_all(device, width, height);
         self.tonemap.resize(device, width, height);
-        if let Some(gb) = &mut self.group_buf {
+        for gb in &mut self.group_bufs {
             gb.resize(device, width, height);
         }
-        if let Some(ec) = &mut self.group_effect_chain {
+        for ec in &mut self.group_effect_chains {
             ec.resize(device, width, height);
         }
         // LED tap will be recreated at new size on next frame if needed.
