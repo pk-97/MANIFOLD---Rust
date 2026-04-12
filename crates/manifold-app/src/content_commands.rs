@@ -62,6 +62,11 @@ impl ContentThread {
                 {
                     self.sync_arbiter.suppress_next_transport = false;
                     self.sync_arbiter.set_manifold_owns_at(self.time_since_start);
+                    // Suppress MIDI Clock position sync during the play→seek
+                    // round-trip. Without this, stale MIDI Clock positions
+                    // arriving before Ableton processes our deferred seek
+                    // pull the playhead back to the wrong beat.
+                    self.sync_arbiter.set_user_seek_time(self.time_since_start);
                 }
                 // Align transport to active external beat source BEFORE
                 // the first sync pass. Port of C# PlaybackController.Play() lines 631-643.
