@@ -1721,6 +1721,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         self.output_presenter = None;
                     }
 
+                    // Unblock the content thread's vsync wait BEFORE sending
+                    // Shutdown. The content thread may be blocked in
+                    // GpuVsyncWaiter::wait() — shutdown() sets the flag and
+                    // notifies the condvar so it wakes up and can receive the
+                    // Shutdown command from the channel. Without this, join()
+                    // deadlocks: main thread waits for content thread, content
+                    // thread waits for a vsync signal that will never arrive.
+                    #[cfg(target_os = "macos")]
+                    if let Some(ref signal) = self.content_vsync_signal {
+                        signal.shutdown();
+                    }
+
                     // Shut down content thread
                     if let Some(tx) = self.content_tx.take() {
                         let _ = tx.send(ContentCommand::Shutdown);
