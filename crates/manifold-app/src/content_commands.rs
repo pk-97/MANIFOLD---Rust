@@ -736,6 +736,53 @@ impl ContentThread {
                 // No-op outside of export loop — cancel flag checked inside run_export.
             }
 
+            // ── Live Recording ──────────────────────────────────────
+            #[cfg(target_os = "macos")]
+            ContentCommand::StartLiveRecording(config) => {
+                if self.content_pipeline.recording_session.is_some() {
+                    log::warn!("[ContentThread] Already recording, ignoring StartLiveRecording");
+                    return false;
+                }
+                let device = self.content_pipeline.native_device();
+                let (w, h) = self.content_pipeline.output_dimensions();
+                let fps = self.engine.project().map_or(
+                    60.0,
+                    |p| p.settings.frame_rate,
+                );
+                if let Some(device) = device {
+                    match manifold_recording::LiveRecordingSession::new(
+                        *config, device, w, h, fps,
+                    ) {
+                        Ok(session) => {
+                            log::info!("[ContentThread] Live recording started");
+                            self.content_pipeline.recording_session = Some(session);
+                        }
+                        Err(e) => {
+                            log::error!("[ContentThread] Failed to start recording: {e}");
+                        }
+                    }
+                } else {
+                    log::error!("[ContentThread] No native device — cannot record");
+                }
+            }
+            #[cfg(target_os = "macos")]
+            ContentCommand::StopLiveRecording => {
+                if let Some(session) = self.content_pipeline.recording_session.take() {
+                    let result = session.stop();
+                    log::info!(
+                        "[ContentThread] Recording stopped: {} frames, {} dropped, {:.1}s -> {}",
+                        result.frames_recorded,
+                        result.frames_dropped,
+                        result.duration_seconds,
+                        result.output_path,
+                    );
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            ContentCommand::StartLiveRecording(_) | ContentCommand::StopLiveRecording => {
+                log::warn!("[ContentThread] Live recording not supported on this platform");
+            }
+
             // ── Lifecycle ────────────────────────────────────────────
             ContentCommand::PauseRendering => {
                 self.rendering_paused = true;

@@ -93,6 +93,12 @@ pub struct ContentState {
     /// Whether the LED pipeline is initialized and ready.
     pub led_initialized: bool,
 
+    // ── Live Recording ─────────────────────────────────────────────
+    /// Whether a live recording is currently in progress.
+    pub is_live_recording: bool,
+    /// Number of video frames dropped during recording (pool exhaustion).
+    pub recording_dropped_frames: u32,
+
     // ── Export ────────────────────────────────────────────────────
     /// Whether an export is currently in progress.
     pub is_exporting: bool,
@@ -283,6 +289,8 @@ impl Default for ContentState {
             vsync_actual_fps: 60.0,
             led_enabled: false,
             led_initialized: false,
+            is_live_recording: false,
+            recording_dropped_frames: 0,
             is_exporting: false,
             export_progress: 0.0,
             export_status: String::new(),

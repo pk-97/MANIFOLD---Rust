@@ -123,6 +123,10 @@ pub struct ContentPipeline {
     /// Linear sampler for preview downscaling.
     #[cfg(target_os = "macos")]
     preview_sampler: Option<manifold_gpu::GpuSampler>,
+    /// Active live recording session. `Some` while recording, `None` otherwise.
+    /// Managed by ContentThread via `set_recording_session` / `take_recording_session`.
+    #[cfg(target_os = "macos")]
+    pub(crate) recording_session: Option<manifold_recording::LiveRecordingSession>,
 }
 
 impl ContentPipeline {
@@ -172,6 +176,8 @@ impl ContentPipeline {
             preview_pipeline: None,
             #[cfg(target_os = "macos")]
             preview_sampler: None,
+            #[cfg(target_os = "macos")]
+            recording_session: None,
         }
     }
 
@@ -235,6 +241,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     #[cfg(target_os = "macos")]
     pub fn native_device_ptr(&self) -> Option<*mut std::ffi::c_void> {
         self.native_device.as_ref().map(|d| d.raw_device_ptr())
+    }
+
+    /// Current output resolution (post-upscale).
+    pub fn output_dimensions(&self) -> (u32, u32) {
+        (self.output_w, self.output_h)
     }
 
     /// Set the triple-buffered IOSurface shared textures (native GpuTexture) and bridge.
@@ -663,6 +674,35 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             }
         }
 
+        // ── Live recording capture ──────────────────────────────────
+        // Blit the upscaled output to a recording pool texture.
+        // Same command buffer as IOSurface — committed together, one GPU sync point.
+        let recording_fence = if !export_mode {
+            if let Some(ref mut session) = self.recording_session {
+                if let Some((tex_idx, pool_slot, fence)) = session.acquire_texture() {
+                    let (src, w, h) = if let Some(ref mfx) = self.metalfx {
+                        (&mfx.output.texture, self.output_w, self.output_h)
+                    } else if let Some(ref fsr) = self.fsr1 {
+                        (&fsr.output.texture, self.output_w, self.output_h)
+                    } else {
+                        let (cw, ch) = self.compositor.dimensions();
+                        (self.compositor.output_texture(), cw, ch)
+                    };
+                    let dst = session.pool_texture(tex_idx);
+                    native_enc.copy_texture_to_texture(src, dst, w, h, 1);
+                    session.submit_frame(pool_slot, fence.clone());
+                    Some(fence)
+                } else {
+                    session.record_dropped_frame();
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         // Register GPU completion handler to publish the front buffer the instant
         // the GPU finishes — decoupled from the content thread's sleep/wake cycle.
         // This eliminates 3-1 cadence judder on high-refresh displays (e.g. 120Hz).
@@ -676,6 +716,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 }
                 if let Some(ref b) = preview {
                     b.publish_front(write_idx);
+                }
+                // Signal recording thread that the GPU blit is complete.
+                if let Some(ref fence) = recording_fence {
+                    fence.store(true, std::sync::atomic::Ordering::Release);
                 }
             });
         }

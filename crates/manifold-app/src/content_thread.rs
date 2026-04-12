@@ -821,6 +821,16 @@ impl ContentThread {
                 vsync_actual_fps: self.timer.actual_fps() as f32,
                 led_enabled: self.led_controller.as_ref().is_some_and(|c| c.is_enabled()),
                 led_initialized: self.led_controller.as_ref().is_some_and(|c| c.is_initialized()),
+                #[cfg(target_os = "macos")]
+                is_live_recording: self.content_pipeline.recording_session.is_some(),
+                #[cfg(not(target_os = "macos"))]
+                is_live_recording: false,
+                #[cfg(target_os = "macos")]
+                recording_dropped_frames: self.content_pipeline.recording_session
+                    .as_ref()
+                    .map_or(0, |s| s.frames_dropped()),
+                #[cfg(not(target_os = "macos"))]
+                recording_dropped_frames: 0,
                 is_exporting: false,
                 export_progress: 0.0,
                 export_status: String::new(),

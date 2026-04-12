@@ -1,0 +1,19 @@
+[package]
+name = "manifold-recording"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+log = { workspace = true }
+crossbeam-channel = "0.5"
+ringbuf = "0.4"
+manifold-audio = { path = "../manifold-audio" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+manifold-gpu = { path = "../manifold-gpu" }
+
+[build-dependencies]
+cc = "1"
+
+[lints]
+workspace = true

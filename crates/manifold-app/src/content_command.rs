@@ -198,6 +198,12 @@ pub enum ContentCommand {
     /// Cancel in-progress export.
     CancelExport,
 
+    // ── Live Recording ───────────────────────────────────────────
+    /// Start live recording. Captures output frames + optional audio.
+    StartLiveRecording(Box<manifold_recording::LiveRecordingConfig>),
+    /// Stop live recording and finalize the output file.
+    StopLiveRecording,
+
     // ── Shutdown ──────────────────────────────────────────────────
     Shutdown,
 }
