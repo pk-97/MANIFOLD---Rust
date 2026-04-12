@@ -2,6 +2,7 @@ pub mod basic_shapes_snap;
 pub mod black_hole;
 pub mod compute_common;
 pub mod concentric_tunnel;
+pub mod digital_plants;
 pub mod duocylinder;
 pub mod fluid_sim_core;
 pub mod fluid_simulation;

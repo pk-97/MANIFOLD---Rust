@@ -567,3 +567,33 @@ inventory::submit! {
         string_params: &[("Text", "text", "HELLO", false), ("Font", "fontFamily", "", true)],
     }
 }
+
+// ── Digital Plants ────────────────────────────────────────────────────
+
+inventory::submit! {
+    GeneratorMetadata {
+        id: GeneratorTypeId::DIGITAL_PLANTS,
+        display_name: "Digital Plants",
+        is_line_based: false,
+        available: true,
+        osc_prefix: "digitalPlants",
+        legacy_discriminant: None,
+        params: &[
+            ParamSpec::continuous("Noise Scale", 0.1, 5.0, 1.5, "F2", "noiseScale"),
+            ParamSpec::continuous("Anim Speed", 0.0, 3.0, 0.5, "F2", "animSpeed"),
+            ParamSpec::continuous("Morph", 0.0, 1.0, 0.0, "F2", "morph"),
+            ParamSpec::continuous("Base Radius", 0.1, 2.0, 0.6, "F2", "baseRadius"),
+            ParamSpec::continuous("Height", 0.5, 4.0, 2.0, "F2", "height"),
+            ParamSpec::continuous("Taper", 0.0, 3.0, 1.5, "F2", "taper"),
+            ParamSpec::continuous("Torus Radius", 0.5, 3.0, 1.2, "F2", "torusRadius"),
+            ParamSpec::continuous("Petal Amp", 0.0, 2.0, 0.8, "F2", "petalAmp"),
+            ParamSpec::continuous("Rot Speed", 0.0, 3.0, 0.3, "F2", "rotSpeed"),
+            ParamSpec::continuous("Box Scale", 0.005, 0.08, 0.025, "F3", "boxScale"),
+            ParamSpec::continuous("Cam Dist", 0.5, 10.0, 3.5, "F1", "camDist"),
+            ParamSpec::continuous("Cam Orbit", -180.0, 180.0, 0.0, "F0", "camOrbit"),
+            ParamSpec::continuous("Cam Tilt", -90.0, 90.0, 15.0, "F0", "camTilt"),
+            ParamSpec::continuous("Cam FOV", 20.0, 120.0, 50.0, "F0", "camFov"),
+        ],
+        string_params: &[],
+    }
+}

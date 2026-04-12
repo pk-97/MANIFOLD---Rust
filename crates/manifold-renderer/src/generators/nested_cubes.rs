@@ -8,7 +8,7 @@
 
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
-use crate::generators::mesh_pipeline::{look_at_rh, mat4_mul};
+use crate::generators::mesh_pipeline::{look_at_rh, mat4_mul, ortho_rh};
 use crate::generators::registration::GeneratorFactory;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::GeneratorTypeId;
@@ -267,7 +267,7 @@ impl Generator for NestedCubesGenerator {
             [0.0, 0.0, 0.0],
             [0.0, 1.0, 0.0],
         );
-        let proj = ortho_rh(half_w, half_h, 0.1, 20.0);
+        let proj = ortho_rh(-half_w, half_w, -half_h, half_h, 0.1, 20.0);
         let view_proj = mat4_mul(proj, view);
 
         // Build uniforms
@@ -347,16 +347,3 @@ impl Generator for NestedCubesGenerator {
     }
 }
 
-// ─── Orthographic projection (right-handed, depth [0,1] for Metal) ──
-
-fn ortho_rh(half_width: f32, half_height: f32, z_near: f32, z_far: f32) -> [[f32; 4]; 4] {
-    let inv_w = 1.0 / half_width;
-    let inv_h = 1.0 / half_height;
-    let inv_d = 1.0 / (z_near - z_far);
-    [
-        [inv_w, 0.0, 0.0, 0.0],
-        [0.0, inv_h, 0.0, 0.0],
-        [0.0, 0.0, inv_d, 0.0],
-        [0.0, 0.0, z_near * inv_d, 1.0],
-    ]
-}

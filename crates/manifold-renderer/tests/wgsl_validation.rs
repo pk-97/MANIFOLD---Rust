@@ -28,7 +28,12 @@ fn find_wgsl_files(dir: &std::path::Path) -> Vec<PathBuf> {
 
 /// Files that are partials (no entry points, included by other shaders).
 /// These won't validate standalone — skip them.
-const PARTIAL_SHADERS: &[&str] = &["particle_common.wgsl", "oily_fluid.wgsl"];
+const PARTIAL_SHADERS: &[&str] = &[
+    "particle_common.wgsl",
+    "oily_fluid.wgsl",
+    "noise_common.wgsl",
+    "digital_plants_compute.wgsl",
+];
 
 fn is_partial(path: &std::path::Path) -> bool {
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
@@ -99,6 +104,26 @@ fn all_wgsl_shaders_validate() {
     );
 
     eprintln!("Validated {validated} shaders, skipped {skipped} partials");
+}
+
+/// Validates the composed (noise_common + digital_plants_compute) source as
+/// dispatched at runtime. Skipped by the standalone sweep because it depends on
+/// noise_common for `simplex3d` / `fbm` / `hash_u32`.
+#[test]
+fn digital_plants_compute_composed_validates() {
+    let noise = include_str!("../src/generators/shaders/noise_common.wgsl");
+    let compute = include_str!("../src/generators/shaders/digital_plants_compute.wgsl");
+    let composed = format!("{noise}\n{compute}");
+
+    let module = naga::front::wgsl::parse_str(&composed)
+        .unwrap_or_else(|e| panic!("digital_plants_compute composed parse error: {e}"));
+    let mut validator = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    );
+    validator
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("digital_plants_compute composed validation error: {e}"));
 }
 
 /// Validates the composed (particle_common + oily_fluid) source as dispatched

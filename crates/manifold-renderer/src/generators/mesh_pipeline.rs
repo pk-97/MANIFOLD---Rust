@@ -238,3 +238,28 @@ fn normalize3(v: [f32; 3]) -> [f32; 3] {
     }
     [v[0] / len, v[1] / len, v[2] / len]
 }
+
+/// Build an orthographic projection matrix (right-handed, depth [0,1] for Metal).
+pub fn ortho_rh(
+    left: f32,
+    right: f32,
+    bottom: f32,
+    top: f32,
+    z_near: f32,
+    z_far: f32,
+) -> [[f32; 4]; 4] {
+    let rml = right - left;
+    let tmb = top - bottom;
+    let fmn = z_far - z_near;
+    [
+        [2.0 / rml, 0.0, 0.0, 0.0],
+        [0.0, 2.0 / tmb, 0.0, 0.0],
+        [0.0, 0.0, -1.0 / fmn, 0.0],
+        [
+            -(right + left) / rml,
+            -(top + bottom) / tmb,
+            -z_near / fmn,
+            1.0,
+        ],
+    ]
+}

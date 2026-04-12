@@ -1,10 +1,10 @@
-//! Galactic Rock — procedural spiral rock formation generator.
+//! Digital Plants — procedural plant topology generator.
 //!
 //! Pipeline:
-//!   1. Compute: 100K particle simulation (distribute → noise → twist → FBM → rotation)
-//!   2. Shadow: depth-only render from each light's perspective (2x)
-//!   3. Render: instanced cubes with PBR + PCF shadow sampling
-//!   4. Blur: luma-masked separable Gaussian for macro DOF
+//!   1. Compute: 160K instance simulation (UV → noise → cylinder → torus → morph)
+//!   2. Shadow: depth-only render from light perspective
+//!   3. Render: instanced cubes with cel shading + PCF shadow sampling
+//!   4. Blur: optional luma-masked separable Gaussian
 
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
@@ -16,30 +16,31 @@ use crate::generators::registration::GeneratorFactory;
 
 inventory::submit! {
     GeneratorFactory {
-        id: GeneratorTypeId::GALACTIC_ROCK,
-        create: |device| Box::new(GalacticRockGenerator::new(device)),
+        id: GeneratorTypeId::DIGITAL_PLANTS,
+        create: |device| Box::new(DigitalPlantsGenerator::new(device)),
     }
 }
 
-const INSTANCE_COUNT: u32 = 100_000;
+const GRID_SIZE: u32 = 400;
+const INSTANCE_COUNT: u32 = GRID_SIZE * GRID_SIZE; // 160,000
 const INSTANCE_STRIDE: u64 = 32; // 2 × vec4<f32>
 const SHADOW_MAP_SIZE: u32 = 2048;
 
-// Parameter indices (must match generator_definition_registry order)
-const P_SPEED: usize = 0;
-const P_WAVE_AMP: usize = 1;
-const P_WAVE_FREQ: usize = 2;
-const P_TWIST: usize = 3;
-const P_GRAIN: usize = 4;
-const P_ROUGHNESS: usize = 5;
-const P_LIGHT_INT: usize = 6;
-const P_BLUR: usize = 7;
-const P_CAM_DIST: usize = 8;
-const P_CAM_ORBIT: usize = 9;
-const P_CAM_TILT: usize = 10;
-const P_CAM_FOV: usize = 11;
-const P_LOOK_Y: usize = 12;
-const P_SCALE: usize = 13;
+// Parameter indices (must match generator_metadata_submissions order)
+const P_NOISE_SCALE: usize = 0;
+const P_ANIM_SPEED: usize = 1;
+const P_MORPH: usize = 2;
+const P_BASE_RADIUS: usize = 3;
+const P_HEIGHT: usize = 4;
+const P_TAPER: usize = 5;
+const P_TORUS_RADIUS: usize = 6;
+const P_PETAL_AMP: usize = 7;
+const P_ROT_SPEED: usize = 8;
+const P_BOX_SCALE: usize = 9;
+const P_CAM_DIST: usize = 10;
+const P_CAM_ORBIT: usize = 11;
+const P_CAM_TILT: usize = 12;
+const P_CAM_FOV: usize = 13;
 
 // ─── Uniform structs (must match WGSL exactly, 16-byte aligned) ─────
 
@@ -48,12 +49,16 @@ const P_SCALE: usize = 13;
 struct ComputeUniforms {
     time: f32,
     instance_count: u32,
-    speed: f32,
-    wave_amp: f32,
-    wave_freq: f32,
-    twist_amount: f32,
-    grain_amp: f32,
-    _pad: f32,
+    noise_scale: f32,
+    anim_speed: f32,
+    morph: f32,
+    base_radius: f32,
+    height_scale: f32,
+    taper: f32,
+    torus_radius: f32,
+    petal_amp: f32,
+    rot_speed: f32,
+    box_scale: f32,
 }
 
 #[repr(C)]
@@ -61,26 +66,21 @@ struct ComputeUniforms {
 struct RenderUniforms {
     view_proj: [[f32; 4]; 4],
     camera_pos: [f32; 4],
-    light0_pos: [f32; 4],
-    light1_pos: [f32; 4],
-    light0_color: [f32; 4],
-    light1_color: [f32; 4],
-    ambient_color: [f32; 4],
-    material: [f32; 4],
+    light_pos: [f32; 4],
+    light_color: [f32; 4],
+    shadow_info: [f32; 4],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct ShadowUniforms {
     light_view_proj: [[f32; 4]; 4],
-    _pad: [[f32; 4]; 7],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct ShadowMatrices {
-    light0_vp: [[f32; 4]; 4],
-    light1_vp: [[f32; 4]; 4],
+struct ShadowMatrix {
+    light_vp: [[f32; 4]; 4],
 }
 
 #[repr(C)]
@@ -94,7 +94,7 @@ struct BlurUniforms {
 
 // ─── Generator ──────────────────────────────────────────────────────
 
-pub struct GalacticRockGenerator {
+pub struct DigitalPlantsGenerator {
     // Compute
     compute_pipeline: manifold_gpu::GpuComputePipeline,
     instance_buf: manifold_gpu::GpuBuffer,
@@ -102,8 +102,7 @@ pub struct GalacticRockGenerator {
     // Shadow
     shadow_pipeline: manifold_gpu::GpuRenderPipeline,
     shadow_depth_stencil: manifold_gpu::GpuDepthStencilState,
-    shadow_map_0: manifold_gpu::GpuTexture,
-    shadow_map_1: manifold_gpu::GpuTexture,
+    shadow_map: manifold_gpu::GpuTexture,
     shadow_color_dummy: manifold_gpu::GpuTexture,
 
     // Render
@@ -121,13 +120,20 @@ pub struct GalacticRockGenerator {
     depth_height: u32,
 }
 
-impl GalacticRockGenerator {
+const NOISE_COMMON: &str = include_str!("shaders/noise_common.wgsl");
+
+impl DigitalPlantsGenerator {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
-        // ── Compute pipeline ──
+        // ── Compute pipeline (noise_common prepended) ──
+        let compute_source = format!(
+            "{}\n{}",
+            NOISE_COMMON,
+            include_str!("shaders/digital_plants_compute.wgsl"),
+        );
         let compute_pipeline = device.create_compute_pipeline(
-            include_str!("shaders/galactic_rock_compute.wgsl"),
+            &compute_source,
             "cs_main",
-            "GalacticRock Compute",
+            "DigitalPlants Compute",
         );
 
         let instance_buf =
@@ -135,14 +141,14 @@ impl GalacticRockGenerator {
 
         // ── Shadow pipeline ──
         let shadow_pipeline = device.create_render_pipeline_depth(
-            include_str!("shaders/galactic_rock_shadow.wgsl"),
+            include_str!("shaders/digital_plants_shadow.wgsl"),
             "vs_shadow",
             "fs_shadow",
             manifold_gpu::GpuTextureFormat::Rgba16Float,
             manifold_gpu::GpuTextureFormat::Depth32Float,
             None,
             1,
-            "GalacticRock Shadow",
+            "DigitalPlants Shadow",
         );
 
         let shadow_depth_stencil =
@@ -151,7 +157,7 @@ impl GalacticRockGenerator {
                 write_enabled: true,
             });
 
-        let shadow_map_0 = device.create_texture(&manifold_gpu::GpuTextureDesc {
+        let shadow_map = device.create_texture(&manifold_gpu::GpuTextureDesc {
             width: SHADOW_MAP_SIZE,
             height: SHADOW_MAP_SIZE,
             depth: 1,
@@ -159,22 +165,10 @@ impl GalacticRockGenerator {
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
                 | manifold_gpu::GpuTextureUsage::SHADER_READ,
-            label: "GalacticRock Shadow0",
+            label: "DigitalPlants Shadow",
             mip_levels: 1,
         });
-        let shadow_map_1 = device.create_texture(&manifold_gpu::GpuTextureDesc {
-            width: SHADOW_MAP_SIZE,
-            height: SHADOW_MAP_SIZE,
-            depth: 1,
-            format: manifold_gpu::GpuTextureFormat::Depth32Float,
-            dimension: manifold_gpu::GpuTextureDimension::D2,
-            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
-                | manifold_gpu::GpuTextureUsage::SHADER_READ,
-            label: "GalacticRock Shadow1",
-            mip_levels: 1,
-        });
-        // Color target for shadow passes — must match shadow map dimensions.
-        // Color output is discarded (DontCare store) but Metal requires matching sizes.
+
         let shadow_color_dummy = device.create_texture(&manifold_gpu::GpuTextureDesc {
             width: SHADOW_MAP_SIZE,
             height: SHADOW_MAP_SIZE,
@@ -182,20 +176,20 @@ impl GalacticRockGenerator {
             format: manifold_gpu::GpuTextureFormat::Rgba16Float,
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET,
-            label: "GalacticRock ShadowColor",
+            label: "DigitalPlants ShadowColor",
             mip_levels: 1,
         });
 
         // ── Main render pipeline ──
         let render_pipeline = device.create_render_pipeline_depth(
-            include_str!("shaders/galactic_rock_render.wgsl"),
+            include_str!("shaders/digital_plants_render.wgsl"),
             "vs_main",
             "fs_main",
             manifold_gpu::GpuTextureFormat::Rgba16Float,
             manifold_gpu::GpuTextureFormat::Depth32Float,
             None,
             1,
-            "GalacticRock Render",
+            "DigitalPlants Render",
         );
 
         let render_depth_stencil =
@@ -214,11 +208,11 @@ impl GalacticRockGenerator {
             compare: Some(manifold_gpu::GpuCompareFunction::LessEqual),
         });
 
-        // ── Blur pipeline ──
+        // ── Blur pipeline (reuse galactic_rock_blur.wgsl) ──
         let blur_pipeline = device.create_compute_pipeline(
             include_str!("shaders/galactic_rock_blur.wgsl"),
             "cs_main",
-            "GalacticRock Blur",
+            "DigitalPlants Blur",
         );
 
         Self {
@@ -226,8 +220,7 @@ impl GalacticRockGenerator {
             instance_buf,
             shadow_pipeline,
             shadow_depth_stencil,
-            shadow_map_0,
-            shadow_map_1,
+            shadow_map,
             shadow_color_dummy,
             render_pipeline,
             render_depth_stencil,
@@ -246,7 +239,9 @@ impl GalacticRockGenerator {
         width: u32,
         height: u32,
     ) {
-        if self.depth_width == width && self.depth_height == height && self.depth_texture.is_some()
+        if self.depth_width == width
+            && self.depth_height == height
+            && self.depth_texture.is_some()
         {
             return;
         }
@@ -257,7 +252,7 @@ impl GalacticRockGenerator {
             format: manifold_gpu::GpuTextureFormat::Depth32Float,
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET,
-            label: "GalacticRock Depth",
+            label: "DigitalPlants Depth",
             mip_levels: 1,
         }));
         self.blur_temp = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
@@ -268,53 +263,17 @@ impl GalacticRockGenerator {
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::SHADER_READ
                 | manifold_gpu::GpuTextureUsage::SHADER_WRITE,
-            label: "GalacticRock BlurTemp",
+            label: "DigitalPlants BlurTemp",
             mip_levels: 1,
         }));
         self.depth_width = width;
         self.depth_height = height;
     }
-
-    /// Render shadow map from a light's perspective.
-    fn render_shadow_pass(
-        &self,
-        gpu: &mut manifold_gpu::GpuEncoder,
-        shadow_map: &manifold_gpu::GpuTexture,
-        light_vp: [[f32; 4]; 4],
-        label: &str,
-    ) {
-        let uniforms = ShadowUniforms {
-            light_view_proj: light_vp,
-            _pad: [[0.0; 4]; 7],
-        };
-
-        gpu.draw_instanced_depth(
-            &self.shadow_pipeline,
-            &self.shadow_color_dummy,
-            shadow_map,
-            &self.shadow_depth_stencil,
-            &[
-                manifold_gpu::GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                manifold_gpu::GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: &self.instance_buf,
-                    offset: 0,
-                },
-            ],
-            36,
-            INSTANCE_COUNT,
-            manifold_gpu::GpuLoadAction::Clear,
-            label,
-        );
-    }
 }
 
-impl Generator for GalacticRockGenerator {
+impl Generator for DigitalPlantsGenerator {
     fn generator_type(&self) -> &GeneratorTypeId {
-        &GeneratorTypeId::GALACTIC_ROCK
+        &GeneratorTypeId::DIGITAL_PLANTS
     }
 
     fn render(
@@ -327,31 +286,35 @@ impl Generator for GalacticRockGenerator {
         let height = ctx.height;
         self.ensure_depth_texture(gpu.device, width, height);
 
-        let speed = ctx.params[P_SPEED];
-        let wave_amp = ctx.params[P_WAVE_AMP];
-        let wave_freq = ctx.params[P_WAVE_FREQ];
-        let twist = ctx.params[P_TWIST];
-        let grain = ctx.params[P_GRAIN];
-        let roughness = ctx.params[P_ROUGHNESS];
-        let light_int = ctx.params[P_LIGHT_INT];
-        let blur_radius = ctx.params[P_BLUR];
+        let noise_scale = ctx.params[P_NOISE_SCALE];
+        let anim_speed = ctx.params[P_ANIM_SPEED];
+        let morph = ctx.params[P_MORPH];
+        let base_radius = ctx.params[P_BASE_RADIUS];
+        let height_scale = ctx.params[P_HEIGHT];
+        let taper = ctx.params[P_TAPER];
+        let torus_radius = ctx.params[P_TORUS_RADIUS];
+        let petal_amp = ctx.params[P_PETAL_AMP];
+        let rot_speed = ctx.params[P_ROT_SPEED];
+        let box_scale = ctx.params[P_BOX_SCALE];
         let cam_dist = ctx.params[P_CAM_DIST].max(0.05);
         let cam_orbit = ctx.params[P_CAM_ORBIT].to_radians();
         let cam_tilt = ctx.params[P_CAM_TILT].to_radians();
         let cam_fov = ctx.params[P_CAM_FOV].to_radians().max(0.1);
-        let look_y = ctx.params[P_LOOK_Y];
-        let scale = ctx.params[P_SCALE].max(0.01);
 
-        // ── Phase 1: Compute particle simulation ──
+        // ── Phase 1: Compute instance simulation ──
         let compute_uniforms = ComputeUniforms {
             time: ctx.time as f32,
             instance_count: INSTANCE_COUNT,
-            speed,
-            wave_amp,
-            wave_freq,
-            twist_amount: twist,
-            grain_amp: grain,
-            _pad: 0.0,
+            noise_scale,
+            anim_speed,
+            morph,
+            base_radius,
+            height_scale,
+            taper,
+            torus_radius,
+            petal_amp,
+            rot_speed,
+            box_scale,
         };
 
         let wg = INSTANCE_COUNT.div_ceil(256);
@@ -369,16 +332,14 @@ impl Generator for GalacticRockGenerator {
                 },
             ],
             [wg, 1, 1],
-            "GalacticRock Compute",
+            "DigitalPlants Compute",
         );
 
         // ── Camera setup (orbit controls) ──
-        // Orbit: horizontal angle around Y axis. Tilt: vertical angle.
-        // Camera orbits around the look-at target at the given distance.
-        let target_pos = [0.0f32, look_y, 0.0];
+        let target_pos = [0.0f32, 0.0, 0.0];
         let eye = [
             cam_dist * cam_tilt.cos() * cam_orbit.sin(),
-            cam_dist * cam_tilt.sin() + look_y,
+            cam_dist * cam_tilt.sin(),
             cam_dist * cam_tilt.cos() * cam_orbit.cos(),
         ];
         let up = [0.0f32, 1.0, 0.0];
@@ -387,50 +348,61 @@ impl Generator for GalacticRockGenerator {
         let proj = mesh_pipeline::perspective_rh(cam_fov, aspect, 0.005, 50.0);
         let view_proj = mesh_pipeline::mat4_mul(proj, view);
 
-        // ── Light positions (opposing high angles, static) ──
-        // Two point lights at steep angles for maximum shadow depth in crevices.
-        let light_radius = 3.0;
-        let light_height = 2.5;
-        let light0_pos = [
-            light_radius * 0.7,
-            light_height,
-            light_radius * 0.7,
-        ];
-        let light1_pos = [
-            -light_radius * 0.7,
-            -light_height * 0.4,
-            -light_radius * 0.7,
-        ];
+        // ── Light position (single high-angle light) ──
+        let light_radius = 4.0;
+        let light_height = 3.0;
+        let light_pos = [light_radius * 0.7, light_height, light_radius * 0.7];
 
-        // ── Phase 2: Shadow passes ──
-        let shadow_extent = 3.0 * scale;
-        let light0_view = mesh_pipeline::look_at_rh(light0_pos, target_pos, up);
-        let light0_proj = mesh_pipeline::ortho_rh(-shadow_extent, shadow_extent, -shadow_extent, shadow_extent, 0.1, 50.0);
-        let light0_vp = mesh_pipeline::mat4_mul(light0_proj, light0_view);
+        // ── Phase 2: Shadow pass ──
+        let shadow_extent = 4.0;
+        let light_view =
+            mesh_pipeline::look_at_rh(light_pos, target_pos, up);
+        let light_proj = mesh_pipeline::ortho_rh(
+            -shadow_extent,
+            shadow_extent,
+            -shadow_extent,
+            shadow_extent,
+            0.1,
+            50.0,
+        );
+        let light_vp = mesh_pipeline::mat4_mul(light_proj, light_view);
 
-        let light1_view = mesh_pipeline::look_at_rh(light1_pos, target_pos, up);
-        let light1_proj = mesh_pipeline::ortho_rh(-shadow_extent, shadow_extent, -shadow_extent, shadow_extent, 0.1, 50.0);
-        let light1_vp = mesh_pipeline::mat4_mul(light1_proj, light1_view);
+        let shadow_uniforms = ShadowUniforms {
+            light_view_proj: light_vp,
+        };
 
-        self.render_shadow_pass(gpu.native_enc, &self.shadow_map_0, light0_vp, "Shadow0");
-        self.render_shadow_pass(gpu.native_enc, &self.shadow_map_1, light1_vp, "Shadow1");
+        gpu.native_enc.draw_instanced_depth(
+            &self.shadow_pipeline,
+            &self.shadow_color_dummy,
+            &self.shadow_map,
+            &self.shadow_depth_stencil,
+            &[
+                manifold_gpu::GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&shadow_uniforms),
+                },
+                manifold_gpu::GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &self.instance_buf,
+                    offset: 0,
+                },
+            ],
+            36,
+            INSTANCE_COUNT,
+            manifold_gpu::GpuLoadAction::Clear,
+            "DigitalPlants Shadow",
+        );
 
         // ── Phase 3: Main render ──
         let render_uniforms = RenderUniforms {
             view_proj,
             camera_pos: [eye[0], eye[1], eye[2], 0.0],
-            light0_pos: [light0_pos[0], light0_pos[1], light0_pos[2], 0.0],
-            light1_pos: [light1_pos[0], light1_pos[1], light1_pos[2], 0.0],
-            light0_color: [1.0, 0.95, 0.9, light_int],
-            light1_color: [0.9, 0.93, 1.0, light_int],
-            ambient_color: [0.5, 0.5, 0.5, 0.02],
-            material: [0.0, roughness, SHADOW_MAP_SIZE as f32, 0.0],
+            light_pos: [light_pos[0], light_pos[1], light_pos[2], 0.0],
+            light_color: [1.0, 0.95, 0.9, 2.0], // warm white, intensity 2.0
+            shadow_info: [SHADOW_MAP_SIZE as f32, 0.0, 0.0, 0.0],
         };
 
-        let shadow_mats = ShadowMatrices {
-            light0_vp,
-            light1_vp,
-        };
+        let shadow_mat = ShadowMatrix { light_vp };
 
         let depth_tex = self.depth_texture.as_ref().unwrap();
 
@@ -451,40 +423,37 @@ impl Generator for GalacticRockGenerator {
                 },
                 manifold_gpu::GpuBinding::Bytes {
                     binding: 2,
-                    data: bytemuck::bytes_of(&shadow_mats),
+                    data: bytemuck::bytes_of(&shadow_mat),
                 },
                 manifold_gpu::GpuBinding::Texture {
                     binding: 3,
-                    texture: &self.shadow_map_0,
-                },
-                manifold_gpu::GpuBinding::Texture {
-                    binding: 4,
-                    texture: &self.shadow_map_1,
+                    texture: &self.shadow_map,
                 },
                 manifold_gpu::GpuBinding::Sampler {
-                    binding: 5,
+                    binding: 4,
                     sampler: &self.shadow_sampler,
                 },
             ],
             36,
             INSTANCE_COUNT,
             manifold_gpu::GpuLoadAction::Clear,
-            "GalacticRock Render",
+            "DigitalPlants Render",
         );
 
-        // ── Phase 4: Luma blur (2-pass separable) ──
+        // ── Phase 4: Optional blur ──
+        let blur_radius = 3.0; // subtle fixed blur for organic softness
         if blur_radius > 0.5 {
             let blur_temp = self.blur_temp.as_ref().unwrap();
+            let wg_x = width.div_ceil(16);
+            let wg_y = height.div_ceil(16);
 
-            // Pass 1: horizontal blur (target → blur_temp)
+            // Pass 1: horizontal
             let blur_h = BlurUniforms {
                 max_radius: blur_radius,
                 direction: 0.0,
                 width: width as f32,
                 height: height as f32,
             };
-            let wg_x = width.div_ceil(16);
-            let wg_y = height.div_ceil(16);
             gpu.native_enc.dispatch_compute(
                 &self.blur_pipeline,
                 &[
@@ -502,10 +471,10 @@ impl Generator for GalacticRockGenerator {
                     },
                 ],
                 [wg_x, wg_y, 1],
-                "GalacticRock BlurH",
+                "DigitalPlants BlurH",
             );
 
-            // Pass 2: vertical blur (blur_temp → target)
+            // Pass 2: vertical
             let blur_v = BlurUniforms {
                 max_radius: blur_radius,
                 direction: 1.0,
@@ -529,7 +498,7 @@ impl Generator for GalacticRockGenerator {
                     },
                 ],
                 [wg_x, wg_y, 1],
-                "GalacticRock BlurV",
+                "DigitalPlants BlurV",
             );
         }
 
@@ -540,4 +509,3 @@ impl Generator for GalacticRockGenerator {
         self.ensure_depth_texture(device, width, height);
     }
 }
-

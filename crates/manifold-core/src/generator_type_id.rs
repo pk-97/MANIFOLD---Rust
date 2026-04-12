@@ -73,6 +73,7 @@ impl GeneratorTypeId {
     pub const STAR_FIELD: Self = Self(Cow::Borrowed("StarField"));
     pub const TEXT: Self = Self(Cow::Borrowed("Text"));
     pub const PARTICLE_TEXT: Self = Self(Cow::Borrowed("ParticleText"));
+    pub const DIGITAL_PLANTS: Self = Self(Cow::Borrowed("DigitalPlants"));
 }
 
 // ── Legacy discriminant mapping ─────────────────────────────────────────
