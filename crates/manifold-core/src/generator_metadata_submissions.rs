@@ -506,7 +506,6 @@ inventory::submit! {
             ParamSpec::continuous("Drift Y", -1.0, 1.0, 0.1, "F2", "driftY"),
             ParamSpec::continuous("Twinkle", 0.0, 1.0, 0.3, "F2", "twinkle"),
             ParamSpec::continuous("Warmth", -1.0, 1.0, 0.0, "F2", "warmth"),
-            ParamSpec::continuous("Nebula", 0.0, 1.0, 0.2, "F2", "nebula"),
             ParamSpec::continuous("Glow", 0.0, 1.0, 0.3, "F2", "glow"),
         ],
         string_params: &[],

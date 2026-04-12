@@ -134,18 +134,6 @@ fn star_layer(theta: f32, phi: f32, scale: f32, threshold: f32,
     return light;
 }
 
-// Faint nebulosity — large-scale dust/gas clouds for depth
-fn nebula(dir: vec3<f32>) -> vec3<f32> {
-    let n1 = fbm(dir.xz * 1.5 + dir.y * 0.5);
-    let n2 = noise2d(dir.xz * 3.0 + vec2<f32>(10.0, 20.0));
-    let density = max(n1 * 0.7 + n2 * 0.3 - 0.35, 0.0);
-
-    let tint = noise2d(dir.xz * 0.8 + vec2<f32>(50.0, 60.0));
-    let warm = vec3<f32>(0.15, 0.06, 0.03);
-    let cool = vec3<f32>(0.04, 0.06, 0.12);
-    return mix(cool, warm, tint) * density;
-}
-
 fn star_field(dir: vec3<f32>, brightness: f32) -> vec3<f32> {
     if brightness < 0.001 { return vec3<f32>(0.0); }
 
@@ -165,9 +153,6 @@ fn star_field(dir: vec3<f32>, brightness: f32) -> vec3<f32> {
 
     // Layer 4: faint background dust
     stars += star_layer(theta, phi, 180.0, 0.88, 0.15, 300.0);
-
-    // Background nebulosity
-    stars += nebula(dir) * brightness;
 
     return stars * brightness;
 }

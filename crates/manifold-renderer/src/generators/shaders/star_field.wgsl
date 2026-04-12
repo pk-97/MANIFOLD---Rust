@@ -1,10 +1,9 @@
-// Star Field — Cinematic 3D parallax star field with procedural nebulosity
+// Star Field — Cinematic 3D parallax star field
 //
 // Adapted from BlackHole's star_layer() with:
 //   - Virtual camera (pan/tilt via drift)
 //   - 4 depth layers on separate spheres for parallax
 //   - Per-star twinkle via hash-based phase offset
-//   - Configurable nebula backdrop
 
 struct Uniforms {
     time_val: f32,
@@ -17,9 +16,8 @@ struct Uniforms {
     drift_y: f32,
     twinkle: f32,
     warmth: f32,
-    nebula_amt: f32,
     glow: f32,
-    _pad: vec2<f32>,
+    _pad: vec3<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -31,24 +29,6 @@ fn hash21(p: vec2<f32>) -> f32 {
     var p3 = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
     return fract((p3.x + p3.y) * p3.z);
-}
-
-fn noise2d(p: vec2<f32>) -> f32 {
-    let i = floor(p);
-    let f = fract(p);
-    let u2 = f * f * (3.0 - 2.0 * f);
-    return mix(
-        mix(hash21(i), hash21(i + vec2<f32>(1.0, 0.0)), u2.x),
-        mix(hash21(i + vec2<f32>(0.0, 1.0)), hash21(i + vec2<f32>(1.0, 1.0)), u2.x),
-        u2.y,
-    );
-}
-
-fn fbm(p: vec2<f32>) -> f32 {
-    var val = noise2d(p) * 0.5;
-    val += noise2d(p * 2.03 + vec2<f32>(1.7, -1.3)) * 0.25;
-    val += noise2d(p * 4.07 + vec2<f32>(3.4, -2.6)) * 0.125;
-    return val;
 }
 
 // ── Camera ──
@@ -148,20 +128,6 @@ fn star_layer(
     return light;
 }
 
-// ── Nebulosity ──
-
-fn nebula(dir: vec3<f32>) -> vec3<f32> {
-    let n1 = fbm(dir.xz * 1.5 + dir.y * 0.5);
-    let n2 = noise2d(dir.xz * 3.0 + vec2<f32>(10.0, 20.0));
-    let density = max(n1 * 0.7 + n2 * 0.3 - 0.35, 0.0);
-
-    let tint = noise2d(dir.xz * 0.8 + vec2<f32>(50.0, 60.0));
-    let warm = vec3<f32>(0.15, 0.06, 0.03);
-    let cool = vec3<f32>(0.04, 0.06, 0.12);
-    let base = mix(cool, warm, tint + u.warmth * 0.3);
-    return base * density;
-}
-
 // ── Main ──
 
 @compute @workgroup_size(16, 16)
@@ -204,10 +170,6 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Layer 4: faint dust — minimal parallax (most distant)
     let dir4 = normalize(cam_rot * raw_dir);
     color += star_layer(dir4, 180.0, 0.88, 0.15, 300.0);
-
-    // Nebulosity behind everything — uses base camera direction
-    let neb_dir = normalize(cam_rot * raw_dir);
-    color += nebula(neb_dir) * u.nebula_amt;
 
     color *= u.brightness;
 

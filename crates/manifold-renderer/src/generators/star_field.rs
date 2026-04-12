@@ -21,8 +21,7 @@ const DRIFT_X: usize = 4;
 const DRIFT_Y: usize = 5;
 const TWINKLE: usize = 6;
 const WARMTH: usize = 7;
-const NEBULA: usize = 8;
-const GLOW: usize = 9;
+const GLOW: usize = 8;
 
 const SHADER: &str = include_str!("shaders/star_field.wgsl");
 
@@ -39,9 +38,8 @@ struct StarFieldUniforms {
     drift_y: f32,
     twinkle: f32,
     warmth: f32,
-    nebula_amt: f32,
     glow: f32,
-    _pad: [f32; 2],
+    _pad: [f32; 3],
 }
 
 pub struct StarFieldGenerator {
@@ -86,9 +84,8 @@ impl Generator for StarFieldGenerator {
             drift_y: param(ctx, DRIFT_Y, 0.1),
             twinkle: param(ctx, TWINKLE, 0.3),
             warmth: param(ctx, WARMTH, 0.0),
-            nebula_amt: param(ctx, NEBULA, 0.2),
             glow: param(ctx, GLOW, 0.3),
-            _pad: [0.0; 2],
+            _pad: [0.0; 3],
         };
 
         gpu.native_enc.dispatch_compute(
