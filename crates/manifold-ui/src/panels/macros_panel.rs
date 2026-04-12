@@ -20,9 +20,12 @@ use manifold_core::macro_bank::MACRO_COUNT;
 
 const ROW_HEIGHT: f32 = 18.0;
 const ROW_SPACING: f32 = 2.0;
+const HEADER_ROW_H: f32 = 22.0;
 const PAD_TOP: f32 = 4.0;
 const PAD_BOTTOM: f32 = 4.0;
 const PAD_H: f32 = 4.0;
+const CHEVRON_W: f32 = 18.0;
+const GAP: f32 = 4.0;
 const LABEL_WIDTH: f32 = crate::slider::DEFAULT_LABEL_WIDTH;
 const FONT_SIZE: u16 = color::FONT_BODY;
 
@@ -52,6 +55,10 @@ pub struct MacrosPanel {
     /// Which macro slot's Ableton trim bar is being dragged (-1 = none).
     dragging_ableton_trim: i32,
     dragging_ableton_trim_is_min: bool,
+    // Collapse state
+    is_collapsed: bool,
+    header_label_id: i32,
+    chevron_btn_id: i32,
 }
 
 impl Default for MacrosPanel {
@@ -81,13 +88,19 @@ impl MacrosPanel {
             ableton_ranges: [None; MACRO_COUNT],
             dragging_ableton_trim: -1,
             dragging_ableton_trim_is_min: false,
+            is_collapsed: false,
+            header_label_id: -1,
+            chevron_btn_id: -1,
         }
     }
 
     /// Total height of the macros panel (for inspector column Y offset).
     /// Dynamic: includes Ableton config drawers for mapped slots.
     pub fn height(&self) -> f32 {
-        let mut h = PAD_TOP + PAD_BOTTOM;
+        if self.is_collapsed {
+            return PAD_TOP + HEADER_ROW_H + PAD_BOTTOM;
+        }
+        let mut h = PAD_TOP + HEADER_ROW_H + PAD_BOTTOM;
         for i in 0..MACRO_COUNT {
             h += ROW_HEIGHT;
             if self.ableton_displays[i].is_some() {
@@ -98,6 +111,14 @@ impl MacrosPanel {
             }
         }
         h
+    }
+
+    pub fn is_collapsed(&self) -> bool {
+        self.is_collapsed
+    }
+
+    pub fn toggle_collapsed(&mut self) {
+        self.is_collapsed = !self.is_collapsed;
     }
 
     pub fn first_node(&self) -> usize {
@@ -192,6 +213,57 @@ impl MacrosPanel {
         let inner_x = rect.x + PAD_H;
         let inner_w = rect.width - PAD_H * 2.0;
         let mut cy = rect.y + PAD_TOP;
+
+        // Header row: "Macros" label + chevron
+        let label_w = inner_w - CHEVRON_W - GAP;
+        self.header_label_id = tree.add_label(
+            -1,
+            inner_x,
+            cy,
+            label_w,
+            HEADER_ROW_H,
+            "Macros",
+            UIStyle {
+                text_color: color::TEXT_PRIMARY_C32,
+                font_size: color::FONT_HEADING,
+                text_align: TextAlign::Left,
+                ..UIStyle::default()
+            },
+        ) as i32;
+
+        let chev_x = inner_x + inner_w - CHEVRON_W;
+        self.chevron_btn_id = tree.add_button(
+            -1,
+            chev_x,
+            cy + (HEADER_ROW_H - 16.0) * 0.5,
+            CHEVRON_W,
+            16.0,
+            UIStyle {
+                bg_color: Color32::TRANSPARENT,
+                hover_bg_color: color::HOVER_OVERLAY,
+                pressed_bg_color: color::PRESS_OVERLAY,
+                text_color: color::CHEVRON_COLOR,
+                font_size: FONT_SIZE,
+                text_align: TextAlign::Center,
+                ..UIStyle::default()
+            },
+            if self.is_collapsed {
+                "\u{25B6}"
+            } else {
+                "\u{25BC}"
+            },
+        ) as i32;
+
+        cy += HEADER_ROW_H;
+
+        if self.is_collapsed {
+            // Clear slider IDs so sync_values skips them
+            for s in &mut self.sliders {
+                s.clear();
+            }
+            self.node_count = tree.count() - self.first_node;
+            return;
+        }
 
         for i in 0..MACRO_COUNT {
             let label = format!("M{}", i + 1);
@@ -357,8 +429,14 @@ impl MacrosPanel {
         Vec::new()
     }
 
-    /// Handle click — label click copies OSC address, INV button toggles invert.
+    /// Handle click — chevron toggles collapse, label click copies OSC address,
+    /// INV button toggles invert.
     pub fn handle_click(&mut self, node_id: u32) -> Vec<PanelAction> {
+        // Chevron collapse toggle
+        if node_id as i32 == self.chevron_btn_id {
+            return vec![PanelAction::MacrosCollapseToggle];
+        }
+
         // Ableton config INV button
         if let Some((slot_idx, AbletonConfigClick::Invert)) =
             check_ableton_config_click(node_id as i32, &self.ableton_config_ids)

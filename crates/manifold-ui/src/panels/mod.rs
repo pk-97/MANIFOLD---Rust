@@ -240,6 +240,9 @@ pub enum PanelAction {
     CopyGenerator,
     PasteGenerator,
 
+    // Macros panel collapse
+    MacrosCollapseToggle,
+
     // Macro sliders (macro_index 0-7)
     MacroSnapshot(usize),
     MacroChanged(usize, f32),

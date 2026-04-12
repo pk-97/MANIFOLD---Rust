@@ -47,6 +47,12 @@ pub(super) fn dispatch_inspector(
 ) -> DispatchResult {
     use crate::content_command::ContentCommand;
     match action {
+        // ── Macros panel collapse ─────────────────────────────────
+        PanelAction::MacrosCollapseToggle => {
+            ui.inspector.macros_panel_mut().toggle_collapsed();
+            DispatchResult::structural()
+        }
+
         // ── Macro sliders ─────────────────────────────────────────
         PanelAction::MacroSnapshot(idx) => {
             let idx = *idx;
