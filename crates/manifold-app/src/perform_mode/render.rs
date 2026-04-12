@@ -10,9 +10,12 @@ use crate::perform_mode::{cue, macros as perform_macros, tracks};
 /// Read-only sync status snapshot for the perform HUD.
 struct SyncStatus {
     authority: ClockAuthority,
+    link_enabled: bool,
     link_peers: i32,
+    midi_clock_enabled: bool,
     midi_clock_receiving: bool,
-    midi_clock_bpm: f32,
+    midi_clock_position_display: String,
+    midi_clock_device_name: String,
 }
 
 impl Application {
@@ -92,9 +95,18 @@ impl Application {
         let ableton_connected = self.content_state.ableton_connected;
         let sync_status = SyncStatus {
             authority: self.content_state.clock_authority,
+            link_enabled: self.content_state.link_enabled,
             link_peers: self.content_state.link_peers,
+            midi_clock_enabled: self.content_state.midi_clock_enabled,
             midi_clock_receiving: self.content_state.midi_clock_receiving,
-            midi_clock_bpm: self.content_state.midi_clock_bpm.0,
+            midi_clock_position_display: self
+                .content_state
+                .midi_clock_position_display
+                .clone(),
+            midi_clock_device_name: self
+                .content_state
+                .midi_clock_device_name
+                .clone(),
         };
         // Snapshot the session Arc (atomic refcount bump, zero data copy).
         // All cue/track/macro reads below borrow from this snapshot, avoiding
@@ -209,8 +221,9 @@ impl Application {
                 is_playing,
                 ableton_connected,
                 cue_points.is_empty(),
-                &sync_status,
             );
+
+            draw_sync_indicators(ui, &sync_status);
 
             if !macros_snapshot.is_empty() {
                 draw_macros_column(ui, lh, &macros_snapshot);
@@ -383,6 +396,143 @@ fn numeric_text_width(ui: &mut UIRenderer, text: &str, font_size: u16) -> f32 {
     w
 }
 
+/// Draw sync source indicators in the top-left, matching the standard
+/// transport bar style: colored badge + green dot + status text.
+///
+/// Layout (left-to-right):
+///   SRC:CLK   LINK  ● 1 peer   CLK  IAC Driver Bus 1  ● 121.2.2
+///
+/// Read-only — no click handling in perform mode.
+fn draw_sync_indicators(ui: &mut UIRenderer, sync: &SyncStatus) {
+    // Color palette — matches transport bar exactly.
+    let link_orange_bg = [0.75, 0.48, 0.08, 1.0];
+    let midi_purple_bg = [0.58, 0.30, 0.58, 1.0];
+    let inactive_bg = [0.23, 0.23, 0.24, 1.0];
+    let osc_blue_bg = [0.22, 0.52, 0.70, 1.0];
+    let white = [240u8, 240u8, 240u8, 255u8];
+    let dimmed = [140u8, 140u8, 145u8, 255u8];
+    let dot_green = [64u8, 179u8, 77u8, 255u8];
+    let dot_yellow = [204u8, 166u8, 38u8, 255u8];
+    let dot_inactive = [64u8, 64u8, 69u8, 255u8];
+
+    let badge_font: u16 = 11;
+    let status_font: u16 = 11;
+    let badge_h = 22.0_f32;
+    let badge_pad_h = 10.0_f32; // horizontal padding inside badge
+    let badge_radius = 4.0_f32;
+    let dot_size = 8.0_f32;
+    let item_gap = 6.0_f32; // gap between badge and dot
+    let text_gap = 5.0_f32; // gap between dot and status text
+    let group_gap = 14.0_f32; // gap between groups (LINK group, CLK group)
+
+    let left_pad = 48.0_f32;
+    let top_pad = 16.0_f32;
+
+    let mut x = left_pad;
+    let y = top_pad;
+    let text_y = y + (badge_h - badge_font as f32) * 0.5;
+    let dot_y = y + (badge_h - dot_size) * 0.5;
+
+    // Helper: draw a badge (rounded rect with centered text).
+    let draw_badge = |ui: &mut UIRenderer, x: f32, label: &str, bg: [f32; 4]| -> f32 {
+        let text_w = ui.measure_text_cached(label, badge_font, FontWeight::Medium).x;
+        let w = text_w + badge_pad_h * 2.0;
+        ui.draw_rounded_rect(x, y, w, badge_h, bg, badge_radius);
+        ui.draw_text(x + badge_pad_h, text_y, label, badge_font as f32, white);
+        w
+    };
+
+    // Helper: draw a status dot.
+    let draw_dot = |ui: &mut UIRenderer, x: f32, color: [u8; 4]| {
+        let c = [
+            color[0] as f32 / 255.0,
+            color[1] as f32 / 255.0,
+            color[2] as f32 / 255.0,
+            1.0,
+        ];
+        ui.draw_rounded_rect(x, dot_y, dot_size, dot_size, c, dot_size * 0.5);
+    };
+
+    // ── SRC badge (clock authority) ─────────────────────────────────
+    let auth_label = sync.authority.transport_label();
+    let auth_bg = match sync.authority {
+        ClockAuthority::Internal => inactive_bg,
+        ClockAuthority::Link => link_orange_bg,
+        ClockAuthority::MidiClock => midi_purple_bg,
+        ClockAuthority::Osc => osc_blue_bg,
+    };
+    let w = draw_badge(ui, x, auth_label, auth_bg);
+    x += w + group_gap;
+
+    // ── LINK group ──────────────────────────────────────────────────
+    let link_bg = if sync.link_enabled {
+        link_orange_bg
+    } else {
+        inactive_bg
+    };
+    let w = draw_badge(ui, x, "LINK", link_bg);
+    x += w + item_gap;
+
+    let (link_dot_color, link_status, link_text_color) = if !sync.link_enabled {
+        (dot_inactive, "Off".to_string(), dimmed)
+    } else if sync.link_peers > 0 {
+        (
+            dot_green,
+            format!(
+                "{} peer{}",
+                sync.link_peers,
+                if sync.link_peers == 1 { "" } else { "s" }
+            ),
+            white,
+        )
+    } else {
+        (dot_yellow, "Listening".to_string(), dimmed)
+    };
+
+    draw_dot(ui, x, link_dot_color);
+    x += dot_size + text_gap;
+    ui.draw_text(x, text_y, &link_status, status_font as f32, link_text_color);
+    let status_w = ui
+        .measure_text_cached(&link_status, status_font, FontWeight::Medium)
+        .x;
+    x += status_w + group_gap;
+
+    // ── CLK group ───────────────────────────────────────────────────
+    let clk_bg = if sync.midi_clock_enabled {
+        midi_purple_bg
+    } else {
+        inactive_bg
+    };
+    let w = draw_badge(ui, x, "CLK", clk_bg);
+    x += w + item_gap;
+
+    // Device name badge (always inactive bg, like the standard bar).
+    let device_text = if sync.midi_clock_device_name.is_empty() {
+        if sync.midi_clock_enabled { "MIDI" } else { "Select..." }
+    } else {
+        &sync.midi_clock_device_name
+    };
+    let w = draw_badge(ui, x, device_text, inactive_bg);
+    x += w + item_gap;
+
+    let (clk_dot_color, clk_status, clk_text_color) = if !sync.midi_clock_enabled {
+        (dot_inactive, "Off".to_string(), dimmed)
+    } else if sync.midi_clock_receiving {
+        let pos = if sync.midi_clock_position_display.is_empty() {
+            "Receiving".to_string()
+        } else {
+            sync.midi_clock_position_display.clone()
+        };
+        (dot_green, pos, white)
+    } else {
+        (dot_yellow, "Waiting".to_string(), dimmed)
+    };
+
+    draw_dot(ui, x, clk_dot_color);
+    x += dot_size + text_gap;
+    ui.draw_text(x, text_y, &clk_status, status_font as f32, clk_text_color);
+}
+
 /// Draw a numeric string digit-by-digit, each digit centered within a
 /// fixed-width column. Non-digit chars (".", "-") use their natural width.
 /// Returns the total rendered width.
@@ -471,7 +621,6 @@ fn draw_cue_hud(
     is_playing: bool,
     ableton_connected: bool,
     cues_empty: bool,
-    sync_status: &SyncStatus,
 ) {
     // Color palette.
     let dim = [140u8, 140u8, 145u8, 255u8];
@@ -634,24 +783,21 @@ fn draw_cue_hud(
         }
     }
 
-    // ── Slim status rows, raised away from the exit button ──────────
+    // ── Slim status row, raised away from the exit button ───────────
     //
-    // Two rows: sync status (authority + sources) and transport status
-    // (BPM + transport + Ableton). Stacked bottom-up.
+    // Just BPM + transport + Ableton state. 3 fixed cells across.
     let status_size: u16 = 16;
-    let row_gap = 10.0_f32;
-    // Exit button bottom-anchored at lh - 36 - 24. Push status rows well
+    // Exit button bottom-anchored at lh - 36 - 24. Push status row well
     // above it so the two never feel coupled.
     let status_y = lh - 36.0 - 24.0 - 64.0;
-    let sync_row_y = status_y - status_size as f32 - row_gap;
 
     // ── BAR.BEAT.SIXTEENTH readout (Ableton transport style) ────────
     //
-    // Sits directly above the sync status row so the "where am I in the
-    // song" indicator anchors to the bottom rather than floating in the
-    // middle of the HUD.
+    // Sits directly above the status row's PLAYING line so the "where am
+    // I in the song" indicator anchors to the bottom rather than floating
+    // in the middle of the HUD.
     let bb_size: u16 = 36;
-    let bb_y = sync_row_y - bb_size as f32 - 16.0;
+    let bb_y = status_y - bb_size as f32 - 16.0;
     {
         let dot = " . ";
         let dot_w = ui.measure_text_cached(dot, bb_size, FontWeight::Medium).x;
@@ -765,58 +911,6 @@ fn draw_cue_hud(
         "DISCONNECTED",
         conn_color,
     );
-
-    // ── Sync status row — authority + source health ────────────────
-    //
-    // Read-only indicators: which clock source is driving, whether Link
-    // has peers, whether MIDI Clock is receiving. Color-coded to match
-    // the main transport bar convention:
-    //   Link = orange, MIDI Clock = purple, Internal = dim, OSC = blue.
-    let link_orange = [191u8, 122u8, 20u8, 255u8];
-    let midi_purple = [148u8, 77u8, 148u8, 255u8];
-    let osc_blue = [56u8, 133u8, 179u8, 255u8];
-
-    let auth_label = match sync_status.authority {
-        ClockAuthority::Internal => "SRC:INT",
-        ClockAuthority::Link => "SRC:LNK",
-        ClockAuthority::MidiClock => "SRC:CLK",
-        ClockAuthority::Osc => "SRC:OSC",
-    };
-    let auth_color = match sync_status.authority {
-        ClockAuthority::Internal => dim,
-        ClockAuthority::Link => link_orange,
-        ClockAuthority::MidiClock => midi_purple,
-        ClockAuthority::Osc => osc_blue,
-    };
-
-    let link_value = format!("LINK:{}", sync_status.link_peers);
-    let link_color = if sync_status.link_peers > 0 {
-        link_orange
-    } else {
-        dim
-    };
-
-    let clk_value = if sync_status.midi_clock_receiving {
-        format!("CLK:{:.0}", sync_status.midi_clock_bpm)
-    } else {
-        "CLK:—".to_string()
-    };
-    let clk_color = if sync_status.midi_clock_receiving {
-        midi_purple
-    } else {
-        dim
-    };
-
-    // Draw three sync cells on the sync_row_y line, using the same
-    // cell_centers layout as the status row.
-    let draw_sync_cell = |ui: &mut UIRenderer, center_x: f32, text: &str, color: [u8; 4]| {
-        let w = ui.measure_text_cached(text, status_size, FontWeight::Medium).x;
-        ui.draw_text(center_x - w * 0.5, sync_row_y, text, status_size as f32, color);
-    };
-
-    draw_sync_cell(ui, cell_centers[0], auth_label, auth_color);
-    draw_sync_cell(ui, cell_centers[1], &link_value, link_color);
-    draw_sync_cell(ui, cell_centers[2], &clk_value, clk_color);
 }
 
 /// Draw the macros bar-graph column on the LEFT side of the HUD.
