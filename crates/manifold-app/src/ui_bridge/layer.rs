@@ -287,8 +287,17 @@ pub(super) fn dispatch_layer(
                 let old_order = project.timeline.layers.clone();
                 let mut new_order = old_order.clone();
 
-                // Read target parent from original array (before removals shift indices)
-                let target_parent = old_order.get(*to).and_then(|l| l.parent_layer_id.clone());
+                // Determine parent for the moved layer(s). Dropping ON a group
+                // means "join that group" (parent = group), not "adopt the group's
+                // own parent".
+                let target_layer = old_order.get(*to);
+                let target_is_group =
+                    target_layer.is_some_and(|l| l.is_group());
+                let target_parent = if target_is_group {
+                    target_layer.map(|l| l.layer_id.clone())
+                } else {
+                    target_layer.and_then(|l| l.parent_layer_id.clone())
+                };
 
                 if is_multi {
                     // Multi-select: move all selected layers as a group
@@ -314,7 +323,16 @@ pub(super) fn dispatch_layer(
                     let target_layer_id = old_order.get(*to).map(|l| &l.layer_id);
                     let target_insert = target_layer_id
                         .and_then(|tid| new_order.iter().position(|l| l.layer_id == *tid))
-                        .map(|pos| if *to > *from { pos + 1 } else { pos })
+                        .map(|pos| {
+                            if target_is_group {
+                                // Insert as first child (right after the group header)
+                                pos + 1
+                            } else if *to > *from {
+                                pos + 1
+                            } else {
+                                pos
+                            }
+                        })
                         .unwrap_or_else(|| (*to).min(new_order.len()));
 
                     // Update parent for all moved layers
@@ -329,11 +347,24 @@ pub(super) fn dispatch_layer(
                     }
                 } else if *from < new_order.len() && *to <= new_order.len() {
                     // Single layer move.
-                    // Insert at *to (not to-1): the indicator shows "after target"
-                    // when moving down and "before target" when moving up. After
-                    // removing the source, inserting at *to lands exactly there.
                     let layer = new_order.remove(*from);
-                    let insert_at = (*to).min(new_order.len());
+
+                    let insert_at = if target_is_group {
+                        // Dropping on a group: insert as first child (right
+                        // after the group header in the post-remove array).
+                        let group_id = &old_order[*to].layer_id;
+                        new_order
+                            .iter()
+                            .position(|l| l.layer_id == *group_id)
+                            .map(|pos| pos + 1)
+                            .unwrap_or_else(|| (*to).min(new_order.len()))
+                    } else {
+                        // Insert at *to: indicator shows "after target" when
+                        // moving down and "before target" when moving up. After
+                        // removing the source, inserting at *to lands exactly
+                        // there.
+                        (*to).min(new_order.len())
+                    };
 
                     new_order.insert(insert_at, layer);
                     new_order[insert_at].parent_layer_id = target_parent;
