@@ -529,6 +529,12 @@ pub struct LayerHeaderPanel {
     // Pending multi-select active flags (applied in update())
     pending_active_layers: Option<Vec<bool>>,
 
+    // ── Live recording controls (in spacer area above layers) ──
+    record_btn_id: i32,
+    audio_device_label_id: i32,
+    recording_active: bool,
+    audio_device_name: String,
+
     // Screen-space origin of the layer controls panel
     panel_origin: Vec2,
     panel_width: f32,
@@ -560,6 +566,10 @@ impl LayerHeaderPanel {
             active_layer: None,
             cached_active_layer: None,
             pending_active_layers: None,
+            record_btn_id: -1,
+            audio_device_label_id: -1,
+            recording_active: false,
+            audio_device_name: "No audio input".into(),
             panel_origin: Vec2::ZERO,
             panel_width: 0.0,
             scroll: ScrollContainer::new(),
@@ -604,6 +614,53 @@ impl LayerHeaderPanel {
             .map(|l| LayerId::new(l.layer_id.clone()));
         // Store full multi-select state for visual update in update()
         self.pending_active_layers = Some(active_layers.to_vec());
+    }
+
+    // ── Live recording ───────────────────────────────────────────
+
+    pub fn set_recording_active(&mut self, tree: &mut UITree, active: bool) {
+        if self.recording_active == active {
+            return;
+        }
+        self.recording_active = active;
+        if self.record_btn_id >= 0 {
+            tree.set_style(self.record_btn_id as u32, self.record_btn_style());
+            let label = if active { "Stop Recording" } else { "Record Live" };
+            tree.set_text(self.record_btn_id as u32, label);
+        }
+    }
+
+    pub fn set_audio_device_name(&mut self, tree: &mut UITree, name: &str) {
+        self.audio_device_name = name.into();
+        if self.audio_device_label_id >= 0 {
+            tree.set_text(self.audio_device_label_id as u32, name);
+        }
+    }
+
+    fn record_btn_style(&self) -> UIStyle {
+        if self.recording_active {
+            UIStyle {
+                bg_color: Color32::new(180, 40, 40, 255),
+                hover_bg_color: Color32::new(200, 50, 50, 255),
+                pressed_bg_color: Color32::new(160, 30, 30, 255),
+                text_color: color::TEXT_WHITE_C32,
+                font_size: BTN_FONT,
+                corner_radius: LH_BTN_RADIUS,
+                text_align: TextAlign::Center,
+                ..UIStyle::default()
+            }
+        } else {
+            UIStyle {
+                bg_color: color::BUTTON_INACTIVE_C32,
+                hover_bg_color: color::HEADER_BUTTON_HOVER,
+                pressed_bg_color: color::HEADER_BUTTON_PRESSED,
+                text_color: color::TEXT_WHITE_C32,
+                font_size: BTN_FONT,
+                corner_radius: LH_BTN_RADIUS,
+                text_align: TextAlign::Center,
+                ..UIStyle::default()
+            }
+        }
     }
 
     // ── Accessors ───────────────────────────────────────────────────
@@ -1274,6 +1331,10 @@ impl LayerHeaderPanel {
 
     fn handle_click(&self, node_id: u32, modifiers: crate::input::Modifiers) -> Vec<PanelAction> {
         let id = node_id as i32;
+        // Record Live button
+        if id == self.record_btn_id && id >= 0 {
+            return vec![PanelAction::ToggleLiveRecording];
+        }
         // Add Layer button
         if id == self.add_layer_btn && id >= 0 {
             return vec![PanelAction::AddLayerClicked];
@@ -1417,6 +1478,41 @@ impl Panel for LayerHeaderPanel {
                 ..UIStyle::default()
             },
         );
+
+        // ── Live recording controls (in the spacer area above layers) ──
+        {
+            let rec_pad = 6.0;
+            let rec_btn_h = 22.0;
+            let rec_label_h = 16.0;
+            let rec_y = lc.y + rec_pad;
+            let rec_x = lc.x + rec_pad;
+            let rec_w = lc.width - rec_pad * 2.0;
+
+            self.record_btn_id = tree.add_button(
+                -1,
+                rec_x,
+                rec_y,
+                rec_w,
+                rec_btn_h,
+                self.record_btn_style(),
+                if self.recording_active { "Stop Recording" } else { "Record Live" },
+            ) as i32;
+
+            self.audio_device_label_id = tree.add_label(
+                -1,
+                rec_x,
+                rec_y + rec_btn_h + 4.0,
+                rec_w,
+                rec_label_h,
+                &self.audio_device_name,
+                UIStyle {
+                    text_color: color::TEXT_DIMMED_C32,
+                    font_size: SMALL_FONT,
+                    text_align: TextAlign::Center,
+                    ..UIStyle::default()
+                },
+            ) as i32;
+        }
 
         // Clip region for scrollable layer rows — prevents overflow into header/footer.
         let clip_top = lc.y + header_spacer;

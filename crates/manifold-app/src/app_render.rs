@@ -224,8 +224,8 @@ impl Application {
             }
         }
 
-        // 1e2. Sync live recording state to header button.
-        self.ui_root.header.set_recording_active(
+        // 1e2. Sync live recording state to layer header record button.
+        self.ui_root.layer_headers.set_recording_active(
             &mut self.ui_root.tree,
             self.content_state.is_live_recording,
         );

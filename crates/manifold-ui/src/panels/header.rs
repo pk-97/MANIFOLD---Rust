@@ -20,7 +20,6 @@ const PROGRESS_BAR_INSET: f32 = 5.0;
 
 const ZOOM_BUTTON_W: f32 = 28.0;
 const ZOOM_LABEL_W: f32 = 70.0;
-const RECORD_LIVE_BUTTON_W: f32 = 80.0;
 const MONITOR_BUTTON_W: f32 = 60.0;
 const PERFORM_BUTTON_W: f32 = 60.0;
 
@@ -50,7 +49,6 @@ struct HeaderLayout {
     zoom_out: Rect,
     zoom_label: Rect,
     zoom_in: Rect,
-    record_live_button: Rect,
     monitor_button: Rect,
     perform_button: Rect,
 }
@@ -97,10 +95,6 @@ impl HeaderLayout {
         self.perform_button = Rect::new(rx, elem_y, PERFORM_BUTTON_W, elem_h);
         rx -= GROUP_SPACING;
 
-        rx -= RECORD_LIVE_BUTTON_W;
-        self.record_live_button = Rect::new(rx, elem_y, RECORD_LIVE_BUTTON_W, elem_h);
-        rx -= GROUP_SPACING;
-
         rx -= ZOOM_BUTTON_W;
         self.zoom_in = Rect::new(rx, elem_y, ZOOM_BUTTON_W, elem_h);
 
@@ -126,12 +120,10 @@ pub struct HeaderPanel {
     zoom_label_id: i32,
     zoom_out_id: i32,
     zoom_in_id: i32,
-    record_live_btn_id: i32,
     monitor_btn_id: i32,
     perform_btn_id: i32,
 
     // State
-    recording_active: bool,
     project_name: String,
     import_status: String,
     import_progress: f32,
@@ -157,10 +149,8 @@ impl HeaderPanel {
             zoom_label_id: -1,
             zoom_out_id: -1,
             zoom_in_id: -1,
-            record_live_btn_id: -1,
             monitor_btn_id: -1,
             perform_btn_id: -1,
-            recording_active: false,
             project_name: "My Project".into(),
             import_status: String::new(),
             import_progress: 0.0,
@@ -236,44 +226,6 @@ impl HeaderPanel {
         }
     }
 
-    pub fn set_recording_active(&mut self, tree: &mut UITree, active: bool) {
-        if self.recording_active == active {
-            return;
-        }
-        self.recording_active = active;
-        if self.record_live_btn_id >= 0 {
-            tree.set_style(self.record_live_btn_id as u32, self.record_live_style());
-            let label = if active { "Recording" } else { "Record" };
-            tree.set_text(self.record_live_btn_id as u32, label);
-        }
-    }
-
-    fn record_live_style(&self) -> UIStyle {
-        if self.recording_active {
-            UIStyle {
-                bg_color: Color32::new(180, 40, 40, 255),
-                hover_bg_color: Color32::new(200, 50, 50, 255),
-                pressed_bg_color: Color32::new(160, 30, 30, 255),
-                text_color: color::TEXT_WHITE_C32,
-                font_size: color::FONT_HEADING,
-                corner_radius: color::BUTTON_RADIUS,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            }
-        } else {
-            UIStyle {
-                bg_color: color::BUTTON_INACTIVE_C32,
-                hover_bg_color: BUTTON_HOVER_H,
-                pressed_bg_color: BUTTON_PRESSED_H,
-                text_color: color::TEXT_WHITE_C32,
-                font_size: color::FONT_HEADING,
-                corner_radius: color::BUTTON_RADIUS,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            }
-        }
-    }
-
     fn perform_style(&self) -> UIStyle {
         UIStyle {
             bg_color: color::BUTTON_INACTIVE_C32,
@@ -320,9 +272,6 @@ impl HeaderPanel {
         }
         if id == self.zoom_in_id {
             return vec![PanelAction::ZoomIn];
-        }
-        if id == self.record_live_btn_id {
-            return vec![PanelAction::ToggleLiveRecording];
         }
         if id == self.monitor_btn_id {
             return vec![PanelAction::ToggleMonitor];
@@ -487,16 +436,6 @@ impl Panel for HeaderPanel {
                 ..UIStyle::default()
             },
             "+",
-        ) as i32;
-
-        self.record_live_btn_id = tree.add_button(
-            bg,
-            self.layout.record_live_button.x,
-            self.layout.record_live_button.y,
-            self.layout.record_live_button.width,
-            self.layout.record_live_button.height,
-            self.record_live_style(),
-            if self.recording_active { "Recording" } else { "Record" },
         ) as i32;
 
         self.monitor_btn_id = tree.add_button(
