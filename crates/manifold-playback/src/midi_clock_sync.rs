@@ -697,8 +697,13 @@ impl MidiClockSyncController {
         let delta = (clock_time - current_time).abs();
 
         if sync_target.is_playing() {
-            if !is_transport_jump && delta < Seconds(0.5) {
+            if !is_transport_jump && delta < Seconds(2.0) {
                 // NudgeTime for smooth per-frame tracking (port of C# line 407).
+                // Threshold widened from 0.5s to 2.0s to absorb tempo ramps
+                // without triggering hard seeks. SPP jumps and transport
+                // restarts are already caught by is_transport_jump (tick-delta
+                // range check), so this threshold only needs to catch genuine
+                // position errors — not continuous drift from tempo automation.
                 arbiter.nudge_time(ClockAuthority::MidiClock, authority, arb_target, clock_time);
             } else {
                 // Large jump via full Seek (port of C# lines 412-419).

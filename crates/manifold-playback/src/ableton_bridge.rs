@@ -333,6 +333,9 @@ pub struct AbletonBridge {
     recv_socket: Option<UdpSocket>,
     recv_thread: Option<std::thread::JoinHandle<()>>,
     shutdown_flag: Arc<AtomicBool>,
+    /// Set by the recv thread if it panics inside catch_unwind.
+    /// Checked each frame in `update()` to trigger automatic reconnection.
+    recv_thread_panicked: Arc<AtomicBool>,
     message_queue: Arc<Mutex<AbletonMessageQueue>>,
 
     // ── Session state
@@ -449,6 +452,7 @@ impl AbletonBridge {
             recv_socket: None,
             recv_thread: None,
             shutdown_flag: Arc::new(AtomicBool::new(false)),
+            recv_thread_panicked: Arc::new(AtomicBool::new(false)),
             message_queue: Arc::new(Mutex::new(AbletonMessageQueue::default())),
             session: AbletonSession::default(),
             session_version: 0,
@@ -537,7 +541,9 @@ impl AbletonBridge {
                 let queue = Arc::clone(&self.message_queue);
                 let pending_values = Arc::clone(&self.pending_values);
                 let shutdown = Arc::clone(&self.shutdown_flag);
+                let panicked = Arc::clone(&self.recv_thread_panicked);
                 self.shutdown_flag.store(false, Ordering::Relaxed);
+                self.recv_thread_panicked.store(false, Ordering::Relaxed);
 
                 let handle = std::thread::spawn(move || {
                     let mut buf = [0u8; 65536];
@@ -558,24 +564,54 @@ impl AbletonBridge {
                                 continue;
                             }
                         };
-                        // Fast path: parse parameter value updates directly
-                        // from raw bytes — zero allocation, bypasses rosc +
-                        // message queue entirely.
-                        if let Some((tid, did, pid, val)) =
-                            try_parse_param_value_fast(&buf[..size])
-                        {
-                            pending_values.lock().insert((tid, did, pid), val);
-                            continue;
-                        }
-                        // Slow path: full rosc decode for discovery, transport,
-                        // and any other message types.
-                        match rosc::decoder::decode_udp(&buf[..size]) {
-                            Ok((_, packet)) => {
-                                Self::handle_packet_static(packet, &queue);
-                            }
-                            Err(e) => {
-                                log::error!("[AbletonBridge] OSC decode error: {e}");
-                            }
+
+                        // Wrap message processing in catch_unwind so a
+                        // malformed packet can't kill the receiver thread.
+                        let result = std::panic::catch_unwind(
+                            std::panic::AssertUnwindSafe(|| {
+                                // Fast path: parse parameter value updates
+                                // directly from raw bytes — zero allocation,
+                                // bypasses rosc + message queue entirely.
+                                if let Some((tid, did, pid, val)) =
+                                    try_parse_param_value_fast(&buf[..size])
+                                {
+                                    pending_values
+                                        .lock()
+                                        .insert((tid, did, pid), val);
+                                    return;
+                                }
+                                // Slow path: full rosc decode for discovery,
+                                // transport, and any other message types.
+                                match rosc::decoder::decode_udp(&buf[..size]) {
+                                    Ok((_, packet)) => {
+                                        Self::handle_packet_static(
+                                            packet, &queue,
+                                        );
+                                    }
+                                    Err(e) => {
+                                        log::error!(
+                                            "[AbletonBridge] OSC decode \
+                                             error: {e}"
+                                        );
+                                    }
+                                }
+                            }),
+                        );
+                        if let Err(e) = result {
+                            let msg = if let Some(s) = e.downcast_ref::<&str>()
+                            {
+                                (*s).to_string()
+                            } else if let Some(s) = e.downcast_ref::<String>() {
+                                s.clone()
+                            } else {
+                                "unknown panic".to_string()
+                            };
+                            log::error!(
+                                "[AbletonBridge] recv thread caught panic: \
+                                 {msg} — signalling for reconnect"
+                            );
+                            panicked.store(true, Ordering::Relaxed);
+                            break;
                         }
                     }
                 });
@@ -651,6 +687,16 @@ impl AbletonBridge {
     /// checks heartbeat/connection status.
     pub fn update(&mut self, realtime: f64) {
         if self.send_socket.is_none() {
+            return;
+        }
+
+        // If the recv thread panicked, tear down and reconnect automatically.
+        if self.recv_thread_panicked.load(Ordering::Relaxed) {
+            log::warn!(
+                "[AbletonBridge] Recv thread died — reconnecting automatically"
+            );
+            self.disconnect();
+            self.connect();
             return;
         }
 
@@ -2648,7 +2694,11 @@ fn send_osc_to(socket: &Option<UdpSocket>, address: &str, args: &[rosc::OscType]
         let packet = rosc::OscPacket::Message(msg);
         match rosc::encoder::encode(&packet) {
             Ok(buf) => {
-                let _ = sock.send(&buf);
+                if let Err(e) = sock.send(&buf) {
+                    log::warn!(
+                        "[AbletonBridge] OSC send failed for {address}: {e}"
+                    );
+                }
             }
             Err(e) => {
                 log::error!("[AbletonBridge] OSC encode error: {e:?}");
