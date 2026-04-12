@@ -168,7 +168,7 @@ impl Generator for LissajousGenerator {
 
             self.helper.projected_x[i] = x * PROJ_SCALE;
             self.helper.projected_y[i] = y * PROJ_SCALE;
-            self.helper.projected_z[i] = i as f32 / VERTEX_COUNT as f32;
+            self.helper.projected_z[i] = 0.0;
         }
 
         let (positions, instances, num_edges, edge_half_thick, dot_half_thick) =
