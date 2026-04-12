@@ -1653,9 +1653,8 @@ impl TimelineViewportPanel {
                     let x_norm = (clip_start - min_beat) / beat_range;
                     let x2_norm = (clip_end - min_beat) / beat_range;
                     let x = (x_norm * tex_w as f32).round().max(0.0) as i32;
-                    let w = ((x2_norm - x_norm) * tex_w as f32)
-                        .round()
-                        .max(1.0) as i32;
+                    let x2 = (x2_norm * tex_w as f32).round().min(tex_w as f32) as i32;
+                    let w = (x2 - x).max(1);
 
                     bitmap_painter::fill_rect(
                         &mut bmp.pixels,
