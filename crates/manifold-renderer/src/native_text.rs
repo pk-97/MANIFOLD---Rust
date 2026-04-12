@@ -178,6 +178,9 @@ struct GlyphAtlas {
     shelf_height: u32,
     /// True when new glyphs were added and GPU upload is needed.
     dirty: bool,
+    /// Set when the atlas overflows and clears. Consumed by NativeTextRenderer
+    /// to re-inject waveform icons whose UV regions were destroyed by the clear.
+    was_cleared: bool,
 }
 
 impl GlyphAtlas {
@@ -200,6 +203,7 @@ impl GlyphAtlas {
             shelf_y: 0,
             shelf_height: 0,
             dirty: false,
+            was_cleared: false,
         }
     }
 
@@ -214,6 +218,7 @@ impl GlyphAtlas {
             shelf_y: 0,
             shelf_height: 0,
             dirty: false,
+            was_cleared: false,
         }
     }
 
@@ -252,12 +257,14 @@ impl GlyphAtlas {
             self.shelf_height = 0;
         }
         // Atlas full — clear everything and restart (rare fallback).
+        // Sets was_cleared so NativeTextRenderer re-injects waveform icons.
         if self.shelf_y + bitmap_h > ATLAS_SIZE {
             self.pixels.fill(0);
             self.glyphs.clear();
             self.shelf_x = 0;
             self.shelf_y = 0;
             self.shelf_height = 0;
+            self.was_cleared = true;
         }
 
         let atlas_x = self.shelf_x;
@@ -615,7 +622,10 @@ pub struct NativeTextRenderer {
     pipeline: GpuRenderPipeline,
     sampler: GpuSampler,
     /// Pre-rendered waveform icons injected into the atlas at startup.
+    /// Re-injected after atlas overflow clears the pixel buffer.
     icon_infos: [Option<IconInfo>; ICON_COUNT],
+    /// Retained waveform bitmaps for re-injection after atlas clear.
+    icon_bitmaps: [Vec<u8>; ICON_COUNT],
 
     // Draw queues.
     commands: Vec<TextCommand>,
@@ -675,9 +685,10 @@ impl NativeTextRenderer {
         });
 
         // Generate and inject waveform icons into the atlas.
-        let waveform_bitmaps = generate_waveform_icons();
+        // Bitmaps are retained so they can be re-injected after atlas overflow.
+        let icon_bitmaps = generate_waveform_icons();
         let mut icon_infos = [None; ICON_COUNT];
-        for (i, bmp) in waveform_bitmaps.iter().enumerate() {
+        for (i, bmp) in icon_bitmaps.iter().enumerate() {
             icon_infos[i] = Some(atlas.inject_icon(bmp, ICON_SIZE, ICON_SIZE));
         }
         // Upload icons to GPU immediately.
@@ -693,6 +704,7 @@ impl NativeTextRenderer {
             pipeline,
             sampler,
             icon_infos,
+            icon_bitmaps,
             commands: Vec::new(),
             icon_commands: Vec::new(),
             text_arena: String::with_capacity(4096),
@@ -954,6 +966,16 @@ impl NativeTextRenderer {
 
         // Restore arena capacity for next frame (contents will be cleared in clear_commands).
         self.text_arena = arena;
+
+        // If the atlas was cleared during glyph rasterization above, the waveform
+        // icon pixels were destroyed. Re-inject them so icon_infos point to valid
+        // atlas regions again.
+        if self.atlas.was_cleared {
+            for (i, bmp) in self.icon_bitmaps.iter().enumerate() {
+                self.icon_infos[i] = Some(self.atlas.inject_icon(bmp, ICON_SIZE, ICON_SIZE));
+            }
+            self.atlas.was_cleared = false;
+        }
 
         // Emit quads for icon commands.
         let icon_cmds: Vec<IconCommand> = std::mem::take(&mut self.icon_commands);
