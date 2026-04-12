@@ -580,7 +580,7 @@ inventory::submit! {
         legacy_discriminant: None,
         params: &[
             ParamSpec::continuous("Noise Scale", 0.1, 5.0, 1.5, "F2", "noiseScale"),
-            ParamSpec::continuous("Anim Speed", 0.0, 3.0, 0.5, "F2", "animSpeed"),
+            ParamSpec::continuous("Anim Speed", 0.0, 1.0, 0.5, "F2", "animSpeed"),
             ParamSpec::continuous("Morph", 0.0, 1.0, 0.0, "F2", "morph"),
             ParamSpec::continuous("Base Radius", 0.1, 2.0, 0.6, "F2", "baseRadius"),
             ParamSpec::continuous("Height", 0.5, 4.0, 2.0, "F2", "height"),
