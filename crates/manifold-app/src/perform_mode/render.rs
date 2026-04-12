@@ -1,10 +1,19 @@
 //! Perform-mode rendering — minimal main-window draw path.
 
+use manifold_core::types::ClockAuthority;
 use manifold_renderer::ui_renderer::UIRenderer;
 use manifold_ui::node::FontWeight;
 
 use crate::app::Application;
 use crate::perform_mode::{cue, macros as perform_macros, tracks};
+
+/// Read-only sync status snapshot for the perform HUD.
+struct SyncStatus {
+    authority: ClockAuthority,
+    link_peers: i32,
+    midi_clock_receiving: bool,
+    midi_clock_bpm: f32,
+}
 
 impl Application {
     /// Performance mode tick: drains content state, polls output window
@@ -81,6 +90,12 @@ impl Application {
         let beats_per_bar = self.content_state.time_signature_numerator.max(1) as u32;
         let is_playing = self.content_state.is_playing;
         let ableton_connected = self.content_state.ableton_connected;
+        let sync_status = SyncStatus {
+            authority: self.content_state.clock_authority,
+            link_peers: self.content_state.link_peers,
+            midi_clock_receiving: self.content_state.midi_clock_receiving,
+            midi_clock_bpm: self.content_state.midi_clock_bpm.0,
+        };
         // Snapshot the session Arc (atomic refcount bump, zero data copy).
         // All cue/track/macro reads below borrow from this snapshot, avoiding
         // per-frame clones of cue_points, track names, etc.
@@ -194,6 +209,7 @@ impl Application {
                 is_playing,
                 ableton_connected,
                 cue_points.is_empty(),
+                &sync_status,
             );
 
             if !macros_snapshot.is_empty() {
@@ -212,6 +228,76 @@ impl Application {
             // Flush.
             if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
                 ui.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
+            }
+        }
+
+        // Blit compositor output preview into the right column, vertically
+        // centered. Reads the latest frame from the preview IOSurface bridge
+        // (same source the workspace viewport uses). Zero extra GPU work —
+        // the frame is already rendered by the content thread.
+        #[cfg(target_os = "macos")]
+        if let (Some(bridge), Some(blit_pipeline), Some(blit_sampler)) = (
+            &self.preview_texture_bridge,
+            &self.blit_pipeline,
+            &self.blit_sampler,
+        ) {
+            // Re-import textures on bridge resize (rare).
+            let bridge_gen = bridge.generation();
+            if bridge_gen != self.last_preview_bridge_generation {
+                self.last_preview_bridge_generation = bridge_gen;
+                let textures: [manifold_gpu::GpuTexture;
+                    crate::shared_texture::SURFACE_COUNT] =
+                    std::array::from_fn(|i| unsafe {
+                        bridge.import_texture_native(&gpu.device, i)
+                    });
+                self.ui_preview_textures = textures.map(Some);
+            }
+            let front = bridge.front_index() as usize;
+            if let Some(source) = self.ui_preview_textures[front].as_ref() {
+                let (comp_w, comp_h) = self
+                    .content_pipeline_output
+                    .as_ref()
+                    .map(|p| p.get_dimensions())
+                    .unwrap_or((1920, 1080));
+                let source_aspect = comp_w as f32 / comp_h as f32;
+
+                // Right column: mirror the macros column width on the left.
+                let preview_max_w = 320.0_f32;
+                let right_pad = 48.0_f32;
+                let preview_x = lw - right_pad - preview_max_w;
+                let preview_max_h = preview_max_w / source_aspect;
+                // Vertically center in the window.
+                let preview_y = (lh - preview_max_h) * 0.5;
+
+                // Aspect-fit (source is wider or taller than the box).
+                let box_aspect = preview_max_w / preview_max_h;
+                let (fit_w, fit_h) = if source_aspect > box_aspect {
+                    (preview_max_w, preview_max_w / source_aspect)
+                } else {
+                    (preview_max_h * source_aspect, preview_max_h)
+                };
+                let fit_x = preview_x + (preview_max_w - fit_w) * 0.5;
+                let fit_y = preview_y + (preview_max_h - fit_h) * 0.5;
+
+                // Convert logical → physical pixels for the viewport.
+                let sf = scale as f32;
+                encoder.draw_fullscreen_viewport(
+                    blit_pipeline,
+                    offscreen,
+                    &[
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 0,
+                            texture: source,
+                        },
+                        manifold_gpu::GpuBinding::Sampler {
+                            binding: 1,
+                            sampler: blit_sampler,
+                        },
+                    ],
+                    (fit_x * sf, fit_y * sf, fit_w * sf, fit_h * sf),
+                    manifold_gpu::GpuLoadAction::Load,
+                    "Perform Preview Blit",
+                );
             }
         }
 
@@ -385,6 +471,7 @@ fn draw_cue_hud(
     is_playing: bool,
     ableton_connected: bool,
     cues_empty: bool,
+    sync_status: &SyncStatus,
 ) {
     // Color palette.
     let dim = [140u8, 140u8, 145u8, 255u8];
@@ -421,9 +508,12 @@ fn draw_cue_hud(
     let label_now = "NOW";
     let label_size: u16 = 18;
     let now_size: u16 = 64;
+    let track_size: u16 = 20;
+    let track_line_h = track_size as f32 + 6.0;
+    const MAX_TRACKS: usize = 5;
     let label_dim = ui.measure_text_cached(label_now, label_size, FontWeight::Medium);
     let now_dim = ui.measure_text_cached(current_name, now_size, FontWeight::Medium);
-    let now_top = lh * 0.14;
+    let now_top = lh * 0.06;
     ui.draw_text(
         (lw - label_dim.x) * 0.5,
         now_top,
@@ -440,24 +530,25 @@ fn draw_cue_hud(
     );
 
     // ── NOW track list (vertical, centered, under the NOW name) ────
+    let now_track_top = now_top + label_size as f32 + 8.0 + now_size as f32 + 12.0;
     if !now_section_tracks.is_empty() {
-        let nl_size: u16 = 28;
-        let line_h = nl_size as f32 + 8.0;
-        let mut ny = now_top + label_size as f32 + 8.0 + now_size as f32 + 12.0;
-        for name in now_section_tracks {
-            let w = ui.measure_text_cached(name, nl_size, FontWeight::Medium).x;
-            ui.draw_text((lw - w) * 0.5, ny, name, nl_size as f32, now_green_dim);
-            ny += line_h;
+        let mut ny = now_track_top;
+        for name in now_section_tracks.iter().take(MAX_TRACKS) {
+            let w = ui.measure_text_cached(name, track_size, FontWeight::Medium).x;
+            ui.draw_text((lw - w) * 0.5, ny, name, track_size as f32, now_green_dim);
+            ny += track_line_h;
         }
     }
 
     // ── NEXT ───────────────────────────────────────────────────────
     let label_next = "NEXT";
-    let next_size: u16 = 40;
-    let countdown_size: u16 = 96;
+    let next_size: u16 = 64;
+    let countdown_size: u16 = 72;
     let label_next_dim = ui.measure_text_cached(label_next, label_size, FontWeight::Medium);
     let next_name_dim = ui.measure_text_cached(next_name, next_size, FontWeight::Medium);
-    let next_top = lh * 0.38;
+    // Position NEXT below the 5-track slot so it never overlaps NOW.
+    let next_top = (now_track_top + MAX_TRACKS as f32 * track_line_h + 16.0)
+        .max(lh * 0.32);
     ui.draw_text(
         (lw - label_next_dim.x) * 0.5,
         next_top,
@@ -473,8 +564,22 @@ fn draw_cue_hud(
         next_color,
     );
 
+    // ── NEXT track list (between name and countdown) ──────────────
+    let mut next_content_y = next_top + label_size as f32 + 8.0 + next_size as f32;
+    if !next_section_tracks.is_empty() {
+        next_content_y += 10.0;
+        for name in next_section_tracks.iter().take(MAX_TRACKS) {
+            let w = ui.measure_text_cached(name, track_size, FontWeight::Medium).x;
+            ui.draw_text((lw - w) * 0.5, next_content_y, name, track_size as f32, next_color);
+            next_content_y += track_line_h;
+        }
+    }
+
     // ── Countdown number (fixed-column digits, anchored center axis) ─
-    let countdown_y = next_top + label_size as f32 + next_size as f32 + 16.0;
+    // Anchored from the bottom so it never jumps when the track count
+    // changes — the progress bar and bar.beat readout below it are also
+    // bottom-anchored, keeping the whole lower HUD stable.
+    let countdown_y = (lh - 300.0).max(next_content_y + 16.0);
     if let Some(cd) = countdown {
         let gap = 24.0_f32;
         let center_x = lw * 0.5;
@@ -529,33 +634,24 @@ fn draw_cue_hud(
         }
     }
 
-    // ── NEXT track list (vertical, centered, under the countdown bar) ──
-    if !next_section_tracks.is_empty() {
-        let nl_size: u16 = 28;
-        let line_h = nl_size as f32 + 8.0;
-        let mut ny = countdown_y + countdown_size as f32 + 56.0;
-        for name in next_section_tracks {
-            let w = ui.measure_text_cached(name, nl_size, FontWeight::Medium).x;
-            ui.draw_text((lw - w) * 0.5, ny, name, nl_size as f32, next_color);
-            ny += line_h;
-        }
-    }
-
-    // ── Slim status row, raised away from the exit button ───────────
+    // ── Slim status rows, raised away from the exit button ──────────
     //
-    // Just BPM + transport + Ableton state. 3 fixed cells across.
+    // Two rows: sync status (authority + sources) and transport status
+    // (BPM + transport + Ableton). Stacked bottom-up.
     let status_size: u16 = 16;
-    // Exit button bottom-anchored at lh - 36 - 24. Push status row well
+    let row_gap = 10.0_f32;
+    // Exit button bottom-anchored at lh - 36 - 24. Push status rows well
     // above it so the two never feel coupled.
     let status_y = lh - 36.0 - 24.0 - 64.0;
+    let sync_row_y = status_y - status_size as f32 - row_gap;
 
     // ── BAR.BEAT.SIXTEENTH readout (Ableton transport style) ────────
     //
-    // Sits directly above the status row's PLAYING line so the "where am
-    // I in the song" indicator anchors to the bottom rather than floating
-    // in the middle of the HUD.
+    // Sits directly above the sync status row so the "where am I in the
+    // song" indicator anchors to the bottom rather than floating in the
+    // middle of the HUD.
     let bb_size: u16 = 36;
-    let bb_y = status_y - bb_size as f32 - 16.0;
+    let bb_y = sync_row_y - bb_size as f32 - 16.0;
     {
         let dot = " . ";
         let dot_w = ui.measure_text_cached(dot, bb_size, FontWeight::Medium).x;
@@ -669,6 +765,58 @@ fn draw_cue_hud(
         "DISCONNECTED",
         conn_color,
     );
+
+    // ── Sync status row — authority + source health ────────────────
+    //
+    // Read-only indicators: which clock source is driving, whether Link
+    // has peers, whether MIDI Clock is receiving. Color-coded to match
+    // the main transport bar convention:
+    //   Link = orange, MIDI Clock = purple, Internal = dim, OSC = blue.
+    let link_orange = [191u8, 122u8, 20u8, 255u8];
+    let midi_purple = [148u8, 77u8, 148u8, 255u8];
+    let osc_blue = [56u8, 133u8, 179u8, 255u8];
+
+    let auth_label = match sync_status.authority {
+        ClockAuthority::Internal => "SRC:INT",
+        ClockAuthority::Link => "SRC:LNK",
+        ClockAuthority::MidiClock => "SRC:CLK",
+        ClockAuthority::Osc => "SRC:OSC",
+    };
+    let auth_color = match sync_status.authority {
+        ClockAuthority::Internal => dim,
+        ClockAuthority::Link => link_orange,
+        ClockAuthority::MidiClock => midi_purple,
+        ClockAuthority::Osc => osc_blue,
+    };
+
+    let link_value = format!("LINK:{}", sync_status.link_peers);
+    let link_color = if sync_status.link_peers > 0 {
+        link_orange
+    } else {
+        dim
+    };
+
+    let clk_value = if sync_status.midi_clock_receiving {
+        format!("CLK:{:.0}", sync_status.midi_clock_bpm)
+    } else {
+        "CLK:—".to_string()
+    };
+    let clk_color = if sync_status.midi_clock_receiving {
+        midi_purple
+    } else {
+        dim
+    };
+
+    // Draw three sync cells on the sync_row_y line, using the same
+    // cell_centers layout as the status row.
+    let draw_sync_cell = |ui: &mut UIRenderer, center_x: f32, text: &str, color: [u8; 4]| {
+        let w = ui.measure_text_cached(text, status_size, FontWeight::Medium).x;
+        ui.draw_text(center_x - w * 0.5, sync_row_y, text, status_size as f32, color);
+    };
+
+    draw_sync_cell(ui, cell_centers[0], auth_label, auth_color);
+    draw_sync_cell(ui, cell_centers[1], &link_value, link_color);
+    draw_sync_cell(ui, cell_centers[2], &clk_value, clk_color);
 }
 
 /// Draw the macros bar-graph column on the LEFT side of the HUD.
