@@ -80,6 +80,7 @@ pub enum PanelAction {
     // Header
     ZoomIn,
     ZoomOut,
+    ToggleLiveRecording,
     ToggleMonitor,
     EnterPerformMode,
 

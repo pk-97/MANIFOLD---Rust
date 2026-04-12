@@ -224,6 +224,12 @@ impl Application {
             }
         }
 
+        // 1e2. Sync live recording state to header button.
+        self.ui_root.header.set_recording_active(
+            &mut self.ui_root.tree,
+            self.content_state.is_live_recording,
+        );
+
         // 1f. Sync stem mute/solo state from content thread to UI panels.
         // Port of Unity: WorkspaceController.OnStemMuteToggled/OnStemSoloToggled refreshing button visuals.
         {
@@ -375,6 +381,17 @@ impl Application {
                 PanelAction::CopyOscAddress(addr) => {
                     if let Ok(mut clipboard) = arboard::Clipboard::new() {
                         let _ = clipboard.set_text(addr.clone());
+                    }
+                    continue;
+                }
+                PanelAction::ToggleLiveRecording => {
+                    if self.content_state.is_live_recording {
+                        self.send_content_cmd(ContentCommand::StopLiveRecording);
+                    } else {
+                        let config = manifold_recording::LiveRecordingConfig::default_to_desktop();
+                        self.send_content_cmd(
+                            ContentCommand::StartLiveRecording(Box::new(config)),
+                        );
                     }
                     continue;
                 }

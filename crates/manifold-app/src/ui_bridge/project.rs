@@ -62,7 +62,7 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
-        PanelAction::ToggleMonitor => DispatchResult {
+        PanelAction::ToggleLiveRecording | PanelAction::ToggleMonitor => DispatchResult {
             handled: true,
             structural_change: false,
             resolution_changed: false,
