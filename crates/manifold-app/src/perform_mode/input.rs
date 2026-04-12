@@ -5,7 +5,7 @@
 
 use manifold_ui::node::Vec2;
 use winit::event::{ElementState, MouseButton};
-use winit::keyboard::{Key, NamedKey};
+use winit::keyboard::Key;
 
 use crate::app::Application;
 
@@ -44,16 +44,14 @@ impl Application {
         true
     }
 
-    /// Keyboard handler. Only Escape triggers exit; all other keys are
-    /// dropped — hardware controllers / OSC drive playback during a
-    /// live show.
+    /// Keyboard handler. All keys are dropped — hardware controllers /
+    /// OSC drive playback during a live show. Exit only via the on-screen
+    /// button so an accidental key press can't kill the HUD mid-show.
     pub(crate) fn perform_handle_key(&mut self, logical_key: &Key) -> bool {
         if !self.perform.active {
             return false;
         }
-        if let Key::Named(NamedKey::Escape) = logical_key {
-            self.perform.pending_exit = true;
-        }
+        let _ = logical_key;
         true
     }
 

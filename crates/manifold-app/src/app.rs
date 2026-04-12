@@ -2353,19 +2353,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     self.ui_root.key_event(ui_key, self.modifiers);
                 }
 
-                // Output window management (only when key wasn't consumed by app shortcuts)
-                if !consumed
-                    && let Key::Named(NamedKey::Escape) = &logical_key
-                    && !is_primary
-                {
-                    #[cfg(target_os = "macos")]
-                    {
-                        self.output_saved_frame = None;
-                    }
-                    self.window_registry.remove(&window_id);
-                    log::info!("Closed output window");
-                    self.perform_on_output_window_closed();
-                }
+                // Output window: Escape no longer closes it — during a live
+                // show an accidental Escape would black out the audience.
+                // Close via the UI Monitor button instead.
             }
 
             // ── Cursor left window → cancel in-progress drags ────────

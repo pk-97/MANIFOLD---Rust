@@ -92,18 +92,13 @@ impl InputHandler {
                 host.dismiss_context_menu();
                 return true;
             }
-            // Level 2: monitor output active → close it
-            if host.is_monitor_output_active() {
-                host.close_output_window();
-                return true;
-            }
-            // Level 3: inspector has focus → clear effect selection
+            // Level 2: inspector has focus → clear effect selection
             if self.inspector_has_focus {
                 host.clear_effect_selection();
                 self.inspector_has_focus = false;
                 return true;
             }
-            // Level 4: clear all selection + insert cursor
+            // Level 3: clear all selection + insert cursor
             host.clear_selection();
             host.on_selection_cleared();
             return true;
