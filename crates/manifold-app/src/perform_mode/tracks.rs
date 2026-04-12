@@ -24,6 +24,10 @@ pub(crate) fn plays_in_range(
     if track.muted || range_end <= range_start {
         return false;
     }
+    // Tracks with "ignore" anywhere in the name are hidden from the HUD.
+    if track.name.to_ascii_lowercase().contains("ignore") {
+        return false;
+    }
     track
         .clips
         .iter()
