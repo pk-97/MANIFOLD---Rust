@@ -410,12 +410,15 @@ impl Generator for MetallicGlassGenerator {
 
         // ── Pass 4: Mirror + height/metallic + temporal blend ──
         // Writes to proc_write, blends with proc_read (previous frame).
+        // First frame: skip temporal blend (prev buffer is empty/zeroed),
+        // otherwise displacement "slides" in from zero over many frames.
+        let temporal_blend = if self.frame_count == 0 { 1.0 } else { 0.15 };
         let process_uniforms = ProcessUniforms {
             edge_strength: edge_str,
             mirror_angle,
             width: width as f32,
             height: height as f32,
-            temporal_blend: 0.15, // blend 15% new, 85% previous → stable
+            temporal_blend, // 1.0 on first frame, then 15% new / 85% previous → stable
             _pad0: 0.0,
             _pad1: 0.0,
             _pad2: 0.0,
