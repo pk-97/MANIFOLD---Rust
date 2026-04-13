@@ -187,6 +187,7 @@ pub struct TimelineViewportPanel {
     bg_panel_id: i32,
     overview_btn_id: i32,
     ruler_bg_id: i32,
+    ruler_clip_id: i32,
     // playhead: unified overlay quad in app.rs (ruler → waveform → stems → tracks)
     insert_cursor_ruler_id: i32,
     // insert_cursor_track_id: removed — painted into bitmap
@@ -295,6 +296,7 @@ impl TimelineViewportPanel {
             bg_panel_id: -1,
             overview_btn_id: -1,
             ruler_bg_id: -1,
+            ruler_clip_id: -1,
             insert_cursor_ruler_id: -1,
             export_in_beat: Beats::ZERO,
             export_out_beat: Beats::ZERO,
@@ -1200,6 +1202,17 @@ impl Panel for TimelineViewportPanel {
             "",
         ) as i32;
 
+        // Clip region for ruler ticks and labels — prevents text from bleeding
+        // past the ruler bounds into adjacent sections (e.g. live recording panel).
+        self.ruler_clip_id = tree.add_node(
+            -1,
+            self.ruler_rect,
+            UINodeType::ClipRegion,
+            UIStyle::default(),
+            None,
+            UIFlags::CLIPS_CHILDREN,
+        ) as i32;
+
         // Interactive overlay covering entire tracks area — catches all clicks/drags
         // (matches Unity's InteractionOverlay which is a transparent MonoBehaviour
         // covering the tracks viewport). Without this, clicks on non-interactive
@@ -1907,7 +1920,7 @@ impl TimelineViewportPanel {
 
                 // Tick mark (bottom-aligned)
                 let id = tree.add_panel(
-                    -1,
+                    self.ruler_clip_id,
                     px,
                     ruler_bottom - tick_h,
                     RULER_TICK_W,
@@ -1936,7 +1949,7 @@ impl TimelineViewportPanel {
 
                     let label_y = self.ruler_rect.y + 2.0;
                     let id = tree.add_label(
-                        -1,
+                        self.ruler_clip_id,
                         px + 2.0,
                         label_y,
                         RULER_LABEL_W,
