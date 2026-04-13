@@ -265,17 +265,14 @@ void* LiveRecorder_Create(int width, int height, float fps, const char* outputPa
         if (state->hasAudio)
         {
             AudioFormatID outputFormatID;
-            int audioBitrate;
 
             if (audioCodec == 1) // ALAC
             {
                 outputFormatID = kAudioFormatAppleLossless;
-                audioBitrate = 0; // lossless — no bitrate setting
             }
             else // AAC (default)
             {
                 outputFormatID = kAudioFormatMPEG4AAC;
-                audioBitrate = 320000; // 320 kbps
             }
 
             NSMutableDictionary* audioSettings = [@{
@@ -284,9 +281,11 @@ void* LiveRecorder_Create(int width, int height, float fps, const char* outputPa
                 AVNumberOfChannelsKey:     @(audioChannels),
             } mutableCopy];
 
-            if (audioBitrate > 0)
+            // AAC: use per-channel bitrate so mono/stereo both work.
+            // 128 kbps/ch → 128k mono, 256k stereo.
+            if (outputFormatID == kAudioFormatMPEG4AAC)
             {
-                audioSettings[AVEncoderBitRateKey] = @(audioBitrate);
+                audioSettings[AVEncoderBitRatePerChannelKey] = @(128000);
             }
 
             state->audioInput = [[AVAssetWriterInput alloc] initWithMediaType:AVMediaTypeAudio
@@ -298,7 +297,7 @@ void* LiveRecorder_Create(int width, int height, float fps, const char* outputPa
                 [state->assetWriter addInput:state->audioInput];
                 NSLog(@"[LiveRecorder] Audio track: %dHz %dch %s",
                       audioSampleRate, audioChannels,
-                      (audioCodec == 1) ? "ALAC" : "AAC-320k");
+                      (audioCodec == 1) ? "ALAC" : "AAC-128k/ch");
             }
             else
             {
