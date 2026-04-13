@@ -63,8 +63,6 @@ impl LiveRecordingSession {
             if let Some(ref device_name) = config.audio_device {
                 let audio_config = manifold_audio::capture::AudioCaptureConfig {
                     device_name: Some(device_name.clone()),
-                    sample_rate: 48_000,
-                    channels: 2,
                 };
                 match manifold_audio::capture::AudioCaptureDevice::new(audio_config) {
                     Ok(mut capture) => {

@@ -23,24 +23,10 @@ pub struct AudioDeviceInfo {
 }
 
 /// Configuration for audio capture.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct AudioCaptureConfig {
     /// Device name to open. `None` = system default input.
     pub device_name: Option<String>,
-    /// Desired sample rate. Falls back to device default if unsupported.
-    pub sample_rate: u32,
-    /// Number of channels (typically 2 for stereo).
-    pub channels: u16,
-}
-
-impl Default for AudioCaptureConfig {
-    fn default() -> Self {
-        Self {
-            device_name: None,
-            sample_rate: 48_000,
-            channels: 2,
-        }
-    }
 }
 
 /// Ring buffer consumer type for reading captured audio samples.
@@ -60,8 +46,9 @@ pub struct AudioCaptureDevice {
 unsafe impl Send for AudioCaptureDevice {}
 
 impl AudioCaptureDevice {
-    /// Create a new audio capture device. Does NOT start capturing until
-    /// [`start()`] is called.
+    /// Create a new audio capture device. Uses the device's default input
+    /// configuration (sample rate, channels) to avoid format mismatches.
+    /// Does NOT start capturing until [`start()`] is called.
     pub fn new(config: AudioCaptureConfig) -> Result<Self, String> {
         let host = cpal::default_host();
 
@@ -78,8 +65,19 @@ impl AudioCaptureDevice {
         let device_name = device.name().unwrap_or_else(|_| "Unknown".into());
         log::info!("[AudioCapture] Using device: {device_name}");
 
-        let sample_rate = config.sample_rate;
-        let channels = config.channels;
+        // Query the device's default input config — use its native sample rate
+        // and channel count to avoid format conversion issues.
+        let default_config = device
+            .default_input_config()
+            .map_err(|e| format!("Failed to get default input config: {e}"))?;
+
+        let sample_rate = default_config.sample_rate().0;
+        let channels = default_config.channels();
+
+        log::info!(
+            "[AudioCapture] Device config: {sample_rate}Hz, {channels}ch, format={:?}",
+            default_config.sample_format(),
+        );
 
         let stream_config = StreamConfig {
             channels,
@@ -87,8 +85,7 @@ impl AudioCaptureDevice {
             buffer_size: cpal::BufferSize::Default,
         };
 
-        // Ring buffer: 2 seconds of audio. Generous headroom for the recording
-        // thread's drain rate.
+        // Ring buffer: 2 seconds of audio.
         let capacity = (sample_rate as usize) * (channels as usize) * 2;
         let ring = HeapRb::<f32>::new(capacity);
         let (mut producer, consumer) = ring.split();
@@ -109,18 +106,13 @@ impl AudioCaptureDevice {
                     }
                     let written = producer.push_slice(data);
                     if written < data.len() {
-                        // Overflow — recording thread can't keep up. Count it
-                        // but never block. Lost samples create a tiny glitch;
-                        // blocking the audio thread would cause system-wide dropout.
                         overflow_cb.fetch_add(1, Ordering::Relaxed);
                     }
                 },
                 move |err| {
-                    // Error callback — can't do much here on a real-time thread.
-                    // The recording session will detect the stream stopping.
                     log::error!("[AudioCapture] Stream error: {err}");
                 },
-                None, // no timeout
+                None,
             )
             .map_err(|e| format!("Failed to build input stream: {e}"))?;
 
@@ -164,12 +156,12 @@ impl AudioCaptureDevice {
         self.consumer.take()
     }
 
-    /// Sample rate of the capture stream.
+    /// Sample rate of the capture stream (from device default config).
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
 
-    /// Number of channels.
+    /// Number of channels (from device default config).
     pub fn channels(&self) -> u16 {
         self.channels
     }
