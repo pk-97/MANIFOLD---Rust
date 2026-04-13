@@ -409,12 +409,38 @@ impl GeneratorRenderer {
                     active.needs_clear = false;
                 }
                 // Pass per-clip string params (e.g. text content) to the generator.
-                let string_params = layer
+                // If the clip's map is missing keys that other clips on the layer
+                // have set (e.g. fontFamily), fill them from the layer-level cache.
+                let clip_params = layer
                     .clips
                     .iter()
                     .find(|c| c.id.as_str() == id)
                     .and_then(|c| c.string_params.as_ref());
-                layer_state.generator.set_string_params(string_params);
+
+                // Update layer defaults from this clip's params (learn new keys)
+                if let Some(map) = clip_params {
+                    for (k, v) in map {
+                        if !v.is_empty() {
+                            layer_state
+                                .layer_string_defaults
+                                .insert(k.clone(), v.clone());
+                        }
+                    }
+                }
+
+                // Merge: use clip params, falling back to layer defaults for
+                // missing keys. Only build merged map when needed.
+                if layer_state.layer_string_defaults.is_empty() {
+                    layer_state.generator.set_string_params(clip_params);
+                } else {
+                    let mut merged = layer_state.layer_string_defaults.clone();
+                    if let Some(map) = clip_params {
+                        for (k, v) in map {
+                            merged.insert(k.clone(), v.clone());
+                        }
+                    }
+                    layer_state.generator.set_string_params(Some(&merged));
+                }
                 let new_progress =
                     layer_state
                         .generator
@@ -615,7 +641,31 @@ impl ClipRenderer for GeneratorRenderer {
             .find(|(_, l)| l.clips.iter().any(|c| c.id == clip.id))
             .map(|(i, l)| (l.layer_id.clone(), l.generator_type().clone(), i as i32))
             .unwrap_or_default();
-        self.acquire_clip(&clip.id, gen_type, layer_id, layer_index)
+        let acquired = self.acquire_clip(&clip.id, gen_type, layer_id.clone(), layer_index);
+
+        // Populate layer string defaults by scanning ALL clips on this layer.
+        // This ensures string params set on any clip (e.g. fontFamily on one clip)
+        // are available as defaults for clips that don't have them.
+        if acquired
+            && let Some(layer_state) = self.layer_generators.get_mut(&layer_id)
+            && let Some(layer) = layers.get(layer_index as usize)
+        {
+            for c in &layer.clips {
+                if let Some(map) = &c.string_params {
+                    for (k, v) in map {
+                        if !v.is_empty()
+                            && !layer_state.layer_string_defaults.contains_key(k)
+                        {
+                            layer_state
+                                .layer_string_defaults
+                                .insert(k.clone(), v.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        acquired
     }
 
     fn stop_clip(&mut self, clip_id: &str) {

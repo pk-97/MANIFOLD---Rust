@@ -116,11 +116,6 @@ impl Generator for TextGenerator {
 
     fn set_string_params(&mut self, params: Option<&BTreeMap<String, String>>) {
         if let Some(map) = params {
-            eprintln!(
-                "[TextGen] set_string_params: text={:?} fontFamily={:?}",
-                map.get("text"),
-                map.get("fontFamily"),
-            );
             if let Some(text) = map.get("text") {
                 self.pending_text = text.clone();
             }
@@ -130,8 +125,6 @@ impl Generator for TextGenerator {
                 }
                 self.pending_font_family = font.clone();
             }
-        } else {
-            eprintln!("[TextGen] set_string_params: None");
         }
     }
 
@@ -168,11 +161,6 @@ impl Generator for TextGenerator {
             || (line_spacing - self.cached_line_spacing).abs() > 0.01;
 
         if text_changed || size_changed || font_changed || style_changed {
-            eprintln!(
-                "[TextGen] rasterize: text={:?} font={:?} text_changed={} size_changed={} font_changed={}",
-                self.pending_text, self.pending_font_family,
-                text_changed, size_changed, font_changed,
-            );
             let opts = RasterizeOptions {
                 font_family: if self.pending_font_family.is_empty() {
                     None
