@@ -672,24 +672,25 @@ impl Application {
             self.output_edr_headroom = h;
         }
 
+        // Create output surface and send to content thread for direct present.
+        // The content thread acquires drawables and presents in its own CB —
+        // no IOSurface bridge, no separate presenter command buffer.
         #[cfg(target_os = "macos")]
-        if let Some(gpu) = &self.gpu
-            && let Some(bridge) = &self.shared_texture_bridge
-        {
-            let window_arc_for_presenter = if !presentation {
-                Some(Arc::clone(&window))
-            } else {
-                None
-            };
-            let presenter = crate::display_link::DisplayLinkPresenter::new(
-                &gpu.device,
-                &window,
-                window_arc_for_presenter,
-                Arc::clone(bridge),
-                h,
-                presentation,
+        if let Some(gpu) = &self.gpu {
+            let size = window.inner_size();
+            let surface = gpu.device.create_surface(
+                &*window,
+                size.width.max(1),
+                size.height.max(1),
+                manifold_gpu::GpuTextureFormat::Rgba16Float,
+                false, // displaySyncEnabled=false — content thread is vsync-paced
             );
-            self.output_presenter = Some(presenter);
+            self.send_content_cmd(
+                crate::content_command::ContentCommand::SetOutputSurface(surface),
+            );
+            self.send_content_cmd(
+                crate::content_command::ContentCommand::UpdateEdrHeadroom(h),
+            );
             // Retarget content vsync to the output window's display —
             // the output is the performance display for live visuals.
             if let Some(ref mut signal) = self.content_vsync_signal {

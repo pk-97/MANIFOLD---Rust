@@ -215,23 +215,13 @@ pub struct Application {
     /// IOSurface bridge for cross-device texture sharing (macOS).
     /// Content device writes compositor output to the IOSurface; UI device reads it.
     #[cfg(target_os = "macos")]
-    pub(crate) shared_texture_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
     /// IOSurface bridge for the workspace preview texture.
     #[cfg(target_os = "macos")]
     pub(crate) preview_texture_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
-    /// UI-side GpuTextures imported from the triple-buffered IOSurfaces.
-    /// The UI reads from whichever surface the content thread has published
-    /// via `bridge.front_index()`.
-    #[cfg(target_os = "macos")]
-    pub(crate) ui_shared_textures:
-        [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
     /// UI-side textures imported from the workspace preview IOSurfaces.
     #[cfg(target_os = "macos")]
     pub(crate) ui_preview_textures:
         [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
-    /// Last seen bridge generation — detects resize (not per-frame).
-    #[cfg(target_os = "macos")]
-    pub(crate) last_bridge_generation: u64,
     /// Last seen preview bridge generation.
     #[cfg(target_os = "macos")]
     pub(crate) last_preview_bridge_generation: u64,
@@ -255,9 +245,6 @@ pub struct Application {
     /// Replaces FrameTimer polling — aligns render submission to MacBook vsync.
     #[cfg(target_os = "macos")]
     pub(crate) ui_display_link: Option<crate::display_link::UiDisplayLink>,
-    /// CVDisplayLink-driven output presenter for hardware-synchronized frame pacing.
-    #[cfg(target_os = "macos")]
-    pub(crate) output_presenter: Option<crate::display_link::DisplayLinkPresenter>,
     /// Content thread vsync signal — shared with ContentThread for display-synced pacing.
     /// Retargeted when windows move between displays or output window opens/closes.
     #[cfg(target_os = "macos")]
@@ -412,15 +399,12 @@ impl Application {
             effect_clipboard: manifold_editing::clipboard::EffectClipboard::new(),
             content_pipeline_output: None,
             #[cfg(target_os = "macos")]
-            shared_texture_bridge: None,
             #[cfg(target_os = "macos")]
             preview_texture_bridge: None,
             #[cfg(target_os = "macos")]
-            ui_shared_textures: [None, None, None],
             #[cfg(target_os = "macos")]
             ui_preview_textures: [None, None, None],
             #[cfg(target_os = "macos")]
-            last_bridge_generation: 0,
             #[cfg(target_os = "macos")]
             last_preview_bridge_generation: 0,
             #[cfg(target_os = "macos")]
@@ -435,7 +419,6 @@ impl Application {
             #[cfg(target_os = "macos")]
             ui_display_link: None,
             #[cfg(target_os = "macos")]
-            output_presenter: None,
             #[cfg(target_os = "macos")]
             content_vsync_signal: None,
             ui_renderer: None,
@@ -1471,19 +1454,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             );
             self.workspace_preview_size = initial_preview_size;
 
-            // Create IOSurface bridge for cross-device texture sharing.
-            // Both devices get their own MTLTexture backed by the same IOSurface memory.
-            // Triple-buffered: 3 surfaces allow 2 content frames in flight.
+            // Create IOSurface bridge for workspace preview (downscaled).
+            // The main output path uses direct-to-drawable present from the
+            // content thread — no full-resolution IOSurface bridge needed.
             #[cfg(target_os = "macos")]
             {
-                let bridge = crate::shared_texture::SharedTextureBridge::new(output_w, output_h);
-                let bridge = Arc::new(bridge);
-                // Import all IOSurface textures on the UI device (triple-buffered).
-                let ui_textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT] =
-                    std::array::from_fn(|i| unsafe { bridge.import_texture_native(&gpu.device, i) });
-                self.ui_shared_textures = ui_textures.map(Some);
-                self.shared_texture_bridge = Some(Arc::clone(&bridge));
-
                 let preview_bridge = crate::shared_texture::SharedTextureBridge::new(
                     initial_preview_size.0,
                     initial_preview_size.1,
@@ -1549,16 +1524,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             native_device.install_device_capture_scope();
             // Transfer native device ownership to content pipeline.
             content_pipeline.set_native_gpu(native_device);
-            // Give the content pipeline all IOSurface textures for triple-buffered async output.
-            // Content textures are native GpuTexture (imported via native device).
-            #[cfg(target_os = "macos")]
-            if let Some(ref bridge) = self.shared_texture_bridge {
-                let native_dev = content_pipeline.native_device().unwrap();
-                let content_textures: [manifold_gpu::GpuTexture;
-                    crate::shared_texture::SURFACE_COUNT] =
-                    std::array::from_fn(|i| unsafe { bridge.import_texture_native(native_dev, i) });
-                content_pipeline.set_shared_textures(content_textures, Arc::clone(bridge));
-            }
+            // Give the content pipeline preview IOSurface textures for the workspace.
             #[cfg(target_os = "macos")]
             if let Some(ref bridge) = self.preview_texture_bridge {
                 let native_dev = content_pipeline.native_device().unwrap();
@@ -1718,7 +1684,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     #[cfg(target_os = "macos")]
                     {
                         self.ui_display_link = None;
-                        self.output_presenter = None;
                     }
 
                     // Unblock the content thread's vsync wait BEFORE sending
@@ -1745,7 +1710,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 } else {
                     #[cfg(target_os = "macos")]
                     {
-                        self.output_presenter = None;
+                        self.send_content_cmd(
+                            crate::content_command::ContentCommand::ClearOutputSurface,
+                        );
                         self.output_saved_frame = None;
                     }
                     self.window_registry.remove(&window_id);
@@ -2020,8 +1987,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
                             #[cfg(target_os = "macos")]
                             {
-                                self.output_presenter = None;
-                                self.output_saved_frame = None;
+                                self.send_content_cmd(
+                                    crate::content_command::ContentCommand::ClearOutputSurface,
+                                );
+                                        self.output_saved_frame = None;
                             }
                             self.window_registry.remove(&window_id);
                             self.open_output_window(
@@ -2493,7 +2462,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             self.pending_close_output = false;
             #[cfg(target_os = "macos")]
             {
-                self.output_presenter = None;
+                self.send_content_cmd(
+                    crate::content_command::ContentCommand::ClearOutputSurface,
+                );
                 self.output_saved_frame = None;
                 // Retarget content vsync back to the primary window.
                 if let Some(ref mut signal) = self.content_vsync_signal
@@ -2597,16 +2568,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
 
         // Present output frame on the main thread (windowed mode only).
-        // The CVDisplayLink callback sets a vsync flag; we do the actual
-        // blit + present here inside the winit event loop where Core Animation
-        // transactions exist, enabling presentsWithTransaction for smooth
-        // compositor-synchronized output.
-        // SKIP during display transitions — commit_and_wait_scheduled() can
-        // block indefinitely when the surface targets a stale display.
-        #[cfg(target_os = "macos")]
-        if !in_display_transition && let Some(ref mut presenter) = self.output_presenter {
-            presenter.present_if_ready();
-        }
+        // Output presentation is handled directly by the content thread's CB.
+        // No presenter blit needed — the content thread presents to the
+        // output drawable in its own command buffer.
 
         // Keep the event loop alive. On macOS the CVDisplayLink callback
         // calls request_redraw to wake us at each vsync. On other platforms
@@ -2641,8 +2605,7 @@ impl Application {
             }
         }
 
-        // Query headroom for output window → update presenter directly.
-        // Collect output window Arc first to avoid borrow conflict with output_presenter.
+        // Query headroom for output window → update content thread.
         let output_window: Option<Arc<winit::window::Window>> = self
             .window_registry
             .iter()
@@ -2663,10 +2626,9 @@ impl Application {
                     },
                 );
                 self.output_edr_headroom = h;
-                #[cfg(target_os = "macos")]
-                if let Some(p) = &mut self.output_presenter {
-                    p.update_edr_headroom(h);
-                }
+                // Update content thread — it owns the output surface and
+                // needs the headroom for tonemapping.
+                self.send_content_cmd(ContentCommand::UpdateEdrHeadroom(h));
             }
         }
 
@@ -2682,11 +2644,6 @@ impl Application {
                 if let Some(dl) = &mut self.ui_display_link {
                     any_changed |= dl.retarget_if_needed(win);
                 }
-            }
-            if let Some(ref win) = output_window
-                && let Some(p) = &mut self.output_presenter
-            {
-                any_changed |= p.retarget_if_needed(win);
             }
             // Retarget content vsync signal: prefer output window's display
             // (that's the performance display), fall back to primary window.
@@ -2734,7 +2691,6 @@ impl Drop for Application {
         #[cfg(target_os = "macos")]
         {
             self.ui_display_link = None;
-            self.output_presenter = None;
         }
 
         // Drop GPU resources before the device and surfaces.
@@ -2743,7 +2699,6 @@ impl Drop for Application {
         // Explicitly clear them here so they're gone before implicit field drops.
         #[cfg(target_os = "macos")]
         {
-            self.ui_shared_textures = [None, None, None];
             self.ui_preview_textures = [None, None, None];
         }
         self.layer_bitmap_gpu = None;

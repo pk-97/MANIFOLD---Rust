@@ -1119,28 +1119,9 @@ impl Application {
             None => return,
         };
 
-        // Present using IOSurface shared texture (dual device, zero GPU copy).
-        // The content thread writes to one IOSurface while the UI reads the other.
-        // front_index tells us which surface has the latest completed frame.
+        // Workspace preview via IOSurface (dual device, zero GPU copy).
         #[cfg(target_os = "macos")]
         {
-            // Detect output bridge resize (generation changed) and re-import all UI textures.
-            if let Some(ref bridge) = self.shared_texture_bridge {
-                let bridge_gen = bridge.generation();
-                if bridge_gen != self.last_bridge_generation {
-                    self.last_bridge_generation = bridge_gen;
-                    let ui_textures: [manifold_gpu::GpuTexture;
-                        crate::shared_texture::SURFACE_COUNT] = std::array::from_fn(|i| unsafe {
-                        bridge.import_texture_native(&gpu.device, i)
-                    });
-                    self.ui_shared_textures = ui_textures.map(Some);
-                    log::info!(
-                        "[UI] re-imported {} IOSurface textures after resize (gen={})",
-                        crate::shared_texture::SURFACE_COUNT,
-                        bridge_gen
-                    );
-                }
-            }
             // Detect preview bridge resize (generation changed) and re-import workspace textures.
             if let Some(ref bridge) = self.preview_texture_bridge {
                 let bridge_gen = bridge.generation();

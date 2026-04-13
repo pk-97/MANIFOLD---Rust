@@ -688,6 +688,16 @@ impl ContentThread {
                 self.engine.mark_compositor_dirty(Seconds::ZERO);
             }
 
+            // ── Output surface (direct present) ────────────────────
+            #[cfg(target_os = "macos")]
+            ContentCommand::SetOutputSurface(surface) => {
+                self.content_pipeline.set_output_surface(surface);
+            }
+            #[cfg(target_os = "macos")]
+            ContentCommand::ClearOutputSurface => {
+                self.content_pipeline.clear_output_surface();
+            }
+
             // ── Generator ─────────────────────────────────────────
             ContentCommand::GeneratorTypeChanged { layer_id, new_type } => {
                 // Port of C# PlaybackController.NotifyGeneratorTypeChanged().

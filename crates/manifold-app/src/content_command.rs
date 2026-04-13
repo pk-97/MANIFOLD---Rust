@@ -190,6 +190,15 @@ pub enum ContentCommand {
     /// Update EDR headroom when window moves to a different display.
     UpdateEdrHeadroom(f64),
 
+    // ── Output surface (direct present from content thread) ─────
+    /// Attach an output surface for direct-to-drawable presentation.
+    /// Content thread acquires drawables and presents in its own CB.
+    #[cfg(target_os = "macos")]
+    SetOutputSurface(manifold_gpu::GpuSurface),
+    /// Detach the output surface (output window closed).
+    #[cfg(target_os = "macos")]
+    ClearOutputSurface,
+
     // ── Export ────────────────────────────────────────────────────
     /// Begin offline video export. Content thread enters export loop.
     StartExport(Box<ExportConfig>),

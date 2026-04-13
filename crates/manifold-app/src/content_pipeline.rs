@@ -62,29 +62,30 @@ pub struct ContentPipeline {
     /// AND MetalFX is not available. Fallback for older hardware.
     #[cfg(target_os = "macos")]
     fsr1: Option<manifold_renderer::fsr1::Fsr1Upscaler>,
-    /// Full output dimensions (what the IOSurface and UI see).
+    /// Full output dimensions (what the drawable and UI see).
     /// May differ from compositor dimensions when FSR is active.
     output_w: u32,
     output_h: u32,
-    /// Triple-buffered IOSurface textures on the content device (native GpuTexture).
-    /// Content writes to shared_textures[write_surface_index]; UI reads the front surface.
+    /// Direct-present output surface (CAMetalLayer on the output window).
+    /// Content thread acquires drawables and presents in its own command buffer.
+    /// None when no output window is open.
     #[cfg(target_os = "macos")]
-    shared_textures: [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
+    output_surface: Option<manifold_gpu::GpuSurface>,
+    /// Blit pipeline for output present (passthrough + sampler).
+    #[cfg(target_os = "macos")]
+    output_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
+    /// Sampler for output present blit.
+    #[cfg(target_os = "macos")]
+    output_sampler: Option<manifold_gpu::GpuSampler>,
     /// Triple-buffered IOSurface textures for the workspace preview.
     #[cfg(target_os = "macos")]
     preview_textures: [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
-    /// Which surface we're writing to THIS frame (0, 1, or 2).
+    /// Which preview surface we're writing to THIS frame (0, 1, or 2).
     #[cfg(target_os = "macos")]
     write_surface_index: usize,
-    /// IOSurface bridge for cross-device sharing.
-    #[cfg(target_os = "macos")]
-    shared_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
     /// IOSurface bridge for the workspace preview path.
     #[cfg(target_os = "macos")]
     preview_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
-    /// Last seen bridge generation — used to detect resize and re-import.
-    #[cfg(target_os = "macos")]
-    shared_generation: u64,
     /// Last seen preview bridge generation.
     #[cfg(target_os = "macos")]
     preview_generation: u64,
@@ -93,9 +94,6 @@ pub struct ContentPipeline {
     /// surface_signal_values[S] to complete (the frame that last used it).
     #[cfg(target_os = "macos")]
     surface_signal_values: [u64; crate::shared_texture::SURFACE_COUNT],
-    /// Which IOSurface the PREVIOUS frame wrote to (published after fence ready).
-    #[cfg(target_os = "macos")]
-    last_write_surface: usize,
     /// Duration of the last GPU fence wait in milliseconds.
     /// Non-zero means the GPU was still working when the content thread woke up.
     /// Exposed unconditionally for the performance overlay.
@@ -144,23 +142,21 @@ impl ContentPipeline {
             output_w: 1920,
             output_h: 1080,
             #[cfg(target_os = "macos")]
-            shared_textures: [None, None, None],
+            output_surface: None,
+            #[cfg(target_os = "macos")]
+            output_pipeline: None,
+            #[cfg(target_os = "macos")]
+            output_sampler: None,
             #[cfg(target_os = "macos")]
             preview_textures: [None, None, None],
             #[cfg(target_os = "macos")]
             write_surface_index: 0,
             #[cfg(target_os = "macos")]
-            shared_bridge: None,
-            #[cfg(target_os = "macos")]
             preview_bridge: None,
-            #[cfg(target_os = "macos")]
-            shared_generation: 0,
             #[cfg(target_os = "macos")]
             preview_generation: 0,
             #[cfg(target_os = "macos")]
             surface_signal_values: [0; crate::shared_texture::SURFACE_COUNT],
-            #[cfg(target_os = "macos")]
-            last_write_surface: 0,
             last_fence_wait_ms: 0.0,
             #[cfg(feature = "profiling")]
             gpu_poll_ms: 0.0,
@@ -255,16 +251,64 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         (self.output_w, self.output_h)
     }
 
-    /// Set the triple-buffered IOSurface shared textures (native GpuTexture) and bridge.
-    /// Called during init after the bridge imports all textures on the content device.
+    /// Attach an output surface for direct-to-drawable presentation.
+    /// Creates the blit pipeline and sampler lazily. Called when the output
+    /// window opens (surface sent via ContentCommand::SetOutputSurface).
     #[cfg(target_os = "macos")]
-    pub fn set_shared_textures(
-        &mut self,
-        textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT],
-        bridge: Arc<crate::shared_texture::SharedTextureBridge>,
-    ) {
-        self.shared_textures = textures.map(Some);
-        self.shared_bridge = Some(bridge);
+    pub fn set_output_surface(&mut self, surface: manifold_gpu::GpuSurface) {
+        // Configure EDR on the output surface.
+        surface.configure_edr();
+        surface.set_maximum_drawable_count(3);
+        surface.set_presents_with_transaction(false);
+        // Create blit pipeline if not already cached.
+        if self.output_pipeline.is_none()
+            && let Some(ref device) = self.native_device
+        {
+                let shader = r#"
+@group(0) @binding(0) var t_source: texture_2d<f32>;
+@group(0) @binding(1) var s_source: sampler;
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+@vertex
+fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
+    var out: VertexOutput;
+    let x = f32(i32(idx) / 2) * 4.0 - 1.0;
+    let y = f32(i32(idx) % 2) * 4.0 - 1.0;
+    out.position = vec4<f32>(x, y, 0.0, 1.0);
+    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+    return out;
+}
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return textureSample(t_source, s_source, in.uv);
+}
+"#;
+                self.output_pipeline = Some(device.create_render_pipeline(
+                    shader,
+                    "vs_main",
+                    "fs_main",
+                    manifold_gpu::GpuTextureFormat::Rgba16Float,
+                    None,
+                    "Output Present Blit",
+                ));
+                self.output_sampler =
+                    Some(device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+                        min_filter: manifold_gpu::GpuFilterMode::Linear,
+                        mag_filter: manifold_gpu::GpuFilterMode::Linear,
+                        ..Default::default()
+                    }));
+        }
+        self.output_surface = Some(surface);
+        log::info!("[ContentPipeline] Output surface attached — direct present enabled");
+    }
+
+    /// Detach the output surface (output window closed).
+    #[cfg(target_os = "macos")]
+    pub fn clear_output_surface(&mut self) {
+        self.output_surface = None;
+        log::info!("[ContentPipeline] Output surface detached");
     }
 
     #[cfg(target_os = "macos")]
@@ -583,96 +627,77 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let _compositor_tex = self.compositor.render(&mut gpu_comp, &frame);
         }
 
-        // Upscale (render-res → output-res) + IOSurface copy.
+        // Upscale (render-res → output-res), direct present, and workspace preview.
         // MetalFX preferred; FSR 1.0 as fallback; direct blit when scale = 1.0.
         // Skipped in export mode (export reads output_texture directly).
         if !export_mode {
-            let (comp_w, comp_h) = self.compositor.dimensions();
-
+            // Resolve the final output texture (post-upscale or raw compositor).
+            let final_output: &manifold_gpu::GpuTexture;
             if let Some(ref mfx) = self.metalfx {
-                // MetalFX Spatial: ML-based upscale directly on the command buffer.
                 {
                     let mut gpu_upscale = if let Some(pool) = texture_pool {
                         GpuEncoder::with_pool(&mut native_enc, native_device, pool)
                     } else {
                         GpuEncoder::new(&mut native_enc, native_device)
                     };
-                    // RCAS sharpness: lower = sharper. AMD default 0.547.
-                    // 0.35 ≈ exp2(-1.5) — crisper without ringing.
                     mfx.upscale(&mut gpu_upscale, self.compositor.output_texture(), 0.35);
                 }
-                if let Some(ref shared_tex) = self.shared_textures[self.write_surface_index]
-                    && shared_tex.width == self.output_w
-                    && shared_tex.height == self.output_h
-                {
-                    native_enc.copy_texture_to_texture(
-                        &mfx.output.texture,
-                        shared_tex,
-                        self.output_w,
-                        self.output_h,
-                        1,
-                    );
-                }
-                Self::update_workspace_preview(
-                    &mut native_enc,
-                    &mfx.output.texture,
-                    self.preview_textures[self.write_surface_index].as_ref(),
-                    self.preview_pipeline.as_ref(),
-                    self.preview_sampler.as_ref(),
-                );
+                final_output = &mfx.output.texture;
             } else if let Some(ref fsr) = self.fsr1 {
-                // FSR 1.0 fallback: EASU + RCAS compute dispatches.
                 {
                     let mut gpu_fsr = if let Some(pool) = texture_pool {
                         GpuEncoder::with_pool(&mut native_enc, native_device, pool)
                     } else {
                         GpuEncoder::new(&mut native_enc, native_device)
                     };
-                    // RCAS sharpness: lower = sharper. AMD default 0.547.
-                    // 0.35 ≈ exp2(-1.5) — crisper without ringing.
                     fsr.upscale(&mut gpu_fsr, self.compositor.output_texture(), 0.35);
                 }
-                if let Some(ref shared_tex) = self.shared_textures[self.write_surface_index]
-                    && shared_tex.width == self.output_w
-                    && shared_tex.height == self.output_h
-                {
-                    native_enc.copy_texture_to_texture(
-                        &fsr.output.texture,
-                        shared_tex,
-                        self.output_w,
-                        self.output_h,
-                        1,
-                    );
-                }
-                Self::update_workspace_preview(
-                    &mut native_enc,
-                    &fsr.output.texture,
-                    self.preview_textures[self.write_surface_index].as_ref(),
-                    self.preview_pipeline.as_ref(),
-                    self.preview_sampler.as_ref(),
-                );
+                final_output = &fsr.output.texture;
             } else {
-                // No upscaling: blit compositor output directly to IOSurface.
-                if let Some(ref shared_tex) = self.shared_textures[self.write_surface_index]
-                    && shared_tex.width == comp_w
-                    && shared_tex.height == comp_h
-                {
-                    native_enc.copy_texture_to_texture(
-                        self.compositor.output_texture(),
-                        shared_tex,
-                        comp_w,
-                        comp_h,
-                        1,
-                    );
-                }
-                Self::update_workspace_preview(
-                    &mut native_enc,
-                    self.compositor.output_texture(),
-                    self.preview_textures[self.write_surface_index].as_ref(),
-                    self.preview_pipeline.as_ref(),
-                    self.preview_sampler.as_ref(),
-                );
+                final_output = self.compositor.output_texture();
             }
+
+            // ── Direct present to output drawable ───────────────────
+            // Acquire drawable, blit final output, schedule present — all in
+            // the same command buffer. No IOSurface, no second CB.
+            if let Some(ref surface) = self.output_surface
+                && let Some(ref pipeline) = self.output_pipeline
+                && let Some(ref sampler) = self.output_sampler
+                && let Some(drawable) = surface.next_drawable()
+            {
+                let target = drawable.gpu_texture(
+                    manifold_gpu::GpuTextureFormat::Rgba16Float,
+                );
+                let w = surface.width as f32;
+                let h = surface.height as f32;
+                native_enc.draw_fullscreen_viewport(
+                    pipeline,
+                    &target,
+                    &[
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 0,
+                            texture: final_output,
+                        },
+                        manifold_gpu::GpuBinding::Sampler {
+                            binding: 1,
+                            sampler,
+                        },
+                    ],
+                    (0.0, 0.0, w, h),
+                    manifold_gpu::GpuLoadAction::DontCare,
+                    "Output Present",
+                );
+                native_enc.present_drawable(&drawable);
+            }
+
+            // ── Workspace preview (downscaled IOSurface) ────────────
+            Self::update_workspace_preview(
+                &mut native_enc,
+                final_output,
+                self.preview_textures[self.write_surface_index].as_ref(),
+                self.preview_pipeline.as_ref(),
+                self.preview_sampler.as_ref(),
+            );
         }
 
         // ── Live recording capture ──────────────────────────────────
@@ -706,17 +731,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             None
         };
 
-        // Register GPU completion handler to publish the front buffer the instant
-        // the GPU finishes — decoupled from the content thread's sleep/wake cycle.
-        // This eliminates 3-1 cadence judder on high-refresh displays (e.g. 120Hz).
+        // Register GPU completion handler to publish the preview front buffer
+        // the instant the GPU finishes — decoupled from the content thread's
+        // sleep/wake cycle. Output presentation is handled by presentDrawable
+        // on the same command buffer (no IOSurface needed).
         if !export_mode {
             let write_idx = self.write_surface_index as u32;
-            let bridge = self.shared_bridge.clone();
             let preview = self.preview_bridge.clone();
             native_enc.add_completed_handler(move || {
-                if let Some(ref b) = bridge {
-                    b.publish_front(write_idx);
-                }
                 if let Some(ref b) = preview {
                     b.publish_front(write_idx);
                 }
@@ -735,10 +757,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         native_enc.commit();
         let _comp_ms = _t0.elapsed().as_secs_f64() * 1000.0;
 
-        // Surface tracking — skipped in export mode (no surface cycling needed).
+        // Preview surface tracking — skipped in export mode (no surface cycling).
         if !export_mode {
             self.surface_signal_values[self.write_surface_index] = self.native_signal_value;
-            self.last_write_surface = self.write_surface_index;
             self.write_surface_index =
                 (self.write_surface_index + 1) % crate::shared_texture::SURFACE_COUNT;
         }
@@ -889,16 +910,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             self.fsr1 = None;
         }
 
-        // IOSurface bridge always at output resolution.
+        // Reset preview surface tracking after resolution change.
         #[cfg(target_os = "macos")]
-        if let Some(ref bridge) = self.shared_bridge {
-            bridge.resize(width, height);
-            self.shared_textures = std::array::from_fn(|i| {
-                Some(unsafe { bridge.import_texture_native(native_device, i) })
-            });
+        {
             self.write_surface_index = 0;
             self.surface_signal_values = [0; crate::shared_texture::SURFACE_COUNT];
-            self.shared_generation = bridge.generation();
         }
 
         // UI thread reads output dimensions.
