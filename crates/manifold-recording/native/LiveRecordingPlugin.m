@@ -450,11 +450,18 @@ int LiveRecorder_EncodeVideoFrame(void* handle, void* metalTexturePtr, double el
 
         AVAssetWriterInput* videoIn = state->videoInput;
         dispatch_async(state->appendQueue, ^{
-            if (writer.status == AVAssetWriterStatusWriting
-                && videoIn.isReadyForMoreMediaData)
+            @try
             {
-                [adaptor appendPixelBuffer:pixelBuffer
-                      withPresentationTime:presentTime];
+                if (writer.status == AVAssetWriterStatusWriting
+                    && videoIn.isReadyForMoreMediaData)
+                {
+                    [adaptor appendPixelBuffer:pixelBuffer
+                          withPresentationTime:presentTime];
+                }
+            }
+            @catch (NSException* e)
+            {
+                NSLog(@"[LiveRecorder] Video append exception (dropped frame): %@", e.reason);
             }
             CFRelease(cvMetalTexture);
             CVPixelBufferRelease(pixelBuffer);
@@ -563,18 +570,30 @@ int LiveRecorder_WriteAudioSamples(void* handle, const float* samples,
             return LR_ERR_AUDIO_FAILED;
         }
 
-        // 4. Append to writer.
-        BOOL appended = [state->audioInput appendSampleBuffer:sampleBuffer];
+        // 4. Append to writer — re-check readyForMoreMediaData (may have changed
+        // during buffer construction above) and wrap in @try to prevent crash.
+        BOOL appended = NO;
+        @try
+        {
+            if (state->assetWriter.status == AVAssetWriterStatusWriting
+                && state->audioInput.isReadyForMoreMediaData)
+            {
+                appended = [state->audioInput appendSampleBuffer:sampleBuffer];
+            }
+        }
+        @catch (NSException* e)
+        {
+            NSLog(@"[LiveRecorder] Audio append exception: %@ — DISABLING audio", e.reason);
+            state->hasAudio = NO;
+        }
         CFRelease(sampleBuffer);
 
-        if (!appended)
+        if (!appended && state->hasAudio)
         {
             NSLog(@"[LiveRecorder] Audio append failed at %.3fs: status=%ld error=%@"
                   " — DISABLING audio to protect video recording",
                   elapsedSeconds, (long)state->assetWriter.status,
                   state->assetWriter.error);
-            // Disable audio for the rest of this session so it doesn't
-            // poison the AVAssetWriter and kill video recording too.
             state->hasAudio = NO;
             return LR_ERR_APPEND_FAILED;
         }
@@ -599,25 +618,32 @@ int LiveRecorder_Finalize(void* handle)
         // and pixel buffer appends to finish before finalizing.
         dispatch_sync(state->appendQueue, ^{});
 
-        if (state->assetWriter != nil &&
-            state->assetWriter.status == AVAssetWriterStatusWriting)
+        @try
         {
-            [state->videoInput markAsFinished];
-            if (state->audioInput != nil)
-                [state->audioInput markAsFinished];
-
-            // Synchronous wait for finalization.
-            dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-            [state->assetWriter finishWritingWithCompletionHandler:^{
-                dispatch_semaphore_signal(sem);
-            }];
-            dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 30LL * NSEC_PER_SEC));
-
-            if (state->assetWriter.status == AVAssetWriterStatusFailed)
+            if (state->assetWriter != nil &&
+                state->assetWriter.status == AVAssetWriterStatusWriting)
             {
-                NSLog(@"[LiveRecorder] finishWriting failed: %@", state->assetWriter.error);
-                frameCount = -LR_ERR_WRITER_FAILED;
+                [state->videoInput markAsFinished];
+                if (state->audioInput != nil)
+                    [state->audioInput markAsFinished];
+
+                dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+                [state->assetWriter finishWritingWithCompletionHandler:^{
+                    dispatch_semaphore_signal(sem);
+                }];
+                dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 30LL * NSEC_PER_SEC));
+
+                if (state->assetWriter.status == AVAssetWriterStatusFailed)
+                {
+                    NSLog(@"[LiveRecorder] finishWriting failed: %@", state->assetWriter.error);
+                    frameCount = -LR_ERR_WRITER_FAILED;
+                }
             }
+        }
+        @catch (NSException* e)
+        {
+            NSLog(@"[LiveRecorder] Finalize exception: %@", e.reason);
+            frameCount = -LR_ERR_WRITER_FAILED;
         }
 
         // Release resources.

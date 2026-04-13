@@ -48,6 +48,12 @@ struct LayerGeneratorState {
     generator: Box<dyn Generator>,
     generator_type: GeneratorTypeId,
     trigger_count: u32,
+    /// Cached string params from the layer's clips. When a clip provides a
+    /// string param (e.g. fontFamily), it's stored here so that subsequent clips
+    /// without that key still get the layer's value. This avoids the first-clip
+    /// fallback-to-default problem where e.g. text renders in Inter before the
+    /// clip with the selected font is reached.
+    layer_string_defaults: std::collections::BTreeMap<String, String>,
 }
 
 /// GPU-side clip renderer for generators.
@@ -192,6 +198,7 @@ impl GeneratorRenderer {
                         generator,
                         generator_type: gen_type.clone(),
                         trigger_count: 0,
+                        layer_string_defaults: std::collections::BTreeMap::new(),
                     },
                 );
             } else {
@@ -560,12 +567,19 @@ impl GeneratorRenderer {
                     }
                 }
 
+                // Preserve layer_string_defaults across type changes
+                let old_defaults = self
+                    .layer_generators
+                    .get(layer_id)
+                    .map(|ls| ls.layer_string_defaults.clone())
+                    .unwrap_or_default();
                 self.layer_generators.insert(
                     layer_id.clone(),
                     LayerGeneratorState {
                         generator,
                         generator_type: new_type.clone(),
                         trigger_count: old_trigger_count,
+                        layer_string_defaults: old_defaults,
                     },
                 );
             }
