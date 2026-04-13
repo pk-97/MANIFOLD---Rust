@@ -89,6 +89,7 @@ typedef struct
     int                                     audioChannels;
     BOOL                                    isHDR;
     BOOL                                    hasAudio;
+    dispatch_queue_t                        appendQueue;  // serial queue for async appends
 } LiveRecorderState;
 
 // -- Create -------------------------------------------------------------------
@@ -111,6 +112,8 @@ void* LiveRecorder_Create(int width, int height, float fps, const char* outputPa
 
         state->device = device;
         state->commandQueue = [device newCommandQueue];
+        state->appendQueue = dispatch_queue_create("com.manifold.recording.append",
+                                                    DISPATCH_QUEUE_SERIAL);
         state->width = width;
         state->height = height;
         state->fpsNum = (int)roundf(fps);
@@ -421,32 +424,39 @@ int LiveRecorder_EncodeVideoFrame(void* handle, void* metalTexturePtr, double el
         [compute dispatchThreadgroups:gridSize threadsPerThreadgroup:threadGroupSize];
 
         [compute endEncoding];
-        [cmdBuf commit];
-        [cmdBuf waitUntilCompleted];
 
-        if (cmdBuf.status == MTLCommandBufferStatusError)
-        {
-            NSLog(@"[LiveRecorder] Compute command buffer error: %@", cmdBuf.error);
-            CFRelease(cvMetalTexture);
-            CVPixelBufferRelease(pixelBuffer);
-            return LR_ERR_BLIT_FAILED;
-        }
-
-        // Append with wall-clock PTS.
-        // Timescale 600 gives sub-ms precision (1/600 ≈ 1.67ms).
+        // Async: submit GPU work and append pixel buffer in completion handler.
+        // This lets the recording thread move to the next frame immediately
+        // instead of blocking on waitUntilCompleted.
         CMTime presentTime = CMTimeMakeWithSeconds(elapsedSeconds, 600);
-        BOOL appended = [state->videoAdaptor appendPixelBuffer:pixelBuffer
-                                           withPresentationTime:presentTime];
 
-        CFRelease(cvMetalTexture);
-        CVPixelBufferRelease(pixelBuffer);
+        // Capture references for the completion block. The block retains these.
+        AVAssetWriterInputPixelBufferAdaptor* adaptor = state->videoAdaptor;
+        AVAssetWriter* writer = state->assetWriter;
+        dispatch_queue_t appendQueue = state->appendQueue;
 
-        if (!appended)
-        {
-            NSLog(@"[LiveRecorder] appendPixelBuffer failed at %.3fs: %@",
-                  elapsedSeconds, state->assetWriter.error);
-            return LR_ERR_APPEND_FAILED;
-        }
+        [cmdBuf addCompletedHandler:^(id<MTLCommandBuffer> completedBuf) {
+            if (completedBuf.status == MTLCommandBufferStatusError)
+            {
+                NSLog(@"[LiveRecorder] Compute error: %@", completedBuf.error);
+                CFRelease(cvMetalTexture);
+                CVPixelBufferRelease(pixelBuffer);
+                return;
+            }
+
+            // Append on serial queue to ensure ordering.
+            dispatch_async(appendQueue, ^{
+                if (writer.status == AVAssetWriterStatusWriting)
+                {
+                    [adaptor appendPixelBuffer:pixelBuffer
+                          withPresentationTime:presentTime];
+                }
+                CFRelease(cvMetalTexture);
+                CVPixelBufferRelease(pixelBuffer);
+            });
+        }];
+
+        [cmdBuf commit];
 
         state->videoFrameCount++;
         return LR_OK;
@@ -583,6 +593,10 @@ int LiveRecorder_Finalize(void* handle)
         LiveRecorderState* state = (LiveRecorderState*)handle;
         int frameCount = state->videoFrameCount;
 
+        // Drain the async append queue — wait for all in-flight GPU completions
+        // and pixel buffer appends to finish before finalizing.
+        dispatch_sync(state->appendQueue, ^{});
+
         if (state->assetWriter != nil &&
             state->assetWriter.status == AVAssetWriterStatusWriting)
         {
@@ -613,6 +627,7 @@ int LiveRecorder_Finalize(void* handle)
         }
 
         state->copyPipeline = nil;
+        state->appendQueue = nil;
         state->assetWriter = nil;
         state->videoInput = nil;
         state->videoAdaptor = nil;
