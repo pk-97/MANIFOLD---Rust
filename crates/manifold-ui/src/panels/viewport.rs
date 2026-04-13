@@ -187,7 +187,7 @@ pub struct TimelineViewportPanel {
     bg_panel_id: i32,
     overview_btn_id: i32,
     ruler_bg_id: i32,
-    ruler_clip_id: i32,
+    viewport_clip_id: i32,
     // playhead: unified overlay quad in app.rs (ruler → waveform → stems → tracks)
     insert_cursor_ruler_id: i32,
     // insert_cursor_track_id: removed — painted into bitmap
@@ -296,7 +296,7 @@ impl TimelineViewportPanel {
             bg_panel_id: -1,
             overview_btn_id: -1,
             ruler_bg_id: -1,
-            ruler_clip_id: -1,
+            viewport_clip_id: -1,
             insert_cursor_ruler_id: -1,
             export_in_beat: Beats::ZERO,
             export_out_beat: Beats::ZERO,
@@ -1202,11 +1202,12 @@ impl Panel for TimelineViewportPanel {
             "",
         ) as i32;
 
-        // Clip region for ruler ticks and labels — prevents text from bleeding
-        // past the ruler bounds into adjacent sections (e.g. live recording panel).
-        self.ruler_clip_id = tree.add_node(
+        // Clip region covering ruler + tracks — prevents ticks, labels, markers,
+        // and export range elements from bleeding past the viewport bounds into
+        // adjacent panels (e.g. live recording section to the right).
+        self.viewport_clip_id = tree.add_node(
             -1,
-            self.ruler_rect,
+            self.viewport_rect,
             UINodeType::ClipRegion,
             UIStyle::default(),
             None,
@@ -1920,7 +1921,7 @@ impl TimelineViewportPanel {
 
                 // Tick mark (bottom-aligned)
                 let id = tree.add_panel(
-                    self.ruler_clip_id,
+                    self.viewport_clip_id,
                     px,
                     ruler_bottom - tick_h,
                     RULER_TICK_W,
@@ -1949,7 +1950,7 @@ impl TimelineViewportPanel {
 
                     let label_y = self.ruler_rect.y + 2.0;
                     let id = tree.add_label(
-                        self.ruler_clip_id,
+                        self.viewport_clip_id,
                         px + 2.0,
                         label_y,
                         RULER_LABEL_W,
@@ -1994,7 +1995,7 @@ impl TimelineViewportPanel {
         // In marker
         let in_px = self.beat_to_pixel(self.export_in_beat);
         self.export_in_marker_id = tree.add_panel(
-            -1,
+            self.viewport_clip_id,
             in_px - marker_w * 0.5,
             self.ruler_rect.y,
             marker_w,
@@ -2008,7 +2009,7 @@ impl TimelineViewportPanel {
         let range_right = out_px.min(self.tracks_rect.x_max());
         let range_w = (range_right - range_left).max(0.0);
         self.export_range_id = tree.add_panel(
-            -1,
+            self.viewport_clip_id,
             range_left,
             self.tracks_rect.y,
             range_w,
@@ -2021,7 +2022,7 @@ impl TimelineViewportPanel {
 
         // Out marker
         self.export_out_marker_id = tree.add_panel(
-            -1,
+            self.viewport_clip_id,
             out_px - marker_w * 0.5,
             self.ruler_rect.y,
             marker_w,
@@ -2059,7 +2060,7 @@ impl TimelineViewportPanel {
 
         let marker_s = color::INSERT_CURSOR_RULER_MARKER_SIZE;
         self.insert_cursor_ruler_id = tree.add_panel(
-            -1,
+            self.viewport_clip_id,
             px - marker_s * 0.5,
             self.ruler_rect.y + self.ruler_rect.height - marker_s,
             marker_s,
@@ -2107,7 +2108,7 @@ impl TimelineViewportPanel {
                 mc
             };
             let flag_id = tree.add_panel(
-                -1,
+                self.viewport_clip_id,
                 flag_x,
                 flag_y,
                 flag_w,
@@ -2124,7 +2125,7 @@ impl TimelineViewportPanel {
 
             // Selection outline — always allocated, hidden if not selected
             let outline_id = tree.add_panel(
-                -1,
+                self.viewport_clip_id,
                 flag_x - 1.0,
                 flag_y - 1.0,
                 flag_w + 2.0,
@@ -2143,7 +2144,7 @@ impl TimelineViewportPanel {
             let label_x = flag_x + flag_w + 2.0;
             let label_y = flag_y + (flag_h - color::MARKER_LABEL_HEIGHT) * 0.5;
             let label_id = tree.add_label(
-                -1,
+                self.viewport_clip_id,
                 label_x,
                 label_y,
                 color::MARKER_LABEL_WIDTH,
