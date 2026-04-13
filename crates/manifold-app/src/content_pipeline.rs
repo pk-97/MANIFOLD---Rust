@@ -243,6 +243,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         self.native_device.as_ref().map(|d| d.raw_device_ptr())
     }
 
+    /// Duration the content thread blocked waiting for a GPU surface to become
+    /// available (ms). Non-zero means the GPU was still processing a frame from
+    /// 2 frames ago when the content thread woke up — a sign of GPU saturation.
+    pub fn last_fence_wait_ms(&self) -> f64 {
+        self.last_fence_wait_ms
+    }
+
     /// Current output resolution (post-upscale).
     pub fn output_dimensions(&self) -> (u32, u32) {
         (self.output_w, self.output_h)
@@ -408,12 +415,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let (renderers, project) = engine.split_renderer_project();
         let layers = project.map(|p| p.timeline.layers.as_slice()).unwrap_or(&[]);
 
-        // ── Generator rendering (separate command buffer) ─────────────
-        // Generators get their own CB that is committed BEFORE the compositor.
-        // This guarantees generator texture writes are visible to the compositor's
-        // per-layer command buffers in the parallel dispatch path. Metal executes
-        // CBs in commit order, so committing gen_enc first ensures generators
-        // complete before per-layer effects read their textures.
+        // ── Single command buffer for generators + compositor ────────
+        // Metal executes render/compute passes within a CB in submission order,
+        // so generator texture writes complete before the compositor reads them.
+        // One CB instead of two reduces Metal command buffer scheduling overhead
+        // and gives the GPU better visibility into the full workload.
         let _t0 = std::time::Instant::now();
 
         // Advance the pool's frame counter — drives frame-stamped recycling.
@@ -426,58 +432,53 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             }
         }
 
-        {
-            let mut gen_enc = native_device.create_encoder("Generators");
-            {
-                let mut gpu_gen = if let Some(pool) = texture_pool {
-                    GpuEncoder::with_pool(&mut gen_enc, native_device, pool)
-                } else {
-                    GpuEncoder::new(&mut gen_enc, native_device)
-                };
+        let mut native_enc = native_device.create_encoder("Content Frame");
 
-                for renderer in renderers.iter_mut() {
-                    if let Some(gen_renderer) =
-                        renderer.as_any_mut().downcast_mut::<GeneratorRenderer>()
-                    {
-                        // Sync upscale mode from project settings (per-frame, zero-cost read).
-                        if let Some(p) = project {
-                            use manifold_core::types::UpscaleMode;
-                            match p.settings.upscale_mode {
-                                UpscaleMode::Native => {
-                                    gen_renderer.set_scaling_enabled(false);
-                                }
-                                UpscaleMode::MetalFxSpatial => {
-                                    gen_renderer.set_scaling_enabled(true);
-                                    gen_renderer.set_upscale_mode(
-                                        manifold_gpu::metalfx::UpscaleMode::MetalFxSpatial,
-                                    );
-                                }
-                                UpscaleMode::MpsLanczos => {
-                                    gen_renderer.set_scaling_enabled(true);
-                                    gen_renderer.set_upscale_mode(
-                                        manifold_gpu::metalfx::UpscaleMode::MpsLanczos,
-                                    );
-                                }
+        // ── Generator rendering ─────────────────────────────────────
+        {
+            let mut gpu_gen = if let Some(pool) = texture_pool {
+                GpuEncoder::with_pool(&mut native_enc, native_device, pool)
+            } else {
+                GpuEncoder::new(&mut native_enc, native_device)
+            };
+
+            for renderer in renderers.iter_mut() {
+                if let Some(gen_renderer) =
+                    renderer.as_any_mut().downcast_mut::<GeneratorRenderer>()
+                {
+                    // Sync upscale mode from project settings (per-frame, zero-cost read).
+                    if let Some(p) = project {
+                        use manifold_core::types::UpscaleMode;
+                        match p.settings.upscale_mode {
+                            UpscaleMode::Native => {
+                                gen_renderer.set_scaling_enabled(false);
+                            }
+                            UpscaleMode::MetalFxSpatial => {
+                                gen_renderer.set_scaling_enabled(true);
+                                gen_renderer.set_upscale_mode(
+                                    manifold_gpu::metalfx::UpscaleMode::MetalFxSpatial,
+                                );
+                            }
+                            UpscaleMode::MpsLanczos => {
+                                gen_renderer.set_scaling_enabled(true);
+                                gen_renderer.set_upscale_mode(
+                                    manifold_gpu::metalfx::UpscaleMode::MpsLanczos,
+                                );
                             }
                         }
-                        gen_renderer.render_all(
-                            &mut gpu_gen,
-                            time_f64,
-                            beat_f64,
-                            dt as f32,
-                            layers,
-                        );
-                        break;
                     }
+                    gen_renderer.render_all(
+                        &mut gpu_gen,
+                        time_f64,
+                        beat_f64,
+                        dt as f32,
+                        layers,
+                    );
+                    break;
                 }
             }
-            gen_enc.add_completed_handler_with_status("Generators");
-            gen_enc.commit();
         }
         let _gen_ms = _t0.elapsed().as_secs_f64() * 1000.0;
-
-        // ── Create compositor command buffer ─────────────────────────
-        let mut native_enc = native_device.create_encoder("Compositor");
 
         // ── Build clip + layer descriptors (CPU only) ────────────────
         let _t0 = std::time::Instant::now();

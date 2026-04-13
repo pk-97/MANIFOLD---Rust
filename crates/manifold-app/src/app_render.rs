@@ -939,6 +939,7 @@ impl Application {
                     ui_frame_time_ms: (self.frame_timer.last_dt() * 1000.0) as f32,
                     render_fps: self.content_state.content_fps,
                     render_frame_time_ms: self.content_state.content_frame_time_ms,
+                    gpu_fence_wait_ms: self.content_state.gpu_fence_wait_ms,
                     render_target_fps: self.content_state.frame_rate as f32,
                     active_clips: self.content_state.active_clips,
                     preparing_clips: 0,

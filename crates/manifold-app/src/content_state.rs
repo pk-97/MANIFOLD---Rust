@@ -33,6 +33,8 @@ pub struct ContentState {
     // ── Content thread perf ─────────────────────────────────────
     pub content_fps: f32,
     pub content_frame_time_ms: f32,
+    /// Time spent waiting for a GPU surface (ms). Non-zero = GPU saturation.
+    pub gpu_fence_wait_ms: f32,
     pub active_clips: usize,
 
     // ── Editing ────────────────────────────────────────────────────
@@ -254,6 +256,7 @@ impl Default for ContentState {
             is_recording: false,
             content_fps: 0.0,
             content_frame_time_ms: 0.0,
+            gpu_fence_wait_ms: 0.0,
             active_clips: 0,
             data_version: 0,
             editing_is_dirty: false,

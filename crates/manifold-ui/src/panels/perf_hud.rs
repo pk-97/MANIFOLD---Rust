@@ -10,7 +10,7 @@ use crate::node::*;
 use crate::tree::UITree;
 
 const HUD_WIDTH: f32 = 250.0;
-const HUD_HEIGHT: f32 = 380.0;
+const HUD_HEIGHT: f32 = 394.0;
 const ROW_HEIGHT: f32 = 14.0;
 const LABEL_FONT: u16 = color::FONT_SMALL;
 const VALUE_FONT: u16 = color::FONT_SMALL;
@@ -31,6 +31,8 @@ pub struct PerfMetrics {
     pub ui_frame_time_ms: f32,
     pub render_fps: f32,
     pub render_frame_time_ms: f32,
+    /// Time spent waiting for a GPU surface (ms). Non-zero = GPU saturation.
+    pub gpu_fence_wait_ms: f32,
     /// Target content FPS from project settings (e.g. 60, 120, 240).
     /// Used to scale graph colors relative to the frame budget.
     pub render_target_fps: f32,
@@ -87,6 +89,7 @@ pub struct PerfHudPanel {
     ui_frame_time_id: i32,
     render_fps_value_id: i32,
     render_frame_time_id: i32,
+    gpu_fence_wait_id: i32,
     active_clips_id: i32,
     beat_id: i32,
     time_id: i32,
@@ -125,6 +128,7 @@ impl PerfHudPanel {
             ui_frame_time_id: -1,
             render_fps_value_id: -1,
             render_frame_time_id: -1,
+            gpu_fence_wait_id: -1,
             active_clips_id: -1,
             beat_id: -1,
             time_id: -1,
@@ -188,6 +192,34 @@ impl PerfHudPanel {
                 self.render_frame_time_id as u32,
                 &format!("{:.1} ms", m.render_frame_time_ms),
             );
+        }
+        if self.gpu_fence_wait_id >= 0 {
+            if m.gpu_fence_wait_ms > 0.1 {
+                tree.set_text(
+                    self.gpu_fence_wait_id as u32,
+                    &format!("{:.1} ms", m.gpu_fence_wait_ms),
+                );
+                tree.set_style(
+                    self.gpu_fence_wait_id as u32,
+                    UIStyle {
+                        text_color: color::STATUS_BAD,
+                        font_size: VALUE_FONT,
+                        text_align: TextAlign::Right,
+                        ..UIStyle::default()
+                    },
+                );
+            } else {
+                tree.set_text(self.gpu_fence_wait_id as u32, "0.0 ms");
+                tree.set_style(
+                    self.gpu_fence_wait_id as u32,
+                    UIStyle {
+                        text_color: color::TEXT_NORMAL,
+                        font_size: VALUE_FONT,
+                        text_align: TextAlign::Right,
+                        ..UIStyle::default()
+                    },
+                );
+            }
         }
         if self.active_clips_id >= 0 {
             tree.set_text(
@@ -461,6 +493,9 @@ impl Panel for PerfHudPanel {
         cy = ny;
         let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "Render Frame");
         self.render_frame_time_id = id;
+        cy = ny;
+        let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "GPU Wait");
+        self.gpu_fence_wait_id = id;
         cy = ny;
 
         // Render frame time graph

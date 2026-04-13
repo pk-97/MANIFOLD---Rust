@@ -172,10 +172,20 @@ unsafe impl Send for PresenterContext {}
 impl PresenterContext {
     /// Blit the latest IOSurface frame to the CAMetalLayer drawable.
     ///
+    /// Like `present_frame`, but returns whether a frame was actually presented.
+    /// Returns `false` when no drawable was available (all in-flight).
+    fn present_frame_tracked(&mut self, use_transaction: bool) -> bool {
+        self.present_frame_inner(use_transaction)
+    }
+
     /// `use_transaction`: when true, uses commit_and_wait_scheduled + manual
     /// present for Core Animation transaction sync (windowed mode, main thread).
     /// When false, uses standard presentDrawable (fullscreen/Direct Display).
     fn present_frame(&mut self, use_transaction: bool) {
+        self.present_frame_inner(use_transaction);
+    }
+
+    fn present_frame_inner(&mut self, use_transaction: bool) -> bool {
         // ── Bridge resize check (rare) ──
         let bridge_gen = self.bridge.generation();
         if bridge_gen != self.last_bridge_gen {
@@ -191,11 +201,11 @@ impl PresenterContext {
         // ── Latch latest content frame ──
         let front = self.bridge.front_index() as usize;
         let Some(source) = self.native_textures[front].as_ref() else {
-            return;
+            return false;
         };
 
         let Some(drawable) = self.surface.next_drawable() else {
-            return;
+            return false;
         };
 
         // ── Blit ──
@@ -234,6 +244,7 @@ impl PresenterContext {
             encoder.present_drawable(&drawable);
             encoder.commit();
         }
+        true
     }
 }
 
@@ -244,6 +255,10 @@ impl PresenterContext {
 struct FullscreenCallbackContext {
     presenter: PresenterContext,
     stop: AtomicBool,
+    /// Consecutive vsyncs where next_drawable() returned None (all in-flight).
+    drawable_starvation_count: u64,
+    /// Total vsyncs since last report (for periodic logging).
+    vsync_count: u64,
 }
 
 unsafe impl Send for FullscreenCallbackContext {}
@@ -260,18 +275,39 @@ unsafe extern "C" fn fullscreen_present_callback(
     if ctx.stop.load(Ordering::Acquire) {
         return K_CV_RETURN_SUCCESS;
     }
+    ctx.vsync_count += 1;
+
     // Must present every vsync to maintain Direct Display lock.
     let before = std::time::Instant::now();
-    objc::rc::autoreleasepool(|| {
-        ctx.presenter.present_frame(false);
+    let presented = objc::rc::autoreleasepool(|| {
+        ctx.presenter.present_frame_tracked(false)
     });
-    let elapsed = before.elapsed();
-    if elapsed.as_millis() > 50 {
+
+    if !presented {
+        ctx.drawable_starvation_count += 1;
+    }
+
+    let elapsed_ms = before.elapsed().as_secs_f64() * 1000.0;
+    // Warn at 18ms — exceeding one 60Hz vsync interval means the blit
+    // is being delayed by GPU saturation from content work.
+    if elapsed_ms > 18.0 {
         log::warn!(
-            "[DisplayLink] Fullscreen present took {}ms — possible drawable stall",
-            elapsed.as_millis(),
+            "[DisplayLink] Fullscreen present took {:.1}ms — GPU contention",
+            elapsed_ms,
         );
     }
+
+    // Periodic summary every 60 vsyncs (~1s at 60Hz).
+    if ctx.vsync_count % 60 == 0 && ctx.drawable_starvation_count > 0 {
+        log::warn!(
+            "[DisplayLink] Drawable starvation: {}/{} vsyncs missed \
+             (Direct Display may drop)",
+            ctx.drawable_starvation_count,
+            60,
+        );
+        ctx.drawable_starvation_count = 0;
+    }
+
     K_CV_RETURN_SUCCESS
 }
 
@@ -416,6 +452,8 @@ impl DisplayLinkPresenter {
             let ctx = Box::into_raw(Box::new(FullscreenCallbackContext {
                 presenter: presenter_ctx,
                 stop: AtomicBool::new(false),
+                drawable_starvation_count: 0,
+                vsync_count: 0,
             }));
             unsafe {
                 CVDisplayLinkSetOutputCallback(

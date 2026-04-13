@@ -758,6 +758,7 @@ impl ContentThread {
                 is_recording: self.engine.is_recording(),
                 content_fps: self.timer.current_fps() as f32,
                 content_frame_time_ms: (self.timer.last_dt() * 1000.0) as f32,
+                gpu_fence_wait_ms: self.content_pipeline.last_fence_wait_ms() as f32,
                 active_clips: self.engine.active_clip_count(),
                 data_version: version,
                 editing_is_dirty: self.editing_service.is_dirty(),
