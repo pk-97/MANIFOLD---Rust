@@ -278,11 +278,12 @@ void* LiveRecorder_Create(int width, int height, float fps, const char* outputPa
                 outputFormatID = kAudioFormatMPEG4AAC;
             }
 
+            // Minimum required keys for AAC. AVFoundation picks optimal
+            // bitrate for the sample rate and channel count (~128-160 kbps/ch).
             NSDictionary* audioSettings = @{
                 AVFormatIDKey:             @(outputFormatID),
                 AVSampleRateKey:           @((double)audioSampleRate),
                 AVNumberOfChannelsKey:     @(audioChannels),
-                AVEncoderAudioQualityKey:  @(AVAudioQualityMax),
             };
 
             state->audioInput = [[AVAssetWriterInput alloc] initWithMediaType:AVMediaTypeAudio
