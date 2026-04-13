@@ -448,8 +448,10 @@ int LiveRecorder_EncodeVideoFrame(void* handle, void* metalTexturePtr, double el
         AVAssetWriterInputPixelBufferAdaptor* adaptor = state->videoAdaptor;
         AVAssetWriter* writer = state->assetWriter;
 
+        AVAssetWriterInput* videoIn = state->videoInput;
         dispatch_async(state->appendQueue, ^{
-            if (writer.status == AVAssetWriterStatusWriting)
+            if (writer.status == AVAssetWriterStatusWriting
+                && videoIn.isReadyForMoreMediaData)
             {
                 [adaptor appendPixelBuffer:pixelBuffer
                       withPresentationTime:presentTime];
