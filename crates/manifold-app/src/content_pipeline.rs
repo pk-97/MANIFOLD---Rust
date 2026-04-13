@@ -675,21 +675,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
 
         // ── Live recording capture ──────────────────────────────────
-        // Blit the upscaled output to a recording pool texture.
-        // Same command buffer as IOSurface — committed together, one GPU sync point.
+        // Format-convert the upscaled output (Rgba16Float → sRGB Bgra8Unorm)
+        // into a recording pool texture. Compute dispatch in the SAME command
+        // buffer — the recording thread has zero GPU work.
         let recording_fence = if !export_mode {
             if let Some(ref mut session) = self.recording_session {
                 if let Some((tex_idx, pool_slot, fence)) = session.acquire_texture() {
-                    let (src, w, h) = if let Some(ref mfx) = self.metalfx {
-                        (&mfx.output.texture, self.output_w, self.output_h)
+                    let src = if let Some(ref mfx) = self.metalfx {
+                        &mfx.output.texture
                     } else if let Some(ref fsr) = self.fsr1 {
-                        (&fsr.output.texture, self.output_w, self.output_h)
+                        &fsr.output.texture
                     } else {
-                        let (cw, ch) = self.compositor.dimensions();
-                        (self.compositor.output_texture(), cw, ch)
+                        self.compositor.output_texture()
                     };
                     let dst = session.pool_texture(tex_idx);
-                    native_enc.copy_texture_to_texture(src, dst, w, h, 1);
+                    // Compute dispatch: Rgba16Float → sRGB Bgra8Unorm.
+                    // Uses the native GpuEncoder directly (same command buffer).
+                    session.encode_format_conversion(&mut native_enc, src, dst);
                     session.submit_frame(pool_slot, fence.clone());
                     Some(fence)
                 } else {

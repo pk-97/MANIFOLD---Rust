@@ -38,44 +38,12 @@
 #define LR_ERR_SHADER_FAILED     9
 #define LR_ERR_AUDIO_FAILED     10
 
-// -- Compute shaders ----------------------------------------------------------
-// Same as MetalEncoderPlugin: GPU-side texture copy with format conversion.
-
-// SDR: linear → sRGB gamma (compositor outputs linear light).
-static NSString* const kCopyShaderSDR =
-    @"#include <metal_stdlib>\n"
-     "using namespace metal;\n"
-     "kernel void copy_texture(\n"
-     "    texture2d<half, access::read>  src [[texture(0)]],\n"
-     "    texture2d<half, access::write> dst [[texture(1)]],\n"
-     "    uint2 gid [[thread_position_in_grid]])\n"
-     "{\n"
-     "    if (gid.x >= src.get_width() || gid.y >= src.get_height()) return;\n"
-     "    half4 c = src.read(gid);\n"
-     "    c.rgb = pow(max(c.rgb, half3(0.0h)), half3(1.0h / 2.2h));\n"
-     "    dst.write(c, gid);\n"
-     "}\n";
-
-// HDR: straight copy (PQ encoding already applied).
-static NSString* const kCopyShaderHDR =
-    @"#include <metal_stdlib>\n"
-     "using namespace metal;\n"
-     "kernel void copy_texture(\n"
-     "    texture2d<half, access::read>  src [[texture(0)]],\n"
-     "    texture2d<half, access::write> dst [[texture(1)]],\n"
-     "    uint2 gid [[thread_position_in_grid]])\n"
-     "{\n"
-     "    if (gid.x >= src.get_width() || gid.y >= src.get_height()) return;\n"
-     "    dst.write(src.read(gid), gid);\n"
-     "}\n";
-
 // -- Recorder State -----------------------------------------------------------
 
 typedef struct
 {
     id<MTLDevice>                           device;
     id<MTLCommandQueue>                     commandQueue;
-    id<MTLComputePipelineState>             copyPipeline;
     CVMetalTextureCacheRef                  textureCache;
     AVAssetWriter*                          assetWriter;
     AVAssetWriterInput*                     videoInput;
@@ -121,28 +89,6 @@ void* LiveRecorder_Create(int width, int height, float fps, const char* outputPa
         state->hasAudio = (audioSampleRate > 0 && audioChannels > 0);
         state->audioSampleRate = audioSampleRate;
         state->audioChannels = audioChannels;
-
-        // -- Compile copy shader --
-        NSError* shaderError = nil;
-        NSString* shaderSource = state->isHDR ? kCopyShaderHDR : kCopyShaderSDR;
-        id<MTLLibrary> lib = [device newLibraryWithSource:shaderSource
-                                                  options:nil
-                                                    error:&shaderError];
-        if (lib == nil)
-        {
-            NSLog(@"[LiveRecorder] Shader compile failed: %@", shaderError);
-            free(state);
-            return NULL;
-        }
-
-        id<MTLFunction> func = [lib newFunctionWithName:@"copy_texture"];
-        state->copyPipeline = [device newComputePipelineStateWithFunction:func error:&shaderError];
-        if (state->copyPipeline == nil)
-        {
-            NSLog(@"[LiveRecorder] Pipeline creation failed: %@", shaderError);
-            free(state);
-            return NULL;
-        }
 
         // -- CVMetalTextureCache for zero-copy GPU pixel buffers --
         CVReturn cvRet = CVMetalTextureCacheCreate(
@@ -394,7 +340,9 @@ int LiveRecorder_EncodeVideoFrame(void* handle, void* metalTexturePtr, double el
             return LR_ERR_TEXTURE_CREATE;
         }
 
-        // GPU compute: copy source texture → CVPixelBuffer-backed texture.
+        // Blit: source texture (Bgra8Unorm, already format-converted by content
+        // thread) → CVPixelBuffer-backed texture (Bgra8Unorm). Format-matched
+        // blit uses the GPU's dedicated copy engine — no compute units needed.
         id<MTLTexture> srcTexture = (__bridge id<MTLTexture>)metalTexturePtr;
 
         id<MTLCommandBuffer> cmdBuf = [state->commandQueue commandBuffer];
@@ -405,37 +353,33 @@ int LiveRecorder_EncodeVideoFrame(void* handle, void* metalTexturePtr, double el
             return LR_ERR_BLIT_FAILED;
         }
 
-        id<MTLComputeCommandEncoder> compute = [cmdBuf computeCommandEncoder];
-        if (compute == nil)
+        id<MTLBlitCommandEncoder> blit = [cmdBuf blitCommandEncoder];
+        if (blit == nil)
         {
             CFRelease(cvMetalTexture);
             CVPixelBufferRelease(pixelBuffer);
             return LR_ERR_BLIT_FAILED;
         }
 
-        [compute setComputePipelineState:state->copyPipeline];
-        [compute setTexture:srcTexture atIndex:0];
-        [compute setTexture:destTexture atIndex:1];
-
-        MTLSize threadGroupSize = MTLSizeMake(16, 16, 1);
-        MTLSize gridSize = MTLSizeMake(
-            (state->width  + threadGroupSize.width  - 1) / threadGroupSize.width,
-            (state->height + threadGroupSize.height - 1) / threadGroupSize.height,
-            1);
-        [compute dispatchThreadgroups:gridSize threadsPerThreadgroup:threadGroupSize];
-
-        [compute endEncoding];
+        [blit copyFromTexture:srcTexture
+                  sourceSlice:0
+                  sourceLevel:0
+                 sourceOrigin:MTLOriginMake(0, 0, 0)
+                   sourceSize:MTLSizeMake(state->width, state->height, 1)
+                    toTexture:destTexture
+             destinationSlice:0
+             destinationLevel:0
+            destinationOrigin:MTLOriginMake(0, 0, 0)];
+        [blit endEncoding];
         [cmdBuf commit];
 
-        // Wait for the GPU compute copy to finish. This ensures the source
-        // pool texture is safe for the content thread to reuse (the caller
-        // releases the pool slot after this function returns). The compute
-        // copy is a single-dispatch kernel — typically <1ms on Apple Silicon.
+        // Wait for the blit to finish. Format-matched blit on the copy engine
+        // is extremely fast (<0.1ms). Ensures pool texture is safe to reuse.
         [cmdBuf waitUntilCompleted];
 
         if (cmdBuf.status == MTLCommandBufferStatusError)
         {
-            NSLog(@"[LiveRecorder] Compute error: %@", cmdBuf.error);
+            NSLog(@"[LiveRecorder] Blit error: %@", cmdBuf.error);
             CFRelease(cvMetalTexture);
             CVPixelBufferRelease(pixelBuffer);
             return LR_ERR_BLIT_FAILED;
@@ -654,7 +598,6 @@ int LiveRecorder_Finalize(void* handle)
             state->textureCache = NULL;
         }
 
-        state->copyPipeline = nil;
         state->appendQueue = nil;
         state->assetWriter = nil;
         state->videoInput = nil;

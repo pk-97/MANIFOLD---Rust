@@ -18,6 +18,8 @@
 pub mod config;
 mod ffi;
 #[cfg(target_os = "macos")]
+mod format_converter;
+#[cfg(target_os = "macos")]
 mod recording_thread;
 #[cfg(target_os = "macos")]
 mod session;

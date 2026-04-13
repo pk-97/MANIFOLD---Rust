@@ -15,6 +15,7 @@ use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
 
 use crate::config::{AudioCodec, LiveRecordingConfig, RecordingResult};
 use crate::ffi;
+use crate::format_converter::FormatConverter;
 use crate::recording_thread::{self, RecordingFrame};
 use crate::texture_pool::{PoolSlot, TextureRingPool, DEFAULT_POOL_SIZE};
 
@@ -26,6 +27,7 @@ use crate::texture_pool::{PoolSlot, TextureRingPool, DEFAULT_POOL_SIZE};
 /// - A dedicated recording thread that encodes A/V to MP4
 pub struct LiveRecordingSession {
     texture_pool: TextureRingPool,
+    format_converter: FormatConverter,
     frame_tx: Sender<RecordingFrame>,
     recording_thread: Option<JoinHandle<(u32, u32)>>,
     stop: Arc<AtomicBool>,
@@ -53,10 +55,11 @@ impl LiveRecordingSession {
         let device_ptr = device.raw_device_ptr();
         let output_path = config.output_path.clone();
 
-        // -- Texture pool --
-        let pool_format = GpuTextureFormat::Rgba16Float;
+        // -- Texture pool (Bgra8Unorm — format conversion done in content thread) --
+        let pool_format = GpuTextureFormat::Bgra8Unorm;
         let texture_pool =
             TextureRingPool::new(device, width, height, pool_format, DEFAULT_POOL_SIZE);
+        let format_converter = FormatConverter::new(device);
 
         // -- Audio capture (optional) --
         let (audio_capture, audio_consumer, sample_rate, channels) =
@@ -145,6 +148,7 @@ impl LiveRecordingSession {
 
         Ok(Self {
             texture_pool,
+            format_converter,
             frame_tx,
             recording_thread: Some(recording_thread),
             stop,
@@ -173,9 +177,21 @@ impl LiveRecordingSession {
         }
     }
 
-    /// Get a reference to the pool texture at the given index (for blit destination).
+    /// Get a reference to the pool texture at the given index.
     pub fn pool_texture(&self, index: usize) -> &GpuTexture {
         self.texture_pool.texture(index)
+    }
+
+    /// Encode the format conversion (Rgba16Float → sRGB Bgra8Unorm) into
+    /// the content thread's GpuEncoder. Must be called in the same command
+    /// buffer as the IOSurface blit.
+    pub fn encode_format_conversion(
+        &self,
+        encoder: &mut manifold_gpu::GpuEncoder,
+        source: &GpuTexture,
+        dest: &GpuTexture,
+    ) {
+        self.format_converter.encode(encoder, source, dest);
     }
 
     /// Submit a frame to the recording thread. Non-blocking.
