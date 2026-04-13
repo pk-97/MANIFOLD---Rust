@@ -126,10 +126,14 @@ void* LiveRecorder_Create(int width, int height, float fps, const char* outputPa
 
         // -- Video input ----------------------------------------------------------
 
-        // Bitrate: 0.6 bpp — same formula as offline encoder.
-        int targetBps = (int)((double)width * height * state->fpsNum * 0.6);
-        if (targetBps < 20000000) targetBps = 20000000;
-        if (targetBps > 400000000) targetBps = 400000000;
+        // Bitrate: 0.15 bpp — tuned for real-time hardware encoding.
+        // The offline encoder uses 0.6 bpp but has no real-time constraint.
+        // At 4K60, 0.15 bpp = ~75 Mbps — excellent quality for generative
+        // content and well within VideoToolbox's real-time encoding capacity.
+        // Clamped to 10-100 Mbps.
+        int targetBps = (int)((double)width * height * state->fpsNum * 0.15);
+        if (targetBps < 10000000) targetBps = 10000000;    // 10 Mbps min
+        if (targetBps > 100000000) targetBps = 100000000;  // 100 Mbps max
 
         NSLog(@"[LiveRecorder] Target bitrate: %d bps (%.1f Mbps) for %dx%d @ %d fps",
               targetBps, targetBps / 1000000.0, width, height, state->fpsNum);
