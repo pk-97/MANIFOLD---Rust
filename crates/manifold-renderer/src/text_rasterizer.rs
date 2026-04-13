@@ -78,6 +78,10 @@ pub struct RasterizedText {
 /// Rasterizes text strings into R8 grayscale bitmaps via CoreText.
 pub struct TextRasterizer {
     cg_font: CGFont,
+    /// Cached CTFont for the currently selected font family.
+    /// Avoids re-resolving the font name on every rasterize call and ensures the
+    /// font is pre-warmed before the first render frame.
+    cached_ct_font: Option<(String, f64, CTFont)>, // (family, size, font)
 }
 
 // Safety: CGFont is a Core Foundation type with thread-safe reference counting.
@@ -97,7 +101,15 @@ impl TextRasterizer {
         let provider = CGDataProvider::from_buffer(Arc::new(data));
         let cg_font = CGFont::from_data_provider(provider)
             .expect("Failed to create CGFont from Inter TTF");
-        Self { cg_font }
+
+        // Prime the CoreText font database so that `new_from_name` resolves
+        // system fonts without delay on the first render frame.
+        let _ = core_text::font_manager::copy_available_font_family_names();
+
+        Self {
+            cg_font,
+            cached_ct_font: None,
+        }
     }
 
     /// Enumerate all installed font family names, sorted alphabetically.
@@ -112,7 +124,7 @@ impl TextRasterizer {
     /// Supports multiline text (lines separated by `\n`).
     /// Returns `None` for empty or whitespace-only strings.
     pub fn rasterize(
-        &self,
+        &mut self,
         text: &str,
         font_size: f32,
         opts: &RasterizeOptions,
@@ -123,11 +135,18 @@ impl TextRasterizer {
         }
 
         // Use system font by family name if provided, fall back to embedded Inter.
+        // Cache the resolved CTFont to avoid repeated name lookups and ensure
+        // the font is fully loaded before the first glyph draw.
         let ct_font = if let Some(family) = opts.font_family {
-            core_text::font::new_from_name(family, font_size as f64)
-                .unwrap_or_else(|()| {
-                    core_text::font::new_from_CGFont(&self.cg_font, font_size as f64)
-                })
+            if let Some((ref cached_fam, cached_size, ref cached_font)) = self.cached_ct_font {
+                if cached_fam == family && (cached_size - font_size as f64).abs() < 0.5 {
+                    cached_font.clone()
+                } else {
+                    self.resolve_and_cache_font(family, font_size as f64)
+                }
+            } else {
+                self.resolve_and_cache_font(family, font_size as f64)
+            }
         } else {
             core_text::font::new_from_CGFont(&self.cg_font, font_size as f64)
         };
@@ -259,6 +278,34 @@ impl TextRasterizer {
         })
     }
 
+    /// Pre-warm a font by family name so it's cached before the first render.
+    /// Called from `set_string_params` when the font family changes.
+    pub fn prewarm_font(&mut self, family: &str) {
+        if family.is_empty() {
+            return;
+        }
+        // Only prewarm if not already cached for this family.
+        if let Some((ref cached_fam, _, _)) = self.cached_ct_font
+            && cached_fam == family
+        {
+            return;
+        }
+        // Resolve at a reference size — the actual size will re-resolve if needed,
+        // but this ensures CoreText has the font descriptor ready.
+        let _ = self.resolve_and_cache_font(family, 64.0);
+    }
+
+    /// Resolve a font by family name, cache it, and return it.
+    /// Falls back to embedded Inter if the name doesn't resolve.
+    fn resolve_and_cache_font(&mut self, family: &str, size: f64) -> CTFont {
+        let font = core_text::font::new_from_name(family, size)
+            .unwrap_or_else(|()| {
+                core_text::font::new_from_CGFont(&self.cg_font, size)
+            });
+        self.cached_ct_font = Some((family.to_string(), size, font.clone()));
+        font
+    }
+
     /// Create a CTLine from a text string and a CTFont.
     fn make_ct_line(&self, ct_font: &CTFont, text: &str) -> core_text::line::CTLine {
         let cf_text = CFString::new(text);
@@ -304,7 +351,7 @@ mod tests {
 
     #[test]
     fn test_rasterize_hello() {
-        let rasterizer = TextRasterizer::new();
+        let mut rasterizer = TextRasterizer::new();
         let result = rasterizer.rasterize("HELLO", 64.0, &RasterizeOptions::default());
         assert!(result.is_some());
         let rt = result.unwrap();
@@ -316,7 +363,7 @@ mod tests {
 
     #[test]
     fn test_rasterize_empty_returns_none() {
-        let rasterizer = TextRasterizer::new();
+        let mut rasterizer = TextRasterizer::new();
         let opts = RasterizeOptions::default();
         assert!(rasterizer.rasterize("", 64.0, &opts).is_none());
         assert!(rasterizer.rasterize("   ", 64.0, &opts).is_none());
@@ -324,7 +371,7 @@ mod tests {
 
     #[test]
     fn test_rasterize_with_system_font() {
-        let rasterizer = TextRasterizer::new();
+        let mut rasterizer = TextRasterizer::new();
         let opts = RasterizeOptions {
             font_family: Some("Helvetica"),
             ..Default::default()
@@ -335,7 +382,7 @@ mod tests {
 
     #[test]
     fn test_rasterize_unknown_font_falls_back() {
-        let rasterizer = TextRasterizer::new();
+        let mut rasterizer = TextRasterizer::new();
         let opts = RasterizeOptions {
             font_family: Some("NonExistentFont12345"),
             ..Default::default()
@@ -354,7 +401,7 @@ mod tests {
 
     #[test]
     fn test_letter_spacing_wider() {
-        let rasterizer = TextRasterizer::new();
+        let mut rasterizer = TextRasterizer::new();
         let narrow = rasterizer
             .rasterize("AB", 64.0, &RasterizeOptions::default())
             .unwrap();
@@ -373,7 +420,7 @@ mod tests {
 
     #[test]
     fn test_line_spacing_taller() {
-        let rasterizer = TextRasterizer::new();
+        let mut rasterizer = TextRasterizer::new();
         let tight = rasterizer
             .rasterize("A\nB", 64.0, &RasterizeOptions {
                 line_spacing: 1.0,
@@ -391,7 +438,7 @@ mod tests {
 
     #[test]
     fn test_h_align_left_vs_right() {
-        let rasterizer = TextRasterizer::new();
+        let mut rasterizer = TextRasterizer::new();
         // Two lines of different widths — alignment should shift the shorter one
         let left = rasterizer
             .rasterize("AAAA\nB", 64.0, &RasterizeOptions {

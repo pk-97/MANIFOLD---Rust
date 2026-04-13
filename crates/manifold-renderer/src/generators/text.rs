@@ -120,6 +120,9 @@ impl Generator for TextGenerator {
                 self.pending_text = text.clone();
             }
             if let Some(font) = map.get("fontFamily") {
+                if *font != self.pending_font_family {
+                    self.rasterizer.prewarm_font(font);
+                }
                 self.pending_font_family = font.clone();
             }
         }
