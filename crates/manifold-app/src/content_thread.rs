@@ -226,6 +226,17 @@ impl ContentThread {
             loop {
                 match cmd_rx.try_recv() {
                     Ok(ContentCommand::StartExport(config)) => {
+                        // Stop any active live recording before entering export.
+                        #[cfg(target_os = "macos")]
+                        if let Some(session) =
+                            self.content_pipeline.recording_session.take()
+                        {
+                            log::warn!(
+                                "[ContentThread] Stopping active recording \
+                                 before export"
+                            );
+                            let _ = session.stop();
+                        }
                         // Flush any pending seek before entering export.
                         if let Some(seek) = pending_seek.take() {
                             let _ = self.handle_command(seek);

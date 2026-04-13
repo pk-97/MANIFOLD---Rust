@@ -22,6 +22,7 @@
 #import <CoreVideo/CoreVideo.h>
 #import <AudioToolbox/AudioToolbox.h>
 #import <Foundation/Foundation.h>
+#import <stdatomic.h>
 #import <stdlib.h>
 
 // -- Error codes --------------------------------------------------------------
@@ -52,7 +53,8 @@ typedef struct
     int                                     width;
     int                                     height;
     int                                     fpsNum;
-    int                                     videoFrameCount;
+    int                                     videoFrameCount;      // submitted (may overcount)
+    atomic_int                              videoFramesAppended;  // actually appended by encoder
     int                                     audioSampleRate;
     int                                     audioChannels;
     BOOL                                    isHDR;
@@ -80,6 +82,7 @@ void* LiveRecorder_Create(int width, int height, float fps, const char* outputPa
 
         state->device = device;
         state->commandQueue = [device newCommandQueue];
+        atomic_init(&state->videoFramesAppended, 0);
         state->appendQueue = dispatch_queue_create("com.manifold.recording.append",
                                                     DISPATCH_QUEUE_SERIAL);
         state->width = width;
@@ -397,6 +400,7 @@ int LiveRecorder_EncodeVideoFrame(void* handle, void* metalTexturePtr, double el
         AVAssetWriter* writer = state->assetWriter;
 
         AVAssetWriterInput* videoIn = state->videoInput;
+        atomic_int* appendedCounter = &state->videoFramesAppended;
         dispatch_async(state->appendQueue, ^{
             @try
             {
@@ -404,8 +408,11 @@ int LiveRecorder_EncodeVideoFrame(void* handle, void* metalTexturePtr, double el
                 {
                     if (videoIn.isReadyForMoreMediaData)
                     {
-                        [adaptor appendPixelBuffer:pixelBuffer
-                              withPresentationTime:presentTime];
+                        if ([adaptor appendPixelBuffer:pixelBuffer
+                                  withPresentationTime:presentTime])
+                        {
+                            atomic_fetch_add(appendedCounter, 1);
+                        }
                     }
                     else
                     {
@@ -567,11 +574,13 @@ int LiveRecorder_Finalize(void* handle)
             return -LR_ERR_NULL_HANDLE;
 
         LiveRecorderState* state = (LiveRecorderState*)handle;
-        int frameCount = state->videoFrameCount;
 
         // Drain the async append queue — wait for all in-flight GPU completions
         // and pixel buffer appends to finish before finalizing.
         dispatch_sync(state->appendQueue, ^{});
+
+        // Read the accurate count AFTER draining — only counts successful appends.
+        int frameCount = atomic_load(&state->videoFramesAppended);
 
         @try
         {

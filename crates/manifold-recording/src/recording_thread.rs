@@ -48,7 +48,7 @@ pub(crate) fn run(
 
     // Scratch buffer for draining audio ring buffer.
     let mut audio_scratch = vec![0.0f32; 4096];
-    let mut total_audio_samples: u64 = 0;
+    let mut total_audio_frames: u64 = 0;
 
     log::info!("[RecordingThread] Started");
 
@@ -74,15 +74,32 @@ pub(crate) fn run(
                 }
             };
 
-            // Wait for GPU blit to complete.
+            // Wait for GPU blit to complete (with timeout).
+            let fence_start = Instant::now();
             let mut spin_count = 0u32;
+            let mut fence_ok = true;
             while !frame.gpu_complete.load(Ordering::Acquire) {
                 std::hint::spin_loop();
                 spin_count += 1;
                 if spin_count > 1_000_000 {
+                    // Check for timeout every ~1M spins (~100ms).
+                    if fence_start.elapsed() > Duration::from_secs(5) {
+                        log::error!(
+                            "[RecordingThread] GPU fence timeout (5s) — \
+                             skipping frame, possible GPU hang"
+                        );
+                        fence_ok = false;
+                        break;
+                    }
                     std::thread::sleep(Duration::from_micros(100));
                     spin_count = 0;
                 }
+            }
+
+            if !fence_ok {
+                frame.pool_slot.release();
+                frames_failed += 1;
+                continue;
             }
 
             // Encode the video frame.
@@ -112,7 +129,7 @@ pub(crate) fn run(
                 consumer,
                 encoder_handle,
                 &mut audio_scratch,
-                &mut total_audio_samples,
+                &mut total_audio_frames,
                 sample_rate,
                 channels,
                 start_time,
@@ -126,7 +143,7 @@ pub(crate) fn run(
                     consumer,
                     encoder_handle,
                     &mut audio_scratch,
-                    &mut total_audio_samples,
+                    &mut total_audio_frames,
                     sample_rate,
                     channels,
                     start_time,
@@ -157,7 +174,7 @@ fn drain_audio(
     consumer: &mut manifold_audio::capture::AudioConsumer,
     encoder_handle: *mut c_void,
     scratch: &mut [f32],
-    total_samples: &mut u64,
+    total_frames: &mut u64,
     sample_rate: u32,
     channels: u16,
     _start_time: Instant,
@@ -181,8 +198,8 @@ fn drain_audio(
             break;
         }
 
-        // PTS from total samples written (sample-accurate).
-        let elapsed_seconds = *total_samples as f64 / sample_rate as f64;
+        // PTS from total frames written (sample-accurate).
+        let elapsed_seconds = *total_frames as f64 / sample_rate as f64;
 
         let result = unsafe {
             ffi::LiveRecorder_WriteAudioSamples(
@@ -197,6 +214,6 @@ fn drain_audio(
             log::warn!("[RecordingThread] Audio write failed: error {result}");
         }
 
-        *total_samples += popped as u64 / channels as u64;
+        *total_frames += popped as u64 / channels as u64;
     }
 }

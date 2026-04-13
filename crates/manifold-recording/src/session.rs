@@ -28,7 +28,8 @@ use crate::texture_pool::{PoolSlot, TextureRingPool, DEFAULT_POOL_SIZE};
 pub struct LiveRecordingSession {
     texture_pool: TextureRingPool,
     format_converter: FormatConverter,
-    frame_tx: Sender<RecordingFrame>,
+    /// Wrapped in Option so Drop can take it to signal the recording thread.
+    frame_tx: Option<Sender<RecordingFrame>>,
     recording_thread: Option<JoinHandle<(u32, u32)>>,
     stop: Arc<AtomicBool>,
     start_time: Instant,
@@ -149,7 +150,7 @@ impl LiveRecordingSession {
         Ok(Self {
             texture_pool,
             format_converter,
-            frame_tx,
+            frame_tx: Some(frame_tx),
             recording_thread: Some(recording_thread),
             stop,
             start_time,
@@ -196,13 +197,19 @@ impl LiveRecordingSession {
 
     /// Submit a frame to the recording thread. Non-blocking.
     pub fn submit_frame(&mut self, pool_slot: PoolSlot, fence: Arc<AtomicBool>) {
+        let Some(ref frame_tx) = self.frame_tx else {
+            pool_slot.release();
+            self.frames_dropped += 1;
+            return;
+        };
+
         let frame = RecordingFrame {
             pool_slot,
             wall_timestamp: Instant::now(),
             gpu_complete: fence,
         };
 
-        match self.frame_tx.try_send(frame) {
+        match frame_tx.try_send(frame) {
             Ok(()) => {
                 self.frames_submitted += 1;
             }
@@ -239,27 +246,10 @@ impl LiveRecordingSession {
 
     /// Stop recording, drain remaining frames, finalize the MP4.
     pub fn stop(mut self) -> RecordingResult {
+        let (frames_encoded, frames_failed) = self.shutdown();
+
         let duration = self.start_time.elapsed().as_secs_f64();
-
-        self.stop.store(true, Ordering::Release);
-
-        // Drop the sender so the recording thread sees disconnection after draining.
-        drop(self.frame_tx);
-
-        let (frames_encoded, _frames_failed) =
-            if let Some(thread) = self.recording_thread.take() {
-                match thread.join() {
-                    Ok(stats) => stats,
-                    Err(_) => {
-                        log::error!("[LiveRecording] Recording thread panicked");
-                        (0, 0)
-                    }
-                }
-            } else {
-                (0, 0)
-            };
-
-        // The recording thread finalizes the native encoder before returning.
+        let _ = frames_failed;
 
         log::info!(
             "[LiveRecording] Stopped: {frames_encoded} encoded, {} dropped, \
@@ -273,6 +263,40 @@ impl LiveRecordingSession {
             frames_recorded: frames_encoded,
             frames_dropped: self.frames_dropped,
             duration_seconds: duration,
+        }
+    }
+
+    /// Signal the recording thread to stop, drop the channel, and join.
+    /// Safe to call multiple times (idempotent). Returns (encoded, failed).
+    fn shutdown(&mut self) -> (u32, u32) {
+        self.stop.store(true, Ordering::Release);
+
+        // Drop the sender so the recording thread sees disconnection after draining.
+        self.frame_tx.take();
+
+        if let Some(thread) = self.recording_thread.take() {
+            // Give the recording thread time to finalize (up to 10s).
+            // The native encoder has a 30s internal timeout, but we don't want
+            // to block the content thread indefinitely on shutdown.
+            match thread.join() {
+                Ok(stats) => return stats,
+                Err(_) => {
+                    log::error!("[LiveRecording] Recording thread panicked");
+                }
+            }
+        }
+        (0, 0)
+    }
+}
+
+impl Drop for LiveRecordingSession {
+    fn drop(&mut self) {
+        if self.recording_thread.is_some() {
+            log::warn!(
+                "[LiveRecording] Session dropped without stop() — \
+                 shutting down recording thread"
+            );
+            self.shutdown();
         }
     }
 }
