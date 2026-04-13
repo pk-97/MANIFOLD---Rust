@@ -81,6 +81,8 @@ pub enum PanelAction {
     ZoomIn,
     ZoomOut,
     ToggleLiveRecording,
+    SelectAudioInputDevice,
+    SetAudioInputDevice(String),
     ToggleMonitor,
     EnterPerformMode,
 

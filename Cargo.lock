@@ -1847,6 +1847,7 @@ dependencies = [
  "io-surface",
  "libc",
  "log",
+ "manifold-audio",
  "manifold-core",
  "manifold-editing",
  "manifold-gpu",

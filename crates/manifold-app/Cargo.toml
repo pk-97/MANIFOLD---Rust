@@ -17,6 +17,7 @@ manifold-io = { path = "../manifold-io" }
 manifold-media = { path = "../manifold-media" }
 manifold-gpu = { path = "../manifold-gpu" }
 manifold-led = { path = "../manifold-led" }
+manifold-audio = { path = "../manifold-audio" }
 manifold-recording = { path = "../manifold-recording" }
 winit = { workspace = true }
 log = { workspace = true }

@@ -388,11 +388,28 @@ impl Application {
                     if self.content_state.is_live_recording {
                         self.send_content_cmd(ContentCommand::StopLiveRecording);
                     } else {
-                        let config = manifold_recording::LiveRecordingConfig::default_to_desktop();
+                        let mut config =
+                            manifold_recording::LiveRecordingConfig::default_to_desktop();
+                        config.audio_device =
+                            self.ui_root.selected_audio_input_device.clone();
                         self.send_content_cmd(
                             ContentCommand::StartLiveRecording(Box::new(config)),
                         );
                     }
+                    continue;
+                }
+                PanelAction::SetAudioInputDevice(name) => {
+                    let display = if name.is_empty() {
+                        self.ui_root.selected_audio_input_device = None;
+                        "No audio input".to_string()
+                    } else {
+                        self.ui_root.selected_audio_input_device = Some(name.clone());
+                        name.clone()
+                    };
+                    self.ui_root.layer_headers.set_audio_device_name(
+                        &mut self.ui_root.tree,
+                        &display,
+                    );
                     continue;
                 }
                 PanelAction::ToggleMonitor => {

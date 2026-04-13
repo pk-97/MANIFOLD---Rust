@@ -1335,6 +1335,10 @@ impl LayerHeaderPanel {
         if id == self.record_btn_id && id >= 0 {
             return vec![PanelAction::ToggleLiveRecording];
         }
+        // Audio input device dropdown
+        if id == self.audio_device_label_id && id >= 0 {
+            return vec![PanelAction::SelectAudioInputDevice];
+        }
         // Add Layer button
         if id == self.add_layer_btn && id >= 0 {
             return vec![PanelAction::AddLayerClicked];
@@ -1498,19 +1502,14 @@ impl Panel for LayerHeaderPanel {
                 if self.recording_active { "Stop Recording" } else { "Record Live" },
             ) as i32;
 
-            self.audio_device_label_id = tree.add_label(
+            self.audio_device_label_id = tree.add_button(
                 -1,
                 rec_x,
                 rec_y + rec_btn_h + 4.0,
                 rec_w,
                 rec_label_h,
+                field_style(),
                 &self.audio_device_name,
-                UIStyle {
-                    text_color: color::TEXT_DIMMED_C32,
-                    font_size: SMALL_FONT,
-                    text_align: TextAlign::Center,
-                    ..UIStyle::default()
-                },
             ) as i32;
         }
 

@@ -329,6 +329,8 @@ pub fn dispatch(
         PanelAction::ToggleHdr
         | PanelAction::TogglePercussion
         | PanelAction::ToggleLiveRecording
+        | PanelAction::SelectAudioInputDevice
+        | PanelAction::SetAudioInputDevice(_)
         | PanelAction::ToggleMonitor
         | PanelAction::EnterPerformMode
         | PanelAction::NewProject

@@ -62,7 +62,10 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
-        PanelAction::ToggleLiveRecording | PanelAction::ToggleMonitor => DispatchResult {
+        PanelAction::ToggleLiveRecording
+        | PanelAction::SelectAudioInputDevice
+        | PanelAction::SetAudioInputDevice(_)
+        | PanelAction::ToggleMonitor => DispatchResult {
             handled: true,
             structural_change: false,
             resolution_changed: false,

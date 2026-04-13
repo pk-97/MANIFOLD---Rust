@@ -78,6 +78,7 @@ pub enum DropdownContext {
     GenParamContext(usize, f32), // param_idx, default_val
     MacroSlotContext(usize),  // macro_index (right-click on macro slider)
     GenStringParamDropdown(usize), // string_param_index (dropdown selector)
+    AudioInputDevice, // audio input device selection for live recording
 }
 
 /// Fine-grained tracking of what scroll-related state changed.
@@ -160,6 +161,11 @@ pub struct UIRoot {
     /// Cached MIDI clock device names for the CLK device dropdown.
     /// Updated from ContentState each frame.
     pub midi_device_names: Vec<String>,
+
+    /// Cached audio input device names for the recording audio device dropdown.
+    pub audio_input_device_names: Vec<String>,
+    /// Currently selected audio input device name for live recording.
+    pub selected_audio_input_device: Option<String>,
 
     // Inspector resize state
     pub inspector_resize_dragging: bool,
@@ -247,6 +253,8 @@ impl UIRoot {
             display_resolutions: Vec::new(),
             master_effect_names: Vec::new(),
             midi_device_names: Vec::new(),
+            audio_input_device_names: Vec::new(),
+            selected_audio_input_device: None,
             inspector_resize_dragging: false,
             inspector_drag_start_x: 0.0,
             inspector_drag_start_width: 0.0,
@@ -1077,6 +1085,23 @@ impl UIRoot {
                 });
                 true
             }
+            PanelAction::SelectAudioInputDevice => {
+                // Enumerate audio input devices on demand.
+                self.audio_input_device_names =
+                    manifold_audio::capture::AudioCaptureDevice::list_devices()
+                        .into_iter()
+                        .map(|d| d.name)
+                        .collect();
+                let mut items: Vec<DropdownItem> =
+                    vec![DropdownItem::new("None (video only)")];
+                items.extend(
+                    self.audio_input_device_names
+                        .iter()
+                        .map(|name| DropdownItem::new(name)),
+                );
+                self.open_dropdown_at(DropdownContext::AudioInputDevice, items, trigger);
+                true
+            }
             PanelAction::SelectClkDevice => {
                 if self.midi_device_names.is_empty() {
                     log::info!("[UIRoot] No MIDI devices available for CLK selection");
@@ -1443,6 +1468,17 @@ impl UIRoot {
                 }
             }
             DropdownContext::ClkDevice => Some(PanelAction::SetMidiClockDevice(index as i32)),
+            DropdownContext::AudioInputDevice => {
+                if index == 0 {
+                    // "None (video only)"
+                    Some(PanelAction::SetAudioInputDevice(String::new()))
+                } else {
+                    let device_idx = index - 1;
+                    self.audio_input_device_names
+                        .get(device_idx)
+                        .map(|name| PanelAction::SetAudioInputDevice(name.clone()))
+                }
+            }
             DropdownContext::GenCardContext => match index {
                 0 => Some(PanelAction::CopyGenerator),
                 1 => Some(PanelAction::PasteGenerator),
