@@ -120,9 +120,9 @@ void* LiveRecorder_Create(int width, int height, float fps, const char* outputPa
             return NULL;
         }
 
-        // Fragmented MP4: write a movie fragment every 10 seconds.
-        // If MANIFOLD crashes, the file is playable up to the last fragment.
-        state->assetWriter.movieFragmentInterval = CMTimeMake(10, 1);
+        // No movieFragmentInterval — fragmented writing causes periodic disk
+        // flush stalls that trigger readyForMoreMediaData=NO and frame drops.
+        // The @try/@catch safety net protects against crashes during recording.
 
         // -- Video input ----------------------------------------------------------
 
@@ -396,11 +396,18 @@ int LiveRecorder_EncodeVideoFrame(void* handle, void* metalTexturePtr, double el
         dispatch_async(state->appendQueue, ^{
             @try
             {
-                if (writer.status == AVAssetWriterStatusWriting
-                    && videoIn.isReadyForMoreMediaData)
+                if (writer.status == AVAssetWriterStatusWriting)
                 {
-                    [adaptor appendPixelBuffer:pixelBuffer
-                          withPresentationTime:presentTime];
+                    if (videoIn.isReadyForMoreMediaData)
+                    {
+                        [adaptor appendPixelBuffer:pixelBuffer
+                              withPresentationTime:presentTime];
+                    }
+                    else
+                    {
+                        NSLog(@"[LiveRecorder] VideoToolbox backpressure — dropped frame at %.3fs",
+                              CMTimeGetSeconds(presentTime));
+                    }
                 }
             }
             @catch (NSException* e)
