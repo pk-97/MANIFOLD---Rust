@@ -470,138 +470,103 @@ int LiveRecorder_WriteAudioSamples(void* handle, const float* samples,
         if (handle == NULL)
             return LR_ERR_NULL_HANDLE;
         if (samples == NULL || sampleCount <= 0)
-            return LR_OK; // nothing to write
+            return LR_OK;
 
         LiveRecorderState* state = (LiveRecorderState*)handle;
         if (!state->hasAudio || state->audioInput == nil)
-            return LR_OK; // audio not configured — silently succeed
+            return LR_OK;
 
         if (state->assetWriter.status != AVAssetWriterStatusWriting)
+        {
+            NSLog(@"[LiveRecorder] Writer not ready for audio: status=%ld error=%@",
+                  (long)state->assetWriter.status, state->assetWriter.error);
             return LR_ERR_WRITER_NOT_READY;
+        }
 
         if (!state->audioInput.isReadyForMoreMediaData)
             return LR_OK; // drop samples rather than block
 
-        // Number of frames (samples per channel).
         int frameCount = sampleCount / state->audioChannels;
+        size_t dataSize = (size_t)(sampleCount * sizeof(float));
 
-        // Create an AudioBufferList wrapping the caller's data (no copy).
-        AudioBufferList audioBufferList;
-        audioBufferList.mNumberBuffers = 1;
-        audioBufferList.mBuffers[0].mNumberChannels = (UInt32)state->audioChannels;
-        audioBufferList.mBuffers[0].mDataByteSize = (UInt32)(sampleCount * sizeof(float));
-        audioBufferList.mBuffers[0].mData = (void*)samples;
-
-        // Create CMSampleBuffer from the audio data.
-        CMSampleBufferRef sampleBuffer = NULL;
-
-        // Audio stream description: Float32 interleaved.
+        // 1. Audio format description (PCM Float32 interleaved).
         AudioStreamBasicDescription asbd = {0};
-        asbd.mSampleRate = (Float64)state->audioSampleRate;
-        asbd.mFormatID = kAudioFormatLinearPCM;
-        asbd.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
-        asbd.mBytesPerPacket = (UInt32)(state->audioChannels * sizeof(float));
-        asbd.mFramesPerPacket = 1;
-        asbd.mBytesPerFrame = (UInt32)(state->audioChannels * sizeof(float));
+        asbd.mSampleRate       = (Float64)state->audioSampleRate;
+        asbd.mFormatID         = kAudioFormatLinearPCM;
+        asbd.mFormatFlags      = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
+        asbd.mBytesPerPacket   = (UInt32)(state->audioChannels * sizeof(float));
+        asbd.mFramesPerPacket  = 1;
+        asbd.mBytesPerFrame    = (UInt32)(state->audioChannels * sizeof(float));
         asbd.mChannelsPerFrame = (UInt32)state->audioChannels;
-        asbd.mBitsPerChannel = 32;
+        asbd.mBitsPerChannel   = 32;
 
         CMAudioFormatDescriptionRef formatDesc = NULL;
         OSStatus status = CMAudioFormatDescriptionCreate(
-            kCFAllocatorDefault,
-            &asbd,
-            0, NULL,     // no channel layout
-            0, NULL, NULL,
+            kCFAllocatorDefault, &asbd,
+            0, NULL, 0, NULL, NULL,
             &formatDesc);
-
         if (status != noErr)
         {
-            NSLog(@"[LiveRecorder] CMAudioFormatDescriptionCreate failed: %d", (int)status);
+            NSLog(@"[LiveRecorder] CMAudioFormatDescriptionCreate: %d", (int)status);
             return LR_ERR_AUDIO_FAILED;
         }
 
-        // Timing: presentation time from wall clock.
+        // 2. Block buffer with OWNED copy of the audio data.
+        CMBlockBufferRef blockBuffer = NULL;
+        status = CMBlockBufferCreateWithMemoryBlock(
+            kCFAllocatorDefault,
+            NULL, dataSize,
+            kCFAllocatorDefault, NULL,
+            0, dataSize,
+            kCMBlockBufferAssureMemoryNowFlag,
+            &blockBuffer);
+        if (status != noErr || blockBuffer == NULL)
+        {
+            CFRelease(formatDesc);
+            NSLog(@"[LiveRecorder] CMBlockBufferCreate: %d", (int)status);
+            return LR_ERR_AUDIO_FAILED;
+        }
+
+        status = CMBlockBufferReplaceDataBytes(samples, blockBuffer, 0, dataSize);
+        if (status != noErr)
+        {
+            CFRelease(blockBuffer);
+            CFRelease(formatDesc);
+            NSLog(@"[LiveRecorder] CMBlockBufferReplaceDataBytes: %d", (int)status);
+            return LR_ERR_AUDIO_FAILED;
+        }
+
+        // 3. Create audio sample buffer using the recommended API.
+        CMSampleBufferRef sampleBuffer = NULL;
         CMTime presentTime = CMTimeMakeWithSeconds(elapsedSeconds, (int32_t)state->audioSampleRate);
 
-        CMSampleTimingInfo timing;
-        timing.presentationTimeStamp = presentTime;
-        timing.duration = CMTimeMake(1, (int32_t)state->audioSampleRate);
-        timing.decodeTimeStamp = kCMTimeInvalid;
-
-        status = CMSampleBufferCreate(
+        status = CMAudioSampleBufferCreateReadyWithPacketDescriptions(
             kCFAllocatorDefault,
-            NULL, false,
-            NULL, NULL,
+            blockBuffer,
             formatDesc,
             frameCount,
-            1, &timing,
-            0, NULL,
+            presentTime,
+            NULL,   // NULL packet descriptions = constant-bit-rate (PCM)
             &sampleBuffer);
 
+        CFRelease(blockBuffer);
         CFRelease(formatDesc);
 
         if (status != noErr || sampleBuffer == NULL)
         {
-            NSLog(@"[LiveRecorder] CMSampleBufferCreate failed: %d", (int)status);
+            NSLog(@"[LiveRecorder] CMAudioSampleBufferCreateReady: %d", (int)status);
             return LR_ERR_AUDIO_FAILED;
         }
 
-        // Copy audio data into a CoreMedia-owned block buffer.
-        // AVAssetWriter may hold references to sample buffer data after
-        // appendSampleBuffer returns, so we MUST NOT use the caller's
-        // pointer directly (it's a reused scratch buffer).
-        CMBlockBufferRef blockBuffer = NULL;
-        size_t dataSize = (size_t)(sampleCount * sizeof(float));
-
-        // Allocate empty block buffer, then copy data in.
-        status = CMBlockBufferCreateWithMemoryBlock(
-            kCFAllocatorDefault,
-            NULL,           // NULL = CoreMedia allocates the memory
-            dataSize,
-            kCFAllocatorDefault,  // CoreMedia owns and frees the allocation
-            NULL,
-            0,
-            dataSize,
-            kCMBlockBufferAssureMemoryNowFlag,
-            &blockBuffer);
-
-        if (status != noErr || blockBuffer == NULL)
-        {
-            CFRelease(sampleBuffer);
-            NSLog(@"[LiveRecorder] CMBlockBufferCreate failed: %d", (int)status);
-            return LR_ERR_AUDIO_FAILED;
-        }
-
-        // Copy caller's audio data into the block buffer's owned memory.
-        status = CMBlockBufferReplaceDataBytes(
-            samples, blockBuffer, 0, dataSize);
-
-        if (status != noErr)
-        {
-            CFRelease(blockBuffer);
-            CFRelease(sampleBuffer);
-            NSLog(@"[LiveRecorder] CMBlockBufferReplaceDataBytes failed: %d", (int)status);
-            return LR_ERR_AUDIO_FAILED;
-        }
-
-        status = CMSampleBufferSetDataBuffer(sampleBuffer, blockBuffer);
-        CFRelease(blockBuffer);
-
-        if (status != noErr)
-        {
-            CFRelease(sampleBuffer);
-            NSLog(@"[LiveRecorder] CMSampleBufferSetDataBuffer failed: %d", (int)status);
-            return LR_ERR_AUDIO_FAILED;
-        }
-
-        // Append to writer.
+        // 4. Append to writer.
         BOOL appended = [state->audioInput appendSampleBuffer:sampleBuffer];
         CFRelease(sampleBuffer);
 
         if (!appended)
         {
-            NSLog(@"[LiveRecorder] Audio append failed at %.3fs: %@",
-                  elapsedSeconds, state->assetWriter.error);
+            NSLog(@"[LiveRecorder] Audio append failed at %.3fs: status=%ld error=%@",
+                  elapsedSeconds, (long)state->assetWriter.status,
+                  state->assetWriter.error);
             return LR_ERR_APPEND_FAILED;
         }
 
