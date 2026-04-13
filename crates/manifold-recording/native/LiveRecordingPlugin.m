@@ -282,10 +282,10 @@ void* LiveRecorder_Create(int width, int height, float fps, const char* outputPa
             } mutableCopy];
 
             // AAC: use per-channel bitrate so mono/stereo both work.
-            // 128 kbps/ch → 128k mono, 256k stereo.
+            // 192 kbps/ch → 192k mono, 384k stereo. Transparent quality for music.
             if (outputFormatID == kAudioFormatMPEG4AAC)
             {
-                audioSettings[AVEncoderBitRatePerChannelKey] = @(128000);
+                audioSettings[AVEncoderBitRatePerChannelKey] = @(192000);
             }
 
             state->audioInput = [[AVAssetWriterInput alloc] initWithMediaType:AVMediaTypeAudio
@@ -297,7 +297,7 @@ void* LiveRecorder_Create(int width, int height, float fps, const char* outputPa
                 [state->assetWriter addInput:state->audioInput];
                 NSLog(@"[LiveRecorder] Audio track: %dHz %dch %s",
                       audioSampleRate, audioChannels,
-                      (audioCodec == 1) ? "ALAC" : "AAC-128k/ch");
+                      (audioCodec == 1) ? "ALAC" : "AAC-192k/ch");
             }
             else
             {
