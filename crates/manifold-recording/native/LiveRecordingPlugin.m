@@ -424,39 +424,38 @@ int LiveRecorder_EncodeVideoFrame(void* handle, void* metalTexturePtr, double el
         [compute dispatchThreadgroups:gridSize threadsPerThreadgroup:threadGroupSize];
 
         [compute endEncoding];
+        [cmdBuf commit];
 
-        // Async: submit GPU work and append pixel buffer in completion handler.
-        // This lets the recording thread move to the next frame immediately
-        // instead of blocking on waitUntilCompleted.
+        // Wait for the GPU compute copy to finish. This ensures the source
+        // pool texture is safe for the content thread to reuse (the caller
+        // releases the pool slot after this function returns). The compute
+        // copy is a single-dispatch kernel — typically <1ms on Apple Silicon.
+        [cmdBuf waitUntilCompleted];
+
+        if (cmdBuf.status == MTLCommandBufferStatusError)
+        {
+            NSLog(@"[LiveRecorder] Compute error: %@", cmdBuf.error);
+            CFRelease(cvMetalTexture);
+            CVPixelBufferRelease(pixelBuffer);
+            return LR_ERR_BLIT_FAILED;
+        }
+
+        // Append pixel buffer ASYNC — the VideoToolbox encoding happens on
+        // the serial append queue, not the recording thread. This frees the
+        // recording thread to process the next frame immediately.
         CMTime presentTime = CMTimeMakeWithSeconds(elapsedSeconds, 600);
-
-        // Capture references for the completion block. The block retains these.
         AVAssetWriterInputPixelBufferAdaptor* adaptor = state->videoAdaptor;
         AVAssetWriter* writer = state->assetWriter;
-        dispatch_queue_t appendQueue = state->appendQueue;
 
-        [cmdBuf addCompletedHandler:^(id<MTLCommandBuffer> completedBuf) {
-            if (completedBuf.status == MTLCommandBufferStatusError)
+        dispatch_async(state->appendQueue, ^{
+            if (writer.status == AVAssetWriterStatusWriting)
             {
-                NSLog(@"[LiveRecorder] Compute error: %@", completedBuf.error);
-                CFRelease(cvMetalTexture);
-                CVPixelBufferRelease(pixelBuffer);
-                return;
+                [adaptor appendPixelBuffer:pixelBuffer
+                      withPresentationTime:presentTime];
             }
-
-            // Append on serial queue to ensure ordering.
-            dispatch_async(appendQueue, ^{
-                if (writer.status == AVAssetWriterStatusWriting)
-                {
-                    [adaptor appendPixelBuffer:pixelBuffer
-                          withPresentationTime:presentTime];
-                }
-                CFRelease(cvMetalTexture);
-                CVPixelBufferRelease(pixelBuffer);
-            });
-        }];
-
-        [cmdBuf commit];
+            CFRelease(cvMetalTexture);
+            CVPixelBufferRelease(pixelBuffer);
+        });
 
         state->videoFrameCount++;
         return LR_OK;
