@@ -546,24 +546,41 @@ int LiveRecorder_WriteAudioSamples(void* handle, const float* samples,
             return LR_ERR_AUDIO_FAILED;
         }
 
-        // Set the audio data on the sample buffer.
+        // Copy audio data into a CoreMedia-owned block buffer.
+        // AVAssetWriter may hold references to sample buffer data after
+        // appendSampleBuffer returns, so we MUST NOT use the caller's
+        // pointer directly (it's a reused scratch buffer).
         CMBlockBufferRef blockBuffer = NULL;
         size_t dataSize = (size_t)(sampleCount * sizeof(float));
+
+        // Allocate empty block buffer, then copy data in.
         status = CMBlockBufferCreateWithMemoryBlock(
             kCFAllocatorDefault,
-            (void*)samples,
+            NULL,           // NULL = CoreMedia allocates the memory
             dataSize,
-            kCFAllocatorNull,  // no dealloc — caller owns the memory
+            kCFAllocatorDefault,  // CoreMedia owns and frees the allocation
             NULL,
             0,
             dataSize,
-            0,
+            kCMBlockBufferAssureMemoryNowFlag,
             &blockBuffer);
 
         if (status != noErr || blockBuffer == NULL)
         {
             CFRelease(sampleBuffer);
             NSLog(@"[LiveRecorder] CMBlockBufferCreate failed: %d", (int)status);
+            return LR_ERR_AUDIO_FAILED;
+        }
+
+        // Copy caller's audio data into the block buffer's owned memory.
+        status = CMBlockBufferReplaceDataBytes(
+            samples, blockBuffer, 0, dataSize);
+
+        if (status != noErr)
+        {
+            CFRelease(blockBuffer);
+            CFRelease(sampleBuffer);
+            NSLog(@"[LiveRecorder] CMBlockBufferReplaceDataBytes failed: %d", (int)status);
             return LR_ERR_AUDIO_FAILED;
         }
 
