@@ -722,12 +722,6 @@ impl ContentThread {
                 self.led_controller = None;
                 log::info!("[ContentThread] LED output shut down.");
             }
-            ContentCommand::SetLedEnabled(enabled) => {
-                if let Some(ref mut ctrl) = self.led_controller {
-                    ctrl.set_enabled(enabled);
-                }
-            }
-
             // ── Export ────────────────────────────────────────────────
             ContentCommand::StartExport(_) => {
                 // Handled in run() loop directly (needs cmd_rx/state_tx access).

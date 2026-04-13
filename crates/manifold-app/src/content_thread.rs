@@ -192,22 +192,8 @@ impl ContentThread {
             }
         }
 
-        // Auto-initialize LED output with default settings (native Metal).
-        // Can be reconfigured at runtime via InitLedOutput command.
-        {
-            let settings = manifold_led::LedSettings::default();
-            let mut ctrl = manifold_led::LedOutputController::new();
-            let native_device = self.content_pipeline.native_device()
-                .expect("native device required for LED init");
-            if ctrl.initialize(native_device, &settings) {
-                self.led_controller = Some(ctrl);
-                log::info!("[LED] Auto-initialized: {}x{} LEDs, target={}:{}",
-                    settings.strip_count, settings.leds_per_strip,
-                    settings.artnet_ip, settings.artnet_port);
-            } else {
-                log::warn!("[LED] Auto-init FAILED");
-            }
-        }
+        // LED output is NOT auto-initialized. The user enables it via the
+        // master-inspector toggle, which sends InitLedOutput / ShutdownLedOutput.
 
         // Initialize vsync mode from project settings if signal is available.
         #[cfg(target_os = "macos")]

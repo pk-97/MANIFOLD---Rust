@@ -179,8 +179,20 @@ pub(super) fn dispatch_inspector(
 
         // ── LED enabled toggle ───────────────────────────────────
         PanelAction::LedEnabledToggle => {
-            let new_enabled = !content_state.led_enabled;
-            ContentCommand::send(content_tx, ContentCommand::SetLedEnabled(new_enabled));
+            if content_state.led_enabled {
+                // Tear down the entire LED pipeline (socket, compute, buffers).
+                ContentCommand::send(content_tx, ContentCommand::ShutdownLedOutput);
+            } else {
+                // Stand up the LED pipeline with default settings.
+                let settings = manifold_led::LedSettings {
+                    enabled: true,
+                    ..Default::default()
+                };
+                ContentCommand::send(
+                    content_tx,
+                    ContentCommand::InitLedOutput(Box::new(settings)),
+                );
+            }
             DispatchResult::handled()
         }
 
