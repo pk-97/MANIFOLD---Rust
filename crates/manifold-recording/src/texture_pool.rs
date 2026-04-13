@@ -67,8 +67,8 @@ impl TextureRingPool {
                 depth: 1,
                 format,
                 dimension: GpuTextureDimension::D2,
-                usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_DST
-                    | GpuTextureUsage::STORAGE_BINDING,
+                usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::SHADER_WRITE
+                    | GpuTextureUsage::COPY_SRC,
                 label: &label,
                 mip_levels: 1,
             };
