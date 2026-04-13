@@ -275,18 +275,12 @@ void* LiveRecorder_Create(int width, int height, float fps, const char* outputPa
                 outputFormatID = kAudioFormatMPEG4AAC;
             }
 
-            NSMutableDictionary* audioSettings = [@{
+            NSDictionary* audioSettings = @{
                 AVFormatIDKey:             @(outputFormatID),
-                AVSampleRateKey:           @(audioSampleRate),
+                AVSampleRateKey:           @((double)audioSampleRate),
                 AVNumberOfChannelsKey:     @(audioChannels),
-            } mutableCopy];
-
-            // AAC: use per-channel bitrate so mono/stereo both work.
-            // 192 kbps/ch → 192k mono, 384k stereo. Transparent quality for music.
-            if (outputFormatID == kAudioFormatMPEG4AAC)
-            {
-                audioSettings[AVEncoderBitRatePerChannelKey] = @(192000);
-            }
+                AVEncoderAudioQualityKey:  @(AVAudioQualityMax),
+            };
 
             state->audioInput = [[AVAssetWriterInput alloc] initWithMediaType:AVMediaTypeAudio
                                                                outputSettings:audioSettings];
@@ -297,7 +291,7 @@ void* LiveRecorder_Create(int width, int height, float fps, const char* outputPa
                 [state->assetWriter addInput:state->audioInput];
                 NSLog(@"[LiveRecorder] Audio track: %dHz %dch %s",
                       audioSampleRate, audioChannels,
-                      (audioCodec == 1) ? "ALAC" : "AAC-192k/ch");
+                      (audioCodec == 1) ? "ALAC" : "AAC");
             }
             else
             {
@@ -563,9 +557,13 @@ int LiveRecorder_WriteAudioSamples(void* handle, const float* samples,
 
         if (!appended)
         {
-            NSLog(@"[LiveRecorder] Audio append failed at %.3fs: status=%ld error=%@",
+            NSLog(@"[LiveRecorder] Audio append failed at %.3fs: status=%ld error=%@"
+                  " — DISABLING audio to protect video recording",
                   elapsedSeconds, (long)state->assetWriter.status,
                   state->assetWriter.error);
+            // Disable audio for the rest of this session so it doesn't
+            // poison the AVAssetWriter and kill video recording too.
+            state->hasAudio = NO;
             return LR_ERR_APPEND_FAILED;
         }
 
