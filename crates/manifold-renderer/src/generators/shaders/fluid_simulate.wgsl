@@ -124,7 +124,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     // Excess + dead: hold at nozzle
     if is_excess && p.life <= 0.0 {
         let spread_hash = hash_float2(id.x * 1664525u + 12345u);
-        let spread_r = spread_hash.x * 0.005;
+        let spread_r = spread_hash.x * 0.05;
         let spread_a = spread_hash.y * 6.28318;
         p.position = vec3<f32>(
             0.5 + cos(spread_a) * spread_r,

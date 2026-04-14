@@ -147,7 +147,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         // Excess: dead at center nozzle
         let spread_hash_a = f32(wang_hash(i * 1664525u + 12345u)) / 4294967296.0;
         let spread_hash_b = f32(wang_hash(wang_hash(i * 1664525u + 12345u))) / 4294967296.0;
-        let spread_r = spread_hash_a * 0.005;
+        let spread_r = spread_hash_a * 0.05;
         let spread_a = spread_hash_b * 6.28318;
         p.position = vec3<f32>(
             0.5 + cos(spread_a) * spread_r,
