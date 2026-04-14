@@ -1,10 +1,10 @@
 //! Digital Plants — procedural plant topology generator.
 //!
 //! Pipeline:
-//!   1. Compute: 160K instance simulation (UV → noise → cylinder → torus → morph)
-//!   2. Shadow: depth-only render from light perspective
-//!   3. Render: instanced cubes with cel shading + PCF shadow sampling
-//!   4. Blur: optional luma-masked separable Gaussian
+//!   1. Compute: 160K instance simulation (UV -> noise -> cylinder -> torus -> morph)
+//!   2. Smooth: 5-point cross neighbor average on instance positions
+//!   3. Shadow: depth-only render from light perspective
+//!   4. Render: instanced cubes with cel shading + PCF shadow sampling
 
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
@@ -23,7 +23,7 @@ inventory::submit! {
 
 const GRID_SIZE: u32 = 400;
 const INSTANCE_COUNT: u32 = GRID_SIZE * GRID_SIZE; // 160,000
-const INSTANCE_STRIDE: u64 = 32; // 2 × vec4<f32>
+const INSTANCE_STRIDE: u64 = 32; // 2 x vec4<f32>
 const SHADOW_MAP_SIZE: u32 = 2048;
 
 // Parameter indices (must match generator_metadata_submissions order)
@@ -63,6 +63,15 @@ struct ComputeUniforms {
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct SmoothUniforms {
+    grid_size: u32,
+    instance_count: u32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct RenderUniforms {
     view_proj: [[f32; 4]; 4],
     camera_pos: [f32; 4],
@@ -83,21 +92,16 @@ struct ShadowMatrix {
     light_vp: [[f32; 4]; 4],
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct BlurUniforms {
-    max_radius: f32,
-    direction: f32,
-    width: f32,
-    height: f32,
-}
-
 // ─── Generator ──────────────────────────────────────────────────────
 
 pub struct DigitalPlantsGenerator {
     // Compute
     compute_pipeline: manifold_gpu::GpuComputePipeline,
     instance_buf: manifold_gpu::GpuBuffer,
+
+    // Smooth
+    smooth_pipeline: manifold_gpu::GpuComputePipeline,
+    smooth_buf: manifold_gpu::GpuBuffer,
 
     // Shadow
     shadow_pipeline: manifold_gpu::GpuRenderPipeline,
@@ -110,10 +114,6 @@ pub struct DigitalPlantsGenerator {
     render_depth_stencil: manifold_gpu::GpuDepthStencilState,
     depth_texture: Option<manifold_gpu::GpuTexture>,
     shadow_sampler: manifold_gpu::GpuSampler,
-
-    // Blur
-    blur_pipeline: manifold_gpu::GpuComputePipeline,
-    blur_temp: Option<manifold_gpu::GpuTexture>,
 
     // State
     depth_width: u32,
@@ -137,6 +137,16 @@ impl DigitalPlantsGenerator {
         );
 
         let instance_buf =
+            device.create_buffer_shared(INSTANCE_COUNT as u64 * INSTANCE_STRIDE);
+
+        // ── Smooth pipeline ──
+        let smooth_pipeline = device.create_compute_pipeline(
+            include_str!("shaders/digital_plants_smooth.wgsl"),
+            "cs_main",
+            "DigitalPlants Smooth",
+        );
+
+        let smooth_buf =
             device.create_buffer_shared(INSTANCE_COUNT as u64 * INSTANCE_STRIDE);
 
         // ── Shadow pipeline ──
@@ -208,16 +218,11 @@ impl DigitalPlantsGenerator {
             compare: Some(manifold_gpu::GpuCompareFunction::LessEqual),
         });
 
-        // ── Blur pipeline (reuse galactic_rock_blur.wgsl) ──
-        let blur_pipeline = device.create_compute_pipeline(
-            include_str!("shaders/galactic_rock_blur.wgsl"),
-            "cs_main",
-            "DigitalPlants Blur",
-        );
-
         Self {
             compute_pipeline,
             instance_buf,
+            smooth_pipeline,
+            smooth_buf,
             shadow_pipeline,
             shadow_depth_stencil,
             shadow_map,
@@ -226,8 +231,6 @@ impl DigitalPlantsGenerator {
             render_depth_stencil,
             depth_texture: None,
             shadow_sampler,
-            blur_pipeline,
-            blur_temp: None,
             depth_width: 0,
             depth_height: 0,
         }
@@ -253,17 +256,6 @@ impl DigitalPlantsGenerator {
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET,
             label: "DigitalPlants Depth",
-            mip_levels: 1,
-        }));
-        self.blur_temp = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
-            width,
-            height,
-            depth: 1,
-            format: manifold_gpu::GpuTextureFormat::Rgba16Float,
-            dimension: manifold_gpu::GpuTextureDimension::D2,
-            usage: manifold_gpu::GpuTextureUsage::SHADER_READ
-                | manifold_gpu::GpuTextureUsage::SHADER_WRITE,
-            label: "DigitalPlants BlurTemp",
             mip_levels: 1,
         }));
         self.depth_width = width;
@@ -335,6 +327,36 @@ impl Generator for DigitalPlantsGenerator {
             "DigitalPlants Compute",
         );
 
+        // ── Phase 2: Data-level smoothing (neighbor average) ──
+        let smooth_uniforms = SmoothUniforms {
+            grid_size: GRID_SIZE,
+            instance_count: INSTANCE_COUNT,
+            _pad0: 0,
+            _pad1: 0,
+        };
+
+        gpu.native_enc.dispatch_compute(
+            &self.smooth_pipeline,
+            &[
+                manifold_gpu::GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&smooth_uniforms),
+                },
+                manifold_gpu::GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: &self.instance_buf,
+                    offset: 0,
+                },
+                manifold_gpu::GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: &self.smooth_buf,
+                    offset: 0,
+                },
+            ],
+            [wg, 1, 1],
+            "DigitalPlants Smooth",
+        );
+
         // ── Camera setup (orbit controls) ──
         let target_pos = [0.0f32, 0.0, 0.0];
         let eye = [
@@ -353,7 +375,7 @@ impl Generator for DigitalPlantsGenerator {
         let light_height = 3.0;
         let light_pos = [light_radius * 0.7, light_height, light_radius * 0.7];
 
-        // ── Phase 2: Shadow pass ──
+        // ── Phase 3: Shadow pass ──
         let shadow_extent = 4.0;
         let light_view =
             mesh_pipeline::look_at_rh(light_pos, target_pos, up);
@@ -383,7 +405,7 @@ impl Generator for DigitalPlantsGenerator {
                 },
                 manifold_gpu::GpuBinding::Buffer {
                     binding: 1,
-                    buffer: &self.instance_buf,
+                    buffer: &self.smooth_buf,
                     offset: 0,
                 },
             ],
@@ -393,12 +415,12 @@ impl Generator for DigitalPlantsGenerator {
             "DigitalPlants Shadow",
         );
 
-        // ── Phase 3: Main render ──
+        // ── Phase 4: Main render ──
         let render_uniforms = RenderUniforms {
             view_proj,
             camera_pos: [eye[0], eye[1], eye[2], 0.0],
             light_pos: [light_pos[0], light_pos[1], light_pos[2], 0.0],
-            light_color: [1.0, 0.95, 0.9, 2.0], // warm white, intensity 2.0
+            light_color: [1.0, 0.95, 0.9, 2.0],
             shadow_info: [SHADOW_MAP_SIZE as f32, 0.0, 0.0, 0.0],
         };
 
@@ -418,7 +440,7 @@ impl Generator for DigitalPlantsGenerator {
                 },
                 manifold_gpu::GpuBinding::Buffer {
                     binding: 1,
-                    buffer: &self.instance_buf,
+                    buffer: &self.smooth_buf,
                     offset: 0,
                 },
                 manifold_gpu::GpuBinding::Bytes {
@@ -439,68 +461,6 @@ impl Generator for DigitalPlantsGenerator {
             manifold_gpu::GpuLoadAction::Clear,
             "DigitalPlants Render",
         );
-
-        // ── Phase 4: Optional blur ──
-        let blur_radius = 3.0; // subtle fixed blur for organic softness
-        if blur_radius > 0.5 {
-            let blur_temp = self.blur_temp.as_ref().unwrap();
-            let wg_x = width.div_ceil(16);
-            let wg_y = height.div_ceil(16);
-
-            // Pass 1: horizontal
-            let blur_h = BlurUniforms {
-                max_radius: blur_radius,
-                direction: 0.0,
-                width: width as f32,
-                height: height as f32,
-            };
-            gpu.native_enc.dispatch_compute(
-                &self.blur_pipeline,
-                &[
-                    manifold_gpu::GpuBinding::Bytes {
-                        binding: 0,
-                        data: bytemuck::bytes_of(&blur_h),
-                    },
-                    manifold_gpu::GpuBinding::Texture {
-                        binding: 1,
-                        texture: target,
-                    },
-                    manifold_gpu::GpuBinding::Texture {
-                        binding: 2,
-                        texture: blur_temp,
-                    },
-                ],
-                [wg_x, wg_y, 1],
-                "DigitalPlants BlurH",
-            );
-
-            // Pass 2: vertical
-            let blur_v = BlurUniforms {
-                max_radius: blur_radius,
-                direction: 1.0,
-                width: width as f32,
-                height: height as f32,
-            };
-            gpu.native_enc.dispatch_compute(
-                &self.blur_pipeline,
-                &[
-                    manifold_gpu::GpuBinding::Bytes {
-                        binding: 0,
-                        data: bytemuck::bytes_of(&blur_v),
-                    },
-                    manifold_gpu::GpuBinding::Texture {
-                        binding: 1,
-                        texture: blur_temp,
-                    },
-                    manifold_gpu::GpuBinding::Texture {
-                        binding: 2,
-                        texture: target,
-                    },
-                ],
-                [wg_x, wg_y, 1],
-                "DigitalPlants BlurV",
-            );
-        }
 
         ctx.anim_progress
     }

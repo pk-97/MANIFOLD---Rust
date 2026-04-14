@@ -589,7 +589,7 @@ inventory::submit! {
             ParamSpec::continuous("Torus Radius", 0.5, 3.0, 1.2, "F2", "torusRadius"),
             ParamSpec::continuous("Petal Amp", 0.0, 80.0, 60.0, "F0", "petalAmp"),
             ParamSpec::continuous("Rot Speed", 0.0, 3.0, 0.3, "F2", "rotSpeed"),
-            ParamSpec::continuous("Box Scale", 0.005, 0.08, 0.025, "F3", "boxScale"),
+            ParamSpec::continuous("Box Scale", 0.05, 1.0, 0.3, "F2", "boxScale"),
             ParamSpec::continuous("Cam Dist", 0.5, 10.0, 3.5, "F1", "camDist"),
             ParamSpec::continuous("Cam Orbit", -180.0, 180.0, 0.0, "F0", "camOrbit"),
             ParamSpec::continuous("Cam Tilt", -90.0, 90.0, 15.0, "F0", "camTilt"),

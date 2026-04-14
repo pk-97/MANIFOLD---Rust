@@ -129,37 +129,30 @@ fn vs_main(
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let N = normalize(in.world_normal);
     let L = normalize(u.light_pos.xyz - in.world_pos);
-    let V = normalize(u.camera_pos.xyz - in.world_pos);
 
     // Shadow
     let texel_size = 1.0 / u.shadow_info.x;
     let shadow = sample_shadow(in.world_pos, texel_size);
 
-    // Diffuse: quantized into 4 cel-shading bands
+    // Cel shading: quantize dot(N, L) into 4 discrete stepping bands.
+    // Shadow applied separately (spec: quantize NdotL, not NdotL*shadow).
     let NdotL = max(dot(N, L), 0.0);
-    let lit = NdotL * shadow;
 
     var band: f32;
-    if lit < 0.25 {
+    if NdotL < 0.25 {
         band = 0.08;   // deep shadow
-    } else if lit < 0.5 {
+    } else if NdotL < 0.5 {
         band = 0.35;   // mid shadow
-    } else if lit < 0.75 {
+    } else if NdotL < 0.75 {
         band = 0.65;   // mid light
     } else {
         band = 1.0;    // full light
     }
 
-    // Base color: desaturated green for plant aesthetic
-    let base_color = vec3<f32>(0.18, 0.28, 0.12);
+    // Base color: plant green
+    let base_color = vec3<f32>(0.36, 0.56, 0.24);
 
-    // Rim highlight: fresnel-like edge glow
-    let rim = pow(1.0 - max(dot(N, V), 0.0), 3.0);
-    let rim_color = vec3<f32>(0.3, 0.45, 0.2) * rim * 0.4;
-
-    // Light intensity modulation
-    let intensity = u.light_color.w;
-    let final_color = base_color * band * intensity + rim_color;
+    let final_color = base_color * band * shadow;
 
     return vec4<f32>(final_color, 1.0);
 }
