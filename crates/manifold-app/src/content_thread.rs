@@ -305,6 +305,10 @@ impl ContentThread {
                     if result.timed_out {
                         // Display link stopped firing (display sleep, disconnect).
                         // Fall through and render anyway to avoid stalling.
+                        // Update last_vsync_count to prevent double-render:
+                        // without this, the next wait sees count > stale last_seen
+                        // and returns immediately → two renders per vsync interval.
+                        self.last_vsync_count = result.count;
                         true
                     } else {
                         self.last_vsync_count = result.count;
