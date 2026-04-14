@@ -684,34 +684,12 @@ impl Application {
             }
         };
 
-        // Set the output window above the dock and menu bar.
-        // The CVDisplayLink cadence issue was caused by
-        // CVDisplayLinkSetCurrentCGDisplay (now fixed by recreating the
-        // link), not the window level.
-        if presentation {
-            #[cfg(target_os = "macos")]
-            {
-                use objc::{msg_send, sel, sel_impl};
-                use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-                let ns_view = match window.window_handle().unwrap().as_raw() {
-                    RawWindowHandle::AppKit(h) => {
-                        h.ns_view.as_ptr() as *mut objc::runtime::Object
-                    }
-                    _ => std::ptr::null_mut(),
-                };
-                if !ns_view.is_null() {
-                    unsafe {
-                        let ns_window: *mut objc::runtime::Object =
-                            msg_send![ns_view, window];
-                        if !ns_window.is_null() {
-                            // NSStatusWindowLevel (25): above menu bar + dock.
-                            let _: () = msg_send![ns_window, setLevel: 25i64];
-                            let _: () = msg_send![ns_window, setMovable: false];
-                        }
-                    }
-                }
-            }
-        }
+        // No window level override. Setting setLevel:25 triggers macOS
+        // Direct Display mode when the window covers the full display,
+        // which destabilizes CVDisplayLink callback cadence (12-20ms
+        // instead of steady 16.67ms). A borderless window at full display
+        // size is visually identical — the menu bar only appears on the
+        // display the cursor is on, not on a dedicated output TV.
 
         let id = window.id();
         let resolved_index = display_index.or(if monitors.len() > 1 { Some(1) } else { Some(0) });
