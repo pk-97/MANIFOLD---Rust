@@ -274,7 +274,7 @@ impl Generator for ParticleTextGenerator {
 
         // Ensure particles are initialized
         if !self.core.initialized {
-            self.core.init_particles_gpu(gpu);
+            self.core.init_particles_gpu(gpu, self.core.active_count);
             self.needs_reseed = true;
         }
 

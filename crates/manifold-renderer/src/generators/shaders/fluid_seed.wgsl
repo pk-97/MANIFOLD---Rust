@@ -16,7 +16,7 @@ struct SeedUniforms {
     active_count: u32,
     pattern_index: u32,
     trigger_count: u32,
-    _pad0: u32,
+    visible_count: u32,
 };
 
 struct Particle {
@@ -134,14 +134,28 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         y = pos.y;
     }
 
-    // Unity: p.position = float3(frac(x + 1.0), frac(y + 1.0), 0.0)
     var p: Particle;
-    p.position = vec3<f32>(fract(x + 1.0), fract(y + 1.0), 0.0);
     p.velocity = vec3<f32>(0.0);
-    p.life = 1.0;
-    // Unity: p.age = -1.0 (uncolored marker)
     p.age = -1.0;
     p.color = vec4<f32>(0.005, 0.005, 0.005, 1.0);
+
+    if i < params.visible_count {
+        // Allowed: seed at pattern position, alive
+        p.position = vec3<f32>(fract(x + 1.0), fract(y + 1.0), 0.0);
+        p.life = 1.0;
+    } else {
+        // Excess: dead at center nozzle
+        let spread_hash_a = f32(wang_hash(i * 1664525u + 12345u)) / 4294967296.0;
+        let spread_hash_b = f32(wang_hash(wang_hash(i * 1664525u + 12345u))) / 4294967296.0;
+        let spread_r = spread_hash_a * 0.005;
+        let spread_a = spread_hash_b * 6.28318;
+        p.position = vec3<f32>(
+            0.5 + cos(spread_a) * spread_r,
+            0.5 + sin(spread_a) * spread_r,
+            0.0,
+        );
+        p.life = 0.0;
+    }
 
     particles[i] = p;
 }

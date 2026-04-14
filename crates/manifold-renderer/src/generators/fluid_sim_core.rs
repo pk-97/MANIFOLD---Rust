@@ -97,7 +97,7 @@ pub struct SeedUniforms {
     pub active_count: u32,
     pub pattern_index: u32,
     pub trigger_count: u32,
-    pub _pad0: u32,
+    pub visible_count: u32,
 }
 
 #[repr(C)]
@@ -272,12 +272,12 @@ impl FluidSimCore {
     }
 
     /// Create and seed particle buffer. Call once before first render.
-    pub fn init_particles_gpu(&mut self, gpu: &mut GpuEncoder) {
+    pub fn init_particles_gpu(&mut self, gpu: &mut GpuEncoder, visible_count: u32) {
         let particle_buf_size = MAX_PARTICLES as u64 * PARTICLE_SIZE_BYTES;
         let particle_buffer = gpu.device.create_buffer(particle_buf_size);
         self.particle_buffer = Some(particle_buffer);
         self.initialized = true;
-        self.dispatch_seed(gpu, 255, 42);
+        self.dispatch_seed(gpu, 255, 42, visible_count);
     }
 
     /// Recreate scatter-resolution resources when output dimensions change.
@@ -356,12 +356,18 @@ impl FluidSimCore {
     }
 
     /// Dispatch the built-in pattern seed shader.
-    pub fn dispatch_seed(&self, gpu: &mut GpuEncoder, pattern: u32, trigger_count: u32) {
+    pub fn dispatch_seed(
+        &self,
+        gpu: &mut GpuEncoder,
+        pattern: u32,
+        trigger_count: u32,
+        visible_count: u32,
+    ) {
         let uniforms = SeedUniforms {
             active_count: self.active_count,
             pattern_index: pattern,
             trigger_count,
-            _pad0: 0,
+            visible_count,
         };
 
         let particle_buf = self.particle_buffer.as_ref().unwrap();
@@ -453,8 +459,12 @@ impl FluidSimCore {
             ((params.particles_millions * 1_000_000.0) as u32).clamp(100_000, MAX_PARTICLES);
         self.active_count = active_count;
 
+        // --- Fill: visible particle count ---
+        let fill = params.fill.clamp(0.0, 1.0);
+        let visible_count = ((fill * active_count as f32) as u32).clamp(0, active_count);
+
         if !self.initialized {
-            self.init_particles_gpu(gpu);
+            self.init_particles_gpu(gpu, visible_count);
         }
 
         self.ensure_scatter_resources(gpu.device, ctx.width, ctx.height, 1.0);
@@ -479,7 +489,7 @@ impl FluidSimCore {
 
                 if self.active_snap_mode == 3 {
                     let pattern = (trigger_count as u32) % PATTERN_COUNT;
-                    self.dispatch_seed(gpu, pattern, trigger_count as u32);
+                    self.dispatch_seed(gpu, pattern, trigger_count as u32, visible_count);
                 } else if self.active_snap_mode == 4 {
                     self.inject_active = true;
                     self.inject_point =
@@ -529,10 +539,6 @@ impl FluidSimCore {
         } else {
             0.0
         };
-
-        // --- Fill: visible particle count ---
-        let fill = params.fill.clamp(0.0, 1.0);
-        let visible_count = ((fill * active_count as f32) as u32).clamp(0, active_count);
 
         // --- Pre-computed energy for scatter ---
         // Scale energy by active_count (total) so density stays consistent
