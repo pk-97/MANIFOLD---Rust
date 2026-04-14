@@ -553,7 +553,7 @@ impl FluidSimCore {
         gpu.native_enc.clear_buffer(scatter_accum);
 
         let splat_uniforms = SplatUniforms {
-            active_count: visible_count,
+            active_count,
             width: sw,
             height: sh,
             scaled_energy,
@@ -576,7 +576,7 @@ impl FluidSimCore {
                     data: bytemuck::bytes_of(&splat_uniforms),
                 },
             ],
-            [visible_count.div_ceil(256).max(1), 1, 1],
+            [active_count.div_ceil(256), 1, 1],
             "FluidSim Splat",
         );
 
