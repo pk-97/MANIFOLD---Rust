@@ -209,24 +209,10 @@ impl ContentThread {
                 hz = result.display_hz;
             }
             if hz > 0.0 {
-                eprintln!(
-                    "[ContentThread] VSync activated: display_hz={:.1}, \
-                     target_fps={:.1}, divisor={}",
-                    hz,
-                    self.timer.target_fps(),
-                    self.timer.frame_divisor(),
-                );
                 log::info!("[ContentThread] VSync activated: display_hz={hz:.1}");
                 self.timer.set_vsync_mode(true, hz);
                 self.last_vsync_count = signal.vsync_count();
-                eprintln!(
-                    "[ContentThread] After set_vsync_mode: divisor={}, \
-                     actual_fps={:.1}",
-                    self.timer.frame_divisor(),
-                    hz / self.timer.frame_divisor() as f64,
-                );
             } else {
-                eprintln!("[ContentThread] VSync: display_hz=0 after wait, timer fallback");
                 log::warn!("[ContentThread] VSync: display_hz=0 after wait, using timer fallback");
             }
         }
