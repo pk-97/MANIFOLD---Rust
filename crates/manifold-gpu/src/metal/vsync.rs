@@ -390,17 +390,20 @@ impl GpuVsyncSignal {
             state.display_hz = new_hz;
         }
 
+        let old_hz = if old_refresh > 0.0 {
+            1.0 / old_refresh
+        } else {
+            0.0
+        };
+        eprintln!(
+            "[GpuVsyncSignal] Retargeted: display {} → {}, \
+             refresh {:.1}Hz → {:.1}Hz",
+            self.current_display_id, display_id, old_hz, new_hz,
+        );
         log::info!(
             "[GpuVsyncSignal] Retargeted: display {} → {}, \
              refresh {:.1}Hz → {:.1}Hz",
-            self.current_display_id,
-            display_id,
-            if old_refresh > 0.0 {
-                1.0 / old_refresh
-            } else {
-                0.0
-            },
-            new_hz,
+            self.current_display_id, display_id, old_hz, new_hz,
         );
 
         self.current_display_id = display_id;

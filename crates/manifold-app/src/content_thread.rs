@@ -209,10 +209,24 @@ impl ContentThread {
                 hz = result.display_hz;
             }
             if hz > 0.0 {
+                eprintln!(
+                    "[ContentThread] VSync activated: display_hz={:.1}, \
+                     target_fps={:.1}, divisor={}",
+                    hz,
+                    self.timer.target_fps(),
+                    self.timer.frame_divisor(),
+                );
                 log::info!("[ContentThread] VSync activated: display_hz={hz:.1}");
                 self.timer.set_vsync_mode(true, hz);
                 self.last_vsync_count = signal.vsync_count();
+                eprintln!(
+                    "[ContentThread] After set_vsync_mode: divisor={}, \
+                     actual_fps={:.1}",
+                    self.timer.frame_divisor(),
+                    hz / self.timer.frame_divisor() as f64,
+                );
             } else {
+                eprintln!("[ContentThread] VSync: display_hz=0 after wait, timer fallback");
                 log::warn!("[ContentThread] VSync: display_hz=0 after wait, using timer fallback");
             }
         }
@@ -296,7 +310,19 @@ impl ContentThread {
                         self.last_vsync_count = result.count;
                         // Update display Hz if it changed (window moved between monitors).
                         if (result.display_hz - self.timer.display_hz()).abs() > 0.1 {
+                            eprintln!(
+                                "[ContentThread] VSync Hz changed: {:.1} → {:.1}, \
+                                 divisor: {} → (recalc)",
+                                self.timer.display_hz(),
+                                result.display_hz,
+                                self.timer.frame_divisor(),
+                            );
                             self.timer.update_display_hz(result.display_hz);
+                            eprintln!(
+                                "[ContentThread] New divisor: {}, actual_fps: {:.1}",
+                                self.timer.frame_divisor(),
+                                result.display_hz / self.timer.frame_divisor() as f64,
+                            );
                         }
                         // Only render on every Nth vsync (frame divisor).
                         result.count % self.timer.frame_divisor() as u64 == 0
