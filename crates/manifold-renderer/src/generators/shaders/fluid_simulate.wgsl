@@ -118,12 +118,18 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
 
-    // Fill gate: particles beyond visible_count are held at the left edge
+    // Fill gate: particles beyond visible_count are held at a nozzle point
     if id.x >= params.visible_count {
         var p = particles[id.x];
-        // Deterministic y spread per particle — thin vertical band at x ≈ 0
-        let y_hash = hash_float(id.x * 1664525u + 12345u);
-        p.position = vec3<f32>(0.001, y_hash, 0.0);
+        // Tight cluster at left-center — nozzle origin with small spread
+        let spread_hash = hash_float2(id.x * 1664525u + 12345u);
+        let spread_r = spread_hash.x * 0.02;
+        let spread_a = spread_hash.y * 6.28318;
+        p.position = vec3<f32>(
+            0.001 + cos(spread_a) * spread_r,
+            0.5 + sin(spread_a) * spread_r,
+            0.0,
+        );
         p.velocity = vec3<f32>(0.0);
         particles[id.x] = p;
         return;
