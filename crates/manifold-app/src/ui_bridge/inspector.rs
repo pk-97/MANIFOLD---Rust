@@ -2963,7 +2963,7 @@ pub(super) fn dispatch_inspector(
                     })),
                 );
             }
-            DispatchResult::handled()
+            DispatchResult::structural()
         }
 
         PanelAction::AbletonGenInvertToggle(param_idx) => {
@@ -2993,7 +2993,7 @@ pub(super) fn dispatch_inspector(
                     }
                 })),
             );
-            DispatchResult::handled()
+            DispatchResult::structural()
         }
 
         PanelAction::AbletonMacroInvertToggle(slot_idx) => {
@@ -3013,7 +3013,7 @@ pub(super) fn dispatch_inspector(
                     }
                 })),
             );
-            DispatchResult::handled()
+            DispatchResult::structural()
         }
 
         _ => DispatchResult::unhandled(),
