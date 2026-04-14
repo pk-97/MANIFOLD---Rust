@@ -142,7 +142,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let kick_seed = id.x * 1664525u + params.frame_count * 747796405u;
         let angle = hash_float(kick_seed) * 6.28318;
         let dt_scale = params.dt * 60.0;
-        let kick = 0.03 * params.speed * dt_scale;
+        let kick = 0.015 * params.speed * dt_scale;
         p.position.x += cos(angle) * kick;
         p.position.y += sin(angle) * kick;
         p.life = 1.0;
@@ -176,9 +176,22 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     force += diff;
 
 
-    // 6. Direct Euler integration + toroidal wrap (framerate-independent)
+    // 6. Direct Euler integration (framerate-independent)
     let dt_scale = params.dt * 60.0;
-    p.position = vec3<f32>(fract(current_uv + force * params.speed * dt_scale + 1.0), 0.0);
+    let new_uv = current_uv + force * params.speed * dt_scale;
+
+    // When fill < 1: particles that leave the screen die (recycled to nozzle).
+    // When fill = 1: toroidal wrap (default behavior).
+    if params.visible_count < params.active_count {
+        if new_uv.x < 0.0 || new_uv.x > 1.0 || new_uv.y < 0.0 || new_uv.y > 1.0 {
+            p.life = 0.0;
+            particles[id.x] = p;
+            return;
+        }
+        p.position = vec3<f32>(new_uv, 0.0);
+    } else {
+        p.position = vec3<f32>(fract(new_uv + 1.0), 0.0);
+    }
 
     // 7. Injection disturbance (applied AFTER integration)
     //    Injection point is a random UV passed from host (was fixed 4-point array).
@@ -217,7 +230,17 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             let dt_scale = params.dt * 60.0;
             let strength = params.inject_force * envelope * falloff * dt_scale;
             let push = perturbed_radial * strength + curl_force * strength * 0.5;
-            p.position = vec3<f32>(fract(pos + push + 1.0), 0.0);
+            let inject_uv = pos + push;
+            if params.visible_count < params.active_count {
+                if inject_uv.x < 0.0 || inject_uv.x > 1.0 || inject_uv.y < 0.0 || inject_uv.y > 1.0 {
+                    p.life = 0.0;
+                    particles[id.x] = p;
+                    return;
+                }
+                p.position = vec3<f32>(inject_uv, 0.0);
+            } else {
+                p.position = vec3<f32>(fract(inject_uv + 1.0), 0.0);
+            }
         }
     }
 
