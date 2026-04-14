@@ -681,16 +681,17 @@ impl Application {
         #[cfg(target_os = "macos")]
         if let Some(gpu) = &self.gpu {
             let size = window.inner_size();
-            // displaySyncEnabled = false: the content thread is vsync-paced
-            // via CVDisplayLink (GpuVsyncSignal). nextDrawable() must return
-            // immediately — blocking would stall the content thread past the
-            // vsync boundary, halving frame rate.
+            // displaySyncEnabled = true: ensures presents are vsync-aligned
+            // to the output display. Without it, presents from a CVDisplayLink
+            // on a different display land at arbitrary times → tearing.
+            // With 3 drawables, nextDrawable() returns quickly (brief wait
+            // for vsync alignment, not a full-frame block).
             let surface = gpu.device.create_surface(
                 &*window,
                 size.width.max(1),
                 size.height.max(1),
                 manifold_gpu::GpuTextureFormat::Rgba16Float,
-                false,
+                true,
             );
             self.send_content_cmd(
                 crate::content_command::ContentCommand::SetOutputSurface(surface),

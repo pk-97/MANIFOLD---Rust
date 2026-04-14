@@ -398,80 +398,46 @@ impl GpuVsyncSignal {
         self.retarget_to_display(new_id)
     }
 
-    /// Retarget to a specific display ID by destroying and recreating the
-    /// CVDisplayLink. `CVDisplayLinkSetCurrentCGDisplay` causes persistent
-    /// callback cadence instability on some displays (consumer TVs over HDMI).
-    /// A fresh display link starts clean at the correct cadence.
-    ///
-    /// The shared VsyncInner (condvar + state) is preserved — the content
-    /// thread's GpuVsyncWaiter continues to work without reconnection.
+    /// Retarget to a specific display ID.
+    /// Returns `true` if the display actually changed.
     pub fn retarget_to_display(&mut self, display_id: u32) -> bool {
         if display_id == 0 || display_id == self.current_display_id {
             return false;
         }
 
-        // Stop and release the old display link.
+        let old_refresh =
+            unsafe { CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link) };
+
+        // Retarget while running — safe per Apple docs.
         unsafe {
-            CVDisplayLinkStop(self.display_link);
-            CVDisplayLinkRelease(self.display_link);
-        }
-
-        // Create a fresh display link targeting the new display.
-        let mut new_link: CVDisplayLinkRef = std::ptr::null_mut();
-        unsafe {
-            let ret = CVDisplayLinkCreateWithActiveCGDisplays(&mut new_link);
-            assert!(
-                ret == K_CV_RETURN_SUCCESS && !new_link.is_null(),
-                "CVDisplayLinkCreateWithActiveCGDisplays failed on retarget (ret={ret})"
-            );
-
-            let ret = CVDisplayLinkSetCurrentCGDisplay(new_link, display_id);
-            if ret != K_CV_RETURN_SUCCESS {
-                log::warn!(
-                    "[GpuVsyncSignal] SetCurrentCGDisplay failed for display \
-                     {display_id} (ret={ret})"
-                );
-            }
-
-            // Reuse the same VsyncInner — the content thread's waiter stays valid.
-            let ctx_ptr = Arc::as_ptr(&self.inner) as *mut c_void;
-            let ret =
-                CVDisplayLinkSetOutputCallback(new_link, content_vsync_callback, ctx_ptr);
-            assert!(
-                ret == K_CV_RETURN_SUCCESS,
-                "CVDisplayLinkSetOutputCallback failed on retarget (ret={ret})"
-            );
-
-            let ret = CVDisplayLinkStart(new_link);
-            assert!(
-                ret == K_CV_RETURN_SUCCESS,
-                "CVDisplayLinkStart failed on retarget (ret={ret})"
-            );
+            CVDisplayLinkSetCurrentCGDisplay(self.display_link, display_id);
         }
 
         let new_refresh =
-            unsafe { CVDisplayLinkGetActualOutputVideoRefreshPeriod(new_link) };
+            unsafe { CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link) };
         let new_hz = if new_refresh > 0.0 {
             1.0 / new_refresh
         } else {
             0.0
         };
+
         if new_hz > 0.0
             && let Ok(mut state) = self.inner.state.lock()
         {
             state.display_hz = new_hz;
         }
 
+        let old_hz = if old_refresh > 0.0 {
+            1.0 / old_refresh
+        } else {
+            0.0
+        };
         eprintln!(
-            "[GpuVsyncSignal] Recreated: display {} → {}, hz={:.1}",
-            self.current_display_id, display_id, new_hz,
-        );
-        log::info!(
-            "[GpuVsyncSignal] Recreated: display {} → {}, hz={:.1}",
-            self.current_display_id, display_id, new_hz,
+            "[GpuVsyncSignal] Retargeted: display {} → {}, \
+             refresh {:.1}Hz → {:.1}Hz",
+            self.current_display_id, display_id, old_hz, new_hz,
         );
 
-        self.display_link = new_link;
         self.current_display_id = display_id;
         true
     }
