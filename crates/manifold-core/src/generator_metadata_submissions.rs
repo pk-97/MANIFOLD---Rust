@@ -587,7 +587,7 @@ inventory::submit! {
             ParamSpec::continuous("Height", 0.5, 4.0, 2.0, "F2", "height"),
             ParamSpec::continuous("Taper", 0.0, 3.0, 1.5, "F2", "taper"),
             ParamSpec::continuous("Torus Radius", 0.5, 3.0, 1.2, "F2", "torusRadius"),
-            ParamSpec::continuous("Petal Amp", 0.0, 2.0, 0.8, "F2", "petalAmp"),
+            ParamSpec::continuous("Petal Amp", 0.0, 80.0, 60.0, "F0", "petalAmp"),
             ParamSpec::continuous("Rot Speed", 0.0, 3.0, 0.3, "F2", "rotSpeed"),
             ParamSpec::continuous("Box Scale", 0.005, 0.08, 0.025, "F3", "boxScale"),
             ParamSpec::continuous("Cam Dist", 0.5, 10.0, 3.5, "F1", "camDist"),
