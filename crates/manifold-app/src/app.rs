@@ -29,6 +29,51 @@ use manifold_ui::ui_state::UIState;
 
 use crate::content_command::ContentCommand;
 use crate::content_state::ContentState;
+
+/// Get the CGDirectDisplayID for the display containing a window's frame center.
+/// Uses CGGetDisplaysWithPoint instead of [NSWindow screen] — more reliable
+/// during window creation and display transitions when NSWindow hasn't updated
+/// its screen property yet.
+#[cfg(target_os = "macos")]
+fn display_id_for_window_frame(window: &winit::window::Window) -> u32 {
+    use objc::{msg_send, sel, sel_impl};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let ns_view = match window.window_handle().unwrap().as_raw() {
+        RawWindowHandle::AppKit(h) => h.ns_view.as_ptr() as *mut objc::runtime::Object,
+        _ => return 0,
+    };
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct CGPoint { x: f64, y: f64 }
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct CGSize { width: f64, height: f64 }
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct CGRect { origin: CGPoint, size: CGSize }
+
+    unsafe extern "C" {
+        fn CGGetDisplaysWithPoint(
+            point: CGPoint, max: u32, displays: *mut u32, count: *mut u32,
+        ) -> i32;
+    }
+
+    unsafe {
+        let ns_window: *mut objc::runtime::Object = msg_send![ns_view, window];
+        if ns_window.is_null() { return 0; }
+        let frame: CGRect = msg_send![ns_window, frame];
+        let center = CGPoint {
+            x: frame.origin.x + frame.size.width * 0.5,
+            y: frame.origin.y + frame.size.height * 0.5,
+        };
+        let mut display_id: u32 = 0;
+        let mut count: u32 = 0;
+        let ret = CGGetDisplaysWithPoint(center, 1, &mut display_id, &mut count);
+        if ret == 0 && count > 0 { display_id } else { 0 }
+    }
+}
 use crate::frame_timer::FrameTimer;
 use crate::project_io::ProjectIOService;
 use crate::ui_root::UIRoot;
@@ -2645,18 +2690,22 @@ impl Application {
                     any_changed |= dl.retarget_if_needed(win);
                 }
             }
-            // Retarget content vsync: only when NO output window exists
-            // (fall back to primary). When an output window IS open, the
-            // authoritative retarget happens in open_output_window() via
-            // CGGetDisplaysWithPoint. Do NOT re-query [NSWindow screen]
-            // here — macOS may not have placed the window on the target
-            // monitor yet, causing a retarget back to the MacBook.
-            if output_window.is_none()
-                && let Some(ref mut signal) = self.content_vsync_signal
-                && let Some(pid) = self.primary_window_id
-                && let Some(ws) = self.window_registry.get(&pid)
-            {
-                any_changed |= signal.retarget(&*ws.window);
+            // Retarget content vsync signal: prefer output window's display
+            // (that's the performance display), fall back to primary window.
+            // Uses CGGetDisplaysWithPoint with the window's frame center
+            // instead of [NSWindow screen] — more reliable during window
+            // creation and display transitions.
+            if let Some(ref mut signal) = self.content_vsync_signal {
+                if let Some(ref win) = output_window {
+                    let display_id = display_id_for_window_frame(win);
+                    if display_id != 0 {
+                        any_changed |= signal.retarget_to_display(display_id);
+                    }
+                } else if let Some(pid) = self.primary_window_id
+                    && let Some(ws) = self.window_registry.get(&pid)
+                {
+                    any_changed |= signal.retarget(&*ws.window);
+                }
             }
             any_changed
         }
