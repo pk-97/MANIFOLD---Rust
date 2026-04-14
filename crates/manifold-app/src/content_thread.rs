@@ -313,19 +313,8 @@ impl ContentThread {
                         if (result.display_hz - self.timer.display_hz()).abs() > 0.1 {
                             self.timer.update_display_hz(result.display_hz);
                         }
-                        // Hard wall-clock gate: never render faster than target FPS.
-                        // CVDisplayLink callbacks can fire faster than the display's
-                        // actual refresh rate during fullscreen transitions and on
-                        // consumer TVs over HDMI. The divisor math can't catch this
-                        // when the reported Hz matches the target (divisor=1).
-                        let min_interval = std::time::Duration::from_secs_f64(
-                            0.9 / self.timer.target_fps(),
-                        );
-                        if self.timer.last_tick_time().elapsed() < min_interval {
-                            false
-                        } else {
-                            result.count % self.timer.frame_divisor() as u64 == 0
-                        }
+                        // Only render on every Nth vsync (frame divisor).
+                        result.count % self.timer.frame_divisor() as u64 == 0
                     }
                 } else {
                     // VSync mode requested but no signal available — fall back to timer.

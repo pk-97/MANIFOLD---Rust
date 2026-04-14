@@ -684,10 +684,11 @@ impl Application {
             }
         };
 
-        if presentation {
-            #[cfg(target_os = "macos")]
-            Self::configure_presentation_window(&window);
-        }
+        // NOTE: configure_presentation_window (setStyleMask:0, setLevel:25)
+        // was removed — it triggered macOS to change CVDisplayLink callback
+        // cadence, causing erratic intervals (13-20ms) and frame drops.
+        // The borderless window at full monitor size looks identical to the
+        // audience but macOS treats it as a normal window with stable vsync.
 
         let id = window.id();
         let resolved_index = display_index.or(if monitors.len() > 1 { Some(1) } else { Some(0) });
@@ -767,25 +768,4 @@ impl Application {
         );
     }
 
-    #[cfg(target_os = "macos")]
-    fn configure_presentation_window(window: &winit::window::Window) {
-        use objc::{msg_send, sel, sel_impl};
-        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-
-        let ns_view = match window.window_handle().unwrap().as_raw() {
-            RawWindowHandle::AppKit(h) => h.ns_view.as_ptr() as *mut objc::runtime::Object,
-            _ => return,
-        };
-
-        unsafe {
-            let ns_window: *mut objc::runtime::Object = msg_send![ns_view, window];
-            if ns_window.is_null() {
-                return;
-            }
-            let _: () = msg_send![ns_window, setStyleMask: 0u64];
-            let _: () = msg_send![ns_window, setLevel: 25i64];
-            let _: () = msg_send![ns_window, setMovable: false];
-            let _: () = msg_send![ns_window, setMovableByWindowBackground: false];
-        }
-    }
 }
