@@ -2004,45 +2004,104 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
                     if is_double {
                         self.output_last_click = None;
-                        if let Some((name, presentation, current_monitor)) = self
-                            .window_registry
-                            .get(&window_id)
-                            .and_then(|ws| match &ws.role {
-                                WindowRole::Output { name, presentation } => {
-                                    Some((name.clone(), *presentation, ws.window.current_monitor()))
-                                }
-                                _ => None,
-                            })
+                        // Toggle fullscreen by resizing the existing window in place.
+                        // Do NOT destroy/recreate — that disrupts the CVDisplayLink
+                        // cadence and tears the output.
+                        if let Some(ws) = self.window_registry.get_mut(&window_id)
+                            && let WindowRole::Output {
+                                ref mut presentation,
+                                ..
+                            } = ws.role
                         {
-                            // Resolve display_index from the monitor the window
-                            // is actually on right now (not the stale stored
-                            // index) so fullscreen targets the correct display.
-                            let display_index = current_monitor.and_then(|cur| {
-                                event_loop
-                                    .available_monitors()
-                                    .enumerate()
-                                    .find_map(|(i, m)| {
-                                        if m.name() == cur.name() {
-                                            Some(i)
-                                        } else {
-                                            None
-                                        }
-                                    })
-                            });
+                            let new_presentation = !*presentation;
+                            *presentation = new_presentation;
 
-                            #[cfg(target_os = "macos")]
-                            {
-                                self.send_content_cmd(
-                                    crate::content_command::ContentCommand::ClearOutputSurface,
-                                );
-                                        self.output_saved_frame = None;
+                            if new_presentation {
+                                // → Fullscreen: save frame, expand to monitor
+                                let outer = ws.window.outer_position().unwrap_or_default();
+                                let inner = ws.window.inner_size();
+                                self.output_saved_frame = Some([
+                                    outer.x as f64,
+                                    outer.y as f64,
+                                    inner.width as f64,
+                                    inner.height as f64,
+                                ]);
+                                if let Some(monitor) = ws.window.current_monitor() {
+                                    let mon_pos = monitor.position();
+                                    let mon_size = monitor.size();
+                                    let scale = monitor.scale_factor();
+                                    let lw = mon_size.width as f64 / scale;
+                                    let lh = mon_size.height as f64 / scale;
+                                    let lx = mon_pos.x as f64 / scale;
+                                    let ly = mon_pos.y as f64 / scale;
+                                    ws.window.set_decorations(false);
+                                    let _ = ws.window.request_inner_size(
+                                        winit::dpi::LogicalSize::new(lw, lh),
+                                    );
+                                    ws.window.set_outer_position(
+                                        winit::dpi::LogicalPosition::new(lx, ly),
+                                    );
+                                }
+                                // Hide menu bar + dock when fullscreen.
+                                #[cfg(target_os = "macos")]
+                                {
+                                    use objc::{msg_send, sel, sel_impl};
+                                    unsafe {
+                                        let app: *mut objc::runtime::Object =
+                                            msg_send![
+                                                objc::class!(NSApplication),
+                                                sharedApplication
+                                            ];
+                                        // NSApplicationPresentationAutoHideMenuBar (4)
+                                        // | NSApplicationPresentationAutoHideDock (1)
+                                        let _: () = msg_send![
+                                            app,
+                                            setPresentationOptions: 5u64
+                                        ];
+                                    }
+                                }
+                            } else {
+                                // → Windowed: restore saved frame + menu bar
+                                ws.window.set_decorations(true);
+                                if let Some(frame) = self.output_saved_frame.take() {
+                                    ws.window.set_outer_position(
+                                        winit::dpi::LogicalPosition::new(
+                                            frame[0], frame[1],
+                                        ),
+                                    );
+                                    let _ = ws.window.request_inner_size(
+                                        winit::dpi::LogicalSize::new(
+                                            frame[2], frame[3],
+                                        ),
+                                    );
+                                }
+                                // Restore menu bar + dock.
+                                #[cfg(target_os = "macos")]
+                                {
+                                    use objc::{msg_send, sel, sel_impl};
+                                    unsafe {
+                                        let app: *mut objc::runtime::Object =
+                                            msg_send![
+                                                objc::class!(NSApplication),
+                                                sharedApplication
+                                            ];
+                                        // NSApplicationPresentationDefault (0)
+                                        let _: () = msg_send![
+                                            app,
+                                            setPresentationOptions: 0u64
+                                        ];
+                                    }
+                                }
                             }
-                            self.window_registry.remove(&window_id);
-                            self.open_output_window(
-                                event_loop,
-                                &name,
-                                display_index,
-                                !presentation,
+
+                            // Resize the output surface drawable to match.
+                            // The CAMetalLayer needs to know the new size.
+                            let new_size = ws.window.inner_size();
+                            self.send_content_cmd(
+                                ContentCommand::ResizeOutputSurface(
+                                    new_size.width.max(1),
+                                    new_size.height.max(1),
+                                ),
                             );
                         }
                     } else {

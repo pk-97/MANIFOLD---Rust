@@ -697,6 +697,10 @@ impl ContentThread {
             ContentCommand::ClearOutputSurface => {
                 self.content_pipeline.clear_output_surface();
             }
+            #[cfg(target_os = "macos")]
+            ContentCommand::ResizeOutputSurface(w, h) => {
+                self.content_pipeline.resize_output_surface(w, h);
+            }
 
             // ── Generator ─────────────────────────────────────────
             ContentCommand::GeneratorTypeChanged { layer_id, new_type } => {

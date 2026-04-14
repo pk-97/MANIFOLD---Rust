@@ -698,13 +698,13 @@ impl Application {
             self.send_content_cmd(
                 crate::content_command::ContentCommand::UpdateEdrHeadroom(h),
             );
-            // Do NOT retarget the content CVDisplayLink to the output display.
-            // Consumer TVs and some external monitors have inherently unstable
-            // CVDisplayLink cadence (12-20ms oscillation). The MacBook's
-            // built-in display provides rock-solid 16.67ms callbacks.
-            // Metal's presentDrawable handles vsync alignment for the output
-            // drawable independently — the content thread doesn't need to
-            // pace to the output display's vsync to present correctly on it.
+            // Retarget content vsync to the output window's display.
+            // The TV's CVDisplayLink IS stable when created fresh — the
+            // instability was caused by destroying/recreating the link
+            // during fullscreen toggle (now fixed by in-place resize).
+            if let Some(ref mut signal) = self.content_vsync_signal {
+                signal.retarget(&window);
+            }
         }
 
         let state = WindowState {

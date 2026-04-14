@@ -198,6 +198,9 @@ pub enum ContentCommand {
     /// Detach the output surface (output window closed).
     #[cfg(target_os = "macos")]
     ClearOutputSurface,
+    /// Resize the output surface drawable (fullscreen toggle).
+    #[cfg(target_os = "macos")]
+    ResizeOutputSurface(u32, u32),
 
     // ── Export ────────────────────────────────────────────────────
     /// Begin offline video export. Content thread enters export loop.

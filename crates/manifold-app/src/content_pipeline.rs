@@ -305,6 +305,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         log::info!("[ContentPipeline] Output surface attached — direct present enabled");
     }
 
+    /// Resize the output surface drawable (fullscreen toggle).
+    #[cfg(target_os = "macos")]
+    pub fn resize_output_surface(&mut self, width: u32, height: u32) {
+        if let Some(ref mut surface) = self.output_surface {
+            surface.resize(width, height);
+            log::info!(
+                "[ContentPipeline] Output surface resized to {}x{}",
+                width,
+                height,
+            );
+        }
+    }
+
     /// Detach the output surface (output window closed).
     #[cfg(target_os = "macos")]
     pub fn clear_output_surface(&mut self) {
