@@ -2698,6 +2698,12 @@ impl Application {
             if let Some(ref mut signal) = self.content_vsync_signal {
                 if let Some(ref win) = output_window {
                     let display_id = display_id_for_window_frame(win);
+                    eprintln!(
+                        "[ScreenChange] output window frame → display_id={}, \
+                         current={}",
+                        display_id,
+                        signal.current_display_id(),
+                    );
                     if display_id != 0 {
                         any_changed |= signal.retarget_to_display(display_id);
                     }
