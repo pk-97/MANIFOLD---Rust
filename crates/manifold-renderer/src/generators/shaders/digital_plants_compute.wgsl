@@ -54,33 +54,30 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // ── Base displacement (spec: Harmonics=1, Exponent=4, clamp negative) ──
     let sample_pos = vec3<f32>(uv.x * u.noise_scale, uv.y * u.noise_scale, 0.0);
-    let raw_disp = simplex3d(sample_pos); // single harmonic, wide spread
-    let disp = pow(max(raw_disp, 0.0), 4.0); // exponent 4 sharpens peaks
+    let raw_disp = simplex3d(sample_pos);
+    let disp = pow(max(raw_disp, 0.0), 4.0);
 
     // Animation layer: secondary noise driven by time.
-    // Spec: restrict intense animation to tips by multiplying by height ramp.
+    // Restricted to tips by height ramp.
     let anim_sample = vec3<f32>(
         uv.x * u.noise_scale * 2.0,
         uv.y * u.noise_scale * 2.0,
         u.time * u.anim_speed,
     );
     let anim_noise = simplex3d(anim_sample) * 0.3;
-    let height_mask = uv.y; // 0 at base, 1 at tip
+    let height_mask = uv.y;
     let anim_disp = anim_noise * height_mask;
 
     let total_disp = disp + anim_disp;
 
     // ── Cylinder topology (morph = 0) ──
-    // Spec: wrap X into angular distribution, Y is vertical height.
     let theta = uv.x * TAU;
     let cos_theta = cos(theta);
     let sin_theta = sin(theta);
 
-    // Vertical position
     let y_cyl = (uv.y - 0.5) * u.height_scale;
 
-    // Spec: tapering via power function to narrow top radius to 0.
-    // Taper fades out as morph increases.
+    // Taper: power function narrows radius to 0 at top. Fades with morph.
     let taper_factor = pow(1.0 - uv.y, u.taper) * (1.0 - u.morph);
     let r_cyl = u.base_radius * taper_factor + total_disp * 0.3;
 
@@ -91,21 +88,21 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     );
 
     // ── Torus topology (morph = 1) ──
-    // Spec: wrap Y into second angular calc (phi), apply extreme amplitude noise
-    // on outward torus normals to break uniform ring into petal clusters.
     let phi = uv.y * TAU;
     let cos_phi = cos(phi);
     let sin_phi = sin(phi);
 
-    // Torus outward normal direction (before petal displacement)
+    // Torus outward normal direction
     let normal_outward = vec3<f32>(
         cos_phi * cos_theta,
         sin_phi,
         cos_phi * sin_theta,
     );
 
-    // Spec: petal displacement amplitude 60-80, mapped to outward normals.
-    let petal_sample = vec3<f32>(uv.x * 8.0, uv.y * 8.0, u.time * u.anim_speed * 0.5);
+    // Petal displacement: LOW-frequency noise so nearby instances cluster
+    // into coherent petal lobes. Static (no time) — structure holds shape.
+    // Amplitude 60-80 fractures the torus into distinct petal groups.
+    let petal_sample = vec3<f32>(uv.x * 2.0, uv.y * 2.0, 0.5);
     let petal_noise = fbm(petal_sample);
     let petal_disp = u.petal_amp * petal_noise;
 
@@ -118,10 +115,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         (R + r_tube * cos_phi) * sin_theta,
     );
 
-    // Apply extreme petal displacement along outward normal
+    // Displace along outward normal — creates petal clusters
     pos_tor += normal_outward * petal_disp;
 
-    // Spec: continuous rotation along local X-axis for inward/outward folding.
+    // Continuous fold rotation around X-axis — petals fold as one.
     let fold_angle = u.time * u.rot_speed;
     pos_tor = rotate_x(pos_tor, fold_angle);
 
@@ -129,25 +126,20 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let pos = mix(pos_cyl, pos_tor, u.morph);
 
     // ── Per-instance rotation ──
-    // Spec: static rotation from UV-seeded noise, mapped to [-0.1, 0.1]
-    // for visual density. NOT full random rotation.
+    // Small static jitter ±0.1 for visual density. No per-instance animation
+    // so cubes within a petal stay aligned as a coherent surface.
     let rot = vec3<f32>(
         (hash_u32(idx * 3u + 0u) - 0.5) * 0.2,
         (hash_u32(idx * 3u + 1u) - 0.5) * 0.2,
         (hash_u32(idx * 3u + 2u) - 0.5) * 0.2,
     );
 
-    // Spec: kinematic animation — continuous X-axis rotation over time.
-    let anim_rot = vec3<f32>(u.time * u.rot_speed, 0.0, 0.0);
-    let final_rot = rot + anim_rot;
-
-    // Spec: scale up box geometry in flower mode so instances overlap
-    // to form solid surfaces.
+    // Box scale increases with morph so flower petals form solid surfaces.
     let scale = u.box_scale * (1.0 + u.morph * 3.0);
 
     // ── Write output ──
     instances[idx] = Instance(
         vec4<f32>(pos, scale),
-        vec4<f32>(final_rot, 0.0),
+        vec4<f32>(rot, 0.0),
     );
 }
