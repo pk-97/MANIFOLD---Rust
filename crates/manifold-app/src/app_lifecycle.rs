@@ -13,6 +13,35 @@ use manifold_playback::audio_decoder::DecodedAudio;
 
 use crate::app::{Application, PendingAudioLoadResult};
 use crate::content_command::ContentCommand;
+
+/// Get the CGDirectDisplayID for the monitor at a given physical screen point.
+/// Uses CoreGraphics directly — doesn't require a window to be placed yet.
+#[cfg(target_os = "macos")]
+fn display_id_for_point(x: f64, y: f64) -> u32 {
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct CGPoint {
+        x: f64,
+        y: f64,
+    }
+    unsafe extern "C" {
+        fn CGGetDisplaysWithPoint(
+            point: CGPoint,
+            max_displays: u32,
+            displays: *mut u32,
+            display_count: *mut u32,
+        ) -> i32;
+    }
+    let mut display_id: u32 = 0;
+    let mut count: u32 = 0;
+    let point = CGPoint { x, y };
+    let result = unsafe { CGGetDisplaysWithPoint(point, 1, &mut display_id, &mut count) };
+    if result == 0 && count > 0 {
+        display_id
+    } else {
+        0
+    }
+}
 use crate::project_io::ProjectIOAction;
 use crate::window_registry::{WindowRole, WindowState};
 use manifold_core::Seconds;
@@ -695,10 +724,22 @@ impl Application {
             self.send_content_cmd(
                 crate::content_command::ContentCommand::UpdateEdrHeadroom(h),
             );
-            // Retarget content vsync to the output window's display —
-            // the output is the performance display for live visuals.
+            // Retarget content vsync to the OUTPUT MONITOR's display, not
+            // the window's screen. The window may not be placed on the target
+            // monitor yet when this runs (macOS races window creation vs
+            // screen assignment). Use the monitor's physical position to
+            // resolve the CGDirectDisplayID directly.
             if let Some(ref mut signal) = self.content_vsync_signal {
-                signal.retarget(&window);
+                let display_id = display_id_for_point(
+                    mon_pos.x as f64,
+                    mon_pos.y as f64,
+                );
+                if display_id != 0 {
+                    signal.retarget_to_display(display_id);
+                } else {
+                    // Fallback: try the window (may still be on primary)
+                    signal.retarget(&window);
+                }
             }
         }
 
