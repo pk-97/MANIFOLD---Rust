@@ -116,6 +116,12 @@ impl FrameTimer {
         self.target_fps
     }
 
+    /// When the last tick was consumed — used as wall-clock gate to prevent
+    /// rendering faster than target FPS when CVDisplayLink misfires.
+    pub fn last_tick_time(&self) -> std::time::Instant {
+        self.last_tick_time
+    }
+
     // ── VSync mode ──────────────────────────────────────────────────
 
     /// Enable or disable vsync-driven pacing.

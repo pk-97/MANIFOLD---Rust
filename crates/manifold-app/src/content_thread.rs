@@ -305,41 +305,27 @@ impl ContentThread {
                     if result.timed_out {
                         // Display link stopped firing (display sleep, disconnect).
                         // Fall through and render anyway to avoid stalling.
-                        // Update last_vsync_count to prevent double-render:
-                        // without this, the next wait sees count > stale last_seen
-                        // and returns immediately → two renders per vsync interval.
                         self.last_vsync_count = result.count;
                         true
                     } else {
                         self.last_vsync_count = result.count;
                         // Update display Hz if it changed (window moved between monitors).
                         if (result.display_hz - self.timer.display_hz()).abs() > 0.1 {
-                            eprintln!(
-                                "[ContentThread] VSync Hz changed: {:.1} → {:.1}, \
-                                 divisor: {} → (recalc)",
-                                self.timer.display_hz(),
-                                result.display_hz,
-                                self.timer.frame_divisor(),
-                            );
                             self.timer.update_display_hz(result.display_hz);
-                            eprintln!(
-                                "[ContentThread] New divisor: {}, actual_fps: {:.1}",
-                                self.timer.frame_divisor(),
-                                result.display_hz / self.timer.frame_divisor() as f64,
-                            );
                         }
-                        // Periodic diagnostic: actual vsync cadence.
-                        if result.count % 120 == 0 {
-                            eprintln!(
-                                "[VSync] count={} hz={:.1} divisor={} fps={:.1}",
-                                result.count,
-                                self.timer.display_hz(),
-                                self.timer.frame_divisor(),
-                                self.timer.current_fps(),
-                            );
+                        // Hard wall-clock gate: never render faster than target FPS.
+                        // CVDisplayLink callbacks can fire faster than the display's
+                        // actual refresh rate during fullscreen transitions and on
+                        // consumer TVs over HDMI. The divisor math can't catch this
+                        // when the reported Hz matches the target (divisor=1).
+                        let min_interval = std::time::Duration::from_secs_f64(
+                            0.9 / self.timer.target_fps(),
+                        );
+                        if self.timer.last_tick_time().elapsed() < min_interval {
+                            false
+                        } else {
+                            result.count % self.timer.frame_divisor() as u64 == 0
                         }
-                        // Only render on every Nth vsync (frame divisor).
-                        result.count % self.timer.frame_divisor() as u64 == 0
                     }
                 } else {
                     // VSync mode requested but no signal available — fall back to timer.
