@@ -48,12 +48,13 @@ fn mirror_ramp(t: f32) -> f32 {
 
 // ── Cylinder / Stem position ───────────────────────────────────────────
 //
-// Spec Stage 2 noise overrides: scale down period (0.5x), harmonics = 0
+// Spec Stage 2 noise overrides: scaled-down period (higher freq), harmonics = 0
 // (single simplex, no FBM), exponent = 2.0.
 
 fn compute_cylinder_pos(uv: vec2<f32>) -> vec3<f32> {
-    // Stem noise: scaled-down period, single octave, exponent 2.0.
-    let stem_freq = u.noise_scale * 0.5;
+    // Stem noise overrides: scaled-down period (higher freq = denser features),
+    // single octave (harmonics=0), exponent 2.0.
+    let stem_freq = u.noise_scale * 2.0;
     let sample_pos = vec3<f32>(uv.x * stem_freq, uv.y * stem_freq, 0.0);
     let raw_disp = simplex3d(sample_pos);
     let disp = pow(max(raw_disp, 0.0), 2.0);
@@ -78,27 +79,21 @@ fn compute_cylinder_pos(uv: vec2<f32>) -> vec3<f32> {
     let cos_theta = cos(theta);
     let sin_theta = sin(theta);
 
-    // Taper: spec says pow(height, curve), then invert.
+    // Taper: convex power function narrows radius toward top (Christmas tree).
     // Disabled in torus mode via (1 - morph).
-    let height_norm = clamp(uv.y, 0.0, 1.0);
-    let taper_val = pow(height_norm, u.taper);
-    let taper_factor = (1.0 - taper_val) * (1.0 - u.morph);
+    let taper_factor = pow(1.0 - uv.y, u.taper) * (1.0 - u.morph);
 
     // Master noise control: 0.3 global scalar on displacement intensity.
     let r = u.base_radius * taper_factor + total_disp * 0.3;
 
-    // Y position: grows upward from 0 (spec: pos.y = uv.y * height_scale).
-    let y = uv.y * u.height_scale;
+    // Y position: centered at origin for camera framing.
+    let y = (uv.y - 0.5) * u.height_scale;
 
     var pos = vec3<f32>(
         r * cos_theta,
         y,
         r * sin_theta,
     );
-
-    // Global 0.5 XY scale (spec Stage 2).
-    pos.x *= 0.5;
-    pos.z *= 0.5;
 
     // High-frequency low-amplitude detail noise for organic texture.
     let detail_freq = 20.0;
@@ -147,9 +142,6 @@ fn compute_torus_pos(uv: vec2<f32>) -> vec3<f32> {
     let petal_noise = fbm(petal_sample);
     let petal_disp = u.petal_amp * petal_noise;
     pos += normal_outward * petal_disp;
-
-    // Global scale-down of the torus (spec Stage 3).
-    pos *= 0.5;
 
     // Continuous fold rotation around X-axis (spec: petal animation).
     let fold_angle = u.time * u.rot_speed;
