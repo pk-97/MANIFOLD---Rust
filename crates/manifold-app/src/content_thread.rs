@@ -324,6 +324,16 @@ impl ContentThread {
                                 result.display_hz / self.timer.frame_divisor() as f64,
                             );
                         }
+                        // Periodic diagnostic: actual vsync cadence.
+                        if result.count % 120 == 0 {
+                            eprintln!(
+                                "[VSync] count={} hz={:.1} divisor={} fps={:.1}",
+                                result.count,
+                                self.timer.display_hz(),
+                                self.timer.frame_divisor(),
+                                self.timer.current_fps(),
+                            );
+                        }
                         // Only render on every Nth vsync (frame divisor).
                         result.count % self.timer.frame_divisor() as u64 == 0
                     }
