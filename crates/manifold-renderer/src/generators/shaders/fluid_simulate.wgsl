@@ -118,14 +118,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
 
-    // Fill gate: particles beyond visible_count are dead off-screen left
+    // Fill gate: particles beyond visible_count are dead at center
     if id.x >= params.visible_count {
         var p = particles[id.x];
         let spread_hash = hash_float2(id.x * 1664525u + 12345u);
         let spread_r = spread_hash.x * 0.005;
         let spread_a = spread_hash.y * 6.28318;
         p.position = vec3<f32>(
-            -0.05 + cos(spread_a) * spread_r,
+            0.5 + cos(spread_a) * spread_r,
             0.5 + sin(spread_a) * spread_r,
             0.0,
         );
@@ -137,14 +137,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     var p = particles[id.x];
 
-    // Fill injection: freshly released particles (life was 0) get a rightward kick
-    // Runs for multiple frames while x < 0 to carry them on-screen
-    if p.life <= 0.0 || p.position.x < 0.0 {
+    // Fill injection: freshly released particles (life was 0) get a radial kick
+    if p.life <= 0.0 {
         let kick_seed = id.x * 1664525u + params.frame_count * 747796405u;
-        let y_scatter = (hash_float(kick_seed) - 0.5) * 0.004;
+        let angle = hash_float(kick_seed) * 6.28318;
         let dt_scale = params.dt * 60.0;
-        p.position.x += 0.03 * params.speed * dt_scale;
-        p.position.y += y_scatter;
+        let kick = 0.03 * params.speed * dt_scale;
+        p.position.x += cos(angle) * kick;
+        p.position.y += sin(angle) * kick;
         p.life = 1.0;
         p.color = vec4<f32>(0.005, 0.005, 0.005, 1.0);
         particles[id.x] = p;
