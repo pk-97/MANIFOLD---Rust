@@ -118,21 +118,25 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
 
-    // Fill gate: particles beyond visible_count are dead at center
+    // Fill gate: particles beyond visible_count that are already dead
+    // get pinned to center nozzle. Live particles keep simulating —
+    // they'll die naturally when they hit the boundary.
     if id.x >= params.visible_count {
         var p = particles[id.x];
-        let spread_hash = hash_float2(id.x * 1664525u + 12345u);
-        let spread_r = spread_hash.x * 0.005;
-        let spread_a = spread_hash.y * 6.28318;
-        p.position = vec3<f32>(
-            0.5 + cos(spread_a) * spread_r,
-            0.5 + sin(spread_a) * spread_r,
-            0.0,
-        );
-        p.velocity = vec3<f32>(0.0);
-        p.life = 0.0;
-        particles[id.x] = p;
-        return;
+        if p.life <= 0.0 {
+            let spread_hash = hash_float2(id.x * 1664525u + 12345u);
+            let spread_r = spread_hash.x * 0.005;
+            let spread_a = spread_hash.y * 6.28318;
+            p.position = vec3<f32>(
+                0.5 + cos(spread_a) * spread_r,
+                0.5 + sin(spread_a) * spread_r,
+                0.0,
+            );
+            p.velocity = vec3<f32>(0.0);
+            particles[id.x] = p;
+            return;
+        }
+        // else: fall through to normal simulation (boundary kill is active)
     }
 
     var p = particles[id.x];
@@ -142,7 +146,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let kick_seed = id.x * 1664525u + params.frame_count * 747796405u;
         let angle = hash_float(kick_seed) * 6.28318;
         let dt_scale = params.dt * 60.0;
-        let kick = 0.015 * params.speed * dt_scale;
+        let kick = 0.005 * params.speed * dt_scale;
         p.position.x += cos(angle) * kick;
         p.position.y += sin(angle) * kick;
         p.life = 1.0;
