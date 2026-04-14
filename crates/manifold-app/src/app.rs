@@ -2645,16 +2645,18 @@ impl Application {
                     any_changed |= dl.retarget_if_needed(win);
                 }
             }
-            // Retarget content vsync signal: prefer output window's display
-            // (that's the performance display), fall back to primary window.
-            if let Some(ref mut signal) = self.content_vsync_signal {
-                if let Some(ref win) = output_window {
-                    any_changed |= signal.retarget(win.as_ref());
-                } else if let Some(pid) = self.primary_window_id
-                    && let Some(ws) = self.window_registry.get(&pid)
-                {
-                    any_changed |= signal.retarget(&*ws.window);
-                }
+            // Retarget content vsync: only when NO output window exists
+            // (fall back to primary). When an output window IS open, the
+            // authoritative retarget happens in open_output_window() via
+            // CGGetDisplaysWithPoint. Do NOT re-query [NSWindow screen]
+            // here — macOS may not have placed the window on the target
+            // monitor yet, causing a retarget back to the MacBook.
+            if output_window.is_none()
+                && let Some(ref mut signal) = self.content_vsync_signal
+                && let Some(pid) = self.primary_window_id
+                && let Some(ws) = self.window_registry.get(&pid)
+            {
+                any_changed |= signal.retarget(&*ws.window);
             }
             any_changed
         }
