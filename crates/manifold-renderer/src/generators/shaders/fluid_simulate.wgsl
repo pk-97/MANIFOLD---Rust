@@ -136,14 +136,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
 
-    // Allowed + dead: spawn from nozzle with radial kick
+    // Allowed + dead: make alive, flow field takes over
     if !is_excess && p.life <= 0.0 {
-        let kick_seed = id.x * 1664525u + params.frame_count * 747796405u;
-        let angle = hash_float(kick_seed) * 6.28318;
-        let dt_scale = params.dt * 60.0;
-        let kick = 0.0001 * params.speed * dt_scale;
-        p.position.x += cos(angle) * kick;
-        p.position.y += sin(angle) * kick;
         p.life = 1.0;
         p.color = vec4<f32>(0.005, 0.005, 0.005, 1.0);
         particles[id.x] = p;
