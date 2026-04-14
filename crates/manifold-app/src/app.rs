@@ -1769,24 +1769,28 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             WindowEvent::Resized(size) => {
                 if let Some(ws) = self.window_registry.get_mut(&window_id) {
                     let scale = ws.window.scale_factor();
-                    // Output windows: surface stays at project resolution
-                    // (pixel-perfect 1:1). Core Animation handles display scaling.
-                    // Only resize workspace windows.
-                    if is_primary && let Some(surface) = &mut ws.surface {
-                        surface.resize(size.width, size.height);
-                        self.resize_ui_offscreen(size.width, size.height);
-                        // Skip drawable acquisition this frame — the drawable
-                        // pool may be reconfiguring after set_drawable_size.
-                        // nextDrawable can block up to 1s during reconfiguration.
-                        self.surface_resized_this_frame = true;
-                        self.offscreen_dirty = true;
-                    }
-
-                    // Rebuild UI on primary window resize
                     if is_primary {
+                        if let Some(surface) = &mut ws.surface {
+                            surface.resize(size.width, size.height);
+                            self.resize_ui_offscreen(size.width, size.height);
+                            // Skip drawable acquisition this frame — the
+                            // drawable pool may be reconfiguring after
+                            // set_drawable_size.
+                            self.surface_resized_this_frame = true;
+                            self.offscreen_dirty = true;
+                        }
                         let logical_w = size.width as f32 / scale as f32;
                         let logical_h = size.height as f32 / scale as f32;
                         self.ui_root.resize(logical_w, logical_h);
+                    } else {
+                        // Output window resized — update the drawable to
+                        // match so the blit doesn't stretch.
+                        self.send_content_cmd(
+                            ContentCommand::ResizeOutputSurface(
+                                size.width.max(1),
+                                size.height.max(1),
+                            ),
+                        );
                     }
                 }
             }
@@ -2042,22 +2046,33 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                         winit::dpi::LogicalPosition::new(lx, ly),
                                     );
                                 }
-                                // Hide menu bar + dock when fullscreen.
+                                // Set window level above menu bar (level 24)
+                                // so our borderless window covers it on this
+                                // display only — no global setPresentationOptions.
                                 #[cfg(target_os = "macos")]
                                 {
                                     use objc::{msg_send, sel, sel_impl};
-                                    unsafe {
-                                        let app: *mut objc::runtime::Object =
-                                            msg_send![
-                                                objc::class!(NSApplication),
-                                                sharedApplication
-                                            ];
-                                        // NSApplicationPresentationAutoHideMenuBar (4)
-                                        // | NSApplicationPresentationAutoHideDock (1)
-                                        let _: () = msg_send![
-                                            app,
-                                            setPresentationOptions: 5u64
-                                        ];
+                                    use raw_window_handle::{
+                                        HasWindowHandle, RawWindowHandle,
+                                    };
+                                    if let Ok(handle) = ws.window.window_handle()
+                                        && let RawWindowHandle::AppKit(h) =
+                                            handle.as_raw()
+                                    {
+                                        unsafe {
+                                            let ns_view = h.ns_view.as_ptr()
+                                                as *mut objc::runtime::Object;
+                                            let ns_win: *mut objc::runtime::Object =
+                                                msg_send![ns_view, window];
+                                            if !ns_win.is_null() {
+                                                // NSMainMenuWindowLevel = 24,
+                                                // so 25 puts us above it.
+                                                let _: () = msg_send![
+                                                    ns_win,
+                                                    setLevel: 25_i64
+                                                ];
+                                            }
+                                        }
                                     }
                                 }
                             } else {
@@ -2075,21 +2090,31 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                         ),
                                     );
                                 }
-                                // Restore menu bar + dock.
+                                // Restore normal window level so the
+                                // menu bar is no longer covered.
                                 #[cfg(target_os = "macos")]
                                 {
                                     use objc::{msg_send, sel, sel_impl};
-                                    unsafe {
-                                        let app: *mut objc::runtime::Object =
-                                            msg_send![
-                                                objc::class!(NSApplication),
-                                                sharedApplication
-                                            ];
-                                        // NSApplicationPresentationDefault (0)
-                                        let _: () = msg_send![
-                                            app,
-                                            setPresentationOptions: 0u64
-                                        ];
+                                    use raw_window_handle::{
+                                        HasWindowHandle, RawWindowHandle,
+                                    };
+                                    if let Ok(handle) = ws.window.window_handle()
+                                        && let RawWindowHandle::AppKit(h) =
+                                            handle.as_raw()
+                                    {
+                                        unsafe {
+                                            let ns_view = h.ns_view.as_ptr()
+                                                as *mut objc::runtime::Object;
+                                            let ns_win: *mut objc::runtime::Object =
+                                                msg_send![ns_view, window];
+                                            if !ns_win.is_null() {
+                                                // NSNormalWindowLevel = 0
+                                                let _: () = msg_send![
+                                                    ns_win,
+                                                    setLevel: 0_i64
+                                                ];
+                                            }
+                                        }
                                     }
                                 }
                             }
