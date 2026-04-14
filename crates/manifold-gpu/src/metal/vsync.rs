@@ -141,6 +141,11 @@ pub struct VsyncWaitResult {
 
 // ─── CVDisplayLink callback ─────────────────────────────────────────────
 
+/// Atomic for measuring real callback interval (nanoseconds since last callback).
+static LAST_CALLBACK_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Callback counter for periodic diagnostic.
+static CALLBACK_DIAG_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 unsafe extern "C" fn content_vsync_callback(
     _display_link: CVDisplayLinkRef,
     _in_now: *const CVTimeStamp,
@@ -150,9 +155,28 @@ unsafe extern "C" fn content_vsync_callback(
     context: *mut c_void,
 ) -> i32 {
     let inner = unsafe { &*(context as *const VsyncInner) };
+
+    // Measure real wall-clock callback interval via mach_absolute_time.
+    unsafe extern "C" {
+        fn mach_absolute_time() -> u64;
+        fn mach_timebase_info(info: *mut MachTimebaseInfo) -> i32;
+    }
+    #[repr(C)]
+    struct MachTimebaseInfo { numer: u32, denom: u32 }
+    let now_ns = unsafe {
+        let mut info = MachTimebaseInfo { numer: 0, denom: 0 };
+        mach_timebase_info(&mut info);
+        let ticks = mach_absolute_time();
+        ticks * info.numer as u64 / info.denom as u64
+    };
+    let prev_ns = LAST_CALLBACK_NS.swap(now_ns, std::sync::atomic::Ordering::Relaxed);
+    let interval_ms = if prev_ns > 0 {
+        (now_ns - prev_ns) as f64 / 1_000_000.0
+    } else {
+        0.0
+    };
+
     // Derive display Hz from the CVTimeStamp's refresh period.
-    // This is always accurate — unlike CVDisplayLinkGetActualOutputVideoRefreshPeriod
-    // which returns 0 before the first callback fires.
     let hz = unsafe {
         let ts = &*in_output_time;
         if ts.video_refresh_period > 0 && ts.video_time_scale > 0 {
@@ -161,6 +185,18 @@ unsafe extern "C" fn content_vsync_callback(
             0.0
         }
     };
+
+    // Periodic diagnostic: every 120 callbacks (~2s at 60Hz).
+    let n = CALLBACK_DIAG_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if n > 0 && n.is_multiple_of(120) {
+        let measured_hz = if interval_ms > 0.0 { 1000.0 / interval_ms } else { 0.0 };
+        eprintln!(
+            "[CVDisplayLink] callback #{}: interval={:.2}ms measured_hz={:.1} \
+             timestamp_hz={:.1}",
+            n, interval_ms, measured_hz, hz,
+        );
+    }
+
     // Lock held for nanoseconds — just increment + notify + update Hz.
     if let Ok(mut state) = inner.state.lock() {
         state.vsync_count += 1;
