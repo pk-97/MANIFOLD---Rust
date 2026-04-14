@@ -248,7 +248,7 @@ fn generator_param_count_mycelium() {
 fn generator_param_count_fluid_sim() {
     assert_eq!(
         generator_definition_registry::get(&GeneratorTypeId::FLUID_SIMULATION).param_count,
-        13
+        14
     );
 }
 #[test]

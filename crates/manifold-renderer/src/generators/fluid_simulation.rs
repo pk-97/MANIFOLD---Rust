@@ -31,6 +31,7 @@ const SNAP_MODE: usize = 9;
 const SPLAT_SIZE: usize = 10;
 const ANTI_CLUMP: usize = 11;
 const INJECT_FORCE: usize = 12;
+const FILL: usize = 13;
 
 fn param(ctx: &GeneratorContext, idx: usize, default: f32) -> f32 {
     if ctx.param_count > idx as u32 {
@@ -77,6 +78,7 @@ impl Generator for FluidSimulationGenerator {
             splat_size: param(ctx, SPLAT_SIZE, 3.0),
             anti_clump: param(ctx, ANTI_CLUMP, 20.0),
             inject_force: param(ctx, INJECT_FORCE, 0.005),
+            fill: param(ctx, FILL, 1.0),
         };
 
         let sim_ctx = FluidSimContext {

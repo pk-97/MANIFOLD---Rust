@@ -274,6 +274,7 @@ inventory::submit! {
             ParamSpec::continuous("Size", 1.0, 8.0, 3.0, "F1", "size"),
             ParamSpec::continuous("Anti-Clump", 0.0, 60.0, 20.0, "F0", "antiClump"),
             ParamSpec::continuous("Force", 0.0, 0.1, 0.005, "F3", "force"),
+            ParamSpec::continuous("Fill", 0.0, 1.0, 1.0, "F2", "fill"),
         ],
         string_params: &[],
     }

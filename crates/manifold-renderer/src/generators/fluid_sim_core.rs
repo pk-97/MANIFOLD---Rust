@@ -87,8 +87,8 @@ struct SimUniforms {
     inject_phase: f32,
     time_val: f32,
     dt: f32,
+    visible_count: u32,
     _pad0: u32,
-    _pad1: u32,
 }
 
 #[repr(C)]
@@ -124,6 +124,7 @@ pub struct FluidSimParams {
     pub splat_size: f32,
     pub anti_clump: f32,
     pub inject_force: f32,
+    pub fill: f32,
 }
 
 impl Default for FluidSimParams {
@@ -142,6 +143,7 @@ impl Default for FluidSimParams {
             splat_size: 3.0,
             anti_clump: 20.0,
             inject_force: 0.005,
+            fill: 1.0,
         }
     }
 }
@@ -528,7 +530,12 @@ impl FluidSimCore {
             0.0
         };
 
+        // --- Fill: visible particle count ---
+        let fill = params.fill.clamp(0.0, 1.0);
+        let visible_count = ((fill * active_count as f32) as u32).clamp(0, active_count);
+
         // --- Pre-computed energy for scatter ---
+        // Scale energy by active_count (total) so density stays consistent
         let energy = 0.005 * params.splat_size / 3.0 * (1_000_000.0 / active_count as f32);
         let scaled_energy = (energy * 4096.0 + 0.5) as u32;
 
@@ -546,7 +553,7 @@ impl FluidSimCore {
         gpu.native_enc.clear_buffer(scatter_accum);
 
         let splat_uniforms = SplatUniforms {
-            active_count,
+            active_count: visible_count,
             width: sw,
             height: sh,
             scaled_energy,
@@ -569,7 +576,7 @@ impl FluidSimCore {
                     data: bytemuck::bytes_of(&splat_uniforms),
                 },
             ],
-            [active_count.div_ceil(256), 1, 1],
+            [visible_count.div_ceil(256).max(1), 1, 1],
             "FluidSim Splat",
         );
 
@@ -746,8 +753,8 @@ impl FluidSimCore {
             inject_phase,
             time_val: ctx.time as f32,
             dt: ctx.dt,
+            visible_count,
             _pad0: 0,
-            _pad1: 0,
         };
         gpu.native_enc.dispatch_compute(
             &self.simulate_pipeline,

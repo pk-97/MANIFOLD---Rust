@@ -264,6 +264,7 @@ impl Generator for ParticleTextGenerator {
             splat_size: param(ctx, SPLAT_SIZE, 3.0),
             anti_clump: param(ctx, ANTI_CLUMP, 20.0),
             inject_force: param(ctx, INJECT_FORCE, 0.005),
+            fill: 1.0,
         };
 
         // Update active count before seeding
