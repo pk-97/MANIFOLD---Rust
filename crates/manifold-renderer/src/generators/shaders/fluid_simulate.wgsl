@@ -130,6 +130,19 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     var p = particles[id.x];
+
+    // Fill injection: freshly released particles get a rightward kick
+    if p.position.x < 0.005 {
+        let kick_seed = id.x * 1664525u + params.frame_count * 747796405u;
+        let y_scatter = (hash_float(kick_seed) - 0.5) * 0.006;
+        let dt_scale = params.dt * 60.0;
+        p.position.x += 0.025 * params.speed * dt_scale;
+        p.position.y = fract(p.position.y + y_scatter + 1.0);
+        p.color = vec4<f32>(0.005, 0.005, 0.005, 1.0);
+        particles[id.x] = p;
+        return;
+    }
+
     let current_uv = p.position.xy;
 
     // 1. Sample blurred vector field
