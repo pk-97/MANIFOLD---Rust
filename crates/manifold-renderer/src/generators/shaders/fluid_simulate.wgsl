@@ -118,35 +118,30 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
 
-    // Fill gate: particles beyond visible_count that are already dead
-    // get pinned to center nozzle. Live particles keep simulating —
-    // they'll die naturally when they hit the boundary.
-    if id.x >= params.visible_count {
-        var p = particles[id.x];
-        if p.life <= 0.0 {
-            let spread_hash = hash_float2(id.x * 1664525u + 12345u);
-            let spread_r = spread_hash.x * 0.005;
-            let spread_a = spread_hash.y * 6.28318;
-            p.position = vec3<f32>(
-                0.5 + cos(spread_a) * spread_r,
-                0.5 + sin(spread_a) * spread_r,
-                0.0,
-            );
-            p.velocity = vec3<f32>(0.0);
-            particles[id.x] = p;
-            return;
-        }
-        // else: fall through to normal simulation (boundary kill is active)
-    }
-
+    let is_excess = id.x >= params.visible_count;
     var p = particles[id.x];
 
-    // Fill injection: freshly released particles (life was 0) get a radial kick
-    if p.life <= 0.0 {
+    // Excess + dead: hold at nozzle
+    if is_excess && p.life <= 0.0 {
+        let spread_hash = hash_float2(id.x * 1664525u + 12345u);
+        let spread_r = spread_hash.x * 0.005;
+        let spread_a = spread_hash.y * 6.28318;
+        p.position = vec3<f32>(
+            0.5 + cos(spread_a) * spread_r,
+            0.5 + sin(spread_a) * spread_r,
+            0.0,
+        );
+        p.velocity = vec3<f32>(0.0);
+        particles[id.x] = p;
+        return;
+    }
+
+    // Allowed + dead: spawn from nozzle with radial kick
+    if !is_excess && p.life <= 0.0 {
         let kick_seed = id.x * 1664525u + params.frame_count * 747796405u;
         let angle = hash_float(kick_seed) * 6.28318;
         let dt_scale = params.dt * 60.0;
-        let kick = 0.005 * params.speed * dt_scale;
+        let kick = 0.0001 * params.speed * dt_scale;
         p.position.x += cos(angle) * kick;
         p.position.y += sin(angle) * kick;
         p.life = 1.0;
@@ -155,6 +150,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
 
+    // ── Normal simulation ──
     let current_uv = p.position.xy;
 
     // 1. Sample blurred vector field
@@ -179,14 +175,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let diff = (hash_float2(diff_seed) - 0.5) * params.diffusion * capped_density;
     force += diff;
 
-
     // 6. Direct Euler integration (framerate-independent)
     let dt_scale = params.dt * 60.0;
     let new_uv = current_uv + force * params.speed * dt_scale;
 
-    // When fill < 1: particles that leave the screen die (recycled to nozzle).
-    // When fill = 1: toroidal wrap (default behavior).
-    if params.visible_count < params.active_count {
+    // Excess particles: no wrap — die at boundary.
+    // Allowed particles: toroidal wrap.
+    if is_excess {
         if new_uv.x < 0.0 || new_uv.x > 1.0 || new_uv.y < 0.0 || new_uv.y > 1.0 {
             p.life = 0.0;
             particles[id.x] = p;
@@ -198,8 +193,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     // 7. Injection disturbance (applied AFTER integration)
-    //    Injection point is a random UV passed from host (was fixed 4-point array).
-    //    inject_force > 0 signals active injection.
     if params.inject_force > 0.0 {
         let inject_pt = vec2<f32>(params.inject_point_x, params.inject_point_y);
         let pos = p.position.xy;
@@ -207,7 +200,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let dist2 = dot(delta, delta);
         let force_r2 = INJECT_FORCE_RADIUS * INJECT_FORCE_RADIUS;
 
-        // Force envelope: fast attack (~10%), exponential decay
         let attack = clamp(params.inject_phase * 10.0, 0.0, 1.0);
         let decay = exp(-params.inject_phase * 3.0);
         let envelope = attack * decay;
@@ -218,24 +210,21 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             let radial = delta / dist;
             let tangent = vec2<f32>(-radial.y, radial.x);
 
-            // Smooth quartic falloff
             let falloff_t = 1.0 - t * t;
             let falloff = falloff_t * falloff_t;
 
-            // Noise perturbation: breaks circular symmetry
             let noise_angle = simplex_noise_2d(pos * 8.0 + params.time_val * 0.3) * PI;
             let noise_dir = vec2<f32>(cos(noise_angle), sin(noise_angle));
             let perturbed_radial = normalize(radial + noise_dir * 0.4 * t);
 
-            // Vortex ring: curl increases toward injection front
             let curl_profile = t * (1.0 - t) * 4.0;
             let curl_force = tangent * curl_profile;
 
-            let dt_scale = params.dt * 60.0;
-            let strength = params.inject_force * envelope * falloff * dt_scale;
+            let dt_scale2 = params.dt * 60.0;
+            let strength = params.inject_force * envelope * falloff * dt_scale2;
             let push = perturbed_radial * strength + curl_force * strength * 0.5;
             let inject_uv = pos + push;
-            if params.visible_count < params.active_count {
+            if is_excess {
                 if inject_uv.x < 0.0 || inject_uv.x > 1.0 || inject_uv.y < 0.0 || inject_uv.y > 1.0 {
                     p.life = 0.0;
                     particles[id.x] = p;
