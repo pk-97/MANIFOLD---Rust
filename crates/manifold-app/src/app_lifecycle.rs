@@ -684,11 +684,33 @@ impl Application {
             }
         };
 
-        // NOTE: configure_presentation_window (setStyleMask:0, setLevel:25)
-        // was removed — it triggered macOS to change CVDisplayLink callback
-        // cadence, causing erratic intervals (13-20ms) and frame drops.
-        // The borderless window at full monitor size looks identical to the
-        // audience but macOS treats it as a normal window with stable vsync.
+        // Set the window above the dock and menu bar for clean fullscreen
+        // output. Level 3 (NSFloatingWindowLevel) is enough to cover the
+        // menu bar without triggering CVDisplayLink cadence issues that
+        // level 25 (kCGScreenSaverWindowLevel) caused.
+        if presentation {
+            #[cfg(target_os = "macos")]
+            {
+                use objc::{msg_send, sel, sel_impl};
+                use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                let ns_view = match window.window_handle().unwrap().as_raw() {
+                    RawWindowHandle::AppKit(h) => {
+                        h.ns_view.as_ptr() as *mut objc::runtime::Object
+                    }
+                    _ => std::ptr::null_mut(),
+                };
+                if !ns_view.is_null() {
+                    unsafe {
+                        let ns_window: *mut objc::runtime::Object =
+                            msg_send![ns_view, window];
+                        if !ns_window.is_null() {
+                            // NSFloatingWindowLevel = 3: above normal windows + menu bar
+                            let _: () = msg_send![ns_window, setLevel: 3i64];
+                        }
+                    }
+                }
+            }
+        }
 
         let id = window.id();
         let resolved_index = display_index.or(if monitors.len() > 1 { Some(1) } else { Some(0) });
