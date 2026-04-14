@@ -684,10 +684,10 @@ impl Application {
             }
         };
 
-        // Set the window above the dock and menu bar for clean fullscreen
-        // output. Level 3 (NSFloatingWindowLevel) is enough to cover the
-        // menu bar without triggering CVDisplayLink cadence issues that
-        // level 25 (kCGScreenSaverWindowLevel) caused.
+        // Set the output window above the dock and menu bar.
+        // The CVDisplayLink cadence issue was caused by
+        // CVDisplayLinkSetCurrentCGDisplay (now fixed by recreating the
+        // link), not the window level.
         if presentation {
             #[cfg(target_os = "macos")]
             {
@@ -704,8 +704,9 @@ impl Application {
                         let ns_window: *mut objc::runtime::Object =
                             msg_send![ns_view, window];
                         if !ns_window.is_null() {
-                            // NSFloatingWindowLevel = 3: above normal windows + menu bar
-                            let _: () = msg_send![ns_window, setLevel: 3i64];
+                            // NSStatusWindowLevel (25): above menu bar + dock.
+                            let _: () = msg_send![ns_window, setLevel: 25i64];
+                            let _: () = msg_send![ns_window, setMovable: false];
                         }
                     }
                 }
