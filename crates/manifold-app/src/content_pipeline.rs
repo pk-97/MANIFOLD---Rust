@@ -256,8 +256,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     /// window opens (surface sent via ContentCommand::SetOutputSurface).
     #[cfg(target_os = "macos")]
     pub fn set_output_surface(&mut self, surface: manifold_gpu::GpuSurface) {
-        // Configure EDR on the output surface.
         surface.configure_edr();
+        surface.set_contents_gravity_resize_aspect();
+        surface.set_background_color(0.0, 0.0, 0.0, 1.0);
         surface.set_maximum_drawable_count(3);
         surface.set_presents_with_transaction(false);
         // Create blit pipeline if not already cached.

@@ -678,16 +678,16 @@ impl Application {
         #[cfg(target_os = "macos")]
         if let Some(gpu) = &self.gpu {
             let size = window.inner_size();
-            // Fullscreen (Direct Display): displaySyncEnabled=true so
-            // nextDrawable() aligns to the display's vsync boundary.
-            // Without it, presents land at variable offsets → stutter.
-            // Windowed: false — WindowServer compositor handles timing.
+            // displaySyncEnabled = false: the content thread is vsync-paced
+            // via CVDisplayLink (GpuVsyncSignal). nextDrawable() must return
+            // immediately — blocking would stall the content thread past the
+            // vsync boundary, halving frame rate.
             let surface = gpu.device.create_surface(
                 &*window,
                 size.width.max(1),
                 size.height.max(1),
                 manifold_gpu::GpuTextureFormat::Rgba16Float,
-                presentation,
+                false,
             );
             self.send_content_cmd(
                 crate::content_command::ContentCommand::SetOutputSurface(surface),
