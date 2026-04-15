@@ -53,8 +53,10 @@ const BLUR_RADIUS: f32 = 12.0; // spec: filter size 12
 const BLUR_PRESHRINK: u32 = 4; // spec: pre-shrink 4
 
 /// Warmup iterations on fresh state so the feedback patterns are already
-/// interesting on first visible frame.
-const WARMUP_FRAMES: u64 = 120;
+/// interesting on first visible frame.  Keep this low enough to avoid a
+/// visible hitch — at quarter-res blur + full-res sim, ~30 steps is
+/// imperceptible on Apple Silicon while producing enough feedback history.
+const WARMUP_FRAMES: u64 = 30;
 
 fn param(ctx: &GeneratorContext, idx: usize, default: f32) -> f32 {
     if ctx.param_count > idx as u32 {
