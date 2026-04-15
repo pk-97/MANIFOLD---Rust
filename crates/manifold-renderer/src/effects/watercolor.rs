@@ -1,9 +1,9 @@
 // Watercolor — multi-pass feedback effect simulating watercolor paint flow.
 // Ported from TouchDesigner watercolor tutorial signal chain.
 //
-// 7-pass pipeline per frame (6 on alternate frames when flow map is reused):
+// 7-pass pipeline per frame:
 //   Pass 1 (Grain+Max):      source + grain + max(feedback * decay) → temp_a
-//   Pass 2 (Flow Map):       fBM noise → flow_map (skipped on odd frames)
+//   Pass 2 (Flow Map):       fBM noise → flow_map (half-res, every frame)
 //   Pass 3 (Displacement):   displace temp_a by flow_map → temp_b
 //   Pass 4 (Blur):           Gaussian blur temp_b → temp_a
 //   Pass 5 (Slope Displace): soft light → Sobel → displace temp_a → temp_b
@@ -12,7 +12,7 @@
 //
 // Performance:
 //   - 4-octave fBM (octaves 5–10 contribute <3% combined)
-//   - Flow map reused on alternate frames (noise evolves at time×0.01)
+//   - Flow map at half resolution (25% dispatch cost, bilinear upsample)
 //   - Grain inlined into max composite (eliminates 1 dispatch + 1 texture)
 //   - Luma blur reduced to 17 taps (2 rings) for lower texture bandwidth
 
@@ -158,11 +158,8 @@ impl PostProcessEffect for WatercolorFX {
         self.width = ctx.width;
         self.height = ctx.height;
 
-        // Track whether this is a brand-new owner (flow map uninitialized)
-        let is_new_owner = !self.states.contains_key(&ctx.owner_key);
-
         // Ensure per-owner state exists — clear feedback to black on creation
-        if is_new_owner && self.width > 0 && self.height > 0 {
+        if !self.states.contains_key(&ctx.owner_key) && self.width > 0 && self.height > 0 {
             let w = self.width;
             let h = self.height;
             let feedback =
@@ -173,7 +170,10 @@ impl PostProcessEffect for WatercolorFX {
                 WatercolorState {
                     feedback,
                     flow_map: alloc_target(
-                        gpu.device, gpu.pool, w, h, "WC FlowMap",
+                        gpu.device, gpu.pool,
+                        (w / 2).max(1),
+                        (h / 2).max(1),
+                        "WC FlowMap",
                     ),
                     temp_a: alloc_target(
                         gpu.device, gpu.pool, w, h, "WC TempA",
@@ -243,22 +243,22 @@ impl PostProcessEffect for WatercolorFX {
             h,
         );
 
-        // Pass 2: Flow Map — procedural noise → flow_map
-        // Skip on alternate frames: noise evolves at time×0.01, so the
-        // per-frame Z-offset delta (~0.00017) is invisible. Halves the
-        // cost of the heaviest pass. Always generate on first frame.
-        if is_new_owner || ctx.frame_count % 2 == 0 {
-            self.helper.dispatch_a_only_with(
-                &self.pipeline_flow_gen,
-                gpu,
-                source, // not read, just bound for layout
-                &state.flow_map.texture,
-                ubytes,
-                "WC FlowGen",
-                w,
-                h,
-            );
-        }
+        // Pass 2: Flow Map — procedural noise → flow_map (half-res)
+        // Half resolution cuts dispatch to 25% cost; bilinear sampling in
+        // the displacement pass smoothly upscales. Runs every frame for
+        // consistent frame pacing.
+        let flow_w = (w / 2).max(1);
+        let flow_h = (h / 2).max(1);
+        self.helper.dispatch_a_only_with(
+            &self.pipeline_flow_gen,
+            gpu,
+            source, // not read, just bound for layout
+            &state.flow_map.texture,
+            ubytes,
+            "WC FlowGen",
+            flow_w,
+            flow_h,
+        );
 
         // Pass 3: Displacement — temp_a + flow_map → temp_b
         self.helper.dispatch_with(
