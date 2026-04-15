@@ -52,12 +52,6 @@ const STATE_FORMAT: manifold_gpu::GpuTextureFormat = manifold_gpu::GpuTextureFor
 const BLUR_RADIUS: f32 = 12.0; // spec: filter size 12
 const BLUR_PRESHRINK: u32 = 4; // spec: pre-shrink 4
 
-/// Warmup iterations on fresh state so the feedback patterns are already
-/// interesting on first visible frame.  Keep this low enough to avoid a
-/// visible hitch — at quarter-res blur + full-res sim, ~30 steps is
-/// imperceptible on Apple Silicon while producing enough feedback history.
-const WARMUP_FRAMES: u64 = 30;
-
 fn param(ctx: &GeneratorContext, idx: usize, default: f32) -> f32 {
     if ctx.param_count > idx as u32 {
         ctx.params[idx]
@@ -66,10 +60,27 @@ fn param(ctx: &GeneratorContext, idx: usize, default: f32) -> f32 {
     }
 }
 
-// ── Uniform structs (all 32 bytes to satisfy Naga multi-entry-point rule) ──
+// ── Uniform structs (all 48 bytes to satisfy Naga multi-entry-point rule) ──
 
 // All uniform structs are 48 bytes (12 f32s) to satisfy Naga's
 // multi-entry-point same-size-at-same-binding rule.
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct SeedUniforms {
+    width: f32,
+    height: f32,
+    aspect: f32,
+    seed: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
+    _pad3: f32,
+    _pad4: f32,
+    _pad5: f32,
+    _pad6: f32,
+    _pad7: f32,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -155,6 +166,7 @@ struct BlurUniforms {
 
 pub struct OilyFluidGenerator {
     // Pipelines
+    seed_pipeline: manifold_gpu::GpuComputePipeline,
     downsample_pipeline: manifold_gpu::GpuComputePipeline,
     blur_pipeline: manifold_gpu::GpuComputePipeline,
     velocity_pipeline: manifold_gpu::GpuComputePipeline,
@@ -186,6 +198,8 @@ impl OilyFluidGenerator {
         let oily = include_str!("shaders/oily_fluid.wgsl");
         let composed = format!("{}\n{}", common, oily);
 
+        let seed_pipeline =
+            device.create_compute_pipeline(&composed, "cs_seed", "OilyFluid Seed");
         let downsample_pipeline =
             device.create_compute_pipeline(&composed, "cs_downsample", "OilyFluid Downsample");
         let velocity_pipeline =
@@ -215,6 +229,7 @@ impl OilyFluidGenerator {
         });
 
         Self {
+            seed_pipeline,
             downsample_pipeline,
             blur_pipeline,
             velocity_pipeline,
@@ -549,22 +564,49 @@ impl Generator for OilyFluidGenerator {
         let col_disp = param(ctx, COL_DISP, 1.0);
         let mode = param(ctx, MODE, 0.0);
 
-        // On fresh state, run warmup iterations so the feedback patterns are
-        // already rich on the first visible frame.
+        // On fresh state, seed both ping-pong textures with layered noise so
+        // the feedback simulation starts from a rich initial state — one
+        // dispatch instead of running dozens of warmup iterations.
         if fresh {
-            for _ in 0..WARMUP_FRAMES {
-                self.step_simulation(
-                    gpu,
-                    ctx,
-                    speed,
-                    feedback,
-                    noise_injection,
-                    vel_damp,
-                    curl,
-                    vel_disp,
-                    col_disp,
-                );
-            }
+            let seed_u = SeedUniforms {
+                width: ctx.width as f32,
+                height: ctx.height as f32,
+                aspect: ctx.aspect,
+                seed: (self.internal_frame as f32) * 0.1,
+                _pad0: 0.0,
+                _pad1: 0.0,
+                _pad2: 0.0,
+                _pad3: 0.0,
+                _pad4: 0.0,
+                _pad5: 0.0,
+                _pad6: 0.0,
+                _pad7: 0.0,
+            };
+            let color_state = self.color_state.as_ref().unwrap();
+            let velocity_state = self.velocity_state.as_ref().unwrap();
+            gpu.native_enc.dispatch_compute(
+                &self.seed_pipeline,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&seed_u),
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1,
+                        texture: color_state.write_texture(),
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 2,
+                        texture: velocity_state.write_texture(),
+                    },
+                ],
+                [ctx.width.div_ceil(16), ctx.height.div_ceil(16), 1],
+                "OilyFluid Seed",
+            );
+            // Swap so the seeded data is now on the read side for the first
+            // simulation step.
+            self.color_state.as_mut().unwrap().swap();
+            self.velocity_state.as_mut().unwrap().swap();
         }
 
         // Normal simulation step.

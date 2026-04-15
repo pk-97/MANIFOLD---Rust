@@ -16,6 +16,66 @@
 // uniform-size rule.
 
 // ─────────────────────────────────────────────────────────────────────
+// Seed pass: cs_seed — fills color + velocity state with layered noise
+// so the feedback simulation starts from a rich initial state instead
+// of running warmup iterations from blank textures.
+// ─────────────────────────────────────────────────────────────────────
+
+struct SeedUniforms {
+    width: f32,
+    height: f32,
+    aspect: f32,
+    seed: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
+    _pad3: f32,
+    _pad4: f32,
+    _pad5: f32,
+    _pad6: f32,
+    _pad7: f32,
+};
+
+@group(0) @binding(0) var<uniform> seed_u: SeedUniforms;
+@group(0) @binding(1) var seed_color_out: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(2) var seed_velocity_out: texture_storage_2d<rgba16float, write>;
+
+@compute @workgroup_size(16, 16, 1)
+fn cs_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let W = u32(seed_u.width);
+    let H = u32(seed_u.height);
+    if gid.x >= W || gid.y >= H {
+        return;
+    }
+
+    let texel = vec2<f32>(1.0 / seed_u.width, 1.0 / seed_u.height);
+    let uv = (vec2<f32>(gid.xy) + 0.5) * texel;
+    let nuv = vec2<f32>(uv.x * seed_u.aspect, uv.y);
+    let s = seed_u.seed;
+
+    // Layered simplex noise for color (R and G channels, independent seeds).
+    let cr = simplex_noise_3d(vec3<f32>(nuv * 3.0, s))
+           + simplex_noise_3d(vec3<f32>(nuv * 7.0, s + 5.0)) * 0.5
+           + simplex_noise_3d(vec3<f32>(nuv * 13.0, s + 11.0)) * 0.25;
+    let cg = simplex_noise_3d(vec3<f32>(nuv * 3.0 + vec2<f32>(31.7, 17.3), s + 3.0))
+           + simplex_noise_3d(vec3<f32>(nuv * 7.0 + vec2<f32>(31.7, 17.3), s + 8.0)) * 0.5
+           + simplex_noise_3d(vec3<f32>(nuv * 13.0 + vec2<f32>(31.7, 17.3), s + 14.0)) * 0.25;
+
+    // Scale to a range that matches what ~30 feedback iterations would produce.
+    let color = vec2<f32>(cr, cg) * 0.15;
+    textureStore(seed_color_out, vec2<i32>(gid.xy), vec4<f32>(color, 0.0, 1.0));
+
+    // Curl-like velocity from noise gradients — gives immediate flow structure.
+    let eps = 0.01;
+    let n0 = simplex_noise_3d(vec3<f32>(nuv * 4.0, s + 20.0));
+    let nx = simplex_noise_3d(vec3<f32>(nuv * 4.0 + vec2<f32>(eps, 0.0), s + 20.0));
+    let ny = simplex_noise_3d(vec3<f32>(nuv * 4.0 + vec2<f32>(0.0, eps), s + 20.0));
+    // Rotate gradient 90° to get curl (divergence-free flow).
+    let vel = vec2<f32>(-(ny - n0) / eps, (nx - n0) / eps) * 0.04;
+    textureStore(seed_velocity_out, vec2<i32>(gid.xy), vec4<f32>(vel, 0.0, 1.0));
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Pass A: cs_downsample — 4x4 box filter on velocity
 // ─────────────────────────────────────────────────────────────────────
 
