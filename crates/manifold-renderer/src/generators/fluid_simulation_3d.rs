@@ -596,6 +596,11 @@ impl Generator for FluidSimulation3DGenerator {
                         flatten,
                         cam_fwd_sim,
                     );
+                    // Skip the full pipeline on the seed frame to avoid a
+                    // GPU pipeline stall from back-to-back particle buffer
+                    // write→read. New positions render next frame.
+                    self.frame_count += 1;
+                    return ctx.anim_progress;
                 } else if self.active_snap_mode == 4 {
                     self.inject_zone_index = self.next_inject_zone;
                     self.inject_elapsed = 0.0;

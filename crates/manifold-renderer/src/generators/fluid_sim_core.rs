@@ -490,6 +490,14 @@ impl FluidSimCore {
                 if self.active_snap_mode == 3 {
                     let pattern = (trigger_count as u32) % PATTERN_COUNT;
                     self.dispatch_seed(gpu, pattern, trigger_count as u32, visible_count);
+                    // Skip the full pipeline on the seed frame — the seed
+                    // writes ~96 MB to the particle buffer and running
+                    // splat+simulate immediately after creates a GPU pipeline
+                    // stall (~16 ms). The new positions render next frame when
+                    // the write is already resident, making the snap feel
+                    // tighter and eliminating the fence-wait spike.
+                    self.frame_count += 1;
+                    return;
                 } else if self.active_snap_mode == 4 {
                     self.inject_active = true;
                     self.inject_point =
