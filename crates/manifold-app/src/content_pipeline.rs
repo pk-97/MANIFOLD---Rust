@@ -1096,13 +1096,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             if event.is_done(self.native_signal_value) {
                 return;
             }
-            // Use kernel notification via fence waiter (zero CPU wait).
+            // Use kernel notification via fence waiter (zero CPU, zero allocation).
             if let Some(ref waiter) = self.fence_waiter {
-                let (tx, rx) = std::sync::mpsc::sync_channel::<()>(1);
+                let thread = std::thread::current();
                 waiter.register(event, self.native_signal_value, move || {
-                    let _ = tx.send(());
+                    thread.unpark();
                 });
-                let _ = rx.recv_timeout(std::time::Duration::from_secs(5));
+                std::thread::park_timeout(std::time::Duration::from_secs(5));
                 return;
             }
             // Fallback: polling (should not be reached in normal operation).

@@ -249,6 +249,10 @@ impl ContentThread {
                         // Coalesce: overwrite previous pending seek.
                         pending_seek = Some(cmd);
                     }
+                    // SurfaceReady is a no-op GPU event — don't flush pending
+                    // seeks, as that would break coalescing during scrubbing.
+                    #[cfg(target_os = "macos")]
+                    Ok(ContentCommand::SurfaceReady) => {}
                     Ok(cmd) => {
                         // Flush any pending seek before a non-seek command
                         // to preserve ordering (e.g. Seek then Play).
@@ -376,6 +380,11 @@ impl ContentThread {
         let deadline =
             std::time::Instant::now() + std::time::Duration::from_secs(5);
 
+        // Coalesce seeks during the wait, matching the main drain loop's
+        // behavior. Without this, scrubbing during a GPU stall would
+        // execute every intermediate seek position individually.
+        let mut pending_seek: Option<ContentCommand> = None;
+
         loop {
             // Check if GPU finished.
             if self.content_pipeline.is_surface_ready() {
@@ -394,14 +403,41 @@ impl ContentThread {
             // GPU notification) or the 5-second deadline expires.
             // Zero CPU — thread sleeps in the kernel until woken.
             match cmd_rx.recv_timeout(remaining) {
+                Ok(ContentCommand::SurfaceReady) => {
+                    // GPU wake signal — loop back to check is_surface_ready().
+                }
+                Ok(cmd @ ContentCommand::SeekTo(_))
+                | Ok(cmd @ ContentCommand::SeekToBeat(_)) => {
+                    pending_seek = Some(cmd);
+                }
                 Ok(cmd) => {
+                    // Flush pending seek before non-seek command.
+                    if let Some(seek) = pending_seek.take()
+                        && self.handle_command(seek)
+                    {
+                        return true;
+                    }
                     if self.handle_command(cmd) {
                         return true; // shutdown
                     }
                     // Drain any additional queued commands.
                     while let Ok(cmd) = cmd_rx.try_recv() {
-                        if self.handle_command(cmd) {
-                            return true;
+                        match cmd {
+                            ContentCommand::SurfaceReady => {}
+                            cmd @ ContentCommand::SeekTo(_)
+                            | cmd @ ContentCommand::SeekToBeat(_) => {
+                                pending_seek = Some(cmd);
+                            }
+                            cmd => {
+                                if let Some(seek) = pending_seek.take()
+                                    && self.handle_command(seek)
+                                {
+                                    return true;
+                                }
+                                if self.handle_command(cmd) {
+                                    return true;
+                                }
+                            }
                         }
                     }
                 }
@@ -414,6 +450,12 @@ impl ContentThread {
                     return true; // shutdown
                 }
             }
+        }
+        // Apply final coalesced seek.
+        if let Some(seek) = pending_seek
+            && self.handle_command(seek)
+        {
+            return true;
         }
         false
     }
