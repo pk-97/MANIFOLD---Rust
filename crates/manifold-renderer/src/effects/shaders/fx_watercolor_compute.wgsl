@@ -1,15 +1,15 @@
 // Watercolor — multi-pass feedback effect simulating watercolor paint flow.
 // Ported from TouchDesigner watercolor tutorial signal chain.
 //
-// 8-pass pipeline per frame:
+// 8-mode pipeline per frame:
 //   Mode 0: Grain overlay (source + white noise)
 //   Mode 1: Maximum composite with decay (grain_base max feedback*decay)
 //   Mode 2: Flow map generation (domain-warped fBM → RB channels)
 //   Mode 3: Flow displacement (displace max result by flow map)
 //   Mode 4: Edge diffusion blur (Gaussian, radius 2)
 //   Mode 5: Slope displacement (soft light → Sobel → UV displace)
-//   Mode 6: Luma blur (variable blur with binary noise mask)
-//   Mode 7: Emboss post-process (emboss + overlay composite + amount blend)
+//   Mode 6: Luma blur (variable blur with binary noise mask, 17 taps)
+//   Mode 7: Wet/dry blend (feedback mixed with original source)
 //
 // Binding layout: ComputeDualBlitHelper (5 bindings).
 // Single-input modes bind source_tex_a == source_tex_b.
@@ -134,12 +134,12 @@ fn noise3d(p: vec3<f32>) -> f32 {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Fractal Brownian Motion — 6-octave 3D fBM
+// Fractal Brownian Motion — 4-octave 3D fBM
 // Returns approximately [-1, 1].
-// 6 octaves: octaves 7–10 contribute <1% each (amp < 0.008).
+// 4 octaves: octaves 5–10 contribute <3% combined (amp < 0.031).
 // ═══════════════════════════════════════════════════════════════════
 
-const FBM_OCTAVES: i32 = 5;
+const FBM_OCTAVES: i32 = 4;
 
 fn fbm3d(p_in: vec3<f32>) -> f32 {
     var val: f32 = 0.0;
@@ -372,43 +372,36 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Unblurred sample
         let sharp = textureSampleLevel(source_tex_a, tex_sampler, uv, 0.0);
 
-        // Heavy blur: 3-ring multi-tap approximation
-        let r1 = texel * uniforms.luma_blur_radius * 0.33;
-        let r2 = texel * uniforms.luma_blur_radius * 0.67;
-        let r3 = texel * uniforms.luma_blur_radius;
+        // Heavy blur: 2-ring multi-tap approximation (17 taps)
+        let r1 = texel * uniforms.luma_blur_radius * 0.4;
+        let r2 = texel * uniforms.luma_blur_radius * 0.8;
 
         // Center
-        var blurred = textureSampleLevel(source_tex_a, tex_sampler, uv, 0.0) * 0.1;
+        var blurred = textureSampleLevel(source_tex_a, tex_sampler, uv, 0.0) * 0.12;
 
         // Inner ring — cardinal + diagonal (8 taps)
-        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>( r1.x, 0.0),  0.0) * 0.07;
-        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(-r1.x, 0.0),  0.0) * 0.07;
-        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(0.0,  r1.y),  0.0) * 0.07;
-        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(0.0, -r1.y),  0.0) * 0.07;
+        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>( r1.x, 0.0),  0.0) * 0.08;
+        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(-r1.x, 0.0),  0.0) * 0.08;
+        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(0.0,  r1.y),  0.0) * 0.08;
+        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(0.0, -r1.y),  0.0) * 0.08;
         let d1 = r1 * 0.707;
-        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>( d1.x,  d1.y), 0.0) * 0.04;
-        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(-d1.x,  d1.y), 0.0) * 0.04;
-        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>( d1.x, -d1.y), 0.0) * 0.04;
-        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(-d1.x, -d1.y), 0.0) * 0.04;
+        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>( d1.x,  d1.y), 0.0) * 0.05;
+        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(-d1.x,  d1.y), 0.0) * 0.05;
+        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>( d1.x, -d1.y), 0.0) * 0.05;
+        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(-d1.x, -d1.y), 0.0) * 0.05;
 
-        // Middle ring — cardinal + diagonal (8 taps)
-        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>( r2.x, 0.0),  0.0) * 0.05;
-        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(-r2.x, 0.0),  0.0) * 0.05;
-        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(0.0,  r2.y),  0.0) * 0.05;
-        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(0.0, -r2.y),  0.0) * 0.05;
+        // Outer ring — cardinal + diagonal (8 taps)
+        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>( r2.x, 0.0),  0.0) * 0.06;
+        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(-r2.x, 0.0),  0.0) * 0.06;
+        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(0.0,  r2.y),  0.0) * 0.06;
+        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(0.0, -r2.y),  0.0) * 0.06;
         let d2 = r2 * 0.707;
-        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>( d2.x,  d2.y), 0.0) * 0.025;
-        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(-d2.x,  d2.y), 0.0) * 0.025;
-        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>( d2.x, -d2.y), 0.0) * 0.025;
-        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(-d2.x, -d2.y), 0.0) * 0.025;
-
-        // Outer ring — cardinal only (4 taps)
-        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>( r3.x, 0.0),  0.0) * 0.02;
-        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(-r3.x, 0.0),  0.0) * 0.02;
-        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(0.0,  r3.y),  0.0) * 0.02;
-        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(0.0, -r3.y),  0.0) * 0.02;
-        // Weights: 0.1 + 4×0.07 + 4×0.04 + 4×0.05 + 4×0.025 + 4×0.02 = 0.92
-        blurred = blurred / 0.92;
+        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>( d2.x,  d2.y), 0.0) * 0.03;
+        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(-d2.x,  d2.y), 0.0) * 0.03;
+        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>( d2.x, -d2.y), 0.0) * 0.03;
+        blurred += textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(-d2.x, -d2.y), 0.0) * 0.03;
+        // Weights: 0.12 + 4×0.08 + 4×0.05 + 4×0.06 + 4×0.03 = 1.0
+        // (no normalization needed)
 
         // Mix sharp and blurred based on binary mask
         let color = mix(sharp, blurred, mask);
@@ -417,42 +410,13 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         textureStore(output_tex, vec2<i32>(gid.xy), safe_clamp(color));
 
     } else {
-        // ─── Mode 7: Emboss Post-Process ───────────────────────────
-        // Sobel gradient → directional light projection → overlay composite.
+        // ─── Mode 7: Wet/Dry Blend ─────────────────────────────────
+        // Simple mix of watercolor feedback with original source.
         // source_a = feedback (watercolor result), source_b = original source
 
         let wc = textureSampleLevel(source_tex_a, tex_sampler, uv, 0.0);
-
-        // 3×3 neighborhood for Sobel gradients
-        let tl = textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(-texel.x, -texel.y), 0.0).rgb;
-        let tc = textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(     0.0, -texel.y), 0.0).rgb;
-        let tr = textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>( texel.x, -texel.y), 0.0).rgb;
-        let ml = textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(-texel.x,      0.0), 0.0).rgb;
-        let mr = textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>( texel.x,      0.0), 0.0).rgb;
-        let bl = textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(-texel.x,  texel.y), 0.0).rgb;
-        let bc = textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>(     0.0,  texel.y), 0.0).rgb;
-        let br = textureSampleLevel(source_tex_a, tex_sampler, uv + vec2<f32>( texel.x,  texel.y), 0.0).rgb;
-
-        // Sobel X/Y gradients (luminance-weighted)
-        let luma = vec3<f32>(0.2126, 0.7152, 0.0722);
-        let gx = dot(-tl + tr - 2.0 * ml + 2.0 * mr - bl + br, luma) / 4.0;
-        let gy = dot(-tl - 2.0 * tc - tr + bl + 2.0 * bc + br, luma) / 4.0;
-
-        // Project gradient onto 45° light direction for emboss look
-        let light_dir = vec2<f32>(0.7071, 0.7071); // normalize(1, 1)
-        let emboss_val = clamp(
-            dot(vec2<f32>(gx, gy), light_dir) * uniforms.emboss_strength + 0.5,
-            0.0,
-            1.0,
-        );
-        let emboss = vec3<f32>(emboss_val, emboss_val, emboss_val);
-
-        // Overlay composite: paint texture over watercolor result
-        let composited = overlay(wc.rgb, emboss);
-
-        // Blend with original source by amount parameter
         let original = textureSampleLevel(source_tex_b, tex_sampler, uv, 0.0);
-        let final_rgb = mix(original.rgb, composited, uniforms.amount);
+        let final_rgb = mix(original.rgb, wc.rgb, uniforms.amount);
         let final_a = mix(original.a, wc.a, uniforms.amount);
 
         textureStore(output_tex, vec2<i32>(gid.xy), vec4<f32>(final_rgb, final_a));

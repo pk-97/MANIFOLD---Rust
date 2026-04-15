@@ -7,13 +7,14 @@
 //   Pass 3 (Displacement):   displace temp_a by flow_map → temp_b
 //   Pass 4 (Blur):           Gaussian blur temp_b → temp_a
 //   Pass 5 (Slope Displace): soft light → Sobel → displace temp_a → temp_b
-//   Pass 6 (Luma Blur):      variable blur with noise mask → feedback
-//   Pass 7 (Emboss):         emboss feedback → overlay → blend with source → target
+//   Pass 6 (Luma Blur):      17-tap variable blur with noise mask → feedback
+//   Pass 7 (Blend):          wet/dry mix of feedback with source → target
 //
 // Performance:
-//   - 5-octave fBM (vs 10 — octaves 6–10 contribute <3% combined)
+//   - 4-octave fBM (octaves 5–10 contribute <3% combined)
 //   - Flow map reused on alternate frames (noise evolves at time×0.01)
 //   - Grain inlined into max composite (eliminates 1 dispatch + 1 texture)
+//   - Luma blur reduced to 17 taps (2 rings) for lower texture bandwidth
 
 use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
@@ -38,7 +39,6 @@ inventory::submit! {
             ParamSpec::continuous("Amount", 0.0, 1.0, 0.5, "F2", ""),
             ParamSpec::continuous("Displace", 0.0001, 0.01, 0.001, "F4", "displace"),
             ParamSpec::continuous("Blur", 0.5, 8.0, 2.0, "F1", "blur"),
-            ParamSpec::continuous("Emboss", 0.0, 24.0, 12.0, "F1", "emboss"),
             ParamSpec::continuous("Decay", 0.9, 1.0, 0.99, "F3", "decay"),
         ],
     }
@@ -91,7 +91,7 @@ pub struct WatercolorFX {
     pipeline_blur: manifold_gpu::GpuComputePipeline,      // mode 4
     pipeline_slope: manifold_gpu::GpuComputePipeline,     // mode 5
     pipeline_luma: manifold_gpu::GpuComputePipeline,      // mode 6
-    pipeline_emboss: manifold_gpu::GpuComputePipeline,    // mode 7
+    pipeline_blend: manifold_gpu::GpuComputePipeline,     // mode 7 (wet/dry)
     states: AHashMap<i64, WatercolorState>,
     width: u32,
     height: u32,
@@ -134,7 +134,7 @@ impl WatercolorFX {
             pipeline_blur: spec("4u", "WC Blur"),
             pipeline_slope: spec("5u", "WC Slope"),
             pipeline_luma: spec("6u", "WC Luma"),
-            pipeline_emboss: spec("7u", "WC Emboss"),
+            pipeline_blend: spec("7u", "WC Blend"),
             states: AHashMap::new(),
             width: 0,
             height: 0,
@@ -203,15 +203,9 @@ impl PostProcessEffect for WatercolorFX {
             .copied()
             .unwrap_or(2.0)
             .clamp(0.5, 8.0);
-        let emboss_strength = fx
-            .param_values
-            .get(3)
-            .copied()
-            .unwrap_or(12.0)
-            .clamp(0.0, 24.0);
         let decay = fx
             .param_values
-            .get(4)
+            .get(3)
             .copied()
             .unwrap_or(0.99)
             .clamp(0.9, 1.0);
@@ -223,7 +217,7 @@ impl PostProcessEffect for WatercolorFX {
             height: h as f32,
             displace_weight,
             blur_radius,
-            emboss_strength,
+            emboss_strength: 0.0, // unused — field kept for uniform alignment
             amount,
             slope_strength: 5.0,
             slope_step: 5.0,
@@ -316,15 +310,15 @@ impl PostProcessEffect for WatercolorFX {
             h,
         );
 
-        // Pass 7: Emboss — feedback + source → target (final output)
+        // Pass 7: Wet/Dry Blend — feedback + source → target (final output)
         self.helper.dispatch_with(
-            &self.pipeline_emboss,
+            &self.pipeline_blend,
             gpu,
             &state.feedback.texture,
             source,
             target,
             ubytes,
-            "WC Emboss",
+            "WC Blend",
             w,
             h,
         );
