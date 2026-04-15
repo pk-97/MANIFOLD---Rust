@@ -342,7 +342,8 @@ pub const EXIT_PATH_PRESSED: Color32 = Color32::new(40, 40, 43, 255);
 
 // ── Overview strip ──────────────────────────────────────────────────
 pub const OVERVIEW_BG: Color32 = Color32::new(15, 15, 17, 255);
-pub const OVERVIEW_VIEWPORT: Color32 = Color32::new(89, 148, 235, 64);
+pub const OVERVIEW_VIEWPORT: Color32 = Color32::new(89, 148, 235, 120);
+pub const OVERVIEW_VIEWPORT_BORDER: Color32 = Color32::new(120, 170, 245, 200);
 pub const OVERVIEW_PLAYHEAD: Color32 = Color32::new(217, 64, 56, 255);
 pub const EXPORT_MARKER_COLOR: Color32 = Color32::new(77, 141, 235, 255);
 pub const EXPORT_RANGE_HIGHLIGHT: Color32 = Color32::new(77, 140, 235, 31);

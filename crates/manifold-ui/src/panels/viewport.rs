@@ -1544,6 +1544,17 @@ impl TimelineViewportPanel {
                 tex_h as i32,
                 color::OVERVIEW_VIEWPORT,
             );
+            bitmap_painter::draw_border(
+                &mut self.overview_pixels,
+                tex_w,
+                tex_h,
+                vp_x,
+                0,
+                vp_w,
+                tex_h as i32,
+                color::OVERVIEW_VIEWPORT_BORDER,
+                1,
+            );
         }
 
         // Playhead (red line, 1-2px)
