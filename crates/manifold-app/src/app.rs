@@ -2081,12 +2081,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                 ws.window.set_decorations(true);
                                 if let Some(frame) = self.output_saved_frame.take() {
                                     ws.window.set_outer_position(
-                                        winit::dpi::LogicalPosition::new(
+                                        winit::dpi::PhysicalPosition::new(
                                             frame[0], frame[1],
                                         ),
                                     );
                                     let _ = ws.window.request_inner_size(
-                                        winit::dpi::LogicalSize::new(
+                                        winit::dpi::PhysicalSize::new(
                                             frame[2], frame[3],
                                         ),
                                     );
