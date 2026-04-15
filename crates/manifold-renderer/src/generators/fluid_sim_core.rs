@@ -465,6 +465,11 @@ impl FluidSimCore {
 
         if !self.initialized {
             self.init_particles_gpu(gpu, visible_count);
+            // Skip the full pipeline on the init frame — same stall as snap
+            // seed (particle buffer write→read in the same command buffer).
+            // First real render happens next frame with data already resident.
+            self.frame_count += 1;
+            return;
         }
 
         self.ensure_scatter_resources(gpu.device, ctx.width, ctx.height, 1.0);

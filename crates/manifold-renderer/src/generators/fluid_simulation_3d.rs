@@ -570,6 +570,10 @@ impl Generator for FluidSimulation3DGenerator {
 
         if !self.initialized {
             self.init_particles_gpu(gpu);
+            // Skip the full pipeline on the init frame — same stall as snap
+            // seed (particle buffer write→read in the same command buffer).
+            self.frame_count += 1;
+            return ctx.anim_progress;
         }
         self.ensure_volume_resources(gpu.device, desired_vol_res);
         self.ensure_display_resources(gpu.device, desired_dw, desired_dh);
