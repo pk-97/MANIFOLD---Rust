@@ -61,8 +61,9 @@ fn cs_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
            + simplex_noise_3d(vec3<f32>(nuv * 7.0 + vec2<f32>(31.7, 17.3), s + 8.0)) * 0.5
            + simplex_noise_3d(vec3<f32>(nuv * 13.0 + vec2<f32>(31.7, 17.3), s + 14.0)) * 0.25;
 
-    // Scale to a range that matches what ~30 feedback iterations would produce.
-    let color = vec2<f32>(cr, cg) * 0.15;
+    // Strong initial color so gradient extraction in cs_velocity immediately
+    // produces curl forcing — the feedback loop amplifies from here.
+    let color = vec2<f32>(cr, cg) * 0.45;
     textureStore(seed_color_out, vec2<i32>(gid.xy), vec4<f32>(color, 0.0, 1.0));
 
     // Curl-like velocity from noise gradients — gives immediate flow structure.
@@ -71,7 +72,7 @@ fn cs_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
     let nx = simplex_noise_3d(vec3<f32>(nuv * 4.0 + vec2<f32>(eps, 0.0), s + 20.0));
     let ny = simplex_noise_3d(vec3<f32>(nuv * 4.0 + vec2<f32>(0.0, eps), s + 20.0));
     // Rotate gradient 90° to get curl (divergence-free flow).
-    let vel = vec2<f32>(-(ny - n0) / eps, (nx - n0) / eps) * 0.04;
+    let vel = vec2<f32>(-(ny - n0) / eps, (nx - n0) / eps) * 0.18;
     textureStore(seed_velocity_out, vec2<i32>(gid.xy), vec4<f32>(vel, 0.0, 1.0));
 }
 
