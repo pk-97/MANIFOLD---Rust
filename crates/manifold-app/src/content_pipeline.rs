@@ -1087,9 +1087,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     /// Block until the last render's GPU command buffer has completed.
     /// Must be called before reading the output texture on a different queue.
+    ///
+    /// Uses the fence waiter's kernel notification when available (zero CPU),
+    /// falling back to the polling path if the fence waiter isn't initialized.
     #[cfg(target_os = "macos")]
     pub fn wait_for_render_complete(&self) {
         if let Some(ref event) = self.native_event {
+            if event.is_done(self.native_signal_value) {
+                return;
+            }
+            // Use kernel notification via fence waiter (zero CPU wait).
+            if let Some(ref waiter) = self.fence_waiter {
+                let (tx, rx) = std::sync::mpsc::sync_channel::<()>(1);
+                waiter.register(event, self.native_signal_value, move || {
+                    let _ = tx.send(());
+                });
+                let _ = rx.recv_timeout(std::time::Duration::from_secs(5));
+                return;
+            }
+            // Fallback: polling (should not be reached in normal operation).
             event.wait_until_done(self.native_signal_value);
         }
     }
