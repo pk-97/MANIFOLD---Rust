@@ -28,4 +28,6 @@ mod texture_pool;
 
 pub use config::{AudioCodec, LiveRecordingConfig, RecordingResult};
 #[cfg(target_os = "macos")]
+pub use recording_thread::GpuFence;
+#[cfg(target_os = "macos")]
 pub use session::LiveRecordingSession;

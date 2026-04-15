@@ -816,7 +816,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 }
                 // Signal recording thread that the GPU blit is complete.
                 if let Some(ref fence) = recording_fence {
-                    fence.store(true, std::sync::atomic::Ordering::Release);
+                    fence.signal();
                 }
             });
         }

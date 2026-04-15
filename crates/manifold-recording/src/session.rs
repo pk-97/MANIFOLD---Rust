@@ -169,9 +169,11 @@ impl LiveRecordingSession {
     /// - `gpu_fence`: the content thread's completion handler must set this to `true`
     ///
     /// Returns `None` if the pool is exhausted (drop this frame).
-    pub fn acquire_texture(&mut self) -> Option<(usize, PoolSlot, Arc<AtomicBool>)> {
+    pub fn acquire_texture(
+        &mut self,
+    ) -> Option<(usize, PoolSlot, Arc<crate::recording_thread::GpuFence>)> {
         if let Some((idx, slot)) = self.texture_pool.try_acquire() {
-            let fence = Arc::new(AtomicBool::new(false));
+            let fence = Arc::new(crate::recording_thread::GpuFence::new());
             Some((idx, slot, fence))
         } else {
             None
@@ -196,7 +198,11 @@ impl LiveRecordingSession {
     }
 
     /// Submit a frame to the recording thread. Non-blocking.
-    pub fn submit_frame(&mut self, pool_slot: PoolSlot, fence: Arc<AtomicBool>) {
+    pub fn submit_frame(
+        &mut self,
+        pool_slot: PoolSlot,
+        fence: Arc<crate::recording_thread::GpuFence>,
+    ) {
         let Some(ref frame_tx) = self.frame_tx else {
             pool_slot.release();
             self.frames_dropped += 1;

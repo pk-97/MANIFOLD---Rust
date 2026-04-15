@@ -15,16 +15,59 @@ use ringbuf::traits::{Consumer as ConsumerTrait, Observer as ObserverTrait};
 use crate::ffi;
 use crate::texture_pool::PoolSlot;
 
+/// GPU completion fence — replaces AtomicBool spin-loop with a condvar.
+///
+/// The GPU completion handler calls `signal()` (sets flag + notifies condvar).
+/// The recording thread calls `wait()` (sleeps until signaled or timeout).
+/// Zero CPU during the wait.
+pub struct GpuFence {
+    state: std::sync::Mutex<bool>,
+    condvar: std::sync::Condvar,
+}
+
+impl Default for GpuFence {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GpuFence {
+    pub fn new() -> Self {
+        Self {
+            state: std::sync::Mutex::new(false),
+            condvar: std::sync::Condvar::new(),
+        }
+    }
+
+    /// Signal that the GPU has completed. Called from the completion handler.
+    pub fn signal(&self) {
+        if let Ok(mut done) = self.state.lock() {
+            *done = true;
+            self.condvar.notify_one();
+        }
+    }
+
+    /// Wait until signaled or timeout. Returns `true` if signaled.
+    pub fn wait(&self, timeout: Duration) -> bool {
+        let guard = self.state.lock().unwrap();
+        let (_guard, result) = self
+            .condvar
+            .wait_timeout_while(guard, timeout, |done| !*done)
+            .unwrap();
+        !result.timed_out()
+    }
+}
+
 /// A single frame submitted by the content thread.
 pub(crate) struct RecordingFrame {
     /// Pool slot holding the raw texture pointer. Released after encoding.
     pub pool_slot: PoolSlot,
     /// Wall-clock timestamp when the frame was produced.
     pub wall_timestamp: Instant,
-    /// Fence: set to `true` by the GPU completion handler when the blit
-    /// to this pool texture is finished. The recording thread must wait
+    /// Fence: signaled by the GPU completion handler when the blit
+    /// to this pool texture is finished. The recording thread waits
     /// on this before reading the texture.
-    pub gpu_complete: Arc<AtomicBool>,
+    pub gpu_complete: Arc<GpuFence>,
 }
 
 // PoolSlot contains a raw pointer to a Metal texture — safe to send.
@@ -74,26 +117,13 @@ pub(crate) fn run(
                 }
             };
 
-            // Wait for GPU blit to complete (with timeout).
-            let fence_start = Instant::now();
-            let mut spin_count = 0u32;
-            let mut fence_ok = true;
-            while !frame.gpu_complete.load(Ordering::Acquire) {
-                std::hint::spin_loop();
-                spin_count += 1;
-                if spin_count > 1_000_000 {
-                    // Check for timeout every ~1M spins (~100ms).
-                    if fence_start.elapsed() > Duration::from_secs(5) {
-                        log::error!(
-                            "[RecordingThread] GPU fence timeout (5s) — \
-                             skipping frame, possible GPU hang"
-                        );
-                        fence_ok = false;
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_micros(100));
-                    spin_count = 0;
-                }
+            // Wait for GPU blit to complete (kernel notification, zero CPU).
+            let fence_ok = frame.gpu_complete.wait(Duration::from_secs(5));
+            if !fence_ok {
+                log::error!(
+                    "[RecordingThread] GPU fence timeout (5s) — \
+                     skipping frame, possible GPU hang"
+                );
             }
 
             if !fence_ok {
