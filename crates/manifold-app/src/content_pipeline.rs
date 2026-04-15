@@ -113,6 +113,11 @@ pub struct ContentPipeline {
     /// Native Metal shared event for frame completion (macOS only).
     #[cfg(target_os = "macos")]
     native_event: Option<manifold_gpu::GpuEvent>,
+    /// Kernel-notified GPU fence waiter — replaces busy-spin polling.
+    /// Registered before each frame to wake the content thread via condvar
+    /// when the GPU finishes with the target surface.
+    #[cfg(target_os = "macos")]
+    fence_waiter: Option<manifold_gpu::GpuFenceWaiter>,
     /// Signal value from the native event.
     #[cfg(target_os = "macos")]
     native_signal_value: u64,
@@ -170,6 +175,8 @@ impl ContentPipeline {
             native_device: None,
             #[cfg(target_os = "macos")]
             native_event: None,
+            #[cfg(target_os = "macos")]
+            fence_waiter: None,
             #[cfg(target_os = "macos")]
             native_signal_value: 0,
             #[cfg(target_os = "macos")]
@@ -230,6 +237,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }));
         self.native_device = Some(device);
         self.native_event = Some(event);
+        self.fence_waiter = Some(manifold_gpu::GpuFenceWaiter::new());
         self.texture_pool = Some(pool);
     }
 
@@ -250,6 +258,72 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     /// 2 frames ago when the content thread woke up — a sign of GPU saturation.
     pub fn last_fence_wait_ms(&self) -> f64 {
         self.last_fence_wait_ms
+    }
+
+    // ── Surface readiness (GPU fence notification) ──────────────────────
+
+    /// Check if the surface is ready (GPU already finished, or no pending work).
+    #[cfg(target_os = "macos")]
+    pub fn is_surface_ready(&self) -> bool {
+        let pending = self.surface_signal_values[self.write_surface_index];
+        if pending == 0 {
+            return true;
+        }
+        self.native_event.as_ref().is_none_or(|e| e.is_done(pending))
+    }
+
+    /// Register a GPU notification for when the current surface becomes
+    /// available. When the GPU signals, `SurfaceReady` is sent through
+    /// `cmd_tx` to wake the content thread's `recv()`.
+    ///
+    /// Returns `true` if a wait is needed (notification registered),
+    /// `false` if the surface is already ready.
+    #[cfg(target_os = "macos")]
+    pub fn register_surface_notify(
+        &self,
+        cmd_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+    ) -> bool {
+        let pending = self.surface_signal_values[self.write_surface_index];
+        if pending == 0 {
+            return false;
+        }
+        if let (Some(event), Some(waiter)) =
+            (&self.native_event, &self.fence_waiter)
+        {
+            if event.is_done(pending) {
+                return false;
+            }
+            let tx = cmd_tx.clone();
+            waiter.register(event, pending, move || {
+                let _ = tx.send(
+                    crate::content_command::ContentCommand::SurfaceReady,
+                );
+            });
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Handle GPU timeout — clear stale signal to prevent infinite blocking.
+    #[cfg(target_os = "macos")]
+    pub fn handle_surface_timeout(&mut self) {
+        let idx = self.write_surface_index;
+        let pending = self.surface_signal_values[idx];
+        let signaled = self.native_event.as_ref().map_or(0, |e| e.signaled_value());
+        log::error!(
+            "[ContentPipeline] GPU timeout waiting for surface {} \
+             (signal={}, signaled={})",
+            idx,
+            pending,
+            signaled,
+        );
+        self.surface_signal_values[idx] = 0;
+    }
+
+    /// Set the last fence wait duration (called from content thread).
+    pub fn set_last_fence_wait_ms(&mut self, ms: f64) {
+        self.last_fence_wait_ms = ms;
     }
 
     /// Current output resolution (post-upscale).
@@ -355,36 +429,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         Arc::clone(&self.shared_output)
     }
 
-    /// Wait for the surface we're about to write to, if it has pending GPU work.
-    /// Called at the START of each frame before encoding new work.
-    ///
-    /// Note: `publish_front` is handled by GPU completion handlers registered in
-    /// `render_content()`, not here. This decouples frame publish timing from
-    /// the content thread's sleep/wake cycle, eliminating judder on displays
-    /// running at a higher refresh rate than the content FPS (e.g. 120Hz TV
-    /// consuming 60fps content).
-    fn wait_for_surface(&mut self) {
-        // Wait for the surface we're about to write to — it may still have
-        // GPU work from 2 frames ago (triple buffering: surface reuse every 3 frames).
-        #[cfg(target_os = "macos")]
-        if let Some(ref native_event) = self.native_event {
-            let pending = self.surface_signal_values[self.write_surface_index];
-            if pending > 0 && !native_event.wait_until_done_timeout(pending, 5000) {
-                log::error!(
-                    "[ContentPipeline] GPU timeout waiting for surface {} \
-                     (signal={}, signaled={})",
-                    self.write_surface_index,
-                    pending,
-                    native_event.signaled_value(),
-                );
-                // After a GPU timeout, clear the stale signal so we don't block
-                // indefinitely on subsequent frames waiting for a value that will
-                // never be signaled (e.g. if the command buffer errored out).
-                self.surface_signal_values[self.write_surface_index] = 0;
-            }
-        }
-    }
-
     /// Render all generators and composite, then submit asynchronously.
     ///
     /// Uses native Metal encoding on macOS via manifold-gpu.
@@ -404,14 +448,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     ) {
         let _t_frame = std::time::Instant::now();
 
-        // Wait for the surface we're about to write to (may have pending GPU work
-        // from 2 frames ago with triple buffering). Also publishes the last completed frame.
-        // Skipped in export mode — export reads output_texture directly, no IOSurface needed.
-        let fence_wait_start = std::time::Instant::now();
-        if !export_mode {
-            self.wait_for_surface();
-        }
-        self.last_fence_wait_ms = fence_wait_start.elapsed().as_secs_f64() * 1000.0;
+        // Surface wait is now handled by the content thread main loop
+        // (wait_for_surface_draining_commands) which keeps processing commands
+        // instead of busy-spinning. Export mode waits via wait_for_gpu_idle().
         let _poll_ms = self.last_fence_wait_ms;
 
         // Extract timing values before split borrow

@@ -42,8 +42,8 @@ pub use encoder::GpuEncoder;
 pub use surface::{GpuDrawable, GpuSurface};
 pub use texture_pool::TexturePool;
 pub use types::{
-    GpuBuffer, GpuComputePipeline, GpuDepthStencilState, GpuEvent, GpuHeap, GpuRenderPipeline,
-    GpuSampler, GpuTexture,
+    GpuBuffer, GpuComputePipeline, GpuDepthStencilState, GpuEvent, GpuFenceWaiter, GpuHeap,
+    GpuRenderPipeline, GpuSampler, GpuTexture,
 };
 pub use vsync::{GpuVsyncSignal, GpuVsyncWaiter, VsyncWaitResult, display_id_for_window};
 

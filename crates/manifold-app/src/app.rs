@@ -1656,10 +1656,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 profiler: None,
             };
 
+            let cmd_tx_clone = cmd_tx.clone();
             let handle = std::thread::Builder::new()
                 .name("content-thread".into())
                 .spawn(move || {
-                    content_thread.run(cmd_rx, state_tx);
+                    content_thread.run(cmd_tx_clone, cmd_rx, state_tx);
                 })
                 .expect("Failed to spawn content thread");
 

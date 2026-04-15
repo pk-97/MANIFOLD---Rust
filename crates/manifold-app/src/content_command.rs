@@ -218,6 +218,13 @@ pub enum ContentCommand {
     /// Stop live recording and finalize the output file.
     StopLiveRecording,
 
+    // ── GPU events ────────────────────────────────────────────────
+    /// GPU finished with a surface — wake the content thread if it's
+    /// blocked in `recv()` waiting for surface readiness.
+    /// Sent by the Metal `SharedEventListener` notification block.
+    #[cfg(target_os = "macos")]
+    SurfaceReady,
+
     // ── Shutdown ──────────────────────────────────────────────────
     Shutdown,
 }

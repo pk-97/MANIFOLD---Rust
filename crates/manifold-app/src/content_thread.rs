@@ -123,6 +123,7 @@ impl ContentThread {
     /// Run the content loop. Blocks until Shutdown is received.
     pub fn run(
         mut self,
+        cmd_tx: crossbeam_channel::Sender<ContentCommand>,
         cmd_rx: Receiver<ContentCommand>,
         state_tx: Sender<ContentState>,
     ) {
@@ -277,6 +278,25 @@ impl ContentThread {
                 return;
             }
 
+            // 1b. Wait for GPU surface, draining commands while waiting.
+            // In the common case (99%+) this returns immediately — the GPU
+            // finished the surface from 2 frames ago long before now.
+            // Under heavy GPU load, keeps processing transport/MIDI/parameter
+            // commands instead of busy-spinning. Zero CPU during the wait.
+            #[cfg(target_os = "macos")]
+            {
+                let fence_start = std::time::Instant::now();
+                if self.wait_for_surface_draining_commands(&cmd_tx, &cmd_rx) {
+                    log::info!(
+                        "[ContentThread] shutdown received during surface wait"
+                    );
+                    return;
+                }
+                self.content_pipeline.set_last_fence_wait_ms(
+                    fence_start.elapsed().as_secs_f64() * 1000.0,
+                );
+            }
+
             // 2. Wait for next content frame (skip tick+render when paused)
             if self.rendering_paused {
                 std::thread::sleep(std::time::Duration::from_millis(16));
@@ -325,6 +345,77 @@ impl ContentThread {
             #[cfg(not(target_os = "macos"))]
             self.tick_frame(&state_tx);
         }
+    }
+
+    /// Wait for the GPU to finish with the surface we're about to render to,
+    /// while continuing to drain and process commands.
+    ///
+    /// In the common case (GPU finished 2 frames ago), this returns immediately.
+    /// Under heavy GPU load, this keeps transport, MIDI, and parameter processing
+    /// alive instead of busy-spinning — zero CPU while waiting.
+    ///
+    /// Returns `true` if a shutdown command was received during the wait.
+    #[cfg(target_os = "macos")]
+    fn wait_for_surface_draining_commands(
+        &mut self,
+        cmd_tx: &crossbeam_channel::Sender<ContentCommand>,
+        cmd_rx: &crossbeam_channel::Receiver<ContentCommand>,
+    ) -> bool {
+        // Fast path: surface already ready (99%+ of frames).
+        if self.content_pipeline.is_surface_ready() {
+            return false;
+        }
+
+        // Slow path: GPU is behind. Register notification — when the GPU
+        // signals, SurfaceReady is sent through cmd_tx, waking recv().
+        if !self.content_pipeline.register_surface_notify(cmd_tx) {
+            return false; // became ready between check and register
+        }
+
+        log::debug!("[ContentThread] GPU behind — waiting with command drain");
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(5);
+
+        loop {
+            // Check if GPU finished.
+            if self.content_pipeline.is_surface_ready() {
+                break;
+            }
+
+            // Check timeout.
+            let remaining =
+                deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                self.content_pipeline.handle_surface_timeout();
+                break;
+            }
+
+            // Block until either a command arrives (UI or SurfaceReady from
+            // GPU notification) or the 5-second deadline expires.
+            // Zero CPU — thread sleeps in the kernel until woken.
+            match cmd_rx.recv_timeout(remaining) {
+                Ok(cmd) => {
+                    if self.handle_command(cmd) {
+                        return true; // shutdown
+                    }
+                    // Drain any additional queued commands.
+                    while let Ok(cmd) = cmd_rx.try_recv() {
+                        if self.handle_command(cmd) {
+                            return true;
+                        }
+                    }
+                }
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                    // 5-second deadline expired — GPU hung.
+                    self.content_pipeline.handle_surface_timeout();
+                    break;
+                }
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                    return true; // shutdown
+                }
+            }
+        }
+        false
     }
 
     /// Timer-based frame wait. Returns true when the frame deadline has passed.

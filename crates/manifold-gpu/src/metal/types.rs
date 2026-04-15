@@ -307,3 +307,82 @@ impl GpuHeap {
         self.heap.max_available_size_with_alignment(alignment)
     }
 }
+
+// ─── GpuFenceWaiter ──────────────────────────────────────────────────
+
+/// Kernel-notified GPU fence waiter.
+///
+/// Instead of busy-spinning on `GpuEvent::is_done()`, this registers a
+/// Metal `MTLSharedEvent.notifyListener:atValue:block:` notification that
+/// sends a wake signal through the caller's event channel when the GPU
+/// signals the target value.
+///
+/// Platform-agnostic concept — this implementation uses Metal's
+/// SharedEventListener. Future Vulkan/D3D12 backends would implement
+/// equivalent fence notification (timeline semaphores / SetEventOnCompletion).
+pub struct GpuFenceWaiter {
+    listener: metal::SharedEventListener,
+}
+
+unsafe impl Send for GpuFenceWaiter {}
+unsafe impl Sync for GpuFenceWaiter {}
+
+impl Default for GpuFenceWaiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GpuFenceWaiter {
+    /// Create a new fence waiter with its own serial dispatch queue.
+    ///
+    /// The dispatch queue is used by Metal to fire the notification block.
+    /// Serial queue ensures notifications are processed in order.
+    pub fn new() -> Self {
+        let label = c"com.manifold.gpu-fence-waiter";
+        // SAFETY: dispatch_queue_create is always available on macOS.
+        // Passing null attr creates a serial queue. The listener retains
+        // the queue — we don't need to manage its lifetime.
+        let queue = unsafe {
+            dispatch_queue_create(label.as_ptr(), std::ptr::null())
+        };
+        assert!(!queue.is_null(), "dispatch_queue_create failed");
+
+        let listener = unsafe {
+            metal::SharedEventListener::from_queue_handle(queue)
+        };
+
+        Self { listener }
+    }
+
+    /// Register a notification for when the GPU event reaches `target_value`.
+    ///
+    /// When the GPU signals the event, the notification block fires on the
+    /// dispatch queue and calls `wake` — typically used to send an event
+    /// into the content thread's command channel, unblocking `recv()`.
+    pub fn register<F>(&self, event: &GpuEvent, target_value: u64, wake: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let wake = std::sync::Mutex::new(Some(wake));
+        let block = block::ConcreteBlock::new(
+            move |_event: &metal::SharedEventRef, _value: u64| {
+                if let Ok(mut guard) = wake.lock()
+                    && let Some(f) = guard.take()
+                {
+                    f();
+                }
+            },
+        );
+        event.raw().notify(&self.listener, target_value, block.copy());
+    }
+}
+
+// ─── FFI: libdispatch (always available on macOS) ────────────────────
+
+unsafe extern "C" {
+    fn dispatch_queue_create(
+        label: *const std::ffi::c_char,
+        attr: *const std::ffi::c_void,
+    ) -> metal::dispatch_queue_t;
+}

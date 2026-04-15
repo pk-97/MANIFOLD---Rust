@@ -52,6 +52,12 @@ impl ContentThread {
         match cmd {
             ContentCommand::Shutdown => return true,
 
+            // ── GPU events ─────────────────────────────────────────
+            // SurfaceReady wakes recv() — no action needed, the main
+            // loop re-checks is_surface_ready() after handling.
+            #[cfg(target_os = "macos")]
+            ContentCommand::SurfaceReady => {}
+
             // ── Transport ──────────────────────────────────────────
             ContentCommand::Play => {
                 // User-initiated transport: clear any stale suppress flag so
