@@ -127,13 +127,13 @@ impl ArtNetOutput {
 
         // Open UDP socket
         if !self.open_socket(&settings.artnet_ip, settings.artnet_port) {
-            eprintln!("[ArtNet] Socket failed to open — no LED packets will be sent.");
+            log::error!("[ArtNet] Socket failed to open — no LED packets will be sent.");
             self.cleanup();
             return false;
         }
 
         self.initialized = true;
-        eprintln!(
+        log::info!(
             "[ArtNet] Initialized: {} universe(s), {}x{} LEDs, {:?} addressing, \
              BGR={}, target={}",
             self.universe_count,
@@ -209,7 +209,7 @@ impl ArtNetOutput {
         if let Some(pixels) = self.readback.try_read(event) {
             self.readback_count += 1;
             if self.readback_count == 1 {
-                eprintln!(
+                log::info!(
                     "[ArtNet] First readback: {} bytes ({}x{} px)",
                     pixels.len(),
                     self.strip_count,
@@ -312,7 +312,7 @@ impl ArtNetOutput {
             Ok(_) => {
                 if !self.sent_first_packet {
                     self.sent_first_packet = true;
-                    eprintln!(
+                    log::info!(
                         "[ArtNet] First data packet sent to {} ({} bytes)",
                         self.endpoint,
                         packet.len(),
@@ -320,7 +320,7 @@ impl ArtNetOutput {
                 }
             }
             Err(e) => {
-                eprintln!("[ArtNet] Send error: {e}");
+                log::error!("[ArtNet] Send error: {e}");
             }
         }
     }

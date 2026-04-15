@@ -37,6 +37,8 @@ pub struct OscPositionSender {
     last_sent_playing: Option<bool>,
     /// Wall-clock time of the last transport send (for confirmation window).
     last_transport_send_time: f64,
+    /// Consecutive send errors — throttles logging to once per second.
+    send_error_count: u32,
 }
 
 impl OscPositionSender {
@@ -50,6 +52,7 @@ impl OscPositionSender {
             last_sent_realtime: 0.0,
             last_sent_playing: None,
             last_transport_send_time: 0.0,
+            send_error_count: 0,
         }
     }
 
@@ -181,17 +184,37 @@ impl OscPositionSender {
 
     // ── OSC encoding (minimal, no external dependency) ──
 
-    fn try_send_float(&self, address: &str, value: f32) {
+    fn try_send_float(&mut self, address: &str, value: f32) {
         if let Some(ref socket) = self.socket {
             let packet = encode_osc_float(address, value);
-            let _ = socket.send(&packet); // Silently ignore SocketException (matches Unity)
+            if let Err(e) = socket.send(&packet) {
+                self.log_send_error(address, &e);
+            } else {
+                self.send_error_count = 0;
+            }
         }
     }
 
-    fn try_send_int(&self, address: &str, value: i32) {
+    fn try_send_int(&mut self, address: &str, value: i32) {
         if let Some(ref socket) = self.socket {
             let packet = encode_osc_int(address, value);
-            let _ = socket.send(&packet);
+            if let Err(e) = socket.send(&packet) {
+                self.log_send_error(address, &e);
+            } else {
+                self.send_error_count = 0;
+            }
+        }
+    }
+
+    fn log_send_error(&mut self, address: &str, err: &std::io::Error) {
+        self.send_error_count += 1;
+        // Log first failure immediately, then throttle to ~1/sec at 60fps.
+        if self.send_error_count == 1 || self.send_error_count.is_multiple_of(60) {
+            log::warn!(
+                "[OscSender] Send failed for {address}: {err} \
+                 (consecutive errors: {})",
+                self.send_error_count,
+            );
         }
     }
 }

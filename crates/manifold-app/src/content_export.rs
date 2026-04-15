@@ -466,7 +466,9 @@ impl ContentThread {
             is_playing: self.engine.is_playing(),
             ..ContentState::default()
         };
-        let _ = state_tx.try_send(state);
+        if let Err(e) = state_tx.send(state) {
+            log::error!("[ContentThread] Export progress channel disconnected: {e}");
+        }
     }
 
     /// Send export finished event to the UI thread.
@@ -485,6 +487,8 @@ impl ContentThread {
             }),
             ..ContentState::default()
         };
-        let _ = state_tx.try_send(state);
+        if let Err(e) = state_tx.send(state) {
+            log::error!("[ContentThread] Export finished channel disconnected: {e}");
+        }
     }
 }

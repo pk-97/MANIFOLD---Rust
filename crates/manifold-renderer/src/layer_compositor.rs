@@ -378,6 +378,10 @@ pub struct LayerCompositor {
     group_effect_chains: Vec<EffectChain>,
     /// How many group_bufs / group_effect_chains were actually used last frame.
     last_group_buf_used: usize,
+    /// Pre-allocated scratch for child layer indices during group folding.
+    group_child_indices: Vec<i32>,
+    /// Pre-allocated scratch for child output positions during group folding.
+    group_child_positions: Vec<usize>,
 }
 
 impl LayerCompositor {
@@ -402,6 +406,8 @@ impl LayerCompositor {
             group_bufs: Vec::new(),
             group_effect_chains: Vec::new(),
             last_group_buf_used: 0,
+            group_child_indices: Vec::new(),
+            group_child_positions: Vec::new(),
         }
     }
 
@@ -725,28 +731,27 @@ impl LayerCompositor {
         // frame.layers (which matches timeline order). Since outputs are sorted
         // descending by layer_index, children of a group are contiguous.
         for group_desc in frame.layers.iter().filter(|l| l.is_group) {
-            // Find child layer_indices for this group
-            let child_indices: Vec<i32> = frame
-                .layers
-                .iter()
-                .filter(|l| l.parent_layer_id.as_ref() == Some(&group_desc.layer_id))
-                .map(|l| l.layer_index)
-                .collect();
+            // Find child layer_indices for this group (reuse scratch buffer).
+            self.group_child_indices.clear();
+            for l in frame.layers {
+                if l.parent_layer_id.as_ref() == Some(&group_desc.layer_id) {
+                    self.group_child_indices.push(l.layer_index);
+                }
+            }
 
-            if child_indices.is_empty() {
+            if self.group_child_indices.is_empty() {
                 continue;
             }
 
-            // Find which outputs belong to children of this group
-            let child_output_positions: Vec<usize> = self
-                .layer_outputs_scratch
-                .iter()
-                .enumerate()
-                .filter(|(_, o)| child_indices.contains(&o.layer_index))
-                .map(|(i, _)| i)
-                .collect();
+            // Find which outputs belong to children of this group.
+            self.group_child_positions.clear();
+            for (i, o) in self.layer_outputs_scratch.iter().enumerate() {
+                if self.group_child_indices.contains(&o.layer_index) {
+                    self.group_child_positions.push(i);
+                }
+            }
 
-            if child_output_positions.is_empty() {
+            if self.group_child_positions.is_empty() {
                 continue;
             }
 
@@ -770,7 +775,7 @@ impl LayerCompositor {
             group_buf.clear_source(gpu, false);
 
             // Blend children into group buffer (using each child's own blend/opacity)
-            for &pos in &child_output_positions {
+            for &pos in &self.group_child_positions {
                 let output = &self.layer_outputs_scratch[pos];
                 let uniforms = BlendUniforms {
                     blend_mode: output.blend_mode as u32,
@@ -830,7 +835,7 @@ impl LayerCompositor {
 
             // Replace child outputs with a single group output.
             // Insert group output at the first child's position, remove the rest.
-            let first_pos = child_output_positions[0];
+            let first_pos = self.group_child_positions[0];
             self.layer_outputs_scratch[first_pos] = LayerOutput {
                 texture: group_texture,
                 blend_mode: group_desc.blend_mode,
@@ -839,7 +844,7 @@ impl LayerCompositor {
             };
 
             // Remove remaining child entries (iterate in reverse to preserve indices)
-            for &pos in child_output_positions[1..].iter().rev() {
+            for &pos in self.group_child_positions[1..].iter().rev() {
                 self.layer_outputs_scratch.remove(pos);
             }
         }
