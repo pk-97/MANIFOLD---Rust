@@ -121,6 +121,10 @@ impl ClipChromePanel {
         self.is_collapsed = !self.is_collapsed;
     }
 
+    pub fn set_collapsed(&mut self, v: bool) {
+        self.is_collapsed = v;
+    }
+
     /// Returns true if mode changed (caller should rebuild).
     pub fn set_mode(
         &mut self,

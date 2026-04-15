@@ -339,6 +339,9 @@ impl InspectorCompositePanel {
         self.last_effect_tab
     }
 
+    pub fn macros_panel(&self) -> &MacrosPanel {
+        &self.macros_panel
+    }
     pub fn macros_panel_mut(&mut self) -> &mut MacrosPanel {
         &mut self.macros_panel
     }

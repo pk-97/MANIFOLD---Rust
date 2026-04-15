@@ -100,6 +100,10 @@ impl MasterChromePanel {
         self.is_collapsed
     }
 
+    pub fn set_collapsed(&mut self, v: bool) {
+        self.is_collapsed = v;
+    }
+
     pub fn toggle_collapsed(&mut self) {
         self.is_collapsed = !self.is_collapsed;
     }

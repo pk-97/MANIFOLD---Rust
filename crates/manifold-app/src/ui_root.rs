@@ -408,6 +408,12 @@ impl UIRoot {
         );
         self.layer_headers
             .set_scroll_y(settings.viewport_scroll_y_px);
+
+        // Restore inspector collapse states
+        self.inspector.macros_panel_mut().set_collapsed(settings.macros_collapsed);
+        self.inspector.master_chrome_mut().set_collapsed(settings.master_chrome_collapsed);
+        self.inspector.layer_chrome_mut().set_collapsed(settings.layer_chrome_collapsed);
+        self.inspector.clip_chrome_mut().set_collapsed(settings.clip_chrome_collapsed);
     }
 
     /// Build all panels. Call once after creation and after resize.

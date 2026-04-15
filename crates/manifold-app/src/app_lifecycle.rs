@@ -21,13 +21,23 @@ use manifold_core::Seconds;
 impl Application {
     // ── Project I/O — delegates to ProjectIOService ────────────────────
 
-    /// Persist current viewport scroll + zoom into project settings.
+    /// Persist current viewport scroll + zoom and UI collapse states into project settings.
     fn save_viewport_state(&mut self) {
         self.local_project.settings.viewport_scroll_x_beats =
             self.ui_root.viewport.scroll_x_beats().as_f32();
         self.local_project.settings.viewport_scroll_y_px = self.ui_root.viewport.scroll_y_px();
         self.local_project.settings.viewport_pixels_per_beat =
             self.ui_root.viewport.pixels_per_beat();
+
+        // Persist inspector collapse states
+        self.local_project.settings.macros_collapsed =
+            self.ui_root.inspector.macros_panel().is_collapsed();
+        self.local_project.settings.master_chrome_collapsed =
+            self.ui_root.inspector.master_chrome().is_collapsed();
+        self.local_project.settings.layer_chrome_collapsed =
+            self.ui_root.inspector.layer_chrome().is_collapsed();
+        self.local_project.settings.clip_chrome_collapsed =
+            self.ui_root.inspector.clip_chrome().is_collapsed();
     }
 
     /// Save. Delegates to ProjectIOService.save_project.

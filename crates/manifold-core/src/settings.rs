@@ -101,6 +101,16 @@ pub struct ProjectSettings {
     #[serde(default = "default_ppb")]
     pub viewport_pixels_per_beat: f32,
 
+    // ── Inspector collapse states (saved/restored on project load) ──
+    #[serde(default)]
+    pub macros_collapsed: bool,
+    #[serde(default)]
+    pub master_chrome_collapsed: bool,
+    #[serde(default)]
+    pub layer_chrome_collapsed: bool,
+    #[serde(default)]
+    pub clip_chrome_collapsed: bool,
+
     // ── Legacy flat effect fields (V1.0.0) ──
     #[serde(
         default,
@@ -250,6 +260,10 @@ impl Default for ProjectSettings {
             viewport_scroll_x_beats: 0.0,
             viewport_scroll_y_px: 0.0,
             viewport_pixels_per_beat: 120.0,
+            macros_collapsed: false,
+            master_chrome_collapsed: false,
+            layer_chrome_collapsed: false,
+            clip_chrome_collapsed: false,
             legacy_bloom_amount: None,
             legacy_feedback_amount: None,
             legacy_pixel_sort_amount: None,

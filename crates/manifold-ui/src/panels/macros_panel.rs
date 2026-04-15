@@ -121,6 +121,10 @@ impl MacrosPanel {
         self.is_collapsed = !self.is_collapsed;
     }
 
+    pub fn set_collapsed(&mut self, v: bool) {
+        self.is_collapsed = v;
+    }
+
     pub fn first_node(&self) -> usize {
         self.first_node
     }

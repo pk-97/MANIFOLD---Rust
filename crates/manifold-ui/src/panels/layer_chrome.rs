@@ -96,6 +96,10 @@ impl LayerChromePanel {
         self.is_collapsed = !self.is_collapsed;
     }
 
+    pub fn set_collapsed(&mut self, v: bool) {
+        self.is_collapsed = v;
+    }
+
     /// Returns true if visibility changed (caller should rebuild).
     pub fn set_visibility(&mut self, show_name: bool, show_opacity: bool) -> bool {
         if self.show_name == show_name && self.show_opacity == show_opacity {
