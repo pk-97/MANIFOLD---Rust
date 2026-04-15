@@ -201,6 +201,10 @@ pub enum ContentCommand {
     /// Resize the output surface drawable (fullscreen toggle).
     #[cfg(target_os = "macos")]
     ResizeOutputSurface(u32, u32),
+    /// Suspend/resume direct present to output drawable during display retarget.
+    /// Unlike PauseRendering, the engine keeps ticking — only next_drawable() is skipped.
+    #[cfg(target_os = "macos")]
+    SetOutputPresentSuspended(bool),
 
     // ── Export ────────────────────────────────────────────────────
     /// Begin offline video export. Content thread enters export loop.
@@ -219,10 +223,10 @@ pub enum ContentCommand {
 }
 
 impl ContentCommand {
-    /// Send a command to the content thread. Logs on failure (channel full or disconnected).
+    /// Send a command to the content thread. Logs on failure (channel disconnected = shutdown).
     pub fn send(tx: &crossbeam_channel::Sender<ContentCommand>, cmd: ContentCommand) {
-        if let Err(e) = tx.try_send(cmd) {
-            log::error!("[UI] Content command dropped: {e}");
+        if let Err(e) = tx.send(cmd) {
+            log::error!("[UI] Content command channel disconnected: {e}");
         }
     }
 }

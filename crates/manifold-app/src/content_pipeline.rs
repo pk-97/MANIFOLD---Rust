@@ -71,6 +71,10 @@ pub struct ContentPipeline {
     /// None when no output window is open.
     #[cfg(target_os = "macos")]
     output_surface: Option<manifold_gpu::GpuSurface>,
+    /// When true, skip next_drawable() during display retarget to avoid
+    /// blocking the content thread for up to 1s on a transitioning display.
+    #[cfg(target_os = "macos")]
+    output_present_suspended: bool,
     /// Blit pipeline for output present (passthrough + sampler).
     #[cfg(target_os = "macos")]
     output_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
@@ -143,6 +147,8 @@ impl ContentPipeline {
             output_h: 1080,
             #[cfg(target_os = "macos")]
             output_surface: None,
+            #[cfg(target_os = "macos")]
+            output_present_suspended: false,
             #[cfg(target_os = "macos")]
             output_pipeline: None,
             #[cfg(target_os = "macos")]
@@ -316,6 +322,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 height,
             );
         }
+    }
+
+    /// Suspend or resume direct present to the output drawable.
+    /// Used during display retarget to avoid blocking on next_drawable().
+    #[cfg(target_os = "macos")]
+    pub fn set_output_present_suspended(&mut self, suspended: bool) {
+        self.output_present_suspended = suspended;
+        log::info!("[ContentPipeline] Output present suspended={suspended}");
     }
 
     /// Detach the output surface (output window closed).
@@ -679,6 +693,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // Acquire drawable, blit final output, schedule present — all in
             // the same command buffer. No IOSurface, no second CB.
             if let Some(ref surface) = self.output_surface
+                && !self.output_present_suspended
                 && let Some(ref pipeline) = self.output_pipeline
                 && let Some(ref sampler) = self.output_sampler
                 && let Some(drawable) = surface.next_drawable()

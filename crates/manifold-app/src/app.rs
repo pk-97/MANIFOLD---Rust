@@ -1478,8 +1478,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Spawn content thread with its OWN GPU device (separate queue for isolation).
         // Compositor output is shared via IOSurface — zero copy, GPU-to-GPU.
         {
-            let (cmd_tx, cmd_rx) = crossbeam_channel::bounded::<ContentCommand>(64);
-            let (state_tx, state_rx) = crossbeam_channel::bounded::<ContentState>(4);
+            let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
+            let (state_tx, state_rx) = crossbeam_channel::unbounded::<ContentState>();
 
             // Content thread uses its own native Metal device from manifold-gpu.
 
@@ -2644,6 +2644,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 self.display_retarget_pending = true;
                 self.display_retarget_deadline =
                     Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
+                // Suspend output present on the content thread so it doesn't
+                // call next_drawable() on a transitioning display (can block ~1s).
+                self.send_content_cmd(ContentCommand::SetOutputPresentSuspended(true));
                 log::info!(
                     "[Display] Retarget in flight — suspending surface ops \
                      until display link confirms"
@@ -2672,6 +2675,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 self.display_retarget_pending = false;
                 self.display_retarget_deadline = None;
                 self.offscreen_dirty = true;
+                // Resume output present on the content thread.
+                self.send_content_cmd(ContentCommand::SetOutputPresentSuspended(false));
             }
         }
         let in_display_transition = self.display_retarget_pending;

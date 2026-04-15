@@ -732,9 +732,10 @@ impl ContentThread {
                 self.cached_midi_clock_position.push_str(new_pos);
             }
             let new_dev = self.transport_controller.midi_clock_sync.as_ref()
-                .map_or_else(String::new, |s| s.selected_source_name());
+                .map_or("None", |s| s.selected_source_name());
             if new_dev != self.cached_midi_clock_device {
-                self.cached_midi_clock_device = new_dev;
+                self.cached_midi_clock_device.clear();
+                self.cached_midi_clock_device.push_str(new_dev);
             }
             if self.osc_sync.current_timecode_display != self.cached_osc_timecode {
                 self.cached_osc_timecode.clone_from(&self.osc_sync.current_timecode_display);
@@ -847,8 +848,10 @@ impl ContentThread {
                 modulation_snapshot,
             };
 
-            // Non-blocking send — if the UI is behind, drop the oldest state.
-            let _ = state_tx.try_send(state);
+            // Send state to UI. Unbounded channel — never drops snapshots.
+            if let Err(e) = state_tx.send(state) {
+                log::error!("[ContentThread] State channel disconnected: {e}");
+            }
     }
 
     /// Tick all sync controllers once per frame. Called before engine tick.

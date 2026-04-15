@@ -256,6 +256,9 @@ pub struct MidiClockSyncController {
     hard_seek_count: i32,
     last_hard_seek_delta_seconds: f32,
     selected_source_index: i32,
+    /// Cached display name of the selected MIDI source. Updated on
+    /// enable/disable/change_source — avoids per-frame CoreMIDI enumeration.
+    cached_source_name: String,
 
     // Config
     clock_signal_timeout: f32,
@@ -298,6 +301,7 @@ impl MidiClockSyncController {
             hard_seek_count: 0,
             last_hard_seek_delta_seconds: 0.0,
             selected_source_index: -1,
+            cached_source_name: "None".into(),
 
             clock_signal_timeout: 0.5,
             derive_bpm_from_clock: true,
@@ -362,12 +366,8 @@ impl MidiClockSyncController {
 
     /// Display name of the currently selected MIDI source.
     /// Port of C# MidiClockSyncController.SelectedSourceName property.
-    pub fn selected_source_name(&self) -> String {
-        if self.selected_source_index >= 0 {
-            MidiClockReceiver::source_name(self.selected_source_index)
-        } else {
-            "None".into()
-        }
+    pub fn selected_source_name(&self) -> &str {
+        &self.cached_source_name
     }
 
     // ── Lifecycle ────────────────────────────────────────────────────
@@ -391,6 +391,7 @@ impl MidiClockSyncController {
         };
 
         self.selected_source_index = source_index;
+        self.cached_source_name = MidiClockReceiver::source_name(source_index);
 
         let mut receiver = MidiClockReceiver::new();
         receiver.start(source_index);
@@ -418,8 +419,7 @@ impl MidiClockSyncController {
         self.integrated_clock_time_seconds = Seconds::ZERO;
         self.is_midi_clock_enabled = true;
 
-        let source_name = MidiClockReceiver::source_name(source_index);
-        log::info!("[MidiClockSync] Enabled — source: {}", source_name);
+        log::info!("[MidiClockSync] Enabled — source: {}", self.cached_source_name);
     }
 
     /// Switch to a different MIDI source. Restarts the receiver.
@@ -430,6 +430,11 @@ impl MidiClockSyncController {
             self.enable_midi_clock(source_index);
         } else {
             self.selected_source_index = source_index;
+            self.cached_source_name = if source_index >= 0 {
+                MidiClockReceiver::source_name(source_index)
+            } else {
+                "None".into()
+            };
         }
     }
 
@@ -440,6 +445,7 @@ impl MidiClockSyncController {
 
         self.is_midi_clock_enabled = false;
         self.is_receiving_clock = false;
+        self.cached_source_name = "None".into();
         self.current_position_display = "---".into();
         self.last_is_playing = false;
         self.last_clock_activity_time = Seconds(-999.0);

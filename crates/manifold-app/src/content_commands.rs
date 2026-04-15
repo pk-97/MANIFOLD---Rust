@@ -701,6 +701,10 @@ impl ContentThread {
             ContentCommand::ResizeOutputSurface(w, h) => {
                 self.content_pipeline.resize_output_surface(w, h);
             }
+            #[cfg(target_os = "macos")]
+            ContentCommand::SetOutputPresentSuspended(suspended) => {
+                self.content_pipeline.set_output_present_suspended(suspended);
+            }
 
             // ── Generator ─────────────────────────────────────────
             ContentCommand::GeneratorTypeChanged { layer_id, new_type } => {
