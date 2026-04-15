@@ -341,8 +341,10 @@ impl GpuFenceWaiter {
     pub fn new() -> Self {
         let label = c"com.manifold.gpu-fence-waiter";
         // SAFETY: dispatch_queue_create is always available on macOS.
-        // Passing null attr creates a serial queue. The listener retains
-        // the queue — we don't need to manage its lifetime.
+        // Passing null attr creates a serial queue.
+        // dispatch_queue_create returns a +1 retained object.
+        // SharedEventListener::from_queue_handle calls initWithDispatchQueue:
+        // which adds another +1 retain. We must release the original +1.
         let queue = unsafe {
             dispatch_queue_create(label.as_ptr(), std::ptr::null())
         };
@@ -351,6 +353,8 @@ impl GpuFenceWaiter {
         let listener = unsafe {
             metal::SharedEventListener::from_queue_handle(queue)
         };
+        // Balance the +1 from dispatch_queue_create (listener holds its own retain).
+        unsafe { dispatch_release(queue as *mut std::ffi::c_void) };
 
         Self { listener }
     }
@@ -385,4 +389,5 @@ unsafe extern "C" {
         label: *const std::ffi::c_char,
         attr: *const std::ffi::c_void,
     ) -> metal::dispatch_queue_t;
+    fn dispatch_release(object: *mut std::ffi::c_void);
 }
