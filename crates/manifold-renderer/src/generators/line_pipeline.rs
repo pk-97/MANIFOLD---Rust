@@ -196,6 +196,9 @@ pub struct LineGeneratorHelper {
     // Depth sorting scratch buffers (Unity: LineMeshUtil.edgeDepth/edgeSortedIdx)
     edge_depth: Vec<f32>,
     edge_sorted_idx: Vec<usize>,
+    // Stable animation sort — re-sorted each frame but preserves prior relative order
+    anim_sorted_idx: Vec<usize>,
+    anim_sort_dirty: bool,
     // Scratch: which vertices are visible during animation (for dot filtering)
     vert_visible: Vec<bool>,
 }
@@ -213,6 +216,8 @@ impl LineGeneratorHelper {
             instances: Vec::with_capacity(edge_count + vertex_count),
             edge_depth: vec![0.0; edge_count],
             edge_sorted_idx: vec![0; edge_count],
+            anim_sorted_idx: vec![0; edge_count],
+            anim_sort_dirty: true,
             vert_visible: vec![false; vertex_count],
         }
     }
@@ -279,6 +284,27 @@ impl LineGeneratorHelper {
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
 
+            // For animation: use a stable sort on the *previous* animation
+            // order, keyed by current depths. This gives correct depth every
+            // frame while preserving relative order of edges at similar
+            // depths, preventing the window from jittering.
+            if self.anim_sort_dirty
+                || self.anim_sorted_idx.len() != edge_count
+            {
+                // First frame or edge count changed — seed from fresh sort
+                self.anim_sorted_idx[..edge_count]
+                    .copy_from_slice(&self.edge_sorted_idx[..edge_count]);
+                self.anim_sort_dirty = false;
+            } else {
+                // Re-sort the existing animation order with a stable sort,
+                // so edges at near-equal depths keep their prior positions.
+                let d = &self.edge_depth;
+                self.anim_sorted_idx[..edge_count].sort_by(|&a, &b| {
+                    d[a].partial_cmp(&d[b])
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+
             self.anim_progress += speed * (edge_count as f32 / 100.0) * dt * 60.0;
             let total = edge_count as f32;
             if self.anim_progress >= total {
@@ -286,17 +312,26 @@ impl LineGeneratorHelper {
             }
             let window_edges = ((edge_count as f32 * window).ceil() as usize).max(1);
             let window_start = self.anim_progress.floor() as usize % edge_count;
+            let fract = self.anim_progress.fract();
 
             // Track which vertices are touched by visible edges
             self.vert_visible.resize(vert_count, false);
             self.vert_visible.fill(false);
 
-            for offset in 0..window_edges {
+            // Render window_edges + 1 edges, using fract to crossfade
+            // the leading edge in and the trailing edge out for smooth motion.
+            let render_count = window_edges + 1;
+            for offset in 0..render_count {
                 let sort_pos = (window_start + offset) % edge_count;
-                let edge_idx = self.edge_sorted_idx[sort_pos];
+                let edge_idx = self.anim_sorted_idx[sort_pos];
                 let va = self.edge_a[edge_idx];
                 let vb = self.edge_b[edge_idx];
-                let fade = 1.0 - offset as f32 / window_edges as f32;
+                // Smooth position within the window using fractional progress
+                let smooth_offset = offset as f32 - fract;
+                let fade = (1.0 - smooth_offset / window_edges as f32).clamp(0.0, 1.0);
+                if fade <= 0.0 {
+                    continue;
+                }
                 self.instances.push(EdgeInstance {
                     a: va as u32,
                     b: vb as u32,
@@ -353,6 +388,8 @@ impl LineGeneratorHelper {
         if self.edge_depth.len() < edge_count {
             self.edge_depth.resize(edge_count, 0.0);
             self.edge_sorted_idx.resize(edge_count, 0);
+            self.anim_sorted_idx.resize(edge_count, 0);
+            self.anim_sort_dirty = true;
         }
     }
 }
