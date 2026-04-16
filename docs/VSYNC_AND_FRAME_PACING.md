@@ -1,160 +1,144 @@
-# VSync & Frame Pacing Architecture
+# Frame Pacing Architecture
 
-## Decision: 2026-04-02
+## Current Design (2026-04-16)
 
-Replace the sleep-based FPS limiter on the content thread with true display-synchronized rendering via CVDisplayLink. Three independent CVDisplayLinks drive three independent consumers, each with its own lightweight callback.
-
-## Architecture: Three Independent CVDisplayLinks
+Direct present with timer-based content thread pacing. No CVDisplayLink on the content thread, no IOSurface intermediary for output. The same model used by TouchDesigner (via MoltenVK), Resolume, and every game engine.
 
 ```
-Physical Display (120Hz)
-    │
-    ├── CVDisplayLink 1 → GpuVsyncSignal     → Content thread (condvar notify)
-    │                     manifold-gpu           Wakes frame production
-    │
-    ├── CVDisplayLink 2 → DisplayLinkPresenter → Output window present
-    │                     display_link.rs         Fullscreen: blit in callback
-    │                                             Windowed: flag → main thread blit
-    │
-    └── CVDisplayLink 3 → UiDisplayLink       → UI thread (request_redraw)
-                          display_link.rs         Wakes winit event loop
+Content Thread (timer-paced):
+  mach_wait_until + 2ms spin → render → nextDrawable → present → commit
+  THREAD_TIME_CONSTRAINT_POLICY for real-time kernel scheduling
+
+Output CAMetalLayer:
+  displaySyncEnabled = true, 3 drawables
+  Metal queues presents to vsync — the ONLY vsync gate
+
+UI Thread:
+  UiDisplayLink (CVDisplayLink) fires at MacBook display cadence
+  Lightweight: sets AtomicBool flag, wakes CFRunLoop
 ```
 
-**Each callback is lightweight (<1μs) and never misses its vsync deadline.** This is the critical invariant — CVDisplayLink skips the next callback if the current one overruns the vsync interval (~8ms at 120Hz).
+## Content Thread Pacing
 
-### Why Three Independent Links, Not One Unified
+**File:** `manifold-app/src/frame_timer.rs`, `manifold-app/src/content_thread.rs`
 
-A unified CVDisplayLink callback that does content notification + presenter blit + UI signal was attempted and **rejected**. The presenter's `nextDrawable()` + GPU blit takes 2-5ms. At 120Hz (8.3ms per vsync), this pushes the callback past the deadline, causing CoreVideo to skip the next callback — starving the content thread and dropping render FPS from 60 to 48.
+The content thread runs at `project.settings.frame_rate` using a hybrid timer:
 
-**Lesson: never put heavy GPU work in a vsync callback that also serves as the timing source for other consumers.** This matches how Resolume Arena and TouchDesigner handle multi-output live performance — every part of the pipeline is an independent, minimal unit with its own scheduling.
+1. **`mach_wait_until(deadline)`** — kernel sleep for the bulk of the frame interval. Zero CPU. Precision limited to ~1ms by macOS software timer resolution.
+2. **Spin-wait for final 2ms** — checks `mach_absolute_time()` in a tight loop until the exact deadline. The nanosecond-resolution clock provides sub-microsecond precision.
 
-## Content Thread VSync (GpuVsyncSignal)
+This is the standard pattern for real-time video on macOS. CoreAudio uses hardware interrupts instead (DMA), but no hardware interrupt is available for arbitrary frame deadlines. The 2ms spin burns ~12% of one core at 60fps — acceptable for a real-time renderer.
 
-**File:** `manifold-gpu/src/metal/vsync.rs`
+### Real-Time Thread Scheduling
 
-The content thread blocks on a `Condvar` instead of sleeping. A dedicated CVDisplayLink fires at the display's refresh rate, increments a counter, and notifies the condvar. The content thread wakes, checks the frame divisor, and renders or skips.
-
-### Two-Part Design
-
-- **GpuVsyncSignal** (UI thread): Owns the CVDisplayLink. Handles retargeting when windows move between displays. Supports headless mode (no CVDisplayLink — external code calls `notify_vsync()`).
-- **GpuVsyncWaiter** (content thread): Blocks on the shared `Condvar`. No CVDisplayLink access. Content thread code is unchanged — just calls `waiter.wait(last_count)`.
-
-### Frame Divisor (Clean VSync Rounding)
-
-When the project FPS differs from the display refresh rate, the content thread renders every Nth vsync:
+The content thread uses `THREAD_TIME_CONSTRAINT_POLICY` (the native macOS real-time API, same as CoreAudio):
 
 ```
-divisor = max(1, round(display_hz / target_fps))
-actual_fps = display_hz / divisor
+period:      16.67ms at 60fps (one frame)
+computation: 12.5ms  (75% budget for render work)
+constraint:  16.67ms (must complete within one period)
+preemptible: true
 ```
 
-| Display | Project FPS | Divisor | Actual FPS |
-|---------|-------------|---------|------------|
-| 120Hz   | 60          | 2       | 60         |
-| 120Hz   | 30          | 4       | 30         |
-| 120Hz   | 40          | 3       | 40         |
-| 60Hz    | 30          | 2       | 30         |
-| 60Hz    | 24          | 3       | 20 (!)     |
+This ensures the thread gets immediate CPU time during the spin-wait. `SCHED_RR` (POSIX) was tried first but macOS doesn't honor it — the thread falls back to normal scheduling with 1-2ms of jitter.
 
-### Display Hz Detection
+### FPS Measurement
 
-`CVDisplayLinkGetActualOutputVideoRefreshPeriod` returns 0 before the first callback fires (the link hasn't measured the period yet). **Hz is derived from the CVTimeStamp's `video_refresh_period` / `video_time_scale` fields inside the callback** — always accurate from the first vsync. The content thread waits for the first callback if Hz is still 0 at startup.
+EWMA (exponentially weighted moving average) on frame time with tau=0.3s. Updates every frame. Responds to frame drops within ~5 frames while filtering single-frame jitter.
 
-### Fallback Chain
+## Output Presentation
 
-1. VSync signal present + Hz > 0 → vsync-driven pacing
-2. VSync signal present but Hz = 0 → wait for first callback (100ms timeout)
-3. No VSync signal (export mode, headless, non-macOS) → timer-based sleep pacing
+**File:** `manifold-app/src/content_pipeline.rs` (render path, lines ~730-773)
 
-### VSync Wait Timeout
+The content thread presents directly to the output window's CAMetalLayer:
 
-The condvar wait has a **100ms timeout**. During display transitions (fullscreen animation, display sleep/disconnect), the CVDisplayLink may stop firing temporarily. The short timeout ensures the content thread degrades gracefully to timer-based pacing instead of stalling.
+1. `surface.next_drawable()` — acquire from the 3-drawable pool
+2. Aspect-fit blit from compositor output to drawable (fullscreen triangle shader)
+3. `encoder.present_drawable(&drawable)` — schedule present on command buffer completion
+4. `encoder.commit()` — submit to GPU queue
 
-## Output Presenter (DisplayLinkPresenter)
+`displaySyncEnabled = true` on the CAMetalLayer is the **single vsync gate**. Metal queues each present to the next vsync boundary. With 3 drawables, `nextDrawable()` almost never blocks — one drawable is being displayed, one is queued, one is available for rendering.
 
-**File:** `manifold-app/src/display_link.rs`
+### Why Not displaySyncEnabled = false?
 
-Two modes based on `presentation` flag:
+Tested and rejected. Without display sync, presents land at arbitrary times relative to WindowServer's compositor cycle. This creates phase mismatch — irregular frame display times (16ms, 33ms alternating) perceived as judder. WindowServer prevents tearing regardless, but the timing irregularity is visible.
 
-### Fullscreen (Direct Display)
+### Suspend During Display Retarget
 
-CVDisplayLink callback does the full blit + present every vsync:
-1. Read `front_index` from IOSurface triple buffer
-2. `nextDrawable()` → acquire CAMetalLayer drawable
-3. Blit IOSurface → drawable (single fullscreen draw)
-4. `presentDrawable` on command buffer → `commit()`
-
-**Must present on every vsync** — even re-presenting the same frame. Missing a single present causes WindowServer to drop Direct Display mode, thrashing ALL displays (including the MacBook). This is why the callback does the present directly rather than deferring to the main thread.
-
-### Windowed (Compositor-Synchronized)
-
-CVDisplayLink callback is lightweight — sets `AtomicBool` flag + calls `request_redraw()` (same pattern as `UiDisplayLink`). The main thread does the blit in `about_to_wait()`:
-
-1. Check `present_if_ready()` → consumes the atomic flag
-2. Blit IOSurface → drawable
-3. `commit_and_wait_scheduled()` → block until GPU has the blit queued
-4. `drawable.present_after_scheduled()` → present directly into Core Animation transaction
-
-**`presentsWithTransaction = true`** on the CAMetalLayer. This syncs the present with WindowServer's compositor schedule, reducing phase mismatch judder. Requires the present to happen on the main thread where CA transactions exist — `presentsWithTransaction` silently discards presents from background threads (CVDisplayLink callbacks).
-
-**Tradeoff:** ~1 frame additional latency in windowed mode (present happens on the next event loop iteration). Invisible for a preview window. Fullscreen has zero additional latency.
+`SetOutputPresentSuspended(true)` skips `next_drawable()` during display transitions (fullscreen toggle, window move between monitors). Without this, `next_drawable()` can block for up to 1 second on a transitioning display, stalling the content thread.
 
 ## UI Thread VSync (UiDisplayLink)
 
 **File:** `manifold-app/src/display_link.rs`
 
-Lightweight: sets `AtomicBool` + calls `request_redraw()`. The winit event loop checks `vsync_ready()` in `about_to_wait()` to decide when to render. Replaces the free-running `FrameTimer` for UI thread pacing.
+Lightweight CVDisplayLink (the only remaining display link): sets `AtomicBool` + calls `CFRunLoopWakeUp()`. The winit event loop checks `vsync_ready()` in `about_to_wait()` to decide when to render UI. Retargets when the primary window moves between displays.
 
-## IOSurface Triple Buffer
+## IOSurface Triple Buffer (Workspace Preview Only)
 
 **File:** `manifold-app/src/shared_texture.rs`
 
-Content thread → UI/presenter frame transport:
-- 3 IOSurface buffers (zero-copy kernel memory)
+The workspace preview (small inset in the editor) uses an IOSurface triple buffer for content → UI frame transport. The output window does NOT use this — it uses direct present.
+
+- 3 IOSurface buffers (zero-copy kernel memory, Rgba16Float)
 - Atomic `front_index` tracks which surface is safe to read
-- GPU completion handler (`add_completed_handler`) publishes `front_index` asynchronously when the content thread's GPU work finishes — decoupled from the content thread's sleep/wake cycle
-- Presenter reads whatever `front_index` is current — never waits for the content thread
-
-## Display Retargeting
-
-When windows move between displays, CVDisplayLinks retarget to the new display:
-
-- **Content VSync (`GpuVsyncSignal`):** Retargets to output display when output window opens, back to primary when it closes. Updated on screen-change notifications.
-- **Presenter (`DisplayLinkPresenter`):** Retargets to whatever display the output window is on.
-- **UI (`UiDisplayLink`):** Retargets to whatever display the primary window is on.
-
-`CVDisplayLinkSetCurrentCGDisplay` is safe to call while the link is running (Apple docs). At most 1 vsync fires at the old display's timing — acceptable.
-
-## Project Settings
-
-- `vsync_enabled: bool` (default `true`) — enables/disables content thread VSync pacing
-- `frame_rate: f32` (default `60.0`) — target FPS, snapped to nearest clean display divisor when VSync is active
-- UI: footer bar shows `[VSYNC]` toggle button + `→60` resolved FPS label
+- GPU completion handler publishes `front_index` when content GPU work finishes
+- UI thread reads latest `front_index` for preview display
 
 ## What We Tried and Why It Failed
 
-### Unified CVDisplayLink (rejected)
+### CVDisplayLink content thread pacing (removed April 2026)
 
-One CVDisplayLink callback doing content notification + presenter blit + UI signal. **Failed because the presenter's `nextDrawable()` + GPU blit (2-5ms) pushed the callback past the 8.3ms vsync deadline at 120Hz.** CoreVideo skipped callbacks, starving the content thread. Render FPS dropped from 60 to 48 with heavy oscillation.
+Phase-locked content thread wake to vsync boundaries via `GpuVsyncSignal` condvar. Created **double vsync gating**: CVDisplayLink wakes the thread at vsync, then `displaySyncEnabled` gates the present at the next vsync. Under heavy scenes where render time approached the frame budget, these two gates fought — the thread overran one boundary, causing 16ms/33ms oscillation (visible judder).
 
-### presentsWithTransaction from CVDisplayLink callback (rejected)
+Additionally, CVDisplayLink is not actually vsync-locked on multi-monitor setups — it degrades to a simple high-resolution timer (documented by Tristan Hume's disassembly of CoreVideo).
 
-Set `presentsWithTransaction = true` on CAMetalLayer and called `drawable.present()` from the CVDisplayLink background thread. **Black window.** Core Animation transactions only exist on the main thread's run loop. The present was silently discarded because there was no CA transaction context on the background thread.
+**Lesson: a single vsync gate (displaySyncEnabled) is correct. Two gates fight.**
 
-### presentsWithTransaction without waitUntilScheduled (rejected)
+### IOSurface + CAMetalDisplayLink decoupled presenter (removed April 2026)
 
-Set `presentsWithTransaction = true` and used the standard `encoder.present_drawable()` + `commit()` path. **Black window.** With transactions enabled, the standard present path doesn't work — you must commit without presentDrawable, call `waitUntilScheduled`, then present the drawable manually.
+Content thread wrote to an IOSurface triple buffer. A separate CAMetalDisplayLink-based presenter on the main thread read the latest IOSurface and presented to the output drawable at vsync. Fully decoupled — content timing independent of display timing.
+
+**Failed because:**
+
+1. **GPU contention at high FPS.** At uncapped/high content FPS, the content command queue flooded the GPU with work. The presenter's blit (on a separate command queue) was starved for GPU time, causing missed vsync deadlines and stutter. Running at 100fps looked WORSE than 60fps — the opposite of expected.
+
+2. **Temporal aliasing at non-integer frame ratios.** At 100fps on a 120Hz display, the presenter got fresh frames for 100 out of 120 callbacks. The 20 stale callbacks were scattered irregularly, creating uneven motion. Only frame rates that divide evenly into the display rate (120, 60, 40, 30) looked smooth.
+
+3. **Unnecessary complexity.** The IOSurface intermediary added a GPU blit per frame, a second command queue, and complex lifecycle management — all to solve a problem (heavy-scene judder) that `displaySyncEnabled` with triple drawables already handles naturally (previous drawable stays visible when a frame misses the deadline).
+
+**Lesson: direct present is simpler, faster, and handles all edge cases. Every game engine and VJ tool uses this model for a reason.**
+
+### presentsWithTransaction in CAMetalDisplayLink callback (removed April 2026)
+
+`commit_and_wait_scheduled()` blocks the main thread until the GPU schedules the presenter's blit. On a 120Hz display with high content FPS, the GPU queue was deep and the block took 2-3ms per callback. At 120 callbacks/sec, this consumed 300ms/sec of main thread time — overloading it and causing frame skips.
+
+**Lesson: presenter callbacks must be non-blocking.** But the non-blocking path still had the GPU contention issue — the fundamental problem was the separate command queue, not the blocking.
+
+### displaySyncEnabled = false / mailbox mode (rejected April 2026)
+
+Tested as part of the CVDisplayLink removal. Without display sync, WindowServer still prevents tearing (it composites at its own vsync), but present timing is uncontrolled. Frames arrive at arbitrary phase relative to the compositor cycle, creating irregular display times perceived as judder.
+
+### Unified CVDisplayLink (rejected April 2026)
+
+One CVDisplayLink callback doing content notification + presenter blit + UI signal. Failed because the presenter's `nextDrawable()` + GPU blit (2-5ms) pushed the callback past the 8.3ms vsync deadline at 120Hz. CoreVideo skipped callbacks, starving the content thread. Render FPS dropped from 60 to 48.
+
+### mach_wait_until with small spin margin (rejected April 2026)
+
+`mach_wait_until` with 100-500μs spin margin. `mach_wait_until` is a software timer with ~1ms wake resolution — the spin margin was too small, and the thread consistently woke past the deadline. Result: locked at 57-58fps instead of 60fps. The 2ms margin covers the measured overshoot.
+
+`THREAD_TIME_CONSTRAINT_POLICY` was also tested to improve `mach_wait_until` precision. It helps the thread get CPU immediately when woken, but does NOT improve the wake precision itself (that's governed by the kernel timer subsystem, not the scheduler).
 
 ## Key Files
 
 | File | What |
 |------|------|
-| `manifold-gpu/src/metal/vsync.rs` | `GpuVsyncSignal`, `GpuVsyncWaiter`, CVDisplayLink FFI, `display_id_for_window` |
-| `manifold-app/src/display_link.rs` | `DisplayLinkPresenter` (fullscreen + windowed), `UiDisplayLink` |
-| `manifold-app/src/content_thread.rs` | Content thread run loop (vsync wait + timer fallback) |
-| `manifold-app/src/frame_timer.rs` | `FrameTimer` with vsync mode (divisor, actual_fps) |
-| `manifold-app/src/content_pipeline.rs` | GPU completion handler publishes `front_index` |
-| `manifold-app/src/shared_texture.rs` | IOSurface triple buffer + atomic front_index |
-| `manifold-core/src/settings.rs` | `vsync_enabled`, `frame_rate` project settings |
-| `manifold-gpu/src/metal/encoder.rs` | `commit_and_wait_scheduled()` for CA transactions |
-| `manifold-gpu/src/metal/surface.rs` | `present_after_scheduled()` for CA transactions |
+| `manifold-app/src/content_thread.rs` | Content thread run loop, THREAD_TIME_CONSTRAINT, timer wait |
+| `manifold-app/src/frame_timer.rs` | `FrameTimer` with mach_wait_until + spin, EWMA FPS |
+| `manifold-app/src/content_pipeline.rs` | Direct present path (nextDrawable → blit → present) |
+| `manifold-app/src/display_link.rs` | `UiDisplayLink` (CVDisplayLink for UI thread only) |
+| `manifold-app/src/shared_texture.rs` | IOSurface triple buffer (workspace preview only) |
+| `manifold-app/src/output_presenter.rs` | CAMetalDisplayLink presenter (dead code, kept for reference) |
+| `manifold-gpu/src/metal/surface.rs` | `GpuSurface` (CAMetalLayer), `GpuDrawable`, displaySyncEnabled |
+| `manifold-gpu/src/metal/vsync.rs` | `GpuVsyncSignal`/`GpuVsyncWaiter` (dead code, kept for reference) |
+| `manifold-gpu/src/metal/encoder.rs` | `present_drawable()`, `commit()` |
+| `manifold-core/src/settings.rs` | `frame_rate` project setting |

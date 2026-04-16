@@ -33,7 +33,6 @@ mod shader_compiler;
 pub mod surface;
 mod texture_pool;
 mod types;
-pub mod vsync;
 
 // Re-export all public types so external code paths remain identical.
 pub use device::GpuDevice;
@@ -45,7 +44,6 @@ pub use types::{
     GpuBuffer, GpuComputePipeline, GpuDepthStencilState, GpuEvent, GpuFenceWaiter, GpuHeap,
     GpuRenderPipeline, GpuSampler, GpuTexture,
 };
-pub use vsync::{GpuVsyncSignal, GpuVsyncWaiter, VsyncWaitResult, display_id_for_window};
 
 // Raw ObjC retain/release — avoids dependency on objc::msg_send! macro.
 // Used by both device (command buffer retain) and encoder (encoder retain/release).

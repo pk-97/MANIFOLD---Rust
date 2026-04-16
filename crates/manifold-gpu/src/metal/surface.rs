@@ -108,11 +108,6 @@ impl GpuSurface {
         unsafe { &*(self.layer_ptr as *const metal::MetalLayerRef) }
     }
 
-    /// Raw CAMetalLayer pointer for interop (e.g. CAMetalDisplayLink).
-    pub fn raw_layer_ptr(&self) -> *mut std::ffi::c_void {
-        self.layer_ptr
-    }
-
     /// Resize the drawable surface.
     pub fn resize(&mut self, width: u32, height: u32) {
         self.width = width;
@@ -201,17 +196,6 @@ impl Drop for GpuSurface {
 // ─── GpuDrawable methods ─────────────────────────────────────────────
 
 impl GpuDrawable {
-    /// Create a GpuDrawable from a raw `id<CAMetalDrawable>` pointer.
-    /// Retains the drawable. Used by the output presenter which receives
-    /// drawables from CAMetalDisplayLink (not from nextDrawable).
-    ///
-    /// # Safety
-    /// `ptr` must be a valid, non-null `id<CAMetalDrawable>`.
-    pub unsafe fn from_raw(ptr: *mut std::ffi::c_void) -> Self {
-        unsafe { objc_retain(ptr); }
-        Self { drawable_ptr: ptr }
-    }
-
     /// Get the drawable's backing texture as a raw pointer.
     /// The returned texture is valid as a render target for the current frame.
     pub fn texture(&self) -> &metal::TextureRef {
