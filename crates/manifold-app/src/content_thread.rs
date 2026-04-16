@@ -707,7 +707,7 @@ impl ContentThread {
                     let gen_renderer = renderers.iter().find_map(|r| {
                         r.as_any().downcast_ref::<manifold_renderer::generator_renderer::GeneratorRenderer>()
                     });
-                    tick_result.ready_clips.iter().map(|clip| {
+                    tick_result.ready_clips.iter().map(|(_, clip)| {
                         let progress = gen_renderer
                             .map_or(0.0, |gr| gr.get_clip_anim_progress(clip.id.as_str()));
                         (clip.id.to_string(), progress)
@@ -720,11 +720,8 @@ impl ContentThread {
                     .unwrap_or(&[]);
 
                 let active_clip_info: Vec<manifold_profiler::ActiveClipInfo> =
-                    tick_result.ready_clips.iter().enumerate().map(|(i, clip)| {
-                        let clip_layer_idx = self.engine.project()
-                            .and_then(|p| p.timeline.layer_index_for_id(&clip.layer_id))
-                            .unwrap_or(0);
-                        let gen_param_values = layers.get(clip_layer_idx)
+                    tick_result.ready_clips.iter().enumerate().map(|(i, (li, clip))| {
+                        let gen_param_values = layers.get(*li as usize)
                             .and_then(|l| l.gen_params());
                         let gen_params = gen_param_values
                             .map(|gp| build_gen_params(&clip.generator_type, &gp.param_values))
@@ -733,7 +730,7 @@ impl ContentThread {
                         manifold_profiler::ActiveClipInfo {
                             clip_id: clip.id.to_string(),
                             generator_type: clip.generator_type.to_string(),
-                            layer_index: clip_layer_idx as i32,
+                            layer_index: *li,
                             anim_progress,
                             gen_params,
                         }

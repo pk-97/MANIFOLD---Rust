@@ -63,7 +63,8 @@ pub struct TickContext {
 /// Output of a single engine tick.
 #[derive(Debug, Clone, Default)]
 pub struct TickResult {
-    pub ready_clips: Vec<TimelineClip>,
+    /// Active clips ready for compositing, paired with their layer index.
+    pub ready_clips: Vec<(i32, TimelineClip)>,
     pub compositor_dirty: bool,
     pub should_clear_compositor: bool,
     pub should_clear_feedback_buffer: bool,
@@ -144,12 +145,12 @@ pub struct PlaybackEngine {
     /// Clips stopped during the current tick. Drained into TickResult::stopped_clips
     /// so the content pipeline can release per-owner GPU effect state.
     stopped_this_tick: Vec<ClipId>,
-    ready_clips_list: Vec<TimelineClip>,
-    timeline_active_scratch: Vec<TimelineClip>,
+    ready_clips_list: Vec<(i32, TimelineClip)>,
+    timeline_active_scratch: Vec<(i32, TimelineClip)>,
     became_ready_list: Vec<ClipId>,
     clips_to_stop_drift: Vec<ClipId>,
     prewarm_candidates: Vec<TimelineClip>,
-    compositor_fallback_clips: Vec<TimelineClip>,
+    compositor_fallback_clips: Vec<(i32, TimelineClip)>,
 
     // Prewarm state. Port of C# PlaybackEngine prewarm fields.
     next_prewarm_at: f64,
@@ -784,7 +785,7 @@ impl PlaybackEngine {
                     .get(*li)
                     .and_then(|l| l.clips.get(*ci))
                 {
-                    self.timeline_active_scratch.push(clip.clone());
+                    self.timeline_active_scratch.push((*li as i32, clip.clone()));
                 }
             }
         }
@@ -983,7 +984,7 @@ impl PlaybackEngine {
 
     /// Return timeline active clips at the current beat.
     /// Port of C# PlaybackEngine.GetTimelineActiveClipsAtCurrentBeat (lines 1031-1056).
-    pub fn get_timeline_active_clips_at_current_beat(&mut self) -> &[TimelineClip] {
+    pub fn get_timeline_active_clips_at_current_beat(&mut self) -> &[(i32, TimelineClip)] {
         self.query_active_timeline_clips();
         &self.timeline_active_scratch
     }
@@ -1793,15 +1794,15 @@ impl PlaybackEngine {
     /// Filter active clips to only those ready for compositing.
     /// Applies recently-started gate for video clips.
     /// Port of C# PlaybackEngine.FilterReadyClips (lines 1193-1239).
-    pub fn filter_ready_clips(&mut self, pre_render_dt: Seconds) -> Vec<TimelineClip> {
+    pub fn filter_ready_clips(&mut self, pre_render_dt: Seconds) -> Vec<(i32, TimelineClip)> {
         // Resolve should-be-active clips (timeline + live slots)
         self.compositor_fallback_clips.clear();
         self.query_active_timeline_clips();
         self.compositor_fallback_clips
             .extend(self.timeline_active_scratch.iter().cloned());
         if let Some(mgr) = &self.live_clip_manager {
-            for (_, clip) in mgr.live_slots_list() {
-                self.compositor_fallback_clips.push(clip.clone());
+            for (li, clip) in mgr.live_slots_list() {
+                self.compositor_fallback_clips.push((*li, clip.clone()));
             }
         }
 
@@ -1817,7 +1818,7 @@ impl PlaybackEngine {
         // Filter to ready clips (index-based to avoid borrow conflict)
         self.ready_clips_list.clear();
         for i in 0..self.compositor_fallback_clips.len() {
-            let clip = &self.compositor_fallback_clips[i];
+            let (_, clip) = &self.compositor_fallback_clips[i];
             let clip_id = clip.id.clone();
             let renderer_idx = match self.active_clip_renderers.get(clip_id.as_str()) {
                 Some(&idx) => idx,

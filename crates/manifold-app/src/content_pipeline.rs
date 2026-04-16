@@ -602,7 +602,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
         let mut clip_descs: Vec<CompositeClipDescriptor> =
             Vec::with_capacity(tick_result.ready_clips.len());
-        for clip in &tick_result.ready_clips {
+        for (layer_index, clip) in &tick_result.ready_clips {
             let clip_texture = renderers.iter().find_map(|r| {
                 if let Some(gen_r) = r.as_any().downcast_ref::<GeneratorRenderer>()
                     && let Some(t) = gen_r.get_clip_texture(&clip.id)
@@ -618,15 +618,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 None
             });
             if let Some(texture) = clip_texture {
-                let clip_li = layers
-                    .iter()
-                    .position(|l| l.clips.iter().any(|c| c.id == clip.id))
-                    .unwrap_or(0);
-                let layer = layers.get(clip_li);
+                let layer = layers.get(*layer_index as usize);
                 clip_descs.push(CompositeClipDescriptor {
                     clip_id: &clip.id,
                     texture,
-                    layer_index: clip_li as i32,
+                    layer_index: *layer_index,
                     blend_mode: layer.map_or(BlendMode::Normal, |l| l.default_blend_mode),
                     opacity: layer.map_or(1.0, |l| l.opacity),
                     effects: &[],

@@ -60,7 +60,7 @@ impl ClipScheduler {
         &mut self,
         _current_time: Seconds,
         current_beat: Beats,
-        timeline_active_clips: &[TimelineClip],
+        timeline_active_clips: &[(i32, TimelineClip)],
         live_slots: &[(i32, TimelineClip)],
         currently_active_ids: &AHashSet<ClipId>,
         looping_clip_ids: &AHashSet<ClipId>,
@@ -77,7 +77,7 @@ impl ClipScheduler {
         self.should_be_active_ids.clear();
 
         // Copy timeline clips to internal merged list (avoids mutating caller's cached list).
-        merged.extend_from_slice(timeline_active_clips);
+        merged.extend(timeline_active_clips.iter().map(|(_, c)| c.clone()));
 
         // Merge live slots. Live slots persist until CommitLiveClip() removes them
         // (triggered by NoteOff). They must NOT expire based on EndBeat — if the
@@ -181,7 +181,7 @@ mod tests {
         let result = sched.compute_sync(
             Seconds(3.0),
             Beats(3.0),
-            &[clip.clone()],
+            &[(0, clip.clone())],
             &[],
             &active,
             &looping,
@@ -202,7 +202,7 @@ mod tests {
         let result = sched.compute_sync(
             Seconds(3.0),
             Beats(3.0),
-            &[clip],
+            &[(0, clip)],
             &[],
             &active,
             &looping,
@@ -241,7 +241,7 @@ mod tests {
         let result = sched.compute_sync(
             Seconds(5.95),
             Beats(5.95),
-            &[clip],
+            &[(0, clip)],
             &[],
             &active,
             &looping,
@@ -260,7 +260,7 @@ mod tests {
         let result = sched.compute_sync(
             Seconds(5.95),
             Beats(5.95),
-            &[clip],
+            &[(0, clip)],
             &[],
             &active,
             &looping,
@@ -345,7 +345,7 @@ mod tests {
         let result = sched.compute_sync(
             Seconds(5.0),
             Beats(5.0),
-            &[timeline_clip],
+            &[(0, timeline_clip)],
             &live_slots,
             &active,
             &looping,
@@ -367,7 +367,7 @@ mod tests {
         let result = sched.compute_sync(
             Seconds(5.0),
             Beats(5.0),
-            &[t1, t2],
+            &[(0, t1), (1, t2)],
             &live_slots,
             &active,
             &looping,
@@ -387,7 +387,7 @@ mod tests {
     #[test]
     fn input_list_not_mutated() {
         let mut sched = ClipScheduler::new();
-        let clips = vec![make_clip("c1", 2.0, 4.0)];
+        let clips: Vec<(i32, TimelineClip)> = vec![(0, make_clip("c1", 2.0, 4.0))];
         let live_clip = make_clip("live1", 1.0, 10.0);
         let live_slots = vec![(0i32, live_clip)];
         let active = AHashSet::new();
@@ -415,7 +415,7 @@ mod tests {
         let result = sched.compute_sync(
             Seconds(1.0),
             Beats(1.0),
-            &[clip.clone()],
+            &[(0, clip.clone())],
             &[],
             &active,
             &looping,
@@ -430,7 +430,7 @@ mod tests {
         let result2 = sched.compute_sync(
             Seconds(1.0),
             Beats(1.0),
-            &[clip],
+            &[(0, clip)],
             &[],
             &active2,
             &looping,
