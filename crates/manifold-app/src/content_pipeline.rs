@@ -618,10 +618,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 None
             });
             if let Some(texture) = clip_texture {
-                // Match via clip.layer_id instead of scanning all clips in all layers.
                 let clip_li = layers
                     .iter()
-                    .position(|l| l.layer_id == clip.layer_id)
+                    .position(|l| l.clips.iter().any(|c| c.id == clip.id))
                     .unwrap_or(0);
                 let layer = layers.get(clip_li);
                 clip_descs.push(CompositeClipDescriptor {
