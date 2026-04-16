@@ -95,60 +95,83 @@ pub(crate) fn run(
 
     log::info!("[RecordingThread] Started");
 
+    /// Encode a single video frame: wait for GPU fence, encode, release pool slot.
+    #[inline]
+    fn encode_frame(
+        frame: RecordingFrame,
+        encoder_handle: *mut c_void,
+        start_time: Instant,
+        frames_encoded: &mut u32,
+        frames_failed: &mut u32,
+    ) {
+        // Wait for GPU blit to complete (kernel notification, zero CPU).
+        let fence_ok = frame.gpu_complete.wait(Duration::from_secs(5));
+        if !fence_ok {
+            log::error!(
+                "[RecordingThread] GPU fence timeout (5s) — \
+                 skipping frame, possible GPU hang"
+            );
+            frame.pool_slot.release();
+            *frames_failed += 1;
+            return;
+        }
+
+        let elapsed = frame.wall_timestamp.duration_since(start_time).as_secs_f64();
+        let texture_ptr = frame.pool_slot.raw_ptr;
+
+        let result = unsafe {
+            ffi::LiveRecorder_EncodeVideoFrame(encoder_handle, texture_ptr, elapsed)
+        };
+
+        // Release the pool slot AFTER encoding.
+        frame.pool_slot.release();
+
+        if result == 0 {
+            *frames_encoded += 1;
+        } else {
+            *frames_failed += 1;
+            log::warn!(
+                "[RecordingThread] Video encode failed at {elapsed:.3}s: error {result}"
+            );
+        }
+    }
+
+    // Audio drain interval: 2ms. At 48kHz stereo this is ~192 samples —
+    // well within the scratch buffer. Short enough for continuous audio,
+    // long enough that the thread sleeps in the kernel between frames
+    // instead of polling 2000×/sec.
+    const AUDIO_DRAIN_INTERVAL: Duration = Duration::from_millis(2);
+
     loop {
         let stopping = stop.load(Ordering::Acquire);
 
-        // -- Drain video frames --
-        loop {
-            let frame = if stopping {
-                match frame_rx.try_recv() {
-                    Ok(f) => f,
-                    Err(_) => break,
+        // -- Wait for video frames (kernel-level block, zero CPU) --
+        // When running: recv_timeout blocks until a frame arrives or the
+        // audio drain interval elapses. When stopping: non-blocking drain.
+        let first_frame = if stopping {
+            frame_rx.try_recv().ok()
+        } else {
+            match frame_rx.recv_timeout(AUDIO_DRAIN_INTERVAL) {
+                Ok(f) => Some(f),
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => None,
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                    log::warn!("[RecordingThread] Frame channel disconnected");
+                    stop.store(true, Ordering::Release);
+                    None
                 }
-            } else {
-                match frame_rx.try_recv() {
-                    Ok(f) => f,
-                    Err(crossbeam_channel::TryRecvError::Empty) => break,
-                    Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                        log::warn!("[RecordingThread] Frame channel disconnected");
-                        stop.store(true, Ordering::Release);
-                        break;
-                    }
-                }
-            };
-
-            // Wait for GPU blit to complete (kernel notification, zero CPU).
-            let fence_ok = frame.gpu_complete.wait(Duration::from_secs(5));
-            if !fence_ok {
-                log::error!(
-                    "[RecordingThread] GPU fence timeout (5s) — \
-                     skipping frame, possible GPU hang"
-                );
             }
+        };
 
-            if !fence_ok {
-                frame.pool_slot.release();
-                frames_failed += 1;
-                continue;
-            }
-
-            // Encode the video frame.
-            let elapsed = frame.wall_timestamp.duration_since(start_time).as_secs_f64();
-            let texture_ptr = frame.pool_slot.raw_ptr;
-
-            let result = unsafe {
-                ffi::LiveRecorder_EncodeVideoFrame(encoder_handle, texture_ptr, elapsed)
-            };
-
-            // Release the pool slot AFTER encoding.
-            frame.pool_slot.release();
-
-            if result == 0 {
-                frames_encoded += 1;
-            } else {
-                frames_failed += 1;
-                log::warn!(
-                    "[RecordingThread] Video encode failed at {elapsed:.3}s: error {result}"
+        // Encode the first frame, then drain any additional queued frames.
+        if let Some(frame) = first_frame {
+            encode_frame(
+                frame, encoder_handle, start_time,
+                &mut frames_encoded, &mut frames_failed,
+            );
+            while let Ok(frame) = frame_rx.try_recv() {
+                encode_frame(
+                    frame, encoder_handle, start_time,
+                    &mut frames_encoded, &mut frames_failed,
                 );
             }
         }
@@ -168,6 +191,7 @@ pub(crate) fn run(
 
         // -- Check stop condition --
         if stopping {
+            // Final audio drain after all video frames are processed.
             if let Some(ref mut consumer) = audio_consumer {
                 drain_audio(
                     consumer,
@@ -181,9 +205,6 @@ pub(crate) fn run(
             }
             break;
         }
-
-        // Brief yield to avoid busy-spinning when both queues are empty.
-        std::thread::sleep(Duration::from_micros(500));
     }
 
     // Finalize the native encoder.
