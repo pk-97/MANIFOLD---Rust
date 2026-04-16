@@ -5,6 +5,11 @@ use std::time::{Duration, Instant};
 /// Timer-based pacing at `target_fps`. On macOS, uses `mach_wait_until`
 /// for precise kernel-level frame deadlines with zero CPU overhead.
 /// Presentation timing is handled independently by CAMetalLayer.
+///
+/// FPS is measured via exponentially weighted moving average (EWMA) on
+/// frame time — updates every frame with ~0.3s response time, producing
+/// a smooth readout that reacts quickly to frame drops without flickering
+/// on single-frame variance.
 pub struct FrameTimer {
     target_fps: f64,
     target_frame_duration: Duration,
@@ -12,9 +17,9 @@ pub struct FrameTimer {
     app_start_time: Instant,
     last_dt: f64,
 
-    // FPS counter
-    fps_sample_start: Instant,
-    fps_frame_count: u64,
+    /// EWMA-smoothed frame time in seconds. FPS derived as 1/smoothed_dt.
+    smoothed_dt: f64,
+    /// Current FPS derived from smoothed_dt. Updated every frame.
     current_fps: f64,
 
     /// Number of ticks missed this frame (dt exceeded 2× target = frame drop).
@@ -70,20 +75,23 @@ impl MachTimebase {
     }
 }
 
-const FPS_SAMPLE_INTERVAL: f64 = 1.0;
+/// EWMA smoothing time constant in seconds. Controls how quickly the
+/// FPS readout responds to changes. 0.3s settles in ~5 frames at 60fps —
+/// fast enough to show frame drops, slow enough to filter jitter.
+const EWMA_TAU: f64 = 0.3;
 
 impl FrameTimer {
     pub fn new(target_fps: f64) -> Self {
         let now = Instant::now();
+        let initial_dt = 1.0 / target_fps;
         Self {
             target_fps,
-            target_frame_duration: Duration::from_secs_f64(1.0 / target_fps),
+            target_frame_duration: Duration::from_secs_f64(initial_dt),
             last_tick_time: now,
             app_start_time: now,
             last_dt: 0.0,
-            fps_sample_start: now,
-            fps_frame_count: 0,
-            current_fps: 0.0,
+            smoothed_dt: initial_dt,
+            current_fps: target_fps,
             missed_ticks: 0,
             #[cfg(target_os = "macos")]
             mach_timebase: MachTimebase::query(),
@@ -140,7 +148,6 @@ impl FrameTimer {
         let dt = (now - self.last_tick_time).as_secs_f64();
         self.last_tick_time = now;
         self.last_dt = dt;
-        self.fps_frame_count += 1;
         // Detect missed ticks: if dt exceeds 2× target, we dropped frames
         let target_secs = self.target_frame_duration.as_secs_f64();
         self.missed_ticks = if target_secs > 0.0 {
@@ -148,7 +155,7 @@ impl FrameTimer {
         } else {
             0
         };
-        self.update_fps_counter(now);
+        self.update_fps(dt);
         dt
     }
 
@@ -168,7 +175,7 @@ impl FrameTimer {
         self.last_dt
     }
 
-    /// Current measured FPS (updated every second).
+    /// Current measured FPS (EWMA, updated every frame).
     pub fn current_fps(&self) -> f64 {
         self.current_fps
     }
@@ -184,14 +191,20 @@ impl FrameTimer {
         self.target_fps
     }
 
-    fn update_fps_counter(&mut self, now: Instant) {
-        let elapsed = (now - self.fps_sample_start).as_secs_f64();
-        if elapsed >= FPS_SAMPLE_INTERVAL {
-            self.current_fps = self.fps_frame_count as f64 / elapsed;
-            log::debug!("FPS: {:.1}", self.current_fps);
-            self.fps_sample_start = now;
-            self.fps_frame_count = 0;
+    /// Update EWMA-smoothed FPS from the latest frame's dt.
+    ///
+    /// Uses adaptive alpha: `alpha = 1 - exp(-dt / tau)`. This makes the
+    /// smoothing time constant independent of frame rate — the readout
+    /// settles in ~tau seconds whether running at 30fps or 120fps.
+    fn update_fps(&mut self, dt: f64) {
+        if dt <= 0.0 {
+            return;
         }
+        // Adaptive alpha from time constant. At 60fps (dt=16.6ms, tau=0.3s):
+        // alpha ≈ 0.054 → ~5% weight on new sample, 95% on history.
+        let alpha = 1.0 - (-dt / EWMA_TAU).exp();
+        self.smoothed_dt = alpha * dt + (1.0 - alpha) * self.smoothed_dt;
+        self.current_fps = 1.0 / self.smoothed_dt;
     }
 }
 
@@ -203,9 +216,7 @@ mod tests {
     #[test]
     fn should_tick_respects_target_fps() {
         let timer = FrameTimer::new(60.0);
-        // Just created — should not tick yet (unless system is very slow)
-        // Sleep for one frame duration
-        thread::sleep(Duration::from_millis(17)); // ~60fps
+        thread::sleep(Duration::from_millis(17));
         assert!(timer.should_tick());
     }
 
@@ -230,9 +241,7 @@ mod tests {
         let mut timer = FrameTimer::new(60.0);
         timer.set_target_fps(30.0);
         assert_eq!(timer.target_fps(), 30.0);
-        // At 30fps, frame duration should be ~33ms
         thread::sleep(Duration::from_millis(17));
-        // Should NOT tick yet at 30fps after only 17ms
         assert!(!timer.should_tick());
         thread::sleep(Duration::from_millis(20));
         assert!(timer.should_tick());
@@ -241,15 +250,10 @@ mod tests {
     #[test]
     fn wait_for_deadline_returns_at_deadline() {
         let mut timer = FrameTimer::new(60.0);
-        timer.consume_tick(); // reset last_tick_time to now
+        timer.consume_tick();
         let start = Instant::now();
         timer.wait_for_deadline();
         let elapsed = start.elapsed();
-        // Should have waited approximately one frame (~16.6ms).
-        // Wide tolerance: test runner runs many tests in parallel,
-        // causing scheduling contention that inflates wait times.
-        // mach_wait_until precision is a kernel guarantee verified
-        // by the real-time content thread, not by unit tests.
         assert!(
             elapsed >= Duration::from_millis(14),
             "Returned too early: {elapsed:?}"
@@ -257,6 +261,41 @@ mod tests {
         assert!(
             elapsed < Duration::from_millis(30),
             "Returned too late: {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn ewma_fps_converges() {
+        let mut timer = FrameTimer::new(60.0);
+        // Simulate 30 frames at 60fps
+        for _ in 0..30 {
+            thread::sleep(Duration::from_millis(16));
+            timer.consume_tick();
+        }
+        // EWMA should have converged near 60fps (within tolerance for
+        // test runner scheduling jitter).
+        let fps = timer.current_fps();
+        assert!(fps > 40.0, "FPS too low: {fps:.1}");
+        assert!(fps < 80.0, "FPS too high: {fps:.1}");
+    }
+
+    #[test]
+    fn ewma_responds_to_frame_drop() {
+        let mut timer = FrameTimer::new(60.0);
+        // Establish baseline at 60fps
+        for _ in 0..20 {
+            thread::sleep(Duration::from_millis(16));
+            timer.consume_tick();
+        }
+        let baseline = timer.current_fps();
+        // Simulate a frame drop (2× frame time)
+        thread::sleep(Duration::from_millis(33));
+        timer.consume_tick();
+        let after_drop = timer.current_fps();
+        // FPS should have decreased
+        assert!(
+            after_drop < baseline,
+            "FPS should decrease after frame drop: baseline={baseline:.1}, after={after_drop:.1}"
         );
     }
 }
