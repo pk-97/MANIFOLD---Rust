@@ -159,11 +159,11 @@ extern "C" fn presenter_callback(
     let fit_x = (dst_w - fit_w) * 0.5;
     let fit_y = (dst_h - fit_h) * 0.5;
 
-    // 6. Encode blit + present with Core Animation transaction sync.
-    // presentsWithTransaction ensures the present is batched into the
-    // next CA transaction (aligned with WindowServer's vsync). This
-    // eliminates phase mismatch judder in windowed mode.
-    // Sequence: encode blit → commit → wait_until_scheduled → present.
+    // 6. Encode blit, schedule present, commit — fully non-blocking.
+    // CAMetalDisplayLink already provides vsync-aligned timing (the drawable
+    // is delivered at vsync). No need for presentsWithTransaction or
+    // waitUntilScheduled — those block the main thread and cause starvation
+    // when the GPU is busy with content work at high FPS.
     let mut encoder = ctx.device.create_encoder("Output Present");
     encoder.draw_fullscreen_viewport(
         &ctx.pipeline,
@@ -182,9 +182,8 @@ extern "C" fn presenter_callback(
         manifold_gpu::GpuLoadAction::Clear,
         "Output Present",
     );
-    // Don't call present_drawable — manual present after commit.
-    encoder.commit_and_wait_scheduled();
-    gpu_drawable.present_after_scheduled();
+    encoder.present_drawable(&gpu_drawable);
+    encoder.commit();
 }
 
 // ─── OutputPresenter ───────────────────────────────────────────────────
@@ -233,10 +232,10 @@ impl OutputPresenter {
         surface.set_contents_gravity_resize_aspect();
         surface.set_background_color(0.0, 0.0, 0.0, 1.0);
         surface.set_maximum_drawable_count(3);
-        // Sync presents with Core Animation transactions. The callback
-        // runs on the main thread where CA transactions exist — safe.
-        // Eliminates phase mismatch judder in windowed mode.
-        surface.set_presents_with_transaction(true);
+        // CAMetalDisplayLink provides vsync-aligned drawable delivery —
+        // no need for presentsWithTransaction (which blocks the main thread
+        // via waitUntilScheduled and causes starvation at high FPS).
+        surface.set_presents_with_transaction(false);
 
         // Create dedicated GPU device for the presenter (own command queue)
         let device = manifold_gpu::GpuDevice::new();
