@@ -82,13 +82,6 @@ pub struct ContentState {
     /// Number of frames recorded in the current session.
     pub profiling_frame_count: u64,
 
-    // ── VSync ─────────────────────────────────────────────────────
-    /// Whether vsync-driven pacing is active on the content thread.
-    pub vsync_active: bool,
-    /// Actual locked FPS in vsync mode (display_hz / divisor).
-    /// In timer mode, equals target FPS.
-    pub vsync_actual_fps: f32,
-
     // ── LED output ────────────────────────────────────────────────
     /// Whether LED output is enabled.
     pub led_enabled: bool,
@@ -344,8 +337,6 @@ impl Default for ContentState {
             percussion_show_progress: false,
             profiling_active: false,
             profiling_frame_count: 0,
-            vsync_active: false,
-            vsync_actual_fps: 60.0,
             led_enabled: false,
             led_initialized: false,
             is_live_recording: false,

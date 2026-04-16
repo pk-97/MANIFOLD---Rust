@@ -171,12 +171,6 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::resolution()
         }
-        PanelAction::ToggleVsync => {
-            let new_val = !project.settings.vsync_enabled;
-            project.settings.vsync_enabled = new_val;
-            ContentCommand::send(content_tx, ContentCommand::SetVsyncEnabled(new_val));
-            DispatchResult::handled()
-        }
         PanelAction::SetTonemapCurve(curve) => {
             let old_curve = project.settings.tonemap_curve;
             if *curve != old_curve {

@@ -33,12 +33,6 @@ impl ContentThread {
 
         log::info!("[ContentThread] Starting export: {:?}", config);
 
-        // Disable vsync for export — render as fast as possible.
-        let was_vsync = self.timer.is_vsync_mode();
-        if was_vsync {
-            self.timer.set_vsync_mode(false, 0.0);
-        }
-
         // 1. Save playback state for restore
         let was_playing = self.engine.is_playing();
         let saved_beat = self.engine.current_beat();
@@ -328,13 +322,6 @@ impl ContentThread {
         }
 
         // 7. Restore playback state
-        // Restore vsync mode if it was active before export.
-        if was_vsync {
-            #[cfg(target_os = "macos")]
-            if let Some(ref signal) = self.vsync_signal {
-                self.timer.set_vsync_mode(true, signal.display_hz());
-            }
-        }
         self.engine.set_export_mode(false);
         // Restore content pipeline resolution (and render scale) after export.
         if cur_w != export_config.width || cur_h != export_config.height {

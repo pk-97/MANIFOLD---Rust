@@ -30,50 +30,6 @@ use manifold_ui::ui_state::UIState;
 use crate::content_command::ContentCommand;
 use crate::content_state::ContentState;
 
-/// Get the CGDirectDisplayID for the display containing a window's frame center.
-/// Uses CGGetDisplaysWithPoint instead of [NSWindow screen] — more reliable
-/// during window creation and display transitions when NSWindow hasn't updated
-/// its screen property yet.
-#[cfg(target_os = "macos")]
-fn display_id_for_window_frame(window: &winit::window::Window) -> u32 {
-    use objc::{msg_send, sel, sel_impl};
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-
-    let ns_view = match window.window_handle().unwrap().as_raw() {
-        RawWindowHandle::AppKit(h) => h.ns_view.as_ptr() as *mut objc::runtime::Object,
-        _ => return 0,
-    };
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct CGPoint { x: f64, y: f64 }
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct CGSize { width: f64, height: f64 }
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct CGRect { origin: CGPoint, size: CGSize }
-
-    unsafe extern "C" {
-        fn CGGetDisplaysWithPoint(
-            point: CGPoint, max: u32, displays: *mut u32, count: *mut u32,
-        ) -> i32;
-    }
-
-    unsafe {
-        let ns_window: *mut objc::runtime::Object = msg_send![ns_view, window];
-        if ns_window.is_null() { return 0; }
-        let frame: CGRect = msg_send![ns_window, frame];
-        let center = CGPoint {
-            x: frame.origin.x + frame.size.width * 0.5,
-            y: frame.origin.y + frame.size.height * 0.5,
-        };
-        let mut display_id: u32 = 0;
-        let mut count: u32 = 0;
-        let ret = CGGetDisplaysWithPoint(center, 1, &mut display_id, &mut count);
-        if ret == 0 && count > 0 { display_id } else { 0 }
-    }
-}
 use crate::frame_timer::FrameTimer;
 use crate::project_io::ProjectIOService;
 use crate::ui_root::UIRoot;
@@ -290,10 +246,6 @@ pub struct Application {
     /// Replaces FrameTimer polling — aligns render submission to MacBook vsync.
     #[cfg(target_os = "macos")]
     pub(crate) ui_display_link: Option<crate::display_link::UiDisplayLink>,
-    /// Content thread vsync signal — shared with ContentThread for display-synced pacing.
-    /// Retargeted when windows move between displays or output window opens/closes.
-    #[cfg(target_os = "macos")]
-    pub(crate) content_vsync_signal: Option<manifold_gpu::GpuVsyncSignal>,
     pub(crate) ui_renderer: Option<UIRenderer>,
     pub(crate) ui_cache_manager: Option<manifold_renderer::ui_cache_manager::UICacheManager>,
     pub(crate) layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
@@ -463,9 +415,6 @@ impl Application {
             ui_offscreen: None,
             #[cfg(target_os = "macos")]
             ui_display_link: None,
-            #[cfg(target_os = "macos")]
-            #[cfg(target_os = "macos")]
-            content_vsync_signal: None,
             ui_renderer: None,
             ui_cache_manager: None,
             layer_bitmap_gpu: None,
@@ -1356,10 +1305,6 @@ impl ApplicationHandler for Application {
             // render trigger replacing the free-running FrameTimer.
             #[cfg(target_os = "macos")]
             {
-                // Create content thread vsync signal targeting the primary window's
-                // display. Retargeted to output window when it opens.
-                self.content_vsync_signal =
-                    Some(manifold_gpu::GpuVsyncSignal::new(window_arc.as_ref()));
                 self.ui_display_link = Some(crate::display_link::UiDisplayLink::new(window_arc));
             }
 
@@ -1628,12 +1573,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     self.local_project.settings.frame_rate as f64,
                 ),
                 #[cfg(target_os = "macos")]
-                vsync_signal: self
-                    .content_vsync_signal
-                    .as_ref()
-                    .map(|s| s.create_waiter()),
-                #[cfg(target_os = "macos")]
-                last_vsync_count: 0,
                 sync_arbiter: manifold_playback::sync::SyncArbiter::new(),
                 osc_receiver: manifold_playback::osc_receiver::OscReceiver::new(),
                 osc_sync: manifold_playback::osc_sync::OscSyncController::new(),
@@ -1731,18 +1670,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     #[cfg(target_os = "macos")]
                     {
                         self.ui_display_link = None;
-                    }
-
-                    // Unblock the content thread's vsync wait BEFORE sending
-                    // Shutdown. The content thread may be blocked in
-                    // GpuVsyncWaiter::wait() — shutdown() sets the flag and
-                    // notifies the condvar so it wakes up and can receive the
-                    // Shutdown command from the channel. Without this, join()
-                    // deadlocks: main thread waits for content thread, content
-                    // thread waits for a vsync signal that will never arrive.
-                    #[cfg(target_os = "macos")]
-                    if let Some(ref signal) = self.content_vsync_signal {
-                        signal.shutdown();
                     }
 
                     // Shut down content thread
@@ -2597,13 +2524,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     crate::content_command::ContentCommand::ClearOutputSurface,
                 );
                 self.output_saved_frame = None;
-                // Retarget content vsync back to the primary window.
-                if let Some(ref mut signal) = self.content_vsync_signal
-                    && let Some(pid) = self.primary_window_id
-                    && let Some(ws) = self.window_registry.get(&pid)
-                {
-                    signal.retarget(&*ws.window);
-                }
             }
             let output_ids: Vec<_> = self
                 .window_registry
@@ -2781,31 +2701,6 @@ impl Application {
                     any_changed |= dl.retarget_if_needed(win);
                 }
             }
-            // Retarget content vsync signal: prefer output window's display
-            // (that's the performance display), fall back to primary window.
-            // Uses CGGetDisplaysWithPoint with the window's frame center
-            // instead of [NSWindow screen] — more reliable during window
-            // creation and display transitions.
-            if let Some(ref mut signal) = self.content_vsync_signal {
-                if let Some(ref win) = output_window {
-                    let display_id = display_id_for_window_frame(win);
-                    if display_id != 0
-                        && display_id != signal.current_display_id()
-                    {
-                        log::info!(
-                            "[ScreenChange] output window → display_id={}, \
-                             was={}",
-                            display_id,
-                            signal.current_display_id(),
-                        );
-                        any_changed |= signal.retarget_to_display(display_id);
-                    }
-                } else if let Some(pid) = self.primary_window_id
-                    && let Some(ws) = self.window_registry.get(&pid)
-                {
-                    any_changed |= signal.retarget(&*ws.window);
-                }
-            }
             any_changed
         }
         #[cfg(not(target_os = "macos"))]
@@ -2817,14 +2712,6 @@ impl Application {
 
 impl Drop for Application {
     fn drop(&mut self) {
-        // Shut down content vsync signal BEFORE sending Shutdown command.
-        // The content thread may be blocked in GpuVsyncWaiter::wait() —
-        // shutdown() unblocks the condvar so it can receive the Shutdown command.
-        #[cfg(target_os = "macos")]
-        if let Some(ref signal) = self.content_vsync_signal {
-            signal.shutdown();
-        }
-
         // Ensure the content thread is shut down even on abnormal exit (panic, etc.).
         // Normal exit already handles this in WindowEvent::CloseRequested, but if the
         // Application is dropped without that event, the content thread would leak.

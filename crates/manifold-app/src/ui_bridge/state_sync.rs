@@ -455,12 +455,6 @@ pub fn push_state(
         ui.footer.set_resolution_text(tree, &res_label);
         ui.footer
             .set_fps_text(tree, &format!("{:.0} FPS", project.settings.frame_rate));
-        ui.footer.set_vsync_state(
-            tree,
-            project.settings.vsync_enabled,
-            content_state.vsync_active,
-            content_state.vsync_actual_fps,
-        );
         ui.footer
             .set_render_scale(tree, project.settings.render_scale);
         ui.footer

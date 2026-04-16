@@ -38,9 +38,9 @@ pub enum ContentCommand {
     // ── Settings ───────────────────────────────────────────────────
     SetBpm(Bpm),
     SetFrameRate(f64),
-    /// Enable or disable vsync-driven content thread pacing.
-    /// When enabled, the content thread renders in sync with the display's
-    /// refresh cadence via GpuVsyncSignal. When disabled, timer-based pacing.
+    /// Legacy: updates project setting for serialization compat.
+    /// Content thread always uses timer-based pacing; CAMetalLayer's
+    /// displaySyncEnabled handles presentation timing independently.
     SetVsyncEnabled(bool),
 
     // ── GPU ────────────────────────────────────────────────────────

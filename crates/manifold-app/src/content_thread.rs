@@ -53,15 +53,6 @@ pub struct ContentThread {
     /// Content frame timer — target FPS synced from project settings.
     pub timer: FrameTimer,
 
-    /// VSync waiter from display (macOS CVDisplayLink via manifold-gpu).
-    /// When present and vsync mode is enabled, the content thread blocks on
-    /// this signal instead of using the sleep-based timer. The UI thread
-    /// owns the GpuVsyncSignal (for retargeting); we hold the waiter.
-    #[cfg(target_os = "macos")]
-    pub vsync_signal: Option<manifold_gpu::GpuVsyncWaiter>,
-    /// Last vsync count seen — used for frame divisor skip logic.
-    #[cfg(target_os = "macos")]
-    pub last_vsync_count: u64,
 
     // ── Sync infrastructure ──
     /// Authority gatekeeper — only the active ClockAuthority can issue transport commands.
@@ -199,28 +190,6 @@ impl ContentThread {
         // LED output is NOT auto-initialized. The user enables it via the
         // master-inspector toggle, which sends InitLedOutput / ShutdownLedOutput.
 
-        // Initialize vsync mode from project settings if signal is available.
-        #[cfg(target_os = "macos")]
-        if let Some(p) = self.engine.project()
-            && p.settings.vsync_enabled
-            && let Some(ref signal) = self.vsync_signal
-        {
-            // The CVDisplayLink may not have fired yet (display_hz = 0).
-            // Wait for the first vsync callback to populate the Hz.
-            let mut hz = signal.display_hz();
-            if hz == 0.0 {
-                let result = signal.wait(0);
-                hz = result.display_hz;
-            }
-            if hz > 0.0 {
-                log::info!("[ContentThread] VSync activated: display_hz={hz:.1}");
-                self.timer.set_vsync_mode(true, hz);
-                self.last_vsync_count = signal.vsync_count();
-            } else {
-                log::warn!("[ContentThread] VSync: display_hz=0 after wait, using timer fallback");
-            }
-        }
-
         loop {
             // 1. Drain ALL pending commands, coalescing consecutive seeks.
             // During scrubbing the UI sends a SeekTo/SeekToBeat per mouse-move
@@ -310,34 +279,9 @@ impl ContentThread {
                 continue;
             }
 
-            // ── VSync mode: block on display vsync signal ──
-            #[cfg(target_os = "macos")]
-            let should_render = if self.timer.is_vsync_mode() {
-                if let Some(ref signal) = self.vsync_signal {
-                    let result = signal.wait(self.last_vsync_count);
-                    if result.timed_out {
-                        // Display link stopped firing (display sleep, disconnect).
-                        // Fall through and render anyway to avoid stalling.
-                        self.last_vsync_count = result.count;
-                        true
-                    } else {
-                        self.last_vsync_count = result.count;
-                        // Update display Hz if it changed (window moved between monitors).
-                        if (result.display_hz - self.timer.display_hz()).abs() > 0.1 {
-                            self.timer.update_display_hz(result.display_hz);
-                        }
-                        // Only render on every Nth vsync (frame divisor).
-                        result.count % self.timer.frame_divisor() as u64 == 0
-                    }
-                } else {
-                    // VSync mode requested but no signal available — fall back to timer.
-                    self.wait_timer()
-                }
-            } else {
-                self.wait_timer()
-            };
-
-            #[cfg(not(target_os = "macos"))]
+            // Timer-based pacing: sleep + spin-wait for precise frame deadlines.
+            // displaySyncEnabled on the output CAMetalLayer handles vsync-aligned
+            // presentation independently — no need to phase-lock the content thread.
             let should_render = self.wait_timer();
 
             if !should_render {
@@ -960,8 +904,6 @@ impl ContentThread {
                     #[cfg(not(feature = "profiling"))]
                     { 0 }
                 },
-                vsync_active: self.timer.is_vsync_mode(),
-                vsync_actual_fps: self.timer.actual_fps() as f32,
                 led_enabled: self.led_controller.as_ref().is_some_and(|c| c.is_enabled()),
                 led_initialized: self.led_controller.as_ref().is_some_and(|c| c.is_initialized()),
                 #[cfg(target_os = "macos")]

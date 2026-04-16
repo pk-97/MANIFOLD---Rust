@@ -202,12 +202,6 @@ impl ContentThread {
                     }
                     if (post_fps - pre_fps).abs() > 0.01 {
                         self.timer.set_target_fps(post_fps as f64);
-                        #[cfg(target_os = "macos")]
-                        if self.timer.is_vsync_mode()
-                            && let Some(ref signal) = self.vsync_signal
-                        {
-                            self.timer.update_display_hz(signal.display_hz());
-                        }
                     }
                 }
                 if let Some(p) = self.engine.project() {
@@ -238,12 +232,6 @@ impl ContentThread {
                     }
                     if (post_fps - pre_fps).abs() > 0.01 {
                         self.timer.set_target_fps(post_fps as f64);
-                        #[cfg(target_os = "macos")]
-                        if self.timer.is_vsync_mode()
-                            && let Some(ref signal) = self.vsync_signal
-                        {
-                            self.timer.update_display_hz(signal.display_hz());
-                        }
                     }
                 }
                 if let Some(p) = self.engine.project() {
@@ -285,24 +273,6 @@ impl ContentThread {
                 if let Some(p) = self.engine.project() {
                     self.timer.set_target_fps(p.settings.frame_rate as f64);
                 }
-                // Initialize vsync mode from loaded project settings.
-                #[cfg(target_os = "macos")]
-                if let Some(p) = self.engine.project() {
-                    if p.settings.vsync_enabled {
-                        if let Some(ref signal) = self.vsync_signal {
-                            let mut hz = signal.display_hz();
-                            if hz == 0.0 {
-                                let result = signal.wait(0);
-                                hz = result.display_hz;
-                            }
-                            if hz > 0.0 {
-                                self.timer.set_vsync_mode(true, hz);
-                            }
-                        }
-                    } else {
-                        self.timer.set_vsync_mode(false, 0.0);
-                    }
-                }
                 // Update MIDI mapping config from the newly loaded project.
                 // Port of C# PlaybackController.OnProjectLoaded → midiInputController.SetMidiConfig().
                 if let Some(p) = self.engine.project() {
@@ -337,32 +307,14 @@ impl ContentThread {
                     p.settings.frame_rate = fps as f32;
                 }
                 self.timer.set_target_fps(fps);
-                // Recompute vsync divisor if in vsync mode.
-                #[cfg(target_os = "macos")]
-                if self.timer.is_vsync_mode()
-                    && let Some(ref signal) = self.vsync_signal
-                {
-                    self.timer.update_display_hz(signal.display_hz());
-                }
             }
             ContentCommand::SetVsyncEnabled(enabled) => {
+                // Legacy: update project setting for serialization compat
+                // but no longer affects content thread pacing. The content
+                // thread always uses timer-based pacing; CAMetalLayer's
+                // displaySyncEnabled handles presentation timing.
                 if let Some(p) = self.engine.project_mut() {
                     p.settings.vsync_enabled = enabled;
-                }
-                #[cfg(target_os = "macos")]
-                if enabled {
-                    if let Some(ref signal) = self.vsync_signal {
-                        let mut hz = signal.display_hz();
-                        if hz == 0.0 {
-                            let result = signal.wait(0);
-                            hz = result.display_hz;
-                        }
-                        if hz > 0.0 {
-                            self.timer.set_vsync_mode(true, hz);
-                        }
-                    }
-                } else {
-                    self.timer.set_vsync_mode(false, 0.0);
                 }
             }
 
