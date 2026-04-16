@@ -691,18 +691,21 @@ impl Application {
         #[cfg(target_os = "macos")]
         if let Some(gpu) = &self.gpu {
             let size = window.inner_size();
-            // displaySyncEnabled = false (mailbox mode): nextDrawable()
-            // returns immediately, presents land as soon as the GPU finishes.
-            // WindowServer composites all windows at its own vsync — no tearing.
-            // This decouples the content thread's production rate from vsync,
-            // preventing the double-gating judder that occurred when both
-            // CVDisplayLink and displaySyncEnabled fought under heavy load.
+            // displaySyncEnabled = true: Metal queues each present to the
+            // next vsync boundary, ensuring smooth frame delivery. With 3
+            // drawables, nextDrawable() almost never blocks — at most a
+            // brief wait for vsync alignment, not a full-frame stall.
+            // The old double-gating issue was caused by CVDisplayLink
+            // phase-locking the content thread's WAKE to vsync on top of
+            // this. Now that the content thread uses timer pacing (not
+            // CVDisplayLink), displaySyncEnabled is the single vsync gate
+            // — exactly where it belongs.
             let surface = gpu.device.create_surface(
                 &*window,
                 size.width.max(1),
                 size.height.max(1),
                 manifold_gpu::GpuTextureFormat::Rgba16Float,
-                false,
+                true,
             );
             self.send_content_cmd(
                 crate::content_command::ContentCommand::SetOutputSurface(surface),
