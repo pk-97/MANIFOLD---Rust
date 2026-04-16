@@ -685,8 +685,9 @@ impl Application {
             self.output_edr_headroom = h;
         }
 
-        // Decoupled presentation: content thread writes to IOSurface,
-        // CAMetalDisplayLink-based presenter reads and presents at vsync.
+        // Direct present: content thread acquires drawables and presents
+        // in its own command buffer. displaySyncEnabled handles vsync.
+        // No CVDisplayLink, no IOSurface intermediary.
         #[cfg(target_os = "macos")]
         if let Some(gpu) = &self.gpu {
             let size = window.inner_size();
@@ -697,25 +698,8 @@ impl Application {
                 manifold_gpu::GpuTextureFormat::Rgba16Float,
                 true,
             );
-
-            // Create IOSurface bridge at content output resolution.
-            let bridge = std::sync::Arc::new(
-                crate::shared_texture::SharedTextureBridge::new(
-                    self.local_project.settings.output_width.max(1) as u32,
-                    self.local_project.settings.output_height.max(1) as u32,
-                ),
-            );
-
-            // Create presenter (CAMetalDisplayLink on main thread).
-            // Falls back to None on macOS < 14.
-            self.output_presenter = crate::output_presenter::OutputPresenter::new(
-                surface,
-                bridge.clone(),
-            );
-
-            // Send bridge to content thread.
             self.send_content_cmd(
-                crate::content_command::ContentCommand::SetOutputBridge(bridge),
+                crate::content_command::ContentCommand::SetOutputSurface(surface),
             );
             self.send_content_cmd(
                 crate::content_command::ContentCommand::UpdateEdrHeadroom(h),

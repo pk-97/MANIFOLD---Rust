@@ -66,21 +66,19 @@ pub struct ContentPipeline {
     /// May differ from compositor dimensions when FSR is active.
     output_w: u32,
     output_h: u32,
-    /// IOSurface bridge for output presentation. When present, the content
-    /// thread blits final output to this bridge; a separate OutputPresenter
-    /// (CAMetalDisplayLink) reads it and presents to the output drawable.
+    /// Direct-present output surface (CAMetalLayer on the output window).
+    /// Content thread acquires drawables and presents in its own command buffer.
+    /// None when no output window is open.
     #[cfg(target_os = "macos")]
-    output_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
-    /// IOSurface-backed textures for output bridge (one per surface slot).
+    output_surface: Option<manifold_gpu::GpuSurface>,
+    /// When true, skip next_drawable() during display retarget to avoid
+    /// blocking the content thread for up to 1s on a transitioning display.
     #[cfg(target_os = "macos")]
-    output_textures: [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
-    /// Last seen output bridge generation (for stale texture detection).
-    #[cfg(target_os = "macos")]
-    output_generation: u64,
-    /// Blit pipeline for output IOSurface write (passthrough + sampler).
+    output_present_suspended: bool,
+    /// Blit pipeline for output present (passthrough + sampler).
     #[cfg(target_os = "macos")]
     output_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
-    /// Sampler for output IOSurface blit.
+    /// Sampler for output present blit.
     #[cfg(target_os = "macos")]
     output_sampler: Option<manifold_gpu::GpuSampler>,
     /// Triple-buffered IOSurface textures for the workspace preview.
@@ -153,11 +151,9 @@ impl ContentPipeline {
             output_w: 1920,
             output_h: 1080,
             #[cfg(target_os = "macos")]
-            output_bridge: None,
+            output_surface: None,
             #[cfg(target_os = "macos")]
-            output_textures: [None, None, None],
-            #[cfg(target_os = "macos")]
-            output_generation: 0,
+            output_present_suspended: false,
             #[cfg(target_os = "macos")]
             output_pipeline: None,
             #[cfg(target_os = "macos")]
@@ -335,12 +331,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         (self.output_w, self.output_h)
     }
 
-    /// Attach an output IOSurface bridge for decoupled presentation.
-    /// The content thread blits final output to this bridge; a separate
-    /// OutputPresenter (CAMetalDisplayLink) reads and presents it.
+    /// Attach an output surface for direct-to-drawable presentation.
+    /// Creates the blit pipeline and sampler lazily.
     #[cfg(target_os = "macos")]
-    pub fn set_output_bridge(&mut self, bridge: Arc<crate::shared_texture::SharedTextureBridge>) {
-        // Lazily create blit pipeline for the output IOSurface write.
+    pub fn set_output_surface(&mut self, surface: manifold_gpu::GpuSurface) {
+        surface.configure_edr();
+        surface.set_contents_gravity_resize_aspect();
+        surface.set_background_color(0.0, 0.0, 0.0, 1.0);
+        surface.set_maximum_drawable_count(3);
+        surface.set_presents_with_transaction(false);
         if self.output_pipeline.is_none()
             && let Some(ref device) = self.native_device
         {
@@ -371,7 +370,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 "fs_main",
                 manifold_gpu::GpuTextureFormat::Rgba16Float,
                 None,
-                "Output IOSurface Blit",
+                "Output Present Blit",
             ));
             self.output_sampler =
                 Some(device.create_sampler(&manifold_gpu::GpuSamplerDesc {
@@ -380,25 +379,28 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     ..Default::default()
                 }));
         }
-        // Import IOSurface textures
-        if let Some(ref device) = self.native_device {
-            for i in 0..crate::shared_texture::SURFACE_COUNT {
-                self.output_textures[i] = Some(unsafe {
-                    bridge.import_texture_native(device, i)
-                });
-            }
-            self.output_generation = bridge.generation();
-        }
-        self.output_bridge = Some(bridge);
-        log::info!("[ContentPipeline] Output bridge attached — decoupled presentation");
+        self.output_surface = Some(surface);
+        log::info!("[ContentPipeline] Output surface attached — direct present");
     }
 
-    /// Detach the output bridge (output window closed).
+    /// Resize the output surface drawable (fullscreen toggle).
     #[cfg(target_os = "macos")]
-    pub fn clear_output_bridge(&mut self) {
-        self.output_bridge = None;
-        self.output_textures = [None, None, None];
-        log::info!("[ContentPipeline] Output bridge detached");
+    pub fn resize_output_surface(&mut self, width: u32, height: u32) {
+        if let Some(ref mut surface) = self.output_surface {
+            surface.resize(width, height);
+        }
+    }
+
+    /// Suspend or resume direct present to the output drawable.
+    #[cfg(target_os = "macos")]
+    pub fn set_output_present_suspended(&mut self, suspended: bool) {
+        self.output_present_suspended = suspended;
+    }
+
+    /// Detach the output surface (output window closed).
+    #[cfg(target_os = "macos")]
+    pub fn clear_output_surface(&mut self) {
+        self.output_surface = None;
     }
 
     #[cfg(target_os = "macos")]
@@ -716,17 +718,49 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 final_output = self.compositor.output_texture();
             }
 
-            // ── Output IOSurface (decoupled presentation) ────────────
-            // Blit final output to the output IOSurface bridge. The
-            // OutputPresenter (CAMetalDisplayLink) reads the latest
-            // surface and presents to the output drawable at vsync.
-            Self::update_output_bridge(
-                &mut native_enc,
-                final_output,
-                self.output_textures[self.write_surface_index].as_ref(),
-                self.output_pipeline.as_ref(),
-                self.output_sampler.as_ref(),
-            );
+            // ── Direct present to output drawable ───────────────────
+            // Acquire drawable, blit final output, schedule present — all in
+            // the same command buffer. displaySyncEnabled on the CAMetalLayer
+            // handles vsync-aligned delivery. No CVDisplayLink, no IOSurface.
+            if let Some(ref surface) = self.output_surface
+                && !self.output_present_suspended
+                && let Some(ref pipeline) = self.output_pipeline
+                && let Some(ref sampler) = self.output_sampler
+                && let Some(drawable) = surface.next_drawable()
+            {
+                let target = drawable.gpu_texture(
+                    manifold_gpu::GpuTextureFormat::Rgba16Float,
+                );
+                let draw_w = surface.width as f32;
+                let draw_h = surface.height as f32;
+                let source_aspect = self.output_w as f32 / self.output_h as f32;
+                let draw_aspect = draw_w / draw_h;
+                let (fit_w, fit_h) = if source_aspect > draw_aspect {
+                    (draw_w, draw_w / source_aspect)
+                } else {
+                    (draw_h * source_aspect, draw_h)
+                };
+                let fit_x = (draw_w - fit_w) * 0.5;
+                let fit_y = (draw_h - fit_h) * 0.5;
+                native_enc.draw_fullscreen_viewport(
+                    pipeline,
+                    &target,
+                    &[
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 0,
+                            texture: final_output,
+                        },
+                        manifold_gpu::GpuBinding::Sampler {
+                            binding: 1,
+                            sampler,
+                        },
+                    ],
+                    (fit_x, fit_y, fit_w, fit_h),
+                    manifold_gpu::GpuLoadAction::Clear,
+                    "Output Present",
+                );
+                native_enc.present_drawable(&drawable);
+            }
 
             // ── Workspace preview (downscaled IOSurface) ────────────
             Self::update_workspace_preview(
@@ -769,18 +803,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             None
         };
 
-        // Register GPU completion handler to publish both output and preview
-        // front buffers the instant the GPU finishes — decoupled from the
-        // content thread's sleep/wake cycle. The OutputPresenter reads the
-        // output bridge; the UI thread reads the preview bridge.
+        // Register GPU completion handler to publish the preview front buffer
+        // the instant the GPU finishes — decoupled from the content thread's
+        // sleep/wake cycle. Output presentation is handled by presentDrawable
+        // on the same command buffer (no IOSurface needed).
         if !export_mode {
             let write_idx = self.write_surface_index as u32;
             let preview = self.preview_bridge.clone();
-            let output = self.output_bridge.clone();
             native_enc.add_completed_handler(move || {
-                if let Some(ref b) = output {
-                    b.publish_front(write_idx);
-                }
                 if let Some(ref b) = preview {
                     b.publish_front(write_idx);
                 }
@@ -990,48 +1020,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     /// When FSR is active these differ from `self.compositor.dimensions()`.
     pub fn dimensions(&self) -> (u32, u32) {
         (self.output_w, self.output_h)
-    }
-
-    /// Blit final output to the output IOSurface bridge.
-    /// Same pattern as workspace preview — copy if same size, blit otherwise.
-    #[cfg(target_os = "macos")]
-    fn update_output_bridge(
-        native_enc: &mut manifold_gpu::GpuEncoder,
-        source: &manifold_gpu::GpuTexture,
-        target: Option<&manifold_gpu::GpuTexture>,
-        pipeline: Option<&manifold_gpu::GpuRenderPipeline>,
-        sampler: Option<&manifold_gpu::GpuSampler>,
-    ) {
-        let Some(target) = target else {
-            return;
-        };
-
-        if target.width == source.width && target.height == source.height {
-            native_enc.copy_texture_to_texture(source, target, target.width, target.height, 1);
-            return;
-        }
-
-        let (Some(pipeline), Some(sampler)) = (pipeline, sampler) else {
-            return;
-        };
-
-        native_enc.draw_fullscreen(
-            pipeline,
-            target,
-            &[
-                manifold_gpu::GpuBinding::Texture {
-                    binding: 0,
-                    texture: source,
-                },
-                manifold_gpu::GpuBinding::Sampler {
-                    binding: 1,
-                    sampler,
-                },
-            ],
-            true,
-            true,
-            "Output IOSurface Blit",
-        );
     }
 
     #[cfg(target_os = "macos")]

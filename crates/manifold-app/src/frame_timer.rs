@@ -198,6 +198,32 @@ impl FrameTimer {
         self.target_frame_duration = Duration::from_secs_f64(1.0 / fps);
     }
 
+    /// Snap target FPS to a clean display divisor.
+    #[allow(dead_code)]
+    ///
+    /// On a 120Hz display, 60fps → divisor 2 → actual 60fps.
+    /// 100fps → divisor 1 → actual 120fps (round up to display rate).
+    /// This prevents temporal aliasing from non-integer frame ratios.
+    pub fn snap_to_display_hz(&mut self, display_hz: f64) {
+        if display_hz <= 0.0 {
+            return;
+        }
+        let divisor = (display_hz / self.target_fps).round().max(1.0) as u32;
+        let snapped = display_hz / divisor as f64;
+        if (snapped - self.target_fps).abs() > 0.5 {
+            log::info!(
+                "[FrameTimer] Snapped {:.1}fps → {:.1}fps \
+                 (display={:.1}Hz, divisor={})",
+                self.target_fps,
+                snapped,
+                display_hz,
+                divisor,
+            );
+        }
+        self.target_fps = snapped;
+        self.target_frame_duration = Duration::from_secs_f64(1.0 / snapped);
+    }
+
     #[allow(dead_code)]
     pub fn target_fps(&self) -> f64 {
         self.target_fps

@@ -16,11 +16,30 @@
 
 use std::ffi::c_void;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use objc::{sel, sel_impl};
 
 use crate::shared_texture::{SharedTextureBridge, SURFACE_COUNT};
+
+/// Shared display Hz between presenter and content thread.
+/// The presenter writes the detected Hz; the content thread reads it
+/// to snap its target FPS to a clean display divisor.
+pub struct DisplayHz(AtomicU64);
+
+impl DisplayHz {
+    pub fn new() -> Self {
+        Self(AtomicU64::new(0.0f64.to_bits()))
+    }
+
+    pub fn store(&self, hz: f64) {
+        self.0.store(hz.to_bits(), Ordering::Release);
+    }
+
+    pub fn load(&self) -> f64 {
+        f64::from_bits(self.0.load(Ordering::Acquire))
+    }
+}
 
 // ─── CAMetalDisplayLink FFI ────────────────────────────────────────────
 
@@ -92,6 +111,10 @@ struct PresenterContext {
     /// Output drawable dimensions (for aspect-fit calculation).
     surface_width: u32,
     surface_height: u32,
+    /// Shared display Hz — written here, read by content thread.
+    display_hz: Arc<DisplayHz>,
+    /// Previous targetPresentationTimestamp for Hz derivation.
+    last_present_timestamp: f64,
     /// Stop flag — set before invalidate to make in-flight callbacks no-op.
     stop: AtomicBool,
 }
@@ -113,12 +136,23 @@ extern "C" fn presenter_callback(
         return;
     }
 
-    // 1. Get drawable from update
+    // 1. Get drawable and presentation timestamp from update
     let drawable_ptr: *mut objc::runtime::Object =
         unsafe { objc::msg_send![update, drawable] };
     if drawable_ptr.is_null() {
         return;
     }
+
+    // Derive display Hz from consecutive presentation timestamps.
+    let present_ts: f64 = unsafe { objc::msg_send![update, targetPresentationTimestamp] };
+    if ctx.last_present_timestamp > 0.0 && present_ts > ctx.last_present_timestamp {
+        let interval = present_ts - ctx.last_present_timestamp;
+        if interval > 0.001 && interval < 0.1 {
+            let hz = 1.0 / interval;
+            ctx.display_hz.store(hz);
+        }
+    }
+    ctx.last_present_timestamp = present_ts;
 
     // 2. Read latest IOSurface front_index
     let front = ctx.bridge.front_index() as usize;
@@ -199,6 +233,8 @@ pub struct OutputPresenter {
     context: *mut PresenterContext,
     /// Retained GpuSurface for configuration (resize, EDR).
     surface: manifold_gpu::GpuSurface,
+    /// Shared display Hz — content thread reads to snap frame rate.
+    display_hz: Arc<DisplayHz>,
 }
 
 // OutputPresenter is created and used only on the main thread.
@@ -246,6 +282,8 @@ impl OutputPresenter {
             ..Default::default()
         });
 
+        let display_hz = Arc::new(DisplayHz::new());
+
         let context = Box::into_raw(Box::new(PresenterContext {
             bridge,
             device,
@@ -255,6 +293,8 @@ impl OutputPresenter {
             generation: u64::MAX, // force reimport on first callback
             surface_width: surface.width,
             surface_height: surface.height,
+            display_hz: display_hz.clone(),
+            last_present_timestamp: 0.0,
             stop: AtomicBool::new(false),
         }));
 
@@ -314,6 +354,7 @@ impl OutputPresenter {
             delegate,
             context,
             surface,
+            display_hz,
         })
     }
 
@@ -328,6 +369,12 @@ impl OutputPresenter {
             width,
             height,
         );
+    }
+
+    /// Get the shared display Hz handle. The content thread holds an
+    /// Arc clone and reads it to snap its target FPS to a clean divisor.
+    pub fn display_hz(&self) -> &Arc<DisplayHz> {
+        &self.display_hz
     }
 
     /// Pause or resume the presenter (e.g. during display retarget).

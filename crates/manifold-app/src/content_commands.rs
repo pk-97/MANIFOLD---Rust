@@ -646,14 +646,22 @@ impl ContentThread {
                 self.engine.mark_compositor_dirty(Seconds::ZERO);
             }
 
-            // ── Output bridge (decoupled presentation) ────────────
+            // ── Output surface (direct present) ────────────────────
             #[cfg(target_os = "macos")]
-            ContentCommand::SetOutputBridge(bridge) => {
-                self.content_pipeline.set_output_bridge(bridge);
+            ContentCommand::SetOutputSurface(surface) => {
+                self.content_pipeline.set_output_surface(surface);
             }
             #[cfg(target_os = "macos")]
-            ContentCommand::ClearOutputBridge => {
-                self.content_pipeline.clear_output_bridge();
+            ContentCommand::ClearOutputSurface => {
+                self.content_pipeline.clear_output_surface();
+            }
+            #[cfg(target_os = "macos")]
+            ContentCommand::ResizeOutputSurface(w, h) => {
+                self.content_pipeline.resize_output_surface(w, h);
+            }
+            #[cfg(target_os = "macos")]
+            ContentCommand::SetOutputPresentSuspended(suspended) => {
+                self.content_pipeline.set_output_present_suspended(suspended);
             }
 
             // ── Generator ─────────────────────────────────────────

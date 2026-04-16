@@ -18,6 +18,7 @@ mod edr_surface;
 mod frame_timer;
 mod input_handler;
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 mod output_presenter;
 mod input_host;
 mod perform_mode;

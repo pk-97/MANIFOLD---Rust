@@ -53,7 +53,6 @@ pub struct ContentThread {
     /// Content frame timer — target FPS synced from project settings.
     pub timer: FrameTimer,
 
-
     // ── Sync infrastructure ──
     /// Authority gatekeeper — only the active ClockAuthority can issue transport commands.
     pub sync_arbiter: SyncArbiter,
@@ -335,9 +334,7 @@ impl ContentThread {
             }
 
             // Precision frame pacing: block until the next frame deadline.
-            // On macOS, uses mach_wait_until (kernel-level, zero CPU).
-            // displaySyncEnabled on the output CAMetalLayer handles vsync-aligned
-            // presentation independently — no need to phase-lock the content thread.
+            // mach_wait_until for the bulk, spin for the final 2ms.
             self.timer.wait_for_deadline();
             // Drain autoreleased ObjC Metal objects at the end of each frame,
             // preventing memory accumulation and random GC-like pauses.
