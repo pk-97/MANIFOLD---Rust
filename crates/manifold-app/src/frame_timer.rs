@@ -112,10 +112,11 @@ impl FrameTimer {
 
     /// Block until the next frame deadline.
     ///
-    /// On macOS with THREAD_TIME_CONSTRAINT_POLICY, `mach_wait_until`
-    /// wakes with sub-microsecond precision. A minimal 100μs spin margin
-    /// handles any residual jitter. Total CPU burn: ~0.1ms/frame (<1%
-    /// of one core).
+    /// On macOS: `mach_wait_until` for the bulk of the wait (zero CPU),
+    /// then spin for the final ~2ms to hit the deadline precisely.
+    /// `mach_wait_until` is a software timer with ~1ms wake resolution —
+    /// the spin bridges the gap using the nanosecond-resolution clock.
+    /// Total CPU: ~2ms/frame = 12% of one core at 60fps.
     pub fn wait_for_deadline(&self) {
         let remaining = self.time_until_next_tick();
         if remaining.is_zero() {
@@ -124,9 +125,7 @@ impl FrameTimer {
 
         #[cfg(target_os = "macos")]
         {
-            // With THREAD_TIME_CONSTRAINT real-time policy, mach_wait_until
-            // is precise to microseconds. Minimal spin margin for safety.
-            const SPIN_MARGIN: Duration = Duration::from_micros(100);
+            const SPIN_MARGIN: Duration = Duration::from_micros(2000);
             if remaining > SPIN_MARGIN {
                 let coarse = remaining - SPIN_MARGIN;
                 let now_mach = unsafe { mach_absolute_time() };
