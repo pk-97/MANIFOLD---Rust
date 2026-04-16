@@ -252,22 +252,24 @@ impl ModulationSnapshot {
         // Layer effects + generator params
         for (i, &(effect_count, has_gen)) in self.layer_shapes.iter().enumerate()
         {
+            // Advance cursor/block for every effect block regardless of
+            // whether the layer/effect exists on the UI side. The flat buffer
+            // layout is authoritative — skipping blocks without advancing
+            // would desync all subsequent data.
             if let Some(layer) = project.timeline.layers.get_mut(i) {
-                // Layer effects
-                if let Some(effects) = &mut layer.effects {
-                    for j in 0..effect_count as usize {
-                        let len =
-                            *self.block_lens.get(block).unwrap_or(&0) as usize;
-                        if let Some(fx) = effects.get_mut(j)
-                            && fx.param_values.len() == len
-                        {
-                            fx.param_values.copy_from_slice(
-                                &self.values[cursor..cursor + len],
-                            );
-                        }
-                        cursor += len;
-                        block += 1;
+                for j in 0..effect_count as usize {
+                    let len =
+                        *self.block_lens.get(block).unwrap_or(&0) as usize;
+                    if let Some(effects) = &mut layer.effects
+                        && let Some(fx) = effects.get_mut(j)
+                        && fx.param_values.len() == len
+                    {
+                        fx.param_values.copy_from_slice(
+                            &self.values[cursor..cursor + len],
+                        );
                     }
+                    cursor += len;
+                    block += 1;
                 }
 
                 // Generator params

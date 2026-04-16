@@ -483,10 +483,8 @@ impl TimelineViewportPanel {
         for v in &mut self.clips_by_layer {
             v.clear();
         }
-        // Grow to match track count if needed (new layers get empty vecs).
+        // Match track count: resize_with grows OR truncates as needed.
         self.clips_by_layer.resize_with(self.tracks.len(), Vec::new);
-        // Truncate if layers were removed.
-        self.clips_by_layer.truncate(self.tracks.len());
         for clip in clips {
             if clip.layer_index < self.clips_by_layer.len() {
                 self.clips_by_layer[clip.layer_index].push(clip);
