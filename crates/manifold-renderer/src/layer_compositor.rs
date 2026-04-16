@@ -264,7 +264,7 @@ fn count_active_layers(frame: &CompositorFrame, any_solo: bool) -> usize {
             i += 1;
         }
         if let Some(ld) = layer_desc
-            && (ld.is_muted || (any_solo && !ld.is_solo))
+            && (ld.is_muted || (any_solo && !ld.is_solo) || ld.opacity <= 0.0)
         {
             continue;
         }
@@ -971,6 +971,12 @@ impl LayerCompositor {
 
             let layer_blend = layer_desc.map_or(BlendMode::Normal, |l| l.blend_mode);
             let layer_opacity = layer_desc.map_or(1.0, |l| l.opacity);
+
+            // Skip fully transparent layers — no GPU work needed
+            if layer_opacity <= 0.0 {
+                continue;
+            }
+
             let has_layer_effects = layer_desc.is_some_and(|ld| has_enabled_effects(ld.effects));
 
             let ec_idx = effect_chain_idx;
