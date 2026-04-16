@@ -161,8 +161,8 @@ pub struct TimelineViewportPanel {
     track_y_offsets: Vec<f32>, // cumulative Y offsets from tracks
     total_tracks_height: f32,
 
-    // Clip data
-    clips: Vec<ViewportClip>,
+    // Clip data — single storage, bucketed by layer index.
+    // Access all clips via clips_by_layer.iter().flatten().
     clips_by_layer: Vec<Vec<ViewportClip>>,
 
     // Per-layer bitmap renderers (None for group layers)
@@ -281,7 +281,6 @@ impl TimelineViewportPanel {
             tracks: Vec::new(),
             track_y_offsets: Vec::new(),
             total_tracks_height: 0.0,
-            clips: Vec::new(),
             clips_by_layer: Vec::new(),
             bitmap_renderers: Vec::new(),
             render_scale: 2.0, // default HiDPI (macOS Retina)
@@ -350,7 +349,7 @@ impl TimelineViewportPanel {
     /// From Unity LayerBitmapRenderer.ComputeClipFingerprint (lines 332-344).
     pub fn compute_fingerprint(&self) -> u64 {
         let (min_beat, max_beat) = self.visible_beat_range();
-        let mut hash = self.clips.len() as u64;
+        let mut hash = self.total_clip_count() as u64;
         hash = hash
             .wrapping_mul(31)
             .wrapping_add(self.mapper.pixels_per_beat().to_bits() as u64);
@@ -377,7 +376,7 @@ impl TimelineViewportPanel {
                 .unwrap_or(0),
         );
         // Per-visible-clip fingerprint
-        for clip in &self.clips {
+        for clip in self.clips_by_layer.iter().flatten() {
             let clip_end = (clip.start_beat + clip.duration_beats).as_f32();
             if clip_end <= min_beat || clip.start_beat.as_f32() >= max_beat {
                 continue;
@@ -479,15 +478,25 @@ impl TimelineViewportPanel {
         self.overview_last_clip_fingerprint = clip_fp;
         self.overview_dirty = true;
 
-        // Bucket clips by layer for per-layer bitmap rendering
-        self.clips_by_layer.clear();
-        self.clips_by_layer.resize(self.tracks.len(), Vec::new());
-        for clip in &clips {
+        // Bucket clips by layer — clear inner vecs (preserving capacity)
+        // instead of dropping and reallocating them.
+        for v in &mut self.clips_by_layer {
+            v.clear();
+        }
+        // Grow to match track count if needed (new layers get empty vecs).
+        self.clips_by_layer.resize_with(self.tracks.len(), Vec::new);
+        // Truncate if layers were removed.
+        self.clips_by_layer.truncate(self.tracks.len());
+        for clip in clips {
             if clip.layer_index < self.clips_by_layer.len() {
-                self.clips_by_layer[clip.layer_index].push(clip.clone());
+                self.clips_by_layer[clip.layer_index].push(clip);
             }
         }
-        self.clips = clips;
+    }
+
+    /// Total number of clips across all layers.
+    fn total_clip_count(&self) -> usize {
+        self.clips_by_layer.iter().map(|v| v.len()).sum()
     }
 
     /// Force a specific layer's bitmap to repaint on the next frame.
@@ -753,8 +762,9 @@ impl TimelineViewportPanel {
 
     /// Max beat across all clips (for overview strip normalization).
     pub fn max_content_beat(&self) -> f32 {
-        self.clips
+        self.clips_by_layer
             .iter()
+            .flatten()
             .map(|c| c.start_beat.as_f32() + c.duration_beats.as_f32())
             .fold(0.0f32, f32::max)
     }
@@ -790,9 +800,17 @@ impl TimelineViewportPanel {
         self.node_count
     }
 
-    /// Read-only access to the flat clip list (for hit testing and rendering).
-    pub fn clips(&self) -> &[ViewportClip] {
-        &self.clips
+    /// Read-only access to clips for a specific layer.
+    pub fn clips_for_layer(&self, layer_index: usize) -> &[ViewportClip] {
+        self.clips_by_layer
+            .get(layer_index)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Total layer count (for iterating all clips across layers).
+    pub fn layer_count(&self) -> usize {
+        self.clips_by_layer.len()
     }
 
     /// Whether a layer is a group track (not directly renderable).
@@ -894,10 +912,10 @@ impl TimelineViewportPanel {
         }
 
         // Iterate clips on this layer in reverse order (topmost/last wins)
-        for clip in self.clips.iter().rev() {
-            if clip.layer_index != layer_index {
-                continue;
-            }
+        let layer_clips = self.clips_by_layer.get(layer_index)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
+        for clip in layer_clips.iter().rev() {
 
             let clip_start_f32 = clip.start_beat.as_f32();
             let clip_end = clip_start_f32 + clip.duration_beats.as_f32();
@@ -1010,10 +1028,10 @@ impl TimelineViewportPanel {
         // Neighboring clip edges on the same layer (uses pixel-based threshold).
         // Clip edges that are closer than the grid snap win — this lets you
         // align clip boundaries precisely even between grid lines.
-        for clip in &self.clips {
-            if clip.layer_index != layer_index {
-                continue;
-            }
+        let layer_clips = self.clips_by_layer.get(layer_index)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
+        for clip in layer_clips {
             if ignore_ids.contains(&clip.clip_id) {
                 continue;
             }
@@ -1484,7 +1502,7 @@ impl TimelineViewportPanel {
 
         let total = tex_w * tex_h;
 
-        if self.clips.is_empty() || self.tracks.is_empty() {
+        if self.total_clip_count() == 0 || self.tracks.is_empty() {
             self.overview_pixels.resize(total, Color32::TRANSPARENT);
             self.overview_pixels.fill(Color32::TRANSPARENT);
             self.overview_dirty = true;
@@ -1493,7 +1511,7 @@ impl TimelineViewportPanel {
 
         // Content duration for normalization
         let mut max_beat = 0.0f32;
-        for clip in &self.clips {
+        for clip in self.clips_by_layer.iter().flatten() {
             let end = clip.start_beat.as_f32() + clip.duration_beats.as_f32();
             if end > max_beat {
                 max_beat = end;
@@ -1527,7 +1545,7 @@ impl TimelineViewportPanel {
             if non_group_count > 0 {
                 let row_h = tex_h as f32 / non_group_count as f32;
 
-                for clip in &self.clips {
+                for clip in self.clips_by_layer.iter().flatten() {
                     let row = match non_group_row.get(clip.layer_index).copied().flatten() {
                         Some(r) => r,
                         None => continue,

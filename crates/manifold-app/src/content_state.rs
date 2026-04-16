@@ -133,114 +133,168 @@ pub struct ContentState {
 }
 
 /// Lightweight snapshot of modulated param values.
-/// Captures only the `Vec<f32>` param_values from effects and generator params,
+/// Captures only `param_values` from effects and generator params,
 /// avoiding a full `Project::clone()` on every modulation frame.
+///
+/// All float values are packed into a single flat buffer (`values`).
+/// A parallel `block_lens` array records the length of each param block.
+/// Layout order: macros, master effects, then per-layer (effects, gen).
+/// Clone = 3 Vec allocations (values + block_lens + layer_shapes)
+/// instead of ~128 separate Vec<f32> clones.
 #[derive(Clone)]
 pub struct ModulationSnapshot {
-    /// Macro slot values, indexed by macro slot.
-    pub macro_values: Vec<f32>,
-    /// Master effect param values, indexed by effect position.
-    pub master_params: Vec<Vec<f32>>,
-    /// Per-layer modulation data, indexed by layer position.
-    pub layers: Vec<ModulationLayerData>,
-}
-
-#[derive(Clone)]
-pub struct ModulationLayerData {
-    /// Layer effect param values, indexed by effect position.
-    pub effect_params: Vec<Vec<f32>>,
-    /// Generator param values (only for generator layers).
-    pub gen_param_values: Option<Vec<f32>>,
+    /// All param values concatenated: macros | master_fx0 | master_fx1 | ...
+    /// | layer0_fx0 | layer0_fx1 | ... | layer0_gen | layer1_fx0 | ...
+    values: Vec<f32>,
+    /// Length of each param block in `values`, in the same order.
+    /// block 0 = macros, blocks 1..1+master_count = master effects,
+    /// remaining blocks = per-layer effects and gen params (see layer_shapes).
+    block_lens: Vec<u16>,
+    /// Number of master effect blocks (immediately after the macro block).
+    master_count: u16,
+    /// Per-layer: (effect_count, has_gen_params). Determines how many
+    /// blocks in `block_lens` belong to each layer.
+    layer_shapes: Vec<(u16, bool)>,
 }
 
 impl ModulationSnapshot {
-    /// Capture modulated param values from the project. Only clones small
-    /// `Vec<f32>` buffers — no strings, no clips, no video library.
-    pub fn capture(project: &Project) -> Self {
-        let macro_values = project
-            .settings
-            .macro_bank
-            .slots
-            .iter()
-            .map(|slot| slot.value)
-            .collect();
-
-        let master_params = project
-            .settings
-            .master_effects
-            .iter()
-            .map(|fx| fx.param_values.clone())
-            .collect();
-
-        let layers = project
-            .timeline
-            .layers
-            .iter()
-            .map(|layer| {
-                let effect_params = layer
-                    .effects
-                    .as_ref()
-                    .map(|effects| effects.iter().map(|fx| fx.param_values.clone()).collect())
-                    .unwrap_or_default();
-
-                let gen_param_values = if layer.layer_type == LayerType::Generator {
-                    layer.gen_params().map(|gp| gp.param_values.clone())
-                } else {
-                    None
-                };
-
-                ModulationLayerData {
-                    effect_params,
-                    gen_param_values,
-                }
-            })
-            .collect();
-
+    /// Create an empty snapshot (used as scratch buffer on content thread).
+    pub fn empty() -> Self {
         Self {
-            macro_values,
-            master_params,
-            layers,
+            values: Vec::new(),
+            block_lens: Vec::new(),
+            master_count: 0,
+            layer_shapes: Vec::new(),
+        }
+    }
+
+    /// Fill this snapshot from the project, reusing existing vec capacity.
+    /// Called each frame on the content thread's scratch instance — zero
+    /// allocation after the first frame (vecs grow once, never shrink).
+    pub fn capture_into(&mut self, project: &Project) {
+        self.values.clear();
+        self.block_lens.clear();
+        self.layer_shapes.clear();
+
+        // Macros (block 0)
+        let macro_count = project.settings.macro_bank.slots.len();
+        for slot in &project.settings.macro_bank.slots {
+            self.values.push(slot.value);
+        }
+        self.block_lens.push(macro_count as u16);
+
+        // Master effects
+        self.master_count = project.settings.master_effects.len() as u16;
+        for fx in &project.settings.master_effects {
+            let len = fx.param_values.len();
+            self.values.extend_from_slice(&fx.param_values);
+            self.block_lens.push(len as u16);
+        }
+
+        // Per-layer: effects + optional gen params
+        for layer in &project.timeline.layers {
+            let effect_count = layer
+                .effects
+                .as_ref()
+                .map_or(0, |effects| effects.len());
+            let has_gen = layer.layer_type == LayerType::Generator
+                && layer.gen_params().is_some();
+
+            if let Some(effects) = &layer.effects {
+                for fx in effects {
+                    let len = fx.param_values.len();
+                    self.values.extend_from_slice(&fx.param_values);
+                    self.block_lens.push(len as u16);
+                }
+            }
+
+            if has_gen
+                && let Some(gp) = layer.gen_params()
+            {
+                let len = gp.param_values.len();
+                self.values.extend_from_slice(&gp.param_values);
+                self.block_lens.push(len as u16);
+            }
+
+            self.layer_shapes.push((effect_count as u16, has_gen));
         }
     }
 
     /// Apply modulated values to a project in-place. Overwrites only
     /// `param_values` — no structural changes, no allocations if lengths match.
     pub fn apply(&self, project: &mut Project) {
-        for (i, &value) in self.macro_values.iter().enumerate() {
+        let mut cursor = 0usize; // position in values
+        let mut block = 0usize;  // position in block_lens
+
+        // Macros (block 0)
+        let macro_len = *self.block_lens.get(block).unwrap_or(&0) as usize;
+        for i in 0..macro_len {
             if let Some(slot) = project.settings.macro_bank.slots.get_mut(i) {
-                slot.value = value;
+                slot.value = self.values[cursor + i];
             }
         }
+        cursor += macro_len;
+        block += 1;
 
         // Master effects
-        for (i, params) in self.master_params.iter().enumerate() {
+        for i in 0..self.master_count as usize {
+            let len = *self.block_lens.get(block).unwrap_or(&0) as usize;
             if let Some(fx) = project.settings.master_effects.get_mut(i)
-                && fx.param_values.len() == params.len()
+                && fx.param_values.len() == len
             {
-                fx.param_values.copy_from_slice(params);
+                fx.param_values
+                    .copy_from_slice(&self.values[cursor..cursor + len]);
             }
+            cursor += len;
+            block += 1;
         }
 
         // Layer effects + generator params
-        for (i, layer_data) in self.layers.iter().enumerate() {
+        for (i, &(effect_count, has_gen)) in self.layer_shapes.iter().enumerate()
+        {
             if let Some(layer) = project.timeline.layers.get_mut(i) {
                 // Layer effects
                 if let Some(effects) = &mut layer.effects {
-                    for (j, params) in layer_data.effect_params.iter().enumerate() {
+                    for j in 0..effect_count as usize {
+                        let len =
+                            *self.block_lens.get(block).unwrap_or(&0) as usize;
                         if let Some(fx) = effects.get_mut(j)
-                            && fx.param_values.len() == params.len()
+                            && fx.param_values.len() == len
                         {
-                            fx.param_values.copy_from_slice(params);
+                            fx.param_values.copy_from_slice(
+                                &self.values[cursor..cursor + len],
+                            );
                         }
+                        cursor += len;
+                        block += 1;
                     }
                 }
 
                 // Generator params
-                if let Some(ref params) = layer_data.gen_param_values
-                    && let Some(gp) = layer.gen_params_mut()
-                    && gp.param_values.len() == params.len()
-                {
-                    gp.param_values.copy_from_slice(params);
+                if has_gen {
+                    let len =
+                        *self.block_lens.get(block).unwrap_or(&0) as usize;
+                    if let Some(gp) = layer.gen_params_mut()
+                        && gp.param_values.len() == len
+                    {
+                        gp.param_values.copy_from_slice(
+                            &self.values[cursor..cursor + len],
+                        );
+                    }
+                    cursor += len;
+                    block += 1;
+                }
+            } else {
+                // Layer gone — skip its blocks
+                for _ in 0..effect_count {
+                    cursor +=
+                        *self.block_lens.get(block).unwrap_or(&0) as usize;
+                    block += 1;
+                }
+                if has_gen {
+                    cursor +=
+                        *self.block_lens.get(block).unwrap_or(&0) as usize;
+                    block += 1;
                 }
             }
         }

@@ -54,14 +54,14 @@ impl ClipHitTester {
     /// `y_in_track_content`: Y offset from top of tracks area (positive downward).
     /// `clip_vertical_padding`: vertical inset clips have within their track.
     /// `mapper`: coordinate mapper for layer layout queries.
-    /// `clips`: flat list of all viewport clips (filtered by layer internally).
+    /// `clips_for_layer`: returns the clips for a given layer index.
     /// `is_group_layer`: closure that returns true if the layer at a given index is a group.
-    pub fn hit_test(
+    pub fn hit_test<'a>(
         beat_at_pointer: f32,
         y_in_track_content: f32,
         clip_vertical_padding: f32,
         mapper: &CoordinateMapper,
-        clips: &[ViewportClip],
+        clips_for_layer: impl Fn(usize) -> &'a [ViewportClip],
         is_group_layer: impl Fn(usize) -> bool,
     ) -> Option<ClipHitResult> {
         // Unity line 51: get layer from Y
@@ -84,11 +84,8 @@ impl ClipHitTester {
         // Unity line 68: pixels per beat for trim handle detection
         let ppb = mapper.pixels_per_beat();
 
-        // Unity lines 72-97: linear scan, reverse iteration (topmost/last wins)
-        for clip in clips.iter().rev() {
-            if clip.layer_index != layer_index {
-                continue;
-            }
+        // Unity lines 72-97: iterate this layer's clips in reverse (topmost/last wins)
+        for clip in clips_for_layer(layer_index).iter().rev() {
 
             let clip_start_f32 = clip.start_beat.as_f32();
             let clip_end = clip_start_f32 + clip.duration_beats.as_f32();
@@ -132,15 +129,15 @@ impl ClipHitTester {
     ///
     /// `min_beat`/`max_beat`: horizontal extent in beats.
     /// `min_layer`/`max_layer`: vertical extent in layer indices.
-    /// `clips`: flat list of all viewport clips.
+    /// `clips_for_layer`: returns the clips for a given layer index.
     /// `layer_count`: total number of layers.
     /// `is_group_layer`: closure returning true for group layers.
-    pub fn box_select(
+    pub fn box_select<'a>(
         min_beat: f32,
         max_beat: f32,
         min_layer: usize,
         max_layer: usize,
-        clips: &[ViewportClip],
+        clips_for_layer: impl Fn(usize) -> &'a [ViewportClip],
         layer_count: usize,
         is_group_layer: impl Fn(usize) -> bool,
     ) -> Vec<ClipId> {
@@ -154,20 +151,17 @@ impl ClipHitTester {
             layer_count - 1
         };
 
-        // Unity lines 115-128: iterate clips, filter by layer and beat range
-        for clip in clips {
-            if clip.layer_index < lo || clip.layer_index > hi {
+        // Unity lines 115-128: iterate per-layer clips within layer range
+        for layer_idx in lo..=hi {
+            if is_group_layer(layer_idx) {
                 continue;
             }
-            // Unity line 118: skip groups
-            if is_group_layer(clip.layer_index) {
-                continue;
-            }
-            // Unity line 125: overlap check
-            let clip_start_f32 = clip.start_beat.as_f32();
-            let clip_end = clip_start_f32 + clip.duration_beats.as_f32();
-            if clip_end > min_beat && clip_start_f32 < max_beat {
-                results.push(clip.clip_id.clone());
+            for clip in clips_for_layer(layer_idx) {
+                let clip_start_f32 = clip.start_beat.as_f32();
+                let clip_end = clip_start_f32 + clip.duration_beats.as_f32();
+                if clip_end > min_beat && clip_start_f32 < max_beat {
+                    results.push(clip.clip_id.clone());
+                }
             }
         }
 
@@ -209,13 +203,29 @@ mod tests {
         false
     }
 
+    /// Bucket flat clip list by layer_index for use with the per-layer API.
+    fn bucket(clips: &[ViewportClip], layer_count: usize) -> Vec<Vec<ViewportClip>> {
+        let mut buckets = vec![Vec::new(); layer_count];
+        for c in clips {
+            if c.layer_index < layer_count {
+                buckets[c.layer_index].push(c.clone());
+            }
+        }
+        buckets
+    }
+
     #[test]
     fn hit_body_region() {
         // Clip at beat 0..4, layer 0 (height 60), ppb=100 → 400px wide
         let mapper = make_mapper(100.0, &[60.0]);
         let clips = vec![make_clip("c1", 0, 0.0, 4.0)];
+        let by_layer = bucket(&clips, 1);
         // Click at beat 2.0, Y=30 (center of 60px track), padding=6
-        let result = ClipHitTester::hit_test(2.0, 30.0, 6.0, &mapper, &clips, no_groups);
+        let result = ClipHitTester::hit_test(
+            2.0, 30.0, 6.0, &mapper,
+            |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
+            no_groups,
+        );
         let hit = result.unwrap();
         assert_eq!(hit.clip_id, "c1");
         assert_eq!(hit.region, HitRegion::Body);
@@ -224,29 +234,40 @@ mod tests {
 
     #[test]
     fn hit_trim_left() {
-        // ppb=100, clip at beat 0..4 → 400px wide. Click at beat 0.05 → 5px from left (< 8)
         let mapper = make_mapper(100.0, &[60.0]);
         let clips = vec![make_clip("c1", 0, 0.0, 4.0)];
-        let result = ClipHitTester::hit_test(0.05, 30.0, 6.0, &mapper, &clips, no_groups);
+        let by_layer = bucket(&clips, 1);
+        let result = ClipHitTester::hit_test(
+            0.05, 30.0, 6.0, &mapper,
+            |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
+            no_groups,
+        );
         assert_eq!(result.unwrap().region, HitRegion::TrimLeft);
     }
 
     #[test]
     fn hit_trim_right() {
-        // ppb=100, clip at beat 0..4 → 400px. Click at beat 3.95 → 395px from left, 5px from right
         let mapper = make_mapper(100.0, &[60.0]);
         let clips = vec![make_clip("c1", 0, 0.0, 4.0)];
-        let result = ClipHitTester::hit_test(3.95, 30.0, 6.0, &mapper, &clips, no_groups);
+        let by_layer = bucket(&clips, 1);
+        let result = ClipHitTester::hit_test(
+            3.95, 30.0, 6.0, &mapper,
+            |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
+            no_groups,
+        );
         assert_eq!(result.unwrap().region, HitRegion::TrimRight);
     }
 
     #[test]
     fn no_trim_on_narrow_clip() {
-        // ppb=100, clip at beat 0..0.1 → 10px wide (< 16px threshold)
         let mapper = make_mapper(100.0, &[60.0]);
         let clips = vec![make_clip("c1", 0, 0.0, 0.1)];
-        // Click at very left edge — should still be Body because clip too narrow
-        let result = ClipHitTester::hit_test(0.005, 30.0, 6.0, &mapper, &clips, no_groups);
+        let by_layer = bucket(&clips, 1);
+        let result = ClipHitTester::hit_test(
+            0.005, 30.0, 6.0, &mapper,
+            |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
+            no_groups,
+        );
         assert_eq!(result.unwrap().region, HitRegion::Body);
     }
 
@@ -254,8 +275,12 @@ mod tests {
     fn miss_gap_between_clips() {
         let mapper = make_mapper(100.0, &[60.0]);
         let clips = vec![make_clip("c1", 0, 0.0, 2.0), make_clip("c2", 0, 4.0, 2.0)];
-        // Beat 3.0 is in the gap
-        let result = ClipHitTester::hit_test(3.0, 30.0, 6.0, &mapper, &clips, no_groups);
+        let by_layer = bucket(&clips, 1);
+        let result = ClipHitTester::hit_test(
+            3.0, 30.0, 6.0, &mapper,
+            |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
+            no_groups,
+        );
         assert!(result.is_none());
     }
 
@@ -263,8 +288,12 @@ mod tests {
     fn miss_in_padding() {
         let mapper = make_mapper(100.0, &[60.0]);
         let clips = vec![make_clip("c1", 0, 0.0, 4.0)];
-        // Y=2 is in top padding (padding=6, track starts at 0)
-        let result = ClipHitTester::hit_test(2.0, 2.0, 6.0, &mapper, &clips, no_groups);
+        let by_layer = bucket(&clips, 1);
+        let result = ClipHitTester::hit_test(
+            2.0, 2.0, 6.0, &mapper,
+            |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
+            no_groups,
+        );
         assert!(result.is_none());
     }
 
@@ -272,21 +301,28 @@ mod tests {
     fn miss_group_layer() {
         let mapper = make_mapper(100.0, &[60.0]);
         let clips = vec![make_clip("c1", 0, 0.0, 4.0)];
-        // Layer 0 is a group
-        let result = ClipHitTester::hit_test(2.0, 30.0, 6.0, &mapper, &clips, |_| true);
+        let by_layer = bucket(&clips, 1);
+        let result = ClipHitTester::hit_test(
+            2.0, 30.0, 6.0, &mapper,
+            |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
+            |_| true,
+        );
         assert!(result.is_none());
     }
 
     #[test]
     fn reverse_iteration_last_wins() {
         let mapper = make_mapper(100.0, &[60.0]);
-        // Two clips at same position (shouldn't happen with overlap enforcement,
-        // but tests the reverse iteration contract)
         let clips = vec![
             make_clip("first", 0, 0.0, 4.0),
             make_clip("last", 0, 0.0, 4.0),
         ];
-        let result = ClipHitTester::hit_test(2.0, 30.0, 6.0, &mapper, &clips, no_groups);
+        let by_layer = bucket(&clips, 1);
+        let result = ClipHitTester::hit_test(
+            2.0, 30.0, 6.0, &mapper,
+            |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
+            no_groups,
+        );
         assert_eq!(result.unwrap().clip_id, "last");
     }
 
@@ -298,8 +334,13 @@ mod tests {
             make_clip("c3", 1, 1.0, 3.0), // beats 1-4, layer 1
             make_clip("c4", 2, 0.0, 1.0), // beats 0-1, layer 2 (outside)
         ];
+        let by_layer = bucket(&clips, 3);
         // Region: beats 1-4, layers 0-1
-        let result = ClipHitTester::box_select(1.0, 4.0, 0, 1, &clips, 3, no_groups);
+        let result = ClipHitTester::box_select(
+            1.0, 4.0, 0, 1,
+            |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
+            3, no_groups,
+        );
         assert!(result.contains(&ClipId::new("c1"))); // 0-2 overlaps 1-4
         assert!(result.contains(&ClipId::new("c2"))); // 3-5 overlaps 1-4
         assert!(result.contains(&ClipId::new("c3"))); // 1-4 overlaps 1-4
@@ -309,8 +350,13 @@ mod tests {
     #[test]
     fn box_select_skips_groups() {
         let clips = vec![make_clip("c1", 0, 0.0, 4.0), make_clip("c2", 1, 0.0, 4.0)];
+        let by_layer = bucket(&clips, 2);
         // Layer 0 is a group
-        let result = ClipHitTester::box_select(0.0, 4.0, 0, 1, &clips, 2, |i| i == 0);
+        let result = ClipHitTester::box_select(
+            0.0, 4.0, 0, 1,
+            |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
+            2, |i| i == 0,
+        );
         assert!(!result.contains(&ClipId::new("c1"))); // group layer skipped
         assert!(result.contains(&ClipId::new("c2"))); // non-group collected
     }

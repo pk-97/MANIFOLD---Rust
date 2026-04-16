@@ -1097,16 +1097,18 @@ impl InteractionOverlay {
             y_in_tracks + viewport.scroll_y_px(),
             self.clip_vertical_padding,
             viewport.mapper(),
-            viewport.clips(),
+            |layer_idx| viewport.clips_for_layer(layer_idx),
             |layer_idx| viewport.is_group_layer(layer_idx),
         )
     }
 
     /// Check if a clip is locked.
     fn clip_is_locked(&self, clip_id: &str, viewport: &TimelineViewportPanel) -> bool {
-        viewport
-            .clips()
-            .iter()
-            .any(|c| c.clip_id == clip_id && c.is_locked)
+        (0..viewport.layer_count()).any(|i| {
+            viewport
+                .clips_for_layer(i)
+                .iter()
+                .any(|c| c.clip_id == clip_id && c.is_locked)
+        })
     }
 }

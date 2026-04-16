@@ -55,6 +55,11 @@ struct LayerGeneratorState {
     /// fallback-to-default problem where e.g. text renders in Inter before the
     /// clip with the selected font is reached.
     layer_string_defaults: std::collections::BTreeMap<String, String>,
+    /// Cached merged string params (defaults + clip overrides). Rebuilt only
+    /// when `string_params_dirty` is set (clip start, type change, data_version).
+    merged_string_params: std::collections::BTreeMap<String, String>,
+    /// True when merged_string_params needs to be rebuilt.
+    string_params_dirty: bool,
 }
 
 /// GPU-side clip renderer for generators.
@@ -204,6 +209,8 @@ impl GeneratorRenderer {
                         generator_type: gen_type.clone(),
                         trigger_count: 0,
                         layer_string_defaults: std::collections::BTreeMap::new(),
+                        merged_string_params: std::collections::BTreeMap::new(),
+                        string_params_dirty: true,
                     },
                 );
             } else {
@@ -341,6 +348,10 @@ impl GeneratorRenderer {
                         .unwrap_or(0) as u32;
                 }
             }
+            // Structural change — string params may have changed, mark all dirty.
+            for layer_state in self.layer_generators.values_mut() {
+                layer_state.string_params_dirty = true;
+            }
         }
 
         // Collect clip IDs into pre-allocated scratch to avoid borrow conflict
@@ -436,29 +447,42 @@ impl GeneratorRenderer {
                     .get(clip_index as usize)
                     .and_then(|c| c.string_params.as_ref());
 
-                // Update layer defaults from this clip's params (learn new keys)
+                // Update layer defaults from this clip's params (learn new keys).
+                // If any new key is learned, mark dirty to rebuild merged cache.
                 if let Some(map) = clip_params {
                     for (k, v) in map {
-                        if !v.is_empty() {
+                        if !v.is_empty()
+                            && layer_state.layer_string_defaults.get(k) != Some(v)
+                        {
                             layer_state
                                 .layer_string_defaults
                                 .insert(k.clone(), v.clone());
+                            layer_state.string_params_dirty = true;
                         }
                     }
                 }
 
                 // Merge: use clip params, falling back to layer defaults for
-                // missing keys. Only build merged map when needed.
+                // missing keys. Use cached merged map — only rebuild when dirty.
                 if layer_state.layer_string_defaults.is_empty() {
                     layer_state.generator.set_string_params(clip_params);
                 } else {
-                    let mut merged = layer_state.layer_string_defaults.clone();
-                    if let Some(map) = clip_params {
-                        for (k, v) in map {
-                            merged.insert(k.clone(), v.clone());
+                    if layer_state.string_params_dirty {
+                        layer_state.merged_string_params.clone_from(
+                            &layer_state.layer_string_defaults,
+                        );
+                        if let Some(map) = clip_params {
+                            for (k, v) in map {
+                                layer_state
+                                    .merged_string_params
+                                    .insert(k.clone(), v.clone());
+                            }
                         }
+                        layer_state.string_params_dirty = false;
                     }
-                    layer_state.generator.set_string_params(Some(&merged));
+                    layer_state
+                        .generator
+                        .set_string_params(Some(&layer_state.merged_string_params));
                 }
                 let new_progress =
                     layer_state
@@ -625,6 +649,8 @@ impl GeneratorRenderer {
                         generator_type: new_type.clone(),
                         trigger_count: old_trigger_count,
                         layer_string_defaults: old_defaults,
+                        merged_string_params: std::collections::BTreeMap::new(),
+                        string_params_dirty: true,
                     },
                 );
             }
@@ -687,6 +713,8 @@ impl ClipRenderer for GeneratorRenderer {
                     }
                 }
             }
+            // New clip started — merged cache needs rebuild with this clip's params.
+            layer_state.string_params_dirty = true;
         }
 
         acquired

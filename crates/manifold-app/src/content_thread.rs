@@ -105,6 +105,9 @@ pub struct ContentThread {
     // ── Cached project snapshot (Arc avoids deep clone every modulation frame) ──
     pub cached_project_snapshot: Option<std::sync::Arc<manifold_core::project::Project>>,
 
+    // ── Reusable modulation scratch (flat buffer — zero alloc after first frame) ──
+    pub mod_scratch: crate::content_state::ModulationSnapshot,
+
     // ── Cached ContentState strings (Arc<str> — clone = refcount bump, zero alloc) ──
     pub cached_midi_clock_position: Arc<str>,
     pub cached_midi_clock_device: Arc<str>,
@@ -850,9 +853,16 @@ impl ContentThread {
 
             // Build lightweight modulation snapshot when drivers/envelopes are
             // active — contains only the param_values that changed this frame.
+            // Uses a reusable scratch buffer: capture_into() clears and refills
+            // without allocating (vecs keep capacity), then clone() copies the
+            // flat buffer (3 allocations vs ~128 with the old nested Vec<Vec<f32>>).
             let modulation_snapshot = if modulation_active {
-                self.engine.project()
-                    .map(crate::content_state::ModulationSnapshot::capture)
+                if let Some(project) = self.engine.project() {
+                    self.mod_scratch.capture_into(project);
+                    Some(self.mod_scratch.clone())
+                } else {
+                    None
+                }
             } else {
                 None
             };

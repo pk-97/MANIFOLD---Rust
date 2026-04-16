@@ -266,12 +266,16 @@ impl OscReceiver {
             q.drain(&mut self.dispatch_buffer);
         }
 
-        for i in 0..self.dispatch_buffer.len() {
-            let addr = self.dispatch_buffer[i].address.clone();
-            let vals = self.dispatch_buffer[i].values.clone();
-            self.dispatch_to_subscribers(&addr, &vals);
+        // Take ownership of the buffer to break the self-borrow:
+        // dispatch_to_subscribers borrows self.subscribers, which conflicts
+        // with self.dispatch_buffer. mem::take moves the Vec out (O(1)),
+        // letting us iterate owned entries without cloning address/values.
+        let mut buf = std::mem::take(&mut self.dispatch_buffer);
+        for msg in &buf {
+            self.dispatch_to_subscribers(&msg.address, &msg.values);
         }
-        self.dispatch_buffer.clear();
+        buf.clear();
+        self.dispatch_buffer = buf;
     }
 
     fn dispatch_to_subscribers(&self, address: &str, values: &[f32]) {
