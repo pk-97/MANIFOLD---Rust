@@ -123,30 +123,87 @@ impl ContentThread {
     ) {
         log::info!("[ContentThread] started");
 
-        // Set content thread to real-time scheduling priority.
-        // Priority 47 is high but leaves headroom for the audio thread (max=48).
-        // Reduces context switch latency and sleep overshoot.
+        // Set content thread to real-time scheduling via THREAD_TIME_CONSTRAINT_POLICY.
+        // This is the native macOS real-time API (used by CoreAudio, game engines).
+        // Tells the kernel: "I'm a periodic real-time workload with a specific
+        // deadline." The scheduler reserves time slots and mach_wait_until wakes
+        // with sub-microsecond precision.
+        //
+        // SCHED_RR (POSIX) was used previously but macOS doesn't honor it for
+        // real-time — it falls back to normal scheduling with 1-2ms jitter.
         #[cfg(target_os = "macos")]
         {
-            let pthread = unsafe { libc::pthread_self() };
-            let mut param: libc::sched_param = unsafe { std::mem::zeroed() };
-            param.sched_priority = 47;
-            let ret = unsafe { libc::pthread_setschedparam(pthread, libc::SCHED_RR, &param) };
-            if ret != 0 {
+            #[repr(C)]
+            struct ThreadTimeConstraintPolicy {
+                period: u32,
+                computation: u32,
+                constraint: u32,
+                preemptible: i32,
+            }
+
+            unsafe extern "C" {
+                fn thread_policy_set(
+                    thread: u32,
+                    flavor: u32,
+                    policy_info: *const ThreadTimeConstraintPolicy,
+                    count: u32,
+                ) -> i32;
+                fn pthread_mach_thread_np(thread: libc::pthread_t) -> u32;
+            }
+
+            // THREAD_TIME_CONSTRAINT_POLICY = 2
+            const THREAD_TIME_CONSTRAINT_POLICY: u32 = 2;
+            // Count = struct size in natural_t (u32) units
+            const POLICY_COUNT: u32 =
+                (std::mem::size_of::<ThreadTimeConstraintPolicy>() / std::mem::size_of::<u32>())
+                    as u32;
+
+            // Convert frame timing to Mach absolute time units.
+            // On Apple Silicon: timebase 1:1, so 1 tick = 1 nanosecond.
+            let frame_ns = (1_000_000_000.0 / self.timer.target_fps()) as u32;
+            // Computation budget: allow up to 75% of the frame for render work.
+            // The remaining 25% is headroom for the scheduler.
+            let computation_ns = (frame_ns as f64 * 0.75) as u32;
+
+            let policy = ThreadTimeConstraintPolicy {
+                period: frame_ns,           // 16.67ms at 60fps
+                computation: computation_ns, // 12.5ms max render time
+                constraint: frame_ns,        // must complete within one period
+                preemptible: 1,              // can be preempted during computation
+            };
+
+            let mach_thread = unsafe {
+                pthread_mach_thread_np(libc::pthread_self())
+            };
+            let ret = unsafe {
+                thread_policy_set(
+                    mach_thread,
+                    THREAD_TIME_CONSTRAINT_POLICY,
+                    &policy,
+                    POLICY_COUNT,
+                )
+            };
+
+            if ret == 0 {
+                log::info!(
+                    "[ContentThread] Real-time thread policy set \
+                     (THREAD_TIME_CONSTRAINT: period={:.2}ms, \
+                     computation={:.2}ms)",
+                    frame_ns as f64 / 1_000_000.0,
+                    computation_ns as f64 / 1_000_000.0,
+                );
+            } else {
                 log::warn!(
-                    "[ContentThread] Failed to set real-time priority (err={}), \
+                    "[ContentThread] THREAD_TIME_CONSTRAINT failed (err={}), \
                      falling back to QOS_CLASS_USER_INTERACTIVE",
                     ret,
                 );
-                // Fallback: request highest QoS class so the scheduler still
-                // prioritises this thread over default work.
                 unsafe extern "C" {
                     fn pthread_set_qos_class_self_np(
                         qos_class: u32,
                         relative_priority: i32,
                     ) -> i32;
                 }
-                // QOS_CLASS_USER_INTERACTIVE = 0x21
                 let qos_ret =
                     unsafe { pthread_set_qos_class_self_np(0x21, 0) };
                 if qos_ret != 0 {
@@ -159,8 +216,6 @@ impl ContentThread {
                         "[ContentThread] QoS set to USER_INTERACTIVE (fallback)"
                     );
                 }
-            } else {
-                log::info!("[ContentThread] Real-time priority set (SCHED_RR, priority=47)");
             }
         }
 

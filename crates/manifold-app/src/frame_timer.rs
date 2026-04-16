@@ -112,10 +112,10 @@ impl FrameTimer {
 
     /// Block until the next frame deadline.
     ///
-    /// On macOS: `mach_wait_until` for the bulk of the wait (zero CPU),
-    /// then a short spin for the final portion to hit the deadline precisely.
-    /// `mach_wait_until` has 1-2ms of scheduler wake latency without
-    /// real-time thread policy — the spin margin must exceed this.
+    /// On macOS with THREAD_TIME_CONSTRAINT_POLICY, `mach_wait_until`
+    /// wakes with sub-microsecond precision. A minimal 100μs spin margin
+    /// handles any residual jitter. Total CPU burn: ~0.1ms/frame (<1%
+    /// of one core).
     pub fn wait_for_deadline(&self) {
         let remaining = self.time_until_next_tick();
         if remaining.is_zero() {
@@ -124,11 +124,9 @@ impl FrameTimer {
 
         #[cfg(target_os = "macos")]
         {
-            // Kernel wait for the coarse portion — zero CPU.
-            // Wake ~2ms early to cover mach_wait_until scheduler latency
-            // (measured at ~1-1.5ms on Apple Silicon without THREAD_TIME_CONSTRAINT).
-            // Spin burn: ~2ms/frame = 12% of one core at 60fps.
-            const SPIN_MARGIN: Duration = Duration::from_micros(2000);
+            // With THREAD_TIME_CONSTRAINT real-time policy, mach_wait_until
+            // is precise to microseconds. Minimal spin margin for safety.
+            const SPIN_MARGIN: Duration = Duration::from_micros(100);
             if remaining > SPIN_MARGIN {
                 let coarse = remaining - SPIN_MARGIN;
                 let now_mach = unsafe { mach_absolute_time() };
@@ -137,7 +135,7 @@ impl FrameTimer {
                     mach_wait_until(now_mach + wait_mach);
                 }
             }
-            // Precision spin for the final portion.
+            // Sub-microsecond spin for the final edge.
             while !self.should_tick() {
                 std::hint::spin_loop();
             }
