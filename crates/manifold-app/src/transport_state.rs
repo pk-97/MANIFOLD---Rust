@@ -5,6 +5,8 @@
 //! Throttled to TRANSPORT_UPDATE_INTERVAL (0.25s) except for per-frame items
 //! like time display.
 
+use std::sync::Arc;
+
 use manifold_core::types::{ClockAuthority, OscSyncMode, PlaybackState};
 use manifold_ui::color;
 
@@ -25,7 +27,7 @@ pub struct TransportStateCache {
     link_peers: i32,
     clk_enabled: bool,
     clk_receiving: bool,
-    clk_position: String,
+    clk_position: Arc<str>,
     sync_enabled: bool,
     sync_mode: OscSyncMode,
     last_update_time: f32,
@@ -43,7 +45,7 @@ impl TransportStateCache {
             link_peers: -1,
             clk_enabled: false,
             clk_receiving: false,
-            clk_position: String::new(),
+            clk_position: Arc::from(""),
             sync_enabled: false,
             sync_mode: OscSyncMode::M4L,
             last_update_time: -1.0,
@@ -284,17 +286,17 @@ impl TransportStateCache {
                 color::TEXT_DIMMED_C32,
             );
         } else if receiving {
-            let display = if position.is_empty() {
-                "Receiving".to_string()
+            let display: &str = if position.is_empty() {
+                "Receiving"
             } else {
-                position
+                &position
             };
             ui.transport.set_clk_state(
                 tree,
                 true,
                 device_text,
                 color::STATUS_DOT_GREEN,
-                &display,
+                display,
                 color::TEXT_WHITE_C32,
             );
         } else {

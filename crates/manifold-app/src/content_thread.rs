@@ -105,13 +105,13 @@ pub struct ContentThread {
     // ── Cached project snapshot (Arc avoids deep clone every modulation frame) ──
     pub cached_project_snapshot: Option<std::sync::Arc<manifold_core::project::Project>>,
 
-    // ── Cached ContentState strings (only rebuilt when changed) ──
-    pub cached_midi_clock_position: String,
-    pub cached_midi_clock_device: String,
-    pub cached_osc_timecode: String,
-    pub cached_perc_message: String,
-    /// Last-sent MIDI device names — only clone when the list changes.
-    pub last_sent_midi_device_names: Vec<String>,
+    // ── Cached ContentState strings (Arc<str> — clone = refcount bump, zero alloc) ──
+    pub cached_midi_clock_position: Arc<str>,
+    pub cached_midi_clock_device: Arc<str>,
+    pub cached_osc_timecode: Arc<str>,
+    pub cached_perc_message: Arc<str>,
+    /// Last-sent MIDI device names — only reallocated when the list changes.
+    pub last_sent_midi_device_names: Arc<[String]>,
 
     // ── Profiling ──
     /// Active profiling session (only present when feature = "profiling").
@@ -857,29 +857,29 @@ impl ContentThread {
                 None
             };
 
-            // Update cached strings only when underlying values change.
+            // Update cached Arc<str> only when underlying values change.
+            // On unchanged frames, .clone() = refcount bump (zero allocation).
             let new_pos = self.transport_controller.midi_clock_sync.as_ref()
                 .map_or("", |s| s.current_position_display());
-            if new_pos != self.cached_midi_clock_position {
-                self.cached_midi_clock_position.clear();
-                self.cached_midi_clock_position.push_str(new_pos);
+            if new_pos != &*self.cached_midi_clock_position {
+                self.cached_midi_clock_position = Arc::from(new_pos);
             }
             let new_dev = self.transport_controller.midi_clock_sync.as_ref()
                 .map_or("None", |s| s.selected_source_name());
-            if new_dev != self.cached_midi_clock_device {
-                self.cached_midi_clock_device.clear();
-                self.cached_midi_clock_device.push_str(new_dev);
+            if new_dev != &*self.cached_midi_clock_device {
+                self.cached_midi_clock_device = Arc::from(new_dev);
             }
-            if self.osc_sync.current_timecode_display != self.cached_osc_timecode {
-                self.cached_osc_timecode.clone_from(&self.osc_sync.current_timecode_display);
+            if self.osc_sync.current_timecode_display != *self.cached_osc_timecode {
+                self.cached_osc_timecode =
+                    Arc::from(self.osc_sync.current_timecode_display.as_str());
             }
             let new_perc = self.percussion_orchestrator.status_message();
-            if new_perc != self.cached_perc_message {
-                self.cached_perc_message.clear();
-                self.cached_perc_message.push_str(new_perc);
+            if new_perc != &*self.cached_perc_message {
+                self.cached_perc_message = Arc::from(new_perc);
             }
-            if self.cached_midi_device_names != self.last_sent_midi_device_names {
-                self.last_sent_midi_device_names.clone_from(&self.cached_midi_device_names);
+            if self.cached_midi_device_names[..] != self.last_sent_midi_device_names[..] {
+                self.last_sent_midi_device_names =
+                    Arc::from(self.cached_midi_device_names.as_slice());
             }
 
             let perc_progress = self.percussion_orchestrator.status_progress01();
@@ -966,7 +966,7 @@ impl ContentThread {
                 recording_dropped_frames: 0,
                 is_exporting: false,
                 export_progress: 0.0,
-                export_status: String::new(),
+                export_status: Arc::from(""),
                 export_finished: None,
                 ableton_session: if self.ableton_bridge.session_changed() {
                     Some(Arc::new(self.ableton_bridge.session().clone()))

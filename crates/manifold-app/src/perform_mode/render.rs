@@ -1,5 +1,7 @@
 //! Perform-mode rendering — minimal main-window draw path.
 
+use std::sync::Arc;
+
 use manifold_core::types::ClockAuthority;
 use manifold_renderer::ui_renderer::UIRenderer;
 use manifold_ui::node::FontWeight;
@@ -14,8 +16,8 @@ struct SyncStatus {
     link_peers: i32,
     midi_clock_enabled: bool,
     midi_clock_receiving: bool,
-    midi_clock_position_display: String,
-    midi_clock_device_name: String,
+    midi_clock_position_display: Arc<str>,
+    midi_clock_device_name: Arc<str>,
 }
 
 impl Application {
@@ -515,22 +517,22 @@ fn draw_sync_indicators(ui: &mut UIRenderer, sync: &SyncStatus) {
     let w = draw_badge(ui, x, device_text, inactive_bg);
     x += w + item_gap;
 
-    let (clk_dot_color, clk_status, clk_text_color) = if !sync.midi_clock_enabled {
-        (dot_inactive, "Off".to_string(), dimmed)
-    } else if sync.midi_clock_receiving {
-        let pos = if sync.midi_clock_position_display.is_empty() {
-            "Receiving".to_string()
+    let (clk_dot_color, clk_status, clk_text_color): (_, &str, _) =
+        if !sync.midi_clock_enabled {
+            (dot_inactive, "Off", dimmed)
+        } else if sync.midi_clock_receiving {
+            if sync.midi_clock_position_display.is_empty() {
+                (dot_green, "Receiving", white)
+            } else {
+                (dot_green, &sync.midi_clock_position_display, white)
+            }
         } else {
-            sync.midi_clock_position_display.clone()
+            (dot_yellow, "Waiting", dimmed)
         };
-        (dot_green, pos, white)
-    } else {
-        (dot_yellow, "Waiting".to_string(), dimmed)
-    };
 
     draw_dot(ui, x, clk_dot_color);
     x += dot_size + text_gap;
-    ui.draw_text(x, text_y, &clk_status, status_font as f32, clk_text_color);
+    ui.draw_text(x, text_y, clk_status, status_font as f32, clk_text_color);
 }
 
 /// Draw a numeric string digit-by-digit, each digit centered within a

@@ -1647,11 +1647,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 cached_midi_device_names: Vec::new(),
                 last_midi_device_scan_time: manifold_core::Seconds(-10.0),
                 cached_project_snapshot: None,
-                cached_midi_clock_position: String::new(),
-                cached_midi_clock_device: String::new(),
-                cached_osc_timecode: String::new(),
-                cached_perc_message: String::new(),
-                last_sent_midi_device_names: Vec::new(),
+                cached_midi_clock_position: Arc::from(""),
+                cached_midi_clock_device: Arc::from(""),
+                cached_osc_timecode: Arc::from(""),
+                cached_perc_message: Arc::from(""),
+                last_sent_midi_device_names: Arc::from([]),
                 #[cfg(feature = "profiling")]
                 profiler: None,
             };
@@ -2788,13 +2788,15 @@ impl Application {
             if let Some(ref mut signal) = self.content_vsync_signal {
                 if let Some(ref win) = output_window {
                     let display_id = display_id_for_window_frame(win);
-                    eprintln!(
-                        "[ScreenChange] output window frame → display_id={}, \
-                         current={}",
-                        display_id,
-                        signal.current_display_id(),
-                    );
-                    if display_id != 0 {
+                    if display_id != 0
+                        && display_id != signal.current_display_id()
+                    {
+                        log::info!(
+                            "[ScreenChange] output window → display_id={}, \
+                             was={}",
+                            display_id,
+                            signal.current_display_id(),
+                        );
                         any_changed |= signal.retarget_to_display(display_id);
                     }
                 } else if let Some(pid) = self.primary_window_id

@@ -241,8 +241,11 @@ pub fn push_state(
             .set_clock_authority(tree, auth.transport_label(), auth_color);
 
         // Cache MIDI device names for dropdown
-        ui.midi_device_names
-            .clone_from(&content_state.midi_device_names);
+        if ui.midi_device_names[..] != content_state.midi_device_names[..] {
+            ui.midi_device_names.clear();
+            ui.midi_device_names
+                .extend_from_slice(&content_state.midi_device_names);
+        }
 
         // Cache Ableton session for parameter mapping dropdown
         if let Some(session) = &content_state.ableton_session {
@@ -306,17 +309,17 @@ pub fn push_state(
             } else {
                 &content_state.midi_clock_device_name
             };
-            let position = if content_state.midi_clock_position_display.is_empty() {
-                "Receiving".to_string()
+            let position: &str = if content_state.midi_clock_position_display.is_empty() {
+                "Receiving"
             } else {
-                content_state.midi_clock_position_display.clone()
+                &content_state.midi_clock_position_display
             };
             ui.transport.set_clk_state(
                 tree,
                 true,
                 device_text,
                 color::STATUS_DOT_GREEN,
-                &position,
+                position,
                 color::TEXT_WHITE_C32,
             );
         } else {

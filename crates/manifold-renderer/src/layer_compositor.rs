@@ -585,6 +585,11 @@ impl LayerCompositor {
             let layer_blend = layer_desc.map_or(BlendMode::Normal, |l| l.blend_mode);
             let layer_opacity = layer_desc.map_or(1.0, |l| l.opacity);
 
+            // Skip fully transparent layers — no GPU work needed
+            if layer_opacity <= 0.0 {
+                continue;
+            }
+
             // Check if this layer has layer-level effects
             let has_layer_effects = layer_desc.is_some_and(|ld| has_enabled_effects(ld.effects));
 

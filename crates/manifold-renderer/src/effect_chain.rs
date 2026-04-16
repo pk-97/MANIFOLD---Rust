@@ -177,25 +177,39 @@ impl EffectChain {
                         continue;
                     }
                     if group.wet_dry < 1.0 {
-                        // If no effect has run yet, copy input -> source via
-                        // GPU memcpy so the dry snapshot captures the input.
-                        if first_effect_pending {
+                        // Only snapshot if at least one effect in this group
+                        // will actually execute — avoids 2 GPU texture copies
+                        // when all group effects are skipped (amount == 0).
+                        let group_has_work = effects.iter().any(|e| {
+                            e.enabled
+                                && e.group_id.as_deref() == Some(gid)
+                                && registry
+                                    .get_mut(e.effect_type())
+                                    .is_some_and(|p| !p.should_skip(e))
+                        });
+                        if group_has_work {
+                            // If no effect has run yet, copy input -> source via
+                            // GPU memcpy so the dry snapshot captures the input.
+                            if first_effect_pending {
+                                gpu.copy_texture_to_texture(
+                                    input_texture,
+                                    self.source_texture(),
+                                    ctx.width,
+                                    ctx.height,
+                                );
+                                first_effect_pending = false;
+                            }
+                            self.ensure_dry_snapshot(
+                                gpu.device, gpu.pool, ctx.width, ctx.height,
+                            );
+                            // GPU copy source -> dry_snapshot
                             gpu.copy_texture_to_texture(
-                                input_texture,
                                 self.source_texture(),
+                                &self.dry_snapshot.as_ref().unwrap().texture,
                                 ctx.width,
                                 ctx.height,
                             );
-                            first_effect_pending = false;
                         }
-                        self.ensure_dry_snapshot(gpu.device, gpu.pool, ctx.width, ctx.height);
-                        // GPU copy source -> dry_snapshot
-                        gpu.copy_texture_to_texture(
-                            self.source_texture(),
-                            &self.dry_snapshot.as_ref().unwrap().texture,
-                            ctx.width,
-                            ctx.height,
-                        );
                     }
                 }
 

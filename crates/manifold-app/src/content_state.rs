@@ -54,14 +54,14 @@ pub struct ContentState {
     pub link_is_playing: bool,
     pub midi_clock_enabled: bool,
     pub midi_clock_bpm: Bpm,
-    pub midi_clock_position_display: String,
+    pub midi_clock_position_display: Arc<str>,
     pub midi_clock_receiving: bool,
-    pub midi_clock_device_name: String,
+    pub midi_clock_device_name: Arc<str>,
     /// Available MIDI input device names for the CLK device dropdown.
-    pub midi_device_names: Vec<String>,
+    pub midi_device_names: Arc<[String]>,
     pub osc_sender_enabled: bool,
     pub osc_receiving_timecode: bool,
-    pub osc_timecode_display: String,
+    pub osc_timecode_display: Arc<str>,
 
     // ── Stem audio state ──────────────────────────────────────────
     pub stem_expanded: bool,
@@ -72,7 +72,7 @@ pub struct ContentState {
 
     // ── Percussion status ─────────────────────────────────────────
     pub percussion_importing: bool,
-    pub percussion_status_message: String,
+    pub percussion_status_message: Arc<str>,
     pub percussion_progress: f32,
     pub percussion_show_progress: bool,
 
@@ -107,7 +107,7 @@ pub struct ContentState {
     /// Export progress (0.0..1.0).
     pub export_progress: f32,
     /// Export status text (e.g. "Exporting 120/600 (20%)").
-    pub export_status: String,
+    pub export_status: Arc<str>,
     /// Set once when export finishes (success or failure).
     pub export_finished: Option<ExportFinishedEvent>,
 
@@ -270,20 +270,20 @@ impl Default for ContentState {
             link_is_playing: false,
             midi_clock_enabled: false,
             midi_clock_bpm: Bpm(120.0),
-            midi_clock_position_display: String::new(),
+            midi_clock_position_display: Arc::from(""),
             midi_clock_receiving: false,
-            midi_clock_device_name: String::new(),
-            midi_device_names: Vec::new(),
+            midi_clock_device_name: Arc::from(""),
+            midi_device_names: Arc::from([]),
             osc_sender_enabled: false,
             osc_receiving_timecode: false,
-            osc_timecode_display: String::new(),
+            osc_timecode_display: Arc::from(""),
             stem_expanded: false,
             stem_ready: false,
             stem_muted: [false; STEM_COUNT],
             stem_soloed: [false; STEM_COUNT],
             stem_available: [false; STEM_COUNT],
             percussion_importing: false,
-            percussion_status_message: String::new(),
+            percussion_status_message: Arc::from(""),
             percussion_progress: 0.0,
             percussion_show_progress: false,
             profiling_active: false,
@@ -296,7 +296,7 @@ impl Default for ContentState {
             recording_dropped_frames: 0,
             is_exporting: false,
             export_progress: 0.0,
-            export_status: String::new(),
+            export_status: Arc::from(""),
             export_finished: None,
             ableton_session: None,
             ableton_connected: false,

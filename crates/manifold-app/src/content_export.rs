@@ -2,6 +2,8 @@
 //! Contains `run_export`, `export_one_frame`, `get_metal_texture_ptr`,
 //! `send_export_progress`, and `send_export_finished`.
 
+use std::sync::Arc;
+
 use crossbeam_channel::{Receiver, Sender};
 
 use manifold_core::{Beats, Seconds};
@@ -460,7 +462,7 @@ impl ContentThread {
         let state = ContentState {
             is_exporting: true,
             export_progress: session.progress(),
-            export_status: session.status_text(),
+            export_status: Arc::from(session.status_text()),
             current_beat: self.engine.current_beat(),
             current_time: self.engine.current_time(),
             is_playing: self.engine.is_playing(),
