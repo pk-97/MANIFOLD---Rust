@@ -147,6 +147,14 @@ pub struct PlaybackEngine {
     stopped_this_tick: Vec<ClipId>,
     ready_clips_list: Vec<ActiveClipRef>,
     timeline_active_scratch: Vec<ActiveClipRef>,
+    /// Pre-allocated scratch for timeline active clip indices from get_active_clips_at_beat.
+    active_indices_scratch: Vec<(usize, usize)>,
+    /// Pre-allocated scratch for live slot refs (avoids per-frame Vec allocation).
+    live_slot_refs_scratch: Vec<ActiveClipRef>,
+    /// Pre-allocated scratch for clips to start during sync (avoids per-sync Vec allocation).
+    sync_start_scratch: Vec<ActiveClipRef>,
+    /// Pre-allocated scratch for modulation active clip timing.
+    modulation_timing_scratch: Vec<(Beats, Beats)>,
     /// Frame count when timeline_active_scratch was last populated.
     /// Used to skip redundant re-queries within the same frame.
     timeline_query_frame: u64,
@@ -222,6 +230,10 @@ impl PlaybackEngine {
             stopped_this_tick: Vec::with_capacity(16),
             ready_clips_list: Vec::with_capacity(32),
             timeline_active_scratch: Vec::with_capacity(32),
+            active_indices_scratch: Vec::with_capacity(32),
+            live_slot_refs_scratch: Vec::with_capacity(8),
+            sync_start_scratch: Vec::with_capacity(4),
+            modulation_timing_scratch: Vec::with_capacity(64),
             timeline_query_frame: u64::MAX, // sentinel: never matches a real frame
             became_ready_list: Vec::with_capacity(8),
             clips_to_stop_drift: Vec::with_capacity(8),
@@ -675,11 +687,17 @@ impl PlaybackEngine {
 
         // 7. Evaluate modulation pipeline (LFO drivers + ADSR envelopes).
         //    Port of C# DriverController.Update() [ExecutionOrder 50, after PlaybackController].
+        let mut timing = std::mem::take(&mut self.modulation_timing_scratch);
         let modulation_dirty = if let Some(project) = &mut self.project {
-            crate::modulation::evaluate_modulation(project, Beats(self.current_beat))
+            crate::modulation::evaluate_modulation(
+                project,
+                Beats(self.current_beat),
+                &mut timing,
+            )
         } else {
             false
         };
+        self.modulation_timing_scratch = timing;
         if modulation_dirty {
             self.mark_compositor_dirty(ctx.realtime_now);
         }
@@ -734,8 +752,13 @@ impl PlaybackEngine {
 
         // 3. Evaluate modulation pipeline even when stopped (for scrub preview / inspector).
         //    Port of C# DriverController — runs in all states.
+        let mut timing = std::mem::take(&mut self.modulation_timing_scratch);
         let modulation_dirty = if let Some(project) = &mut self.project {
-            let dirty = crate::modulation::evaluate_modulation(project, Beats(self.current_beat));
+            let dirty = crate::modulation::evaluate_modulation(
+                project,
+                Beats(self.current_beat),
+                &mut timing,
+            );
             if dirty {
                 self.mark_compositor_dirty(ctx.realtime_now);
             }
@@ -743,6 +766,7 @@ impl PlaybackEngine {
         } else {
             false
         };
+        self.modulation_timing_scratch = timing;
 
         // 4. Filter ready clips for compositor.
         //    Port of C# UpdateCompositor (lines 1126-1132).
@@ -780,12 +804,16 @@ impl PlaybackEngine {
         }
 
         // Step 2: query active clips and build lightweight refs
-        // (split borrow: &self.project + &mut self.timeline_active_scratch)
+        // (split borrow: project.timeline vs self.timeline_active_scratch/active_indices_scratch)
         self.timeline_active_scratch.clear();
-        if let Some(project) = &self.project {
+        if let Some(project) = &mut self.project {
             let beat = Beats(self.current_beat);
-            let active_indices = project.timeline.get_active_clips_at_beat_ref(beat);
-            for (li, ci) in &active_indices {
+            project
+                .timeline
+                .get_active_clips_at_beat_ref(beat, &mut self.active_indices_scratch);
+        }
+        if let Some(project) = &self.project {
+            for (li, ci) in &self.active_indices_scratch {
                 if let Some(clip) = project
                     .timeline
                     .layers
@@ -1030,17 +1058,16 @@ impl PlaybackEngine {
             MIN_START_REMAINING_TIME
         };
 
-        let live_slot_refs = if let Some(mgr) = &self.live_clip_manager {
-            mgr.live_slot_refs()
-        } else {
-            Vec::new()
-        };
+        self.live_slot_refs_scratch.clear();
+        if let Some(mgr) = &self.live_clip_manager {
+            mgr.fill_live_slot_refs(&mut self.live_slot_refs_scratch);
+        }
 
         let sync_result = self.scheduler.compute_sync(
             self.current_time,
             Beats(self.current_beat),
             &self.timeline_active_scratch,
-            &live_slot_refs,
+            &self.live_slot_refs_scratch,
             &self.active_clip_ids,
             &self.looping_clip_ids,
             Beats::from_f32(min_remaining_beats),
@@ -1052,8 +1079,10 @@ impl PlaybackEngine {
 
         // Use realtime 0.0 as fallback since this is called outside tick context.
         // Resolve full TimelineClip from project (timeline) or live_clip_manager.
-        // Clone to_start entries to break borrow — typically 0-2 clips per sync.
-        let starts = sync_result.to_start.to_vec();
+        // Swap scratch in to break borrow — capacity preserved across frames.
+        let mut starts = std::mem::take(&mut self.sync_start_scratch);
+        starts.clear();
+        starts.extend(sync_result.to_start.iter().cloned());
         for entry in &starts {
             let clip = if entry.is_live_slot() {
                 self.live_clip_manager
@@ -1071,6 +1100,7 @@ impl PlaybackEngine {
                 self.start_clip(clip, Seconds::ZERO, entry.layer_index);
             }
         }
+        self.sync_start_scratch = starts;
 
         if !sync_result.to_stop.is_empty() {
             self.compositor_dirty_deadline = self
@@ -1838,7 +1868,7 @@ impl PlaybackEngine {
         self.compositor_fallback_clips
             .extend(self.timeline_active_scratch.iter().cloned());
         if let Some(mgr) = &self.live_clip_manager {
-            self.compositor_fallback_clips.extend(mgr.live_slot_refs());
+            mgr.fill_live_slot_refs(&mut self.compositor_fallback_clips);
         }
 
         // Pre-render all renderers (generators blit shaders, video is no-op)

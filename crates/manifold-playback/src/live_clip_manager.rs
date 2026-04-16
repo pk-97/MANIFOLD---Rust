@@ -117,11 +117,10 @@ impl LiveClipManager {
     pub fn live_slots_list(&self) -> &[(i32, TimelineClip)] {
         &self.live_slots_list
     }
-    /// Build lightweight ActiveClipRef entries for all live slots.
-    pub fn live_slot_refs(&self) -> Vec<crate::scheduler::ActiveClipRef> {
-        self.live_slots_list
-            .iter()
-            .map(|(li, clip)| crate::scheduler::ActiveClipRef {
+    /// Build lightweight ActiveClipRef entries for all live slots into caller's buffer.
+    pub fn fill_live_slot_refs(&self, out: &mut Vec<crate::scheduler::ActiveClipRef>) {
+        for (li, clip) in &self.live_slots_list {
+            out.push(crate::scheduler::ActiveClipRef {
                 clip_id: clip.id.clone(),
                 layer_index: *li,
                 clip_index: crate::scheduler::ActiveClipRef::LIVE_SLOT,
@@ -129,8 +128,8 @@ impl LiveClipManager {
                 duration_beats: clip.duration_beats,
                 is_looping: clip.is_looping,
                 is_video: !clip.video_clip_id.is_empty(),
-            })
-            .collect()
+            });
+        }
     }
     /// Look up a live slot clip by clip ID (for start_clip resolution).
     pub fn find_live_slot_clip(&self, clip_id: &str) -> Option<&TimelineClip> {

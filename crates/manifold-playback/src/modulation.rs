@@ -729,7 +729,11 @@ pub fn evaluate_gen_param_envelopes(
 
 /// Run the full modulation pipeline: reset → drivers → envelopes → gen envelopes.
 /// Returns true if any modulation was applied (compositor should be marked dirty).
-pub fn evaluate_modulation(project: &mut Project, current_beat: Beats) -> bool {
+pub fn evaluate_modulation(
+    project: &mut Project,
+    current_beat: Beats,
+    timing_scratch: &mut Vec<(Beats, Beats)>,
+) -> bool {
     // Phase 1: Reset all effective values to base
     reset_all_effectives(project);
 
@@ -738,13 +742,13 @@ pub fn evaluate_modulation(project: &mut Project, current_beat: Beats) -> bool {
 
     // Pre-compute per-layer active clip timing for envelope phases.
     // Avoids O(total_clips) scan in each envelope function.
-    let active_clip_timing = compute_active_clip_timing(&project.timeline.layers, current_beat);
+    compute_active_clip_timing(&project.timeline.layers, current_beat, timing_scratch);
 
     // Phase 3: Evaluate clip/layer ADSR envelopes (additive on top of drivers)
-    let any_enveloped = evaluate_all_envelopes(project, &active_clip_timing);
+    let any_enveloped = evaluate_all_envelopes(project, timing_scratch);
 
     // Phase 4: Evaluate generator param ADSR envelopes
-    let any_gen_enveloped = evaluate_gen_param_envelopes(project, &active_clip_timing);
+    let any_gen_enveloped = evaluate_gen_param_envelopes(project, timing_scratch);
 
     any_driven || any_enveloped || any_gen_enveloped
 }
@@ -754,8 +758,9 @@ pub fn evaluate_modulation(project: &mut Project, current_beat: Beats) -> bool {
 fn compute_active_clip_timing(
     layers: &[manifold_core::layer::Layer],
     current_beat: Beats,
-) -> Vec<(Beats, Beats)> {
-    let mut timing = Vec::with_capacity(layers.len());
+    timing: &mut Vec<(Beats, Beats)>,
+) {
+    timing.clear();
     for layer in layers {
         let mut elapsed = Beats(-1.0);
         let mut duration = Beats::ZERO;
@@ -772,5 +777,4 @@ fn compute_active_clip_timing(
         }
         timing.push((elapsed, duration));
     }
-    timing
 }

@@ -390,19 +390,28 @@ impl Timeline {
     }
 
     /// Get active clips at a given beat (respecting mute/solo with group hierarchy).
-    /// This &mut self variant ensures sort caches are up-to-date before querying.
+    /// Ensures sort caches are up-to-date, then queries into caller-provided buffer.
     /// From Unity Timeline.cs GetActiveClipsAtBeat (lines 331-374).
-    pub fn get_active_clips_at_beat(&mut self, beat: Beats) -> Vec<(usize, usize)> {
+    pub fn get_active_clips_at_beat(
+        &mut self,
+        beat: Beats,
+        results: &mut Vec<(usize, usize)>,
+    ) {
         self.ensure_layers_sorted();
-        self.get_active_clips_at_beat_ref(beat)
+        self.get_active_clips_at_beat_ref(beat, results);
     }
 
-    /// Get active clips at a given beat (&self variant).
+    /// Get active clips at a given beat into caller-provided buffer.
     /// IMPORTANT: Caller must ensure sort caches are current via `ensure_layers_sorted()`
     /// before calling this. Use `get_active_clips_at_beat()` if unsure.
-    pub fn get_active_clips_at_beat_ref(&self, beat: Beats) -> Vec<(usize, usize)> {
+    /// Zero per-frame allocation — uses caller's pre-allocated buffer.
+    pub fn get_active_clips_at_beat_ref(
+        &self,
+        beat: Beats,
+        results: &mut Vec<(usize, usize)>,
+    ) {
         let any_solo = self.layers.iter().any(|l| l.is_solo);
-        let mut results = Vec::new();
+        results.clear();
         let mut active_indices = Vec::new();
 
         for li in 0..self.layers.len() {
@@ -432,15 +441,14 @@ impl Timeline {
             }
 
             active_indices.clear();
-            self.layers[li].collect_active_clips_at_beat(beat, &mut active_indices);
+            self.layers[li]
+                .collect_active_clips_at_beat(beat, &mut active_indices);
             for ci in &active_indices {
                 if !self.layers[li].clips[*ci].is_muted {
                     results.push((li, *ci));
                 }
             }
         }
-
-        results
     }
 
     /// Find the parent group layer for a child at the given flat index.
