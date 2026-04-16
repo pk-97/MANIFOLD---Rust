@@ -27,9 +27,9 @@ use crate::shared_texture::{SharedTextureBridge, SURFACE_COUNT};
 #[link(name = "QuartzCore", kind = "framework")]
 unsafe extern "C" {}
 
-// NSRunLoop
+// NSRunLoop mode constant — a global NSString*, not a function.
 unsafe extern "C" {
-    fn NSRunLoopCommonModes() -> *mut c_void;
+    static NSRunLoopCommonModes: *mut c_void;
 }
 
 /// Register the ObjC delegate class for CAMetalDisplayLink.
@@ -288,11 +288,10 @@ impl OutputPresenter {
         unsafe {
             let main_loop: *mut objc::runtime::Object =
                 objc::msg_send![objc::class!(NSRunLoop), mainRunLoop];
-            let mode = NSRunLoopCommonModes();
             let _: () = objc::msg_send![
                 display_link,
                 addToRunLoop: main_loop
-                forMode: mode
+                forMode: NSRunLoopCommonModes
             ];
         }
 
