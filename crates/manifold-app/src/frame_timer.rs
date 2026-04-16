@@ -110,9 +110,13 @@ impl FrameTimer {
             .saturating_sub(self.last_tick_time.elapsed())
     }
 
-    /// Block until the next frame deadline. Zero CPU overhead on macOS
-    /// (kernel-level `mach_wait_until`). Falls back to sleep on other
-    /// platforms.
+    /// Block until the next frame deadline.
+    ///
+    /// On macOS: `mach_wait_until` for the bulk of the wait (zero CPU),
+    /// then a short spin for the last ~0.5ms to hit the deadline precisely.
+    /// `mach_wait_until` has ~0.5-1ms of scheduler wake latency even with
+    /// SCHED_RR — the spin compensates. Total CPU burn: ~0.5ms/frame (3%
+    /// of one core), vs the old 3ms/frame (18%) with pure sleep+spin.
     pub fn wait_for_deadline(&self) {
         let remaining = self.time_until_next_tick();
         if remaining.is_zero() {
@@ -121,23 +125,30 @@ impl FrameTimer {
 
         #[cfg(target_os = "macos")]
         {
-            let now_mach = unsafe { mach_absolute_time() };
-            let wait_mach = self.mach_timebase.duration_to_mach_units(remaining);
-            let deadline = now_mach + wait_mach;
-            unsafe {
-                mach_wait_until(deadline);
+            // Kernel wait for the coarse portion — zero CPU.
+            // Wake ~0.5ms early to leave room for the precision spin.
+            const SPIN_MARGIN: Duration = Duration::from_micros(500);
+            if remaining > SPIN_MARGIN {
+                let coarse = remaining - SPIN_MARGIN;
+                let now_mach = unsafe { mach_absolute_time() };
+                let wait_mach = self.mach_timebase.duration_to_mach_units(coarse);
+                unsafe {
+                    mach_wait_until(now_mach + wait_mach);
+                }
+            }
+            // Precision spin for the final sub-millisecond.
+            while !self.should_tick() {
+                std::hint::spin_loop();
             }
         }
 
         #[cfg(not(target_os = "macos"))]
         {
-            // Fallback: sleep most of the duration, spin-wait the rest
-            // to compensate for OS sleep overshoot.
             if remaining > Duration::from_millis(4) {
                 std::thread::sleep(remaining - Duration::from_millis(3));
             }
             while !self.should_tick() {
-                std::thread::yield_now();
+                std::hint::spin_loop();
             }
         }
     }
