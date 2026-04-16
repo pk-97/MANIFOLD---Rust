@@ -606,27 +606,27 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
         let mut clip_descs: Vec<CompositeClipDescriptor> =
             Vec::with_capacity(tick_result.ready_clips.len());
-        for (layer_index, clip) in &tick_result.ready_clips {
+        for entry in &tick_result.ready_clips {
             let clip_texture = renderers.iter().find_map(|r| {
                 if let Some(gen_r) = r.as_any().downcast_ref::<GeneratorRenderer>()
-                    && let Some(t) = gen_r.get_clip_texture(&clip.id)
+                    && let Some(t) = gen_r.get_clip_texture(&entry.clip_id)
                 {
                     return Some(t);
                 }
                 #[cfg(target_os = "macos")]
                 if let Some(vid_r) = r.as_any().downcast_ref::<VideoRenderer>()
-                    && let Some(t) = vid_r.get_clip_texture(&clip.id)
+                    && let Some(t) = vid_r.get_clip_texture(&entry.clip_id)
                 {
                     return Some(t);
                 }
                 None
             });
             if let Some(texture) = clip_texture {
-                let layer = layers.get(*layer_index as usize);
+                let layer = layers.get(entry.layer_index as usize);
                 clip_descs.push(CompositeClipDescriptor {
-                    clip_id: &clip.id,
+                    clip_id: &entry.clip_id,
                     texture,
-                    layer_index: *layer_index,
+                    layer_index: entry.layer_index,
                     blend_mode: layer.map_or(BlendMode::Normal, |l| l.default_blend_mode),
                     opacity: layer.map_or(1.0, |l| l.opacity),
                     effects: &[],

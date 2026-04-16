@@ -11,7 +11,7 @@ use manifold_core::{Beats, Bpm, Seconds};
 use crate::active_window::ActiveTimelineClipWindow;
 use crate::live_clip_manager::LiveClipManager;
 use crate::renderer::ClipRenderer;
-use crate::scheduler::ClipScheduler;
+use crate::scheduler::{ActiveClipRef, ClipScheduler};
 
 use ahash::{AHashMap, AHashSet};
 use std::collections::HashMap;
@@ -63,8 +63,8 @@ pub struct TickContext {
 /// Output of a single engine tick.
 #[derive(Debug, Clone, Default)]
 pub struct TickResult {
-    /// Active clips ready for compositing, paired with their layer index.
-    pub ready_clips: Vec<(i32, TimelineClip)>,
+    /// Active clips ready for compositing (lightweight references).
+    pub ready_clips: Vec<ActiveClipRef>,
     pub compositor_dirty: bool,
     pub should_clear_compositor: bool,
     pub should_clear_feedback_buffer: bool,
@@ -145,15 +145,15 @@ pub struct PlaybackEngine {
     /// Clips stopped during the current tick. Drained into TickResult::stopped_clips
     /// so the content pipeline can release per-owner GPU effect state.
     stopped_this_tick: Vec<ClipId>,
-    ready_clips_list: Vec<(i32, TimelineClip)>,
-    timeline_active_scratch: Vec<(i32, TimelineClip)>,
+    ready_clips_list: Vec<ActiveClipRef>,
+    timeline_active_scratch: Vec<ActiveClipRef>,
     /// Frame count when timeline_active_scratch was last populated.
     /// Used to skip redundant re-queries within the same frame.
     timeline_query_frame: u64,
     became_ready_list: Vec<ClipId>,
     clips_to_stop_drift: Vec<ClipId>,
     prewarm_candidates: Vec<TimelineClip>,
-    compositor_fallback_clips: Vec<(i32, TimelineClip)>,
+    compositor_fallback_clips: Vec<ActiveClipRef>,
 
     // Prewarm state. Port of C# PlaybackEngine prewarm fields.
     next_prewarm_at: f64,
@@ -779,7 +779,8 @@ impl PlaybackEngine {
             p.timeline.ensure_layers_sorted();
         }
 
-        // Step 2: query active clips (split borrow: &self.project + &mut self.timeline_active_scratch)
+        // Step 2: query active clips and build lightweight refs
+        // (split borrow: &self.project + &mut self.timeline_active_scratch)
         self.timeline_active_scratch.clear();
         if let Some(project) = &self.project {
             let beat = Beats(self.current_beat);
@@ -791,7 +792,15 @@ impl PlaybackEngine {
                     .get(*li)
                     .and_then(|l| l.clips.get(*ci))
                 {
-                    self.timeline_active_scratch.push((*li as i32, clip.clone()));
+                    self.timeline_active_scratch.push(ActiveClipRef {
+                        clip_id: clip.id.clone(),
+                        layer_index: *li as i32,
+                        clip_index: *ci as u32,
+                        start_beat: clip.start_beat,
+                        duration_beats: clip.duration_beats,
+                        is_looping: clip.is_looping,
+                        is_video: !clip.video_clip_id.is_empty(),
+                    });
                 }
             }
         }
@@ -992,7 +1001,7 @@ impl PlaybackEngine {
 
     /// Return timeline active clips at the current beat.
     /// Port of C# PlaybackEngine.GetTimelineActiveClipsAtCurrentBeat (lines 1031-1056).
-    pub fn get_timeline_active_clips_at_current_beat(&mut self) -> &[(i32, TimelineClip)] {
+    pub fn get_timeline_active_clips_at_current_beat(&mut self) -> &[ActiveClipRef] {
         self.query_active_timeline_clips();
         &self.timeline_active_scratch
     }
@@ -1021,17 +1030,17 @@ impl PlaybackEngine {
             MIN_START_REMAINING_TIME
         };
 
-        let live_slots = if let Some(mgr) = &self.live_clip_manager {
-            mgr.live_slots_list()
+        let live_slot_refs = if let Some(mgr) = &self.live_clip_manager {
+            mgr.live_slot_refs()
         } else {
-            &[]
+            Vec::new()
         };
 
         let sync_result = self.scheduler.compute_sync(
             self.current_time,
             Beats(self.current_beat),
             &self.timeline_active_scratch,
-            live_slots,
+            &live_slot_refs,
             &self.active_clip_ids,
             &self.looping_clip_ids,
             Beats::from_f32(min_remaining_beats),
@@ -1041,9 +1050,26 @@ impl PlaybackEngine {
             self.stop_clip(clip_id);
         }
 
-        // Use realtime 0.0 as fallback since this is called outside tick context
-        for (layer_index, clip) in &sync_result.to_start {
-            self.start_clip(clip, Seconds::ZERO, *layer_index);
+        // Use realtime 0.0 as fallback since this is called outside tick context.
+        // Resolve full TimelineClip from project (timeline) or live_clip_manager.
+        // Clone to_start entries to break borrow — typically 0-2 clips per sync.
+        let starts = sync_result.to_start.to_vec();
+        for entry in &starts {
+            let clip = if entry.is_live_slot() {
+                self.live_clip_manager
+                    .as_ref()
+                    .and_then(|mgr| mgr.find_live_slot_clip(&entry.clip_id))
+                    .cloned()
+            } else {
+                self.project
+                    .as_ref()
+                    .and_then(|p| p.timeline.layers.get(entry.layer_index as usize))
+                    .and_then(|l| l.clips.get(entry.clip_index as usize))
+                    .cloned()
+            };
+            if let Some(ref clip) = clip {
+                self.start_clip(clip, Seconds::ZERO, entry.layer_index);
+            }
         }
 
         if !sync_result.to_stop.is_empty() {
@@ -1802,7 +1828,7 @@ impl PlaybackEngine {
     /// Filter active clips to only those ready for compositing.
     /// Applies recently-started gate for video clips.
     /// Port of C# PlaybackEngine.FilterReadyClips (lines 1193-1239).
-    pub fn filter_ready_clips(&mut self, pre_render_dt: Seconds) -> Vec<(i32, TimelineClip)> {
+    pub fn filter_ready_clips(&mut self, pre_render_dt: Seconds) -> Vec<ActiveClipRef> {
         // Resolve should-be-active clips (timeline + live slots).
         // Skip re-query if sync_clips_to_time already populated the scratch this frame.
         self.compositor_fallback_clips.clear();
@@ -1812,9 +1838,7 @@ impl PlaybackEngine {
         self.compositor_fallback_clips
             .extend(self.timeline_active_scratch.iter().cloned());
         if let Some(mgr) = &self.live_clip_manager {
-            for (li, clip) in mgr.live_slots_list() {
-                self.compositor_fallback_clips.push((*li, clip.clone()));
-            }
+            self.compositor_fallback_clips.extend(mgr.live_slot_refs());
         }
 
         // Pre-render all renderers (generators blit shaders, video is no-op)
@@ -1829,13 +1853,12 @@ impl PlaybackEngine {
         // Filter to ready clips (index-based to avoid borrow conflict)
         self.ready_clips_list.clear();
         for i in 0..self.compositor_fallback_clips.len() {
-            let (_, clip) = &self.compositor_fallback_clips[i];
-            let clip_id = clip.id.clone();
-            let renderer_idx = match self.active_clip_renderers.get(clip_id.as_str()) {
+            let entry = &self.compositor_fallback_clips[i];
+            let renderer_idx = match self.active_clip_renderers.get(entry.clip_id.as_str()) {
                 Some(&idx) => idx,
                 None => continue,
             };
-            if !self.renderers[renderer_idx].is_clip_ready(&clip_id) {
+            if !self.renderers[renderer_idx].is_clip_ready(&entry.clip_id) {
                 continue;
             }
 
@@ -1846,18 +1869,22 @@ impl PlaybackEngine {
                 let is_live_clip = self
                     .live_clip_manager
                     .as_ref()
-                    .is_some_and(|mgr| mgr.is_live_slot_clip(&clip_id));
+                    .is_some_and(|mgr| mgr.is_live_slot_clip(&entry.clip_id));
                 // Inline beat_to_timeline_time to avoid &mut self borrow
                 let clip_end_time = if let Some(project) = &self.project {
                     TempoMapConverter::beat_to_seconds_immut(
                         &project.tempo_map,
-                        clip.end_beat(),
+                        entry.end_beat(),
                         project.settings.bpm,
                     )
                 } else {
-                    Seconds(clip.end_beat().0 * 0.5)
+                    Seconds(entry.end_beat().0 * 0.5)
                 };
-                if self.should_exclude_recently_started(&clip_id, clip_end_time, is_live_clip) {
+                if self.should_exclude_recently_started(
+                    &entry.clip_id,
+                    clip_end_time,
+                    is_live_clip,
+                ) {
                     continue;
                 }
             }

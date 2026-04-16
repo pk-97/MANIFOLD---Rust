@@ -707,10 +707,10 @@ impl ContentThread {
                     let gen_renderer = renderers.iter().find_map(|r| {
                         r.as_any().downcast_ref::<manifold_renderer::generator_renderer::GeneratorRenderer>()
                     });
-                    tick_result.ready_clips.iter().map(|(_, clip)| {
+                    tick_result.ready_clips.iter().map(|entry| {
                         let progress = gen_renderer
-                            .map_or(0.0, |gr| gr.get_clip_anim_progress(clip.id.as_str()));
-                        (clip.id.to_string(), progress)
+                            .map_or(0.0, |gr| gr.get_clip_anim_progress(entry.clip_id.as_str()));
+                        (entry.clip_id.to_string(), progress)
                     }).collect()
                 };
 
@@ -720,17 +720,20 @@ impl ContentThread {
                     .unwrap_or(&[]);
 
                 let active_clip_info: Vec<manifold_profiler::ActiveClipInfo> =
-                    tick_result.ready_clips.iter().enumerate().map(|(i, (li, clip))| {
-                        let gen_param_values = layers.get(*li as usize)
-                            .and_then(|l| l.gen_params());
+                    tick_result.ready_clips.iter().enumerate().map(|(i, entry)| {
+                        let layer = layers.get(entry.layer_index as usize);
+                        let gen_param_values = layer.and_then(|l| l.gen_params());
+                        let gen_type = layer
+                            .map(|l| l.generator_type().clone())
+                            .unwrap_or_default();
                         let gen_params = gen_param_values
-                            .map(|gp| build_gen_params(&clip.generator_type, &gp.param_values))
+                            .map(|gp| build_gen_params(&gen_type, &gp.param_values))
                             .unwrap_or_default();
                         let anim_progress = anim_map.get(i).map_or(0.0, |a| a.1);
                         manifold_profiler::ActiveClipInfo {
-                            clip_id: clip.id.to_string(),
-                            generator_type: clip.generator_type.to_string(),
-                            layer_index: *li,
+                            clip_id: entry.clip_id.to_string(),
+                            generator_type: gen_type.to_string(),
+                            layer_index: entry.layer_index,
                             anim_progress,
                             gen_params,
                         }
