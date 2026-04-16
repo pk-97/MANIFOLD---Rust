@@ -622,7 +622,7 @@ impl ContentThread {
             let render_work_start = std::time::Instant::now();
             self.content_pipeline.render_content(
                 &self.gpu, &mut self.engine, &tick_result, dt, self.frame_count,
-                false,
+                false, self.editing_service.data_version(),
             );
             let _render_work_ms = render_work_start.elapsed().as_secs_f64() * 1000.0;
 

@@ -397,6 +397,7 @@ impl ContentThread {
             frame_dt,
             frame_idx as u64,
             true,
+            self.editing_service.data_version(),
         );
 
         // Block until async effect workers complete (blob tracking, wireframe depth,

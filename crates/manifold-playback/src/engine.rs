@@ -793,7 +793,7 @@ impl PlaybackEngine {
 
     // ─── Clip lifecycle ───
 
-    pub fn start_clip(&mut self, clip: &TimelineClip, realtime_now: Seconds) {
+    pub fn start_clip(&mut self, clip: &TimelineClip, realtime_now: Seconds, layer_index: i32) {
         // Fix 6: Never start clips on group layers
         if let Some(project) = &self.project
             && let Some(li) = project.timeline.layer_index_for_id(&clip.layer_id)
@@ -810,7 +810,8 @@ impl PlaybackEngine {
                 .project
                 .as_ref()
                 .map_or(&[] as &[_], |p| &p.timeline.layers);
-            let success = self.renderers[idx].start_clip(clip, self.current_time, layers);
+            let success =
+                self.renderers[idx].start_clip(clip, self.current_time, layers, layer_index);
             if success {
                 self.active_clip_renderers.insert(clip.id.clone(), idx);
                 self.active_clip_ids.insert(clip.id.clone());
@@ -1034,8 +1035,8 @@ impl PlaybackEngine {
         }
 
         // Use realtime 0.0 as fallback since this is called outside tick context
-        for clip in &sync_result.to_start {
-            self.start_clip(clip, Seconds::ZERO);
+        for (layer_index, clip) in &sync_result.to_start {
+            self.start_clip(clip, Seconds::ZERO, *layer_index);
         }
 
         if !sync_result.to_stop.is_empty() {

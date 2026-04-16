@@ -9,7 +9,7 @@ use std::any::Any;
 /// Port of C# IClipRenderer interface.
 pub trait ClipRenderer: Any + Send {
     fn can_handle(&self, clip: &TimelineClip) -> bool;
-    fn start_clip(&mut self, clip: &TimelineClip, current_time: Seconds, layers: &[Layer]) -> bool;
+    fn start_clip(&mut self, clip: &TimelineClip, current_time: Seconds, layers: &[Layer], layer_index: i32) -> bool;
     fn stop_clip(&mut self, clip_id: &str);
     fn release_all(&mut self);
 
@@ -96,6 +96,7 @@ impl ClipRenderer for StubRenderer {
         clip: &TimelineClip,
         _current_time: Seconds,
         _layers: &[Layer],
+        _layer_index: i32,
     ) -> bool {
         self.active_clips.insert(
             clip.id.clone(),

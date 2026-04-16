@@ -8,12 +8,12 @@ use manifold_core::{Beats, Seconds};
 /// They are valid until the next compute_sync call, which reclaims them.
 /// Port of C# ClipScheduler.SyncResult.
 pub struct SyncResult {
-    /// All clips that should be playing (timeline + live slots).
-    pub should_be_active: Vec<TimelineClip>,
+    /// All clips that should be playing (timeline + live slots), with layer index.
+    pub should_be_active: Vec<(i32, TimelineClip)>,
     /// Clip IDs to deactivate (were active, no longer should be).
     pub to_stop: Vec<ClipId>,
-    /// Clips to activate (should be active, aren't yet).
-    pub to_start: Vec<TimelineClip>,
+    /// Clips to activate (should be active, aren't yet), with layer index.
+    pub to_start: Vec<(i32, TimelineClip)>,
 }
 
 /// Pure clip scheduling logic. Port of C# ClipScheduler.
@@ -21,13 +21,13 @@ pub struct SyncResult {
 pub struct ClipScheduler {
     should_be_active_ids: AHashSet<ClipId>,
     // Internal buffers — drained into SyncResult each call, reclaimed next call.
-    _merged_list: Vec<TimelineClip>,
+    _merged_list: Vec<(i32, TimelineClip)>,
     _to_stop: Vec<ClipId>,
-    _to_start: Vec<TimelineClip>,
+    _to_start: Vec<(i32, TimelineClip)>,
     // Reclaimed buffers from previous SyncResult.
-    reclaimed_should_be_active: Vec<TimelineClip>,
+    reclaimed_should_be_active: Vec<(i32, TimelineClip)>,
     reclaimed_to_stop: Vec<ClipId>,
-    reclaimed_to_start: Vec<TimelineClip>,
+    reclaimed_to_start: Vec<(i32, TimelineClip)>,
 }
 
 impl ClipScheduler {
@@ -77,7 +77,7 @@ impl ClipScheduler {
         self.should_be_active_ids.clear();
 
         // Copy timeline clips to internal merged list (avoids mutating caller's cached list).
-        merged.extend(timeline_active_clips.iter().map(|(_, c)| c.clone()));
+        merged.extend(timeline_active_clips.iter().cloned());
 
         // Merge live slots. Live slots persist until CommitLiveClip() removes them
         // (triggered by NoteOff). They must NOT expire based on EndBeat — if the
@@ -85,16 +85,16 @@ impl ClipScheduler {
         // last frame but the slot stays alive so NoteOff can commit the correct
         // held duration to the timeline.
         // C# ClipScheduler.cs lines 74-83.
-        for (_layer_index, clip) in live_slots {
+        for (layer_index, clip) in live_slots {
             // Live slots are NoteOff-lifetime clips and can extend past EndBeat,
             // but they must still honor their launch boundary (StartBeat).
             if current_beat + Beats(0.0001) >= clip.start_beat {
-                merged.push(clip.clone());
+                merged.push((*layer_index, clip.clone()));
             }
         }
 
         // Build lookup of what should be active.
-        for clip in &merged {
+        for (_, clip) in &merged {
             self.should_be_active_ids.insert(clip.id.clone());
         }
 
@@ -108,13 +108,13 @@ impl ClipScheduler {
         // Compute starts — clips that should be active but aren't.
         // Skip clips whose remaining lifetime in BEATS is too short to render.
         // Beat-domain checks stay stable when external tempo nudges BPM slightly.
-        for clip in &merged {
+        for (li, clip) in &merged {
             if !currently_active_ids.contains(&clip.id) {
                 let remaining = clip.end_beat() - current_beat;
                 if remaining < min_remaining_beats && !looping_clip_ids.contains(&clip.id) {
                     continue;
                 }
-                to_start.push(clip.clone());
+                to_start.push((*li, clip.clone()));
             }
         }
 
@@ -189,7 +189,7 @@ mod tests {
         );
         assert_eq!(result.should_be_active.len(), 1);
         assert_eq!(result.to_start.len(), 1);
-        assert_eq!(result.to_start[0].id, "c1");
+        assert_eq!(result.to_start[0].1.id, "c1");
     }
 
     #[test]
@@ -290,7 +290,7 @@ mod tests {
         );
         assert_eq!(result.should_be_active.len(), 1);
         assert_eq!(result.to_start.len(), 1);
-        assert_eq!(result.to_start[0].id, "live1");
+        assert_eq!(result.to_start[0].1.id, "live1");
     }
 
     #[test]
@@ -377,7 +377,7 @@ mod tests {
         let ids: AHashSet<ClipId> = result
             .should_be_active
             .iter()
-            .map(|c| c.id.clone())
+            .map(|(_, c)| c.id.clone())
             .collect();
         assert!(ids.contains("t1"));
         assert!(ids.contains("t2"));

@@ -91,6 +91,8 @@ pub struct GeneratorRenderer {
     /// When false, all generators render at full resolution (Native mode).
     /// Controlled by `UpscaleMode` from project settings.
     scaling_enabled: bool,
+    /// Cached data_version — layer_index refresh scan only runs when this changes.
+    last_data_version: u64,
 }
 
 // Safety: device_ptr points to GpuDevice on the content thread.
@@ -134,6 +136,7 @@ impl GeneratorRenderer {
             uniform_arena,
             upscaler,
             scaling_enabled: true,
+            last_data_version: u64::MAX, // force scan on first frame
         }
     }
 
@@ -312,16 +315,22 @@ impl GeneratorRenderer {
         beat: f64,
         dt: f32,
         layers: &[Layer],
+        data_version: u64,
     ) {
         // Reset uniform arena for this frame and set on GpuEncoder.
         self.uniform_arena.reset();
         gpu.uniform_arena = Some(&mut self.uniform_arena as *mut UniformArena);
 
-        // Refresh positional cache on active clips — layer_index may have changed
-        // after reorder, but layer_id stays stable so generator state follows.
-        for active in self.active_clips.values_mut() {
-            if let Some(pos) = layers.iter().position(|l| l.layer_id == active.layer_id) {
-                active.layer_index = pos as i32;
+        // Refresh positional cache on active clips — only when the project has
+        // structurally changed (layer reorder/add/delete bumps data_version).
+        // layer_id stays stable across reorders so generator state follows.
+        if data_version != self.last_data_version {
+            self.last_data_version = data_version;
+            for active in self.active_clips.values_mut() {
+                if let Some(pos) = layers.iter().position(|l| l.layer_id == active.layer_id)
+                {
+                    active.layer_index = pos as i32;
+                }
             }
         }
 
@@ -633,13 +642,12 @@ impl ClipRenderer for GeneratorRenderer {
         clip: &TimelineClip,
         _current_time: Seconds,
         layers: &[Layer],
+        layer_index: i32,
     ) -> bool {
-        // Find the layer that contains this clip to get layer_id and generator_type
+        // Use the layer_index from the scheduler to get layer_id and generator_type — O(1).
         let (layer_id, gen_type, layer_index) = layers
-            .iter()
-            .enumerate()
-            .find(|(_, l)| l.clips.iter().any(|c| c.id == clip.id))
-            .map(|(i, l)| (l.layer_id.clone(), l.generator_type().clone(), i as i32))
+            .get(layer_index as usize)
+            .map(|l| (l.layer_id.clone(), l.generator_type().clone(), layer_index))
             .unwrap_or_default();
         let acquired = self.acquire_clip(&clip.id, gen_type, layer_id.clone(), layer_index);
 
@@ -698,6 +706,8 @@ impl ClipRenderer for GeneratorRenderer {
         // Release per-layer generator state (particle buffers, density textures, etc.)
         // to prevent GPU memory leaks across project switches.
         self.layer_generators.clear();
+        // Force layer_index rescan on next render after project reload.
+        self.last_data_version = u64::MAX;
     }
 
     fn is_clip_ready(&self, clip_id: &str) -> bool {

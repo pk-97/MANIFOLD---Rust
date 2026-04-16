@@ -445,6 +445,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         dt: f64,
         frame_count: u64,
         export_mode: bool,
+        data_version: u64,
     ) {
         let _t_frame = std::time::Instant::now();
 
@@ -477,6 +478,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 _t_frame,
                 _poll_ms,
                 export_mode,
+                data_version,
             );
         }
 
@@ -518,6 +520,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         _t_frame: std::time::Instant,
         _poll_ms: f64,
         export_mode: bool,
+        data_version: u64,
     ) {
         let native_device = self.native_device.as_ref().unwrap();
         let texture_pool = self.texture_pool.as_ref();
@@ -583,6 +586,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             beat_f64,
                             dt as f32,
                             layers,
+                            data_version,
                         );
                         break;
                     }

@@ -339,6 +339,7 @@ impl ClipRenderer for VideoRenderer {
         clip: &TimelineClip,
         _current_time: Seconds,
         _layers: &[Layer],
+        _layer_index: i32,
     ) -> bool {
         if self.active_clips.contains_key(clip.id.as_ref()) {
             return true;
