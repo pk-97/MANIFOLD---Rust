@@ -19,7 +19,7 @@ use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::video::VideoLibrary;
-use manifold_core::{Beats, Seconds};
+use manifold_core::{Beats, ClipId, Seconds};
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
@@ -84,15 +84,15 @@ pub struct VideoRenderer {
     width: u32,
     height: u32,
     format: GpuTextureFormat,
-    active_clips: AHashMap<String, ActiveVideoClip>,
+    active_clips: AHashMap<ClipId, ActiveVideoClip>,
     scheduler: DecodeScheduler,
     available_rts: Vec<VideoRenderTarget>,
     video_library: Option<VideoLibrary>,
     rt_counter: usize,
     /// Pre-allocated scratch buffer for pending seek dispatch (avoids per-frame alloc).
-    pending_scratch: Vec<(String, f32)>,
+    pending_scratch: Vec<(ClipId, f32)>,
     /// Pre-allocated scratch buffer for clip ID iteration (avoids per-frame alloc).
-    clip_ids_scratch: Vec<String>,
+    clip_ids_scratch: Vec<ClipId>,
 }
 
 // Safety: device_ptr points to GpuDevice on the content thread.
@@ -371,11 +371,12 @@ impl ClipRenderer for VideoRenderer {
             (video_clip.file_path.clone(), video_clip.duration)
         };
 
-        let clip_id_str: String = clip.id.as_ref().to_string();
+        let clip_id_owned = clip.id.clone();
+        let clip_id_str = clip.id.to_string(); // For DecodeJob (background thread, needs String)
         let rt = self.acquire_rt();
 
         self.active_clips.insert(
-            clip_id_str.clone(),
+            clip_id_owned,
             ActiveVideoClip {
                 video_clip_id: clip.video_clip_id.clone(),
                 render_target: rt,
@@ -414,10 +415,12 @@ impl ClipRenderer for VideoRenderer {
     }
 
     fn release_all(&mut self) {
-        let clip_ids: Vec<String> = self.active_clips.keys().cloned().collect();
-        for clip_id in clip_ids {
-            if let Some(clip) = self.active_clips.remove(&clip_id) {
-                self.scheduler.submit(DecodeJob::Close { clip_id });
+        let clip_ids: Vec<ClipId> = self.active_clips.keys().cloned().collect();
+        for clip_id in &clip_ids {
+            if let Some(clip) = self.active_clips.remove(clip_id.as_str()) {
+                self.scheduler.submit(DecodeJob::Close {
+                    clip_id: clip_id.to_string(),
+                });
                 self.release_rt(clip.render_target);
             }
         }
@@ -527,7 +530,7 @@ impl ClipRenderer for VideoRenderer {
         for i in 0..self.pending_scratch.len() {
             let (ref clip_id, target_time) = self.pending_scratch[i];
             self.scheduler.submit(DecodeJob::Seek {
-                clip_id: clip_id.clone(),
+                clip_id: clip_id.to_string(),
                 target_time,
             });
         }
@@ -562,7 +565,7 @@ impl ClipRenderer for VideoRenderer {
                     clip.time_accumulator = 0.0;
                     clip.decode_pending = true;
                     self.scheduler.submit(DecodeJob::Seek {
-                        clip_id: clip_id.clone(),
+                        clip_id: clip_id.to_string(),
                         target_time: skip_time,
                     });
                 } else {
@@ -571,7 +574,7 @@ impl ClipRenderer for VideoRenderer {
                     }
                     clip.decode_pending = true;
                     self.scheduler.submit(DecodeJob::DecodeNext {
-                        clip_id: clip_id.clone(),
+                        clip_id: clip_id.to_string(),
                     });
                 }
             }

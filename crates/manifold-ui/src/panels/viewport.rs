@@ -175,6 +175,7 @@ pub struct TimelineViewportPanel {
     is_playing: bool,
     selection_region: Option<SelectionRegion>,
     selected_clip_ids: Vec<ClipId>,
+    last_selection_version: u64,
     hovered_clip_id: Option<ClipId>,
 
     // Viewport rects
@@ -251,6 +252,7 @@ pub struct TimelineViewportPanel {
     // Timeline markers
     marker_groups: Vec<MarkerNodeGroup>,
     markers: Vec<TimelineMarker>,
+    marker_line_cache: Vec<(f32, Color32)>,
     selected_marker_ids: Vec<MarkerId>,
     marker_flag_rects: Vec<(MarkerId, Rect)>,
     marker_node_ids: Vec<i32>,
@@ -288,6 +290,7 @@ impl TimelineViewportPanel {
             is_playing: false,
             selection_region: None,
             selected_clip_ids: Vec::new(),
+            last_selection_version: 0,
             hovered_clip_id: None,
             viewport_rect: Rect::ZERO,
             overview_rect: Rect::ZERO,
@@ -328,6 +331,7 @@ impl TimelineViewportPanel {
             collapsed_group_bitmaps: Vec::new(),
             marker_groups: Vec::new(),
             markers: Vec::new(),
+            marker_line_cache: Vec::new(),
             selected_marker_ids: Vec::new(),
             marker_flag_rects: Vec::new(),
             marker_node_ids: Vec::new(),
@@ -659,25 +663,56 @@ impl TimelineViewportPanel {
         self.selected_clip_ids = ids;
     }
 
+    /// Update selection sets only when selection_version has changed.
+    /// Avoids per-frame Vec allocation when selection is stable.
+    pub fn sync_selection(
+        &mut self,
+        version: u64,
+        clip_ids: impl FnOnce() -> Vec<ClipId>,
+        marker_ids: impl FnOnce() -> Vec<MarkerId>,
+    ) {
+        if version != self.last_selection_version {
+            self.last_selection_version = version;
+            self.selected_clip_ids = clip_ids();
+            self.selected_marker_ids = marker_ids();
+        }
+    }
+
     pub fn set_hovered_clip_id(&mut self, id: Option<ClipId>) {
         self.hovered_clip_id = id;
     }
 
     pub fn set_markers(&mut self, markers: Vec<TimelineMarker>) {
-        self.markers = markers;
-    }
-
-    /// Marker positions and colors for bitmap rendering (beat, color with line alpha).
-    pub fn marker_line_data(&self) -> Vec<(f32, Color32)> {
-        self.markers
+        self.marker_line_cache = markers
             .iter()
             .map(|m| {
                 let mc = color::marker_color_to_color32(m.color);
-                let line_color =
-                    Color32::new(mc.r, mc.g, mc.b, color::MARKER_LINE_ALPHA);
+                let line_color = Color32::new(mc.r, mc.g, mc.b, color::MARKER_LINE_ALPHA);
                 (m.beat.as_f32(), line_color)
             })
-            .collect()
+            .collect();
+        self.markers = markers;
+    }
+
+    /// Check if the provided markers differ from the cached set.
+    /// Uses length + first/last beat as a fast proxy to avoid full comparison.
+    pub fn markers_stale(&self, source: &[TimelineMarker]) -> bool {
+        if self.markers.len() != source.len() {
+            return true;
+        }
+        if let (Some(a), Some(b)) = (self.markers.last(), source.last())
+            && (a.beat != b.beat || a.id != b.id)
+        {
+            return true;
+        }
+        false
+    }
+
+    /// Marker positions and colors for bitmap rendering (beat, color with line alpha).
+    /// Cached — rebuilt when markers change via set_markers(). Returns owned Vec
+    /// (from cache) so the caller can use it without borrowing the viewport.
+    pub fn marker_line_data(&self) -> Vec<(f32, Color32)> {
+        self.marker_line_cache.clone()
     }
 
     pub fn set_selected_marker_ids(&mut self, ids: Vec<MarkerId>) {

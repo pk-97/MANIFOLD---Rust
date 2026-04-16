@@ -7,7 +7,7 @@ use crate::uniform_arena::UniformArena;
 use ahash::AHashMap;
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
-use manifold_core::{Beats, GeneratorTypeId, LayerId, Seconds};
+use manifold_core::{Beats, ClipId, GeneratorTypeId, LayerId, Seconds};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_playback::renderer::ClipRenderer;
 use std::any::Any;
@@ -23,7 +23,8 @@ struct ActiveClip {
     internal_scale: f32,
     generator_type: GeneratorTypeId,
     layer_id: LayerId,
-    layer_index: i32, // positional cache for param lookup in render_all
+    layer_index: i32,  // positional cache for param lookup in render_all
+    clip_index: u32,   // positional cache for string_params lookup (avoids linear scan)
     anim_progress: f32,
     /// True on the first frame after acquiring a reused render target.
     /// Cleared to opaque black before the generator renders to prevent
@@ -74,14 +75,14 @@ pub struct GeneratorRenderer {
     output_height: u32,
     format: GpuTextureFormat,
     registry: GeneratorRegistry,
-    active_clips: AHashMap<String, ActiveClip>,
+    active_clips: AHashMap<ClipId, ActiveClip>,
     layer_generators: AHashMap<LayerId, LayerGeneratorState>,
     available_rts: Vec<RenderTarget>,
     /// Pre-allocated scratch buffer for render iteration (avoids per-frame alloc).
-    render_scratch: Vec<String>,
-    /// Per-clip render info: (layer_index, trigger_count, anim_progress, internal_scale).
+    render_scratch: Vec<ClipId>,
+    /// Per-clip render info: (layer_index, clip_index, trigger_count, anim_progress, internal_scale).
     /// Parallel to render_scratch — avoids LayerId/GeneratorTypeId clones in render loop.
-    render_info_scratch: Vec<(i32, u32, f32, f32)>,
+    render_info_scratch: Vec<(i32, u32, u32, f32, f32)>,
     /// Shared-memory uniform arena for generator uniform data.
     /// Eliminates per-generator queue.write_buffer() calls.
     uniform_arena: UniformArena,
@@ -182,6 +183,7 @@ impl GeneratorRenderer {
         gen_type: GeneratorTypeId,
         layer_id: LayerId,
         layer_index: i32,
+        clip_index: u32,
     ) -> bool {
         if self.active_clips.contains_key(clip_id) {
             return true;
@@ -288,7 +290,7 @@ impl GeneratorRenderer {
         // Reused RTs may contain stale content from a different clip/layer.
         // Clear before the generator renders to prevent cross-layer bleed.
         self.active_clips.insert(
-            clip_id.to_string(),
+            ClipId::new(clip_id),
             ActiveClip {
                 render_target,
                 upscale_target,
@@ -296,6 +298,7 @@ impl GeneratorRenderer {
                 generator_type: gen_type.clone(),
                 layer_id,
                 layer_index,
+                clip_index,
                 anim_progress: 0.0,
                 needs_clear: true,
                 upscale_needs_clear: needs_upscale,
@@ -326,10 +329,16 @@ impl GeneratorRenderer {
         // layer_id stays stable across reorders so generator state follows.
         if data_version != self.last_data_version {
             self.last_data_version = data_version;
-            for active in self.active_clips.values_mut() {
+            for (clip_id, active) in self.active_clips.iter_mut() {
                 if let Some(pos) = layers.iter().position(|l| l.layer_id == active.layer_id)
                 {
                     active.layer_index = pos as i32;
+                    // Refresh clip_index within the layer (clips may reorder on edit).
+                    active.clip_index = layers[pos]
+                        .clips
+                        .iter()
+                        .position(|c| c.id == *clip_id)
+                        .unwrap_or(0) as u32;
                 }
             }
         }
@@ -350,19 +359,20 @@ impl GeneratorRenderer {
                     .map_or(0, |ls| ls.trigger_count);
                 self.render_info_scratch.push((
                     active.layer_index,
+                    active.clip_index,
                     trigger_count,
                     active.anim_progress,
                     active.internal_scale,
                 ));
             } else {
                 // Sentinel: skip this clip in the render loop
-                self.render_info_scratch.push((-1, 0, 0.0, 1.0));
+                self.render_info_scratch.push((-1, 0, 0, 0.0, 1.0));
             }
         }
 
         for clip_idx in 0..self.render_scratch.len() {
             let id = &self.render_scratch[clip_idx];
-            let (layer_index, trigger_count, anim_progress, internal_scale) =
+            let (layer_index, clip_index, trigger_count, anim_progress, internal_scale) =
                 self.render_info_scratch[clip_idx];
             if layer_index < 0 {
                 continue; // sentinel — clip not found
@@ -420,10 +430,10 @@ impl GeneratorRenderer {
                 // Pass per-clip string params (e.g. text content) to the generator.
                 // If the clip's map is missing keys that other clips on the layer
                 // have set (e.g. fontFamily), fill them from the layer-level cache.
+                // Uses cached clip_index for O(1) lookup (set during start_clip).
                 let clip_params = layer
                     .clips
-                    .iter()
-                    .find(|c| c.id.as_str() == id)
+                    .get(clip_index as usize)
                     .and_then(|c| c.string_params.as_ref());
 
                 // Update layer defaults from this clip's params (learn new keys)
@@ -645,11 +655,17 @@ impl ClipRenderer for GeneratorRenderer {
         layer_index: i32,
     ) -> bool {
         // Use the layer_index from the scheduler to get layer_id and generator_type — O(1).
-        let (layer_id, gen_type, layer_index) = layers
-            .get(layer_index as usize)
-            .map(|l| (l.layer_id.clone(), l.generator_type().clone(), layer_index))
+        let layer = layers.get(layer_index as usize);
+        let (layer_id, gen_type) = layer
+            .map(|l| (l.layer_id.clone(), l.generator_type().clone()))
             .unwrap_or_default();
-        let acquired = self.acquire_clip(&clip.id, gen_type, layer_id.clone(), layer_index);
+        // Find clip_index within the layer for O(1) string_params lookup in render_all.
+        // This scan runs once per clip start (0-2 per frame), not per-frame.
+        let clip_index = layer
+            .and_then(|l| l.clips.iter().position(|c| c.id == clip.id))
+            .unwrap_or(0) as u32;
+        let acquired =
+            self.acquire_clip(&clip.id, gen_type, layer_id.clone(), layer_index, clip_index);
 
         // Populate layer string defaults by scanning ALL clips on this layer.
         // This ensures string params set on any clip (e.g. fontFamily on one clip)

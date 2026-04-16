@@ -480,11 +480,12 @@ pub fn push_state(
     ui.viewport.set_playhead(Beats::from_f32(playhead_beat));
     ui.viewport.set_playing(content_state.is_playing);
 
-    // Selection → viewport
-    ui.viewport
-        .set_selected_clip_ids(selection.selected_clip_ids.iter().cloned().collect());
-    ui.viewport
-        .set_selected_marker_ids(selection.selected_marker_ids.iter().cloned().collect());
+    // Selection → viewport (version-gated to avoid per-frame Vec allocation)
+    ui.viewport.sync_selection(
+        selection.selection_version,
+        || selection.selected_clip_ids.iter().cloned().collect(),
+        || selection.selected_marker_ids.iter().cloned().collect(),
+    );
     if let Some(beat) = selection.insert_cursor_beat {
         ui.viewport.set_insert_cursor(beat);
     }
@@ -1034,8 +1035,10 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
         }
     }
     ui.viewport.set_clips(viewport_clips);
-    // Also sync markers during drag (marker drag mutates project.timeline.markers)
-    ui.viewport.set_markers(project.timeline.markers.clone());
+    // Only sync markers when marker data has changed (avoids full clone on every drag frame).
+    if ui.viewport.markers_stale(&project.timeline.markers) {
+        ui.viewport.set_markers(project.timeline.markers.clone());
+    }
 }
 
 /// Sync inspector content for the active selection.

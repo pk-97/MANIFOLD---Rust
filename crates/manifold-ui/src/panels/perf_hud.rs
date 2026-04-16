@@ -81,6 +81,8 @@ pub struct PerfHudPanel {
     metrics: PerfMetrics,
     first_node: usize,
     node_count: usize,
+    /// Re-usable string buffer for formatted values (avoids per-frame String allocation).
+    fmt_buf: String,
     // Rolling frame time histories
     ui_dt_history: FrameTimeHistory,
     render_dt_history: FrameTimeHistory,
@@ -122,6 +124,7 @@ impl PerfHudPanel {
             metrics: PerfMetrics::default(),
             first_node: 0,
             node_count: 0,
+            fmt_buf: String::with_capacity(64),
             ui_dt_history: FrameTimeHistory::new(),
             render_dt_history: FrameTimeHistory::new(),
             ui_fps_value_id: -1,
@@ -166,39 +169,31 @@ impl PerfHudPanel {
     }
 
     /// Push metric values and graph bars to the tree without rebuilding.
-    pub fn push_values(&self, tree: &mut UITree) {
+    /// Uses a reusable string buffer to avoid per-frame format! allocations.
+    pub fn push_values(&mut self, tree: &mut UITree) {
+        use std::fmt::Write;
         if !self.visible {
             return;
         }
         let m = &self.metrics;
 
-        if self.ui_fps_value_id >= 0 {
-            tree.set_text(self.ui_fps_value_id as u32, &format!("{:.0}", m.ui_fps));
+        macro_rules! fmt_set {
+            ($id:expr, $($arg:tt)*) => {
+                if $id >= 0 {
+                    self.fmt_buf.clear();
+                    let _ = write!(self.fmt_buf, $($arg)*);
+                    tree.set_text($id as u32, &self.fmt_buf);
+                }
+            };
         }
-        if self.ui_frame_time_id >= 0 {
-            tree.set_text(
-                self.ui_frame_time_id as u32,
-                &format!("{:.1} ms", m.ui_frame_time_ms),
-            );
-        }
-        if self.render_fps_value_id >= 0 {
-            tree.set_text(
-                self.render_fps_value_id as u32,
-                &format!("{:.0}", m.render_fps),
-            );
-        }
-        if self.render_frame_time_id >= 0 {
-            tree.set_text(
-                self.render_frame_time_id as u32,
-                &format!("{:.1} ms", m.render_frame_time_ms),
-            );
-        }
+
+        fmt_set!(self.ui_fps_value_id, "{:.0}", m.ui_fps);
+        fmt_set!(self.ui_frame_time_id, "{:.1} ms", m.ui_frame_time_ms);
+        fmt_set!(self.render_fps_value_id, "{:.0}", m.render_fps);
+        fmt_set!(self.render_frame_time_id, "{:.1} ms", m.render_frame_time_ms);
         if self.gpu_fence_wait_id >= 0 {
             if m.gpu_fence_wait_ms > 0.1 {
-                tree.set_text(
-                    self.gpu_fence_wait_id as u32,
-                    &format!("{:.1} ms", m.gpu_fence_wait_ms),
-                );
+                fmt_set!(self.gpu_fence_wait_id, "{:.1} ms", m.gpu_fence_wait_ms);
                 tree.set_style(
                     self.gpu_fence_wait_id as u32,
                     UIStyle {
@@ -221,33 +216,21 @@ impl PerfHudPanel {
                 );
             }
         }
-        if self.active_clips_id >= 0 {
-            tree.set_text(
-                self.active_clips_id as u32,
-                &format!("{} / {}", m.active_clips, m.preparing_clips),
-            );
-        }
-        if self.beat_id >= 0 {
-            tree.set_text(self.beat_id as u32, &format!("{:.2}", m.current_beat.0));
-        }
+        fmt_set!(self.active_clips_id, "{} / {}", m.active_clips, m.preparing_clips);
+        fmt_set!(self.beat_id, "{:.2}", m.current_beat.0);
         if self.time_id >= 0 {
             let secs = m.current_time_secs;
             let mins = (secs / 60.0).floor() as u32;
             let s = secs % 60.0;
-            tree.set_text(self.time_id as u32, &format!("{}:{:05.2}", mins, s));
+            fmt_set!(self.time_id, "{}:{:05.2}", mins, s);
         }
-        if self.bpm_id >= 0 {
-            tree.set_text(self.bpm_id as u32, &format!("{:.1}", m.bpm.0));
-        }
+        fmt_set!(self.bpm_id, "{:.1}", m.bpm.0);
         if self.clock_id >= 0 {
             tree.set_text(self.clock_id as u32, &m.clock_source);
         }
         if self.profiling_id >= 0 {
             if m.profiling_active {
-                tree.set_text(
-                    self.profiling_id as u32,
-                    &format!("REC {}", m.profiling_frame_count),
-                );
+                fmt_set!(self.profiling_id, "REC {}", m.profiling_frame_count);
                 tree.set_style(
                     self.profiling_id as u32,
                     UIStyle {

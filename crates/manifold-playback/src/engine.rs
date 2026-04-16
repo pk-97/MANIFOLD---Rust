@@ -8,7 +8,6 @@ use manifold_core::tempo::TempoMapConverter;
 use manifold_core::types::{LayerType, PlaybackState, TempoPointSource};
 use manifold_core::{Beats, Bpm, Seconds};
 
-use crate::active_window::ActiveTimelineClipWindow;
 use crate::live_clip_manager::LiveClipManager;
 use crate::renderer::ClipRenderer;
 use crate::scheduler::{ActiveClipRef, ClipScheduler};
@@ -114,7 +113,6 @@ pub struct PlaybackEngine {
 
     // Scheduling
     scheduler: ClipScheduler,
-    active_window: ActiveTimelineClipWindow,
 
     // Live clip manager (MIDI phantom clips)
     live_clip_manager: Option<LiveClipManager>,
@@ -215,7 +213,7 @@ impl PlaybackEngine {
             looping_clip_ids: AHashSet::with_capacity(16),
             recently_started_times: AHashMap::with_capacity(8),
             scheduler: ClipScheduler::new(),
-            active_window: ActiveTimelineClipWindow::new(),
+
             live_clip_manager: None,
             compositor_dirty_deadline: 0.0,
             sync_clips_dirty: false,
@@ -355,7 +353,7 @@ impl PlaybackEngine {
         // or programmatic construction may not. Redundant calls are safe (idempotent).
         project.on_after_deserialize();
         self.project = Some(project);
-        self.active_window.reset();
+
         self.current_time_double = 0.0;
         self.current_time = Seconds::ZERO;
         self.current_beat = 0.0;
@@ -383,7 +381,7 @@ impl PlaybackEngine {
 
     /// Reset the active clip window index. Call after bulk clip operations (undo/redo).
     pub fn reset_active_clip_window(&mut self) {
-        self.active_window.reset();
+
     }
 
     /// Update clock state for non-tick operations (Play, Stop, Seek).
@@ -449,7 +447,7 @@ impl PlaybackEngine {
         self.current_time = Seconds::ZERO;
         self.current_beat = 0.0;
         self.compositor_dirty_deadline = 0.0; // Force one more compositor update
-        self.active_window.reset();
+
         self.sync_clips_dirty = false;
     }
 
@@ -529,7 +527,7 @@ impl PlaybackEngine {
         let old_beat = self.current_beat;
         self.set_time(Seconds(time.0.max(0.0)));
         self.sync_project_bpm_from_current_beat();
-        self.active_window.reset();
+
 
         // Clear live clips on large seek
         let beat_delta = (self.current_beat - old_beat).abs();
