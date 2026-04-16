@@ -403,6 +403,7 @@ impl Timeline {
     pub fn get_active_clips_at_beat_ref(&self, beat: Beats) -> Vec<(usize, usize)> {
         let any_solo = self.layers.iter().any(|l| l.is_solo);
         let mut results = Vec::new();
+        let mut active_indices = Vec::new();
 
         for li in 0..self.layers.len() {
             if self.layers[li].is_group() {
@@ -414,33 +415,27 @@ impl Timeline {
             }
 
             if self.layers[li].parent_layer_id.is_some() {
-                let parent_muted = self
-                    .find_group_parent(li)
-                    .map(|(_, p)| p.is_muted)
-                    .unwrap_or(false);
+                let parent = self.find_group_parent(li);
+                let parent_muted = parent.map(|(_, p)| p.is_muted).unwrap_or(false);
                 if parent_muted {
                     continue;
                 }
 
-                let parent_solo = self
-                    .find_group_parent(li)
-                    .map(|(_, p)| p.is_solo)
-                    .unwrap_or(false);
-
-                if any_solo && !self.layers[li].is_solo && !parent_solo {
+                if any_solo
+                    && !self.layers[li].is_solo
+                    && !parent.map(|(_, p)| p.is_solo).unwrap_or(false)
+                {
                     continue;
                 }
-            } else {
-                if any_solo && !self.layers[li].is_solo {
-                    continue;
-                }
+            } else if any_solo && !self.layers[li].is_solo {
+                continue;
             }
 
-            let mut active_indices = Vec::new();
+            active_indices.clear();
             self.layers[li].collect_active_clips_at_beat(beat, &mut active_indices);
-            for ci in active_indices {
-                if !self.layers[li].clips[ci].is_muted {
-                    results.push((li, ci));
+            for ci in &active_indices {
+                if !self.layers[li].clips[*ci].is_muted {
+                    results.push((li, *ci));
                 }
             }
         }

@@ -147,6 +147,9 @@ pub struct PlaybackEngine {
     stopped_this_tick: Vec<ClipId>,
     ready_clips_list: Vec<(i32, TimelineClip)>,
     timeline_active_scratch: Vec<(i32, TimelineClip)>,
+    /// Frame count when timeline_active_scratch was last populated.
+    /// Used to skip redundant re-queries within the same frame.
+    timeline_query_frame: u64,
     became_ready_list: Vec<ClipId>,
     clips_to_stop_drift: Vec<ClipId>,
     prewarm_candidates: Vec<TimelineClip>,
@@ -219,6 +222,7 @@ impl PlaybackEngine {
             stopped_this_tick: Vec::with_capacity(16),
             ready_clips_list: Vec::with_capacity(32),
             timeline_active_scratch: Vec::with_capacity(32),
+            timeline_query_frame: u64::MAX, // sentinel: never matches a real frame
             became_ready_list: Vec::with_capacity(8),
             clips_to_stop_drift: Vec::with_capacity(8),
             prewarm_candidates: Vec::with_capacity(32),
@@ -348,6 +352,7 @@ impl PlaybackEngine {
         self.sync_clips_dirty = false;
         self.last_realtime_now = 0.0;
         self.last_frame_count = 0;
+        self.timeline_query_frame = u64::MAX;
 
         // Notify all renderers of the new project (GAP-PLAY-5).
         // Port of C# PlaybackController.LoadProject → renderer.OnProjectLoaded().
@@ -767,6 +772,7 @@ impl PlaybackEngine {
 
     /// Query timeline for active clips at current beat, populating timeline_active_scratch.
     /// Uses split borrows to avoid cloning the project.
+    /// Stamps `timeline_query_frame` so callers later in the same frame can skip re-query.
     fn query_active_timeline_clips(&mut self) {
         // Step 1: ensure layer sort caches are up-to-date (needs &mut project)
         if let Some(p) = &mut self.project {
@@ -789,6 +795,7 @@ impl PlaybackEngine {
                 }
             }
         }
+        self.timeline_query_frame = self.last_frame_count;
     }
 
     // ─── Clip lifecycle ───
@@ -1796,9 +1803,12 @@ impl PlaybackEngine {
     /// Applies recently-started gate for video clips.
     /// Port of C# PlaybackEngine.FilterReadyClips (lines 1193-1239).
     pub fn filter_ready_clips(&mut self, pre_render_dt: Seconds) -> Vec<(i32, TimelineClip)> {
-        // Resolve should-be-active clips (timeline + live slots)
+        // Resolve should-be-active clips (timeline + live slots).
+        // Skip re-query if sync_clips_to_time already populated the scratch this frame.
         self.compositor_fallback_clips.clear();
-        self.query_active_timeline_clips();
+        if self.timeline_query_frame != self.last_frame_count {
+            self.query_active_timeline_clips();
+        }
         self.compositor_fallback_clips
             .extend(self.timeline_active_scratch.iter().cloned());
         if let Some(mgr) = &self.live_clip_manager {

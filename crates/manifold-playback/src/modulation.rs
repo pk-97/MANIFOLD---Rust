@@ -279,25 +279,18 @@ fn evaluate_effect_drivers(fx: &mut EffectInstance, current_beat: Beats) -> bool
 
 /// Evaluate all layer envelopes (ADSR and Random modes).
 /// Returns true if any envelope was active (compositor should be marked dirty).
-pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> bool {
+pub fn evaluate_all_envelopes(
+    project: &mut Project,
+    active_clip_timing: &[(Beats, Beats)],
+) -> bool {
     let mut any_modulated = false;
 
-    for layer in project.timeline.layers.iter_mut() {
+    for (li, layer) in project.timeline.layers.iter_mut().enumerate() {
         // Envelopes run even on muted layers (mute = compositor only).
-        // Find first active clip on this layer (for envelope timing)
-        let mut active_elapsed = Beats(-1.0); // sentinel: no active clip
-        let mut active_duration = Beats::ZERO;
-        for clip in &layer.clips {
-            if clip.is_muted {
-                continue;
-            }
-            let elapsed = current_beat - clip.start_beat;
-            if elapsed >= Beats::ZERO && elapsed < clip.duration_beats {
-                active_elapsed = elapsed;
-                active_duration = clip.duration_beats;
-                break; // Use first active clip
-            }
-        }
+        let (active_elapsed, active_duration) = active_clip_timing
+            .get(li)
+            .copied()
+            .unwrap_or((Beats(-1.0), Beats::ZERO));
 
         let clip_active = active_elapsed >= Beats::ZERO;
 
@@ -538,29 +531,21 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> boo
 
 /// Evaluate envelopes (ADSR and Random) on generator layer parameters.
 /// Returns true if any envelope was active (compositor should be marked dirty).
-pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: Beats) -> bool {
+pub fn evaluate_gen_param_envelopes(
+    project: &mut Project,
+    active_clip_timing: &[(Beats, Beats)],
+) -> bool {
     let mut any_modulated = false;
 
-    for layer in project.timeline.layers.iter_mut() {
+    for (li, layer) in project.timeline.layers.iter_mut().enumerate() {
         if layer.layer_type != LayerType::Generator {
             continue;
         }
 
-        // Find first active clip on this layer for envelope timing
-        // (must borrow clips immutably before taking mutable gen_params borrow)
-        let mut active_elapsed = Beats(-1.0); // sentinel: no active clip
-        let mut active_duration = Beats::ZERO;
-        for clip in &layer.clips {
-            if clip.is_muted {
-                continue;
-            }
-            let elapsed = current_beat - clip.start_beat;
-            if elapsed >= Beats::ZERO && elapsed < clip.duration_beats {
-                active_elapsed = elapsed;
-                active_duration = clip.duration_beats;
-                break;
-            }
-        }
+        let (active_elapsed, active_duration) = active_clip_timing
+            .get(li)
+            .copied()
+            .unwrap_or((Beats(-1.0), Beats::ZERO));
 
         let clip_active = active_elapsed >= Beats::ZERO;
 
@@ -751,11 +736,41 @@ pub fn evaluate_modulation(project: &mut Project, current_beat: Beats) -> bool {
     // Phase 2: Evaluate LFO drivers
     let any_driven = evaluate_all_drivers(project, current_beat);
 
+    // Pre-compute per-layer active clip timing for envelope phases.
+    // Avoids O(total_clips) scan in each envelope function.
+    let active_clip_timing = compute_active_clip_timing(&project.timeline.layers, current_beat);
+
     // Phase 3: Evaluate clip/layer ADSR envelopes (additive on top of drivers)
-    let any_enveloped = evaluate_all_envelopes(project, current_beat);
+    let any_enveloped = evaluate_all_envelopes(project, &active_clip_timing);
 
     // Phase 4: Evaluate generator param ADSR envelopes
-    let any_gen_enveloped = evaluate_gen_param_envelopes(project, current_beat);
+    let any_gen_enveloped = evaluate_gen_param_envelopes(project, &active_clip_timing);
 
     any_driven || any_enveloped || any_gen_enveloped
+}
+
+/// Per-layer active clip timing: (elapsed, duration).
+/// Sentinel `Beats(-1.0)` for elapsed means no active clip on that layer.
+fn compute_active_clip_timing(
+    layers: &[manifold_core::layer::Layer],
+    current_beat: Beats,
+) -> Vec<(Beats, Beats)> {
+    let mut timing = Vec::with_capacity(layers.len());
+    for layer in layers {
+        let mut elapsed = Beats(-1.0);
+        let mut duration = Beats::ZERO;
+        for clip in &layer.clips {
+            if clip.is_muted {
+                continue;
+            }
+            let e = current_beat - clip.start_beat;
+            if e >= Beats::ZERO && e < clip.duration_beats {
+                elapsed = e;
+                duration = clip.duration_beats;
+                break;
+            }
+        }
+        timing.push((elapsed, duration));
+    }
+    timing
 }

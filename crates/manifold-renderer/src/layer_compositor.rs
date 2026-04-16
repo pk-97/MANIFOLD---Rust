@@ -253,9 +253,8 @@ fn group_id_owner_key(layer_id: &manifold_core::LayerId) -> i64 {
 }
 
 /// Count active (non-muted, non-solo-hidden) layers in the frame.
-fn count_active_layers(frame: &CompositorFrame) -> usize {
+fn count_active_layers(frame: &CompositorFrame, any_solo: bool) -> usize {
     let clips = frame.clips;
-    let any_solo = frame.layers.iter().any(|l| l.is_solo);
     let mut count = 0;
     let mut i = 0;
     while i < clips.len() {
@@ -504,13 +503,10 @@ impl LayerCompositor {
     ///
     /// Each layer uses its own effect chain (no shared state between layers).
     /// Populates `self.layer_outputs_scratch` for the blend pass.
-    fn generate_layers(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) {
+    fn generate_layers(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame, any_solo: bool) {
         let clips = frame.clips;
         let width = self.main.width();
         let height = self.main.height();
-
-        // Check for any solo layer
-        let any_solo = frame.layers.iter().any(|l| l.is_solo);
 
         // Count active layers for pool sizing
         let mut active_layer_count = 0usize;
@@ -859,9 +855,9 @@ impl LayerCompositor {
 
     /// Serial composite path: single encoder for all work.
     /// Used when only 1 active layer (no parallel benefit).
-    fn composite_serial(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) {
+    fn composite_serial(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame, any_solo: bool) {
         self.uniform_arena.reset();
-        self.generate_layers(gpu, frame);
+        self.generate_layers(gpu, frame, any_solo);
         self.fold_groups(gpu, frame);
         // Safety: layer_outputs_scratch contains raw pointers to textures owned
         // by effect chains, layer bufs, or clip render targets — all valid for
@@ -886,7 +882,12 @@ impl LayerCompositor {
     /// the frame duration since they're owned by effect chains, layer bufs, or
     /// clip render targets that aren't reallocated between generate and blend.
     #[cfg(target_os = "macos")]
-    fn composite_parallel(&mut self, compositor_gpu: &mut GpuEncoder, frame: &CompositorFrame) {
+    fn composite_parallel(
+        &mut self,
+        compositor_gpu: &mut GpuEncoder,
+        frame: &CompositorFrame,
+        any_solo: bool,
+    ) {
         let clips = frame.clips;
         let width = self.main.width();
         let height = self.main.height();
@@ -904,9 +905,6 @@ impl LayerCompositor {
         // Safety: async_event lives for the duration of this method and
         // is not modified (only signal values change, which is interior mutation).
         let async_event: *const manifold_gpu::GpuEvent = self.async_event.as_ref().unwrap();
-
-        // Check for any solo layer
-        let any_solo = frame.layers.iter().any(|l| l.is_solo);
 
         // Pre-scan: count active layers and multi-clip layers for pool sizing.
         let mut active_layer_count = 0usize;
@@ -1121,17 +1119,18 @@ impl Compositor for LayerCompositor {
         // Parallel path creates per-layer command buffers for GPU-concurrent
         // generation. Only activated with 2+ active layers (no overhead for
         // single-layer frames).
+        let any_solo = frame.layers.iter().any(|l| l.is_solo);
         #[cfg(target_os = "macos")]
         {
-            let active_layers = count_active_layers(frame);
+            let active_layers = count_active_layers(frame, any_solo);
             if active_layers >= 2 {
-                self.composite_parallel(gpu, frame);
+                self.composite_parallel(gpu, frame, any_solo);
             } else {
-                self.composite_serial(gpu, frame);
+                self.composite_serial(gpu, frame, any_solo);
             }
         }
         #[cfg(not(target_os = "macos"))]
-        self.composite_serial(gpu, frame);
+        self.composite_serial(gpu, frame, any_solo);
 
         // LED tap: capture pre-tonemap composite when exit index is 0.
         // main.source holds the all-layers composite at this point, before

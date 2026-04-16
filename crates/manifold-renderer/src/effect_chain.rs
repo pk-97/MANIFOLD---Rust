@@ -125,16 +125,11 @@ impl EffectChain {
         ctx: &EffectContext,
         wet_dry_lerp: Option<&WetDryLerpPipeline>,
     ) -> Option<&'a GpuTexture> {
-        // Quick scan: any enabled effects with registered processors?
-        let has_enabled = effects
-            .iter()
-            .any(|fx| fx.enabled && registry.get_mut(fx.effect_type()).is_some());
-        if !has_enabled {
+        // Quick scan: any enabled effects? (Skip registry lookup — the main loop
+        // handles unregistered effects. This just avoids buffer/context setup.)
+        if !effects.iter().any(|fx| fx.enabled) {
             return None;
         }
-
-        self.ensure_buffers(gpu.device, gpu.pool, ctx.width, ctx.height);
-        self.use_ping_as_source = true;
 
         // Precompute cross-chain params for effects that need them.
         // Unity ref: EffectContext.FindChainParam() — VoronoiPrism reads EdgeStretch width.
@@ -147,6 +142,7 @@ impl EffectChain {
         // The first effect reads directly from input_texture, writing to the
         // chain's target buffer. Subsequent effects use normal ping-pong.
         // Saves ~629us per chain invocation at 4K (one fewer render pass).
+        // Buffers are lazily created on the first effect that actually runs.
         let mut first_effect_pending = true;
 
         let mut current_group_id: Option<&str> = None;
@@ -191,6 +187,10 @@ impl EffectChain {
                             // If no effect has run yet, copy input -> source via
                             // GPU memcpy so the dry snapshot captures the input.
                             if first_effect_pending {
+                                self.ensure_buffers(
+                                    gpu.device, gpu.pool, ctx.width, ctx.height,
+                                );
+                                self.use_ping_as_source = true;
                                 gpu.copy_texture_to_texture(
                                     input_texture,
                                     self.source_texture(),
@@ -229,6 +229,11 @@ impl EffectChain {
             if let Some(processor) = registry.get_mut(fx.effect_type())
                 && !processor.should_skip(fx)
             {
+                // Lazily create ping/pong buffers on first real effect.
+                if first_effect_pending {
+                    self.ensure_buffers(gpu.device, gpu.pool, ctx.width, ctx.height);
+                    self.use_ping_as_source = true;
+                }
                 // First effect reads directly from input_texture (no copy).
                 let source = if first_effect_pending {
                     input_texture
