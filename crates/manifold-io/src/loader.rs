@@ -141,7 +141,16 @@ pub fn run_post_load_validation(project: &mut Project) {
         );
     }
 
-    // Step 8: Repair pre-existing clip overlaps.
+    // Step 8: Populate clip.layer_id from structural ownership.
+    // layer_id is skip_serializing (not persisted), so it deserializes as empty.
+    // Stamp it here so runtime code that reads clip.layer_id gets the correct value.
+    for layer in &mut project.timeline.layers {
+        for clip in &mut layer.clips {
+            clip.layer_id = layer.layer_id.clone();
+        }
+    }
+
+    // Step 9: Repair pre-existing clip overlaps.
     // Projects saved before overlap enforcement was added to all mutation paths
     // may contain overlapping clips. Remove the shorter clip in each collision.
     repair_overlapping_clips(project);
