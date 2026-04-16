@@ -45,7 +45,7 @@ impl Default for TonemapSettings {
 }
 
 /// Uniform buffer layout for the tonemap shader.
-/// Two u32 fields: mode (SDR/PQ/EDR) and curve (Narkowicz/Hill/AgX).
+/// Two u32 fields: mode (SDR/PQ/EDR) and curve (Narkowicz/Hill/AgX/Khronos PBR Neutral).
 /// 24 bytes total — padded to 32 bytes for 16-byte alignment.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]

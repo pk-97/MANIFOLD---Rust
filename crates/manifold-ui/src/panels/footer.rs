@@ -50,6 +50,7 @@ struct FooterLayout {
     tonemap_aces: Rect,
     tonemap_hill: Rect,
     tonemap_agx: Rect,
+    tonemap_khr: Rect,
     fps_label: Rect,
     fps_field: Rect,
 }
@@ -69,8 +70,10 @@ impl FooterLayout {
         self.fps_label = Rect::new(rx, y, FPS_LABEL_W, elem_h);
         rx -= SECTION_SPACER;
 
-        // Tonemap curve buttons: [ACES] [Hill] [AgX]
+        // Tonemap curve buttons: [ACES] [Hill] [AgX] [Khr]
         rx -= TONEMAP_BUTTON_W;
+        self.tonemap_khr = Rect::new(rx, y, TONEMAP_BUTTON_W, elem_h);
+        rx -= TONEMAP_BTN_GAP + TONEMAP_BUTTON_W;
         self.tonemap_agx = Rect::new(rx, y, TONEMAP_BUTTON_W, elem_h);
         rx -= TONEMAP_BTN_GAP + TONEMAP_BUTTON_W;
         self.tonemap_hill = Rect::new(rx, y, TONEMAP_BUTTON_W, elem_h);
@@ -129,6 +132,7 @@ pub struct FooterPanel {
     tonemap_aces_id: i32,
     tonemap_hill_id: i32,
     tonemap_agx_id: i32,
+    tonemap_khr_id: i32,
     fps_label_id: i32,
     fps_field_id: i32,
 
@@ -161,6 +165,7 @@ impl FooterPanel {
             tonemap_aces_id: -1,
             tonemap_hill_id: -1,
             tonemap_agx_id: -1,
+            tonemap_khr_id: -1,
             fps_label_id: -1,
             fps_field_id: -1,
             selection_info: String::new(),
@@ -236,6 +241,7 @@ impl FooterPanel {
             (self.tonemap_aces_id, TonemapCurve::AcesNarkowicz),
             (self.tonemap_hill_id, TonemapCurve::AcesHill),
             (self.tonemap_agx_id, TonemapCurve::Agx),
+            (self.tonemap_khr_id, TonemapCurve::KhronosPbrNeutral),
         ];
         for (id, val) in ids {
             if id < 0 {
@@ -346,6 +352,9 @@ impl FooterPanel {
         }
         if id == self.tonemap_agx_id {
             return vec![PanelAction::SetTonemapCurve(TonemapCurve::Agx)];
+        }
+        if id == self.tonemap_khr_id {
+            return vec![PanelAction::SetTonemapCurve(TonemapCurve::KhronosPbrNeutral)];
         }
         Vec::new()
     }
@@ -522,6 +531,16 @@ impl Panel for FooterPanel {
             "AgX",
         ) as i32;
 
+        self.tonemap_khr_id = tree.add_button(
+            bg,
+            self.layout.tonemap_khr.x,
+            self.layout.tonemap_khr.y,
+            self.layout.tonemap_khr.width,
+            self.layout.tonemap_khr.height,
+            self.tonemap_button_style_for(TonemapCurve::KhronosPbrNeutral),
+            "Khr",
+        ) as i32;
+
         // FPS
         self.fps_label_id = tree.add_node(
             bg,
@@ -586,7 +605,7 @@ mod tests {
         assert!(panel.scale_75_id >= 0);
         assert!(panel.scale_50_id >= 0);
         assert!(panel.fps_field_id >= 0);
-        assert!(tree.count() >= 11); // bg + 10 elements
+        assert!(tree.count() >= 12); // bg + 11 elements
     }
 
     #[test]

@@ -7,7 +7,7 @@ struct Uniforms {
     paper_white: f32,
     max_nits: f32,
     mode: u32,  // 0 = SDR, 1 = PQ, 2 = EDR, 3 = EDR passthrough
-    curve: u32, // 0 = Narkowicz, 1 = Hill, 2 = AgX
+    curve: u32, // 0 = Narkowicz, 1 = Hill, 2 = AgX, 3 = Khronos PBR Neutral
     _pad0: f32,
     _pad1: f32,
     _pad2: f32,
@@ -150,6 +150,35 @@ fn agx_tonemap_raw(color: vec3<f32>) -> vec3<f32> {
     return c;
 }
 
+// ── Khronos PBR Neutral ───────────────────────────────────────────────
+// Reference: https://github.com/KhronosGroup/ToneMapping
+
+fn khronos_pbr_neutral(color: vec3<f32>) -> vec3<f32> {
+    let start_compression: f32 = 0.8 - 0.04;
+    let desaturation: f32 = 0.15;
+
+    var x = min(color.r, min(color.g, color.b));
+    var offset: f32;
+    if x < 0.08 {
+        offset = x - 6.25 * x * x;
+    } else {
+        offset = 0.04;
+    }
+    var c = color - offset;
+
+    let peak = max(c.r, max(c.g, c.b));
+    if peak < start_compression {
+        return c;
+    }
+
+    let d = 1.0 - start_compression;
+    let new_peak = 1.0 - d * d / (peak + d - start_compression);
+    c *= new_peak / peak;
+
+    let g = 1.0 - 1.0 / (desaturation * (peak - new_peak) + 1.0);
+    return mix(c, vec3<f32>(new_peak), vec3<f32>(g));
+}
+
 // ── Curve dispatch ─────────────────────────────────────────────────────
 
 fn tonemap_sdr(hdr: vec3<f32>) -> vec3<f32> {
@@ -157,6 +186,8 @@ fn tonemap_sdr(hdr: vec3<f32>) -> vec3<f32> {
         return aces_hill(hdr);
     } else if u.curve == 2u {
         return agx_tonemap(hdr);
+    } else if u.curve == 3u {
+        return saturate(khronos_pbr_neutral(hdr));
     }
     return aces_narkowicz(hdr);
 }
@@ -166,6 +197,8 @@ fn tonemap_raw(hdr: vec3<f32>) -> vec3<f32> {
         return aces_hill_raw(hdr);
     } else if u.curve == 2u {
         return agx_tonemap_raw(hdr);
+    } else if u.curve == 3u {
+        return khronos_pbr_neutral(hdr);
     }
     return aces_narkowicz_raw(hdr);
 }

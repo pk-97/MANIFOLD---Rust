@@ -1003,4 +1003,7 @@ pub enum TonemapCurve {
     /// AgX (Troy Sobotka) — designed for saturated/generative content.
     /// Minimal hue shift on neons, graceful highlight desaturation.
     Agx = 2,
+    /// Khronos PBR Neutral — minimal hue shift, low saturation loss in highlights.
+    /// Designed for cross-display consistency (glTF standard tonemapper).
+    KhronosPbrNeutral = 3,
 }
