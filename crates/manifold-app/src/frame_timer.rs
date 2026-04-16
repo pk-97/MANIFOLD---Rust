@@ -2,9 +2,9 @@ use std::time::{Duration, Instant};
 
 /// Frame pacing and timing statistics.
 ///
-/// Timer-based pacing at `target_fps`. The content thread sleeps between
-/// frames using sleep + spin-wait for precise deadlines. Presentation
-/// timing is handled independently by CAMetalLayer's displaySyncEnabled.
+/// Timer-based pacing at `target_fps`. On macOS, uses `mach_wait_until`
+/// for precise kernel-level frame deadlines with zero CPU overhead.
+/// Presentation timing is handled independently by CAMetalLayer.
 pub struct FrameTimer {
     target_fps: f64,
     target_frame_duration: Duration,
@@ -19,6 +19,55 @@ pub struct FrameTimer {
 
     /// Number of ticks missed this frame (dt exceeded 2× target = frame drop).
     missed_ticks: u64,
+
+    /// Mach timebase for converting nanoseconds ↔ mach absolute time units.
+    /// Cached at construction — the timebase never changes at runtime.
+    #[cfg(target_os = "macos")]
+    mach_timebase: MachTimebase,
+}
+
+/// Cached Mach timebase info for nanosecond ↔ mach unit conversion.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+struct MachTimebase {
+    numer: u32,
+    denom: u32,
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+struct MachTimebaseInfo {
+    numer: u32,
+    denom: u32,
+}
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn mach_timebase_info(info: *mut MachTimebaseInfo) -> i32;
+    fn mach_absolute_time() -> u64;
+    fn mach_wait_until(deadline: u64) -> i32;
+}
+
+#[cfg(target_os = "macos")]
+impl MachTimebase {
+    fn query() -> Self {
+        let mut info = MachTimebaseInfo { numer: 0, denom: 0 };
+        unsafe {
+            mach_timebase_info(&mut info);
+        }
+        Self {
+            numer: info.numer,
+            denom: info.denom,
+        }
+    }
+
+    /// Convert a Duration to mach absolute time units.
+    fn duration_to_mach_units(self, d: Duration) -> u64 {
+        let nanos = d.as_nanos() as u64;
+        // mach_units = nanos * denom / numer
+        // Use u128 to avoid overflow on large durations.
+        ((nanos as u128 * self.denom as u128) / self.numer as u128) as u64
+    }
 }
 
 const FPS_SAMPLE_INTERVAL: f64 = 1.0;
@@ -36,6 +85,8 @@ impl FrameTimer {
             fps_frame_count: 0,
             current_fps: 0.0,
             missed_ticks: 0,
+            #[cfg(target_os = "macos")]
+            mach_timebase: MachTimebase::query(),
         }
     }
 
@@ -49,6 +100,38 @@ impl FrameTimer {
     pub fn time_until_next_tick(&self) -> Duration {
         self.target_frame_duration
             .saturating_sub(self.last_tick_time.elapsed())
+    }
+
+    /// Block until the next frame deadline. Zero CPU overhead on macOS
+    /// (kernel-level `mach_wait_until`). Falls back to sleep on other
+    /// platforms.
+    pub fn wait_for_deadline(&self) {
+        let remaining = self.time_until_next_tick();
+        if remaining.is_zero() {
+            return;
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let now_mach = unsafe { mach_absolute_time() };
+            let wait_mach = self.mach_timebase.duration_to_mach_units(remaining);
+            let deadline = now_mach + wait_mach;
+            unsafe {
+                mach_wait_until(deadline);
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            // Fallback: sleep most of the duration, spin-wait the rest
+            // to compensate for OS sleep overshoot.
+            if remaining > Duration::from_millis(4) {
+                std::thread::sleep(remaining - Duration::from_millis(3));
+            }
+            while !self.should_tick() {
+                std::thread::yield_now();
+            }
+        }
     }
 
     /// Consume the tick, returning delta time in seconds.
@@ -153,5 +236,27 @@ mod tests {
         assert!(!timer.should_tick());
         thread::sleep(Duration::from_millis(20));
         assert!(timer.should_tick());
+    }
+
+    #[test]
+    fn wait_for_deadline_returns_at_deadline() {
+        let mut timer = FrameTimer::new(60.0);
+        timer.consume_tick(); // reset last_tick_time to now
+        let start = Instant::now();
+        timer.wait_for_deadline();
+        let elapsed = start.elapsed();
+        // Should have waited approximately one frame (~16.6ms).
+        // Wide tolerance: test runner runs many tests in parallel,
+        // causing scheduling contention that inflates wait times.
+        // mach_wait_until precision is a kernel guarantee verified
+        // by the real-time content thread, not by unit tests.
+        assert!(
+            elapsed >= Duration::from_millis(14),
+            "Returned too early: {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(30),
+            "Returned too late: {elapsed:?}"
+        );
     }
 }

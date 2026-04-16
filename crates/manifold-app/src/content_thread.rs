@@ -279,14 +279,11 @@ impl ContentThread {
                 continue;
             }
 
-            // Timer-based pacing: sleep + spin-wait for precise frame deadlines.
+            // Precision frame pacing: block until the next frame deadline.
+            // On macOS, uses mach_wait_until (kernel-level, zero CPU).
             // displaySyncEnabled on the output CAMetalLayer handles vsync-aligned
             // presentation independently — no need to phase-lock the content thread.
-            let should_render = self.wait_timer();
-
-            if !should_render {
-                continue;
-            }
+            self.timer.wait_for_deadline();
             // Drain autoreleased ObjC Metal objects at the end of each frame,
             // preventing memory accumulation and random GC-like pauses.
             #[cfg(target_os = "macos")]
@@ -403,21 +400,6 @@ impl ContentThread {
             && self.handle_command(seek)
         {
             return true;
-        }
-        false
-    }
-
-    /// Timer-based frame wait. Returns true when the frame deadline has passed.
-    /// Uses sleep + spin-wait for precise pacing (avoids macOS 2-4ms sleep overshoot).
-    fn wait_timer(&self) -> bool {
-        if self.timer.should_tick() {
-            return true;
-        }
-        let remaining = self.timer.time_until_next_tick();
-        if remaining > std::time::Duration::from_millis(4) {
-            std::thread::sleep(remaining - std::time::Duration::from_millis(3));
-        } else if remaining > std::time::Duration::from_micros(100) {
-            std::thread::yield_now();
         }
         false
     }
