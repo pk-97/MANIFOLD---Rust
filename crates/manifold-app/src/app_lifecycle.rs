@@ -685,21 +685,11 @@ impl Application {
             self.output_edr_headroom = h;
         }
 
-        // Create output surface and send to content thread for direct present.
-        // The content thread acquires drawables and presents in its own CB —
-        // no IOSurface bridge, no separate presenter command buffer.
+        // Decoupled presentation: content thread writes to IOSurface,
+        // CAMetalDisplayLink-based presenter reads and presents at vsync.
         #[cfg(target_os = "macos")]
         if let Some(gpu) = &self.gpu {
             let size = window.inner_size();
-            // displaySyncEnabled = true: Metal queues each present to the
-            // next vsync boundary, ensuring smooth frame delivery. With 3
-            // drawables, nextDrawable() almost never blocks — at most a
-            // brief wait for vsync alignment, not a full-frame stall.
-            // The old double-gating issue was caused by CVDisplayLink
-            // phase-locking the content thread's WAKE to vsync on top of
-            // this. Now that the content thread uses timer pacing (not
-            // CVDisplayLink), displaySyncEnabled is the single vsync gate
-            // — exactly where it belongs.
             let surface = gpu.device.create_surface(
                 &*window,
                 size.width.max(1),
@@ -707,8 +697,25 @@ impl Application {
                 manifold_gpu::GpuTextureFormat::Rgba16Float,
                 true,
             );
+
+            // Create IOSurface bridge at content output resolution.
+            let bridge = std::sync::Arc::new(
+                crate::shared_texture::SharedTextureBridge::new(
+                    self.local_project.settings.output_width.max(1) as u32,
+                    self.local_project.settings.output_height.max(1) as u32,
+                ),
+            );
+
+            // Create presenter (CAMetalDisplayLink on main thread).
+            // Falls back to None on macOS < 14.
+            self.output_presenter = crate::output_presenter::OutputPresenter::new(
+                surface,
+                bridge.clone(),
+            );
+
+            // Send bridge to content thread.
             self.send_content_cmd(
-                crate::content_command::ContentCommand::SetOutputSurface(surface),
+                crate::content_command::ContentCommand::SetOutputBridge(bridge),
             );
             self.send_content_cmd(
                 crate::content_command::ContentCommand::UpdateEdrHeadroom(h),

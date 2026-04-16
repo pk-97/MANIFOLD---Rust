@@ -246,6 +246,10 @@ pub struct Application {
     /// Replaces FrameTimer polling — aligns render submission to MacBook vsync.
     #[cfg(target_os = "macos")]
     pub(crate) ui_display_link: Option<crate::display_link::UiDisplayLink>,
+    /// CAMetalDisplayLink-based output presenter (macOS 14+).
+    /// Decouples content production from display presentation via IOSurface.
+    #[cfg(target_os = "macos")]
+    pub(crate) output_presenter: Option<crate::output_presenter::OutputPresenter>,
     pub(crate) ui_renderer: Option<UIRenderer>,
     pub(crate) ui_cache_manager: Option<manifold_renderer::ui_cache_manager::UICacheManager>,
     pub(crate) layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
@@ -415,6 +419,8 @@ impl Application {
             ui_offscreen: None,
             #[cfg(target_os = "macos")]
             ui_display_link: None,
+            #[cfg(target_os = "macos")]
+            output_presenter: None,
             ui_renderer: None,
             ui_cache_manager: None,
             layer_bitmap_gpu: None,
@@ -1684,8 +1690,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 } else {
                     #[cfg(target_os = "macos")]
                     {
+                        // Drop presenter BEFORE clearing bridge — ensures no
+                        // callbacks access the bridge after content thread drops it.
+                        self.output_presenter = None;
                         self.send_content_cmd(
-                            crate::content_command::ContentCommand::ClearOutputSurface,
+                            crate::content_command::ContentCommand::ClearOutputBridge,
                         );
                         self.output_saved_frame = None;
                     }
@@ -1712,14 +1721,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         let logical_h = size.height as f32 / scale as f32;
                         self.ui_root.resize(logical_w, logical_h);
                     } else {
-                        // Output window resized — update the drawable to
-                        // match so the blit doesn't stretch.
-                        self.send_content_cmd(
-                            ContentCommand::ResizeOutputSurface(
-                                size.width.max(1),
-                                size.height.max(1),
-                            ),
-                        );
+                        // Output window resized — update presenter drawable.
+                        #[cfg(target_os = "macos")]
+                        if let Some(ref mut p) = self.output_presenter {
+                            p.resize(size.width.max(1), size.height.max(1));
+                        }
                     }
                 }
             }
@@ -2049,14 +2055,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             }
 
                             // Resize the output surface drawable to match.
-                            // The CAMetalLayer needs to know the new size.
+                            // Resize presenter drawable to match new window size.
                             let new_size = ws.window.inner_size();
-                            self.send_content_cmd(
-                                ContentCommand::ResizeOutputSurface(
+                            if let Some(ref mut p) = self.output_presenter {
+                                p.resize(
                                     new_size.width.max(1),
                                     new_size.height.max(1),
-                                ),
-                            );
+                                );
+                            }
                         }
                     } else {
                         self.output_last_click = Some(now);
@@ -2520,8 +2526,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             self.pending_close_output = false;
             #[cfg(target_os = "macos")]
             {
+                self.output_presenter = None;
                 self.send_content_cmd(
-                    crate::content_command::ContentCommand::ClearOutputSurface,
+                    crate::content_command::ContentCommand::ClearOutputBridge,
                 );
                 self.output_saved_frame = None;
             }
@@ -2566,9 +2573,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 self.display_retarget_pending = true;
                 self.display_retarget_deadline =
                     Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
-                // Suspend output present on the content thread so it doesn't
-                // call next_drawable() on a transitioning display (can block ~1s).
-                self.send_content_cmd(ContentCommand::SetOutputPresentSuspended(true));
+                // Pause the output presenter during display transition.
+                if let Some(ref p) = self.output_presenter {
+                    p.set_paused(true);
+                }
                 log::info!(
                     "[Display] Retarget in flight — suspending surface ops \
                      until display link confirms"
@@ -2597,8 +2605,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 self.display_retarget_pending = false;
                 self.display_retarget_deadline = None;
                 self.offscreen_dirty = true;
-                // Resume output present on the content thread.
-                self.send_content_cmd(ContentCommand::SetOutputPresentSuspended(false));
+                // Resume the output presenter.
+                if let Some(ref p) = self.output_presenter {
+                    p.set_paused(false);
+                }
             }
         }
         let in_display_transition = self.display_retarget_pending;

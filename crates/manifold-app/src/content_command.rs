@@ -190,21 +190,14 @@ pub enum ContentCommand {
     /// Update EDR headroom when window moves to a different display.
     UpdateEdrHeadroom(f64),
 
-    // ── Output surface (direct present from content thread) ─────
-    /// Attach an output surface for direct-to-drawable presentation.
-    /// Content thread acquires drawables and presents in its own CB.
+    // ── Output bridge (decoupled presentation via IOSurface) ────
+    /// Attach an output IOSurface bridge. Content thread blits final output
+    /// to this bridge; a separate OutputPresenter reads and presents.
     #[cfg(target_os = "macos")]
-    SetOutputSurface(manifold_gpu::GpuSurface),
-    /// Detach the output surface (output window closed).
+    SetOutputBridge(std::sync::Arc<crate::shared_texture::SharedTextureBridge>),
+    /// Detach the output bridge (output window closed).
     #[cfg(target_os = "macos")]
-    ClearOutputSurface,
-    /// Resize the output surface drawable (fullscreen toggle).
-    #[cfg(target_os = "macos")]
-    ResizeOutputSurface(u32, u32),
-    /// Suspend/resume direct present to output drawable during display retarget.
-    /// Unlike PauseRendering, the engine keeps ticking — only next_drawable() is skipped.
-    #[cfg(target_os = "macos")]
-    SetOutputPresentSuspended(bool),
+    ClearOutputBridge,
 
     // ── Export ────────────────────────────────────────────────────
     /// Begin offline video export. Content thread enters export loop.

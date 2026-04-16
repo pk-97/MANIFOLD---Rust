@@ -17,6 +17,8 @@ mod editing_host;
 mod edr_surface;
 mod frame_timer;
 mod input_handler;
+#[cfg(target_os = "macos")]
+mod output_presenter;
 mod input_host;
 mod perform_mode;
 mod project_io;
