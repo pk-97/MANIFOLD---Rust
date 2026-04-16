@@ -43,6 +43,23 @@ pub struct CompositorFrame<'a> {
     pub output_height: u32,
 }
 
+impl<'a> CompositorFrame<'a> {
+    /// Find the layer descriptor matching a given layer_index.
+    /// Layers are typically indexed sequentially (0..N), so try direct
+    /// positional lookup first (O(1)) before falling back to linear scan.
+    #[inline]
+    pub fn find_layer(&self, layer_index: i32) -> Option<&CompositeLayerDescriptor<'a>> {
+        // Fast path: layers are usually ordered by index, so position == index.
+        if let Some(ld) = self.layers.get(layer_index as usize)
+            && ld.layer_index == layer_index
+        {
+            return Some(ld);
+        }
+        // Slow path: layer order doesn't match index (reordered/gaps).
+        self.layers.iter().find(|l| l.layer_index == layer_index)
+    }
+}
+
 /// Trait for compositing layers into a final output.
 pub trait Compositor: Send {
     /// Render into the compositor's internal render targets.

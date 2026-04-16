@@ -260,7 +260,7 @@ fn count_active_layers(frame: &CompositorFrame) -> usize {
     let mut i = 0;
     while i < clips.len() {
         let layer_idx = clips[i].layer_index;
-        let layer_desc = frame.layers.iter().find(|l| l.layer_index == layer_idx);
+        let layer_desc = frame.find_layer(layer_idx);
         while i < clips.len() && clips[i].layer_index == layer_idx {
             i += 1;
         }
@@ -519,7 +519,7 @@ impl LayerCompositor {
             let mut ci = 0;
             while ci < clips.len() {
                 let layer_idx = clips[ci].layer_index;
-                let layer_desc = frame.layers.iter().find(|l| l.layer_index == layer_idx);
+                let layer_desc = frame.find_layer(layer_idx);
                 let start = ci;
                 while ci < clips.len() && clips[ci].layer_index == layer_idx {
                     ci += 1;
@@ -562,7 +562,7 @@ impl LayerCompositor {
             let layer_idx = clips[i].layer_index;
 
             // Find layer descriptor
-            let layer_desc = frame.layers.iter().find(|l| l.layer_index == layer_idx);
+            let layer_desc = frame.find_layer(layer_idx);
 
             // Check mute/solo
             if let Some(ld) = layer_desc
@@ -915,7 +915,7 @@ impl LayerCompositor {
             let mut ci = 0;
             while ci < clips.len() {
                 let layer_idx = clips[ci].layer_index;
-                let layer_desc = frame.layers.iter().find(|l| l.layer_index == layer_idx);
+                let layer_desc = frame.find_layer(layer_idx);
                 let start = ci;
                 while ci < clips.len() && clips[ci].layer_index == layer_idx {
                     ci += 1;
@@ -953,7 +953,7 @@ impl LayerCompositor {
         let mut i = 0;
         while i < clips.len() {
             let layer_idx = clips[i].layer_index;
-            let layer_desc = frame.layers.iter().find(|l| l.layer_index == layer_idx);
+            let layer_desc = frame.find_layer(layer_idx);
 
             // Check mute/solo
             if let Some(ld) = layer_desc
