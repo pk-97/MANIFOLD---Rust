@@ -8,7 +8,7 @@ use manifold_core::effects::{EffectGroup, EffectInstance};
 /// Per-layer metadata passed to the compositor.
 pub struct CompositeLayerDescriptor<'a> {
     pub layer_index: i32,
-    pub layer_id: LayerId,
+    pub layer_id: &'a LayerId,
     pub blend_mode: BlendMode,
     pub opacity: f32,
     pub is_muted: bool,
@@ -16,7 +16,7 @@ pub struct CompositeLayerDescriptor<'a> {
     pub effects: &'a [EffectInstance],
     pub effect_groups: &'a [EffectGroup],
     /// Parent group layer ID (None for root layers).
-    pub parent_layer_id: Option<LayerId>,
+    pub parent_layer_id: Option<&'a LayerId>,
     /// Whether this layer is a group container.
     pub is_group: bool,
 }

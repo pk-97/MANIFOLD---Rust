@@ -618,9 +618,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 None
             });
             if let Some(texture) = clip_texture {
+                // Match via clip.layer_id instead of scanning all clips in all layers.
                 let clip_li = layers
                     .iter()
-                    .position(|l| l.clips.iter().any(|c| c.id == clip.id))
+                    .position(|l| l.layer_id == clip.layer_id)
                     .unwrap_or(0);
                 let layer = layers.get(clip_li);
                 clip_descs.push(CompositeClipDescriptor {
@@ -643,14 +644,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             .iter()
             .map(|layer| CompositeLayerDescriptor {
                 layer_index: layer.index,
-                layer_id: layer.layer_id.clone(),
+                layer_id: &layer.layer_id,
                 blend_mode: layer.default_blend_mode,
                 opacity: layer.opacity,
                 is_muted: layer.is_muted,
                 is_solo: layer.is_solo,
                 effects: layer.effects.as_deref().unwrap_or(empty_effects),
                 effect_groups: layer.effect_groups.as_deref().unwrap_or(empty_groups),
-                parent_layer_id: layer.parent_layer_id.clone(),
+                parent_layer_id: layer.parent_layer_id.as_ref(),
                 is_group: layer.is_group(),
             })
             .collect();
