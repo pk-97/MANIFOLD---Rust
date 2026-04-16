@@ -740,8 +740,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 let target = drawable.gpu_texture(
                     manifold_gpu::GpuTextureFormat::Rgba16Float,
                 );
-                let w = surface.width as f32;
-                let h = surface.height as f32;
+                let draw_w = surface.width as f32;
+                let draw_h = surface.height as f32;
+                // Aspect-fit: letterbox/pillarbox to preserve content
+                // aspect ratio instead of stretching.
+                let source_aspect = self.output_w as f32 / self.output_h as f32;
+                let draw_aspect = draw_w / draw_h;
+                let (fit_w, fit_h) = if source_aspect > draw_aspect {
+                    (draw_w, draw_w / source_aspect)
+                } else {
+                    (draw_h * source_aspect, draw_h)
+                };
+                let fit_x = (draw_w - fit_w) * 0.5;
+                let fit_y = (draw_h - fit_h) * 0.5;
                 native_enc.draw_fullscreen_viewport(
                     pipeline,
                     &target,
@@ -755,8 +766,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             sampler,
                         },
                     ],
-                    (0.0, 0.0, w, h),
-                    manifold_gpu::GpuLoadAction::DontCare,
+                    (fit_x, fit_y, fit_w, fit_h),
+                    manifold_gpu::GpuLoadAction::Clear,
                     "Output Present",
                 );
                 native_enc.present_drawable(&drawable);
