@@ -261,7 +261,11 @@ impl UiDisplayLink {
             // Fence ensures the stop flag is visible to the callback thread
             // before we change the display target.
             std::sync::atomic::fence(Ordering::SeqCst);
+            // Stop blocks until any in-flight callback returns, eliminating
+            // the race between SetCurrentCGDisplay and the callback thread.
+            CVDisplayLinkStop(self.display_link);
             CVDisplayLinkSetCurrentCGDisplay(self.display_link, new_id);
+            CVDisplayLinkStart(self.display_link);
             ctx.stop.store(false, Ordering::Release);
         }
         let new_refresh =

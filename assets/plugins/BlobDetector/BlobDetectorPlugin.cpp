@@ -36,15 +36,23 @@ extern "C"
 
 void* BlobDetector_Create(int maxBlobs)
 {
-    auto* state = new BlobDetectorState();
-    state->maxBlobs = maxBlobs > 0 ? maxBlobs : 16;
-    return state;
+    try {
+        auto* state = new BlobDetectorState();
+        state->maxBlobs = maxBlobs > 0 ? maxBlobs : 16;
+        return state;
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 void BlobDetector_Destroy(void* ptr)
 {
     if (!ptr) return;
-    delete static_cast<BlobDetectorState*>(ptr);
+    try {
+        delete static_cast<BlobDetectorState*>(ptr);
+    } catch (...) {
+        // Destructors should not throw; defend against leaks across FFI anyway.
+    }
 }
 
 /*
