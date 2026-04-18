@@ -1513,10 +1513,13 @@ impl GpuEncoder {
 
         let label = label.to_string();
         let block = RcBlock::new(move |buf: *mut AnyObject| unsafe {
-            // Read MTLCommandBuffer status via ObjC.
-            let status: u64 = msg_send![buf, status];
-            // MTLCommandBufferStatusError = 4
-            if status == 4 {
+            // Read MTLCommandBuffer status via ObjC. MTLCommandBufferStatus is
+            // NSUInteger; on arm64 that's u64. Values from Apple headers:
+            //   NotEnqueued=0, Enqueued=1, Committed=2, Scheduled=3,
+            //   Completed=4, Error=5.
+            let status: usize = msg_send![buf, status];
+            const MTL_COMMAND_BUFFER_STATUS_ERROR: usize = 5;
+            if status == MTL_COMMAND_BUFFER_STATUS_ERROR {
                 let err: *mut AnyObject = msg_send![buf, error];
                 let (code, desc) = if err.is_null() {
                     (-1i64, String::from("(nil)"))

@@ -84,12 +84,14 @@ impl GpuDevice {
         // Attach CAMetalLayer to the NSView.
         let layer_ptr = layer.as_ptr() as *mut std::ffi::c_void;
         unsafe {
-            let layer_obj = layer_ptr as *mut AnyObject;
+            let layer_obj: *mut AnyObject = layer_ptr.cast();
             // Prevent CAMetalLayer::nextDrawable from blocking the caller when
             // all drawables are in flight. The output presenter now runs inline
             // on the main frame encoder, so blocking here would stall the app.
             let _: () = msg_send![layer_obj, setAllowsNextDrawableTimeout: true];
-            let _: () = msg_send![ns_view, setLayer: layer_ptr];
+            // setLayer: takes an ObjC object (type '@'); pass layer_obj, not the
+            // raw void pointer (which would encode as '^v' and fail type check).
+            let _: () = msg_send![ns_view, setLayer: layer_obj];
             let _: () = msg_send![ns_view, setWantsLayer: true];
             // Retain the layer — the local MetalLayer will drop its reference.
             objc_retain(layer_ptr);
@@ -147,7 +149,9 @@ impl GpuSurface {
             let cs = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearSRGB);
             if !cs.is_null() {
                 let layer = self.layer_ptr as *mut AnyObject;
-                let _: () = msg_send![layer, setColorspace: cs];
+                // CGColorSpaceRef is toll-free bridged; encode as ObjC object ('@').
+                let cs_obj: *mut AnyObject = cs.cast();
+                let _: () = msg_send![layer, setColorspace: cs_obj];
                 let _: () = msg_send![layer, setWantsExtendedDynamicRangeContent: true];
                 CGColorSpaceRelease(cs);
             }
@@ -180,7 +184,9 @@ impl GpuSurface {
             let color = CGColorCreateGenericRGB(r, g, b, a);
             if !color.is_null() {
                 let layer = self.layer_ptr as *mut AnyObject;
-                let _: () = msg_send![layer, setBackgroundColor: color];
+                // CGColorRef is toll-free bridged; encode as ObjC object ('@').
+                let color_obj: *mut AnyObject = color.cast();
+                let _: () = msg_send![layer, setBackgroundColor: color_obj];
                 CGColorRelease(color);
             }
         }

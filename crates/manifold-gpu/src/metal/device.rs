@@ -1181,10 +1181,12 @@ impl GpuDevice {
             use metal::foreign_types::{ForeignType, ForeignTypeRef};
             let device_ptr: *mut AnyObject = self.raw_device().as_ptr().cast();
             let desc_ptr: *mut AnyObject = descriptor.as_ref().as_ptr().cast();
+            // IOSurfaceRef is toll-free bridged; encode as ObjC object ('@').
+            let iosurface_obj: *mut AnyObject = (io_surface as *mut std::ffi::c_void).cast();
             let raw_mtl_texture: *mut AnyObject = msg_send![
                 device_ptr,
                 newTextureWithDescriptor: desc_ptr,
-                iosurface: io_surface,
+                iosurface: iosurface_obj,
                 plane: 0usize,
             ];
             assert!(
