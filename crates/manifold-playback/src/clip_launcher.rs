@@ -299,11 +299,14 @@ impl ClipLauncher {
         velocity: f32,
         midi_channel: i32,
         device_id: i32,
+        device_name: &str,
         beat_stamp: Option<f32>,
         event_sequence: u32,
         event_absolute_tick: i32,
         realtime_now: f64,
     ) -> bool {
+        use manifold_core::types::MidiTriggerMode;
+
         let key = (midi_note, device_id);
 
         // Auto-commit existing clip for this note+device before creating new one
@@ -321,16 +324,32 @@ impl ClipLauncher {
             );
         }
 
-        // Find layer that owns this MIDI note and matches channel filter
+        // Find a layer that accepts this event.
+        //  - Channel filter (-1 = any) and device filter (None = any) always apply.
+        //  - SingleNote mode: require exact layer.midi_note == midi_note.
+        //  - AllNotes mode: any note triggers (drum-pad / MIDI-import style).
         let target_layer_index = {
             let mut found = None;
             for layer in &project.timeline.layers {
-                if layer.midi_note == midi_note
-                    && (layer.midi_channel < 0 || layer.midi_channel == midi_channel)
-                {
-                    found = Some(layer.index);
-                    break;
+                if layer.midi_channel >= 0 && layer.midi_channel != midi_channel {
+                    continue;
                 }
+                if let Some(dev) = layer.midi_device.as_deref()
+                    && !device_name.eq_ignore_ascii_case(dev)
+                {
+                    continue;
+                }
+                let note_matches = match layer.midi_trigger_mode {
+                    MidiTriggerMode::SingleNote => {
+                        layer.midi_note >= 0 && layer.midi_note == midi_note
+                    }
+                    MidiTriggerMode::AllNotes => true,
+                };
+                if !note_matches {
+                    continue;
+                }
+                found = Some(layer.index);
+                break;
             }
             found
         };

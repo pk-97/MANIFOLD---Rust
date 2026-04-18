@@ -25,6 +25,10 @@ const FOLDER_W: f32 = color::LAYER_CTRL_FOLDER_BTN_WIDTH;
 const NEW_CLIP_W: f32 = color::LAYER_CTRL_NEW_CLIP_BTN_WIDTH;
 const ADD_GEN_W: f32 = color::LAYER_CTRL_ADD_GEN_CLIP_BTN_WIDTH;
 const GEN_TYPE_H: f32 = color::LAYER_CTRL_GEN_TYPE_ROW_HEIGHT;
+// Widths for the MIDI trigger-mode toggle and per-layer device dropdown
+// packed into the existing MIDI / CH rows (no new row, preserves TRACK_HEIGHT).
+const MODE_TOGGLE_W: f32 = 32.0;
+const DEV_LBL_W: f32 = 24.0;
 const MIDI_LBL_W: f32 = color::LAYER_CTRL_MIDI_LABEL_WIDTH;
 const CH_LBL_W: f32 = color::LAYER_CTRL_CHANNEL_LABEL_WIDTH;
 const ACCENT_W: f32 = color::GROUP_ACCENT_BAR_WIDTH;
@@ -184,6 +188,10 @@ pub struct LayerInfo {
     pub source_clip_count: usize,
     pub midi_note: i32,
     pub midi_channel: i32,
+    /// None or empty string = any device.
+    pub midi_device: Option<String>,
+    /// True when layer is in "AllNotes" trigger mode (every NoteOn triggers).
+    pub midi_all_notes: bool,
     /// Y offset within the layer controls panel (panel-local).
     pub y_offset: f32,
     /// Height of this layer row.
@@ -216,8 +224,11 @@ struct LayerRowData {
     add_gen_clip: Rect,
     midi_label: Rect,
     midi_input: Rect,
+    midi_mode: Rect,
     ch_label: Rect,
     ch_dropdown: Rect,
+    dev_label: Rect,
+    dev_dropdown: Rect,
     has_chevron: bool,
     has_accent_bar: bool,
     has_connector: bool,
@@ -331,16 +342,25 @@ fn compute_layer_row(
         d.add_gen_clip = Rect::new(pad, y, ADD_GEN_W, BTN_H);
         y += BTN_H + 2.0;
 
-        // MIDI note
+        // MIDI note + trigger-mode toggle (share one row)
         d.midi_label = Rect::new(pad, y, MIDI_LBL_W, BTN_H);
         let gen_midi_x = pad + MIDI_LBL_W + 2.0;
-        d.midi_input = Rect::new(gen_midi_x, y, w - gen_midi_x - pad - RIGHT_GUTTER, BTN_H);
+        let right_edge = w - pad - RIGHT_GUTTER;
+        let mode_x = right_edge - MODE_TOGGLE_W;
+        d.midi_input =
+            Rect::new(gen_midi_x, y, (mode_x - 4.0 - gen_midi_x).max(10.0), BTN_H);
+        d.midi_mode = Rect::new(mode_x, y, MODE_TOGGLE_W, BTN_H);
         y += ROW_STEP;
 
-        // MIDI channel
+        // MIDI channel + device dropdown (share one row)
         d.ch_label = Rect::new(pad, y, CH_LBL_W, BTN_H);
         let gen_ch_x = pad + CH_LBL_W + 2.0;
-        d.ch_dropdown = Rect::new(gen_ch_x, y, w - gen_ch_x - pad - RIGHT_GUTTER, BTN_H);
+        let ch_w = 44.0;
+        d.ch_dropdown = Rect::new(gen_ch_x, y, ch_w, BTN_H);
+        let dev_lbl_x = gen_ch_x + ch_w + 6.0;
+        d.dev_label = Rect::new(dev_lbl_x, y, DEV_LBL_W, BTN_H);
+        let dev_x = dev_lbl_x + DEV_LBL_W + 2.0;
+        d.dev_dropdown = Rect::new(dev_x, y, (right_edge - dev_x).max(10.0), BTN_H);
     } else {
         d.has_video_controls = true;
 
@@ -353,16 +373,24 @@ fn compute_layer_row(
         d.new_clip = Rect::new(new_clip_x, y, NEW_CLIP_W, BTN_H);
         y += ROW_STEP;
 
-        // MIDI note
+        // MIDI note + trigger-mode toggle (share one row)
         d.midi_label = Rect::new(pad, y, MIDI_LBL_W, BTN_H);
         let midi_x = pad + MIDI_LBL_W + 2.0;
-        d.midi_input = Rect::new(midi_x, y, w - midi_x - pad - RIGHT_GUTTER, BTN_H);
+        let right_edge = w - pad - RIGHT_GUTTER;
+        let mode_x = right_edge - MODE_TOGGLE_W;
+        d.midi_input = Rect::new(midi_x, y, (mode_x - 4.0 - midi_x).max(10.0), BTN_H);
+        d.midi_mode = Rect::new(mode_x, y, MODE_TOGGLE_W, BTN_H);
         y += ROW_STEP;
 
-        // MIDI channel
+        // MIDI channel + device dropdown (share one row)
         d.ch_label = Rect::new(pad, y, CH_LBL_W, BTN_H);
         let ch_x = pad + CH_LBL_W + 2.0;
-        d.ch_dropdown = Rect::new(ch_x, y, w - ch_x - pad - RIGHT_GUTTER, BTN_H);
+        let ch_w = 44.0;
+        d.ch_dropdown = Rect::new(ch_x, y, ch_w, BTN_H);
+        let dev_lbl_x = ch_x + ch_w + 6.0;
+        d.dev_label = Rect::new(dev_lbl_x, y, DEV_LBL_W, BTN_H);
+        let dev_x = dev_lbl_x + DEV_LBL_W + 2.0;
+        d.dev_dropdown = Rect::new(dev_x, y, (right_edge - dev_x).max(10.0), BTN_H);
     }
 
     let _ = y; // suppress unused
@@ -393,8 +421,11 @@ struct LayerRowIds {
     add_gen_clip: i32,
     midi_label: i32,
     midi_input: i32,
+    midi_mode: i32,
     ch_label: i32,
     ch_dropdown: i32,
+    dev_label: i32,
+    dev_dropdown: i32,
 }
 
 impl LayerRowIds {
@@ -420,8 +451,11 @@ impl LayerRowIds {
             self.add_gen_clip,
             self.midi_label,
             self.midi_input,
+            self.midi_mode,
             self.ch_label,
             self.ch_dropdown,
+            self.dev_label,
+            self.dev_dropdown,
         ] {
             if id >= 0 {
                 f(id);
@@ -452,8 +486,11 @@ impl Default for LayerRowIds {
             add_gen_clip: -1,
             midi_label: -1,
             midi_input: -1,
+            midi_mode: -1,
             ch_label: -1,
             ch_dropdown: -1,
+            dev_label: -1,
+            dev_dropdown: -1,
         }
     }
 }
@@ -666,6 +703,14 @@ impl LayerHeaderPanel {
         self.rows.get(index).map_or(-1, |r| r.midi_input)
     }
 
+    pub fn midi_device_node_id(&self, index: usize) -> i32 {
+        self.rows.get(index).map_or(-1, |r| r.dev_dropdown)
+    }
+
+    pub fn midi_mode_node_id(&self, index: usize) -> i32 {
+        self.rows.get(index).map_or(-1, |r| r.midi_mode)
+    }
+
     pub fn name_node_id(&self, index: usize) -> i32 {
         self.rows.get(index).map_or(-1, |r| r.name)
     }
@@ -755,6 +800,22 @@ impl LayerHeaderPanel {
             && row.ch_dropdown >= 0
         {
             tree.set_text(row.ch_dropdown as u32, text);
+        }
+    }
+
+    pub fn set_midi_device_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
+        if let Some(row) = self.rows.get(index)
+            && row.dev_dropdown >= 0
+        {
+            tree.set_text(row.dev_dropdown as u32, text);
+        }
+    }
+
+    pub fn set_midi_mode_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
+        if let Some(row) = self.rows.get(index)
+            && row.midi_mode >= 0
+        {
+            tree.set_text(row.midi_mode as u32, text);
         }
     }
 
@@ -1258,7 +1319,11 @@ impl LayerHeaderPanel {
                 },
             ) as i32;
 
-            let midi_text = note_number_to_name(layer.midi_note);
+            let midi_text = if layer.midi_all_notes {
+                "—".to_string()
+            } else {
+                note_number_to_name(layer.midi_note)
+            };
             let mir = s(row.midi_input);
             ids.midi_input = tree.add_button(
                 clip_parent,
@@ -1268,6 +1333,19 @@ impl LayerHeaderPanel {
                 mir.height,
                 field_style(),
                 &midi_text,
+            ) as i32;
+
+            // Trigger-mode toggle (Note ↔ All)
+            let mode_text = if layer.midi_all_notes { "All" } else { "Note" };
+            let mmr = s(row.midi_mode);
+            ids.midi_mode = tree.add_button(
+                clip_parent,
+                mmr.x,
+                mmr.y,
+                mmr.width,
+                mmr.height,
+                small_button_style(),
+                mode_text,
             ) as i32;
 
             // Channel label + dropdown
@@ -1290,7 +1368,7 @@ impl LayerHeaderPanel {
             let ch_text = if layer.midi_channel < 0 {
                 "All".to_string()
             } else {
-                format!("Ch {}", layer.midi_channel + 1)
+                format!("{}", layer.midi_channel + 1)
             };
             let cdr = s(row.ch_dropdown);
             ids.ch_dropdown = tree.add_button(
@@ -1301,6 +1379,38 @@ impl LayerHeaderPanel {
                 cdr.height,
                 small_button_style(),
                 &ch_text,
+            ) as i32;
+
+            // Per-layer device filter: label + dropdown
+            let dlr = s(row.dev_label);
+            ids.dev_label = tree.add_label(
+                clip_parent,
+                dlr.x,
+                dlr.y,
+                dlr.width,
+                dlr.height,
+                "DEV",
+                UIStyle {
+                    text_color: text_clr,
+                    font_size: SMALL_FONT,
+                    text_align: TextAlign::Left,
+                    ..UIStyle::default()
+                },
+            ) as i32;
+
+            let dev_text: &str = match layer.midi_device.as_deref() {
+                None | Some("") => "All",
+                Some(name) => name,
+            };
+            let ddr = s(row.dev_dropdown);
+            ids.dev_dropdown = tree.add_button(
+                clip_parent,
+                ddr.x,
+                ddr.y,
+                ddr.width,
+                ddr.height,
+                small_button_style(),
+                dev_text,
             ) as i32;
         }
 
@@ -1357,8 +1467,14 @@ impl LayerHeaderPanel {
             if id == row.midi_input {
                 return vec![PanelAction::MidiInputClicked(i)];
             }
+            if id == row.midi_mode {
+                return vec![PanelAction::MidiTriggerModeClicked(i)];
+            }
             if id == row.ch_dropdown {
                 return vec![PanelAction::MidiChannelClicked(i)];
+            }
+            if id == row.dev_dropdown {
+                return vec![PanelAction::MidiDeviceClicked(i)];
             }
             if id == row.name || id == row.bg || id == row.drag_handle {
                 return vec![PanelAction::LayerClicked(i, modifiers)];
@@ -1682,6 +1798,8 @@ mod tests {
             source_clip_count: 0,
             midi_note: -1,
             midi_channel: -1,
+            midi_device: None,
+            midi_all_notes: false,
             y_offset,
             height,
             is_selected: false,

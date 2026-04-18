@@ -111,6 +111,8 @@ pub enum PanelAction {
     AddGenClipClicked(usize),
     MidiInputClicked(usize),
     MidiChannelClicked(usize),
+    MidiDeviceClicked(usize),
+    MidiTriggerModeClicked(usize),
     LayerDragStarted(usize),
     LayerDragMoved(usize, usize),
     LayerDragEnded(usize, usize),
@@ -340,6 +342,8 @@ pub enum PanelAction {
     // Dropdown results (context-routed from UIRoot)
     SetMidiNote(usize, i32),        // layer_index, note (0-127)
     SetMidiChannel(usize, i32),     // layer_index, channel (0-15 internal, displayed 1-16)
+    SetMidiDevice(usize, Option<String>), // layer_index, device name (None = any)
+    SetMidiTriggerMode(usize, manifold_core::types::MidiTriggerMode),
     SetResolution(usize),           // preset index
     SetDisplayResolution(i32, i32), // direct width, height (no undo, matches Unity)
     SetRenderScale(f32),            // render scale: 1.0 (native), 0.75 (quality), 0.5 (performance)

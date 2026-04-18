@@ -267,6 +267,10 @@ pub(super) fn dispatch_layer(
             // Intercepted by UIRoot::try_open_dropdown (opens dropdown at button).
             DispatchResult::handled()
         }
+        PanelAction::MidiDeviceClicked(_idx) => {
+            // Intercepted by UIRoot::try_open_dropdown (opens dropdown at button).
+            DispatchResult::handled()
+        }
         PanelAction::LayerDragStarted(_) | PanelAction::LayerDragMoved(..) => {
             DispatchResult::handled()
         }

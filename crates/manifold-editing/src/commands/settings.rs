@@ -6,7 +6,7 @@ use manifold_core::effects::ParameterDriver;
 use manifold_core::math::BeatQuantizer;
 use manifold_core::project::Project;
 use manifold_core::tempo::TempoPoint;
-use manifold_core::types::{BlendMode, QuantizeMode, TempoPointSource};
+use manifold_core::types::{BlendMode, MidiTriggerMode, QuantizeMode, TempoPointSource};
 use manifold_core::units::Bpm;
 
 /// Change project BPM with full tempo map support.
@@ -641,6 +641,78 @@ impl Command for ChangeLayerMidiChannelCommand {
 
     fn description(&self) -> &str {
         "Change MIDI Channel"
+    }
+}
+
+/// Change a layer's MIDI device filter (None = any device).
+#[derive(Debug)]
+pub struct ChangeLayerMidiDeviceCommand {
+    layer_id: LayerId,
+    old_device: Option<String>,
+    new_device: Option<String>,
+}
+
+impl ChangeLayerMidiDeviceCommand {
+    pub fn new(layer_id: LayerId, old_device: Option<String>, new_device: Option<String>) -> Self {
+        Self {
+            layer_id,
+            old_device,
+            new_device,
+        }
+    }
+}
+
+impl Command for ChangeLayerMidiDeviceCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
+            layer.set_midi_device(self.new_device.clone());
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
+            layer.set_midi_device(self.old_device.clone());
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Change MIDI Device"
+    }
+}
+
+/// Change a layer's MIDI trigger mode (single-note vs all-notes).
+#[derive(Debug)]
+pub struct ChangeLayerMidiTriggerModeCommand {
+    layer_id: LayerId,
+    old_mode: MidiTriggerMode,
+    new_mode: MidiTriggerMode,
+}
+
+impl ChangeLayerMidiTriggerModeCommand {
+    pub fn new(layer_id: LayerId, old_mode: MidiTriggerMode, new_mode: MidiTriggerMode) -> Self {
+        Self {
+            layer_id,
+            old_mode,
+            new_mode,
+        }
+    }
+}
+
+impl Command for ChangeLayerMidiTriggerModeCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
+            layer.set_midi_trigger_mode(self.new_mode);
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
+            layer.set_midi_trigger_mode(self.old_mode);
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Change MIDI Trigger Mode"
     }
 }
 

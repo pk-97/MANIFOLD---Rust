@@ -524,20 +524,31 @@ pub fn push_state(
             ui.layer_headers
                 .set_blend_mode_text(tree, i, layer.default_blend_mode.display_name());
 
-            // MIDI note/channel labels
-            let note_text = if layer.midi_note >= 0 {
-                format!("{}", layer.midi_note)
-            } else {
+            // MIDI note/channel/device labels + trigger-mode toggle
+            use manifold_core::types::MidiTriggerMode;
+            let all_notes = matches!(layer.midi_trigger_mode, MidiTriggerMode::AllNotes);
+            let note_text = if all_notes {
                 "\u{2014}".into()
+            } else {
+                manifold_core::midi::note_number_to_name(layer.midi_note)
             };
             ui.layer_headers.set_midi_note_text(tree, i, &note_text);
 
             let ch_text = if layer.midi_channel >= 0 {
-                format!("Ch {}", layer.midi_channel + 1)
+                format!("{}", layer.midi_channel + 1)
             } else {
-                "Any".into()
+                "All".into()
             };
             ui.layer_headers.set_midi_channel_text(tree, i, &ch_text);
+
+            let dev_text = match layer.midi_device.as_deref() {
+                None | Some("") => "All",
+                Some(name) => name,
+            };
+            ui.layer_headers.set_midi_device_text(tree, i, dev_text);
+
+            let mode_text = if all_notes { "All" } else { "Note" };
+            ui.layer_headers.set_midi_mode_text(tree, i, mode_text);
 
             // Layer info text (clip count)
             let clip_count = layer.clips.len();
@@ -815,6 +826,11 @@ pub fn sync_project_data(
                     source_clip_count: 0,
                     midi_note: layer.midi_note,
                     midi_channel: layer.midi_channel,
+                    midi_device: layer.midi_device.clone(),
+                    midi_all_notes: matches!(
+                        layer.midi_trigger_mode,
+                        manifold_core::types::MidiTriggerMode::AllNotes
+                    ),
                     y_offset: y,
                     height: track_h,
                     is_selected: selection.is_layer_active(&layer.layer_id),

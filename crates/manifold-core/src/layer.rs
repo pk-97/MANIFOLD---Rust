@@ -5,7 +5,7 @@ use crate::effects::{EffectGroup, EffectInstance, ParamEnvelope, ParameterDriver
 use crate::generator::GeneratorParamState;
 use crate::generator_type_id::GeneratorTypeId;
 use crate::id::{ClipId, EffectGroupId, LayerId};
-use crate::types::{BlendMode, ClipDurationMode, LayerType};
+use crate::types::{BlendMode, ClipDurationMode, LayerType, MidiTriggerMode};
 use crate::units::{Beats, Seconds};
 use ahash::AHashMap;
 use serde::{Deserialize, Serialize};
@@ -87,6 +87,13 @@ pub struct Layer {
     pub midi_note: i32,
     #[serde(default = "default_neg_one")]
     pub midi_channel: i32,
+    /// Per-layer MIDI device filter (matches device name case-insensitively).
+    /// `None` = accept events from any connected device.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub midi_device: Option<String>,
+    /// Trigger mode for incoming NoteOn events. See `MidiTriggerMode`.
+    #[serde(default, skip_serializing_if = "is_default_trigger_mode")]
+    pub midi_trigger_mode: MidiTriggerMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_mode: Option<ClipDurationMode>,
     #[serde(default)]
@@ -674,6 +681,19 @@ impl Layer {
         self.midi_channel = if v < 0 { -1 } else { v.clamp(0, 15) };
     }
 
+    /// Set the per-layer MIDI device filter. Empty string → None (any device).
+    pub fn set_midi_device(&mut self, name: Option<String>) {
+        self.midi_device = match name {
+            Some(s) if !s.is_empty() => Some(s),
+            _ => None,
+        };
+    }
+
+    /// Set the MIDI trigger mode (single-note vs all-notes).
+    pub fn set_midi_trigger_mode(&mut self, mode: MidiTriggerMode) {
+        self.midi_trigger_mode = mode;
+    }
+
     /// Clear all clips. Unity Layer.cs line 445.
     pub fn clear_clips(&mut self) {
         self.clips.clear();
@@ -810,6 +830,8 @@ impl Default for Layer {
             relative_video_folder_path: None,
             midi_note: -1,
             midi_channel: -1,
+            midi_device: None,
+            midi_trigger_mode: MidiTriggerMode::SingleNote,
             duration_mode: None,
             source_clip_ids: Vec::new(),
             legacy_generator_type: None,
@@ -838,6 +860,9 @@ fn default_one() -> f32 {
 }
 fn default_neg_one() -> i32 {
     -1
+}
+fn is_default_trigger_mode(mode: &MidiTriggerMode) -> bool {
+    *mode == MidiTriggerMode::SingleNote
 }
 
 #[cfg(test)]

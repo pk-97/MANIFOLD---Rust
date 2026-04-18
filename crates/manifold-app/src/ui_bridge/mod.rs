@@ -300,6 +300,7 @@ pub fn dispatch(
         | PanelAction::AddGenClipClicked(_)
         | PanelAction::MidiInputClicked(_)
         | PanelAction::MidiChannelClicked(_)
+        | PanelAction::MidiDeviceClicked(_)
         | PanelAction::LayerDragStarted(_)
         | PanelAction::LayerDragMoved(..)
         | PanelAction::LayerDragEnded(..)
@@ -342,6 +343,9 @@ pub fn dispatch(
         | PanelAction::ExportXml
         | PanelAction::SetMidiNote(..)
         | PanelAction::SetMidiChannel(..)
+        | PanelAction::SetMidiDevice(..)
+        | PanelAction::SetMidiTriggerMode(..)
+        | PanelAction::MidiTriggerModeClicked(_)
         | PanelAction::SetResolution(_)
         | PanelAction::SetDisplayResolution(..)
         | PanelAction::SetRenderScale(_)

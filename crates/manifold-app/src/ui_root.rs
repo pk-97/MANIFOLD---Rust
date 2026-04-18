@@ -65,6 +65,7 @@ pub enum DropdownContext {
     BlendMode(usize),
     MidiNote(usize),
     MidiChannel(usize),
+    MidiDevice(usize),
     Resolution,
     #[allow(dead_code)]
     AddEffect(InspectorTab),
@@ -1129,10 +1130,19 @@ impl UIRoot {
                 true
             }
             PanelAction::MidiChannelClicked(idx) => {
-                let items: Vec<DropdownItem> = (1..=16)
-                    .map(|ch| DropdownItem::new(&format!("Ch {}", ch)))
-                    .collect();
+                let mut items: Vec<DropdownItem> = vec![DropdownItem::new("All")];
+                items.extend((1..=16).map(|ch| DropdownItem::new(&format!("Ch {}", ch))));
                 self.open_dropdown_at(DropdownContext::MidiChannel(*idx), items, trigger);
+                true
+            }
+            PanelAction::MidiDeviceClicked(idx) => {
+                let mut items: Vec<DropdownItem> = vec![DropdownItem::new("All Devices")];
+                items.extend(
+                    self.midi_device_names
+                        .iter()
+                        .map(|name| DropdownItem::new(name)),
+                );
+                self.open_dropdown_at(DropdownContext::MidiDevice(*idx), items, trigger);
                 true
             }
             PanelAction::ResolutionClicked => {
@@ -1416,8 +1426,18 @@ impl UIRoot {
                 Some(PanelAction::SetMidiNote(layer_idx, index as i32))
             }
             DropdownContext::MidiChannel(layer_idx) => {
-                // Storage is 0-indexed internally (0..15); display adds +1 for "Ch 1".."Ch 16".
-                Some(PanelAction::SetMidiChannel(layer_idx, index as i32))
+                // Item 0 = "All" (-1 sentinel); 1..=16 map to channels 0..15.
+                let ch = if index == 0 { -1 } else { index as i32 - 1 };
+                Some(PanelAction::SetMidiChannel(layer_idx, ch))
+            }
+            DropdownContext::MidiDevice(layer_idx) => {
+                // Item 0 = "All Devices" (None); subsequent items map into midi_device_names.
+                let device = if index == 0 {
+                    None
+                } else {
+                    self.midi_device_names.get(index - 1).cloned()
+                };
+                Some(PanelAction::SetMidiDevice(layer_idx, device))
             }
             DropdownContext::Resolution => {
                 use manifold_core::types::ResolutionPreset;

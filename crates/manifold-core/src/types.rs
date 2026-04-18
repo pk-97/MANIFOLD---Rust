@@ -807,6 +807,19 @@ pub enum ClipDurationMode {
     NoteOff = 2,
 }
 
+// ─── MIDI Trigger Mode ───
+
+/// How a layer responds to incoming MIDI notes.
+/// `SingleNote`: only `layer.midi_note` triggers a clip.
+/// `AllNotes`: every NoteOn on the selected device fires a clip (drum-pad style).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MidiTriggerMode {
+    #[default]
+    SingleNote,
+    AllNotes,
+}
+
 impl Serialize for ClipDurationMode {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_i32(*self as i32)

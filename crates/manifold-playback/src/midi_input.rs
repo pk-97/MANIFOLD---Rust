@@ -322,6 +322,7 @@ impl MidiInputController {
             let evt = self.native_event_buffer[i];
             let source_index = evt.source_index.max(0);
             let device_id = NATIVE_CLOCK_DEVICE_ID_BASE + source_index;
+            let device_name = self.device_name_for_source(source_index).to_owned();
 
             // beat_stamp: Some(tick / 24.0) when a real absolute_tick is present.
             // Port of C# line 379: float beatStamp = evt.AbsoluteTick / 24f;
@@ -339,6 +340,7 @@ impl MidiInputController {
                         evt.velocity,
                         evt.channel,
                         device_id,
+                        &device_name,
                         beat_stamp,
                         "midir",
                         evt.sequence,
@@ -355,6 +357,7 @@ impl MidiInputController {
                         evt.note,
                         evt.channel,
                         device_id,
+                        &device_name,
                         beat_stamp,
                         "midir",
                         evt.sequence,
@@ -582,6 +585,20 @@ impl MidiInputController {
         clock_authority == ClockAuthority::MidiClock
     }
 
+    /// Look up the display name of the registered device that owns `source_index`.
+    /// Returns an empty string if no registered device matches.
+    fn device_name_for_source(&self, source_index: i32) -> &str {
+        if source_index < 0 {
+            return "";
+        }
+        let wanted = source_index as usize;
+        self.registered_devices
+            .iter()
+            .find(|d| d.port_index == wanted)
+            .map(|d| d.name.as_str())
+            .unwrap_or("")
+    }
+
     // ── Note routing ─────────────────────────────────────────────────
 
     /// Port of C# MidiInputController.ProcessNoteOn.
@@ -593,6 +610,7 @@ impl MidiInputController {
         velocity: f32,
         channel: i32,
         device_id: i32,
+        device_name: &str,
         beat_stamp: Option<f32>,
         source: &str,
         event_sequence: u32,
@@ -620,6 +638,7 @@ impl MidiInputController {
             velocity,
             channel,
             device_id,
+            device_name,
             beat_stamp,
             event_sequence,
             event_absolute_tick,
@@ -705,6 +724,7 @@ impl MidiInputController {
         note_number: i32,
         channel: i32,
         device_id: i32,
+        _device_name: &str,
         beat_stamp: Option<f32>,
         source: &str,
         event_sequence: u32,

@@ -127,6 +127,54 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
+        PanelAction::SetMidiDevice(layer_idx, device) => {
+            if let Some(layer) = project.timeline.layers.get(*layer_idx) {
+                let layer_id = layer.layer_id.clone();
+                let old_device = layer.midi_device.clone();
+                let cmd = manifold_editing::commands::settings::ChangeLayerMidiDeviceCommand::new(
+                    layer_id,
+                    old_device,
+                    device.clone(),
+                );
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::MidiTriggerModeClicked(layer_idx) => {
+            use manifold_core::types::MidiTriggerMode;
+            if let Some(layer) = project.timeline.layers.get(*layer_idx) {
+                let layer_id = layer.layer_id.clone();
+                let old_mode = layer.midi_trigger_mode;
+                let new_mode = match old_mode {
+                    MidiTriggerMode::SingleNote => MidiTriggerMode::AllNotes,
+                    MidiTriggerMode::AllNotes => MidiTriggerMode::SingleNote,
+                };
+                let cmd =
+                    manifold_editing::commands::settings::ChangeLayerMidiTriggerModeCommand::new(
+                        layer_id, old_mode, new_mode,
+                    );
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::SetMidiTriggerMode(layer_idx, new_mode) => {
+            if let Some(layer) = project.timeline.layers.get(*layer_idx) {
+                let layer_id = layer.layer_id.clone();
+                let old_mode = layer.midi_trigger_mode;
+                let cmd =
+                    manifold_editing::commands::settings::ChangeLayerMidiTriggerModeCommand::new(
+                        layer_id, old_mode, *new_mode,
+                    );
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::structural()
+        }
         PanelAction::SetResolution(preset_idx) => {
             use manifold_core::types::ResolutionPreset;
             let old = project.settings.resolution_preset;
