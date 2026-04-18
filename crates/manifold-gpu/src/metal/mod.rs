@@ -29,6 +29,7 @@ mod device;
 mod encoder;
 mod format;
 mod msl_cache;
+mod objc2_bridge;
 mod shader_compiler;
 pub mod surface;
 mod texture_pool;

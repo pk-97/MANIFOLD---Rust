@@ -7,55 +7,55 @@
 //! Requires macOS 13+ (Ventura) and Apple Silicon. Falls back to
 //! MPS Lanczos if MetalFX is unavailable.
 //!
-//! Uses `msg_send!` because the `metal` crate v0.33 doesn't expose
-//! MetalFX types.
-//!
-//! ## Why not objc2-metal-fx?
-//!
-//! The `objc2-metal-fx` crate provides typed bindings for MTLFXSpatialScalerDescriptor
-//! and MTLFXSpatialScaler. However, it uses `objc2-metal`'s type system which is
-//! incompatible with our `metal` crate types. The same migration blocker as MPS —
-//! see `mps.rs` header for details. Once the full `metal` → `objc2-metal` migration
-//! happens, MetalFX bindings should be replaced with the typed objc2-metal-fx crate.
+//! Uses `objc2-metal-fx` typed bindings. Public API still accepts
+//! `metal::DeviceRef` / `metal::CommandBufferRef` so downstream crates
+//! don't need to change — bridging to `objc2-metal` happens at call
+//! boundaries via `objc2_bridge`.
 
-use objc::runtime::{BOOL, Class, Object};
-use std::ffi::c_void;
+use objc2::AnyThread;
+use objc2::rc::Retained;
+use objc2_metal::MTLPixelFormat;
+use objc2_metal_fx::{
+    MTLFXSpatialScaler, MTLFXSpatialScalerBase, MTLFXSpatialScalerColorProcessingMode,
+    MTLFXSpatialScalerDescriptor,
+};
 
 use super::GpuTexture;
+use super::objc2_bridge::{cmd_buf_as_objc2, device_as_objc2, texture_as_objc2};
 use crate::GpuTextureFormat;
 
-// ─── Link MetalFX framework ─────────────────────────────────────────
-// Weak link: on macOS < 13 the framework doesn't exist but the binary
-// still loads — Class::get() returns None and we fall back to MPS.
-
-#[link(name = "MetalFX", kind = "framework")]
-unsafe extern "C" {}
-
-unsafe extern "C" {
-    fn objc_release(obj: *mut c_void);
-}
-
 /// Check if MetalFX Spatial Scaler is available on this system.
+///
+/// Availability is determined by trying to resolve `MTLFXSpatialScalerDescriptor`.
+/// objc2-metal-fx weak-links the framework, so on macOS < 13 the class lookup
+/// returns None and this function returns false.
 pub fn metalfx_available() -> bool {
-    Class::get("MTLFXSpatialScalerDescriptor").is_some()
+    // The class may not exist on older macOS. objc2 handles weak linking
+    // transparently — if the framework loader couldn't resolve the class,
+    // any call into it panics. We probe by catching via device support check
+    // in `supports_spatial_scaling` instead; here we just assume availability
+    // is tied to macOS 13+. The downstream helper still gates on
+    // supportsDevice:, which is the authoritative check.
+    // For a cheaper probe, use runtime class lookup:
+    use objc2::runtime::AnyClass;
+    AnyClass::get(c"MTLFXSpatialScalerDescriptor").is_some()
 }
 
-/// Map GpuTextureFormat to Metal pixel format enum value.
-fn to_mtl_pixel_format(fmt: GpuTextureFormat) -> u64 {
-    // MTLPixelFormat raw values (from Metal headers)
+/// Map GpuTextureFormat to MTLPixelFormat.
+fn to_mtl_pixel_format(fmt: GpuTextureFormat) -> MTLPixelFormat {
     match fmt {
-        GpuTextureFormat::Rgba16Float => 115, // MTLPixelFormatRGBA16Float
-        GpuTextureFormat::Rgba32Float => 125, // MTLPixelFormatRGBA32Float
-        GpuTextureFormat::Rgba8Unorm => 70,   // MTLPixelFormatRGBA8Unorm
-        GpuTextureFormat::Bgra8Unorm => 80,   // MTLPixelFormatBGRA8Unorm
-        GpuTextureFormat::R32Float => 55,     // MTLPixelFormatR32Float
-        GpuTextureFormat::Rg32Float => 63,    // MTLPixelFormatRG32Float
-        GpuTextureFormat::R16Float => 25,     // MTLPixelFormatR16Float
-        GpuTextureFormat::Rg16Float => 35,    // MTLPixelFormatRG16Float
-        GpuTextureFormat::R32Uint => 53,      // MTLPixelFormatR32Uint
-        GpuTextureFormat::Rgba8UnormSrgb => 71, // MTLPixelFormatRGBA8Unorm_sRGB
-        GpuTextureFormat::R8Unorm => 10,      // MTLPixelFormatR8Unorm
-        GpuTextureFormat::Depth32Float => 252, // MTLPixelFormatDepth32Float
+        GpuTextureFormat::Rgba16Float => MTLPixelFormat::RGBA16Float,
+        GpuTextureFormat::Rgba32Float => MTLPixelFormat::RGBA32Float,
+        GpuTextureFormat::Rgba8Unorm => MTLPixelFormat::RGBA8Unorm,
+        GpuTextureFormat::Bgra8Unorm => MTLPixelFormat::BGRA8Unorm,
+        GpuTextureFormat::R32Float => MTLPixelFormat::R32Float,
+        GpuTextureFormat::Rg32Float => MTLPixelFormat::RG32Float,
+        GpuTextureFormat::R16Float => MTLPixelFormat::R16Float,
+        GpuTextureFormat::Rg16Float => MTLPixelFormat::RG16Float,
+        GpuTextureFormat::R32Uint => MTLPixelFormat::R32Uint,
+        GpuTextureFormat::Rgba8UnormSrgb => MTLPixelFormat::RGBA8Unorm_sRGB,
+        GpuTextureFormat::R8Unorm => MTLPixelFormat::R8Unorm,
+        GpuTextureFormat::Depth32Float => MTLPixelFormat::Depth32Float,
     }
 }
 
@@ -65,8 +65,7 @@ fn to_mtl_pixel_format(fmt: GpuTextureFormat) -> u64 {
 /// Reused across frames. The scaler is a stateful ObjC object that
 /// encodes directly into MTLCommandBuffer.
 pub struct MetalFxSpatialScaler {
-    /// Retained MTLFXSpatialScaler object.
-    scaler_ptr: *mut Object,
+    scaler: Retained<objc2::runtime::ProtocolObject<dyn MTLFXSpatialScaler>>,
     pub input_width: u32,
     pub input_height: u32,
     pub output_width: u32,
@@ -88,41 +87,29 @@ impl MetalFxSpatialScaler {
         output_height: u32,
         format: GpuTextureFormat,
     ) -> Option<Self> {
-        let desc_cls = Class::get("MTLFXSpatialScalerDescriptor")?;
-
-        let pixel_format = to_mtl_pixel_format(format);
-
-        let desc: *mut Object = unsafe {
-            let alloc: *mut Object = msg_send![desc_cls, alloc];
-            msg_send![alloc, init]
-        };
-        if desc.is_null() {
+        if !metalfx_available() {
             return None;
         }
 
-        // Configure descriptor
-        unsafe {
-            let _: () = msg_send![desc, setInputWidth: input_width as u64];
-            let _: () = msg_send![desc, setInputHeight: input_height as u64];
-            let _: () = msg_send![desc, setOutputWidth: output_width as u64];
-            let _: () = msg_send![desc, setOutputHeight: output_height as u64];
-            let _: () = msg_send![desc, setColorTextureFormat: pixel_format];
-            let _: () = msg_send![desc, setOutputTextureFormat: pixel_format];
-            // Linear color processing (our content is linear HDR)
-            let _: () = msg_send![desc, setColorProcessingMode: 1u64]; // MTLFXSpatialScalerColorProcessingModeLinear
-        }
+        let pixel_format = to_mtl_pixel_format(format);
 
-        // Create scaler from descriptor + device
-        let scaler: *mut Object = unsafe {
-            msg_send![desc, newSpatialScalerWithDevice: device as *const _ as *mut Object]
+        let desc = unsafe {
+            let desc = MTLFXSpatialScalerDescriptor::init(MTLFXSpatialScalerDescriptor::alloc());
+            desc.setInputWidth(input_width as usize);
+            desc.setInputHeight(input_height as usize);
+            desc.setOutputWidth(output_width as usize);
+            desc.setOutputHeight(output_height as usize);
+            desc.setColorTextureFormat(pixel_format);
+            desc.setOutputTextureFormat(pixel_format);
+            // Linear color processing (our content is linear HDR).
+            desc.setColorProcessingMode(MTLFXSpatialScalerColorProcessingMode::Linear);
+            desc
         };
 
-        // Release the descriptor (scaler retains what it needs)
-        unsafe {
-            objc_release(desc as *mut c_void);
-        }
+        let device_obj = unsafe { device_as_objc2(device) };
+        let scaler = unsafe { desc.newSpatialScalerWithDevice(device_obj) };
 
-        if scaler.is_null() {
+        let Some(scaler) = scaler else {
             log::error!(
                 "[MetalFX] Failed to create spatial scaler ({}x{} -> {}x{})",
                 input_width,
@@ -131,10 +118,8 @@ impl MetalFxSpatialScaler {
                 output_height
             );
             return None;
-        }
+        };
 
-        // `newSpatialScalerWithDevice:` follows ObjC +1 naming convention (already retained).
-        // No extra retain needed — we own it, drop releases it.
         log::info!(
             "[MetalFX] Created spatial scaler: {}x{} -> {}x{}",
             input_width,
@@ -144,7 +129,7 @@ impl MetalFxSpatialScaler {
         );
 
         Some(Self {
-            scaler_ptr: scaler,
+            scaler,
             input_width,
             input_height,
             output_width,
@@ -157,17 +142,12 @@ impl MetalFxSpatialScaler {
     /// Caller must end any active encoder on the command buffer before calling this.
     pub fn encode(&self, cmd_buf: &metal::CommandBufferRef, src: &GpuTexture, dst: &GpuTexture) {
         unsafe {
-            let src_ref: &metal::TextureRef = &src.raw;
-            let dst_ref: &metal::TextureRef = &dst.raw;
-            let _: () = msg_send![self.scaler_ptr,
-                setColorTexture: src_ref as *const _ as *mut Object
-            ];
-            let _: () = msg_send![self.scaler_ptr,
-                setOutputTexture: dst_ref as *const _ as *mut Object
-            ];
-            let _: () = msg_send![self.scaler_ptr,
-                encodeToCommandBuffer: cmd_buf as *const _ as *mut Object
-            ];
+            let src_obj = texture_as_objc2(&src.raw);
+            let dst_obj = texture_as_objc2(&dst.raw);
+            let cb_obj = cmd_buf_as_objc2(cmd_buf);
+            self.scaler.setColorTexture(Some(src_obj));
+            self.scaler.setOutputTexture(Some(dst_obj));
+            self.scaler.encodeToCommandBuffer(cb_obj);
         }
     }
 
@@ -180,16 +160,6 @@ impl MetalFxSpatialScaler {
     }
 }
 
-impl Drop for MetalFxSpatialScaler {
-    fn drop(&mut self) {
-        if !self.scaler_ptr.is_null() {
-            unsafe {
-                objc_release(self.scaler_ptr as *mut c_void);
-            }
-        }
-    }
-}
-
 /// Check if MetalFX spatial scaling is supported for the given device.
 /// Returns true if the MTLFXSpatialScalerDescriptor class exists AND
 /// the device supports the required features.
@@ -197,11 +167,8 @@ pub fn supports_spatial_scaling(device: &metal::DeviceRef) -> bool {
     if !metalfx_available() {
         return false;
     }
-    let supported: BOOL = unsafe {
-        let cls = Class::get("MTLFXSpatialScalerDescriptor").unwrap();
-        msg_send![cls, supportsDevice: device as *const _ as *mut Object]
-    };
-    supported
+    let device_obj = unsafe { device_as_objc2(device) };
+    unsafe { MTLFXSpatialScalerDescriptor::supportsDevice(device_obj) }
 }
 
 // ─── TextureUpscaler ─────────────────────────────────────────────────

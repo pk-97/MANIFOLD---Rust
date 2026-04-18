@@ -22,5 +22,45 @@ block = "0.1"
 core-graphics-types = "0.2"
 raw-window-handle = "0.6"
 
+# objc2 ecosystem — typed Metal bindings replacing raw msg_send! in
+# archive.rs, metalfx.rs, and mps.rs. Coexists with the `metal` crate
+# via raw ObjC pointer bridging at call boundaries.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSURL"] }
+objc2-metal = { version = "0.3", features = [
+    "MTLDevice",
+    "MTLTexture",
+    "MTLCommandBuffer",
+    "MTLBinaryArchive",
+    "MTLPixelFormat",
+] }
+objc2-metal-fx = { version = "0.3", features = [
+    "MTLFXSpatialScaler",
+] }
+objc2-metal-performance-shaders = { version = "0.3", features = [
+    "MPSKernel",
+    "MPSCore",
+    "MPSCoreTypes",
+    "MPSImage",
+    "MPSImageKernel",
+    "MPSImageConvolution",
+    "MPSImageResampling",
+    "MPSImageMorphology",
+    "MPSImageReduce",
+    "MPSImageHistogram",
+    "MPSImageThreshold",
+    "MPSImageMedian",
+    "MPSImageIntegral",
+    "MPSImageTranspose",
+    "MPSImageCopy",
+    "MPSImageStatistics",
+    "MPSImageMath",
+    "MPSImageConversion",
+    "MPSImageKeypoint",
+    "MPSMatrix",
+    "MPSMatrixRandom",
+    "MPSMatrixTypes",
+] }
+
 [lints]
 workspace = true

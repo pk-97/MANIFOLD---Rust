@@ -17,39 +17,22 @@ use std::path::Path;
 /// `metal::URL::new_with_string` uses `[NSURL URLWithString:]` which returns
 /// an autoreleased object. The `metal` crate's wrapper assumes +1 ownership
 /// but doesn't retain, so the autorelease pool drain sends a second release
-/// → use-after-free. This helper creates the URL via `alloc` + `initWithString:`
+/// → use-after-free. This helper uses objc2-foundation's `NSURL::initWithString`
 /// which returns a +1 retained object (no autorelease), matching what the
 /// `metal::URL` Drop expects.
 fn create_retained_url(string: &str) -> metal::URL {
     use metal::foreign_types::ForeignType;
-    use std::ffi::c_void;
-    const UTF8_ENCODING: usize = 4;
-    unsafe {
-        // Create an NSString (autoreleased, but we don't store it)
-        let ns_cls = objc::class!(NSString);
-        let bytes = string.as_ptr().cast::<c_void>();
-        let ns_str: *mut objc::runtime::Object = objc::msg_send![ns_cls, alloc];
-        let ns_str: *mut objc::runtime::Object = objc::msg_send![
-            ns_str,
-            initWithBytes:bytes
-            length:string.len()
-            encoding:UTF8_ENCODING
-        ];
+    use objc2::AnyThread;
+    use objc2::rc::Retained;
+    use objc2_foundation::{NSString, NSURL};
 
-        // Create NSURL via alloc+init (returns +1 retained, no autorelease)
-        let url_cls = objc::class!(NSURL);
-        let alloc: *mut objc::runtime::Object = objc::msg_send![url_cls, alloc];
-        let obj: *mut objc::runtime::Object = objc::msg_send![alloc, initWithString: ns_str];
-
-        // Release the NSString — NSURL retains it internally if needed
-        let _: () = objc::msg_send![ns_str, release];
-
-        assert!(
-            !obj.is_null(),
-            "NSURL initWithString: returned nil for {string}"
-        );
-        metal::URL::from_ptr(obj as *mut _)
-    }
+    let ns_string = NSString::from_str(string);
+    // alloc + initWithString: returns +1 retained (no autorelease).
+    let url = NSURL::initWithString(NSURL::alloc(), &ns_string)
+        .unwrap_or_else(|| panic!("NSURL initWithString: returned nil for {string}"));
+    // Transfer +1 ownership to metal::URL (its Drop releases).
+    let raw_ptr = Retained::into_raw(url);
+    unsafe { metal::URL::from_ptr(raw_ptr.cast()) }
 }
 
 /// Pipeline binary archive — wraps MTLBinaryArchive.

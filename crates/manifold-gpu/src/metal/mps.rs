@@ -7,130 +7,49 @@
 //! MPS kernels are created once per device (or per parameter set) and cached.
 //! They are NOT per-dispatch objects — reuse them across frames.
 //!
-//! Uses `msg_send!` because the `metal` crate v0.33 only exposes
-//! MPS ray tracing types, not image processing kernels.
-//!
-//! ## Why not objc2-metal-performance-shaders?
-//!
-//! The `objc2-metal-performance-shaders` crate (v0.3.2) provides typed bindings for
-//! all MPS image kernels we use (MPSImageGaussianBlur, MPSImageSobel, MPSImageBox,
-//! MPSImageTent, MPSImageLanczosScale). However, it uses `objc2-metal`'s type system
-//! (`ProtocolObject<dyn MTLDevice>`, `ProtocolObject<dyn MTLCommandBuffer>`, etc.)
-//! which is incompatible with our `metal` crate types. Using it would require either
-//! unsafe pointer casting between the two type systems, or a full migration from the
-//! `metal` crate to `objc2-metal` across all of manifold-gpu. The full migration is
-//! a future task (see mod.rs header). Once that migration happens, MPS and MetalFX
-//! bindings should be replaced with the typed objc2 crates.
+//! Uses typed `objc2-metal-performance-shaders` bindings. Public API still
+//! accepts `metal::DeviceRef` / `metal::CommandBufferRef` / `metal::TextureRef`
+//! so downstream crates don't need to change — bridging to the `objc2-metal`
+//! type system happens at call boundaries via `objc2_bridge`.
 
-use objc::runtime::{BOOL, Class, Object, YES};
-use std::ffi::c_void;
-use std::ptr;
+use std::ffi::c_float;
+use std::ptr::NonNull;
+
+use objc2::rc::Retained;
+use objc2::runtime::{AnyClass, AnyObject, Bool, ProtocolObject};
+use objc2::{AnyThread, Encode, Encoding, RefEncode, msg_send};
+use objc2_metal::MTLDevice;
+use objc2_metal_performance_shaders::{
+    MPSBinaryImageKernel, MPSImageAdd, MPSImageAreaMax, MPSImageAreaMin, MPSImageBilinearScale,
+    MPSImageBox, MPSImageConvolution, MPSImageDilate, MPSImageDivide, MPSImageErode,
+    MPSImageFindKeypoints, MPSImageGaussianBlur, MPSImageHistogram, MPSImageHistogramEqualization,
+    MPSImageIntegral, MPSImageIntegralOfSquares, MPSImageKeypointRangeInfo, MPSImageLanczosScale,
+    MPSImageLaplacian, MPSImageMedian, MPSImageMultiply, MPSImageSobel,
+    MPSImageStatisticsMinAndMax, MPSImageSubtract, MPSImageTent, MPSImageThresholdBinary,
+    MPSImageThresholdToZero, MPSImageThresholdTruncate, MPSScaleTransform, MPSUnaryImageKernel,
+};
 
 use super::GpuTexture;
+use super::objc2_bridge::{cmd_buf_as_objc2, device_as_objc2, texture_as_objc2};
 
 // ─── Link MPS framework ──────────────────────────────────────────────
 
-#[link(name = "MetalPerformanceShaders", kind = "framework")]
 unsafe extern "C" {
-    fn MPSSupportsMTLDevice(device: *const c_void) -> BOOL;
+    fn MPSSupportsMTLDevice(device: *const std::ffi::c_void) -> bool;
 }
 
 /// Check if the device supports MPS.
 pub fn mps_supports_device(device: &metal::DeviceRef) -> bool {
-    let b: BOOL = unsafe {
-        let ptr: *const metal::DeviceRef = device;
-        MPSSupportsMTLDevice(ptr as *const c_void)
-    };
-    b == YES
+    use metal::foreign_types::ForeignTypeRef;
+    unsafe { MPSSupportsMTLDevice(device.as_ptr() as *const std::ffi::c_void) }
 }
 
-// ─── Raw ObjC helpers ─────────────────────────────────────────────────
-
-unsafe extern "C" {
-    fn objc_retain(obj: *mut c_void) -> *mut c_void;
-    fn objc_release(obj: *mut c_void);
-}
-
-/// Wrapper around an ObjC MPS kernel object. Retains on creation, releases on drop.
-struct MpsObject {
-    ptr: *mut Object,
-}
-
-impl MpsObject {
-    /// Wrap a newly created (autoreleased) ObjC object. Retains it.
-    unsafe fn from_raw(ptr: *mut Object) -> Self {
-        assert!(!ptr.is_null(), "MPS kernel creation returned null");
-        unsafe {
-            objc_retain(ptr as *mut c_void);
-        }
-        Self { ptr }
-    }
-
-    fn as_ptr(&self) -> *mut Object {
-        self.ptr
-    }
-}
-
-impl Drop for MpsObject {
-    fn drop(&mut self) {
-        if !self.ptr.is_null() {
-            unsafe {
-                objc_release(self.ptr as *mut c_void);
-            }
-        }
-    }
-}
-
-// Safety: MPS kernels are thread-safe for encoding (Apple docs).
-unsafe impl Send for MpsObject {}
-unsafe impl Sync for MpsObject {}
-
-// ─── Encode helpers ───────────────────────────────────────────────────
-
-/// Encode a unary image kernel (src → dst) into a command buffer.
-///
-/// # Safety
-/// `kernel` must be a valid MPSUnaryImageKernel subclass.
-/// `cmd_buf`, `src`, `dst` must be valid Metal objects.
-unsafe fn encode_unary(
-    kernel: *mut Object,
-    cmd_buf: &metal::CommandBufferRef,
-    src: &metal::TextureRef,
-    dst: &metal::TextureRef,
-) {
-    let _: () = unsafe {
-        msg_send![kernel,
-            encodeToCommandBuffer: cmd_buf as *const _ as *mut Object
-            sourceTexture: src as *const _ as *mut Object
-            destinationTexture: dst as *const _ as *mut Object
-        ]
-    };
-}
-
-/// Encode a binary image kernel (a + b → dst) into a command buffer.
-///
-/// # Safety
-/// `kernel` must be a valid MPSBinaryImageKernel subclass.
-unsafe fn encode_binary(
-    kernel: *mut Object,
-    cmd_buf: &metal::CommandBufferRef,
-    primary: &metal::TextureRef,
-    secondary: &metal::TextureRef,
-    dst: &metal::TextureRef,
-) {
-    let _: () = unsafe {
-        msg_send![kernel,
-            encodeToCommandBuffer: cmd_buf as *const _ as *mut Object
-            primaryTexture: primary as *const _ as *mut Object
-            secondaryTexture: secondary as *const _ as *mut Object
-            destinationTexture: dst as *const _ as *mut Object
-        ]
-    };
-}
-
-// ─── Scale transform for MPSImageScale ────────────────────────────────
+// ─── Scale transform ──────────────────────────────────────────────────
 
 /// Scale transform struct matching MPSScaleTransform.
+///
+/// Kept as the public ABI; converts to/from `objc2_metal_performance_shaders::MPSScaleTransform`
+/// (identical `#[repr(C)]` layout) at call sites.
 #[repr(C)]
 pub struct MpsScaleTransform {
     pub scale_x: f64,
@@ -139,70 +58,119 @@ pub struct MpsScaleTransform {
     pub translate_y: f64,
 }
 
+impl MpsScaleTransform {
+    #[inline]
+    fn as_mps(&self) -> MPSScaleTransform {
+        MPSScaleTransform {
+            scaleX: self.scale_x,
+            scaleY: self.scale_y,
+            translateX: self.translate_x,
+            translateY: self.translate_y,
+        }
+    }
+}
+
+// ─── Small helper macros ──────────────────────────────────────────────
+
+/// Encode a unary image kernel (src → dst) via the typed MPSUnaryImageKernel protocol.
+#[inline]
+unsafe fn encode_unary_typed<K>(
+    kernel: &K,
+    cmd_buf: &metal::CommandBufferRef,
+    src: &metal::TextureRef,
+    dst: &metal::TextureRef,
+) where
+    K: AsRef<MPSUnaryImageKernel>,
+{
+    unsafe {
+        kernel.as_ref().encodeToCommandBuffer_sourceTexture_destinationTexture(
+            cmd_buf_as_objc2(cmd_buf),
+            texture_as_objc2(src),
+            texture_as_objc2(dst),
+        );
+    }
+}
+
+/// Encode a binary image kernel (a + b → dst) via the typed MPSBinaryImageKernel protocol.
+#[inline]
+unsafe fn encode_binary_typed<K>(
+    kernel: &K,
+    cmd_buf: &metal::CommandBufferRef,
+    primary: &metal::TextureRef,
+    secondary: &metal::TextureRef,
+    dst: &metal::TextureRef,
+) where
+    K: AsRef<MPSBinaryImageKernel>,
+{
+    unsafe {
+        kernel
+            .as_ref()
+            .encodeToCommandBuffer_primaryTexture_secondaryTexture_destinationTexture(
+                cmd_buf_as_objc2(cmd_buf),
+                texture_as_objc2(primary),
+                texture_as_objc2(secondary),
+                texture_as_objc2(dst),
+            );
+    }
+}
+
 // ─── MPS Kernel Wrappers ──────────────────────────────────────────────
 
 // -- Blur --
 
 /// MPSImageGaussianBlur — separable Gaussian blur optimized for Apple Silicon.
 pub struct MpsGaussianBlur {
-    inner: MpsObject,
+    inner: Retained<MPSImageGaussianBlur>,
 }
 
+unsafe impl Send for MpsGaussianBlur {}
+unsafe impl Sync for MpsGaussianBlur {}
+
 impl MpsGaussianBlur {
-    /// Create a Gaussian blur kernel with the given sigma.
-    /// Sigma must be > 0. The kernel size is computed automatically.
     pub fn new(device: &metal::DeviceRef, sigma: f32) -> Self {
-        let cls = Class::get("MPSImageGaussianBlur").expect("MPSImageGaussianBlur class not found");
-        let obj: *mut Object = unsafe {
-            let alloc: *mut Object = msg_send![cls, alloc];
-            msg_send![alloc,
-                initWithDevice: device as *const _ as *mut Object
-                sigma: sigma as f64
-            ]
+        let inner = unsafe {
+            MPSImageGaussianBlur::initWithDevice_sigma(
+                MPSImageGaussianBlur::alloc(),
+                device_as_objc2(device),
+                sigma as c_float,
+            )
         };
-        Self {
-            inner: unsafe { MpsObject::from_raw(obj) },
-        }
+        Self { inner }
     }
 
-    /// Encode blur: src → dst. Textures must be compatible formats.
     pub fn encode(
         &self,
         cmd_buf: &metal::CommandBufferRef,
         src: &metal::TextureRef,
         dst: &metal::TextureRef,
     ) {
-        unsafe {
-            encode_unary(self.inner.as_ptr(), cmd_buf, src, dst);
-        }
+        unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
 
-    /// Get the current sigma value.
     pub fn sigma(&self) -> f32 {
-        let s: f64 = unsafe { msg_send![self.inner.as_ptr(), sigma] };
-        s as f32
+        unsafe { self.inner.sigma() }
     }
 }
 
 /// MPSImageBox — fast box blur.
 pub struct MpsBoxBlur {
-    inner: MpsObject,
+    inner: Retained<MPSImageBox>,
 }
+
+unsafe impl Send for MpsBoxBlur {}
+unsafe impl Sync for MpsBoxBlur {}
 
 impl MpsBoxBlur {
     pub fn new(device: &metal::DeviceRef, kernel_width: u32, kernel_height: u32) -> Self {
-        let cls = Class::get("MPSImageBox").expect("MPSImageBox class not found");
-        let obj: *mut Object = unsafe {
-            let alloc: *mut Object = msg_send![cls, alloc];
-            msg_send![alloc,
-                initWithDevice: device as *const _ as *mut Object
-                kernelWidth: kernel_width as u64
-                kernelHeight: kernel_height as u64
-            ]
+        let inner = unsafe {
+            MPSImageBox::initWithDevice_kernelWidth_kernelHeight(
+                MPSImageBox::alloc(),
+                device_as_objc2(device),
+                kernel_width as usize,
+                kernel_height as usize,
+            )
         };
-        Self {
-            inner: unsafe { MpsObject::from_raw(obj) },
-        }
+        Self { inner }
     }
 
     pub fn encode(
@@ -211,31 +179,29 @@ impl MpsBoxBlur {
         src: &metal::TextureRef,
         dst: &metal::TextureRef,
     ) {
-        unsafe {
-            encode_unary(self.inner.as_ptr(), cmd_buf, src, dst);
-        }
+        unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
 }
 
 /// MPSImageTent — tent (triangle) blur.
 pub struct MpsTentBlur {
-    inner: MpsObject,
+    inner: Retained<MPSImageTent>,
 }
+
+unsafe impl Send for MpsTentBlur {}
+unsafe impl Sync for MpsTentBlur {}
 
 impl MpsTentBlur {
     pub fn new(device: &metal::DeviceRef, kernel_width: u32, kernel_height: u32) -> Self {
-        let cls = Class::get("MPSImageTent").expect("MPSImageTent class not found");
-        let obj: *mut Object = unsafe {
-            let alloc: *mut Object = msg_send![cls, alloc];
-            msg_send![alloc,
-                initWithDevice: device as *const _ as *mut Object
-                kernelWidth: kernel_width as u64
-                kernelHeight: kernel_height as u64
-            ]
+        let inner = unsafe {
+            MPSImageTent::initWithDevice_kernelWidth_kernelHeight(
+                MPSImageTent::alloc(),
+                device_as_objc2(device),
+                kernel_width as usize,
+                kernel_height as usize,
+            )
         };
-        Self {
-            inner: unsafe { MpsObject::from_raw(obj) },
-        }
+        Self { inner }
     }
 
     pub fn encode(
@@ -244,31 +210,28 @@ impl MpsTentBlur {
         src: &metal::TextureRef,
         dst: &metal::TextureRef,
     ) {
-        unsafe {
-            encode_unary(self.inner.as_ptr(), cmd_buf, src, dst);
-        }
+        unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
 }
 
 /// MPSImageMedian — median filter.
 pub struct MpsMedian {
-    inner: MpsObject,
+    inner: Retained<MPSImageMedian>,
 }
 
+unsafe impl Send for MpsMedian {}
+unsafe impl Sync for MpsMedian {}
+
 impl MpsMedian {
-    /// Kernel size must be odd and >= 3.
     pub fn new(device: &metal::DeviceRef, kernel_diameter: u32) -> Self {
-        let cls = Class::get("MPSImageMedian").expect("MPSImageMedian class not found");
-        let obj: *mut Object = unsafe {
-            let alloc: *mut Object = msg_send![cls, alloc];
-            msg_send![alloc,
-                initWithDevice: device as *const _ as *mut Object
-                kernelDiameter: kernel_diameter as u64
-            ]
+        let inner = unsafe {
+            MPSImageMedian::initWithDevice_kernelDiameter(
+                MPSImageMedian::alloc(),
+                device_as_objc2(device),
+                kernel_diameter as usize,
+            )
         };
-        Self {
-            inner: unsafe { MpsObject::from_raw(obj) },
-        }
+        Self { inner }
     }
 
     pub fn encode(
@@ -277,9 +240,7 @@ impl MpsMedian {
         src: &metal::TextureRef,
         dst: &metal::TextureRef,
     ) {
-        unsafe {
-            encode_unary(self.inner.as_ptr(), cmd_buf, src, dst);
-        }
+        unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
 }
 
@@ -287,29 +248,30 @@ impl MpsMedian {
 
 /// MPSImageBilinearScale — bilinear texture scaling.
 pub struct MpsBilinearScale {
-    inner: MpsObject,
+    inner: Retained<MPSImageBilinearScale>,
 }
+
+unsafe impl Send for MpsBilinearScale {}
+unsafe impl Sync for MpsBilinearScale {}
 
 impl MpsBilinearScale {
     pub fn new(device: &metal::DeviceRef) -> Self {
-        let cls =
-            Class::get("MPSImageBilinearScale").expect("MPSImageBilinearScale class not found");
-        let obj: *mut Object = unsafe {
-            let alloc: *mut Object = msg_send![cls, alloc];
-            msg_send![alloc, initWithDevice: device as *const _ as *mut Object]
+        let inner = unsafe {
+            MPSImageBilinearScale::initWithDevice(
+                MPSImageBilinearScale::alloc(),
+                device_as_objc2(device),
+            )
         };
-        Self {
-            inner: unsafe { MpsObject::from_raw(obj) },
-        }
+        Self { inner }
     }
 
-    /// Set the scale transform before encoding.
     pub fn set_transform(&self, transform: &MpsScaleTransform) {
-        let _: () = unsafe {
-            msg_send![self.inner.as_ptr(),
-                setScaleTransform: transform as *const MpsScaleTransform
-            ]
-        };
+        let xform = transform.as_mps();
+        unsafe {
+            // setScaleTransform takes a nullable pointer to MPSScaleTransform.
+            let ptr: *const MPSScaleTransform = &xform;
+            let _: () = msg_send![&*self.inner, setScaleTransform: ptr];
+        }
     }
 
     pub fn encode(
@@ -318,35 +280,35 @@ impl MpsBilinearScale {
         src: &metal::TextureRef,
         dst: &metal::TextureRef,
     ) {
-        unsafe {
-            encode_unary(self.inner.as_ptr(), cmd_buf, src, dst);
-        }
+        unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
 }
 
 /// MPSImageLanczosScale — high-quality Lanczos texture scaling.
 pub struct MpsLanczosScale {
-    inner: MpsObject,
+    inner: Retained<MPSImageLanczosScale>,
 }
+
+unsafe impl Send for MpsLanczosScale {}
+unsafe impl Sync for MpsLanczosScale {}
 
 impl MpsLanczosScale {
     pub fn new(device: &metal::DeviceRef) -> Self {
-        let cls = Class::get("MPSImageLanczosScale").expect("MPSImageLanczosScale class not found");
-        let obj: *mut Object = unsafe {
-            let alloc: *mut Object = msg_send![cls, alloc];
-            msg_send![alloc, initWithDevice: device as *const _ as *mut Object]
+        let inner = unsafe {
+            MPSImageLanczosScale::initWithDevice(
+                MPSImageLanczosScale::alloc(),
+                device_as_objc2(device),
+            )
         };
-        Self {
-            inner: unsafe { MpsObject::from_raw(obj) },
-        }
+        Self { inner }
     }
 
     pub fn set_transform(&self, transform: &MpsScaleTransform) {
-        let _: () = unsafe {
-            msg_send![self.inner.as_ptr(),
-                setScaleTransform: transform as *const MpsScaleTransform
-            ]
-        };
+        let xform = transform.as_mps();
+        unsafe {
+            let ptr: *const MPSScaleTransform = &xform;
+            let _: () = msg_send![&*self.inner, setScaleTransform: ptr];
+        }
     }
 
     pub fn encode(
@@ -355,9 +317,7 @@ impl MpsLanczosScale {
         src: &metal::TextureRef,
         dst: &metal::TextureRef,
     ) {
-        unsafe {
-            encode_unary(self.inner.as_ptr(), cmd_buf, src, dst);
-        }
+        unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
 }
 
@@ -365,19 +325,18 @@ impl MpsLanczosScale {
 
 /// MPSImageSobel — Sobel edge detection.
 pub struct MpsSobel {
-    inner: MpsObject,
+    inner: Retained<MPSImageSobel>,
 }
+
+unsafe impl Send for MpsSobel {}
+unsafe impl Sync for MpsSobel {}
 
 impl MpsSobel {
     pub fn new(device: &metal::DeviceRef) -> Self {
-        let cls = Class::get("MPSImageSobel").expect("MPSImageSobel class not found");
-        let obj: *mut Object = unsafe {
-            let alloc: *mut Object = msg_send![cls, alloc];
-            msg_send![alloc, initWithDevice: device as *const _ as *mut Object]
+        let inner = unsafe {
+            MPSImageSobel::initWithDevice(MPSImageSobel::alloc(), device_as_objc2(device))
         };
-        Self {
-            inner: unsafe { MpsObject::from_raw(obj) },
-        }
+        Self { inner }
     }
 
     pub fn encode(
@@ -386,27 +345,24 @@ impl MpsSobel {
         src: &metal::TextureRef,
         dst: &metal::TextureRef,
     ) {
-        unsafe {
-            encode_unary(self.inner.as_ptr(), cmd_buf, src, dst);
-        }
+        unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
 }
 
 /// MPSImageLaplacian — Laplacian edge detection.
 pub struct MpsLaplacian {
-    inner: MpsObject,
+    inner: Retained<MPSImageLaplacian>,
 }
+
+unsafe impl Send for MpsLaplacian {}
+unsafe impl Sync for MpsLaplacian {}
 
 impl MpsLaplacian {
     pub fn new(device: &metal::DeviceRef) -> Self {
-        let cls = Class::get("MPSImageLaplacian").expect("MPSImageLaplacian class not found");
-        let obj: *mut Object = unsafe {
-            let alloc: *mut Object = msg_send![cls, alloc];
-            msg_send![alloc, initWithDevice: device as *const _ as *mut Object]
+        let inner = unsafe {
+            MPSImageLaplacian::initWithDevice(MPSImageLaplacian::alloc(), device_as_objc2(device))
         };
-        Self {
-            inner: unsafe { MpsObject::from_raw(obj) },
-        }
+        Self { inner }
     }
 
     pub fn encode(
@@ -415,16 +371,17 @@ impl MpsLaplacian {
         src: &metal::TextureRef,
         dst: &metal::TextureRef,
     ) {
-        unsafe {
-            encode_unary(self.inner.as_ptr(), cmd_buf, src, dst);
-        }
+        unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
 }
 
 /// MPSImageConvolution — arbitrary convolution kernel.
 pub struct MpsConvolution {
-    inner: MpsObject,
+    inner: Retained<MPSImageConvolution>,
 }
+
+unsafe impl Send for MpsConvolution {}
+unsafe impl Sync for MpsConvolution {}
 
 impl MpsConvolution {
     /// Create with a custom kernel. `weights` length must be `width * height`.
@@ -439,19 +396,16 @@ impl MpsConvolution {
             (kernel_width * kernel_height) as usize,
             "Convolution weights length must match kernel dimensions"
         );
-        let cls = Class::get("MPSImageConvolution").expect("MPSImageConvolution class not found");
-        let obj: *mut Object = unsafe {
-            let alloc: *mut Object = msg_send![cls, alloc];
-            msg_send![alloc,
-                initWithDevice: device as *const _ as *mut Object
-                kernelWidth: kernel_width as u64
-                kernelHeight: kernel_height as u64
-                weights: weights.as_ptr()
-            ]
+        let inner = unsafe {
+            MPSImageConvolution::initWithDevice_kernelWidth_kernelHeight_weights(
+                MPSImageConvolution::alloc(),
+                device_as_objc2(device),
+                kernel_width as usize,
+                kernel_height as usize,
+                NonNull::new(weights.as_ptr() as *mut c_float).unwrap(),
+            )
         };
-        Self {
-            inner: unsafe { MpsObject::from_raw(obj) },
-        }
+        Self { inner }
     }
 
     pub fn encode(
@@ -460,9 +414,7 @@ impl MpsConvolution {
         src: &metal::TextureRef,
         dst: &metal::TextureRef,
     ) {
-        unsafe {
-            encode_unary(self.inner.as_ptr(), cmd_buf, src, dst);
-        }
+        unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
 }
 
@@ -470,8 +422,11 @@ impl MpsConvolution {
 
 /// MPSImageDilate — morphological dilation.
 pub struct MpsDilate {
-    inner: MpsObject,
+    inner: Retained<MPSImageDilate>,
 }
+
+unsafe impl Send for MpsDilate {}
+unsafe impl Sync for MpsDilate {}
 
 impl MpsDilate {
     pub fn new(
@@ -481,19 +436,16 @@ impl MpsDilate {
         values: &[f32],
     ) -> Self {
         assert_eq!(values.len(), (kernel_width * kernel_height) as usize);
-        let cls = Class::get("MPSImageDilate").expect("MPSImageDilate class not found");
-        let obj: *mut Object = unsafe {
-            let alloc: *mut Object = msg_send![cls, alloc];
-            msg_send![alloc,
-                initWithDevice: device as *const _ as *mut Object
-                kernelWidth: kernel_width as u64
-                kernelHeight: kernel_height as u64
-                values: values.as_ptr()
-            ]
+        let inner = unsafe {
+            MPSImageDilate::initWithDevice_kernelWidth_kernelHeight_values(
+                MPSImageDilate::alloc(),
+                device_as_objc2(device),
+                kernel_width as usize,
+                kernel_height as usize,
+                NonNull::new(values.as_ptr() as *mut c_float).unwrap(),
+            )
         };
-        Self {
-            inner: unsafe { MpsObject::from_raw(obj) },
-        }
+        Self { inner }
     }
 
     pub fn encode(
@@ -502,16 +454,17 @@ impl MpsDilate {
         src: &metal::TextureRef,
         dst: &metal::TextureRef,
     ) {
-        unsafe {
-            encode_unary(self.inner.as_ptr(), cmd_buf, src, dst);
-        }
+        unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
 }
 
 /// MPSImageErode — morphological erosion.
 pub struct MpsErode {
-    inner: MpsObject,
+    inner: Retained<MPSImageErode>,
 }
+
+unsafe impl Send for MpsErode {}
+unsafe impl Sync for MpsErode {}
 
 impl MpsErode {
     pub fn new(
@@ -521,19 +474,16 @@ impl MpsErode {
         values: &[f32],
     ) -> Self {
         assert_eq!(values.len(), (kernel_width * kernel_height) as usize);
-        let cls = Class::get("MPSImageErode").expect("MPSImageErode class not found");
-        let obj: *mut Object = unsafe {
-            let alloc: *mut Object = msg_send![cls, alloc];
-            msg_send![alloc,
-                initWithDevice: device as *const _ as *mut Object
-                kernelWidth: kernel_width as u64
-                kernelHeight: kernel_height as u64
-                values: values.as_ptr()
-            ]
+        let inner = unsafe {
+            MPSImageErode::initWithDevice_kernelWidth_kernelHeight_values(
+                MPSImageErode::alloc(),
+                device_as_objc2(device),
+                kernel_width as usize,
+                kernel_height as usize,
+                NonNull::new(values.as_ptr() as *mut c_float).unwrap(),
+            )
         };
-        Self {
-            inner: unsafe { MpsObject::from_raw(obj) },
-        }
+        Self { inner }
     }
 
     pub fn encode(
@@ -542,9 +492,7 @@ impl MpsErode {
         src: &metal::TextureRef,
         dst: &metal::TextureRef,
     ) {
-        unsafe {
-            encode_unary(self.inner.as_ptr(), cmd_buf, src, dst);
-        }
+        unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
 }
 
@@ -552,8 +500,11 @@ impl MpsErode {
 
 /// MPSImageThresholdBinary — binary threshold.
 pub struct MpsThresholdBinary {
-    inner: MpsObject,
+    inner: Retained<MPSImageThresholdBinary>,
 }
+
+unsafe impl Send for MpsThresholdBinary {}
+unsafe impl Sync for MpsThresholdBinary {}
 
 impl MpsThresholdBinary {
     /// Pixels above `threshold` become `max_value`, below become 0.
@@ -563,23 +514,19 @@ impl MpsThresholdBinary {
         max_value: f32,
         linear_gray_color_transform: Option<&[f32; 3]>,
     ) -> Self {
-        let transform = linear_gray_color_transform
-            .map(|t| t.as_ptr())
-            .unwrap_or(ptr::null());
-        let cls =
-            Class::get("MPSImageThresholdBinary").expect("MPSImageThresholdBinary class not found");
-        let obj: *mut Object = unsafe {
-            let alloc: *mut Object = msg_send![cls, alloc];
-            msg_send![alloc,
-                initWithDevice: device as *const _ as *mut Object
-                thresholdValue: threshold
-                maximumValue: max_value
-                linearGrayColorTransform: transform
-            ]
+        let transform_ptr = linear_gray_color_transform
+            .map(|t| t.as_ptr() as *const c_float)
+            .unwrap_or(std::ptr::null());
+        let inner = unsafe {
+            MPSImageThresholdBinary::initWithDevice_thresholdValue_maximumValue_linearGrayColorTransform(
+                MPSImageThresholdBinary::alloc(),
+                device_as_objc2(device),
+                threshold,
+                max_value,
+                transform_ptr,
+            )
         };
-        Self {
-            inner: unsafe { MpsObject::from_raw(obj) },
-        }
+        Self { inner }
     }
 
     pub fn encode(
@@ -588,16 +535,17 @@ impl MpsThresholdBinary {
         src: &metal::TextureRef,
         dst: &metal::TextureRef,
     ) {
-        unsafe {
-            encode_unary(self.inner.as_ptr(), cmd_buf, src, dst);
-        }
+        unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
 }
 
 /// MPSImageThresholdTruncate — truncate values above threshold.
 pub struct MpsThresholdTruncate {
-    inner: MpsObject,
+    inner: Retained<MPSImageThresholdTruncate>,
 }
+
+unsafe impl Send for MpsThresholdTruncate {}
+unsafe impl Sync for MpsThresholdTruncate {}
 
 impl MpsThresholdTruncate {
     pub fn new(
@@ -605,22 +553,18 @@ impl MpsThresholdTruncate {
         threshold: f32,
         linear_gray_color_transform: Option<&[f32; 3]>,
     ) -> Self {
-        let transform = linear_gray_color_transform
-            .map(|t| t.as_ptr())
-            .unwrap_or(ptr::null());
-        let cls = Class::get("MPSImageThresholdTruncate")
-            .expect("MPSImageThresholdTruncate class not found");
-        let obj: *mut Object = unsafe {
-            let alloc: *mut Object = msg_send![cls, alloc];
-            msg_send![alloc,
-                initWithDevice: device as *const _ as *mut Object
-                thresholdValue: threshold
-                linearGrayColorTransform: transform
-            ]
+        let transform_ptr = linear_gray_color_transform
+            .map(|t| t.as_ptr() as *const c_float)
+            .unwrap_or(std::ptr::null());
+        let inner = unsafe {
+            MPSImageThresholdTruncate::initWithDevice_thresholdValue_linearGrayColorTransform(
+                MPSImageThresholdTruncate::alloc(),
+                device_as_objc2(device),
+                threshold,
+                transform_ptr,
+            )
         };
-        Self {
-            inner: unsafe { MpsObject::from_raw(obj) },
-        }
+        Self { inner }
     }
 
     pub fn encode(
@@ -629,16 +573,17 @@ impl MpsThresholdTruncate {
         src: &metal::TextureRef,
         dst: &metal::TextureRef,
     ) {
-        unsafe {
-            encode_unary(self.inner.as_ptr(), cmd_buf, src, dst);
-        }
+        unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
 }
 
 /// MPSImageThresholdToZero — zero values below threshold.
 pub struct MpsThresholdToZero {
-    inner: MpsObject,
+    inner: Retained<MPSImageThresholdToZero>,
 }
+
+unsafe impl Send for MpsThresholdToZero {}
+unsafe impl Sync for MpsThresholdToZero {}
 
 impl MpsThresholdToZero {
     pub fn new(
@@ -646,22 +591,18 @@ impl MpsThresholdToZero {
         threshold: f32,
         linear_gray_color_transform: Option<&[f32; 3]>,
     ) -> Self {
-        let transform = linear_gray_color_transform
-            .map(|t| t.as_ptr())
-            .unwrap_or(ptr::null());
-        let cls =
-            Class::get("MPSImageThresholdToZero").expect("MPSImageThresholdToZero class not found");
-        let obj: *mut Object = unsafe {
-            let alloc: *mut Object = msg_send![cls, alloc];
-            msg_send![alloc,
-                initWithDevice: device as *const _ as *mut Object
-                thresholdValue: threshold
-                linearGrayColorTransform: transform
-            ]
+        let transform_ptr = linear_gray_color_transform
+            .map(|t| t.as_ptr() as *const c_float)
+            .unwrap_or(std::ptr::null());
+        let inner = unsafe {
+            MPSImageThresholdToZero::initWithDevice_thresholdValue_linearGrayColorTransform(
+                MPSImageThresholdToZero::alloc(),
+                device_as_objc2(device),
+                threshold,
+                transform_ptr,
+            )
         };
-        Self {
-            inner: unsafe { MpsObject::from_raw(obj) },
-        }
+        Self { inner }
     }
 
     pub fn encode(
@@ -670,34 +611,26 @@ impl MpsThresholdToZero {
         src: &metal::TextureRef,
         dst: &metal::TextureRef,
     ) {
-        unsafe {
-            encode_unary(self.inner.as_ptr(), cmd_buf, src, dst);
-        }
+        unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
 }
 
 // -- Arithmetic --
 
-/// Helper to create MPSImageArithmetic subclass kernels.
-unsafe fn create_arithmetic(class_name: &str, device: &metal::DeviceRef) -> MpsObject {
-    let cls = Class::get(class_name).unwrap_or_else(|| panic!("{class_name} class not found"));
-    let obj: *mut Object = unsafe {
-        let alloc: *mut Object = msg_send![cls, alloc];
-        msg_send![alloc, initWithDevice: device as *const _ as *mut Object]
-    };
-    unsafe { MpsObject::from_raw(obj) }
-}
-
 /// MPSImageAdd — element-wise addition of two textures.
 pub struct MpsAdd {
-    inner: MpsObject,
+    inner: Retained<MPSImageAdd>,
 }
+
+unsafe impl Send for MpsAdd {}
+unsafe impl Sync for MpsAdd {}
 
 impl MpsAdd {
     pub fn new(device: &metal::DeviceRef) -> Self {
-        Self {
-            inner: unsafe { create_arithmetic("MPSImageAdd", device) },
-        }
+        let inner = unsafe {
+            MPSImageAdd::initWithDevice(MPSImageAdd::alloc(), device_as_objc2(device))
+        };
+        Self { inner }
     }
 
     pub fn encode(
@@ -707,22 +640,24 @@ impl MpsAdd {
         secondary: &metal::TextureRef,
         dst: &metal::TextureRef,
     ) {
-        unsafe {
-            encode_binary(self.inner.as_ptr(), cmd_buf, primary, secondary, dst);
-        }
+        unsafe { encode_binary_typed(&*self.inner, cmd_buf, primary, secondary, dst) }
     }
 }
 
 /// MPSImageSubtract — element-wise subtraction (primary - secondary).
 pub struct MpsSubtract {
-    inner: MpsObject,
+    inner: Retained<MPSImageSubtract>,
 }
+
+unsafe impl Send for MpsSubtract {}
+unsafe impl Sync for MpsSubtract {}
 
 impl MpsSubtract {
     pub fn new(device: &metal::DeviceRef) -> Self {
-        Self {
-            inner: unsafe { create_arithmetic("MPSImageSubtract", device) },
-        }
+        let inner = unsafe {
+            MPSImageSubtract::initWithDevice(MPSImageSubtract::alloc(), device_as_objc2(device))
+        };
+        Self { inner }
     }
 
     pub fn encode(
@@ -732,22 +667,24 @@ impl MpsSubtract {
         secondary: &metal::TextureRef,
         dst: &metal::TextureRef,
     ) {
-        unsafe {
-            encode_binary(self.inner.as_ptr(), cmd_buf, primary, secondary, dst);
-        }
+        unsafe { encode_binary_typed(&*self.inner, cmd_buf, primary, secondary, dst) }
     }
 }
 
 /// MPSImageMultiply — element-wise multiplication.
 pub struct MpsMultiply {
-    inner: MpsObject,
+    inner: Retained<MPSImageMultiply>,
 }
+
+unsafe impl Send for MpsMultiply {}
+unsafe impl Sync for MpsMultiply {}
 
 impl MpsMultiply {
     pub fn new(device: &metal::DeviceRef) -> Self {
-        Self {
-            inner: unsafe { create_arithmetic("MPSImageMultiply", device) },
-        }
+        let inner = unsafe {
+            MPSImageMultiply::initWithDevice(MPSImageMultiply::alloc(), device_as_objc2(device))
+        };
+        Self { inner }
     }
 
     pub fn encode(
@@ -757,22 +694,24 @@ impl MpsMultiply {
         secondary: &metal::TextureRef,
         dst: &metal::TextureRef,
     ) {
-        unsafe {
-            encode_binary(self.inner.as_ptr(), cmd_buf, primary, secondary, dst);
-        }
+        unsafe { encode_binary_typed(&*self.inner, cmd_buf, primary, secondary, dst) }
     }
 }
 
 /// MPSImageDivide — element-wise division (primary / secondary).
 pub struct MpsDivide {
-    inner: MpsObject,
+    inner: Retained<MPSImageDivide>,
 }
+
+unsafe impl Send for MpsDivide {}
+unsafe impl Sync for MpsDivide {}
 
 impl MpsDivide {
     pub fn new(device: &metal::DeviceRef) -> Self {
-        Self {
-            inner: unsafe { create_arithmetic("MPSImageDivide", device) },
-        }
+        let inner = unsafe {
+            MPSImageDivide::initWithDevice(MPSImageDivide::alloc(), device_as_objc2(device))
+        };
+        Self { inner }
     }
 
     pub fn encode(
@@ -782,9 +721,7 @@ impl MpsDivide {
         secondary: &metal::TextureRef,
         dst: &metal::TextureRef,
     ) {
-        unsafe {
-            encode_binary(self.inner.as_ptr(), cmd_buf, primary, secondary, dst);
-        }
+        unsafe { encode_binary_typed(&*self.inner, cmd_buf, primary, secondary, dst) }
     }
 }
 
@@ -792,20 +729,21 @@ impl MpsDivide {
 
 /// MPSImageStatisticsMinAndMax — compute min/max of an image.
 pub struct MpsMinMax {
-    inner: MpsObject,
+    inner: Retained<MPSImageStatisticsMinAndMax>,
 }
+
+unsafe impl Send for MpsMinMax {}
+unsafe impl Sync for MpsMinMax {}
 
 impl MpsMinMax {
     pub fn new(device: &metal::DeviceRef) -> Self {
-        let cls = Class::get("MPSImageStatisticsMinAndMax")
-            .expect("MPSImageStatisticsMinAndMax class not found");
-        let obj: *mut Object = unsafe {
-            let alloc: *mut Object = msg_send![cls, alloc];
-            msg_send![alloc, initWithDevice: device as *const _ as *mut Object]
+        let inner = unsafe {
+            MPSImageStatisticsMinAndMax::initWithDevice(
+                MPSImageStatisticsMinAndMax::alloc(),
+                device_as_objc2(device),
+            )
         };
-        Self {
-            inner: unsafe { MpsObject::from_raw(obj) },
-        }
+        Self { inner }
     }
 
     /// Encode: result is written to a 2-pixel texture (min, max).
@@ -815,31 +753,29 @@ impl MpsMinMax {
         src: &metal::TextureRef,
         dst: &metal::TextureRef,
     ) {
-        unsafe {
-            encode_unary(self.inner.as_ptr(), cmd_buf, src, dst);
-        }
+        unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
 }
 
 /// MPSImageAreaMax — maximum value in a rectangular region.
 pub struct MpsAreaMax {
-    inner: MpsObject,
+    inner: Retained<MPSImageAreaMax>,
 }
+
+unsafe impl Send for MpsAreaMax {}
+unsafe impl Sync for MpsAreaMax {}
 
 impl MpsAreaMax {
     pub fn new(device: &metal::DeviceRef, kernel_width: u32, kernel_height: u32) -> Self {
-        let cls = Class::get("MPSImageAreaMax").expect("MPSImageAreaMax class not found");
-        let obj: *mut Object = unsafe {
-            let alloc: *mut Object = msg_send![cls, alloc];
-            msg_send![alloc,
-                initWithDevice: device as *const _ as *mut Object
-                kernelWidth: kernel_width as u64
-                kernelHeight: kernel_height as u64
-            ]
+        let inner = unsafe {
+            MPSImageAreaMax::initWithDevice_kernelWidth_kernelHeight(
+                MPSImageAreaMax::alloc(),
+                device_as_objc2(device),
+                kernel_width as usize,
+                kernel_height as usize,
+            )
         };
-        Self {
-            inner: unsafe { MpsObject::from_raw(obj) },
-        }
+        Self { inner }
     }
 
     pub fn encode(
@@ -848,31 +784,29 @@ impl MpsAreaMax {
         src: &metal::TextureRef,
         dst: &metal::TextureRef,
     ) {
-        unsafe {
-            encode_unary(self.inner.as_ptr(), cmd_buf, src, dst);
-        }
+        unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
 }
 
 /// MPSImageAreaMin — minimum value in a rectangular region.
 pub struct MpsAreaMin {
-    inner: MpsObject,
+    inner: Retained<MPSImageAreaMin>,
 }
+
+unsafe impl Send for MpsAreaMin {}
+unsafe impl Sync for MpsAreaMin {}
 
 impl MpsAreaMin {
     pub fn new(device: &metal::DeviceRef, kernel_width: u32, kernel_height: u32) -> Self {
-        let cls = Class::get("MPSImageAreaMin").expect("MPSImageAreaMin class not found");
-        let obj: *mut Object = unsafe {
-            let alloc: *mut Object = msg_send![cls, alloc];
-            msg_send![alloc,
-                initWithDevice: device as *const _ as *mut Object
-                kernelWidth: kernel_width as u64
-                kernelHeight: kernel_height as u64
-            ]
+        let inner = unsafe {
+            MPSImageAreaMin::initWithDevice_kernelWidth_kernelHeight(
+                MPSImageAreaMin::alloc(),
+                device_as_objc2(device),
+                kernel_width as usize,
+                kernel_height as usize,
+            )
         };
-        Self {
-            inner: unsafe { MpsObject::from_raw(obj) },
-        }
+        Self { inner }
     }
 
     pub fn encode(
@@ -881,27 +815,24 @@ impl MpsAreaMin {
         src: &metal::TextureRef,
         dst: &metal::TextureRef,
     ) {
-        unsafe {
-            encode_unary(self.inner.as_ptr(), cmd_buf, src, dst);
-        }
+        unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
 }
 
 /// MPSImageIntegral — summed area table (integral image).
 pub struct MpsIntegral {
-    inner: MpsObject,
+    inner: Retained<MPSImageIntegral>,
 }
+
+unsafe impl Send for MpsIntegral {}
+unsafe impl Sync for MpsIntegral {}
 
 impl MpsIntegral {
     pub fn new(device: &metal::DeviceRef) -> Self {
-        let cls = Class::get("MPSImageIntegral").expect("MPSImageIntegral class not found");
-        let obj: *mut Object = unsafe {
-            let alloc: *mut Object = msg_send![cls, alloc];
-            msg_send![alloc, initWithDevice: device as *const _ as *mut Object]
+        let inner = unsafe {
+            MPSImageIntegral::initWithDevice(MPSImageIntegral::alloc(), device_as_objc2(device))
         };
-        Self {
-            inner: unsafe { MpsObject::from_raw(obj) },
-        }
+        Self { inner }
     }
 
     pub fn encode(
@@ -910,28 +841,27 @@ impl MpsIntegral {
         src: &metal::TextureRef,
         dst: &metal::TextureRef,
     ) {
-        unsafe {
-            encode_unary(self.inner.as_ptr(), cmd_buf, src, dst);
-        }
+        unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
 }
 
 /// MPSImageIntegralOfSquares — summed area table of squared values.
 pub struct MpsIntegralOfSquares {
-    inner: MpsObject,
+    inner: Retained<MPSImageIntegralOfSquares>,
 }
+
+unsafe impl Send for MpsIntegralOfSquares {}
+unsafe impl Sync for MpsIntegralOfSquares {}
 
 impl MpsIntegralOfSquares {
     pub fn new(device: &metal::DeviceRef) -> Self {
-        let cls = Class::get("MPSImageIntegralOfSquares")
-            .expect("MPSImageIntegralOfSquares class not found");
-        let obj: *mut Object = unsafe {
-            let alloc: *mut Object = msg_send![cls, alloc];
-            msg_send![alloc, initWithDevice: device as *const _ as *mut Object]
+        let inner = unsafe {
+            MPSImageIntegralOfSquares::initWithDevice(
+                MPSImageIntegralOfSquares::alloc(),
+                device_as_objc2(device),
+            )
         };
-        Self {
-            inner: unsafe { MpsObject::from_raw(obj) },
-        }
+        Self { inner }
     }
 
     pub fn encode(
@@ -940,9 +870,7 @@ impl MpsIntegralOfSquares {
         src: &metal::TextureRef,
         dst: &metal::TextureRef,
     ) {
-        unsafe {
-            encode_unary(self.inner.as_ptr(), cmd_buf, src, dst);
-        }
+        unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
 }
 
@@ -950,31 +878,58 @@ impl MpsIntegralOfSquares {
 
 /// MPSImageHistogram — compute histogram of an image into a buffer.
 pub struct MpsHistogram {
-    inner: MpsObject,
+    inner: Retained<MPSImageHistogram>,
 }
 
-/// Histogram info matching MPSImageHistogramInfo.
+unsafe impl Send for MpsHistogram {}
+unsafe impl Sync for MpsHistogram {}
+
+/// Histogram info — matches MPSImageHistogramInfo layout. Kept as a local
+/// repr(C) struct because the typed crate doesn't export it publicly.
+///
+/// `histogram_for_alpha` uses `Bool` (ObjC BOOL) rather than Rust `bool` to
+/// match the underlying C struct layout exactly.
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct MpsHistogramInfo {
-    pub number_of_histogram_entries: u64,
-    pub histogram_for_alpha: BOOL,
+    pub number_of_histogram_entries: usize,
+    pub histogram_for_alpha: Bool,
     pub min_pixel_value: [f32; 4],
     pub max_pixel_value: [f32; 4],
 }
 
+// Safety: `MpsHistogramInfo` is `#[repr(C)]` and its layout matches
+// MPSImageHistogramInfo from Metal.framework.
+unsafe impl Encode for MpsHistogramInfo {
+    const ENCODING: Encoding = Encoding::Struct(
+        "?",
+        &[
+            <usize as Encode>::ENCODING,
+            <Bool as Encode>::ENCODING,
+            <[f32; 4] as Encode>::ENCODING,
+            <[f32; 4] as Encode>::ENCODING,
+        ],
+    );
+}
+
+unsafe impl RefEncode for MpsHistogramInfo {
+    const ENCODING_REF: Encoding = Encoding::Pointer(&<Self as Encode>::ENCODING);
+}
+
 impl MpsHistogram {
     pub fn new(device: &metal::DeviceRef, info: &MpsHistogramInfo) -> Self {
-        let cls = Class::get("MPSImageHistogram").expect("MPSImageHistogram class not found");
-        let obj: *mut Object = unsafe {
-            let alloc: *mut Object = msg_send![cls, alloc];
-            msg_send![alloc,
-                initWithDevice: device as *const _ as *mut Object
-                histogramInfo: info as *const MpsHistogramInfo
-            ]
+        let inner = unsafe {
+            let cls = AnyClass::get(c"MPSImageHistogram").expect("MPSImageHistogram class not found");
+            let alloc: *mut AnyObject = msg_send![cls, alloc];
+            let info_ptr: *const MpsHistogramInfo = info;
+            let obj: *mut MPSImageHistogram = msg_send![
+                alloc,
+                initWithDevice: device_as_objc2(device),
+                histogramInfo: info_ptr,
+            ];
+            Retained::from_raw(obj).expect("MPSImageHistogram init returned nil")
         };
-        Self {
-            inner: unsafe { MpsObject::from_raw(obj) },
-        }
+        Self { inner }
     }
 
     /// Encode histogram computation. Result goes into `histogram_buffer` at offset 0.
@@ -985,41 +940,48 @@ impl MpsHistogram {
         histogram_buffer: &metal::BufferRef,
         histogram_offset: u64,
     ) {
-        let _: () = unsafe {
-            msg_send![self.inner.as_ptr(),
-                encodeToCommandBuffer: cmd_buf as *const _ as *mut Object
-                sourceTexture: src as *const _ as *mut Object
-                histogram: histogram_buffer as *const _ as *mut Object
-                histogramOffset: histogram_offset
-            ]
-        };
+        use metal::foreign_types::ForeignTypeRef;
+        unsafe {
+            let _: () = msg_send![
+                &*self.inner,
+                encodeToCommandBuffer: cmd_buf_as_objc2(cmd_buf),
+                sourceTexture: texture_as_objc2(src),
+                histogram: histogram_buffer.as_ptr() as *const AnyObject,
+                histogramOffset: histogram_offset as usize,
+            ];
+        }
     }
 
     /// Returns the size in bytes needed for the histogram buffer.
     pub fn histogram_size(&self) -> u64 {
-        unsafe { msg_send![self.inner.as_ptr(), histogramSize] }
+        let size: usize = unsafe { msg_send![&*self.inner, histogramSize] };
+        size as u64
     }
 }
 
 /// MPSImageHistogramEqualization — equalize image histogram.
 pub struct MpsHistogramEqualization {
-    inner: MpsObject,
+    inner: Retained<MPSImageHistogramEqualization>,
 }
+
+unsafe impl Send for MpsHistogramEqualization {}
+unsafe impl Sync for MpsHistogramEqualization {}
 
 impl MpsHistogramEqualization {
     pub fn new(device: &metal::DeviceRef, info: &MpsHistogramInfo) -> Self {
-        let cls = Class::get("MPSImageHistogramEqualization")
-            .expect("MPSImageHistogramEqualization class not found");
-        let obj: *mut Object = unsafe {
-            let alloc: *mut Object = msg_send![cls, alloc];
-            msg_send![alloc,
-                initWithDevice: device as *const _ as *mut Object
-                histogramInfo: info as *const MpsHistogramInfo
-            ]
+        let inner = unsafe {
+            let cls = AnyClass::get(c"MPSImageHistogramEqualization")
+                .expect("MPSImageHistogramEqualization class not found");
+            let alloc: *mut AnyObject = msg_send![cls, alloc];
+            let info_ptr: *const MpsHistogramInfo = info;
+            let obj: *mut MPSImageHistogramEqualization = msg_send![
+                alloc,
+                initWithDevice: device_as_objc2(device),
+                histogramInfo: info_ptr,
+            ];
+            Retained::from_raw(obj).expect("MPSImageHistogramEqualization init returned nil")
         };
-        Self {
-            inner: unsafe { MpsObject::from_raw(obj) },
-        }
+        Self { inner }
     }
 
     /// Must call this before encode() to provide the histogram data.
@@ -1030,14 +992,16 @@ impl MpsHistogramEqualization {
         histogram_buffer: &metal::BufferRef,
         histogram_offset: u64,
     ) {
-        let _: () = unsafe {
-            msg_send![self.inner.as_ptr(),
-                encodeTransformToCommandBuffer: cmd_buf as *const _ as *mut Object
-                sourceTexture: src as *const _ as *mut Object
-                histogram: histogram_buffer as *const _ as *mut Object
-                histogramOffset: histogram_offset
-            ]
-        };
+        use metal::foreign_types::ForeignTypeRef;
+        unsafe {
+            let _: () = msg_send![
+                &*self.inner,
+                encodeTransformToCommandBuffer: cmd_buf_as_objc2(cmd_buf),
+                sourceTexture: texture_as_objc2(src),
+                histogram: histogram_buffer.as_ptr() as *const AnyObject,
+                histogramOffset: histogram_offset as usize,
+            ];
+        }
     }
 
     pub fn encode(
@@ -1046,44 +1010,33 @@ impl MpsHistogramEqualization {
         src: &metal::TextureRef,
         dst: &metal::TextureRef,
     ) {
-        unsafe {
-            encode_unary(self.inner.as_ptr(), cmd_buf, src, dst);
-        }
+        unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
 }
-
-// -- Utility --
-// MPSImageCopyToTexture is not a real MPS class — use blit encoder for copies.
-// Actual copies use GpuEncoder::copy_texture_to_texture().
 
 // -- Keypoints --
 
 /// MPSImageFindKeypoints — feature point detection.
 pub struct MpsFindKeypoints {
-    inner: MpsObject,
+    inner: Retained<MPSImageFindKeypoints>,
 }
 
-/// Keypoint info matching MPSImageKeypointRangeInfo.
-#[repr(C)]
-pub struct MpsKeypointRangeInfo {
-    pub maximum_keypoint_count: u64,
-    pub minimum_threshold_value: f32,
-}
+unsafe impl Send for MpsFindKeypoints {}
+unsafe impl Sync for MpsFindKeypoints {}
+
+/// Keypoint info — public ABI alias for the typed struct.
+pub type MpsKeypointRangeInfo = MPSImageKeypointRangeInfo;
 
 impl MpsFindKeypoints {
     pub fn new(device: &metal::DeviceRef, info: &MpsKeypointRangeInfo) -> Self {
-        let cls =
-            Class::get("MPSImageFindKeypoints").expect("MPSImageFindKeypoints class not found");
-        let obj: *mut Object = unsafe {
-            let alloc: *mut Object = msg_send![cls, alloc];
-            msg_send![alloc,
-                initWithDevice: device as *const _ as *mut Object
-                info: info as *const MpsKeypointRangeInfo
-            ]
+        let inner = unsafe {
+            MPSImageFindKeypoints::initWithDevice_info(
+                MPSImageFindKeypoints::alloc(),
+                device_as_objc2(device),
+                NonNull::new(info as *const _ as *mut _).unwrap(),
+            )
         };
-        Self {
-            inner: unsafe { MpsObject::from_raw(obj) },
-        }
+        Self { inner }
     }
 
     /// Encode keypoint detection. Results go into `keypoint_data_buffer`.
@@ -1096,18 +1049,20 @@ impl MpsFindKeypoints {
         keypoint_data_buffer: &metal::BufferRef,
         keypoint_data_offset: u64,
     ) {
-        let _: () = unsafe {
-            msg_send![self.inner.as_ptr(),
-                encodeToCommandBuffer: cmd_buf as *const _ as *mut Object
-                sourceTexture: src as *const _ as *mut Object
-                regions: ptr::null::<c_void>()
-                numberOfRegions: 1u64
-                keypointCountBuffer: keypoint_count_buffer as *const _ as *mut Object
-                keypointCountBufferOffset: keypoint_count_offset
-                keypointDataBuffer: keypoint_data_buffer as *const _ as *mut Object
-                keypointDataBufferOffset: keypoint_data_offset
-            ]
-        };
+        use metal::foreign_types::ForeignTypeRef;
+        unsafe {
+            let _: () = msg_send![
+                &*self.inner,
+                encodeToCommandBuffer: cmd_buf_as_objc2(cmd_buf),
+                sourceTexture: texture_as_objc2(src),
+                regions: std::ptr::null::<std::ffi::c_void>(),
+                numberOfRegions: 1usize,
+                keypointCountBuffer: keypoint_count_buffer.as_ptr() as *const AnyObject,
+                keypointCountBufferOffset: keypoint_count_offset as usize,
+                keypointDataBuffer: keypoint_data_buffer.as_ptr() as *const AnyObject,
+                keypointDataBufferOffset: keypoint_data_offset as usize,
+            ];
+        }
     }
 }
 
@@ -1121,60 +1076,80 @@ pub enum MpsRandomDistribution {
 }
 
 /// MPSMatrixRandomMTGP32 — GPU-accelerated Mersenne Twister random number generation.
+///
+/// The typed `objc2-metal-performance-shaders` crate exposes MPSMatrixRandom types,
+/// but the distribution descriptor factory methods + the MPSVector constructor used
+/// here aren't in the generated surface, so this wrapper uses untyped `msg_send!`
+/// (still via objc2's safer runtime).
 pub struct MpsMatrixRandom {
-    inner: MpsObject,
+    inner: Retained<AnyObject>,
 }
 
-/// Helper: create uniform distribution descriptor. Extracted to avoid clippy ICE
-/// from deeply nested msg_send! in match arms.
-unsafe fn create_uniform_dist_desc() -> *mut Object {
-    let desc_cls = Class::get("MPSMatrixRandomDistributionDescriptor")
+unsafe impl Send for MpsMatrixRandom {}
+unsafe impl Sync for MpsMatrixRandom {}
+
+/// Helper: create uniform distribution descriptor (+1 retained? No — class method returns autoreleased).
+unsafe fn create_uniform_dist_desc() -> Retained<AnyObject> {
+    let desc_cls = AnyClass::get(c"MPSMatrixRandomDistributionDescriptor")
         .expect("MPSMatrixRandomDistributionDescriptor class not found");
-    msg_send![desc_cls,
-        uniformDistributionDescriptorWithMinimum: 0.0f32
-        maximum: 1.0f32
-    ]
+    unsafe {
+        let desc: *mut AnyObject = msg_send![
+            desc_cls,
+            uniformDistributionDescriptorWithMinimum: 0.0f32,
+            maximum: 1.0f32,
+        ];
+        Retained::retain(desc).expect("uniformDistributionDescriptor returned nil")
+    }
 }
 
 /// Helper: create normal distribution descriptor.
-unsafe fn create_normal_dist_desc(mean: f32, std_dev: f32) -> *mut Object {
-    let desc_cls = Class::get("MPSMatrixRandomDistributionDescriptor")
+unsafe fn create_normal_dist_desc(mean: f32, std_dev: f32) -> Retained<AnyObject> {
+    let desc_cls = AnyClass::get(c"MPSMatrixRandomDistributionDescriptor")
         .expect("MPSMatrixRandomDistributionDescriptor class not found");
-    msg_send![desc_cls,
-        normalDistributionDescriptorWithMean: mean
-        standardDeviation: std_dev
-    ]
+    unsafe {
+        let desc: *mut AnyObject = msg_send![
+            desc_cls,
+            normalDistributionDescriptorWithMean: mean,
+            standardDeviation: std_dev,
+        ];
+        Retained::retain(desc).expect("normalDistributionDescriptor returned nil")
+    }
 }
 
 /// Helper: create MTGP32 random kernel with a distribution descriptor.
-unsafe fn create_mtgp32(device: *mut Object, desc: *mut Object) -> *mut Object {
-    let cls = Class::get("MPSMatrixRandomMTGP32").expect("MPSMatrixRandomMTGP32 class not found");
-    let alloc: *mut Object = msg_send![cls, alloc];
-    // MPSDataTypeFloat32 = 0x10000020
-    msg_send![alloc,
-        initWithDevice: device
-        destinationDataType: 0x10000020u64
-        seed: 0u64
-        distributionDescriptor: desc
-    ]
+unsafe fn create_mtgp32(
+    device: &ProtocolObject<dyn MTLDevice>,
+    desc: &AnyObject,
+) -> Retained<AnyObject> {
+    let cls = AnyClass::get(c"MPSMatrixRandomMTGP32").expect("MPSMatrixRandomMTGP32 class not found");
+    unsafe {
+        let alloc: *mut AnyObject = msg_send![cls, alloc];
+        // MPSDataTypeFloat32 = 0x10000020
+        let obj: *mut AnyObject = msg_send![
+            alloc,
+            initWithDevice: device,
+            destinationDataType: 0x10000020u64,
+            seed: 0usize,
+            distributionDescriptor: desc,
+        ];
+        Retained::from_raw(obj).expect("MPSMatrixRandomMTGP32 init returned nil")
+    }
 }
 
 impl MpsMatrixRandom {
     /// Create a random number generator.
     pub fn new(device: &metal::DeviceRef, distribution: MpsRandomDistribution) -> Self {
-        let dev_ptr = device as *const _ as *mut Object;
-        let obj: *mut Object = unsafe {
-            let desc = match distribution {
+        let dev = unsafe { device_as_objc2(device) };
+        let desc = unsafe {
+            match distribution {
                 MpsRandomDistribution::Uniform => create_uniform_dist_desc(),
                 MpsRandomDistribution::Normal { mean, std_dev } => {
                     create_normal_dist_desc(mean, std_dev)
                 }
-            };
-            create_mtgp32(dev_ptr, desc)
+            }
         };
-        Self {
-            inner: unsafe { MpsObject::from_raw(obj) },
-        }
+        let inner = unsafe { create_mtgp32(dev, &desc) };
+        Self { inner }
     }
 
     /// Encode random fill into a buffer (as an MPS vector).
@@ -1184,30 +1159,37 @@ impl MpsMatrixRandom {
         buffer: &metal::BufferRef,
         length: u64,
     ) {
-        let vector = unsafe { create_mps_vector(buffer, length) };
-        let _: () = unsafe {
-            msg_send![self.inner.as_ptr(),
-                encodeToCommandBuffer: cmd_buf as *const _ as *mut Object
-                destinationVector: vector
-            ]
-        };
+        unsafe {
+            let vector = create_mps_vector(buffer, length);
+            let _: () = msg_send![
+                &*self.inner,
+                encodeToCommandBuffer: cmd_buf_as_objc2(cmd_buf),
+                destinationVector: &*vector,
+            ];
+        }
     }
 }
 
 /// Helper: create MPSVector wrapping an existing buffer.
-unsafe fn create_mps_vector(buffer: &metal::BufferRef, length: u64) -> *mut Object {
-    let vec_cls = Class::get("MPSVector").expect("MPSVector class not found");
-    let desc_cls = Class::get("MPSVectorDescriptor").expect("MPSVectorDescriptor class not found");
-    // MPSDataTypeFloat32 = 0x10000020
-    let desc: *mut Object = msg_send![desc_cls,
-        vectorDescriptorWithLength: length
-        dataType: 0x10000020u64
-    ];
-    let alloc: *mut Object = msg_send![vec_cls, alloc];
-    msg_send![alloc,
-        initWithBuffer: buffer as *const _ as *mut Object
-        descriptor: desc
-    ]
+unsafe fn create_mps_vector(buffer: &metal::BufferRef, length: u64) -> Retained<AnyObject> {
+    use metal::foreign_types::ForeignTypeRef;
+    let vec_cls = AnyClass::get(c"MPSVector").expect("MPSVector class not found");
+    let desc_cls = AnyClass::get(c"MPSVectorDescriptor").expect("MPSVectorDescriptor class not found");
+    unsafe {
+        // MPSDataTypeFloat32 = 0x10000020
+        let desc: *mut AnyObject = msg_send![
+            desc_cls,
+            vectorDescriptorWithLength: length as usize,
+            dataType: 0x10000020u64,
+        ];
+        let alloc: *mut AnyObject = msg_send![vec_cls, alloc];
+        let obj: *mut AnyObject = msg_send![
+            alloc,
+            initWithBuffer: buffer.as_ptr() as *const AnyObject,
+            descriptor: desc,
+        ];
+        Retained::from_raw(obj).expect("MPSVector init returned nil")
+    }
 }
 
 // ─── High-level convenience API on GpuEncoder ─────────────────────────
