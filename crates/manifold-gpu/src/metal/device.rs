@@ -1166,6 +1166,18 @@ impl GpuDevice {
     ) -> GpuTexture {
         use objc2::msg_send;
         use objc2::runtime::AnyObject;
+        use objc2::{Encoding, RefEncode};
+
+        // IOSurfaceRef encodes as `^{__IOSurface=}`, not an ObjC object.
+        #[repr(C)]
+        struct IOSurfaceOpaque {
+            _priv: [u8; 0],
+        }
+        unsafe impl RefEncode for IOSurfaceOpaque {
+            const ENCODING_REF: Encoding =
+                Encoding::Pointer(&Encoding::Struct("__IOSurface", &[]));
+        }
+
         unsafe {
             let descriptor = metal::TextureDescriptor::new();
             descriptor.set_pixel_format(to_mtl_pixel_format(format));
@@ -1181,12 +1193,11 @@ impl GpuDevice {
             use metal::foreign_types::{ForeignType, ForeignTypeRef};
             let device_ptr: *mut AnyObject = self.raw_device().as_ptr().cast();
             let desc_ptr: *mut AnyObject = descriptor.as_ref().as_ptr().cast();
-            // IOSurfaceRef is toll-free bridged; encode as ObjC object ('@').
-            let iosurface_obj: *mut AnyObject = (io_surface as *mut std::ffi::c_void).cast();
+            let iosurface_ptr: *const IOSurfaceOpaque = io_surface.cast();
             let raw_mtl_texture: *mut AnyObject = msg_send![
                 device_ptr,
                 newTextureWithDescriptor: desc_ptr,
-                iosurface: iosurface_obj,
+                iosurface: iosurface_ptr,
                 plane: 0usize,
             ];
             assert!(

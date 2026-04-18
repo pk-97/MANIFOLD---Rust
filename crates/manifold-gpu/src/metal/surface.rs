@@ -4,8 +4,30 @@
 //! Used by the UI thread for native Metal rendering directly to windows.
 
 use objc2::runtime::AnyObject;
-use objc2::{class, msg_send};
+use objc2::{Encoding, RefEncode, class, msg_send};
 use objc2_foundation::NSString;
+
+// Opaque CoreFoundation struct types. `setColorspace:` / `setBackgroundColor:`
+// on CAMetalLayer declare their parameters as `CGColorSpaceRef` and `CGColorRef`,
+// whose ObjC type encodings are `^{CGColorSpace=}` and `^{CGColor=}`. These
+// are NOT toll-free bridged to `id` — objc2's strict msg_send! verification
+// rejects a generic `^v` (void pointer) or `@` (object). We give the pointer
+// its proper encoding by routing through these phantom types.
+#[repr(C)]
+struct CGColorSpaceOpaque {
+    _priv: [u8; 0],
+}
+unsafe impl RefEncode for CGColorSpaceOpaque {
+    const ENCODING_REF: Encoding = Encoding::Pointer(&Encoding::Struct("CGColorSpace", &[]));
+}
+
+#[repr(C)]
+struct CGColorOpaque {
+    _priv: [u8; 0],
+}
+unsafe impl RefEncode for CGColorOpaque {
+    const ENCODING_REF: Encoding = Encoding::Pointer(&Encoding::Struct("CGColor", &[]));
+}
 
 use super::device::GpuDevice;
 use super::format::to_mtl_pixel_format;
@@ -149,9 +171,8 @@ impl GpuSurface {
             let cs = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearSRGB);
             if !cs.is_null() {
                 let layer = self.layer_ptr as *mut AnyObject;
-                // CGColorSpaceRef is toll-free bridged; encode as ObjC object ('@').
-                let cs_obj: *mut AnyObject = cs.cast();
-                let _: () = msg_send![layer, setColorspace: cs_obj];
+                let cs_ptr: *mut CGColorSpaceOpaque = cs.cast();
+                let _: () = msg_send![layer, setColorspace: cs_ptr];
                 let _: () = msg_send![layer, setWantsExtendedDynamicRangeContent: true];
                 CGColorSpaceRelease(cs);
             }
@@ -184,9 +205,8 @@ impl GpuSurface {
             let color = CGColorCreateGenericRGB(r, g, b, a);
             if !color.is_null() {
                 let layer = self.layer_ptr as *mut AnyObject;
-                // CGColorRef is toll-free bridged; encode as ObjC object ('@').
-                let color_obj: *mut AnyObject = color.cast();
-                let _: () = msg_send![layer, setBackgroundColor: color_obj];
+                let color_ptr: *mut CGColorOpaque = color.cast();
+                let _: () = msg_send![layer, setBackgroundColor: color_ptr];
                 CGColorRelease(color);
             }
         }
