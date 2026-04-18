@@ -1489,55 +1489,64 @@ impl GpuEncoder {
     /// Uses Metal's `addCompletedHandler` — fires immediately on GPU completion,
     /// no polling or next-frame delay.
     pub fn add_completed_handler<F: Fn() + Send + 'static>(&self, callback: F) {
-        let block = block::ConcreteBlock::new(move |_: &metal::CommandBufferRef| {
+        use block2::RcBlock;
+        use metal::foreign_types::ForeignTypeRef;
+        use objc2::msg_send;
+        use objc2::runtime::AnyObject;
+
+        let block = RcBlock::new(move |_buf: *mut AnyObject| {
             callback();
         });
-        let block = block.copy();
-        self.cmd_buf().add_completed_handler(&block);
+        unsafe {
+            let cb_ptr: *mut AnyObject = self.cmd_buf().as_ptr().cast();
+            let _: () = msg_send![cb_ptr, addCompletedHandler: &*block];
+        }
     }
 
     /// Register a diagnostic completed handler that logs GPU errors with
     /// the Metal error code and description.
     pub fn add_completed_handler_with_status(&self, label: &str) {
+        use block2::RcBlock;
+        use metal::foreign_types::ForeignTypeRef;
+        use objc2::msg_send;
+        use objc2::runtime::AnyObject;
+
         let label = label.to_string();
-        let block =
-            block::ConcreteBlock::new(move |buf: &metal::CommandBufferRef| {
-                let status = buf.status();
-                if status == metal::MTLCommandBufferStatus::Error {
-                    // Extract NSError via ObjC runtime — not exposed by metal-rs.
-                    let (code, desc) = unsafe {
-                        let err: *const objc::runtime::Object =
-                            objc::msg_send![buf, error];
-                        if err.is_null() {
-                            (-1i64, String::from("(nil)"))
+        let block = RcBlock::new(move |buf: *mut AnyObject| unsafe {
+            // Read MTLCommandBuffer status via ObjC.
+            let status: u64 = msg_send![buf, status];
+            // MTLCommandBufferStatusError = 4
+            if status == 4 {
+                let err: *mut AnyObject = msg_send![buf, error];
+                let (code, desc) = if err.is_null() {
+                    (-1i64, String::from("(nil)"))
+                } else {
+                    let code: i64 = msg_send![err, code];
+                    let ns_desc: *mut AnyObject = msg_send![err, localizedDescription];
+                    let desc = if ns_desc.is_null() {
+                        String::from("(no description)")
+                    } else {
+                        let cstr: *const std::ffi::c_char = msg_send![ns_desc, UTF8String];
+                        if cstr.is_null() {
+                            String::from("(UTF8 nil)")
                         } else {
-                            let code: i64 = objc::msg_send![err, code];
-                            let ns_desc: *const objc::runtime::Object =
-                                objc::msg_send![err, localizedDescription];
-                            let desc = if ns_desc.is_null() {
-                                String::from("(no description)")
-                            } else {
-                                let cstr: *const std::ffi::c_char =
-                                    objc::msg_send![ns_desc, UTF8String];
-                                if cstr.is_null() {
-                                    String::from("(UTF8 nil)")
-                                } else {
-                                    std::ffi::CStr::from_ptr(cstr)
-                                        .to_string_lossy()
-                                        .into_owned()
-                                }
-                            };
-                            (code, desc)
+                            std::ffi::CStr::from_ptr(cstr)
+                                .to_string_lossy()
+                                .into_owned()
                         }
                     };
-                    log::error!(
-                        "[GPU] Command buffer '{}' error (code={}): {}",
-                        label, code, desc,
-                    );
-                }
-            });
-        let block = block.copy();
-        self.cmd_buf().add_completed_handler(&block);
+                    (code, desc)
+                };
+                log::error!(
+                    "[GPU] Command buffer '{}' error (code={}): {}",
+                    label, code, desc,
+                );
+            }
+        });
+        unsafe {
+            let cb_ptr: *mut AnyObject = self.cmd_buf().as_ptr().cast();
+            let _: () = msg_send![cb_ptr, addCompletedHandler: &*block];
+        }
     }
 
     /// Commit the command buffer to the GPU queue.

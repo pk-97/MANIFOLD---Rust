@@ -134,12 +134,15 @@ impl GpuDevice {
     /// GPU frame capture grabs command buffers from ALL threads (content +
     /// UI), not just the main thread's command queue.
     pub fn install_device_capture_scope(&self) {
+        use objc2::runtime::AnyObject;
+        use objc2::{class, msg_send};
         unsafe {
-            let manager: *mut objc::runtime::Object =
-                objc::msg_send![objc::class!(MTLCaptureManager), sharedCaptureManager];
-            let scope: *mut objc::runtime::Object =
-                objc::msg_send![manager, newCaptureScopeWithDevice: self.raw_device_ptr()];
-            let _: () = objc::msg_send![manager, setDefaultCaptureScope: scope];
+            let mgr_cls = class!(MTLCaptureManager);
+            let manager: *mut AnyObject = msg_send![mgr_cls, sharedCaptureManager];
+            let device_ptr: *mut AnyObject = self.raw_device_ptr() as *mut AnyObject;
+            let scope: *mut AnyObject =
+                msg_send![manager, newCaptureScopeWithDevice: device_ptr];
+            let _: () = msg_send![manager, setDefaultCaptureScope: scope];
         }
     }
 
@@ -1161,6 +1164,8 @@ impl GpuDevice {
         format: GpuTextureFormat,
         usage: GpuTextureUsage,
     ) -> GpuTexture {
+        use objc2::msg_send;
+        use objc2::runtime::AnyObject;
         unsafe {
             let descriptor = metal::TextureDescriptor::new();
             descriptor.set_pixel_format(to_mtl_pixel_format(format));
@@ -1173,18 +1178,20 @@ impl GpuDevice {
             descriptor.set_usage(to_mtl_texture_usage(usage));
             descriptor.set_storage_mode(metal::MTLStorageMode::Shared);
 
-            let raw_mtl_texture: *mut objc::runtime::Object = msg_send![
-                self.raw_device(),
-                newTextureWithDescriptor:descriptor.as_ref()
-                iosurface:io_surface
-                plane:0usize
+            use metal::foreign_types::{ForeignType, ForeignTypeRef};
+            let device_ptr: *mut AnyObject = self.raw_device().as_ptr().cast();
+            let desc_ptr: *mut AnyObject = descriptor.as_ref().as_ptr().cast();
+            let raw_mtl_texture: *mut AnyObject = msg_send![
+                device_ptr,
+                newTextureWithDescriptor: desc_ptr,
+                iosurface: io_surface,
+                plane: 0usize,
             ];
             assert!(
                 !raw_mtl_texture.is_null(),
                 "newTextureWithDescriptor:iosurface:plane: failed"
             );
-            use metal::foreign_types::ForeignType;
-            let mtl_texture = metal::Texture::from_ptr(raw_mtl_texture as *mut _);
+            let mtl_texture = metal::Texture::from_ptr(raw_mtl_texture.cast());
             GpuTexture::from_raw(mtl_texture, width, height, 1, format)
         }
     }

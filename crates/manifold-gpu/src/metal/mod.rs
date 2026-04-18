@@ -9,20 +9,25 @@
 //! SPIRV-Cross compiles optimized SPIR-V to MSL with explicit resource binding indices
 //! matching the SlotMap assignments. Metal compiles MSL at runtime.
 //!
-//! ## objc2-metal migration path (future task)
+//! ## ObjC bindings: objc2 + block2
 //!
-//! The current `metal` crate (v0.33 from gfx-rs) is functional but missing newer
-//! Metal features (MetalFX, MPS image processing), which is why `mps.rs` and
-//! `metalfx.rs` use raw `objc::msg_send!`. `objc2-metal` (v0.3.2, 13M+ downloads)
-//! is the successor with full API coverage including MPS and MetalFX. A full
-//! migration from `metal` to `objc2-metal` would touch every file in manifold-gpu
-//! (different naming conventions, ownership model via `objc2::rc::Retained`).
-//! This is a future task — the current `metal` crate works correctly for all
-//! existing functionality.
+//! All direct ObjC interop (CAMetalLayer configuration, MPS/MetalFX kernels,
+//! MTLSharedEvent notifiers, command buffer completion handlers, NSError
+//! extraction) goes through `objc2` and `block2`. The `metal` crate (v0.33,
+//! gfx-rs) still backs the device/queue/encoder/texture types — it internally
+//! uses `objc 0.2`, but manifold-gpu itself no longer depends on `objc` or
+//! `block` directly. Where the `metal` crate's typed API is insufficient, the
+//! generated `objc2-metal`, `objc2-metal-fx`, and `objc2-metal-performance-shaders`
+//! crates provide full coverage; raw pointer bridging between the two
+//! ecosystems lives in `objc2_bridge.rs`.
+//!
+//! A future task is the full `metal` → `objc2-metal` migration (replacing the
+//! wrapper types themselves). The current split keeps the hot-path code in
+//! the battle-tested `metal` crate while removing our direct exposure to
+//! unmaintained libraries.
 
 pub mod archive;
 pub mod metalfx;
-#[allow(unexpected_cfgs)]
 pub mod mps;
 
 mod device;

@@ -3,6 +3,10 @@
 //! Wraps a `CAMetalLayer` for acquiring drawables and presenting them.
 //! Used by the UI thread for native Metal rendering directly to windows.
 
+use objc2::runtime::AnyObject;
+use objc2::{class, msg_send};
+use objc2_foundation::NSString;
+
 use super::device::GpuDevice;
 use super::format::to_mtl_pixel_format;
 use super::{objc_release, objc_retain};
@@ -63,7 +67,7 @@ impl GpuDevice {
         use raw_window_handle::RawWindowHandle;
 
         let ns_view = match window.window_handle().unwrap().as_raw() {
-            RawWindowHandle::AppKit(h) => h.ns_view.as_ptr() as *mut objc::runtime::Object,
+            RawWindowHandle::AppKit(h) => h.ns_view.as_ptr() as *mut AnyObject,
             _ => panic!("Expected AppKit window handle"),
         };
 
@@ -80,11 +84,11 @@ impl GpuDevice {
         // Attach CAMetalLayer to the NSView.
         let layer_ptr = layer.as_ptr() as *mut std::ffi::c_void;
         unsafe {
+            let layer_obj = layer_ptr as *mut AnyObject;
             // Prevent CAMetalLayer::nextDrawable from blocking the caller when
             // all drawables are in flight. The output presenter now runs inline
             // on the main frame encoder, so blocking here would stall the app.
-            let _: () = msg_send![layer_ptr as *mut objc::runtime::Object,
-                setAllowsNextDrawableTimeout: true];
+            let _: () = msg_send![layer_obj, setAllowsNextDrawableTimeout: true];
             let _: () = msg_send![ns_view, setLayer: layer_ptr];
             let _: () = msg_send![ns_view, setWantsLayer: true];
             // Retain the layer — the local MetalLayer will drop its reference.
@@ -142,7 +146,7 @@ impl GpuSurface {
         unsafe {
             let cs = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearSRGB);
             if !cs.is_null() {
-                let layer = self.layer_ptr as *mut objc::runtime::Object;
+                let layer = self.layer_ptr as *mut AnyObject;
                 let _: () = msg_send![layer, setColorspace: cs];
                 let _: () = msg_send![layer, setWantsExtendedDynamicRangeContent: true];
                 CGColorSpaceRelease(cs);
@@ -153,10 +157,10 @@ impl GpuSurface {
     /// Set the layer's contents gravity to resize-aspect (letterbox).
     pub fn set_contents_gravity_resize_aspect(&self) {
         unsafe {
-            let layer = self.layer_ptr as *mut objc::runtime::Object;
-            let gravity: *const objc::runtime::Object = msg_send![class!(NSString), stringWithUTF8String:
-                    c"resizeAspect".as_ptr()];
-            let _: () = msg_send![layer, setContentsGravity: gravity];
+            let layer = self.layer_ptr as *mut AnyObject;
+            let gravity = NSString::from_str("resizeAspect");
+            let gravity_ptr: *const AnyObject = &*gravity as *const NSString as *const AnyObject;
+            let _: () = msg_send![layer, setContentsGravity: gravity_ptr];
         }
     }
 
@@ -165,7 +169,7 @@ impl GpuSurface {
     /// CA transactions, preserving the timing guarantees of the display link.
     pub fn set_presents_with_transaction(&self, enabled: bool) {
         unsafe {
-            let layer = self.layer_ptr as *mut objc::runtime::Object;
+            let layer = self.layer_ptr as *mut AnyObject;
             let _: () = msg_send![layer, setPresentsWithTransaction: enabled];
         }
     }
@@ -175,7 +179,7 @@ impl GpuSurface {
         unsafe {
             let color = CGColorCreateGenericRGB(r, g, b, a);
             if !color.is_null() {
-                let layer = self.layer_ptr as *mut objc::runtime::Object;
+                let layer = self.layer_ptr as *mut AnyObject;
                 let _: () = msg_send![layer, setBackgroundColor: color];
                 CGColorRelease(color);
             }
@@ -256,6 +260,12 @@ impl Drop for GpuDrawable {
             }
         }
     }
+}
+
+// Silence the unused import warning when the NSString is only used via raw ptr.
+#[allow(dead_code)]
+fn _nsstring_class_check() {
+    let _ = class!(NSString);
 }
 
 // ─── GpuEncoder integration ─────────────────────────────────────────

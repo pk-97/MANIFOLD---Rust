@@ -368,17 +368,29 @@ impl GpuFenceWaiter {
     where
         F: FnOnce() + Send + 'static,
     {
+        use block2::RcBlock;
+        use metal::foreign_types::{ForeignType, ForeignTypeRef};
+
         let wake = std::sync::Mutex::new(Some(wake));
-        let block = block::ConcreteBlock::new(
-            move |_event: &metal::SharedEventRef, _value: u64| {
-                if let Ok(mut guard) = wake.lock()
-                    && let Some(f) = guard.take()
-                {
-                    f();
-                }
-            },
-        );
-        event.raw().notify(&self.listener, target_value, block.copy());
+        let block = RcBlock::new(move |_event: *mut std::ffi::c_void, _value: u64| {
+            if let Ok(mut guard) = wake.lock()
+                && let Some(f) = guard.take()
+            {
+                f();
+            }
+        });
+        // metal::SharedEventRef::notify signature takes a `block::Block` (objc 0.2's
+        // block). We call the ObjC method directly via objc2 to avoid the mismatch.
+        unsafe {
+            let event_ptr: *mut objc2::runtime::AnyObject = event.raw().as_ptr().cast();
+            let listener_ptr: *mut objc2::runtime::AnyObject = self.listener.as_ptr().cast();
+            let _: () = objc2::msg_send![
+                event_ptr,
+                notifyListener: listener_ptr,
+                atValue: target_value,
+                block: &*block,
+            ];
+        }
     }
 }
 
