@@ -339,7 +339,7 @@ pub enum PanelAction {
 
     // Dropdown results (context-routed from UIRoot)
     SetMidiNote(usize, i32),        // layer_index, note (0-127)
-    SetMidiChannel(usize, i32),     // layer_index, channel (1-16)
+    SetMidiChannel(usize, i32),     // layer_index, channel (0-15 internal, displayed 1-16)
     SetResolution(usize),           // preset index
     SetDisplayResolution(i32, i32), // direct width, height (no undo, matches Unity)
     SetRenderScale(f32),            // render scale: 1.0 (native), 0.75 (quality), 0.5 (performance)

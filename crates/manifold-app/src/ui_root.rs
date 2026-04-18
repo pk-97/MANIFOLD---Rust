@@ -1123,7 +1123,7 @@ impl UIRoot {
             }
             PanelAction::MidiInputClicked(idx) => {
                 let items: Vec<DropdownItem> = (0..128)
-                    .map(|n| DropdownItem::new(&format!("{}", n)))
+                    .map(|n| DropdownItem::new(&manifold_core::midi::note_number_to_name(n)))
                     .collect();
                 self.open_dropdown_at(DropdownContext::MidiNote(*idx), items, trigger);
                 true
@@ -1416,8 +1416,8 @@ impl UIRoot {
                 Some(PanelAction::SetMidiNote(layer_idx, index as i32))
             }
             DropdownContext::MidiChannel(layer_idx) => {
-                // Dropdown items are 0-indexed ("Ch 1" = index 0), channel is 1-based.
-                Some(PanelAction::SetMidiChannel(layer_idx, index as i32 + 1))
+                // Storage is 0-indexed internally (0..15); display adds +1 for "Ch 1".."Ch 16".
+                Some(PanelAction::SetMidiChannel(layer_idx, index as i32))
             }
             DropdownContext::Resolution => {
                 use manifold_core::types::ResolutionPreset;

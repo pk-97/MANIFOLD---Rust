@@ -6,6 +6,7 @@ use crate::node::*;
 use crate::scroll_container::ScrollContainer;
 use crate::tree::UITree;
 use manifold_core::LayerId;
+use manifold_core::midi::note_number_to_name;
 
 // ── Layout constants (from LayerHeaderLayout.cs / UIConstants) ───────
 
@@ -458,18 +459,6 @@ impl Default for LayerRowIds {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
-
-fn midi_note_to_name(note: i32) -> String {
-    if note < 0 {
-        return "None".into();
-    }
-    const NAMES: [&str; 12] = [
-        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
-    ];
-    let octave = (note / 12) - 1;
-    let name = NAMES[(note % 12) as usize];
-    format!("{}{}", name, octave)
-}
 
 fn folder_path_text(path: &Option<String>, source_count: usize) -> String {
     match path {
@@ -1269,7 +1258,7 @@ impl LayerHeaderPanel {
                 },
             ) as i32;
 
-            let midi_text = midi_note_to_name(layer.midi_note);
+            let midi_text = note_number_to_name(layer.midi_note);
             let mir = s(row.midi_input);
             ids.midi_input = tree.add_button(
                 clip_parent,
@@ -1814,15 +1803,6 @@ mod tests {
         // Child has accent bar and bottom border (last child)
         assert!(panel.rows[1].accent_bar >= 0);
         assert!(panel.rows[1].bottom_border >= 0);
-    }
-
-    #[test]
-    fn midi_note_name_conversion() {
-        assert_eq!(midi_note_to_name(-1), "None");
-        assert_eq!(midi_note_to_name(60), "C4");
-        assert_eq!(midi_note_to_name(69), "A4");
-        assert_eq!(midi_note_to_name(36), "C2");
-        assert_eq!(midi_note_to_name(127), "G9");
     }
 
     #[test]

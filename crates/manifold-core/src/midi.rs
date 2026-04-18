@@ -29,6 +29,20 @@ pub struct MidiMappingConfig {
     mapping_dict: HashMap<i32, usize>,
 }
 
+/// Format a MIDI note number as a note name using Ableton's convention (C3 = 60).
+/// Returns "None" for negative values (the sentinel for "unassigned").
+pub fn note_number_to_name(note: i32) -> String {
+    if note < 0 {
+        return "None".into();
+    }
+    const NAMES: [&str; 12] = [
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    ];
+    let octave = (note / 12) - 2;
+    let name = NAMES[(note % 12) as usize];
+    format!("{}{}", name, octave)
+}
+
 impl MidiMappingConfig {
     pub fn rebuild_dictionary(&mut self) {
         self.mapping_dict.clear();
@@ -58,5 +72,20 @@ impl MidiMappingConfig {
         self.mappings.retain(|m| !m.video_clip_ids.is_empty());
         self.rebuild_dictionary();
         removed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn note_number_to_name_ableton_convention() {
+        assert_eq!(note_number_to_name(-1), "None");
+        assert_eq!(note_number_to_name(0), "C-2");
+        assert_eq!(note_number_to_name(60), "C3");
+        assert_eq!(note_number_to_name(69), "A3");
+        assert_eq!(note_number_to_name(36), "C1");
+        assert_eq!(note_number_to_name(127), "G8");
     }
 }
