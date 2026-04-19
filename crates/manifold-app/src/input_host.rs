@@ -30,7 +30,7 @@ pub struct AppInputHost<'a> {
     pub needs_rebuild: &'a mut bool,
     pub needs_structural_sync: &'a mut bool,
     pub scroll_dirty: &'a mut crate::ui_root::ScrollDirty,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // FIXME(dead-code-audit): field never read
     pub current_project_path: &'a Option<std::path::PathBuf>,
     pub has_output_window: bool,
     pub pending_close_output: &'a mut bool,
@@ -374,7 +374,6 @@ impl TimelineInputHost for AppInputHost<'_> {
         *self.needs_rebuild = true;
     }
 
-    fn set_inspector_focus(&mut self, _focused: bool) {}
     fn show_toast(&mut self, message: &str) {
         log::info!("[Toast] {}", message);
     }
@@ -856,14 +855,8 @@ impl TimelineInputHost for AppInputHost<'_> {
         if let Some(id) = selected_id
             && let Some(project) = Some(&mut *self.project)
         {
-            let (idx, layer) = match project
-                .timeline
-                .layers
-                .iter()
-                .enumerate()
-                .find(|(_, l)| l.layer_id == id)
-            {
-                Some((i, l)) => (i, l),
+            let layer = match project.timeline.layers.iter().find(|l| l.layer_id == id) {
+                Some(l) => l,
                 None => return,
             };
             if !layer.is_group() {
@@ -880,7 +873,9 @@ impl TimelineInputHost for AppInputHost<'_> {
                 .collect();
             let original_order = project.timeline.layers.clone();
             let cmd = manifold_editing::commands::layer::UngroupLayersCommand::new(
-                group_layer, idx, child_ids, original_order,
+                group_layer,
+                child_ids,
+                original_order,
             );
             let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
                 Box::new(cmd);

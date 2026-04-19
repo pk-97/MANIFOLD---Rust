@@ -237,8 +237,6 @@ struct LayerRowData {
     has_gen_type: bool,
     has_video_controls: bool,
     has_generator_controls: bool,
-    #[allow(dead_code)]
-    has_group_info: bool,
 }
 
 /// Compute element rects for one layer row in panel-local coordinates.
@@ -335,7 +333,6 @@ fn compute_layer_row(
     y += 16.0;
 
     if is_group {
-        d.has_group_info = true;
         y += 2.0;
     } else if is_generator {
         d.has_generator_controls = true;

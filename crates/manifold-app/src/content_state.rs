@@ -11,6 +11,8 @@ use manifold_playback::stem_audio::STEM_COUNT;
 use std::sync::Arc;
 
 /// Sent once when an export finishes.
+// FIXME(dead-code-audit): event is constructed and stored in ContentState but
+// never read by UI — export-finished feedback isn't wired.
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct ExportFinishedEvent {
@@ -21,6 +23,9 @@ pub struct ExportFinishedEvent {
 
 /// State snapshot sent from the content thread to the UI thread.
 /// The UI thread drains these from a bounded channel and uses the latest.
+// FIXME(dead-code-audit): several fields written by content thread but never
+// read by UI (link_tempo, link_is_playing, midi_clock_bpm, osc_receiving_timecode,
+// osc_timecode_display, stem_expanded, stem_ready, stem_available, led_initialized).
 #[derive(Clone)]
 #[allow(dead_code)]
 pub struct ContentState {

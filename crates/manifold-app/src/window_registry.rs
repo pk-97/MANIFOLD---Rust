@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+// FIXME(dead-code-audit): Output.name and display_index never read;
+// iter_mut/window_arcs/len/is_empty/contains methods never called.
 #[allow(dead_code)]
 /// Role of a window in the application.
 #[derive(Debug, Clone)]

@@ -394,18 +394,6 @@ impl PerfHudPanel {
     }
 }
 
-/// Map frame time to color: green (<8ms), yellow (8-16ms), red (>16ms).
-#[allow(dead_code)]
-fn dt_color(ms: f32) -> Color32 {
-    if ms < 8.5 {
-        color::STATUS_GOOD
-    } else if ms < 16.7 {
-        color::STATUS_WARNING
-    } else {
-        color::STATUS_BAD
-    }
-}
-
 impl Panel for PerfHudPanel {
     fn build(&mut self, tree: &mut UITree, layout: &ScreenLayout) {
         self.first_node = tree.count();

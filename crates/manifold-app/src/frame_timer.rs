@@ -199,7 +199,6 @@ impl FrameTimer {
     }
 
 
-    #[allow(dead_code)]
     pub fn target_fps(&self) -> f64 {
         self.target_fps
     }

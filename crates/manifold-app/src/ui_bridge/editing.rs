@@ -411,7 +411,9 @@ pub(super) fn dispatch_editing(
                     let original_order = project.timeline.layers.clone();
                     let cmd =
                         manifold_editing::commands::layer::UngroupLayersCommand::new(
-                            group_layer, idx, child_ids, original_order,
+                            group_layer,
+                            child_ids,
+                            original_order,
                         );
                     {
                         let mut boxed: Box<

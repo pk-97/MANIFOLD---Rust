@@ -312,8 +312,6 @@ impl Command for RenameLayerCommand {
 #[derive(Debug)]
 pub struct UngroupLayersCommand {
     group_layer: Option<Layer>,
-    #[allow(dead_code)]
-    group_index: usize,
     child_layer_ids: Vec<LayerId>,
     original_order: Vec<Layer>,
 }
@@ -321,13 +319,11 @@ pub struct UngroupLayersCommand {
 impl UngroupLayersCommand {
     pub fn new(
         group_layer: Layer,
-        group_index: usize,
         child_layer_ids: Vec<LayerId>,
         original_order: Vec<Layer>,
     ) -> Self {
         Self {
             group_layer: Some(group_layer),
-            group_index,
             child_layer_ids,
             original_order,
         }

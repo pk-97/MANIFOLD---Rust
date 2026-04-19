@@ -79,9 +79,6 @@ pub trait TimelineInputHost {
     /// Clear effect selection in the inspector.
     fn clear_effect_selection(&mut self);
 
-    /// Set inspector focus state.
-    fn set_inspector_focus(&mut self, focused: bool);
-
     // ── Toast feedback ──────────────────────────────────────────
 
     /// Show a toast notification.

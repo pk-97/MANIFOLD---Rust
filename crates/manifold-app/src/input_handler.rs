@@ -40,11 +40,6 @@ impl InputHandler {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn set_inspector_focus(&mut self, focused: bool) {
-        self.inspector_has_focus = focused;
-    }
-
     pub fn clear_needs_zoom_update(&mut self) {
         self.needs_zoom_update = false;
     }

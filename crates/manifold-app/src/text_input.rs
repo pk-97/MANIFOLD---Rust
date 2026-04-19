@@ -9,6 +9,8 @@
 //! `begin()` auto-cancels any existing session (matches Unity behavior).
 
 /// What kind of field is being edited.
+// FIXME(dead-code-audit): EffectParam/GroupRename/GenParam are matched on in app.rs
+// but no path constructs them — begin() callers don't reach these branches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub enum TextInputField {

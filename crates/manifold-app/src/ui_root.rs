@@ -67,7 +67,7 @@ pub enum DropdownContext {
     MidiChannel(usize),
     MidiDevice(usize),
     Resolution,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // FIXME(dead-code-audit): variant never constructed
     AddEffect(InspectorTab),
     ClipContext(String),      // right-click on clip: clip_id
     TrackContext(f32, usize), // right-click on empty track: beat, layer

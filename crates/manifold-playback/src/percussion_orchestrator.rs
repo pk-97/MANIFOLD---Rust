@@ -39,9 +39,6 @@ use crate::process_runner::{ExternalProcessRunner, ProcessHandle, ProcessRunnerI
 // CONSTANTS (preserved from Unity)
 // ──────────────────────────────────────
 
-#[allow(dead_code)]
-const PERCUSSION_AUDIO_EXTENSION_FILTER: &str = "wav,mp3,m4a,aac,flac,ogg,aif,aiff,wma,json";
-
 const SUPPORTED_PERCUSSION_AUDIO_EXTENSIONS: &[&str] = &[
     ".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".aif", ".aiff", ".wma",
 ];

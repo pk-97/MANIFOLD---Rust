@@ -124,9 +124,4 @@ impl TextureRingPool {
         &self.textures[index]
     }
 
-    /// Number of textures in the pool.
-    #[allow(dead_code)]
-    pub fn capacity(&self) -> usize {
-        self.textures.len()
-    }
 }

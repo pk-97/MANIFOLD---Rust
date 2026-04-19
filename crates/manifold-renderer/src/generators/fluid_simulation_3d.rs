@@ -31,8 +31,6 @@ const CURL: usize = 2;
 const TURBULENCE: usize = 3;
 const SPEED: usize = 4;
 const CONTRAST: usize = 5;
-#[allow(dead_code)]
-const SCALE: usize = 6;
 const PARTICLES: usize = 7;
 const SNAP: usize = 8;
 const SNAP_MODE: usize = 9;

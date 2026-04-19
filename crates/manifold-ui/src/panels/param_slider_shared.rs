@@ -24,8 +24,6 @@ pub(crate) const DE_BUTTON_GAP: f32 = 2.0;
 
 pub(crate) const DRIVER_CONFIG_HEIGHT: f32 = 56.0;
 pub(crate) const DRIVER_ROW_HEIGHT: f32 = 22.0;
-#[allow(dead_code)]
-pub(crate) const BEAT_DIV_BTN_W: f32 = 27.0;
 pub(crate) const BEAT_DIV_SPACING: f32 = 1.0;
 pub(crate) const DRIVER_PAD_H: f32 = 5.0;
 pub(crate) const BEAT_DIV_COUNT: usize = 11;
@@ -839,7 +837,6 @@ pub(crate) fn build_trim_handles(
 
 /// Build trim handles from explicit min/max values (used by Ableton mappings).
 /// Same visual as driver trim handles but with configurable colors.
-#[allow(dead_code)] // used once effect_card build wiring is added
 pub(crate) fn build_trim_handles_explicit(
     tree: &mut UITree,
     track_parent: i32,

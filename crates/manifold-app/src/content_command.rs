@@ -11,6 +11,8 @@ use manifold_playback::audio_decoder::DecodedAudio;
 use manifold_playback::audio_sync::PreloadedAudioData;
 use manifold_playback::stem_audio::PreloadedStemData;
 
+// FIXME(dead-code-audit): 9 variants + AudioLoaded.waveform field have no
+// producers/consumers; needs deeper investigation to decide keep-vs-delete.
 #[allow(dead_code)]
 pub enum ContentCommand {
     // ── Transport ──────────────────────────────────────────────────

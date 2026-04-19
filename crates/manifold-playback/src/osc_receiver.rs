@@ -40,8 +40,6 @@ struct MessageQueue {
 impl MessageQueue {
     /// Record or replace the latest message for `address`.
     /// Called from the background receive thread under lock.
-    /// Dead until native OSC UDP thread is wired.
-    #[allow(dead_code)]
     fn push(&mut self, address: String, values: Vec<f32>) {
         if let Some(existing) = self.latest.get_mut(&address) {
             // Update in-place: reuse allocation if same count, otherwise replace.

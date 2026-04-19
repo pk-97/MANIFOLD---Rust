@@ -18,8 +18,6 @@ inventory::submit! {
 const LINE: usize = 0;
 const VERTS: usize = 1;
 const VSIZE: usize = 2;
-#[allow(dead_code)]
-const ANIM: usize = 3;
 const SPEED: usize = 4;
 const WINDOW: usize = 5;
 const WAVE: usize = 6;

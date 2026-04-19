@@ -17,12 +17,10 @@ use super::*;
 use crate::types::*;
 
 /// Encoder state — tracks the current active Metal encoder.
-#[allow(dead_code)]
 pub(crate) enum EncoderState {
     None,
     Compute(Retained<ProtocolObject<dyn MTLComputeCommandEncoder>>),
     Render(Retained<ProtocolObject<dyn MTLRenderCommandEncoder>>),
-    Blit(Retained<ProtocolObject<dyn MTLBlitCommandEncoder>>),
 }
 
 /// Cached compute bind state — skips redundant Metal API calls when the same
@@ -142,9 +140,6 @@ impl GpuEncoder {
                 self.compute_cache.clear();
             }
             EncoderState::Render(enc) => {
-                enc.endEncoding();
-            }
-            EncoderState::Blit(enc) => {
                 enc.endEncoding();
             }
         }

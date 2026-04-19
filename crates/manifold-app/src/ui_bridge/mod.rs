@@ -23,6 +23,7 @@ use crate::ui_root::UIRoot;
 use crate::user_prefs::UserPrefs;
 
 /// Result of dispatching a panel action.
+// FIXME(dead-code-audit): `handled` field written by constructors but never read.
 #[allow(dead_code)]
 pub struct DispatchResult {
     /// True if the action was handled.
@@ -33,7 +34,6 @@ pub struct DispatchResult {
     pub resolution_changed: bool,
 }
 
-#[allow(dead_code)]
 impl DispatchResult {
     pub(crate) fn handled() -> Self {
         Self {
@@ -376,46 +376,6 @@ pub fn dispatch(
 
         // Handled in app_render.rs (Application-level intercept, never reaches dispatch)
         PanelAction::CopyOscAddress(_) => DispatchResult::handled(),
-    }
-}
-
-/// Update the selection region to encompass all currently selected clips.
-/// Called after Ctrl+Click multi-select, paste, and duplicate.
-/// From Unity InteractionOverlay.UpdateRegionFromClipSelection.
-#[allow(dead_code)]
-fn update_region_from_clip_selection(selection: &mut SelectionState, project: &Project) {
-    if selection.selected_clip_ids.len() < 2 {
-        return;
-    }
-    {
-        let mut min_beat = manifold_core::Beats(f64::MAX);
-        let mut max_beat = manifold_core::Beats(-f64::MAX);
-        let mut min_layer = i32::MAX;
-        let mut max_layer = i32::MIN;
-        let mut found = false;
-
-        for (li, layer) in project.timeline.layers.iter().enumerate() {
-            let li = li as i32;
-            for clip in &layer.clips {
-                if selection.selected_clip_ids.contains(&clip.id) {
-                    min_beat = min_beat.min(clip.start_beat);
-                    max_beat = max_beat.max(clip.start_beat + clip.duration_beats);
-                    min_layer = min_layer.min(li);
-                    max_layer = max_layer.max(li);
-                    found = true;
-                }
-            }
-        }
-
-        if found {
-            selection.set_region_from_clip_bounds(
-                min_beat,
-                max_beat,
-                min_layer,
-                max_layer,
-                &project.timeline.layers,
-            );
-        }
     }
 }
 

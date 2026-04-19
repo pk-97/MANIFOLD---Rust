@@ -65,17 +65,14 @@ impl Default for StemLaneNodeIds {
 /// Unity: `StemWaveformLane` (312 lines).
 struct StemLane {
     renderer: WaveformRenderer,
-    #[allow(dead_code)]
-    stem_index: usize,
     is_muted: bool,
     is_soloed: bool,
 }
 
 impl StemLane {
-    fn new(stem_index: usize) -> Self {
+    fn new() -> Self {
         Self {
             renderer: WaveformRenderer::new(),
-            stem_index,
             is_muted: false,
             is_soloed: false,
         }
@@ -115,10 +112,10 @@ impl StemLaneGroupPanel {
     pub fn new() -> Self {
         Self {
             lanes: [
-                StemLane::new(0),
-                StemLane::new(1),
-                StemLane::new(2),
-                StemLane::new(3),
+                StemLane::new(),
+                StemLane::new(),
+                StemLane::new(),
+                StemLane::new(),
             ],
             expanded: false,
             pixel_buffer: Vec::new(),
