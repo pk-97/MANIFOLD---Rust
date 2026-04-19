@@ -67,8 +67,6 @@ pub enum DropdownContext {
     MidiChannel(usize),
     MidiDevice(usize),
     Resolution,
-    #[allow(dead_code)] // FIXME(dead-code-audit): variant never constructed
-    AddEffect(InspectorTab),
     ClipContext(String),      // right-click on clip: clip_id
     TrackContext(f32, usize), // right-click on empty track: beat, layer
     LayerContext(usize),      // right-click on layer header: layer_index
@@ -1452,7 +1450,6 @@ impl UIRoot {
                     Some(PanelAction::SetDisplayResolution(*w as i32, *h as i32))
                 }
             }
-            DropdownContext::AddEffect(tab) => Some(PanelAction::AddEffect(tab, index)),
             DropdownContext::ClipContext(clip_id) => match index {
                 0 => Some(PanelAction::ContextSplitAtPlayhead(clip_id)),
                 1 => Some(PanelAction::ContextDeleteClip(clip_id)),

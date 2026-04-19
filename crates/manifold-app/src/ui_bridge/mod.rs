@@ -23,11 +23,7 @@ use crate::ui_root::UIRoot;
 use crate::user_prefs::UserPrefs;
 
 /// Result of dispatching a panel action.
-// FIXME(dead-code-audit): `handled` field written by constructors but never read.
-#[allow(dead_code)]
 pub struct DispatchResult {
-    /// True if the action was handled.
-    pub handled: bool,
     /// True if the action changed project structure (needs sync_project_data).
     pub structural_change: bool,
     /// True if the output resolution changed (needs compositor + generator resize).
@@ -37,28 +33,24 @@ pub struct DispatchResult {
 impl DispatchResult {
     pub(crate) fn handled() -> Self {
         Self {
-            handled: true,
             structural_change: false,
             resolution_changed: false,
         }
     }
     pub(crate) fn structural() -> Self {
         Self {
-            handled: true,
             structural_change: true,
             resolution_changed: false,
         }
     }
     pub(crate) fn resolution() -> Self {
         Self {
-            handled: true,
             structural_change: true,
             resolution_changed: true,
         }
     }
     pub(crate) fn unhandled() -> Self {
         Self {
-            handled: false,
             structural_change: false,
             resolution_changed: false,
         }

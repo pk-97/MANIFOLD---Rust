@@ -30,7 +30,7 @@ pub struct AppInputHost<'a> {
     pub needs_rebuild: &'a mut bool,
     pub needs_structural_sync: &'a mut bool,
     pub scroll_dirty: &'a mut crate::ui_root::ScrollDirty,
-    #[allow(dead_code)] // FIXME(dead-code-audit): field never read
+    #[cfg_attr(not(feature = "profiling"), allow(dead_code))]
     pub current_project_path: &'a Option<std::path::PathBuf>,
     pub has_output_window: bool,
     pub pending_close_output: &'a mut bool,

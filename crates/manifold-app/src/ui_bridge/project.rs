@@ -65,16 +65,8 @@ pub(super) fn dispatch_project(
         PanelAction::ToggleLiveRecording
         | PanelAction::SelectAudioInputDevice
         | PanelAction::SetAudioInputDevice(_)
-        | PanelAction::ToggleMonitor => DispatchResult {
-            handled: true,
-            structural_change: false,
-            resolution_changed: false,
-        },
-        PanelAction::EnterPerformMode => DispatchResult {
-            handled: true,
-            structural_change: false,
-            resolution_changed: false,
-        },
+        | PanelAction::ToggleMonitor => DispatchResult::handled(),
+        PanelAction::EnterPerformMode => DispatchResult::handled(),
 
         PanelAction::NewProject
         | PanelAction::OpenProject
