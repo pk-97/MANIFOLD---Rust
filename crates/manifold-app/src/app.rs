@@ -1297,7 +1297,6 @@ impl ApplicationHandler for Application {
                     window,
                     surface: Some(surface),
                     role: WindowRole::Workspace,
-                    display_index: None,
                 },
             );
 

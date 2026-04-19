@@ -114,32 +114,6 @@ impl ContentThread {
                 self.engine.stop();
                 self.link_beat_offset = f64::NAN;
             }
-            ContentCommand::TogglePlayback => {
-                if self.osc_sender.is_sender_enabled()
-                    || self.ableton_bridge.is_transport_enabled()
-                {
-                    self.sync_arbiter.suppress_next_transport = false;
-                    self.sync_arbiter.set_manifold_owns_at(self.time_since_start);
-                }
-                if self.engine.is_playing() {
-                    self.end_tempo_recording_session();
-                    self.engine.pause();
-                } else {
-                    let authority = self.engine.project()
-                        .map_or(ClockAuthority::Internal, |p| p.settings.clock_authority);
-                    if authority == ClockAuthority::MidiClock
-                        && !self.sync_arbiter.manifold_owns_playback
-                        && let Some(ref clk) = self.transport_controller.midi_clock_sync
-                            && clk.is_midi_clock_enabled() {
-                                let midi_beat = Beats::from_f32(clk.current_clock_beat());
-                                self.engine.set_beat(midi_beat);
-                                let time = self.engine.beat_to_timeline_time(midi_beat);
-                                self.engine.set_time(Seconds(time.0.max(0.0)));
-                            }
-                    self.engine.play();
-                    self.cache_link_beat_offset();
-                }
-            }
             ContentCommand::SeekTo(t) => {
                 self.sync_arbiter.set_user_seek_time(self.time_since_start);
                 self.engine.seek_to(t);
@@ -297,25 +271,11 @@ impl ContentThread {
                 }
             }
             // ── Settings ───────────────────────────────────────────
-            ContentCommand::SetBpm(bpm) => {
-                if let Some(p) = self.engine.project_mut() {
-                    p.settings.bpm = bpm;
-                }
-            }
             ContentCommand::SetFrameRate(fps) => {
                 if let Some(p) = self.engine.project_mut() {
                     p.settings.frame_rate = fps as f32;
                 }
                 self.timer.set_target_fps(fps);
-            }
-            ContentCommand::SetVsyncEnabled(enabled) => {
-                // Legacy: update project setting for serialization compat
-                // but no longer affects content thread pacing. The content
-                // thread always uses timer-based pacing; CAMetalLayer's
-                // displaySyncEnabled handles presentation timing.
-                if let Some(p) = self.engine.project_mut() {
-                    p.settings.vsync_enabled = enabled;
-                }
             }
 
             // ── GPU ────────────────────────────────────────────────
@@ -327,30 +287,11 @@ impl ContentThread {
             }
 
             // ── Transport/sync ─────────────────────────────────────
-            ContentCommand::CycleClockAuthority => {
-                // No longer used — authority is auto-determined from enabled sources.
-                // Kept for backwards compatibility with any pending commands.
-            }
             ContentCommand::ToggleLink => {
                 self.transport_controller.toggle_link(&mut self.engine);
             }
             ContentCommand::ToggleMidiClock => {
                 self.transport_controller.toggle_midi_clock(&mut self.engine);
-            }
-            ContentCommand::ToggleSyncOutput => {
-                self.transport_controller.toggle_sync_output(&mut self.engine);
-                // Wire the actual socket enable/disable on OscPositionSender.
-                if self.transport_controller.osc_sender_enabled {
-                    let realtime = self.timer.realtime_since_start();
-                    self.osc_sender.enable_sender(
-                        self.transport_controller.osc_sender_port,
-                        self.engine.is_playing(),
-                        self.engine.current_beat(),
-                        Seconds(realtime),
-                    );
-                } else {
-                    self.osc_sender.disable_sender(&mut self.sync_arbiter);
-                }
             }
             ContentCommand::SetMidiClockDevice(index) => {
                 if let Some(ref mut clk) = self.transport_controller.midi_clock_sync {
@@ -365,7 +306,7 @@ impl ContentThread {
             }
 
             // ── Audio ──────────────────────────────────────────────
-            ContentCommand::AudioLoaded { preloaded, waveform: _ } => {
+            ContentCommand::AudioLoaded { preloaded } => {
                 if let Some(ref mut audio_sync) = self.audio_sync
                     && let Err(e) = audio_sync.apply_preloaded(*preloaded) {
                         log::warn!("[ContentThread] Failed to apply loaded audio: {}", e);
@@ -378,11 +319,6 @@ impl ContentThread {
             }
 
             // ── Stem audio ────────────────────────────────────────
-            ContentCommand::StemAudioLoaded(preloaded) => {
-                if let Some(ref mut stem) = self.stem_audio {
-                    stem.apply_preloaded_stems(*preloaded);
-                }
-            }
             ContentCommand::StemSetExpanded(expand) => {
                 if let Some(ref mut stem) = self.stem_audio {
                     // Auto-load stems on first expand if paths available but not yet loaded.
@@ -438,13 +374,6 @@ impl ContentThread {
                     && let Some(p) = self.engine.project()
                 {
                     self.ableton_bridge.rebuild_listeners(p);
-                }
-            }
-
-            // ── Save support ───────────────────────────────────────
-            ContentCommand::RequestProjectSnapshot(tx) => {
-                if let Some(p) = self.engine.project() {
-                    let _ = tx.send(p.clone());
                 }
             }
 
@@ -523,21 +452,6 @@ impl ContentThread {
             }
 
             // ── Ableton bridge ──────────────────────────���──────────
-            ContentCommand::AbletonConnect => {
-                self.ableton_bridge.connect();
-                // Auto-enable transport sync if mode is AbletonOSC
-                if self.engine.project()
-                    .is_some_and(|p| {
-                        p.settings.osc_sync_mode
-                            == manifold_core::types::OscSyncMode::AbletonOsc
-                    })
-                {
-                    self.ableton_bridge.enable_transport_sync();
-                }
-            }
-            ContentCommand::AbletonDisconnect => {
-                self.ableton_bridge.disconnect();
-            }
             ContentCommand::AbletonMapParam { target, address } => {
                 use manifold_core::ableton_mapping::{
                     AbletonMappingStatus, AbletonMappingTarget, AbletonParamMapping,
@@ -603,15 +517,6 @@ impl ContentThread {
                     let realtime = self.timer.realtime_since_start();
                     self.ableton_bridge.start_discovery(realtime);
                 }
-            }
-            ContentCommand::AbletonRebind => {
-                if let Some(p) = self.engine.project_mut() {
-                    self.ableton_bridge.validate_mappings(p);
-                    self.ableton_bridge.rebuild_listeners(p);
-                    p.settings.ableton_set_context =
-                        Some(self.ableton_bridge.build_set_context());
-                }
-                self.engine.mark_sync_dirty();
             }
             ContentCommand::ToggleOscSyncMode => {
                 // Toggle AbletonOSC transport sync on/off.

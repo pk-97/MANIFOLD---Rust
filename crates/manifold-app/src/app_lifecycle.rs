@@ -489,7 +489,6 @@ impl Application {
                 // Send loaded audio to content thread
                 self.send_content_cmd(ContentCommand::AudioLoaded {
                     preloaded: Box::new(result.preloaded),
-                    waveform: None,
                 });
 
                 if let Some(decoded) = result.waveform {
@@ -674,7 +673,6 @@ impl Application {
         // display the cursor is on, not on a dedicated output TV.
 
         let id = window.id();
-        let resolved_index = display_index.or(if monitors.len() > 1 { Some(1) } else { Some(0) });
 
         // Query headroom for the new output window immediately — don't wait
         // for an NSNotification. Without this, output_edr_headroom stays at 1.0
@@ -709,11 +707,7 @@ impl Application {
         let state = WindowState {
             window,
             surface: None, // NativeOutputPresenter owns the CAMetalLayer.
-            role: WindowRole::Output {
-                name: name.to_string(),
-                presentation,
-            },
-            display_index: resolved_index,
+            role: WindowRole::Output { presentation },
         };
 
         self.window_registry.add(id, state);

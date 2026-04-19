@@ -4,22 +4,16 @@
 //! crossbeam channel. Each variant represents an action that must
 //! execute on the content thread where PlaybackEngine and EditingService live.
 use manifold_core::project::Project;
-use manifold_core::{Beats, Bpm, ClipId, LayerId, Seconds};
+use manifold_core::{Beats, ClipId, LayerId, Seconds};
 use manifold_editing::command::Command;
 use manifold_media::export_config::ExportConfig;
-use manifold_playback::audio_decoder::DecodedAudio;
 use manifold_playback::audio_sync::PreloadedAudioData;
-use manifold_playback::stem_audio::PreloadedStemData;
 
-// FIXME(dead-code-audit): 9 variants + AudioLoaded.waveform field have no
-// producers/consumers; needs deeper investigation to decide keep-vs-delete.
-#[allow(dead_code)]
 pub enum ContentCommand {
     // ── Transport ──────────────────────────────────────────────────
     Play,
     Pause,
     Stop,
-    TogglePlayback,
     SeekTo(Seconds),
     SeekToBeat(Beats),
     SetRecording(bool),
@@ -38,12 +32,7 @@ pub enum ContentCommand {
     LoadProject(Box<Project>),
 
     // ── Settings ───────────────────────────────────────────────────
-    SetBpm(Bpm),
     SetFrameRate(f64),
-    /// Legacy: updates project setting for serialization compat.
-    /// Content thread always uses timer-based pacing; CAMetalLayer's
-    /// displaySyncEnabled handles presentation timing independently.
-    SetVsyncEnabled(bool),
 
     // ── GPU ────────────────────────────────────────────────────────
     /// Resize the content pipeline to `(width, height)` output resolution
@@ -54,23 +43,18 @@ pub enum ContentCommand {
     ResizeWorkspacePreview(u32, u32),
 
     // ── Transport/sync ─────────────────────────────────────────────
-    CycleClockAuthority,
     ToggleLink,
     ToggleMidiClock,
-    ToggleSyncOutput,
     SetMidiClockDevice(i32),
     ResetBpm,
 
     // ── Audio ──────────────────────────────────────────────────────
     AudioLoaded {
         preloaded: Box<PreloadedAudioData>,
-        waveform: Option<DecodedAudio>,
     },
     ResetAudio,
 
     // ── Stem audio ──────────────────────────────────────────────────
-    /// Apply pre-loaded stem data on the content thread (fast — no I/O).
-    StemAudioLoaded(Box<PreloadedStemData>),
     /// Toggle expand/collapse of stem playback.
     /// Port of C# StemAudioController.SetExpanded(bool).
     StemSetExpanded(bool),
@@ -101,11 +85,6 @@ pub enum ContentCommand {
     /// Closure runs on the content thread with &mut Project access.
     MutateProject(Box<dyn FnOnce(&mut Project) + Send>),
 
-    // ── Save support ──────────────────────────────────────────────
-    /// Request project clone for serialization. Content thread sends
-    /// the project through the provided oneshot sender.
-    RequestProjectSnapshot(std::sync::mpsc::Sender<Project>),
-
     // ── Percussion ─────────────────────────────────────────────────
     /// Trigger percussion import pipeline with the selected audio/JSON file path.
     /// Port of Unity: percussionImportController.OnImportPercussionMap(path).
@@ -130,10 +109,6 @@ pub enum ContentCommand {
     PercussionResetAlignment,
 
     // ── Ableton bridge ─────────────────────────────────────────────
-    /// Connect to Ableton Live via AbletonOSC.
-    AbletonConnect,
-    /// Disconnect from Ableton Live.
-    AbletonDisconnect,
     /// Map an Ableton macro to a MANIFOLD parameter.
     AbletonMapParam {
         target: manifold_core::ableton_mapping::AbletonMappingTarget,
@@ -143,8 +118,6 @@ pub enum ContentCommand {
     AbletonUnmapParam {
         target: manifold_core::ableton_mapping::AbletonMappingTarget,
     },
-    /// Re-validate all Ableton mappings against current session.
-    AbletonRebind,
     /// Re-discover Ableton session structure (tracks, devices, macros).
     AbletonRediscover,
     /// Toggle OSC sync mode between M4L and AbletonOSC.
@@ -209,7 +182,10 @@ pub enum ContentCommand {
     // ── Export ────────────────────────────────────────────────────
     /// Begin offline video export. Content thread enters export loop.
     StartExport(Box<ExportConfig>),
-    /// Cancel in-progress export.
+    /// Cancel in-progress export. Polled by the export loop at
+    /// content_export.rs:242. No UI producer yet — the cancel button/hotkey
+    /// is a known UX gap; leave the variant and plumbing ready to wire up.
+    #[allow(dead_code)]
     CancelExport,
 
     // ── Live Recording ───────────────────────────────────────────

@@ -1,19 +1,15 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-// FIXME(dead-code-audit): Output.name and display_index never read;
-// iter_mut/window_arcs/len/is_empty/contains methods never called.
-#[allow(dead_code)]
 /// Role of a window in the application.
 #[derive(Debug, Clone)]
 pub enum WindowRole {
     /// Main workspace window (UI, timeline, etc.)
     Workspace,
     /// External output window (projector, LED wall, secondary monitor)
-    Output { name: String, presentation: bool },
+    Output { presentation: bool },
 }
 
-#[allow(dead_code)]
 /// State for a single window.
 pub struct WindowState {
     pub window: Arc<winit::window::Window>,
@@ -22,7 +18,6 @@ pub struct WindowState {
     /// `OutputPresenterHandle` on a separate thread (macOS fullscreen path).
     pub surface: Option<manifold_gpu::GpuSurface>,
     pub role: WindowRole,
-    pub display_index: Option<usize>,
 }
 
 /// Registry of all open windows.
@@ -31,7 +26,6 @@ pub struct WindowRegistry {
     creation_order: Vec<winit::window::WindowId>,
 }
 
-#[allow(dead_code)]
 impl WindowRegistry {
     pub fn new() -> Self {
         Self {
@@ -65,34 +59,13 @@ impl WindowRegistry {
             .filter_map(move |id| self.windows.get(id).map(|state| (id, state)))
     }
 
-    /// Iterate mutable references in creation order.
-    pub fn iter_mut(
-        &mut self,
-    ) -> impl Iterator<Item = (&winit::window::WindowId, &mut WindowState)> {
-        let _order = &self.creation_order;
-        let windows = &mut self.windows;
-        // Can't easily do ordered mutable iteration with HashMap.
-        // Use a different approach: iterate the hashmap directly (unordered but safe).
-        windows.iter_mut()
-    }
-
     /// Get all Arc<Window> references (for request_redraw).
+    /// Non-macOS only — macOS wakes via CVDisplayLink per-window.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub fn window_arcs(&self) -> impl Iterator<Item = &Arc<winit::window::Window>> {
         self.creation_order
             .iter()
             .filter_map(move |id| self.windows.get(id).map(|s| &s.window))
-    }
-
-    pub fn len(&self) -> usize {
-        self.windows.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.windows.is_empty()
-    }
-
-    pub fn contains(&self, id: &winit::window::WindowId) -> bool {
-        self.windows.contains_key(id)
     }
 
     /// True if any Output-role window is currently open.
