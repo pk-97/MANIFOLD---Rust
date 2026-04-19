@@ -24,7 +24,6 @@ mod types;
 
 // Re-export all public types so external code paths remain identical.
 pub use device::GpuDevice;
-use encoder::ComputeBindCache;
 pub use encoder::GpuEncoder;
 pub use surface::{GpuDrawable, GpuSurface};
 pub use texture_pool::TexturePool;

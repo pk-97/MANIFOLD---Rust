@@ -4,7 +4,7 @@ use std::ffi::c_void;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{AnyThread, Encode, Encoding, RefEncode, class, msg_send};
+use objc2::{Encode, Encoding, RefEncode, class, msg_send};
 use objc2_foundation::NSString;
 use objc2_metal::{MTLCommandBuffer, MTLDrawable, MTLPixelFormat, MTLTexture};
 
