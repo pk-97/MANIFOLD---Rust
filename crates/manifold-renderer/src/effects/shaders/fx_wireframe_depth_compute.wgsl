@@ -72,52 +72,7 @@ fn cs_analysis(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 1: HeuristicDepth
-// ---------------------------------------------------------------------------
-@compute @workgroup_size(16, 16)
-fn cs_heuristic_depth(@builtin(global_invocation_id) id: vec3<u32>) {
-    let dims = textureDimensions(output_tex);
-    if id.x >= u32(dims.x) || id.y >= u32(dims.y) { return; }
-    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
-    let texel = vec2<f32>(u.texel_x, u.texel_y);
-
-    let c  = textureSampleLevel(main_tex, samp, uv, 0.0).r;
-    let tl = textureSampleLevel(main_tex, samp, uv + texel * vec2<f32>(-1.0, -1.0), 0.0).r;
-    let tc = textureSampleLevel(main_tex, samp, uv + texel * vec2<f32>( 0.0, -1.0), 0.0).r;
-    let tr = textureSampleLevel(main_tex, samp, uv + texel * vec2<f32>( 1.0, -1.0), 0.0).r;
-    let ml = textureSampleLevel(main_tex, samp, uv + texel * vec2<f32>(-1.0,  0.0), 0.0).r;
-    let mr = textureSampleLevel(main_tex, samp, uv + texel * vec2<f32>( 1.0,  0.0), 0.0).r;
-    let bl = textureSampleLevel(main_tex, samp, uv + texel * vec2<f32>(-1.0,  1.0), 0.0).r;
-    let bc = textureSampleLevel(main_tex, samp, uv + texel * vec2<f32>( 0.0,  1.0), 0.0).r;
-    let br = textureSampleLevel(main_tex, samp, uv + texel * vec2<f32>( 1.0,  1.0), 0.0).r;
-
-    let gx = -tl - 2.0 * ml - bl + tr + 2.0 * mr + br;
-    let gy = -tl - 2.0 * tc - tr + bl + 2.0 * bc + br;
-    let edge = clamp(sqrt(gx * gx + gy * gy) * 0.18, 0.0, 1.0);
-
-    let prev_luma = textureSampleLevel(prev_analysis_tex, samp, uv, 0.0).r;
-    let motion = clamp(abs(c - prev_luma) * 2.0, 0.0, 1.0);
-    let luma_depth = 1.0 - c;
-    let neighborhood_mean = (tl + tc + tr + ml + c + mr + bl + bc + br) / 9.0;
-    let local_contrast = clamp(abs(c - neighborhood_mean) * 2.0, 0.0, 1.0);
-    let structure = clamp(edge * 0.9 + local_contrast * 0.6, 0.0, 1.0);
-
-    let raw_depth = clamp(luma_depth * 0.78 + structure * 0.20 + motion * 0.10, 0.0, 1.0);
-    let prev_depth   = textureSampleLevel(prev_depth_tex, samp, uv, 0.0).r;
-    let prev_depth_l = textureSampleLevel(prev_depth_tex, samp, uv - vec2<f32>(texel.x, 0.0), 0.0).r;
-    let prev_depth_r = textureSampleLevel(prev_depth_tex, samp, uv + vec2<f32>(texel.x, 0.0), 0.0).r;
-    let prev_depth_b = textureSampleLevel(prev_depth_tex, samp, uv - vec2<f32>(0.0, texel.y), 0.0).r;
-    let prev_depth_t = textureSampleLevel(prev_depth_tex, samp, uv + vec2<f32>(0.0, texel.y), 0.0).r;
-    let prev_depth_blur = (prev_depth * 2.0 + prev_depth_l + prev_depth_r + prev_depth_b + prev_depth_t) / 6.0;
-    let smooth_depth = mix(raw_depth, prev_depth_blur, u.temporal_smooth);
-
-    let confidence_raw = clamp(luma_depth * 0.60 + structure * 0.30 + motion * 0.10, 0.0, 1.0);
-    let confidence = smoothstep(0.35, 0.75, confidence_raw);
-    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(smooth_depth, smooth_depth, smooth_depth, confidence));
-}
-
-// ---------------------------------------------------------------------------
-// Pass 2: WireMask — compute dpdx/dpdy via finite differences
+// Pass 1: WireMask — compute dpdx/dpdy via finite differences
 // ---------------------------------------------------------------------------
 
 // Catmull-Rom bicubic sampling — C1-continuous interpolation from the low-res
@@ -346,7 +301,7 @@ fn cs_wire_mask(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 3: UpdateHistory
+// Pass 2: UpdateHistory
 // ---------------------------------------------------------------------------
 @compute @workgroup_size(16, 16)
 fn cs_update_history(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -380,7 +335,7 @@ fn cs_update_history(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 4: Composite
+// Pass 3: Composite
 // ---------------------------------------------------------------------------
 fn blend_add(base_col: vec3<f32>, blend_col: vec3<f32>) -> vec3<f32> {
     return clamp(base_col + blend_col, vec3<f32>(0.0), vec3<f32>(1.0));
@@ -432,7 +387,7 @@ fn cs_composite(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 5: DnnDepthPost
+// Pass 4: DnnDepthPost
 // ---------------------------------------------------------------------------
 @compute @workgroup_size(16, 16)
 fn cs_dnn_depth_post(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -448,7 +403,7 @@ fn cs_dnn_depth_post(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 6: FlowEstimate
+// Pass 5: FlowEstimate
 // ---------------------------------------------------------------------------
 @compute @workgroup_size(16, 16)
 fn cs_flow_estimate(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -479,7 +434,7 @@ fn cs_flow_estimate(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 7: FlowAdvectCoord
+// Pass 6: FlowAdvectCoord
 // ---------------------------------------------------------------------------
 @compute @workgroup_size(16, 16)
 fn cs_flow_advect_coord(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -574,7 +529,7 @@ fn cs_flow_advect_coord(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 8: InitMeshCoord
+// Pass 7: InitMeshCoord
 // ---------------------------------------------------------------------------
 @compute @workgroup_size(16, 16)
 fn cs_init_mesh_coord(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -585,7 +540,7 @@ fn cs_init_mesh_coord(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 9: MeshRegularize
+// Pass 8: MeshRegularize
 // ---------------------------------------------------------------------------
 @compute @workgroup_size(16, 16)
 fn cs_mesh_regularize(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -653,7 +608,7 @@ fn cs_mesh_regularize(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 10: MeshCellAffine
+// Pass 9: MeshCellAffine
 // ---------------------------------------------------------------------------
 @compute @workgroup_size(16, 16)
 fn cs_mesh_cell_affine(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -711,7 +666,7 @@ fn cs_mesh_cell_affine(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 11: SemanticMask
+// Pass 10: SemanticMask
 // ---------------------------------------------------------------------------
 @compute @workgroup_size(16, 16)
 fn cs_semantic_mask(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -745,7 +700,7 @@ fn cs_semantic_mask(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 12: MeshFaceWarp
+// Pass 11: MeshFaceWarp
 // ---------------------------------------------------------------------------
 @compute @workgroup_size(16, 16)
 fn cs_mesh_face_warp(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -794,7 +749,7 @@ fn cs_mesh_face_warp(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 13: SurfaceCacheUpdate
+// Pass 12: SurfaceCacheUpdate
 // ---------------------------------------------------------------------------
 @compute @workgroup_size(16, 16)
 fn cs_surface_cache_update(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -828,7 +783,7 @@ fn cs_surface_cache_update(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 14: FlowHygiene
+// Pass 13: FlowHygiene
 // ---------------------------------------------------------------------------
 fn accumulate_flow_sample(
     s: vec4<f32>,

@@ -128,34 +128,24 @@ enum WorkerMode {
 
 // WireframeDepthFX.cs line 21-35
 const PASS_ANALYSIS: usize = 0;
-const PASS_HEURISTIC_DEPTH: usize = 1;
-const PASS_WIREFRAME_MASK: usize = 2;
-const PASS_UPDATE_HISTORY: usize = 3;
-const PASS_COMPOSITE: usize = 4;
-const PASS_DNN_DEPTH_POST: usize = 5;
-const PASS_FLOW_ESTIMATE: usize = 6;
-const PASS_FLOW_ADVECT_COORD: usize = 7;
-const PASS_INIT_MESH_COORD: usize = 8;
-const PASS_MESH_REGULARIZE: usize = 9;
-const PASS_MESH_CELL_AFFINE: usize = 10;
-const PASS_SEMANTIC_MASK: usize = 11;
-const PASS_MESH_FACE_WARP: usize = 12;
-const PASS_SURFACE_CACHE_UPDATE: usize = 13;
-const PASS_FLOW_HYGIENE: usize = 14;
+const PASS_WIREFRAME_MASK: usize = 1;
+const PASS_UPDATE_HISTORY: usize = 2;
+const PASS_COMPOSITE: usize = 3;
+const PASS_DNN_DEPTH_POST: usize = 4;
+const PASS_FLOW_ESTIMATE: usize = 5;
+const PASS_FLOW_ADVECT_COORD: usize = 6;
+const PASS_INIT_MESH_COORD: usize = 7;
+const PASS_MESH_REGULARIZE: usize = 8;
+const PASS_MESH_CELL_AFFINE: usize = 9;
+const PASS_SEMANTIC_MASK: usize = 10;
+const PASS_MESH_FACE_WARP: usize = 11;
+const PASS_SURFACE_CACHE_UPDATE: usize = 12;
+const PASS_FLOW_HYGIENE: usize = 13;
 
 // WireframeDepthFX.cs line 36-39
 const MAX_ANALYSIS_DIM: u32 = 360;
 const NATIVE_UPDATE_INTERVAL_DNN: i64 = 1;
-const NATIVE_UPDATE_INTERVAL_HEURISTIC: i64 = 1;
 const NATIVE_UPDATE_INTERVAL_SUBJECT: i64 = 1;
-
-// WireframeDepthFX.cs line 41-45
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
-enum DepthSourceMode {
-    Heuristic = 0,
-    Dnn = 1,
-}
 
 // WireframeDepthFX.cs line 47-90 — OwnerState
 // ARGB32  → Rgba8Unorm
@@ -276,20 +266,19 @@ impl WireframeDepthFX {
         let compute_wgsl = include_str!("shaders/fx_wireframe_depth_compute.wgsl");
         let cs_entry_points = [
             "cs_analysis",             // 0
-            "cs_heuristic_depth",      // 1
-            "cs_wire_mask",            // 2
-            "cs_update_history",       // 3
-            "cs_composite",            // 4
-            "cs_dnn_depth_post",       // 5
-            "cs_flow_estimate",        // 6
-            "cs_flow_advect_coord",    // 7
-            "cs_init_mesh_coord",      // 8
-            "cs_mesh_regularize",      // 9
-            "cs_mesh_cell_affine",     // 10
-            "cs_semantic_mask",        // 11
-            "cs_mesh_face_warp",       // 12
-            "cs_surface_cache_update", // 13
-            "cs_flow_hygiene",         // 14
+            "cs_wire_mask",            // 1
+            "cs_update_history",       // 2
+            "cs_composite",            // 3
+            "cs_dnn_depth_post",       // 4
+            "cs_flow_estimate",        // 5
+            "cs_flow_advect_coord",    // 6
+            "cs_init_mesh_coord",      // 7
+            "cs_mesh_regularize",      // 8
+            "cs_mesh_cell_affine",     // 9
+            "cs_semantic_mask",        // 10
+            "cs_mesh_face_warp",       // 11
+            "cs_surface_cache_update", // 12
+            "cs_flow_hygiene",         // 13
         ];
         let compute_pipelines: Vec<manifold_gpu::GpuComputePipeline> = cs_entry_points
             .iter()
@@ -1086,7 +1075,6 @@ impl WireframeDepthFX {
         gpu: &mut GpuEncoder,
         source_tex: &manifold_gpu::GpuTexture,
         owner_key: i64,
-        mode: DepthSourceMode,
         subject_isolation: f32,
         frame_count: i64,
     ) {
@@ -1096,23 +1084,12 @@ impl WireframeDepthFX {
         };
 
         // WireframeDepthFX.cs line 465-472
-        let wants_depth = mode == DepthSourceMode::Dnn;
-        let wants_flow = true;
         let wants_subject = self.dnn_subject_api_available
-            && mode == DepthSourceMode::Dnn
             && subject_isolation > 0.02
             && frame_count - state.last_subject_request_frame >= NATIVE_UPDATE_INTERVAL_SUBJECT;
-        if !wants_depth && !wants_flow && !wants_subject {
-            return;
-        }
 
         // WireframeDepthFX.cs line 475-478
-        let min_interval = if mode == DepthSourceMode::Dnn {
-            NATIVE_UPDATE_INTERVAL_DNN
-        } else {
-            NATIVE_UPDATE_INTERVAL_HEURISTIC
-        };
-        if frame_count - state.last_native_request_frame < min_interval {
+        if frame_count - state.last_native_request_frame < NATIVE_UPDATE_INTERVAL_DNN {
             return;
         }
 
@@ -1141,8 +1118,8 @@ impl WireframeDepthFX {
             copy_ah,
         );
 
-        state.native_request_wants_depth = wants_depth;
-        state.native_request_wants_flow = wants_flow;
+        state.native_request_wants_depth = true;
+        state.native_request_wants_flow = true;
         state.native_request_wants_subject = wants_subject;
         state.last_native_request_frame = frame_count;
         if wants_subject {
@@ -1190,52 +1167,6 @@ impl WireframeDepthFX {
             state.dnn_has_subject_mask = true;
             state.dnn_subject_dirty = true;
         }
-    }
-
-    // WireframeDepthFX.cs line 894-913 — EstimateDepthHeuristic
-    fn estimate_depth_heuristic(
-        &self,
-        gpu: &mut GpuEncoder,
-        analysis_tex: &manifold_gpu::GpuTexture,
-        state: &mut OwnerState,
-        _temporal_smooth: f32,
-        uniforms: &WireUniforms,
-    ) {
-        let aw = state.analysis_width;
-        let ah = state.analysis_height;
-        let depth_next = Self::create_transient(
-            gpu,
-            aw,
-            ah,
-            manifold_gpu::GpuTextureFormat::Rgba16Float,
-            "WD DepthNext",
-        );
-
-        // PASS_HEURISTIC_DEPTH: analysis → depthNext
-        self.encode_pass(
-            gpu,
-            PASS_HEURISTIC_DEPTH,
-            uniforms,
-            analysis_tex,
-            &state.previous_analysis_tex.texture,
-            &state.depth_tex.texture,
-            &self.dummy_tex,
-            &self.dummy_tex,
-            &self.dummy_tex,
-            &self.dummy_tex,
-            &self.dummy_tex,
-            &self.dummy_tex,
-            &self.dummy_tex,
-            &self.dummy_tex,
-            &self.dummy_tex,
-            &depth_next.texture,
-            aw,
-            ah,
-        );
-
-        // Graphics.Blit(depthNext, state.depthTex) — copy
-        Self::encode_copy(gpu, &depth_next.texture, &state.depth_tex.texture, aw, ah);
-        Self::release_transient(gpu, depth_next);
     }
 
     // WireframeDepthFX.cs line 420-453 — TryEstimateDepthDnn
@@ -1723,7 +1654,6 @@ impl PostProcessEffect for WireframeDepthFX {
         let depth_scale = fx.param_values.get(3).copied().unwrap_or(1.0);
         let temporal_smooth = fx.param_values.get(4).copied().unwrap_or(0.8);
         let persistence = 0.82; // hardcoded default (Persist param removed from UI)
-        let depth_mode = DepthSourceMode::Dnn; // always DNN
         let subject_isolation = fx
             .param_values
             .get(5)
@@ -1994,44 +1924,24 @@ impl PostProcessEffect for WireframeDepthFX {
                     gpu,
                     &analysis_rt.texture,
                     owner_key,
-                    depth_mode,
                     subject_isolation,
                     ctx.frame_count,
                 );
             }
         }
-        // WireframeDepthFX.cs line 396-407 — depth estimation
+        // WireframeDepthFX.cs line 396-407 — depth estimation (DNN only)
         // Temporarily remove state to avoid borrow conflict
         // (self.method + self.owner_states)
-        let dnn_used = if depth_mode == DepthSourceMode::Dnn && dnn_available {
+        if dnn_available {
             let mut state = self.owner_states.remove(&owner_key).unwrap();
-            let result =
-                self.try_estimate_depth_dnn(gpu, &mut state, temporal_smooth, &uniforms_analysis);
+            self.try_estimate_depth_dnn(gpu, &mut state, temporal_smooth, &uniforms_analysis);
             self.owner_states.insert(owner_key, state);
-            result
-        } else {
-            false
-        };
-        if !dnn_used {
-            if depth_mode == DepthSourceMode::Dnn
-                && !self.warned_missing_dnn
-                && !self.dnn_backend_available
-            {
-                log::warn!(
-                    "[WireframeDepthFX] DNN depth path requested, but no \
-                     backend is configured. Falling back to heuristic depth."
-                );
-                self.warned_missing_dnn = true;
-            }
-            let mut state = self.owner_states.remove(&owner_key).unwrap();
-            self.estimate_depth_heuristic(
-                gpu,
-                &analysis_rt.texture,
-                &mut state,
-                temporal_smooth,
-                &uniforms_analysis,
+        } else if !self.warned_missing_dnn {
+            log::warn!(
+                "[WireframeDepthFX] DNN depth path requested, but no \
+                 backend is configured. Effect will render without depth."
             );
-            self.owner_states.insert(owner_key, state);
+            self.warned_missing_dnn = true;
         }
         // WireframeDepthFX.cs line 409-412 — UpdateFlowLock or blit analysis →
         //   previousAnalysisTex
@@ -2083,12 +1993,11 @@ impl PostProcessEffect for WireframeDepthFX {
         );
         {
             let state = self.owner_states.get(&owner_key).unwrap();
-            let subject_mask_tex =
-                if depth_mode == DepthSourceMode::Dnn && state.dnn_has_subject_mask {
-                    &state.dnn_subject_texture
-                } else {
-                    &self.dummy_tex
-                };
+            let subject_mask_tex = if state.dnn_has_subject_mask {
+                &state.dnn_subject_texture
+            } else {
+                &self.dummy_tex
+            };
             self.encode_pass(
                 gpu,
                 PASS_WIREFRAME_MASK,
