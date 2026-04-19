@@ -352,11 +352,10 @@ impl Default for GpuFenceWaiter {
 impl GpuFenceWaiter {
     /// Create a new fence waiter.
     ///
-    /// Uses the Metal-provided shared listener which fires notification blocks
-    /// on a private dispatch queue. Shared across all waiters — this is fine
-    /// for our use case (we just need a callback when the event signals).
+    /// `[MTLSharedEventListener new]` — Metal provisions a default internal
+    /// dispatch queue for firing notification blocks.
     pub fn new() -> Self {
-        let listener = unsafe { MTLSharedEventListener::sharedListener() };
+        let listener = MTLSharedEventListener::new();
         Self { listener }
     }
 
