@@ -19,11 +19,9 @@ tiff = "0.9"
 naga = { version = "28", features = ["wgsl-in", "msl-out"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-metal = "0.33"
 core-text = "20"
 core-graphics = "0.23"
 core-foundation = "0.9"
-objc = "0.2"
 
 [dev-dependencies]
 
