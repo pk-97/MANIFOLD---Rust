@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = [
+    "manifold-analyzer-plugin",
+    "xtask",
+]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
