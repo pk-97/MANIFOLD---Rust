@@ -5,6 +5,11 @@
 //! SPIRV-Cross compiles optimized SPIR-V to MSL with explicit resource binding indices
 //! matching the SlotMap assignments. Metal compiles MSL at runtime.
 
+use objc2::rc::Retained;
+use objc2::runtime::ProtocolObject;
+use objc2_foundation::NSString;
+use objc2_metal::{MTLFunction, MTLLibrary};
+
 use super::*;
 use spirv_cross2::Compiler;
 use spirv_cross2::compile::msl;
@@ -691,27 +696,30 @@ fn collect_calls_from_block(
 /// Find an entry function in a Metal library. Tries the exact name first,
 /// then looks for naga-mangled versions (e.g. "cs_main" → "cs_main_").
 pub(super) fn find_entry_function(
-    library: &metal::LibraryRef,
+    library: &ProtocolObject<dyn MTLLibrary>,
     entry_name: &str,
     available: &[String],
     label: &str,
     stage: &str,
-) -> metal::Function {
+) -> Retained<ProtocolObject<dyn MTLFunction>> {
     // Try exact name
-    if let Ok(f) = library.get_function(entry_name, None) {
+    let entry_ns = NSString::from_str(entry_name);
+    if let Some(f) = library.newFunctionWithName(&entry_ns) {
         return f;
     }
     // Try with underscore suffix (naga sometimes appends)
     let mangled = format!("{entry_name}_");
-    if let Ok(f) = library.get_function(&mangled, None) {
+    let mangled_ns = NSString::from_str(&mangled);
+    if let Some(f) = library.newFunctionWithName(&mangled_ns) {
         return f;
     }
     // Try matching prefix
     for name in available {
-        if name.starts_with(entry_name)
-            && let Ok(f) = library.get_function(name, None)
-        {
-            return f;
+        if name.starts_with(entry_name) {
+            let candidate = NSString::from_str(name);
+            if let Some(f) = library.newFunctionWithName(&candidate) {
+                return f;
+            }
         }
     }
     panic!("{label}: {stage} function '{entry_name}' not found. Available: {available:?}");

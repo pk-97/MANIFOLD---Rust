@@ -1,5 +1,21 @@
 //! GpuDevice — native Metal device + command queue for the content thread.
 
+use std::ffi::c_void;
+use std::ptr::NonNull;
+
+use objc2::rc::Retained;
+use objc2::runtime::ProtocolObject;
+use objc2::{Encoding, RefEncode};
+use objc2_foundation::NSString;
+use objc2_metal::{
+    MTLBinaryArchive, MTLBuffer, MTLCommandBuffer, MTLCommandQueue, MTLCompileOptions,
+    MTLComputePipelineDescriptor, MTLDepthStencilDescriptor, MTLDevice, MTLHeap, MTLHeapDescriptor,
+    MTLLanguageVersion, MTLLibrary, MTLPipelineOption, MTLPrimitiveTopologyClass,
+    MTLRenderPipelineDescriptor, MTLResource, MTLResourceOptions, MTLSamplerDescriptor,
+    MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureType, MTLTextureUsage,
+    MTLVertexDescriptor, MTLVertexStepFunction,
+};
+
 use super::encoder::{EncoderState, RenderBindCache};
 use super::*;
 use crate::types::*;
@@ -76,19 +92,9 @@ use super::shader_compiler::{
 };
 
 /// Native Metal device + command queue for the content thread.
-/// Created once at startup. Owns the Metal device and a dedicated command queue
-/// for content-thread GPU work (separate from the UI thread's queue).
-///
-/// Optionally holds a `GpuPipelineArchive` for caching compiled pipeline binaries
-/// to disk. When present, all `create_compute_pipeline` calls automatically use
-/// the archive — no caller changes needed.
-///
-/// Pipeline object cache: compiled pipelines are cached by shader hash so that
-/// duplicate `create_*_pipeline()` calls (e.g. generator pre-warm + first use)
-/// return a clone of the cached object — zero WGSL→MSL or Metal compilation.
 pub struct GpuDevice {
-    device: metal::Device,
-    queue: metal::CommandQueue,
+    device: Retained<ProtocolObject<dyn MTLDevice>>,
+    queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
     /// Binary archive for pipeline caching. Protected by Mutex for Sync.
     /// Only locked during pipeline creation (startup), never on the hot path.
     archive: std::sync::Mutex<Option<archive::GpuPipelineArchive>>,
@@ -102,7 +108,7 @@ pub struct GpuDevice {
     clear_pipelines: std::sync::OnceLock<ClearPipelines>,
 }
 
-// Safety: metal::Device and metal::CommandQueue are thread-safe (Metal guarantee).
+// Safety: MTLDevice and MTLCommandQueue are thread-safe (Metal guarantee).
 // The archive Mutex provides the synchronization for the archive field.
 unsafe impl Send for GpuDevice {}
 unsafe impl Sync for GpuDevice {}
@@ -117,8 +123,10 @@ impl GpuDevice {
     /// Create from the system default Metal device.
     /// Uses a dedicated command queue for content-thread work.
     pub fn new() -> Self {
-        let device = metal::Device::system_default().expect("No Metal device found");
-        let queue = device.new_command_queue();
+        let device = objc2_metal::MTLCreateSystemDefaultDevice().expect("No Metal device found");
+        let queue = device
+            .newCommandQueue()
+            .expect("Failed to create command queue");
         Self {
             device,
             queue,
@@ -131,55 +139,46 @@ impl GpuDevice {
     }
 
     /// Set the default Metal capture scope to the device so that Xcode's
-    /// GPU frame capture grabs command buffers from ALL threads (content +
-    /// UI), not just the main thread's command queue.
+    /// GPU frame capture grabs command buffers from ALL threads.
     pub fn install_device_capture_scope(&self) {
-        use objc2::runtime::AnyObject;
-        use objc2::{class, msg_send};
-        unsafe {
-            let mgr_cls = class!(MTLCaptureManager);
-            let manager: *mut AnyObject = msg_send![mgr_cls, sharedCaptureManager];
-            let device_ptr: *mut AnyObject = self.raw_device_ptr() as *mut AnyObject;
-            let scope: *mut AnyObject =
-                msg_send![manager, newCaptureScopeWithDevice: device_ptr];
-            let _: () = msg_send![manager, setDefaultCaptureScope: scope];
-        }
+        use objc2_metal::{MTLCaptureManager, MTLCaptureScope};
+        let manager = unsafe { MTLCaptureManager::sharedCaptureManager() };
+        let scope = unsafe { manager.newCaptureScopeWithDevice(&self.device) };
+        let scope_proto = ProtocolObject::from_ref(&*scope);
+        unsafe { manager.setDefaultCaptureScope(Some(scope_proto)) };
     }
 
     /// Raw Metal device reference (for advanced interop).
-    pub fn raw_device(&self) -> &metal::DeviceRef {
+    pub fn raw_device(&self) -> &ProtocolObject<dyn MTLDevice> {
         &self.device
     }
 
     /// Raw Metal device pointer as `*mut c_void` (an `id<MTLDevice>`).
     /// Used for FFI interop with native Objective-C plugins.
     pub fn raw_device_ptr(&self) -> *mut std::ffi::c_void {
-        use metal::foreign_types::ForeignType;
-        self.device.as_ptr() as *mut std::ffi::c_void
+        Retained::as_ptr(&self.device) as *mut std::ffi::c_void
     }
 
     /// Raw Metal command queue reference (for advanced interop).
-    pub fn raw_queue(&self) -> &metal::CommandQueueRef {
+    pub fn raw_queue(&self) -> &ProtocolObject<dyn MTLCommandQueue> {
         &self.queue
     }
 
     /// Clone the owned Metal command queue handle.
     /// Multiple threads can submit command buffers to the same queue; Metal
     /// serializes them in submission order on that queue.
-    pub fn clone_queue(&self) -> metal::CommandQueue {
+    pub fn clone_queue(&self) -> Retained<ProtocolObject<dyn MTLCommandQueue>> {
         self.queue.clone()
     }
 
     /// Create a GPU texture via device allocation (kernel call per texture).
     /// Prefer `TexturePool::acquire()` for transient textures.
     pub fn create_texture(&self, desc: &GpuTextureDesc) -> GpuTexture {
-        use metal::foreign_types::ForeignType;
         let mtl_desc = Self::build_mtl_texture_desc(desc);
-        let raw = self.device.new_texture(&mtl_desc);
-        assert!(
-            !raw.as_ptr().is_null(),
-            "Metal: texture allocation failed — GPU memory exhausted",
-        );
+        let raw = self
+            .device
+            .newTextureWithDescriptor(&mtl_desc)
+            .expect("Metal: texture allocation failed — GPU memory exhausted");
         GpuTexture {
             raw,
             width: desc.width,
@@ -191,14 +190,12 @@ impl GpuDevice {
 
     /// Create a GPU buffer with private storage (GPU-only).
     pub fn create_buffer(&self, size: u64) -> GpuBuffer {
-        use metal::foreign_types::ForeignType;
         let raw = self
             .device
-            .new_buffer(size, metal::MTLResourceOptions::StorageModePrivate);
-        assert!(
-            !raw.as_ptr().is_null(),
-            "Metal: buffer allocation failed ({size} bytes) — GPU memory exhausted",
-        );
+            .newBufferWithLength_options(size as usize, MTLResourceOptions::StorageModePrivate)
+            .unwrap_or_else(|| {
+                panic!("Metal: buffer allocation failed ({size} bytes) — GPU memory exhausted")
+            });
         GpuBuffer {
             raw,
             size,
@@ -209,15 +206,15 @@ impl GpuDevice {
     /// Create a GPU buffer with shared memory (CPU+GPU coherent).
     /// Returns a buffer with a persistent mapped pointer for zero-copy writes.
     pub fn create_buffer_shared(&self, size: u64) -> GpuBuffer {
-        use metal::foreign_types::ForeignType;
         let raw = self
             .device
-            .new_buffer(size, metal::MTLResourceOptions::StorageModeShared);
-        assert!(
-            !raw.as_ptr().is_null(),
-            "Metal: shared buffer allocation failed ({size} bytes) — GPU memory exhausted",
-        );
-        let ptr = raw.contents() as *mut u8;
+            .newBufferWithLength_options(size as usize, MTLResourceOptions::StorageModeShared)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Metal: shared buffer allocation failed ({size} bytes) — GPU memory exhausted"
+                )
+            });
+        let ptr = unsafe { raw.contents() }.as_ptr() as *mut u8;
         GpuBuffer {
             raw,
             size,
@@ -227,45 +224,52 @@ impl GpuDevice {
 
     /// Create a sampler state.
     pub fn create_sampler(&self, desc: &GpuSamplerDesc) -> GpuSampler {
-        let mtl_desc = metal::SamplerDescriptor::new();
-        mtl_desc.set_min_filter(to_mtl_filter(desc.min_filter));
-        mtl_desc.set_mag_filter(to_mtl_filter(desc.mag_filter));
-        mtl_desc.set_mip_filter(to_mtl_mip_filter(desc.mip_filter));
-        mtl_desc.set_address_mode_s(to_mtl_address(desc.address_mode_u));
-        mtl_desc.set_address_mode_t(to_mtl_address(desc.address_mode_v));
-        mtl_desc.set_address_mode_r(to_mtl_address(desc.address_mode_w));
-        if let Some(compare) = desc.compare {
-            mtl_desc.set_compare_function(to_mtl_compare_function(compare));
+        let mtl_desc = unsafe {
+            use objc2::AnyThread;
+            MTLSamplerDescriptor::init(MTLSamplerDescriptor::alloc())
+        };
+        unsafe {
+            mtl_desc.setMinFilter(to_mtl_filter(desc.min_filter));
+            mtl_desc.setMagFilter(to_mtl_filter(desc.mag_filter));
+            mtl_desc.setMipFilter(to_mtl_mip_filter(desc.mip_filter));
+            mtl_desc.setSAddressMode(to_mtl_address(desc.address_mode_u));
+            mtl_desc.setTAddressMode(to_mtl_address(desc.address_mode_v));
+            mtl_desc.setRAddressMode(to_mtl_address(desc.address_mode_w));
+            if let Some(compare) = desc.compare {
+                mtl_desc.setCompareFunction(to_mtl_compare_function(compare));
+            }
         }
-        let raw = self.device.new_sampler(&mtl_desc);
+        let raw = self
+            .device
+            .newSamplerStateWithDescriptor(&mtl_desc)
+            .expect("newSamplerStateWithDescriptor failed");
         GpuSampler { raw }
     }
 
     /// Upload pixel data to a texture synchronously (CPU → GPU).
-    /// Uses Metal `replace_region` which works on all storage modes on macOS.
-    /// Best for one-time uploads during initialization (font atlases, LUTs).
     pub fn upload_texture(&self, texture: &GpuTexture, data: &[u8]) {
+        use objc2_metal::{MTLOrigin, MTLRegion, MTLSize};
         let bpp = texture.format.bytes_per_pixel();
         let bytes_per_row = texture.width as u64 * bpp as u64;
-        let region = metal::MTLRegion::new_2d(0, 0, texture.width as _, texture.height as _);
-        texture.raw.replace_region(
-            region,
-            0, // mipmap level
-            data.as_ptr() as *const _,
-            bytes_per_row,
-        );
+        let region = MTLRegion {
+            origin: MTLOrigin { x: 0, y: 0, z: 0 },
+            size: MTLSize {
+                width: texture.width as usize,
+                height: texture.height as usize,
+                depth: 1,
+            },
+        };
+        unsafe {
+            texture.raw.replaceRegion_mipmapLevel_withBytes_bytesPerRow(
+                region,
+                0,
+                NonNull::new(data.as_ptr() as *mut c_void).unwrap(),
+                bytes_per_row as usize,
+            );
+        }
     }
 
     /// Create a compute pipeline from WGSL source (full f32 precision).
-    ///
-    /// 1. Parse WGSL → naga Module
-    /// 2. Introspect bindings → build slot map
-    /// 3. Compile naga → MSL with slot assignments
-    /// 4. Create MTLLibrary from MSL source
-    /// 5. Create MTLComputePipelineState from entry function
-    ///
-    /// If a binary archive is loaded on this device, the pipeline is
-    /// automatically cached — archive lookup on hit, recompile + add on miss.
     pub fn create_compute_pipeline(
         &self,
         wgsl_source: &str,
@@ -276,15 +280,6 @@ impl GpuDevice {
     }
 
     /// Create a compute pipeline with half-precision (f16) ALU optimization.
-    ///
-    /// Same as `create_compute_pipeline` but applies spirv-opt
-    /// `RelaxFloatOps` + `ConvertRelaxedToHalf` passes, converting all f32
-    /// ALU ops to f16 (`half`) in the generated MSL. Apple Silicon GPUs
-    /// execute 2× f16 ops per cycle.
-    ///
-    /// **Only use for shaders without temporal accumulation or UV-precision
-    /// sensitivity** — e.g. bloom, blend modes, color grading. NOT for fluid
-    /// simulation, feedback effects, or displacement mapping.
     pub fn create_compute_pipeline_half(
         &self,
         wgsl_source: &str,
@@ -335,49 +330,89 @@ impl GpuDevice {
             }
         };
 
-        let compile_opts = metal::CompileOptions::new();
-        compile_opts.set_language_version(metal::MTLLanguageVersion::V2_4);
-        compile_opts.set_fast_math_enabled(true);
-        let library = self
-            .device
-            .new_library_with_source(&msl_source, &compile_opts)
-            .unwrap_or_else(|e| {
-                panic!("{label}: MTL library compile error: {e}\nMSL source:\n{msl_source}")
-            });
+        let compile_opts = unsafe {
+            use objc2::AnyThread;
+            MTLCompileOptions::init(MTLCompileOptions::alloc())
+        };
+        unsafe {
+            compile_opts.setLanguageVersion(MTLLanguageVersion::Version2_4);
+            compile_opts.setMathMode(objc2_metal::MTLMathMode::Fast);
+        }
+        let msl_ns = NSString::from_str(&msl_source);
+        let library = unsafe {
+            self.device
+                .newLibraryWithSource_options_error(&msl_ns, Some(&compile_opts))
+        }
+        .unwrap_or_else(|e| {
+            panic!(
+                "{label}: MTL library compile error: {}\nMSL source:\n{msl_source}",
+                e.localizedDescription()
+            )
+        });
 
-        let available = library.function_names();
-        let function = find_entry_function(&library, &msl_entry_name, &available, label, "compute");
+        let available_ns_names = unsafe { library.functionNames() };
+        let available: Vec<String> = available_ns_names.iter().map(|s| s.to_string()).collect();
+        let function =
+            find_entry_function(&library, &msl_entry_name, &available, label, "compute");
 
         // Use descriptor-based creation when archive is available — enables
         // binary archive lookup (near-instant on cache hit) and auto-populates
         // the archive on miss.
         let mut archive_guard = self.archive.lock().unwrap();
         let state = if let Some(ref mut arch) = *archive_guard {
-            let desc = metal::ComputePipelineDescriptor::new();
-            desc.set_compute_function(Some(&function));
-            desc.set_label(label);
-            desc.set_binary_archives(&[arch.raw_archive()]);
+            let desc = unsafe {
+                use objc2::AnyThread;
+                MTLComputePipelineDescriptor::init(MTLComputePipelineDescriptor::alloc())
+            };
+            unsafe {
+                desc.setComputeFunction(Some(&function));
+                desc.setLabel(Some(&NSString::from_str(label)));
+                let archives = objc2_foundation::NSArray::from_retained_slice(&[
+                    arch.raw_archive().clone(),
+                ]);
+                desc.setBinaryArchives(Some(&archives));
+            }
 
-            let state = self
-                .device
-                .new_compute_pipeline_state(&desc)
-                .unwrap_or_else(|e| panic!("{label}: MTL compute PSO error: {e}"));
+            let state = unsafe {
+                self.device
+                    .newComputePipelineStateWithDescriptor_options_reflection_error(
+                        &desc,
+                        MTLPipelineOption::None,
+                        None,
+                    )
+            }
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{label}: MTL compute PSO error: {}",
+                    e.localizedDescription()
+                )
+            });
 
             if !arch.was_added(hash) {
-                if let Err(e) = arch
-                    .raw_archive()
-                    .add_compute_pipeline_functions_with_descriptor(&desc)
-                {
-                    log::warn!("{label}: failed to add to binary archive: {e}");
-                } else {
-                    arch.mark_added(hash);
+                match unsafe { arch.raw_archive().addComputePipelineFunctionsWithDescriptor_error(&desc) } {
+                    Ok(()) => {
+                        arch.mark_added(hash);
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "{label}: failed to add to binary archive: {}",
+                            e.localizedDescription()
+                        );
+                    }
                 }
             }
             state
         } else {
-            self.device
-                .new_compute_pipeline_state_with_function(&function)
-                .unwrap_or_else(|e| panic!("{label}: MTL compute PSO error: {e}"))
+            unsafe {
+                self.device
+                    .newComputePipelineStateWithFunction_error(&function)
+            }
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{label}: MTL compute PSO error: {}",
+                    e.localizedDescription()
+                )
+            })
         };
         drop(archive_guard);
 
@@ -397,14 +432,7 @@ impl GpuDevice {
     }
 
     /// Create a specialized compute pipeline by substituting constants in the WGSL
-    /// source before compilation. Each `(pattern, replacement)` pair performs a
-    /// string replacement — e.g. `("uniforms.mode", "0u")` replaces every
-    /// occurrence of `uniforms.mode` with the literal `0u`, allowing naga and
-    /// the Metal compiler to constant-fold branches and dead-code eliminate
-    /// inactive paths.
-    ///
-    /// This achieves the same effect as Metal function constants without
-    /// requiring naga to emit `[[function_constant]]` annotations.
+    /// source before compilation.
     pub fn create_specialized_compute_pipeline(
         &self,
         wgsl_source: &str,
@@ -420,7 +448,6 @@ impl GpuDevice {
     }
 
     /// Half-precision variant of `create_specialized_compute_pipeline`.
-    /// See `create_compute_pipeline_half` for safety constraints.
     pub fn create_specialized_compute_pipeline_half(
         &self,
         wgsl_source: &str,
@@ -436,9 +463,7 @@ impl GpuDevice {
     }
 
     /// Create a specialized render pipeline by text-replacing patterns in WGSL
-    /// source before compilation. Same approach as `create_specialized_compute_pipeline`:
-    /// replaces occurrences of pattern strings (e.g. `uniforms.mode`) with literal
-    /// values (e.g. `0u`) so naga and Metal constant-fold and dead-code eliminate.
+    /// source before compilation.
     pub fn create_specialized_render_pipeline(
         &self,
         wgsl_source: &str,
@@ -456,9 +481,6 @@ impl GpuDevice {
     }
 
     /// Load or create a pipeline binary archive at the given path.
-    /// Once loaded, all subsequent `create_compute_pipeline` calls automatically
-    /// use the archive for caching. Call `save_pipeline_archive()` after all
-    /// pipelines have been created to persist to disk.
     pub fn load_pipeline_archive(&self, path: &std::path::Path) {
         if let Some(arch) = archive::GpuPipelineArchive::load_or_create(&self.device, path) {
             *self.archive.lock().unwrap() = Some(arch);
@@ -466,7 +488,6 @@ impl GpuDevice {
     }
 
     /// Save the pipeline binary archive to disk (if loaded and modified).
-    /// Call after all pipelines have been created (e.g. end of startup).
     pub fn save_pipeline_archive(&self) {
         if let Some(ref mut arch) = *self.archive.lock().unwrap() {
             arch.save();
@@ -474,8 +495,6 @@ impl GpuDevice {
     }
 
     /// Load or create an MSL shader cache at the given directory.
-    /// Caches intermediate MSL compilation results (WGSL→MSL) to skip
-    /// naga + spirv-opt + SPIRV-Cross on subsequent launches.
     pub fn load_msl_cache(&self, cache_dir: &std::path::Path) {
         *self.msl_cache.lock().unwrap() = Some(msl_cache::MslCache::new(cache_dir.to_path_buf()));
     }
@@ -488,9 +507,6 @@ impl GpuDevice {
     }
 
     /// Create a render pipeline from WGSL source (fullscreen triangle pattern).
-    ///
-    /// Vertex shader generates a fullscreen triangle from vertex_index.
-    /// No vertex buffers needed. Single color attachment.
     pub fn create_render_pipeline(
         &self,
         wgsl_source: &str,
@@ -512,10 +528,6 @@ impl GpuDevice {
     }
 
     /// Create a render pipeline with MSAA (sample_count > 1).
-    ///
-    /// Same shader compilation as `create_render_pipeline`, but the pipeline
-    /// state object is configured for multisample rendering. Use with
-    /// `GpuNativeEncoder::draw_instanced_msaa` and a memoryless MSAA texture.
     pub fn create_render_pipeline_msaa(
         &self,
         wgsl_source: &str,
@@ -548,8 +560,6 @@ impl GpuDevice {
         sample_count: u32,
         label: &str,
     ) -> GpuRenderPipeline {
-        // Include sample_count in cache key so MSAA and non-MSAA pipelines
-        // with the same shader are cached independently.
         let base_hash = archive::render_pipeline_hash(wgsl_source, vs_entry, fs_entry);
         let hash = if sample_count <= 1 {
             base_hash
@@ -564,8 +574,6 @@ impl GpuDevice {
             return cached.clone();
         }
 
-        // Try MSL cache first (skips naga + spirv-opt + SPIRV-Cross).
-        // MSL is the same regardless of sample_count, so use base_hash.
         let (slot_map, vs_msl, fs_msl) = {
             let mut msl_guard = self.msl_cache.lock().unwrap();
             if let Some(ref mut cache) = *msl_guard
@@ -580,7 +588,6 @@ impl GpuDevice {
 
                 let result = compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, label);
 
-                // Store in MSL cache
                 if let Some(ref cache) = *self.msl_cache.lock().unwrap() {
                     cache.put_render(base_hash, &result.0, &result.1, &result.2);
                 }
@@ -588,79 +595,117 @@ impl GpuDevice {
             }
         };
 
-        let compile_opts = metal::CompileOptions::new();
-        compile_opts.set_language_version(metal::MTLLanguageVersion::V2_4);
-        compile_opts.set_fast_math_enabled(true);
+        let compile_opts = unsafe {
+            use objc2::AnyThread;
+            MTLCompileOptions::init(MTLCompileOptions::alloc())
+        };
+        unsafe {
+            compile_opts.setLanguageVersion(MTLLanguageVersion::Version2_4);
+            compile_opts.setMathMode(objc2_metal::MTLMathMode::Fast);
+        }
 
-        // Create separate Metal libraries for vertex and fragment.
-        // Metal supports vertex and fragment functions from different libraries.
-        let vs_library = self
-            .device
-            .new_library_with_source(&vs_msl, &compile_opts)
-            .unwrap_or_else(|e| {
-                panic!("{label}: MTL vertex library compile error: {e}\nMSL:\n{vs_msl}")
-            });
-        let fs_library = self
-            .device
-            .new_library_with_source(&fs_msl, &compile_opts)
-            .unwrap_or_else(|e| {
-                panic!("{label}: MTL fragment library compile error: {e}\nMSL:\n{fs_msl}")
-            });
+        let vs_ns = NSString::from_str(&vs_msl);
+        let vs_library = unsafe {
+            self.device
+                .newLibraryWithSource_options_error(&vs_ns, Some(&compile_opts))
+        }
+        .unwrap_or_else(|e| {
+            panic!(
+                "{label}: MTL vertex library compile error: {}\nMSL:\n{vs_msl}",
+                e.localizedDescription()
+            )
+        });
+        let fs_ns = NSString::from_str(&fs_msl);
+        let fs_library = unsafe {
+            self.device
+                .newLibraryWithSource_options_error(&fs_ns, Some(&compile_opts))
+        }
+        .unwrap_or_else(|e| {
+            panic!(
+                "{label}: MTL fragment library compile error: {}\nMSL:\n{fs_msl}",
+                e.localizedDescription()
+            )
+        });
 
-        let vs_available = vs_library.function_names();
-        let fs_available = fs_library.function_names();
+        let vs_names_raw = unsafe { vs_library.functionNames() };
+        let vs_available: Vec<String> = vs_names_raw.iter().map(|s| s.to_string()).collect();
+        let fs_names_raw = unsafe { fs_library.functionNames() };
+        let fs_available: Vec<String> = fs_names_raw.iter().map(|s| s.to_string()).collect();
         let vs_func = find_entry_function(&vs_library, vs_entry, &vs_available, label, "vertex");
         let fs_func = find_entry_function(&fs_library, fs_entry, &fs_available, label, "fragment");
 
-        let desc = metal::RenderPipelineDescriptor::new();
-        desc.set_vertex_function(Some(&vs_func));
-        desc.set_fragment_function(Some(&fs_func));
-        if sample_count > 1 {
-            desc.set_sample_count(sample_count as u64);
+        let desc = unsafe {
+            use objc2::AnyThread;
+            MTLRenderPipelineDescriptor::init(MTLRenderPipelineDescriptor::alloc())
+        };
+        unsafe {
+            desc.setVertexFunction(Some(&vs_func));
+            desc.setFragmentFunction(Some(&fs_func));
+            if sample_count > 1 {
+                desc.setRasterSampleCount(sample_count as usize);
+            }
         }
 
-        let color_attach = desc
-            .color_attachments()
-            .object_at(0)
-            .expect("color attachment 0");
-        color_attach.set_pixel_format(to_mtl_pixel_format(color_format));
-
-        if let Some(blend) = blend {
-            color_attach.set_blending_enabled(true);
-            color_attach.set_rgb_blend_operation(to_mtl_blend_op(blend.operation));
-            color_attach.set_alpha_blend_operation(to_mtl_blend_op(blend.alpha_operation));
-            color_attach.set_source_rgb_blend_factor(to_mtl_blend_factor(blend.src_factor));
-            color_attach.set_destination_rgb_blend_factor(to_mtl_blend_factor(blend.dst_factor));
-            color_attach.set_source_alpha_blend_factor(to_mtl_blend_factor(blend.src_alpha_factor));
-            color_attach
-                .set_destination_alpha_blend_factor(to_mtl_blend_factor(blend.dst_alpha_factor));
+        let color_attach = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
+        unsafe {
+            color_attach.setPixelFormat(to_mtl_pixel_format(color_format));
+            if let Some(blend) = blend {
+                color_attach.setBlendingEnabled(true);
+                color_attach.setRgbBlendOperation(to_mtl_blend_op(blend.operation));
+                color_attach.setAlphaBlendOperation(to_mtl_blend_op(blend.alpha_operation));
+                color_attach.setSourceRGBBlendFactor(to_mtl_blend_factor(blend.src_factor));
+                color_attach.setDestinationRGBBlendFactor(to_mtl_blend_factor(blend.dst_factor));
+                color_attach
+                    .setSourceAlphaBlendFactor(to_mtl_blend_factor(blend.src_alpha_factor));
+                color_attach
+                    .setDestinationAlphaBlendFactor(to_mtl_blend_factor(blend.dst_alpha_factor));
+            }
         }
 
         // Use binary archive for render pipelines (same pattern as compute).
         let mut archive_guard = self.archive.lock().unwrap();
         let state = if let Some(ref mut arch) = *archive_guard {
-            desc.set_binary_archives(&[arch.raw_archive()]);
+            unsafe {
+                let archives = objc2_foundation::NSArray::from_retained_slice(&[
+                    arch.raw_archive().clone(),
+                ]);
+                desc.setBinaryArchives(Some(&archives));
+            }
 
-            let state = self
-                .device
-                .new_render_pipeline_state(&desc)
-                .unwrap_or_else(|e| panic!("{label}: MTL render PSO error: {e}"));
+            let state = unsafe {
+                self.device.newRenderPipelineStateWithDescriptor_error(&desc)
+            }
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{label}: MTL render PSO error: {}",
+                    e.localizedDescription()
+                )
+            });
 
             if !arch.was_added(hash) {
-                if let Err(e) = arch
-                    .raw_archive()
-                    .add_render_pipeline_functions_with_descriptor(&desc)
-                {
-                    log::warn!("{label}: failed to add render PSO to binary archive: {e}");
-                } else {
-                    arch.mark_added(hash);
+                match unsafe { arch.raw_archive().addRenderPipelineFunctionsWithDescriptor_error(&desc) } {
+                    Ok(()) => {
+                        arch.mark_added(hash);
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "{label}: failed to add render PSO to binary archive: {}",
+                            e.localizedDescription()
+                        );
+                    }
                 }
             }
             state
         } else {
-            self.device
-                .new_render_pipeline_state(&desc)
-                .unwrap_or_else(|e| panic!("{label}: MTL render PSO error: {e}"))
+            unsafe {
+                self.device.newRenderPipelineStateWithDescriptor_error(&desc)
+            }
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{label}: MTL render PSO error: {}",
+                    e.localizedDescription()
+                )
+            })
         };
         drop(archive_guard);
 
@@ -677,10 +722,6 @@ impl GpuDevice {
     }
 
     /// Create a render pipeline from WGSL source with a vertex buffer layout.
-    ///
-    /// Same as `create_render_pipeline()` but additionally configures an
-    /// `MTLVertexDescriptor` from a `GpuVertexLayout`. Used for UI-thread
-    /// rendering with actual vertex buffers (not fullscreen triangles).
     #[allow(clippy::too_many_arguments)]
     pub fn create_render_pipeline_with_vertex_layout(
         &self,
@@ -692,8 +733,6 @@ impl GpuDevice {
         vertex_layout: &GpuVertexLayout,
         label: &str,
     ) -> GpuRenderPipeline {
-        // Incorporate vertex layout stride into the hash to differentiate from
-        // vertex-less pipelines with the same shader.
         let base_hash = archive::render_pipeline_hash(wgsl_source, vs_entry, fs_entry);
         let hash = {
             use std::hash::{Hash, Hasher};
@@ -706,8 +745,6 @@ impl GpuDevice {
             return cached.clone();
         }
 
-        // MSL cache uses base_hash (same WGSL → same MSL, vertex layout only
-        // affects the PSO descriptor, not the compiled MSL).
         let (slot_map, vs_msl, fs_msl) = {
             let mut msl_guard = self.msl_cache.lock().unwrap();
             if let Some(ref mut cache) = *msl_guard
@@ -729,95 +766,139 @@ impl GpuDevice {
             }
         };
 
-        let compile_opts = metal::CompileOptions::new();
-        compile_opts.set_language_version(metal::MTLLanguageVersion::V2_4);
-        compile_opts.set_fast_math_enabled(true);
+        let compile_opts = unsafe {
+            use objc2::AnyThread;
+            MTLCompileOptions::init(MTLCompileOptions::alloc())
+        };
+        unsafe {
+            compile_opts.setLanguageVersion(MTLLanguageVersion::Version2_4);
+            compile_opts.setMathMode(objc2_metal::MTLMathMode::Fast);
+        }
 
-        let vs_library = self
-            .device
-            .new_library_with_source(&vs_msl, &compile_opts)
-            .unwrap_or_else(|e| {
-                panic!("{label}: MTL vertex library compile error: {e}\nMSL:\n{vs_msl}")
-            });
-        let fs_library = self
-            .device
-            .new_library_with_source(&fs_msl, &compile_opts)
-            .unwrap_or_else(|e| {
-                panic!("{label}: MTL fragment library compile error: {e}\nMSL:\n{fs_msl}")
-            });
+        let vs_ns = NSString::from_str(&vs_msl);
+        let vs_library = unsafe {
+            self.device
+                .newLibraryWithSource_options_error(&vs_ns, Some(&compile_opts))
+        }
+        .unwrap_or_else(|e| {
+            panic!(
+                "{label}: MTL vertex library compile error: {}\nMSL:\n{vs_msl}",
+                e.localizedDescription()
+            )
+        });
+        let fs_ns = NSString::from_str(&fs_msl);
+        let fs_library = unsafe {
+            self.device
+                .newLibraryWithSource_options_error(&fs_ns, Some(&compile_opts))
+        }
+        .unwrap_or_else(|e| {
+            panic!(
+                "{label}: MTL fragment library compile error: {}\nMSL:\n{fs_msl}",
+                e.localizedDescription()
+            )
+        });
 
-        let vs_available = vs_library.function_names();
-        let fs_available = fs_library.function_names();
+        let vs_names_raw = unsafe { vs_library.functionNames() };
+        let vs_available: Vec<String> = vs_names_raw.iter().map(|s| s.to_string()).collect();
+        let fs_names_raw = unsafe { fs_library.functionNames() };
+        let fs_available: Vec<String> = fs_names_raw.iter().map(|s| s.to_string()).collect();
         let vs_func = find_entry_function(&vs_library, vs_entry, &vs_available, label, "vertex");
         let fs_func = find_entry_function(&fs_library, fs_entry, &fs_available, label, "fragment");
 
-        let desc = metal::RenderPipelineDescriptor::new();
-        desc.set_vertex_function(Some(&vs_func));
-        desc.set_fragment_function(Some(&fs_func));
-
-        // Build MTLVertexDescriptor from GpuVertexLayout.
-        // Vertex buffer bound at index 30 to avoid collision with SPIRV-Cross bindings.
-        const VERTEX_BUFFER_INDEX: u64 = 30;
-        let vtx_desc = metal::VertexDescriptor::new();
-        for attr in &vertex_layout.attributes {
-            let a = vtx_desc
-                .attributes()
-                .object_at(attr.shader_location as u64)
-                .expect("vertex attribute");
-            a.set_format(format::to_mtl_vertex_format(attr.format));
-            a.set_offset(attr.offset as u64);
-            a.set_buffer_index(VERTEX_BUFFER_INDEX);
+        let desc = unsafe {
+            use objc2::AnyThread;
+            MTLRenderPipelineDescriptor::init(MTLRenderPipelineDescriptor::alloc())
+        };
+        unsafe {
+            desc.setVertexFunction(Some(&vs_func));
+            desc.setFragmentFunction(Some(&fs_func));
         }
-        let layout = vtx_desc
-            .layouts()
-            .object_at(VERTEX_BUFFER_INDEX)
-            .expect("vertex buffer layout");
-        layout.set_stride(vertex_layout.stride as u64);
-        layout.set_step_function(metal::MTLVertexStepFunction::PerVertex);
-        layout.set_step_rate(1);
-        desc.set_vertex_descriptor(Some(vtx_desc));
 
-        let color_attach = desc
-            .color_attachments()
-            .object_at(0)
-            .expect("color attachment 0");
-        color_attach.set_pixel_format(to_mtl_pixel_format(color_format));
+        const VERTEX_BUFFER_INDEX: usize = 30;
+        let vtx_desc = unsafe {
+            use objc2::AnyThread;
+            MTLVertexDescriptor::init(MTLVertexDescriptor::alloc())
+        };
+        for attr in &vertex_layout.attributes {
+            let a = unsafe {
+                vtx_desc
+                    .attributes()
+                    .objectAtIndexedSubscript(attr.shader_location as usize)
+            };
+            unsafe {
+                a.setFormat(format::to_mtl_vertex_format(attr.format));
+                a.setOffset(attr.offset as usize);
+                a.setBufferIndex(VERTEX_BUFFER_INDEX);
+            }
+        }
+        let layout = unsafe { vtx_desc.layouts().objectAtIndexedSubscript(VERTEX_BUFFER_INDEX) };
+        unsafe {
+            layout.setStride(vertex_layout.stride as usize);
+            layout.setStepFunction(MTLVertexStepFunction::PerVertex);
+            layout.setStepRate(1);
+        }
+        unsafe { desc.setVertexDescriptor(Some(&vtx_desc)) };
 
-        if let Some(blend) = blend {
-            color_attach.set_blending_enabled(true);
-            color_attach.set_rgb_blend_operation(to_mtl_blend_op(blend.operation));
-            color_attach.set_alpha_blend_operation(to_mtl_blend_op(blend.alpha_operation));
-            color_attach.set_source_rgb_blend_factor(to_mtl_blend_factor(blend.src_factor));
-            color_attach.set_destination_rgb_blend_factor(to_mtl_blend_factor(blend.dst_factor));
-            color_attach.set_source_alpha_blend_factor(to_mtl_blend_factor(blend.src_alpha_factor));
-            color_attach
-                .set_destination_alpha_blend_factor(to_mtl_blend_factor(blend.dst_alpha_factor));
+        let color_attach = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
+        unsafe {
+            color_attach.setPixelFormat(to_mtl_pixel_format(color_format));
+
+            if let Some(blend) = blend {
+                color_attach.setBlendingEnabled(true);
+                color_attach.setRgbBlendOperation(to_mtl_blend_op(blend.operation));
+                color_attach.setAlphaBlendOperation(to_mtl_blend_op(blend.alpha_operation));
+                color_attach.setSourceRGBBlendFactor(to_mtl_blend_factor(blend.src_factor));
+                color_attach.setDestinationRGBBlendFactor(to_mtl_blend_factor(blend.dst_factor));
+                color_attach
+                    .setSourceAlphaBlendFactor(to_mtl_blend_factor(blend.src_alpha_factor));
+                color_attach
+                    .setDestinationAlphaBlendFactor(to_mtl_blend_factor(blend.dst_alpha_factor));
+            }
         }
 
         let mut archive_guard = self.archive.lock().unwrap();
         let state = if let Some(ref mut arch) = *archive_guard {
-            desc.set_binary_archives(&[arch.raw_archive()]);
+            unsafe {
+                let archives = objc2_foundation::NSArray::from_retained_slice(&[
+                    arch.raw_archive().clone(),
+                ]);
+                desc.setBinaryArchives(Some(&archives));
+            }
 
-            let state = self
-                .device
-                .new_render_pipeline_state(&desc)
-                .unwrap_or_else(|e| panic!("{label}: MTL render PSO error: {e}"));
+            let state = unsafe {
+                self.device.newRenderPipelineStateWithDescriptor_error(&desc)
+            }
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{label}: MTL render PSO error: {}",
+                    e.localizedDescription()
+                )
+            });
 
             if !arch.was_added(hash) {
-                if let Err(e) = arch
-                    .raw_archive()
-                    .add_render_pipeline_functions_with_descriptor(&desc)
-                {
-                    log::warn!("{label}: failed to add render PSO to binary archive: {e}");
-                } else {
-                    arch.mark_added(hash);
+                match unsafe { arch.raw_archive().addRenderPipelineFunctionsWithDescriptor_error(&desc) } {
+                    Ok(()) => {
+                        arch.mark_added(hash);
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "{label}: failed to add render PSO to binary archive: {}",
+                            e.localizedDescription()
+                        );
+                    }
                 }
             }
             state
         } else {
-            self.device
-                .new_render_pipeline_state(&desc)
-                .unwrap_or_else(|e| panic!("{label}: MTL render PSO error: {e}"))
+            unsafe {
+                self.device.newRenderPipelineStateWithDescriptor_error(&desc)
+            }
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{label}: MTL render PSO error: {}",
+                    e.localizedDescription()
+                )
+            })
         };
         drop(archive_guard);
 
@@ -857,22 +938,15 @@ impl GpuDevice {
 
     /// Create a new command encoder for one frame's GPU work.
     pub fn create_encoder(&self, label: &str) -> GpuEncoder {
-        // Use retained references — Metal retains all resources set on encoders.
-        // Slightly higher overhead than unretained, but guarantees resources
-        // survive until GPU execution completes. Required because we extract
-        // temporary GpuTexture wrappers (via extract_native_texture) that are
-        // dropped before commit.
-        let cmd_buf = self.queue.new_command_buffer();
-        cmd_buf.set_label(label);
-        // Retain the command buffer so it outlives the autorelease pool drain.
-        let ptr = cmd_buf as *const metal::CommandBufferRef as *mut std::ffi::c_void;
-        unsafe {
-            objc_retain(ptr);
-        }
+        let cmd_buf = self
+            .queue
+            .commandBuffer()
+            .expect("Failed to acquire command buffer");
+        unsafe { cmd_buf.setLabel(Some(&NSString::from_str(label))) };
         GpuEncoder {
-            cmd_buf_ptr: ptr,
+            cmd_buf,
             state: EncoderState::None,
-            compute_cache: ComputeBindCache::new(),
+            compute_cache: super::encoder::ComputeBindCache::new(),
             render_cache: RenderBindCache::new(),
             clear_pipelines: self.clear_pipelines() as *const ClearPipelines,
         }
@@ -880,18 +954,22 @@ impl GpuDevice {
 
     /// Create a compiled depth-stencil state object.
     pub fn create_depth_stencil_state(&self, desc: &GpuDepthStencilDesc) -> GpuDepthStencilState {
-        let ds_desc = metal::DepthStencilDescriptor::new();
-        ds_desc.set_depth_compare_function(to_mtl_compare_function(desc.compare));
-        ds_desc.set_depth_write_enabled(desc.write_enabled);
-        let state = self.device.new_depth_stencil_state(&ds_desc);
+        let ds_desc = unsafe {
+            use objc2::AnyThread;
+            MTLDepthStencilDescriptor::init(MTLDepthStencilDescriptor::alloc())
+        };
+        unsafe {
+            ds_desc.setDepthCompareFunction(to_mtl_compare_function(desc.compare));
+            ds_desc.setDepthWriteEnabled(desc.write_enabled);
+        }
+        let state = self
+            .device
+            .newDepthStencilStateWithDescriptor(&ds_desc)
+            .expect("newDepthStencilStateWithDescriptor failed");
         GpuDepthStencilState { raw: state }
     }
 
     /// Create a render pipeline configured for depth testing.
-    ///
-    /// Same as `create_render_pipeline_inner` but additionally sets the
-    /// depth attachment pixel format on the pipeline descriptor so Metal
-    /// knows to expect a depth attachment at draw time.
     #[allow(clippy::too_many_arguments)]
     pub fn create_render_pipeline_depth(
         &self,
@@ -904,7 +982,6 @@ impl GpuDevice {
         sample_count: u32,
         label: &str,
     ) -> GpuRenderPipeline {
-        // Include depth format and sample_count in cache key.
         let base_hash = archive::render_pipeline_hash(wgsl_source, vs_entry, fs_entry);
         let hash = {
             use std::hash::{Hash, Hasher};
@@ -940,79 +1017,118 @@ impl GpuDevice {
             }
         };
 
-        let compile_opts = metal::CompileOptions::new();
-        compile_opts.set_language_version(metal::MTLLanguageVersion::V2_4);
-        compile_opts.set_fast_math_enabled(true);
+        let compile_opts = unsafe {
+            use objc2::AnyThread;
+            MTLCompileOptions::init(MTLCompileOptions::alloc())
+        };
+        unsafe {
+            compile_opts.setLanguageVersion(MTLLanguageVersion::Version2_4);
+            compile_opts.setMathMode(objc2_metal::MTLMathMode::Fast);
+        }
 
-        let vs_library = self
-            .device
-            .new_library_with_source(&vs_msl, &compile_opts)
-            .unwrap_or_else(|e| {
-                panic!("{label}: MTL vertex library compile error: {e}\nMSL:\n{vs_msl}")
-            });
-        let fs_library = self
-            .device
-            .new_library_with_source(&fs_msl, &compile_opts)
-            .unwrap_or_else(|e| {
-                panic!("{label}: MTL fragment library compile error: {e}\nMSL:\n{fs_msl}")
-            });
+        let vs_ns = NSString::from_str(&vs_msl);
+        let vs_library = unsafe {
+            self.device
+                .newLibraryWithSource_options_error(&vs_ns, Some(&compile_opts))
+        }
+        .unwrap_or_else(|e| {
+            panic!(
+                "{label}: MTL vertex library compile error: {}\nMSL:\n{vs_msl}",
+                e.localizedDescription()
+            )
+        });
+        let fs_ns = NSString::from_str(&fs_msl);
+        let fs_library = unsafe {
+            self.device
+                .newLibraryWithSource_options_error(&fs_ns, Some(&compile_opts))
+        }
+        .unwrap_or_else(|e| {
+            panic!(
+                "{label}: MTL fragment library compile error: {}\nMSL:\n{fs_msl}",
+                e.localizedDescription()
+            )
+        });
 
-        let vs_available = vs_library.function_names();
-        let fs_available = fs_library.function_names();
+        let vs_names_raw = unsafe { vs_library.functionNames() };
+        let vs_available: Vec<String> = vs_names_raw.iter().map(|s| s.to_string()).collect();
+        let fs_names_raw = unsafe { fs_library.functionNames() };
+        let fs_available: Vec<String> = fs_names_raw.iter().map(|s| s.to_string()).collect();
         let vs_func = find_entry_function(&vs_library, vs_entry, &vs_available, label, "vertex");
         let fs_func = find_entry_function(&fs_library, fs_entry, &fs_available, label, "fragment");
 
-        let desc = metal::RenderPipelineDescriptor::new();
-        desc.set_vertex_function(Some(&vs_func));
-        desc.set_fragment_function(Some(&fs_func));
-        if sample_count > 1 {
-            desc.set_sample_count(sample_count as u64);
+        let desc = unsafe {
+            use objc2::AnyThread;
+            MTLRenderPipelineDescriptor::init(MTLRenderPipelineDescriptor::alloc())
+        };
+        unsafe {
+            desc.setVertexFunction(Some(&vs_func));
+            desc.setFragmentFunction(Some(&fs_func));
+            if sample_count > 1 {
+                desc.setRasterSampleCount(sample_count as usize);
+            }
+            desc.setDepthAttachmentPixelFormat(to_mtl_pixel_format(depth_format));
         }
 
-        // Depth attachment pixel format — tells Metal this pipeline uses depth testing.
-        desc.set_depth_attachment_pixel_format(to_mtl_pixel_format(depth_format));
+        let color_attach = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
+        unsafe {
+            color_attach.setPixelFormat(to_mtl_pixel_format(color_format));
 
-        let color_attach = desc
-            .color_attachments()
-            .object_at(0)
-            .expect("color attachment 0");
-        color_attach.set_pixel_format(to_mtl_pixel_format(color_format));
-
-        if let Some(blend) = blend {
-            color_attach.set_blending_enabled(true);
-            color_attach.set_rgb_blend_operation(to_mtl_blend_op(blend.operation));
-            color_attach.set_alpha_blend_operation(to_mtl_blend_op(blend.alpha_operation));
-            color_attach.set_source_rgb_blend_factor(to_mtl_blend_factor(blend.src_factor));
-            color_attach.set_destination_rgb_blend_factor(to_mtl_blend_factor(blend.dst_factor));
-            color_attach.set_source_alpha_blend_factor(to_mtl_blend_factor(blend.src_alpha_factor));
-            color_attach
-                .set_destination_alpha_blend_factor(to_mtl_blend_factor(blend.dst_alpha_factor));
+            if let Some(blend) = blend {
+                color_attach.setBlendingEnabled(true);
+                color_attach.setRgbBlendOperation(to_mtl_blend_op(blend.operation));
+                color_attach.setAlphaBlendOperation(to_mtl_blend_op(blend.alpha_operation));
+                color_attach.setSourceRGBBlendFactor(to_mtl_blend_factor(blend.src_factor));
+                color_attach.setDestinationRGBBlendFactor(to_mtl_blend_factor(blend.dst_factor));
+                color_attach
+                    .setSourceAlphaBlendFactor(to_mtl_blend_factor(blend.src_alpha_factor));
+                color_attach
+                    .setDestinationAlphaBlendFactor(to_mtl_blend_factor(blend.dst_alpha_factor));
+            }
         }
 
         let mut archive_guard = self.archive.lock().unwrap();
         let state = if let Some(ref mut arch) = *archive_guard {
-            desc.set_binary_archives(&[arch.raw_archive()]);
+            unsafe {
+                let archives = objc2_foundation::NSArray::from_retained_slice(&[
+                    arch.raw_archive().clone(),
+                ]);
+                desc.setBinaryArchives(Some(&archives));
+            }
 
-            let state = self
-                .device
-                .new_render_pipeline_state(&desc)
-                .unwrap_or_else(|e| panic!("{label}: MTL render PSO error: {e}"));
+            let state = unsafe {
+                self.device.newRenderPipelineStateWithDescriptor_error(&desc)
+            }
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{label}: MTL render PSO error: {}",
+                    e.localizedDescription()
+                )
+            });
 
             if !arch.was_added(hash) {
-                if let Err(e) = arch
-                    .raw_archive()
-                    .add_render_pipeline_functions_with_descriptor(&desc)
-                {
-                    log::warn!("{label}: failed to add render PSO to binary archive: {e}");
-                } else {
-                    arch.mark_added(hash);
+                match unsafe { arch.raw_archive().addRenderPipelineFunctionsWithDescriptor_error(&desc) } {
+                    Ok(()) => {
+                        arch.mark_added(hash);
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "{label}: failed to add render PSO to binary archive: {}",
+                            e.localizedDescription()
+                        );
+                    }
                 }
             }
             state
         } else {
-            self.device
-                .new_render_pipeline_state(&desc)
-                .unwrap_or_else(|e| panic!("{label}: MTL render PSO error: {e}"))
+            unsafe {
+                self.device.newRenderPipelineStateWithDescriptor_error(&desc)
+            }
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{label}: MTL render PSO error: {}",
+                    e.localizedDescription()
+                )
+            })
         };
         drop(archive_guard);
 
@@ -1030,18 +1146,28 @@ impl GpuDevice {
 
     /// Create a shared event for CPU↔GPU synchronization.
     pub fn create_event(&self) -> GpuEvent {
-        let raw = self.device.new_shared_event();
+        let raw = self
+            .device
+            .newSharedEvent()
+            .expect("newSharedEvent failed");
         GpuEvent::new(raw)
     }
 
     /// Create a GPU heap for sub-allocation.
-    /// Textures allocated from a heap avoid per-allocation kernel calls.
     pub fn create_heap(&self, size: u64, storage_mode: GpuStorageMode) -> GpuHeap {
-        let desc = metal::HeapDescriptor::new();
-        desc.set_size(size as _);
-        desc.set_storage_mode(to_mtl_storage_mode(storage_mode));
-        let heap = self.device.new_heap(&desc);
-        heap.set_label("MANIFOLD TexturePool Heap");
+        let desc = unsafe {
+            use objc2::AnyThread;
+            MTLHeapDescriptor::init(MTLHeapDescriptor::alloc())
+        };
+        unsafe {
+            desc.setSize(size as usize);
+            desc.setStorageMode(to_mtl_storage_mode(storage_mode));
+        }
+        let heap = self
+            .device
+            .newHeapWithDescriptor(&desc)
+            .expect("newHeapWithDescriptor failed");
+        unsafe { heap.setLabel(Some(&NSString::from_str("MANIFOLD TexturePool Heap"))) };
         GpuHeap::new(heap)
     }
 
@@ -1049,49 +1175,44 @@ impl GpuDevice {
     /// descriptor. Used to pre-compute heap capacity.
     pub fn heap_texture_size_and_align(&self, desc: &GpuTextureDesc) -> (u64, u64) {
         let mtl_desc = Self::build_mtl_texture_desc(desc);
-        let sa = self.device.heap_texture_size_and_align(&mtl_desc);
-        (sa.size, sa.align)
+        let sa = unsafe { self.device.heapTextureSizeAndAlignWithDescriptor(&mtl_desc) };
+        (sa.size as u64, sa.align as u64)
     }
 
     /// Build a Metal TextureDescriptor from GpuTextureDesc (shared helper).
-    ///
-    /// Lossy GPU compression (`allowGPUOptimizedContents`) is enabled by default
-    /// in Metal. We never disable it — all Private-storage textures with
-    /// ShaderRead + ShaderWrite usage benefit from lossy compression automatically.
-    /// This reduces VRAM bandwidth for intermediates without any code changes.
-    pub(crate) fn build_mtl_texture_desc(desc: &GpuTextureDesc) -> metal::TextureDescriptor {
-        let mtl_desc = metal::TextureDescriptor::new();
-        mtl_desc.set_pixel_format(to_mtl_pixel_format(desc.format));
-        mtl_desc.set_width(desc.width as u64);
-        mtl_desc.set_height(desc.height as u64);
-        mtl_desc.set_depth(desc.depth as u64);
-        mtl_desc.set_texture_type(to_mtl_texture_type(desc.dimension, desc.depth));
-        mtl_desc.set_usage(to_mtl_texture_usage(desc.usage));
-        if desc.usage.contains(GpuTextureUsage::CPU_UPLOAD) {
-            mtl_desc.set_storage_mode(metal::MTLStorageMode::Shared);
-        } else {
-            mtl_desc.set_storage_mode(metal::MTLStorageMode::Private);
+    pub(crate) fn build_mtl_texture_desc(
+        desc: &GpuTextureDesc,
+    ) -> Retained<MTLTextureDescriptor> {
+        let mtl_desc = unsafe {
+            use objc2::AnyThread;
+            MTLTextureDescriptor::init(MTLTextureDescriptor::alloc())
+        };
+        unsafe {
+            mtl_desc.setPixelFormat(to_mtl_pixel_format(desc.format));
+            mtl_desc.setWidth(desc.width as usize);
+            mtl_desc.setHeight(desc.height as usize);
+            mtl_desc.setDepth(desc.depth as usize);
+            mtl_desc.setTextureType(to_mtl_texture_type(desc.dimension, desc.depth));
+            mtl_desc.setUsage(to_mtl_texture_usage(desc.usage));
+            if desc.usage.contains(GpuTextureUsage::CPU_UPLOAD) {
+                mtl_desc.setStorageMode(MTLStorageMode::Shared);
+            } else {
+                mtl_desc.setStorageMode(MTLStorageMode::Private);
+            }
+            mtl_desc.setMipmapLevelCount(desc.mip_levels.max(1) as usize);
+            mtl_desc.setSampleCount(1);
         }
-        mtl_desc.set_mipmap_level_count(desc.mip_levels.max(1) as u64);
-        mtl_desc.set_sample_count(1);
-        // allowGPUOptimizedContents defaults to true in Metal — we never
-        // disable it. This enables lossy GPU compression for Private-storage
-        // textures, reducing VRAM bandwidth for intermediates.
         mtl_desc
     }
 
     /// Create a texture with memoryless storage (Apple Silicon only).
-    /// Data stays in tile/cache memory — zero VRAM bandwidth.
-    /// Only valid as render pass attachments, NOT for compute storage textures.
     pub fn create_texture_memoryless(&self, desc: &GpuTextureDesc) -> GpuTexture {
-        use metal::foreign_types::ForeignType;
         let mtl_desc = Self::build_mtl_texture_desc(desc);
-        mtl_desc.set_storage_mode(metal::MTLStorageMode::Memoryless);
-        let raw = self.device.new_texture(&mtl_desc);
-        assert!(
-            !raw.as_ptr().is_null(),
-            "Metal: memoryless texture allocation failed — GPU memory exhausted",
-        );
+        unsafe { mtl_desc.setStorageMode(MTLStorageMode::Memoryless) };
+        let raw = self
+            .device
+            .newTextureWithDescriptor(&mtl_desc)
+            .expect("Metal: memoryless texture allocation failed — GPU memory exhausted");
         GpuTexture {
             raw,
             width: desc.width,
@@ -1102,10 +1223,6 @@ impl GpuDevice {
     }
 
     /// Create a memoryless multisample texture for MSAA render passes.
-    ///
-    /// On Apple Silicon's TBDR, MSAA samples live in tile memory and are
-    /// resolved on-chip — the multisample texture never touches VRAM.
-    /// Use with `draw_instanced_msaa` which resolves to a single-sample target.
     pub fn create_texture_msaa_memoryless(
         &self,
         width: u32,
@@ -1114,23 +1231,26 @@ impl GpuDevice {
         sample_count: u32,
         label: &str,
     ) -> GpuTexture {
-        use metal::foreign_types::ForeignType;
-        let mtl_desc = metal::TextureDescriptor::new();
-        mtl_desc.set_pixel_format(to_mtl_pixel_format(format));
-        mtl_desc.set_width(width as u64);
-        mtl_desc.set_height(height as u64);
-        mtl_desc.set_depth(1);
-        mtl_desc.set_texture_type(metal::MTLTextureType::D2Multisample);
-        mtl_desc.set_sample_count(sample_count as u64);
-        mtl_desc.set_storage_mode(metal::MTLStorageMode::Memoryless);
-        mtl_desc.set_usage(metal::MTLTextureUsage::RenderTarget);
-        mtl_desc.set_mipmap_level_count(1);
-        let raw = self.device.new_texture(&mtl_desc);
-        assert!(
-            !raw.as_ptr().is_null(),
-            "{label}: MSAA memoryless texture allocation failed",
-        );
-        raw.set_label(label);
+        let mtl_desc = unsafe {
+            use objc2::AnyThread;
+            MTLTextureDescriptor::init(MTLTextureDescriptor::alloc())
+        };
+        unsafe {
+            mtl_desc.setPixelFormat(to_mtl_pixel_format(format));
+            mtl_desc.setWidth(width as usize);
+            mtl_desc.setHeight(height as usize);
+            mtl_desc.setDepth(1);
+            mtl_desc.setTextureType(MTLTextureType::Type2DMultisample);
+            mtl_desc.setSampleCount(sample_count as usize);
+            mtl_desc.setStorageMode(MTLStorageMode::Memoryless);
+            mtl_desc.setUsage(MTLTextureUsage::RenderTarget);
+            mtl_desc.setMipmapLevelCount(1);
+        }
+        let raw = self
+            .device
+            .newTextureWithDescriptor(&mtl_desc)
+            .unwrap_or_else(|| panic!("{label}: MSAA memoryless texture allocation failed"));
+        unsafe { raw.setLabel(Some(&NSString::from_str(label))) };
         GpuTexture {
             raw,
             width,
@@ -1141,18 +1261,11 @@ impl GpuDevice {
     }
 
     /// Create a texture pool with frame-stamped recycling.
-    /// `frames_in_flight` is the number of frames that can be executing
-    /// concurrently on the GPU (typically 3 for triple buffering).
     pub fn create_texture_pool(&self, frames_in_flight: u64) -> TexturePool {
         TexturePool::new(self, frames_in_flight)
     }
 
     /// Create a GPU texture backed by an IOSurface.
-    /// Used for zero-copy cross-thread texture sharing on macOS.
-    ///
-    /// `usage` controls the Metal texture usage flags. The content thread
-    /// (which renders into the surface) needs full usage; the presenter
-    /// thread (which only samples) needs only `SHADER_READ`.
     ///
     /// # Safety
     /// The IOSurface must remain valid for the lifetime of the returned texture.
@@ -1166,7 +1279,6 @@ impl GpuDevice {
     ) -> GpuTexture {
         use objc2::msg_send;
         use objc2::runtime::AnyObject;
-        use objc2::{Encoding, RefEncode};
 
         // IOSurfaceRef encodes as `^{__IOSurface=}`, not an ObjC object.
         #[repr(C)]
@@ -1179,20 +1291,22 @@ impl GpuDevice {
         }
 
         unsafe {
-            let descriptor = metal::TextureDescriptor::new();
-            descriptor.set_pixel_format(to_mtl_pixel_format(format));
-            descriptor.set_width(width as u64);
-            descriptor.set_height(height as u64);
-            descriptor.set_depth(1);
-            descriptor.set_mipmap_level_count(1);
-            descriptor.set_sample_count(1);
-            descriptor.set_texture_type(metal::MTLTextureType::D2);
-            descriptor.set_usage(to_mtl_texture_usage(usage));
-            descriptor.set_storage_mode(metal::MTLStorageMode::Shared);
+            let descriptor = {
+                use objc2::AnyThread;
+                MTLTextureDescriptor::init(MTLTextureDescriptor::alloc())
+            };
+            descriptor.setPixelFormat(to_mtl_pixel_format(format));
+            descriptor.setWidth(width as usize);
+            descriptor.setHeight(height as usize);
+            descriptor.setDepth(1);
+            descriptor.setMipmapLevelCount(1);
+            descriptor.setSampleCount(1);
+            descriptor.setTextureType(MTLTextureType::Type2D);
+            descriptor.setUsage(to_mtl_texture_usage(usage));
+            descriptor.setStorageMode(MTLStorageMode::Shared);
 
-            use metal::foreign_types::{ForeignType, ForeignTypeRef};
-            let device_ptr: *mut AnyObject = self.raw_device().as_ptr().cast();
-            let desc_ptr: *mut AnyObject = descriptor.as_ref().as_ptr().cast();
+            let device_ptr: *mut AnyObject = Retained::as_ptr(&self.device) as *mut AnyObject;
+            let desc_ptr: *const AnyObject = Retained::as_ptr(&descriptor) as *const AnyObject;
             let iosurface_ptr: *const IOSurfaceOpaque = io_surface.cast();
             let raw_mtl_texture: *mut AnyObject = msg_send![
                 device_ptr,
@@ -1204,8 +1318,14 @@ impl GpuDevice {
                 !raw_mtl_texture.is_null(),
                 "newTextureWithDescriptor:iosurface:plane: failed"
             );
-            let mtl_texture = metal::Texture::from_ptr(raw_mtl_texture.cast());
+            let mtl_texture: Retained<ProtocolObject<dyn objc2_metal::MTLTexture>> =
+                Retained::from_raw(raw_mtl_texture.cast())
+                    .expect("newTextureWithDescriptor:iosurface:plane: returned nil");
             GpuTexture::from_raw(mtl_texture, width, height, 1, format)
         }
     }
 }
+
+// Silence unused-trait warnings
+#[allow(dead_code)]
+fn _use_topology(_: MTLPrimitiveTopologyClass) {}

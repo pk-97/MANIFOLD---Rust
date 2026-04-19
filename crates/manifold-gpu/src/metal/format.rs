@@ -2,137 +2,143 @@
 //!
 //! Translates manifold-gpu abstract types to native Metal enums.
 
+use objc2_metal::{
+    MTLBlendFactor, MTLBlendOperation, MTLCompareFunction, MTLPixelFormat, MTLPrimitiveType,
+    MTLSamplerAddressMode, MTLSamplerMinMagFilter, MTLSamplerMipFilter, MTLStorageMode,
+    MTLTextureType, MTLTextureUsage, MTLTriangleFillMode, MTLVertexFormat,
+};
+
 use crate::types::*;
 
-pub(crate) fn to_mtl_pixel_format(format: GpuTextureFormat) -> metal::MTLPixelFormat {
+pub(crate) fn to_mtl_pixel_format(format: GpuTextureFormat) -> MTLPixelFormat {
     match format {
-        GpuTextureFormat::Rgba16Float => metal::MTLPixelFormat::RGBA16Float,
-        GpuTextureFormat::Rgba32Float => metal::MTLPixelFormat::RGBA32Float,
-        GpuTextureFormat::Rgba8Unorm => metal::MTLPixelFormat::RGBA8Unorm,
-        GpuTextureFormat::R32Float => metal::MTLPixelFormat::R32Float,
-        GpuTextureFormat::Rg32Float => metal::MTLPixelFormat::RG32Float,
-        GpuTextureFormat::R16Float => metal::MTLPixelFormat::R16Float,
-        GpuTextureFormat::Rg16Float => metal::MTLPixelFormat::RG16Float,
-        GpuTextureFormat::R32Uint => metal::MTLPixelFormat::R32Uint,
-        GpuTextureFormat::Rgba8UnormSrgb => metal::MTLPixelFormat::RGBA8Unorm_sRGB,
-        GpuTextureFormat::Bgra8Unorm => metal::MTLPixelFormat::BGRA8Unorm,
-        GpuTextureFormat::R8Unorm => metal::MTLPixelFormat::R8Unorm,
-        GpuTextureFormat::Depth32Float => metal::MTLPixelFormat::Depth32Float,
+        GpuTextureFormat::Rgba16Float => MTLPixelFormat::RGBA16Float,
+        GpuTextureFormat::Rgba32Float => MTLPixelFormat::RGBA32Float,
+        GpuTextureFormat::Rgba8Unorm => MTLPixelFormat::RGBA8Unorm,
+        GpuTextureFormat::R32Float => MTLPixelFormat::R32Float,
+        GpuTextureFormat::Rg32Float => MTLPixelFormat::RG32Float,
+        GpuTextureFormat::R16Float => MTLPixelFormat::R16Float,
+        GpuTextureFormat::Rg16Float => MTLPixelFormat::RG16Float,
+        GpuTextureFormat::R32Uint => MTLPixelFormat::R32Uint,
+        GpuTextureFormat::Rgba8UnormSrgb => MTLPixelFormat::RGBA8Unorm_sRGB,
+        GpuTextureFormat::Bgra8Unorm => MTLPixelFormat::BGRA8Unorm,
+        GpuTextureFormat::R8Unorm => MTLPixelFormat::R8Unorm,
+        GpuTextureFormat::Depth32Float => MTLPixelFormat::Depth32Float,
     }
 }
 
-pub(crate) fn to_mtl_texture_type(dim: GpuTextureDimension, _depth: u32) -> metal::MTLTextureType {
+pub(crate) fn to_mtl_texture_type(dim: GpuTextureDimension, _depth: u32) -> MTLTextureType {
     match dim {
-        GpuTextureDimension::D2 => metal::MTLTextureType::D2,
-        GpuTextureDimension::D3 => metal::MTLTextureType::D3,
+        GpuTextureDimension::D2 => MTLTextureType::Type2D,
+        GpuTextureDimension::D3 => MTLTextureType::Type3D,
     }
 }
 
-pub(crate) fn to_mtl_storage_mode(mode: GpuStorageMode) -> metal::MTLStorageMode {
+pub(crate) fn to_mtl_storage_mode(mode: GpuStorageMode) -> MTLStorageMode {
     match mode {
-        GpuStorageMode::Private => metal::MTLStorageMode::Private,
-        GpuStorageMode::Shared => metal::MTLStorageMode::Shared,
-        GpuStorageMode::Managed => metal::MTLStorageMode::Managed,
-        GpuStorageMode::Memoryless => metal::MTLStorageMode::Memoryless,
+        GpuStorageMode::Private => MTLStorageMode::Private,
+        GpuStorageMode::Shared => MTLStorageMode::Shared,
+        GpuStorageMode::Managed => MTLStorageMode::Managed,
+        GpuStorageMode::Memoryless => MTLStorageMode::Memoryless,
     }
 }
 
-pub(crate) fn to_mtl_texture_usage(usage: GpuTextureUsage) -> metal::MTLTextureUsage {
-    let mut mtl = metal::MTLTextureUsage::Unknown;
+pub(crate) fn to_mtl_texture_usage(usage: GpuTextureUsage) -> MTLTextureUsage {
+    let mut mtl = MTLTextureUsage::Unknown;
     if usage.contains(GpuTextureUsage::SHADER_READ) {
-        mtl |= metal::MTLTextureUsage::ShaderRead;
+        mtl |= MTLTextureUsage::ShaderRead;
     }
     if usage.contains(GpuTextureUsage::SHADER_WRITE) {
-        mtl |= metal::MTLTextureUsage::ShaderWrite;
+        mtl |= MTLTextureUsage::ShaderWrite;
     }
     if usage.contains(GpuTextureUsage::RENDER_TARGET) {
-        mtl |= metal::MTLTextureUsage::RenderTarget;
+        mtl |= MTLTextureUsage::RenderTarget;
     }
     mtl
 }
 
-pub(crate) fn to_mtl_filter(filter: GpuFilterMode) -> metal::MTLSamplerMinMagFilter {
+pub(crate) fn to_mtl_filter(filter: GpuFilterMode) -> MTLSamplerMinMagFilter {
     match filter {
-        GpuFilterMode::Nearest => metal::MTLSamplerMinMagFilter::Nearest,
-        GpuFilterMode::Linear => metal::MTLSamplerMinMagFilter::Linear,
+        GpuFilterMode::Nearest => MTLSamplerMinMagFilter::Nearest,
+        GpuFilterMode::Linear => MTLSamplerMinMagFilter::Linear,
     }
 }
 
-pub(crate) fn to_mtl_mip_filter(filter: GpuFilterMode) -> metal::MTLSamplerMipFilter {
+pub(crate) fn to_mtl_mip_filter(filter: GpuFilterMode) -> MTLSamplerMipFilter {
     match filter {
-        GpuFilterMode::Nearest => metal::MTLSamplerMipFilter::Nearest,
-        GpuFilterMode::Linear => metal::MTLSamplerMipFilter::Linear,
+        GpuFilterMode::Nearest => MTLSamplerMipFilter::Nearest,
+        GpuFilterMode::Linear => MTLSamplerMipFilter::Linear,
     }
 }
 
-pub(crate) fn to_mtl_address(mode: GpuAddressMode) -> metal::MTLSamplerAddressMode {
+pub(crate) fn to_mtl_address(mode: GpuAddressMode) -> MTLSamplerAddressMode {
     match mode {
-        GpuAddressMode::ClampToEdge => metal::MTLSamplerAddressMode::ClampToEdge,
-        GpuAddressMode::Repeat => metal::MTLSamplerAddressMode::Repeat,
-        GpuAddressMode::MirrorRepeat => metal::MTLSamplerAddressMode::MirrorRepeat,
-        GpuAddressMode::ClampToZero => metal::MTLSamplerAddressMode::ClampToZero,
+        GpuAddressMode::ClampToEdge => MTLSamplerAddressMode::ClampToEdge,
+        GpuAddressMode::Repeat => MTLSamplerAddressMode::Repeat,
+        GpuAddressMode::MirrorRepeat => MTLSamplerAddressMode::MirrorRepeat,
+        GpuAddressMode::ClampToZero => MTLSamplerAddressMode::ClampToZero,
     }
 }
 
-pub(crate) fn to_mtl_vertex_format(fmt: GpuVertexFormat) -> metal::MTLVertexFormat {
+pub(crate) fn to_mtl_vertex_format(fmt: GpuVertexFormat) -> MTLVertexFormat {
     match fmt {
-        GpuVertexFormat::Float32 => metal::MTLVertexFormat::Float,
-        GpuVertexFormat::Float32x2 => metal::MTLVertexFormat::Float2,
-        GpuVertexFormat::Float32x3 => metal::MTLVertexFormat::Float3,
-        GpuVertexFormat::Float32x4 => metal::MTLVertexFormat::Float4,
-        GpuVertexFormat::Uint32 => metal::MTLVertexFormat::UInt,
-        GpuVertexFormat::Uint8x4 => metal::MTLVertexFormat::UChar4,
+        GpuVertexFormat::Float32 => MTLVertexFormat::Float,
+        GpuVertexFormat::Float32x2 => MTLVertexFormat::Float2,
+        GpuVertexFormat::Float32x3 => MTLVertexFormat::Float3,
+        GpuVertexFormat::Float32x4 => MTLVertexFormat::Float4,
+        GpuVertexFormat::Uint32 => MTLVertexFormat::UInt,
+        GpuVertexFormat::Uint8x4 => MTLVertexFormat::UChar4,
     }
 }
 
-pub(crate) fn to_mtl_triangle_fill_mode(mode: GpuTriangleFillMode) -> metal::MTLTriangleFillMode {
+pub(crate) fn to_mtl_triangle_fill_mode(mode: GpuTriangleFillMode) -> MTLTriangleFillMode {
     match mode {
-        GpuTriangleFillMode::Fill => metal::MTLTriangleFillMode::Fill,
-        GpuTriangleFillMode::Lines => metal::MTLTriangleFillMode::Lines,
+        GpuTriangleFillMode::Fill => MTLTriangleFillMode::Fill,
+        GpuTriangleFillMode::Lines => MTLTriangleFillMode::Lines,
     }
 }
 
-pub(crate) fn to_mtl_primitive_type(prim: GpuPrimitiveType) -> metal::MTLPrimitiveType {
+pub(crate) fn to_mtl_primitive_type(prim: GpuPrimitiveType) -> MTLPrimitiveType {
     match prim {
-        GpuPrimitiveType::Triangle => metal::MTLPrimitiveType::Triangle,
-        GpuPrimitiveType::Line => metal::MTLPrimitiveType::Line,
+        GpuPrimitiveType::Triangle => MTLPrimitiveType::Triangle,
+        GpuPrimitiveType::Line => MTLPrimitiveType::Line,
     }
 }
 
-pub(crate) fn to_mtl_compare_function(func: GpuCompareFunction) -> metal::MTLCompareFunction {
+pub(crate) fn to_mtl_compare_function(func: GpuCompareFunction) -> MTLCompareFunction {
     match func {
-        GpuCompareFunction::Never => metal::MTLCompareFunction::Never,
-        GpuCompareFunction::Less => metal::MTLCompareFunction::Less,
-        GpuCompareFunction::Equal => metal::MTLCompareFunction::Equal,
-        GpuCompareFunction::LessEqual => metal::MTLCompareFunction::LessEqual,
-        GpuCompareFunction::Greater => metal::MTLCompareFunction::Greater,
-        GpuCompareFunction::NotEqual => metal::MTLCompareFunction::NotEqual,
-        GpuCompareFunction::GreaterEqual => metal::MTLCompareFunction::GreaterEqual,
-        GpuCompareFunction::Always => metal::MTLCompareFunction::Always,
+        GpuCompareFunction::Never => MTLCompareFunction::Never,
+        GpuCompareFunction::Less => MTLCompareFunction::Less,
+        GpuCompareFunction::Equal => MTLCompareFunction::Equal,
+        GpuCompareFunction::LessEqual => MTLCompareFunction::LessEqual,
+        GpuCompareFunction::Greater => MTLCompareFunction::Greater,
+        GpuCompareFunction::NotEqual => MTLCompareFunction::NotEqual,
+        GpuCompareFunction::GreaterEqual => MTLCompareFunction::GreaterEqual,
+        GpuCompareFunction::Always => MTLCompareFunction::Always,
     }
 }
 
-pub(crate) fn to_mtl_blend_factor(factor: GpuBlendFactor) -> metal::MTLBlendFactor {
+pub(crate) fn to_mtl_blend_factor(factor: GpuBlendFactor) -> MTLBlendFactor {
     match factor {
-        GpuBlendFactor::Zero => metal::MTLBlendFactor::Zero,
-        GpuBlendFactor::One => metal::MTLBlendFactor::One,
-        GpuBlendFactor::SrcAlpha => metal::MTLBlendFactor::SourceAlpha,
-        GpuBlendFactor::OneMinusSrcAlpha => metal::MTLBlendFactor::OneMinusSourceAlpha,
-        GpuBlendFactor::DstAlpha => metal::MTLBlendFactor::DestinationAlpha,
-        GpuBlendFactor::OneMinusDstAlpha => metal::MTLBlendFactor::OneMinusDestinationAlpha,
-        GpuBlendFactor::SrcColor => metal::MTLBlendFactor::SourceColor,
-        GpuBlendFactor::OneMinusSrcColor => metal::MTLBlendFactor::OneMinusSourceColor,
-        GpuBlendFactor::DstColor => metal::MTLBlendFactor::DestinationColor,
-        GpuBlendFactor::OneMinusDstColor => metal::MTLBlendFactor::OneMinusDestinationColor,
+        GpuBlendFactor::Zero => MTLBlendFactor::Zero,
+        GpuBlendFactor::One => MTLBlendFactor::One,
+        GpuBlendFactor::SrcAlpha => MTLBlendFactor::SourceAlpha,
+        GpuBlendFactor::OneMinusSrcAlpha => MTLBlendFactor::OneMinusSourceAlpha,
+        GpuBlendFactor::DstAlpha => MTLBlendFactor::DestinationAlpha,
+        GpuBlendFactor::OneMinusDstAlpha => MTLBlendFactor::OneMinusDestinationAlpha,
+        GpuBlendFactor::SrcColor => MTLBlendFactor::SourceColor,
+        GpuBlendFactor::OneMinusSrcColor => MTLBlendFactor::OneMinusSourceColor,
+        GpuBlendFactor::DstColor => MTLBlendFactor::DestinationColor,
+        GpuBlendFactor::OneMinusDstColor => MTLBlendFactor::OneMinusDestinationColor,
     }
 }
 
-pub(crate) fn to_mtl_blend_op(op: GpuBlendOp) -> metal::MTLBlendOperation {
+pub(crate) fn to_mtl_blend_op(op: GpuBlendOp) -> MTLBlendOperation {
     match op {
-        GpuBlendOp::Add => metal::MTLBlendOperation::Add,
-        GpuBlendOp::Subtract => metal::MTLBlendOperation::Subtract,
-        GpuBlendOp::ReverseSubtract => metal::MTLBlendOperation::ReverseSubtract,
-        GpuBlendOp::Min => metal::MTLBlendOperation::Min,
-        GpuBlendOp::Max => metal::MTLBlendOperation::Max,
+        GpuBlendOp::Add => MTLBlendOperation::Add,
+        GpuBlendOp::Subtract => MTLBlendOperation::Subtract,
+        GpuBlendOp::ReverseSubtract => MTLBlendOperation::ReverseSubtract,
+        GpuBlendOp::Min => MTLBlendOperation::Min,
+        GpuBlendOp::Max => MTLBlendOperation::Max,
     }
 }

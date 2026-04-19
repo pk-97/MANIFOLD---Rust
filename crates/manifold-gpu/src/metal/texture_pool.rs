@@ -2,38 +2,23 @@
 //!
 //! Matches Unity's `RenderTexture.GetTemporary()` / `ReleaseTemporary()` pattern.
 
+use objc2::rc::Retained;
+use objc2::runtime::ProtocolObject;
+use objc2_metal::{MTLDevice, MTLTexture};
+
 use super::*;
 use crate::types::*;
 
 /// Frame-stamped texture recycling pool.
-///
-/// Matches Unity's `RenderTexture.GetTemporary()` / `ReleaseTemporary()` pattern.
-/// Textures are recycled by (width, height, format) key, but only after enough
-/// frames have passed to guarantee the GPU is done reading them.
-///
-/// **Frame-stamped lifetime:** each released texture is tagged with the frame
-/// it was released on. `acquire()` only recycles textures released at least
-/// `frames_in_flight` frames ago. This prevents inter-frame GPU aliasing —
-/// the same protection Unity/Unreal use internally.
-///
-/// After a warmup period (= frames_in_flight), allocation count drops to zero
-/// at steady state. All textures are recycled, no kernel calls.
-///
-/// Uses interior mutability (UnsafeCell) — safe because TexturePool is only
-/// used on the content thread (single-threaded).
 pub struct TexturePool {
     inner: std::cell::UnsafeCell<TexturePoolInner>,
 }
 
 /// Maximum number of textures cached in the pool.
-/// Beyond this limit, released textures are dropped (freed) immediately
-/// to prevent unbounded GPU memory growth.
 const MAX_POOL_TEXTURES: usize = 128;
 
 type PoolKey = (u32, u32, GpuTextureFormat);
 
-/// A released texture waiting to be recycled, tagged with the frame it was
-/// released on. Only eligible for reuse after `frames_in_flight` frames.
 struct PoolEntry {
     texture: GpuTexture,
     release_frame: u64,
@@ -41,13 +26,11 @@ struct PoolEntry {
 
 struct TexturePoolInner {
     available: std::collections::HashMap<PoolKey, Vec<PoolEntry>>,
-    /// Owned clone of the Metal device for allocation.
-    /// metal::Device is a refcounted ObjC object — clone is just a retain.
-    device: metal::Device,
+    /// Retained Metal device handle for allocation.
+    device: Retained<ProtocolObject<dyn MTLDevice>>,
     /// Current frame number, incremented by begin_frame().
     current_frame: u64,
     /// Number of frames that can execute concurrently on the GPU.
-    /// Textures are only recycled after this many frames have passed.
     frames_in_flight: u64,
     /// New allocations via device.create_texture().
     stats_allocated: u64,
@@ -60,9 +43,10 @@ unsafe impl Send for TexturePool {}
 
 impl TexturePool {
     /// Create a new texture pool with frame-stamped recycling.
-    /// `frames_in_flight` = max concurrent GPU frames (typically 3).
     pub fn new(device: &GpuDevice, frames_in_flight: u64) -> Self {
-        let mtl_device = device.raw_device().to_owned();
+        let dev_ptr = device.raw_device() as *const _ as *mut ProtocolObject<dyn MTLDevice>;
+        let mtl_device = unsafe { Retained::retain(dev_ptr) }
+            .expect("MTLDevice retain returned nil");
         log::info!(
             "TexturePool: frame-stamped recycling, {} frames in flight",
             frames_in_flight,
@@ -79,17 +63,13 @@ impl TexturePool {
         }
     }
 
-    /// Mark the start of a new frame. Must be called once per frame before
-    /// any acquire/release calls. Drives the frame-stamp recycling clock.
+    /// Mark the start of a new frame.
     pub fn begin_frame(&self) {
         let inner = unsafe { &mut *self.inner.get() };
         inner.current_frame += 1;
     }
 
     /// Acquire a texture, recycling one if a safe match is available.
-    /// Only recycles textures released >= `frames_in_flight` frames ago,
-    /// guaranteeing the GPU has finished reading them.
-    /// Falls back to `device.create_texture()` if no safe match exists.
     pub fn acquire(
         &self,
         width: u32,
@@ -124,14 +104,10 @@ impl TexturePool {
             mip_levels: 1,
         };
         let mtl_desc = GpuDevice::build_mtl_texture_desc(&desc);
-        let raw = inner.device.new_texture(&mtl_desc);
-        {
-            use metal::foreign_types::ForeignType;
-            assert!(
-                !raw.as_ptr().is_null(),
-                "Metal: TexturePool allocation failed — GPU memory exhausted",
-            );
-        }
+        let raw = inner
+            .device
+            .newTextureWithDescriptor(&mtl_desc)
+            .expect("Metal: TexturePool allocation failed — GPU memory exhausted");
         GpuTexture {
             raw,
             width,
@@ -142,15 +118,10 @@ impl TexturePool {
     }
 
     /// Return a texture to the pool for future reuse.
-    /// Tagged with the current frame — won't be recycled until
-    /// `frames_in_flight` frames have passed.
-    /// If the pool already holds MAX_POOL_TEXTURES, the texture is dropped
-    /// immediately to prevent unbounded GPU memory growth.
     pub fn release(&self, texture: GpuTexture) {
         let inner = unsafe { &mut *self.inner.get() };
         let total: usize = inner.available.values().map(|v| v.len()).sum();
         if total >= MAX_POOL_TEXTURES {
-            // Pool is full — let the texture drop (Metal will free it).
             return;
         }
         let key = (texture.width, texture.height, texture.format);
@@ -185,8 +156,7 @@ impl TexturePool {
     }
 
     /// Remove textures that have been sitting in the pool unreused for
-    /// `stale_frames` frames. Prevents GPU memory from growing monotonically
-    /// after resolution changes or project switches.
+    /// `stale_frames` frames.
     pub fn prune_stale(&self, stale_frames: u64) {
         let inner = unsafe { &mut *self.inner.get() };
         let threshold = inner.current_frame.saturating_sub(stale_frames);

@@ -7,10 +7,7 @@
 //! MPS kernels are created once per device (or per parameter set) and cached.
 //! They are NOT per-dispatch objects — reuse them across frames.
 //!
-//! Uses typed `objc2-metal-performance-shaders` bindings. Public API still
-//! accepts `metal::DeviceRef` / `metal::CommandBufferRef` / `metal::TextureRef`
-//! so downstream crates don't need to change — bridging to the `objc2-metal`
-//! type system happens at call boundaries via `objc2_bridge`.
+//! Uses typed `objc2-metal-performance-shaders` bindings end-to-end.
 
 use std::ffi::c_float;
 use std::ptr::NonNull;
@@ -18,7 +15,7 @@ use std::ptr::NonNull;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Bool, ProtocolObject};
 use objc2::{AnyThread, Encode, Encoding, RefEncode, msg_send};
-use objc2_metal::MTLDevice;
+use objc2_metal::{MTLBuffer, MTLCommandBuffer, MTLDevice, MTLTexture};
 use objc2_metal_performance_shaders::{
     MPSBinaryImageKernel, MPSImageAdd, MPSImageAreaMax, MPSImageAreaMin, MPSImageBilinearScale,
     MPSImageBox, MPSImageConvolution, MPSImageDilate, MPSImageDivide, MPSImageErode,
@@ -30,7 +27,6 @@ use objc2_metal_performance_shaders::{
 };
 
 use super::GpuTexture;
-use super::objc2_bridge::{cmd_buf_as_objc2, device_as_objc2, texture_as_objc2};
 
 // ─── Link MPS framework ──────────────────────────────────────────────
 
@@ -39,9 +35,8 @@ unsafe extern "C" {
 }
 
 /// Check if the device supports MPS.
-pub fn mps_supports_device(device: &metal::DeviceRef) -> bool {
-    use metal::foreign_types::ForeignTypeRef;
-    unsafe { MPSSupportsMTLDevice(device.as_ptr() as *const std::ffi::c_void) }
+pub fn mps_supports_device(device: &ProtocolObject<dyn MTLDevice>) -> bool {
+    unsafe { MPSSupportsMTLDevice(device as *const _ as *const std::ffi::c_void) }
 }
 
 // ─── Scale transform ──────────────────────────────────────────────────
@@ -76,18 +71,16 @@ impl MpsScaleTransform {
 #[inline]
 unsafe fn encode_unary_typed<K>(
     kernel: &K,
-    cmd_buf: &metal::CommandBufferRef,
-    src: &metal::TextureRef,
-    dst: &metal::TextureRef,
+    cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+    src: &ProtocolObject<dyn MTLTexture>,
+    dst: &ProtocolObject<dyn MTLTexture>,
 ) where
     K: AsRef<MPSUnaryImageKernel>,
 {
     unsafe {
-        kernel.as_ref().encodeToCommandBuffer_sourceTexture_destinationTexture(
-            cmd_buf_as_objc2(cmd_buf),
-            texture_as_objc2(src),
-            texture_as_objc2(dst),
-        );
+        kernel
+            .as_ref()
+            .encodeToCommandBuffer_sourceTexture_destinationTexture(cmd_buf, src, dst);
     }
 }
 
@@ -95,10 +88,10 @@ unsafe fn encode_unary_typed<K>(
 #[inline]
 unsafe fn encode_binary_typed<K>(
     kernel: &K,
-    cmd_buf: &metal::CommandBufferRef,
-    primary: &metal::TextureRef,
-    secondary: &metal::TextureRef,
-    dst: &metal::TextureRef,
+    cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+    primary: &ProtocolObject<dyn MTLTexture>,
+    secondary: &ProtocolObject<dyn MTLTexture>,
+    dst: &ProtocolObject<dyn MTLTexture>,
 ) where
     K: AsRef<MPSBinaryImageKernel>,
 {
@@ -106,10 +99,7 @@ unsafe fn encode_binary_typed<K>(
         kernel
             .as_ref()
             .encodeToCommandBuffer_primaryTexture_secondaryTexture_destinationTexture(
-                cmd_buf_as_objc2(cmd_buf),
-                texture_as_objc2(primary),
-                texture_as_objc2(secondary),
-                texture_as_objc2(dst),
+                cmd_buf, primary, secondary, dst,
             );
     }
 }
@@ -127,11 +117,11 @@ unsafe impl Send for MpsGaussianBlur {}
 unsafe impl Sync for MpsGaussianBlur {}
 
 impl MpsGaussianBlur {
-    pub fn new(device: &metal::DeviceRef, sigma: f32) -> Self {
+    pub fn new(device: &ProtocolObject<dyn MTLDevice>, sigma: f32) -> Self {
         let inner = unsafe {
             MPSImageGaussianBlur::initWithDevice_sigma(
                 MPSImageGaussianBlur::alloc(),
-                device_as_objc2(device),
+                device,
                 sigma as c_float,
             )
         };
@@ -140,9 +130,9 @@ impl MpsGaussianBlur {
 
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        src: &metal::TextureRef,
-        dst: &metal::TextureRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        src: &ProtocolObject<dyn MTLTexture>,
+        dst: &ProtocolObject<dyn MTLTexture>,
     ) {
         unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
@@ -161,11 +151,11 @@ unsafe impl Send for MpsBoxBlur {}
 unsafe impl Sync for MpsBoxBlur {}
 
 impl MpsBoxBlur {
-    pub fn new(device: &metal::DeviceRef, kernel_width: u32, kernel_height: u32) -> Self {
+    pub fn new(device: &ProtocolObject<dyn MTLDevice>, kernel_width: u32, kernel_height: u32) -> Self {
         let inner = unsafe {
             MPSImageBox::initWithDevice_kernelWidth_kernelHeight(
                 MPSImageBox::alloc(),
-                device_as_objc2(device),
+                device,
                 kernel_width as usize,
                 kernel_height as usize,
             )
@@ -175,9 +165,9 @@ impl MpsBoxBlur {
 
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        src: &metal::TextureRef,
-        dst: &metal::TextureRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        src: &ProtocolObject<dyn MTLTexture>,
+        dst: &ProtocolObject<dyn MTLTexture>,
     ) {
         unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
@@ -192,11 +182,11 @@ unsafe impl Send for MpsTentBlur {}
 unsafe impl Sync for MpsTentBlur {}
 
 impl MpsTentBlur {
-    pub fn new(device: &metal::DeviceRef, kernel_width: u32, kernel_height: u32) -> Self {
+    pub fn new(device: &ProtocolObject<dyn MTLDevice>, kernel_width: u32, kernel_height: u32) -> Self {
         let inner = unsafe {
             MPSImageTent::initWithDevice_kernelWidth_kernelHeight(
                 MPSImageTent::alloc(),
-                device_as_objc2(device),
+                device,
                 kernel_width as usize,
                 kernel_height as usize,
             )
@@ -206,9 +196,9 @@ impl MpsTentBlur {
 
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        src: &metal::TextureRef,
-        dst: &metal::TextureRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        src: &ProtocolObject<dyn MTLTexture>,
+        dst: &ProtocolObject<dyn MTLTexture>,
     ) {
         unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
@@ -223,11 +213,11 @@ unsafe impl Send for MpsMedian {}
 unsafe impl Sync for MpsMedian {}
 
 impl MpsMedian {
-    pub fn new(device: &metal::DeviceRef, kernel_diameter: u32) -> Self {
+    pub fn new(device: &ProtocolObject<dyn MTLDevice>, kernel_diameter: u32) -> Self {
         let inner = unsafe {
             MPSImageMedian::initWithDevice_kernelDiameter(
                 MPSImageMedian::alloc(),
-                device_as_objc2(device),
+                device,
                 kernel_diameter as usize,
             )
         };
@@ -236,9 +226,9 @@ impl MpsMedian {
 
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        src: &metal::TextureRef,
-        dst: &metal::TextureRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        src: &ProtocolObject<dyn MTLTexture>,
+        dst: &ProtocolObject<dyn MTLTexture>,
     ) {
         unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
@@ -255,11 +245,11 @@ unsafe impl Send for MpsBilinearScale {}
 unsafe impl Sync for MpsBilinearScale {}
 
 impl MpsBilinearScale {
-    pub fn new(device: &metal::DeviceRef) -> Self {
+    pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
         let inner = unsafe {
             MPSImageBilinearScale::initWithDevice(
                 MPSImageBilinearScale::alloc(),
-                device_as_objc2(device),
+                device,
             )
         };
         Self { inner }
@@ -276,9 +266,9 @@ impl MpsBilinearScale {
 
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        src: &metal::TextureRef,
-        dst: &metal::TextureRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        src: &ProtocolObject<dyn MTLTexture>,
+        dst: &ProtocolObject<dyn MTLTexture>,
     ) {
         unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
@@ -293,11 +283,11 @@ unsafe impl Send for MpsLanczosScale {}
 unsafe impl Sync for MpsLanczosScale {}
 
 impl MpsLanczosScale {
-    pub fn new(device: &metal::DeviceRef) -> Self {
+    pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
         let inner = unsafe {
             MPSImageLanczosScale::initWithDevice(
                 MPSImageLanczosScale::alloc(),
-                device_as_objc2(device),
+                device,
             )
         };
         Self { inner }
@@ -313,9 +303,9 @@ impl MpsLanczosScale {
 
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        src: &metal::TextureRef,
-        dst: &metal::TextureRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        src: &ProtocolObject<dyn MTLTexture>,
+        dst: &ProtocolObject<dyn MTLTexture>,
     ) {
         unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
@@ -332,18 +322,18 @@ unsafe impl Send for MpsSobel {}
 unsafe impl Sync for MpsSobel {}
 
 impl MpsSobel {
-    pub fn new(device: &metal::DeviceRef) -> Self {
+    pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
         let inner = unsafe {
-            MPSImageSobel::initWithDevice(MPSImageSobel::alloc(), device_as_objc2(device))
+            MPSImageSobel::initWithDevice(MPSImageSobel::alloc(), device)
         };
         Self { inner }
     }
 
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        src: &metal::TextureRef,
-        dst: &metal::TextureRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        src: &ProtocolObject<dyn MTLTexture>,
+        dst: &ProtocolObject<dyn MTLTexture>,
     ) {
         unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
@@ -358,18 +348,18 @@ unsafe impl Send for MpsLaplacian {}
 unsafe impl Sync for MpsLaplacian {}
 
 impl MpsLaplacian {
-    pub fn new(device: &metal::DeviceRef) -> Self {
+    pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
         let inner = unsafe {
-            MPSImageLaplacian::initWithDevice(MPSImageLaplacian::alloc(), device_as_objc2(device))
+            MPSImageLaplacian::initWithDevice(MPSImageLaplacian::alloc(), device)
         };
         Self { inner }
     }
 
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        src: &metal::TextureRef,
-        dst: &metal::TextureRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        src: &ProtocolObject<dyn MTLTexture>,
+        dst: &ProtocolObject<dyn MTLTexture>,
     ) {
         unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
@@ -386,7 +376,7 @@ unsafe impl Sync for MpsConvolution {}
 impl MpsConvolution {
     /// Create with a custom kernel. `weights` length must be `width * height`.
     pub fn new(
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
         kernel_width: u32,
         kernel_height: u32,
         weights: &[f32],
@@ -399,7 +389,7 @@ impl MpsConvolution {
         let inner = unsafe {
             MPSImageConvolution::initWithDevice_kernelWidth_kernelHeight_weights(
                 MPSImageConvolution::alloc(),
-                device_as_objc2(device),
+                device,
                 kernel_width as usize,
                 kernel_height as usize,
                 NonNull::new(weights.as_ptr() as *mut c_float).unwrap(),
@@ -410,9 +400,9 @@ impl MpsConvolution {
 
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        src: &metal::TextureRef,
-        dst: &metal::TextureRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        src: &ProtocolObject<dyn MTLTexture>,
+        dst: &ProtocolObject<dyn MTLTexture>,
     ) {
         unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
@@ -430,7 +420,7 @@ unsafe impl Sync for MpsDilate {}
 
 impl MpsDilate {
     pub fn new(
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
         kernel_width: u32,
         kernel_height: u32,
         values: &[f32],
@@ -439,7 +429,7 @@ impl MpsDilate {
         let inner = unsafe {
             MPSImageDilate::initWithDevice_kernelWidth_kernelHeight_values(
                 MPSImageDilate::alloc(),
-                device_as_objc2(device),
+                device,
                 kernel_width as usize,
                 kernel_height as usize,
                 NonNull::new(values.as_ptr() as *mut c_float).unwrap(),
@@ -450,9 +440,9 @@ impl MpsDilate {
 
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        src: &metal::TextureRef,
-        dst: &metal::TextureRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        src: &ProtocolObject<dyn MTLTexture>,
+        dst: &ProtocolObject<dyn MTLTexture>,
     ) {
         unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
@@ -468,7 +458,7 @@ unsafe impl Sync for MpsErode {}
 
 impl MpsErode {
     pub fn new(
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
         kernel_width: u32,
         kernel_height: u32,
         values: &[f32],
@@ -477,7 +467,7 @@ impl MpsErode {
         let inner = unsafe {
             MPSImageErode::initWithDevice_kernelWidth_kernelHeight_values(
                 MPSImageErode::alloc(),
-                device_as_objc2(device),
+                device,
                 kernel_width as usize,
                 kernel_height as usize,
                 NonNull::new(values.as_ptr() as *mut c_float).unwrap(),
@@ -488,9 +478,9 @@ impl MpsErode {
 
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        src: &metal::TextureRef,
-        dst: &metal::TextureRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        src: &ProtocolObject<dyn MTLTexture>,
+        dst: &ProtocolObject<dyn MTLTexture>,
     ) {
         unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
@@ -509,7 +499,7 @@ unsafe impl Sync for MpsThresholdBinary {}
 impl MpsThresholdBinary {
     /// Pixels above `threshold` become `max_value`, below become 0.
     pub fn new(
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
         threshold: f32,
         max_value: f32,
         linear_gray_color_transform: Option<&[f32; 3]>,
@@ -520,7 +510,7 @@ impl MpsThresholdBinary {
         let inner = unsafe {
             MPSImageThresholdBinary::initWithDevice_thresholdValue_maximumValue_linearGrayColorTransform(
                 MPSImageThresholdBinary::alloc(),
-                device_as_objc2(device),
+                device,
                 threshold,
                 max_value,
                 transform_ptr,
@@ -531,9 +521,9 @@ impl MpsThresholdBinary {
 
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        src: &metal::TextureRef,
-        dst: &metal::TextureRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        src: &ProtocolObject<dyn MTLTexture>,
+        dst: &ProtocolObject<dyn MTLTexture>,
     ) {
         unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
@@ -549,7 +539,7 @@ unsafe impl Sync for MpsThresholdTruncate {}
 
 impl MpsThresholdTruncate {
     pub fn new(
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
         threshold: f32,
         linear_gray_color_transform: Option<&[f32; 3]>,
     ) -> Self {
@@ -559,7 +549,7 @@ impl MpsThresholdTruncate {
         let inner = unsafe {
             MPSImageThresholdTruncate::initWithDevice_thresholdValue_linearGrayColorTransform(
                 MPSImageThresholdTruncate::alloc(),
-                device_as_objc2(device),
+                device,
                 threshold,
                 transform_ptr,
             )
@@ -569,9 +559,9 @@ impl MpsThresholdTruncate {
 
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        src: &metal::TextureRef,
-        dst: &metal::TextureRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        src: &ProtocolObject<dyn MTLTexture>,
+        dst: &ProtocolObject<dyn MTLTexture>,
     ) {
         unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
@@ -587,7 +577,7 @@ unsafe impl Sync for MpsThresholdToZero {}
 
 impl MpsThresholdToZero {
     pub fn new(
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
         threshold: f32,
         linear_gray_color_transform: Option<&[f32; 3]>,
     ) -> Self {
@@ -597,7 +587,7 @@ impl MpsThresholdToZero {
         let inner = unsafe {
             MPSImageThresholdToZero::initWithDevice_thresholdValue_linearGrayColorTransform(
                 MPSImageThresholdToZero::alloc(),
-                device_as_objc2(device),
+                device,
                 threshold,
                 transform_ptr,
             )
@@ -607,9 +597,9 @@ impl MpsThresholdToZero {
 
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        src: &metal::TextureRef,
-        dst: &metal::TextureRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        src: &ProtocolObject<dyn MTLTexture>,
+        dst: &ProtocolObject<dyn MTLTexture>,
     ) {
         unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
@@ -626,19 +616,19 @@ unsafe impl Send for MpsAdd {}
 unsafe impl Sync for MpsAdd {}
 
 impl MpsAdd {
-    pub fn new(device: &metal::DeviceRef) -> Self {
+    pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
         let inner = unsafe {
-            MPSImageAdd::initWithDevice(MPSImageAdd::alloc(), device_as_objc2(device))
+            MPSImageAdd::initWithDevice(MPSImageAdd::alloc(), device)
         };
         Self { inner }
     }
 
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        primary: &metal::TextureRef,
-        secondary: &metal::TextureRef,
-        dst: &metal::TextureRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        primary: &ProtocolObject<dyn MTLTexture>,
+        secondary: &ProtocolObject<dyn MTLTexture>,
+        dst: &ProtocolObject<dyn MTLTexture>,
     ) {
         unsafe { encode_binary_typed(&*self.inner, cmd_buf, primary, secondary, dst) }
     }
@@ -653,19 +643,19 @@ unsafe impl Send for MpsSubtract {}
 unsafe impl Sync for MpsSubtract {}
 
 impl MpsSubtract {
-    pub fn new(device: &metal::DeviceRef) -> Self {
+    pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
         let inner = unsafe {
-            MPSImageSubtract::initWithDevice(MPSImageSubtract::alloc(), device_as_objc2(device))
+            MPSImageSubtract::initWithDevice(MPSImageSubtract::alloc(), device)
         };
         Self { inner }
     }
 
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        primary: &metal::TextureRef,
-        secondary: &metal::TextureRef,
-        dst: &metal::TextureRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        primary: &ProtocolObject<dyn MTLTexture>,
+        secondary: &ProtocolObject<dyn MTLTexture>,
+        dst: &ProtocolObject<dyn MTLTexture>,
     ) {
         unsafe { encode_binary_typed(&*self.inner, cmd_buf, primary, secondary, dst) }
     }
@@ -680,19 +670,19 @@ unsafe impl Send for MpsMultiply {}
 unsafe impl Sync for MpsMultiply {}
 
 impl MpsMultiply {
-    pub fn new(device: &metal::DeviceRef) -> Self {
+    pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
         let inner = unsafe {
-            MPSImageMultiply::initWithDevice(MPSImageMultiply::alloc(), device_as_objc2(device))
+            MPSImageMultiply::initWithDevice(MPSImageMultiply::alloc(), device)
         };
         Self { inner }
     }
 
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        primary: &metal::TextureRef,
-        secondary: &metal::TextureRef,
-        dst: &metal::TextureRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        primary: &ProtocolObject<dyn MTLTexture>,
+        secondary: &ProtocolObject<dyn MTLTexture>,
+        dst: &ProtocolObject<dyn MTLTexture>,
     ) {
         unsafe { encode_binary_typed(&*self.inner, cmd_buf, primary, secondary, dst) }
     }
@@ -707,19 +697,19 @@ unsafe impl Send for MpsDivide {}
 unsafe impl Sync for MpsDivide {}
 
 impl MpsDivide {
-    pub fn new(device: &metal::DeviceRef) -> Self {
+    pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
         let inner = unsafe {
-            MPSImageDivide::initWithDevice(MPSImageDivide::alloc(), device_as_objc2(device))
+            MPSImageDivide::initWithDevice(MPSImageDivide::alloc(), device)
         };
         Self { inner }
     }
 
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        primary: &metal::TextureRef,
-        secondary: &metal::TextureRef,
-        dst: &metal::TextureRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        primary: &ProtocolObject<dyn MTLTexture>,
+        secondary: &ProtocolObject<dyn MTLTexture>,
+        dst: &ProtocolObject<dyn MTLTexture>,
     ) {
         unsafe { encode_binary_typed(&*self.inner, cmd_buf, primary, secondary, dst) }
     }
@@ -736,11 +726,11 @@ unsafe impl Send for MpsMinMax {}
 unsafe impl Sync for MpsMinMax {}
 
 impl MpsMinMax {
-    pub fn new(device: &metal::DeviceRef) -> Self {
+    pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
         let inner = unsafe {
             MPSImageStatisticsMinAndMax::initWithDevice(
                 MPSImageStatisticsMinAndMax::alloc(),
-                device_as_objc2(device),
+                device,
             )
         };
         Self { inner }
@@ -749,9 +739,9 @@ impl MpsMinMax {
     /// Encode: result is written to a 2-pixel texture (min, max).
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        src: &metal::TextureRef,
-        dst: &metal::TextureRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        src: &ProtocolObject<dyn MTLTexture>,
+        dst: &ProtocolObject<dyn MTLTexture>,
     ) {
         unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
@@ -766,11 +756,11 @@ unsafe impl Send for MpsAreaMax {}
 unsafe impl Sync for MpsAreaMax {}
 
 impl MpsAreaMax {
-    pub fn new(device: &metal::DeviceRef, kernel_width: u32, kernel_height: u32) -> Self {
+    pub fn new(device: &ProtocolObject<dyn MTLDevice>, kernel_width: u32, kernel_height: u32) -> Self {
         let inner = unsafe {
             MPSImageAreaMax::initWithDevice_kernelWidth_kernelHeight(
                 MPSImageAreaMax::alloc(),
-                device_as_objc2(device),
+                device,
                 kernel_width as usize,
                 kernel_height as usize,
             )
@@ -780,9 +770,9 @@ impl MpsAreaMax {
 
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        src: &metal::TextureRef,
-        dst: &metal::TextureRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        src: &ProtocolObject<dyn MTLTexture>,
+        dst: &ProtocolObject<dyn MTLTexture>,
     ) {
         unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
@@ -797,11 +787,11 @@ unsafe impl Send for MpsAreaMin {}
 unsafe impl Sync for MpsAreaMin {}
 
 impl MpsAreaMin {
-    pub fn new(device: &metal::DeviceRef, kernel_width: u32, kernel_height: u32) -> Self {
+    pub fn new(device: &ProtocolObject<dyn MTLDevice>, kernel_width: u32, kernel_height: u32) -> Self {
         let inner = unsafe {
             MPSImageAreaMin::initWithDevice_kernelWidth_kernelHeight(
                 MPSImageAreaMin::alloc(),
-                device_as_objc2(device),
+                device,
                 kernel_width as usize,
                 kernel_height as usize,
             )
@@ -811,9 +801,9 @@ impl MpsAreaMin {
 
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        src: &metal::TextureRef,
-        dst: &metal::TextureRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        src: &ProtocolObject<dyn MTLTexture>,
+        dst: &ProtocolObject<dyn MTLTexture>,
     ) {
         unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
@@ -828,18 +818,18 @@ unsafe impl Send for MpsIntegral {}
 unsafe impl Sync for MpsIntegral {}
 
 impl MpsIntegral {
-    pub fn new(device: &metal::DeviceRef) -> Self {
+    pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
         let inner = unsafe {
-            MPSImageIntegral::initWithDevice(MPSImageIntegral::alloc(), device_as_objc2(device))
+            MPSImageIntegral::initWithDevice(MPSImageIntegral::alloc(), device)
         };
         Self { inner }
     }
 
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        src: &metal::TextureRef,
-        dst: &metal::TextureRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        src: &ProtocolObject<dyn MTLTexture>,
+        dst: &ProtocolObject<dyn MTLTexture>,
     ) {
         unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
@@ -854,11 +844,11 @@ unsafe impl Send for MpsIntegralOfSquares {}
 unsafe impl Sync for MpsIntegralOfSquares {}
 
 impl MpsIntegralOfSquares {
-    pub fn new(device: &metal::DeviceRef) -> Self {
+    pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
         let inner = unsafe {
             MPSImageIntegralOfSquares::initWithDevice(
                 MPSImageIntegralOfSquares::alloc(),
-                device_as_objc2(device),
+                device,
             )
         };
         Self { inner }
@@ -866,9 +856,9 @@ impl MpsIntegralOfSquares {
 
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        src: &metal::TextureRef,
-        dst: &metal::TextureRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        src: &ProtocolObject<dyn MTLTexture>,
+        dst: &ProtocolObject<dyn MTLTexture>,
     ) {
         unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
@@ -917,14 +907,14 @@ unsafe impl RefEncode for MpsHistogramInfo {
 }
 
 impl MpsHistogram {
-    pub fn new(device: &metal::DeviceRef, info: &MpsHistogramInfo) -> Self {
+    pub fn new(device: &ProtocolObject<dyn MTLDevice>, info: &MpsHistogramInfo) -> Self {
         let inner = unsafe {
             let cls = AnyClass::get(c"MPSImageHistogram").expect("MPSImageHistogram class not found");
             let alloc: *mut AnyObject = msg_send![cls, alloc];
             let info_ptr: *const MpsHistogramInfo = info;
             let obj: *mut MPSImageHistogram = msg_send![
                 alloc,
-                initWithDevice: device_as_objc2(device),
+                initWithDevice: device,
                 histogramInfo: info_ptr,
             ];
             Retained::from_raw(obj).expect("MPSImageHistogram init returned nil")
@@ -935,18 +925,18 @@ impl MpsHistogram {
     /// Encode histogram computation. Result goes into `histogram_buffer` at offset 0.
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        src: &metal::TextureRef,
-        histogram_buffer: &metal::BufferRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        src: &ProtocolObject<dyn MTLTexture>,
+        histogram_buffer: &ProtocolObject<dyn MTLBuffer>,
         histogram_offset: u64,
     ) {
-        use metal::foreign_types::ForeignTypeRef;
+        
         unsafe {
             let _: () = msg_send![
                 &*self.inner,
-                encodeToCommandBuffer: cmd_buf_as_objc2(cmd_buf),
-                sourceTexture: texture_as_objc2(src),
-                histogram: histogram_buffer.as_ptr() as *const AnyObject,
+                encodeToCommandBuffer: cmd_buf,
+                sourceTexture: src,
+                histogram: histogram_buffer as *const _ as *const AnyObject,
                 histogramOffset: histogram_offset as usize,
             ];
         }
@@ -968,7 +958,7 @@ unsafe impl Send for MpsHistogramEqualization {}
 unsafe impl Sync for MpsHistogramEqualization {}
 
 impl MpsHistogramEqualization {
-    pub fn new(device: &metal::DeviceRef, info: &MpsHistogramInfo) -> Self {
+    pub fn new(device: &ProtocolObject<dyn MTLDevice>, info: &MpsHistogramInfo) -> Self {
         let inner = unsafe {
             let cls = AnyClass::get(c"MPSImageHistogramEqualization")
                 .expect("MPSImageHistogramEqualization class not found");
@@ -976,7 +966,7 @@ impl MpsHistogramEqualization {
             let info_ptr: *const MpsHistogramInfo = info;
             let obj: *mut MPSImageHistogramEqualization = msg_send![
                 alloc,
-                initWithDevice: device_as_objc2(device),
+                initWithDevice: device,
                 histogramInfo: info_ptr,
             ];
             Retained::from_raw(obj).expect("MPSImageHistogramEqualization init returned nil")
@@ -987,18 +977,18 @@ impl MpsHistogramEqualization {
     /// Must call this before encode() to provide the histogram data.
     pub fn encode_transform(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        src: &metal::TextureRef,
-        histogram_buffer: &metal::BufferRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        src: &ProtocolObject<dyn MTLTexture>,
+        histogram_buffer: &ProtocolObject<dyn MTLBuffer>,
         histogram_offset: u64,
     ) {
-        use metal::foreign_types::ForeignTypeRef;
+        
         unsafe {
             let _: () = msg_send![
                 &*self.inner,
-                encodeTransformToCommandBuffer: cmd_buf_as_objc2(cmd_buf),
-                sourceTexture: texture_as_objc2(src),
-                histogram: histogram_buffer.as_ptr() as *const AnyObject,
+                encodeTransformToCommandBuffer: cmd_buf,
+                sourceTexture: src,
+                histogram: histogram_buffer as *const _ as *const AnyObject,
                 histogramOffset: histogram_offset as usize,
             ];
         }
@@ -1006,9 +996,9 @@ impl MpsHistogramEqualization {
 
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        src: &metal::TextureRef,
-        dst: &metal::TextureRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        src: &ProtocolObject<dyn MTLTexture>,
+        dst: &ProtocolObject<dyn MTLTexture>,
     ) {
         unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
     }
@@ -1028,11 +1018,11 @@ unsafe impl Sync for MpsFindKeypoints {}
 pub type MpsKeypointRangeInfo = MPSImageKeypointRangeInfo;
 
 impl MpsFindKeypoints {
-    pub fn new(device: &metal::DeviceRef, info: &MpsKeypointRangeInfo) -> Self {
+    pub fn new(device: &ProtocolObject<dyn MTLDevice>, info: &MpsKeypointRangeInfo) -> Self {
         let inner = unsafe {
             MPSImageFindKeypoints::initWithDevice_info(
                 MPSImageFindKeypoints::alloc(),
-                device_as_objc2(device),
+                device,
                 NonNull::new(info as *const _ as *mut _).unwrap(),
             )
         };
@@ -1042,24 +1032,24 @@ impl MpsFindKeypoints {
     /// Encode keypoint detection. Results go into `keypoint_data_buffer`.
     pub fn encode(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        src: &metal::TextureRef,
-        keypoint_count_buffer: &metal::BufferRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        src: &ProtocolObject<dyn MTLTexture>,
+        keypoint_count_buffer: &ProtocolObject<dyn MTLBuffer>,
         keypoint_count_offset: u64,
-        keypoint_data_buffer: &metal::BufferRef,
+        keypoint_data_buffer: &ProtocolObject<dyn MTLBuffer>,
         keypoint_data_offset: u64,
     ) {
-        use metal::foreign_types::ForeignTypeRef;
+        
         unsafe {
             let _: () = msg_send![
                 &*self.inner,
-                encodeToCommandBuffer: cmd_buf_as_objc2(cmd_buf),
-                sourceTexture: texture_as_objc2(src),
+                encodeToCommandBuffer: cmd_buf,
+                sourceTexture: src,
                 regions: std::ptr::null::<std::ffi::c_void>(),
                 numberOfRegions: 1usize,
-                keypointCountBuffer: keypoint_count_buffer.as_ptr() as *const AnyObject,
+                keypointCountBuffer: keypoint_count_buffer as *const _ as *const AnyObject,
                 keypointCountBufferOffset: keypoint_count_offset as usize,
-                keypointDataBuffer: keypoint_data_buffer.as_ptr() as *const AnyObject,
+                keypointDataBuffer: keypoint_data_buffer as *const _ as *const AnyObject,
                 keypointDataBufferOffset: keypoint_data_offset as usize,
             ];
         }
@@ -1138,8 +1128,8 @@ unsafe fn create_mtgp32(
 
 impl MpsMatrixRandom {
     /// Create a random number generator.
-    pub fn new(device: &metal::DeviceRef, distribution: MpsRandomDistribution) -> Self {
-        let dev = unsafe { device_as_objc2(device) };
+    pub fn new(device: &ProtocolObject<dyn MTLDevice>, distribution: MpsRandomDistribution) -> Self {
+        let dev = unsafe { device };
         let desc = unsafe {
             match distribution {
                 MpsRandomDistribution::Uniform => create_uniform_dist_desc(),
@@ -1155,15 +1145,15 @@ impl MpsMatrixRandom {
     /// Encode random fill into a buffer (as an MPS vector).
     pub fn encode_to_buffer(
         &self,
-        cmd_buf: &metal::CommandBufferRef,
-        buffer: &metal::BufferRef,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        buffer: &ProtocolObject<dyn MTLBuffer>,
         length: u64,
     ) {
         unsafe {
             let vector = create_mps_vector(buffer, length);
             let _: () = msg_send![
                 &*self.inner,
-                encodeToCommandBuffer: cmd_buf_as_objc2(cmd_buf),
+                encodeToCommandBuffer: cmd_buf,
                 destinationVector: &*vector,
             ];
         }
@@ -1171,8 +1161,8 @@ impl MpsMatrixRandom {
 }
 
 /// Helper: create MPSVector wrapping an existing buffer.
-unsafe fn create_mps_vector(buffer: &metal::BufferRef, length: u64) -> Retained<AnyObject> {
-    use metal::foreign_types::ForeignTypeRef;
+unsafe fn create_mps_vector(buffer: &ProtocolObject<dyn MTLBuffer>, length: u64) -> Retained<AnyObject> {
+    
     let vec_cls = AnyClass::get(c"MPSVector").expect("MPSVector class not found");
     let desc_cls = AnyClass::get(c"MPSVectorDescriptor").expect("MPSVectorDescriptor class not found");
     unsafe {
@@ -1185,7 +1175,7 @@ unsafe fn create_mps_vector(buffer: &metal::BufferRef, length: u64) -> Retained<
         let alloc: *mut AnyObject = msg_send![vec_cls, alloc];
         let obj: *mut AnyObject = msg_send![
             alloc,
-            initWithBuffer: buffer.as_ptr() as *const AnyObject,
+            initWithBuffer: buffer as *const _ as *const AnyObject,
             descriptor: desc,
         ];
         Retained::from_raw(obj).expect("MPSVector init returned nil")
@@ -1197,7 +1187,7 @@ unsafe fn create_mps_vector(buffer: &metal::BufferRef, length: u64) -> Retained<
 impl super::GpuEncoder {
     /// End any active encoder and return the raw command buffer.
     /// MPS kernels encode directly into the command buffer.
-    pub(crate) fn raw_cmd_buf_for_mps(&mut self) -> &metal::CommandBufferRef {
+    pub(crate) fn raw_cmd_buf_for_mps(&mut self) -> &ProtocolObject<dyn MTLCommandBuffer> {
         self.end_current();
         self.cmd_buf()
     }
@@ -1209,7 +1199,7 @@ impl super::GpuEncoder {
         src: &GpuTexture,
         dst: &GpuTexture,
         sigma: f32,
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
     ) {
         let kernel = MpsGaussianBlur::new(device, sigma);
         let cmd_buf = self.raw_cmd_buf_for_mps();
@@ -1223,7 +1213,7 @@ impl super::GpuEncoder {
         dst: &GpuTexture,
         kernel_width: u32,
         kernel_height: u32,
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
     ) {
         let kernel = MpsBoxBlur::new(device, kernel_width, kernel_height);
         let cmd_buf = self.raw_cmd_buf_for_mps();
@@ -1237,7 +1227,7 @@ impl super::GpuEncoder {
         dst: &GpuTexture,
         kernel_width: u32,
         kernel_height: u32,
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
     ) {
         let kernel = MpsTentBlur::new(device, kernel_width, kernel_height);
         let cmd_buf = self.raw_cmd_buf_for_mps();
@@ -1250,7 +1240,7 @@ impl super::GpuEncoder {
         src: &GpuTexture,
         dst: &GpuTexture,
         kernel_diameter: u32,
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
     ) {
         let kernel = MpsMedian::new(device, kernel_diameter);
         let cmd_buf = self.raw_cmd_buf_for_mps();
@@ -1262,7 +1252,7 @@ impl super::GpuEncoder {
         &mut self,
         src: &GpuTexture,
         dst: &GpuTexture,
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
     ) {
         let scale_x = dst.width as f64 / src.width as f64;
         let scale_y = dst.height as f64 / src.height as f64;
@@ -1282,7 +1272,7 @@ impl super::GpuEncoder {
         &mut self,
         src: &GpuTexture,
         dst: &GpuTexture,
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
     ) {
         let scale_x = dst.width as f64 / src.width as f64;
         let scale_y = dst.height as f64 / src.height as f64;
@@ -1298,14 +1288,14 @@ impl super::GpuEncoder {
     }
 
     /// Encode an MPS Sobel edge detection.
-    pub fn mps_sobel(&mut self, src: &GpuTexture, dst: &GpuTexture, device: &metal::DeviceRef) {
+    pub fn mps_sobel(&mut self, src: &GpuTexture, dst: &GpuTexture, device: &ProtocolObject<dyn MTLDevice>) {
         let kernel = MpsSobel::new(device);
         let cmd_buf = self.raw_cmd_buf_for_mps();
         kernel.encode(cmd_buf, &src.raw, &dst.raw);
     }
 
     /// Encode an MPS Laplacian edge detection.
-    pub fn mps_laplacian(&mut self, src: &GpuTexture, dst: &GpuTexture, device: &metal::DeviceRef) {
+    pub fn mps_laplacian(&mut self, src: &GpuTexture, dst: &GpuTexture, device: &ProtocolObject<dyn MTLDevice>) {
         let kernel = MpsLaplacian::new(device);
         let cmd_buf = self.raw_cmd_buf_for_mps();
         kernel.encode(cmd_buf, &src.raw, &dst.raw);
@@ -1319,7 +1309,7 @@ impl super::GpuEncoder {
         kernel_width: u32,
         kernel_height: u32,
         weights: &[f32],
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
     ) {
         let kernel = MpsConvolution::new(device, kernel_width, kernel_height, weights);
         let cmd_buf = self.raw_cmd_buf_for_mps();
@@ -1334,7 +1324,7 @@ impl super::GpuEncoder {
         kernel_width: u32,
         kernel_height: u32,
         values: &[f32],
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
     ) {
         let kernel = MpsDilate::new(device, kernel_width, kernel_height, values);
         let cmd_buf = self.raw_cmd_buf_for_mps();
@@ -1349,7 +1339,7 @@ impl super::GpuEncoder {
         kernel_width: u32,
         kernel_height: u32,
         values: &[f32],
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
     ) {
         let kernel = MpsErode::new(device, kernel_width, kernel_height, values);
         let cmd_buf = self.raw_cmd_buf_for_mps();
@@ -1363,7 +1353,7 @@ impl super::GpuEncoder {
         dst: &GpuTexture,
         threshold: f32,
         max_value: f32,
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
     ) {
         let kernel = MpsThresholdBinary::new(device, threshold, max_value, None);
         let cmd_buf = self.raw_cmd_buf_for_mps();
@@ -1376,7 +1366,7 @@ impl super::GpuEncoder {
         src: &GpuTexture,
         dst: &GpuTexture,
         threshold: f32,
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
     ) {
         let kernel = MpsThresholdTruncate::new(device, threshold, None);
         let cmd_buf = self.raw_cmd_buf_for_mps();
@@ -1389,7 +1379,7 @@ impl super::GpuEncoder {
         src: &GpuTexture,
         dst: &GpuTexture,
         threshold: f32,
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
     ) {
         let kernel = MpsThresholdToZero::new(device, threshold, None);
         let cmd_buf = self.raw_cmd_buf_for_mps();
@@ -1402,7 +1392,7 @@ impl super::GpuEncoder {
         a: &GpuTexture,
         b: &GpuTexture,
         dst: &GpuTexture,
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
     ) {
         let kernel = MpsAdd::new(device);
         let cmd_buf = self.raw_cmd_buf_for_mps();
@@ -1415,7 +1405,7 @@ impl super::GpuEncoder {
         a: &GpuTexture,
         b: &GpuTexture,
         dst: &GpuTexture,
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
     ) {
         let kernel = MpsSubtract::new(device);
         let cmd_buf = self.raw_cmd_buf_for_mps();
@@ -1428,7 +1418,7 @@ impl super::GpuEncoder {
         a: &GpuTexture,
         b: &GpuTexture,
         dst: &GpuTexture,
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
     ) {
         let kernel = MpsMultiply::new(device);
         let cmd_buf = self.raw_cmd_buf_for_mps();
@@ -1441,7 +1431,7 @@ impl super::GpuEncoder {
         a: &GpuTexture,
         b: &GpuTexture,
         dst: &GpuTexture,
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
     ) {
         let kernel = MpsDivide::new(device);
         let cmd_buf = self.raw_cmd_buf_for_mps();
@@ -1455,7 +1445,7 @@ impl super::GpuEncoder {
         dst: &GpuTexture,
         kernel_width: u32,
         kernel_height: u32,
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
     ) {
         let kernel = MpsAreaMax::new(device, kernel_width, kernel_height);
         let cmd_buf = self.raw_cmd_buf_for_mps();
@@ -1469,7 +1459,7 @@ impl super::GpuEncoder {
         dst: &GpuTexture,
         kernel_width: u32,
         kernel_height: u32,
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
     ) {
         let kernel = MpsAreaMin::new(device, kernel_width, kernel_height);
         let cmd_buf = self.raw_cmd_buf_for_mps();
@@ -1477,14 +1467,14 @@ impl super::GpuEncoder {
     }
 
     /// Encode MPS min/max statistics.
-    pub fn mps_min_max(&mut self, src: &GpuTexture, dst: &GpuTexture, device: &metal::DeviceRef) {
+    pub fn mps_min_max(&mut self, src: &GpuTexture, dst: &GpuTexture, device: &ProtocolObject<dyn MTLDevice>) {
         let kernel = MpsMinMax::new(device);
         let cmd_buf = self.raw_cmd_buf_for_mps();
         kernel.encode(cmd_buf, &src.raw, &dst.raw);
     }
 
     /// Encode MPS integral image (summed area table).
-    pub fn mps_integral(&mut self, src: &GpuTexture, dst: &GpuTexture, device: &metal::DeviceRef) {
+    pub fn mps_integral(&mut self, src: &GpuTexture, dst: &GpuTexture, device: &ProtocolObject<dyn MTLDevice>) {
         let kernel = MpsIntegral::new(device);
         let cmd_buf = self.raw_cmd_buf_for_mps();
         kernel.encode(cmd_buf, &src.raw, &dst.raw);
@@ -1495,7 +1485,7 @@ impl super::GpuEncoder {
         &mut self,
         src: &GpuTexture,
         dst: &GpuTexture,
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
     ) {
         let kernel = MpsIntegralOfSquares::new(device);
         let cmd_buf = self.raw_cmd_buf_for_mps();

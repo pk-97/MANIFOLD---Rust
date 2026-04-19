@@ -1,5 +1,13 @@
 //! GPU resource types backed by native Metal objects.
 
+use objc2::rc::Retained;
+use objc2::runtime::ProtocolObject;
+use objc2_metal::{
+    MTLBuffer, MTLCommandBuffer, MTLCommandQueue, MTLComputePipelineState, MTLDepthStencilState,
+    MTLDevice, MTLHeap, MTLRenderPipelineState, MTLResource, MTLSamplerState, MTLSharedEvent,
+    MTLSharedEventListener, MTLStorageMode, MTLTexture,
+};
+
 use super::*;
 use crate::types::*;
 
@@ -7,7 +15,7 @@ use crate::types::*;
 
 /// GPU texture backed by a native Metal texture.
 pub struct GpuTexture {
-    pub(crate) raw: metal::Texture,
+    pub(crate) raw: Retained<ProtocolObject<dyn MTLTexture>>,
     pub width: u32,
     pub height: u32,
     pub depth: u32,
@@ -18,9 +26,9 @@ unsafe impl Send for GpuTexture {}
 unsafe impl Sync for GpuTexture {}
 
 impl GpuTexture {
-    /// Wrap an existing metal::Texture (e.g. from IOSurface).
+    /// Wrap an existing Metal texture (e.g. from IOSurface).
     pub fn from_raw(
-        raw: metal::Texture,
+        raw: Retained<ProtocolObject<dyn MTLTexture>>,
         width: u32,
         height: u32,
         depth: u32,
@@ -36,14 +44,13 @@ impl GpuTexture {
     }
 
     /// Raw Metal texture reference.
-    pub fn raw(&self) -> &metal::TextureRef {
+    pub fn raw(&self) -> &ProtocolObject<dyn MTLTexture> {
         &self.raw
     }
 
     /// Raw Metal texture pointer as `*mut c_void` for FFI interop.
     pub fn raw_ptr(&self) -> *mut std::ffi::c_void {
-        use metal::foreign_types::ForeignType;
-        self.raw.as_ptr() as *mut std::ffi::c_void
+        Retained::as_ptr(&self.raw) as *mut std::ffi::c_void
     }
 }
 
@@ -51,7 +58,7 @@ impl GpuTexture {
 
 /// GPU buffer backed by a native Metal buffer.
 pub struct GpuBuffer {
-    pub(crate) raw: metal::Buffer,
+    pub(crate) raw: Retained<ProtocolObject<dyn MTLBuffer>>,
     pub size: u64,
     /// Persistent mapped pointer for shared-memory buffers.
     /// Some for MTLStorageMode::Shared, None for Private.
@@ -62,9 +69,10 @@ unsafe impl Send for GpuBuffer {}
 unsafe impl Sync for GpuBuffer {}
 
 impl GpuBuffer {
-    /// Wrap an existing metal::Buffer.
-    pub fn from_raw(raw: metal::Buffer, size: u64) -> Self {
-        let ptr = raw.contents() as *mut u8;
+    /// Wrap an existing Metal buffer.
+    pub fn from_raw(raw: Retained<ProtocolObject<dyn MTLBuffer>>, size: u64) -> Self {
+        let ptr = unsafe { raw.contents() };
+        let ptr = ptr.as_ptr() as *mut u8;
         Self {
             raw,
             size,
@@ -93,7 +101,7 @@ impl GpuBuffer {
     }
 
     /// Raw Metal buffer reference.
-    pub fn raw(&self) -> &metal::BufferRef {
+    pub fn raw(&self) -> &ProtocolObject<dyn MTLBuffer> {
         &self.raw
     }
 
@@ -105,7 +113,7 @@ impl GpuBuffer {
 // ─── GpuSampler ───────────────────────────────────────────────────────
 
 pub struct GpuSampler {
-    pub(crate) raw: metal::SamplerState,
+    pub(crate) raw: Retained<ProtocolObject<dyn MTLSamplerState>>,
 }
 
 unsafe impl Send for GpuSampler {}
@@ -113,7 +121,7 @@ unsafe impl Sync for GpuSampler {}
 
 impl GpuSampler {
     /// Raw Metal sampler state reference.
-    pub fn raw(&self) -> &metal::SamplerStateRef {
+    pub fn raw(&self) -> &ProtocolObject<dyn MTLSamplerState> {
         &self.raw
     }
 }
@@ -121,7 +129,7 @@ impl GpuSampler {
 // ─── GpuComputePipeline ───────────────────────────────────────────────
 
 pub struct GpuComputePipeline {
-    pub(crate) state: metal::ComputePipelineState,
+    pub(crate) state: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     pub slot_map: SlotMap,
     pub label: String,
     /// Workgroup size from the shader's @workgroup_size declaration.
@@ -149,14 +157,14 @@ unsafe impl Sync for GpuComputePipeline {}
 // ─── GpuRenderPipeline ───────────────────────────────────────────────
 
 pub struct GpuRenderPipeline {
-    pub(crate) state: metal::RenderPipelineState,
+    pub(crate) state: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     pub slot_map: SlotMap,
     pub label: String,
 }
 
 impl GpuRenderPipeline {
     /// Raw Metal render pipeline state reference.
-    pub fn raw_state(&self) -> &metal::RenderPipelineStateRef {
+    pub fn raw_state(&self) -> &ProtocolObject<dyn MTLRenderPipelineState> {
         &self.state
     }
 }
@@ -179,7 +187,7 @@ unsafe impl Sync for GpuRenderPipeline {}
 /// Compiled depth-stencil state object (MTLDepthStencilState).
 /// Created once, set on the render encoder for depth-tested draws.
 pub struct GpuDepthStencilState {
-    pub(crate) raw: metal::DepthStencilState,
+    pub(crate) raw: Retained<ProtocolObject<dyn MTLDepthStencilState>>,
 }
 
 unsafe impl Send for GpuDepthStencilState {}
@@ -187,7 +195,7 @@ unsafe impl Sync for GpuDepthStencilState {}
 
 impl GpuDepthStencilState {
     /// Raw Metal depth-stencil state reference.
-    pub fn raw(&self) -> &metal::DepthStencilStateRef {
+    pub fn raw(&self) -> &ProtocolObject<dyn MTLDepthStencilState> {
         &self.raw
     }
 }
@@ -197,7 +205,7 @@ impl GpuDepthStencilState {
 /// GPU↔CPU synchronization via MTLSharedEvent.
 /// Near-zero overhead polling (direct counter read).
 pub struct GpuEvent {
-    raw: metal::SharedEvent,
+    raw: Retained<ProtocolObject<dyn MTLSharedEvent>>,
     pub(crate) counter: std::cell::Cell<u64>,
 }
 
@@ -206,7 +214,7 @@ unsafe impl Sync for GpuEvent {}
 
 impl GpuEvent {
     /// Create a new GpuEvent from a shared event.
-    pub(crate) fn new(raw: metal::SharedEvent) -> Self {
+    pub(crate) fn new(raw: Retained<ProtocolObject<dyn MTLSharedEvent>>) -> Self {
         Self {
             raw,
             counter: std::cell::Cell::new(0),
@@ -215,7 +223,7 @@ impl GpuEvent {
 
     /// Check if the GPU has completed work signaled at `value`.
     pub fn is_done(&self, value: u64) -> bool {
-        self.raw.signaled_value() >= value
+        unsafe { self.raw.signaledValue() >= value }
     }
 
     /// Current signal counter (store after signal_event).
@@ -225,7 +233,7 @@ impl GpuEvent {
 
     /// Read the GPU-side signaled value directly.
     pub fn signaled_value(&self) -> u64 {
-        self.raw.signaled_value()
+        unsafe { self.raw.signaledValue() }
     }
 
     /// Block the calling thread until the GPU has signaled `value`, with a timeout.
@@ -249,13 +257,13 @@ impl GpuEvent {
                 "GpuEvent::wait_until_done timed out after 5s \
                  (waiting for value={}, signaled={})",
                 value,
-                self.raw.signaled_value(),
+                unsafe { self.raw.signaledValue() },
             );
         }
     }
 
     /// Raw Metal shared event reference.
-    pub fn raw(&self) -> &metal::SharedEventRef {
+    pub fn raw(&self) -> &ProtocolObject<dyn MTLSharedEvent> {
         &self.raw
     }
 }
@@ -265,7 +273,7 @@ impl GpuEvent {
 /// GPU heap backed by a native MTLHeap.
 /// Sub-allocates textures without per-allocation kernel calls.
 pub struct GpuHeap {
-    heap: metal::Heap,
+    heap: Retained<ProtocolObject<dyn MTLHeap>>,
 }
 
 unsafe impl Send for GpuHeap {}
@@ -273,7 +281,7 @@ unsafe impl Sync for GpuHeap {}
 
 impl GpuHeap {
     /// Create a new GpuHeap wrapping a Metal heap.
-    pub(crate) fn new(heap: metal::Heap) -> Self {
+    pub(crate) fn new(heap: Retained<ProtocolObject<dyn MTLHeap>>) -> Self {
         Self { heap }
     }
 
@@ -282,8 +290,10 @@ impl GpuHeap {
     pub fn new_texture(&self, desc: &GpuTextureDesc) -> Option<GpuTexture> {
         let mtl_desc = GpuDevice::build_mtl_texture_desc(desc);
         // Override storage mode to match heap's storage mode.
-        mtl_desc.set_storage_mode(self.heap.storage_mode());
-        self.heap.new_texture(&mtl_desc).map(|raw| GpuTexture {
+        let storage_mode = unsafe { self.heap.storageMode() };
+        unsafe { mtl_desc.setStorageMode(storage_mode) };
+        let raw = unsafe { self.heap.newTextureWithDescriptor(&mtl_desc) }?;
+        Some(GpuTexture {
             raw,
             width: desc.width,
             height: desc.height,
@@ -294,19 +304,25 @@ impl GpuHeap {
 
     /// Total heap size in bytes.
     pub fn size(&self) -> u64 {
-        self.heap.size()
+        unsafe { self.heap.size() as u64 }
     }
 
     /// Currently used heap memory in bytes.
     pub fn used_size(&self) -> u64 {
-        self.heap.used_size()
+        unsafe { self.heap.usedSize() as u64 }
     }
 
     /// Maximum available contiguous allocation size with given alignment.
     pub fn max_available_size(&self, alignment: u64) -> u64 {
-        self.heap.max_available_size_with_alignment(alignment)
+        unsafe { self.heap.maxAvailableSizeWithAlignment(alignment as usize) as u64 }
     }
 }
+
+// Suppress unused-import lint for trait imports that are only needed by the
+// `impl GpuHeap` method calls above (Rust requires the trait in scope to call
+// its methods through dispatch, even via ProtocolObject).
+#[allow(dead_code)]
+fn _storage_mode_trait_check(_: MTLStorageMode) {}
 
 // ─── GpuFenceWaiter ──────────────────────────────────────────────────
 
@@ -321,7 +337,7 @@ impl GpuHeap {
 /// SharedEventListener. Future Vulkan/D3D12 backends would implement
 /// equivalent fence notification (timeline semaphores / SetEventOnCompletion).
 pub struct GpuFenceWaiter {
-    listener: metal::SharedEventListener,
+    listener: Retained<MTLSharedEventListener>,
 }
 
 unsafe impl Send for GpuFenceWaiter {}
@@ -334,72 +350,48 @@ impl Default for GpuFenceWaiter {
 }
 
 impl GpuFenceWaiter {
-    /// Create a new fence waiter with its own serial dispatch queue.
+    /// Create a new fence waiter.
     ///
-    /// The dispatch queue is used by Metal to fire the notification block.
-    /// Serial queue ensures notifications are processed in order.
+    /// Uses the Metal-provided shared listener which fires notification blocks
+    /// on a private dispatch queue. Shared across all waiters — this is fine
+    /// for our use case (we just need a callback when the event signals).
     pub fn new() -> Self {
-        let label = c"com.manifold.gpu-fence-waiter";
-        // SAFETY: dispatch_queue_create is always available on macOS.
-        // Passing null attr creates a serial queue.
-        // dispatch_queue_create returns a +1 retained object.
-        // SharedEventListener::from_queue_handle calls initWithDispatchQueue:
-        // which adds another +1 retain. We must release the original +1.
-        let queue = unsafe {
-            dispatch_queue_create(label.as_ptr(), std::ptr::null())
-        };
-        assert!(!queue.is_null(), "dispatch_queue_create failed");
-
-        let listener = unsafe {
-            metal::SharedEventListener::from_queue_handle(queue)
-        };
-        // Balance the +1 from dispatch_queue_create (listener holds its own retain).
-        unsafe { dispatch_release(queue as *mut std::ffi::c_void) };
-
+        let listener = unsafe { MTLSharedEventListener::sharedListener() };
         Self { listener }
     }
 
     /// Register a notification for when the GPU event reaches `target_value`.
-    ///
-    /// When the GPU signals the event, the notification block fires on the
-    /// dispatch queue and calls `wake` — typically used to send an event
-    /// into the content thread's command channel, unblocking `recv()`.
     pub fn register<F>(&self, event: &GpuEvent, target_value: u64, wake: F)
     where
         F: FnOnce() + Send + 'static,
     {
         use block2::RcBlock;
-        use metal::foreign_types::{ForeignType, ForeignTypeRef};
 
         let wake = std::sync::Mutex::new(Some(wake));
-        let block = RcBlock::new(move |_event: *mut std::ffi::c_void, _value: u64| {
+        let block = RcBlock::new(move |_event: std::ptr::NonNull<ProtocolObject<dyn MTLSharedEvent>>,
+                                       _value: u64| {
             if let Ok(mut guard) = wake.lock()
                 && let Some(f) = guard.take()
             {
                 f();
             }
         });
-        // metal::SharedEventRef::notify signature takes a `block::Block` (objc 0.2's
-        // block). We call the ObjC method directly via objc2 to avoid the mismatch.
         unsafe {
-            let event_ptr: *mut objc2::runtime::AnyObject = event.raw().as_ptr().cast();
-            let listener_ptr: *mut objc2::runtime::AnyObject = self.listener.as_ptr().cast();
-            let _: () = objc2::msg_send![
-                event_ptr,
-                notifyListener: listener_ptr,
-                atValue: target_value,
-                block: &*block,
-            ];
+            event.raw().notifyListener_atValue_block(
+                &self.listener,
+                target_value,
+                &*block as *const _ as *mut _,
+            );
         }
     }
 }
 
-// ─── FFI: libdispatch (always available on macOS) ────────────────────
-
-unsafe extern "C" {
-    fn dispatch_queue_create(
-        label: *const std::ffi::c_char,
-        attr: *const std::ffi::c_void,
-    ) -> metal::dispatch_queue_t;
-    fn dispatch_release(object: *mut std::ffi::c_void);
+// Keep imports alive for trait dispatch; these can be stripped if unused.
+#[allow(dead_code)]
+fn _unused_traits(
+    _: &ProtocolObject<dyn MTLDevice>,
+    _: &ProtocolObject<dyn MTLCommandQueue>,
+    _: &ProtocolObject<dyn MTLCommandBuffer>,
+    _: &ProtocolObject<dyn MTLResource>,
+) {
 }

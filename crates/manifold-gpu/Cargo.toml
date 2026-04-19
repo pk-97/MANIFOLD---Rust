@@ -16,13 +16,9 @@ spirv-cross2 = { version = "0.4", default-features = false, features = ["msl"] }
 
 # Native Metal backend
 [target.'cfg(target_os = "macos")'.dependencies]
-metal = "0.33"
-core-graphics-types = "0.2"
 raw-window-handle = "0.6"
 
-# objc2 ecosystem — typed Metal bindings replacing raw msg_send! in
-# archive.rs, metalfx.rs, and mps.rs. Coexists with the `metal` crate
-# via raw ObjC pointer bridging at call boundaries.
+# objc2 ecosystem — typed Metal bindings (full migration, no `metal` crate).
 objc2 = "0.6"
 block2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSURL", "NSError", "NSArray", "NSDictionary", "NSValue", "NSObjCRuntime"] }

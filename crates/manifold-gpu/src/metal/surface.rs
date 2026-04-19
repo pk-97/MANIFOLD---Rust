@@ -1,18 +1,14 @@
 //! GpuSurface — CAMetalLayer wrapper for presenting rendered content to a window.
-//!
-//! Wraps a `CAMetalLayer` for acquiring drawables and presenting them.
-//! Used by the UI thread for native Metal rendering directly to windows.
 
-use objc2::runtime::AnyObject;
-use objc2::{Encoding, RefEncode, class, msg_send};
+use std::ffi::c_void;
+
+use objc2::rc::Retained;
+use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2::{AnyThread, Encode, Encoding, RefEncode, class, msg_send};
 use objc2_foundation::NSString;
+use objc2_metal::{MTLCommandBuffer, MTLDrawable, MTLPixelFormat, MTLTexture};
 
-// Opaque CoreFoundation struct types. `setColorspace:` / `setBackgroundColor:`
-// on CAMetalLayer declare their parameters as `CGColorSpaceRef` and `CGColorRef`,
-// whose ObjC type encodings are `^{CGColorSpace=}` and `^{CGColor=}`. These
-// are NOT toll-free bridged to `id` — objc2's strict msg_send! verification
-// rejects a generic `^v` (void pointer) or `@` (object). We give the pointer
-// its proper encoding by routing through these phantom types.
+// Opaque CoreFoundation struct types.
 #[repr(C)]
 struct CGColorSpaceOpaque {
     _priv: [u8; 0],
@@ -31,16 +27,13 @@ unsafe impl RefEncode for CGColorOpaque {
 
 use super::device::GpuDevice;
 use super::format::to_mtl_pixel_format;
-use super::{objc_release, objc_retain};
 use crate::metal::types::GpuTexture;
 use crate::types::GpuTextureFormat;
-
-use core_graphics_types::geometry::CGSize;
 
 /// A presentable surface backed by a CAMetalLayer.
 pub struct GpuSurface {
     /// Retained CAMetalLayer pointer.
-    layer_ptr: *mut std::ffi::c_void,
+    layer_ptr: *mut c_void,
     pub width: u32,
     pub height: u32,
     pub format: GpuTextureFormat,
@@ -49,10 +42,9 @@ pub struct GpuSurface {
 unsafe impl Send for GpuSurface {}
 
 /// A drawable acquired from a GpuSurface.
-/// Must be presented before being dropped (or the drawable is wasted).
 pub struct GpuDrawable {
-    /// Raw CAMetalDrawable pointer (retained).
-    drawable_ptr: *mut std::ffi::c_void,
+    /// Retained CAMetalDrawable (an `id<CAMetalDrawable>` pointer, retained).
+    drawable_ptr: *mut c_void,
 }
 
 unsafe impl Send for GpuDrawable {}
@@ -60,23 +52,110 @@ unsafe impl Send for GpuDrawable {}
 // ─── CGColorSpace FFI ────────────────────────────────────────────────
 
 unsafe extern "C" {
-    fn CGColorSpaceCreateWithName(name: *const std::ffi::c_void) -> *mut std::ffi::c_void;
-    fn CGColorSpaceRelease(space: *mut std::ffi::c_void);
-    fn CGColorCreateGenericRGB(r: f64, g: f64, b: f64, a: f64) -> *mut std::ffi::c_void;
-    fn CGColorRelease(color: *mut std::ffi::c_void);
-    static kCGColorSpaceExtendedLinearSRGB: *const std::ffi::c_void;
+    fn CGColorSpaceCreateWithName(name: *const c_void) -> *mut c_void;
+    fn CGColorSpaceRelease(space: *mut c_void);
+    fn CGColorCreateGenericRGB(r: f64, g: f64, b: f64, a: f64) -> *mut c_void;
+    fn CGColorRelease(color: *mut c_void);
+    static kCGColorSpaceExtendedLinearSRGB: *const c_void;
+}
+
+// ─── Low-level CAMetalLayer helpers (objc2 msg_send) ─────────────────
+
+/// Allocate a fresh CAMetalLayer and retain it. Returns +1.
+unsafe fn new_metal_layer() -> *mut c_void {
+    unsafe {
+        let cls = class!(CAMetalLayer);
+        let obj: *mut AnyObject = msg_send![cls, alloc];
+        let obj: *mut AnyObject = msg_send![obj, init];
+        obj as *mut c_void
+    }
+}
+
+unsafe fn layer_set_device(layer: *mut c_void, device: &ProtocolObject<dyn objc2_metal::MTLDevice>) {
+    unsafe {
+        let layer_obj: *mut AnyObject = layer.cast();
+        let dev_ptr: *const AnyObject = device as *const _ as *const AnyObject;
+        let _: () = msg_send![layer_obj, setDevice: dev_ptr];
+    }
+}
+
+unsafe fn layer_set_pixel_format(layer: *mut c_void, format: MTLPixelFormat) {
+    unsafe {
+        let layer_obj: *mut AnyObject = layer.cast();
+        let raw = format.0;
+        let _: () = msg_send![layer_obj, setPixelFormat: raw];
+    }
+}
+
+unsafe fn layer_set_framebuffer_only(layer: *mut c_void, v: bool) {
+    unsafe {
+        let layer_obj: *mut AnyObject = layer.cast();
+        let _: () = msg_send![layer_obj, setFramebufferOnly: v];
+    }
+}
+
+unsafe fn layer_set_display_sync_enabled(layer: *mut c_void, v: bool) {
+    unsafe {
+        let layer_obj: *mut AnyObject = layer.cast();
+        let _: () = msg_send![layer_obj, setDisplaySyncEnabled: v];
+    }
+}
+
+unsafe fn layer_set_maximum_drawable_count(layer: *mut c_void, n: usize) {
+    unsafe {
+        let layer_obj: *mut AnyObject = layer.cast();
+        let _: () = msg_send![layer_obj, setMaximumDrawableCount: n];
+    }
+}
+
+/// CGSize struct — matches the ABI.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CGSize {
+    width: f64,
+    height: f64,
+}
+
+unsafe impl Encode for CGSize {
+    const ENCODING: Encoding = Encoding::Struct(
+        "CGSize",
+        &[<f64 as Encode>::ENCODING, <f64 as Encode>::ENCODING],
+    );
+}
+
+unsafe fn layer_set_drawable_size(layer: *mut c_void, w: f64, h: f64) {
+    unsafe {
+        let layer_obj: *mut AnyObject = layer.cast();
+        let size = CGSize { width: w, height: h };
+        let _: () = msg_send![layer_obj, setDrawableSize: size];
+    }
+}
+
+unsafe fn layer_set_contents_scale(layer: *mut c_void, s: f64) {
+    unsafe {
+        let layer_obj: *mut AnyObject = layer.cast();
+        let _: () = msg_send![layer_obj, setContentsScale: s];
+    }
+}
+
+/// Acquire the next drawable; returns a +1 retained pointer, or null if unavailable.
+unsafe fn layer_next_drawable(layer: *mut c_void) -> *mut c_void {
+    unsafe {
+        let layer_obj: *mut AnyObject = layer.cast();
+        let raw: *mut AnyObject = msg_send![layer_obj, nextDrawable];
+        if raw.is_null() {
+            return std::ptr::null_mut();
+        }
+        // nextDrawable returns autoreleased; retain to match our +1 ownership.
+        let _: *mut AnyObject = msg_send![raw, retain];
+        raw as *mut c_void
+    }
 }
 
 // ─── GpuDevice: create_surface ───────────────────────────────────────
 
 impl GpuDevice {
     /// Create a presentable surface backed by a CAMetalLayer.
-    ///
-    /// Extracts the NSView from the window handle and attaches a configured
-    /// CAMetalLayer to it.
-    ///
-    /// # Safety
-    /// The window must remain valid for the lifetime of the returned surface.
     pub fn create_surface(
         &self,
         window: &impl raw_window_handle::HasWindowHandle,
@@ -85,7 +164,6 @@ impl GpuDevice {
         format: GpuTextureFormat,
         vsync: bool,
     ) -> GpuSurface {
-        use metal::foreign_types::ForeignType;
         use raw_window_handle::RawWindowHandle;
 
         let ns_view = match window.window_handle().unwrap().as_raw() {
@@ -93,30 +171,21 @@ impl GpuDevice {
             _ => panic!("Expected AppKit window handle"),
         };
 
-        let layer = metal::MetalLayer::new();
-        let layer_ref: &metal::MetalLayerRef = &layer;
-        layer_ref.set_device(self.raw_device());
-        layer_ref.set_pixel_format(to_mtl_pixel_format(format));
-        layer_ref.set_framebuffer_only(true);
-        layer_ref.set_display_sync_enabled(vsync);
-        layer_ref.set_maximum_drawable_count(3);
-        layer_ref.set_drawable_size(CGSize::new(width as f64, height as f64));
-        layer_ref.set_contents_scale(1.0);
-
-        // Attach CAMetalLayer to the NSView.
-        let layer_ptr = layer.as_ptr() as *mut std::ffi::c_void;
+        let layer_ptr = unsafe { new_metal_layer() };
         unsafe {
+            layer_set_device(layer_ptr, self.raw_device());
+            layer_set_pixel_format(layer_ptr, to_mtl_pixel_format(format));
+            layer_set_framebuffer_only(layer_ptr, true);
+            layer_set_display_sync_enabled(layer_ptr, vsync);
+            layer_set_maximum_drawable_count(layer_ptr, 3);
+            layer_set_drawable_size(layer_ptr, width as f64, height as f64);
+            layer_set_contents_scale(layer_ptr, 1.0);
+
+            // Attach CAMetalLayer to the NSView.
             let layer_obj: *mut AnyObject = layer_ptr.cast();
-            // Prevent CAMetalLayer::nextDrawable from blocking the caller when
-            // all drawables are in flight. The output presenter now runs inline
-            // on the main frame encoder, so blocking here would stall the app.
             let _: () = msg_send![layer_obj, setAllowsNextDrawableTimeout: true];
-            // setLayer: takes an ObjC object (type '@'); pass layer_obj, not the
-            // raw void pointer (which would encode as '^v' and fail type check).
             let _: () = msg_send![ns_view, setLayer: layer_obj];
             let _: () = msg_send![ns_view, setWantsLayer: true];
-            // Retain the layer — the local MetalLayer will drop its reference.
-            objc_retain(layer_ptr);
         }
 
         GpuSurface {
@@ -131,41 +200,31 @@ impl GpuDevice {
 // ─── GpuSurface methods ─────────────────────────────────────────────
 
 impl GpuSurface {
-    /// Get the raw CAMetalLayer as a MetalLayerRef.
-    fn layer_ref(&self) -> &metal::MetalLayerRef {
-        unsafe { &*(self.layer_ptr as *const metal::MetalLayerRef) }
-    }
-
     /// Resize the drawable surface.
     pub fn resize(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
-        self.layer_ref()
-            .set_drawable_size(CGSize::new(width as f64, height as f64));
+        unsafe { layer_set_drawable_size(self.layer_ptr, width as f64, height as f64) };
     }
 
     /// Set the maximum number of drawables in the pool (2 or 3).
-    /// 2 = lowest latency (blocks until previous present hits display).
-    /// 3 = higher throughput, up to 2 frames queue-ahead.
     pub fn set_maximum_drawable_count(&self, count: u32) {
-        self.layer_ref()
-            .set_maximum_drawable_count(count.clamp(2, 3) as u64);
+        unsafe {
+            layer_set_maximum_drawable_count(self.layer_ptr, count.clamp(2, 3) as usize);
+        }
     }
 
     /// Acquire the next drawable from the surface.
-    /// Returns `None` if no drawable is available (all in-flight).
     pub fn next_drawable(&self) -> Option<GpuDrawable> {
-        let drawable = self.layer_ref().next_drawable()?;
-        // Retain the drawable so it outlives the autorelease pool.
-        let ptr = drawable as *const metal::MetalDrawableRef as *mut std::ffi::c_void;
-        unsafe {
-            objc_retain(ptr);
+        let ptr = unsafe { layer_next_drawable(self.layer_ptr) };
+        if ptr.is_null() {
+            None
+        } else {
+            Some(GpuDrawable { drawable_ptr: ptr })
         }
-        Some(GpuDrawable { drawable_ptr: ptr })
     }
 
     /// Configure the surface for Extended Dynamic Range (EDR) output.
-    /// Sets the colorspace to ExtendedLinearSRGB and enables EDR content.
     pub fn configure_edr(&self) {
         unsafe {
             let cs = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearSRGB);
@@ -190,8 +249,6 @@ impl GpuSurface {
     }
 
     /// Control whether presents are synchronized with Core Animation transactions.
-    /// `false` (recommended for CVDisplayLink): presents are not batched into
-    /// CA transactions, preserving the timing guarantees of the display link.
     pub fn set_presents_with_transaction(&self, enabled: bool) {
         unsafe {
             let layer = self.layer_ptr as *mut AnyObject;
@@ -216,8 +273,10 @@ impl GpuSurface {
 impl Drop for GpuSurface {
     fn drop(&mut self) {
         if !self.layer_ptr.is_null() {
+            // Release the +1 retain from alloc/init.
             unsafe {
-                objc_release(self.layer_ptr);
+                let layer_obj: *mut AnyObject = self.layer_ptr.cast();
+                let _: () = msg_send![layer_obj, release];
             }
         }
     }
@@ -226,55 +285,48 @@ impl Drop for GpuSurface {
 // ─── GpuDrawable methods ─────────────────────────────────────────────
 
 impl GpuDrawable {
-    /// Get the drawable's backing texture as a raw pointer.
-    /// The returned texture is valid as a render target for the current frame.
-    pub fn texture(&self) -> &metal::TextureRef {
-        let drawable = unsafe { &*(self.drawable_ptr as *const metal::MetalDrawableRef) };
-        drawable.texture()
-    }
-
-    /// Get the raw drawable pointer for command buffer present integration.
-    pub(crate) fn raw_drawable_ref(&self) -> &metal::MetalDrawableRef {
-        unsafe { &*(self.drawable_ptr as *const metal::MetalDrawableRef) }
+    /// Get the drawable's backing texture reference (retained).
+    pub fn texture(&self) -> Retained<ProtocolObject<dyn MTLTexture>> {
+        unsafe {
+            let drawable_obj: *mut AnyObject = self.drawable_ptr.cast();
+            let tex_raw: *mut AnyObject = msg_send![drawable_obj, texture];
+            assert!(!tex_raw.is_null(), "drawable.texture returned nil");
+            // drawable.texture returns autoreleased; retain for our ownership.
+            let _: *mut AnyObject = msg_send![tex_raw, retain];
+            let typed: *mut ProtocolObject<dyn MTLTexture> = tex_raw.cast();
+            Retained::from_raw(typed).expect("drawable.texture returned nil")
+        }
     }
 
     /// Create a GpuTexture referencing this drawable's backing texture.
-    /// The drawable must outlive the returned GpuTexture.
-    /// Retains the Metal texture — safe to use alongside the drawable.
     pub fn gpu_texture(&self, format: GpuTextureFormat) -> GpuTexture {
-        use metal::foreign_types::{ForeignType, ForeignTypeRef};
-        let tex_ref = self.texture();
-        let w = tex_ref.width() as u32;
-        let h = tex_ref.height() as u32;
-        // Retain: GpuTexture::drop will release, so we need our own +1
-        let ptr = tex_ref.as_ptr() as *mut std::ffi::c_void;
-        unsafe {
-            super::objc_retain(ptr);
-        }
-        let mtl_texture = unsafe { metal::Texture::from_ptr(ptr as *mut _) };
-        GpuTexture::from_raw(mtl_texture, w, h, 1, format)
+        let tex = self.texture();
+        let w = unsafe { tex.width() } as u32;
+        let h = unsafe { tex.height() } as u32;
+        GpuTexture::from_raw(tex, w, h, 1, format)
     }
 
     /// Present the drawable directly (for `presentsWithTransaction` mode).
-    ///
-    /// Call AFTER `GpuEncoder::commit_and_wait_scheduled()` to sync with
-    /// Core Animation transactions. The drawable is presented immediately
-    /// and will be composited on the next WindowServer cycle.
     pub fn present_after_scheduled(&self) {
-        let drawable = unsafe { &*(self.drawable_ptr as *const metal::MetalDrawableRef) };
-        use std::ops::Deref;
-        drawable.deref().present();
+        unsafe {
+            let drawable_obj: *mut AnyObject = self.drawable_ptr.cast();
+            let _: () = msg_send![drawable_obj, present];
+        }
     }
 
     /// Present the drawable immediately.
-    /// Consumes self — the drawable is scheduled for display at the next vsync.
     pub fn present(self) {
-        let drawable = unsafe { &*(self.drawable_ptr as *const metal::MetalDrawableRef) };
-        // MetalDrawableRef derefs to DrawableRef which has present().
-        use std::ops::Deref;
-        drawable.deref().present();
-        // Don't release in drop — present() transfers ownership to the display pipeline.
-        // Actually, we still need to release our retain. Drop will handle it.
+        unsafe {
+            let drawable_obj: *mut AnyObject = self.drawable_ptr.cast();
+            let _: () = msg_send![drawable_obj, present];
+        }
+    }
+
+    /// Internal accessor for command-buffer present integration.
+    /// Returns a `ProtocolObject<dyn MTLDrawable>` reference — CAMetalDrawable
+    /// conforms to MTLDrawable, so the cast is safe.
+    pub(crate) fn raw_drawable(&self) -> &ProtocolObject<dyn MTLDrawable> {
+        unsafe { &*(self.drawable_ptr as *const ProtocolObject<dyn MTLDrawable>) }
     }
 }
 
@@ -282,29 +334,21 @@ impl Drop for GpuDrawable {
     fn drop(&mut self) {
         if !self.drawable_ptr.is_null() {
             unsafe {
-                objc_release(self.drawable_ptr);
+                let drawable_obj: *mut AnyObject = self.drawable_ptr.cast();
+                let _: () = msg_send![drawable_obj, release];
             }
         }
     }
-}
-
-// Silence the unused import warning when the NSString is only used via raw ptr.
-#[allow(dead_code)]
-fn _nsstring_class_check() {
-    let _ = class!(NSString);
 }
 
 // ─── GpuEncoder integration ─────────────────────────────────────────
 
 impl super::encoder::GpuEncoder {
     /// Schedule a drawable for presentation when the command buffer completes.
-    /// This is preferred over `GpuDrawable::present()` because it coordinates
-    /// with the command buffer's GPU work — the drawable is presented only after
-    /// all preceding GPU commands finish.
     pub fn present_drawable(&mut self, drawable: &GpuDrawable) {
-        // MetalDrawableRef derefs to DrawableRef, which is what
-        // CommandBufferRef::present_drawable expects.
-        self.cmd_buf().present_drawable(drawable.raw_drawable_ref());
+        unsafe {
+            self.cmd_buf().presentDrawable(drawable.raw_drawable());
+        }
     }
 }
 
@@ -315,10 +359,8 @@ mod tests {
 
     #[test]
     fn test_indexed_draw_to_texture() {
-        // 1. Create GpuDevice
         let device = GpuDevice::new();
 
-        // 2. Create a small render target (4x4, Rgba8Unorm)
         let target = device.create_texture(&GpuTextureDesc {
             width: 4,
             height: 4,
@@ -330,7 +372,6 @@ mod tests {
             mip_levels: 1,
         });
 
-        // 3. Define vertex layout: position (Float32x2) + color (Float32x4)
         let layout = GpuVertexLayout {
             stride: 24,
             attributes: vec![
@@ -347,7 +388,6 @@ mod tests {
             ],
         };
 
-        // 4. Create pipeline with vertex layout
         let wgsl = r#"
             struct VertexInput {
                 @location(0) position: vec2<f32>,
@@ -380,7 +420,6 @@ mod tests {
             "test pipeline",
         );
 
-        // 5. Create vertex buffer (fullscreen quad as 2 triangles)
         #[repr(C)]
         struct Vertex {
             pos: [f32; 2],
@@ -415,7 +454,6 @@ mod tests {
             vertex_buffer.write(0, vertex_data);
         }
 
-        // 6. Create index buffer (two triangles: 0,1,2 + 0,2,3)
         let indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
         let index_data = unsafe {
             std::slice::from_raw_parts(
@@ -428,7 +466,6 @@ mod tests {
             index_buffer.write(0, index_data);
         }
 
-        // 7. Draw
         let mut encoder = device.create_encoder("test draw");
         encoder.draw_indexed(
             &pipeline,
@@ -443,8 +480,5 @@ mod tests {
             "test indexed draw",
         );
         encoder.commit();
-
-        // If we get here without panicking, the pipeline creation
-        // and draw_indexed encoding worked correctly.
     }
 }

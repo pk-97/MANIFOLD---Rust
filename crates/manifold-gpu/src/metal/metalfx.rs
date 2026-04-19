@@ -14,14 +14,14 @@
 
 use objc2::AnyThread;
 use objc2::rc::Retained;
-use objc2_metal::MTLPixelFormat;
+use objc2::runtime::ProtocolObject;
+use objc2_metal::{MTLCommandBuffer, MTLDevice, MTLPixelFormat};
 use objc2_metal_fx::{
     MTLFXSpatialScaler, MTLFXSpatialScalerBase, MTLFXSpatialScalerColorProcessingMode,
     MTLFXSpatialScalerDescriptor,
 };
 
 use super::GpuTexture;
-use super::objc2_bridge::{cmd_buf_as_objc2, device_as_objc2, texture_as_objc2};
 use crate::GpuTextureFormat;
 
 /// Check if MetalFX Spatial Scaler is available on this system.
@@ -80,7 +80,7 @@ impl MetalFxSpatialScaler {
     /// Create a spatial scaler for the given input/output dimensions and format.
     /// Returns None if MetalFX is not available on this system.
     pub fn new(
-        device: &metal::DeviceRef,
+        device: &ProtocolObject<dyn MTLDevice>,
         input_width: u32,
         input_height: u32,
         output_width: u32,
@@ -106,8 +106,7 @@ impl MetalFxSpatialScaler {
             desc
         };
 
-        let device_obj = unsafe { device_as_objc2(device) };
-        let scaler = unsafe { desc.newSpatialScalerWithDevice(device_obj) };
+        let scaler = unsafe { desc.newSpatialScalerWithDevice(device) };
 
         let Some(scaler) = scaler else {
             log::error!(
@@ -140,14 +139,16 @@ impl MetalFxSpatialScaler {
     /// Encode the upscale operation into a command buffer.
     /// The source texture must match input dimensions, dst must match output dimensions.
     /// Caller must end any active encoder on the command buffer before calling this.
-    pub fn encode(&self, cmd_buf: &metal::CommandBufferRef, src: &GpuTexture, dst: &GpuTexture) {
+    pub fn encode(
+        &self,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        src: &GpuTexture,
+        dst: &GpuTexture,
+    ) {
         unsafe {
-            let src_obj = texture_as_objc2(&src.raw);
-            let dst_obj = texture_as_objc2(&dst.raw);
-            let cb_obj = cmd_buf_as_objc2(cmd_buf);
-            self.scaler.setColorTexture(Some(src_obj));
-            self.scaler.setOutputTexture(Some(dst_obj));
-            self.scaler.encodeToCommandBuffer(cb_obj);
+            self.scaler.setColorTexture(Some(&src.raw));
+            self.scaler.setOutputTexture(Some(&dst.raw));
+            self.scaler.encodeToCommandBuffer(cmd_buf);
         }
     }
 
@@ -163,12 +164,11 @@ impl MetalFxSpatialScaler {
 /// Check if MetalFX spatial scaling is supported for the given device.
 /// Returns true if the MTLFXSpatialScalerDescriptor class exists AND
 /// the device supports the required features.
-pub fn supports_spatial_scaling(device: &metal::DeviceRef) -> bool {
+pub fn supports_spatial_scaling(device: &ProtocolObject<dyn MTLDevice>) -> bool {
     if !metalfx_available() {
         return false;
     }
-    let device_obj = unsafe { device_as_objc2(device) };
-    unsafe { MTLFXSpatialScalerDescriptor::supportsDevice(device_obj) }
+    unsafe { MTLFXSpatialScalerDescriptor::supportsDevice(device) }
 }
 
 // ─── TextureUpscaler ─────────────────────────────────────────────────
@@ -243,23 +243,23 @@ impl TextureUpscaler {
             let scaler_idx =
                 self.ensure_metalfx_scaler(device, src.width, src.height, dst.width, dst.height);
             if let Some(idx) = scaler_idx {
+                let cmd_buf = enc.raw_cmd_buf();
                 let scaler = &self.metalfx_scalers[idx];
-                enc.end_current();
-                scaler.encode(enc.cmd_buf(), src, dst);
+                scaler.encode(cmd_buf, src, dst);
                 return;
             }
             // MetalFX creation failed — fall through to MPS
         }
 
         // MPS Lanczos fallback
-        enc.end_current();
+        let cmd_buf = enc.raw_cmd_buf();
         self.mps_lanczos.set_transform(&mps::MpsScaleTransform {
             scale_x: dst.width as f64 / src.width as f64,
             scale_y: dst.height as f64 / src.height as f64,
             translate_x: 0.0,
             translate_y: 0.0,
         });
-        self.mps_lanczos.encode(enc.cmd_buf(), &src.raw, &dst.raw);
+        self.mps_lanczos.encode(cmd_buf, &src.raw, &dst.raw);
     }
 
     /// Find or create a MetalFX scaler for the given dimensions.

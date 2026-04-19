@@ -1,53 +1,23 @@
 //! MTLBinaryArchive — caches compiled Metal pipeline binaries to disk.
-//!
-//! First launch: compiles shaders normally, adds each compiled pipeline to the
-//! archive, serializes to disk.
-//! Subsequent launches: loads pre-compiled GPU binaries — zero compilation latency.
-//!
-//! Cache invalidation: pipelines are keyed by a hash of the WGSL source +
-//! entry point. If a shader changes between app versions, the stale entry
-//! is recompiled and the archive is updated.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 
-/// Create a properly retained NSURL from a string.
-///
-/// `metal::URL::new_with_string` uses `[NSURL URLWithString:]` which returns
-/// an autoreleased object. The `metal` crate's wrapper assumes +1 ownership
-/// but doesn't retain, so the autorelease pool drain sends a second release
-/// → use-after-free. This helper uses objc2-foundation's `NSURL::initWithString`
-/// which returns a +1 retained object (no autorelease), matching what the
-/// `metal::URL` Drop expects.
-fn create_retained_url(string: &str) -> metal::URL {
-    use metal::foreign_types::ForeignType;
-    use objc2::AnyThread;
-    use objc2::rc::Retained;
-    use objc2_foundation::{NSString, NSURL};
-
-    let ns_string = NSString::from_str(string);
-    // alloc + initWithString: returns +1 retained (no autorelease).
-    let url = NSURL::initWithString(NSURL::alloc(), &ns_string)
-        .unwrap_or_else(|| panic!("NSURL initWithString: returned nil for {string}"));
-    // Transfer +1 ownership to metal::URL (its Drop releases).
-    let raw_ptr = Retained::into_raw(url);
-    unsafe { metal::URL::from_ptr(raw_ptr.cast()) }
-}
+use objc2::AnyThread;
+use objc2::rc::Retained;
+use objc2::runtime::ProtocolObject;
+use objc2_foundation::{NSString, NSURL};
+use objc2_metal::{MTLBinaryArchive, MTLBinaryArchiveDescriptor, MTLDevice};
 
 /// Pipeline binary archive — wraps MTLBinaryArchive.
-/// Created once at startup, used for all pipeline creation, saved on shutdown.
 pub struct GpuPipelineArchive {
-    archive: metal::BinaryArchive,
+    archive: Retained<ProtocolObject<dyn MTLBinaryArchive>>,
     /// Tracks which pipeline hashes have been added to the archive this session.
-    /// Used to avoid redundant addComputePipelineFunctions calls.
     added_hashes: std::collections::HashSet<u64>,
     /// Whether the archive was modified (new pipelines added).
     dirty: bool,
-    /// File URL string for serialization. Stored as a String rather than
-    /// metal::URL because URL wraps an autoreleased ObjC object whose
-    /// lifetime is not visible to the Rust compiler — storing it long-term
-    /// leads to use-after-free when an autorelease pool drains.
+    /// File URL string for serialization.
     save_url_string: String,
 }
 
@@ -57,25 +27,37 @@ unsafe impl Sync for GpuPipelineArchive {}
 
 impl GpuPipelineArchive {
     /// Load an existing archive from disk, or create a new empty one.
-    /// Binary archives require macOS 11+ / Apple Silicon (all supported targets).
-    pub fn load_or_create(device: &metal::DeviceRef, path: &Path) -> Option<Self> {
+    pub fn load_or_create(
+        device: &ProtocolObject<dyn MTLDevice>,
+        path: &Path,
+    ) -> Option<Self> {
         let url_string = format!("file://{}", path.display());
-        let url = create_retained_url(&url_string);
+        let url_ns = NSString::from_str(&url_string);
+        let url = NSURL::initWithString(NSURL::alloc(), &url_ns)
+            .unwrap_or_else(|| panic!("NSURL initWithString: returned nil for {url_string}"));
 
         // Try loading existing archive
-        let desc = metal::BinaryArchiveDescriptor::new();
-        desc.set_url(&url);
-        let archive = match device.new_binary_archive_with_descriptor(&desc) {
+        let desc = unsafe { MTLBinaryArchiveDescriptor::init(MTLBinaryArchiveDescriptor::alloc()) };
+        unsafe {
+            desc.setUrl(Some(&url));
+        }
+        let archive = match unsafe { device.newBinaryArchiveWithDescriptor_error(&desc) } {
             Ok(archive) => {
                 log::info!("Loaded pipeline archive from {}", path.display());
                 archive
             }
             Err(_) => {
                 // No existing archive or corrupt — create empty
-                let empty_desc = metal::BinaryArchiveDescriptor::new();
-                device
-                    .new_binary_archive_with_descriptor(&empty_desc)
-                    .unwrap_or_else(|e| panic!("Failed to create empty binary archive: {e}"))
+                let empty_desc = unsafe {
+                    MTLBinaryArchiveDescriptor::init(MTLBinaryArchiveDescriptor::alloc())
+                };
+                unsafe { device.newBinaryArchiveWithDescriptor_error(&empty_desc) }
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "Failed to create empty binary archive: {}",
+                            e.localizedDescription()
+                        )
+                    })
             }
         };
 
@@ -88,7 +70,7 @@ impl GpuPipelineArchive {
     }
 
     /// Get a reference to the underlying MTLBinaryArchive for pipeline creation.
-    pub fn raw_archive(&self) -> &metal::BinaryArchiveRef {
+    pub fn raw_archive(&self) -> &Retained<ProtocolObject<dyn MTLBinaryArchive>> {
         &self.archive
     }
 
@@ -108,15 +90,16 @@ impl GpuPipelineArchive {
         self.dirty
     }
 
-    /// Serialize the archive to disk. Call after all pipelines have been created
-    /// (e.g. at the end of startup or on shutdown).
+    /// Serialize the archive to disk (if loaded and modified).
     pub fn save(&mut self) {
         if !self.dirty {
             return;
         }
-        let url = create_retained_url(&self.save_url_string);
-        match self.archive.serialize_to_url(&url) {
-            Ok(_) => {
+        let url_ns = NSString::from_str(&self.save_url_string);
+        let url = NSURL::initWithString(NSURL::alloc(), &url_ns)
+            .unwrap_or_else(|| panic!("NSURL initWithString: returned nil for {}", self.save_url_string));
+        match unsafe { self.archive.serializeToURL_error(&url) } {
+            Ok(()) => {
                 log::info!(
                     "Saved pipeline archive ({} pipelines)",
                     self.added_hashes.len()
@@ -124,15 +107,16 @@ impl GpuPipelineArchive {
                 self.dirty = false;
             }
             Err(e) => {
-                log::warn!("Failed to save pipeline archive: {e}");
+                log::warn!(
+                    "Failed to save pipeline archive: {}",
+                    e.localizedDescription()
+                );
             }
         }
     }
 }
 
-/// Compute a stable hash for a compute pipeline's identity
-/// (WGSL source + entry point + half-precision flag).
-/// Used for cache invalidation — if the hash changes, the pipeline is recompiled.
+/// Compute a stable hash for a compute pipeline's identity.
 pub fn pipeline_hash(wgsl_source: &str, entry_point: &str, use_half: bool) -> u64 {
     let mut hasher = DefaultHasher::new();
     wgsl_source.hash(&mut hasher);
@@ -141,7 +125,7 @@ pub fn pipeline_hash(wgsl_source: &str, entry_point: &str, use_half: bool) -> u6
     hasher.finish()
 }
 
-/// Compute a stable hash for a render pipeline's identity (WGSL source + VS/FS entry points).
+/// Compute a stable hash for a render pipeline's identity.
 pub fn render_pipeline_hash(wgsl_source: &str, vs_entry: &str, fs_entry: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     wgsl_source.hash(&mut hasher);

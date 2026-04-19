@@ -1,5 +1,18 @@
 //! GpuEncoder — per-frame GPU command encoder wrapping a retained Metal command buffer.
 
+use std::ffi::c_void;
+use std::ptr::NonNull;
+
+use objc2::rc::Retained;
+use objc2::runtime::ProtocolObject;
+use objc2_foundation::NSString;
+use objc2_metal::{
+    MTLBlitCommandEncoder, MTLBlitOption, MTLCommandBuffer, MTLCommandEncoder,
+    MTLComputeCommandEncoder, MTLIndexType, MTLLoadAction, MTLOrigin, MTLPrimitiveType,
+    MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLRenderPipelineState, MTLScissorRect,
+    MTLSize, MTLStoreAction, MTLTexture, MTLTextureUsage, MTLViewport,
+};
+
 use super::*;
 use crate::types::*;
 
@@ -7,26 +20,19 @@ use crate::types::*;
 #[allow(dead_code)]
 pub(crate) enum EncoderState {
     None,
-    /// Active compute command encoder.
-    Compute(*const metal::ComputeCommandEncoderRef),
-    /// Active render command encoder.
-    Render(*const metal::RenderCommandEncoderRef),
-    /// Active blit command encoder.
-    Blit(*const metal::BlitCommandEncoderRef),
+    Compute(Retained<ProtocolObject<dyn MTLComputeCommandEncoder>>),
+    Render(Retained<ProtocolObject<dyn MTLRenderCommandEncoder>>),
+    Blit(Retained<ProtocolObject<dyn MTLBlitCommandEncoder>>),
 }
 
 /// Cached compute bind state — skips redundant Metal API calls when the same
 /// resource is already bound at a slot from a previous dispatch.
-/// Only valid while the compute encoder stays alive across dispatches.
 const CACHE_SLOTS: usize = 16;
 
 pub(super) struct ComputeBindCache {
-    /// Raw ObjC pointers for currently bound textures, indexed by Metal texture slot.
-    textures: [*const std::ffi::c_void; CACHE_SLOTS],
-    /// Raw ObjC pointers for currently bound samplers, indexed by Metal sampler slot.
-    samplers: [*const std::ffi::c_void; CACHE_SLOTS],
-    /// (Raw ObjC pointer, offset) for currently bound buffers, indexed by Metal buffer slot.
-    buffers: [(*const std::ffi::c_void, u64); CACHE_SLOTS],
+    textures: [*const c_void; CACHE_SLOTS],
+    samplers: [*const c_void; CACHE_SLOTS],
+    buffers: [(*const c_void, u64); CACHE_SLOTS],
 }
 
 impl ComputeBindCache {
@@ -45,17 +51,11 @@ impl ComputeBindCache {
     }
 }
 
-/// Cached render bind state for `draw_in_render_pass` — skips redundant
-/// bindings across consecutive draws within the same render pass.
 pub(super) struct RenderBindCache {
-    frag_textures: [*const std::ffi::c_void; CACHE_SLOTS],
-    frag_samplers: [*const std::ffi::c_void; CACHE_SLOTS],
-    /// Buffers: (ObjC pointer, offset) per slot — same identity = skip both stages.
-    buffers: [(*const std::ffi::c_void, u64); CACHE_SLOTS],
-    /// Vertex buffer at index 30: ObjC pointer. When the same buffer is
-    /// re-bound at a different offset, use setVertexBufferOffset instead.
-    vertex_buf_30: *const std::ffi::c_void,
-    /// Bytes: (data pointer, length) per slot — same slice = skip both stages.
+    frag_textures: [*const c_void; CACHE_SLOTS],
+    frag_samplers: [*const c_void; CACHE_SLOTS],
+    buffers: [(*const c_void, u64); CACHE_SLOTS],
+    vertex_buf_30: *const c_void,
     bytes: [(*const u8, usize); CACHE_SLOTS],
 }
 
@@ -80,104 +80,77 @@ impl RenderBindCache {
 }
 
 /// Per-frame GPU command encoder. Wraps a retained Metal command buffer.
-///
-/// Automatically manages compute/render/blit encoder transitions.
-/// Compute encoders are kept alive across dispatches for efficiency.
-/// Render/blit encoders are ended after each pass.
 pub struct GpuEncoder {
     /// Retained MTLCommandBuffer. Released on drop.
-    pub(crate) cmd_buf_ptr: *mut std::ffi::c_void,
+    pub(crate) cmd_buf: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
     pub(crate) state: EncoderState,
-    /// Bind cache for the active compute encoder — eliminates redundant
-    /// set_texture/set_sampler/set_buffer calls across consecutive dispatches.
     pub(super) compute_cache: ComputeBindCache,
-    /// Bind cache for multi-draw render passes (`draw_in_render_pass`) —
-    /// eliminates redundant fragment texture/sampler bindings across draws.
     pub(super) render_cache: RenderBindCache,
-    /// Pre-compiled compute clear pipelines per texture format.
     pub(super) clear_pipelines: *const super::device::ClearPipelines,
 }
 
 unsafe impl Send for GpuEncoder {}
 
-/// Extract the raw ObjC pointer from a Metal texture for bind cache comparison.
 #[inline]
-fn texture_identity(tex: &metal::Texture) -> *const std::ffi::c_void {
-    &**tex as *const metal::TextureRef as *const std::ffi::c_void
+fn texture_identity(tex: &ProtocolObject<dyn objc2_metal::MTLTexture>) -> *const c_void {
+    tex as *const _ as *const c_void
 }
 
-/// Extract the raw ObjC pointer from a Metal sampler for bind cache comparison.
 #[inline]
-fn sampler_identity(s: &metal::SamplerState) -> *const std::ffi::c_void {
-    &**s as *const metal::SamplerStateRef as *const std::ffi::c_void
+fn sampler_identity(s: &ProtocolObject<dyn objc2_metal::MTLSamplerState>) -> *const c_void {
+    s as *const _ as *const c_void
 }
 
-/// Extract the raw ObjC pointer from a Metal buffer for bind cache comparison.
 #[inline]
-fn buffer_identity(buf: &metal::Buffer) -> *const std::ffi::c_void {
-    &**buf as *const metal::BufferRef as *const std::ffi::c_void
+fn buffer_identity(buf: &ProtocolObject<dyn objc2_metal::MTLBuffer>) -> *const c_void {
+    buf as *const _ as *const c_void
 }
 
 impl GpuEncoder {
-    pub(super) fn cmd_buf(&self) -> &metal::CommandBufferRef {
-        unsafe { &*(self.cmd_buf_ptr as *const metal::CommandBufferRef) }
+    pub(super) fn cmd_buf(&self) -> &ProtocolObject<dyn MTLCommandBuffer> {
+        &self.cmd_buf
     }
 
     /// Get the raw command buffer for direct encoding (MPS kernels, MetalFX).
     /// Ends any active encoder first to avoid encoding conflicts.
-    pub fn raw_cmd_buf(&mut self) -> &metal::CommandBufferRef {
+    pub fn raw_cmd_buf(&mut self) -> &ProtocolObject<dyn MTLCommandBuffer> {
         self.end_current();
-        self.cmd_buf()
+        &self.cmd_buf
     }
 
-    /// Ensure a compute encoder is active. Returns a raw pointer to it.
-    fn ensure_compute(&mut self) -> *const metal::ComputeCommandEncoderRef {
-        if let EncoderState::Compute(ptr) = self.state {
-            return ptr;
+    /// Ensure a compute encoder is active. Returns a retained handle.
+    fn ensure_compute(&mut self) -> Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> {
+        if let EncoderState::Compute(ref enc) = self.state {
+            return enc.clone();
         }
         self.end_current();
-        let enc = self.cmd_buf().new_compute_command_encoder();
-        let ptr = enc as *const metal::ComputeCommandEncoderRef;
-        // Retain the encoder so it survives autorelease pool drains.
-        // The autoreleased reference from new_compute_command_encoder() could
-        // be freed by an outer pool drain in release builds.
-        unsafe {
-            objc_retain(ptr as *mut std::ffi::c_void);
-        }
-        self.state = EncoderState::Compute(ptr);
-        ptr
+        let enc = self
+            .cmd_buf
+            .computeCommandEncoder()
+            .expect("Failed to create compute encoder");
+        self.state = EncoderState::Compute(enc.clone());
+        enc
     }
 
     /// End the current encoder (if any).
     pub(super) fn end_current(&mut self) {
-        match self.state {
+        let state = std::mem::replace(&mut self.state, EncoderState::None);
+        match state {
             EncoderState::None => {}
-            EncoderState::Compute(ptr) => {
-                unsafe { &*ptr }.end_encoding();
-                unsafe {
-                    objc_release(ptr as *mut std::ffi::c_void);
-                }
+            EncoderState::Compute(enc) => {
+                enc.endEncoding();
                 self.compute_cache.clear();
             }
-            EncoderState::Render(ptr) => {
-                unsafe { &*ptr }.end_encoding();
-                // Render encoders are not retained (created+ended in same scope)
+            EncoderState::Render(enc) => {
+                enc.endEncoding();
             }
-            EncoderState::Blit(ptr) => {
-                unsafe { &*ptr }.end_encoding();
-                // Blit encoders are not retained (created+ended in same scope)
+            EncoderState::Blit(enc) => {
+                enc.endEncoding();
             }
         }
-        self.state = EncoderState::None;
     }
 
     /// Dispatch a compute shader.
-    ///
-    /// Automatically manages encoder state — if a compute encoder is already
-    /// active, reuses it. If a render/blit encoder is active, ends it first.
-    ///
-    /// `bindings` use WGSL @binding(N) indices. The pipeline's slot map
-    /// translates to Metal buffer/texture/sampler argument indices.
     pub fn dispatch_compute(
         &mut self,
         pipeline: &GpuComputePipeline,
@@ -185,14 +158,12 @@ impl GpuEncoder {
         workgroups: [u32; 3],
         label: &str,
     ) {
-        let enc_ptr = self.ensure_compute();
-        let enc = unsafe { &*enc_ptr };
-        enc.push_debug_group(label);
-        enc.set_compute_pipeline_state(&pipeline.state);
+        let enc = self.ensure_compute();
+        unsafe {
+            enc.pushDebugGroup(&NSString::from_str(label));
+            enc.setComputePipelineState(&pipeline.state);
+        }
 
-        // Collect buffer sizes for the sizes buffer (runtime-sized arrays).
-        // naga's MSL backend reads arrayLength() from this auxiliary buffer.
-        // Fixed-size stack array — Metal argument indices are < 31 in practice.
         const MAX_BUFFER_SLOTS: usize = 32;
         let mut buffer_sizes = [0u32; MAX_BUFFER_SLOTS];
         let mut buffer_sizes_len: usize = 0;
@@ -204,23 +175,23 @@ impl GpuEncoder {
                     buffer,
                     offset,
                 } => {
-                    // Skip bindings not used by this entry point. Metal ignores
-                    // unused argument slots, so this is safe. Multi-entry-point
-                    // shaders have per-entry slot maps that may exclude globals
-                    // not referenced by the specific entry point.
                     let Some(slot) = pipeline.slot_map.get(*b) else {
                         continue;
                     };
                     let idx = slot.metal_index as usize;
                     let id = buffer_identity(&buffer.raw);
                     if idx >= CACHE_SLOTS || self.compute_cache.buffers[idx] != (id, *offset) {
-                        enc.set_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
+                        unsafe {
+                            enc.setBuffer_offset_atIndex(
+                                Some(&buffer.raw),
+                                *offset as usize,
+                                slot.metal_index as usize,
+                            );
+                        }
                         if idx < CACHE_SLOTS {
                             self.compute_cache.buffers[idx] = (id, *offset);
                         }
                     }
-                    // Track buffer size for sizes buffer generation.
-                    // Indexed by Metal buffer argument index.
                     if idx < MAX_BUFFER_SLOTS {
                         buffer_sizes[idx] = buffer.size as u32;
                         if idx >= buffer_sizes_len {
@@ -238,7 +209,9 @@ impl GpuEncoder {
                     let idx = slot.metal_index as usize;
                     let id = texture_identity(&texture.raw);
                     if idx >= CACHE_SLOTS || self.compute_cache.textures[idx] != id {
-                        enc.set_texture(slot.metal_index as _, Some(&texture.raw));
+                        unsafe {
+                            enc.setTexture_atIndex(Some(&texture.raw), slot.metal_index as usize);
+                        }
                         if idx < CACHE_SLOTS {
                             self.compute_cache.textures[idx] = id;
                         }
@@ -254,51 +227,65 @@ impl GpuEncoder {
                     let idx = slot.metal_index as usize;
                     let id = sampler_identity(&sampler.raw);
                     if idx >= CACHE_SLOTS || self.compute_cache.samplers[idx] != id {
-                        enc.set_sampler_state(slot.metal_index as _, Some(&sampler.raw));
+                        unsafe {
+                            enc.setSamplerState_atIndex(
+                                Some(&sampler.raw),
+                                slot.metal_index as usize,
+                            );
+                        }
                         if idx < CACHE_SLOTS {
                             self.compute_cache.samplers[idx] = id;
                         }
                     }
                 }
                 GpuBinding::Bytes { binding: b, data } => {
-                    // Always re-bind: inline bytes change every dispatch (uniforms).
                     let Some(slot) = pipeline.slot_map.get(*b) else {
                         continue;
                     };
-                    enc.set_bytes(
-                        slot.metal_index as _,
-                        data.len() as _,
-                        data.as_ptr() as *const _,
-                    );
+                    unsafe {
+                        enc.setBytes_length_atIndex(
+                            NonNull::new(data.as_ptr() as *mut c_void).unwrap(),
+                            data.len(),
+                            slot.metal_index as usize,
+                        );
+                    }
                 }
             }
         }
 
-        // Bind the sizes buffer if this pipeline has runtime-sized arrays.
         if pipeline.needs_sizes_buffer {
             let slot = pipeline
                 .slot_map
                 .get(SIZES_BUFFER_BINDING)
                 .expect("sizes buffer slot missing");
-            enc.set_bytes(
-                slot.metal_index as _,
-                (buffer_sizes_len * 4) as _,
-                buffer_sizes.as_ptr() as *const _,
-            );
+            unsafe {
+                enc.setBytes_length_atIndex(
+                    NonNull::new(buffer_sizes.as_ptr() as *mut c_void).unwrap(),
+                    buffer_sizes_len * 4,
+                    slot.metal_index as usize,
+                );
+            }
         }
 
         let wg = pipeline.workgroup_size;
-        enc.dispatch_thread_groups(
-            metal::MTLSize::new(workgroups[0] as _, workgroups[1] as _, workgroups[2] as _),
-            metal::MTLSize::new(wg[0] as _, wg[1] as _, wg[2] as _),
-        );
-        enc.pop_debug_group();
+        unsafe {
+            enc.dispatchThreadgroups_threadsPerThreadgroup(
+                MTLSize {
+                    width: workgroups[0] as usize,
+                    height: workgroups[1] as usize,
+                    depth: workgroups[2] as usize,
+                },
+                MTLSize {
+                    width: wg[0] as usize,
+                    height: wg[1] as usize,
+                    depth: wg[2] as usize,
+                },
+            );
+            enc.popDebugGroup();
+        }
     }
 
     /// Draw a fullscreen triangle with a render pipeline.
-    ///
-    /// Creates a new render encoder for each call (render targets may differ).
-    /// Used by SimpleBlitHelper, DualTextureBlitHelper, etc.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_fullscreen(
         &mut self,
@@ -311,82 +298,47 @@ impl GpuEncoder {
     ) {
         self.end_current();
 
-        let desc = metal::RenderPassDescriptor::new();
-        let color = desc.color_attachments().object_at(0).unwrap();
-        color.set_texture(Some(&target.raw));
-        color.set_load_action(if clear {
-            metal::MTLLoadAction::Clear
-        } else {
-            metal::MTLLoadAction::Load
-        });
-        color.set_store_action(if store {
-            metal::MTLStoreAction::Store
-        } else {
-            metal::MTLStoreAction::DontCare
-        });
-        color.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 0.0));
-
-        let enc = self.cmd_buf().new_render_command_encoder(desc);
-        enc.push_debug_group(label);
-        enc.set_render_pipeline_state(&pipeline.state);
-
-        for binding in bindings {
-            match binding {
-                GpuBinding::Buffer {
-                    binding: b,
-                    buffer,
-                    offset,
-                } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    enc.set_fragment_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
-                }
-                GpuBinding::Texture {
-                    binding: b,
-                    texture,
-                } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    // Bind to both stages — vertex shaders may sample textures
-                    // (e.g. displacement maps). Metal ignores unused bindings.
-                    enc.set_vertex_texture(slot.metal_index as _, Some(&texture.raw));
-                    enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
-                }
-                GpuBinding::Sampler {
-                    binding: b,
-                    sampler,
-                } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    enc.set_vertex_sampler_state(slot.metal_index as _, Some(&sampler.raw));
-                    enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
-                }
-                GpuBinding::Bytes { binding: b, data } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    enc.set_fragment_bytes(
-                        slot.metal_index as _,
-                        data.len() as _,
-                        data.as_ptr() as *const _,
-                    );
-                }
-            }
+        let desc = new_render_pass_descriptor();
+        let color = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
+        unsafe {
+            color.setTexture(Some(&target.raw));
+            color.setLoadAction(if clear {
+                MTLLoadAction::Clear
+            } else {
+                MTLLoadAction::Load
+            });
+            color.setStoreAction(if store {
+                MTLStoreAction::Store
+            } else {
+                MTLStoreAction::DontCare
+            });
+            color.setClearColor(objc2_metal::MTLClearColor {
+                red: 0.0,
+                green: 0.0,
+                blue: 0.0,
+                alpha: 0.0,
+            });
         }
 
-        enc.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
-        enc.pop_debug_group();
-        enc.end_encoding();
-        // State goes back to None (render encoder consumed).
+        let enc = self
+            .cmd_buf
+            .renderCommandEncoderWithDescriptor(&desc)
+            .expect("renderCommandEncoderWithDescriptor failed");
+        unsafe {
+            enc.pushDebugGroup(&NSString::from_str(label));
+            enc.setRenderPipelineState(&pipeline.state);
+        }
+
+        apply_bindings_draw_fullscreen(&enc, pipeline, bindings);
+
+        unsafe {
+            enc.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
+            enc.popDebugGroup();
+            enc.endEncoding();
+        }
     }
 
     /// Draw a fullscreen triangle with viewport positioning.
-    ///
-    /// Like `draw_fullscreen()` but sets a viewport for sub-region rendering
-    /// (e.g. aspect-fit blit into a panel). Load action preserves existing content.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_fullscreen_viewport(
         &mut self,
@@ -399,88 +351,51 @@ impl GpuEncoder {
     ) {
         self.end_current();
 
-        let desc = metal::RenderPassDescriptor::new();
-        let color = desc.color_attachments().object_at(0).unwrap();
-        color.set_texture(Some(&target.raw));
-        color.set_load_action(match load_action {
-            crate::GpuLoadAction::Clear => metal::MTLLoadAction::Clear,
-            crate::GpuLoadAction::Load => metal::MTLLoadAction::Load,
-            crate::GpuLoadAction::DontCare => metal::MTLLoadAction::DontCare,
-        });
-        color.set_store_action(metal::MTLStoreAction::Store);
-        color.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 0.0));
-
-        let enc = self.cmd_buf().new_render_command_encoder(desc);
-        enc.push_debug_group(label);
-        enc.set_render_pipeline_state(&pipeline.state);
-
-        let (x, y, w, h) = viewport;
-        enc.set_viewport(metal::MTLViewport {
-            originX: x as f64,
-            originY: y as f64,
-            width: w as f64,
-            height: h as f64,
-            znear: 0.0,
-            zfar: 1.0,
-        });
-
-        for binding in bindings {
-            match binding {
-                GpuBinding::Buffer {
-                    binding: b,
-                    buffer,
-                    offset,
-                } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    enc.set_fragment_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
-                }
-                GpuBinding::Texture {
-                    binding: b,
-                    texture,
-                } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    // Bind to both stages — vertex shaders may sample textures
-                    // (e.g. displacement maps). Metal ignores unused bindings.
-                    enc.set_vertex_texture(slot.metal_index as _, Some(&texture.raw));
-                    enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
-                }
-                GpuBinding::Sampler {
-                    binding: b,
-                    sampler,
-                } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    enc.set_vertex_sampler_state(slot.metal_index as _, Some(&sampler.raw));
-                    enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
-                }
-                GpuBinding::Bytes { binding: b, data } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    enc.set_fragment_bytes(
-                        slot.metal_index as _,
-                        data.len() as _,
-                        data.as_ptr() as *const _,
-                    );
-                }
-            }
+        let desc = new_render_pass_descriptor();
+        let color = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
+        unsafe {
+            color.setTexture(Some(&target.raw));
+            color.setLoadAction(convert_load_action(load_action));
+            color.setStoreAction(MTLStoreAction::Store);
+            color.setClearColor(objc2_metal::MTLClearColor {
+                red: 0.0,
+                green: 0.0,
+                blue: 0.0,
+                alpha: 0.0,
+            });
         }
 
-        enc.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
-        enc.pop_debug_group();
-        enc.end_encoding();
+        let enc = self
+            .cmd_buf
+            .renderCommandEncoderWithDescriptor(&desc)
+            .expect("renderCommandEncoderWithDescriptor failed");
+        unsafe {
+            enc.pushDebugGroup(&NSString::from_str(label));
+            enc.setRenderPipelineState(&pipeline.state);
+        }
+
+        let (x, y, w, h) = viewport;
+        unsafe {
+            enc.setViewport(MTLViewport {
+                originX: x as f64,
+                originY: y as f64,
+                width: w as f64,
+                height: h as f64,
+                znear: 0.0,
+                zfar: 1.0,
+            });
+        }
+
+        apply_bindings_draw_fullscreen(&enc, pipeline, bindings);
+
+        unsafe {
+            enc.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
+            enc.popDebugGroup();
+            enc.endEncoding();
+        }
     }
 
     /// Draw instanced geometry with a render pipeline.
-    ///
-    /// Buffer/Bytes bindings are set on BOTH vertex and fragment stages.
-    /// Texture/Sampler bindings are fragment-only (no current vertex shader
-    /// samples textures — avoids redundant vertex-stage bindings).
     #[allow(clippy::too_many_arguments)]
     pub fn draw_instanced(
         &mut self,
@@ -494,90 +409,49 @@ impl GpuEncoder {
     ) {
         self.end_current();
 
-        let desc = metal::RenderPassDescriptor::new();
-        let color = desc.color_attachments().object_at(0).unwrap();
-        color.set_texture(Some(&target.raw));
-        color.set_load_action(match load_action {
-            crate::GpuLoadAction::Clear => metal::MTLLoadAction::Clear,
-            crate::GpuLoadAction::Load => metal::MTLLoadAction::Load,
-            crate::GpuLoadAction::DontCare => metal::MTLLoadAction::DontCare,
-        });
-        color.set_store_action(metal::MTLStoreAction::Store);
-        color.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 0.0));
-
-        let enc = self.cmd_buf().new_render_command_encoder(desc);
-        enc.push_debug_group(label);
-        enc.set_render_pipeline_state(&pipeline.state);
-
-        for binding in bindings {
-            match binding {
-                GpuBinding::Buffer {
-                    binding: b,
-                    buffer,
-                    offset,
-                } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    enc.set_vertex_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
-                    enc.set_fragment_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
-                }
-                GpuBinding::Texture {
-                    binding: b,
-                    texture,
-                } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    // Bind to both stages — vertex shaders may sample textures
-                    // (e.g. displacement maps). Metal ignores unused bindings.
-                    enc.set_vertex_texture(slot.metal_index as _, Some(&texture.raw));
-                    enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
-                }
-                GpuBinding::Sampler {
-                    binding: b,
-                    sampler,
-                } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    enc.set_vertex_sampler_state(slot.metal_index as _, Some(&sampler.raw));
-                    enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
-                }
-                GpuBinding::Bytes { binding: b, data } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    enc.set_vertex_bytes(
-                        slot.metal_index as _,
-                        data.len() as _,
-                        data.as_ptr() as *const _,
-                    );
-                    enc.set_fragment_bytes(
-                        slot.metal_index as _,
-                        data.len() as _,
-                        data.as_ptr() as *const _,
-                    );
-                }
-            }
+        let desc = new_render_pass_descriptor();
+        let color = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
+        unsafe {
+            color.setTexture(Some(&target.raw));
+            color.setLoadAction(convert_load_action(load_action));
+            color.setStoreAction(MTLStoreAction::Store);
+            color.setClearColor(objc2_metal::MTLClearColor {
+                red: 0.0,
+                green: 0.0,
+                blue: 0.0,
+                alpha: 0.0,
+            });
         }
+
+        let enc = self
+            .cmd_buf
+            .renderCommandEncoderWithDescriptor(&desc)
+            .expect("renderCommandEncoderWithDescriptor failed");
+        unsafe {
+            enc.pushDebugGroup(&NSString::from_str(label));
+            enc.setRenderPipelineState(&pipeline.state);
+        }
+
+        apply_bindings_draw_both_stages(&enc, pipeline, bindings);
 
         if instance_count > 0 {
-            enc.draw_primitives_instanced(
-                metal::MTLPrimitiveType::Triangle,
-                0,
-                vertex_count as u64,
-                instance_count as u64,
-            );
+            unsafe {
+                enc.drawPrimitives_vertexStart_vertexCount_instanceCount(
+                    MTLPrimitiveType::Triangle,
+                    0,
+                    vertex_count as usize,
+                    instance_count as usize,
+                );
+            }
         }
-        enc.pop_debug_group();
-        enc.end_encoding();
+        unsafe {
+            enc.popDebugGroup();
+            enc.endEncoding();
+        }
     }
 
     /// Draw instanced with MSAA: render to a multisample target, resolve to
-    /// a single-sample texture. The MSAA target should be memoryless (tile
-    /// memory only on Apple Silicon — zero VRAM cost). The resolved result
-    /// is written to `resolve_target`.
+    /// a single-sample texture.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_instanced_msaa(
         &mut self,
@@ -592,91 +466,49 @@ impl GpuEncoder {
     ) {
         self.end_current();
 
-        let desc = metal::RenderPassDescriptor::new();
-        let color = desc.color_attachments().object_at(0).unwrap();
-        color.set_texture(Some(&msaa_target.raw));
-        color.set_resolve_texture(Some(&resolve_target.raw));
-        color.set_load_action(match load_action {
-            crate::GpuLoadAction::Clear => metal::MTLLoadAction::Clear,
-            crate::GpuLoadAction::Load => metal::MTLLoadAction::Load,
-            crate::GpuLoadAction::DontCare => metal::MTLLoadAction::DontCare,
-        });
-        color.set_store_action(metal::MTLStoreAction::MultisampleResolve);
-        color.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 0.0));
-
-        let enc = self.cmd_buf().new_render_command_encoder(desc);
-        enc.push_debug_group(label);
-        enc.set_render_pipeline_state(&pipeline.state);
-
-        for binding in bindings {
-            match binding {
-                GpuBinding::Buffer {
-                    binding: b,
-                    buffer,
-                    offset,
-                } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    enc.set_vertex_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
-                    enc.set_fragment_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
-                }
-                GpuBinding::Texture {
-                    binding: b,
-                    texture,
-                } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    // Bind to both stages — vertex shaders may sample textures
-                    // (e.g. displacement maps). Metal ignores unused bindings.
-                    enc.set_vertex_texture(slot.metal_index as _, Some(&texture.raw));
-                    enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
-                }
-                GpuBinding::Sampler {
-                    binding: b,
-                    sampler,
-                } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    enc.set_vertex_sampler_state(slot.metal_index as _, Some(&sampler.raw));
-                    enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
-                }
-                GpuBinding::Bytes { binding: b, data } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    enc.set_vertex_bytes(
-                        slot.metal_index as _,
-                        data.len() as _,
-                        data.as_ptr() as *const _,
-                    );
-                    enc.set_fragment_bytes(
-                        slot.metal_index as _,
-                        data.len() as _,
-                        data.as_ptr() as *const _,
-                    );
-                }
-            }
+        let desc = new_render_pass_descriptor();
+        let color = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
+        unsafe {
+            color.setTexture(Some(&msaa_target.raw));
+            color.setResolveTexture(Some(&resolve_target.raw));
+            color.setLoadAction(convert_load_action(load_action));
+            color.setStoreAction(MTLStoreAction::MultisampleResolve);
+            color.setClearColor(objc2_metal::MTLClearColor {
+                red: 0.0,
+                green: 0.0,
+                blue: 0.0,
+                alpha: 0.0,
+            });
         }
+
+        let enc = self
+            .cmd_buf
+            .renderCommandEncoderWithDescriptor(&desc)
+            .expect("renderCommandEncoderWithDescriptor failed");
+        unsafe {
+            enc.pushDebugGroup(&NSString::from_str(label));
+            enc.setRenderPipelineState(&pipeline.state);
+        }
+
+        apply_bindings_draw_both_stages(&enc, pipeline, bindings);
 
         if instance_count > 0 {
-            enc.draw_primitives_instanced(
-                metal::MTLPrimitiveType::Triangle,
-                0,
-                vertex_count as u64,
-                instance_count as u64,
-            );
+            unsafe {
+                enc.drawPrimitives_vertexStart_vertexCount_instanceCount(
+                    MTLPrimitiveType::Triangle,
+                    0,
+                    vertex_count as usize,
+                    instance_count as usize,
+                );
+            }
         }
-        enc.pop_debug_group();
-        enc.end_encoding();
+        unsafe {
+            enc.popDebugGroup();
+            enc.endEncoding();
+        }
     }
 
     /// Draw instanced geometry with depth testing.
-    ///
-    /// Renders to `target` (color) and `depth_target` (Depth32Float) with the given
-    /// depth-stencil state. Buffer/Bytes on both stages; Texture/Sampler fragment-only.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_instanced_depth(
         &mut self,
@@ -692,115 +524,66 @@ impl GpuEncoder {
     ) {
         self.end_current();
 
-        let desc = metal::RenderPassDescriptor::new();
+        let desc = new_render_pass_descriptor();
 
-        // Color attachment
-        let color = desc.color_attachments().object_at(0).unwrap();
-        color.set_texture(Some(&target.raw));
-        color.set_load_action(match load_action {
-            crate::GpuLoadAction::Clear => metal::MTLLoadAction::Clear,
-            crate::GpuLoadAction::Load => metal::MTLLoadAction::Load,
-            crate::GpuLoadAction::DontCare => metal::MTLLoadAction::DontCare,
-        });
-        color.set_store_action(metal::MTLStoreAction::Store);
-        color.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 0.0));
-
-        // Depth attachment
-        let depth = desc.depth_attachment().unwrap();
-        depth.set_texture(Some(&depth_target.raw));
-        depth.set_load_action(match load_action {
-            crate::GpuLoadAction::Clear => metal::MTLLoadAction::Clear,
-            crate::GpuLoadAction::Load => metal::MTLLoadAction::Load,
-            crate::GpuLoadAction::DontCare => metal::MTLLoadAction::DontCare,
-        });
-        depth.set_store_action(metal::MTLStoreAction::Store);
-        depth.set_clear_depth(1.0);
-
-        let enc = self.cmd_buf().new_render_command_encoder(desc);
-        enc.push_debug_group(label);
-        enc.set_render_pipeline_state(&pipeline.state);
-        enc.set_depth_stencil_state(&depth_stencil_state.raw);
-
-        // Set viewport with depth range
-        enc.set_viewport(metal::MTLViewport {
-            originX: 0.0,
-            originY: 0.0,
-            width: target.width as f64,
-            height: target.height as f64,
-            znear: 0.0,
-            zfar: 1.0,
-        });
-
-        for binding in bindings {
-            match binding {
-                GpuBinding::Buffer {
-                    binding: b,
-                    buffer,
-                    offset,
-                } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    enc.set_vertex_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
-                    enc.set_fragment_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
-                }
-                GpuBinding::Texture {
-                    binding: b,
-                    texture,
-                } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    // Bind to both stages — vertex shaders may sample textures
-                    // (e.g. displacement maps). Metal ignores unused bindings.
-                    enc.set_vertex_texture(slot.metal_index as _, Some(&texture.raw));
-                    enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
-                }
-                GpuBinding::Sampler {
-                    binding: b,
-                    sampler,
-                } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    enc.set_vertex_sampler_state(slot.metal_index as _, Some(&sampler.raw));
-                    enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
-                }
-                GpuBinding::Bytes { binding: b, data } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    enc.set_vertex_bytes(
-                        slot.metal_index as _,
-                        data.len() as _,
-                        data.as_ptr() as *const _,
-                    );
-                    enc.set_fragment_bytes(
-                        slot.metal_index as _,
-                        data.len() as _,
-                        data.as_ptr() as *const _,
-                    );
-                }
-            }
+        let color = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
+        unsafe {
+            color.setTexture(Some(&target.raw));
+            color.setLoadAction(convert_load_action(load_action));
+            color.setStoreAction(MTLStoreAction::Store);
+            color.setClearColor(objc2_metal::MTLClearColor {
+                red: 0.0,
+                green: 0.0,
+                blue: 0.0,
+                alpha: 0.0,
+            });
         }
+
+        let depth = unsafe { desc.depthAttachment() };
+        unsafe {
+            depth.setTexture(Some(&depth_target.raw));
+            depth.setLoadAction(convert_load_action(load_action));
+            depth.setStoreAction(MTLStoreAction::Store);
+            depth.setClearDepth(1.0);
+        }
+
+        let enc = self
+            .cmd_buf
+            .renderCommandEncoderWithDescriptor(&desc)
+            .expect("renderCommandEncoderWithDescriptor failed");
+        unsafe {
+            enc.pushDebugGroup(&NSString::from_str(label));
+            enc.setRenderPipelineState(&pipeline.state);
+            enc.setDepthStencilState(Some(&depth_stencil_state.raw));
+            enc.setViewport(MTLViewport {
+                originX: 0.0,
+                originY: 0.0,
+                width: target.width as f64,
+                height: target.height as f64,
+                znear: 0.0,
+                zfar: 1.0,
+            });
+        }
+
+        apply_bindings_draw_both_stages(&enc, pipeline, bindings);
 
         if instance_count > 0 {
-            enc.draw_primitives_instanced(
-                metal::MTLPrimitiveType::Triangle,
-                0,
-                vertex_count as u64,
-                instance_count as u64,
-            );
+            unsafe {
+                enc.drawPrimitives_vertexStart_vertexCount_instanceCount(
+                    MTLPrimitiveType::Triangle,
+                    0,
+                    vertex_count as usize,
+                    instance_count as usize,
+                );
+            }
         }
-        enc.pop_debug_group();
-        enc.end_encoding();
+        unsafe {
+            enc.popDebugGroup();
+            enc.endEncoding();
+        }
     }
 
     /// Draw instanced geometry with depth testing, fill mode, and optional depth bias.
-    ///
-    /// Extended variant of `draw_instanced_depth` that supports wireframe rendering
-    /// (triangle fill mode) and polygon offset (depth bias). Used for multi-pass
-    /// rendering where pass 1 writes solid occluders and pass 2 draws wireframe edges.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_instanced_depth_ex(
         &mut self,
@@ -819,117 +602,72 @@ impl GpuEncoder {
     ) {
         self.end_current();
 
-        let desc = metal::RenderPassDescriptor::new();
+        let desc = new_render_pass_descriptor();
 
-        // Color attachment
-        let color = desc.color_attachments().object_at(0).unwrap();
-        color.set_texture(Some(&target.raw));
-        color.set_load_action(match load_action {
-            crate::GpuLoadAction::Clear => metal::MTLLoadAction::Clear,
-            crate::GpuLoadAction::Load => metal::MTLLoadAction::Load,
-            crate::GpuLoadAction::DontCare => metal::MTLLoadAction::DontCare,
-        });
-        color.set_store_action(metal::MTLStoreAction::Store);
-        color.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 1.0));
-
-        // Depth attachment
-        let depth = desc.depth_attachment().unwrap();
-        depth.set_texture(Some(&depth_target.raw));
-        depth.set_load_action(match load_action {
-            crate::GpuLoadAction::Clear => metal::MTLLoadAction::Clear,
-            crate::GpuLoadAction::Load => metal::MTLLoadAction::Load,
-            crate::GpuLoadAction::DontCare => metal::MTLLoadAction::DontCare,
-        });
-        depth.set_store_action(metal::MTLStoreAction::Store);
-        depth.set_clear_depth(1.0);
-
-        let enc = self.cmd_buf().new_render_command_encoder(desc);
-        enc.push_debug_group(label);
-        enc.set_render_pipeline_state(&pipeline.state);
-        enc.set_depth_stencil_state(&depth_stencil_state.raw);
-        enc.set_triangle_fill_mode(format::to_mtl_triangle_fill_mode(fill_mode));
-
-        if let Some((bias, slope_scale, clamp)) = depth_bias {
-            enc.set_depth_bias(bias, slope_scale, clamp);
+        let color = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
+        unsafe {
+            color.setTexture(Some(&target.raw));
+            color.setLoadAction(convert_load_action(load_action));
+            color.setStoreAction(MTLStoreAction::Store);
+            color.setClearColor(objc2_metal::MTLClearColor {
+                red: 0.0,
+                green: 0.0,
+                blue: 0.0,
+                alpha: 1.0,
+            });
         }
 
-        // Set viewport with depth range
-        enc.set_viewport(metal::MTLViewport {
-            originX: 0.0,
-            originY: 0.0,
-            width: target.width as f64,
-            height: target.height as f64,
-            znear: 0.0,
-            zfar: 1.0,
-        });
+        let depth = unsafe { desc.depthAttachment() };
+        unsafe {
+            depth.setTexture(Some(&depth_target.raw));
+            depth.setLoadAction(convert_load_action(load_action));
+            depth.setStoreAction(MTLStoreAction::Store);
+            depth.setClearDepth(1.0);
+        }
 
-        for binding in bindings {
-            match binding {
-                GpuBinding::Buffer {
-                    binding: b,
-                    buffer,
-                    offset,
-                } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    enc.set_vertex_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
-                    enc.set_fragment_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
-                }
-                GpuBinding::Texture {
-                    binding: b,
-                    texture,
-                } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    enc.set_vertex_texture(slot.metal_index as _, Some(&texture.raw));
-                    enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
-                }
-                GpuBinding::Sampler {
-                    binding: b,
-                    sampler,
-                } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    enc.set_vertex_sampler_state(slot.metal_index as _, Some(&sampler.raw));
-                    enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
-                }
-                GpuBinding::Bytes { binding: b, data } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    enc.set_vertex_bytes(
-                        slot.metal_index as _,
-                        data.len() as _,
-                        data.as_ptr() as *const _,
-                    );
-                    enc.set_fragment_bytes(
-                        slot.metal_index as _,
-                        data.len() as _,
-                        data.as_ptr() as *const _,
-                    );
-                }
+        let enc = self
+            .cmd_buf
+            .renderCommandEncoderWithDescriptor(&desc)
+            .expect("renderCommandEncoderWithDescriptor failed");
+        unsafe {
+            enc.pushDebugGroup(&NSString::from_str(label));
+            enc.setRenderPipelineState(&pipeline.state);
+            enc.setDepthStencilState(Some(&depth_stencil_state.raw));
+            enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(fill_mode));
+
+            if let Some((bias, slope_scale, clamp)) = depth_bias {
+                enc.setDepthBias_slopeScale_clamp(bias, slope_scale, clamp);
             }
+
+            enc.setViewport(MTLViewport {
+                originX: 0.0,
+                originY: 0.0,
+                width: target.width as f64,
+                height: target.height as f64,
+                znear: 0.0,
+                zfar: 1.0,
+            });
         }
+
+        apply_bindings_draw_both_stages(&enc, pipeline, bindings);
 
         if instance_count > 0 {
-            enc.draw_primitives_instanced(
-                format::to_mtl_primitive_type(primitive_type),
-                0,
-                vertex_count as u64,
-                instance_count as u64,
-            );
+            unsafe {
+                enc.drawPrimitives_vertexStart_vertexCount_instanceCount(
+                    format::to_mtl_primitive_type(primitive_type),
+                    0,
+                    vertex_count as usize,
+                    instance_count as usize,
+                );
+            }
         }
-        enc.pop_debug_group();
-        enc.end_encoding();
+        unsafe {
+            enc.popDebugGroup();
+            enc.endEncoding();
+        }
     }
 
     /// Draw indexed geometry with a render pipeline and vertex/index buffers.
-    ///
-    /// Buffer/Bytes on both stages; Texture/Sampler fragment-only.
-    /// Vertex buffer bound at index 30 (matching the vertex descriptor buffer index).
     #[allow(clippy::too_many_arguments)]
     pub fn draw_indexed(
         &mut self,
@@ -946,118 +684,72 @@ impl GpuEncoder {
     ) {
         self.end_current();
 
-        let desc = metal::RenderPassDescriptor::new();
-        let color = desc.color_attachments().object_at(0).unwrap();
-        color.set_texture(Some(&target.raw));
-        color.set_load_action(match load_action {
-            crate::GpuLoadAction::Clear => metal::MTLLoadAction::Clear,
-            crate::GpuLoadAction::Load => metal::MTLLoadAction::Load,
-            crate::GpuLoadAction::DontCare => metal::MTLLoadAction::DontCare,
-        });
-        color.set_store_action(metal::MTLStoreAction::Store);
-        color.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 0.0));
-
-        let enc = self.cmd_buf().new_render_command_encoder(desc);
-        enc.push_debug_group(label);
-        enc.set_render_pipeline_state(&pipeline.state);
-
-        // Set viewport if provided, otherwise full texture dimensions.
-        if let Some((x, y, w, h)) = viewport {
-            enc.set_viewport(metal::MTLViewport {
-                originX: x as f64,
-                originY: y as f64,
-                width: w as f64,
-                height: h as f64,
-                znear: 0.0,
-                zfar: 1.0,
-            });
-        } else {
-            enc.set_viewport(metal::MTLViewport {
-                originX: 0.0,
-                originY: 0.0,
-                width: target.width as f64,
-                height: target.height as f64,
-                znear: 0.0,
-                zfar: 1.0,
+        let desc = new_render_pass_descriptor();
+        let color = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
+        unsafe {
+            color.setTexture(Some(&target.raw));
+            color.setLoadAction(convert_load_action(load_action));
+            color.setStoreAction(MTLStoreAction::Store);
+            color.setClearColor(objc2_metal::MTLClearColor {
+                red: 0.0,
+                green: 0.0,
+                blue: 0.0,
+                alpha: 0.0,
             });
         }
 
-        // Bind vertex buffer at index 30 (same as vertex descriptor buffer index).
-        const VERTEX_BUFFER_INDEX: u64 = 30;
-        enc.set_vertex_buffer(
-            VERTEX_BUFFER_INDEX,
-            Some(&vertex_buffer.raw),
-            vertex_offset as _,
-        );
+        let enc = self
+            .cmd_buf
+            .renderCommandEncoderWithDescriptor(&desc)
+            .expect("renderCommandEncoderWithDescriptor failed");
+        unsafe {
+            enc.pushDebugGroup(&NSString::from_str(label));
+            enc.setRenderPipelineState(&pipeline.state);
 
-        for binding in bindings {
-            match binding {
-                GpuBinding::Buffer {
-                    binding: b,
-                    buffer,
-                    offset,
-                } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    enc.set_vertex_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
-                    enc.set_fragment_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
-                }
-                GpuBinding::Texture {
-                    binding: b,
-                    texture,
-                } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    // Bind to both stages — vertex shaders may sample textures
-                    // (e.g. displacement maps). Metal ignores unused bindings.
-                    enc.set_vertex_texture(slot.metal_index as _, Some(&texture.raw));
-                    enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
-                }
-                GpuBinding::Sampler {
-                    binding: b,
-                    sampler,
-                } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    enc.set_vertex_sampler_state(slot.metal_index as _, Some(&sampler.raw));
-                    enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
-                }
-                GpuBinding::Bytes { binding: b, data } => {
-                    let Some(slot) = pipeline.slot_map.get(*b) else {
-                        continue;
-                    };
-                    enc.set_vertex_bytes(
-                        slot.metal_index as _,
-                        data.len() as _,
-                        data.as_ptr() as *const _,
-                    );
-                    enc.set_fragment_bytes(
-                        slot.metal_index as _,
-                        data.len() as _,
-                        data.as_ptr() as *const _,
-                    );
-                }
+            if let Some((x, y, w, h)) = viewport {
+                enc.setViewport(MTLViewport {
+                    originX: x as f64,
+                    originY: y as f64,
+                    width: w as f64,
+                    height: h as f64,
+                    znear: 0.0,
+                    zfar: 1.0,
+                });
+            } else {
+                enc.setViewport(MTLViewport {
+                    originX: 0.0,
+                    originY: 0.0,
+                    width: target.width as f64,
+                    height: target.height as f64,
+                    znear: 0.0,
+                    zfar: 1.0,
+                });
             }
+
+            const VERTEX_BUFFER_INDEX: usize = 30;
+            enc.setVertexBuffer_offset_atIndex(
+                Some(&vertex_buffer.raw),
+                vertex_offset as usize,
+                VERTEX_BUFFER_INDEX,
+            );
         }
 
-        enc.draw_indexed_primitives(
-            metal::MTLPrimitiveType::Triangle,
-            index_count as u64,
-            metal::MTLIndexType::UInt32,
-            &index_buffer.raw,
-            0,
-        );
-        enc.pop_debug_group();
-        enc.end_encoding();
+        apply_bindings_draw_both_stages(&enc, pipeline, bindings);
+
+        unsafe {
+            enc.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset(
+                MTLPrimitiveType::Triangle,
+                index_count as usize,
+                MTLIndexType::UInt32,
+                &index_buffer.raw,
+                0,
+            );
+            enc.popDebugGroup();
+            enc.endEncoding();
+        }
     }
 
     /// Begin a render pass that stays alive across multiple draw calls.
-    /// Use `draw_in_render_pass` for each draw, then `end_render_pass` when done.
-    /// This avoids creating a new render encoder per draw when multiple draws
-    /// target the same texture (e.g. layer bitmap quads).
     pub fn begin_render_pass(
         &mut self,
         target: &GpuTexture,
@@ -1067,36 +759,40 @@ impl GpuEncoder {
         self.end_current();
         self.render_cache.clear();
 
-        let desc = metal::RenderPassDescriptor::new();
-        let color = desc.color_attachments().object_at(0).unwrap();
-        color.set_texture(Some(&target.raw));
-        color.set_load_action(match load_action {
-            crate::GpuLoadAction::Clear => metal::MTLLoadAction::Clear,
-            crate::GpuLoadAction::Load => metal::MTLLoadAction::Load,
-            crate::GpuLoadAction::DontCare => metal::MTLLoadAction::DontCare,
-        });
-        color.set_store_action(metal::MTLStoreAction::Store);
-        color.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 0.0));
+        let desc = new_render_pass_descriptor();
+        let color = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
+        unsafe {
+            color.setTexture(Some(&target.raw));
+            color.setLoadAction(convert_load_action(load_action));
+            color.setStoreAction(MTLStoreAction::Store);
+            color.setClearColor(objc2_metal::MTLClearColor {
+                red: 0.0,
+                green: 0.0,
+                blue: 0.0,
+                alpha: 0.0,
+            });
+        }
 
-        let enc = self.cmd_buf().new_render_command_encoder(desc);
-        enc.push_debug_group(label);
+        let enc = self
+            .cmd_buf
+            .renderCommandEncoderWithDescriptor(&desc)
+            .expect("renderCommandEncoderWithDescriptor failed");
+        unsafe {
+            enc.pushDebugGroup(&NSString::from_str(label));
+            enc.setViewport(MTLViewport {
+                originX: 0.0,
+                originY: 0.0,
+                width: target.width as f64,
+                height: target.height as f64,
+                znear: 0.0,
+                zfar: 1.0,
+            });
+        }
 
-        let vp = metal::MTLViewport {
-            originX: 0.0,
-            originY: 0.0,
-            width: target.width as f64,
-            height: target.height as f64,
-            znear: 0.0,
-            zfar: 1.0,
-        };
-        enc.set_viewport(vp);
-
-        // Store as active render encoder (not retained — caller must end the pass).
-        self.state = EncoderState::Render(enc as *const metal::RenderCommandEncoderRef);
+        self.state = EncoderState::Render(enc);
     }
 
-    /// Draw indexed geometry within an active render pass (from `begin_render_pass`).
-    /// Does NOT create or end the render encoder — multiple draws share one pass.
+    /// Draw indexed geometry within an active render pass.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_in_render_pass(
         &mut self,
@@ -1110,36 +806,41 @@ impl GpuEncoder {
         viewport: Option<(f32, f32, f32, f32)>,
         label: &str,
     ) {
-        let EncoderState::Render(ptr) = self.state else {
-            panic!("draw_in_render_pass called without active render pass");
+        let enc = match &self.state {
+            EncoderState::Render(enc) => enc.clone(),
+            _ => panic!("draw_in_render_pass called without active render pass"),
         };
-        let enc = unsafe { &*ptr };
 
-        enc.push_debug_group(label);
-        enc.set_render_pipeline_state(&pipeline.state);
+        unsafe {
+            enc.pushDebugGroup(&NSString::from_str(label));
+            enc.setRenderPipelineState(&pipeline.state);
 
-        if let Some((x, y, w, h)) = viewport {
-            enc.set_viewport(metal::MTLViewport {
-                originX: x as f64,
-                originY: y as f64,
-                width: w as f64,
-                height: h as f64,
-                znear: 0.0,
-                zfar: 1.0,
-            });
+            if let Some((x, y, w, h)) = viewport {
+                enc.setViewport(MTLViewport {
+                    originX: x as f64,
+                    originY: y as f64,
+                    width: w as f64,
+                    height: h as f64,
+                    znear: 0.0,
+                    zfar: 1.0,
+                });
+            }
         }
 
-        const VERTEX_BUFFER_INDEX: u64 = 30;
+        const VERTEX_BUFFER_INDEX: usize = 30;
         let vb_id = buffer_identity(&vertex_buffer.raw);
         if self.render_cache.vertex_buf_30 == vb_id {
-            // Same buffer already bound — lightweight offset-only update.
-            enc.set_vertex_buffer_offset(VERTEX_BUFFER_INDEX, vertex_offset as _);
+            unsafe {
+                enc.setVertexBufferOffset_atIndex(vertex_offset as usize, VERTEX_BUFFER_INDEX);
+            }
         } else {
-            enc.set_vertex_buffer(
-                VERTEX_BUFFER_INDEX,
-                Some(&vertex_buffer.raw),
-                vertex_offset as _,
-            );
+            unsafe {
+                enc.setVertexBuffer_offset_atIndex(
+                    Some(&vertex_buffer.raw),
+                    vertex_offset as usize,
+                    VERTEX_BUFFER_INDEX,
+                );
+            }
             self.render_cache.vertex_buf_30 = vb_id;
         }
 
@@ -1156,16 +857,18 @@ impl GpuEncoder {
                     let idx = slot.metal_index as usize;
                     let id = buffer_identity(&buffer.raw);
                     if idx >= CACHE_SLOTS || self.render_cache.buffers[idx] != (id, *offset) {
-                        enc.set_vertex_buffer(
-                            slot.metal_index as _,
-                            Some(&buffer.raw),
-                            *offset as _,
-                        );
-                        enc.set_fragment_buffer(
-                            slot.metal_index as _,
-                            Some(&buffer.raw),
-                            *offset as _,
-                        );
+                        unsafe {
+                            enc.setVertexBuffer_offset_atIndex(
+                                Some(&buffer.raw),
+                                *offset as usize,
+                                slot.metal_index as usize,
+                            );
+                            enc.setFragmentBuffer_offset_atIndex(
+                                Some(&buffer.raw),
+                                *offset as usize,
+                                slot.metal_index as usize,
+                            );
+                        }
                         if idx < CACHE_SLOTS {
                             self.render_cache.buffers[idx] = (id, *offset);
                         }
@@ -1181,10 +884,16 @@ impl GpuEncoder {
                     let idx = slot.metal_index as usize;
                     let id = texture_identity(&texture.raw);
                     if idx >= CACHE_SLOTS || self.render_cache.frag_textures[idx] != id {
-                        // Bind to both stages — vertex shaders may sample textures
-                    // (e.g. displacement maps). Metal ignores unused bindings.
-                    enc.set_vertex_texture(slot.metal_index as _, Some(&texture.raw));
-                    enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
+                        unsafe {
+                            enc.setVertexTexture_atIndex(
+                                Some(&texture.raw),
+                                slot.metal_index as usize,
+                            );
+                            enc.setFragmentTexture_atIndex(
+                                Some(&texture.raw),
+                                slot.metal_index as usize,
+                            );
+                        }
                         if idx < CACHE_SLOTS {
                             self.render_cache.frag_textures[idx] = id;
                         }
@@ -1200,8 +909,16 @@ impl GpuEncoder {
                     let idx = slot.metal_index as usize;
                     let id = sampler_identity(&sampler.raw);
                     if idx >= CACHE_SLOTS || self.render_cache.frag_samplers[idx] != id {
-                        enc.set_vertex_sampler_state(slot.metal_index as _, Some(&sampler.raw));
-                    enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
+                        unsafe {
+                            enc.setVertexSamplerState_atIndex(
+                                Some(&sampler.raw),
+                                slot.metal_index as usize,
+                            );
+                            enc.setFragmentSamplerState_atIndex(
+                                Some(&sampler.raw),
+                                slot.metal_index as usize,
+                            );
+                        }
                         if idx < CACHE_SLOTS {
                             self.render_cache.frag_samplers[idx] = id;
                         }
@@ -1214,16 +931,18 @@ impl GpuEncoder {
                     let idx = slot.metal_index as usize;
                     let id = (data.as_ptr(), data.len());
                     if idx >= CACHE_SLOTS || self.render_cache.bytes[idx] != id {
-                        enc.set_vertex_bytes(
-                            slot.metal_index as _,
-                            data.len() as _,
-                            data.as_ptr() as *const _,
-                        );
-                        enc.set_fragment_bytes(
-                            slot.metal_index as _,
-                            data.len() as _,
-                            data.as_ptr() as *const _,
-                        );
+                        unsafe {
+                            enc.setVertexBytes_length_atIndex(
+                                NonNull::new(data.as_ptr() as *mut c_void).unwrap(),
+                                data.len(),
+                                slot.metal_index as usize,
+                            );
+                            enc.setFragmentBytes_length_atIndex(
+                                NonNull::new(data.as_ptr() as *mut c_void).unwrap(),
+                                data.len(),
+                                slot.metal_index as usize,
+                            );
+                        }
                         if idx < CACHE_SLOTS {
                             self.render_cache.bytes[idx] = id;
                         }
@@ -1232,53 +951,49 @@ impl GpuEncoder {
             }
         }
 
-        enc.draw_indexed_primitives(
-            metal::MTLPrimitiveType::Triangle,
-            index_count as u64,
-            metal::MTLIndexType::UInt32,
-            &index_buffer.raw,
-            index_buffer_offset,
-        );
-        enc.pop_debug_group();
-        // Do NOT end encoding — pass stays alive for more draws.
+        unsafe {
+            enc.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset(
+                MTLPrimitiveType::Triangle,
+                index_count as usize,
+                MTLIndexType::UInt32,
+                &index_buffer.raw,
+                index_buffer_offset as usize,
+            );
+            enc.popDebugGroup();
+        }
     }
 
     /// Set the scissor rectangle on the active render pass.
-    /// Coordinates are in physical pixels of the render target.
     pub fn set_scissor_rect(&mut self, x: u32, y: u32, w: u32, h: u32) {
-        let EncoderState::Render(ptr) = self.state else {
-            panic!("set_scissor_rect called without active render pass");
+        let enc = match &self.state {
+            EncoderState::Render(enc) => enc.clone(),
+            _ => panic!("set_scissor_rect called without active render pass"),
         };
-        let enc = unsafe { &*ptr };
-        enc.set_scissor_rect(metal::MTLScissorRect {
-            x: x as u64,
-            y: y as u64,
-            width: w as u64,
-            height: h as u64,
-        });
+        unsafe {
+            enc.setScissorRect(MTLScissorRect {
+                x: x as usize,
+                y: y as usize,
+                width: w as usize,
+                height: h as usize,
+            });
+        }
     }
 
-    /// End the active render pass (started by `begin_render_pass`).
-    /// Also called implicitly by `end_current()` if the encoder transitions.
+    /// End the active render pass.
     pub fn end_render_pass(&mut self) {
-        if let EncoderState::Render(ptr) = self.state {
-            let enc = unsafe { &*ptr };
-            enc.pop_debug_group(); // matches begin_render_pass push
-            enc.end_encoding();
+        if let EncoderState::Render(ref enc) = self.state {
+            unsafe {
+                enc.popDebugGroup();
+                enc.endEncoding();
+            }
             self.state = EncoderState::None;
         }
     }
 
     /// Clear a texture to a solid color.
-    /// Uses compute dispatch for formats with storage write support (avoids
-    /// render encoder creation and TBDR tile overhead). Falls back to
-    /// render-pass clear for formats without storage support (R16Float, etc.).
     pub fn clear_texture(&mut self, texture: &GpuTexture, r: f64, g: f64, b: f64, a: f64) {
         let pipelines = unsafe { &*self.clear_pipelines };
-        let has_write = texture
-            .raw
-            .usage()
-            .contains(metal::MTLTextureUsage::ShaderWrite);
+        let has_write = unsafe { texture.raw.usage() }.contains(MTLTextureUsage::ShaderWrite);
         if let Some(pipeline) = pipelines.get(texture.format).filter(|_| has_write) {
             #[repr(C)]
             #[derive(Clone, Copy)]
@@ -1317,42 +1032,58 @@ impl GpuEncoder {
                 "Clear Texture",
             );
         } else {
-            // Formats without storage write support (R16Float, R8Unorm, etc.).
             self.end_current();
-            let desc = metal::RenderPassDescriptor::new();
-            let color_att = desc.color_attachments().object_at(0).unwrap();
-            color_att.set_texture(Some(&texture.raw));
-            color_att.set_load_action(metal::MTLLoadAction::Clear);
-            color_att.set_store_action(metal::MTLStoreAction::Store);
-            color_att.set_clear_color(metal::MTLClearColor::new(r, g, b, a));
-            let enc = self.cmd_buf().new_render_command_encoder(desc);
-            enc.end_encoding();
+            let desc = new_render_pass_descriptor();
+            let color_att = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
+            unsafe {
+                color_att.setTexture(Some(&texture.raw));
+                color_att.setLoadAction(MTLLoadAction::Clear);
+                color_att.setStoreAction(MTLStoreAction::Store);
+                color_att.setClearColor(objc2_metal::MTLClearColor {
+                    red: r,
+                    green: g,
+                    blue: b,
+                    alpha: a,
+                });
+            }
+            let enc = self
+                .cmd_buf
+                .renderCommandEncoderWithDescriptor(&desc)
+                .expect("renderCommandEncoderWithDescriptor failed");
+            enc.endEncoding();
         }
     }
 
     /// Fill a buffer with zeros via blit encoder.
     pub fn clear_buffer(&mut self, buffer: &GpuBuffer) {
         self.end_current();
-        let enc = self.cmd_buf().new_blit_command_encoder();
-        enc.fill_buffer(&buffer.raw, metal::NSRange::new(0, buffer.size), 0);
-        enc.end_encoding();
+        let enc = self
+            .cmd_buf
+            .blitCommandEncoder()
+            .expect("blitCommandEncoder failed");
+        unsafe {
+            enc.fillBuffer_range_value(
+                &buffer.raw,
+                objc2_foundation::NSRange {
+                    location: 0,
+                    length: buffer.size as usize,
+                },
+                0,
+            );
+        }
+        enc.endEncoding();
     }
 
     /// Generate the mipmap chain for a texture using Metal's optimized
-    /// blit-encoder path. The texture must have been created with
-    /// `mip_levels > 1` and a usage that allows GPU read+write of all
-    /// mip levels (the standard `RENDER_TARGET_FULL` set is enough).
-    /// Apple Silicon implements this in hardware.
-    ///
-    /// Single-tap mip sampling in shaders becomes the cheapest possible
-    /// wide-blur primitive: each mip level k stores the average of a
-    /// 2^k × 2^k region of the source, so `textureSampleLevel(.., k)`
-    /// gives a 2^(k+1)-pixel-wide box-blurred value in one fetch.
+    /// blit-encoder path.
     pub fn generate_mipmaps(&mut self, texture: &GpuTexture) {
         self.end_current();
-        let enc = self.cmd_buf().new_blit_command_encoder();
-        enc.generate_mipmaps(&texture.raw);
-        enc.end_encoding();
+        let enc = self
+            .cmd_buf
+            .blitCommandEncoder()
+            .expect("blitCommandEncoder failed");
+        unsafe { enc.generateMipmapsForTexture(&texture.raw) };
+        enc.endEncoding();
     }
 
     /// Copy texture to texture via blit encoder.
@@ -1365,19 +1096,28 @@ impl GpuEncoder {
         depth: u32,
     ) {
         self.end_current();
-        let enc = self.cmd_buf().new_blit_command_encoder();
-        enc.copy_from_texture(
-            &src.raw,
-            0, // source_slice
-            0, // source_level
-            metal::MTLOrigin { x: 0, y: 0, z: 0 },
-            metal::MTLSize::new(width as _, height as _, depth as _),
-            &dst.raw,
-            0, // dest_slice
-            0, // dest_level
-            metal::MTLOrigin { x: 0, y: 0, z: 0 },
-        );
-        enc.end_encoding();
+        let enc = self
+            .cmd_buf
+            .blitCommandEncoder()
+            .expect("blitCommandEncoder failed");
+        unsafe {
+            enc.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
+                &src.raw,
+                0,
+                0,
+                MTLOrigin { x: 0, y: 0, z: 0 },
+                MTLSize {
+                    width: width as usize,
+                    height: height as usize,
+                    depth: depth as usize,
+                },
+                &dst.raw,
+                0,
+                0,
+                MTLOrigin { x: 0, y: 0, z: 0 },
+            );
+        }
+        enc.endEncoding();
     }
 
     /// Copy texture to buffer via blit encoder (for readback).
@@ -1390,26 +1130,32 @@ impl GpuEncoder {
         bytes_per_row: u32,
     ) {
         self.end_current();
-        let enc = self.cmd_buf().new_blit_command_encoder();
-        let src_size = metal::MTLSize::new(width as _, height as _, 1);
-        let src_origin = metal::MTLOrigin { x: 0, y: 0, z: 0 };
-        enc.copy_from_texture_to_buffer(
-            &src.raw,
-            0, // slice
-            0, // level
-            src_origin,
-            src_size,
-            &dst.raw,
-            0,                                    // destination_offset
-            bytes_per_row as u64,                 // destination_bytes_per_row
-            bytes_per_row as u64 * height as u64, // destination_bytes_per_image
-            metal::MTLBlitOption::empty(),
-        );
-        enc.end_encoding();
+        let enc = self
+            .cmd_buf
+            .blitCommandEncoder()
+            .expect("blitCommandEncoder failed");
+        unsafe {
+            enc.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage_options(
+                &src.raw,
+                0,
+                0,
+                MTLOrigin { x: 0, y: 0, z: 0 },
+                MTLSize {
+                    width: width as usize,
+                    height: height as usize,
+                    depth: 1,
+                },
+                &dst.raw,
+                0,
+                bytes_per_row as usize,
+                (bytes_per_row as usize) * (height as usize),
+                MTLBlitOption::empty(),
+            );
+        }
+        enc.endEncoding();
     }
 
-    /// Upload CPU data to a 2D texture region via blit encoder.
-    /// `bytes_per_pixel` is inferred from the texture format.
+    /// Upload CPU data to a 2D texture region via replaceRegion.
     pub fn upload_texture(
         &mut self,
         texture: &GpuTexture,
@@ -1421,42 +1167,61 @@ impl GpuEncoder {
         self.end_current();
         let bpp = texture.format.bytes_per_pixel();
         let bytes_per_row = width as u64 * bpp as u64;
-        let region = metal::MTLRegion::new_2d(0, 0, width as _, height as _);
-        texture.raw.replace_region(
-            region,
-            0, // mipmap level
-            data.as_ptr() as *const _,
-            bytes_per_row,
-        );
+        let region = objc2_metal::MTLRegion {
+            origin: MTLOrigin { x: 0, y: 0, z: 0 },
+            size: MTLSize {
+                width: width as usize,
+                height: height as usize,
+                depth: 1,
+            },
+        };
+        unsafe {
+            texture.raw.replaceRegion_mipmapLevel_withBytes_bytesPerRow(
+                region,
+                0,
+                NonNull::new(data.as_ptr() as *mut c_void).unwrap(),
+                bytes_per_row as usize,
+            );
+        }
     }
 
     /// Signal a shared event on the GPU timeline.
-    /// The event value is incremented automatically.
     pub fn signal_event(&mut self, event: &GpuEvent) {
         let value = event.counter.get() + 1;
         event.counter.set(value);
-        // Encode signal on current command buffer (after all work).
         self.end_current();
-        self.cmd_buf().encode_signal_event(event.raw(), value);
+        unsafe {
+            self.cmd_buf.encodeSignalEvent_value(
+                ProtocolObject::from_ref(event.raw()),
+                value,
+            );
+        }
     }
 
     /// Signal a shared event with a specific value (does NOT auto-increment).
-    /// Used for per-layer completion signals in async compute.
     pub fn signal_event_value(&mut self, event: &GpuEvent, value: u64) {
         self.end_current();
-        self.cmd_buf().encode_signal_event(event.raw(), value);
+        unsafe {
+            self.cmd_buf.encodeSignalEvent_value(
+                ProtocolObject::from_ref(event.raw()),
+                value,
+            );
+        }
     }
 
     /// Wait for a shared event to reach a specific value before executing
     /// subsequent GPU work on this command buffer.
-    /// Used by the compositor to wait for all layer generation to complete.
     pub fn wait_event(&mut self, event: &GpuEvent, value: u64) {
         self.end_current();
-        self.cmd_buf().encode_wait_for_event(event.raw(), value);
+        unsafe {
+            self.cmd_buf.encodeWaitForEvent_value(
+                ProtocolObject::from_ref(event.raw()),
+                value,
+            );
+        }
     }
 
     /// Encode a MetalFX spatial upscale (src → dst).
-    /// Ends any active encoder first. The scaler must match the texture dimensions.
     pub fn encode_metalfx_upscale(
         &mut self,
         scaler: &metalfx::MetalFxSpatialScaler,
@@ -1464,11 +1229,10 @@ impl GpuEncoder {
         dst: &GpuTexture,
     ) {
         self.end_current();
-        scaler.encode(self.cmd_buf(), src, dst);
+        scaler.encode(&self.cmd_buf, src, dst);
     }
 
     /// Encode an MPS Lanczos upscale (src → dst).
-    /// Automatically computes the scale transform from texture dimensions.
     pub fn encode_mps_upscale(
         &mut self,
         scaler: &mps::MpsLanczosScale,
@@ -1482,63 +1246,39 @@ impl GpuEncoder {
             translate_x: 0.0,
             translate_y: 0.0,
         });
-        scaler.encode(self.cmd_buf(), &src.raw, &dst.raw);
+        scaler.encode(&self.cmd_buf, &src.raw, &dst.raw);
     }
 
     /// Register a callback to run when the GPU finishes executing this command buffer.
-    /// Uses Metal's `addCompletedHandler` — fires immediately on GPU completion,
-    /// no polling or next-frame delay.
     pub fn add_completed_handler<F: Fn() + Send + 'static>(&self, callback: F) {
         use block2::RcBlock;
-        use metal::foreign_types::ForeignTypeRef;
-        use objc2::msg_send;
-        use objc2::runtime::AnyObject;
-
-        let block = RcBlock::new(move |_buf: *mut AnyObject| {
+        let block = RcBlock::new(move |_buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
             callback();
         });
         unsafe {
-            let cb_ptr: *mut AnyObject = self.cmd_buf().as_ptr().cast();
-            let _: () = msg_send![cb_ptr, addCompletedHandler: &*block];
+            self.cmd_buf
+                .addCompletedHandler(&*block as *const _ as *mut _);
         }
     }
 
-    /// Register a diagnostic completed handler that logs GPU errors with
-    /// the Metal error code and description.
+    /// Register a diagnostic completed handler that logs GPU errors.
     pub fn add_completed_handler_with_status(&self, label: &str) {
         use block2::RcBlock;
-        use metal::foreign_types::ForeignTypeRef;
-        use objc2::msg_send;
-        use objc2::runtime::AnyObject;
+        use objc2_metal::MTLCommandBufferStatus;
 
         let label = label.to_string();
-        let block = RcBlock::new(move |buf: *mut AnyObject| unsafe {
-            // Read MTLCommandBuffer status via ObjC. MTLCommandBufferStatus is
-            // NSUInteger; on arm64 that's u64. Values from Apple headers:
-            //   NotEnqueued=0, Enqueued=1, Committed=2, Scheduled=3,
-            //   Completed=4, Error=5.
-            let status: usize = msg_send![buf, status];
-            const MTL_COMMAND_BUFFER_STATUS_ERROR: usize = 5;
-            if status == MTL_COMMAND_BUFFER_STATUS_ERROR {
-                let err: *mut AnyObject = msg_send![buf, error];
-                let (code, desc) = if err.is_null() {
-                    (-1i64, String::from("(nil)"))
-                } else {
-                    let code: i64 = msg_send![err, code];
-                    let ns_desc: *mut AnyObject = msg_send![err, localizedDescription];
-                    let desc = if ns_desc.is_null() {
-                        String::from("(no description)")
-                    } else {
-                        let cstr: *const std::ffi::c_char = msg_send![ns_desc, UTF8String];
-                        if cstr.is_null() {
-                            String::from("(UTF8 nil)")
-                        } else {
-                            std::ffi::CStr::from_ptr(cstr)
-                                .to_string_lossy()
-                                .into_owned()
-                        }
-                    };
-                    (code, desc)
+        let block = RcBlock::new(move |buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+            let cb = unsafe { buf.as_ref() };
+            let status = unsafe { cb.status() };
+            if status == MTLCommandBufferStatus::Error {
+                let err = unsafe { cb.error() };
+                let (code, desc) = match err {
+                    None => (-1i64, String::from("(nil)")),
+                    Some(err) => {
+                        let code = err.code() as i64;
+                        let desc = err.localizedDescription().to_string();
+                        (code, desc)
+                    }
                 };
                 log::error!(
                     "[GPU] Command buffer '{}' error (code={}): {}",
@@ -1547,40 +1287,200 @@ impl GpuEncoder {
             }
         });
         unsafe {
-            let cb_ptr: *mut AnyObject = self.cmd_buf().as_ptr().cast();
-            let _: () = msg_send![cb_ptr, addCompletedHandler: &*block];
+            self.cmd_buf
+                .addCompletedHandler(&*block as *const _ as *mut _);
         }
     }
 
     /// Commit the command buffer to the GPU queue.
-    /// Ends any active encoder and commits. Consumes the encoder.
     pub fn commit(mut self) {
         self.end_current();
-        self.cmd_buf().commit();
-        // Don't release in commit — Drop handles it
+        self.cmd_buf.commit();
     }
 
     /// Commit and block until the GPU has scheduled (not completed) the work.
-    ///
-    /// Used with `presentsWithTransaction = true` on CAMetalLayer: commit the
-    /// blit work, wait until the GPU has it queued, then call
-    /// `drawable.present_after_scheduled()` to sync with Core Animation.
-    /// Does NOT call `presentDrawable` — the caller presents manually.
     pub fn commit_and_wait_scheduled(mut self) {
         self.end_current();
-        let cb = self.cmd_buf();
-        cb.commit();
-        cb.wait_until_scheduled();
+        self.cmd_buf.commit();
+        unsafe { self.cmd_buf.waitUntilScheduled() };
     }
 }
 
 impl Drop for GpuEncoder {
     fn drop(&mut self) {
         self.end_current();
-        if !self.cmd_buf_ptr.is_null() {
-            unsafe {
-                objc_release(self.cmd_buf_ptr);
+    }
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────
+
+fn new_render_pass_descriptor() -> Retained<MTLRenderPassDescriptor> {
+    // MTLRenderPassDescriptor is a class (NSObject subclass); use new.
+    unsafe {
+        use objc2::AnyThread;
+        MTLRenderPassDescriptor::init(MTLRenderPassDescriptor::alloc())
+    }
+}
+
+fn convert_load_action(la: crate::GpuLoadAction) -> MTLLoadAction {
+    match la {
+        crate::GpuLoadAction::Clear => MTLLoadAction::Clear,
+        crate::GpuLoadAction::Load => MTLLoadAction::Load,
+        crate::GpuLoadAction::DontCare => MTLLoadAction::DontCare,
+    }
+}
+
+/// Apply bindings for a fullscreen-triangle draw: buffer→fragment only, texture/sampler
+/// on both stages (vertex may sample too, Metal ignores unused bindings).
+fn apply_bindings_draw_fullscreen(
+    enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+    pipeline: &GpuRenderPipeline,
+    bindings: &[GpuBinding],
+) {
+    for binding in bindings {
+        match binding {
+            GpuBinding::Buffer {
+                binding: b,
+                buffer,
+                offset,
+            } => {
+                let Some(slot) = pipeline.slot_map.get(*b) else {
+                    continue;
+                };
+                unsafe {
+                    enc.setFragmentBuffer_offset_atIndex(
+                        Some(&buffer.raw),
+                        *offset as usize,
+                        slot.metal_index as usize,
+                    );
+                }
+            }
+            GpuBinding::Texture {
+                binding: b,
+                texture,
+            } => {
+                let Some(slot) = pipeline.slot_map.get(*b) else {
+                    continue;
+                };
+                unsafe {
+                    enc.setVertexTexture_atIndex(Some(&texture.raw), slot.metal_index as usize);
+                    enc.setFragmentTexture_atIndex(Some(&texture.raw), slot.metal_index as usize);
+                }
+            }
+            GpuBinding::Sampler {
+                binding: b,
+                sampler,
+            } => {
+                let Some(slot) = pipeline.slot_map.get(*b) else {
+                    continue;
+                };
+                unsafe {
+                    enc.setVertexSamplerState_atIndex(
+                        Some(&sampler.raw),
+                        slot.metal_index as usize,
+                    );
+                    enc.setFragmentSamplerState_atIndex(
+                        Some(&sampler.raw),
+                        slot.metal_index as usize,
+                    );
+                }
+            }
+            GpuBinding::Bytes { binding: b, data } => {
+                let Some(slot) = pipeline.slot_map.get(*b) else {
+                    continue;
+                };
+                unsafe {
+                    enc.setFragmentBytes_length_atIndex(
+                        NonNull::new(data.as_ptr() as *mut c_void).unwrap(),
+                        data.len(),
+                        slot.metal_index as usize,
+                    );
+                }
             }
         }
     }
 }
+
+/// Apply bindings on both vertex and fragment stages (used for draw_instanced et al.).
+fn apply_bindings_draw_both_stages(
+    enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+    pipeline: &GpuRenderPipeline,
+    bindings: &[GpuBinding],
+) {
+    for binding in bindings {
+        match binding {
+            GpuBinding::Buffer {
+                binding: b,
+                buffer,
+                offset,
+            } => {
+                let Some(slot) = pipeline.slot_map.get(*b) else {
+                    continue;
+                };
+                unsafe {
+                    enc.setVertexBuffer_offset_atIndex(
+                        Some(&buffer.raw),
+                        *offset as usize,
+                        slot.metal_index as usize,
+                    );
+                    enc.setFragmentBuffer_offset_atIndex(
+                        Some(&buffer.raw),
+                        *offset as usize,
+                        slot.metal_index as usize,
+                    );
+                }
+            }
+            GpuBinding::Texture {
+                binding: b,
+                texture,
+            } => {
+                let Some(slot) = pipeline.slot_map.get(*b) else {
+                    continue;
+                };
+                unsafe {
+                    enc.setVertexTexture_atIndex(Some(&texture.raw), slot.metal_index as usize);
+                    enc.setFragmentTexture_atIndex(Some(&texture.raw), slot.metal_index as usize);
+                }
+            }
+            GpuBinding::Sampler {
+                binding: b,
+                sampler,
+            } => {
+                let Some(slot) = pipeline.slot_map.get(*b) else {
+                    continue;
+                };
+                unsafe {
+                    enc.setVertexSamplerState_atIndex(
+                        Some(&sampler.raw),
+                        slot.metal_index as usize,
+                    );
+                    enc.setFragmentSamplerState_atIndex(
+                        Some(&sampler.raw),
+                        slot.metal_index as usize,
+                    );
+                }
+            }
+            GpuBinding::Bytes { binding: b, data } => {
+                let Some(slot) = pipeline.slot_map.get(*b) else {
+                    continue;
+                };
+                unsafe {
+                    enc.setVertexBytes_length_atIndex(
+                        NonNull::new(data.as_ptr() as *mut c_void).unwrap(),
+                        data.len(),
+                        slot.metal_index as usize,
+                    );
+                    enc.setFragmentBytes_length_atIndex(
+                        NonNull::new(data.as_ptr() as *mut c_void).unwrap(),
+                        data.len(),
+                        slot.metal_index as usize,
+                    );
+                }
+            }
+        }
+    }
+}
+
+// Keep unused-import warnings at bay for the pipeline state type used above.
+#[allow(dead_code)]
+fn _use_pipeline_state(_: &ProtocolObject<dyn MTLRenderPipelineState>) {}
