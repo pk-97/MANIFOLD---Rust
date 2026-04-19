@@ -1,12 +1,9 @@
 [package]
-name = "manifold-analyzer-plugin"
+name = "manifold-analyzer-cli"
 version = "0.1.0"
 edition = "2021"
 publish = false
 
-[lib]
-crate-type = ["cdylib", "lib"]
-
 [dependencies]
-nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
 manifold-analyzer-dsp = { path = "../manifold-analyzer-dsp" }
+hound = "3"

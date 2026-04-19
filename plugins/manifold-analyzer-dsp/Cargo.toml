@@ -1,0 +1,8 @@
+[package]
+name = "manifold-analyzer-dsp"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+rustfft = "6"
