@@ -4,9 +4,9 @@ description: manifold-gpu crate architecture — native Metal on all threads, ze
 type: project
 ---
 
-## Decision: 2026-03-25
+## Decision: 2026-03-25 (objc2-metal migration completed 2026-04-19)
 
-Purpose-built `manifold-gpu` crate wrapping the `metal` crate directly. Native Metal on all threads (content + UI). Zero wgpu anywhere in the codebase.
+Purpose-built `manifold-gpu` crate on typed `objc2-metal` bindings. Native Metal on all threads (content + UI). Zero wgpu anywhere in the codebase. Zero dependency on the unmaintained gfx-rs `metal` crate, `objc 0.2`, or `block 0.1`.
 
 **Why:** wgpu submission overhead was 8-15ms. Native Metal brought it to 4.5-5.5ms. Professional tools (Resolume Arena, TouchDesigner) use native GPU APIs directly.
 
@@ -14,31 +14,34 @@ Purpose-built `manifold-gpu` crate wrapping the `metal` crate directly. Native M
 
 ```
 manifold-gpu/
-├── lib.rs              — compile-time backend selection (zero-cost, no vtable)
+├── lib.rs              — crate entry; re-exports metal::*
 ├── types.rs            — shared enums (TextureFormat, WorkgroupSize, etc.)
-├── metal/              — native Metal implementation (macOS content thread)
-│   ├── device.rs       — GpuDevice (MTLDevice)
-│   ├── encoder.rs      — GpuEncoder (MTLCommandBuffer + encoders)
-│   ├── texture.rs      — GpuTexture / GpuTextureView (MTLTexture)
-│   ├── buffer.rs       — GpuBuffer (MTLBuffer, shared-memory mapped by default)
-│   ├── pipeline.rs     — GpuComputePipeline / GpuRenderPipeline (WGSL→SPIR-V→spirv-opt→SPIRV-Cross→MSL)
-│   ├── sampler.rs      — GpuSampler
-│   ├── sync.rs         — GpuEvent (MTLSharedEvent)
-│   ├── heap.rs         — GpuHeap (MTLHeap — memoryless, aliasing, lossy compression)
-│   ├── mps.rs          — MPS blur, Sobel, scale kernels
-│   ├── metalfx.rs      — MetalFX Spatial/Temporal scalers
-│   ├── msl_cache.rs    — WGSL→MSL compilation cache on disk
-│   ├── vsync.rs        — GpuVsyncSignal / GpuVsyncWaiter (CVDisplayLink)
-│   └── archive.rs      — MTLBinaryArchive (compiled pipeline caching)
+└── metal/              — native Metal implementation (objc2-metal bindings)
+    ├── mod.rs          — public re-exports, SlotMap (WGSL @binding → Metal arg index)
+    ├── device.rs       — GpuDevice (MTLDevice + MTLCommandQueue, pipeline + resource factories)
+    ├── encoder.rs      — GpuEncoder (MTLCommandBuffer + compute/render/blit encoders, bind caches)
+    ├── types.rs        — GpuTexture/Buffer/Sampler/Pipeline/DepthStencil/Event/Heap/FenceWaiter
+    ├── format.rs       — GpuTextureFormat → MTLPixelFormat mappers
+    ├── shader_compiler.rs — WGSL → naga → SPIR-V → spirv-opt → SPIRV-Cross → MSL + slot map
+    ├── msl_cache.rs    — on-disk MSL compilation cache (skip WGSL frontend on warm launch)
+    ├── surface.rs      — GpuSurface / GpuDrawable (CAMetalLayer + EDR configuration)
+    ├── texture_pool.rs — frame-stamped MTLHeap-backed texture recycling
+    ├── archive.rs      — MTLBinaryArchive (compiled pipeline binaries on disk)
+    ├── metalfx.rs      — MetalFX Spatial scaler
+    └── mps.rs          — MPS kernels (blur, Sobel, scale, histogram, reduction, ...)
 ```
 
-**Compile-time selection:** `#[cfg(target_os = "macos")] pub use metal::*;` — consumer code uses `GpuDevice`, `GpuTexture`, etc. without knowing the backend. Zero overhead.
+**CVDisplayLink** lives in `manifold-app/src/display_link.rs`, not in manifold-gpu — each window owns its own display link.
 
-**API surface:** ~15 methods total. create_texture, create_buffer, create_pipeline, create_sampler, dispatch_compute, begin/end_render_pass, copy_texture, clear_texture, submit, signal_event. Purpose-built for MANIFOLD, not general-purpose.
+**API surface:** ~15 core methods. create_texture, create_buffer, create_pipeline, create_sampler, dispatch_compute, begin/end_render_pass, copy_texture, clear_texture, submit, signal_event. Purpose-built for MANIFOLD, not general-purpose.
 
-**Shaders:** WGSL everywhere. Pipeline: WGSL -> naga -> SPIR-V -> spirv-opt (22 optimization passes) -> SPIRV-Cross -> MSL. Intermediate MSL cached on disk (`msl_cache.rs`). Compiled GPU binaries cached via MTLBinaryArchive. Compilation runs at pipeline creation (startup), not per-frame.
+**Shaders:** WGSL everywhere. Pipeline: WGSL → naga → SPIR-V → spirv-opt (22 optimization passes) → SPIRV-Cross → MSL. Intermediate MSL cached on disk (`msl_cache.rs`). Compiled GPU binaries cached via MTLBinaryArchive. Compilation runs at pipeline creation (startup), not per-frame.
+
+**Ownership model:** All Metal objects are owned as `Retained<ProtocolObject<dyn MTLFoo>>` (automatic retain/release via `objc2::rc`). No manual `objc_retain`/`objc_release`, no raw pointer fields on GPU wrappers. Command buffers and encoders are fully typed — no `*mut c_void` cmd_buf tricks.
 
 **All threads use manifold-gpu.** Content thread and UI thread both use native Metal. Zero wgpu anywhere in the codebase.
+
+**Dependency policy:** manifold-gpu pulls only `objc2`, `block2`, `objc2-foundation`, `objc2-metal`, `objc2-metal-fx`, `objc2-metal-performance-shaders`. No `metal` crate, no `objc 0.2`, no `block 0.1`, no `core-graphics-types`. Raw-window-handle is the only non-objc2 macOS dep (winit interop).
 
 ## Phase Roadmap
 
@@ -51,8 +54,9 @@ manifold-gpu/
 | 4B                     | All-compute pipeline (TBDR elimination)                                                          | **Done**        |
 | 4.5                    | Generators → hal, single submission                                                              | **Done**        |
 | 4.6                    | LinePipeline hal render + native readbacks → zero wgpu on content hot path                       | **Done**        |
-| **manifold-gpu crate** | Extract hal code into native Metal backend (metal crate, not wgpu::hal). Metal-only, no wgpu fallback on content thread | **Done**        |
+| **manifold-gpu crate** | Extract hal code into native Metal backend (metal crate wrapper, not wgpu::hal). Metal-only, no wgpu fallback on content thread | **Done**        |
 | **Resource migration** | All content-thread textures/buffers → manifold_gpu types. Zero wgpu::Device on content thread    | **Done**        |
+| **objc2-metal migration** | Replace gfx-rs `metal` crate with typed `objc2-metal` bindings. Drops `objc 0.2`, `block 0.1`, `core-graphics-types` from dep graph | **Done** (2026-04-19) |
 | 5                      | Frame-stamped texture recycling pool (zero per-frame allocations after 3-frame warmup)           | **Done**        |
 | 6                      | MPS API (27 operations behind manifold-gpu). Effects use compound shaders — API available for future use | **Done**        |
 | 7                      | MetalFX Frame Interpolation (Metal 4 / macOS Tahoe). Master output level — render at 90 FPS, interpolate to 120. Requires 2 frames + depth + motion vectors. Depth available when WireframeDepth active. Without depth/motion: spatial-only fallback. | Future          |
@@ -73,17 +77,6 @@ manifold-gpu/
 - **Ring buffer overflow:** Uniform ring buffers need either generous sizing or fence-based wraparound protection.
 - **MetalFX Temporal:** Needs depth + motion vectors. MANIFOLD is 2D — only available when WireframeDepth effect is active (provides depth + flow). Spatial Scaler works unconditionally.
 - **Current performance:** 5-7ms GPU frame times (~140-200 FPS GPU throughput) after native Metal migration. Zero "(wgpu internal) Signal" overhead on content thread. Profile after each remaining phase to verify gains.
-
-## Migration Strategy
-
-Incremental, not big-bang. Same pattern as Phases 2-4:
-
-1. Build crate with GpuTexture/GpuBuffer wrapping existing hal code
-2. Migrate GpuEncoder
-3. Migrate pipelines
-4. Effects/generators migrate one by one
-5. Each step compiles and runs
-6. Existing hal code (hal_context.rs, hal_pipeline.rs, ring buffers) becomes the Metal backend — not new code, extracted code
 
 ## Windows / Linux Backend
 

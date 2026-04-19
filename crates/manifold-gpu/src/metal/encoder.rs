@@ -9,8 +9,8 @@ use objc2_foundation::NSString;
 use objc2_metal::{
     MTLBlitCommandEncoder, MTLBlitOption, MTLCommandBuffer, MTLCommandEncoder,
     MTLComputeCommandEncoder, MTLIndexType, MTLLoadAction, MTLOrigin, MTLPrimitiveType,
-    MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLRenderPipelineState, MTLScissorRect,
-    MTLSize, MTLStoreAction, MTLTexture, MTLTextureUsage, MTLViewport,
+    MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLScissorRect, MTLSize, MTLStoreAction,
+    MTLTexture, MTLTextureUsage, MTLViewport,
 };
 
 use super::*;
@@ -1256,8 +1256,7 @@ impl GpuEncoder {
             callback();
         });
         unsafe {
-            self.cmd_buf
-                .addCompletedHandler(&*block as *const _ as *mut _);
+            self.cmd_buf.addCompletedHandler(RcBlock::as_ptr(&block));
         }
     }
 
@@ -1287,8 +1286,7 @@ impl GpuEncoder {
             }
         });
         unsafe {
-            self.cmd_buf
-                .addCompletedHandler(&*block as *const _ as *mut _);
+            self.cmd_buf.addCompletedHandler(RcBlock::as_ptr(&block));
         }
     }
 
@@ -1481,6 +1479,3 @@ fn apply_bindings_draw_both_stages(
     }
 }
 
-// Keep unused-import warnings at bay for the pipeline state type used above.
-#[allow(dead_code)]
-fn _use_pipeline_state(_: &ProtocolObject<dyn MTLRenderPipelineState>) {}

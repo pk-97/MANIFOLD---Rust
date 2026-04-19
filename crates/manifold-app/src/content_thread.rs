@@ -339,7 +339,7 @@ impl ContentThread {
             // Drain autoreleased ObjC Metal objects at the end of each frame,
             // preventing memory accumulation and random GC-like pauses.
             #[cfg(target_os = "macos")]
-            objc::rc::autoreleasepool(|| {
+            objc2::rc::autoreleasepool(|_| {
                 self.tick_frame(&state_tx);
             });
             #[cfg(not(target_os = "macos"))]

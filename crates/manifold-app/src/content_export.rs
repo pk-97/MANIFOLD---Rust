@@ -250,7 +250,7 @@ impl ContentThread {
             }
 
             #[cfg(target_os = "macos")]
-            let frame_err: Option<String> = objc::rc::autoreleasepool(|| {
+            let frame_err: Option<String> = objc2::rc::autoreleasepool(|_| {
                 self.export_one_frame(
                     &mut session,
                     &export_config,

@@ -35,9 +35,10 @@ manifold-profiler = { path = "../manifold-profiler", optional = true }
 # macOS platform dependencies
 [target.'cfg(target_os = "macos")'.dependencies]
 io-surface = "0.16"
-objc = "0.2"
 core-foundation = "0.10"
 raw-window-handle = "0.6"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSNotification"] }
 
 [features]
 profiling = ["dep:manifold-profiler"]

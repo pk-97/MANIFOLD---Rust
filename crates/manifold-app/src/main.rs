@@ -167,30 +167,24 @@ fn create_iopm_assertion() -> u32 {
 /// Suppress App Nap so macOS doesn't throttle MANIFOLD when backgrounded.
 /// Returns the activity token object (must stay alive).
 #[cfg(target_os = "macos")]
-fn suppress_app_nap() -> objc::rc::StrongPtr {
-    use objc::runtime::Object;
-    use objc::*;
+fn suppress_app_nap() -> objc2::rc::Retained<objc2::runtime::AnyObject> {
+    use objc2::rc::Retained;
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    use objc2_foundation::NSString;
 
-    // NSActivityUserInitiated | NSActivityLatencyCritical
-    // NSActivityUserInitiated          = 0x00000001
-    // NSActivityLatencyCritical        = 0xFF00000000
+    // NSActivityUserInitiated (0x00000001) | NSActivityLatencyCritical (0xFF00000000).
     // Combined keeps the process at full speed and prevents App Nap.
     let options: u64 = 0xFF00000001;
 
     unsafe {
-        let process_info: *mut Object = msg_send![class!(NSProcessInfo), processInfo];
-        let reason = {
-            let s: *const objc::runtime::Object = msg_send![
-                class!(NSString),
-                stringWithUTF8String: c"MANIFOLD live performance".as_ptr()
-            ];
-            s
-        };
-        let token: *mut Object = msg_send![
+        let process_info: *mut AnyObject = msg_send![class!(NSProcessInfo), processInfo];
+        let reason = NSString::from_str("MANIFOLD live performance");
+        let token: Retained<AnyObject> = msg_send![
             process_info,
-            beginActivityWithOptions: options
-            reason: reason
+            beginActivityWithOptions: options,
+            reason: &*reason,
         ];
-        objc::rc::StrongPtr::retain(token)
+        token
     }
 }

@@ -10,10 +10,9 @@ use objc2_foundation::NSString;
 use objc2_metal::{
     MTLBinaryArchive, MTLBuffer, MTLCommandBuffer, MTLCommandQueue, MTLCompileOptions,
     MTLComputePipelineDescriptor, MTLDepthStencilDescriptor, MTLDevice, MTLHeap, MTLHeapDescriptor,
-    MTLLanguageVersion, MTLLibrary, MTLPipelineOption, MTLPrimitiveTopologyClass,
-    MTLRenderPipelineDescriptor, MTLResource, MTLResourceOptions, MTLSamplerDescriptor,
-    MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureType, MTLTextureUsage,
-    MTLVertexDescriptor, MTLVertexStepFunction,
+    MTLLanguageVersion, MTLLibrary, MTLPipelineOption, MTLRenderPipelineDescriptor, MTLResource,
+    MTLResourceOptions, MTLSamplerDescriptor, MTLStorageMode, MTLTexture, MTLTextureDescriptor,
+    MTLTextureType, MTLTextureUsage, MTLVertexDescriptor, MTLVertexStepFunction,
 };
 
 use super::encoder::{EncoderState, RenderBindCache};
@@ -1326,6 +1325,3 @@ impl GpuDevice {
     }
 }
 
-// Silence unused-trait warnings
-#[allow(dead_code)]
-fn _use_topology(_: MTLPrimitiveTopologyClass) {}

@@ -1,4 +1,5 @@
-//! macOS EDR (Extended Dynamic Range) surface configuration.
+//! macOS AppKit interop: EDR (Extended Dynamic Range) surface configuration
+//! and miscellaneous NSWindow/NSScreen helpers used from the UI thread.
 //!
 //! When using Rgba16Float surfaces for HDR output, three properties must be
 //! set on the CAMetalLayer for macOS to correctly interpret linear HDR values:
@@ -10,8 +11,6 @@
 //! Without the correct colorspace, macOS doesn't know the values are linear
 //! and won't apply the sRGB display transfer function. Subtle bloom gradients
 //! (linear 0.02) stay invisible instead of being gamma-expanded to ~0.15.
-//!
-//! Unity: MonitorWindowPlugin.mm ApplyLayerMode() sets all three.
 //!
 //! ## Dynamic headroom
 //!
@@ -44,53 +43,50 @@ pub(crate) fn edr_screen_changed() -> bool {
 /// Must be called once from the main thread after window creation.
 #[cfg(target_os = "macos")]
 pub(crate) fn register_screen_change_observer() {
-    use objc::declare::ClassDecl;
-    use objc::runtime::{Object, Sel};
-    use objc::{class, msg_send, sel, sel_impl};
+    use objc2::runtime::{AnyClass, AnyObject, ClassBuilder, Sel};
+    use objc2::{class, msg_send, sel};
+    use objc2_foundation::NSString;
 
     // Callback: sets the atomic flag when any screen change occurs.
-    extern "C" fn on_screen_changed(_this: &Object, _cmd: Sel, _notification: *mut Object) {
+    extern "C" fn on_screen_changed(_this: *mut AnyObject, _cmd: Sel, _notification: *mut AnyObject) {
         EDR_SCREEN_CHANGED.store(true, Ordering::Relaxed);
     }
 
     unsafe {
         let superclass = class!(NSObject);
-        let mut decl = ClassDecl::new("ManifoldEDRObserver", superclass)
+        let mut builder = ClassBuilder::new(c"ManifoldEDRObserver", superclass)
             .expect("failed to declare ManifoldEDRObserver");
-
-        decl.add_method(
+        builder.add_method(
             sel!(onScreenChanged:),
-            on_screen_changed as extern "C" fn(&Object, Sel, *mut Object),
+            on_screen_changed as extern "C" fn(*mut AnyObject, Sel, *mut AnyObject),
         );
+        let cls: &AnyClass = builder.register();
+        let observer: *mut AnyObject = msg_send![cls, new];
 
-        let cls = decl.register();
-        let observer: *mut Object = msg_send![cls, new];
-
-        let center: *mut Object = msg_send![class!(NSNotificationCenter), defaultCenter];
+        let center: *mut AnyObject = msg_send![class!(NSNotificationCenter), defaultCenter];
 
         // NSWindowDidChangeScreenNotification — window moved between displays.
-        let name1: *const Object = msg_send![class!(NSString), stringWithUTF8String:
-                c"NSWindowDidChangeScreenNotification".as_ptr()];
-        let _: () = msg_send![center,
-            addObserver: observer
-            selector: sel!(onScreenChanged:)
-            name: name1
-            object: std::ptr::null::<Object>()
+        let name1 = NSString::from_str("NSWindowDidChangeScreenNotification");
+        let _: () = msg_send![
+            center,
+            addObserver: observer,
+            selector: sel!(onScreenChanged:),
+            name: &*name1,
+            object: std::ptr::null::<AnyObject>(),
         ];
 
         // NSApplicationDidChangeScreenParametersNotification — display
         // connected/disconnected or resolution/brightness changed.
-        let name2: *const Object = msg_send![class!(NSString), stringWithUTF8String:
-                c"NSApplicationDidChangeScreenParametersNotification".as_ptr()];
-        let _: () = msg_send![center,
-            addObserver: observer
-            selector: sel!(onScreenChanged:)
-            name: name2
-            object: std::ptr::null::<Object>()
+        let name2 = NSString::from_str("NSApplicationDidChangeScreenParametersNotification");
+        let _: () = msg_send![
+            center,
+            addObserver: observer,
+            selector: sel!(onScreenChanged:),
+            name: &*name2,
+            object: std::ptr::null::<AnyObject>(),
         ];
 
         // Leak the observer intentionally — it must live for the app's lifetime.
-        // observer is *mut Object (a raw pointer / Copy type), so just don't release it.
         let _ = observer;
 
         log::info!("[EDR] Registered screen change notification observers");
@@ -100,11 +96,11 @@ pub(crate) fn register_screen_change_observer() {
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn register_screen_change_observer() {}
 
-/// Query EDR headroom for a specific NSScreen. Lightweight — two Obj-C
+/// Query EDR headroom for a specific NSScreen. Lightweight — three Obj-C
 /// message sends, no allocations.
 #[cfg(target_os = "macos")]
-pub(crate) fn query_screen_headroom(screen: *mut objc::runtime::Object) -> f64 {
-    use objc::{msg_send, sel, sel_impl};
+pub(crate) fn query_screen_headroom(screen: *mut objc2::runtime::AnyObject) -> f64 {
+    use objc2::msg_send;
 
     if screen.is_null() {
         return 1.0;
@@ -136,7 +132,8 @@ pub(crate) fn query_screen_headroom(screen: *mut objc::runtime::Object) -> f64 {
 /// Query the EDR headroom of the screen that the given winit Window is on.
 #[cfg(target_os = "macos")]
 pub(crate) fn query_window_headroom(window: &winit::window::Window) -> f64 {
-    use objc::{msg_send, sel, sel_impl};
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     let Ok(handle) = window.window_handle() else {
@@ -147,12 +144,12 @@ pub(crate) fn query_window_headroom(window: &winit::window::Window) -> f64 {
     };
 
     unsafe {
-        let ns_view = appkit.ns_view.as_ptr() as *mut objc::runtime::Object;
-        let ns_window: *mut objc::runtime::Object = msg_send![ns_view, window];
+        let ns_view = appkit.ns_view.as_ptr() as *mut AnyObject;
+        let ns_window: *mut AnyObject = msg_send![ns_view, window];
         if ns_window.is_null() {
             return 1.0;
         }
-        let screen: *mut objc::runtime::Object = msg_send![ns_window, screen];
+        let screen: *mut AnyObject = msg_send![ns_window, screen];
         query_screen_headroom(screen)
     }
 }
@@ -160,4 +157,31 @@ pub(crate) fn query_window_headroom(window: &winit::window::Window) -> f64 {
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn query_window_headroom(_window: &winit::window::Window) -> f64 {
     1.0
+}
+
+/// Set the NSWindow level for a winit window. 0 = NSNormalWindowLevel,
+/// 25 = above NSMainMenuWindowLevel (24) so a borderless "fullscreen"
+/// window covers the menu bar on a single display without touching global
+/// presentation options.
+#[cfg(target_os = "macos")]
+pub(crate) fn set_window_level(window: &winit::window::Window, level: i64) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let Ok(handle) = window.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
+        return;
+    };
+
+    unsafe {
+        let ns_view = appkit.ns_view.as_ptr() as *mut AnyObject;
+        let ns_window: *mut AnyObject = msg_send![ns_view, window];
+        if ns_window.is_null() {
+            return;
+        }
+        let _: () = msg_send![ns_window, setLevel: level];
+    }
 }

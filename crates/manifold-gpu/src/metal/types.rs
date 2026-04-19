@@ -3,9 +3,8 @@
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandQueue, MTLComputePipelineState, MTLDepthStencilState,
-    MTLDevice, MTLHeap, MTLRenderPipelineState, MTLResource, MTLSamplerState, MTLSharedEvent,
-    MTLSharedEventListener, MTLStorageMode, MTLTexture,
+    MTLBuffer, MTLComputePipelineState, MTLDepthStencilState, MTLHeap, MTLRenderPipelineState,
+    MTLSamplerState, MTLSharedEvent, MTLSharedEventListener, MTLTexture,
 };
 
 use super::*;
@@ -318,12 +317,6 @@ impl GpuHeap {
     }
 }
 
-// Suppress unused-import lint for trait imports that are only needed by the
-// `impl GpuHeap` method calls above (Rust requires the trait in scope to call
-// its methods through dispatch, even via ProtocolObject).
-#[allow(dead_code)]
-fn _storage_mode_trait_check(_: MTLStorageMode) {}
-
 // ─── GpuFenceWaiter ──────────────────────────────────────────────────
 
 /// Kernel-notified GPU fence waiter.
@@ -379,18 +372,9 @@ impl GpuFenceWaiter {
             event.raw().notifyListener_atValue_block(
                 &self.listener,
                 target_value,
-                &*block as *const _ as *mut _,
+                RcBlock::as_ptr(&block),
             );
         }
     }
 }
 
-// Keep imports alive for trait dispatch; these can be stripped if unused.
-#[allow(dead_code)]
-fn _unused_traits(
-    _: &ProtocolObject<dyn MTLDevice>,
-    _: &ProtocolObject<dyn MTLCommandQueue>,
-    _: &ProtocolObject<dyn MTLCommandBuffer>,
-    _: &ProtocolObject<dyn MTLResource>,
-) {
-}

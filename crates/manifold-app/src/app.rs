@@ -1974,35 +1974,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                         winit::dpi::LogicalPosition::new(lx, ly),
                                     );
                                 }
-                                // Set window level above menu bar (level 24)
+                                // Set window level above menu bar (NSMainMenuWindowLevel=24)
                                 // so our borderless window covers it on this
                                 // display only — no global setPresentationOptions.
                                 #[cfg(target_os = "macos")]
-                                {
-                                    use objc::{msg_send, sel, sel_impl};
-                                    use raw_window_handle::{
-                                        HasWindowHandle, RawWindowHandle,
-                                    };
-                                    if let Ok(handle) = ws.window.window_handle()
-                                        && let RawWindowHandle::AppKit(h) =
-                                            handle.as_raw()
-                                    {
-                                        unsafe {
-                                            let ns_view = h.ns_view.as_ptr()
-                                                as *mut objc::runtime::Object;
-                                            let ns_win: *mut objc::runtime::Object =
-                                                msg_send![ns_view, window];
-                                            if !ns_win.is_null() {
-                                                // NSMainMenuWindowLevel = 24,
-                                                // so 25 puts us above it.
-                                                let _: () = msg_send![
-                                                    ns_win,
-                                                    setLevel: 25_i64
-                                                ];
-                                            }
-                                        }
-                                    }
-                                }
+                                crate::edr_surface::set_window_level(&ws.window, 25);
                             } else {
                                 // → Windowed: restore saved frame + menu bar
                                 ws.window.set_decorations(true);
@@ -2018,33 +1994,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                         ),
                                     );
                                 }
-                                // Restore normal window level so the
-                                // menu bar is no longer covered.
+                                // Restore NSNormalWindowLevel=0 so the menu
+                                // bar is no longer covered.
                                 #[cfg(target_os = "macos")]
-                                {
-                                    use objc::{msg_send, sel, sel_impl};
-                                    use raw_window_handle::{
-                                        HasWindowHandle, RawWindowHandle,
-                                    };
-                                    if let Ok(handle) = ws.window.window_handle()
-                                        && let RawWindowHandle::AppKit(h) =
-                                            handle.as_raw()
-                                    {
-                                        unsafe {
-                                            let ns_view = h.ns_view.as_ptr()
-                                                as *mut objc::runtime::Object;
-                                            let ns_win: *mut objc::runtime::Object =
-                                                msg_send![ns_view, window];
-                                            if !ns_win.is_null() {
-                                                // NSNormalWindowLevel = 0
-                                                let _: () = msg_send![
-                                                    ns_win,
-                                                    setLevel: 0_i64
-                                                ];
-                                            }
-                                        }
-                                    }
-                                }
+                                crate::edr_surface::set_window_level(&ws.window, 0);
                             }
 
                             let new_size = ws.window.inner_size();

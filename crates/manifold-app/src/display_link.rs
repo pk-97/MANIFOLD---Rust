@@ -61,32 +61,31 @@ unsafe extern "C" {
 
 /// Get the CGDirectDisplayID for the monitor a window is currently on.
 fn display_id_for_window(window: &winit::window::Window) -> u32 {
-    use objc::{class, msg_send, sel, sel_impl};
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use objc2_foundation::NSString;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     let ns_view = match window.window_handle().unwrap().as_raw() {
-        RawWindowHandle::AppKit(h) => h.ns_view.as_ptr() as *mut objc::runtime::Object,
+        RawWindowHandle::AppKit(h) => h.ns_view.as_ptr() as *mut AnyObject,
         _ => return 0,
     };
 
     unsafe {
-        let ns_window: *mut objc::runtime::Object = msg_send![ns_view, window];
+        let ns_window: *mut AnyObject = msg_send![ns_view, window];
         if ns_window.is_null() {
             return 0;
         }
-        let screen: *mut objc::runtime::Object = msg_send![ns_window, screen];
+        let screen: *mut AnyObject = msg_send![ns_window, screen];
         if screen.is_null() {
             return 0;
         }
-        let desc: *mut objc::runtime::Object = msg_send![screen, deviceDescription];
+        let desc: *mut AnyObject = msg_send![screen, deviceDescription];
         if desc.is_null() {
             return 0;
         }
-        let key: *mut objc::runtime::Object = msg_send![
-            class!(NSString),
-            stringWithUTF8String: c"NSScreenNumber".as_ptr()
-        ];
-        let display_id_obj: *mut objc::runtime::Object = msg_send![desc, objectForKey: key];
+        let key = NSString::from_str("NSScreenNumber");
+        let display_id_obj: *mut AnyObject = msg_send![desc, objectForKey: &*key];
         if display_id_obj.is_null() {
             return 0;
         }
