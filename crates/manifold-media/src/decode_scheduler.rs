@@ -36,15 +36,6 @@ pub enum DecodeJob {
     Close { clip_id: String },
     /// Open a video file for warm cache (keyed by video_clip_id, not clip_id).
     WarmOpen { video_clip_id: String, path: String },
-    /// Promote a warm decoder to active (move from warm to active by clip_id).
-    #[allow(dead_code)]
-    PromoteWarm {
-        video_clip_id: String,
-        clip_id: String,
-    },
-    /// Close a warm cache entry.
-    #[allow(dead_code)]
-    WarmClose { video_clip_id: String },
     /// Shutdown the worker thread.
     Shutdown,
 }
@@ -58,9 +49,7 @@ impl DecodeJob {
             | Self::Seek { clip_id, .. }
             | Self::DecodeNext { clip_id }
             | Self::Close { clip_id } => Some(clip_id),
-            Self::WarmOpen { video_clip_id, .. }
-            | Self::PromoteWarm { video_clip_id, .. }
-            | Self::WarmClose { video_clip_id } => Some(video_clip_id),
+            Self::WarmOpen { video_clip_id, .. } => Some(video_clip_id),
             Self::Shutdown => None,
         }
     }
@@ -370,32 +359,6 @@ fn worker_loop(job_rx: Receiver<DecodeJob>, result_tx: Sender<DecodeResult>, poo
                         log::warn!("[DecodeWorker] Warm open failed for {video_clip_id}: {e}");
                     }
                 }
-            }
-
-            DecodeJob::PromoteWarm {
-                video_clip_id,
-                clip_id,
-            } => {
-                if let Some(handle) = warm.remove(&video_clip_id) {
-                    let duration = handle.duration();
-                    let width = handle.width();
-                    let height = handle.height();
-                    let frame_rate = handle.frame_rate();
-                    active.insert(clip_id.clone(), handle);
-                    let _ = result_tx.send(DecodeResult {
-                        clip_id,
-                        status: DecodeResultStatus::Opened {
-                            duration,
-                            width,
-                            height,
-                            frame_rate,
-                        },
-                    });
-                }
-            }
-
-            DecodeJob::WarmClose { video_clip_id } => {
-                warm.remove(&video_clip_id);
             }
 
             DecodeJob::Shutdown => {

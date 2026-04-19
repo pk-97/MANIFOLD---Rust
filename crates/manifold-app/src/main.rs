@@ -23,7 +23,6 @@ mod project_io;
 #[cfg(target_os = "macos")]
 mod shared_texture;
 mod text_input;
-mod transport_state;
 mod ui_bridge;
 mod ui_root;
 mod user_prefs;

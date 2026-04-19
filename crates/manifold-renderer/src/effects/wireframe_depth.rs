@@ -1080,15 +1080,6 @@ impl WireframeDepthFX {
         self.dnn_backend_available
     }
 
-    // WireframeDepthFX.cs line 715-728 — DisableDnnBackend
-    #[allow(dead_code)]
-    fn disable_dnn_backend(&mut self, frame_count: i64) {
-        self.workers = None;
-        self.dnn_backend_initialized = true;
-        self.dnn_backend_available = false;
-        self.dnn_next_retry_frame = frame_count + 300;
-    }
-
     // WireframeDepthFX.cs line 455-495 — RequestNativeReadback
     fn request_native_readback(
         &mut self,
@@ -1676,36 +1667,6 @@ impl WireframeDepthFX {
         Self::release_transient(gpu, surface_next);
     }
 
-    // WireframeDepthFX.cs line 927-978 — ClearOwnerState
-    #[allow(dead_code)]
-    fn clear_owner_state(gpu: &mut GpuEncoder, state: &mut OwnerState) {
-        Self::encode_clear(gpu, &state.previous_analysis_tex);
-        Self::encode_clear(gpu, &state.depth_tex);
-        Self::encode_clear(gpu, &state.line_history_tex);
-        Self::encode_clear(gpu, &state.flow_tex);
-        Self::encode_clear(gpu, &state.mesh_coord_tex);
-        Self::encode_clear(gpu, &state.semantic_tex);
-        Self::encode_clear(gpu, &state.surface_cache_tex);
-        state.dnn_readback_pending = false;
-        state.dnn_has_depth = false;
-        state.dnn_depth_dirty = false;
-        state.dnn_has_subject_mask = false;
-        state.dnn_subject_dirty = false;
-        state.has_prev_native_frame = false;
-        state.native_flow_has_data = false;
-        state.native_flow_dirty = false;
-        state.native_flow_ready = false;
-        state.native_request_wants_flow = false;
-        state.native_request_wants_depth = false;
-        state.native_request_wants_subject = false;
-        state.latest_cut_score = 0.0;
-        state.last_subject_request_frame = -1024;
-        state.last_mesh_update_frame = -1024;
-        // Clear CPU pixel buffers (equivalent to SetPixels32 with zeros)
-        state.dnn_depth_buffer.fill(0.0);
-        state.dnn_subject_history_buffer.fill(0.0);
-        state.native_flow_buffer.fill(0.0);
-    }
 }
 
 impl PostProcessEffect for WireframeDepthFX {
