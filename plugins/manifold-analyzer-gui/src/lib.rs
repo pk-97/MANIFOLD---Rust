@@ -46,10 +46,85 @@ const MAX_SPECTRUM_H: u32 = 2048;
 // Matched to SPAN preset: 10 Hz–25 kHz log, -90…-10 dB, +4.5 dB/oct tilt
 // pivoted at 1 kHz, 1/12-oct frequency smoothing, filled display.
 const DB_MIN: f32 = -90.0;
-const DB_MAX: f32 = -10.0;
-const SLOPE_DB_PER_OCT: f32 = 4.5;
+const DB_MAX: f32 = 0.0;
+/// Reference frequency for the Flat/Pink/Tilted weighting slopes.
+/// LUFS modes ignore this (the biquad response has its own pivot).
 const SLOPE_REF_FREQ: f32 = 1000.0;
-const ALIGN_OFFSET_DB: f32 = 0.0; // Placeholder for SPAN "Align 0 dB" pink-noise calibration.
+/// Auto-computed per frame: `-mean(weighting_db)` over the visible
+/// freq range. Cancels the weighting curve's DC bias so the
+/// display's overall level doesn't jump when switching between
+/// weighting modes — only the *shape* of the weighting actually
+/// colours the display.
+fn weighting_align_offset(weighting: Weighting, freq_min: f32, freq_max: f32) -> f32 {
+    if freq_max <= freq_min {
+        return 0.0;
+    }
+    let mean_db = match weighting {
+        Weighting::Flat => 0.0,
+        Weighting::Pink | Weighting::Tilted => {
+            // Log-uniform mean of `slope * log2(f/ref)` is `slope *
+            // log2(gm/ref)` where gm = sqrt(fmin*fmax).
+            let slope = weighting.slope_db_per_oct();
+            let gm = (freq_min * freq_max).sqrt();
+            slope * (gm / SLOPE_REF_FREQ).log2()
+        }
+        Weighting::Lufs | Weighting::LufsSubAdj => {
+            // Numerically integrate the biquad response over a
+            // log-uniform grid. 64 samples is smooth enough that the
+            // result doesn't wobble as the user drags freq_min/max.
+            let n = 64usize;
+            let log_min = freq_min.ln();
+            let log_max = freq_max.ln();
+            let mut sum = 0.0_f32;
+            for i in 0..n {
+                let t = (i as f32 + 0.5) / n as f32;
+                let freq = (log_min + t * (log_max - log_min)).exp();
+                sum += lufs_weighting_db(weighting, freq);
+            }
+            sum / n as f32
+        }
+    };
+    -mean_db
+}
+
+fn lufs_weighting_db(weighting: Weighting, freq: f32) -> f32 {
+    let pre = biquad_mag_db_48k(
+        freq,
+        1.535_124_8,
+        -2.691_696_2,
+        1.198_392_8,
+        -1.690_659_3,
+        0.732_480_8,
+    );
+    match weighting {
+        Weighting::Lufs => {
+            let rlb = biquad_mag_db_48k(
+                freq,
+                1.0,
+                -2.0,
+                1.0,
+                -1.990_047_4,
+                0.990_072_3,
+            );
+            pre + rlb
+        }
+        Weighting::LufsSubAdj => pre,
+        _ => 0.0,
+    }
+}
+
+fn biquad_mag_db_48k(freq: f32, b0: f32, b1: f32, b2: f32, a1: f32, a2: f32) -> f32 {
+    let w = std::f32::consts::TAU * freq / 48_000.0;
+    let (sw, cw) = w.sin_cos();
+    let (s2w, c2w) = (2.0 * w).sin_cos();
+    let num_re = b0 + b1 * cw + b2 * c2w;
+    let num_im = -b1 * sw - b2 * s2w;
+    let den_re = 1.0 + a1 * cw + a2 * c2w;
+    let den_im = -a1 * sw - a2 * s2w;
+    let num_mag2 = num_re * num_re + num_im * num_im;
+    let den_mag2 = den_re * den_re + den_im * den_im;
+    10.0 * (num_mag2.max(1e-30) / den_mag2.max(1e-30)).log10()
+}
 const SMOOTH_HALF_OCT_LOG2: f32 = 1.0 / 24.0; // 1/12-oct bandwidth → ±1/24 oct half-width
 const FILL_ALPHA: f32 = 0.45;
 // Colourmap dB range. Synchrosqueezing concentrates a main-lobe's worth
@@ -83,9 +158,9 @@ const FREQ_MINORS: &[f32] = &[
 ];
 
 /// dB grid ticks for the top MS graph. Linear spacing: 20 dB majors,
-/// 10 dB minors. Range must match DB_MIN..DB_MAX below.
-const DB_MAJORS: &[f32] = &[-20.0, -40.0, -60.0, -80.0];
-const DB_MINORS: &[f32] = &[-30.0, -50.0, -70.0];
+/// 10 dB minors. Range must match DB_MIN..DB_MAX.
+const DB_MAJORS: &[f32] = &[0.0, -20.0, -40.0, -60.0, -80.0];
+const DB_MINORS: &[f32] = &[-10.0, -30.0, -50.0, -70.0];
 
 /// Musical time factor selected in Sync mode. Matches Vision 4X's
 /// "Factor" dropdown: the ratio that scales a bar. 1/1 = 1 bar per unit,
@@ -157,6 +232,66 @@ impl TopRatio {
     }
 }
 
+/// Frequency weighting applied to both the MS curves and the spectrogram
+/// colormap. Flat/Pink/Tilted are plain linear-in-log-freq slopes; LUFS
+/// is the full ITU-R BS.1770 K-weighting (HF shelf + 38 Hz HPF), which
+/// is what LUFS meters use to model perceptual loudness. LUFS Sub Adj
+/// keeps the HF shelf but drops the HPF so subsonic issues (rumble,
+/// DC, plugin artifacts) remain visible instead of being attenuated
+/// by 20+ dB — more useful for diagnosing mix problems than a strict
+/// LUFS reading.
+#[derive(Enum, PartialEq, Eq, Debug, Clone, Copy)]
+pub enum Weighting {
+    #[id = "flat"]
+    #[name = "Flat"]
+    Flat,
+    #[id = "pink"]
+    #[name = "Pink"]
+    Pink,
+    #[id = "tilted"]
+    #[name = "Tilted"]
+    Tilted,
+    #[id = "lufs"]
+    #[name = "LUFS"]
+    Lufs,
+    #[id = "lufs-sub"]
+    #[name = "LUFS (Sub Adj)"]
+    LufsSubAdj,
+}
+
+impl Weighting {
+    /// Linear slope (dB/octave) used for Flat/Pink/Tilted modes. The
+    /// LUFS modes ignore this; the shader picks them up via `mode_id`.
+    fn slope_db_per_oct(self) -> f32 {
+        match self {
+            Weighting::Flat => 0.0,
+            Weighting::Pink => 3.0,
+            Weighting::Tilted => 4.5,
+            _ => 0.0,
+        }
+    }
+
+    fn mode_id(self) -> f32 {
+        match self {
+            Weighting::Flat => 0.0,
+            Weighting::Pink => 1.0,
+            Weighting::Tilted => 2.0,
+            Weighting::Lufs => 3.0,
+            Weighting::LufsSubAdj => 4.0,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Weighting::Flat => "Flat",
+            Weighting::Pink => "Pink",
+            Weighting::Tilted => "Tilted",
+            Weighting::Lufs => "LUFS",
+            Weighting::LufsSubAdj => "LUFS (Sub Adj)",
+        }
+    }
+}
+
 #[derive(Params)]
 pub struct AnalyzerParams {
     #[persist = "editor-state"]
@@ -211,6 +346,11 @@ pub struct AnalyzerParams {
     /// transients survive; higher → cleaner on noise.
     #[id = "synchro-gate"]
     pub synchro_gate_db: FloatParam,
+
+    /// Frequency weighting applied to both the MS curves and the
+    /// spectrogram. See `Weighting` for what each mode does.
+    #[id = "weighting"]
+    pub weighting: EnumParam<Weighting>,
 }
 
 impl AnalyzerParams {
@@ -236,6 +376,7 @@ impl AnalyzerParams {
             )
             .with_unit(" dB")
             .with_step_size(1.0),
+            weighting: EnumParam::new("Weighting", Weighting::LufsSubAdj),
         }
     }
 }
@@ -323,6 +464,32 @@ struct EditorState {
     /// Scratch buffer that accumulates samples drained from the ring
     /// each render frame before they're fed into the CQT pipeline.
     sample_scratch: Vec<f32>,
+    /// Cached weighting-curve align offset so we don't re-integrate
+    /// the BS.1770 biquads every frame — only when mode / freq range
+    /// changes.
+    align_offset_cache: AlignOffsetCache,
+}
+
+#[derive(Default)]
+struct AlignOffsetCache {
+    key: Option<(Weighting, f32, f32)>,
+    value: f32,
+}
+
+fn align_offset_cached(
+    cache: &mut AlignOffsetCache,
+    weighting: Weighting,
+    freq_min: f32,
+    freq_max: f32,
+) -> f32 {
+    let key = (weighting, freq_min, freq_max);
+    if cache.key == Some(key) {
+        return cache.value;
+    }
+    let v = weighting_align_offset(weighting, freq_min, freq_max);
+    cache.key = Some(key);
+    cache.value = v;
+    v
 }
 
 pub fn create_editor(
@@ -340,6 +507,7 @@ pub fn create_editor(
         mid_scratch: vec![MIN_DB; num_bins],
         side_scratch: vec![MIN_DB; num_bins],
         sample_scratch: Vec::with_capacity(4096),
+        align_offset_cache: AlignOffsetCache::default(),
     };
     create_egui_editor(
         egui_state,
@@ -429,10 +597,25 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         }
         let ss_on = state.params.synchrosqueeze.value();
         let top_fraction = state.params.top_ratio.value().fraction();
+        let weighting = state.params.weighting.value();
+        let (freq_min_for_align, freq_max_for_align) = {
+            let nyquist = sr * 0.5;
+            let fmin_u = state.params.freq_min_hz.value() as f32;
+            let fmax_u = state.params.freq_max_hz.value() as f32;
+            let fmax = fmax_u.min(nyquist).max(fmin_u * 2.0);
+            let fmin = fmin_u.min(fmax * 0.5).max(1.0);
+            (fmin, fmax)
+        };
+        let align_offset = align_offset_cached(
+            &mut state.align_offset_cache,
+            weighting,
+            freq_min_for_align,
+            freq_max_for_align,
+        );
         spec.set_display(DisplayConfig {
-            slope_db_per_oct: SLOPE_DB_PER_OCT,
+            slope_db_per_oct: weighting.slope_db_per_oct(),
             slope_ref_freq: SLOPE_REF_FREQ,
-            align_offset_db: ALIGN_OFFSET_DB,
+            align_offset_db: align_offset,
             smooth_half_oct_log2: SMOOTH_HALF_OCT_LOG2,
             fill_alpha: FILL_ALPHA,
             spectrum_fraction: top_fraction,
@@ -441,6 +624,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             enable_synchrosqueezing: ss_on,
             enable_coherence_check: state.params.coherence.value(),
             synchro_gate_db: state.params.synchro_gate_db.value(),
+            weighting_mode: weighting.mode_id(),
         });
 
         let (bpm_opt, beat_opt, _playing) = state.shared.transport();
@@ -902,6 +1086,27 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
                         setter.begin_set_parameter(&params.top_ratio);
                         setter.set_parameter(&params.top_ratio, ratio_val);
                         setter.end_set_parameter(&params.top_ratio);
+                    }
+                }
+            });
+
+        ui.label("Weighting");
+        let mut weight_val = params.weighting.value();
+        egui::ComboBox::from_id_salt("weighting")
+            .selected_text(weight_val.label())
+            .width(120.0)
+            .show_ui(ui, |ui| {
+                for opt in [
+                    Weighting::Flat,
+                    Weighting::Pink,
+                    Weighting::Tilted,
+                    Weighting::Lufs,
+                    Weighting::LufsSubAdj,
+                ] {
+                    if ui.selectable_value(&mut weight_val, opt, opt.label()).changed() {
+                        setter.begin_set_parameter(&params.weighting);
+                        setter.set_parameter(&params.weighting, weight_val);
+                        setter.end_set_parameter(&params.weighting);
                     }
                 }
             });

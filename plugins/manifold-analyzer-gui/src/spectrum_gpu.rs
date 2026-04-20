@@ -134,6 +134,11 @@ pub struct DisplayConfig {
     /// synchrosqueezed scatter. Lower (−85..−90) keeps kick attacks /
     /// transients continuous; higher (−65..−60) is cleaner on noise.
     pub synchro_gate_db: f32,
+    /// Weighting mode id consumed by the shader's `weighting_db`
+    /// function. 0 = Flat, 1 = Pink (+3), 2 = Tilted (+4.5),
+    /// 3 = LUFS (BS.1770 K-weighting), 4 = LUFS sub-adjusted
+    /// (HF shelf only, no HPF).
+    pub weighting_mode: f32,
 }
 
 impl Default for DisplayConfig {
@@ -150,6 +155,7 @@ impl Default for DisplayConfig {
             enable_synchrosqueezing: false,
             enable_coherence_check: false,
             synchro_gate_db: SYNCHRO_SCATTER_GATE_DEFAULT_DB,
+            weighting_mode: 2.0,
         }
     }
 }
@@ -216,7 +222,8 @@ struct SpectrumUniforms {
     /// spectrogram Y axis.
     cqt_fmin_hz: f32,
     cqt_bins_per_octave: f32,
-    _pad: f32,
+    /// Weighting mode (see `DisplayConfig::weighting_mode`).
+    weighting_mode: f32,
 }
 
 pub struct SpectrumGpuRenderer {
@@ -802,7 +809,7 @@ impl SpectrumGpuRenderer {
             sync_mode: if self.sync.enabled { 1.0 } else { 0.0 },
             cqt_fmin_hz: CQT_FMIN_HZ,
             cqt_bins_per_octave: CQT_BINS_PER_OCTAVE as f32,
-            _pad: 0.0,
+            weighting_mode: self.display.weighting_mode,
         };
         let uniform_bytes: &[u8] = unsafe {
             std::slice::from_raw_parts(

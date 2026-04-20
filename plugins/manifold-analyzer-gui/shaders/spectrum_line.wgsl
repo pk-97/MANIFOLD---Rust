@@ -44,7 +44,9 @@ struct Uniforms {
     sync_mode: f32,
     cqt_fmin_hz: f32,
     cqt_bins_per_octave: f32,
-    _pad0: f32,
+    // 0=Flat, 1=Pink(+3), 2=Tilted(+4.5), 3=LUFS K-weighting,
+    // 4=LUFS sub-adjusted (HF shelf only, no HPF).
+    weighting_mode: f32,
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -76,10 +78,65 @@ fn db_to_y_px(db: f32) -> f32 {
     return u.spectrum_height * (1.0 - clamp(t, 0.0, 1.0));
 }
 
+// Magnitude-in-dB of a z-domain biquad at physical freq (Hz), evaluated
+// at 48 kHz (the BS.1770 reference rate). Used by the LUFS modes; tiny
+// error at non-48 kHz audio since the filter is fully resolved in the
+// 10 Hz–20 kHz range regardless.
+fn biquad_mag_db(freq: f32, b0: f32, b1: f32, b2: f32, a1: f32, a2: f32) -> f32 {
+    let w = 6.2831853 * freq / 48000.0;
+    let cw = cos(w);
+    let sw = sin(w);
+    let c2w = cos(2.0 * w);
+    let s2w = sin(2.0 * w);
+    let num_re = b0 + b1 * cw + b2 * c2w;
+    let num_im = -b1 * sw - b2 * s2w;
+    let den_re = 1.0 + a1 * cw + a2 * c2w;
+    let den_im = -a1 * sw - a2 * s2w;
+    let num_mag2 = num_re * num_re + num_im * num_im;
+    let den_mag2 = den_re * den_re + den_im * den_im;
+    return 10.0 * log(max(num_mag2, 1e-30) / max(den_mag2, 1e-30)) / log(10.0);
+}
+
+// BS.1770 pre-filter: high-shelf ~+4 dB above 1.5 kHz. 0 dB at DC.
+fn k_prefilter_db(freq: f32) -> f32 {
+    return biquad_mag_db(
+        freq,
+        1.53512485958697,
+        -2.69169618940638,
+        1.19839281085285,
+        -1.69065929318241,
+        0.73248077421585,
+    );
+}
+
+// BS.1770 RLB stage: 2nd-order HPF cutoff ~38 Hz. 0 dB at HF.
+fn k_rlb_db(freq: f32) -> f32 {
+    return biquad_mag_db(
+        freq,
+        1.0,
+        -2.0,
+        1.0,
+        -1.99004745483398,
+        0.99007225036621,
+    );
+}
+
+fn weighting_db(freq: f32) -> f32 {
+    let mode = u.weighting_mode;
+    if (mode < 2.5) {
+        // Flat / Pink / Tilted — linear-in-log slope. slope_db_per_oct
+        // is set by the GUI (0 / 3 / 4.5 respectively).
+        return u.slope_db_per_oct * log2(freq / u.slope_ref_freq);
+    } else if (mode < 3.5) {
+        // LUFS — full K-weighting.
+        return k_prefilter_db(freq) + k_rlb_db(freq);
+    }
+    // LUFS (Sub Adj) — HF shelf only, sub-content stays visible.
+    return k_prefilter_db(freq);
+}
+
 fn tilt_db(freq: f32, raw_db: f32) -> f32 {
-    return raw_db
-         + u.slope_db_per_oct * log2(freq / u.slope_ref_freq)
-         + u.align_offset_db;
+    return raw_db + weighting_db(freq) + u.align_offset_db;
 }
 
 // Number of samples taken inside the smoothing bandwidth. Fixed loop for
@@ -248,10 +305,12 @@ fn spectrogram_pixel(px: vec2<f32>) -> vec4<f32> {
 
     let raw_db = sample_history_db(col, log_bin_f, log_bins_i);
 
-    // No tilt — Vision 4X's heatmap is raw dB. Colourmap range is
-    // independent of the spectrum curve's axis range.
+    // Run the same weighting used on the curves so the colourmap reads
+    // perceptually (K-weighting reveals what's driving loudness; linear
+    // tilts give SPAN-style HF brightness).
+    let weighted_db = tilt_db(freq, raw_db);
     let span = max(u.spectrogram_db_max - u.spectrogram_db_min, 1e-3);
-    let t = (raw_db - u.spectrogram_db_min) / span;
+    let t = (weighted_db - u.spectrogram_db_min) / span;
     var rgb = colormap(t);
 
     // 1-px bright playhead in sync mode. Marks where new columns are
