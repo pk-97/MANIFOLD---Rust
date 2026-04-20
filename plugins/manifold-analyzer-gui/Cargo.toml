@@ -16,3 +16,6 @@ rustfft = "6"
 # Zero-copy Metal↔GL bridge
 glow = "0.16"
 egui_glow = "0.31"
+
+# Faster uncontended try_lock + no poisoning (matches MANIFOLD convention).
+parking_lot = "0.12"

@@ -163,16 +163,13 @@ impl Plugin for ManifoldAnalyzer {
 
         // Averaged curves: push samples into the existing Analyzer pair
         // (16 384 BH FFT on audio thread) and publish newest averaged dB
-        // per FFT frame via mailbox.
+        // per FFT frame via mailbox. try_publish drops the update if
+        // the GUI is mid-read — never blocks the audio thread.
         if mid.push_mono(&self.mid_scratch[..i]) {
-            if let Ok(mut guard) = self.gui_shared.mid_db.try_lock() {
-                guard.copy_from_slice(mid.latest_spectrum_db());
-            }
+            self.gui_shared.try_publish_mid_db(mid.latest_spectrum_db());
         }
         if side.push_mono(&self.side_scratch[..i]) {
-            if let Ok(mut guard) = self.gui_shared.side_db.try_lock() {
-                guard.copy_from_slice(side.latest_spectrum_db());
-            }
+            self.gui_shared.try_publish_side_db(side.latest_spectrum_db());
         }
 
         // Spectrogram: push raw Mid audio samples into the lock-free

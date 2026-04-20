@@ -70,6 +70,14 @@ const CQT_THRESHOLD_REL: f32 = 1e-4;
 /// synchrosqueezing's instantaneous-frequency estimate unambiguous
 /// (no 2f-style ghost lines from phase wrap).
 const CQT_HOP_SAMPLES: usize = 256;
+/// Maximum CQT columns emitted per `ingest_samples` call. At 2.5 ms per
+/// CQT this caps worst-case GUI-thread CPU at ~20 ms. In steady state
+/// at 60 fps we emit ~3 columns/frame (well under), so this only kicks
+/// in after GUI stalls (window drag, plugin reload): rolling samples
+/// still flow through the ring so the NEXT run sees correct history,
+/// but the oldest hops' CQTs are skipped. Visible effect: a brief
+/// spectrogram gap instead of a ~500 ms freeze on resume.
+const MAX_CQT_HOPS_PER_CALL: usize = 8;
 /// Kernel length floor in samples. Clamps HF bandwidth so high-frequency
 /// partials don't smear across hundreds of Hz. 4 × hop guarantees 75 %
 /// overlap between consecutive frames, which keeps synchrosqueezing's
@@ -224,6 +232,9 @@ struct SpectrumUniforms {
     cqt_bins_per_octave: f32,
     /// Weighting mode (see `DisplayConfig::weighting_mode`).
     weighting_mode: f32,
+    /// Host sample rate — consumed by the shader's K-weighting biquad
+    /// so the LUFS curve renders correctly at non-48 kHz rates.
+    sample_rate_hz: f32,
 }
 
 pub struct SpectrumGpuRenderer {
@@ -352,7 +363,11 @@ impl SpectrumGpuRenderer {
             last_sync_applied: SyncConfig::OFF,
             internal_beat_pos: 0.0,
             have_internal_beat: false,
-            write_col: 0,
+            // Start one column before index 0 so the very first free-scroll
+            // emit lands at col 0 (prev_col + 1 wraps from HISTORY_COLS-1
+            // to 0). Without this the first column ever written is col 1,
+            // leaving col 0 at FLOOR_DB for ~11 s until the ring wraps.
+            write_col: HISTORY_COLS - 1,
             cqt,
             cqt_num_bins,
             sample_rate,
@@ -463,6 +478,12 @@ impl SpectrumGpuRenderer {
     /// N_fft window and, every `CQT_HOP_SAMPLES`, runs one CQT and writes
     /// a column to the history buffer. Samples beyond the rolling window
     /// naturally fall off the back (ring overwrite).
+    ///
+    /// Stall-recovery: when many hops are pending (GUI paused for a while),
+    /// only the most recent `MAX_CQT_HOPS_PER_CALL` hops actually run the
+    /// CQT. Older hops still advance the rolling buffer + beat clock, so
+    /// the first emitted CQT after the skip sees a correct window — the
+    /// user just sees a brief spectrogram gap instead of a ~500 ms freeze.
     pub fn ingest_samples(&mut self, samples: &[f32]) {
         let beats_per_hop = if self.sync.bpm > 0.0 {
             (CQT_HOP_SAMPLES as f64) / (self.sample_rate as f64)
@@ -471,18 +492,30 @@ impl SpectrumGpuRenderer {
         } else {
             0.0
         };
+
+        // Pre-count how many hops this call would emit so we know how
+        // many to skip at the front. `samples_since_last_hop` hasn't
+        // advanced yet, so the total is `(pending + samples.len()) / HOP`.
+        let pending = self.samples_since_last_hop + samples.len();
+        let total_hops = pending / CQT_HOP_SAMPLES;
+        let skip_hops = total_hops.saturating_sub(MAX_CQT_HOPS_PER_CALL);
+        let mut hops_seen: usize = 0;
+
         for &s in samples {
             self.rolling[self.rolling_head] = s;
             self.rolling_head = (self.rolling_head + 1) % CQT_N_FFT;
             self.samples_since_last_hop += 1;
             if self.samples_since_last_hop >= CQT_HOP_SAMPLES {
                 self.samples_since_last_hop = 0;
-                let beat_at_hop = self.internal_beat_pos;
-                self.emit_column(beat_at_hop);
-                // Advance the internal clock regardless of sync mode so
-                // that re-entering sync later keeps a plausible
-                // position — it'll still be re-anchored on the next
-                // set_sync anyway.
+                hops_seen += 1;
+                if hops_seen > skip_hops {
+                    let beat_at_hop = self.internal_beat_pos;
+                    self.emit_column(beat_at_hop);
+                }
+                // Advance the internal clock regardless of sync mode or
+                // whether the hop was skipped so re-entering sync later
+                // keeps a plausible position — it'll still be re-anchored
+                // on the next set_sync anyway.
                 self.internal_beat_pos += beats_per_hop;
             }
         }
@@ -716,7 +749,7 @@ impl SpectrumGpuRenderer {
             }
 
             let log_bin_f = (if_now / fmin).log2() * inv_log2_ratio;
-            if !(log_bin_f >= 0.0) {
+            if log_bin_f.is_nan() || log_bin_f < 0.0 {
                 continue;
             }
             let lo = log_bin_f as usize;
@@ -810,6 +843,7 @@ impl SpectrumGpuRenderer {
             cqt_fmin_hz: CQT_FMIN_HZ,
             cqt_bins_per_octave: CQT_BINS_PER_OCTAVE as f32,
             weighting_mode: self.display.weighting_mode,
+            sample_rate_hz: sample_rate,
         };
         let uniform_bytes: &[u8] = unsafe {
             std::slice::from_raw_parts(

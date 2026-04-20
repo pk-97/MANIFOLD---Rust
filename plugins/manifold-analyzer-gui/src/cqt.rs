@@ -216,10 +216,10 @@ impl CqtTransform {
                 .map(|c| c.norm())
                 .fold(0.0f32, f32::max);
             let cutoff = max_abs * threshold_rel;
-            for m in 0..n_fft {
-                if kernel_buf[m].norm() >= cutoff {
+            for (m, &entry) in kernel_buf.iter().enumerate() {
+                if entry.norm() >= cutoff {
                     col_idx.push(m as u32);
-                    coef.push(kernel_buf[m]);
+                    coef.push(entry);
                 }
             }
             row_ptr.push(col_idx.len());
@@ -282,7 +282,7 @@ impl CqtTransform {
         self.fft
             .process_with_scratch(&mut self.fft_buffer, &mut self.fft_scratch);
 
-        for k in 0..self.num_bins {
+        for (k, out) in output.iter_mut().enumerate().take(self.num_bins) {
             let lo = self.row_ptr[k];
             let hi = self.row_ptr[k + 1];
             let mut acc = Complex::new(0.0f32, 0.0f32);
@@ -290,7 +290,7 @@ impl CqtTransform {
                 let m = self.col_idx[idx] as usize;
                 acc += self.fft_buffer[m] * self.coef[idx];
             }
-            output[k] = acc;
+            *out = acc;
         }
     }
 }

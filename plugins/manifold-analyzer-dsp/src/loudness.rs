@@ -32,7 +32,10 @@ const SHORT_TERM_BLOCKS: usize = 30; // 3000 ms / 100 ms
 const LRA_BLOCKS_PER_UPDATE: usize = SHORT_TERM_BLOCKS;
 
 const TP_OVERSAMPLE: usize = 4;
-const TP_TAPS_PER_PHASE: usize = 12;
+// 16 taps/phase × 0.985 cutoff brings the FIR's DC droop to < 0.02 dB
+// (was ~0.2 dB at 12 taps / 0.97 cutoff). Raw-sample-peak fold-in still
+// guards against any residual under-reading at integer offsets.
+const TP_TAPS_PER_PHASE: usize = 16;
 
 /// Direct-form-II biquad. State kept in `z1`, `z2`.
 #[derive(Default, Clone, Copy)]
@@ -89,6 +92,13 @@ fn k_pre_filter(sample_rate: f32) -> Biquad {
 
 /// RLB stage: 2nd-order Butterworth-ish high-pass at ~38 Hz, removes
 /// sub-bass before summing.
+///
+/// Normalisation matches ITU-R BS.1770-4 Annex 1: the numerator stays
+/// at the HPF prototype `(1, -2, 1)` un-normalised, and only the
+/// denominator is divided by a0. This is what the WGSL display shader
+/// hardcodes, so meter and LUFS-weighting display agree to f32
+/// precision (instead of differing by ~0.04 dB due to normalisation
+/// convention).
 fn k_rlb_filter(sample_rate: f32) -> Biquad {
     const F0: f64 = 38.135_470_876_024_44;
     const Q: f64 = 0.500_327_037_323_877_3;
@@ -96,9 +106,9 @@ fn k_rlb_filter(sample_rate: f32) -> Biquad {
     let k2 = k * k;
     let a0 = 1.0 + k / Q + k2;
     Biquad {
-        b0: (1.0 / a0) as f32,
-        b1: (-2.0 / a0) as f32,
-        b2: (1.0 / a0) as f32,
+        b0: 1.0,
+        b1: -2.0,
+        b2: 1.0,
         a1: (2.0 * (k2 - 1.0) / a0) as f32,
         a2: ((1.0 - k / Q + k2) / a0) as f32,
         z1: 0.0,
@@ -149,7 +159,7 @@ impl TruePeakDetector {
         // Cutoff slightly below 1/L so zero-crossings nearly line up
         // with integer-sample offsets, preserving unity gain at DC
         // while passing essentially the full original band.
-        let cutoff = 0.97;
+        let cutoff = 0.985;
         for (n, coef) in h.iter_mut().enumerate().take(total) {
             let k = n as f32 - center;
             let arg = std::f32::consts::PI * cutoff * k / TP_OVERSAMPLE as f32;
@@ -280,6 +290,14 @@ pub struct LoudnessMeter {
     // integrated / LRA can be recomputed at each 100 ms tick.
     block_msq: Vec<f32>,
 
+    // Per-tick scratch buffers — promoted to fields so the audio-thread
+    // recompute path stays allocation-free across a long session
+    // (otherwise each field would be re-allocated every 100 ms, up to
+    // ~144 KB each at 1 hr).
+    scratch_block_means: Vec<f32>,
+    scratch_lra_loudness: Vec<f32>,
+    scratch_kept: Vec<f32>,
+
     // Most recent readouts.
     snapshot: LoudnessSnapshot,
 
@@ -291,6 +309,10 @@ pub struct LoudnessMeter {
 impl LoudnessMeter {
     pub fn new(sample_rate: f32) -> Self {
         let samples_per_block = ((sample_rate * BLOCK_MS / 1000.0).round() as usize).max(1);
+        // Pre-size block storage + scratch for ~30 min sessions so the
+        // audio-thread push never allocates in the common case. Beyond
+        // that, Vec amortised growth kicks in (still bounded memcpy).
+        const PRESIZE_BINS: usize = 18_000; // 30 min × 10 bins/sec
         Self {
             sample_rate,
             samples_per_block,
@@ -300,7 +322,10 @@ impl LoudnessMeter {
             block_sum_sq_l: 0.0,
             block_sum_sq_r: 0.0,
             block_count: 0,
-            block_msq: Vec::with_capacity(600),
+            block_msq: Vec::with_capacity(PRESIZE_BINS),
+            scratch_block_means: Vec::with_capacity(PRESIZE_BINS),
+            scratch_lra_loudness: Vec::with_capacity(PRESIZE_BINS),
+            scratch_kept: Vec::with_capacity(PRESIZE_BINS),
             snapshot: LoudnessSnapshot::EMPTY,
             bins_since_reset: 0,
         }
@@ -322,6 +347,9 @@ impl LoudnessMeter {
         self.block_sum_sq_r = 0.0;
         self.block_count = 0;
         self.block_msq.clear();
+        self.scratch_block_means.clear();
+        self.scratch_lra_loudness.clear();
+        self.scratch_kept.clear();
         self.snapshot = LoudnessSnapshot::EMPTY;
         self.bins_since_reset = 0;
     }
@@ -415,19 +443,19 @@ impl LoudnessMeter {
         // Integrated loudness: two-pass gate over all 400 ms blocks
         // (100 ms stride). A 400 ms block is the mean of 4
         // consecutive 100 ms bins; we iterate by starting bin.
-        let bins = &self.block_msq;
-        if bins.len() < MOMENTARY_BLOCKS {
+        let n_bins = self.block_msq.len();
+        if n_bins < MOMENTARY_BLOCKS {
             return;
         }
         let stride = 1; // 75 % overlap = one bin step
         let window = MOMENTARY_BLOCKS;
         let mut ungated_sum = 0.0_f64;
         let mut ungated_count = 0_usize;
-        let end = bins.len() - window + 1;
-        let mut block_means: Vec<f32> = Vec::with_capacity(end);
+        let end = n_bins - window + 1;
+        self.scratch_block_means.clear();
         for start in (0..end).step_by(stride) {
-            let m = mean_slice(&bins[start..start + window]);
-            block_means.push(m);
+            let m = mean_slice(&self.block_msq[start..start + window]);
+            self.scratch_block_means.push(m);
             if loudness_from_mean_sq(m) >= ABSOLUTE_GATE_LUFS {
                 ungated_sum += m as f64;
                 ungated_count += 1;
@@ -440,7 +468,7 @@ impl LoudnessMeter {
         let rel_threshold = loudness_from_mean_sq(ungated_mean) - RELATIVE_GATE_LU;
         let mut gated_sum = 0.0_f64;
         let mut gated_count = 0_usize;
-        for &m in &block_means {
+        for &m in &self.scratch_block_means {
             let lufs = loudness_from_mean_sq(m);
             if lufs >= ABSOLUTE_GATE_LUFS && lufs >= rel_threshold {
                 gated_sum += m as f64;
@@ -455,33 +483,34 @@ impl LoudnessMeter {
         // LRA: same gating but on 3 s short-term blocks (30 bins).
         // Gate: absolute −70 LUFS + relative −20 LU. Range = 95th −
         // 10th percentile of the surviving loudness values.
-        if bins.len() >= LRA_BLOCKS_PER_UPDATE {
+        if n_bins >= LRA_BLOCKS_PER_UPDATE {
             let lra_window = LRA_BLOCKS_PER_UPDATE;
-            let lra_end = bins.len() - lra_window + 1;
-            let mut lra_loudness: Vec<f32> = Vec::with_capacity(lra_end);
+            let lra_end = n_bins - lra_window + 1;
+            self.scratch_lra_loudness.clear();
             let mut lra_ungated_sum = 0.0_f64;
             let mut lra_ungated_count = 0_usize;
             for start in (0..lra_end).step_by(stride) {
-                let m = mean_slice(&bins[start..start + lra_window]);
+                let m = mean_slice(&self.block_msq[start..start + lra_window]);
                 let lufs = loudness_from_mean_sq(m);
                 if lufs >= ABSOLUTE_GATE_LUFS {
                     lra_ungated_sum += m as f64;
                     lra_ungated_count += 1;
-                    lra_loudness.push(lufs);
+                    self.scratch_lra_loudness.push(lufs);
                 }
             }
             if lra_ungated_count > 0 {
                 let lra_ungated_mean = (lra_ungated_sum / lra_ungated_count as f64) as f32;
                 let lra_rel = loudness_from_mean_sq(lra_ungated_mean) - LRA_RELATIVE_GATE_LU;
-                let mut kept: Vec<f32> = lra_loudness
-                    .iter()
-                    .copied()
-                    .filter(|&v| v >= lra_rel)
-                    .collect();
-                if kept.len() >= 2 {
-                    kept.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                    let p10 = percentile(&kept, 0.10);
-                    let p95 = percentile(&kept, 0.95);
+                self.scratch_kept.clear();
+                self.scratch_kept
+                    .extend(self.scratch_lra_loudness.iter().copied().filter(|&v| v >= lra_rel));
+                if self.scratch_kept.len() >= 2 {
+                    // total_cmp avoids panics on hypothetical NaN inputs;
+                    // partial_cmp().unwrap() would tear down the audio
+                    // thread on an unexpected value.
+                    self.scratch_kept.sort_by(|a, b| a.total_cmp(b));
+                    let p10 = percentile(&self.scratch_kept, 0.10);
+                    let p95 = percentile(&self.scratch_kept, 0.95);
                     self.snapshot.lra_lu = (p95 - p10).max(0.0);
                 }
             }

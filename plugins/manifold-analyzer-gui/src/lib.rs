@@ -31,8 +31,9 @@ use nih_plug::prelude::*;
 use nih_plug_egui::{EguiState, create_egui_editor, egui};
 use sample_ring::SampleRing;
 use spectrum_gpu::{DisplayConfig, SpectrumGpuRenderer, SyncConfig};
+use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 // Initial render-target size; `SpectrumGpuRenderer::ensure_size` resizes every
 // frame to match the current rect × pixels_per_point for pixel-perfect output.
@@ -73,11 +74,10 @@ fn weighting_align_offset(weighting: Weighting, freq_min: f32, freq_max: f32) ->
 struct WeightingStats {
     mean: f32,
     min: f32,
-    max: f32,
 }
 
-/// Returns mean/min/max of `weighting_db(f)` over a log-uniform grid
-/// in [freq_min, freq_max]. Mean is used for align-offset (DC bias
+/// Returns mean/min of `weighting_db(f)` over a log-uniform grid in
+/// [freq_min, freq_max]. Mean is used for align-offset (DC bias
 /// removal). Min is used for the reference-curve overlay: pinning the
 /// inverted weighting line to 0 dB at the freq where the weighting is
 /// smallest gives a clean "equal-LUFS-contribution" reading — above
@@ -85,7 +85,7 @@ struct WeightingStats {
 /// share; below = room to push.
 fn weighting_stats(weighting: Weighting, freq_min: f32, freq_max: f32) -> WeightingStats {
     if let Weighting::Flat = weighting {
-        return WeightingStats { mean: 0.0, min: 0.0, max: 0.0 };
+        return WeightingStats { mean: 0.0, min: 0.0 };
     }
     match weighting {
         Weighting::Pink | Weighting::Tilted => {
@@ -97,7 +97,6 @@ fn weighting_stats(weighting: Weighting, freq_min: f32, freq_max: f32) -> Weight
             WeightingStats {
                 mean,
                 min: v_lo.min(v_hi),
-                max: v_lo.max(v_hi),
             }
         }
         Weighting::Lufs | Weighting::LufsSubAdj => {
@@ -105,16 +104,12 @@ fn weighting_stats(weighting: Weighting, freq_min: f32, freq_max: f32) -> Weight
             let log_min = freq_min.ln();
             let log_max = freq_max.ln();
             let mut sum = 0.0_f32;
-            let mut peak = f32::NEG_INFINITY;
             let mut trough = f32::INFINITY;
             for i in 0..n {
                 let t = (i as f32 + 0.5) / n as f32;
                 let freq = (log_min + t * (log_max - log_min)).exp();
                 let v = lufs_weighting_db(weighting, freq);
                 sum += v;
-                if v > peak {
-                    peak = v;
-                }
                 if v < trough {
                     trough = v;
                 }
@@ -122,10 +117,9 @@ fn weighting_stats(weighting: Weighting, freq_min: f32, freq_max: f32) -> Weight
             WeightingStats {
                 mean: sum / n as f32,
                 min: trough,
-                max: peak,
             }
         }
-        Weighting::Flat => WeightingStats { mean: 0.0, min: 0.0, max: 0.0 },
+        Weighting::Flat => WeightingStats { mean: 0.0, min: 0.0 },
     }
 }
 
@@ -476,8 +470,10 @@ pub struct AnalyzerGuiShared {
     sample_rate_bits: AtomicU32,
     fft_size: AtomicUsize,
     /// Averaged (SPAN-style) Mid/Side spectra for the top curve.
-    pub mid_db: Mutex<Vec<f32>>,
-    pub side_db: Mutex<Vec<f32>>,
+    /// Accessed via `try_publish_*_db` (audio thread) and
+    /// `try_read_*_db` (GUI thread); neither side blocks on the other.
+    mid_db: Mutex<Vec<f32>>,
+    side_db: Mutex<Vec<f32>>,
     /// Raw mid-channel audio samples for the CQT spectrogram. Audio
     /// thread pushes every sample; GUI thread drains and feeds the CQT
     /// pipeline. No FFT on the audio thread for this path.
@@ -562,6 +558,49 @@ impl AnalyzerGuiShared {
             if beat.is_finite() { Some(beat) } else { None },
             playing,
         )
+    }
+
+    /// Audio-thread mailbox write for the averaged Mid spectrum. If the
+    /// GUI happens to be reading (rare — it holds the lock only for an
+    /// ~8 KB memcpy), the update is dropped. Returns `true` when the
+    /// publish succeeded.
+    pub fn try_publish_mid_db(&self, src: &[f32]) -> bool {
+        if let Some(mut guard) = self.mid_db.try_lock() {
+            guard.copy_from_slice(src);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn try_publish_side_db(&self, src: &[f32]) -> bool {
+        if let Some(mut guard) = self.side_db.try_lock() {
+            guard.copy_from_slice(src);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// GUI-thread mailbox read for the averaged Mid spectrum. Returns
+    /// `false` when the audio thread is mid-write; callers keep their
+    /// previous frame's values on miss.
+    pub fn try_read_mid_db(&self, dst: &mut [f32]) -> bool {
+        if let Some(guard) = self.mid_db.try_lock() {
+            dst.copy_from_slice(&guard);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn try_read_side_db(&self, dst: &mut [f32]) -> bool {
+        if let Some(guard) = self.side_db.try_lock() {
+            dst.copy_from_slice(&guard);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn set_loudness(&self, s: LoudnessSnapshot) {
@@ -675,7 +714,7 @@ pub fn create_editor(
         // (program/VAO/texture) are now dangling — reset the lifecycle so
         // the next PaintCallback rebuilds against the fresh context.
         |_ctx, state: &mut EditorState| {
-            *state.quad.lock().unwrap() = PainterState::NotYet;
+            *state.quad.lock() = PainterState::NotYet;
         },
         |ctx, setter, state| {
             egui::TopBottomPanel::top("analyzer-controls")
@@ -745,7 +784,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     // was bound to the now-dropped IOSurface).
     if let (Some(device), Some(spec)) = (state.device.as_ref(), state.spectrum.as_mut()) {
         if spec.ensure_size(device, phys_w, phys_h) {
-            let mut lock = state.quad.lock().unwrap();
+            let mut lock = state.quad.lock();
             let prev = std::mem::replace(&mut *lock, PainterState::NotYet);
             *lock = match prev {
                 PainterState::Ready(qp) => PainterState::PendingDestroy(qp),
@@ -756,14 +795,12 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
 
     // Copy latest averaged mid/side spectra for the curves; drain new
     // mid audio samples and feed them to the CQT pipeline so every hop
-    // boundary emits a new spectrogram column.
+    // boundary emits a new spectrogram column. Try-lock both sides so
+    // neither thread ever blocks the other — if the audio thread is
+    // mid-write, we simply redraw the previous frame's spectrum.
     if let (Some(device), Some(spec)) = (state.device.as_ref(), state.spectrum.as_mut()) {
-        if let Ok(guard) = state.shared.mid_db.lock() {
-            state.mid_scratch.copy_from_slice(&guard);
-        }
-        if let Ok(guard) = state.shared.side_db.lock() {
-            state.side_scratch.copy_from_slice(&guard);
-        }
+        let _ = state.shared.try_read_mid_db(&mut state.mid_scratch);
+        let _ = state.shared.try_read_side_db(&mut state.side_scratch);
         let ss_on = state.params.synchrosqueeze.value();
         let top_fraction = state.params.top_ratio.value().fraction();
         let weighting = state.params.weighting.value();
@@ -916,7 +953,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             rect,
             callback: Arc::new(egui_glow::CallbackFn::new(move |_info, glow_painter| {
                 let gl = glow_painter.gl();
-                let mut lock = quad.lock().unwrap();
+                let mut lock = quad.lock();
 
                 // Advance lifecycle if the Metal side has resized the IOSurface.
                 let needs_build = match std::mem::replace(&mut *lock, PainterState::NotYet) {
@@ -1107,11 +1144,11 @@ fn draw_spectrogram_chrome(
     } else if px_per_beat >= 12.0 {
         2.0
     } else if px_per_beat >= 6.0 {
-        BEATS_PER_BAR as f32
+        BEATS_PER_BAR
     } else if px_per_beat >= 3.0 {
-        BEATS_PER_BAR as f32 * 2.0
+        BEATS_PER_BAR * 2.0
     } else {
-        BEATS_PER_BAR as f32 * 4.0
+        BEATS_PER_BAR * 4.0
     };
 
     // The window starts at the floored cycle boundary. beat_in_window

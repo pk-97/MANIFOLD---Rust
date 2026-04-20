@@ -47,6 +47,11 @@ struct Uniforms {
     // 0=Flat, 1=Pink(+3), 2=Tilted(+4.5), 3=LUFS K-weighting,
     // 4=LUFS sub-adjusted (HF shelf only, no HPF).
     weighting_mode: f32,
+    // Actual host sample rate — used by the K-weighting biquad magnitude
+    // response so the curve renders at the true sample rate instead of
+    // assuming 48 kHz (introduces a visible shift of the HF shelf at
+    // 44.1 / 96 / 192 kHz).
+    sample_rate_hz: f32,
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -79,11 +84,11 @@ fn db_to_y_px(db: f32) -> f32 {
 }
 
 // Magnitude-in-dB of a z-domain biquad at physical freq (Hz), evaluated
-// at 48 kHz (the BS.1770 reference rate). Used by the LUFS modes; tiny
-// error at non-48 kHz audio since the filter is fully resolved in the
-// 10 Hz–20 kHz range regardless.
+// at the host sample rate (uniform). BS.1770 coefficients below are the
+// ITU Annex 1 published 48 kHz values; evaluating them at the actual
+// rate keeps the HF shelf in the right place at 44.1 / 96 / 192 kHz.
 fn biquad_mag_db(freq: f32, b0: f32, b1: f32, b2: f32, a1: f32, a2: f32) -> f32 {
-    let w = 6.2831853 * freq / 48000.0;
+    let w = 6.2831853 * freq / max(u.sample_rate_hz, 1.0);
     let cw = cos(w);
     let sw = sin(w);
     let c2w = cos(2.0 * w);
@@ -144,7 +149,7 @@ fn tilt_db(freq: f32, raw_db: f32) -> f32 {
 const SMOOTH_N: i32 = 12;
 
 fn sample_bin_db_mid(bin_f: f32, num_bins: f32) -> f32 {
-    if (bin_f < 0.0 || bin_f > num_bins - 1.0) {
+    if (bin_f < 0.0 || bin_f >= num_bins) {
         return u.db_min;
     }
     let bin_lo = u32(floor(bin_f));
@@ -154,7 +159,7 @@ fn sample_bin_db_mid(bin_f: f32, num_bins: f32) -> f32 {
 }
 
 fn sample_bin_db_side(bin_f: f32, num_bins: f32) -> f32 {
-    if (bin_f < 0.0 || bin_f > num_bins - 1.0) {
+    if (bin_f < 0.0 || bin_f >= num_bins) {
         return u.db_min;
     }
     let bin_lo = u32(floor(bin_f));

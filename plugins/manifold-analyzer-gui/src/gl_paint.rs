@@ -240,4 +240,4 @@ pub enum PainterState {
     PendingDestroy(QuadPainter),
 }
 
-pub type SharedPainterState = Arc<std::sync::Mutex<PainterState>>;
+pub type SharedPainterState = Arc<parking_lot::Mutex<PainterState>>;
