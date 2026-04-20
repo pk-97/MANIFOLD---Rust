@@ -218,7 +218,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         }
         let freq_max = (sr * 0.5).clamp(FREQ_MIN * 2.0, FREQ_MAX_LIMIT);
         state.shared.mid_raw_ring.drain(|db, inst_freqs| {
-            spec.push_spectrogram_frame(db, inst_freqs, FREQ_MIN, freq_max);
+            spec.push_spectrogram_frame(db, inst_freqs, sr, FREQ_MIN, freq_max);
         });
         spec.render(
             device,

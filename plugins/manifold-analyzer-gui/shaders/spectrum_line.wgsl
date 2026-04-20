@@ -203,9 +203,10 @@ fn spectrogram_pixel(px: vec2<f32>) -> vec4<f32> {
     let write_col_i = i32(u.write_col);
     let log_bins_i = i32(u.log_bins);
 
-    // X axis: newest column at the left edge, older frames scrolling to
-    // the right. `history_idx` counts pixels from the left edge.
-    let history_idx = i32(floor(px.x));
+    // X axis: newest column at the right edge, older frames scrolling to
+    // the left (standard DAW/Vision 4X convention). `history_idx` counts
+    // pixels back from the right edge.
+    let history_idx = i32(floor(u.resolution.x - 1.0 - px.x));
     if (history_idx < 0 || history_idx >= history_cols_i) {
         return vec4<f32>(0.0);
     }

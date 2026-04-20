@@ -116,15 +116,13 @@ pub struct SpectrumGpuRenderer {
     display: DisplayConfig,
     write_col: u32,
     // Log-resampler state — pre-allocated so the GUI-thread hot path is
-    // allocation-free. Spectral reassignment is a scatter: for each FFT
-    // bin, we compute linear power, look up its instantaneous frequency,
-    // and add its power to the log bin covering that frequency.
-    // `log_power_scratch` is the accumulator (cleared per frame);
-    // `log_scratch` holds the final dB per log bin after log10.
-    log_freq_min_ln: f32,
-    log_freq_max_ln: f32,
+    // allocation-free. `log_edge_freqs_hz` holds the lower/upper freq
+    // edges of each log bin (length LOG_BINS+1), recomputed when the
+    // axis range changes.
+    log_edge_freqs_hz: Vec<f32>,
+    log_freq_min: f32,
+    log_freq_max: f32,
     power_scratch: Vec<f32>,
-    log_power_scratch: Vec<f32>,
     log_scratch: Vec<f32>,
 }
 
@@ -166,10 +164,10 @@ impl SpectrumGpuRenderer {
             num_bins,
             display: DisplayConfig::default(),
             write_col: 0,
-            log_freq_min_ln: f32::NAN,
-            log_freq_max_ln: f32::NAN,
+            log_edge_freqs_hz: vec![0.0; LOG_BINS + 1],
+            log_freq_min: 0.0,
+            log_freq_max: 0.0,
             power_scratch: vec![0.0; num_bins],
-            log_power_scratch: vec![0.0; LOG_BINS],
             log_scratch: vec![-140.0; LOG_BINS],
         })
     }
@@ -206,36 +204,31 @@ impl SpectrumGpuRenderer {
         }
     }
 
-    /// Append one un-averaged Mid frame to the spectrogram ring using
-    /// **spectral reassignment**: for each FFT bin, we look up its
-    /// instantaneous frequency (derived by the DSP from STFT phase
-    /// advance between consecutive frames) and scatter-add its linear
-    /// power into the log bin covering that frequency. This collapses
-    /// FFT main-lobe smears (a pure tone spreads across ~1.5 bins in a
-    /// windowed FFT) down to near-delta peaks — the effect is that
-    /// harmonic lines read as razor-thin.
-    ///
-    /// The scatter's linear-split between adjacent log bins preserves
-    /// sub-log-bin frequency accuracy so nearby tones don't visually
-    /// snap to the same log bin.
+    /// Append one un-averaged Mid frame to the spectrogram ring. The raw
+    /// linear-bin spectrum is resampled into `LOG_BINS` log-spaced display
+    /// bins using proper power-domain trapezoid integration: at low freq
+    /// (log bins finer than FFT bins) this upsamples smoothly; at high
+    /// freq (log bins span many FFT bins) this acts as an anti-aliasing
+    /// box filter. `inst_freqs` is accepted but currently ignored — the
+    /// reassignment scatter path produced an unwanted striation look.
+    /// Kept in the ring signature so we can turn it back on cheaply.
     pub fn push_spectrogram_frame(
         &mut self,
         raw_db: &[f32],
-        inst_freqs: &[f32],
+        _inst_freqs: &[f32],
+        sample_rate: f32,
         freq_min: f32,
         freq_max: f32,
     ) {
         debug_assert_eq!(raw_db.len(), self.num_bins);
-        debug_assert_eq!(inst_freqs.len(), self.num_bins);
 
-        let log_min = freq_min.ln();
-        let log_max = freq_max.ln();
-        if log_min != self.log_freq_min_ln || log_max != self.log_freq_max_ln {
-            self.log_freq_min_ln = log_min;
-            self.log_freq_max_ln = log_max;
+        if (self.log_freq_min - freq_min).abs() > 0.01
+            || (self.log_freq_max - freq_max).abs() > 0.01
+        {
+            self.recompute_log_edges(freq_min, freq_max);
         }
 
-        self.reassign_to_log(raw_db, inst_freqs, freq_min, freq_max);
+        self.resample_to_log(raw_db, sample_rate);
 
         self.write_col = (self.write_col + 1) % HISTORY_COLS;
         if let Some(ptr) = self.history_buf.mapped_ptr() {
@@ -250,61 +243,46 @@ impl SpectrumGpuRenderer {
         }
     }
 
-    /// Scatter-reassignment resampler. Each FFT bin contributes its linear
-    /// power to one or two log bins at the bin's instantaneous frequency,
-    /// not its nominal frequency. Tones whose main lobes spread across
-    /// ~1.5 FFT bins all report the same instantaneous frequency, so
-    /// their power sums into a single log bin = near-delta peak.
-    fn reassign_to_log(
-        &mut self,
-        raw_db: &[f32],
-        inst_freqs: &[f32],
-        freq_min: f32,
-        freq_max: f32,
-    ) {
-        let num_fft_bins = raw_db.len();
+    fn recompute_log_edges(&mut self, freq_min: f32, freq_max: f32) {
+        self.log_freq_min = freq_min;
+        self.log_freq_max = freq_max;
+        let log_lo = freq_min.ln();
+        let log_hi = freq_max.ln();
+        let span = log_hi - log_lo;
+        for i in 0..=LOG_BINS {
+            let t = i as f32 / LOG_BINS as f32;
+            self.log_edge_freqs_hz[i] = (log_lo + t * span).exp();
+        }
+    }
 
-        // dB → linear power once.
+    /// Power-domain trapezoid integration over each log bin's freq span.
+    /// At low freq (log bins finer than FFT bins) this smoothly upsamples;
+    /// at high freq (many FFT bins per log bin) it acts as an anti-alias
+    /// box filter.
+    fn resample_to_log(&mut self, raw_db: &[f32], sample_rate: f32) {
+        let num_fft_bins = raw_db.len();
+        let fft_size = (num_fft_bins * 2) as f32;
+        let bins_per_hz = fft_size / sample_rate;
+        let max_bin = (num_fft_bins as f32) - 1.0;
+
         for (i, &db) in raw_db.iter().enumerate() {
             self.power_scratch[i] = 10.0_f32.powf(db * 0.1);
         }
 
-        // Clear scatter accumulator.
-        self.log_power_scratch.fill(0.0);
-
-        let log_lo = self.log_freq_min_ln;
-        let inv_log_span = 1.0 / (self.log_freq_max_ln - log_lo);
-        let log_bins_f = LOG_BINS as f32;
-
-        for bin in 0..num_fft_bins {
-            let freq = inst_freqs[bin];
-            if !(freq > 0.0 && freq >= freq_min && freq <= freq_max) {
-                continue;
-            }
-            let t = (freq.ln() - log_lo) * inv_log_span;
-            let log_bin_f = t * log_bins_f;
-            let lo = log_bin_f as usize;
-            if lo >= LOG_BINS {
-                continue;
-            }
-            let frac = log_bin_f - lo as f32;
-            let power = self.power_scratch[bin];
-            // Split between adjacent log bins (sub-log-bin accuracy).
-            self.log_power_scratch[lo] += power * (1.0 - frac);
-            let hi = lo + 1;
-            if hi < LOG_BINS {
-                self.log_power_scratch[hi] += power * frac;
-            }
-        }
-
-        // Accumulated linear power → dB.
         for i in 0..LOG_BINS {
-            let p = self.log_power_scratch[i];
-            self.log_scratch[i] = if p > 1e-20 {
-                10.0 * p.log10()
+            let f_lo = self.log_edge_freqs_hz[i];
+            let f_hi = self.log_edge_freqs_hz[i + 1];
+            let b_lo = (f_lo * bins_per_hz).clamp(0.0, max_bin);
+            let b_hi = (f_hi * bins_per_hz).clamp(0.0, max_bin);
+            let width = b_hi - b_lo;
+
+            let power_avg = if width <= 1e-6 {
+                read_power_linear(&self.power_scratch, 0.5 * (b_lo + b_hi))
             } else {
-                -140.0
+                integrate_power(&self.power_scratch, b_lo, b_hi) / width
             };
+
+            self.log_scratch[i] = 10.0 * (power_avg + 1e-24).log10();
         }
     }
 
@@ -414,4 +392,41 @@ impl SpectrumGpuRenderer {
         );
         enc.commit_and_wait_completed();
     }
+}
+
+#[inline]
+fn read_power_linear(power: &[f32], b: f32) -> f32 {
+    let n = b.floor() as usize;
+    let n1 = (n + 1).min(power.len() - 1);
+    let frac = b - n as f32;
+    power[n] + (power[n1] - power[n]) * frac
+}
+
+/// Integrate a piecewise-linear-in-power function across `[b_lo, b_hi]`.
+/// Each unit interval `[n, n+1]` is a trapezoid `(power[n], power[n+1])`
+/// so the analytic integral of any sub-interval reduces to averaging the
+/// endpoint values and multiplying by the sub-interval width.
+fn integrate_power(power: &[f32], b_lo: f32, b_hi: f32) -> f32 {
+    let max_idx = power.len().saturating_sub(1);
+    let n_lo = b_lo.floor() as usize;
+    let n_hi = b_hi.floor() as usize;
+
+    if n_lo == n_hi || n_hi >= max_idx {
+        let v_lo = read_power_linear(power, b_lo);
+        let v_hi = read_power_linear(power, b_hi);
+        return 0.5 * (v_lo + v_hi) * (b_hi - b_lo);
+    }
+
+    let v_lo = read_power_linear(power, b_lo);
+    let p_nlo_next = power[n_lo + 1];
+    let mut acc = 0.5 * (v_lo + p_nlo_next) * ((n_lo + 1) as f32 - b_lo);
+
+    for n in (n_lo + 1)..n_hi {
+        acc += 0.5 * (power[n] + power[n + 1]);
+    }
+
+    let v_hi = read_power_linear(power, b_hi);
+    acc += 0.5 * (power[n_hi] + v_hi) * (b_hi - n_hi as f32);
+
+    acc
 }
