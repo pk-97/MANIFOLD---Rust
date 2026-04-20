@@ -70,12 +70,14 @@ pub fn cqt_build_params(sample_rate: f32) -> CqtBuildParams {
     }
 }
 
+/// Length of the weighting LUT uploaded to the shader. 1024 samples across
+/// `[freq_min, freq_max]` in log-space is smoother than the display pixel
+/// density even at 4K widths, so sampling is effectively exact.
+pub const WEIGHTING_LUT_SIZE: usize = 1024;
+
 /// SPAN-style display options driving the fragment shader.
 #[derive(Copy, Clone, Debug)]
 pub struct DisplayConfig {
-    pub slope_db_per_oct: f32,
-    pub slope_ref_freq: f32,
-    pub align_offset_db: f32,
     /// Half-bandwidth of frequency smoothing in log2(octave). Set to
     /// `1.0 / 24.0` for a 1/12-oct smoothing (±1/24 oct either side of the
     /// centre frequency). `0.0` disables smoothing.
@@ -95,26 +97,17 @@ pub struct DisplayConfig {
     /// so the shader draws its grid + playhead correctly. Doesn't affect
     /// CQT processing itself — that's the worker's WorkerConfig.
     pub sync_mode: bool,
-    /// Weighting mode id consumed by the shader's `weighting_db`
-    /// function. 0 = Flat, 1 = Pink (+3), 2 = Tilted (+4.5),
-    /// 3 = LUFS (BS.1770 K-weighting), 4 = LUFS sub-adjusted
-    /// (HF shelf only, no HPF).
-    pub weighting_mode: f32,
 }
 
 impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
-            slope_db_per_oct: 0.0,
-            slope_ref_freq: 1000.0,
-            align_offset_db: 0.0,
             smooth_half_oct_log2: 0.0,
             fill_alpha: 0.0,
             spectrum_fraction: 1.0,
             spectrogram_db_min: -59.0,
             spectrogram_db_max: 0.0,
             sync_mode: false,
-            weighting_mode: 2.0,
         }
     }
 }
@@ -134,9 +127,6 @@ struct SpectrumUniforms {
     bg_color: [f32; 4],
     side_color: [f32; 4],
     line_thickness: f32,
-    slope_db_per_oct: f32,
-    slope_ref_freq: f32,
-    align_offset_db: f32,
     smooth_half_oct_log2: f32,
     fill_alpha: f32,
     spectrum_height: f32,
@@ -148,8 +138,6 @@ struct SpectrumUniforms {
     sync_mode: f32,
     cqt_fmin_hz: f32,
     cqt_bins_per_octave: f32,
-    weighting_mode: f32,
-    sample_rate_hz: f32,
 }
 
 pub struct SpectrumGpuRenderer {
@@ -157,6 +145,9 @@ pub struct SpectrumGpuRenderer {
     mid_buf: GpuBuffer,
     side_buf: GpuBuffer,
     history_buf: GpuBuffer,
+    /// Pre-computed weighting curve uploaded from CPU when the weighting
+    /// mode or visible freq range changes. See `WEIGHTING_LUT_SIZE`.
+    weighting_lut_buf: GpuBuffer,
     pipeline: GpuRenderPipeline,
     num_bins: usize,
     cqt_num_bins: usize,
@@ -191,6 +182,12 @@ impl SpectrumGpuRenderer {
             slice.fill(FLOOR_DB);
         }
 
+        let weighting_lut_buf =
+            device.create_buffer_shared((WEIGHTING_LUT_SIZE as u64) * 4);
+        // Zero-init is already "flat weighting" (no tilt applied), so the
+        // shader renders sensibly on the first frame before the GUI has
+        // uploaded a mode-specific LUT.
+
         let pipeline = device.create_render_pipeline(
             SHADER,
             "vs_main",
@@ -205,6 +202,7 @@ impl SpectrumGpuRenderer {
             mid_buf,
             side_buf,
             history_buf,
+            weighting_lut_buf,
             pipeline,
             num_bins,
             cqt_num_bins,
@@ -213,6 +211,22 @@ impl SpectrumGpuRenderer {
             // written (prev+1 wraps to 0) lands at col 0 rather than col 1.
             write_col: HISTORY_COLS - 1,
         })
+    }
+
+    /// Upload a new weighting curve. `lut` must be `WEIGHTING_LUT_SIZE`
+    /// samples spanning the current displayed freq range, with any
+    /// alignment-offset bias already baked in.
+    pub fn set_weighting_lut(&mut self, lut: &[f32]) {
+        debug_assert_eq!(lut.len(), WEIGHTING_LUT_SIZE);
+        if let Some(ptr) = self.weighting_lut_buf.mapped_ptr() {
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    lut.as_ptr() as *const u8,
+                    ptr,
+                    lut.len() * 4,
+                );
+            }
+        }
     }
 
     pub fn set_display(&mut self, config: DisplayConfig) {
@@ -337,9 +351,6 @@ impl SpectrumGpuRenderer {
             bg_color: [0.031, 0.039, 0.055, 1.0],
             side_color: [0.95, 0.30, 0.15, 1.0],
             line_thickness: 1.2,
-            slope_db_per_oct: self.display.slope_db_per_oct,
-            slope_ref_freq: self.display.slope_ref_freq,
-            align_offset_db: self.display.align_offset_db,
             smooth_half_oct_log2: self.display.smooth_half_oct_log2,
             fill_alpha: self.display.fill_alpha,
             spectrum_height,
@@ -351,8 +362,6 @@ impl SpectrumGpuRenderer {
             sync_mode: if self.display.sync_mode { 1.0 } else { 0.0 },
             cqt_fmin_hz: CQT_FMIN_HZ,
             cqt_bins_per_octave: CQT_BINS_PER_OCTAVE as f32,
-            weighting_mode: self.display.weighting_mode,
-            sample_rate_hz: sample_rate,
         };
         let uniform_bytes: &[u8] = unsafe {
             std::slice::from_raw_parts(
@@ -379,6 +388,11 @@ impl SpectrumGpuRenderer {
             GpuBinding::Buffer {
                 binding: 3,
                 buffer: &self.history_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: &self.weighting_lut_buf,
                 offset: 0,
             },
         ];

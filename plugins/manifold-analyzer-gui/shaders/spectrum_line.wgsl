@@ -30,9 +30,6 @@ struct Uniforms {
     bg_color: vec4<f32>,
     side_color: vec4<f32>,
     line_thickness: f32,
-    slope_db_per_oct: f32,
-    slope_ref_freq: f32,
-    align_offset_db: f32,
     smooth_half_oct_log2: f32,
     fill_alpha: f32,
     spectrum_height: f32,
@@ -44,20 +41,17 @@ struct Uniforms {
     sync_mode: f32,
     cqt_fmin_hz: f32,
     cqt_bins_per_octave: f32,
-    // 0=Flat, 1=Pink(+3), 2=Tilted(+4.5), 3=LUFS K-weighting,
-    // 4=LUFS sub-adjusted (HF shelf only, no HPF).
-    weighting_mode: f32,
-    // Actual host sample rate — used by the K-weighting biquad magnitude
-    // response so the curve renders at the true sample rate instead of
-    // assuming 48 kHz (introduces a visible shift of the HF shelf at
-    // 44.1 / 96 / 192 kHz).
-    sample_rate_hz: f32,
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var<storage, read> mid_spectrum: array<f32>;
 @group(0) @binding(2) var<storage, read> side_spectrum: array<f32>;
 @group(0) @binding(3) var<storage, read> history: array<f32>;
+// Pre-computed weighting curve (dB) over log-uniform [freq_min, freq_max].
+// CPU-side: GUI builds this whenever the weighting mode or freq range
+// changes. Includes the DC-bias align offset baked in. Replaces the
+// per-pixel biquad sin/cos evaluation the shader used to do.
+@group(0) @binding(4) var<storage, read> weighting_lut: array<f32>;
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -83,65 +77,24 @@ fn db_to_y_px(db: f32) -> f32 {
     return u.spectrum_height * (1.0 - clamp(t, 0.0, 1.0));
 }
 
-// Magnitude-in-dB of a z-domain biquad at physical freq (Hz), evaluated
-// at the host sample rate (uniform). BS.1770 coefficients below are the
-// ITU Annex 1 published 48 kHz values; evaluating them at the actual
-// rate keeps the HF shelf in the right place at 44.1 / 96 / 192 kHz.
-fn biquad_mag_db(freq: f32, b0: f32, b1: f32, b2: f32, a1: f32, a2: f32) -> f32 {
-    let w = 6.2831853 * freq / max(u.sample_rate_hz, 1.0);
-    let cw = cos(w);
-    let sw = sin(w);
-    let c2w = cos(2.0 * w);
-    let s2w = sin(2.0 * w);
-    let num_re = b0 + b1 * cw + b2 * c2w;
-    let num_im = -b1 * sw - b2 * s2w;
-    let den_re = 1.0 + a1 * cw + a2 * c2w;
-    let den_im = -a1 * sw - a2 * s2w;
-    let num_mag2 = num_re * num_re + num_im * num_im;
-    let den_mag2 = den_re * den_re + den_im * den_im;
-    return 10.0 * log(max(num_mag2, 1e-30) / max(den_mag2, 1e-30)) / log(10.0);
-}
-
-// BS.1770 pre-filter: high-shelf ~+4 dB above 1.5 kHz. 0 dB at DC.
-fn k_prefilter_db(freq: f32) -> f32 {
-    return biquad_mag_db(
-        freq,
-        1.53512485958697,
-        -2.69169618940638,
-        1.19839281085285,
-        -1.69065929318241,
-        0.73248077421585,
-    );
-}
-
-// BS.1770 RLB stage: 2nd-order HPF cutoff ~38 Hz. 0 dB at HF.
-fn k_rlb_db(freq: f32) -> f32 {
-    return biquad_mag_db(
-        freq,
-        1.0,
-        -2.0,
-        1.0,
-        -1.99004745483398,
-        0.99007225036621,
-    );
-}
-
+// Sample the pre-computed weighting LUT by log-freq index. The LUT covers
+// [log(freq_min), log(freq_max)] uniformly and has `align_offset_db`
+// baked in, so `tilt_db` is just `raw + lut(freq)`.
 fn weighting_db(freq: f32) -> f32 {
-    let mode = u.weighting_mode;
-    if (mode < 2.5) {
-        // Flat / Pink / Tilted — linear-in-log slope. slope_db_per_oct
-        // is set by the GUI (0 / 3 / 4.5 respectively).
-        return u.slope_db_per_oct * log2(freq / u.slope_ref_freq);
-    } else if (mode < 3.5) {
-        // LUFS — full K-weighting.
-        return k_prefilter_db(freq) + k_rlb_db(freq);
+    let n = f32(arrayLength(&weighting_lut));
+    if (n < 2.0) {
+        return 0.0;
     }
-    // LUFS (Sub Adj) — HF shelf only, sub-content stays visible.
-    return k_prefilter_db(freq);
+    let t = clamp(log(freq / u.freq_min) / log(u.freq_max / u.freq_min), 0.0, 1.0);
+    let idx_f = t * (n - 1.0);
+    let lo = u32(floor(idx_f));
+    let hi = min(lo + 1u, u32(n) - 1u);
+    let frac = fract(idx_f);
+    return mix(weighting_lut[lo], weighting_lut[hi], frac);
 }
 
 fn tilt_db(freq: f32, raw_db: f32) -> f32 {
-    return raw_db + weighting_db(freq) + u.align_offset_db;
+    return raw_db + weighting_db(freq);
 }
 
 // Number of samples taken inside the smoothing bandwidth. Fixed loop for

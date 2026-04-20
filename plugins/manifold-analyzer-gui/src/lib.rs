@@ -34,7 +34,7 @@ use manifold_gpu::GpuDevice;
 use nih_plug::prelude::*;
 use nih_plug_egui::{EguiState, create_egui_editor, egui};
 use sample_ring::SampleRing;
-use spectrum_gpu::{DisplayConfig, SpectrumGpuRenderer};
+use spectrum_gpu::{DisplayConfig, SpectrumGpuRenderer, WEIGHTING_LUT_SIZE};
 use spectrum_worker::{CqtWorker, WorkerConfig};
 use crossbeam_queue::ArrayQueue;
 use parking_lot::Mutex;
@@ -322,16 +322,6 @@ impl Weighting {
             Weighting::Pink => 3.0,
             Weighting::Tilted => 4.5,
             _ => 0.0,
-        }
-    }
-
-    fn mode_id(self) -> f32 {
-        match self {
-            Weighting::Flat => 0.0,
-            Weighting::Pink => 1.0,
-            Weighting::Tilted => 2.0,
-            Weighting::Lufs => 3.0,
-            Weighting::LufsSubAdj => 4.0,
         }
     }
 
@@ -717,32 +707,50 @@ struct EditorState {
     quad: SharedPainterState,
     mid_scratch: Vec<f32>,
     side_scratch: Vec<f32>,
-    /// Cached weighting-curve align offset so we don't re-integrate
-    /// the BS.1770 biquads every frame — only when mode / freq range
-    /// changes.
-    align_offset_cache: AlignOffsetCache,
+    /// Pre-computed weighting curve uploaded to the shader whenever the
+    /// mode or visible freq range changes. Replaces the old per-pixel
+    /// biquad sin/cos evaluation — shader now samples this LUT with one
+    /// 2-tap blend per pixel.
+    weighting_lut_cache: WeightingLutCache,
 }
 
-#[derive(Default)]
-struct AlignOffsetCache {
+struct WeightingLutCache {
     key: Option<(Weighting, f32, f32)>,
-    value: f32,
+    values: Vec<f32>,
 }
 
-fn align_offset_cached(
-    cache: &mut AlignOffsetCache,
+impl Default for WeightingLutCache {
+    fn default() -> Self {
+        Self {
+            key: None,
+            values: vec![0.0; WEIGHTING_LUT_SIZE],
+        }
+    }
+}
+
+/// Populate `out` with the weighting curve sampled on a log-uniform grid
+/// over `[freq_min, freq_max]`, with the DC-bias align offset baked in
+/// so the shader doesn't need a separate uniform for it.
+fn fill_weighting_lut(
+    out: &mut [f32],
     weighting: Weighting,
     freq_min: f32,
     freq_max: f32,
-) -> f32 {
-    let key = (weighting, freq_min, freq_max);
-    if cache.key == Some(key) {
-        return cache.value;
+) {
+    debug_assert_eq!(out.len(), WEIGHTING_LUT_SIZE);
+    let align = weighting_align_offset(weighting, freq_min, freq_max);
+    if freq_max <= freq_min {
+        out.fill(align);
+        return;
     }
-    let v = weighting_align_offset(weighting, freq_min, freq_max);
-    cache.key = Some(key);
-    cache.value = v;
-    v
+    let log_min = freq_min.ln();
+    let log_max = freq_max.ln();
+    let denom = (WEIGHTING_LUT_SIZE - 1) as f32;
+    for (i, slot) in out.iter_mut().enumerate() {
+        let t = i as f32 / denom;
+        let freq = (log_min + t * (log_max - log_min)).exp();
+        *slot = weighting_db_at(weighting, freq) + align;
+    }
 }
 
 pub fn create_editor(
@@ -760,7 +768,7 @@ pub fn create_editor(
         quad: Arc::new(Mutex::new(PainterState::NotYet)),
         mid_scratch: vec![MIN_DB; num_bins],
         side_scratch: vec![MIN_DB; num_bins],
-        align_offset_cache: AlignOffsetCache::default(),
+        weighting_lut_cache: WeightingLutCache::default(),
     };
     create_egui_editor(
         egui_state,
@@ -869,7 +877,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         let ss_on = state.params.synchrosqueeze.value();
         let top_fraction = state.params.top_ratio.value().fraction();
         let weighting = state.params.weighting.value();
-        let (freq_min_for_align, freq_max_for_align) = {
+        let (freq_min_for_lut, freq_max_for_lut) = {
             let nyquist = sr * 0.5;
             let fmin_u = state.params.freq_min_hz.value() as f32;
             let fmax_u = state.params.freq_max_hz.value() as f32;
@@ -877,12 +885,20 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             let fmin = fmin_u.min(fmax * 0.5).max(1.0);
             (fmin, fmax)
         };
-        let align_offset = align_offset_cached(
-            &mut state.align_offset_cache,
-            weighting,
-            freq_min_for_align,
-            freq_max_for_align,
-        );
+
+        // Rebuild the weighting LUT only when mode / range changes.
+        // Uploads to the GPU on every rebuild; skip-op otherwise.
+        let lut_key = (weighting, freq_min_for_lut, freq_max_for_lut);
+        if state.weighting_lut_cache.key != Some(lut_key) {
+            fill_weighting_lut(
+                &mut state.weighting_lut_cache.values,
+                weighting,
+                freq_min_for_lut,
+                freq_max_for_lut,
+            );
+            state.weighting_lut_cache.key = Some(lut_key);
+            spec.set_weighting_lut(&state.weighting_lut_cache.values);
+        }
 
         // Resolve sync state for display + worker.
         let (bpm_opt, beat_opt, _playing) = state.shared.transport();
@@ -896,16 +912,12 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         );
 
         spec.set_display(DisplayConfig {
-            slope_db_per_oct: weighting.slope_db_per_oct(),
-            slope_ref_freq: SLOPE_REF_FREQ,
-            align_offset_db: align_offset,
             smooth_half_oct_log2: SMOOTH_HALF_OCT_LOG2,
             fill_alpha: FILL_ALPHA,
             spectrum_fraction: top_fraction,
             spectrogram_db_min: SPECTROGRAM_DB_MIN,
             spectrogram_db_max: if ss_on { SPECTROGRAM_DB_MAX_SS } else { SPECTROGRAM_DB_MAX_RAW },
             sync_mode: sync_active,
-            weighting_mode: weighting.mode_id(),
         });
 
         // Hand current transport + display knobs to the worker. It reads
