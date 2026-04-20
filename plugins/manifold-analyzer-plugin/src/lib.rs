@@ -135,17 +135,10 @@ impl Plugin for ManifoldAnalyzer {
             i += 1;
         }
 
-        // Publish latest averaged spectra via try_lock (mailbox — only the
-        // newest value matters for the SPAN curve). Push every un-averaged
-        // Mid frame (dB + instantaneous freqs) into the lock-free ring so
-        // the spectrogram can spectral-reassign each column.
-        let gui_shared = &self.gui_shared;
-        let mut mid_had_frame = false;
-        mid.process_mono_with_raw(&self.mid_scratch[..i], |_avg, raw, inst_freqs| {
-            let _ = gui_shared.mid_raw_ring.push(raw, inst_freqs);
-            mid_had_frame = true;
-        });
-        if mid_had_frame {
+        // Averaged curves: push samples into the existing Analyzer pair
+        // (16 384 BH FFT on audio thread) and publish newest averaged dB
+        // per FFT frame via mailbox.
+        if mid.push_mono(&self.mid_scratch[..i]) {
             if let Ok(mut guard) = self.gui_shared.mid_db.try_lock() {
                 guard.copy_from_slice(mid.latest_spectrum_db());
             }
@@ -155,6 +148,13 @@ impl Plugin for ManifoldAnalyzer {
                 guard.copy_from_slice(side.latest_spectrum_db());
             }
         }
+
+        // Spectrogram: push raw Mid audio samples into the lock-free
+        // sample ring; the GUI thread runs the CQT. No FFT work here for
+        // the spectrogram path.
+        self.gui_shared
+            .mid_sample_ring
+            .push(&self.mid_scratch[..i]);
 
         ProcessStatus::Normal
     }

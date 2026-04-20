@@ -18,6 +18,7 @@
 //! rewritten via the shared-memory mapped pointer each frame — zero audio-
 //! thread cost, small memcpys on the GUI thread.
 
+use crate::cqt::CqtTransform;
 use crate::gpu_bridge::IoSurfaceMtlTexture;
 use manifold_gpu::{
     GpuBinding, GpuBuffer, GpuDevice, GpuRenderPipeline, GpuTextureFormat,
@@ -31,14 +32,37 @@ const SHADER: &str = include_str!("../shaders/spectrum_line.wgsl");
 /// enough to fill a wide window.
 const HISTORY_COLS: u32 = 1024;
 
-/// Virtual log-spaced "display bins" we resample the raw linear FFT into
-/// before pushing a column. 2048 gives ~260 bins/octave over 10 Hz–25 kHz,
-/// well above display pixel density so the shader can linear-interp
-/// between adjacent log bins and see smooth gradients instead of the
-/// raw-FFT step structure. The resampler integrates raw power across each
-/// log bin's frequency span, so this is both upsampling (at low freq) and
-/// anti-aliasing (at high freq).
-const LOG_BINS: usize = 2048;
+/// VQT parameters. Variable-Q transform: each bin's bandwidth is
+/// `bandwidth(f) = α·f + γ`. At high freq `α·f` dominates (constant-Q
+/// behavior, tight pitch); at low freq `γ` floors the bandwidth so bass
+/// windows stay tractable instead of growing to seconds. `γ = 0` reduces
+/// to classical CQT.
+///
+/// With `γ = 20 Hz` the longest window hits ~50 ms at the bottom of the
+/// range, so an N_fft of 65 536 (≈ 1.37 s) covers everything down to
+/// ~10 Hz comfortably.
+const CQT_N_FFT: usize = 65_536;
+const CQT_FMIN_HZ: f32 = 10.0;
+const CQT_FMAX_HZ: f32 = 22_000.0;
+const CQT_BINS_PER_OCTAVE: usize = 24;
+/// Bandwidth floor in Hz. 0 = pure CQT (bass smears over 1 s).
+/// 20 = balanced hybrid (bass transients in ~50 ms).
+/// ERB-match would be ~25 Hz.
+const CQT_GAMMA_HZ: f32 = 20.0;
+/// Prune kernel entries below this fraction of each row's peak.
+/// 0.005 keeps the main lobe plus a decibel or two of skirts; below that
+/// is noise-floor material.
+const CQT_THRESHOLD_REL: f32 = 0.005;
+/// Samples between consecutive VQT columns. 512 at 48 kHz = 10.67 ms per
+/// column, 93.75 columns per second. Well above 60 fps display rate so
+/// every render frame ingests ~1.5 new columns on average.
+const CQT_HOP_SAMPLES: usize = 512;
+
+/// Noise-floor gate. Log bins whose CQT dB sits below this cut off to
+/// the black floor so quiet background stays fully black instead of
+/// speckling with sub-audible bin-level dithering.
+const NOISE_GATE_DB: f32 = -90.0;
+const FLOOR_DB: f32 = -140.0;
 
 /// SPAN-style display options driving the fragment shader.
 #[derive(Copy, Clone, Debug)]
@@ -115,34 +139,58 @@ pub struct SpectrumGpuRenderer {
     num_bins: usize,
     display: DisplayConfig,
     write_col: u32,
-    // Log-resampler state — pre-allocated so the GUI-thread hot path is
-    // allocation-free. `log_edge_freqs_hz` holds the lower/upper freq
-    // edges of each log bin (length LOG_BINS+1), recomputed when the
-    // axis range changes.
-    log_edge_freqs_hz: Vec<f32>,
-    log_freq_min: f32,
-    log_freq_max: f32,
-    power_scratch: Vec<f32>,
-    log_scratch: Vec<f32>,
+    // Spectrogram pipeline. Audio samples arrive in variable-sized chunks
+    // via `ingest_samples`; we keep an N_fft-long rolling window and run
+    // the CQT every CQT_HOP_SAMPLES samples. Each CQT emits one column
+    // into `history_buf`, which is sized `cqt.num_bins() × HISTORY_COLS`.
+    cqt: CqtTransform,
+    cqt_num_bins: usize,
+    // Rolling window: latest CQT_N_FFT samples, newest at `rolling_head`.
+    rolling: Vec<f32>,
+    rolling_head: usize,
+    samples_since_last_hop: usize,
+    fft_scratch_audio: Vec<f32>,
+    cqt_out: Vec<f32>,
 }
 
 impl SpectrumGpuRenderer {
-    /// Create the renderer with a fixed-size render target. `num_bins` must
-    /// match `fft_size / 2` on the audio side.
-    pub fn new(device: &GpuDevice, width: u32, height: u32, num_bins: usize) -> Option<Self> {
+    /// Create the renderer with a fixed-size render target. `num_bins` is
+    /// the top-curve FFT's half-size (for the averaged Mid/Side storage
+    /// buffers); the spectrogram CQT has its own count derived from
+    /// `sample_rate` + `CQT_FMIN_HZ/FMAX_HZ/BINS_PER_OCTAVE`.
+    pub fn new(
+        device: &GpuDevice,
+        width: u32,
+        height: u32,
+        num_bins: usize,
+        sample_rate: f32,
+    ) -> Option<Self> {
         let target = IoSurfaceMtlTexture::new(device, width, height)?;
 
         let mid_buf = device.create_buffer_shared((num_bins * 4) as u64);
         let side_buf = device.create_buffer_shared((num_bins * 4) as u64);
-        let history_buf =
-            device.create_buffer_shared((LOG_BINS as u64) * (HISTORY_COLS as u64) * 4);
 
-        // Shared buffers are allocated zero-initialised. For the spectrogram
-        // history, 0 dB would hit the top of the colourmap (solid red) on
-        // every unwritten column — fill with a low floor so unseen history
-        // reads as silence (black) until real frames overwrite it.
+        let fmax = CQT_FMAX_HZ.min(sample_rate * 0.5);
+        let cqt = CqtTransform::new(
+            sample_rate,
+            CQT_N_FFT,
+            CQT_FMIN_HZ,
+            fmax,
+            CQT_BINS_PER_OCTAVE,
+            CQT_GAMMA_HZ,
+            CQT_THRESHOLD_REL,
+        );
+        let cqt_num_bins = cqt.num_bins();
+
+        let history_buf =
+            device.create_buffer_shared((cqt_num_bins as u64) * (HISTORY_COLS as u64) * 4);
+
+        // Shared buffers are zero-initialised. 0 dB would hit the top of
+        // the colourmap (solid red) on every unwritten column — fill with
+        // a low floor so unseen history reads as silence (black) until
+        // real frames overwrite it.
         if let Some(ptr) = history_buf.mapped_ptr() {
-            let num_elems = LOG_BINS * HISTORY_COLS as usize;
+            let num_elems = cqt_num_bins * HISTORY_COLS as usize;
             let slice = unsafe { std::slice::from_raw_parts_mut(ptr as *mut f32, num_elems) };
             slice.fill(-140.0);
         }
@@ -164,11 +212,13 @@ impl SpectrumGpuRenderer {
             num_bins,
             display: DisplayConfig::default(),
             write_col: 0,
-            log_edge_freqs_hz: vec![0.0; LOG_BINS + 1],
-            log_freq_min: 0.0,
-            log_freq_max: 0.0,
-            power_scratch: vec![0.0; num_bins],
-            log_scratch: vec![-140.0; LOG_BINS],
+            cqt,
+            cqt_num_bins,
+            rolling: vec![0.0; CQT_N_FFT],
+            rolling_head: 0,
+            samples_since_last_hop: 0,
+            fft_scratch_audio: vec![0.0; CQT_N_FFT],
+            cqt_out: vec![FLOOR_DB; cqt_num_bins],
         })
     }
 
@@ -204,85 +254,57 @@ impl SpectrumGpuRenderer {
         }
     }
 
-    /// Append one un-averaged Mid frame to the spectrogram ring. The raw
-    /// linear-bin spectrum is resampled into `LOG_BINS` log-spaced display
-    /// bins using proper power-domain trapezoid integration: at low freq
-    /// (log bins finer than FFT bins) this upsamples smoothly; at high
-    /// freq (log bins span many FFT bins) this acts as an anti-aliasing
-    /// box filter. `inst_freqs` is accepted but currently ignored — the
-    /// reassignment scatter path produced an unwanted striation look.
-    /// Kept in the ring signature so we can turn it back on cheaply.
-    pub fn push_spectrogram_frame(
-        &mut self,
-        raw_db: &[f32],
-        _inst_freqs: &[f32],
-        sample_rate: f32,
-        freq_min: f32,
-        freq_max: f32,
-    ) {
-        debug_assert_eq!(raw_db.len(), self.num_bins);
+    /// Number of log bins in the spectrogram's vertical axis (== number
+    /// of CQT output bins).
+    #[allow(dead_code)] // diagnostic accessor
+    pub fn cqt_num_bins(&self) -> usize {
+        self.cqt_num_bins
+    }
 
-        if (self.log_freq_min - freq_min).abs() > 0.01
-            || (self.log_freq_max - freq_max).abs() > 0.01
-        {
-            self.recompute_log_edges(freq_min, freq_max);
-        }
-
-        self.resample_to_log(raw_db, sample_rate);
-
-        self.write_col = (self.write_col + 1) % HISTORY_COLS;
-        if let Some(ptr) = self.history_buf.mapped_ptr() {
-            unsafe {
-                let offset = self.write_col as usize * LOG_BINS * 4;
-                std::ptr::copy_nonoverlapping(
-                    self.log_scratch.as_ptr() as *const u8,
-                    ptr.add(offset),
-                    LOG_BINS * 4,
-                );
+    /// Consume a block of mono audio samples. Appends them to the rolling
+    /// N_fft window and, every `CQT_HOP_SAMPLES`, runs one CQT and writes
+    /// a column to the history buffer. Samples beyond the rolling window
+    /// naturally fall off the back (ring overwrite).
+    pub fn ingest_samples(&mut self, samples: &[f32]) {
+        for &s in samples {
+            self.rolling[self.rolling_head] = s;
+            self.rolling_head = (self.rolling_head + 1) % CQT_N_FFT;
+            self.samples_since_last_hop += 1;
+            if self.samples_since_last_hop >= CQT_HOP_SAMPLES {
+                self.samples_since_last_hop = 0;
+                self.emit_column();
             }
         }
     }
 
-    fn recompute_log_edges(&mut self, freq_min: f32, freq_max: f32) {
-        self.log_freq_min = freq_min;
-        self.log_freq_max = freq_max;
-        let log_lo = freq_min.ln();
-        let log_hi = freq_max.ln();
-        let span = log_hi - log_lo;
-        for i in 0..=LOG_BINS {
-            let t = i as f32 / LOG_BINS as f32;
-            self.log_edge_freqs_hz[i] = (log_lo + t * span).exp();
-        }
-    }
+    fn emit_column(&mut self) {
+        // Copy the rolling ring into linear order (oldest → newest).
+        // `rolling_head` is the next write position, so oldest sample is
+        // at `rolling_head` and the ring reads out as
+        // [head..N_fft) ++ [0..head).
+        let head = self.rolling_head;
+        let (tail, front) = self.rolling.split_at(head);
+        self.fft_scratch_audio[..front.len()].copy_from_slice(front);
+        self.fft_scratch_audio[front.len()..].copy_from_slice(tail);
 
-    /// Power-domain trapezoid integration over each log bin's freq span.
-    /// At low freq (log bins finer than FFT bins) this smoothly upsamples;
-    /// at high freq (many FFT bins per log bin) it acts as an anti-alias
-    /// box filter.
-    fn resample_to_log(&mut self, raw_db: &[f32], sample_rate: f32) {
-        let num_fft_bins = raw_db.len();
-        let fft_size = (num_fft_bins * 2) as f32;
-        let bins_per_hz = fft_size / sample_rate;
-        let max_bin = (num_fft_bins as f32) - 1.0;
+        self.cqt.process(&self.fft_scratch_audio, &mut self.cqt_out);
 
-        for (i, &db) in raw_db.iter().enumerate() {
-            self.power_scratch[i] = 10.0_f32.powf(db * 0.1);
+        for v in self.cqt_out.iter_mut() {
+            if *v < NOISE_GATE_DB {
+                *v = FLOOR_DB;
+            }
         }
 
-        for i in 0..LOG_BINS {
-            let f_lo = self.log_edge_freqs_hz[i];
-            let f_hi = self.log_edge_freqs_hz[i + 1];
-            let b_lo = (f_lo * bins_per_hz).clamp(0.0, max_bin);
-            let b_hi = (f_hi * bins_per_hz).clamp(0.0, max_bin);
-            let width = b_hi - b_lo;
-
-            let power_avg = if width <= 1e-6 {
-                read_power_linear(&self.power_scratch, 0.5 * (b_lo + b_hi))
-            } else {
-                integrate_power(&self.power_scratch, b_lo, b_hi) / width
-            };
-
-            self.log_scratch[i] = 10.0 * (power_avg + 1e-24).log10();
+        self.write_col = (self.write_col + 1) % HISTORY_COLS;
+        if let Some(ptr) = self.history_buf.mapped_ptr() {
+            unsafe {
+                let offset = self.write_col as usize * self.cqt_num_bins * 4;
+                std::ptr::copy_nonoverlapping(
+                    self.cqt_out.as_ptr() as *const u8,
+                    ptr.add(offset),
+                    self.cqt_num_bins * 4,
+                );
+            }
         }
     }
 
@@ -350,7 +372,7 @@ impl SpectrumGpuRenderer {
             write_col: self.write_col as f32,
             spectrogram_db_min: self.display.spectrogram_db_min,
             spectrogram_db_max: self.display.spectrogram_db_max,
-            log_bins: LOG_BINS as f32,
+            log_bins: self.cqt_num_bins as f32,
         };
         let uniform_bytes: &[u8] = unsafe {
             std::slice::from_raw_parts(
@@ -392,41 +414,4 @@ impl SpectrumGpuRenderer {
         );
         enc.commit_and_wait_completed();
     }
-}
-
-#[inline]
-fn read_power_linear(power: &[f32], b: f32) -> f32 {
-    let n = b.floor() as usize;
-    let n1 = (n + 1).min(power.len() - 1);
-    let frac = b - n as f32;
-    power[n] + (power[n1] - power[n]) * frac
-}
-
-/// Integrate a piecewise-linear-in-power function across `[b_lo, b_hi]`.
-/// Each unit interval `[n, n+1]` is a trapezoid `(power[n], power[n+1])`
-/// so the analytic integral of any sub-interval reduces to averaging the
-/// endpoint values and multiplying by the sub-interval width.
-fn integrate_power(power: &[f32], b_lo: f32, b_hi: f32) -> f32 {
-    let max_idx = power.len().saturating_sub(1);
-    let n_lo = b_lo.floor() as usize;
-    let n_hi = b_hi.floor() as usize;
-
-    if n_lo == n_hi || n_hi >= max_idx {
-        let v_lo = read_power_linear(power, b_lo);
-        let v_hi = read_power_linear(power, b_hi);
-        return 0.5 * (v_lo + v_hi) * (b_hi - b_lo);
-    }
-
-    let v_lo = read_power_linear(power, b_lo);
-    let p_nlo_next = power[n_lo + 1];
-    let mut acc = 0.5 * (v_lo + p_nlo_next) * ((n_lo + 1) as f32 - b_lo);
-
-    for n in (n_lo + 1)..n_hi {
-        acc += 0.5 * (power[n] + power[n + 1]);
-    }
-
-    let v_hi = read_power_linear(power, b_hi);
-    acc += 0.5 * (power[n_hi] + v_hi) * (b_hi - n_hi as f32);
-
-    acc
 }

@@ -47,7 +47,7 @@ impl Analyzer {
         let mut planner = FftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(fft_size);
         let scratch_len = fft.get_inplace_scratch_len();
-        let window = hann_window(fft_size);
+        let window = blackman_harris_window(fft_size);
         let window_sum: f32 = window.iter().sum();
         let num_bins = fft_size / 2;
 
@@ -254,11 +254,29 @@ impl Analyzer {
 
 pub const MIN_DB: f32 = -120.0;
 
+#[allow(dead_code)]
 fn hann_window(size: usize) -> Vec<f32> {
     (0..size)
         .map(|n| {
             let x = 2.0 * std::f32::consts::PI * n as f32 / (size - 1) as f32;
             0.5 - 0.5 * x.cos()
+        })
+        .collect()
+}
+
+/// Blackman-Harris 4-term window. First sidelobe at ~−92 dB vs Hann's
+/// −31 dB — drastically cleaner display between tones at the cost of a
+/// slightly wider main lobe (~1.62 bins vs 1.44).
+pub fn blackman_harris_window(size: usize) -> Vec<f32> {
+    const A0: f32 = 0.35875;
+    const A1: f32 = 0.48829;
+    const A2: f32 = 0.14128;
+    const A3: f32 = 0.01168;
+    let denom = (size - 1) as f32;
+    (0..size)
+        .map(|n| {
+            let x = 2.0 * std::f32::consts::PI * n as f32 / denom;
+            A0 - A1 * x.cos() + A2 * (2.0 * x).cos() - A3 * (3.0 * x).cos()
         })
         .collect()
 }

@@ -1085,6 +1085,7 @@ dependencies = [
  "manifold-gpu",
  "nih_plug",
  "nih_plug_egui",
+ "rustfft",
 ]
 
 [[package]]

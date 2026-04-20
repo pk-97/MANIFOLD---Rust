@@ -18,9 +18,10 @@
 //! update on contention. GUI thread briefly clones under each lock, then
 //! uploads both into GPU-shared buffers (~8KB memcpy each, negligible).
 
+mod cqt;
 mod gl_paint;
 mod gpu_bridge;
-mod raw_ring;
+mod sample_ring;
 mod spectrum_gpu;
 
 use gl_paint::{PainterState, QuadPainter, SharedPainterState};
@@ -28,7 +29,7 @@ use manifold_analyzer_dsp::MIN_DB;
 use manifold_gpu::GpuDevice;
 use nih_plug::prelude::*;
 use nih_plug_egui::{EguiState, create_egui_editor, egui};
-use raw_ring::RawFrameRing;
+use sample_ring::SampleRing;
 use spectrum_gpu::{DisplayConfig, SpectrumGpuRenderer};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -61,11 +62,10 @@ const SPECTRUM_FRACTION: f32 = 0.55;
 const SPECTROGRAM_DB_MIN: f32 = -59.0;
 const SPECTROGRAM_DB_MAX: f32 = 0.0;
 
-/// Ring depth for un-averaged frames. At 8192 FFT / 95 % overlap / 48 kHz
-/// the producer runs at ~117 Hz and the consumer at ~60 Hz, so pending
-/// depth sits near 2 most of the time. 16 tolerates a sluggish GUI frame
-/// (~130 ms stall) before the audio thread starts dropping frames.
-const RAW_RING_CAPACITY: usize = 16;
+/// Sample-ring capacity in mono samples. Sized to tolerate ~1.3 s of
+/// GUI stall at 48 kHz before the audio thread starts dropping — well
+/// beyond anything we'd see in normal operation.
+const SAMPLE_RING_CAPACITY: usize = 65_536;
 
 pub struct AnalyzerGuiShared {
     sample_rate_bits: AtomicU32,
@@ -73,10 +73,10 @@ pub struct AnalyzerGuiShared {
     /// Averaged (SPAN-style) Mid/Side spectra for the top curve.
     pub mid_db: Mutex<Vec<f32>>,
     pub side_db: Mutex<Vec<f32>>,
-    /// Un-averaged Mid frames queued for the spectrogram. Pushed on every
-    /// FFT hop by the audio thread, drained once per render by the GUI so
-    /// no frames are lost to the producer/consumer rate mismatch.
-    pub mid_raw_ring: RawFrameRing,
+    /// Raw mid-channel audio samples for the CQT spectrogram. Audio
+    /// thread pushes every sample; GUI thread drains and feeds the CQT
+    /// pipeline. No FFT on the audio thread for this path.
+    pub mid_sample_ring: SampleRing,
 }
 
 impl AnalyzerGuiShared {
@@ -87,7 +87,7 @@ impl AnalyzerGuiShared {
             fft_size: AtomicUsize::new(fft_size),
             mid_db: Mutex::new(vec![MIN_DB; num_bins]),
             side_db: Mutex::new(vec![MIN_DB; num_bins]),
-            mid_raw_ring: RawFrameRing::new(RAW_RING_CAPACITY, num_bins, MIN_DB, 0.0),
+            mid_sample_ring: SampleRing::new(SAMPLE_RING_CAPACITY),
         }
     }
 
@@ -111,6 +111,9 @@ struct EditorState {
     quad: SharedPainterState,
     mid_scratch: Vec<f32>,
     side_scratch: Vec<f32>,
+    /// Scratch buffer that accumulates samples drained from the ring
+    /// each render frame before they're fed into the CQT pipeline.
+    sample_scratch: Vec<f32>,
 }
 
 pub fn create_editor(
@@ -125,6 +128,7 @@ pub fn create_editor(
         quad: Arc::new(Mutex::new(PainterState::NotYet)),
         mid_scratch: vec![MIN_DB; num_bins],
         side_scratch: vec![MIN_DB; num_bins],
+        sample_scratch: Vec::with_capacity(4096),
     };
     create_egui_editor(
         egui_state,
@@ -175,6 +179,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
                 INITIAL_SPECTRUM_W,
                 INITIAL_SPECTRUM_H,
                 num_bins,
+                sr,
             ) {
                 spec.set_display(DisplayConfig {
                     slope_db_per_oct: SLOPE_DB_PER_OCT,
@@ -205,10 +210,9 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         }
     }
 
-    // Copy latest averaged mid/side spectra for the curves. Drain the raw
-    // ring and push every pending frame into the spectrogram history so
-    // each FFT hop becomes its own column (matches Vision's temporal
-    // density instead of down-sampling to render rate).
+    // Copy latest averaged mid/side spectra for the curves; drain new
+    // mid audio samples and feed them to the CQT pipeline so every hop
+    // boundary emits a new spectrogram column.
     if let (Some(device), Some(spec)) = (state.device.as_ref(), state.spectrum.as_mut()) {
         if let Ok(guard) = state.shared.mid_db.lock() {
             state.mid_scratch.copy_from_slice(&guard);
@@ -216,10 +220,10 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         if let Ok(guard) = state.shared.side_db.lock() {
             state.side_scratch.copy_from_slice(&guard);
         }
+        state.sample_scratch.clear();
+        state.shared.mid_sample_ring.drain_into(&mut state.sample_scratch);
+        spec.ingest_samples(&state.sample_scratch);
         let freq_max = (sr * 0.5).clamp(FREQ_MIN * 2.0, FREQ_MAX_LIMIT);
-        state.shared.mid_raw_ring.drain(|db, inst_freqs| {
-            spec.push_spectrogram_frame(db, inst_freqs, sr, FREQ_MIN, freq_max);
-        });
         spec.render(
             device,
             &state.mid_scratch,

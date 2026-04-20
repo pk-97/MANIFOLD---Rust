@@ -10,6 +10,9 @@ nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git" }
 manifold-analyzer-dsp = { path = "../manifold-analyzer-dsp" }
 manifold-gpu = { path = "../../crates/manifold-gpu" }
 
+# CQT spectrogram (GUI-side FFT + sparse kernel mul)
+rustfft = "6"
+
 # Zero-copy Metal↔GL bridge
 glow = "0.16"
 egui_glow = "0.31"
