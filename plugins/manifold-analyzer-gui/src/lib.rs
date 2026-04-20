@@ -69,15 +69,26 @@ const LOUDNESS_PANEL_WIDTH: f32 = 180.0;
 /// Matches typical mastering-reference tool conventions (SPAN / Ozone).
 pub const REF_SLOT_COUNT: usize = 4;
 
-/// Display colours per slot. Picked for distinctness on the dark MS
-/// plot background; alpha is applied separately when drawing the
-/// percentile band vs the slot indicator.
+/// Display colours per slot. Chosen to sit in the cyan→magenta half
+/// of the hue wheel so they read clearly against the red Mid and
+/// green Side spectrum fills — colours in the red/green/orange/yellow
+/// quadrant blend into the live curves and become unreadable.
 const REF_SLOT_COLORS: [[u8; 3]; REF_SLOT_COUNT] = [
-    [255, 140, 90],   // warm orange
-    [90, 190, 255],   // cyan
-    [200, 140, 255],  // violet
-    [140, 230, 140],  // green
+    [90, 215, 255],   // cyan
+    [255, 100, 210],  // magenta
+    [150, 150, 255],  // electric blue
+    [210, 150, 255],  // lavender
 ];
+
+/// Gaussian smoothing sigma (in log-grid points) applied to the ref
+/// envelopes before rendering. With `REF_POINTS = 1024` log-spaced
+/// over ~12.2 octaves, 5 points ≈ 1/17 octave — just enough to knock
+/// down single-bin spikes without blurring real spectral features.
+const REF_SMOOTH_SIGMA: f32 = 5.0;
+/// Truncation radius of the smoothing kernel, ~2 σ so tails contribute
+/// < 14 % of peak weight. Trading exact Gaussian for a finite kernel
+/// keeps per-frame smoothing cost bounded (radius × 2 × N_slots taps).
+const REF_SMOOTH_RADIUS: usize = 10;
 /// Reference frequency for the Flat/Pink/Tilted weighting slopes.
 /// LUFS modes ignore this (the biquad response has its own pivot).
 const SLOPE_REF_FREQ: f32 = 1000.0;
@@ -1198,6 +1209,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         freq_max,
         &state.params.ref_slots.read(),
         state.shared.integrated_lufs(),
+        state.params.weighting.value(),
     );
 
     // 3. Spectrum-region labels. Transparent shader lets these sit on
@@ -1290,6 +1302,7 @@ fn draw_ref_bands(
     freq_max: f32,
     slots: &RefSlots,
     live_integrated_lufs: f32,
+    weighting: Weighting,
 ) {
     if rect.width() <= 0.0 || rect.height() <= 0.0 {
         return;
@@ -1300,6 +1313,12 @@ fn draw_ref_bands(
     if !grid_span.is_finite() || grid_span <= 0.0 {
         return;
     }
+
+    // Match the live curves' weighting transform so the ref reshapes
+    // along with them when the user toggles Pink / Tilted / LUFS. Align
+    // offset cancels the curve's DC bias over the visible range — same
+    // normalisation the shader's weighting LUT applies to Mid/Side.
+    let weight_align = weighting_align_offset(weighting, freq_min, freq_max);
 
     for (slot_idx, slot) in slots.slots.iter().enumerate() {
         if !slot.visible {
@@ -1335,53 +1354,99 @@ fn draw_ref_bands(
             .unwrap_or(source_nyquist);
 
         let c = REF_SLOT_COLORS[slot_idx];
-        let fill = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], 55);
+        let line_color = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], 220);
 
-        // Collect valid samples as (x, y_hi, y_lo) triples. Long-tail
-        // bins (freq > source Nyquist / LAME lowpass / view range) are
-        // filtered out so the band terminates cleanly instead of
-        // collapsing through `MIN_DB` slots.
+        // Gaussian-smoothed percentile curves. Smoothing happens in
+        // log-grid point space (≈ 1/6 octave) so it's shape-preserving
+        // on the log-freq display — straight bin-space smoothing would
+        // flatten sub-100-Hz detail and leave high-freq noise alone.
+        let smoothed = smooth_envelope(&envelope.bounds);
+
+        // Collect valid samples. Long-tail bins (freq > source Nyquist
+        // / LAME lowpass / view range) are filtered out so the outline
+        // terminates cleanly instead of collapsing through `MIN_DB`
+        // slots.
         let denom = (REF_POINTS - 1) as f32;
-        let mut pts: Vec<(f32, f32, f32)> = Vec::with_capacity(REF_POINTS);
-        for (i, pair) in envelope.bounds.iter().enumerate() {
+        let mut upper_pts: Vec<egui::Pos2> = Vec::with_capacity(REF_POINTS);
+        let mut lower_pts: Vec<egui::Pos2> = Vec::with_capacity(REF_POINTS);
+        for (i, pair) in smoothed.iter().enumerate() {
             let t = i as f32 / denom;
             let freq = (log_min + t * grid_span).exp();
             if freq < freq_min || freq > freq_max || freq > upper_cutoff_hz {
                 continue;
             }
-            let lo = pair[0] + shift_db;
-            let hi = pair[1] + shift_db;
+            // Smoothing first, then add per-freq weighting offset — the
+            // two commute (weighting is a pointwise add) and smoothing
+            // the raw curves is simpler.
+            let weight_db = weighting_db_at(weighting, freq) + weight_align;
+            let lo = pair[0] + shift_db + weight_db;
+            let hi = pair[1] + shift_db + weight_db;
             if lo <= MIN_DB + 1.0 && hi <= MIN_DB + 1.0 {
                 continue;
             }
             let x = freq_to_x(freq, freq_min, freq_max, rect);
-            let y_lo = db_to_y(lo, DB_MIN, DB_MAX, rect);
-            let y_hi = db_to_y(hi, DB_MIN, DB_MAX, rect);
-            pts.push((x, y_hi, y_lo));
+            upper_pts.push(egui::pos2(x, db_to_y(hi, DB_MIN, DB_MAX, rect)));
+            lower_pts.push(egui::pos2(x, db_to_y(lo, DB_MIN, DB_MAX, rect)));
         }
-        if pts.len() < 2 {
+        if upper_pts.len() < 2 {
             continue;
         }
 
-        // Fill the band as a strip of convex quads between consecutive
-        // samples. One big non-convex closed path used to tessellate
-        // into long thin slivers that rendered as diagonal streaks
-        // across the plot; convex quads are tessellated cleanly.
-        for w in pts.windows(2) {
-            let (x0, y_hi0, y_lo0) = w[0];
-            let (x1, y_hi1, y_lo1) = w[1];
-            painter.add(egui::Shape::convex_polygon(
-                vec![
-                    egui::pos2(x0, y_hi0),
-                    egui::pos2(x1, y_hi1),
-                    egui::pos2(x1, y_lo1),
-                    egui::pos2(x0, y_lo0),
-                ],
-                fill,
-                egui::Stroke::NONE,
-            ));
-        }
+        // Two unfilled outlines — upper (90th percentile) and lower
+        // (10th). Fill between them gets busy over the live MS curves;
+        // the two lines already describe the band clearly.
+        let stroke = egui::Stroke::new(1.25, line_color);
+        painter.add(egui::Shape::line(upper_pts, stroke));
+        painter.add(egui::Shape::line(lower_pts, stroke));
     }
+}
+
+/// Gaussian-smooth both percentile curves of a reference envelope,
+/// skipping `MIN_DB` slots so out-of-range / silent bins don't drag
+/// neighbouring samples down. Allocates once per call — per-frame
+/// cost is ~1024 × 57 taps × 2 curves × 4 slots ≈ 450 k muls, well
+/// under a ms even on modest hardware.
+fn smooth_envelope(bounds: &[[f32; 2]]) -> Vec<[f32; 2]> {
+    let n = bounds.len();
+    let mut out = vec![[MIN_DB, MIN_DB]; n];
+    if n == 0 {
+        return out;
+    }
+    // Precompute symmetric Gaussian weights once (same for both curves).
+    let radius = REF_SMOOTH_RADIUS.min(n.saturating_sub(1));
+    let sigma = REF_SMOOTH_SIGMA.max(0.5);
+    let mut weights = Vec::with_capacity(2 * radius + 1);
+    for k in 0..=(2 * radius) {
+        let d = k as f32 - radius as f32;
+        weights.push((-0.5 * (d / sigma).powi(2)).exp());
+    }
+
+    let threshold = MIN_DB + 1.0;
+    for i in 0..n {
+        let lo_i = i.saturating_sub(radius);
+        let hi_i = (i + radius + 1).min(n);
+        let mut lo_sum = 0.0f32;
+        let mut lo_wsum = 0.0f32;
+        let mut hi_sum = 0.0f32;
+        let mut hi_wsum = 0.0f32;
+        for j in lo_i..hi_i {
+            let w = weights[radius + j - i];
+            let pair = bounds[j];
+            if pair[0] > threshold {
+                lo_sum += pair[0] * w;
+                lo_wsum += w;
+            }
+            if pair[1] > threshold {
+                hi_sum += pair[1] * w;
+                hi_wsum += w;
+            }
+        }
+        out[i] = [
+            if lo_wsum > 0.0 { lo_sum / lo_wsum } else { MIN_DB },
+            if hi_wsum > 0.0 { hi_sum / hi_wsum } else { MIN_DB },
+        ];
+    }
+    out
 }
 
 fn draw_spectrogram_chrome(

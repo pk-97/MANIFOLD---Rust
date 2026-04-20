@@ -94,8 +94,9 @@ pub struct DisplayConfig {
     pub spectrogram_db_max: f32,
     /// Whether the spectrogram is being drawn in BPM-locked "sync" mode.
     /// Set on the renderer every frame from the GUI's current param state
-    /// so the shader draws its grid + playhead correctly. Doesn't affect
-    /// CQT processing itself — that's the worker's WorkerConfig.
+    /// so the shader picks the right x-axis mapping (pinned-to-grid vs
+    /// scrolling). Doesn't affect CQT processing itself — that's the
+    /// worker's WorkerConfig.
     pub sync_mode: bool,
 }
 
@@ -153,8 +154,8 @@ pub struct SpectrumGpuRenderer {
     cqt_num_bins: usize,
     display: DisplayConfig,
     /// Last column index written by `apply_column`. Used by the shader as
-    /// the newest-pixel anchor in free-scroll mode and as the playhead
-    /// position in sync mode.
+    /// the newest-pixel anchor in free-scroll mode and as the wrap point
+    /// in sync mode.
     write_col: u32,
 }
 
@@ -264,7 +265,7 @@ impl SpectrumGpuRenderer {
     /// Apply one CQT column from the worker: optionally clear the
     /// spectrogram history first (tempo/sync change), then write the
     /// column data into the history storage buffer. Updates `write_col`
-    /// so the shader's playhead tracks the newest column.
+    /// so the shader tracks the newest column.
     pub fn apply_column(&mut self, msg: &CqtColumnMsg) {
         debug_assert_eq!(msg.data.len(), self.cqt_num_bins);
         if msg.clear_history_before {

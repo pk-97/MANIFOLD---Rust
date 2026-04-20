@@ -432,8 +432,21 @@ impl LoudnessMeter {
             // hops later; consumers already treat those readouts as
             // slow-moving.
             let _ = sink.force_push(z);
+            // Also stash z in a small rolling window so the in-line
+            // momentary / short-term readouts have real history — the
+            // worker owns the unbounded log for integrated / LRA, not
+            // these fast-path readouts. Without this the partial is
+            // the ONLY contributor and ST flickers around a 100 ms
+            // window.
+            self.block_msq.push(z);
+            const ROLLING_CAP: usize = SHORT_TERM_BLOCKS + 2;
+            if self.block_msq.len() > ROLLING_CAP {
+                let drop = self.block_msq.len() - ROLLING_CAP;
+                self.block_msq.drain(..drop);
+            }
         } else {
-            // In-line path (CLI, unit tests): keep history + recompute.
+            // In-line path (CLI, unit tests): keep full history +
+            // recompute integrated / LRA in-line on every tick.
             self.block_msq.push(z);
             self.recompute_on_tick();
         }

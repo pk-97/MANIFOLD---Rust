@@ -227,16 +227,14 @@ fn spectrogram_pixel(px: vec2<f32>) -> vec4<f32> {
 
     // X axis: free mode scrolls newest→right, older→left. Sync mode maps
     // pixel x directly to a column in [0, history_cols) so columns stay
-    // pinned to the beat grid and the "playhead" at `write_col` advances
-    // left→right, wrapping to overwrite the oldest pixels — matches
-    // Vision 4X's synced spectrogram.
+    // pinned to the beat grid and the write position advances left→right,
+    // wrapping to overwrite the oldest pixels — matches Vision 4X's
+    // synced spectrogram.
     var col: i32;
-    var playhead_dist = 1e9;
     if (u.sync_mode > 0.5) {
         let rel_x = clamp(px.x / max(u.resolution.x, 1.0), 0.0, 0.9999);
         col = i32(floor(rel_x * f32(history_cols_i)));
         col = clamp(col, 0, history_cols_i - 1);
-        playhead_dist = abs(f32(col - write_col_i));
     } else {
         let history_idx = i32(floor(u.resolution.x - 1.0 - px.x));
         if (history_idx < 0 || history_idx >= history_cols_i) {
@@ -272,14 +270,7 @@ fn spectrogram_pixel(px: vec2<f32>) -> vec4<f32> {
     let weighted_db = tilt_db(freq, raw_db);
     let span = max(u.spectrogram_db_max - u.spectrogram_db_min, 1e-3);
     let t = (weighted_db - u.spectrogram_db_min) / span;
-    var rgb = colormap(t);
-
-    // 1-px bright playhead in sync mode. Marks where new columns are
-    // being written so the user can see the write position sweep across
-    // the grid on each bar cycle.
-    if (u.sync_mode > 0.5 && playhead_dist < 1.0) {
-        rgb = mix(rgb, vec3<f32>(1.0, 1.0, 1.0), 0.6);
-    }
+    let rgb = colormap(t);
     return vec4<f32>(rgb, 1.0);
 }
 
