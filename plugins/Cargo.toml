@@ -13,3 +13,11 @@ lto = "thin"
 codegen-units = 1
 strip = "symbols"
 panic = "abort"
+
+# Redirect the nih-plug git deps to our vendored copy so we can carry local
+# patches (notably the Host→Plugin resize implementation). Drop this section
+# once those land upstream.
+[patch."https://github.com/robbert-vdh/nih-plug.git"]
+nih_plug = { path = "vendor/nih-plug" }
+nih_plug_egui = { path = "vendor/nih-plug/nih_plug_egui" }
+nih_plug_xtask = { path = "vendor/nih-plug/nih_plug_xtask" }
