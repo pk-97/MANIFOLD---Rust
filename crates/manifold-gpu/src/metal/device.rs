@@ -1264,6 +1264,112 @@ impl GpuDevice {
         TexturePool::new(self, frames_in_flight)
     }
 
+    /// Create a freestanding BGRA8888 IOSurface of the given size.
+    ///
+    /// The returned pointer is a +1 Core Foundation handle — the caller owns
+    /// it and must release it via `CFRelease` when done. Typically you'd wrap
+    /// it in an RAII guard together with the `GpuTexture` it backs.
+    ///
+    /// `None` on failure (rare — usually malformed properties or kernel refusal).
+    ///
+    /// # Safety
+    /// The returned raw pointer does not carry its lifetime. The caller is
+    /// responsible for calling `CFRelease` exactly once.
+    pub unsafe fn create_io_surface_bgra8(width: u32, height: u32) -> Option<*mut c_void> {
+        // IOSurface property keys are CFString globals from the IOSurface framework.
+        #[link(name = "IOSurface", kind = "framework")]
+        unsafe extern "C" {
+            fn IOSurfaceCreate(properties: *const c_void) -> *mut c_void;
+
+            static kIOSurfaceWidth: *const c_void;
+            static kIOSurfaceHeight: *const c_void;
+            static kIOSurfaceBytesPerElement: *const c_void;
+            static kIOSurfaceBytesPerRow: *const c_void;
+            static kIOSurfacePixelFormat: *const c_void;
+        }
+
+        #[link(name = "CoreFoundation", kind = "framework")]
+        unsafe extern "C" {
+            fn CFDictionaryCreate(
+                allocator: *const c_void,
+                keys: *const *const c_void,
+                values: *const *const c_void,
+                num_values: isize,
+                key_callbacks: *const c_void,
+                value_callbacks: *const c_void,
+            ) -> *const c_void;
+            fn CFNumberCreate(
+                allocator: *const c_void,
+                the_type: i32,
+                value_ptr: *const c_void,
+            ) -> *const c_void;
+            fn CFRelease(cf: *const c_void);
+
+            static kCFTypeDictionaryKeyCallBacks: c_void;
+            static kCFTypeDictionaryValueCallBacks: c_void;
+        }
+
+        // kCFNumberSInt32Type = 3
+        const K_CF_NUMBER_SINT32: i32 = 3;
+
+        let bytes_per_row = (width * 4) as i32;
+        let bpp = 4i32;
+        let pixel_format = i32::from_be_bytes(*b"BGRA");
+        let w = width as i32;
+        let h = height as i32;
+
+        let make_num = |v: &i32| unsafe {
+            CFNumberCreate(
+                std::ptr::null(),
+                K_CF_NUMBER_SINT32,
+                v as *const i32 as *const c_void,
+            )
+        };
+
+        unsafe {
+            let num_w = make_num(&w);
+            let num_h = make_num(&h);
+            let num_bpe = make_num(&bpp);
+            let num_bpr = make_num(&bytes_per_row);
+            let num_pf = make_num(&pixel_format);
+
+            let keys = [
+                kIOSurfaceWidth,
+                kIOSurfaceHeight,
+                kIOSurfaceBytesPerElement,
+                kIOSurfaceBytesPerRow,
+                kIOSurfacePixelFormat,
+            ];
+            let values = [num_w, num_h, num_bpe, num_bpr, num_pf];
+
+            let dict = CFDictionaryCreate(
+                std::ptr::null(),
+                keys.as_ptr(),
+                values.as_ptr(),
+                keys.len() as isize,
+                &kCFTypeDictionaryKeyCallBacks as *const c_void,
+                &kCFTypeDictionaryValueCallBacks as *const c_void,
+            );
+
+            for v in values {
+                CFRelease(v);
+            }
+
+            if dict.is_null() {
+                return None;
+            }
+
+            let surface = IOSurfaceCreate(dict);
+            CFRelease(dict);
+
+            if surface.is_null() {
+                None
+            } else {
+                Some(surface)
+            }
+        }
+    }
+
     /// Create a GPU texture backed by an IOSurface.
     ///
     /// # Safety

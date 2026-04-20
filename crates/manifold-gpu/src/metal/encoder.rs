@@ -1297,6 +1297,15 @@ impl GpuEncoder {
         self.cmd_buf.commit();
         unsafe { self.cmd_buf.waitUntilScheduled() };
     }
+
+    /// Commit and block until the GPU has fully completed the work.
+    /// Required for synchronous texture readback — a copy to a shared buffer
+    /// is only readable from the CPU once the GPU reports completion.
+    pub fn commit_and_wait_completed(mut self) {
+        self.end_current();
+        self.cmd_buf.commit();
+        unsafe { self.cmd_buf.waitUntilCompleted() };
+    }
 }
 
 impl Drop for GpuEncoder {
