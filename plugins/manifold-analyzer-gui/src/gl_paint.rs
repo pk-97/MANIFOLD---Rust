@@ -61,10 +61,6 @@ impl QuadPainter {
         width: u32,
         height: u32,
     ) -> Option<Self> {
-        eprintln!(
-            "manifold-analyzer-gui: QuadPainter::new {}x{} iosurface={:p}",
-            width, height, iosurface
-        );
         unsafe {
             // GL 3.2 Core + sampler2DRect (pixel-coord sampling, matches IOSurface binding).
             let vs_src = "#version 150 core
@@ -177,7 +173,6 @@ impl QuadPainter {
                 return None;
             }
 
-            eprintln!("manifold-analyzer-gui: QuadPainter ready");
             Some(Self {
                 program,
                 vao,
@@ -211,15 +206,33 @@ impl QuadPainter {
             gl.bind_texture(GL_TEXTURE_RECTANGLE, None);
         }
     }
+
+    /// Free the GL resources this painter owns. Must be called with a current
+    /// GL context. Takes `self` by value to prevent use-after-free.
+    pub fn destroy(self, gl: &glow::Context) {
+        unsafe {
+            gl.delete_program(self.program);
+            gl.delete_vertex_array(self.vao);
+            gl.delete_texture(self.gl_texture);
+        }
+    }
 }
 
-/// Tri-state: never tried / tried and failed (don't retry every frame) / ready.
+/// Lifecycle state for the shared `QuadPainter`:
+///
+/// - `NotYet`: never built yet — next PaintCallback builds it.
+/// - `Failed`: sticky — we already tried and failed, don't retry.
+/// - `Ready`: built and usable.
+/// - `PendingDestroy`: previous painter is stale (e.g. IOSurface resized).
+///   The next PaintCallback destroys it (needs a current GL context) and
+///   rebuilds against the new IOSurface.
 #[derive(Default)]
 pub enum PainterState {
     #[default]
     NotYet,
     Failed,
     Ready(QuadPainter),
+    PendingDestroy(QuadPainter),
 }
 
 pub type SharedPainterState = Arc<std::sync::Mutex<PainterState>>;

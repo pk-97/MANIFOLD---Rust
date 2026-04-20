@@ -31,10 +31,14 @@ use spectrum_gpu::SpectrumGpuRenderer;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-// Fixed render-target size. egui scales this to whatever rect it allocates.
-// TODO: resize dynamically on rect change for pixel-perfect output.
-const SPECTRUM_W: u32 = 1024;
-const SPECTRUM_H: u32 = 512;
+// Initial render-target size; `SpectrumGpuRenderer::ensure_size` resizes every
+// frame to match the current rect × pixels_per_point for pixel-perfect output.
+const INITIAL_SPECTRUM_W: u32 = 900;
+const INITIAL_SPECTRUM_H: u32 = 450;
+
+// Hard caps on the GPU texture. 4K scenarios are well within this.
+const MAX_SPECTRUM_W: u32 = 4096;
+const MAX_SPECTRUM_H: u32 = 2048;
 
 const FREQ_MIN: f32 = 20.0;
 const DB_MIN: f32 = -90.0;
@@ -111,17 +115,38 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         state.scratch.resize(num_bins, MIN_DB);
     }
 
+    // Target render-buffer size: rect × DPI, clamped.
+    let ppp = ui.ctx().pixels_per_point();
+    let available = ui.available_size();
+    let phys_w = ((available.x * ppp).round() as u32).clamp(64, MAX_SPECTRUM_W);
+    let phys_h = ((available.y * ppp).round() as u32).clamp(32, MAX_SPECTRUM_H);
+
     // Lazy GPU init.
     if state.device.is_none() {
         state.device = Some(GpuDevice::new());
     }
     if state.spectrum.is_none() {
         if let Some(device) = state.device.as_ref() {
-            state.spectrum =
-                SpectrumGpuRenderer::new(device, SPECTRUM_W, SPECTRUM_H, num_bins);
-            if state.spectrum.is_some() {
-                eprintln!("manifold-analyzer-gui: SpectrumGpuRenderer ready");
-            }
+            state.spectrum = SpectrumGpuRenderer::new(
+                device,
+                INITIAL_SPECTRUM_W,
+                INITIAL_SPECTRUM_H,
+                num_bins,
+            );
+        }
+    }
+
+    // Resize the GPU texture to the current rect pixel size. If it rebuilt,
+    // mark the GL-side painter for destroy+rebuild next PaintCallback (it
+    // was bound to the now-dropped IOSurface).
+    if let (Some(device), Some(spec)) = (state.device.as_ref(), state.spectrum.as_mut()) {
+        if spec.ensure_size(device, phys_w, phys_h) {
+            let mut lock = state.quad.lock().unwrap();
+            let prev = std::mem::replace(&mut *lock, PainterState::NotYet);
+            *lock = match prev {
+                PainterState::Ready(qp) => PainterState::PendingDestroy(qp),
+                other => other,
+            };
         }
     }
 
@@ -137,7 +162,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     }
 
     // Allocate the rect for the whole spectrum view.
-    let (rect, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(available, egui::Sense::hover());
     let painter = ui.painter_at(rect);
     let freq_max = (sr * 0.5).max(FREQ_MIN * 2.0);
 
@@ -174,7 +199,24 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             callback: Arc::new(egui_glow::CallbackFn::new(move |_info, glow_painter| {
                 let gl = glow_painter.gl();
                 let mut lock = quad.lock().unwrap();
-                if matches!(*lock, PainterState::NotYet) {
+
+                // Advance lifecycle if the Metal side has resized the IOSurface.
+                let needs_build = match std::mem::replace(&mut *lock, PainterState::NotYet) {
+                    PainterState::Ready(qp) => {
+                        *lock = PainterState::Ready(qp);
+                        false
+                    }
+                    PainterState::Failed => {
+                        *lock = PainterState::Failed;
+                        false
+                    }
+                    PainterState::NotYet => true,
+                    PainterState::PendingDestroy(old) => {
+                        old.destroy(gl);
+                        true
+                    }
+                };
+                if needs_build {
                     let iosurface = iosurface_addr as *mut std::ffi::c_void;
                     *lock = match QuadPainter::new(gl, iosurface, w, h) {
                         Some(qp) => PainterState::Ready(qp),

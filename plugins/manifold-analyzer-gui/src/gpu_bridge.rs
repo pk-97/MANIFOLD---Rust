@@ -43,10 +43,6 @@ impl IoSurfaceMtlTexture {
                 GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::SHADER_READ,
             )
         };
-        eprintln!(
-            "manifold-analyzer-gui: IoSurfaceMtlTexture ready {}x{} (iosurface={:p})",
-            width, height, iosurface
-        );
         Some(Self {
             width,
             height,

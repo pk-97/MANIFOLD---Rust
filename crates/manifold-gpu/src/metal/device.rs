@@ -1312,7 +1312,11 @@ impl GpuDevice {
         // kCFNumberSInt32Type = 3
         const K_CF_NUMBER_SINT32: i32 = 3;
 
-        let bytes_per_row = (width * 4) as i32;
+        // Metal requires `bytesPerRow` on IOSurface-backed textures to be
+        // aligned to 16 bytes — otherwise `newTextureWithDescriptor:iosurface:`
+        // asserts with "bytesPerRow must be aligned to 16 bytes" and aborts.
+        let unaligned_bpr = (width * 4) as i32;
+        let bytes_per_row = (unaligned_bpr + 15) & !15;
         let bpp = 4i32;
         let pixel_format = i32::from_be_bytes(*b"BGRA");
         let w = width as i32;

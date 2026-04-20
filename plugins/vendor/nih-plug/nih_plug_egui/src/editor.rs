@@ -120,10 +120,14 @@ where
                 }
 
                 // Host → Plugin resize (native window-frame drag in the host).
-                // The host has already committed to the new size; we just
-                // need to bring egui's window in line.
+                // `queue.resize` takes PHYSICAL pixels; `host_resize` is stored
+                // as logical points from the host. Multiply by `pixels_per_point`
+                // so baseview sees the real framebuffer size on retina.
                 if let Some(new_size) = egui_state.host_resize.swap(None) {
-                    queue.resize(PhySize::new(new_size.0, new_size.1));
+                    let ppp = egui_ctx.pixels_per_point();
+                    let phys_w = (new_size.0 as f32 * ppp).round() as u32;
+                    let phys_h = (new_size.1 as f32 * ppp).round() as u32;
+                    queue.resize(PhySize::new(phys_w, phys_h));
                     egui_ctx.send_viewport_cmd(ViewportCommand::InnerSize(Vec2::new(
                         new_size.0 as f32,
                         new_size.1 as f32,

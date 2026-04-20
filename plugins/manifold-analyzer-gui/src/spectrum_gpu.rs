@@ -80,6 +80,22 @@ impl SpectrumGpuRenderer {
         self.target.height
     }
 
+    /// Resize the IOSurface-backed texture to `new_w × new_h` if different
+    /// from the current size. Returns `true` if a rebuild happened — the
+    /// caller must invalidate the GL-side `QuadPainter` because it bound
+    /// to the now-dropped IOSurface.
+    pub fn ensure_size(&mut self, device: &GpuDevice, new_w: u32, new_h: u32) -> bool {
+        if new_w == self.target.width && new_h == self.target.height {
+            return false;
+        }
+        if let Some(new_target) = IoSurfaceMtlTexture::new(device, new_w, new_h) {
+            self.target = new_target;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Render one frame. `spectrum_db` length must equal `num_bins`.
     pub fn render(
         &mut self,
