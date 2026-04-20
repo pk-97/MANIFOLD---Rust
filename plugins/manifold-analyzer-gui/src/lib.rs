@@ -65,32 +65,80 @@ fn weighting_align_offset(weighting: Weighting, freq_min: f32, freq_max: f32) ->
     if freq_max <= freq_min {
         return 0.0;
     }
-    let mean_db = match weighting {
-        Weighting::Flat => 0.0,
+    let stats = weighting_stats(weighting, freq_min, freq_max);
+    -stats.mean
+}
+
+#[derive(Copy, Clone)]
+struct WeightingStats {
+    mean: f32,
+    min: f32,
+    max: f32,
+}
+
+/// Returns mean/min/max of `weighting_db(f)` over a log-uniform grid
+/// in [freq_min, freq_max]. Mean is used for align-offset (DC bias
+/// removal). Min is used for the reference-curve overlay: pinning the
+/// inverted weighting line to 0 dB at the freq where the weighting is
+/// smallest gives a clean "equal-LUFS-contribution" reading — above
+/// the line = this bin is driving loudness more than its balanced
+/// share; below = room to push.
+fn weighting_stats(weighting: Weighting, freq_min: f32, freq_max: f32) -> WeightingStats {
+    if let Weighting::Flat = weighting {
+        return WeightingStats { mean: 0.0, min: 0.0, max: 0.0 };
+    }
+    match weighting {
         Weighting::Pink | Weighting::Tilted => {
-            // Log-uniform mean of `slope * log2(f/ref)` is `slope *
-            // log2(gm/ref)` where gm = sqrt(fmin*fmax).
             let slope = weighting.slope_db_per_oct();
             let gm = (freq_min * freq_max).sqrt();
-            slope * (gm / SLOPE_REF_FREQ).log2()
+            let mean = slope * (gm / SLOPE_REF_FREQ).log2();
+            let v_lo = slope * (freq_min / SLOPE_REF_FREQ).log2();
+            let v_hi = slope * (freq_max / SLOPE_REF_FREQ).log2();
+            WeightingStats {
+                mean,
+                min: v_lo.min(v_hi),
+                max: v_lo.max(v_hi),
+            }
         }
         Weighting::Lufs | Weighting::LufsSubAdj => {
-            // Numerically integrate the biquad response over a
-            // log-uniform grid. 64 samples is smooth enough that the
-            // result doesn't wobble as the user drags freq_min/max.
             let n = 64usize;
             let log_min = freq_min.ln();
             let log_max = freq_max.ln();
             let mut sum = 0.0_f32;
+            let mut peak = f32::NEG_INFINITY;
+            let mut trough = f32::INFINITY;
             for i in 0..n {
                 let t = (i as f32 + 0.5) / n as f32;
                 let freq = (log_min + t * (log_max - log_min)).exp();
-                sum += lufs_weighting_db(weighting, freq);
+                let v = lufs_weighting_db(weighting, freq);
+                sum += v;
+                if v > peak {
+                    peak = v;
+                }
+                if v < trough {
+                    trough = v;
+                }
             }
-            sum / n as f32
+            WeightingStats {
+                mean: sum / n as f32,
+                min: trough,
+                max: peak,
+            }
         }
-    };
-    -mean_db
+        Weighting::Flat => WeightingStats { mean: 0.0, min: 0.0, max: 0.0 },
+    }
+}
+
+/// Weighting curve value at a single frequency, matching the shader's
+/// `weighting_db(freq)` function. Used by the reference-curve overlay
+/// and the align-offset integration.
+fn weighting_db_at(weighting: Weighting, freq: f32) -> f32 {
+    match weighting {
+        Weighting::Flat | Weighting::Pink | Weighting::Tilted => {
+            weighting.slope_db_per_oct() * (freq / SLOPE_REF_FREQ).log2()
+        }
+        Weighting::Lufs | Weighting::LufsSubAdj => lufs_weighting_db(weighting, freq),
+    }
 }
 
 fn lufs_weighting_db(weighting: Weighting, freq: f32) -> f32 {
@@ -298,6 +346,30 @@ impl Weighting {
     }
 }
 
+/// Optional overlay that plots the selected weighting curve directly
+/// on the MS graph, scaled so its peak sits at 0 dB. Line high = this
+/// frequency is loudness-efficient (+1 dB boost there drives LUFS a
+/// lot); line low = weighting discounts this frequency, so any content
+/// there eats peak budget without helping loudness.
+#[derive(Enum, PartialEq, Eq, Debug, Clone, Copy)]
+pub enum ReferenceCurve {
+    #[id = "none"]
+    #[name = "None"]
+    None,
+    #[id = "weighting"]
+    #[name = "Weighting"]
+    Weighting,
+}
+
+impl ReferenceCurve {
+    fn label(self) -> &'static str {
+        match self {
+            ReferenceCurve::None => "None",
+            ReferenceCurve::Weighting => "Weighting",
+        }
+    }
+}
+
 #[derive(Params)]
 pub struct AnalyzerParams {
     #[persist = "editor-state"]
@@ -357,6 +429,12 @@ pub struct AnalyzerParams {
     /// spectrogram. See `Weighting` for what each mode does.
     #[id = "weighting"]
     pub weighting: EnumParam<Weighting>,
+
+    /// Reference curve overlaid on the MS graph — shows the inverse of
+    /// the current weighting so you can see which bins are under- or
+    /// over-driving perceptual loudness.
+    #[id = "ref-curve"]
+    pub reference_curve: EnumParam<ReferenceCurve>,
 }
 
 impl AnalyzerParams {
@@ -383,6 +461,7 @@ impl AnalyzerParams {
             .with_unit(" dB")
             .with_step_size(1.0),
             weighting: EnumParam::new("Weighting", Weighting::LufsSubAdj),
+            reference_curve: EnumParam::new("Reference", ReferenceCurve::None),
         }
     }
 }
@@ -876,6 +955,18 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         return;
     }
 
+    // 2a. Reference curve (inverse weighting). Drawn after the grid
+    //     but before text labels so the line is visible yet labels
+    //     stay readable on top.
+    draw_reference_curve(
+        &painter,
+        spectrum_rect,
+        freq_min,
+        freq_max,
+        state.params.weighting.value(),
+        state.params.reference_curve.value(),
+    );
+
     // 3. Spectrum-region labels. Transparent shader lets these sit on
     //    top of the curves for readability.
     for &freq in FREQ_MAJORS {
@@ -911,6 +1002,46 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         freq_max,
         state,
     );
+}
+
+fn draw_reference_curve(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    freq_min: f32,
+    freq_max: f32,
+    weighting: Weighting,
+    mode: ReferenceCurve,
+) {
+    if matches!(mode, ReferenceCurve::None) || matches!(weighting, Weighting::Flat) {
+        return;
+    }
+    // Inverse-weighting reference = the spectral shape that gives
+    // EQUAL LUFS contribution at every frequency. Pinned so the line
+    // touches 0 dB at the freq where the weighting is smallest (= the
+    // freq that needs the MOST signal to register on LUFS).
+    //
+    // Reading:
+    //   curve above line → this bin is driving loudness more than its
+    //                      balanced share (pushing LUFS further)
+    //   curve below line → room to push this bin up for more loudness,
+    //                      whatever the frequency
+    let stats = weighting_stats(weighting, freq_min, freq_max);
+    let n = 128usize;
+    let log_min = freq_min.ln();
+    let log_max = freq_max.ln();
+    let mut pts = Vec::with_capacity(n);
+    for i in 0..n {
+        let t = i as f32 / (n - 1) as f32;
+        let freq = (log_min + t * (log_max - log_min)).exp();
+        let ref_db = stats.min - weighting_db_at(weighting, freq);
+        let x = rect.left() + t * rect.width();
+        let y = db_to_y(ref_db, DB_MIN, DB_MAX, rect);
+        pts.push(egui::pos2(x, y));
+    }
+    painter.add(egui::Shape::line(
+        pts,
+        egui::Stroke::new(1.5, egui::Color32::from_white_alpha(180)),
+    ));
 }
 
 fn draw_spectrogram_chrome(
@@ -1411,6 +1542,24 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
                         setter.begin_set_parameter(&params.weighting);
                         setter.set_parameter(&params.weighting, weight_val);
                         setter.end_set_parameter(&params.weighting);
+                    }
+                }
+            });
+
+        ui.label("Ref");
+        let mut ref_val = params.reference_curve.value();
+        egui::ComboBox::from_id_salt("ref-curve")
+            .selected_text(ref_val.label())
+            .width(88.0)
+            .show_ui(ui, |ui| {
+                for opt in [ReferenceCurve::None, ReferenceCurve::Weighting] {
+                    if ui
+                        .selectable_value(&mut ref_val, opt, opt.label())
+                        .changed()
+                    {
+                        setter.begin_set_parameter(&params.reference_curve);
+                        setter.set_parameter(&params.reference_curve, ref_val);
+                        setter.end_set_parameter(&params.reference_curve);
                     }
                 }
             });
