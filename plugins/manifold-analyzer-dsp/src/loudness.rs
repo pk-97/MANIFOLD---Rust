@@ -20,6 +20,9 @@
 //! visually react within a block. Numerical behaviour is within a
 //! fraction of a dB of reference implementations on sine sweeps.
 
+use crossbeam_queue::ArrayQueue;
+use std::sync::Arc;
+
 const ABSOLUTE_GATE_LUFS: f32 = -70.0;
 const RELATIVE_GATE_LU: f32 = 10.0;
 const LRA_RELATIVE_GATE_LU: f32 = 20.0;
@@ -287,16 +290,25 @@ pub struct LoudnessMeter {
 
     // Closed 100 ms bins, channel-weighted mean-square (L² + R²) / N
     // where N is samples_per_block. Stored indefinitely so gated
-    // integrated / LRA can be recomputed at each 100 ms tick.
+    // integrated / LRA can be recomputed at each 100 ms tick. Only
+    // written when no `block_sink` is attached — when a sink is in
+    // place, the worker thread owns the bin history.
     block_msq: Vec<f32>,
 
     // Per-tick scratch buffers — promoted to fields so the audio-thread
     // recompute path stays allocation-free across a long session
     // (otherwise each field would be re-allocated every 100 ms, up to
-    // ~144 KB each at 1 hr).
+    // ~144 KB each at 1 hr). Unused when a `block_sink` is attached.
     scratch_block_means: Vec<f32>,
     scratch_lra_loudness: Vec<f32>,
     scratch_kept: Vec<f32>,
+
+    // Optional sink for closed-block z values. When present (plugin
+    // runtime path), the meter stops running integrated / LRA gating
+    // in-line; a worker thread pops z's from this queue and does the
+    // O(N) recompute off-thread. Absent in CLI / unit tests so the
+    // standalone `snapshot()` keeps working.
+    block_sink: Option<Arc<ArrayQueue<f32>>>,
 
     // Most recent readouts.
     snapshot: LoudnessSnapshot,
@@ -326,9 +338,32 @@ impl LoudnessMeter {
             scratch_block_means: Vec::with_capacity(PRESIZE_BINS),
             scratch_lra_loudness: Vec::with_capacity(PRESIZE_BINS),
             scratch_kept: Vec::with_capacity(PRESIZE_BINS),
+            block_sink: None,
             snapshot: LoudnessSnapshot::EMPTY,
             bins_since_reset: 0,
         }
+    }
+
+    /// Set the current integrated-LUFS value from an external source
+    /// (typically the off-thread worker that computes gating). Lets the
+    /// audio-thread DR / PLR derivation inside `update_running_readouts`
+    /// use an up-to-date integrated instead of the short-term-max
+    /// fallback it would otherwise be stuck on when a sink is attached.
+    pub fn set_external_integrated_lufs(&mut self, lufs: f32) {
+        self.snapshot.integrated_lufs = lufs;
+    }
+
+    /// Attach an off-thread sink that receives closed-block z values.
+    /// With a sink attached, the meter stops computing integrated / LRA
+    /// in-line and no longer stores historical `block_msq` — the worker
+    /// on the other end of the queue owns that work.
+    ///
+    /// Overflow uses `force_push`: if the worker falls behind by more than
+    /// the queue capacity, the oldest pending block is dropped. For a
+    /// reasonable queue size (256 = 25.6 s) this never happens in
+    /// practice, but it guarantees the audio thread never blocks.
+    pub fn attach_block_sink(&mut self, sink: Arc<ArrayQueue<f32>>) {
+        self.block_sink = Some(sink);
     }
 
     pub fn sample_rate(&self) -> f32 {
@@ -385,12 +420,23 @@ impl LoudnessMeter {
         // Stereo channel-weighted sum (G_L = G_R = 1 per BS.1770-4
         // for front L/R). Future 5.1 support would apply G_Ls = 1.41.
         let z = (msq_l + msq_r) as f32;
-        self.block_msq.push(z);
         self.block_sum_sq_l = 0.0;
         self.block_sum_sq_r = 0.0;
         self.block_count = 0;
         self.bins_since_reset += 1;
-        self.recompute_on_tick();
+
+        if let Some(sink) = &self.block_sink {
+            // Deferred path: hand z to the worker thread. force_push
+            // evicts the oldest on overflow so we never block the audio
+            // thread. Integrated / LRA will land on the atomics a few
+            // hops later; consumers already treat those readouts as
+            // slow-moving.
+            let _ = sink.force_push(z);
+        } else {
+            // In-line path (CLI, unit tests): keep history + recompute.
+            self.block_msq.push(z);
+            self.recompute_on_tick();
+        }
     }
 
     fn update_running_readouts(&mut self) {
@@ -551,6 +597,103 @@ impl LoudnessMeter {
             Some((total_sq / total_n) as f32)
         }
     }
+}
+
+/// Scratch buffers for out-of-thread integrated / LRA recompute. Owned by
+/// the worker so repeated `compute_integrated_and_lra` calls stay
+/// allocation-free. Sized on first use via the bin count.
+#[derive(Default)]
+pub struct IntegratedScratch {
+    block_means: Vec<f32>,
+    lra_loudness: Vec<f32>,
+    kept: Vec<f32>,
+}
+
+/// Compute BS.1770-4 gated integrated loudness and EBU Tech 3342 LRA from a
+/// chronological list of closed 100 ms channel-weighted mean-squares.
+///
+/// Returns `(integrated_lufs, lra_lu)`. Either value is `None` when the
+/// sliding window isn't yet full enough (< 400 ms for integrated,
+/// < 3 s for LRA) or the gating rejects all blocks (pure silence).
+///
+/// Pure function — callers own the `block_msq` and the scratch. Intended
+/// for the off-thread loudness worker; the in-line meter path keeps its
+/// own scratch inside `LoudnessMeter`.
+pub fn compute_integrated_and_lra(
+    block_msq: &[f32],
+    scratch: &mut IntegratedScratch,
+) -> (Option<f32>, Option<f32>) {
+    let mut integrated_out = None;
+    let mut lra_out = None;
+    let n_bins = block_msq.len();
+    if n_bins < MOMENTARY_BLOCKS {
+        return (integrated_out, lra_out);
+    }
+
+    let stride = 1;
+    let window = MOMENTARY_BLOCKS;
+    let end = n_bins - window + 1;
+    scratch.block_means.clear();
+    let mut ungated_sum = 0.0_f64;
+    let mut ungated_count = 0_usize;
+    for start in (0..end).step_by(stride) {
+        let m = mean_slice(&block_msq[start..start + window]);
+        scratch.block_means.push(m);
+        if loudness_from_mean_sq(m) >= ABSOLUTE_GATE_LUFS {
+            ungated_sum += m as f64;
+            ungated_count += 1;
+        }
+    }
+    if ungated_count > 0 {
+        let ungated_mean = (ungated_sum / ungated_count as f64) as f32;
+        let rel_threshold = loudness_from_mean_sq(ungated_mean) - RELATIVE_GATE_LU;
+        let mut gated_sum = 0.0_f64;
+        let mut gated_count = 0_usize;
+        for &m in &scratch.block_means {
+            let lufs = loudness_from_mean_sq(m);
+            if lufs >= ABSOLUTE_GATE_LUFS && lufs >= rel_threshold {
+                gated_sum += m as f64;
+                gated_count += 1;
+            }
+        }
+        if gated_count > 0 {
+            let gated_mean = (gated_sum / gated_count as f64) as f32;
+            integrated_out = Some(loudness_from_mean_sq(gated_mean));
+        }
+    }
+
+    if n_bins >= LRA_BLOCKS_PER_UPDATE {
+        let lra_window = LRA_BLOCKS_PER_UPDATE;
+        let lra_end = n_bins - lra_window + 1;
+        scratch.lra_loudness.clear();
+        let mut lra_ungated_sum = 0.0_f64;
+        let mut lra_ungated_count = 0_usize;
+        for start in (0..lra_end).step_by(stride) {
+            let m = mean_slice(&block_msq[start..start + lra_window]);
+            let lufs = loudness_from_mean_sq(m);
+            if lufs >= ABSOLUTE_GATE_LUFS {
+                lra_ungated_sum += m as f64;
+                lra_ungated_count += 1;
+                scratch.lra_loudness.push(lufs);
+            }
+        }
+        if lra_ungated_count > 0 {
+            let lra_ungated_mean = (lra_ungated_sum / lra_ungated_count as f64) as f32;
+            let lra_rel = loudness_from_mean_sq(lra_ungated_mean) - LRA_RELATIVE_GATE_LU;
+            scratch.kept.clear();
+            scratch
+                .kept
+                .extend(scratch.lra_loudness.iter().copied().filter(|&v| v >= lra_rel));
+            if scratch.kept.len() >= 2 {
+                scratch.kept.sort_by(|a, b| a.total_cmp(b));
+                let p10 = percentile(&scratch.kept, 0.10);
+                let p95 = percentile(&scratch.kept, 0.95);
+                lra_out = Some((p95 - p10).max(0.0));
+            }
+        }
+    }
+
+    (integrated_out, lra_out)
 }
 
 fn mean_slice(xs: &[f32]) -> f32 {

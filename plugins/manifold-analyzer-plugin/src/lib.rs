@@ -1,5 +1,5 @@
 use manifold_analyzer_dsp::{Analyzer, LoudnessMeter};
-use manifold_analyzer_gui::{AnalyzerGuiShared, AnalyzerParams};
+use manifold_analyzer_gui::{AnalyzerGuiShared, AnalyzerParams, LoudnessWorker};
 use nih_plug::prelude::*;
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -21,6 +21,10 @@ struct ManifoldAnalyzer {
     right_scratch: Vec<f32>,
     loudness: Option<LoudnessMeter>,
     last_loudness_reset_epoch: u32,
+    /// Off-thread BS.1770 integrated / LRA recompute. Spawned once in
+    /// `initialize` and joined on `Drop` (plugin teardown). Holds only a
+    /// clone of `gui_shared`; the meter feeds it via the shared queue.
+    loudness_worker: Option<LoudnessWorker>,
     gui_shared: Arc<AnalyzerGuiShared>,
 }
 
@@ -36,6 +40,7 @@ impl Default for ManifoldAnalyzer {
             right_scratch: Vec::new(),
             loudness: None,
             last_loudness_reset_epoch: 0,
+            loudness_worker: None,
             gui_shared: Arc::new(AnalyzerGuiShared::new(44100.0, FFT_SIZE)),
         }
     }
@@ -88,8 +93,18 @@ impl Plugin for ManifoldAnalyzer {
         self.side_scratch = vec![0.0; max_block];
         self.left_scratch = vec![0.0; max_block];
         self.right_scratch = vec![0.0; max_block];
-        self.loudness = Some(LoudnessMeter::new(buffer_config.sample_rate));
+        let mut meter = LoudnessMeter::new(buffer_config.sample_rate);
+        // Attach the shared block queue so closed-block z values flow to
+        // the worker thread instead of the audio thread running O(N)
+        // gating in-line. Spawn the worker on first initialize — it
+        // survives further initialize/reset calls for this plugin
+        // instance and joins on plugin drop.
+        meter.attach_block_sink(self.gui_shared.loudness_block_queue.clone());
+        self.loudness = Some(meter);
         self.last_loudness_reset_epoch = self.gui_shared.loudness_reset_epoch();
+        if self.loudness_worker.is_none() {
+            self.loudness_worker = Some(LoudnessWorker::spawn(self.gui_shared.clone()));
+        }
         self.gui_shared.set_sample_rate(buffer_config.sample_rate);
         self.gui_shared
             .set_loudness(manifold_analyzer_dsp::LoudnessSnapshot::EMPTY);
@@ -149,16 +164,19 @@ impl Plugin for ManifoldAnalyzer {
         }
 
         // Loudness: honour a pending GUI reset (edge-triggered via
-        // epoch counter), then push raw L/R through the BS.1770
-        // meter and publish the fresh snapshot.
+        // epoch counter), inject the worker's latest integrated value
+        // so the meter's in-line DR/PLR derivation stays current, push
+        // L/R through the BS.1770 meter, and publish only the fast-
+        // moving fields — the worker owns integrated + LRA.
         if let Some(meter) = self.loudness.as_mut() {
             let epoch = self.gui_shared.loudness_reset_epoch();
             if epoch != self.last_loudness_reset_epoch {
                 meter.reset();
                 self.last_loudness_reset_epoch = epoch;
             }
+            meter.set_external_integrated_lufs(self.gui_shared.integrated_lufs());
             meter.process(&self.left_scratch[..i], &self.right_scratch[..i]);
-            self.gui_shared.set_loudness(meter.snapshot());
+            self.gui_shared.set_fast_loudness(meter.snapshot());
         }
 
         // Averaged curves: push samples into the existing Analyzer pair

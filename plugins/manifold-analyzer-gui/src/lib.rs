@@ -21,9 +21,12 @@
 mod cqt;
 mod gl_paint;
 mod gpu_bridge;
+mod loudness_worker;
 mod sample_ring;
 mod spectrum_gpu;
 mod spectrum_worker;
+
+pub use loudness_worker::LoudnessWorker;
 
 use gl_paint::{PainterState, QuadPainter, SharedPainterState};
 use manifold_analyzer_dsp::{LoudnessSnapshot, MIN_DB};
@@ -33,6 +36,7 @@ use nih_plug_egui::{EguiState, create_egui_editor, egui};
 use sample_ring::SampleRing;
 use spectrum_gpu::{DisplayConfig, SpectrumGpuRenderer};
 use spectrum_worker::{CqtWorker, WorkerConfig};
+use crossbeam_queue::ArrayQueue;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -480,6 +484,12 @@ pub struct AnalyzerGuiShared {
     /// thread pushes every sample; GUI thread drains and feeds the CQT
     /// pipeline. No FFT on the audio thread for this path.
     pub mid_sample_ring: SampleRing,
+    /// Lock-free SPSC queue of closed 100 ms loudness-block z values.
+    /// Produced by the audio thread's `LoudnessMeter::close_block`;
+    /// consumed by the off-thread loudness worker which runs the
+    /// O(N) BS.1770 integrated / LRA gating. Capacity: 256 bins ≈
+    /// 25.6 s of buffer — overflow drops oldest (audio never blocks).
+    pub loudness_block_queue: Arc<ArrayQueue<f32>>,
     /// Host transport snapshot, published from the audio thread each
     /// process block. `NaN` means "host did not provide this value" — we
     /// can only honour Sync mode when both `bpm_bits` and
@@ -515,6 +525,7 @@ impl AnalyzerGuiShared {
             mid_db: Mutex::new(vec![MIN_DB; num_bins]),
             side_db: Mutex::new(vec![MIN_DB; num_bins]),
             mid_sample_ring: SampleRing::new(SAMPLE_RING_CAPACITY),
+            loudness_block_queue: Arc::new(ArrayQueue::new(256)),
             bpm_bits: AtomicU64::new(f64::NAN.to_bits()),
             beat_pos_bits: AtomicU64::new(f64::NAN.to_bits()),
             playing: AtomicBool::new(false),
@@ -605,6 +616,10 @@ impl AnalyzerGuiShared {
         }
     }
 
+    /// Full-snapshot publish — only used by the CLI / tests path where
+    /// the meter computes integrated + LRA in-line. The plugin runtime
+    /// uses `set_fast_loudness` (audio thread) + `set_integrated_lufs`
+    /// / `set_lra_lu` (worker thread) to avoid clobbering.
     pub fn set_loudness(&self, s: LoudnessSnapshot) {
         self.momentary_lufs_bits
             .store(s.momentary_lufs.to_bits(), Ordering::Relaxed);
@@ -621,6 +636,43 @@ impl AnalyzerGuiShared {
             .store(s.short_term_max_lufs.to_bits(), Ordering::Relaxed);
         self.true_peak_max_dbtp_bits
             .store(s.true_peak_max_dbtp.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Audio-thread publish for the fast-updating readouts. Integrated
+    /// and LRA are intentionally NOT touched — those are owned by the
+    /// loudness worker so the audio thread's partial snapshot doesn't
+    /// clobber them.
+    pub fn set_fast_loudness(&self, s: LoudnessSnapshot) {
+        self.momentary_lufs_bits
+            .store(s.momentary_lufs.to_bits(), Ordering::Relaxed);
+        self.short_term_lufs_bits
+            .store(s.short_term_lufs.to_bits(), Ordering::Relaxed);
+        self.dr_lu_bits.store(s.dr_lu.to_bits(), Ordering::Relaxed);
+        self.plr_lu_bits.store(s.plr_lu.to_bits(), Ordering::Relaxed);
+        self.momentary_max_lufs_bits
+            .store(s.momentary_max_lufs.to_bits(), Ordering::Relaxed);
+        self.short_term_max_lufs_bits
+            .store(s.short_term_max_lufs.to_bits(), Ordering::Relaxed);
+        self.true_peak_max_dbtp_bits
+            .store(s.true_peak_max_dbtp.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Worker-thread publish for integrated LUFS. Audio-thread DR / PLR
+    /// readouts pick up the new value on their next update.
+    pub fn set_integrated_lufs(&self, lufs: f32) {
+        self.integrated_lufs_bits
+            .store(lufs.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Worker-thread publish for Loudness Range.
+    pub fn set_lra_lu(&self, lra: f32) {
+        self.lra_lu_bits.store(lra.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Audio-thread read of the current integrated LUFS (for DR / PLR
+    /// derivation in the meter's fast-path snapshot).
+    pub fn integrated_lufs(&self) -> f32 {
+        f32::from_bits(self.integrated_lufs_bits.load(Ordering::Relaxed))
     }
 
     pub fn loudness(&self) -> LoudnessSnapshot {

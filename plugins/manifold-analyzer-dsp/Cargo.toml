@@ -6,3 +6,8 @@ publish = false
 
 [dependencies]
 rustfft = "6"
+
+# Lock-free bounded SPSC used to hand closed 100 ms block values from the
+# audio thread to an off-thread integrated/LRA recompute worker. Consumed
+# via an optional `Arc<ArrayQueue<f32>>` sink — CLI and tests skip it.
+crossbeam-queue = "0.3"

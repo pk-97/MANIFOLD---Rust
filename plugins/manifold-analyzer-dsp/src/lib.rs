@@ -6,7 +6,9 @@
 
 mod loudness;
 
-pub use loudness::{LoudnessMeter, LoudnessSnapshot};
+pub use loudness::{
+    compute_integrated_and_lra, IntegratedScratch, LoudnessMeter, LoudnessSnapshot,
+};
 
 use rustfft::{Fft, FftPlanner, num_complex::Complex};
 use std::sync::Arc;
