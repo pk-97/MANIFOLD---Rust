@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "manifold-analyzer-dsp",
+    "manifold-analyzer-gui",
     "manifold-analyzer-plugin",
     "manifold-analyzer-cli",
     "xtask",

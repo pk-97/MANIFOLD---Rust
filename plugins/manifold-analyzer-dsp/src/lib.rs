@@ -79,9 +79,14 @@ impl Analyzer {
     }
 
     /// Push mono samples; updates `latest_spectrum_db` as frames complete.
+    /// Returns `true` if at least one new FFT frame was computed.
     /// Allocation-free after construction.
-    pub fn push_mono(&mut self, samples: &[f32]) {
-        self.process_mono(samples, |_| {});
+    pub fn push_mono(&mut self, samples: &[f32]) -> bool {
+        let mut new_frame = false;
+        self.process_mono(samples, |_| {
+            new_frame = true;
+        });
+        new_frame
     }
 
     /// Push mono samples; invokes `on_frame` with the dB spectrum each time

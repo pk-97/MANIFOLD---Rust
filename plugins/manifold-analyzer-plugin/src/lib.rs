@@ -1,32 +1,39 @@
 use manifold_analyzer_dsp::Analyzer;
+use manifold_analyzer_gui::AnalyzerGuiShared;
 use nih_plug::prelude::*;
+use nih_plug_egui::EguiState;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
 const FFT_SIZE: usize = 4096;
+const INITIAL_WINDOW_SIZE: (u32, u32) = (900, 450);
 
 struct ManifoldAnalyzer {
     params: Arc<ManifoldAnalyzerParams>,
     analyzer: Option<Analyzer>,
     mono_scratch: Vec<f32>,
+    gui_shared: Arc<AnalyzerGuiShared>,
+    egui_state: Arc<EguiState>,
 }
 
 #[derive(Params)]
-struct ManifoldAnalyzerParams {}
+struct ManifoldAnalyzerParams {
+    #[persist = "editor-state"]
+    editor_state: Arc<EguiState>,
+}
 
 impl Default for ManifoldAnalyzer {
     fn default() -> Self {
+        let egui_state = EguiState::from_size(INITIAL_WINDOW_SIZE.0, INITIAL_WINDOW_SIZE.1);
         Self {
-            params: Arc::new(ManifoldAnalyzerParams::default()),
+            params: Arc::new(ManifoldAnalyzerParams {
+                editor_state: egui_state.clone(),
+            }),
             analyzer: None,
             mono_scratch: Vec::new(),
+            gui_shared: Arc::new(AnalyzerGuiShared::new(44100.0, FFT_SIZE)),
+            egui_state,
         }
-    }
-}
-
-impl Default for ManifoldAnalyzerParams {
-    fn default() -> Self {
-        Self {}
     }
 }
 
@@ -54,6 +61,10 @@ impl Plugin for ManifoldAnalyzer {
         self.params.clone()
     }
 
+    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        manifold_analyzer_gui::create_editor(self.egui_state.clone(), self.gui_shared.clone())
+    }
+
     fn initialize(
         &mut self,
         _audio_io_layout: &AudioIOLayout,
@@ -62,6 +73,7 @@ impl Plugin for ManifoldAnalyzer {
     ) -> bool {
         self.analyzer = Some(Analyzer::new(buffer_config.sample_rate, FFT_SIZE));
         self.mono_scratch = vec![0.0; buffer_config.max_buffer_size as usize];
+        self.gui_shared.set_sample_rate(buffer_config.sample_rate);
         true
     }
 
@@ -85,11 +97,7 @@ impl Plugin for ManifoldAnalyzer {
         if num_samples == 0 {
             return ProcessStatus::Normal;
         }
-
-        // Sum channels to mono in a pre-allocated scratch buffer, then
-        // feed the analyzer once. Audio stays untouched (pass-through).
         if self.mono_scratch.len() < num_samples {
-            // Host gave us more samples than advertised in initialize(). Skip this block.
             return ProcessStatus::Normal;
         }
 
@@ -105,7 +113,13 @@ impl Plugin for ManifoldAnalyzer {
             i += 1;
         }
 
-        analyzer.push_mono(&self.mono_scratch[..i]);
+        // Publish latest spectrum to GUI via try_lock — skip if GUI is reading,
+        // no audio-thread allocations.
+        if analyzer.push_mono(&self.mono_scratch[..i]) {
+            if let Ok(mut guard) = self.gui_shared.spectrum_db.try_lock() {
+                guard.copy_from_slice(analyzer.latest_spectrum_db());
+            }
+        }
 
         ProcessStatus::Normal
     }

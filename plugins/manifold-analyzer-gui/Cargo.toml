@@ -1,14 +1,10 @@
 [package]
-name = "manifold-analyzer-plugin"
+name = "manifold-analyzer-gui"
 version = "0.1.0"
 edition = "2021"
 publish = false
-
-[lib]
-crate-type = ["cdylib", "lib"]
 
 [dependencies]
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
 nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git" }
 manifold-analyzer-dsp = { path = "../manifold-analyzer-dsp" }
-manifold-analyzer-gui = { path = "../manifold-analyzer-gui" }
