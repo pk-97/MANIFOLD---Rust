@@ -1,15 +1,16 @@
-//! Spectrum line rendered by manifold-gpu into an IOSurface-backed texture.
+//! Spectrum lines rendered by manifold-gpu into an IOSurface-backed texture.
 //!
-//! Pattern:
-//! 1. WGSL fragment shader reads `spectrum_db[]` from a storage buffer, maps
-//!    each pixel (x → log-freq → bin, y → dB), anti-aliases around the line.
+//! Two curves per frame (Mid and Side). Pattern:
+//! 1. WGSL fragment shader reads `mid_spectrum[]` and `side_spectrum[]` from
+//!    storage buffers, maps each pixel (x → log-freq → bin, y → dB), and
+//!    anti-aliases around each line.
 //! 2. `device.draw_fullscreen` renders into the IOSurface-backed `GpuTexture`.
 //! 3. `commit_and_wait_completed` syncs; egui's PaintCallback samples the same
 //!    IOSurface via GL_TEXTURE_RECTANGLE (see `gl_paint.rs`).
 //!
-//! The uniform + spectrum storage buffer are allocated once and rewritten via
-//! the shared-memory mapped pointer each frame — zero audio-thread cost, one
-//! ~8KB memcpy on the GUI thread.
+//! The uniform + spectrum storage buffers are allocated once and rewritten via
+//! the shared-memory mapped pointer each frame — zero audio-thread cost, two
+//! ~8KB memcpys on the GUI thread.
 
 use crate::gpu_bridge::IoSurfaceMtlTexture;
 use manifold_gpu::{
@@ -19,8 +20,34 @@ use std::ffi::c_void;
 
 const SHADER: &str = include_str!("../shaders/spectrum_line.wgsl");
 
+/// SPAN-style display options driving the fragment shader.
+#[derive(Copy, Clone, Debug)]
+pub struct DisplayConfig {
+    pub slope_db_per_oct: f32,
+    pub slope_ref_freq: f32,
+    pub align_offset_db: f32,
+    /// Half-bandwidth of frequency smoothing in log2(octave). Set to
+    /// `1.0 / 24.0` for a 1/12-oct smoothing (±1/24 oct either side of the
+    /// centre frequency). `0.0` disables smoothing.
+    pub smooth_half_oct_log2: f32,
+    /// Alpha of the fill below each curve. `0.0` disables fill.
+    pub fill_alpha: f32,
+}
+
+impl Default for DisplayConfig {
+    fn default() -> Self {
+        Self {
+            slope_db_per_oct: 0.0,
+            slope_ref_freq: 1000.0,
+            align_offset_db: 0.0,
+            smooth_half_oct_log2: 0.0,
+            fill_alpha: 0.0,
+        }
+    }
+}
+
 /// Matches the `Uniforms` struct in `spectrum_line.wgsl`.
-/// Total size 80 bytes, 16-byte aligned (vec4 members force 16-byte struct alignment).
+/// Total size 112 bytes, 16-byte aligned.
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct SpectrumUniforms {
@@ -33,15 +60,23 @@ struct SpectrumUniforms {
     db_max: f32,
     line_color: [f32; 4],
     bg_color: [f32; 4],
+    side_color: [f32; 4],
     line_thickness: f32,
-    _pad: [f32; 3],
+    slope_db_per_oct: f32,
+    slope_ref_freq: f32,
+    align_offset_db: f32,
+    smooth_half_oct_log2: f32,
+    fill_alpha: f32,
+    _pad: [f32; 2],
 }
 
 pub struct SpectrumGpuRenderer {
     target: IoSurfaceMtlTexture,
-    spectrum_buf: GpuBuffer,
+    mid_buf: GpuBuffer,
+    side_buf: GpuBuffer,
     pipeline: GpuRenderPipeline,
     num_bins: usize,
+    display: DisplayConfig,
 }
 
 impl SpectrumGpuRenderer {
@@ -50,7 +85,8 @@ impl SpectrumGpuRenderer {
     pub fn new(device: &GpuDevice, width: u32, height: u32, num_bins: usize) -> Option<Self> {
         let target = IoSurfaceMtlTexture::new(device, width, height)?;
 
-        let spectrum_buf = device.create_buffer_shared((num_bins * 4) as u64);
+        let mid_buf = device.create_buffer_shared((num_bins * 4) as u64);
+        let side_buf = device.create_buffer_shared((num_bins * 4) as u64);
         let pipeline = device.create_render_pipeline(
             SHADER,
             "vs_main",
@@ -62,10 +98,16 @@ impl SpectrumGpuRenderer {
 
         Some(Self {
             target,
-            spectrum_buf,
+            mid_buf,
+            side_buf,
             pipeline,
             num_bins,
+            display: DisplayConfig::default(),
         })
+    }
+
+    pub fn set_display(&mut self, config: DisplayConfig) {
+        self.display = config;
     }
 
     pub fn iosurface(&self) -> *mut c_void {
@@ -96,26 +138,37 @@ impl SpectrumGpuRenderer {
         }
     }
 
-    /// Render one frame. `spectrum_db` length must equal `num_bins`.
+    /// Render one frame. Both spectrum slices must have length `num_bins`.
     pub fn render(
         &mut self,
         device: &GpuDevice,
-        spectrum_db: &[f32],
+        mid_db: &[f32],
+        side_db: &[f32],
         sample_rate: f32,
         freq_min: f32,
         freq_max: f32,
         db_min: f32,
         db_max: f32,
     ) {
-        debug_assert_eq!(spectrum_db.len(), self.num_bins);
+        debug_assert_eq!(mid_db.len(), self.num_bins);
+        debug_assert_eq!(side_db.len(), self.num_bins);
 
-        // Zero-copy upload into the shared-storage spectrum buffer.
-        if let Some(ptr) = self.spectrum_buf.mapped_ptr() {
+        // Zero-copy upload into the shared-storage spectrum buffers.
+        if let Some(ptr) = self.mid_buf.mapped_ptr() {
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    spectrum_db.as_ptr() as *const u8,
+                    mid_db.as_ptr() as *const u8,
                     ptr,
-                    spectrum_db.len() * 4,
+                    mid_db.len() * 4,
+                );
+            }
+        }
+        if let Some(ptr) = self.side_buf.mapped_ptr() {
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    side_db.as_ptr() as *const u8,
+                    ptr,
+                    side_db.len() * 4,
                 );
             }
         }
@@ -128,10 +181,18 @@ impl SpectrumGpuRenderer {
             freq_max,
             db_min,
             db_max,
-            line_color: [0.39, 0.82, 1.0, 1.0], // matches previous egui cyan
-            bg_color: [0.031, 0.039, 0.055, 1.0], // matches panel bg (8,10,14)/255
-            line_thickness: 1.5,
-            _pad: [0.0; 3],
+            // Mid — bright green outline, darker green fill handled in shader via fill_alpha.
+            line_color: [0.72, 0.98, 0.38, 1.0],
+            bg_color: [0.031, 0.039, 0.055, 1.0], // panel bg (8,10,14)/255
+            // Side — red/orange outline, same fill-alpha strategy.
+            side_color: [0.95, 0.30, 0.15, 1.0],
+            line_thickness: 1.2,
+            slope_db_per_oct: self.display.slope_db_per_oct,
+            slope_ref_freq: self.display.slope_ref_freq,
+            align_offset_db: self.display.align_offset_db,
+            smooth_half_oct_log2: self.display.smooth_half_oct_log2,
+            fill_alpha: self.display.fill_alpha,
+            _pad: [0.0; 2],
         };
         let uniform_bytes: &[u8] = unsafe {
             std::slice::from_raw_parts(
@@ -147,7 +208,12 @@ impl SpectrumGpuRenderer {
             },
             GpuBinding::Buffer {
                 binding: 1,
-                buffer: &self.spectrum_buf,
+                buffer: &self.mid_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: &self.side_buf,
                 offset: 0,
             },
         ];

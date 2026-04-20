@@ -13,10 +13,10 @@
 //!
 //! # Audio thread ↔ GUI thread
 //!
-//! Audio thread publishes the spectrum via `try_lock` on
-//! `AnalyzerGuiShared::spectrum_db` — drops the update on contention. GUI
-//! thread briefly clones under the lock, then uploads into a GPU-shared
-//! buffer (~8KB memcpy, negligible).
+//! Audio thread publishes two spectra — Mid = (L+R)/2 and Side = (L-R)/2 —
+//! via `try_lock` on `AnalyzerGuiShared::{mid_db, side_db}`, dropping the
+//! update on contention. GUI thread briefly clones under each lock, then
+//! uploads both into GPU-shared buffers (~8KB memcpy each, negligible).
 
 mod gl_paint;
 mod gpu_bridge;
@@ -27,7 +27,7 @@ use manifold_analyzer_dsp::MIN_DB;
 use manifold_gpu::GpuDevice;
 use nih_plug::prelude::*;
 use nih_plug_egui::{EguiState, create_egui_editor, egui};
-use spectrum_gpu::SpectrumGpuRenderer;
+use spectrum_gpu::{DisplayConfig, SpectrumGpuRenderer};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -40,22 +40,33 @@ const INITIAL_SPECTRUM_H: u32 = 450;
 const MAX_SPECTRUM_W: u32 = 4096;
 const MAX_SPECTRUM_H: u32 = 2048;
 
-const FREQ_MIN: f32 = 20.0;
+// Matched to SPAN preset: 10 Hz–25 kHz log, -90…-10 dB, +4.5 dB/oct tilt
+// pivoted at 1 kHz, 1/12-oct frequency smoothing, filled display.
+const FREQ_MIN: f32 = 10.0;
+const FREQ_MAX_LIMIT: f32 = 25_000.0;
 const DB_MIN: f32 = -90.0;
-const DB_MAX: f32 = 0.0;
+const DB_MAX: f32 = -10.0;
+const SLOPE_DB_PER_OCT: f32 = 4.5;
+const SLOPE_REF_FREQ: f32 = 1000.0;
+const ALIGN_OFFSET_DB: f32 = 0.0; // Placeholder for SPAN "Align 0 dB" pink-noise calibration.
+const SMOOTH_HALF_OCT_LOG2: f32 = 1.0 / 24.0; // 1/12-oct bandwidth → ±1/24 oct half-width
+const FILL_ALPHA: f32 = 0.45;
 
 pub struct AnalyzerGuiShared {
     sample_rate_bits: AtomicU32,
     fft_size: AtomicUsize,
-    pub spectrum_db: Mutex<Vec<f32>>,
+    pub mid_db: Mutex<Vec<f32>>,
+    pub side_db: Mutex<Vec<f32>>,
 }
 
 impl AnalyzerGuiShared {
     pub fn new(sample_rate: f32, fft_size: usize) -> Self {
+        let num_bins = fft_size / 2;
         Self {
             sample_rate_bits: AtomicU32::new(sample_rate.to_bits()),
             fft_size: AtomicUsize::new(fft_size),
-            spectrum_db: Mutex::new(vec![MIN_DB; fft_size / 2]),
+            mid_db: Mutex::new(vec![MIN_DB; num_bins]),
+            side_db: Mutex::new(vec![MIN_DB; num_bins]),
         }
     }
 
@@ -77,25 +88,33 @@ struct EditorState {
     device: Option<GpuDevice>,
     spectrum: Option<SpectrumGpuRenderer>,
     quad: SharedPainterState,
-    scratch: Vec<f32>,
+    mid_scratch: Vec<f32>,
+    side_scratch: Vec<f32>,
 }
 
 pub fn create_editor(
     egui_state: Arc<EguiState>,
     shared: Arc<AnalyzerGuiShared>,
 ) -> Option<Box<dyn Editor>> {
-    let fft_size = shared.fft_size();
+    let num_bins = shared.fft_size() / 2;
     let state = EditorState {
         shared,
         device: None,
         spectrum: None,
         quad: Arc::new(Mutex::new(PainterState::NotYet)),
-        scratch: vec![MIN_DB; fft_size / 2],
+        mid_scratch: vec![MIN_DB; num_bins],
+        side_scratch: vec![MIN_DB; num_bins],
     };
     create_egui_editor(
         egui_state,
         state,
-        |_, _| {},
+        // Build callback runs on each editor spawn (open/close cycle). The
+        // prior GL context is gone, so the cached `QuadPainter`'s GL handles
+        // (program/VAO/texture) are now dangling — reset the lifecycle so
+        // the next PaintCallback rebuilds against the fresh context.
+        |_ctx, state: &mut EditorState| {
+            *state.quad.lock().unwrap() = PainterState::NotYet;
+        },
         |ctx, _setter, state| {
             egui::CentralPanel::default()
                 .frame(egui::Frame::new().fill(egui::Color32::from_rgb(8, 10, 14)))
@@ -111,8 +130,11 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     let sr = state.shared.sample_rate();
     let fft_size = state.shared.fft_size();
     let num_bins = fft_size / 2;
-    if state.scratch.len() != num_bins {
-        state.scratch.resize(num_bins, MIN_DB);
+    if state.mid_scratch.len() != num_bins {
+        state.mid_scratch.resize(num_bins, MIN_DB);
+    }
+    if state.side_scratch.len() != num_bins {
+        state.side_scratch.resize(num_bins, MIN_DB);
     }
 
     // Target render-buffer size: rect × DPI, clamped.
@@ -127,12 +149,21 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     }
     if state.spectrum.is_none() {
         if let Some(device) = state.device.as_ref() {
-            state.spectrum = SpectrumGpuRenderer::new(
+            if let Some(mut spec) = SpectrumGpuRenderer::new(
                 device,
                 INITIAL_SPECTRUM_W,
                 INITIAL_SPECTRUM_H,
                 num_bins,
-            );
+            ) {
+                spec.set_display(DisplayConfig {
+                    slope_db_per_oct: SLOPE_DB_PER_OCT,
+                    slope_ref_freq: SLOPE_REF_FREQ,
+                    align_offset_db: ALIGN_OFFSET_DB,
+                    smooth_half_oct_log2: SMOOTH_HALF_OCT_LOG2,
+                    fill_alpha: FILL_ALPHA,
+                });
+                state.spectrum = Some(spec);
+            }
         }
     }
 
@@ -150,21 +181,31 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         }
     }
 
-    // Copy latest spectrum under the lock, upload to GPU, render.
+    // Copy latest mid/side spectra under their locks, upload to GPU, render.
     if let (Some(device), Some(spec)) = (state.device.as_ref(), state.spectrum.as_mut()) {
-        if let Ok(guard) = state.shared.spectrum_db.lock() {
-            state.scratch.copy_from_slice(&guard);
+        if let Ok(guard) = state.shared.mid_db.lock() {
+            state.mid_scratch.copy_from_slice(&guard);
         }
-        let freq_max = (sr * 0.5).max(FREQ_MIN * 2.0);
+        if let Ok(guard) = state.shared.side_db.lock() {
+            state.side_scratch.copy_from_slice(&guard);
+        }
+        let freq_max = (sr * 0.5).min(FREQ_MAX_LIMIT).max(FREQ_MIN * 2.0);
         spec.render(
-            device, &state.scratch, sr, FREQ_MIN, freq_max, DB_MIN, DB_MAX,
+            device,
+            &state.mid_scratch,
+            &state.side_scratch,
+            sr,
+            FREQ_MIN,
+            freq_max,
+            DB_MIN,
+            DB_MAX,
         );
     }
 
     // Allocate the rect for the whole spectrum view.
     let (rect, _) = ui.allocate_exact_size(available, egui::Sense::hover());
     let painter = ui.painter_at(rect);
-    let freq_max = (sr * 0.5).max(FREQ_MIN * 2.0);
+    let freq_max = (sr * 0.5).min(FREQ_MAX_LIMIT).max(FREQ_MIN * 2.0);
 
     // 1. Grid lines underneath the spectrum (so the line sits on top).
     let grid_color = egui::Color32::from_gray(40);

@@ -199,6 +199,11 @@ impl QuadPainter {
             }
             gl.disable(glow::DEPTH_TEST);
             gl.disable(glow::CULL_FACE);
+            // Premultiplied-alpha "over" compositing so transparent pixels in
+            // our texture (everything outside the curve + fill) let the egui
+            // grid lines drawn underneath show through.
+            gl.enable(glow::BLEND);
+            gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
             gl.draw_arrays(glow::TRIANGLES, 0, 3);
 
             gl.bind_vertex_array(None);

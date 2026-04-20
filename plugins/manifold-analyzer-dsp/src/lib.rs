@@ -19,6 +19,9 @@ pub struct Analyzer {
     samples_since_last_fft: usize,
     fft_scratch: Vec<Complex<f32>>,
     fft_buffer: Vec<Complex<f32>>,
+    power_avg: Vec<f32>,
+    avg_alpha: f32,
+    avg_time_ms: f32,
     magnitude_db: Vec<f32>,
 }
 
@@ -34,6 +37,7 @@ impl Analyzer {
         let scratch_len = fft.get_inplace_scratch_len();
         let window = hann_window(fft_size);
         let window_sum: f32 = window.iter().sum();
+        let num_bins = fft_size / 2;
 
         Self {
             fft_size,
@@ -47,8 +51,39 @@ impl Analyzer {
             samples_since_last_fft: 0,
             fft_scratch: vec![Complex::new(0.0, 0.0); scratch_len],
             fft_buffer: vec![Complex::new(0.0, 0.0); fft_size],
-            magnitude_db: vec![MIN_DB; fft_size / 2],
+            power_avg: vec![0.0; num_bins],
+            avg_alpha: 1.0, // no averaging (instant) by default
+            avg_time_ms: 0.0,
+            magnitude_db: vec![MIN_DB; num_bins],
         }
+    }
+
+    /// Set FFT frame overlap as a ratio in `[0.0, 0.99]`. `0.95` means
+    /// 95 % overlap (hop = 5 % of `fft_size`). Also re-derives the averaging
+    /// coefficient since its time constant is relative to the new frame rate.
+    pub fn set_overlap_ratio(&mut self, ratio: f32) {
+        let ratio = ratio.clamp(0.0, 0.99);
+        let hop = ((1.0 - ratio) * self.fft_size as f32).round() as usize;
+        self.hop_size = hop.max(1);
+        self.samples_since_last_fft = 0;
+        self.recompute_alpha_preserving_time();
+    }
+
+    /// Set exponential power-averaging time constant in milliseconds. `0.0`
+    /// disables averaging (each frame replaces the previous).
+    pub fn set_averaging_ms(&mut self, ms: f32) {
+        self.avg_time_ms = ms.max(0.0);
+        self.recompute_alpha_preserving_time();
+    }
+
+    fn recompute_alpha_preserving_time(&mut self) {
+        if self.avg_time_ms <= 0.0 {
+            self.avg_alpha = 1.0;
+            return;
+        }
+        let dt_s = self.hop_size as f32 / self.sample_rate;
+        let tau_s = self.avg_time_ms * 0.001;
+        self.avg_alpha = 1.0 - (-dt_s / tau_s).exp();
     }
 
     pub fn fft_size(&self) -> usize {
@@ -75,6 +110,7 @@ impl Analyzer {
         self.ring.fill(0.0);
         self.ring_write_pos = 0;
         self.samples_since_last_fft = 0;
+        self.power_avg.fill(0.0);
         self.magnitude_db.fill(MIN_DB);
     }
 
@@ -120,10 +156,15 @@ impl Analyzer {
         // Factor of 2 compensates for folding negative frequencies onto positives
         // (skipping DC and Nyquist bins, but for analyzer display this is fine).
         let norm = 2.0 / self.window_sum;
+        let norm_sq = norm * norm;
+        let alpha = self.avg_alpha;
+        let one_minus_alpha = 1.0 - alpha;
         for bin in 0..self.num_bins() {
             let c = self.fft_buffer[bin];
-            let mag = (c.re * c.re + c.im * c.im).sqrt() * norm;
-            self.magnitude_db[bin] = 20.0 * (mag + 1e-12).log10();
+            let power = (c.re * c.re + c.im * c.im) * norm_sq;
+            // Exponential power averaging. alpha=1.0 → no averaging.
+            self.power_avg[bin] = alpha * power + one_minus_alpha * self.power_avg[bin];
+            self.magnitude_db[bin] = 10.0 * (self.power_avg[bin] + 1e-24).log10();
         }
     }
 }

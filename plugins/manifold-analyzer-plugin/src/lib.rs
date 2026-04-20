@@ -5,13 +5,17 @@ use nih_plug_egui::EguiState;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-const FFT_SIZE: usize = 4096;
+const FFT_SIZE: usize = 8192;
+const OVERLAP_RATIO: f32 = 0.95;
+const AVG_TIME_MS: f32 = 200.0;
 const INITIAL_WINDOW_SIZE: (u32, u32) = (900, 450);
 
 struct ManifoldAnalyzer {
     params: Arc<ManifoldAnalyzerParams>,
-    analyzer: Option<Analyzer>,
-    mono_scratch: Vec<f32>,
+    mid_analyzer: Option<Analyzer>,
+    side_analyzer: Option<Analyzer>,
+    mid_scratch: Vec<f32>,
+    side_scratch: Vec<f32>,
     gui_shared: Arc<AnalyzerGuiShared>,
     egui_state: Arc<EguiState>,
 }
@@ -29,8 +33,10 @@ impl Default for ManifoldAnalyzer {
             params: Arc::new(ManifoldAnalyzerParams {
                 editor_state: egui_state.clone(),
             }),
-            analyzer: None,
-            mono_scratch: Vec::new(),
+            mid_analyzer: None,
+            side_analyzer: None,
+            mid_scratch: Vec::new(),
+            side_scratch: Vec::new(),
             gui_shared: Arc::new(AnalyzerGuiShared::new(44100.0, FFT_SIZE)),
             egui_state,
         }
@@ -71,14 +77,26 @@ impl Plugin for ManifoldAnalyzer {
         buffer_config: &BufferConfig,
         _context: &mut impl InitContext<Self>,
     ) -> bool {
-        self.analyzer = Some(Analyzer::new(buffer_config.sample_rate, FFT_SIZE));
-        self.mono_scratch = vec![0.0; buffer_config.max_buffer_size as usize];
+        let mut mid = Analyzer::new(buffer_config.sample_rate, FFT_SIZE);
+        mid.set_overlap_ratio(OVERLAP_RATIO);
+        mid.set_averaging_ms(AVG_TIME_MS);
+        let mut side = Analyzer::new(buffer_config.sample_rate, FFT_SIZE);
+        side.set_overlap_ratio(OVERLAP_RATIO);
+        side.set_averaging_ms(AVG_TIME_MS);
+        self.mid_analyzer = Some(mid);
+        self.side_analyzer = Some(side);
+        let max_block = buffer_config.max_buffer_size as usize;
+        self.mid_scratch = vec![0.0; max_block];
+        self.side_scratch = vec![0.0; max_block];
         self.gui_shared.set_sample_rate(buffer_config.sample_rate);
         true
     }
 
     fn reset(&mut self) {
-        if let Some(a) = self.analyzer.as_mut() {
+        if let Some(a) = self.mid_analyzer.as_mut() {
+            a.reset();
+        }
+        if let Some(a) = self.side_analyzer.as_mut() {
             a.reset();
         }
     }
@@ -89,7 +107,8 @@ impl Plugin for ManifoldAnalyzer {
         _aux: &mut AuxiliaryBuffers,
         _context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
-        let Some(analyzer) = self.analyzer.as_mut() else {
+        let (Some(mid), Some(side)) = (self.mid_analyzer.as_mut(), self.side_analyzer.as_mut())
+        else {
             return ProcessStatus::Normal;
         };
 
@@ -97,27 +116,32 @@ impl Plugin for ManifoldAnalyzer {
         if num_samples == 0 {
             return ProcessStatus::Normal;
         }
-        if self.mono_scratch.len() < num_samples {
+        if self.mid_scratch.len() < num_samples || self.side_scratch.len() < num_samples {
             return ProcessStatus::Normal;
         }
 
+        // M/S decode: Mid = (L+R)/2, Side = (L-R)/2. Falls back to mono
+        // (r = l → side = 0) when only one channel is provided.
         let mut i = 0;
         for channel_samples in buffer.iter_samples() {
-            let mut sum = 0.0f32;
-            let mut n = 0usize;
-            for sample in channel_samples {
-                sum += *sample;
-                n += 1;
-            }
-            self.mono_scratch[i] = if n > 0 { sum / n as f32 } else { 0.0 };
+            let mut iter = channel_samples.into_iter();
+            let l = iter.next().map(|s| *s).unwrap_or(0.0);
+            let r = iter.next().map(|s| *s).unwrap_or(l);
+            self.mid_scratch[i] = (l + r) * 0.5;
+            self.side_scratch[i] = (l - r) * 0.5;
             i += 1;
         }
 
-        // Publish latest spectrum to GUI via try_lock — skip if GUI is reading,
+        // Publish latest spectra to GUI via try_lock — skip if GUI is reading,
         // no audio-thread allocations.
-        if analyzer.push_mono(&self.mono_scratch[..i]) {
-            if let Ok(mut guard) = self.gui_shared.spectrum_db.try_lock() {
-                guard.copy_from_slice(analyzer.latest_spectrum_db());
+        if mid.push_mono(&self.mid_scratch[..i]) {
+            if let Ok(mut guard) = self.gui_shared.mid_db.try_lock() {
+                guard.copy_from_slice(mid.latest_spectrum_db());
+            }
+        }
+        if side.push_mono(&self.side_scratch[..i]) {
+            if let Ok(mut guard) = self.gui_shared.side_db.try_lock() {
+                guard.copy_from_slice(side.latest_spectrum_db());
             }
         }
 
