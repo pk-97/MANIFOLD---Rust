@@ -23,6 +23,7 @@ mod gl_paint;
 mod gpu_bridge;
 mod sample_ring;
 mod spectrum_gpu;
+mod spectrum_worker;
 
 use gl_paint::{PainterState, QuadPainter, SharedPainterState};
 use manifold_analyzer_dsp::{LoudnessSnapshot, MIN_DB};
@@ -30,7 +31,8 @@ use manifold_gpu::GpuDevice;
 use nih_plug::prelude::*;
 use nih_plug_egui::{EguiState, create_egui_editor, egui};
 use sample_ring::SampleRing;
-use spectrum_gpu::{DisplayConfig, SpectrumGpuRenderer, SyncConfig};
+use spectrum_gpu::{DisplayConfig, SpectrumGpuRenderer};
+use spectrum_worker::{CqtWorker, WorkerConfig};
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -655,12 +657,14 @@ struct EditorState {
     params: Arc<AnalyzerParams>,
     device: Option<GpuDevice>,
     spectrum: Option<SpectrumGpuRenderer>,
+    /// CQT worker thread — spawned lazily on first paint so the ~500 ms
+    /// kernel construction happens once we know the host sample rate.
+    /// Dropped when `EditorState` drops (editor close / plugin destroy),
+    /// joining the worker.
+    worker: Option<CqtWorker>,
     quad: SharedPainterState,
     mid_scratch: Vec<f32>,
     side_scratch: Vec<f32>,
-    /// Scratch buffer that accumulates samples drained from the ring
-    /// each render frame before they're fed into the CQT pipeline.
-    sample_scratch: Vec<f32>,
     /// Cached weighting-curve align offset so we don't re-integrate
     /// the BS.1770 biquads every frame — only when mode / freq range
     /// changes.
@@ -700,10 +704,10 @@ pub fn create_editor(
         params,
         device: None,
         spectrum: None,
+        worker: None,
         quad: Arc::new(Mutex::new(PainterState::NotYet)),
         mid_scratch: vec![MIN_DB; num_bins],
         side_scratch: vec![MIN_DB; num_bins],
-        sample_scratch: Vec::with_capacity(4096),
         align_offset_cache: AlignOffsetCache::default(),
     };
     create_egui_editor(
@@ -765,14 +769,21 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     if state.device.is_none() {
         state.device = Some(GpuDevice::new());
     }
+    // Spawn the CQT worker the first time we know the sample rate. The
+    // worker owns the ~500 ms kernel construction; subsequent renders
+    // just drain its output ring.
+    if state.worker.is_none() && sr > 0.0 {
+        let build = spectrum_gpu::cqt_build_params(sr);
+        state.worker = Some(CqtWorker::spawn(sr, state.shared.clone(), build));
+    }
     if state.spectrum.is_none() {
-        if let Some(device) = state.device.as_ref() {
+        if let (Some(device), Some(worker)) = (state.device.as_ref(), state.worker.as_ref()) {
             if let Some(spec) = SpectrumGpuRenderer::new(
                 device,
                 INITIAL_SPECTRUM_W,
                 INITIAL_SPECTRUM_H,
                 num_bins,
-                sr,
+                worker.cqt_num_bins(),
             ) {
                 state.spectrum = Some(spec);
             }
@@ -793,12 +804,14 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         }
     }
 
-    // Copy latest averaged mid/side spectra for the curves; drain new
-    // mid audio samples and feed them to the CQT pipeline so every hop
-    // boundary emits a new spectrogram column. Try-lock both sides so
-    // neither thread ever blocks the other — if the audio thread is
-    // mid-write, we simply redraw the previous frame's spectrum.
-    if let (Some(device), Some(spec)) = (state.device.as_ref(), state.spectrum.as_mut()) {
+    // Copy latest averaged mid/side spectra for the curves. Try-lock both
+    // sides so neither thread ever blocks the other — if the audio thread
+    // is mid-write, we simply redraw the previous frame's spectrum.
+    if let (Some(device), Some(spec), Some(worker)) = (
+        state.device.as_ref(),
+        state.spectrum.as_mut(),
+        state.worker.as_ref(),
+    ) {
         let _ = state.shared.try_read_mid_db(&mut state.mid_scratch);
         let _ = state.shared.try_read_side_db(&mut state.side_scratch);
         let ss_on = state.params.synchrosqueeze.value();
@@ -818,6 +831,18 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             freq_min_for_align,
             freq_max_for_align,
         );
+
+        // Resolve sync state for display + worker.
+        let (bpm_opt, beat_opt, _playing) = state.shared.transport();
+        let sync_requested = state.params.sync.value();
+        let factor_ratio = state.params.sync_factor.value().as_ratio();
+        let multiplier = state.params.sync_multiplier.value() as f32;
+        let beats_per_window = factor_ratio * multiplier * BEATS_PER_BAR;
+        let sync_active = matches!(
+            (sync_requested, bpm_opt, beat_opt),
+            (true, Some(bpm), Some(_)) if bpm > 0.0 && beats_per_window > 0.0
+        );
+
         spec.set_display(DisplayConfig {
             slope_db_per_oct: weighting.slope_db_per_oct(),
             slope_ref_freq: SLOPE_REF_FREQ,
@@ -827,31 +852,28 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             spectrum_fraction: top_fraction,
             spectrogram_db_min: SPECTROGRAM_DB_MIN,
             spectrogram_db_max: if ss_on { SPECTROGRAM_DB_MAX_SS } else { SPECTROGRAM_DB_MAX_RAW },
-            enable_synchrosqueezing: ss_on,
-            enable_coherence_check: state.params.coherence.value(),
-            synchro_gate_db: state.params.synchro_gate_db.value(),
+            sync_mode: sync_active,
             weighting_mode: weighting.mode_id(),
         });
 
-        let (bpm_opt, beat_opt, _playing) = state.shared.transport();
-        let sync_requested = state.params.sync.value();
-        let factor_ratio = state.params.sync_factor.value().as_ratio();
-        let multiplier = state.params.sync_multiplier.value() as f32;
-        let beats_per_window = factor_ratio * multiplier * BEATS_PER_BAR;
-        let sync_config = match (sync_requested, bpm_opt, beat_opt) {
-            (true, Some(bpm), Some(beat)) if bpm > 0.0 && beats_per_window > 0.0 => SyncConfig {
-                enabled: true,
-                bpm: bpm as f32,
-                beat_pos: beat,
-                beats_per_window,
-            },
-            _ => SyncConfig::OFF,
-        };
-        spec.set_sync(sync_config);
+        // Hand current transport + display knobs to the worker. It reads
+        // this once per hop; the config lock is uncontested here (only
+        // the worker touches it otherwise).
+        worker.post_config(WorkerConfig {
+            sync_enabled: sync_active,
+            bpm: bpm_opt.map(|v| v as f32).unwrap_or(0.0),
+            beat_pos: beat_opt.unwrap_or(f64::NAN),
+            beats_per_window,
+            synchrosqueeze: ss_on,
+            coherence: state.params.coherence.value(),
+            synchro_gate_db: state.params.synchro_gate_db.value(),
+        });
 
-        state.sample_scratch.clear();
-        state.shared.mid_sample_ring.drain_into(&mut state.sample_scratch);
-        spec.ingest_samples(&state.sample_scratch);
+        // Drain completed CQT columns from the worker and write them into
+        // the history storage buffer. `apply_column` handles history clears
+        // on tempo change and advances the renderer's `write_col`.
+        worker.drain_columns(|msg| spec.apply_column(&msg));
+
         let nyquist = sr * 0.5;
         let freq_min_user = state.params.freq_min_hz.value() as f32;
         let freq_max_user = state.params.freq_max_hz.value() as f32;

@@ -19,3 +19,6 @@ egui_glow = "0.31"
 
 # Faster uncontended try_lock + no poisoning (matches MANIFOLD convention).
 parking_lot = "0.12"
+
+# Lock-free bounded SPSC used by the CQT worker → GUI column pipeline.
+crossbeam-queue = "0.3"
