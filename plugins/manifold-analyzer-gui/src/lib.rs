@@ -58,9 +58,17 @@ const FILL_ALPHA: f32 = 0.45;
 // Mid-only spectrogram. 0.55 leaves a readable spectrogram at the default
 // 450 px window height (~200 px strip) without crushing the curves.
 const SPECTRUM_FRACTION: f32 = 0.55;
-// Vision 4X "Heatmap" default range — colourmap spans these dB values.
+// Colourmap dB range. Top bumped to +10 dB to give synchrosqueezed peaks
+// headroom — SS concentrates a main-lobe's worth of power into a single
+// log bin, so a unit sinusoid reads ~+4.5 dB vs 0 dB unsqueezed. Anything
+// above +10 still saturates to solid red (extreme signals are rare).
 const SPECTROGRAM_DB_MIN: f32 = -59.0;
-const SPECTROGRAM_DB_MAX: f32 = 0.0;
+const SPECTROGRAM_DB_MAX: f32 = 10.0;
+/// Toggle synchrosqueezing on top of the VQT. When on, per-column
+/// phase-advance reassigns energy in frequency only (time unchanged)
+/// so sustained tones collapse to near-delta lines. When off, you get
+/// vanilla VQT power. Flip + rebuild to A/B compare.
+const ENABLE_SYNCHROSQUEEZING: bool = true;
 
 /// Sample-ring capacity in mono samples. Sized to tolerate ~1.3 s of
 /// GUI stall at 48 kHz before the audio thread starts dropping — well
@@ -190,6 +198,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
                     spectrum_fraction: SPECTRUM_FRACTION,
                     spectrogram_db_min: SPECTROGRAM_DB_MIN,
                     spectrogram_db_max: SPECTROGRAM_DB_MAX,
+                    enable_synchrosqueezing: ENABLE_SYNCHROSQUEEZING,
                 });
                 state.spectrum = Some(spec);
             }

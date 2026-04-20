@@ -18,7 +18,7 @@
 //! rewritten via the shared-memory mapped pointer each frame — zero audio-
 //! thread cost, small memcpys on the GUI thread.
 
-use crate::cqt::CqtTransform;
+use crate::cqt::{CqtComplex, CqtTransform};
 use crate::gpu_bridge::IoSurfaceMtlTexture;
 use manifold_gpu::{
     GpuBinding, GpuBuffer, GpuDevice, GpuRenderPipeline, GpuTextureFormat,
@@ -58,11 +58,20 @@ const CQT_THRESHOLD_REL: f32 = 0.005;
 /// every render frame ingests ~1.5 new columns on average.
 const CQT_HOP_SAMPLES: usize = 512;
 
-/// Noise-floor gate. Log bins whose CQT dB sits below this cut off to
-/// the black floor so quiet background stays fully black instead of
+/// Noise-floor gate. Log bins whose final dB sits below this cut off
+/// to the black floor so quiet background stays fully black instead of
 /// speckling with sub-audible bin-level dithering.
 const NOISE_GATE_DB: f32 = -90.0;
 const FLOOR_DB: f32 = -140.0;
+
+/// Scatter-side gate for synchrosqueezing. Source bins whose current or
+/// previous-frame power sits below this don't contribute — their phases
+/// are noise, so their IF estimates are random and piling many such
+/// bins into one log bin produces the "vertical rain" speckle. Tighter
+/// than `NOISE_GATE_DB` because many marginal bins summing noise into a
+/// single log bin can clear the output gate even when individually each
+/// was sub-audible.
+const SYNCHRO_SCATTER_GATE_DB: f32 = -75.0;
 
 /// SPAN-style display options driving the fragment shader.
 #[derive(Copy, Clone, Debug)]
@@ -84,6 +93,13 @@ pub struct DisplayConfig {
     /// default is `-59 … 0`.
     pub spectrogram_db_min: f32,
     pub spectrogram_db_max: f32,
+    /// If true, synchrosqueeze each VQT column — reassign energy in
+    /// frequency (not time) toward the instantaneous-frequency implied
+    /// by the phase advance between consecutive frames. Tonal content
+    /// (sustained notes, harmonic stacks) collapses to razor-thin lines
+    /// without the striation artifact of full reassignment; transient
+    /// content is unchanged. Invertible, so no visual lying.
+    pub enable_synchrosqueezing: bool,
 }
 
 impl Default for DisplayConfig {
@@ -97,6 +113,7 @@ impl Default for DisplayConfig {
             spectrum_fraction: 1.0,
             spectrogram_db_min: -59.0,
             spectrogram_db_max: 0.0,
+            enable_synchrosqueezing: false,
         }
     }
 }
@@ -145,11 +162,20 @@ pub struct SpectrumGpuRenderer {
     // into `history_buf`, which is sized `cqt.num_bins() × HISTORY_COLS`.
     cqt: CqtTransform,
     cqt_num_bins: usize,
+    sample_rate: f32,
     // Rolling window: latest CQT_N_FFT samples, newest at `rolling_head`.
     rolling: Vec<f32>,
     rolling_head: usize,
     samples_since_last_hop: usize,
     fft_scratch_audio: Vec<f32>,
+    cqt_complex: Vec<CqtComplex<f32>>,
+    // Synchrosqueezing state. `prev_cqt_complex` holds the last column's
+    // complex VQT so we can compute per-bin phase advance (∂arg/∂t) and
+    // remap energy in frequency only. `synchro_power_scratch` is the
+    // scatter accumulator — cleared per column, then summed.
+    prev_cqt_complex: Vec<CqtComplex<f32>>,
+    have_prev_cqt: bool,
+    synchro_power_scratch: Vec<f32>,
     cqt_out: Vec<f32>,
 }
 
@@ -214,10 +240,15 @@ impl SpectrumGpuRenderer {
             write_col: 0,
             cqt,
             cqt_num_bins,
+            sample_rate,
             rolling: vec![0.0; CQT_N_FFT],
             rolling_head: 0,
             samples_since_last_hop: 0,
             fft_scratch_audio: vec![0.0; CQT_N_FFT],
+            cqt_complex: vec![CqtComplex::new(0.0, 0.0); cqt_num_bins],
+            prev_cqt_complex: vec![CqtComplex::new(0.0, 0.0); cqt_num_bins],
+            have_prev_cqt: false,
+            synchro_power_scratch: vec![0.0; cqt_num_bins],
             cqt_out: vec![FLOOR_DB; cqt_num_bins],
         })
     }
@@ -287,13 +318,23 @@ impl SpectrumGpuRenderer {
         self.fft_scratch_audio[..front.len()].copy_from_slice(front);
         self.fft_scratch_audio[front.len()..].copy_from_slice(tail);
 
-        self.cqt.process(&self.fft_scratch_audio, &mut self.cqt_out);
+        self.cqt
+            .process_complex(&self.fft_scratch_audio, &mut self.cqt_complex);
 
-        for v in self.cqt_out.iter_mut() {
-            if *v < NOISE_GATE_DB {
-                *v = FLOOR_DB;
+        if self.display.enable_synchrosqueezing && self.have_prev_cqt {
+            self.synchrosqueeze_into_cqt_out();
+        } else {
+            for (dst, c) in self.cqt_out.iter_mut().zip(self.cqt_complex.iter()) {
+                let db = 10.0 * (c.norm_sqr() + 1e-24).log10();
+                *dst = if db < NOISE_GATE_DB { FLOOR_DB } else { db };
             }
         }
+
+        // Save this column's complex VQT for the next frame's phase diff.
+        // Do this unconditionally — if SS is toggled on later, we already
+        // have a valid `prev`. Small memcpy (~2 KB).
+        self.prev_cqt_complex.copy_from_slice(&self.cqt_complex);
+        self.have_prev_cqt = true;
 
         self.write_col = (self.write_col + 1) % HISTORY_COLS;
         if let Some(ptr) = self.history_buf.mapped_ptr() {
@@ -305,6 +346,90 @@ impl SpectrumGpuRenderer {
                     self.cqt_num_bins * 4,
                 );
             }
+        }
+    }
+
+    /// Synchrosqueezing: for each source bin k, compute its instantaneous
+    /// frequency from phase advance between consecutive columns, then
+    /// scatter its power to the log bin at that IF. Time position is
+    /// preserved (we're rebuilding this column's output in place). Pure
+    /// tones whose main lobes report consistent IFs collapse to near-delta
+    /// lines; noise bins scatter diffusely but stay in this column, not
+    /// across adjacent columns.
+    fn synchrosqueeze_into_cqt_out(&mut self) {
+        let center_freqs = self.cqt.center_freqs();
+        let num_bins = self.cqt_num_bins;
+        let hop = CQT_HOP_SAMPLES as f32;
+        let two_pi = std::f32::consts::TAU;
+        // rad/hop → Hz: sr / (2π · hop).
+        let freq_per_rad_per_hop = self.sample_rate / (two_pi * hop);
+        // Principal value of the expected phase advance per hop for bin k,
+        // reduced mod 2π so the raw subtraction gives a value near 0.
+        let hop_over_sr = hop / self.sample_rate;
+        // Reassignment only makes sense for bins with enough power in
+        // BOTH current and previous frames — noise-floor bins have
+        // random phase whose difference is random IF, piling rain onto
+        // random log bins if not gated.
+        let mag_gate_power = 10.0_f32.powf(SYNCHRO_SCATTER_GATE_DB * 0.1);
+
+        // Map from freq → log-bin index. VQT bins are geometric:
+        //   f_k = fmin · 2^(k/bpo)   ⇒   k(f) = bpo · log2(f / fmin).
+        // So we need fmin and bpo; derive from center_freqs[0..1].
+        let fmin = center_freqs[0];
+        let log2_ratio = if num_bins > 1 {
+            (center_freqs[1] / center_freqs[0]).log2()
+        } else {
+            1.0 / 24.0
+        };
+        let inv_log2_ratio = 1.0 / log2_ratio;
+
+        self.synchro_power_scratch.fill(0.0);
+
+        for k in 0..num_bins {
+            let x_curr = self.cqt_complex[k];
+            let x_prev = self.prev_cqt_complex[k];
+            let power = x_curr.norm_sqr();
+            let prev_power = x_prev.norm_sqr();
+            // Gate on BOTH frames — onsets have silent `prev` and would
+            // otherwise contribute random phase-diffs from noise.
+            if power < mag_gate_power || prev_power < mag_gate_power {
+                continue;
+            }
+            let f_k = center_freqs[k];
+            let expected = two_pi * f_k * hop_over_sr;
+            // Measured phase advance, wrapped via subtraction. Since
+            // `arg()` is in (-π, π], the raw difference is in (-2π, 2π);
+            // subtract the expected advance and wrap the residual.
+            let raw_dev = x_curr.arg() - x_prev.arg() - expected;
+            let wrapped = raw_dev - two_pi * (raw_dev / two_pi).round();
+            let if_k = f_k + wrapped * freq_per_rad_per_hop;
+
+            if if_k <= 0.0 {
+                continue;
+            }
+            let log_bin_f = (if_k / fmin).log2() * inv_log2_ratio;
+            if !(log_bin_f >= 0.0) {
+                continue;
+            }
+            let lo = log_bin_f as usize;
+            if lo >= num_bins {
+                continue;
+            }
+            let frac = log_bin_f - lo as f32;
+            self.synchro_power_scratch[lo] += power * (1.0 - frac);
+            let hi = lo + 1;
+            if hi < num_bins {
+                self.synchro_power_scratch[hi] += power * frac;
+            }
+        }
+
+        for (dst, &p) in self.cqt_out.iter_mut().zip(self.synchro_power_scratch.iter()) {
+            let db = if p > 1e-20 {
+                10.0 * p.log10()
+            } else {
+                FLOOR_DB
+            };
+            *dst = if db < NOISE_GATE_DB { FLOOR_DB } else { db };
         }
     }
 

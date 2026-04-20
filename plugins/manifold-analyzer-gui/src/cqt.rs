@@ -38,6 +38,8 @@ use manifold_analyzer_dsp::blackman_harris_window;
 use rustfft::{Fft, FftPlanner, num_complex::Complex};
 use std::sync::Arc;
 
+pub use rustfft::num_complex::Complex as CqtComplex;
+
 /// Sparse kernel + FFT state. Stateless with respect to the audio
 /// stream — feed it one N_fft-sample segment at a time.
 pub struct CqtTransform {
@@ -51,7 +53,6 @@ pub struct CqtTransform {
     col_idx: Vec<u32>,
     coef: Vec<Complex<f32>>,
     num_bins: usize,
-    #[allow(dead_code)] // diagnostic accessor
     center_freqs: Vec<f32>,
 }
 
@@ -179,7 +180,6 @@ impl CqtTransform {
         self.n_fft
     }
 
-    #[allow(dead_code)] // diagnostic accessor
     pub fn center_freqs(&self) -> &[f32] {
         &self.center_freqs
     }
@@ -192,11 +192,13 @@ impl CqtTransform {
         stored / dense
     }
 
-    /// Transform one N_fft-sample audio segment into CQT power (dB) per
-    /// bin. `audio.len() == n_fft` and `output_db.len() == num_bins`.
-    pub fn process(&mut self, audio: &[f32], output_db: &mut [f32]) {
+    /// Transform one N_fft-sample audio segment into complex VQT values
+    /// per bin. Callers that only want magnitude take `.norm_sqr()`;
+    /// callers that want synchrosqueezing need the phase too, hence
+    /// we expose complex output directly.
+    pub fn process_complex(&mut self, audio: &[f32], output: &mut [Complex<f32>]) {
         assert_eq!(audio.len(), self.n_fft);
-        assert_eq!(output_db.len(), self.num_bins);
+        assert_eq!(output.len(), self.num_bins);
 
         // Real audio → complex FFT buffer (imaginary = 0).
         for (dst, &s) in self.fft_buffer.iter_mut().zip(audio.iter()) {
@@ -213,8 +215,7 @@ impl CqtTransform {
                 let m = self.col_idx[idx] as usize;
                 acc += self.fft_buffer[m] * self.coef[idx];
             }
-            let power = acc.norm_sqr();
-            output_db[k] = 10.0 * (power + 1e-24).log10();
+            output[k] = acc;
         }
     }
 }
@@ -222,6 +223,15 @@ impl CqtTransform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn powers_db(cqt: &mut CqtTransform, audio: &[f32]) -> Vec<f32> {
+        let mut complex = vec![Complex::new(0.0, 0.0); cqt.num_bins()];
+        cqt.process_complex(audio, &mut complex);
+        complex
+            .iter()
+            .map(|c| 10.0 * (c.norm_sqr() + 1e-24).log10())
+            .collect()
+    }
 
     #[test]
     fn unit_sine_reads_near_zero_db_at_its_bin_cqt() {
@@ -237,8 +247,7 @@ mod tests {
             .map(|n| (2.0 * std::f32::consts::PI * target_freq * n as f32 / sr).cos())
             .collect();
 
-        let mut out = vec![0.0; cqt.num_bins()];
-        cqt.process(&audio, &mut out);
+        let out = powers_db(&mut cqt, &audio);
 
         let (peak_bin, peak_db) = out
             .iter()
@@ -262,8 +271,7 @@ mod tests {
         let sr = 48000.0;
         let mut cqt = CqtTransform::new(sr, 8192, 100.0, 4000.0, 12, 0.0, 0.005);
         let audio = vec![0.0; cqt.n_fft()];
-        let mut out = vec![0.0; cqt.num_bins()];
-        cqt.process(&audio, &mut out);
+        let out = powers_db(&mut cqt, &audio);
         for db in &out {
             assert!(*db < -100.0, "silence read {db} dB");
         }
@@ -281,8 +289,7 @@ mod tests {
         let audio: Vec<f32> = (0..n_fft)
             .map(|n| (2.0 * std::f32::consts::PI * target * n as f32 / sr).cos())
             .collect();
-        let mut out = vec![0.0; cqt.num_bins()];
-        cqt.process(&audio, &mut out);
+        let out = powers_db(&mut cqt, &audio);
         let peak_db = out.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
         assert!(peak_db > -3.0, "VQT peak {peak_db} dB, expected near 0");
     }
