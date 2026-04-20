@@ -78,6 +78,20 @@ objc2-metal-performance-shaders = { version = "0.3", features = [
     "MPSMatrixRandom",
     "MPSMatrixTypes",
 ] }
+# MPSGraph — Apple's graph-compiled compute ops. We use it only for the
+# FFT primitive (`GpuFft`); everything else goes through our own compute
+# kernels. Minimal feature set: Core + Memory (placeholder tensors) +
+# FourierTransformOps + executable compile/encode + device + tensor data.
+objc2-metal-performance-shaders-graph = { version = "0.3", features = [
+    "MPSGraph",
+    "MPSGraphCore",
+    "MPSGraphDevice",
+    "MPSGraphExecutable",
+    "MPSGraphFourierTransformOps",
+    "MPSGraphMemoryOps",
+    "MPSGraphTensor",
+    "MPSGraphTensorData",
+] }
 
 [lints]
 workspace = true

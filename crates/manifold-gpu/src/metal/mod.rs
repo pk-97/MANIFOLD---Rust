@@ -10,6 +10,7 @@
 //! matching the SlotMap assignments. Metal compiles MSL at runtime.
 
 pub mod archive;
+pub mod fft;
 pub mod metalfx;
 pub mod mps;
 
@@ -25,6 +26,7 @@ mod types;
 // Re-export all public types so external code paths remain identical.
 pub use device::GpuDevice;
 pub use encoder::GpuEncoder;
+pub use fft::{FftKind, GpuFft};
 pub use surface::{GpuDrawable, GpuSurface};
 pub use texture_pool::TexturePool;
 pub use types::{
