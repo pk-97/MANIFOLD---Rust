@@ -366,25 +366,30 @@ impl LoudnessMeter {
     }
 
     fn update_running_readouts(&mut self) {
-        let n = self.block_msq.len();
-        if n == 0 {
-            self.snapshot.momentary_lufs = MIN_LUFS;
-            self.snapshot.short_term_lufs = MIN_LUFS;
-        } else {
-            let m_count = n.min(MOMENTARY_BLOCKS);
-            let s_count = n.min(SHORT_TERM_BLOCKS);
-            let m_mean = mean_tail(&self.block_msq, m_count);
-            let s_mean = mean_tail(&self.block_msq, s_count);
+        // Momentary/short-term include the in-progress 100 ms bin as
+        // a partial contribution (time-weighted by its sample count).
+        // Without this the readouts step at 10 Hz, which looks like
+        // stuttering on a 60 fps meter — including the partial makes
+        // the column update every audio block instead.
+        let m_opt = self.windowed_mean_sq_with_partial(MOMENTARY_BLOCKS);
+        let s_opt = self.windowed_mean_sq_with_partial(SHORT_TERM_BLOCKS);
+        if let Some(m_mean) = m_opt {
             let m = loudness_from_mean_sq(m_mean);
-            let s = loudness_from_mean_sq(s_mean);
             self.snapshot.momentary_lufs = m;
-            self.snapshot.short_term_lufs = s;
             if m > self.snapshot.momentary_max_lufs {
                 self.snapshot.momentary_max_lufs = m;
             }
+        } else {
+            self.snapshot.momentary_lufs = MIN_LUFS;
+        }
+        if let Some(s_mean) = s_opt {
+            let s = loudness_from_mean_sq(s_mean);
+            self.snapshot.short_term_lufs = s;
             if s > self.snapshot.short_term_max_lufs {
                 self.snapshot.short_term_max_lufs = s;
             }
+        } else {
+            self.snapshot.short_term_lufs = MIN_LUFS;
         }
         let tp = self.tp.peak_dbtp();
         if tp > self.snapshot.true_peak_max_dbtp {
@@ -484,6 +489,41 @@ impl LoudnessMeter {
     }
 }
 
+impl LoudnessMeter {
+    /// Weighted mean-square over the trailing `blocks` of 100 ms
+    /// bins, including the in-progress 100 ms partial. Weights are
+    /// the actual sample counts so the partial contributes
+    /// proportionally to how far through the 100 ms bin we are.
+    /// Returns `None` if there's no history at all.
+    fn windowed_mean_sq_with_partial(&self, blocks: usize) -> Option<f32> {
+        let closed = self.block_msq.len();
+        let have_partial = self.block_count > 0;
+        if closed == 0 && !have_partial {
+            return None;
+        }
+        let spb = self.samples_per_block as f64;
+        // Reserve the last slot for the partial when it exists so
+        // the total window stays at `blocks * samples_per_block`.
+        let take_closed = closed.min(blocks.saturating_sub(if have_partial { 1 } else { 0 }));
+        let start = closed - take_closed;
+        let mut total_sq = 0.0_f64;
+        let mut total_n = 0.0_f64;
+        for &msq in &self.block_msq[start..closed] {
+            total_sq += msq as f64 * spb;
+            total_n += spb;
+        }
+        if have_partial {
+            total_sq += self.block_sum_sq_l + self.block_sum_sq_r;
+            total_n += self.block_count as f64;
+        }
+        if total_n <= 0.0 {
+            None
+        } else {
+            Some((total_sq / total_n) as f32)
+        }
+    }
+}
+
 fn mean_slice(xs: &[f32]) -> f32 {
     if xs.is_empty() {
         return 0.0;
@@ -493,15 +533,6 @@ fn mean_slice(xs: &[f32]) -> f32 {
         s += v as f64;
     }
     (s / xs.len() as f64) as f32
-}
-
-fn mean_tail(xs: &[f32], tail: usize) -> f32 {
-    let n = xs.len();
-    if tail == 0 || n == 0 {
-        return 0.0;
-    }
-    let start = n.saturating_sub(tail);
-    mean_slice(&xs[start..])
 }
 
 fn loudness_from_mean_sq(m: f32) -> f32 {

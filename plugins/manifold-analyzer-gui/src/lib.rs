@@ -696,7 +696,11 @@ pub fn create_editor(
                 .show(ctx, |ui| {
                     draw_spectrum(ui, state);
                 });
-            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            // Continuous repaint — the loudness meter column reads
+            // atomics that update every audio block, so we want a
+            // real 60 fps rather than "every 16 ms the scheduler
+            // gets around to it" (which can stretch to 30+ ms).
+            ctx.request_repaint();
         },
     )
 }
@@ -1196,28 +1200,26 @@ fn draw_loudness_panel(ui: &mut egui::Ui, state: &mut EditorState) {
         });
         ui.add_space(6.0);
 
-        // The meter column lives inside an allocated rect so the
-        // readouts below can start exactly where the column ends,
-        // regardless of panel height.
+        // Reserve ~210 px at the bottom for the 8-row readout block
+        // (5 main rows + 4 px spacer + 3 max rows). Remainder is the
+        // meter column.
         let total_avail = ui.available_size();
-        // Reserve the bottom section for the numeric readouts. The
-        // column itself fills the remainder.
-        let readout_height: f32 = 168.0;
-        let column_height = (total_avail.y - readout_height - 8.0).max(120.0);
+        let readout_height: f32 = 210.0;
+        let column_height = (total_avail.y - readout_height - 8.0).max(180.0);
         let column_size = egui::vec2(total_avail.x, column_height);
         let (rect, _) = ui.allocate_exact_size(column_size, egui::Sense::hover());
         draw_meter_column(ui.painter_at(rect), rect, &snap);
 
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         draw_loudness_readouts(ui, &snap);
     });
 }
 
-/// Draw the vertical meter bar in `rect`. Left half is the filled
-/// momentary column with target-band highlight and short-term-max
-/// gutter hold; right half carries the dB scale labels and tick
-/// marks. The two halves share the same top/bottom mapping so the
-/// user can read level off the adjacent scale without mental jumps.
+/// Draw the vertical meter bar in `rect`. Column is centred in the
+/// rect with tick marks flanking both sides and numeric labels on
+/// the right. Top and bottom of the column are inset from the rect
+/// edge so the `0` and `-54` labels don't get clipped at the panel
+/// boundaries.
 fn draw_meter_column(painter: egui::Painter, rect: egui::Rect, snap: &LoudnessSnapshot) {
     // Meter range: 0 LUFS at top, -54 LUFS at bottom.
     const METER_TOP: f32 = 0.0;
@@ -1226,75 +1228,111 @@ fn draw_meter_column(painter: egui::Painter, rect: egui::Rect, snap: &LoudnessSn
     const LABELED_TICKS: &[f32] = &[0.0, -3.0, -6.0, -9.0, -18.0, -23.0, -27.0, -36.0, -45.0, -54.0];
     const TARGET_BAND: (f32, f32) = (-23.0, -18.0);
 
+    // Vertical padding keeps the top (`0`) and bottom (`-54`) tick
+    // labels fully inside `rect`. Label font is 10 px → 8 px margin
+    // is enough for the text on either side of the column end.
+    let v_pad = 8.0_f32;
+    let top = rect.top() + v_pad;
+    let bottom = rect.bottom() - v_pad;
+    let height = (bottom - top).max(1.0);
+
+    // Centre the column. Layout left-to-right across the rect:
+    //   [ pad | left ticks | gap | column | gap | right ticks | gap | labels | pad ]
     let col_width = 22.0_f32;
-    let col_left = rect.left() + 6.0;
+    let left_tick_len = 6.0_f32;
+    let right_tick_len = 6.0_f32;
+    let tick_gap = 2.0_f32;
+    let label_gap = 3.0_f32;
+    // Label gutter fits a two-digit negative ("-54") at 10 px mono.
+    let label_gutter = 24.0_f32;
+    let content_width =
+        left_tick_len + tick_gap + col_width + tick_gap + right_tick_len + label_gap + label_gutter;
+    let content_left = rect.left() + ((rect.width() - content_width).max(0.0) * 0.5);
+    let col_left = content_left + left_tick_len + tick_gap;
     let col_right = col_left + col_width;
+
     let col_rect = egui::Rect::from_min_max(
-        egui::pos2(col_left, rect.top()),
-        egui::pos2(col_right, rect.bottom()),
+        egui::pos2(col_left, top),
+        egui::pos2(col_right, bottom),
     );
 
     let lufs_to_y = |lufs: f32| -> f32 {
         let clamped = lufs.clamp(METER_BOTTOM, METER_TOP);
         let t = (clamped - METER_TOP) / (METER_BOTTOM - METER_TOP);
-        rect.top() + t * rect.height()
+        top + t * height
     };
 
     // Column backdrop.
     painter.rect_filled(col_rect, 2.0, egui::Color32::from_rgb(26, 30, 38));
 
-    // Target band: translucent desaturated red, matches the Vision
-    // reference screenshot.
-    let target_top = lufs_to_y(TARGET_BAND.1);
-    let target_bottom = lufs_to_y(TARGET_BAND.0);
+    // Target band.
+    let target_top_y = lufs_to_y(TARGET_BAND.1);
+    let target_bottom_y = lufs_to_y(TARGET_BAND.0);
     let target_rect = egui::Rect::from_min_max(
-        egui::pos2(col_left, target_top),
-        egui::pos2(col_right, target_bottom),
+        egui::pos2(col_left, target_top_y),
+        egui::pos2(col_right, target_bottom_y),
     );
-    painter.rect_filled(target_rect, 1.0, egui::Color32::from_rgba_unmultiplied(170, 60, 60, 110));
+    painter.rect_filled(
+        target_rect,
+        1.0,
+        egui::Color32::from_rgba_unmultiplied(170, 60, 60, 110),
+    );
 
-    // Momentary fill — gradient-lite: colour keys change over the
-    // meter range so the user can read loudness at a glance.
+    // Momentary fill (stepped colour keys).
     let m_lufs = snap.momentary_lufs;
     if m_lufs > METER_BOTTOM {
         let m_y = lufs_to_y(m_lufs);
         let fill_rect = egui::Rect::from_min_max(
             egui::pos2(col_left, m_y),
-            egui::pos2(col_right, rect.bottom()),
+            egui::pos2(col_right, bottom),
         );
         let colour = meter_fill_colour(m_lufs);
         painter.rect_filled(fill_rect, 1.0, colour);
     }
 
-    // Short-term max hold: thin bright line sitting above the
-    // filled column.
+    // Short-term max hold — extended past both ticks so it reads
+    // as a sustained cap across the whole meter.
     if snap.short_term_max_lufs > METER_BOTTOM {
         let y = lufs_to_y(snap.short_term_max_lufs);
         painter.line_segment(
-            [egui::pos2(col_left - 2.0, y), egui::pos2(col_right + 2.0, y)],
+            [
+                egui::pos2(col_left - left_tick_len - tick_gap, y),
+                egui::pos2(col_right + right_tick_len + tick_gap, y),
+            ],
             (1.5, egui::Color32::from_rgb(240, 240, 120)),
         );
     }
 
-    // Ticks + scale labels sit to the right of the column.
+    // Flanking tick marks + right-side labels.
     let label_color = egui::Color32::from_gray(170);
     let target_label_color = egui::Color32::from_rgb(230, 180, 90);
-    let tick_x0 = col_right + 2.0;
-    let tick_x1 = col_right + 8.0;
+    let tick_color = egui::Color32::from_gray(80);
+    let left_tick_x1 = col_left - tick_gap;
+    let left_tick_x0 = left_tick_x1 - left_tick_len;
+    let right_tick_x0 = col_right + tick_gap;
+    let right_tick_x1 = right_tick_x0 + right_tick_len;
     for &db in MAJOR_TICKS {
         let y = lufs_to_y(db);
         painter.line_segment(
-            [egui::pos2(tick_x0, y), egui::pos2(tick_x1, y)],
-            (1.0, egui::Color32::from_gray(80)),
+            [egui::pos2(left_tick_x0, y), egui::pos2(left_tick_x1, y)],
+            (1.0, tick_color),
+        );
+        painter.line_segment(
+            [egui::pos2(right_tick_x0, y), egui::pos2(right_tick_x1, y)],
+            (1.0, tick_color),
         );
         if LABELED_TICKS.contains(&db) {
             let is_target = (db - TARGET_BAND.0).abs() < 0.01;
             painter.text(
-                egui::pos2(tick_x1 + 3.0, y),
+                egui::pos2(right_tick_x1 + label_gap, y),
                 egui::Align2::LEFT_CENTER,
                 format!("{}", db as i32),
                 egui::FontId::monospace(10.0),
-                if is_target { target_label_color } else { label_color },
+                if is_target {
+                    target_label_color
+                } else {
+                    label_color
+                },
             );
         }
     }
