@@ -137,12 +137,12 @@ impl Plugin for ManifoldAnalyzer {
 
         // Publish latest averaged spectra via try_lock (mailbox — only the
         // newest value matters for the SPAN curve). Push every un-averaged
-        // Mid frame into the lock-free ring (queue — the spectrogram draws
-        // one column per FFT hop so dropping frames coarsens the time axis).
+        // Mid frame (dB + instantaneous freqs) into the lock-free ring so
+        // the spectrogram can spectral-reassign each column.
         let gui_shared = &self.gui_shared;
         let mut mid_had_frame = false;
-        mid.process_mono_with_raw(&self.mid_scratch[..i], |_avg, raw| {
-            let _ = gui_shared.mid_raw_ring.push(raw);
+        mid.process_mono_with_raw(&self.mid_scratch[..i], |_avg, raw, inst_freqs| {
+            let _ = gui_shared.mid_raw_ring.push(raw, inst_freqs);
             mid_had_frame = true;
         });
         if mid_had_frame {

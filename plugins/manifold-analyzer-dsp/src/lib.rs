@@ -27,6 +27,14 @@ pub struct Analyzer {
     // transients stay sharp; the averaged `magnitude_db` is what the SPAN-
     // style curve display consumes.
     raw_magnitude_db: Vec<f32>,
+    // Reassignment state — previous frame's phase per bin and the derived
+    // instantaneous frequency per bin. The frequency is where a bin's
+    // energy "really is" (derived from phase-advance between frames), not
+    // just the nominal bin frequency. Scatter-plotting power at these
+    // frequencies collapses FFT main-lobe smears into near-delta peaks.
+    prev_phase: Vec<f32>,
+    instantaneous_freqs: Vec<f32>,
+    have_prev_phase: bool,
 }
 
 impl Analyzer {
@@ -60,6 +68,13 @@ impl Analyzer {
             avg_time_ms: 0.0,
             magnitude_db: vec![MIN_DB; num_bins],
             raw_magnitude_db: vec![MIN_DB; num_bins],
+            prev_phase: vec![0.0; num_bins],
+            // Default to nominal bin frequencies; first frame has no phase
+            // history so we fall back to bin-nominal for one hop.
+            instantaneous_freqs: (0..num_bins)
+                .map(|k| k as f32 * sample_rate / fft_size as f32)
+                .collect(),
+            have_prev_phase: false,
         }
     }
 
@@ -119,6 +134,14 @@ impl Analyzer {
         &self.raw_magnitude_db
     }
 
+    /// Per-bin instantaneous frequency (Hz) derived from STFT phase
+    /// advance. Use with `latest_raw_spectrum_db` to reassign power to
+    /// where it "really is" in frequency (collapses FFT main-lobe width
+    /// on sinusoidal content to near-delta peaks).
+    pub fn latest_instantaneous_freqs(&self) -> &[f32] {
+        &self.instantaneous_freqs
+    }
+
     pub fn reset(&mut self) {
         self.ring.fill(0.0);
         self.ring_write_pos = 0;
@@ -126,6 +149,8 @@ impl Analyzer {
         self.power_avg.fill(0.0);
         self.magnitude_db.fill(MIN_DB);
         self.raw_magnitude_db.fill(MIN_DB);
+        self.prev_phase.fill(0.0);
+        self.have_prev_phase = false;
     }
 
     /// Push mono samples; updates `latest_spectrum_db` as frames complete.
@@ -142,13 +167,15 @@ impl Analyzer {
     /// Push mono samples; invokes `on_frame` with the dB spectrum each time
     /// a full hop-aligned FFT frame completes.
     pub fn process_mono<F: FnMut(&[f32])>(&mut self, samples: &[f32], mut on_frame: F) {
-        self.process_mono_with_raw(samples, |avg, _raw| on_frame(avg));
+        self.process_mono_with_raw(samples, |avg, _raw, _freq| on_frame(avg));
     }
 
-    /// Like `process_mono`, but the callback receives both the averaged
-    /// spectrum and the un-averaged one for the same frame. Spectrograms
-    /// want the raw per-frame spectrum so transients stay sharp.
-    pub fn process_mono_with_raw<F: FnMut(&[f32], &[f32])>(
+    /// Like `process_mono`, but the callback receives:
+    /// - `avg`: averaged dB spectrum (for SPAN-style curves)
+    /// - `raw`: un-averaged dB spectrum (for spectrograms)
+    /// - `inst_freqs`: instantaneous frequency (Hz) per bin derived from
+    ///   phase advance between consecutive frames (for spectral reassignment)
+    pub fn process_mono_with_raw<F: FnMut(&[f32], &[f32], &[f32])>(
         &mut self,
         samples: &[f32],
         mut on_frame: F,
@@ -161,7 +188,11 @@ impl Analyzer {
             if self.samples_since_last_fft >= self.hop_size {
                 self.samples_since_last_fft = 0;
                 self.compute_spectrum();
-                on_frame(&self.magnitude_db, &self.raw_magnitude_db);
+                on_frame(
+                    &self.magnitude_db,
+                    &self.raw_magnitude_db,
+                    &self.instantaneous_freqs,
+                );
             }
         }
     }
@@ -184,6 +215,19 @@ impl Analyzer {
         let norm_sq = norm * norm;
         let alpha = self.avg_alpha;
         let one_minus_alpha = 1.0 - alpha;
+
+        // Reassignment constants. `bin_hz` is the nominal frequency step
+        // per FFT bin. `expected_per_bin` is the phase advance (rad) a
+        // pure sinusoid at bin k would accrue over one hop:
+        //   2π · k · hop / fft_size.
+        // `freq_per_rad_per_hop` converts the deviation (rad/hop) to Hz:
+        //   sample_rate / (2π · hop).
+        let bin_hz = self.sample_rate / self.fft_size as f32;
+        let two_pi = 2.0 * std::f32::consts::PI;
+        let expected_per_bin_k = two_pi * self.hop_size as f32 / self.fft_size as f32;
+        let freq_per_rad_per_hop = self.sample_rate / (two_pi * self.hop_size as f32);
+        let have_prev = self.have_prev_phase;
+
         for bin in 0..self.num_bins() {
             let c = self.fft_buffer[bin];
             let power = (c.re * c.re + c.im * c.im) * norm_sq;
@@ -191,7 +235,20 @@ impl Analyzer {
             // Exponential power averaging. alpha=1.0 → no averaging.
             self.power_avg[bin] = alpha * power + one_minus_alpha * self.power_avg[bin];
             self.magnitude_db[bin] = 10.0 * (self.power_avg[bin] + 1e-24).log10();
+
+            let phase = c.im.atan2(c.re);
+            if have_prev {
+                let expected = expected_per_bin_k * bin as f32;
+                let raw_dev = phase - self.prev_phase[bin] - expected;
+                // Principal-value wrap to (-π, π]. For a bin whose signal
+                // is close to nominal, `raw_dev` is already small; for
+                // far-off signals the 2π ambiguity resolves here.
+                let wrapped = raw_dev - two_pi * (raw_dev / two_pi).round();
+                self.instantaneous_freqs[bin] = bin as f32 * bin_hz + wrapped * freq_per_rad_per_hop;
+            }
+            self.prev_phase[bin] = phase;
         }
+        self.have_prev_phase = true;
     }
 }
 

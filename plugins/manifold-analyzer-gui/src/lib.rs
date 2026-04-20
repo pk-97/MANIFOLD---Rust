@@ -87,7 +87,7 @@ impl AnalyzerGuiShared {
             fft_size: AtomicUsize::new(fft_size),
             mid_db: Mutex::new(vec![MIN_DB; num_bins]),
             side_db: Mutex::new(vec![MIN_DB; num_bins]),
-            mid_raw_ring: RawFrameRing::new(RAW_RING_CAPACITY, num_bins, MIN_DB),
+            mid_raw_ring: RawFrameRing::new(RAW_RING_CAPACITY, num_bins, MIN_DB, 0.0),
         }
     }
 
@@ -217,8 +217,8 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             state.side_scratch.copy_from_slice(&guard);
         }
         let freq_max = (sr * 0.5).clamp(FREQ_MIN * 2.0, FREQ_MAX_LIMIT);
-        state.shared.mid_raw_ring.drain(|frame| {
-            spec.push_spectrogram_frame(frame, sr, FREQ_MIN, freq_max);
+        state.shared.mid_raw_ring.drain(|db, inst_freqs| {
+            spec.push_spectrogram_frame(db, inst_freqs, FREQ_MIN, freq_max);
         });
         spec.render(
             device,
