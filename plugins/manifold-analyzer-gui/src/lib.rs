@@ -25,7 +25,7 @@ mod sample_ring;
 mod spectrum_gpu;
 
 use gl_paint::{PainterState, QuadPainter, SharedPainterState};
-use manifold_analyzer_dsp::MIN_DB;
+use manifold_analyzer_dsp::{LoudnessSnapshot, MIN_DB};
 use manifold_gpu::GpuDevice;
 use nih_plug::prelude::*;
 use nih_plug_egui::{EguiState, create_egui_editor, egui};
@@ -47,6 +47,12 @@ const MAX_SPECTRUM_H: u32 = 2048;
 // pivoted at 1 kHz, 1/12-oct frequency smoothing, filled display.
 const DB_MIN: f32 = -90.0;
 const DB_MAX: f32 = 0.0;
+
+/// Fixed width of the right-side loudness meter panel (pixels).
+/// Wide enough for a vertical meter column, the scale labels, and
+/// readouts like "-14.4 LUFS" without truncation at the default
+/// egui font size.
+const LOUDNESS_PANEL_WIDTH: f32 = 180.0;
 /// Reference frequency for the Flat/Pink/Tilted weighting slopes.
 /// LUFS modes ignore this (the biquad response has its own pivot).
 const SLOPE_REF_FREQ: f32 = 1000.0;
@@ -404,6 +410,23 @@ pub struct AnalyzerGuiShared {
     bpm_bits: AtomicU64,
     beat_pos_bits: AtomicU64,
     playing: AtomicBool,
+    /// Loudness-meter readouts published by the audio thread each
+    /// process block. All stored as f32 bits; `MIN_DB` means
+    /// "not yet computed / silence".
+    momentary_lufs_bits: AtomicU32,
+    short_term_lufs_bits: AtomicU32,
+    integrated_lufs_bits: AtomicU32,
+    lra_lu_bits: AtomicU32,
+    dr_lu_bits: AtomicU32,
+    plr_lu_bits: AtomicU32,
+    momentary_max_lufs_bits: AtomicU32,
+    short_term_max_lufs_bits: AtomicU32,
+    true_peak_max_dbtp_bits: AtomicU32,
+    /// GUI increments this to request a meter reset; the audio
+    /// thread compares against its last-seen value and resets on
+    /// change. An atomic counter avoids the "miss the edge" problem
+    /// of a plain boolean.
+    reset_epoch: AtomicU32,
 }
 
 impl AnalyzerGuiShared {
@@ -418,6 +441,16 @@ impl AnalyzerGuiShared {
             bpm_bits: AtomicU64::new(f64::NAN.to_bits()),
             beat_pos_bits: AtomicU64::new(f64::NAN.to_bits()),
             playing: AtomicBool::new(false),
+            momentary_lufs_bits: AtomicU32::new(MIN_DB.to_bits()),
+            short_term_lufs_bits: AtomicU32::new(MIN_DB.to_bits()),
+            integrated_lufs_bits: AtomicU32::new(MIN_DB.to_bits()),
+            lra_lu_bits: AtomicU32::new(0.0_f32.to_bits()),
+            dr_lu_bits: AtomicU32::new(0.0_f32.to_bits()),
+            plr_lu_bits: AtomicU32::new(0.0_f32.to_bits()),
+            momentary_max_lufs_bits: AtomicU32::new(MIN_DB.to_bits()),
+            short_term_max_lufs_bits: AtomicU32::new(MIN_DB.to_bits()),
+            true_peak_max_dbtp_bits: AtomicU32::new(MIN_DB.to_bits()),
+            reset_epoch: AtomicU32::new(0),
         }
     }
 
@@ -450,6 +483,52 @@ impl AnalyzerGuiShared {
             if beat.is_finite() { Some(beat) } else { None },
             playing,
         )
+    }
+
+    pub fn set_loudness(&self, s: LoudnessSnapshot) {
+        self.momentary_lufs_bits
+            .store(s.momentary_lufs.to_bits(), Ordering::Relaxed);
+        self.short_term_lufs_bits
+            .store(s.short_term_lufs.to_bits(), Ordering::Relaxed);
+        self.integrated_lufs_bits
+            .store(s.integrated_lufs.to_bits(), Ordering::Relaxed);
+        self.lra_lu_bits.store(s.lra_lu.to_bits(), Ordering::Relaxed);
+        self.dr_lu_bits.store(s.dr_lu.to_bits(), Ordering::Relaxed);
+        self.plr_lu_bits.store(s.plr_lu.to_bits(), Ordering::Relaxed);
+        self.momentary_max_lufs_bits
+            .store(s.momentary_max_lufs.to_bits(), Ordering::Relaxed);
+        self.short_term_max_lufs_bits
+            .store(s.short_term_max_lufs.to_bits(), Ordering::Relaxed);
+        self.true_peak_max_dbtp_bits
+            .store(s.true_peak_max_dbtp.to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn loudness(&self) -> LoudnessSnapshot {
+        let load = |a: &AtomicU32| f32::from_bits(a.load(Ordering::Relaxed));
+        LoudnessSnapshot {
+            momentary_lufs: load(&self.momentary_lufs_bits),
+            short_term_lufs: load(&self.short_term_lufs_bits),
+            integrated_lufs: load(&self.integrated_lufs_bits),
+            lra_lu: load(&self.lra_lu_bits),
+            dr_lu: load(&self.dr_lu_bits),
+            plr_lu: load(&self.plr_lu_bits),
+            momentary_max_lufs: load(&self.momentary_max_lufs_bits),
+            short_term_max_lufs: load(&self.short_term_max_lufs_bits),
+            true_peak_max_dbtp: load(&self.true_peak_max_dbtp_bits),
+        }
+    }
+
+    /// GUI-side: increment to request a reset of running maxes /
+    /// integrated / LRA on the audio thread. Momentary and
+    /// short-term keep flowing.
+    pub fn request_loudness_reset(&self) {
+        self.reset_epoch.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Audio-side: read current reset-request counter; process code
+    /// compares against its last-seen value to detect an edge.
+    pub fn loudness_reset_epoch(&self) -> u32 {
+        self.reset_epoch.load(Ordering::Relaxed)
     }
 }
 
@@ -525,6 +604,13 @@ pub fn create_editor(
                 .exact_height(26.0)
                 .show(ctx, |ui| {
                     draw_controls(ui, state, setter);
+                });
+            egui::SidePanel::right("analyzer-loudness")
+                .frame(egui::Frame::new().fill(egui::Color32::from_rgb(12, 15, 21)))
+                .exact_width(LOUDNESS_PANEL_WIDTH)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    draw_loudness_panel(ui, state);
                 });
             egui::CentralPanel::default()
                 .frame(egui::Frame::new().fill(egui::Color32::from_rgb(8, 10, 14)))
@@ -948,6 +1034,224 @@ fn format_hz(freq: f32) -> String {
         }
     } else {
         format!("{}", freq as i32)
+    }
+}
+
+/// Right-side loudness meter. Vertical scale spans both rows; a
+/// filled column shows the momentary level, tick marks flank it on
+/// both sides, a target band sits around −23 LUFS (EBU R128), and
+/// the short-term-max line rides as a gutter hold. Readouts below
+/// the column show short-term / integrated / LRA / DR / PLR plus
+/// the M / ST / TP max trio.
+fn draw_loudness_panel(ui: &mut egui::Ui, state: &mut EditorState) {
+    let snap = state.shared.loudness();
+
+    ui.vertical(|ui| {
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            if ui
+                .button("Reset")
+                .on_hover_text("Reset Integrated, LRA, and Max holds")
+                .clicked()
+            {
+                state.shared.request_loudness_reset();
+            }
+            ui.label(
+                egui::RichText::new("LUFS")
+                    .color(egui::Color32::from_gray(190))
+                    .size(12.0)
+                    .strong(),
+            );
+        });
+        ui.add_space(6.0);
+
+        // The meter column lives inside an allocated rect so the
+        // readouts below can start exactly where the column ends,
+        // regardless of panel height.
+        let total_avail = ui.available_size();
+        // Reserve the bottom section for the numeric readouts. The
+        // column itself fills the remainder.
+        let readout_height: f32 = 168.0;
+        let column_height = (total_avail.y - readout_height - 8.0).max(120.0);
+        let column_size = egui::vec2(total_avail.x, column_height);
+        let (rect, _) = ui.allocate_exact_size(column_size, egui::Sense::hover());
+        draw_meter_column(ui.painter_at(rect), rect, &snap);
+
+        ui.add_space(6.0);
+        draw_loudness_readouts(ui, &snap);
+    });
+}
+
+/// Draw the vertical meter bar in `rect`. Left half is the filled
+/// momentary column with target-band highlight and short-term-max
+/// gutter hold; right half carries the dB scale labels and tick
+/// marks. The two halves share the same top/bottom mapping so the
+/// user can read level off the adjacent scale without mental jumps.
+fn draw_meter_column(painter: egui::Painter, rect: egui::Rect, snap: &LoudnessSnapshot) {
+    // Meter range: 0 LUFS at top, -54 LUFS at bottom.
+    const METER_TOP: f32 = 0.0;
+    const METER_BOTTOM: f32 = -54.0;
+    const MAJOR_TICKS: &[f32] = &[0.0, -3.0, -6.0, -9.0, -18.0, -23.0, -27.0, -36.0, -45.0, -54.0];
+    const LABELED_TICKS: &[f32] = &[0.0, -3.0, -6.0, -9.0, -18.0, -23.0, -27.0, -36.0, -45.0, -54.0];
+    const TARGET_BAND: (f32, f32) = (-23.0, -18.0);
+
+    let col_width = 22.0_f32;
+    let col_left = rect.left() + 6.0;
+    let col_right = col_left + col_width;
+    let col_rect = egui::Rect::from_min_max(
+        egui::pos2(col_left, rect.top()),
+        egui::pos2(col_right, rect.bottom()),
+    );
+
+    let lufs_to_y = |lufs: f32| -> f32 {
+        let clamped = lufs.clamp(METER_BOTTOM, METER_TOP);
+        let t = (clamped - METER_TOP) / (METER_BOTTOM - METER_TOP);
+        rect.top() + t * rect.height()
+    };
+
+    // Column backdrop.
+    painter.rect_filled(col_rect, 2.0, egui::Color32::from_rgb(26, 30, 38));
+
+    // Target band: translucent desaturated red, matches the Vision
+    // reference screenshot.
+    let target_top = lufs_to_y(TARGET_BAND.1);
+    let target_bottom = lufs_to_y(TARGET_BAND.0);
+    let target_rect = egui::Rect::from_min_max(
+        egui::pos2(col_left, target_top),
+        egui::pos2(col_right, target_bottom),
+    );
+    painter.rect_filled(target_rect, 1.0, egui::Color32::from_rgba_unmultiplied(170, 60, 60, 110));
+
+    // Momentary fill — gradient-lite: colour keys change over the
+    // meter range so the user can read loudness at a glance.
+    let m_lufs = snap.momentary_lufs;
+    if m_lufs > METER_BOTTOM {
+        let m_y = lufs_to_y(m_lufs);
+        let fill_rect = egui::Rect::from_min_max(
+            egui::pos2(col_left, m_y),
+            egui::pos2(col_right, rect.bottom()),
+        );
+        let colour = meter_fill_colour(m_lufs);
+        painter.rect_filled(fill_rect, 1.0, colour);
+    }
+
+    // Short-term max hold: thin bright line sitting above the
+    // filled column.
+    if snap.short_term_max_lufs > METER_BOTTOM {
+        let y = lufs_to_y(snap.short_term_max_lufs);
+        painter.line_segment(
+            [egui::pos2(col_left - 2.0, y), egui::pos2(col_right + 2.0, y)],
+            (1.5, egui::Color32::from_rgb(240, 240, 120)),
+        );
+    }
+
+    // Ticks + scale labels sit to the right of the column.
+    let label_color = egui::Color32::from_gray(170);
+    let target_label_color = egui::Color32::from_rgb(230, 180, 90);
+    let tick_x0 = col_right + 2.0;
+    let tick_x1 = col_right + 8.0;
+    for &db in MAJOR_TICKS {
+        let y = lufs_to_y(db);
+        painter.line_segment(
+            [egui::pos2(tick_x0, y), egui::pos2(tick_x1, y)],
+            (1.0, egui::Color32::from_gray(80)),
+        );
+        if LABELED_TICKS.contains(&db) {
+            let is_target = (db - TARGET_BAND.0).abs() < 0.01;
+            painter.text(
+                egui::pos2(tick_x1 + 3.0, y),
+                egui::Align2::LEFT_CENTER,
+                format!("{}", db as i32),
+                egui::FontId::monospace(10.0),
+                if is_target { target_label_color } else { label_color },
+            );
+        }
+    }
+}
+
+/// Momentary-column colour as a function of the current loudness.
+/// Loud (≥ −9 LUFS) = saturated red; commercial-broadcast band
+/// (−23…−14) = amber; below −36 = green. Stepped (not continuous)
+/// so the eye reads bands, not a gradient.
+fn meter_fill_colour(lufs: f32) -> egui::Color32 {
+    if lufs >= -9.0 {
+        egui::Color32::from_rgb(220, 60, 60)
+    } else if lufs >= -14.0 {
+        egui::Color32::from_rgb(220, 150, 60)
+    } else if lufs >= -23.0 {
+        egui::Color32::from_rgb(220, 200, 60)
+    } else if lufs >= -36.0 {
+        egui::Color32::from_rgb(120, 200, 90)
+    } else {
+        egui::Color32::from_rgb(70, 160, 120)
+    }
+}
+
+fn draw_loudness_readouts(ui: &mut egui::Ui, snap: &LoudnessSnapshot) {
+    let label_color = egui::Color32::from_gray(150);
+    let value_color = egui::Color32::from_gray(230);
+    let highlight_bg = egui::Color32::from_rgb(40, 60, 110);
+
+    // Short-term / Integrated / LRA / DR / PLR — Integrated sits in
+    // a highlighted row because that's the number most producers
+    // are aiming at a specific target for.
+    let row = |ui: &mut egui::Ui, label: &str, text: String, highlight: bool| {
+        let bg = if highlight {
+            highlight_bg
+        } else {
+            egui::Color32::TRANSPARENT
+        };
+        egui::Frame::new()
+            .fill(bg)
+            .inner_margin(egui::Margin::symmetric(4, 2))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(label).color(label_color).size(11.0),
+                        )
+                        .truncate(),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(text).color(value_color).size(12.0).strong(),
+                            )
+                            .truncate(),
+                        );
+                    });
+                });
+            });
+    };
+
+    row(ui, "Short-term", fmt_lufs(snap.short_term_lufs), false);
+    row(ui, "Integrated", fmt_lufs(snap.integrated_lufs), true);
+    row(ui, "Range", fmt_lu(snap.lra_lu), false);
+    row(ui, "Dynamic", fmt_lu(snap.dr_lu), false);
+    row(ui, "PLR", fmt_lu(snap.plr_lu), false);
+    ui.add_space(4.0);
+    row(ui, "M Max", fmt_lufs(snap.momentary_max_lufs), false);
+    row(ui, "ST Max", fmt_lufs(snap.short_term_max_lufs), false);
+    row(ui, "TP Max", fmt_dbtp(snap.true_peak_max_dbtp), false);
+}
+
+fn fmt_lufs(v: f32) -> String {
+    if v <= -120.0 {
+        "-- LUFS".to_string()
+    } else {
+        format!("{:.1} LUFS", v)
+    }
+}
+
+fn fmt_lu(v: f32) -> String {
+    format!("{:.1} LU", v)
+}
+
+fn fmt_dbtp(v: f32) -> String {
+    if v <= -120.0 {
+        "-- dBTP".to_string()
+    } else {
+        format!("{:.1} dBTP", v)
     }
 }
 

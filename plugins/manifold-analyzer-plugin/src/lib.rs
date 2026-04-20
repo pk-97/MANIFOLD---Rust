@@ -1,4 +1,4 @@
-use manifold_analyzer_dsp::Analyzer;
+use manifold_analyzer_dsp::{Analyzer, LoudnessMeter};
 use manifold_analyzer_gui::{AnalyzerGuiShared, AnalyzerParams};
 use nih_plug::prelude::*;
 use std::num::NonZeroU32;
@@ -17,6 +17,10 @@ struct ManifoldAnalyzer {
     side_analyzer: Option<Analyzer>,
     mid_scratch: Vec<f32>,
     side_scratch: Vec<f32>,
+    left_scratch: Vec<f32>,
+    right_scratch: Vec<f32>,
+    loudness: Option<LoudnessMeter>,
+    last_loudness_reset_epoch: u32,
     gui_shared: Arc<AnalyzerGuiShared>,
 }
 
@@ -28,6 +32,10 @@ impl Default for ManifoldAnalyzer {
             side_analyzer: None,
             mid_scratch: Vec::new(),
             side_scratch: Vec::new(),
+            left_scratch: Vec::new(),
+            right_scratch: Vec::new(),
+            loudness: None,
+            last_loudness_reset_epoch: 0,
             gui_shared: Arc::new(AnalyzerGuiShared::new(44100.0, FFT_SIZE)),
         }
     }
@@ -78,7 +86,13 @@ impl Plugin for ManifoldAnalyzer {
         let max_block = buffer_config.max_buffer_size as usize;
         self.mid_scratch = vec![0.0; max_block];
         self.side_scratch = vec![0.0; max_block];
+        self.left_scratch = vec![0.0; max_block];
+        self.right_scratch = vec![0.0; max_block];
+        self.loudness = Some(LoudnessMeter::new(buffer_config.sample_rate));
+        self.last_loudness_reset_epoch = self.gui_shared.loudness_reset_epoch();
         self.gui_shared.set_sample_rate(buffer_config.sample_rate);
+        self.gui_shared
+            .set_loudness(manifold_analyzer_dsp::LoudnessSnapshot::EMPTY);
         true
     }
 
@@ -88,6 +102,10 @@ impl Plugin for ManifoldAnalyzer {
         }
         if let Some(a) = self.side_analyzer.as_mut() {
             a.reset();
+        }
+        if let Some(m) = self.loudness.as_mut() {
+            m.reset();
+            self.gui_shared.set_loudness(m.snapshot());
         }
     }
 
@@ -116,6 +134,8 @@ impl Plugin for ManifoldAnalyzer {
 
         // M/S decode: Mid = (L+R)/2, Side = (L-R)/2. Falls back to mono
         // (r = l → side = 0) when only one channel is provided.
+        // Raw L/R kept in parallel scratch buffers for the BS.1770
+        // loudness meter (K-weighting requires pre-M/S signals).
         let mut i = 0;
         for channel_samples in buffer.iter_samples() {
             let mut iter = channel_samples.into_iter();
@@ -123,7 +143,22 @@ impl Plugin for ManifoldAnalyzer {
             let r = iter.next().map(|s| *s).unwrap_or(l);
             self.mid_scratch[i] = (l + r) * 0.5;
             self.side_scratch[i] = (l - r) * 0.5;
+            self.left_scratch[i] = l;
+            self.right_scratch[i] = r;
             i += 1;
+        }
+
+        // Loudness: honour a pending GUI reset (edge-triggered via
+        // epoch counter), then push raw L/R through the BS.1770
+        // meter and publish the fresh snapshot.
+        if let Some(meter) = self.loudness.as_mut() {
+            let epoch = self.gui_shared.loudness_reset_epoch();
+            if epoch != self.last_loudness_reset_epoch {
+                meter.reset();
+                self.last_loudness_reset_epoch = epoch;
+            }
+            meter.process(&self.left_scratch[..i], &self.right_scratch[..i]);
+            self.gui_shared.set_loudness(meter.snapshot());
         }
 
         // Averaged curves: push samples into the existing Analyzer pair

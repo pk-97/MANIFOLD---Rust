@@ -4,6 +4,10 @@
 //! VST3 plugin's audio callback and from the offline CLI — this is the
 //! contract that lets the CLI verify DSP correctness without a DAW.
 
+mod loudness;
+
+pub use loudness::{LoudnessMeter, LoudnessSnapshot};
+
 use rustfft::{Fft, FftPlanner, num_complex::Complex};
 use std::sync::Arc;
 
