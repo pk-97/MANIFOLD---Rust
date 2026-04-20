@@ -21,6 +21,7 @@
 mod cqt;
 mod gl_paint;
 mod gpu_bridge;
+mod gpu_cqt;
 mod loudness_worker;
 mod sample_ring;
 mod spectrum_gpu;
@@ -796,7 +797,11 @@ impl AnalyzerGuiShared {
 struct EditorState {
     shared: Arc<AnalyzerGuiShared>,
     params: Arc<AnalyzerParams>,
-    device: Option<GpuDevice>,
+    /// Shared GPU device. `Arc` so the CQT worker thread can hold its
+    /// own reference and issue its own command buffers against the
+    /// same underlying MTLDevice + command queue (both thread-safe
+    /// per Apple's Metal docs).
+    device: Option<Arc<GpuDevice>>,
     spectrum: Option<SpectrumGpuRenderer>,
     /// CQT worker thread — spawned lazily on first paint so the ~500 ms
     /// kernel construction happens once we know the host sample rate.
@@ -932,14 +937,21 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
 
     // Lazy GPU init.
     if state.device.is_none() {
-        state.device = Some(GpuDevice::new());
+        state.device = Some(Arc::new(GpuDevice::new()));
     }
     // Spawn the CQT worker the first time we know the sample rate. The
-    // worker owns the ~500 ms kernel construction; subsequent renders
-    // just drain its output ring.
+    // worker owns the ~500 ms kernel construction + GPU FFT plan setup;
+    // subsequent redraws just drain its output ring.
     if state.worker.is_none() && sr > 0.0 {
-        let build = spectrum_gpu::cqt_build_params(sr);
-        state.worker = Some(CqtWorker::spawn(sr, state.shared.clone(), build));
+        if let Some(device) = state.device.as_ref() {
+            let build = spectrum_gpu::cqt_build_params(sr);
+            state.worker = Some(CqtWorker::spawn(
+                sr,
+                state.shared.clone(),
+                device.clone(),
+                build,
+            ));
+        }
     }
     if state.spectrum.is_none() {
         if let (Some(device), Some(worker)) = (state.device.as_ref(), state.worker.as_ref()) {

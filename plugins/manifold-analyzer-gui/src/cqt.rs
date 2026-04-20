@@ -44,12 +44,24 @@ pub use rustfft::num_complex::Complex as CqtComplex;
 /// stream — feed it one N_fft-sample segment at a time.
 pub struct CqtTransform {
     n_fft: usize,
+    // `fft` is used at construction to FFT each time-domain kernel into
+    // its spectral form. The per-hop forward transform now runs on the
+    // GPU via `GpuFft` + `gpu_cqt::GpuCqt`; this field plus the two
+    // scratch buffers stay live so the CPU-side `process_complex` path
+    // (exercised by unit tests and available as an offline fallback)
+    // keeps working.
+    #[allow(dead_code)]
     fft: Arc<dyn Fft<f32>>,
+    #[allow(dead_code)]
     fft_scratch: Vec<Complex<f32>>,
+    #[allow(dead_code)]
     fft_buffer: Vec<Complex<f32>>,
     // CSR-style sparse kernel matrix. Row k spans indices
-    // `[row_ptr[k], row_ptr[k+1])` of `col_idx` and `coef`.
-    row_ptr: Vec<usize>,
+    // `[row_ptr[k], row_ptr[k+1])` of `col_idx` and `coef`. `row_ptr`
+    // is stored as u32 (not usize) so the GPU compute shader can read
+    // the buffer as-is without a conversion pass; the ceiling is
+    // num_bins × n_fft ≈ 17M nonzeros, well under u32::MAX.
+    row_ptr: Vec<u32>,
     col_idx: Vec<u32>,
     coef: Vec<Complex<f32>>,
     num_bins: usize,
@@ -145,7 +157,7 @@ impl CqtTransform {
         let mut fft_scratch = vec![Complex::new(0.0, 0.0); scratch_len];
         let mut kernel_buf = vec![Complex::new(0.0, 0.0); n_fft];
 
-        let mut row_ptr = Vec::with_capacity(num_bins + 1);
+        let mut row_ptr: Vec<u32> = Vec::with_capacity(num_bins + 1);
         row_ptr.push(0);
         let mut col_idx: Vec<u32> = Vec::new();
         let mut coef: Vec<Complex<f32>> = Vec::new();
@@ -222,7 +234,7 @@ impl CqtTransform {
                     coef.push(entry);
                 }
             }
-            row_ptr.push(col_idx.len());
+            row_ptr.push(col_idx.len() as u32);
         }
 
         Self {
@@ -267,10 +279,24 @@ impl CqtTransform {
         stored / dense
     }
 
+    /// Raw CSR sparse-kernel storage — `(row_ptr, col_idx, coef)`. The
+    /// GPU CQT pipeline uploads these to immutable storage buffers once
+    /// at worker spawn and reuses them across hops. CPU-side
+    /// `process_complex` still reads them in-place.
+    pub fn csr_raw(&self) -> (&[u32], &[u32], &[Complex<f32>]) {
+        (&self.row_ptr, &self.col_idx, &self.coef)
+    }
+
     /// Transform one N_fft-sample audio segment into complex VQT values
     /// per bin. Callers that only want magnitude take `.norm_sqr()`;
     /// callers that want synchrosqueezing need the phase too, hence
     /// we expose complex output directly.
+    ///
+    /// Per-hop runtime callers use the GPU pipeline in `gpu_cqt::GpuCqt`
+    /// instead — this function is retained for unit tests that validate
+    /// kernel construction and as a fallback if a future platform
+    /// without MPSGraph ever needs it.
+    #[allow(dead_code)]
     pub fn process_complex(&mut self, audio: &[f32], output: &mut [Complex<f32>]) {
         assert_eq!(audio.len(), self.n_fft);
         assert_eq!(output.len(), self.num_bins);
@@ -283,8 +309,8 @@ impl CqtTransform {
             .process_with_scratch(&mut self.fft_buffer, &mut self.fft_scratch);
 
         for (k, out) in output.iter_mut().enumerate().take(self.num_bins) {
-            let lo = self.row_ptr[k];
-            let hi = self.row_ptr[k + 1];
+            let lo = self.row_ptr[k] as usize;
+            let hi = self.row_ptr[k + 1] as usize;
             let mut acc = Complex::new(0.0f32, 0.0f32);
             for idx in lo..hi {
                 let m = self.col_idx[idx] as usize;

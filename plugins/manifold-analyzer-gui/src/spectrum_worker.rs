@@ -17,8 +17,10 @@
 //! entirely out of this file — its only duty is pushing into `SampleRing`.
 
 use crate::cqt::{CqtComplex, CqtTransform};
+use crate::gpu_cqt::GpuCqt;
 use crate::AnalyzerGuiShared;
 use crossbeam_queue::ArrayQueue;
+use manifold_gpu::GpuDevice;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -115,9 +117,15 @@ impl CqtWorker {
     /// Build the CQT on the calling thread (so the ~500 ms kernel
     /// construction happens on the GUI thread during first paint, not on
     /// the worker where it would delay first output) and spawn the worker.
+    ///
+    /// `device` is the same `GpuDevice` the renderer uses; both the GUI
+    /// thread's spectrum renderer and this worker hand buffers to the
+    /// underlying MTLDevice's shared command queue (thread-safe per
+    /// Apple).
     pub fn spawn(
         sample_rate: f32,
         shared: Arc<AnalyzerGuiShared>,
+        device: Arc<GpuDevice>,
         params: CqtBuildParams,
     ) -> Self {
         let cqt = CqtTransform::new(
@@ -135,6 +143,11 @@ impl CqtWorker {
         );
         let cqt_num_bins = cqt.num_bins();
 
+        // Build the GPU side of the pipeline now so the worker thread
+        // starts processing hops immediately. Kernel buffer uploads +
+        // MPSGraph compile happen here.
+        let gpu_cqt = GpuCqt::new(&device, &cqt);
+
         // Ring sized so the GUI can fall ~1 s behind at 187 hops/sec
         // without loss. Beyond that the producer's `force_push` wins —
         // oldest columns drop, matching the "visible gap, never a
@@ -147,11 +160,12 @@ impl CqtWorker {
             let column_ring = column_ring.clone();
             let config = config.clone();
             let shutdown = shutdown.clone();
+            let device = device.clone();
             thread::Builder::new()
                 .name("manifold-analyzer-cqt".into())
                 .spawn(move || {
-                    let mut state = WorkerState::new(cqt, params, sample_rate);
-                    worker_loop(&mut state, shared, column_ring, config, shutdown);
+                    let mut state = WorkerState::new(gpu_cqt, params, sample_rate);
+                    worker_loop(&mut state, device, shared, column_ring, config, shutdown);
                 })
                 .expect("spawn manifold-analyzer-cqt thread")
         };
@@ -204,7 +218,11 @@ struct WorkerState {
     cqt_num_bins: usize,
     sample_rate: f32,
 
-    cqt: CqtTransform,
+    /// GPU pipeline: R2C FFT + sparse CSR mat-vec in one command buffer.
+    /// Replaced the CPU `CqtTransform::process_complex` path — that CPU
+    /// transform still exists (kernel construction happens on it at
+    /// plan time) but no longer runs per hop.
+    gpu_cqt: GpuCqt,
     rolling: Vec<f32>,
     rolling_head: usize,
     samples_since_last_hop: usize,
@@ -231,15 +249,15 @@ struct WorkerState {
 }
 
 impl WorkerState {
-    fn new(cqt: CqtTransform, params: CqtBuildParams, sample_rate: f32) -> Self {
-        let cqt_num_bins = cqt.num_bins();
+    fn new(gpu_cqt: GpuCqt, params: CqtBuildParams, sample_rate: f32) -> Self {
+        let cqt_num_bins = gpu_cqt.num_bins();
         Self {
             n_fft: params.n_fft,
             hop: params.hop_samples,
             history_cols: params.history_cols,
             cqt_num_bins,
             sample_rate,
-            cqt,
+            gpu_cqt,
             rolling: vec![0.0; params.n_fft],
             rolling_head: 0,
             samples_since_last_hop: 0,
@@ -298,7 +316,13 @@ impl WorkerState {
     /// older ones when the ring backed up. Pushes completed columns into the
     /// output ring (dropping oldest on overflow — matches the "gap, not
     /// freeze" policy).
-    fn process(&mut self, samples: &[f32], cfg: &WorkerConfig, ring: &ArrayQueue<CqtColumnMsg>) {
+    fn process(
+        &mut self,
+        device: &GpuDevice,
+        samples: &[f32],
+        cfg: &WorkerConfig,
+        ring: &ArrayQueue<CqtColumnMsg>,
+    ) {
         let beats_per_hop = if cfg.bpm > 0.0 {
             self.hop as f64 / self.sample_rate as f64 * cfg.bpm as f64 / 60.0
         } else {
@@ -324,21 +348,30 @@ impl WorkerState {
                     continue;
                 }
 
-                self.emit_column(cfg, ring);
+                self.emit_column(device, cfg, ring);
                 self.internal_beat_pos += beats_per_hop;
             }
         }
     }
 
-    fn emit_column(&mut self, cfg: &WorkerConfig, ring: &ArrayQueue<CqtColumnMsg>) {
+    fn emit_column(
+        &mut self,
+        device: &GpuDevice,
+        cfg: &WorkerConfig,
+        ring: &ArrayQueue<CqtColumnMsg>,
+    ) {
         // Copy rolling ring into oldest→newest linear order.
         let head = self.rolling_head;
         let (tail, front) = self.rolling.split_at(head);
         self.scratch_audio[..front.len()].copy_from_slice(front);
         self.scratch_audio[front.len()..].copy_from_slice(tail);
 
-        self.cqt
-            .process_complex(&self.scratch_audio, &mut self.cqt_complex);
+        // GPU CQT: uploads scratch_audio → runs FFT + sparse mat-vec →
+        // writes result into `cqt_complex`. Synchronous so the CPU-side
+        // synchrosqueezing + column push can run on the same thread
+        // without waiting on a fence.
+        self.gpu_cqt
+            .process(device, &self.scratch_audio, &mut self.cqt_complex);
 
         if cfg.synchrosqueeze && self.have_prev_cqt {
             self.synchrosqueeze(cfg);
@@ -460,8 +493,8 @@ impl WorkerState {
     }
 
     fn synchrosqueeze(&mut self, cfg: &WorkerConfig) {
-        let center_freqs = self.cqt.center_freqs();
-        let bandwidths = self.cqt.bandwidths_hz();
+        let center_freqs = self.gpu_cqt.center_freqs();
+        let bandwidths = self.gpu_cqt.bandwidths_hz();
         let num_bins = self.cqt_num_bins;
         let hop = self.hop as f32;
         let two_pi = std::f32::consts::TAU;
@@ -556,6 +589,7 @@ fn force_push(ring: &ArrayQueue<CqtColumnMsg>, msg: CqtColumnMsg) {
 
 fn worker_loop(
     state: &mut WorkerState,
+    device: Arc<GpuDevice>,
     shared: Arc<AnalyzerGuiShared>,
     column_ring: Arc<ArrayQueue<CqtColumnMsg>>,
     config: Arc<Mutex<WorkerConfig>>,
@@ -573,6 +607,6 @@ fn worker_loop(
         }
         let cfg = *config.lock();
         state.apply_config(cfg);
-        state.process(&sample_scratch, &cfg, &column_ring);
+        state.process(&device, &sample_scratch, &cfg, &column_ring);
     }
 }
