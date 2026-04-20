@@ -216,10 +216,10 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         if let Ok(guard) = state.shared.side_db.lock() {
             state.side_scratch.copy_from_slice(&guard);
         }
-        state.shared.mid_raw_ring.drain(|frame| {
-            spec.push_spectrogram_frame(frame);
-        });
         let freq_max = (sr * 0.5).clamp(FREQ_MIN * 2.0, FREQ_MAX_LIMIT);
+        state.shared.mid_raw_ring.drain(|frame| {
+            spec.push_spectrogram_frame(frame, sr, FREQ_MIN, freq_max);
+        });
         spec.render(
             device,
             &state.mid_scratch,

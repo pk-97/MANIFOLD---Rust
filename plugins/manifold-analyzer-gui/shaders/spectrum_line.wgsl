@@ -40,7 +40,7 @@ struct Uniforms {
     write_col: f32,
     spectrogram_db_min: f32,
     spectrogram_db_max: f32,
-    _pad0: f32,
+    log_bins: f32,
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -179,17 +179,19 @@ fn colormap(t_in: f32) -> vec3<f32> {
     return mix(c5, c6, (t - 0.85) / 0.15);
 }
 
-// Linear interpolation in the POWER domain between the two adjacent FFT
-// bins of `bin_f`. Power-domain mixing matches how dB values combine
-// physically; interpolating dB directly understates power. Returns dB
-// (log of linear power).
-fn sample_history_db(col: i32, bin_f_in: f32, num_bins_i: i32) -> f32 {
-    let bin_f = clamp(bin_f_in, 0.0, f32(num_bins_i) - 1.0);
-    let bin_lo = i32(floor(bin_f));
-    let bin_hi = min(bin_lo + 1, num_bins_i - 1);
-    let frac = fract(bin_f);
-    let db_lo = history[col * num_bins_i + bin_lo];
-    let db_hi = history[col * num_bins_i + bin_hi];
+// History is pre-resampled to `log_bins` log-spaced dB values per column
+// by the CPU side — at low freq each log bin is finer than an FFT bin
+// (upsampled via power-domain linear interp), at high freq each log bin
+// integrates power across many FFT bins (anti-aliased). Indexing is
+// simple: `log_bin=0` is `freq_min` (bottom), `log_bin=log_bins-1` is
+// `freq_max` (top). Pixel-side interpolation is one 2-tap linear blend.
+fn sample_history_db(col: i32, log_bin_f: f32, log_bins_i: i32) -> f32 {
+    let clamped = clamp(log_bin_f, 0.0, f32(log_bins_i) - 1.0);
+    let lo = i32(floor(clamped));
+    let hi = min(lo + 1, log_bins_i - 1);
+    let frac = fract(clamped);
+    let db_lo = history[col * log_bins_i + lo];
+    let db_hi = history[col * log_bins_i + hi];
     let p_lo = pow(10.0, db_lo * 0.1);
     let p_hi = pow(10.0, db_hi * 0.1);
     let p = mix(p_lo, p_hi, frac);
@@ -199,8 +201,7 @@ fn sample_history_db(col: i32, bin_f_in: f32, num_bins_i: i32) -> f32 {
 fn spectrogram_pixel(px: vec2<f32>) -> vec4<f32> {
     let history_cols_i = i32(u.history_cols);
     let write_col_i = i32(u.write_col);
-    let num_bins = i32(u.fft_size * 0.5);
-    let bins_per_hz = u.fft_size / u.sample_rate;
+    let log_bins_i = i32(u.log_bins);
 
     // X axis: newest column at the left edge, older frames scrolling to
     // the right. `history_idx` counts pixels from the left edge.
@@ -211,17 +212,14 @@ fn spectrogram_pixel(px: vec2<f32>) -> vec4<f32> {
     var col = write_col_i - history_idx;
     col = ((col % history_cols_i) + history_cols_i) % history_cols_i;
 
-    // Y axis: log-frequency, high freq at the top of the spectrogram strip,
-    // low freq at the bottom (Vision 4X orientation).
+    // Y axis: log-spaced bins, high freq at the top. rel_y=0 → top = last
+    // log bin (freq_max); rel_y=1 → bottom = first log bin (freq_min).
     let spec_y = px.y - u.spectrum_height;
     let spec_h = max(u.resolution.y - u.spectrum_height, 1.0);
     let rel_y = clamp(spec_y / spec_h, 0.0, 1.0);
-    let log_f = mix(log(u.freq_max), log(u.freq_min), rel_y);
-    let freq = exp(log_f);
+    let log_bin_f = (1.0 - rel_y) * (u.log_bins - 1.0);
 
-    // Linear power-domain interp between adjacent bins — no log-octave
-    // smoothing, so harmonic stacks stay resolved (matches Vision 4X).
-    let raw_db = sample_history_db(col, freq * bins_per_hz, num_bins);
+    let raw_db = sample_history_db(col, log_bin_f, log_bins_i);
 
     // No tilt — Vision 4X's heatmap is raw dB. Colourmap range is
     // independent of the spectrum curve's axis range.

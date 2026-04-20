@@ -5,8 +5,11 @@ use nih_plug_egui::EguiState;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-const FFT_SIZE: usize = 8192;
-const OVERLAP_RATIO: f32 = 0.95;
+// Larger FFT + proportionally higher overlap: same ~8.5 ms hop (time
+// resolution) but halves bin width to 2.93 Hz for tighter low-end detail.
+// rustfft on Apple Silicon eats this easily (~100 µs/frame at 16384).
+const FFT_SIZE: usize = 16384;
+const OVERLAP_RATIO: f32 = 0.975;
 const AVG_TIME_MS: f32 = 200.0;
 const INITIAL_WINDOW_SIZE: (u32, u32) = (900, 450);
 
