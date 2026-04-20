@@ -23,6 +23,10 @@ pub struct Analyzer {
     avg_alpha: f32,
     avg_time_ms: f32,
     magnitude_db: Vec<f32>,
+    // Un-averaged per-frame dB. Spectrograms want instantaneous frames so
+    // transients stay sharp; the averaged `magnitude_db` is what the SPAN-
+    // style curve display consumes.
+    raw_magnitude_db: Vec<f32>,
 }
 
 impl Analyzer {
@@ -55,6 +59,7 @@ impl Analyzer {
             avg_alpha: 1.0, // no averaging (instant) by default
             avg_time_ms: 0.0,
             magnitude_db: vec![MIN_DB; num_bins],
+            raw_magnitude_db: vec![MIN_DB; num_bins],
         }
     }
 
@@ -106,12 +111,21 @@ impl Analyzer {
         &self.magnitude_db
     }
 
+    /// Un-averaged dB spectrum of the most recent FFT frame. Intended for
+    /// spectrograms where short-time detail must survive; if the plugin is
+    /// configured with `set_averaging_ms(0.0)` this equals
+    /// `latest_spectrum_db`.
+    pub fn latest_raw_spectrum_db(&self) -> &[f32] {
+        &self.raw_magnitude_db
+    }
+
     pub fn reset(&mut self) {
         self.ring.fill(0.0);
         self.ring_write_pos = 0;
         self.samples_since_last_fft = 0;
         self.power_avg.fill(0.0);
         self.magnitude_db.fill(MIN_DB);
+        self.raw_magnitude_db.fill(MIN_DB);
     }
 
     /// Push mono samples; updates `latest_spectrum_db` as frames complete.
@@ -128,6 +142,17 @@ impl Analyzer {
     /// Push mono samples; invokes `on_frame` with the dB spectrum each time
     /// a full hop-aligned FFT frame completes.
     pub fn process_mono<F: FnMut(&[f32])>(&mut self, samples: &[f32], mut on_frame: F) {
+        self.process_mono_with_raw(samples, |avg, _raw| on_frame(avg));
+    }
+
+    /// Like `process_mono`, but the callback receives both the averaged
+    /// spectrum and the un-averaged one for the same frame. Spectrograms
+    /// want the raw per-frame spectrum so transients stay sharp.
+    pub fn process_mono_with_raw<F: FnMut(&[f32], &[f32])>(
+        &mut self,
+        samples: &[f32],
+        mut on_frame: F,
+    ) {
         for &s in samples {
             self.ring[self.ring_write_pos] = s;
             self.ring_write_pos = (self.ring_write_pos + 1) % self.fft_size;
@@ -136,7 +161,7 @@ impl Analyzer {
             if self.samples_since_last_fft >= self.hop_size {
                 self.samples_since_last_fft = 0;
                 self.compute_spectrum();
-                on_frame(&self.magnitude_db);
+                on_frame(&self.magnitude_db, &self.raw_magnitude_db);
             }
         }
     }
@@ -162,6 +187,7 @@ impl Analyzer {
         for bin in 0..self.num_bins() {
             let c = self.fft_buffer[bin];
             let power = (c.re * c.re + c.im * c.im) * norm_sq;
+            self.raw_magnitude_db[bin] = 10.0 * (power + 1e-24).log10();
             // Exponential power averaging. alpha=1.0 → no averaging.
             self.power_avg[bin] = alpha * power + one_minus_alpha * self.power_avg[bin];
             self.magnitude_db[bin] = 10.0 * (self.power_avg[bin] + 1e-24).log10();

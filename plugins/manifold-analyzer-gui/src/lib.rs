@@ -20,6 +20,7 @@
 
 mod gl_paint;
 mod gpu_bridge;
+mod raw_ring;
 mod spectrum_gpu;
 
 use gl_paint::{PainterState, QuadPainter, SharedPainterState};
@@ -27,6 +28,7 @@ use manifold_analyzer_dsp::MIN_DB;
 use manifold_gpu::GpuDevice;
 use nih_plug::prelude::*;
 use nih_plug_egui::{EguiState, create_egui_editor, egui};
+use raw_ring::RawFrameRing;
 use spectrum_gpu::{DisplayConfig, SpectrumGpuRenderer};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -51,12 +53,30 @@ const SLOPE_REF_FREQ: f32 = 1000.0;
 const ALIGN_OFFSET_DB: f32 = 0.0; // Placeholder for SPAN "Align 0 dB" pink-noise calibration.
 const SMOOTH_HALF_OCT_LOG2: f32 = 1.0 / 24.0; // 1/12-oct bandwidth → ±1/24 oct half-width
 const FILL_ALPHA: f32 = 0.45;
+// Top N% of the render target = spectrum curves, bottom = scrolling
+// Mid-only spectrogram. 0.55 leaves a readable spectrogram at the default
+// 450 px window height (~200 px strip) without crushing the curves.
+const SPECTRUM_FRACTION: f32 = 0.55;
+// Vision 4X "Heatmap" default range — colourmap spans these dB values.
+const SPECTROGRAM_DB_MIN: f32 = -59.0;
+const SPECTROGRAM_DB_MAX: f32 = 0.0;
+
+/// Ring depth for un-averaged frames. At 8192 FFT / 95 % overlap / 48 kHz
+/// the producer runs at ~117 Hz and the consumer at ~60 Hz, so pending
+/// depth sits near 2 most of the time. 16 tolerates a sluggish GUI frame
+/// (~130 ms stall) before the audio thread starts dropping frames.
+const RAW_RING_CAPACITY: usize = 16;
 
 pub struct AnalyzerGuiShared {
     sample_rate_bits: AtomicU32,
     fft_size: AtomicUsize,
+    /// Averaged (SPAN-style) Mid/Side spectra for the top curve.
     pub mid_db: Mutex<Vec<f32>>,
     pub side_db: Mutex<Vec<f32>>,
+    /// Un-averaged Mid frames queued for the spectrogram. Pushed on every
+    /// FFT hop by the audio thread, drained once per render by the GUI so
+    /// no frames are lost to the producer/consumer rate mismatch.
+    pub mid_raw_ring: RawFrameRing,
 }
 
 impl AnalyzerGuiShared {
@@ -67,6 +87,7 @@ impl AnalyzerGuiShared {
             fft_size: AtomicUsize::new(fft_size),
             mid_db: Mutex::new(vec![MIN_DB; num_bins]),
             side_db: Mutex::new(vec![MIN_DB; num_bins]),
+            mid_raw_ring: RawFrameRing::new(RAW_RING_CAPACITY, num_bins, MIN_DB),
         }
     }
 
@@ -161,6 +182,9 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
                     align_offset_db: ALIGN_OFFSET_DB,
                     smooth_half_oct_log2: SMOOTH_HALF_OCT_LOG2,
                     fill_alpha: FILL_ALPHA,
+                    spectrum_fraction: SPECTRUM_FRACTION,
+                    spectrogram_db_min: SPECTROGRAM_DB_MIN,
+                    spectrogram_db_max: SPECTROGRAM_DB_MAX,
                 });
                 state.spectrum = Some(spec);
             }
@@ -181,7 +205,10 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         }
     }
 
-    // Copy latest mid/side spectra under their locks, upload to GPU, render.
+    // Copy latest averaged mid/side spectra for the curves. Drain the raw
+    // ring and push every pending frame into the spectrogram history so
+    // each FFT hop becomes its own column (matches Vision's temporal
+    // density instead of down-sampling to render rate).
     if let (Some(device), Some(spec)) = (state.device.as_ref(), state.spectrum.as_mut()) {
         if let Ok(guard) = state.shared.mid_db.lock() {
             state.mid_scratch.copy_from_slice(&guard);
@@ -189,7 +216,10 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         if let Ok(guard) = state.shared.side_db.lock() {
             state.side_scratch.copy_from_slice(&guard);
         }
-        let freq_max = (sr * 0.5).min(FREQ_MAX_LIMIT).max(FREQ_MIN * 2.0);
+        state.shared.mid_raw_ring.drain(|frame| {
+            spec.push_spectrogram_frame(frame);
+        });
+        let freq_max = (sr * 0.5).clamp(FREQ_MIN * 2.0, FREQ_MAX_LIMIT);
         spec.render(
             device,
             &state.mid_scratch,
@@ -205,7 +235,15 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     // Allocate the rect for the whole spectrum view.
     let (rect, _) = ui.allocate_exact_size(available, egui::Sense::hover());
     let painter = ui.painter_at(rect);
-    let freq_max = (sr * 0.5).min(FREQ_MAX_LIMIT).max(FREQ_MIN * 2.0);
+    let freq_max = (sr * 0.5).clamp(FREQ_MIN * 2.0, FREQ_MAX_LIMIT);
+
+    // Spectrum-region rect (top). The spectrogram below is opaque, so grid
+    // lines + labels only belong inside this sub-rect — anything drawn below
+    // it would be hidden behind the colourmap.
+    let spectrum_rect = egui::Rect::from_min_max(
+        rect.min,
+        egui::pos2(rect.max.x, rect.top() + rect.height() * SPECTRUM_FRACTION),
+    );
 
     // 1. Grid lines underneath the spectrum (so the line sits on top).
     let grid_color = egui::Color32::from_gray(40);
@@ -213,17 +251,23 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
 
     for &freq in &[100.0_f32, 1000.0, 10_000.0] {
         if freq <= freq_max {
-            let x = freq_to_x(freq, FREQ_MIN, freq_max, rect);
+            let x = freq_to_x(freq, FREQ_MIN, freq_max, spectrum_rect);
             painter.line_segment(
-                [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                [
+                    egui::pos2(x, spectrum_rect.top()),
+                    egui::pos2(x, spectrum_rect.bottom()),
+                ],
                 (1.0, grid_color),
             );
         }
     }
     for db in [-20.0_f32, -40.0, -60.0, -80.0] {
-        let y = db_to_y(db, DB_MIN, DB_MAX, rect);
+        let y = db_to_y(db, DB_MIN, DB_MAX, spectrum_rect);
         painter.line_segment(
-            [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+            [
+                egui::pos2(spectrum_rect.left(), y),
+                egui::pos2(spectrum_rect.right(), y),
+            ],
             (1.0, grid_color),
         );
     }
@@ -283,17 +327,19 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     }
 
     // 3. Text labels on top of everything, so they stay readable even when
-    //    the spectrum line crosses them.
+    //    the spectrum line crosses them. Labels live inside the spectrum
+    //    sub-rect (transparent background); the spectrogram below is opaque
+    //    and would hide anything painted into it.
     for &freq in &[100.0_f32, 1000.0, 10_000.0] {
         if freq <= freq_max {
-            let x = freq_to_x(freq, FREQ_MIN, freq_max, rect);
+            let x = freq_to_x(freq, FREQ_MIN, freq_max, spectrum_rect);
             let label = if freq >= 1000.0 {
                 format!("{}k", (freq / 1000.0) as i32)
             } else {
                 format!("{}", freq as i32)
             };
             painter.text(
-                egui::pos2(x + 4.0, rect.bottom() - 4.0),
+                egui::pos2(x + 4.0, spectrum_rect.bottom() - 4.0),
                 egui::Align2::LEFT_BOTTOM,
                 label,
                 egui::FontId::monospace(10.0),
@@ -302,9 +348,9 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         }
     }
     for db in [-20.0_f32, -40.0, -60.0, -80.0] {
-        let y = db_to_y(db, DB_MIN, DB_MAX, rect);
+        let y = db_to_y(db, DB_MIN, DB_MAX, spectrum_rect);
         painter.text(
-            egui::pos2(rect.left() + 4.0, y),
+            egui::pos2(spectrum_rect.left() + 4.0, y),
             egui::Align2::LEFT_CENTER,
             format!("{} dB", db as i32),
             egui::FontId::monospace(10.0),

@@ -1,16 +1,22 @@
-//! Spectrum lines rendered by manifold-gpu into an IOSurface-backed texture.
+//! Spectrum lines + scrolling spectrogram rendered by manifold-gpu into an
+//! IOSurface-backed texture.
 //!
-//! Two curves per frame (Mid and Side). Pattern:
-//! 1. WGSL fragment shader reads `mid_spectrum[]` and `side_spectrum[]` from
-//!    storage buffers, maps each pixel (x → log-freq → bin, y → dB), and
-//!    anti-aliases around each line.
+//! One shader, one draw, two regions. Top region draws Mid + Side curves;
+//! bottom region samples a ring-buffer history of Mid frames for the
+//! spectrogram.
+//!
+//! Pattern:
+//! 1. WGSL fragment shader reads `mid_spectrum[]` + `side_spectrum[]` (current
+//!    frame) and `history[]` (ring buffer of past Mid frames) from storage
+//!    buffers, maps each pixel (x → log-freq → bin), and produces either a
+//!    curve+fill composite (top) or a colourmapped history sample (bottom).
 //! 2. `device.draw_fullscreen` renders into the IOSurface-backed `GpuTexture`.
 //! 3. `commit_and_wait_completed` syncs; egui's PaintCallback samples the same
 //!    IOSurface via GL_TEXTURE_RECTANGLE (see `gl_paint.rs`).
 //!
-//! The uniform + spectrum storage buffers are allocated once and rewritten via
-//! the shared-memory mapped pointer each frame — zero audio-thread cost, two
-//! ~8KB memcpys on the GUI thread.
+//! The uniform + spectrum + history storage buffers are allocated once and
+//! rewritten via the shared-memory mapped pointer each frame — zero audio-
+//! thread cost, small memcpys on the GUI thread.
 
 use crate::gpu_bridge::IoSurfaceMtlTexture;
 use manifold_gpu::{
@@ -19,6 +25,12 @@ use manifold_gpu::{
 use std::ffi::c_void;
 
 const SHADER: &str = include_str!("../shaders/spectrum_line.wgsl");
+
+/// Number of historical Mid frames kept for the spectrogram. Each rendered
+/// frame writes one column; one column = one vertical pixel of spectrogram
+/// height. 1024 ≈ 17 s of scroll-back at 60 fps, which is well beyond any
+/// reasonable spectrogram panel height.
+const HISTORY_COLS: u32 = 1024;
 
 /// SPAN-style display options driving the fragment shader.
 #[derive(Copy, Clone, Debug)]
@@ -32,6 +44,14 @@ pub struct DisplayConfig {
     pub smooth_half_oct_log2: f32,
     /// Alpha of the fill below each curve. `0.0` disables fill.
     pub fill_alpha: f32,
+    /// Fraction of total render-target height devoted to the spectrum curves.
+    /// Remainder is spectrogram. `1.0` disables the spectrogram region.
+    pub spectrum_fraction: f32,
+    /// dB range that maps onto the spectrogram colourmap (independent of
+    /// the spectrum curve's `db_min`/`db_max` axis). Vision 4X's Heatmap
+    /// default is `-59 … 0`.
+    pub spectrogram_db_min: f32,
+    pub spectrogram_db_max: f32,
 }
 
 impl Default for DisplayConfig {
@@ -42,12 +62,15 @@ impl Default for DisplayConfig {
             align_offset_db: 0.0,
             smooth_half_oct_log2: 0.0,
             fill_alpha: 0.0,
+            spectrum_fraction: 1.0,
+            spectrogram_db_min: -59.0,
+            spectrogram_db_max: 0.0,
         }
     }
 }
 
 /// Matches the `Uniforms` struct in `spectrum_line.wgsl`.
-/// Total size 112 bytes, 16-byte aligned.
+/// Total size 128 bytes, 16-byte aligned.
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct SpectrumUniforms {
@@ -67,16 +90,23 @@ struct SpectrumUniforms {
     align_offset_db: f32,
     smooth_half_oct_log2: f32,
     fill_alpha: f32,
-    _pad: [f32; 2],
+    spectrum_height: f32,
+    history_cols: f32,
+    write_col: f32,
+    spectrogram_db_min: f32,
+    spectrogram_db_max: f32,
+    _pad: f32,
 }
 
 pub struct SpectrumGpuRenderer {
     target: IoSurfaceMtlTexture,
     mid_buf: GpuBuffer,
     side_buf: GpuBuffer,
+    history_buf: GpuBuffer,
     pipeline: GpuRenderPipeline,
     num_bins: usize,
     display: DisplayConfig,
+    write_col: u32,
 }
 
 impl SpectrumGpuRenderer {
@@ -87,6 +117,18 @@ impl SpectrumGpuRenderer {
 
         let mid_buf = device.create_buffer_shared((num_bins * 4) as u64);
         let side_buf = device.create_buffer_shared((num_bins * 4) as u64);
+        let history_buf =
+            device.create_buffer_shared((num_bins as u64) * (HISTORY_COLS as u64) * 4);
+
+        // Shared buffers are allocated zero-initialised. For the spectrogram
+        // history, 0 dB would hit the top of the colourmap (solid red) on
+        // every unwritten column — fill with a low floor so unseen history
+        // reads as silence (black) until real frames overwrite it.
+        if let Some(ptr) = history_buf.mapped_ptr() {
+            let num_elems = num_bins * HISTORY_COLS as usize;
+            let slice = unsafe { std::slice::from_raw_parts_mut(ptr as *mut f32, num_elems) };
+            slice.fill(-140.0);
+        }
         let pipeline = device.create_render_pipeline(
             SHADER,
             "vs_main",
@@ -100,9 +142,11 @@ impl SpectrumGpuRenderer {
             target,
             mid_buf,
             side_buf,
+            history_buf,
             pipeline,
             num_bins,
             display: DisplayConfig::default(),
+            write_col: 0,
         })
     }
 
@@ -138,7 +182,27 @@ impl SpectrumGpuRenderer {
         }
     }
 
-    /// Render one frame. Both spectrum slices must have length `num_bins`.
+    /// Append one un-averaged Mid frame to the spectrogram ring. Call
+    /// once per FFT hop; `render` then draws whatever state the ring
+    /// is in. `frame.len() == num_bins`.
+    pub fn push_spectrogram_frame(&mut self, frame: &[f32]) {
+        debug_assert_eq!(frame.len(), self.num_bins);
+        self.write_col = (self.write_col + 1) % HISTORY_COLS;
+        if let Some(ptr) = self.history_buf.mapped_ptr() {
+            unsafe {
+                let offset = self.write_col as usize * self.num_bins * 4;
+                std::ptr::copy_nonoverlapping(
+                    frame.as_ptr() as *const u8,
+                    ptr.add(offset),
+                    self.num_bins * 4,
+                );
+            }
+        }
+    }
+
+    /// Render one frame. `mid_db` / `side_db` feed the Mid + Side curves
+    /// (averaged); the spectrogram is drawn from history already populated
+    /// via `push_spectrogram_frame`.
     pub fn render(
         &mut self,
         device: &GpuDevice,
@@ -173,6 +237,9 @@ impl SpectrumGpuRenderer {
             }
         }
 
+        let spectrum_fraction = self.display.spectrum_fraction.clamp(0.1, 1.0);
+        let spectrum_height = (self.target.height as f32 * spectrum_fraction).round();
+
         let uniforms = SpectrumUniforms {
             resolution: [self.target.width as f32, self.target.height as f32],
             sample_rate,
@@ -192,7 +259,12 @@ impl SpectrumGpuRenderer {
             align_offset_db: self.display.align_offset_db,
             smooth_half_oct_log2: self.display.smooth_half_oct_log2,
             fill_alpha: self.display.fill_alpha,
-            _pad: [0.0; 2],
+            spectrum_height,
+            history_cols: HISTORY_COLS as f32,
+            write_col: self.write_col as f32,
+            spectrogram_db_min: self.display.spectrogram_db_min,
+            spectrogram_db_max: self.display.spectrogram_db_max,
+            _pad: 0.0,
         };
         let uniform_bytes: &[u8] = unsafe {
             std::slice::from_raw_parts(
@@ -214,6 +286,11 @@ impl SpectrumGpuRenderer {
             GpuBinding::Buffer {
                 binding: 2,
                 buffer: &self.side_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &self.history_buf,
                 offset: 0,
             },
         ];

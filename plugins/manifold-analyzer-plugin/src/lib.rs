@@ -132,9 +132,17 @@ impl Plugin for ManifoldAnalyzer {
             i += 1;
         }
 
-        // Publish latest spectra to GUI via try_lock — skip if GUI is reading,
-        // no audio-thread allocations.
-        if mid.push_mono(&self.mid_scratch[..i]) {
+        // Publish latest averaged spectra via try_lock (mailbox — only the
+        // newest value matters for the SPAN curve). Push every un-averaged
+        // Mid frame into the lock-free ring (queue — the spectrogram draws
+        // one column per FFT hop so dropping frames coarsens the time axis).
+        let gui_shared = &self.gui_shared;
+        let mut mid_had_frame = false;
+        mid.process_mono_with_raw(&self.mid_scratch[..i], |_avg, raw| {
+            let _ = gui_shared.mid_raw_ring.push(raw);
+            mid_had_frame = true;
+        });
+        if mid_had_frame {
             if let Ok(mut guard) = self.gui_shared.mid_db.try_lock() {
                 guard.copy_from_slice(mid.latest_spectrum_db());
             }

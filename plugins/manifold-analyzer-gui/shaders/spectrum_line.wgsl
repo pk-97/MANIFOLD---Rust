@@ -1,17 +1,22 @@
-// Spectrum — fullscreen fragment shader with SPAN-style display.
+// Spectrum + spectrogram — fullscreen fragment shader.
 //
-// Two curves per frame: Mid = (L+R)/2, Side = (L-R)/2.
-// Per-pixel pipeline:
-//   1. For each curve, compute dB at the pixel centre frequency and at
-//      ±1 px in log-freq (for anti-aliased line SDF).
-//   2. Apply 1/N-oct frequency smoothing in the power domain.
-//   3. Apply +slope dB/oct tilt around a reference frequency and a
-//      scalar align-0-dB offset.
-//   4. Convert dB → y pixel, evaluate SDF to adjacent pixel anchors
-//      (continuous line even on steep slopes), compute line AA.
-//   5. Compose: bg → side fill → side line → mid fill → mid line.
+// Top region (y < spectrum_height):
+//   SPAN-style Mid + Side line/fill curves. Pipeline:
+//     1. For each curve, compute dB at the pixel centre frequency and at
+//        ±1 px in log-freq (for anti-aliased line SDF).
+//     2. Apply 1/N-oct frequency smoothing in the power domain.
+//     3. Apply +slope dB/oct tilt around a reference frequency and a
+//        scalar align-0-dB offset.
+//     4. Convert dB → y pixel, evaluate SDF to adjacent pixel anchors, AA.
+//     5. Compose: bg → side fill → side line → mid fill → mid line.
+//   Side is drawn underneath Mid so the primary curve reads as foreground.
 //
-// Side is drawn underneath Mid so the primary curve reads as foreground.
+// Bottom region (y >= spectrum_height):
+//   Scrolling Mid spectrogram sampled from a ring buffer. One row of pixels
+//   = one historical column. Newest column is at the top (just below the
+//   spectrum line), flowing down with age. dB → colour via inferno-like
+//   ramp, with the same display tilt applied so the ramp has headroom at
+//   low frequencies.
 
 struct Uniforms {
     resolution: vec2<f32>,
@@ -30,13 +35,18 @@ struct Uniforms {
     align_offset_db: f32,
     smooth_half_oct_log2: f32,
     fill_alpha: f32,
+    spectrum_height: f32,
+    history_cols: f32,
+    write_col: f32,
+    spectrogram_db_min: f32,
+    spectrogram_db_max: f32,
     _pad0: f32,
-    _pad1: f32,
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var<storage, read> mid_spectrum: array<f32>;
 @group(0) @binding(2) var<storage, read> side_spectrum: array<f32>;
+@group(0) @binding(3) var<storage, read> history: array<f32>;
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -59,7 +69,7 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
 
 fn db_to_y_px(db: f32) -> f32 {
     let t = (db - u.db_min) / (u.db_max - u.db_min);
-    return u.resolution.y * (1.0 - clamp(t, 0.0, 1.0));
+    return u.spectrum_height * (1.0 - clamp(t, 0.0, 1.0));
 }
 
 fn tilt_db(freq: f32, raw_db: f32) -> f32 {
@@ -149,6 +159,78 @@ fn sdf_segment(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
     return length(pa - ba * h);
 }
 
+// Vision 4X "Heatmap" style — jet-like ramp from black through deep blue,
+// cyan, green, yellow, orange to saturated red. Low dB = black/navy so
+// near-silent regions read as background; mids = cyan/green; peaks = red.
+fn colormap(t_in: f32) -> vec3<f32> {
+    let t = clamp(t_in, 0.0, 1.0);
+    let c0 = vec3<f32>(0.00, 0.00, 0.00); // black
+    let c1 = vec3<f32>(0.00, 0.00, 0.45); // deep navy
+    let c2 = vec3<f32>(0.00, 0.10, 0.95); // blue
+    let c3 = vec3<f32>(0.00, 0.80, 0.95); // cyan
+    let c4 = vec3<f32>(0.20, 0.95, 0.20); // green
+    let c5 = vec3<f32>(0.95, 0.95, 0.00); // yellow
+    let c6 = vec3<f32>(0.95, 0.00, 0.00); // red
+    if (t < 0.15) { return mix(c0, c1, t / 0.15); }
+    if (t < 0.35) { return mix(c1, c2, (t - 0.15) / 0.20); }
+    if (t < 0.55) { return mix(c2, c3, (t - 0.35) / 0.20); }
+    if (t < 0.70) { return mix(c3, c4, (t - 0.55) / 0.15); }
+    if (t < 0.85) { return mix(c4, c5, (t - 0.70) / 0.15); }
+    return mix(c5, c6, (t - 0.85) / 0.15);
+}
+
+// Linear interpolation in the POWER domain between the two adjacent FFT
+// bins of `bin_f`. Power-domain mixing matches how dB values combine
+// physically; interpolating dB directly understates power. Returns dB
+// (log of linear power).
+fn sample_history_db(col: i32, bin_f_in: f32, num_bins_i: i32) -> f32 {
+    let bin_f = clamp(bin_f_in, 0.0, f32(num_bins_i) - 1.0);
+    let bin_lo = i32(floor(bin_f));
+    let bin_hi = min(bin_lo + 1, num_bins_i - 1);
+    let frac = fract(bin_f);
+    let db_lo = history[col * num_bins_i + bin_lo];
+    let db_hi = history[col * num_bins_i + bin_hi];
+    let p_lo = pow(10.0, db_lo * 0.1);
+    let p_hi = pow(10.0, db_hi * 0.1);
+    let p = mix(p_lo, p_hi, frac);
+    return 10.0 * log(p + 1e-24) / log(10.0);
+}
+
+fn spectrogram_pixel(px: vec2<f32>) -> vec4<f32> {
+    let history_cols_i = i32(u.history_cols);
+    let write_col_i = i32(u.write_col);
+    let num_bins = i32(u.fft_size * 0.5);
+    let bins_per_hz = u.fft_size / u.sample_rate;
+
+    // X axis: newest column at the left edge, older frames scrolling to
+    // the right. `history_idx` counts pixels from the left edge.
+    let history_idx = i32(floor(px.x));
+    if (history_idx < 0 || history_idx >= history_cols_i) {
+        return vec4<f32>(0.0);
+    }
+    var col = write_col_i - history_idx;
+    col = ((col % history_cols_i) + history_cols_i) % history_cols_i;
+
+    // Y axis: log-frequency, high freq at the top of the spectrogram strip,
+    // low freq at the bottom (Vision 4X orientation).
+    let spec_y = px.y - u.spectrum_height;
+    let spec_h = max(u.resolution.y - u.spectrum_height, 1.0);
+    let rel_y = clamp(spec_y / spec_h, 0.0, 1.0);
+    let log_f = mix(log(u.freq_max), log(u.freq_min), rel_y);
+    let freq = exp(log_f);
+
+    // Linear power-domain interp between adjacent bins — no log-octave
+    // smoothing, so harmonic stacks stay resolved (matches Vision 4X).
+    let raw_db = sample_history_db(col, freq * bins_per_hz, num_bins);
+
+    // No tilt — Vision 4X's heatmap is raw dB. Colourmap range is
+    // independent of the spectrum curve's axis range.
+    let span = max(u.spectrogram_db_max - u.spectrogram_db_min, 1e-3);
+    let t = (raw_db - u.spectrogram_db_min) / span;
+    let rgb = colormap(t);
+    return vec4<f32>(rgb, 1.0);
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let px = in.uv * u.resolution;
@@ -158,7 +240,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let log_range = log_hi - log_lo;
     let dx_per_px = log_range / u.resolution.x;
     let log_f = log_lo + in.uv.x * log_range;
+    let freq = exp(log_f);
 
+    // Spectrogram region — opaque fill, no curves. Uses its own freq axis
+    // (log-y) so `freq` from the curve-mapping above is not used here.
+    if (px.y >= u.spectrum_height) {
+        return spectrogram_pixel(px);
+    }
+
+    // Spectrum region — curves + fills composited over transparency so the
+    // egui-drawn grid behind the paint callback shows through.
     let my_prev = y_px_at_freq_mid(exp(log_f - dx_per_px));
     let my_curr = y_px_at_freq_mid(exp(log_f));
     let my_next = y_px_at_freq_mid(exp(log_f + dx_per_px));
@@ -179,9 +270,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let aa_mid  = 1.0 - smoothstep(half_t - 0.5, half_t + 0.5, dm);
     let aa_side = 1.0 - smoothstep(half_t - 0.5, half_t + 0.5, ds);
 
-    // Fill coverage: 1 below the curve, 0 above, with a 1-px AA edge.
-    let fill_mid  = smoothstep(my_curr - 0.5, my_curr + 0.5, px.y);
-    let fill_side = smoothstep(sy_curr - 0.5, sy_curr + 0.5, px.y);
+    // Fill coverage: 1 below the curve, 0 above, with a 1-px AA edge. The
+    // lower bound is spectrum_height — fills stop at the spectrogram seam.
+    let lower = min(px.y, u.spectrum_height);
+    let fill_mid  = smoothstep(my_curr - 0.5, my_curr + 0.5, lower);
+    let fill_side = smoothstep(sy_curr - 0.5, sy_curr + 0.5, lower);
 
     let a_side_fill = fill_side * u.fill_alpha;
     let a_side_line = aa_side;
@@ -189,8 +282,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let a_mid_line  = aa_mid;
 
     // Premultiplied-alpha "over" compositing, far-to-near (side fill below,
-    // mid line on top). Output has alpha = 0 everywhere off the curves so
-    // the egui-drawn grid behind the paint callback shows through.
+    // mid line on top).
     var pre = vec3<f32>(0.0);
     var alpha = 0.0;
 
