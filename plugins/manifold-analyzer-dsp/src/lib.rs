@@ -5,9 +5,14 @@
 //! contract that lets the CLI verify DSP correctness without a DAW.
 
 mod loudness;
+pub mod reference;
 
 pub use loudness::{
-    compute_integrated_and_lra, IntegratedScratch, LoudnessMeter, LoudnessSnapshot,
+    IntegratedScratch, LoudnessMeter, LoudnessSnapshot, compute_integrated_and_lra,
+};
+pub use reference::{
+    REF_FFT_SIZE, REF_FREQ_MAX, REF_FREQ_MIN, REF_POINTS, RefAnalysis, RefEnvelope, RefError,
+    analyze_ref_file,
 };
 
 use rustfft::{Fft, FftPlanner, num_complex::Complex};

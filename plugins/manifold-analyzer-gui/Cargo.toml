@@ -22,3 +22,24 @@ parking_lot = "0.12"
 
 # Lock-free bounded SPSC used by the CQT worker → GUI column pipeline.
 crossbeam-queue = "0.3"
+
+# Native file-picker for loading reference tracks. We use `AsyncFileDialog`
+# driven on a worker thread (`pollster`) because the blocking `FileDialog`
+# on macOS runs an NSOpenPanel modal loop that re-enters baseview's
+# already-borrowed RefCell and crashes the plugin editor.
+rfd = "0.14"
+pollster = "0.4"
+
+# Persist ref-slot state with the plugin.
+serde = { version = "1", features = ["derive"] }
+
+# macOS-only: grab the plugin editor's NSView so the file-picker sheet
+# attaches to it instead of floating behind the plugin window. objc2
+# 0.5 matches the transitive version already pulled in by objc2-app-kit
+# 0.2 — using 0.6 forks a second copy and `MainThreadMarker` types stop
+# unifying across calls.
+[target.'cfg(target_os = "macos")'.dependencies]
+raw-window-handle = "0.6"
+objc2 = "0.5"
+objc2-foundation = { version = "0.2", features = ["NSThread"] }
+objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSWindow", "NSView", "NSResponder"] }

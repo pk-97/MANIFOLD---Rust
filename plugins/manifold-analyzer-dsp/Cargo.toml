@@ -11,3 +11,12 @@ rustfft = "6"
 # audio thread to an off-thread integrated/LRA recompute worker. Consumed
 # via an optional `Arc<ArrayQueue<f32>>` sink — CLI and tests skip it.
 crossbeam-queue = "0.3"
+
+# Offline reference-track decode: WAV/MP3/FLAC/AAC/M4A. Only used by the
+# `reference` module; the real-time path never touches symphonia.
+symphonia = { version = "0.5", default-features = false, features = [
+    "wav", "pcm", "flac", "mp3", "aac", "isomp4",
+] }
+
+# Persist/serialize ref-track envelopes alongside the plugin state.
+serde = { version = "1", features = ["derive"] }

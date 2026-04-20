@@ -29,17 +29,21 @@ mod spectrum_worker;
 pub use loudness_worker::LoudnessWorker;
 
 use gl_paint::{PainterState, QuadPainter, SharedPainterState};
-use manifold_analyzer_dsp::{LoudnessSnapshot, MIN_DB};
+use manifold_analyzer_dsp::{
+    LoudnessSnapshot, MIN_DB, REF_FREQ_MAX, REF_FREQ_MIN, REF_POINTS, RefAnalysis,
+    analyze_ref_file,
+};
 use manifold_gpu::GpuDevice;
 use nih_plug::prelude::*;
 use nih_plug_egui::{EguiState, create_egui_editor, egui};
 use sample_ring::SampleRing;
+use serde::{Deserialize, Serialize};
 use spectrum_gpu::{DisplayConfig, SpectrumGpuRenderer, WEIGHTING_LUT_SIZE};
 use spectrum_worker::{CqtWorker, WorkerConfig};
 use crossbeam_queue::ArrayQueue;
-use parking_lot::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 // Initial render-target size; `SpectrumGpuRenderer::ensure_size` resizes every
 // frame to match the current rect × pixels_per_point for pixel-perfect output.
@@ -60,6 +64,20 @@ const DB_MAX: f32 = 0.0;
 /// readouts like "-14.4 LUFS" without truncation at the default
 /// egui font size.
 const LOUDNESS_PANEL_WIDTH: f32 = 180.0;
+
+/// Maximum number of reference-track slots persisted with the plugin.
+/// Matches typical mastering-reference tool conventions (SPAN / Ozone).
+pub const REF_SLOT_COUNT: usize = 4;
+
+/// Display colours per slot. Picked for distinctness on the dark MS
+/// plot background; alpha is applied separately when drawing the
+/// percentile band vs the slot indicator.
+const REF_SLOT_COLORS: [[u8; 3]; REF_SLOT_COUNT] = [
+    [255, 140, 90],   // warm orange
+    [90, 190, 255],   // cyan
+    [200, 140, 255],  // violet
+    [140, 230, 140],  // green
+];
 /// Reference frequency for the Flat/Pink/Tilted weighting slopes.
 /// LUFS modes ignore this (the biquad response has its own pivot).
 const SLOPE_REF_FREQ: f32 = 1000.0;
@@ -360,10 +378,51 @@ impl ReferenceCurve {
     }
 }
 
+/// One loaded reference track. Holds just enough to re-render the band
+/// without re-decoding the source file: the pre-computed percentile
+/// envelopes, the source's integrated LUFS for gain-match, and an
+/// optional LAME lowpass cutoff so codec brickwalls don't mislead.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct RefSlot {
+    /// File name (no path). Empty string → slot is unused.
+    pub name: String,
+    /// Analysis result. `None` if the slot is empty; `Some` once a file
+    /// has been loaded and analysed.
+    pub analysis: Option<RefAnalysis>,
+    /// GUI visibility toggle. Defaults to `true` on new load.
+    pub visible: bool,
+}
+
+impl RefSlot {
+    pub fn is_loaded(&self) -> bool {
+        self.analysis.is_some()
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RefSlots {
+    pub slots: [RefSlot; REF_SLOT_COUNT],
+}
+
+impl Default for RefSlots {
+    fn default() -> Self {
+        Self {
+            slots: core::array::from_fn(|_| RefSlot::default()),
+        }
+    }
+}
+
 #[derive(Params)]
 pub struct AnalyzerParams {
     #[persist = "editor-state"]
     pub editor_state: Arc<EguiState>,
+
+    /// Loaded reference tracks (up to `REF_SLOT_COUNT`). Persisted with
+    /// the plugin state so the user doesn't have to re-load refs each
+    /// session. Only the envelopes + integrated LUFS are stored, not
+    /// the source audio.
+    #[persist = "ref-slots"]
+    pub ref_slots: Arc<RwLock<RefSlots>>,
 
     /// Lock the scrolling spectrogram to the host's bars/beats grid.
     /// When off, the spectrogram scrolls right-to-left at its native
@@ -431,6 +490,7 @@ impl AnalyzerParams {
     pub fn new() -> Self {
         Self {
             editor_state: EguiState::from_size(INITIAL_SPECTRUM_W, INITIAL_SPECTRUM_H),
+            ref_slots: Arc::new(RwLock::new(RefSlots::default())),
             sync: BoolParam::new("Sync", false),
             sync_factor: EnumParam::new("Factor", SyncFactor::One),
             sync_multiplier: IntParam::new("Multiplier", 4, IntRange::Linear { min: 1, max: 16 }),
@@ -504,6 +564,12 @@ pub struct AnalyzerGuiShared {
     /// change. An atomic counter avoids the "miss the edge" problem
     /// of a plain boolean.
     reset_epoch: AtomicU32,
+    /// Bit N set → reference slot N has an analysis worker thread
+    /// in flight. GUI flips these on when spawning the worker and
+    /// off when the worker writes its result back into the params
+    /// slot. Used only to draw a "…analysing" indicator; never
+    /// gates audio-thread behaviour.
+    ref_analyzing_mask: AtomicU8,
 }
 
 impl AnalyzerGuiShared {
@@ -529,7 +595,29 @@ impl AnalyzerGuiShared {
             short_term_max_lufs_bits: AtomicU32::new(MIN_DB.to_bits()),
             true_peak_max_dbtp_bits: AtomicU32::new(MIN_DB.to_bits()),
             reset_epoch: AtomicU32::new(0),
+            ref_analyzing_mask: AtomicU8::new(0),
         }
+    }
+
+    /// GUI flips these while an analysis worker is in flight for slot
+    /// `slot`. Bits outside `0..REF_SLOT_COUNT` are ignored.
+    pub fn set_ref_analyzing(&self, slot: usize, on: bool) {
+        if slot >= REF_SLOT_COUNT {
+            return;
+        }
+        let bit = 1u8 << slot;
+        if on {
+            self.ref_analyzing_mask.fetch_or(bit, Ordering::Relaxed);
+        } else {
+            self.ref_analyzing_mask.fetch_and(!bit, Ordering::Relaxed);
+        }
+    }
+
+    pub fn is_ref_analyzing(&self, slot: usize) -> bool {
+        if slot >= REF_SLOT_COUNT {
+            return false;
+        }
+        (self.ref_analyzing_mask.load(Ordering::Relaxed) & (1u8 << slot)) != 0
     }
 
     pub fn set_sample_rate(&self, sr: f32) {
@@ -786,6 +874,12 @@ pub fn create_editor(
                 .exact_height(26.0)
                 .show(ctx, |ui| {
                     draw_controls(ui, state, setter);
+                });
+            egui::TopBottomPanel::top("analyzer-refs")
+                .frame(egui::Frame::new().fill(egui::Color32::from_rgb(14, 17, 24)))
+                .exact_height(26.0)
+                .show(ctx, |ui| {
+                    draw_ref_slots(ui, state);
                 });
             egui::SidePanel::right("analyzer-loudness")
                 .frame(egui::Frame::new().fill(egui::Color32::from_rgb(12, 15, 21)))
@@ -1094,6 +1188,18 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         state.params.reference_curve.value(),
     );
 
+    // 2b. Reference-track percentile bands. Drawn after the static
+    //     inverse-weighting line so slots with bright fills don't hide
+    //     the reference line underneath.
+    draw_ref_bands(
+        &painter,
+        spectrum_rect,
+        freq_min,
+        freq_max,
+        &state.params.ref_slots.read(),
+        state.shared.integrated_lufs(),
+    );
+
     // 3. Spectrum-region labels. Transparent shader lets these sit on
     //    top of the curves for readability.
     for &freq in FREQ_MAJORS {
@@ -1169,6 +1275,113 @@ fn draw_reference_curve(
         pts,
         egui::Stroke::new(1.5, egui::Color32::from_white_alpha(180)),
     ));
+}
+
+/// Draw the loaded reference slots as filled percentile bands on the
+/// MS plot. Each visible slot contributes one band; bands are gain-
+/// matched to the live mix's integrated LUFS so *shape* comparison is
+/// honest regardless of relative level. MP3 codec lowpass (if detected)
+/// clips the band at the brickwall so the display doesn't misleadingly
+/// show the ref "falling off" above the codec cutoff.
+fn draw_ref_bands(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    freq_min: f32,
+    freq_max: f32,
+    slots: &RefSlots,
+    live_integrated_lufs: f32,
+) {
+    if rect.width() <= 0.0 || rect.height() <= 0.0 {
+        return;
+    }
+    let log_min = REF_FREQ_MIN.ln();
+    let log_max = REF_FREQ_MAX.ln();
+    let grid_span = log_max - log_min;
+    if !grid_span.is_finite() || grid_span <= 0.0 {
+        return;
+    }
+
+    for (slot_idx, slot) in slots.slots.iter().enumerate() {
+        if !slot.visible {
+            continue;
+        }
+        let Some(analysis) = &slot.analysis else {
+            continue;
+        };
+        let envelope = &analysis.mid;
+        if envelope.bounds.len() != REF_POINTS {
+            continue;
+        }
+
+        // Match-to-current gain. Only shift when both the ref and the
+        // live mix have a sensible integrated value; otherwise display
+        // at source level so a fresh / silent host doesn't drag the
+        // ref off-screen.
+        let shift_db = if live_integrated_lufs > MIN_DB + 1.0
+            && analysis.integrated_lufs > MIN_DB + 1.0
+        {
+            live_integrated_lufs - analysis.integrated_lufs
+        } else {
+            0.0
+        };
+
+        // Upper cutoff: the band is meaningful only up to min(source
+        // Nyquist, LAME lowpass if set). Beyond that the percentile
+        // is computed from codec-filtered silence and would misread.
+        let source_nyquist = analysis.source_sample_rate * 0.5;
+        let upper_cutoff_hz = analysis
+            .lowpass_hz
+            .map(|lp| lp.min(source_nyquist))
+            .unwrap_or(source_nyquist);
+
+        let c = REF_SLOT_COLORS[slot_idx];
+        let fill = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], 55);
+
+        // Collect valid samples as (x, y_hi, y_lo) triples. Long-tail
+        // bins (freq > source Nyquist / LAME lowpass / view range) are
+        // filtered out so the band terminates cleanly instead of
+        // collapsing through `MIN_DB` slots.
+        let denom = (REF_POINTS - 1) as f32;
+        let mut pts: Vec<(f32, f32, f32)> = Vec::with_capacity(REF_POINTS);
+        for (i, pair) in envelope.bounds.iter().enumerate() {
+            let t = i as f32 / denom;
+            let freq = (log_min + t * grid_span).exp();
+            if freq < freq_min || freq > freq_max || freq > upper_cutoff_hz {
+                continue;
+            }
+            let lo = pair[0] + shift_db;
+            let hi = pair[1] + shift_db;
+            if lo <= MIN_DB + 1.0 && hi <= MIN_DB + 1.0 {
+                continue;
+            }
+            let x = freq_to_x(freq, freq_min, freq_max, rect);
+            let y_lo = db_to_y(lo, DB_MIN, DB_MAX, rect);
+            let y_hi = db_to_y(hi, DB_MIN, DB_MAX, rect);
+            pts.push((x, y_hi, y_lo));
+        }
+        if pts.len() < 2 {
+            continue;
+        }
+
+        // Fill the band as a strip of convex quads between consecutive
+        // samples. One big non-convex closed path used to tessellate
+        // into long thin slivers that rendered as diagonal streaks
+        // across the plot; convex quads are tessellated cleanly.
+        for w in pts.windows(2) {
+            let (x0, y_hi0, y_lo0) = w[0];
+            let (x1, y_hi1, y_lo1) = w[1];
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    egui::pos2(x0, y_hi0),
+                    egui::pos2(x1, y_hi1),
+                    egui::pos2(x1, y_lo1),
+                    egui::pos2(x0, y_lo0),
+                ],
+                fill,
+                egui::Stroke::NONE,
+            ));
+        }
+    }
 }
 
 fn draw_spectrogram_chrome(
@@ -1731,6 +1944,240 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
             ui.label("— BPM");
         }
     });
+}
+
+fn draw_ref_slots(ui: &mut egui::Ui, state: &mut EditorState) {
+    let params = state.params.clone();
+    let shared = state.shared.clone();
+    ui.horizontal_centered(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        ui.label(egui::RichText::new("Refs").color(egui::Color32::from_gray(180)));
+        for slot_idx in 0..REF_SLOT_COUNT {
+            draw_single_ref_slot(ui, &params.ref_slots, &shared, slot_idx);
+            if slot_idx < REF_SLOT_COUNT - 1 {
+                ui.separator();
+            }
+        }
+    });
+}
+
+fn draw_single_ref_slot(
+    ui: &mut egui::Ui,
+    ref_slots: &Arc<RwLock<RefSlots>>,
+    shared: &Arc<AnalyzerGuiShared>,
+    slot_idx: usize,
+) {
+    let color = REF_SLOT_COLORS[slot_idx];
+    let color32 = egui::Color32::from_rgb(color[0], color[1], color[2]);
+
+    // Snapshot slot state so we release the lock before any file-dialog
+    // work: rfd's native picker can block for seconds, and the analysis
+    // worker takes a `write` lock when it finishes.
+    let (name, loaded, visible) = {
+        let slots = ref_slots.read();
+        let slot = &slots.slots[slot_idx];
+        (slot.name.clone(), slot.is_loaded(), slot.visible)
+    };
+    let analyzing = shared.is_ref_analyzing(slot_idx);
+
+    ui.label(
+        egui::RichText::new(format!("{}", slot_idx + 1))
+            .color(egui::Color32::from_gray(150))
+            .monospace(),
+    );
+
+    if analyzing {
+        ui.label(
+            egui::RichText::new("analysing…")
+                .color(egui::Color32::from_gray(200))
+                .italics(),
+        );
+        return;
+    }
+
+    if !loaded {
+        if ui.small_button("Load…").clicked() {
+            launch_ref_picker(slot_idx, ref_slots.clone(), shared.clone());
+        }
+        return;
+    }
+
+    // Colour dot — dim when visibility is off.
+    let dot_color = if visible {
+        color32
+    } else {
+        egui::Color32::from_rgba_premultiplied(
+            (color[0] as f32 * 0.35) as u8,
+            (color[1] as f32 * 0.35) as u8,
+            (color[2] as f32 * 0.35) as u8,
+            255,
+        )
+    };
+    let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+    ui.painter()
+        .circle_filled(dot_rect.center(), 5.0, dot_color);
+
+    let label_color = if visible {
+        egui::Color32::WHITE
+    } else {
+        egui::Color32::from_white_alpha(120)
+    };
+    let truncated = truncate_name(&name, 16);
+    let btn = ui
+        .add(egui::Button::new(
+            egui::RichText::new(truncated).color(label_color),
+        ))
+        .on_hover_text(format!("{name}\nclick → toggle visibility"));
+    if btn.clicked() {
+        let mut slots = ref_slots.write();
+        slots.slots[slot_idx].visible = !slots.slots[slot_idx].visible;
+    }
+    if ui.small_button("×").on_hover_text("Clear slot").clicked() {
+        let mut slots = ref_slots.write();
+        slots.slots[slot_idx] = RefSlot::default();
+    }
+}
+
+fn truncate_name(s: &str, max_chars: usize) -> String {
+    let count = s.chars().count();
+    if count <= max_chars {
+        s.to_string()
+    } else {
+        let keep = max_chars.saturating_sub(1);
+        let mut out: String = s.chars().take(keep).collect();
+        out.push('…');
+        out
+    }
+}
+
+/// Spawn a worker thread that (a) runs the non-blocking
+/// `AsyncFileDialog` — which dispatches NSOpenPanel onto the main
+/// runloop without spinning a nested modal loop, avoiding a baseview
+/// RefCell-reentrancy crash — and (b) runs the offline analysis once
+/// the user picks a file, writing the result back into the persistent
+/// slot.
+///
+/// On macOS we capture the editor's key NSView on the main thread
+/// before spawning so rfd can attach the picker as a sheet on the
+/// plugin window — otherwise the panel floats *below* the editor
+/// because the editor's NSWindow level sits above the default
+/// panel level and the user never sees it.
+fn launch_ref_picker(
+    slot_idx: usize,
+    ref_slots: Arc<RwLock<RefSlots>>,
+    shared: Arc<AnalyzerGuiShared>,
+) {
+    // Main-thread capture of the parent view pointer. Must happen here
+    // (not inside the worker) because `NSApplication::sharedApplication`
+    // requires a `MainThreadMarker`.
+    #[cfg(target_os = "macos")]
+    let parent = macos::capture_key_window_parent();
+    #[cfg(not(target_os = "macos"))]
+    let parent: Option<()> = None;
+
+    shared.set_ref_analyzing(slot_idx, true);
+    std::thread::spawn(move || {
+        let dialog = rfd::AsyncFileDialog::new()
+            .set_title(format!("Load reference for slot {}", slot_idx + 1))
+            .add_filter(
+                "Audio",
+                &["wav", "mp3", "flac", "aac", "m4a", "ogg", "aiff", "aif"],
+            );
+        #[cfg(target_os = "macos")]
+        let dialog = if let Some(p) = parent.as_ref() {
+            dialog.set_parent(p)
+        } else {
+            dialog
+        };
+        #[cfg(not(target_os = "macos"))]
+        let _ = parent;
+
+        let picked = pollster::block_on(dialog.pick_file());
+        let Some(handle) = picked else {
+            shared.set_ref_analyzing(slot_idx, false);
+            return;
+        };
+        let path = handle.path().to_path_buf();
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(String::from)
+            .unwrap_or_else(|| format!("ref-{}", slot_idx + 1));
+
+        match analyze_ref_file(&path) {
+            Ok(analysis) => {
+                let mut slots = ref_slots.write();
+                slots.slots[slot_idx] = RefSlot {
+                    name,
+                    analysis: Some(analysis),
+                    visible: true,
+                };
+            }
+            Err(e) => {
+                eprintln!("manifold-analyzer: reference analysis failed ({e})");
+            }
+        }
+        shared.set_ref_analyzing(slot_idx, false);
+    });
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use objc2::rc::Id;
+    use objc2_app_kit::{NSApplication, NSView};
+    use objc2_foundation::MainThreadMarker;
+    use raw_window_handle::{
+        AppKitDisplayHandle, AppKitWindowHandle, DisplayHandle, HasDisplayHandle,
+        HasWindowHandle, RawDisplayHandle, RawWindowHandle, WindowHandle,
+    };
+    use std::ptr::NonNull;
+
+    /// Owns a retained `NSView` so the pointer we hand to `set_parent`
+    /// stays alive across the `AsyncFileDialog` await. Send/Sync are
+    /// hand-asserted because `Id<NSView>` isn't auto-`Send`, but we
+    /// only read its address on the worker thread — never call
+    /// AppKit methods through it off-main-thread.
+    pub struct KeyWindowParent {
+        view: Id<NSView>,
+    }
+    unsafe impl Send for KeyWindowParent {}
+    unsafe impl Sync for KeyWindowParent {}
+
+    impl HasWindowHandle for KeyWindowParent {
+        fn window_handle(
+            &self,
+        ) -> Result<WindowHandle<'_>, raw_window_handle::HandleError> {
+            let ptr: *const NSView = &*self.view;
+            let nn = NonNull::new(ptr as *mut std::ffi::c_void)
+                .ok_or(raw_window_handle::HandleError::Unavailable)?;
+            let handle = AppKitWindowHandle::new(nn);
+            // SAFETY: the `NSView` is retained for the lifetime of
+            // `self`, so the raw pointer is valid for this borrow.
+            Ok(unsafe { WindowHandle::borrow_raw(RawWindowHandle::AppKit(handle)) })
+        }
+    }
+
+    impl HasDisplayHandle for KeyWindowParent {
+        fn display_handle(
+            &self,
+        ) -> Result<DisplayHandle<'_>, raw_window_handle::HandleError> {
+            // SAFETY: AppKitDisplayHandle carries no data to invalidate.
+            Ok(unsafe {
+                DisplayHandle::borrow_raw(RawDisplayHandle::AppKit(AppKitDisplayHandle::new()))
+            })
+        }
+    }
+
+    /// Grab the current key window's `contentView`. Returns `None` off
+    /// the main thread or when the plugin has no key window (host not
+    /// active, editor not focused).
+    pub fn capture_key_window_parent() -> Option<KeyWindowParent> {
+        let mtm = MainThreadMarker::new()?;
+        let app = NSApplication::sharedApplication(mtm);
+        let key_win = app.keyWindow()?;
+        let view = key_win.contentView()?;
+        Some(KeyWindowParent { view })
+    }
 }
 
 fn top_ratio_label(r: TopRatio) -> &'static str {
