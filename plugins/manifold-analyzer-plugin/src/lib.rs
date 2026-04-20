@@ -1,7 +1,6 @@
 use manifold_analyzer_dsp::Analyzer;
-use manifold_analyzer_gui::AnalyzerGuiShared;
+use manifold_analyzer_gui::{AnalyzerGuiShared, AnalyzerParams};
 use nih_plug::prelude::*;
-use nih_plug_egui::EguiState;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
@@ -11,37 +10,25 @@ use std::sync::Arc;
 const FFT_SIZE: usize = 16384;
 const OVERLAP_RATIO: f32 = 0.975;
 const AVG_TIME_MS: f32 = 200.0;
-const INITIAL_WINDOW_SIZE: (u32, u32) = (900, 450);
 
 struct ManifoldAnalyzer {
-    params: Arc<ManifoldAnalyzerParams>,
+    params: Arc<AnalyzerParams>,
     mid_analyzer: Option<Analyzer>,
     side_analyzer: Option<Analyzer>,
     mid_scratch: Vec<f32>,
     side_scratch: Vec<f32>,
     gui_shared: Arc<AnalyzerGuiShared>,
-    egui_state: Arc<EguiState>,
-}
-
-#[derive(Params)]
-struct ManifoldAnalyzerParams {
-    #[persist = "editor-state"]
-    editor_state: Arc<EguiState>,
 }
 
 impl Default for ManifoldAnalyzer {
     fn default() -> Self {
-        let egui_state = EguiState::from_size(INITIAL_WINDOW_SIZE.0, INITIAL_WINDOW_SIZE.1);
         Self {
-            params: Arc::new(ManifoldAnalyzerParams {
-                editor_state: egui_state.clone(),
-            }),
+            params: Arc::new(AnalyzerParams::new()),
             mid_analyzer: None,
             side_analyzer: None,
             mid_scratch: Vec::new(),
             side_scratch: Vec::new(),
             gui_shared: Arc::new(AnalyzerGuiShared::new(44100.0, FFT_SIZE)),
-            egui_state,
         }
     }
 }
@@ -71,7 +58,7 @@ impl Plugin for ManifoldAnalyzer {
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        manifold_analyzer_gui::create_editor(self.egui_state.clone(), self.gui_shared.clone())
+        manifold_analyzer_gui::create_editor(self.params.clone(), self.gui_shared.clone())
     }
 
     fn initialize(
@@ -108,8 +95,12 @@ impl Plugin for ManifoldAnalyzer {
         &mut self,
         buffer: &mut Buffer,
         _aux: &mut AuxiliaryBuffers,
-        _context: &mut impl ProcessContext<Self>,
+        context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
+        let transport = context.transport();
+        self.gui_shared
+            .set_transport(transport.tempo, transport.pos_beats(), transport.playing);
+
         let (Some(mid), Some(side)) = (self.mid_analyzer.as_mut(), self.side_analyzer.as_mut())
         else {
             return ProcessStatus::Normal;

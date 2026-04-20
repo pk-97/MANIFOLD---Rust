@@ -41,6 +41,10 @@ struct Uniforms {
     spectrogram_db_min: f32,
     spectrogram_db_max: f32,
     log_bins: f32,
+    sync_mode: f32,
+    cqt_fmin_hz: f32,
+    cqt_bins_per_octave: f32,
+    _pad0: f32,
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -203,22 +207,44 @@ fn spectrogram_pixel(px: vec2<f32>) -> vec4<f32> {
     let write_col_i = i32(u.write_col);
     let log_bins_i = i32(u.log_bins);
 
-    // X axis: newest column at the right edge, older frames scrolling to
-    // the left (standard DAW/Vision 4X convention). `history_idx` counts
-    // pixels back from the right edge.
-    let history_idx = i32(floor(u.resolution.x - 1.0 - px.x));
-    if (history_idx < 0 || history_idx >= history_cols_i) {
-        return vec4<f32>(0.0);
+    // X axis: free mode scrolls newest→right, older→left. Sync mode maps
+    // pixel x directly to a column in [0, history_cols) so columns stay
+    // pinned to the beat grid and the "playhead" at `write_col` advances
+    // left→right, wrapping to overwrite the oldest pixels — matches
+    // Vision 4X's synced spectrogram.
+    var col: i32;
+    var playhead_dist = 1e9;
+    if (u.sync_mode > 0.5) {
+        let rel_x = clamp(px.x / max(u.resolution.x, 1.0), 0.0, 0.9999);
+        col = i32(floor(rel_x * f32(history_cols_i)));
+        col = clamp(col, 0, history_cols_i - 1);
+        playhead_dist = abs(f32(col - write_col_i));
+    } else {
+        let history_idx = i32(floor(u.resolution.x - 1.0 - px.x));
+        if (history_idx < 0 || history_idx >= history_cols_i) {
+            return vec4<f32>(0.0);
+        }
+        var c = write_col_i - history_idx;
+        c = ((c % history_cols_i) + history_cols_i) % history_cols_i;
+        col = c;
     }
-    var col = write_col_i - history_idx;
-    col = ((col % history_cols_i) + history_cols_i) % history_cols_i;
 
-    // Y axis: log-spaced bins, high freq at the top. rel_y=0 → top = last
-    // log bin (freq_max); rel_y=1 → bottom = first log bin (freq_min).
+    // Y axis: log-spaced. rel_y=0 → top = freq_max; rel_y=1 → bottom =
+    // freq_min. Map the user-selected freq range onto the CQT's stored
+    // log bins (cqt_fmin_hz + bins_per_octave) so zooming the curves
+    // zooms the spectrogram too.
     let spec_y = px.y - u.spectrum_height;
     let spec_h = max(u.resolution.y - u.spectrum_height, 1.0);
     let rel_y = clamp(spec_y / spec_h, 0.0, 1.0);
-    let log_bin_f = (1.0 - rel_y) * (u.log_bins - 1.0);
+    let log_min = log(u.freq_min);
+    let log_max = log(u.freq_max);
+    let log_freq = mix(log_max, log_min, rel_y);
+    let freq = exp(log_freq);
+    let log_bin_f = clamp(
+        u.cqt_bins_per_octave * log2(freq / u.cqt_fmin_hz),
+        0.0,
+        f32(log_bins_i) - 1.0,
+    );
 
     let raw_db = sample_history_db(col, log_bin_f, log_bins_i);
 
@@ -226,7 +252,14 @@ fn spectrogram_pixel(px: vec2<f32>) -> vec4<f32> {
     // independent of the spectrum curve's axis range.
     let span = max(u.spectrogram_db_max - u.spectrogram_db_min, 1e-3);
     let t = (raw_db - u.spectrogram_db_min) / span;
-    let rgb = colormap(t);
+    var rgb = colormap(t);
+
+    // 1-px bright playhead in sync mode. Marks where new columns are
+    // being written so the user can see the write position sweep across
+    // the grid on each bar cycle.
+    if (u.sync_mode > 0.5 && playhead_dist < 1.0) {
+        rgb = mix(rgb, vec3<f32>(1.0, 1.0, 1.0), 0.6);
+    }
     return vec4<f32>(rgb, 1.0);
 }
 

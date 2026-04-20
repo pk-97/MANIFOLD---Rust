@@ -54,6 +54,7 @@ pub struct CqtTransform {
     coef: Vec<Complex<f32>>,
     num_bins: usize,
     center_freqs: Vec<f32>,
+    bandwidths_hz: Vec<f32>,
 }
 
 impl CqtTransform {
@@ -62,9 +63,26 @@ impl CqtTransform {
     /// renderer init / sample-rate change).
     ///
     /// * `bpo` — bins per octave. 24 = 2/semitone is good spectrogram density.
-    /// * `gamma_hz` — bandwidth floor. `0.0` = classical CQT (long bass
-    ///   windows); `20.0` = practical hybrid; `ERB(f) ≈ 0.108·f + 24.7` for
-    ///   a perceptual match.
+    /// * `gamma_lo_hz`, `gamma_hi_hz`, `gamma_transition_hz` — define the
+    ///   bandwidth floor γ as a smooth ramp from `gamma_lo_hz` at 0 Hz up
+    ///   to `gamma_hi_hz` at `gamma_transition_hz` and above. Using a
+    ///   smaller γ at the very bottom lets sub-bass bins grow long enough
+    ///   windows to fit ≥ 4 cycles (kills the 2f ripple on pure bass
+    ///   sines) while the normal γ above the knee keeps mid-and-above
+    ///   kernels short enough for crisp transients. Pass
+    ///   `gamma_lo_hz == gamma_hi_hz` for a constant floor.
+    /// * `min_kernel_len` — per-bin kernel floor in samples. Prevents HF
+    ///   kernels from shrinking below this, which keeps bandwidth narrow
+    ///   enough to resolve closely-spaced partials and guarantees enough
+    ///   overlap between consecutive hops for synchrosqueezing's phase
+    ///   measurement to stay coherent. Set to `4 · hop` or so.
+    /// * `causal_window` — if true, use the left half of a symmetric
+    ///   length-(2·n_k − 1) Blackman-Harris as the per-bin window. The
+    ///   window then peaks at the **newest** sample and tapers back to
+    ///   the oldest, so each column reflects audio "as of now" instead
+    ///   of audio centered n_k/2 samples ago. Wider main lobe than a
+    ///   symmetric window of the same length (roughly 2× bandwidth),
+    ///   in exchange for zero effective display latency.
     /// * `threshold_rel` — prunes kernel entries below
     ///   `threshold_rel · max_entry` per row; 0.005 is conservative.
     pub fn new(
@@ -73,14 +91,25 @@ impl CqtTransform {
         fmin: f32,
         fmax: f32,
         bpo: usize,
-        gamma_hz: f32,
+        gamma_lo_hz: f32,
+        gamma_hi_hz: f32,
+        gamma_transition_hz: f32,
+        min_kernel_len: usize,
+        causal_window: bool,
         threshold_rel: f32,
     ) -> Self {
         assert!(n_fft.is_power_of_two(), "n_fft must be a power of two");
         assert!(fmax > fmin && fmin > 0.0, "need fmax > fmin > 0");
         assert!(bpo > 0);
-        assert!(gamma_hz >= 0.0);
+        assert!(gamma_lo_hz >= 0.0 && gamma_hi_hz >= 0.0);
+        assert!(gamma_transition_hz > 0.0);
         assert!((0.0..1.0).contains(&threshold_rel));
+
+        // γ(f) = lo + (hi − lo) · min(1, f / transition).
+        let gamma_at = |f: f32| -> f32 {
+            let t = (f / gamma_transition_hz).clamp(0.0, 1.0);
+            gamma_lo_hz + (gamma_hi_hz - gamma_lo_hz) * t
+        };
 
         let num_bins = (bpo as f32 * (fmax / fmin).log2()).floor() as usize;
         assert!(num_bins > 0);
@@ -91,8 +120,23 @@ impl CqtTransform {
         let alpha = 2.0_f32.powf(1.0 / bpo as f32) - 1.0;
 
         let mut center_freqs = Vec::with_capacity(num_bins);
+        let mut bandwidths_hz = Vec::with_capacity(num_bins);
+        // Causal windows (half of a 2N−1 symmetric) have ~2× the
+        // effective bandwidth of a symmetric window of the same length.
+        // The IF-consistency gate reads these bandwidths, so match the
+        // real spectral width.
+        let bw_multiplier = if causal_window { 2.0 } else { 1.0 };
         for k in 0..num_bins {
-            center_freqs.push(fmin * 2.0_f32.powf(k as f32 / bpo as f32));
+            let f_k = fmin * 2.0_f32.powf(k as f32 / bpo as f32);
+            center_freqs.push(f_k);
+            // Effective bandwidth accounts for the kernel floor: when
+            // `min_kernel_len` clamps n_k, the actual analysis bandwidth
+            // shrinks to `sr / n_k`.
+            let ideal = alpha * f_k + gamma_at(f_k);
+            let ideal_n_k = (sample_rate / ideal).ceil() as usize;
+            let n_k = ideal_n_k.min(n_fft).max(min_kernel_len).max(4);
+            let effective_bw = bw_multiplier * sample_rate / n_k as f32;
+            bandwidths_hz.push(effective_bw);
         }
 
         let mut planner = FftPlanner::<f32>::new();
@@ -111,13 +155,24 @@ impl CqtTransform {
 
         for &f_k in &center_freqs {
             // Variable-Q bandwidth. At high freq `α·f_k` dominates
-            // (constant Q); at low freq `gamma_hz` floors the bandwidth
-            // (constant bandwidth) so bass windows stay tractable.
-            let bandwidth = alpha * f_k + gamma_hz;
+            // (constant Q); below `gamma_transition_hz`, γ ramps down
+            // so deep-bass windows grow long enough to fit several
+            // cycles (kills the 2f AM ripple of a sub-bass sine).
+            let bandwidth = alpha * f_k + gamma_at(f_k);
             let n_k_ideal = (sample_rate / bandwidth).ceil() as usize;
-            let n_k = n_k_ideal.min(n_fft).max(4);
+            let n_k = n_k_ideal.min(n_fft).max(min_kernel_len).max(4);
 
-            let w = blackman_harris_window(n_k);
+            // Symmetric: standard length-n_k BH, peaks in the middle.
+            // Causal: left half of a length-(2n_k−1) symmetric BH —
+            // peaks at the newest sample (index n_k−1), tapers to ~0
+            // at the oldest (index 0). Zero effective display latency
+            // at the cost of a wider main lobe.
+            let w = if causal_window && n_k >= 2 {
+                let full = blackman_harris_window(2 * n_k - 1);
+                full[..n_k].to_vec()
+            } else {
+                blackman_harris_window(n_k)
+            };
             let w_sum: f32 = w.iter().sum();
             // Normalise so that a unit-amplitude sinusoid at f_k yields
             // |CQT[k]| = 1. Derivation: for x[n] = cos(2π f_k n / sr),
@@ -125,15 +180,27 @@ impl CqtTransform {
             let scale = 2.0 / w_sum;
 
             // Time-domain kernel: g_k[n] = w[n] · exp(+i 2π f_k n / sr),
-            // left-aligned in the n_fft-length FFT buffer.
+            // **right-aligned** in the n_fft-length FFT buffer. Because
+            // the audio buffer we hand to the FFT is in [oldest → newest]
+            // order, right-alignment makes each kernel sample the NEWEST
+            // N_k samples of that buffer — so every bin is "up to date"
+            // at the rightmost sample. Left-alignment would make short
+            // high-freq kernels read N_fft-seconds-old audio, making the
+            // spectrogram lag by the full window length.
+            //
+            // The bin-dependent constant phase this introduces
+            // (`exp(+i 2π f_k (N_fft - N_k) / sr)`) cancels in phase-diff
+            // so synchrosqueezing is unaffected; magnitude is unaffected
+            // period.
             for c in kernel_buf.iter_mut() {
                 *c = Complex::new(0.0, 0.0);
             }
+            let start = n_fft - n_k;
             for n in 0..n_k {
                 let phase = two_pi * f_k * n as f32 / sample_rate;
                 let (s, c) = phase.sin_cos();
                 let wn = w[n] * scale;
-                kernel_buf[n] = Complex::new(wn * c, wn * s);
+                kernel_buf[start + n] = Complex::new(wn * c, wn * s);
             }
 
             // FFT gives G_k. Spectral kernel K_k[m] = conj(G_k[m]) / n_fft
@@ -168,7 +235,15 @@ impl CqtTransform {
             coef,
             num_bins,
             center_freqs,
+            bandwidths_hz,
         }
+    }
+
+    /// Per-bin bandwidth (Hz): `α · f_k + γ`. Used by synchrosqueezing's
+    /// IF-consistency gate to reject aliased IF estimates that fall
+    /// outside the bin's legitimate response region.
+    pub fn bandwidths_hz(&self) -> &[f32] {
+        &self.bandwidths_hz
     }
 
     pub fn num_bins(&self) -> usize {
@@ -240,7 +315,7 @@ mod tests {
         let fmin = 100.0;
         let fmax = 8000.0;
         let bpo = 24;
-        let mut cqt = CqtTransform::new(sr, n_fft, fmin, fmax, bpo, 0.0, 0.005);
+        let mut cqt = CqtTransform::new(sr, n_fft, fmin, fmax, bpo, 0.0, 0.0, 1.0, 4, false, 0.005);
 
         let target_freq = 1000.0;
         let audio: Vec<f32> = (0..n_fft)
@@ -269,7 +344,7 @@ mod tests {
     #[test]
     fn silence_reads_floor() {
         let sr = 48000.0;
-        let mut cqt = CqtTransform::new(sr, 8192, 100.0, 4000.0, 12, 0.0, 0.005);
+        let mut cqt = CqtTransform::new(sr, 8192, 100.0, 4000.0, 12, 0.0, 0.0, 1.0, 4, false, 0.005);
         let audio = vec![0.0; cqt.n_fft()];
         let out = powers_db(&mut cqt, &audio);
         for db in &out {
@@ -284,7 +359,7 @@ mod tests {
         // bandwidth so the low bins stay valid in a modest N_fft.
         let sr = 48000.0;
         let n_fft = 8192;
-        let mut cqt = CqtTransform::new(sr, n_fft, 20.0, 1000.0, 12, 20.0, 0.005);
+        let mut cqt = CqtTransform::new(sr, n_fft, 20.0, 1000.0, 12, 20.0, 20.0, 1.0, 4, false, 0.005);
         let target = 50.0_f32;
         let audio: Vec<f32> = (0..n_fft)
             .map(|n| (2.0 * std::f32::consts::PI * target * n as f32 / sr).cos())
