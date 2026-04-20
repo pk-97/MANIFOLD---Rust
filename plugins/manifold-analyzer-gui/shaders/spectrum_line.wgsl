@@ -220,9 +220,10 @@ fn sdf_segment(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
     return length(pa - ba * h);
 }
 
-// Vision 4X "Heatmap" style — jet-like ramp from black through deep blue,
-// cyan, green, yellow, orange to saturated red. Low dB = black/navy so
-// near-silent regions read as background; mids = cyan/green; peaks = red.
+// Vision 4X "Heatmap" style jet — black → navy → blue → cyan → green →
+// yellow → red → white. The top 10% goes red→white so loudest peaks
+// clearly separate from merely-loud content (solves jet's classic
+// red-vs-darker-red crush at the top end).
 fn colormap(t_in: f32) -> vec3<f32> {
     let t = clamp(t_in, 0.0, 1.0);
     let c0 = vec3<f32>(0.00, 0.00, 0.00); // black
@@ -232,12 +233,14 @@ fn colormap(t_in: f32) -> vec3<f32> {
     let c4 = vec3<f32>(0.20, 0.95, 0.20); // green
     let c5 = vec3<f32>(0.95, 0.95, 0.00); // yellow
     let c6 = vec3<f32>(0.95, 0.00, 0.00); // red
+    let c7 = vec3<f32>(1.00, 1.00, 1.00); // white — peaks
     if (t < 0.15) { return mix(c0, c1, t / 0.15); }
     if (t < 0.35) { return mix(c1, c2, (t - 0.15) / 0.20); }
     if (t < 0.55) { return mix(c2, c3, (t - 0.35) / 0.20); }
     if (t < 0.70) { return mix(c3, c4, (t - 0.55) / 0.15); }
-    if (t < 0.85) { return mix(c4, c5, (t - 0.70) / 0.15); }
-    return mix(c5, c6, (t - 0.85) / 0.15);
+    if (t < 0.80) { return mix(c4, c5, (t - 0.70) / 0.10); }
+    if (t < 0.90) { return mix(c5, c6, (t - 0.80) / 0.10); }
+    return mix(c6, c7, (t - 0.90) / 0.10);
 }
 
 // History is pre-resampled to `log_bins` log-spaced dB values per column
