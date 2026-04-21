@@ -1519,7 +1519,8 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         ui.painter().add(callback);
     } else {
         painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(60, 15, 15));
-        painter.text(
+        draw_outlined_text(
+            &painter,
             rect.center(),
             egui::Align2::CENTER_CENTER,
             "manifold-gpu: init failed (see Console.app)",
@@ -1560,10 +1561,11 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     for &freq in FREQ_MAJORS {
         if freq >= freq_min && freq <= freq_max {
             let x = freq_to_x(freq, freq_min, freq_max, spectrum_rect);
-            painter.text(
+            draw_outlined_text(
+                &painter,
                 egui::pos2(x + 3.0, spectrum_rect.bottom() - 3.0),
                 egui::Align2::LEFT_BOTTOM,
-                format_hz(freq),
+                &format_hz(freq),
                 egui::FontId::monospace(10.0),
                 label_color,
             );
@@ -1571,10 +1573,11 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     }
     for &db in DB_MAJORS {
         let y = db_to_y(db, DB_MIN, DB_MAX, spectrum_rect);
-        painter.text(
+        draw_outlined_text(
+            &painter,
             egui::pos2(spectrum_rect.left() + 3.0, y),
             egui::Align2::LEFT_CENTER,
-            format!("{} dB", db as i32),
+            &format!("{} dB", db as i32),
             egui::FontId::monospace(10.0),
             label_color,
         );
@@ -1920,10 +1923,11 @@ fn draw_spectrogram_chrome(
             [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
             (1.0, grid_over),
         );
-        painter.text(
+        draw_outlined_text(
+            painter,
             egui::pos2(rect.right() - 4.0, y - 1.0),
             egui::Align2::RIGHT_BOTTOM,
-            format_hz(freq),
+            &format_hz(freq),
             egui::FontId::monospace(10.0),
             label_color,
         );
@@ -1987,26 +1991,58 @@ fn draw_spectrogram_chrome(
         if step_beats <= 2.0 {
             // Beat number inside the current bar, 1-indexed.
             let beat_in_bar = beat_idx_in_bar.rem_euclid(BEATS_PER_BAR as i64) + 1;
-            painter.text(
+            draw_outlined_text(
+                painter,
                 egui::pos2(x + 3.0, label_y),
                 egui::Align2::LEFT_BOTTOM,
-                format!("{}", beat_in_bar),
+                &format!("{}", beat_in_bar),
                 egui::FontId::monospace(10.0),
                 label_color,
             );
         } else {
             // Multi-bar step: show bar number instead.
             let bar_num = beat_idx_in_bar.div_euclid(BEATS_PER_BAR as i64) + 1;
-            painter.text(
+            draw_outlined_text(
+                painter,
                 egui::pos2(x + 3.0, label_y),
                 egui::Align2::LEFT_BOTTOM,
-                format!("{}.1", bar_num),
+                &format!("{}.1", bar_num),
                 egui::FontId::monospace(10.0),
                 label_color,
             );
         }
         i += step_beats;
     }
+}
+
+/// Draw text with a 1-pixel black outline in all 8 compass directions.
+/// Makes small labels readable on the noisy spectrum / spectrogram /
+/// heatmap backgrounds without having to fade the background or
+/// recolour the text. egui caches galleys by (text, font, color) so
+/// the 9 draws reuse the same shaped glyphs under the hood.
+fn draw_outlined_text(
+    painter: &egui::Painter,
+    pos: egui::Pos2,
+    anchor: egui::Align2,
+    text: &str,
+    font: egui::FontId,
+    color: egui::Color32,
+) {
+    const OUTLINE_OFFSETS: [(f32, f32); 8] = [
+        (-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0),
+        (-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0),
+    ];
+    let outline = egui::Color32::BLACK;
+    for (dx, dy) in OUTLINE_OFFSETS {
+        painter.text(
+            pos + egui::vec2(dx, dy),
+            anchor,
+            text,
+            font.clone(),
+            outline,
+        );
+    }
+    painter.text(pos, anchor, text, font, color);
 }
 
 fn format_hz(freq: f32) -> String {
@@ -2241,15 +2277,15 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
         }
         db_off += step_db;
     }
-    // Centerline stays visible as a slightly stronger vertical tick
-    // so the "balanced" zero-point reads at a glance.
-    let centerline_color = egui::Color32::from_rgba_unmultiplied(10, 14, 20, 200);
+    // Centerline: thicker + high-contrast so "balanced" reads at a
+    // glance against the colourful correlation heatmap behind.
+    let centerline_color = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 220);
     painter.line_segment(
         [
             egui::pos2(center_x, rect.top()),
             egui::pos2(center_x, rect.bottom()),
         ],
-        (1.0, centerline_color),
+        (2.0, centerline_color),
     );
 
     // Balance curve in white — reads cleanly over the heatmap and
@@ -2262,14 +2298,16 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
     // L / R side hints in the top corners so the user knows which
     // direction means what without hovering for a tooltip.
     let side_hint_color = egui::Color32::WHITE;
-    painter.text(
+    draw_outlined_text(
+        &painter,
         egui::pos2(rect.left() + 4.0, rect.top() + 3.0),
         egui::Align2::LEFT_TOP,
         "L",
         egui::FontId::monospace(10.0),
         side_hint_color,
     );
-    painter.text(
+    draw_outlined_text(
+        &painter,
         egui::pos2(rect.right() - 4.0, rect.top() + 3.0),
         egui::Align2::RIGHT_TOP,
         "R",
@@ -2278,24 +2316,27 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
     );
     // Axis ticks: outer edges = `range` dB of imbalance toward that
     // side; centre = balanced (Δ = 0).
-    painter.text(
+    draw_outlined_text(
+        &painter,
         egui::pos2(rect.left() + 2.0, rect.bottom() - 2.0),
         egui::Align2::LEFT_BOTTOM,
-        format!("{}", range_db as i32),
+        &format!("{}", range_db as i32),
         egui::FontId::monospace(9.0),
         label_color,
     );
-    painter.text(
+    draw_outlined_text(
+        &painter,
         egui::pos2(center_x, rect.bottom() - 2.0),
         egui::Align2::CENTER_BOTTOM,
         "0 dB",
         egui::FontId::monospace(9.0),
         label_color,
     );
-    painter.text(
+    draw_outlined_text(
+        &painter,
         egui::pos2(rect.right() - 2.0, rect.bottom() - 2.0),
         egui::Align2::RIGHT_BOTTOM,
-        format!("{}", range_db as i32),
+        &format!("{}", range_db as i32),
         egui::FontId::monospace(9.0),
         label_color,
     );
@@ -2675,10 +2716,11 @@ fn draw_meter_column(painter: egui::Painter, rect: egui::Rect, snap: &LoudnessSn
         );
         if LABELED_TICKS.contains(&db) {
             let is_target = (db - TARGET_BAND.0).abs() < 0.01;
-            painter.text(
+            draw_outlined_text(
+                &painter,
                 egui::pos2(right_tick_x1 + label_gap, y),
                 egui::Align2::LEFT_CENTER,
-                format!("{}", db as i32),
+                &format!("{}", db as i32),
                 egui::FontId::monospace(10.0),
                 if is_target {
                     target_label_color
