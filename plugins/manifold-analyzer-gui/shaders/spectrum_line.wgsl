@@ -41,6 +41,7 @@ struct Uniforms {
     sync_mode: f32,
     cqt_fmin_hz: f32,
     cqt_bins_per_octave: f32,
+    spectrogram_gamma: f32,
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -225,26 +226,6 @@ fn spectrogram_pixel(px: vec2<f32>) -> vec4<f32> {
     let write_col_i = i32(u.write_col);
     let log_bins_i = i32(u.log_bins);
 
-    // X axis: free mode scrolls newest→right, older→left. Sync mode maps
-    // pixel x directly to a column in [0, history_cols) so columns stay
-    // pinned to the beat grid and the write position advances left→right,
-    // wrapping to overwrite the oldest pixels — matches Vision 4X's
-    // synced spectrogram.
-    var col: i32;
-    if (u.sync_mode > 0.5) {
-        let rel_x = clamp(px.x / max(u.resolution.x, 1.0), 0.0, 0.9999);
-        col = i32(floor(rel_x * f32(history_cols_i)));
-        col = clamp(col, 0, history_cols_i - 1);
-    } else {
-        let history_idx = i32(floor(u.resolution.x - 1.0 - px.x));
-        if (history_idx < 0 || history_idx >= history_cols_i) {
-            return vec4<f32>(0.0);
-        }
-        var c = write_col_i - history_idx;
-        c = ((c % history_cols_i) + history_cols_i) % history_cols_i;
-        col = c;
-    }
-
     // Y axis: log-spaced. rel_y=0 → top = freq_max; rel_y=1 → bottom =
     // freq_min. Map the user-selected freq range onto the CQT's stored
     // log bins (cqt_fmin_hz + bins_per_octave) so zooming the curves
@@ -262,14 +243,50 @@ fn spectrogram_pixel(px: vec2<f32>) -> vec4<f32> {
         f32(log_bins_i) - 1.0,
     );
 
-    let raw_db = sample_history_db(col, log_bin_f, log_bins_i);
+    // X axis: free mode scrolls newest→right, older→left. Sync mode maps
+    // pixel x onto [0, history_cols) so columns stay pinned to the beat
+    // grid and the write position advances left→right, wrapping to
+    // overwrite the oldest pixels — matches Vision 4X's synced spectrogram.
+    //
+    // Free mode is strictly 1 history column = 1 screen pixel, so integer
+    // snap is exact — no interp needed. Sync mode stretches history_cols
+    // across the screen width; when cols-per-pixel < 1 we'd see stairs
+    // without sub-pixel blending, so lerp adjacent columns in the power
+    // domain (matches the Y-axis behaviour in sample_history_db).
+    var raw_db: f32;
+    if (u.sync_mode > 0.5) {
+        let rel_x = clamp(px.x / max(u.resolution.x, 1.0), 0.0, 0.9999);
+        let col_f = rel_x * f32(history_cols_i);
+        let col_lo = clamp(i32(floor(col_f)), 0, history_cols_i - 1);
+        let col_hi = min(col_lo + 1, history_cols_i - 1);
+        let frac_x = col_f - f32(col_lo);
+        let db_lo = sample_history_db(col_lo, log_bin_f, log_bins_i);
+        let db_hi = sample_history_db(col_hi, log_bin_f, log_bins_i);
+        let p_lo = pow(10.0, db_lo * 0.1);
+        let p_hi = pow(10.0, db_hi * 0.1);
+        let p = mix(p_lo, p_hi, frac_x);
+        raw_db = 10.0 * log(p + 1e-24) / log(10.0);
+    } else {
+        let history_idx = i32(floor(u.resolution.x - 1.0 - px.x));
+        if (history_idx < 0 || history_idx >= history_cols_i) {
+            return vec4<f32>(0.0);
+        }
+        var c = write_col_i - history_idx;
+        c = ((c % history_cols_i) + history_cols_i) % history_cols_i;
+        raw_db = sample_history_db(c, log_bin_f, log_bins_i);
+    }
 
     // Run the same weighting used on the curves so the colourmap reads
     // perceptually (K-weighting reveals what's driving loudness; linear
     // tilts give SPAN-style HF brightness).
     let weighted_db = tilt_db(freq, raw_db);
     let span = max(u.spectrogram_db_max - u.spectrogram_db_min, 1e-3);
-    let t = (weighted_db - u.spectrogram_db_min) / span;
+    let t_lin = clamp((weighted_db - u.spectrogram_db_min) / span, 0.0, 1.0);
+    // Gamma on the colour encoding (not on the stored values) lifts quiet
+    // detail into the visible band without washing out peaks. gamma < 1
+    // brightens, gamma > 1 darkens; gamma == 1 is pass-through.
+    let gamma = max(u.spectrogram_gamma, 1e-3);
+    let t = pow(t_lin, gamma);
     let rgb = colormap(t);
     return vec4<f32>(rgb, 1.0);
 }

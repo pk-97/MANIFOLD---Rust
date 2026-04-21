@@ -92,6 +92,9 @@ pub struct DisplayConfig {
     /// default is `-59 … 0`.
     pub spectrogram_db_min: f32,
     pub spectrogram_db_max: f32,
+    /// Gamma applied to the dB→colour mapping. `< 1` brightens quiet
+    /// content, `> 1` darkens it. 1.0 is pass-through.
+    pub spectrogram_gamma: f32,
     /// Whether the spectrogram is being drawn in BPM-locked "sync" mode.
     /// Set on the renderer every frame from the GUI's current param state
     /// so the shader picks the right x-axis mapping (pinned-to-grid vs
@@ -108,12 +111,15 @@ impl Default for DisplayConfig {
             spectrum_fraction: 1.0,
             spectrogram_db_min: -59.0,
             spectrogram_db_max: 0.0,
+            spectrogram_gamma: 1.0,
             sync_mode: false,
         }
     }
 }
 
-/// Matches the `Uniforms` struct in `spectrum_line.wgsl`.
+/// Matches the `Uniforms` struct in `spectrum_line.wgsl`. Total size must
+/// stay a multiple of 16 bytes — WGSL rounds uniform-struct size up to
+/// vec4 alignment and the Rust upload has to match.
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct SpectrumUniforms {
@@ -139,6 +145,8 @@ struct SpectrumUniforms {
     sync_mode: f32,
     cqt_fmin_hz: f32,
     cqt_bins_per_octave: f32,
+    spectrogram_gamma: f32,
+    _pad_tail: [f32; 3],
 }
 
 pub struct SpectrumGpuRenderer {
@@ -363,6 +371,8 @@ impl SpectrumGpuRenderer {
             sync_mode: if self.display.sync_mode { 1.0 } else { 0.0 },
             cqt_fmin_hz: CQT_FMIN_HZ,
             cqt_bins_per_octave: CQT_BINS_PER_OCTAVE as f32,
+            spectrogram_gamma: self.display.spectrogram_gamma,
+            _pad_tail: [0.0; 3],
         };
         let uniform_bytes: &[u8] = unsafe {
             std::slice::from_raw_parts(

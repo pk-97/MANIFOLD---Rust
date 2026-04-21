@@ -9,12 +9,18 @@ use std::sync::Arc;
 // rustfft on Apple Silicon eats this easily (~100 µs/frame at 16384).
 const FFT_SIZE: usize = 16384;
 const OVERLAP_RATIO: f32 = 0.975;
-const AVG_TIME_MS: f32 = 200.0;
+/// SPAN-style peak response: instant attack so transients register on
+/// the rising edge, 100 ms release so the curve decays smoothly instead
+/// of chattering on every frame.
+const ATTACK_MS: f32 = 0.0;
+const RELEASE_MS: f32 = 200.0;
 
 struct ManifoldAnalyzer {
     params: Arc<AnalyzerParams>,
     mid_analyzer: Option<Analyzer>,
     side_analyzer: Option<Analyzer>,
+    left_analyzer: Option<Analyzer>,
+    right_analyzer: Option<Analyzer>,
     mid_scratch: Vec<f32>,
     side_scratch: Vec<f32>,
     left_scratch: Vec<f32>,
@@ -34,6 +40,8 @@ impl Default for ManifoldAnalyzer {
             params: Arc::new(AnalyzerParams::new()),
             mid_analyzer: None,
             side_analyzer: None,
+            left_analyzer: None,
+            right_analyzer: None,
             mid_scratch: Vec::new(),
             side_scratch: Vec::new(),
             left_scratch: Vec::new(),
@@ -82,12 +90,20 @@ impl Plugin for ManifoldAnalyzer {
     ) -> bool {
         let mut mid = Analyzer::new(buffer_config.sample_rate, FFT_SIZE);
         mid.set_overlap_ratio(OVERLAP_RATIO);
-        mid.set_averaging_ms(AVG_TIME_MS);
+        mid.set_attack_release_ms(ATTACK_MS, RELEASE_MS);
         let mut side = Analyzer::new(buffer_config.sample_rate, FFT_SIZE);
         side.set_overlap_ratio(OVERLAP_RATIO);
-        side.set_averaging_ms(AVG_TIME_MS);
+        side.set_attack_release_ms(ATTACK_MS, RELEASE_MS);
+        let mut left = Analyzer::new(buffer_config.sample_rate, FFT_SIZE);
+        left.set_overlap_ratio(OVERLAP_RATIO);
+        left.set_attack_release_ms(ATTACK_MS, RELEASE_MS);
+        let mut right = Analyzer::new(buffer_config.sample_rate, FFT_SIZE);
+        right.set_overlap_ratio(OVERLAP_RATIO);
+        right.set_attack_release_ms(ATTACK_MS, RELEASE_MS);
         self.mid_analyzer = Some(mid);
         self.side_analyzer = Some(side);
+        self.left_analyzer = Some(left);
+        self.right_analyzer = Some(right);
         let max_block = buffer_config.max_buffer_size as usize;
         self.mid_scratch = vec![0.0; max_block];
         self.side_scratch = vec![0.0; max_block];
@@ -118,6 +134,12 @@ impl Plugin for ManifoldAnalyzer {
         if let Some(a) = self.side_analyzer.as_mut() {
             a.reset();
         }
+        if let Some(a) = self.left_analyzer.as_mut() {
+            a.reset();
+        }
+        if let Some(a) = self.right_analyzer.as_mut() {
+            a.reset();
+        }
         if let Some(m) = self.loudness.as_mut() {
             m.reset();
             self.gui_shared.set_loudness(m.snapshot());
@@ -134,8 +156,12 @@ impl Plugin for ManifoldAnalyzer {
         self.gui_shared
             .set_transport(transport.tempo, transport.pos_beats(), transport.playing);
 
-        let (Some(mid), Some(side)) = (self.mid_analyzer.as_mut(), self.side_analyzer.as_mut())
-        else {
+        let (Some(mid), Some(side), Some(left_an), Some(right_an)) = (
+            self.mid_analyzer.as_mut(),
+            self.side_analyzer.as_mut(),
+            self.left_analyzer.as_mut(),
+            self.right_analyzer.as_mut(),
+        ) else {
             return ProcessStatus::Normal;
         };
 
@@ -188,6 +214,14 @@ impl Plugin for ManifoldAnalyzer {
         }
         if side.push_mono(&self.side_scratch[..i]) {
             self.gui_shared.try_publish_side_db(side.latest_spectrum_db());
+        }
+        if left_an.push_mono(&self.left_scratch[..i]) {
+            self.gui_shared
+                .try_publish_left_db(left_an.latest_spectrum_db());
+        }
+        if right_an.push_mono(&self.right_scratch[..i]) {
+            self.gui_shared
+                .try_publish_right_db(right_an.latest_spectrum_db());
         }
 
         // Spectrogram: push raw Mid audio samples into the lock-free

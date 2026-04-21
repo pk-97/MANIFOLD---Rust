@@ -444,10 +444,12 @@ impl WorkerState {
         } else {
             let mut c = start_col;
             let denom = fill_count as f32;
-            // Reuse a scratch buffer by allocating once per push. Each
-            // column payload is an owned Vec (handed off to the GUI to
-            // write into history_buf) — no pooling today. Typical
-            // fill_count is 1 so the common path doesn't touch this.
+            // Lerp in the POWER domain, not dB. dB-lerp is a geometric mean
+            // of powers — energy-losing by up to ~3 dB at the midpoint and
+            // it dims sustained content. Power-domain lerp preserves the
+            // arithmetic mean of energy across the span, which is what the
+            // CQT magnitude actually measures. Converted back to dB for
+            // storage at the end.
             for i in 0..fill_count {
                 let t = (i + 1) as f32 / denom;
                 let one_minus_t = 1.0 - t;
@@ -455,7 +457,16 @@ impl WorkerState {
                     .prev_cqt_out
                     .iter()
                     .zip(self.cqt_out.iter())
-                    .map(|(&p, &cur)| p * one_minus_t + cur * t)
+                    .map(|(&prev_db, &cur_db)| {
+                        let p_prev = 10.0_f32.powf(prev_db * 0.1);
+                        let p_cur = 10.0_f32.powf(cur_db * 0.1);
+                        let p = p_prev * one_minus_t + p_cur * t;
+                        if p > 1e-20 {
+                            10.0 * p.log10()
+                        } else {
+                            WORKER_FLOOR_DB
+                        }
+                    })
                     .collect();
                 let clear = clear_first && i == 0;
                 force_push(

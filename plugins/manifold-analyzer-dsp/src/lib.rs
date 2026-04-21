@@ -18,6 +18,14 @@ pub use reference::{
 use rustfft::{Fft, FftPlanner, num_complex::Complex};
 use std::sync::Arc;
 
+fn ms_to_alpha(ms: f32, dt_s: f32) -> f32 {
+    if ms <= 0.0 {
+        1.0
+    } else {
+        1.0 - (-dt_s / (ms * 0.001)).exp()
+    }
+}
+
 pub struct Analyzer {
     fft_size: usize,
     hop_size: usize,
@@ -31,8 +39,14 @@ pub struct Analyzer {
     fft_scratch: Vec<Complex<f32>>,
     fft_buffer: Vec<Complex<f32>>,
     power_avg: Vec<f32>,
-    avg_alpha: f32,
-    avg_time_ms: f32,
+    /// Per-direction EMA coefficients. SPAN-style peak metering uses
+    /// `attack_alpha = 1.0` (instant rise) and a slower release so peaks
+    /// read cleanly while decay stays visible. Set equal for symmetric
+    /// averaging (offline reference analysis).
+    attack_alpha: f32,
+    release_alpha: f32,
+    attack_ms: f32,
+    release_ms: f32,
     magnitude_db: Vec<f32>,
     // Un-averaged per-frame dB. Spectrograms want instantaneous frames so
     // transients stay sharp; the averaged `magnitude_db` is what the SPAN-
@@ -75,8 +89,11 @@ impl Analyzer {
             fft_scratch: vec![Complex::new(0.0, 0.0); scratch_len],
             fft_buffer: vec![Complex::new(0.0, 0.0); fft_size],
             power_avg: vec![0.0; num_bins],
-            avg_alpha: 1.0, // no averaging (instant) by default
-            avg_time_ms: 0.0,
+            // No averaging by default (each frame replaces previous).
+            attack_alpha: 1.0,
+            release_alpha: 1.0,
+            attack_ms: 0.0,
+            release_ms: 0.0,
             magnitude_db: vec![MIN_DB; num_bins],
             raw_magnitude_db: vec![MIN_DB; num_bins],
             prev_phase: vec![0.0; num_bins],
@@ -100,21 +117,27 @@ impl Analyzer {
         self.recompute_alpha_preserving_time();
     }
 
-    /// Set exponential power-averaging time constant in milliseconds. `0.0`
-    /// disables averaging (each frame replaces the previous).
+    /// Set symmetric exponential power-averaging time constant in
+    /// milliseconds. `0.0` disables averaging (each frame replaces the
+    /// previous). Equivalent to calling `set_attack_release_ms(ms, ms)`.
     pub fn set_averaging_ms(&mut self, ms: f32) {
-        self.avg_time_ms = ms.max(0.0);
+        self.set_attack_release_ms(ms, ms);
+    }
+
+    /// Set separate attack (rise) and release (fall) time constants in
+    /// milliseconds. SPAN-style peak metering typically uses
+    /// `attack_ms = 0.0` (instant rise) with a slow release so peaks
+    /// register immediately and then decay visibly.
+    pub fn set_attack_release_ms(&mut self, attack_ms: f32, release_ms: f32) {
+        self.attack_ms = attack_ms.max(0.0);
+        self.release_ms = release_ms.max(0.0);
         self.recompute_alpha_preserving_time();
     }
 
     fn recompute_alpha_preserving_time(&mut self) {
-        if self.avg_time_ms <= 0.0 {
-            self.avg_alpha = 1.0;
-            return;
-        }
         let dt_s = self.hop_size as f32 / self.sample_rate;
-        let tau_s = self.avg_time_ms * 0.001;
-        self.avg_alpha = 1.0 - (-dt_s / tau_s).exp();
+        self.attack_alpha = ms_to_alpha(self.attack_ms, dt_s);
+        self.release_alpha = ms_to_alpha(self.release_ms, dt_s);
     }
 
     pub fn fft_size(&self) -> usize {
@@ -224,8 +247,8 @@ impl Analyzer {
         // (skipping DC and Nyquist bins, but for analyzer display this is fine).
         let norm = 2.0 / self.window_sum;
         let norm_sq = norm * norm;
-        let alpha = self.avg_alpha;
-        let one_minus_alpha = 1.0 - alpha;
+        let attack_alpha = self.attack_alpha;
+        let release_alpha = self.release_alpha;
 
         // Reassignment constants. `bin_hz` is the nominal frequency step
         // per FFT bin. `expected_per_bin` is the phase advance (rad) a
@@ -243,8 +266,16 @@ impl Analyzer {
             let c = self.fft_buffer[bin];
             let power = (c.re * c.re + c.im * c.im) * norm_sq;
             self.raw_magnitude_db[bin] = 10.0 * (power + 1e-24).log10();
-            // Exponential power averaging. alpha=1.0 → no averaging.
-            self.power_avg[bin] = alpha * power + one_minus_alpha * self.power_avg[bin];
+            // Asymmetric EMA: fast alpha when the new sample exceeds the
+            // running average (attack), slow alpha when it's below
+            // (release). Equal alphas → symmetric averaging.
+            let prev = self.power_avg[bin];
+            let alpha = if power > prev {
+                attack_alpha
+            } else {
+                release_alpha
+            };
+            self.power_avg[bin] = alpha * power + (1.0 - alpha) * prev;
             self.magnitude_db[bin] = 10.0 * (self.power_avg[bin] + 1e-24).log10();
 
             let phase = c.im.atan2(c.re);

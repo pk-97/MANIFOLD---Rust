@@ -64,7 +64,11 @@ const DB_MAX: f32 = 0.0;
 /// Wide enough for a vertical meter column, the scale labels, and
 /// readouts like "-14.4 LUFS" without truncation at the default
 /// egui font size.
-const LOUDNESS_PANEL_WIDTH: f32 = 180.0;
+/// Width of the right-side column. Top half = L/R spectrum comparison,
+/// bottom half = loudness meter. Narrow to leave the MS / spectrogram
+/// stack as much horizontal room as possible; the loudness layout
+/// collapses its content to fit.
+const RIGHT_COLUMN_WIDTH: f32 = 200.0;
 
 /// Maximum number of reference-track slots persisted with the plugin.
 /// Matches typical mastering-reference tool conventions (SPAN / Ozone).
@@ -102,32 +106,53 @@ fn weighting_align_offset(weighting: Weighting, freq_min: f32, freq_max: f32) ->
     if freq_max <= freq_min {
         return 0.0;
     }
-    -weighting_mean(weighting, freq_min, freq_max)
+    -weighting_stats(weighting, freq_min, freq_max).mean
 }
 
-/// Returns the mean of `weighting_db(f)` over a log-uniform grid in
-/// [freq_min, freq_max]. Used to remove the DC bias from the weighting
-/// curve so the shader's adjustment is mean-zero across the visible
-/// range.
-fn weighting_mean(weighting: Weighting, freq_min: f32, freq_max: f32) -> f32 {
+#[derive(Copy, Clone)]
+struct WeightingStats {
+    mean: f32,
+    max: f32,
+}
+
+/// Returns mean/max of `weighting_db(f)` over a log-uniform grid in
+/// [freq_min, freq_max]. Mean is used for align-offset (DC bias
+/// removal on the shader side). Max is used by the reference-curve
+/// overlay to pin the peak of the adjustment curve to 0 dB so the
+/// positive half doesn't clip off the top of the MS plot.
+fn weighting_stats(weighting: Weighting, freq_min: f32, freq_max: f32) -> WeightingStats {
     match weighting {
-        Weighting::Flat => 0.0,
+        Weighting::Flat => WeightingStats { mean: 0.0, max: 0.0 },
         Weighting::Pink | Weighting::Tilted => {
             let slope = weighting.slope_db_per_oct();
             let gm = (freq_min * freq_max).sqrt();
-            slope * (gm / SLOPE_REF_FREQ).log2()
+            let mean = slope * (gm / SLOPE_REF_FREQ).log2();
+            let v_lo = slope * (freq_min / SLOPE_REF_FREQ).log2();
+            let v_hi = slope * (freq_max / SLOPE_REF_FREQ).log2();
+            WeightingStats {
+                mean,
+                max: v_lo.max(v_hi),
+            }
         }
         Weighting::Lufs | Weighting::LufsSubAdj => {
             let n = 64usize;
             let log_min = freq_min.ln();
             let log_max = freq_max.ln();
             let mut sum = 0.0_f32;
+            let mut peak = f32::NEG_INFINITY;
             for i in 0..n {
                 let t = (i as f32 + 0.5) / n as f32;
                 let freq = (log_min + t * (log_max - log_min)).exp();
-                sum += lufs_weighting_db(weighting, freq);
+                let v = lufs_weighting_db(weighting, freq);
+                sum += v;
+                if v > peak {
+                    peak = v;
+                }
             }
-            sum / n as f32
+            WeightingStats {
+                mean: sum / n as f32,
+                max: peak,
+            }
         }
     }
 }
@@ -193,6 +218,11 @@ const FILL_ALPHA: f32 = 0.45;
 const SPECTROGRAM_DB_MIN: f32 = -59.0;
 const SPECTROGRAM_DB_MAX_SS: f32 = 10.0;
 const SPECTROGRAM_DB_MAX_RAW: f32 = 0.0;
+/// Gamma applied to the dB→colour mapping (values only; stored dB is
+/// untouched). `< 1` brightens mids, `> 1` darkens. 0.7 lifts quiet
+/// detail into the visible band without washing out peaks, and matches
+/// the perceptual contrast curve used by iZotope RX's heatmap view.
+const SPECTROGRAM_GAMMA: f32 = 0.7;
 
 /// Synchrosqueeze input-gate range. Single source of truth — used both
 /// for the `FloatParam` definition and the `DragValue` widget clamp so
@@ -522,6 +552,11 @@ pub struct AnalyzerGuiShared {
     /// `try_read_*_db` (GUI thread); neither side blocks on the other.
     mid_db: Mutex<Vec<f32>>,
     side_db: Mutex<Vec<f32>>,
+    /// Averaged Left / Right spectra for the L/R comparison column.
+    /// Same mailbox pattern as mid/side; audio thread publishes when it
+    /// finishes a frame, GUI thread reads each repaint.
+    left_db: Mutex<Vec<f32>>,
+    right_db: Mutex<Vec<f32>>,
     /// Raw mid-channel audio samples for the CQT spectrogram. Audio
     /// thread pushes every sample; GUI thread drains and feeds the CQT
     /// pipeline. No FFT on the audio thread for this path.
@@ -572,6 +607,8 @@ impl AnalyzerGuiShared {
             fft_size: AtomicUsize::new(fft_size),
             mid_db: Mutex::new(vec![MIN_DB; num_bins]),
             side_db: Mutex::new(vec![MIN_DB; num_bins]),
+            left_db: Mutex::new(vec![MIN_DB; num_bins]),
+            right_db: Mutex::new(vec![MIN_DB; num_bins]),
             mid_sample_ring: SampleRing::new(SAMPLE_RING_CAPACITY),
             loudness_block_queue: Arc::new(ArrayQueue::new(256)),
             bpm_bits: AtomicU64::new(f64::NAN.to_bits()),
@@ -686,6 +723,42 @@ impl AnalyzerGuiShared {
         }
     }
 
+    pub fn try_publish_left_db(&self, src: &[f32]) -> bool {
+        if let Some(mut guard) = self.left_db.try_lock() {
+            guard.copy_from_slice(src);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn try_publish_right_db(&self, src: &[f32]) -> bool {
+        if let Some(mut guard) = self.right_db.try_lock() {
+            guard.copy_from_slice(src);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn try_read_left_db(&self, dst: &mut [f32]) -> bool {
+        if let Some(guard) = self.left_db.try_lock() {
+            dst.copy_from_slice(&guard);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn try_read_right_db(&self, dst: &mut [f32]) -> bool {
+        if let Some(guard) = self.right_db.try_lock() {
+            dst.copy_from_slice(&guard);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Full-snapshot publish — only used by the CLI / tests path where
     /// the meter computes integrated + LRA in-line. The plugin runtime
     /// uses `set_fast_loudness` (audio thread) + `set_integrated_lufs`
@@ -791,6 +864,8 @@ struct EditorState {
     quad: SharedPainterState,
     mid_scratch: Vec<f32>,
     side_scratch: Vec<f32>,
+    left_scratch: Vec<f32>,
+    right_scratch: Vec<f32>,
     /// Pre-computed weighting curve uploaded to the shader whenever the
     /// mode or visible freq range changes. Replaces the old per-pixel
     /// biquad sin/cos evaluation — shader now samples this LUT with one
@@ -852,6 +927,8 @@ pub fn create_editor(
         quad: Arc::new(Mutex::new(PainterState::NotYet)),
         mid_scratch: vec![MIN_DB; num_bins],
         side_scratch: vec![MIN_DB; num_bins],
+        left_scratch: vec![MIN_DB; num_bins],
+        right_scratch: vec![MIN_DB; num_bins],
         weighting_lut_cache: WeightingLutCache::default(),
     };
     create_egui_editor(
@@ -877,12 +954,12 @@ pub fn create_editor(
                 .show(ctx, |ui| {
                     draw_ref_slots(ui, state);
                 });
-            egui::SidePanel::right("analyzer-loudness")
+            egui::SidePanel::right("analyzer-right-column")
                 .frame(egui::Frame::new().fill(egui::Color32::from_rgb(12, 15, 21)))
-                .exact_width(LOUDNESS_PANEL_WIDTH)
+                .exact_width(RIGHT_COLUMN_WIDTH)
                 .resizable(false)
                 .show(ctx, |ui| {
-                    draw_loudness_panel(ui, state);
+                    draw_right_column(ui, state);
                 });
             egui::CentralPanel::default()
                 .frame(egui::Frame::new().fill(egui::Color32::from_rgb(8, 10, 14)))
@@ -907,6 +984,12 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     }
     if state.side_scratch.len() != num_bins {
         state.side_scratch.resize(num_bins, MIN_DB);
+    }
+    if state.left_scratch.len() != num_bins {
+        state.left_scratch.resize(num_bins, MIN_DB);
+    }
+    if state.right_scratch.len() != num_bins {
+        state.right_scratch.resize(num_bins, MIN_DB);
     }
 
     // Target render-buffer size: rect × DPI, clamped.
@@ -971,6 +1054,8 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     ) {
         let _ = state.shared.try_read_mid_db(&mut state.mid_scratch);
         let _ = state.shared.try_read_side_db(&mut state.side_scratch);
+        let _ = state.shared.try_read_left_db(&mut state.left_scratch);
+        let _ = state.shared.try_read_right_db(&mut state.right_scratch);
         let ss_on = state.params.synchrosqueeze.value();
         let top_fraction = state.params.top_ratio.value().fraction();
         let weighting = state.params.weighting.value();
@@ -1014,6 +1099,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             spectrum_fraction: top_fraction,
             spectrogram_db_min: SPECTROGRAM_DB_MIN,
             spectrogram_db_max: if ss_on { SPECTROGRAM_DB_MAX_SS } else { SPECTROGRAM_DB_MAX_RAW },
+            spectrogram_gamma: SPECTROGRAM_GAMMA,
             sync_mode: sync_active,
         });
 
@@ -1252,20 +1338,21 @@ fn draw_reference_curve(
     if matches!(mode, ReferenceCurve::None) || matches!(weighting, Weighting::Flat) {
         return;
     }
-    // Adjustment applied to the analyser = the exact per-bin gain the
-    // shader adds via the weighting LUT. Mean-zero across the visible
-    // range (the align offset removes the DC bias), so the line sits
-    // around 0 dB instead of drifting up or down when the window
-    // changes.
+    // Shape of the adjustment applied by the analyser, pinned so the
+    // peak touches 0 dB (= the freq the weighting boosts MOST). The
+    // shader's actual adjustment is mean-zero thanks to the align
+    // offset, but for modes like Pink that span ±20 dB the positive
+    // half would clip off the top of the MS plot — pinning to the
+    // peak keeps the shape faithful without losing the upper half.
     //
     // Reading:
-    //   curve above line → this bin is being BOOSTED by the weighting
-    //                      (loudness-efficient: content here drives
-    //                      LUFS hard)
-    //   curve below line → this bin is being CUT by the weighting
-    //                      (loudness-inefficient: eats peak budget
-    //                      without helping loudness)
-    let align = weighting_align_offset(weighting, freq_min, freq_max);
+    //   curve near 0 dB   → this bin gets the MOST boost from the
+    //                       weighting (loudness-efficient: content
+    //                       here drives LUFS hard)
+    //   curve further down → this bin is weighted down relative to
+    //                        the peak (loudness-inefficient: eats
+    //                        peak budget without helping loudness)
+    let stats = weighting_stats(weighting, freq_min, freq_max);
     let n = 128usize;
     let log_min = freq_min.ln();
     let log_max = freq_max.ln();
@@ -1273,7 +1360,7 @@ fn draw_reference_curve(
     for i in 0..n {
         let t = i as f32 / (n - 1) as f32;
         let freq = (log_min + t * (log_max - log_min)).exp();
-        let adj_db = weighting_db_at(weighting, freq) + align;
+        let adj_db = weighting_db_at(weighting, freq) - stats.max;
         let x = rect.left() + t * rect.width();
         let y = db_to_y(adj_db, DB_MIN, DB_MAX, rect);
         pts.push(egui::pos2(x, y));
@@ -1566,6 +1653,231 @@ fn format_hz(freq: f32) -> String {
     } else {
         format!("{}", freq as i32)
     }
+}
+
+/// L/R comparison column. Vertical frequency axis (log, bottom = low,
+/// top = high) matching the MS plot's frequency range. Horizontal axis
+/// shows which channel dominates at each bin: the L curve extends
+/// leftward from the centerline by `L_dB − R_dB` when L is louder
+/// (otherwise it sits on the centerline), and the R curve extends
+/// rightward by `R_dB − L_dB` when R is louder. Mono bins → both
+/// curves on the centerline.
+///
+/// Axis range: each half of the column spans 0..`LR_DELTA_DB_RANGE`
+/// dB, so the outer edge represents a 20 dB imbalance. Deltas past
+/// that run off the edge and get cropped by the painter's clip
+/// rectangle rather than bouncing off an invisible wall.
+fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
+    /// Max imbalance represented by each half of the column. When the
+    /// louder channel exceeds the quieter by `LR_DELTA_DB_RANGE` dB,
+    /// its curve reaches the outer edge of its half.
+    const LR_DELTA_DB_RANGE: f32 = 20.0;
+    /// Upper end of the soft-gate fade. At or above this level on the
+    /// louder channel, the true L/R delta is drawn. Below it, the
+    /// drawn delta fades linearly toward 0 until `LR_SILENCE_DB`.
+    const LR_GATE_DB: f32 = -70.0;
+    /// Lower end of the soft-gate fade. At or below this level the
+    /// drawn delta is 0 — both curves sit on the centerline — so
+    /// silent regions ease onto centre instead of chopping off.
+    const LR_SILENCE_DB: f32 = -95.0;
+    /// Log2-octave half-width for the per-bin smoothing window. Matches
+    /// `SMOOTH_HALF_OCT_LOG2` (1/24-oct half-width → 1/12-oct
+    /// bandwidth) so the L/R column's visual roughness lines up with
+    /// the MS plot above it.
+    const LR_SMOOTH_HALF_OCT_LOG2: f32 = SMOOTH_HALF_OCT_LOG2;
+
+    let sr = state.shared.sample_rate();
+    let available = ui.available_size();
+    if available.x <= 1.0 || available.y <= 1.0 || sr <= 0.0 {
+        let (_rect, _) = ui.allocate_exact_size(available, egui::Sense::hover());
+        return;
+    }
+    let (rect, _) = ui.allocate_exact_size(available, egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+
+    painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(8, 10, 14));
+
+    let nyquist = sr * 0.5;
+    let freq_min_user = state.params.freq_min_hz.value() as f32;
+    let freq_max_user = state.params.freq_max_hz.value() as f32;
+    let freq_max = freq_max_user.min(nyquist).max(freq_min_user * 2.0);
+    let freq_min = freq_min_user.min(freq_max * 0.5).max(1.0);
+    let log_min = freq_min.ln();
+    let log_max = freq_max.ln();
+    let log_span = (log_max - log_min).max(1e-6);
+
+    let freq_to_y = |freq: f32| -> f32 {
+        let t = (freq.ln() - log_min) / log_span;
+        rect.bottom() - t * rect.height()
+    };
+
+    let center_x = rect.center().x;
+    // Each half of the column spans LR_DELTA_DB_RANGE dB of imbalance.
+    let px_per_db = (rect.width() * 0.5) / LR_DELTA_DB_RANGE;
+
+    let grid_major = egui::Color32::from_gray(52);
+    let grid_minor = egui::Color32::from_gray(32);
+    let label_color = egui::Color32::from_gray(150);
+
+    // Horizontal frequency grid (same freqs as the MS plot).
+    for &freq in FREQ_MAJORS {
+        if freq >= freq_min && freq <= freq_max {
+            let y = freq_to_y(freq);
+            painter.line_segment(
+                [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+                (1.0, grid_minor),
+            );
+        }
+    }
+    // ±10 dB minor delta lines, full-height.
+    for &d in &[-10.0_f32, 10.0] {
+        let x = center_x + d * px_per_db;
+        painter.line_segment(
+            [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+            (1.0, grid_minor),
+        );
+    }
+    // Centre line (0 dB delta) on top of the minor grid.
+    painter.line_segment(
+        [
+            egui::pos2(center_x, rect.top()),
+            egui::pos2(center_x, rect.bottom()),
+        ],
+        (1.0, grid_major),
+    );
+
+    let fft_size = state.shared.fft_size();
+    let num_bins = state.left_scratch.len().min(state.right_scratch.len());
+    if num_bins < 2 {
+        return;
+    }
+    let bin_per_hz = fft_size as f32 / sr;
+    let max_bin = (num_bins - 1) as f32;
+    let smooth_lo = (-LR_SMOOTH_HALF_OCT_LOG2).exp2();
+    let smooth_hi = LR_SMOOTH_HALF_OCT_LOG2.exp2();
+
+    // Walk one point per pixel row (~450 rows at 1x DPI, so cheap).
+    let rows = rect.height().ceil() as i32 + 1;
+    let mut l_pts = Vec::with_capacity(rows as usize);
+    let mut r_pts = Vec::with_capacity(rows as usize);
+
+    for row in 0..rows {
+        let y = rect.bottom() - row as f32;
+        if y < rect.top() {
+            break;
+        }
+        let t = (rect.bottom() - y) / rect.height().max(1.0);
+        let freq = (log_min + t * log_span).exp();
+        // Average all bins inside a 1/12-octave window centred on
+        // `freq`. Below ~150 Hz the window collapses to a single bin,
+        // so we fall back to linear inter-bin interpolation there.
+        let bin_lo_f = (freq * smooth_lo * bin_per_hz).clamp(0.0, max_bin);
+        let bin_hi_f = (freq * smooth_hi * bin_per_hz).clamp(0.0, max_bin);
+        let bin_lo = bin_lo_f.floor() as usize;
+        let bin_hi = bin_hi_f.ceil() as usize;
+        let (l_db, r_db) = if bin_hi > bin_lo {
+            let mut l_sum = 0.0_f32;
+            let mut r_sum = 0.0_f32;
+            for b in bin_lo..=bin_hi.min(num_bins - 1) {
+                l_sum += state.left_scratch[b];
+                r_sum += state.right_scratch[b];
+            }
+            let n = (bin_hi.min(num_bins - 1) - bin_lo + 1) as f32;
+            (l_sum / n, r_sum / n)
+        } else {
+            let bin_f = (freq * bin_per_hz).clamp(0.0, max_bin);
+            let b0 = bin_f.floor() as usize;
+            let b1 = (b0 + 1).min(num_bins - 1);
+            let frac = bin_f - b0 as f32;
+            (
+                state.left_scratch[b0] * (1.0 - frac) + state.left_scratch[b1] * frac,
+                state.right_scratch[b0] * (1.0 - frac) + state.right_scratch[b1] * frac,
+            )
+        };
+
+        // Soft gate: above LR_GATE_DB we show the true delta; as the
+        // louder channel drops from LR_GATE_DB down to `LR_SILENCE_DB`
+        // we linearly fade the delta toward 0 so the curves ease back
+        // onto the centerline in silent regions instead of chopping
+        // off. No clamp on the delta itself — the painter's clip rect
+        // crops anything past the column edge so an extreme imbalance
+        // reads as "line runs off the side" rather than "line bounces
+        // off an invisible wall."
+        let louder = l_db.max(r_db);
+        let fade = ((louder - LR_SILENCE_DB) / (LR_GATE_DB - LR_SILENCE_DB)).clamp(0.0, 1.0);
+        let delta = (l_db - r_db) * fade;
+        let l_lead = delta.max(0.0);
+        let r_lead = (-delta).max(0.0);
+        let l_x = center_x - l_lead * px_per_db;
+        let r_x = center_x + r_lead * px_per_db;
+        l_pts.push(egui::pos2(l_x, y));
+        r_pts.push(egui::pos2(r_x, y));
+    }
+
+    let l_color = egui::Color32::from_rgb(100, 180, 255);
+    let r_color = egui::Color32::from_rgb(255, 200, 80);
+    if l_pts.len() >= 2 {
+        painter.add(egui::Shape::line(l_pts, egui::Stroke::new(1.3, l_color)));
+        painter.add(egui::Shape::line(r_pts, egui::Stroke::new(1.3, r_color)));
+    }
+
+    // L / R channel labels in the top corners.
+    painter.text(
+        egui::pos2(rect.left() + 4.0, rect.top() + 3.0),
+        egui::Align2::LEFT_TOP,
+        "L",
+        egui::FontId::monospace(10.0),
+        l_color,
+    );
+    painter.text(
+        egui::pos2(rect.right() - 4.0, rect.top() + 3.0),
+        egui::Align2::RIGHT_TOP,
+        "R",
+        egui::FontId::monospace(10.0),
+        r_color,
+    );
+    // Imbalance ticks: each outer edge = that channel is
+    // `LR_DELTA_DB_RANGE` dB louder than the other. Centre = mono.
+    let range = LR_DELTA_DB_RANGE as i32;
+    painter.text(
+        egui::pos2(rect.left() + 2.0, rect.bottom() - 2.0),
+        egui::Align2::LEFT_BOTTOM,
+        format!("{range}"),
+        egui::FontId::monospace(9.0),
+        label_color,
+    );
+    painter.text(
+        egui::pos2(center_x, rect.bottom() - 2.0),
+        egui::Align2::CENTER_BOTTOM,
+        "0 dB",
+        egui::FontId::monospace(9.0),
+        label_color,
+    );
+    painter.text(
+        egui::pos2(rect.right() - 2.0, rect.bottom() - 2.0),
+        egui::Align2::RIGHT_BOTTOM,
+        format!("{range}"),
+        egui::FontId::monospace(9.0),
+        label_color,
+    );
+}
+
+/// Right-column container: splits vertically into the L/R comparison
+/// plot (top row) and the loudness meter (bottom row), using the same
+/// `top_ratio` split as the MS-plot / spectrogram stack on the left so
+/// the 2×2 grid rows line up.
+fn draw_right_column(ui: &mut egui::Ui, state: &mut EditorState) {
+    let top_fraction = state.params.top_ratio.value().fraction();
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let total = ui.available_size();
+    let top_h = total.y * top_fraction;
+    let bottom_h = total.y - top_h;
+    ui.allocate_ui(egui::vec2(total.x, top_h), |ui| {
+        draw_lr_column(ui, state);
+    });
+    ui.allocate_ui(egui::vec2(total.x, bottom_h), |ui| {
+        draw_loudness_panel(ui, state);
+    });
 }
 
 /// Right-side loudness meter. Vertical scale spans both rows; a
