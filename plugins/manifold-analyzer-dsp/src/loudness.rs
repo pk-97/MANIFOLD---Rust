@@ -29,6 +29,12 @@ const LRA_RELATIVE_GATE_LU: f32 = 20.0;
 const LKFS_OFFSET: f32 = -0.691;
 const MIN_LUFS: f32 = -120.0;
 
+/// Amplitude → dB with a floor matching `MIN_LUFS` so silent
+/// passages report the same "no signal" sentinel as the LUFS track.
+fn amp_to_db(a: f32) -> f32 {
+    if a <= 1e-12 { MIN_LUFS } else { 20.0 * a.log10() }
+}
+
 const BLOCK_MS: f32 = 100.0;
 const MOMENTARY_BLOCKS: usize = 4; // 400 ms / 100 ms
 const SHORT_TERM_BLOCKS: usize = 30; // 3000 ms / 100 ms
@@ -259,6 +265,22 @@ pub struct LoudnessSnapshot {
     pub momentary_max_lufs: f32,
     pub short_term_max_lufs: f32,
     pub true_peak_max_dbtp: f32,
+    /// Live sample-peak (dBFS, 300 ms release hold) across L/R.
+    pub sample_peak_db: f32,
+    /// Monotonic max of the raw sample peak (dBFS).
+    pub sample_peak_max_db: f32,
+    /// Smoothed stereo RMS (dBFS, 300 ms time constant).
+    pub rms_db: f32,
+    /// Monotonic max of the smoothed RMS (dBFS).
+    pub rms_max_db: f32,
+    /// Smoothed Pearson correlation between L and R: +1 mono,
+    /// 0 uncorrelated, −1 anti-phase.
+    pub correlation: f32,
+    /// Seconds of audio processed since the last `reset()`. Lets the
+    /// GUI suppress metrics that need a warm-up window (ST, Integrated,
+    /// LRA, DR, PLR, ST Max) behind a sensible threshold instead of
+    /// showing noisy partial readings.
+    pub elapsed_secs: f32,
 }
 
 impl LoudnessSnapshot {
@@ -272,6 +294,12 @@ impl LoudnessSnapshot {
         momentary_max_lufs: MIN_LUFS,
         short_term_max_lufs: MIN_LUFS,
         true_peak_max_dbtp: MIN_LUFS,
+        sample_peak_db: MIN_LUFS,
+        sample_peak_max_db: MIN_LUFS,
+        rms_db: MIN_LUFS,
+        rms_max_db: MIN_LUFS,
+        correlation: 0.0,
+        elapsed_secs: 0.0,
     };
 }
 
@@ -282,6 +310,18 @@ pub struct LoudnessMeter {
     k_l: ChannelKFilter,
     k_r: ChannelKFilter,
     tp: TruePeakDetector,
+
+    // Per-sample live readouts for Peak / RMS / Correlation. All
+    // 300 ms-time-constant — fast enough for mastering, slow enough
+    // that the numbers don't chatter.
+    peak_hold: f32,        // max(|L|, |R|) with exponential release
+    peak_release_coef: f32,
+    sm_l_mean_sq: f32,     // 1-pole smoothed L²
+    sm_r_mean_sq: f32,     // 1-pole smoothed R²
+    sm_lr_mean: f32,       // 1-pole smoothed L·R (correlation numerator)
+    sm_coef: f32,          // 1 − (1-pole decay factor per sample)
+    raw_peak_abs_max: f32, // monotonic max of |L|, |R| raw samples
+    rms_max_linear: f32,   // monotonic max of sqrt(sm_mean_sq) for display
 
     // 100 ms accumulator, per channel, sum of squares.
     block_sum_sq_l: f64,
@@ -325,12 +365,24 @@ impl LoudnessMeter {
         // audio-thread push never allocates in the common case. Beyond
         // that, Vec amortised growth kicks in (still bounded memcpy).
         const PRESIZE_BINS: usize = 18_000; // 30 min × 10 bins/sec
+        // 300 ms time constant for peak release and RMS/correlation
+        // smoothing. `coef^N = e^-1` at N = sr·0.3 samples.
+        const READOUT_TC_S: f32 = 0.3;
+        let sm_coef = (-1.0 / (sample_rate * READOUT_TC_S).max(1.0)).exp();
         Self {
             sample_rate,
             samples_per_block,
             k_l: ChannelKFilter::new(sample_rate),
             k_r: ChannelKFilter::new(sample_rate),
             tp: TruePeakDetector::new(),
+            peak_hold: 0.0,
+            peak_release_coef: sm_coef,
+            sm_l_mean_sq: 0.0,
+            sm_r_mean_sq: 0.0,
+            sm_lr_mean: 0.0,
+            sm_coef,
+            raw_peak_abs_max: 0.0,
+            rms_max_linear: 0.0,
             block_sum_sq_l: 0.0,
             block_sum_sq_r: 0.0,
             block_count: 0,
@@ -378,6 +430,12 @@ impl LoudnessMeter {
         self.k_l.reset();
         self.k_r.reset();
         self.tp.reset();
+        self.peak_hold = 0.0;
+        self.sm_l_mean_sq = 0.0;
+        self.sm_r_mean_sq = 0.0;
+        self.sm_lr_mean = 0.0;
+        self.raw_peak_abs_max = 0.0;
+        self.rms_max_linear = 0.0;
         self.block_sum_sq_l = 0.0;
         self.block_sum_sq_r = 0.0;
         self.block_count = 0;
@@ -394,6 +452,9 @@ impl LoudnessMeter {
     /// callers can pass the same slice twice.
     pub fn process(&mut self, left: &[f32], right: &[f32]) {
         let n = left.len().min(right.len());
+        let sm_coef = self.sm_coef;
+        let one_minus = 1.0 - sm_coef;
+        let release = self.peak_release_coef;
         for i in 0..n {
             let xl = left[i];
             let xr = right[i];
@@ -406,6 +467,26 @@ impl LoudnessMeter {
             if self.block_count >= self.samples_per_block {
                 self.close_block();
             }
+
+            // Sample-peak hold: instant attack, exponential release.
+            // Tracks raw (un-weighted) sample magnitude so it pairs
+            // with crest-factor / PPM conventions.
+            let abs_peak = xl.abs().max(xr.abs());
+            if abs_peak > self.peak_hold {
+                self.peak_hold = abs_peak;
+            } else {
+                self.peak_hold *= release;
+            }
+            if abs_peak > self.raw_peak_abs_max {
+                self.raw_peak_abs_max = abs_peak;
+            }
+
+            // 1-pole smoothed L², R², L·R for RMS + correlation.
+            // Using `sm_coef * prev + (1-sm_coef) * x` yields a 300 ms
+            // time-constant LPF on the instantaneous power / product.
+            self.sm_l_mean_sq = sm_coef * self.sm_l_mean_sq + one_minus * (xl * xl);
+            self.sm_r_mean_sq = sm_coef * self.sm_r_mean_sq + one_minus * (xr * xr);
+            self.sm_lr_mean = sm_coef * self.sm_lr_mean + one_minus * (xl * xr);
         }
         // Refresh running readouts (M, ST, max, TP) even if no bin
         // closed this call — M/ST don't change within a 100 ms bin,
@@ -496,6 +577,40 @@ impl LoudnessMeter {
         if ref_lufs > MIN_LUFS && self.snapshot.true_peak_max_dbtp > MIN_LUFS {
             self.snapshot.plr_lu = self.snapshot.true_peak_max_dbtp - ref_lufs;
         }
+
+        // Sample-peak live + max.
+        let peak_live_db = amp_to_db(self.peak_hold);
+        let peak_raw_db = amp_to_db(self.raw_peak_abs_max);
+        self.snapshot.sample_peak_db = peak_live_db;
+        if peak_raw_db > self.snapshot.sample_peak_max_db {
+            self.snapshot.sample_peak_max_db = peak_raw_db;
+        }
+
+        // Stereo RMS: power-average the two smoothed mean-squares.
+        let rms_ms = 0.5 * (self.sm_l_mean_sq + self.sm_r_mean_sq);
+        let rms_linear = rms_ms.max(0.0).sqrt();
+        if rms_linear > self.rms_max_linear {
+            self.rms_max_linear = rms_linear;
+        }
+        self.snapshot.rms_db = amp_to_db(rms_linear);
+        self.snapshot.rms_max_db = amp_to_db(self.rms_max_linear);
+
+        // Elapsed time since last reset. Closed-block count gives us
+        // 100 ms granularity; fold in the in-progress partial bin for
+        // smooth sub-block progress on long pieces.
+        self.snapshot.elapsed_secs = self.bins_since_reset as f32 * (BLOCK_MS * 0.001)
+            + self.block_count as f32 / self.sample_rate.max(1.0);
+
+        // Pearson correlation between L and R. Denominator is the
+        // geometric mean of smoothed L² and R²; guard with a small
+        // epsilon so silent passages show 0 instead of NaN. Clamp to
+        // [-1, 1] in case round-off pushes the ratio slightly past.
+        let denom_sq = self.sm_l_mean_sq * self.sm_r_mean_sq;
+        self.snapshot.correlation = if denom_sq > 1e-18 {
+            (self.sm_lr_mean / denom_sq.sqrt()).clamp(-1.0, 1.0)
+        } else {
+            0.0
+        };
     }
 
     fn recompute_on_tick(&mut self) {

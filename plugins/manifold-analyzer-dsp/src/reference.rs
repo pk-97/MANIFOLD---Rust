@@ -22,7 +22,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Analyzer, LoudnessMeter, MIN_DB};
+use crate::{Analyzer, LoudnessMeter, LoudnessSnapshot, MIN_DB};
 
 /// Number of log-spaced points stored per envelope. Chosen to cover the
 /// pixel density of a typical analyzer window (~1 K wide) without eating
@@ -82,12 +82,45 @@ pub struct RefAnalysis {
     /// band vertically so the comparison is loudness-matched with the
     /// live mix.
     pub integrated_lufs: f32,
+    /// Loudness Range (LRA) in LU over the whole file.
+    pub lra_lu: f32,
+    /// Monotonic max of BS.1770 short-term (3 s) loudness across the
+    /// file. Used to derive DR = ST max − Integrated for the ref.
+    pub short_term_max_lufs: f32,
+    /// Monotonic max of 4× oversampled true peak across the file.
+    pub true_peak_max_dbtp: f32,
+    /// Monotonic max of raw sample peak across the file.
+    pub sample_peak_max_db: f32,
+    /// Monotonic max of the 300 ms-smoothed RMS across the file.
+    pub rms_max_db: f32,
     /// MP3 LAME-tag lowpass in Hz, if detected. Display should fade the
     /// band to transparent above this frequency so codec brickwall
     /// artefacts don't read as "ref has no high end".
     pub lowpass_hz: Option<f32>,
     pub source_sample_rate: f32,
     pub duration_secs: f32,
+}
+
+impl RefAnalysis {
+    /// DR derived the same way the live meter does: short-term max
+    /// minus integrated. Returns 0.0 if either input is below the
+    /// "no signal" sentinel.
+    pub fn dr_lu(&self) -> f32 {
+        if self.short_term_max_lufs > MIN_DB + 1.0 && self.integrated_lufs > MIN_DB + 1.0 {
+            self.short_term_max_lufs - self.integrated_lufs
+        } else {
+            0.0
+        }
+    }
+
+    /// PLR derived like the live meter: true-peak max minus integrated.
+    pub fn plr_lu(&self) -> f32 {
+        if self.true_peak_max_dbtp > MIN_DB + 1.0 && self.integrated_lufs > MIN_DB + 1.0 {
+            self.true_peak_max_dbtp - self.integrated_lufs
+        } else {
+            0.0
+        }
+    }
 }
 
 /// What went wrong when analysing a file.
@@ -124,12 +157,17 @@ pub fn analyze_ref_file(path: &Path) -> Result<RefAnalysis, RefError> {
     }
 
     let (mid_env, side_env) = run_fft_stats(&samples_l, &samples_r, source_sr);
-    let integrated_lufs = run_integrated_lufs(&samples_l, &samples_r, source_sr);
+    let loudness = run_loudness_aggregates(&samples_l, &samples_r, source_sr);
 
     Ok(RefAnalysis {
         mid: mid_env,
         side: side_env,
-        integrated_lufs,
+        integrated_lufs: loudness.integrated_lufs,
+        lra_lu: loudness.lra_lu,
+        short_term_max_lufs: loudness.short_term_max_lufs,
+        true_peak_max_dbtp: loudness.true_peak_max_dbtp,
+        sample_peak_max_db: loudness.sample_peak_max_db,
+        rms_max_db: loudness.rms_max_db,
         lowpass_hz,
         source_sample_rate: source_sr,
         duration_secs,
@@ -218,7 +256,13 @@ fn percentile_from_sorted(sorted: &[f32], p: f32) -> f32 {
     sorted[idx.min(sorted.len() - 1)]
 }
 
-fn run_integrated_lufs(l: &[f32], r: &[f32], sr: f32) -> f32 {
+/// Offline loudness pass: feed the whole file through the same
+/// `LoudnessMeter` the runtime uses, then pull every single-number
+/// aggregate out of its final snapshot. Without a block sink attached
+/// the meter runs integrated + LRA gating in-line, so LRA and the
+/// max-hold readouts all settle to their true full-file values by
+/// the last sample.
+fn run_loudness_aggregates(l: &[f32], r: &[f32], sr: f32) -> LoudnessSnapshot {
     let mut meter = LoudnessMeter::new(sr);
     let chunk = 8192;
     let mut i = 0;
@@ -227,7 +271,7 @@ fn run_integrated_lufs(l: &[f32], r: &[f32], sr: f32) -> f32 {
         meter.process(&l[i..end], &r[i..end]);
         i = end;
     }
-    meter.snapshot().integrated_lufs
+    meter.snapshot()
 }
 
 // ---------------------------------------------------------------------

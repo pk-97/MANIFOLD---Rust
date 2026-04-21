@@ -464,6 +464,13 @@ pub struct AnalyzerParams {
     /// over-driving perceptual loudness.
     #[id = "ref-curve"]
     pub reference_curve: EnumParam<ReferenceCurve>,
+
+    /// Half-range of the L/R SPL column in dB. Each side spans 0 dB
+    /// (outer edge, loudest) down to −this value (centerline, silence).
+    /// 20..90 dB covers "mastering zoom on the top 20 dB" through
+    /// "full analyser floor matching the MS plot".
+    #[id = "lr-range"]
+    pub lr_range_db: IntParam,
 }
 
 impl AnalyzerParams {
@@ -491,6 +498,7 @@ impl AnalyzerParams {
             .with_step_size(1.0),
             weighting: EnumParam::new("Weighting", Weighting::LufsSubAdj),
             reference_curve: EnumParam::new("Reference", ReferenceCurve::None),
+            lr_range_db: IntParam::new("L/R Range", 20, IntRange::Linear { min: 5, max: 60 }),
         }
     }
 }
@@ -543,6 +551,12 @@ pub struct AnalyzerGuiShared {
     momentary_max_lufs_bits: AtomicU32,
     short_term_max_lufs_bits: AtomicU32,
     true_peak_max_dbtp_bits: AtomicU32,
+    sample_peak_db_bits: AtomicU32,
+    sample_peak_max_db_bits: AtomicU32,
+    rms_db_bits: AtomicU32,
+    rms_max_db_bits: AtomicU32,
+    correlation_bits: AtomicU32,
+    elapsed_secs_bits: AtomicU32,
     /// GUI increments this to request a meter reset; the audio
     /// thread compares against its last-seen value and resets on
     /// change. An atomic counter avoids the "miss the edge" problem
@@ -594,6 +608,12 @@ impl AnalyzerGuiShared {
             momentary_max_lufs_bits: AtomicU32::new(MIN_DB.to_bits()),
             short_term_max_lufs_bits: AtomicU32::new(MIN_DB.to_bits()),
             true_peak_max_dbtp_bits: AtomicU32::new(MIN_DB.to_bits()),
+            sample_peak_db_bits: AtomicU32::new(MIN_DB.to_bits()),
+            sample_peak_max_db_bits: AtomicU32::new(MIN_DB.to_bits()),
+            rms_db_bits: AtomicU32::new(MIN_DB.to_bits()),
+            rms_max_db_bits: AtomicU32::new(MIN_DB.to_bits()),
+            correlation_bits: AtomicU32::new(0.0_f32.to_bits()),
+            elapsed_secs_bits: AtomicU32::new(0.0_f32.to_bits()),
             reset_epoch: AtomicU32::new(0),
             ref_analyzing_mask: AtomicU8::new(0),
             right_column_width_bits: AtomicU32::new(RIGHT_COLUMN_WIDTH_DEFAULT.to_bits()),
@@ -777,6 +797,17 @@ impl AnalyzerGuiShared {
             .store(s.short_term_max_lufs.to_bits(), Ordering::Relaxed);
         self.true_peak_max_dbtp_bits
             .store(s.true_peak_max_dbtp.to_bits(), Ordering::Relaxed);
+        self.sample_peak_db_bits
+            .store(s.sample_peak_db.to_bits(), Ordering::Relaxed);
+        self.sample_peak_max_db_bits
+            .store(s.sample_peak_max_db.to_bits(), Ordering::Relaxed);
+        self.rms_db_bits.store(s.rms_db.to_bits(), Ordering::Relaxed);
+        self.rms_max_db_bits
+            .store(s.rms_max_db.to_bits(), Ordering::Relaxed);
+        self.correlation_bits
+            .store(s.correlation.to_bits(), Ordering::Relaxed);
+        self.elapsed_secs_bits
+            .store(s.elapsed_secs.to_bits(), Ordering::Relaxed);
     }
 
     /// Audio-thread publish for the fast-updating readouts. Integrated
@@ -796,6 +827,17 @@ impl AnalyzerGuiShared {
             .store(s.short_term_max_lufs.to_bits(), Ordering::Relaxed);
         self.true_peak_max_dbtp_bits
             .store(s.true_peak_max_dbtp.to_bits(), Ordering::Relaxed);
+        self.sample_peak_db_bits
+            .store(s.sample_peak_db.to_bits(), Ordering::Relaxed);
+        self.sample_peak_max_db_bits
+            .store(s.sample_peak_max_db.to_bits(), Ordering::Relaxed);
+        self.rms_db_bits.store(s.rms_db.to_bits(), Ordering::Relaxed);
+        self.rms_max_db_bits
+            .store(s.rms_max_db.to_bits(), Ordering::Relaxed);
+        self.correlation_bits
+            .store(s.correlation.to_bits(), Ordering::Relaxed);
+        self.elapsed_secs_bits
+            .store(s.elapsed_secs.to_bits(), Ordering::Relaxed);
     }
 
     /// Worker-thread publish for integrated LUFS. Audio-thread DR / PLR
@@ -828,6 +870,12 @@ impl AnalyzerGuiShared {
             momentary_max_lufs: load(&self.momentary_max_lufs_bits),
             short_term_max_lufs: load(&self.short_term_max_lufs_bits),
             true_peak_max_dbtp: load(&self.true_peak_max_dbtp_bits),
+            sample_peak_db: load(&self.sample_peak_db_bits),
+            sample_peak_max_db: load(&self.sample_peak_max_db_bits),
+            rms_db: load(&self.rms_db_bits),
+            rms_max_db: load(&self.rms_max_db_bits),
+            correlation: load(&self.correlation_bits),
+            elapsed_secs: load(&self.elapsed_secs_bits),
         }
     }
 
@@ -1655,30 +1703,22 @@ fn format_hz(freq: f32) -> String {
     }
 }
 
-/// L/R comparison column. Vertical frequency axis (log, bottom = low,
-/// top = high) matching the MS plot's frequency range. Horizontal axis
-/// shows which channel dominates at each bin: the L curve extends
-/// leftward from the centerline by `L_dB − R_dB` when L is louder
-/// (otherwise it sits on the centerline), and the R curve extends
-/// rightward by `R_dB − L_dB` when R is louder. Mono bins → both
-/// curves on the centerline.
-///
-/// Axis range: each half of the column spans 0..`LR_DELTA_DB_RANGE`
-/// dB, so the outer edge represents a 20 dB imbalance. Deltas past
-/// that run off the edge and get cropped by the painter's clip
-/// rectangle rather than bouncing off an invisible wall.
+/// L/R balance column. Frequency on the y-axis (log, bottom = low,
+/// top = high); horizontal axis shows which channel dominates at each
+/// bin via a single `L_dB − R_dB` line. Centerline = balanced, left
+/// of centerline = L louder, right = R louder. Weighting is applied
+/// to both channels before the subtraction so the balance reads in
+/// the same perceptual space as the MS plot / spectrogram.
 fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
-    /// Max imbalance represented by each half of the column. When the
-    /// louder channel exceeds the quieter by `LR_DELTA_DB_RANGE` dB,
-    /// its curve reaches the outer edge of its half.
-    const LR_DELTA_DB_RANGE: f32 = 20.0;
-    /// Upper end of the soft-gate fade. At or above this level on the
-    /// louder channel, the true L/R delta is drawn. Below it, the
-    /// drawn delta fades linearly toward 0 until `LR_SILENCE_DB`.
+    // Half-range of the imbalance axis in dB. The axis spans
+    // `[−range_db, +range_db]`; the toolbar `L/R dB` control drives
+    // this. Anything beyond the range clamps to the column edge.
+    let range_db = state.params.lr_range_db.value().max(1) as f32;
+    /// Louder channel must be at or above this level for the balance
+    /// line to register as "real". Below it, the line eases back to
+    /// centre over `LR_SILENCE_DB` so quiet bins don't randomly bounce.
     const LR_GATE_DB: f32 = -70.0;
-    /// Lower end of the soft-gate fade. At or below this level the
-    /// drawn delta is 0 — both curves sit on the centerline — so
-    /// silent regions ease onto centre instead of chopping off.
+    /// Full silence floor for the gate fade.
     const LR_SILENCE_DB: f32 = -95.0;
     /// Log2-octave half-width for the per-bin smoothing window. Matches
     /// `SMOOTH_HALF_OCT_LOG2` (1/24-oct half-width → 1/12-oct
@@ -1706,14 +1746,21 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
     let log_max = freq_max.ln();
     let log_span = (log_max - log_min).max(1e-6);
 
+    // Match the MS plot / spectrogram's perceptual correction: add the
+    // same Weighting curve to every per-bin dB value. Without this the
+    // L/R column would read raw FFT levels while the chart above shows
+    // LUFS-weighted levels, and the eye can't line them up.
+    let weighting = state.params.weighting.value();
+    let weighting_align = weighting_align_offset(weighting, freq_min, freq_max);
+
     let freq_to_y = |freq: f32| -> f32 {
         let t = (freq.ln() - log_min) / log_span;
         rect.bottom() - t * rect.height()
     };
 
     let center_x = rect.center().x;
-    // Each half of the column spans LR_DELTA_DB_RANGE dB of imbalance.
-    let px_per_db = (rect.width() * 0.5) / LR_DELTA_DB_RANGE;
+    // Each half of the column spans `range_db` dB of imbalance.
+    let px_per_db = (rect.width() * 0.5) / range_db;
 
     let grid_major = egui::Color32::from_gray(52);
     let grid_minor = egui::Color32::from_gray(32);
@@ -1729,15 +1776,20 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
             );
         }
     }
-    // ±10 dB minor delta lines, full-height.
-    for &d in &[-10.0_f32, 10.0] {
-        let x = center_x + d * px_per_db;
-        painter.line_segment(
-            [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-            (1.0, grid_minor),
-        );
+    // Symmetric dB tick lines at ±{step,2×step,…} around the centre.
+    let step_db = if range_db >= 20.0 { 10.0_f32 } else { 5.0_f32 };
+    let mut db_off = step_db;
+    while db_off < range_db - 0.5 {
+        let d = db_off * px_per_db;
+        for x in [center_x - d, center_x + d] {
+            painter.line_segment(
+                [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                (1.0, grid_minor),
+            );
+        }
+        db_off += step_db;
     }
-    // Centre line (0 dB delta) on top of the minor grid.
+    // Centerline (balanced) on top of the minor grid.
     painter.line_segment(
         [
             egui::pos2(center_x, rect.top()),
@@ -1758,8 +1810,7 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
 
     // Walk one point per pixel row (~450 rows at 1x DPI, so cheap).
     let rows = rect.height().ceil() as i32 + 1;
-    let mut l_pts = Vec::with_capacity(rows as usize);
-    let mut r_pts = Vec::with_capacity(rows as usize);
+    let mut pts = Vec::with_capacity(rows as usize);
 
     for row in 0..rows {
         let y = rect.bottom() - row as f32;
@@ -1775,7 +1826,7 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
         let bin_hi_f = (freq * smooth_hi * bin_per_hz).clamp(0.0, max_bin);
         let bin_lo = bin_lo_f.floor() as usize;
         let bin_hi = bin_hi_f.ceil() as usize;
-        let (l_db, r_db) = if bin_hi > bin_lo {
+        let (l_db_raw, r_db_raw) = if bin_hi > bin_lo {
             let mut l_sum = 0.0_f32;
             let mut r_sum = 0.0_f32;
             for b in bin_lo..=bin_hi.min(num_bins - 1) {
@@ -1794,55 +1845,54 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
                 state.right_scratch[b0] * (1.0 - frac) + state.right_scratch[b1] * frac,
             )
         };
+        let weighting_db = weighting_db_at(weighting, freq) + weighting_align;
+        let l_db = l_db_raw + weighting_db;
+        let r_db = r_db_raw + weighting_db;
 
-        // Soft gate: above LR_GATE_DB we show the true delta; as the
-        // louder channel drops from LR_GATE_DB down to `LR_SILENCE_DB`
-        // we linearly fade the delta toward 0 so the curves ease back
-        // onto the centerline in silent regions instead of chopping
-        // off. No clamp on the delta itself — the painter's clip rect
-        // crops anything past the column edge so an extreme imbalance
-        // reads as "line runs off the side" rather than "line bounces
-        // off an invisible wall."
+        // Soft silence gate: multiply the raw delta by a 0..1 fade
+        // based on the louder channel's level. Below `LR_SILENCE_DB`
+        // the line stays dead-centre even if noise-floor bins happen
+        // to show a ±12 dB delta; above `LR_GATE_DB` we show the true
+        // delta. No clamp on the delta — overshoots past ±range just
+        // hit the painter's clip rect and visually "run off" the edge.
         let louder = l_db.max(r_db);
         let fade = ((louder - LR_SILENCE_DB) / (LR_GATE_DB - LR_SILENCE_DB)).clamp(0.0, 1.0);
-        let delta = (l_db - r_db) * fade;
-        let l_lead = delta.max(0.0);
-        let r_lead = (-delta).max(0.0);
-        let l_x = center_x - l_lead * px_per_db;
-        let r_x = center_x + r_lead * px_per_db;
-        l_pts.push(egui::pos2(l_x, y));
-        r_pts.push(egui::pos2(r_x, y));
+        let delta_db = (l_db - r_db) * fade;
+        // Positive delta (L louder) → push the line LEFT of centre.
+        let x = center_x - delta_db * px_per_db;
+        pts.push(egui::pos2(x, y));
     }
 
-    let l_color = egui::Color32::from_rgb(100, 180, 255);
-    let r_color = egui::Color32::from_rgb(255, 200, 80);
-    if l_pts.len() >= 2 {
-        painter.add(egui::Shape::line(l_pts, egui::Stroke::new(1.3, l_color)));
-        painter.add(egui::Shape::line(r_pts, egui::Stroke::new(1.3, r_color)));
+    // Single balance curve in a neutral cyan so it's not confused with
+    // Mid (red) / Side (green) / reference slots.
+    let line_color = egui::Color32::from_rgb(170, 220, 255);
+    if pts.len() >= 2 {
+        painter.add(egui::Shape::line(pts, egui::Stroke::new(1.4, line_color)));
     }
 
-    // L / R channel labels in the top corners.
+    // L / R side hints in the top corners so the user knows which
+    // direction means what without hovering for a tooltip.
+    let side_hint_color = egui::Color32::from_gray(150);
     painter.text(
         egui::pos2(rect.left() + 4.0, rect.top() + 3.0),
         egui::Align2::LEFT_TOP,
         "L",
         egui::FontId::monospace(10.0),
-        l_color,
+        side_hint_color,
     );
     painter.text(
         egui::pos2(rect.right() - 4.0, rect.top() + 3.0),
         egui::Align2::RIGHT_TOP,
         "R",
         egui::FontId::monospace(10.0),
-        r_color,
+        side_hint_color,
     );
-    // Imbalance ticks: each outer edge = that channel is
-    // `LR_DELTA_DB_RANGE` dB louder than the other. Centre = mono.
-    let range = LR_DELTA_DB_RANGE as i32;
+    // Axis ticks: outer edges = `range` dB of imbalance toward that
+    // side; centre = balanced (Δ = 0).
     painter.text(
         egui::pos2(rect.left() + 2.0, rect.bottom() - 2.0),
         egui::Align2::LEFT_BOTTOM,
-        format!("{range}"),
+        format!("{}", range_db as i32),
         egui::FontId::monospace(9.0),
         label_color,
     );
@@ -1856,7 +1906,7 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
     painter.text(
         egui::pos2(rect.right() - 2.0, rect.bottom() - 2.0),
         egui::Align2::RIGHT_BOTTOM,
-        format!("{range}"),
+        format!("{}", range_db as i32),
         egui::FontId::monospace(9.0),
         label_color,
     );
@@ -2060,8 +2110,22 @@ fn draw_loudness_panel(ui: &mut egui::Ui, state: &mut EditorState) {
             if meter_size.y > 0.0 && meter_size.x > 0.0 {
                 draw_meter_column(ui.painter_at(rect), rect, &snap);
             }
+            // First visible loaded ref slot drives the inline-delta
+            // comparison column. Matches MS-plot semantics: toggle
+            // slot visibility to pick which ref the numbers chase.
+            let slots = state.params.ref_slots.read();
+            let active_ref = slots.slots.iter().enumerate().find_map(|(i, s)| {
+                s.analysis.as_ref().filter(|_| s.visible).map(|a| (i, a))
+            });
+            let (ref_analysis, ref_color) = match active_ref {
+                Some((i, a)) => {
+                    let c = REF_SLOT_COLORS[i];
+                    (Some(a), egui::Color32::from_rgb(c[0], c[1], c[2]))
+                }
+                None => (None, egui::Color32::from_gray(120)),
+            };
             ui.vertical(|ui| {
-                draw_loudness_readouts(ui, &snap);
+                draw_loudness_readouts(ui, &snap, ref_analysis, ref_color);
             });
         });
     });
@@ -2208,15 +2272,51 @@ fn meter_fill_colour(lufs: f32) -> egui::Color32 {
     }
 }
 
-fn draw_loudness_readouts(ui: &mut egui::Ui, snap: &LoudnessSnapshot) {
+/// Warm-up thresholds: seconds of audio required before a metric is
+/// considered stable enough to display. Below its threshold, the row
+/// shows "…" in place of the number (and suppresses the ref delta)
+/// so you don't stare at an LRA of 2 LU that's only there because
+/// you've got 4 seconds of material.
+const WARMUP_ST_SECS: f32 = 3.0;
+const WARMUP_INTEGRATED_SECS: f32 = 10.0;
+const WARMUP_LRA_SECS: f32 = 30.0;
+
+/// Animated "loading" placeholder shown while a metric is warming up.
+/// Cycles through ".", "..", "..." at ~2.5 Hz (400 ms per step) so
+/// the reader can see the meter is still gathering data rather than
+/// being frozen. Pulled from `ctx.input().time` so the animation is
+/// driven by wall-clock, not audio time — it keeps stepping even
+/// when the DAW is paused.
+fn warmup_placeholder(ctx: &egui::Context) -> &'static str {
+    let t = ctx.input(|i| i.time);
+    match ((t * 2.5) as i64).rem_euclid(3) {
+        0 => ".  ",
+        1 => ".. ",
+        _ => "...",
+    }
+}
+
+fn draw_loudness_readouts(
+    ui: &mut egui::Ui,
+    snap: &LoudnessSnapshot,
+    ref_analysis: Option<&RefAnalysis>,
+    ref_color: egui::Color32,
+) {
+    let elapsed = snap.elapsed_secs;
+    let placeholder = warmup_placeholder(ui.ctx());
     let label_color = egui::Color32::from_gray(150);
     let value_color = egui::Color32::from_gray(230);
     let highlight_bg = egui::Color32::from_rgb(40, 60, 110);
 
-    // Short-term / Integrated / LRA / DR / PLR — Integrated sits in
-    // a highlighted row because that's the number most producers
-    // are aiming at a specific target for.
-    let row = |ui: &mut egui::Ui, label: &str, text: String, highlight: bool| {
+    // `delta` is an optional precomputed (live − ref, ref_raw) pair for
+    // rows where the ref track provides a matching offline aggregate;
+    // rendered to the right of the live value in the slot's colour.
+    // Label + value widths are fixed so the column reads as a table.
+    let row = |ui: &mut egui::Ui,
+               label: &str,
+               text: String,
+               highlight: bool,
+               delta: Option<(f32, f32, DeltaUnit)>| {
         let bg = if highlight {
             highlight_bg
         } else {
@@ -2234,6 +2334,25 @@ fn draw_loudness_readouts(ui: &mut egui::Ui, snap: &LoudnessSnapshot) {
                         .truncate(),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Right-to-left: delta sits rightmost, then live
+                        // value to its left. Keeps the live number in a
+                        // predictable screen position while the delta
+                        // varies in width.
+                        if let Some((delta_val, ref_val, unit)) = delta {
+                            let delta_str = fmt_delta(delta_val, unit);
+                            let resp = ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(delta_str)
+                                        .color(ref_color)
+                                        .size(10.0),
+                                )
+                                .truncate(),
+                            );
+                            resp.on_hover_text(format!(
+                                "ref: {}",
+                                fmt_absolute(ref_val, unit)
+                            ));
+                        }
                         ui.add(
                             egui::Label::new(
                                 egui::RichText::new(text).color(value_color).size(12.0).strong(),
@@ -2245,15 +2364,160 @@ fn draw_loudness_readouts(ui: &mut egui::Ui, snap: &LoudnessSnapshot) {
             });
     };
 
-    row(ui, "Short-term", fmt_lufs(snap.short_term_lufs), false);
-    row(ui, "Integrated", fmt_lufs(snap.integrated_lufs), true);
-    row(ui, "Range", fmt_lu(snap.lra_lu), false);
-    row(ui, "Dynamic", fmt_lu(snap.dr_lu), false);
-    row(ui, "PLR", fmt_lu(snap.plr_lu), false);
+    // Delta = live − ref, only when both numbers are valid signal (not
+    // the MIN_DB sentinel). Returns `None` otherwise so the row renders
+    // live-only, same as when no ref is loaded.
+    let delta_lufs = |live: f32, reference: f32, unit: DeltaUnit| -> Option<(f32, f32, DeltaUnit)> {
+        if live > MIN_DB + 1.0 && reference > MIN_DB + 1.0 {
+            Some((live - reference, reference, unit))
+        } else {
+            None
+        }
+    };
+    let delta_lu = |live: f32, reference: f32| -> Option<(f32, f32, DeltaUnit)> {
+        // LU/LRA/DR/PLR never carry a MIN_DB sentinel — they're 0 for
+        // "no signal" — so we take the numbers as-is.
+        Some((live - reference, reference, DeltaUnit::Lu))
+    };
+
+    // Live-only readouts (no offline analogue): short-term, live
+    // peak/RMS/correlation. These rows get `None` for delta.
+    let ref_int = ref_analysis.map(|r| r.integrated_lufs);
+    let ref_lra = ref_analysis.map(|r| r.lra_lu);
+    let ref_dr = ref_analysis.map(|r| r.dr_lu());
+    let ref_plr = ref_analysis.map(|r| r.plr_lu());
+    let ref_st_max = ref_analysis.map(|r| r.short_term_max_lufs);
+    let ref_tp_max = ref_analysis.map(|r| r.true_peak_max_dbtp);
+    let ref_peak_max = ref_analysis.map(|r| r.sample_peak_max_db);
+    let ref_rms_max = ref_analysis.map(|r| r.rms_max_db);
+
+    // Warm-up gating: hide the live value (and its ref delta) until
+    // the meter has processed enough audio for the metric to be
+    // stable. `warmup` picks between the formatted number and "…";
+    // `gate_delta` drops the delta when the live value is still warm.
+    let warmup = |threshold: f32, ready: String| -> String {
+        if elapsed >= threshold {
+            ready
+        } else {
+            placeholder.to_string()
+        }
+    };
+    let gate_delta = |threshold: f32,
+                      d: Option<(f32, f32, DeltaUnit)>|
+     -> Option<(f32, f32, DeltaUnit)> {
+        if elapsed >= threshold {
+            d
+        } else {
+            None
+        }
+    };
+
+    row(
+        ui,
+        "Short-term",
+        warmup(WARMUP_ST_SECS, fmt_lufs(snap.short_term_lufs)),
+        false,
+        None,
+    );
+    row(
+        ui,
+        "Integrated",
+        warmup(WARMUP_INTEGRATED_SECS, fmt_lufs(snap.integrated_lufs)),
+        true,
+        gate_delta(
+            WARMUP_INTEGRATED_SECS,
+            ref_int.and_then(|r| delta_lufs(snap.integrated_lufs, r, DeltaUnit::Lu)),
+        ),
+    );
+    row(
+        ui,
+        "Range",
+        warmup(WARMUP_LRA_SECS, fmt_lu(snap.lra_lu)),
+        false,
+        gate_delta(
+            WARMUP_LRA_SECS,
+            ref_lra.and_then(|r| delta_lu(snap.lra_lu, r)),
+        ),
+    );
+    row(
+        ui,
+        "Dynamic",
+        warmup(WARMUP_INTEGRATED_SECS, fmt_lu(snap.dr_lu)),
+        false,
+        gate_delta(
+            WARMUP_INTEGRATED_SECS,
+            ref_dr.and_then(|r| delta_lu(snap.dr_lu, r)),
+        ),
+    );
+    row(
+        ui,
+        "PLR",
+        warmup(WARMUP_INTEGRATED_SECS, fmt_lu(snap.plr_lu)),
+        false,
+        gate_delta(
+            WARMUP_INTEGRATED_SECS,
+            ref_plr.and_then(|r| delta_lu(snap.plr_lu, r)),
+        ),
+    );
     ui.add_space(4.0);
-    row(ui, "M Max", fmt_lufs(snap.momentary_max_lufs), false);
-    row(ui, "ST Max", fmt_lufs(snap.short_term_max_lufs), false);
-    row(ui, "TP Max", fmt_dbtp(snap.true_peak_max_dbtp), false);
+    row(ui, "Peak", fmt_dbfs(snap.sample_peak_db), false, None);
+    row(ui, "RMS", fmt_dbfs(snap.rms_db), false, None);
+    row(ui, "Corr", fmt_corr(snap.correlation), false, None);
+    ui.add_space(4.0);
+    row(ui, "M Max", fmt_lufs(snap.momentary_max_lufs), false, None);
+    row(
+        ui,
+        "ST Max",
+        warmup(WARMUP_ST_SECS, fmt_lufs(snap.short_term_max_lufs)),
+        false,
+        gate_delta(
+            WARMUP_ST_SECS,
+            ref_st_max.and_then(|r| delta_lufs(snap.short_term_max_lufs, r, DeltaUnit::Lu)),
+        ),
+    );
+    row(
+        ui,
+        "TP Max",
+        fmt_dbtp(snap.true_peak_max_dbtp),
+        false,
+        ref_tp_max.and_then(|r| delta_lufs(snap.true_peak_max_dbtp, r, DeltaUnit::Db)),
+    );
+    row(
+        ui,
+        "Peak Max",
+        fmt_dbfs(snap.sample_peak_max_db),
+        false,
+        ref_peak_max.and_then(|r| delta_lufs(snap.sample_peak_max_db, r, DeltaUnit::Db)),
+    );
+    row(
+        ui,
+        "RMS Max",
+        fmt_dbfs(snap.rms_max_db),
+        false,
+        ref_rms_max.and_then(|r| delta_lufs(snap.rms_max_db, r, DeltaUnit::Db)),
+    );
+}
+
+#[derive(Clone, Copy)]
+enum DeltaUnit {
+    Lu,
+    Db,
+}
+
+fn fmt_delta(v: f32, unit: DeltaUnit) -> String {
+    let suffix = match unit {
+        DeltaUnit::Lu => "LU",
+        DeltaUnit::Db => "dB",
+    };
+    format!("Δ{:+.1} {}", v, suffix)
+}
+
+fn fmt_absolute(v: f32, unit: DeltaUnit) -> String {
+    let suffix = match unit {
+        DeltaUnit::Lu => "LUFS",
+        DeltaUnit::Db => "dB",
+    };
+    format!("{:+.1} {}", v, suffix)
 }
 
 fn fmt_lufs(v: f32) -> String {
@@ -2274,6 +2538,21 @@ fn fmt_dbtp(v: f32) -> String {
     } else {
         format!("{:.1} dBTP", v)
     }
+}
+
+fn fmt_dbfs(v: f32) -> String {
+    if v <= -120.0 {
+        "-- dBFS".to_string()
+    } else {
+        format!("{:.1} dBFS", v)
+    }
+}
+
+fn fmt_corr(v: f32) -> String {
+    // +1 = mono, 0 = uncorrelated, -1 = fully out of phase. Two
+    // decimals because the useful range for phase checks sits in
+    // the last 0.1 of each direction.
+    format!("{:+.2}", v)
 }
 
 fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSetter) {
@@ -2389,6 +2668,25 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
             setter.begin_set_parameter(&params.freq_max_hz);
             setter.set_parameter(&params.freq_max_hz, fmax_val);
             setter.end_set_parameter(&params.freq_max_hz);
+        }
+
+        ui.label("L/R ±");
+        let mut lr_range_val = params.lr_range_db.value();
+        if ui
+            .add(
+                egui::DragValue::new(&mut lr_range_val)
+                    .range(5..=60)
+                    .speed(0.25)
+                    .suffix(" dB"),
+            )
+            .on_hover_text(
+                "L/R balance axis: centre = balanced, edges = this many dB of imbalance toward L / R.",
+            )
+            .changed()
+        {
+            setter.begin_set_parameter(&params.lr_range_db);
+            setter.set_parameter(&params.lr_range_db, lr_range_val);
+            setter.end_set_parameter(&params.lr_range_db);
         }
 
         ui.label("Weighting");
