@@ -27,13 +27,11 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-/// Floor dB for the spectrogram history. Matches `spectrum_gpu::FLOOR_DB`.
-/// Kept local so the worker doesn't depend on the renderer module.
+/// Sentinel dB for "silent" bins (no content / cleared history). Well
+/// below `SPECTROGRAM_DB_MIN` so the shader's colormap renders it as
+/// black. Matches `spectrum_gpu::FLOOR_DB`; kept local so the worker
+/// doesn't depend on the renderer module.
 const WORKER_FLOOR_DB: f32 = -140.0;
-
-/// Noise-floor gate. Log bins whose final dB sits below this cut off to the
-/// black floor so quiet background stays fully black instead of speckling.
-const WORKER_NOISE_GATE_DB: f32 = -90.0;
 
 /// Up to N hops per drain. Stall recovery: if the sample ring backed up
 /// while the audio thread kept pushing (e.g. worker was briefly parked by
@@ -377,11 +375,11 @@ impl WorkerState {
             self.synchrosqueeze(cfg);
         } else {
             for (dst, c) in self.cqt_out.iter_mut().zip(self.cqt_complex.iter()) {
-                let db = 10.0 * (c.norm_sqr() + 1e-24).log10();
-                *dst = if db < WORKER_NOISE_GATE_DB {
-                    WORKER_FLOOR_DB
+                let p = c.norm_sqr();
+                *dst = if p > 1e-20 {
+                    10.0 * p.log10()
                 } else {
-                    db
+                    WORKER_FLOOR_DB
                 };
             }
         }
@@ -566,15 +564,10 @@ impl WorkerState {
         }
 
         for (dst, &p) in self.cqt_out.iter_mut().zip(self.synchro_power_scratch.iter()) {
-            let db = if p > 1e-20 {
+            *dst = if p > 1e-20 {
                 10.0 * p.log10()
             } else {
                 WORKER_FLOOR_DB
-            };
-            *dst = if db < WORKER_NOISE_GATE_DB {
-                WORKER_FLOOR_DB
-            } else {
-                db
             };
         }
     }

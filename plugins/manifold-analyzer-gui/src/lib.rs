@@ -220,6 +220,13 @@ const FILL_ALPHA: f32 = 0.45;
 const SPECTROGRAM_DB_MIN: f32 = -59.0;
 const SPECTROGRAM_DB_MAX_SS: f32 = 10.0;
 const SPECTROGRAM_DB_MAX_RAW: f32 = 0.0;
+
+/// Synchrosqueeze input-gate range. Single source of truth — used both
+/// for the `FloatParam` definition and the `DragValue` widget clamp so
+/// they can't drift out of sync.
+const SS_GATE_DB_MIN: f32 = -100.0;
+const SS_GATE_DB_MAX: f32 = -10.0;
+const SS_GATE_DB_DEFAULT: f32 = -75.0;
 /// Sample-ring capacity in mono samples. Sized to tolerate ~1.3 s of
 /// GUI stall at 48 kHz before the audio thread starts dropping — well
 /// beyond anything we'd see in normal operation.
@@ -517,8 +524,8 @@ impl AnalyzerParams {
             top_ratio: EnumParam::new("Split", TopRatio::P50),
             synchro_gate_db: FloatParam::new(
                 "SS Gate",
-                -75.0,
-                FloatRange::Linear { min: -100.0, max: -30.0 },
+                SS_GATE_DB_DEFAULT,
+                FloatRange::Linear { min: SS_GATE_DB_MIN, max: SS_GATE_DB_MAX },
             )
             .with_unit(" dB")
             .with_step_size(1.0),
@@ -1272,17 +1279,20 @@ fn draw_reference_curve(
     if matches!(mode, ReferenceCurve::None) || matches!(weighting, Weighting::Flat) {
         return;
     }
-    // Inverse-weighting reference = the spectral shape that gives
-    // EQUAL LUFS contribution at every frequency. Pinned so the line
-    // touches 0 dB at the freq where the weighting is smallest (= the
-    // freq that needs the MOST signal to register on LUFS).
+    // Adjustment applied to the analyser = the exact per-bin gain the
+    // shader adds via the weighting LUT. Mean-zero across the visible
+    // range (the align offset removes the DC bias), so the line sits
+    // around 0 dB instead of drifting up or down when the window
+    // changes.
     //
     // Reading:
-    //   curve above line → this bin is driving loudness more than its
-    //                      balanced share (pushing LUFS further)
-    //   curve below line → room to push this bin up for more loudness,
-    //                      whatever the frequency
-    let stats = weighting_stats(weighting, freq_min, freq_max);
+    //   curve above line → this bin is being BOOSTED by the weighting
+    //                      (loudness-efficient: content here drives
+    //                      LUFS hard)
+    //   curve below line → this bin is being CUT by the weighting
+    //                      (loudness-inefficient: eats peak budget
+    //                      without helping loudness)
+    let align = weighting_align_offset(weighting, freq_min, freq_max);
     let n = 128usize;
     let log_min = freq_min.ln();
     let log_max = freq_max.ln();
@@ -1290,9 +1300,9 @@ fn draw_reference_curve(
     for i in 0..n {
         let t = i as f32 / (n - 1) as f32;
         let freq = (log_min + t * (log_max - log_min)).exp();
-        let ref_db = stats.min - weighting_db_at(weighting, freq);
+        let adj_db = weighting_db_at(weighting, freq) + align;
         let x = rect.left() + t * rect.width();
-        let y = db_to_y(ref_db, DB_MIN, DB_MAX, rect);
+        let y = db_to_y(adj_db, DB_MIN, DB_MAX, rect);
         pts.push(egui::pos2(x, y));
     }
     painter.add(egui::Shape::line(
@@ -1912,7 +1922,7 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
             if ui
                 .add(
                     egui::DragValue::new(&mut gate_val)
-                        .range(-100.0..=-30.0)
+                        .range(SS_GATE_DB_MIN..=SS_GATE_DB_MAX)
                         .speed(0.5)
                         .suffix(" dB"),
                 )
