@@ -64,11 +64,9 @@ const DB_MAX: f32 = 0.0;
 /// Wide enough for a vertical meter column, the scale labels, and
 /// readouts like "-14.4 LUFS" without truncation at the default
 /// egui font size.
-/// Width of the right-side column. Top half = L/R spectrum comparison,
-/// bottom half = loudness meter. Narrow to leave the MS / spectrogram
-/// stack as much horizontal room as possible; the loudness layout
-/// collapses its content to fit.
-const RIGHT_COLUMN_WIDTH: f32 = 200.0;
+// Right-column width and top/bottom split are runtime-adjustable via the
+// grab handle at the 2×2 cross. See `AnalyzerGuiShared::right_column_width`
+// and `top_fraction`.
 
 /// Maximum number of reference-track slots persisted with the plugin.
 /// Matches typical mastering-reference tool conventions (SPAN / Ozone).
@@ -291,41 +289,6 @@ impl SyncFactor {
     }
 }
 
-/// Vertical split between the top spectrum-curves region and the bottom
-/// spectrogram. Values are the fraction of total height given to the
-/// top region — 75% = tall curves, short spectrogram; 25% = the
-/// opposite.
-#[derive(Enum, PartialEq, Eq, Debug, Clone, Copy)]
-pub enum TopRatio {
-    #[id = "25"]
-    #[name = "25/75"]
-    P25,
-    #[id = "40"]
-    #[name = "40/60"]
-    P40,
-    #[id = "50"]
-    #[name = "50/50"]
-    P50,
-    #[id = "60"]
-    #[name = "60/40"]
-    P60,
-    #[id = "75"]
-    #[name = "75/25"]
-    P75,
-}
-
-impl TopRatio {
-    fn fraction(self) -> f32 {
-        match self {
-            TopRatio::P25 => 0.25,
-            TopRatio::P40 => 0.40,
-            TopRatio::P50 => 0.50,
-            TopRatio::P60 => 0.60,
-            TopRatio::P75 => 0.75,
-        }
-    }
-}
-
 /// Frequency weighting applied to both the MS curves and the spectrogram
 /// colormap. Flat/Pink/Tilted are plain linear-in-log-freq slopes; LUFS
 /// is the full ITU-R BS.1770 K-weighting (HF shelf + 38 Hz HPF), which
@@ -485,11 +448,6 @@ pub struct AnalyzerParams {
     #[id = "freq-max"]
     pub freq_max_hz: IntParam,
 
-    /// Fractional split between the top spectrum-curves region and the
-    /// bottom spectrogram.
-    #[id = "top-ratio"]
-    pub top_ratio: EnumParam<TopRatio>,
-
     /// Synchrosqueezing scatter gate in dB. Source bins below this
     /// power don't contribute to the squeezed scatter. Lower →
     /// transients survive; higher → cleaner on noise.
@@ -524,7 +482,6 @@ impl AnalyzerParams {
                 22_000,
                 IntRange::Linear { min: 1000, max: 25_000 },
             ),
-            top_ratio: EnumParam::new("Split", TopRatio::P50),
             synchro_gate_db: FloatParam::new(
                 "SS Gate",
                 SS_GATE_DB_DEFAULT,
@@ -597,7 +554,21 @@ pub struct AnalyzerGuiShared {
     /// slot. Used only to draw a "…analysing" indicator; never
     /// gates audio-thread behaviour.
     ref_analyzing_mask: AtomicU8,
+    /// Layout split state driven by the 2×2 grab handle. Horizontal:
+    /// width of the right column in logical pixels (MS/spectrogram
+    /// takes the rest). Vertical: fraction of the remaining height
+    /// below the two top bars given to the top row (MS plot + L/R
+    /// column). Both atomics are the single source of truth — no
+    /// host-visible param, no automation lane.
+    right_column_width_bits: AtomicU32,
+    top_fraction_bits: AtomicU32,
 }
+
+/// Defaults the grab handle snaps back to on double-click. The drag
+/// only clamps to keep the handle on-screen; any panel may collapse
+/// to zero to let one of the four figures go full-window.
+const RIGHT_COLUMN_WIDTH_DEFAULT: f32 = 200.0;
+const TOP_FRACTION_DEFAULT: f32 = 0.5;
 
 impl AnalyzerGuiShared {
     pub fn new(sample_rate: f32, fft_size: usize) -> Self {
@@ -625,7 +596,34 @@ impl AnalyzerGuiShared {
             true_peak_max_dbtp_bits: AtomicU32::new(MIN_DB.to_bits()),
             reset_epoch: AtomicU32::new(0),
             ref_analyzing_mask: AtomicU8::new(0),
+            right_column_width_bits: AtomicU32::new(RIGHT_COLUMN_WIDTH_DEFAULT.to_bits()),
+            top_fraction_bits: AtomicU32::new(TOP_FRACTION_DEFAULT.to_bits()),
         }
+    }
+
+    pub fn right_column_width(&self) -> f32 {
+        f32::from_bits(self.right_column_width_bits.load(Ordering::Relaxed))
+    }
+
+    pub fn set_right_column_width(&self, px: f32) {
+        let clean = if px.is_finite() { px.max(0.0) } else { 0.0 };
+        self.right_column_width_bits
+            .store(clean.to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn top_fraction(&self) -> f32 {
+        f32::from_bits(self.top_fraction_bits.load(Ordering::Relaxed))
+    }
+
+    pub fn set_top_fraction(&self, f: f32) {
+        let clean = if f.is_finite() { f.clamp(0.0, 1.0) } else { TOP_FRACTION_DEFAULT };
+        self.top_fraction_bits
+            .store(clean.to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn reset_layout(&self) {
+        self.set_right_column_width(RIGHT_COLUMN_WIDTH_DEFAULT);
+        self.set_top_fraction(TOP_FRACTION_DEFAULT);
     }
 
     /// GUI flips these while an analysis worker is in flight for slot
@@ -954,9 +952,10 @@ pub fn create_editor(
                 .show(ctx, |ui| {
                     draw_ref_slots(ui, state);
                 });
+            let right_col_w = state.shared.right_column_width();
             egui::SidePanel::right("analyzer-right-column")
                 .frame(egui::Frame::new().fill(egui::Color32::from_rgb(12, 15, 21)))
-                .exact_width(RIGHT_COLUMN_WIDTH)
+                .exact_width(right_col_w)
                 .resizable(false)
                 .show(ctx, |ui| {
                     draw_right_column(ui, state);
@@ -966,6 +965,7 @@ pub fn create_editor(
                 .show(ctx, |ui| {
                     draw_spectrum(ui, state);
                 });
+            draw_layout_grab_handle(ctx, state);
             // Continuous repaint — the loudness meter column reads
             // atomics that update every audio block, so we want a
             // real 60 fps rather than "every 16 ms the scheduler
@@ -1057,7 +1057,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         let _ = state.shared.try_read_left_db(&mut state.left_scratch);
         let _ = state.shared.try_read_right_db(&mut state.right_scratch);
         let ss_on = state.params.synchrosqueeze.value();
-        let top_fraction = state.params.top_ratio.value().fraction();
+        let top_fraction = state.shared.top_fraction();
         let weighting = state.params.weighting.value();
         let (freq_min_for_lut, freq_max_for_lut) = {
             let nyquist = sr * 0.5;
@@ -1146,7 +1146,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     let freq_max_user = state.params.freq_max_hz.value() as f32;
     let freq_max = freq_max_user.min(nyquist).max(freq_min_user * 2.0);
     let freq_min = freq_min_user.min(freq_max * 0.5).max(1.0);
-    let top_fraction = state.params.top_ratio.value().fraction();
+    let top_fraction = state.shared.top_fraction();
 
     // Spectrum-region rect (top). The spectrogram below is opaque, so
     // chrome underneath it gets hidden — spectrogram grid/labels are
@@ -1864,10 +1864,11 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
 
 /// Right-column container: splits vertically into the L/R comparison
 /// plot (top row) and the loudness meter (bottom row), using the same
-/// `top_ratio` split as the MS-plot / spectrogram stack on the left so
-/// the 2×2 grid rows line up.
+/// `top_fraction` split as the MS-plot / spectrogram stack on the left
+/// so the 2×2 grid rows line up. Split + column width are driven by
+/// the grab handle at the cross.
 fn draw_right_column(ui: &mut egui::Ui, state: &mut EditorState) {
-    let top_fraction = state.params.top_ratio.value().fraction();
+    let top_fraction = state.shared.top_fraction();
     ui.spacing_mut().item_spacing.y = 0.0;
     let total = ui.available_size();
     let top_h = total.y * top_fraction;
@@ -1879,6 +1880,142 @@ fn draw_right_column(ui: &mut egui::Ui, state: &mut EditorState) {
         draw_loudness_panel(ui, state);
     });
 }
+
+/// Floating grab handle at the 2×2 cross. Dragging adjusts both axes
+/// of the grid at once: horizontal drag resizes the right column,
+/// vertical drag moves the top/bottom split. Double-click resets to
+/// the defaults (200 px, 50/50). Rendered as a top-level `Area` so
+/// the hit test isn't eaten by whichever panel owns the underlying
+/// pixel.
+fn draw_layout_grab_handle(ctx: &egui::Context, state: &EditorState) {
+    // Two 26 px top bars (controls + refs) sit above the content
+    // area; see `create_editor`. Content area is everything below.
+    let screen = ctx.screen_rect();
+    let content_top = screen.top() + TOP_BARS_HEIGHT;
+    let content_h = (screen.bottom() - content_top).max(1.0);
+    let col_w = state.shared.right_column_width();
+    let top_frac = state.shared.top_fraction();
+
+    // Logical cross = the actual panel boundary. Visual cross = where
+    // we draw the handle, inset from the window chrome so the macOS
+    // bottom-right resize grip (and the other corners) can't swallow
+    // drags. Stored layout values stay on the logical path so any one
+    // figure can collapse its siblings to zero and take the window.
+    const HANDLE_SIZE: f32 = 14.0;
+    const EDGE_MARGIN: f32 = 14.0;
+    let logical_x = screen.right() - col_w;
+    let logical_y = content_top + content_h * top_frac;
+    let handle_x = logical_x.clamp(screen.left() + EDGE_MARGIN, screen.right() - EDGE_MARGIN);
+    let handle_y = logical_y.clamp(content_top + EDGE_MARGIN, screen.bottom() - EDGE_MARGIN);
+    let handle_rect = egui::Rect::from_center_size(
+        egui::pos2(handle_x, handle_y),
+        egui::vec2(HANDLE_SIZE, HANDLE_SIZE),
+    );
+
+    let area = egui::Area::new(egui::Id::new("analyzer-grab-handle"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(handle_rect.min);
+    area.show(ctx, |ui| {
+        let resp = ui.allocate_rect(
+            egui::Rect::from_min_size(handle_rect.min, egui::vec2(HANDLE_SIZE, HANDLE_SIZE)),
+            egui::Sense::click_and_drag(),
+        );
+
+        if resp.hovered() || resp.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+        }
+
+        if resp.dragged() {
+            let delta = resp.drag_delta();
+            // No chrome clamp here — panels may collapse fully so one
+            // figure can take the whole window. The only guard is
+            // staying inside the window so stored values remain sane
+            // under resize; the visual handle is clamped separately
+            // above to keep it clickable.
+            let new_col_w = (col_w - delta.x).clamp(0.0, screen.width());
+            state.shared.set_right_column_width(new_col_w);
+            let new_top_h = content_h * top_frac + delta.y;
+            state
+                .shared
+                .set_top_fraction((new_top_h / content_h).clamp(0.0, 1.0));
+        }
+
+        if resp.double_clicked() {
+            state.shared.reset_layout();
+        }
+
+        let painter = ui.painter();
+        let bright = resp.hovered() || resp.dragged();
+        // Accent blue matches the L channel so the handle reads as
+        // "interactive affordance", not another chart element.
+        let color = if bright {
+            egui::Color32::from_rgb(170, 220, 255)
+        } else {
+            egui::Color32::from_rgb(100, 180, 255)
+        };
+
+        // Four-way arrow: a "+" with arrowheads on each tip so the
+        // grab direction is obvious at a glance.
+        let c = handle_rect.center();
+        let arm = 5.0_f32;
+        let head = 2.5_f32;
+        let stroke = egui::Stroke::new(1.5, color);
+
+        // Shafts.
+        painter.line_segment(
+            [egui::pos2(c.x - arm, c.y), egui::pos2(c.x + arm, c.y)],
+            stroke,
+        );
+        painter.line_segment(
+            [egui::pos2(c.x, c.y - arm), egui::pos2(c.x, c.y + arm)],
+            stroke,
+        );
+        // Right arrowhead.
+        painter.line_segment(
+            [egui::pos2(c.x + arm, c.y), egui::pos2(c.x + arm - head, c.y - head)],
+            stroke,
+        );
+        painter.line_segment(
+            [egui::pos2(c.x + arm, c.y), egui::pos2(c.x + arm - head, c.y + head)],
+            stroke,
+        );
+        // Left arrowhead.
+        painter.line_segment(
+            [egui::pos2(c.x - arm, c.y), egui::pos2(c.x - arm + head, c.y - head)],
+            stroke,
+        );
+        painter.line_segment(
+            [egui::pos2(c.x - arm, c.y), egui::pos2(c.x - arm + head, c.y + head)],
+            stroke,
+        );
+        // Up arrowhead.
+        painter.line_segment(
+            [egui::pos2(c.x, c.y - arm), egui::pos2(c.x - head, c.y - arm + head)],
+            stroke,
+        );
+        painter.line_segment(
+            [egui::pos2(c.x, c.y - arm), egui::pos2(c.x + head, c.y - arm + head)],
+            stroke,
+        );
+        // Down arrowhead.
+        painter.line_segment(
+            [egui::pos2(c.x, c.y + arm), egui::pos2(c.x - head, c.y + arm - head)],
+            stroke,
+        );
+        painter.line_segment(
+            [egui::pos2(c.x, c.y + arm), egui::pos2(c.x + head, c.y + arm - head)],
+            stroke,
+        );
+
+        if bright {
+            painter.circle_stroke(c, arm + 2.5, (1.0, color));
+        }
+    });
+}
+
+/// Total height of the two fixed 26 px top bars (controls + ref slots).
+/// Keep in sync with the `exact_height` calls in `create_editor`.
+const TOP_BARS_HEIGHT: f32 = 26.0 * 2.0;
 
 /// Right-side loudness meter. Vertical scale spans both rows; a
 /// filled column shows the momentary level, tick marks flank it on
@@ -1908,18 +2045,25 @@ fn draw_loudness_panel(ui: &mut egui::Ui, state: &mut EditorState) {
         });
         ui.add_space(6.0);
 
-        // Reserve ~210 px at the bottom for the 8-row readout block
-        // (5 main rows + 4 px spacer + 3 max rows). Remainder is the
-        // meter column.
+        // Split horizontally: slim meter column on the left, numeric
+        // readouts stacked on the right. The meter's content (column
+        // + tick marks + labels) is only ~65 px wide, so reserving a
+        // fixed narrow slice for it leaves the rest of the panel for
+        // readable "Short-term / -6.8 LUFS" rows instead of burning
+        // horizontal space on the meter's centring margins.
         let total_avail = ui.available_size();
-        let readout_height: f32 = 210.0;
-        let column_height = (total_avail.y - readout_height - 8.0).max(180.0);
-        let column_size = egui::vec2(total_avail.x, column_height);
-        let (rect, _) = ui.allocate_exact_size(column_size, egui::Sense::hover());
-        draw_meter_column(ui.painter_at(rect), rect, &snap);
-
-        ui.add_space(8.0);
-        draw_loudness_readouts(ui, &snap);
+        const METER_WIDTH: f32 = 80.0;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let meter_size = egui::vec2(METER_WIDTH.min(total_avail.x), total_avail.y);
+            let (rect, _) = ui.allocate_exact_size(meter_size, egui::Sense::hover());
+            if meter_size.y > 0.0 && meter_size.x > 0.0 {
+                draw_meter_column(ui.painter_at(rect), rect, &snap);
+            }
+            ui.vertical(|ui| {
+                draw_loudness_readouts(ui, &snap);
+            });
+        });
     });
 }
 
@@ -2247,30 +2391,6 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
             setter.end_set_parameter(&params.freq_max_hz);
         }
 
-        ui.label("Split");
-        let mut ratio_val = params.top_ratio.value();
-        egui::ComboBox::from_id_salt("top-ratio")
-            .selected_text(top_ratio_label(ratio_val))
-            .width(62.0)
-            .show_ui(ui, |ui| {
-                for opt in [
-                    TopRatio::P25,
-                    TopRatio::P40,
-                    TopRatio::P50,
-                    TopRatio::P60,
-                    TopRatio::P75,
-                ] {
-                    if ui
-                        .selectable_value(&mut ratio_val, opt, top_ratio_label(opt))
-                        .changed()
-                    {
-                        setter.begin_set_parameter(&params.top_ratio);
-                        setter.set_parameter(&params.top_ratio, ratio_val);
-                        setter.end_set_parameter(&params.top_ratio);
-                    }
-                }
-            });
-
         ui.label("Weighting");
         let mut weight_val = params.weighting.value();
         egui::ComboBox::from_id_salt("weighting")
@@ -2549,16 +2669,6 @@ mod macos {
         let key_win = app.keyWindow()?;
         let view = key_win.contentView()?;
         Some(KeyWindowParent { view })
-    }
-}
-
-fn top_ratio_label(r: TopRatio) -> &'static str {
-    match r {
-        TopRatio::P25 => "25/75",
-        TopRatio::P40 => "40/60",
-        TopRatio::P50 => "50/50",
-        TopRatio::P60 => "60/40",
-        TopRatio::P75 => "75/25",
     }
 }
 
