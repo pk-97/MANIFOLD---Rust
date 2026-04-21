@@ -154,27 +154,31 @@ fn smoothed_db_mid(freq: f32) -> f32 {
     if (half_oct <= 0.0) {
         return sample_bin_db_mid(freq * bins_per_hz, num_bins);
     }
-    // Stride the smoothing window in bin-index space. When the window
-    // covers fewer bins than the tap cap we hit every bin (step=1); for
-    // wide windows we stride across so the loop count stays bounded and
-    // adjacent pixels sample a near-identical bin set (no aliasing as
-    // centre freq shifts pixel to pixel).
+    // Blackman-Harris-tapered weighted average across the window.
+    // Rectangular weighting produced flat-topped plateaus around
+    // narrow peaks; Hann fixed that but left visible "skirt" reach.
+    // BH matches the FFT's own analysis window shape and suppresses
+    // sidelobes ~-92 dB, giving clean bell-shaped peak curves with
+    // effectively no ringing.
     let bin_lo_f = clamp(freq * exp2(-half_oct) * bins_per_hz, 0.0, num_bins - 1.0);
     let bin_hi_f = clamp(freq * exp2(half_oct) * bins_per_hz, 0.0, num_bins - 1.0);
     let span_bins = max(bin_hi_f - bin_lo_f, 1e-6);
-    // Hold tap count constant so adjacent pixels don't swap sample
-    // counts as the window slides (an integer-n refactor produced
-    // visible sharp dips where the ceil boundary crossed). Fractional
-    // step handles narrow windows by over-sampling inside one bin,
-    // which costs nothing (sample_bin_db_mid is just a linear interp).
     let step = span_bins / f32(SMOOTH_N_MAX);
+    let two_pi_over_n = 6.28318530717958 / f32(SMOOTH_N_MAX);
     var power_sum = 0.0;
+    var weight_sum = 0.0;
     for (var i: i32 = 0; i < SMOOTH_N_MAX; i = i + 1) {
+        let phase = (f32(i) + 0.5) * two_pi_over_n;
+        // 4-term Blackman-Harris: a0 - a1 cos(φ) + a2 cos(2φ) - a3 cos(3φ)
+        let w = 0.35875 - 0.48829 * cos(phase)
+                       + 0.14128 * cos(2.0 * phase)
+                       - 0.01168 * cos(3.0 * phase);
         let b_f = bin_lo_f + (f32(i) + 0.5) * step;
         let db = sample_bin_db_mid(b_f, num_bins);
-        power_sum = power_sum + pow(10.0, db * 0.1);
+        power_sum = power_sum + pow(10.0, db * 0.1) * w;
+        weight_sum = weight_sum + w;
     }
-    return 10.0 * log(power_sum / f32(SMOOTH_N_MAX) + 1e-24) / log(10.0);
+    return 10.0 * log(power_sum / weight_sum + 1e-24) / log(10.0);
 }
 
 fn smoothed_db_side(freq: f32) -> f32 {
@@ -188,13 +192,20 @@ fn smoothed_db_side(freq: f32) -> f32 {
     let bin_hi_f = clamp(freq * exp2(half_oct) * bins_per_hz, 0.0, num_bins - 1.0);
     let span_bins = max(bin_hi_f - bin_lo_f, 1e-6);
     let step = span_bins / f32(SMOOTH_N_MAX);
+    let two_pi_over_n = 6.28318530717958 / f32(SMOOTH_N_MAX);
     var power_sum = 0.0;
+    var weight_sum = 0.0;
     for (var i: i32 = 0; i < SMOOTH_N_MAX; i = i + 1) {
+        let phase = (f32(i) + 0.5) * two_pi_over_n;
+        let w = 0.35875 - 0.48829 * cos(phase)
+                       + 0.14128 * cos(2.0 * phase)
+                       - 0.01168 * cos(3.0 * phase);
         let b_f = bin_lo_f + (f32(i) + 0.5) * step;
         let db = sample_bin_db_side(b_f, num_bins);
-        power_sum = power_sum + pow(10.0, db * 0.1);
+        power_sum = power_sum + pow(10.0, db * 0.1) * w;
+        weight_sum = weight_sum + w;
     }
-    return 10.0 * log(power_sum / f32(SMOOTH_N_MAX) + 1e-24) / log(10.0);
+    return 10.0 * log(power_sum / weight_sum + 1e-24) / log(10.0);
 }
 
 fn y_px_at_freq_mid(freq: f32) -> f32 {

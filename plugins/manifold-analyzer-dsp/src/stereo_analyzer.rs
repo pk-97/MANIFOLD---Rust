@@ -57,10 +57,22 @@ pub struct StereoAnalyzer {
     corr_alpha: f32,
     corr_smooth_ms: f32,
 
+    // Symmetric 1-pole smoother for L and R specifically used by the
+    // L/R balance column. Same attack + release so values track the
+    // CURRENT signal rather than peak-holding — otherwise a past L
+    // transient would pin the balance line until something equal or
+    // louder hit R.
+    balance_power_l: Vec<f32>,
+    balance_power_r: Vec<f32>,
+    balance_alpha: f32,
+    balance_smooth_ms: f32,
+
     mid_db: Vec<f32>,
     side_db: Vec<f32>,
     left_db: Vec<f32>,
     right_db: Vec<f32>,
+    left_balance_db: Vec<f32>,
+    right_balance_db: Vec<f32>,
     correlation: Vec<f32>,
 }
 
@@ -105,10 +117,16 @@ impl StereoAnalyzer {
             corr_re_lr: vec![0.0; num_bins],
             corr_alpha: 1.0,
             corr_smooth_ms: 0.0,
+            balance_power_l: vec![0.0; num_bins],
+            balance_power_r: vec![0.0; num_bins],
+            balance_alpha: 1.0,
+            balance_smooth_ms: 0.0,
             mid_db: vec![MIN_DB; num_bins],
             side_db: vec![MIN_DB; num_bins],
             left_db: vec![MIN_DB; num_bins],
             right_db: vec![MIN_DB; num_bins],
+            left_balance_db: vec![MIN_DB; num_bins],
+            right_balance_db: vec![MIN_DB; num_bins],
             correlation: vec![0.0; num_bins],
         }
     }
@@ -132,11 +150,17 @@ impl StereoAnalyzer {
         self.recompute_alphas();
     }
 
+    pub fn set_balance_smoothing_ms(&mut self, ms: f32) {
+        self.balance_smooth_ms = ms.max(0.0);
+        self.recompute_alphas();
+    }
+
     fn recompute_alphas(&mut self) {
         let dt_s = self.hop_size as f32 / self.sample_rate.max(1.0);
         self.attack_alpha = ms_to_alpha(self.attack_ms, dt_s);
         self.release_alpha = ms_to_alpha(self.release_ms, dt_s);
         self.corr_alpha = ms_to_alpha(self.corr_smooth_ms, dt_s);
+        self.balance_alpha = ms_to_alpha(self.balance_smooth_ms, dt_s);
     }
 
     pub fn num_bins(&self) -> usize {
@@ -159,6 +183,18 @@ impl StereoAnalyzer {
         &self.right_db
     }
 
+    /// Symmetric-EMA smoothed L magnitude — no peak hold, tracks the
+    /// current signal. Used by the L/R balance column so the displayed
+    /// delta reflects the live relationship rather than a mix of stale
+    /// peak-holds from two different moments.
+    pub fn latest_left_balance_db(&self) -> &[f32] {
+        &self.left_balance_db
+    }
+
+    pub fn latest_right_balance_db(&self) -> &[f32] {
+        &self.right_balance_db
+    }
+
     pub fn latest_correlation(&self) -> &[f32] {
         &self.correlation
     }
@@ -175,10 +211,14 @@ impl StereoAnalyzer {
         self.corr_power_l.fill(0.0);
         self.corr_power_r.fill(0.0);
         self.corr_re_lr.fill(0.0);
+        self.balance_power_l.fill(0.0);
+        self.balance_power_r.fill(0.0);
         self.mid_db.fill(MIN_DB);
         self.side_db.fill(MIN_DB);
         self.left_db.fill(MIN_DB);
         self.right_db.fill(MIN_DB);
+        self.left_balance_db.fill(MIN_DB);
+        self.right_balance_db.fill(MIN_DB);
         self.correlation.fill(0.0);
     }
 
@@ -273,6 +313,19 @@ impl StereoAnalyzer {
                 corr_alpha * p_r + (1.0 - corr_alpha) * self.corr_power_r[bin];
             self.corr_re_lr[bin] =
                 corr_alpha * re_lr + (1.0 - corr_alpha) * self.corr_re_lr[bin];
+
+            // Dedicated symmetric smoother for the L/R balance column.
+            // Faster TC than correlation so the balance line feels live,
+            // but still symmetric so transients don't peak-hold a skew.
+            let balance_alpha = self.balance_alpha;
+            self.balance_power_l[bin] =
+                balance_alpha * p_l + (1.0 - balance_alpha) * self.balance_power_l[bin];
+            self.balance_power_r[bin] =
+                balance_alpha * p_r + (1.0 - balance_alpha) * self.balance_power_r[bin];
+            self.left_balance_db[bin] =
+                10.0 * (self.balance_power_l[bin] + 1e-24).log10();
+            self.right_balance_db[bin] =
+                10.0 * (self.balance_power_r[bin] + 1e-24).log10();
 
             let denom_sq = self.corr_power_l[bin] * self.corr_power_r[bin];
             self.correlation[bin] = if self.corr_power_l[bin] < floor_power

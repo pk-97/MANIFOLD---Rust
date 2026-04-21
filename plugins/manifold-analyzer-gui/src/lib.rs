@@ -670,6 +670,12 @@ pub struct AnalyzerGuiShared {
     /// finishes a frame, GUI thread reads each repaint.
     left_db: Mutex<Vec<f32>>,
     right_db: Mutex<Vec<f32>>,
+    /// Symmetrically-smoothed L / R magnitudes for the balance line.
+    /// Peak-hold values from `left_db` / `right_db` make the balance
+    /// stick at whichever channel peaked most recently; these track
+    /// the current signal instead.
+    left_balance_db: Mutex<Vec<f32>>,
+    right_balance_db: Mutex<Vec<f32>>,
     /// Per-bin stereo correlation in [-1, 1]. Same mailbox pattern as
     /// the spectra. Drives the colour strip in the L/R cell.
     correlation_bins: Mutex<Vec<f32>>,
@@ -767,6 +773,8 @@ impl AnalyzerGuiShared {
             side_db: Mutex::new(vec![MIN_DB; num_bins]),
             left_db: Mutex::new(vec![MIN_DB; num_bins]),
             right_db: Mutex::new(vec![MIN_DB; num_bins]),
+            left_balance_db: Mutex::new(vec![MIN_DB; num_bins]),
+            right_balance_db: Mutex::new(vec![MIN_DB; num_bins]),
             correlation_bins: Mutex::new(vec![0.0; num_bins]),
             mid_sample_ring: SampleRing::new(SAMPLE_RING_CAPACITY),
             loudness_block_queue: Arc::new(ArrayQueue::new(256)),
@@ -884,6 +892,8 @@ impl AnalyzerGuiShared {
             &self.side_db,
             &self.left_db,
             &self.right_db,
+            &self.left_balance_db,
+            &self.right_balance_db,
         ] {
             let mut guard = mailbox.lock();
             guard.resize(num_bins, MIN_DB);
@@ -932,6 +942,22 @@ impl AnalyzerGuiShared {
 
     pub fn try_read_right_db(&self, dst: &mut [f32]) -> bool {
         read_if_size_matches(&self.right_db, dst)
+    }
+
+    pub fn try_publish_left_balance_db(&self, src: &[f32]) -> bool {
+        publish_if_size_matches(&self.left_balance_db, src)
+    }
+
+    pub fn try_publish_right_balance_db(&self, src: &[f32]) -> bool {
+        publish_if_size_matches(&self.right_balance_db, src)
+    }
+
+    pub fn try_read_left_balance_db(&self, dst: &mut [f32]) -> bool {
+        read_if_size_matches(&self.left_balance_db, dst)
+    }
+
+    pub fn try_read_right_balance_db(&self, dst: &mut [f32]) -> bool {
+        read_if_size_matches(&self.right_balance_db, dst)
     }
 
     pub fn try_publish_correlation(&self, src: &[f32]) -> bool {
@@ -1272,8 +1298,16 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     ) {
         let _ = state.shared.try_read_mid_db(&mut state.mid_scratch);
         let _ = state.shared.try_read_side_db(&mut state.side_scratch);
-        let _ = state.shared.try_read_left_db(&mut state.left_scratch);
-        let _ = state.shared.try_read_right_db(&mut state.right_scratch);
+        // LR column reads the symmetrically-smoothed balance magnitudes,
+        // not the peak-hold `left_db`/`right_db` the MS curves use —
+        // otherwise a past L transient would pin the balance line until
+        // a louder R transient came through.
+        let _ = state
+            .shared
+            .try_read_left_balance_db(&mut state.left_scratch);
+        let _ = state
+            .shared
+            .try_read_right_balance_db(&mut state.right_scratch);
         let _ = state
             .shared
             .try_read_correlation(&mut state.correlation_scratch);
@@ -1676,19 +1710,36 @@ fn draw_ref_bands(
         // tight above 5 kHz).
         let smoothed = smooth_envelope(&envelope.bounds, smoothing_mode);
 
-        // Collect valid samples. Long-tail bins (freq > source Nyquist
-        // / LAME lowpass / view range) are filtered out so the outline
-        // terminates cleanly instead of collapsing through `MIN_DB`
-        // slots.
-        let denom = (REF_POINTS - 1) as f32;
-        let mut upper_pts: Vec<egui::Pos2> = Vec::with_capacity(REF_POINTS);
-        let mut lower_pts: Vec<egui::Pos2> = Vec::with_capacity(REF_POINTS);
-        for (i, pair) in smoothed.iter().enumerate() {
-            let t = i as f32 / denom;
+        // Sub-sample the smoothed envelope at 4× the stored density so
+        // zoomed-in views (narrow Min/Max Hz) still get a smooth line
+        // instead of visible straight-line segments between the 1024
+        // log-spaced grid points.
+        const REF_RENDER_UPSAMPLE: usize = 4;
+        let render_points = REF_POINTS * REF_RENDER_UPSAMPLE;
+        let render_denom = (render_points - 1) as f32;
+        let src_denom = (REF_POINTS - 1) as f32;
+        let mut upper_pts: Vec<egui::Pos2> = Vec::with_capacity(render_points);
+        let mut lower_pts: Vec<egui::Pos2> = Vec::with_capacity(render_points);
+        for render_i in 0..render_points {
+            let t = render_i as f32 / render_denom;
             let freq = (log_min + t * grid_span).exp();
             if freq < freq_min || freq > freq_max || freq > upper_cutoff_hz {
                 continue;
             }
+            // Linear interp between adjacent smoothed grid points. After
+            // smoothing, adjacent values are within a few dB of each
+            // other so dB-linear interp is indistinguishable from
+            // power-linear at these scales.
+            let src_f = t * src_denom;
+            let src_lo = (src_f.floor() as usize).min(REF_POINTS - 1);
+            let src_hi = (src_lo + 1).min(REF_POINTS - 1);
+            let frac = src_f - src_lo as f32;
+            let pair_lo = smoothed[src_lo];
+            let pair_hi = smoothed[src_hi];
+            let pair = [
+                pair_lo[0] * (1.0 - frac) + pair_hi[0] * frac,
+                pair_lo[1] * (1.0 - frac) + pair_hi[1] * frac,
+            ];
             // Smoothing first, then add per-freq weighting offset — the
             // two commute (weighting is a pointwise add) and smoothing
             // the raw curves is simpler.

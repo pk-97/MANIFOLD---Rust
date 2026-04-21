@@ -20,6 +20,11 @@ const RELEASE_MS: f32 = 200.0;
 /// bin — steady enough that the colour strip doesn't flicker, fast
 /// enough that a polarity flip reads within half a second.
 const STEREO_CORR_SMOOTH_MS: f32 = 500.0;
+/// 150 ms symmetric smoothing on the per-bin L and R magnitudes
+/// specifically feeding the L/R balance line. Faster than correlation
+/// so balance feels live, slower than the instant-attack asym EMA so
+/// it doesn't chatter.
+const STEREO_BALANCE_SMOOTH_MS: f32 = 150.0;
 
 struct ManifoldAnalyzer {
     params: Arc<AnalyzerParams>,
@@ -109,6 +114,7 @@ impl Plugin for ManifoldAnalyzer {
         stereo.set_overlap_ratio(OVERLAP_RATIO);
         stereo.set_attack_release_ms(ATTACK_MS, RELEASE_MS);
         stereo.set_correlation_smoothing_ms(STEREO_CORR_SMOOTH_MS);
+        stereo.set_balance_smoothing_ms(STEREO_BALANCE_SMOOTH_MS);
         self.stereo = Some(stereo);
         let max_block = buffer_config.max_buffer_size as usize;
         self.mid_scratch = vec![0.0; max_block];
@@ -164,6 +170,7 @@ impl Plugin for ManifoldAnalyzer {
             stereo.set_overlap_ratio(OVERLAP_RATIO);
             stereo.set_attack_release_ms(ATTACK_MS, RELEASE_MS);
             stereo.set_correlation_smoothing_ms(STEREO_CORR_SMOOTH_MS);
+        stereo.set_balance_smoothing_ms(STEREO_BALANCE_SMOOTH_MS);
             self.gui_shared.resize_stereo_mailboxes(desired_fft);
             self.stereo = Some(stereo);
             self.current_fft_size = desired_fft;
@@ -228,6 +235,10 @@ impl Plugin for ManifoldAnalyzer {
                 .try_publish_left_db(stereo.latest_left_db());
             self.gui_shared
                 .try_publish_right_db(stereo.latest_right_db());
+            self.gui_shared
+                .try_publish_left_balance_db(stereo.latest_left_balance_db());
+            self.gui_shared
+                .try_publish_right_balance_db(stereo.latest_right_balance_db());
             self.gui_shared
                 .try_publish_correlation(stereo.latest_correlation());
         }
