@@ -80,8 +80,13 @@ pub const WEIGHTING_LUT_SIZE: usize = 1024;
 pub struct DisplayConfig {
     /// Half-bandwidth of frequency smoothing in log2(octave). Set to
     /// `1.0 / 24.0` for a 1/12-oct smoothing (±1/24 oct either side of the
-    /// centre frequency). `0.0` disables smoothing.
+    /// centre frequency). `0.0` disables smoothing. Ignored when
+    /// `smoothing_mode` selects ERB (width becomes frequency-dependent).
     pub smooth_half_oct_log2: f32,
+    /// `0.0` = fixed-bandwidth smoothing driven by `smooth_half_oct_log2`.
+    /// `1.0` = ERB (Moore & Glasberg) perceptual critical-band smoothing,
+    /// frequency-dependent half-width computed in the shader.
+    pub smoothing_mode: f32,
     /// Alpha of the fill below each curve. `0.0` disables fill.
     pub fill_alpha: f32,
     /// Fraction of total render-target height devoted to the spectrum curves.
@@ -107,6 +112,7 @@ impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
             smooth_half_oct_log2: 0.0,
+            smoothing_mode: 0.0,
             fill_alpha: 0.0,
             spectrum_fraction: 1.0,
             spectrogram_db_min: -59.0,
@@ -146,7 +152,8 @@ struct SpectrumUniforms {
     cqt_fmin_hz: f32,
     cqt_bins_per_octave: f32,
     spectrogram_gamma: f32,
-    _pad_tail: [f32; 3],
+    smoothing_mode: f32,
+    _pad_tail: [f32; 2],
 }
 
 pub struct SpectrumGpuRenderer {
@@ -372,7 +379,8 @@ impl SpectrumGpuRenderer {
             cqt_fmin_hz: CQT_FMIN_HZ,
             cqt_bins_per_octave: CQT_BINS_PER_OCTAVE as f32,
             spectrogram_gamma: self.display.spectrogram_gamma,
-            _pad_tail: [0.0; 3],
+            smoothing_mode: self.display.smoothing_mode,
+            _pad_tail: [0.0; 2],
         };
         let uniform_bytes: &[u8] = unsafe {
             std::slice::from_raw_parts(

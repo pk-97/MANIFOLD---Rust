@@ -83,15 +83,27 @@ const REF_SLOT_COLORS: [[u8; 3]; REF_SLOT_COUNT] = [
     [210, 150, 255],  // lavender
 ];
 
-/// Gaussian smoothing sigma (in log-grid points) applied to the ref
-/// envelopes before rendering. With `REF_POINTS = 1024` log-spaced
-/// over ~12.2 octaves, 5 points ≈ 1/17 octave — just enough to knock
-/// down single-bin spikes without blurring real spectral features.
-const REF_SMOOTH_SIGMA: f32 = 5.0;
-/// Truncation radius of the smoothing kernel, ~2 σ so tails contribute
-/// < 14 % of peak weight. Trading exact Gaussian for a finite kernel
-/// keeps per-frame smoothing cost bounded (radius × 2 × N_slots taps).
-const REF_SMOOTH_RADIUS: usize = 10;
+/// Gaussian smoothing sigma (in log-grid points) per `FreqSmoothing`
+/// mode. Bigger σ widens the effective bandwidth. Fixed-mode values
+/// are tuned so adjacent grid points fall inside the kernel's main
+/// lobe, killing the straight-line-segment artefacts that egui's
+/// polyline rendering shows at low freq when σ is too small. ERB
+/// mode returns `None` — the smoother computes σ per point from
+/// the ERB critical-band curve.
+fn ref_smooth_sigma_points(smoothing: FreqSmoothing) -> Option<f32> {
+    match smoothing {
+        FreqSmoothing::None => Some(0.0),
+        FreqSmoothing::TwentyFourth => Some(3.0),
+        FreqSmoothing::Twelfth => Some(10.0),
+        FreqSmoothing::Sixth => Some(18.0),
+        FreqSmoothing::Third => Some(30.0),
+        FreqSmoothing::Erb => None,
+    }
+}
+/// Truncation radius in σ multiples. 2.5 σ covers > 98 % of the
+/// Gaussian energy; beyond that contributions don't change the
+/// output meaningfully.
+const REF_SMOOTH_RADIUS_SIGMAS: f32 = 2.5;
 /// Reference frequency for the Flat/Pink/Tilted weighting slopes.
 /// LUFS modes ignore this (the biquad response has its own pivot).
 const SLOPE_REF_FREQ: f32 = 1000.0;
@@ -205,7 +217,6 @@ fn biquad_mag_db_48k(freq: f32, b0: f32, b1: f32, b2: f32, a1: f32, a2: f32) -> 
     let den_mag2 = den_re * den_re + den_im * den_im;
     10.0 * (num_mag2.max(1e-30) / den_mag2.max(1e-30)).log10()
 }
-const SMOOTH_HALF_OCT_LOG2: f32 = 1.0 / 24.0; // 1/12-oct bandwidth → ±1/24 oct half-width
 const FILL_ALPHA: f32 = 0.45;
 // Colourmap dB range. Synchrosqueezing concentrates a main-lobe's worth
 // of power into a single log bin, so peaks climb ~+4.5 dB vs raw VQT;
@@ -335,6 +346,117 @@ impl Weighting {
             Weighting::Tilted => "Tilted",
             Weighting::Lufs => "LUFS",
             Weighting::LufsSubAdj => "LUFS (Sub Adj)",
+        }
+    }
+}
+
+/// Frequency smoothing bandwidth for the Mid/Side curves, L/R column,
+/// and loaded reference envelopes. Fixed-width modes apply a constant
+/// log-frequency window everywhere. ERB follows Moore & Glasberg's
+/// critical-band curve — very wide at the low end (~2 oct at 20 Hz),
+/// narrowing to ~1/6 oct above 5 kHz. Matches what the ear actually
+/// integrates, which is what mastering analysers like SPAN hide the
+/// low-end stair-stepping behind.
+#[derive(Enum, PartialEq, Eq, Debug, Clone, Copy)]
+pub enum FreqSmoothing {
+    #[id = "none"]
+    #[name = "None"]
+    None,
+    #[id = "24"]
+    #[name = "1/24 oct"]
+    TwentyFourth,
+    #[id = "12"]
+    #[name = "1/12 oct"]
+    Twelfth,
+    #[id = "6"]
+    #[name = "1/6 oct"]
+    Sixth,
+    #[id = "3"]
+    #[name = "1/3 oct"]
+    Third,
+    #[id = "erb"]
+    #[name = "ERB"]
+    Erb,
+}
+
+impl FreqSmoothing {
+    fn label(self) -> &'static str {
+        match self {
+            FreqSmoothing::None => "None",
+            FreqSmoothing::TwentyFourth => "1/24 oct",
+            FreqSmoothing::Twelfth => "1/12 oct",
+            FreqSmoothing::Sixth => "1/6 oct",
+            FreqSmoothing::Third => "1/3 oct",
+            FreqSmoothing::Erb => "ERB",
+        }
+    }
+
+    /// Fixed half-width in octaves (one-sided). `0.0` = no smoothing.
+    /// Returns `None` for ERB mode (width is frequency-dependent).
+    fn fixed_half_octaves(self) -> Option<f32> {
+        match self {
+            FreqSmoothing::None => Some(0.0),
+            FreqSmoothing::TwentyFourth => Some(1.0 / 48.0),
+            FreqSmoothing::Twelfth => Some(1.0 / 24.0),
+            FreqSmoothing::Sixth => Some(1.0 / 12.0),
+            FreqSmoothing::Third => Some(1.0 / 6.0),
+            FreqSmoothing::Erb => None,
+        }
+    }
+
+}
+
+/// ERB-rate bandwidth (Moore & Glasberg 1983) at frequency `f` Hz.
+/// Monotonic, always positive. At 20 Hz ≈ 27 Hz (2+ octaves symmetric),
+/// at 1 kHz ≈ 133 Hz (~1/5 oct), at 10 kHz ≈ 1104 Hz (~1/9 oct).
+fn erb_hz_at(f: f32) -> f32 {
+    24.7 * (4.37 * f.max(0.0) * 1e-3 + 1.0)
+}
+
+/// Convert an ERB bandwidth at `f` Hz into a half-width in octaves.
+/// `log2((f + erb/2) / f)` — the positive-side log distance. Used by
+/// the CPU-side LR / ref smoothers in ERB mode. Shader does the same
+/// math in WGSL.
+fn erb_half_octaves_at(f: f32) -> f32 {
+    if f <= 1e-3 {
+        return 0.0;
+    }
+    let half_bw = erb_hz_at(f) * 0.5;
+    (1.0 + half_bw / f).log2()
+}
+
+/// Chosen FFT size for the front-of-pipeline stereo analyser. Bigger
+/// size = smaller bin width (better low-freq resolution, kills
+/// stair-stepping at the bottom of the curves) at the cost of a longer
+/// time window (transients visually diluted) and more audio-thread
+/// FFT work per hop. 16k ≈ 370 ms window, 64k ≈ 1.5 s.
+#[derive(Enum, PartialEq, Eq, Debug, Clone, Copy)]
+pub enum FftSize {
+    #[id = "16k"]
+    #[name = "16k"]
+    K16,
+    #[id = "32k"]
+    #[name = "32k"]
+    K32,
+    #[id = "64k"]
+    #[name = "64k"]
+    K64,
+}
+
+impl FftSize {
+    pub fn samples(self) -> usize {
+        match self {
+            FftSize::K16 => 16_384,
+            FftSize::K32 => 32_768,
+            FftSize::K64 => 65_536,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            FftSize::K16 => "16k",
+            FftSize::K32 => "32k",
+            FftSize::K64 => "64k",
         }
     }
 }
@@ -471,6 +593,18 @@ pub struct AnalyzerParams {
     /// "full analyser floor matching the MS plot".
     #[id = "lr-range"]
     pub lr_range_db: IntParam,
+
+    /// Frequency-domain smoothing bandwidth applied to MS curves,
+    /// L/R column, and loaded reference envelopes. ERB mode uses a
+    /// perceptually-shaped variable-width window.
+    #[id = "freq-smooth"]
+    pub freq_smoothing: EnumParam<FreqSmoothing>,
+
+    /// FFT size for the audio-thread stereo analyser. Change rebuilds
+    /// the FFT plan + resizes the shared mailboxes on the audio thread
+    /// (brief glitch on change, stable otherwise).
+    #[id = "fft-size"]
+    pub fft_size: EnumParam<FftSize>,
 }
 
 impl AnalyzerParams {
@@ -499,6 +633,8 @@ impl AnalyzerParams {
             weighting: EnumParam::new("Weighting", Weighting::LufsSubAdj),
             reference_curve: EnumParam::new("Reference", ReferenceCurve::None),
             lr_range_db: IntParam::new("L/R Range", 20, IntRange::Linear { min: 5, max: 60 }),
+            freq_smoothing: EnumParam::new("Smoothing", FreqSmoothing::Twelfth),
+            fft_size: EnumParam::new("FFT Size", FftSize::K16),
         }
     }
 }
@@ -586,6 +722,28 @@ pub struct AnalyzerGuiShared {
 /// to zero to let one of the four figures go full-window.
 const RIGHT_COLUMN_WIDTH_DEFAULT: f32 = 200.0;
 const TOP_FRACTION_DEFAULT: f32 = 0.5;
+
+fn publish_if_size_matches(mailbox: &Mutex<Vec<f32>>, src: &[f32]) -> bool {
+    let Some(mut guard) = mailbox.try_lock() else {
+        return false;
+    };
+    if guard.len() != src.len() {
+        return false;
+    }
+    guard.copy_from_slice(src);
+    true
+}
+
+fn read_if_size_matches(mailbox: &Mutex<Vec<f32>>, dst: &mut [f32]) -> bool {
+    let Some(guard) = mailbox.try_lock() else {
+        return false;
+    };
+    if guard.len() != dst.len() {
+        return false;
+    }
+    dst.copy_from_slice(&guard);
+    true
+}
 
 impl AnalyzerGuiShared {
     pub fn new(sample_rate: f32, fft_size: usize) -> Self {
@@ -702,101 +860,74 @@ impl AnalyzerGuiShared {
         )
     }
 
-    /// Audio-thread mailbox write for the averaged Mid spectrum. If the
-    /// GUI happens to be reading (rare — it holds the lock only for an
-    /// ~8 KB memcpy), the update is dropped. Returns `true` when the
-    /// publish succeeded.
-    pub fn try_publish_mid_db(&self, src: &[f32]) -> bool {
-        if let Some(mut guard) = self.mid_db.try_lock() {
-            guard.copy_from_slice(src);
-            true
-        } else {
-            false
+    /// Resize all stereo mailboxes to match a new FFT size. Called by
+    /// the audio thread after it rebuilds `StereoAnalyzer` on a
+    /// user-driven FFT-size change. Updates `fft_size` only after the
+    /// mailboxes are grown so GUI readers never observe a size > what
+    /// the mailboxes can hold.
+    pub fn resize_stereo_mailboxes(&self, fft_size: usize) {
+        let num_bins = fft_size / 2;
+        for mailbox in [
+            &self.mid_db,
+            &self.side_db,
+            &self.left_db,
+            &self.right_db,
+        ] {
+            let mut guard = mailbox.lock();
+            guard.resize(num_bins, MIN_DB);
         }
+        {
+            let mut guard = self.correlation_bins.lock();
+            guard.resize(num_bins, 0.0);
+        }
+        self.fft_size.store(fft_size, Ordering::Release);
+    }
+
+    /// Audio-thread mailbox write. Returns `false` when the GUI holds
+    /// the lock (rare) or when `src.len() != mailbox.len()` (transient
+    /// mid-resize state). Callers drop the frame and try again next
+    /// hop in either case.
+    pub fn try_publish_mid_db(&self, src: &[f32]) -> bool {
+        publish_if_size_matches(&self.mid_db, src)
     }
 
     pub fn try_publish_side_db(&self, src: &[f32]) -> bool {
-        if let Some(mut guard) = self.side_db.try_lock() {
-            guard.copy_from_slice(src);
-            true
-        } else {
-            false
-        }
+        publish_if_size_matches(&self.side_db, src)
     }
 
-    /// GUI-thread mailbox read for the averaged Mid spectrum. Returns
-    /// `false` when the audio thread is mid-write; callers keep their
+    /// GUI-thread mailbox read. Returns `false` on lock contention OR
+    /// size mismatch (audio thread mid-rebuild). Callers keep their
     /// previous frame's values on miss.
     pub fn try_read_mid_db(&self, dst: &mut [f32]) -> bool {
-        if let Some(guard) = self.mid_db.try_lock() {
-            dst.copy_from_slice(&guard);
-            true
-        } else {
-            false
-        }
+        read_if_size_matches(&self.mid_db, dst)
     }
 
     pub fn try_read_side_db(&self, dst: &mut [f32]) -> bool {
-        if let Some(guard) = self.side_db.try_lock() {
-            dst.copy_from_slice(&guard);
-            true
-        } else {
-            false
-        }
+        read_if_size_matches(&self.side_db, dst)
     }
 
     pub fn try_publish_left_db(&self, src: &[f32]) -> bool {
-        if let Some(mut guard) = self.left_db.try_lock() {
-            guard.copy_from_slice(src);
-            true
-        } else {
-            false
-        }
+        publish_if_size_matches(&self.left_db, src)
     }
 
     pub fn try_publish_right_db(&self, src: &[f32]) -> bool {
-        if let Some(mut guard) = self.right_db.try_lock() {
-            guard.copy_from_slice(src);
-            true
-        } else {
-            false
-        }
+        publish_if_size_matches(&self.right_db, src)
     }
 
     pub fn try_read_left_db(&self, dst: &mut [f32]) -> bool {
-        if let Some(guard) = self.left_db.try_lock() {
-            dst.copy_from_slice(&guard);
-            true
-        } else {
-            false
-        }
+        read_if_size_matches(&self.left_db, dst)
     }
 
     pub fn try_read_right_db(&self, dst: &mut [f32]) -> bool {
-        if let Some(guard) = self.right_db.try_lock() {
-            dst.copy_from_slice(&guard);
-            true
-        } else {
-            false
-        }
+        read_if_size_matches(&self.right_db, dst)
     }
 
     pub fn try_publish_correlation(&self, src: &[f32]) -> bool {
-        if let Some(mut guard) = self.correlation_bins.try_lock() {
-            guard.copy_from_slice(src);
-            true
-        } else {
-            false
-        }
+        publish_if_size_matches(&self.correlation_bins, src)
     }
 
     pub fn try_read_correlation(&self, dst: &mut [f32]) -> bool {
-        if let Some(guard) = self.correlation_bins.try_lock() {
-            dst.copy_from_slice(&guard);
-            true
-        } else {
-            false
-        }
+        read_if_size_matches(&self.correlation_bins, dst)
     }
 
     /// Full-snapshot publish — only used by the CLI / tests path where
@@ -1171,8 +1302,15 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             (true, Some(bpm), Some(_)) if bpm > 0.0 && beats_per_window > 0.0
         );
 
+        let smoothing = state.params.freq_smoothing.value();
+        let (smooth_half, smoothing_mode) = match smoothing.fixed_half_octaves() {
+            Some(half) => (half, 0.0_f32),
+            None => (0.0, 1.0_f32), // ERB — shader computes per-pixel
+        };
+
         spec.set_display(DisplayConfig {
-            smooth_half_oct_log2: SMOOTH_HALF_OCT_LOG2,
+            smooth_half_oct_log2: smooth_half,
+            smoothing_mode,
             fill_alpha: FILL_ALPHA,
             spectrum_fraction: top_fraction,
             spectrogram_db_min: SPECTROGRAM_DB_MIN,
@@ -1368,6 +1506,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         &state.params.ref_slots.read(),
         state.shared.integrated_lufs(),
         state.params.weighting.value(),
+        state.params.freq_smoothing.value(),
     );
 
     // 3. Spectrum-region labels. Transparent shader lets these sit on
@@ -1465,6 +1604,7 @@ fn draw_ref_bands(
     slots: &RefSlots,
     live_integrated_lufs: f32,
     weighting: Weighting,
+    smoothing_mode: FreqSmoothing,
 ) {
     if rect.width() <= 0.0 || rect.height() <= 0.0 {
         return;
@@ -1518,11 +1658,11 @@ fn draw_ref_bands(
         let c = REF_SLOT_COLORS[slot_idx];
         let line_color = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], 220);
 
-        // Gaussian-smoothed percentile curves. Smoothing happens in
-        // log-grid point space (≈ 1/6 octave) so it's shape-preserving
-        // on the log-freq display — straight bin-space smoothing would
-        // flatten sub-100-Hz detail and leave high-freq noise alone.
-        let smoothed = smooth_envelope(&envelope.bounds);
+        // Gaussian-smoothed percentile curves. Width follows the
+        // toolbar smoothing mode; ERB mode varies σ per grid point to
+        // match the ear's critical-band curve (wide low-end smoothing,
+        // tight above 5 kHz).
+        let smoothed = smooth_envelope(&envelope.bounds, smoothing_mode);
 
         // Collect valid samples. Long-tail bins (freq > source Nyquist
         // / LAME lowpass / view range) are filtered out so the outline
@@ -1565,47 +1705,75 @@ fn draw_ref_bands(
 
 /// Gaussian-smooth both percentile curves of a reference envelope,
 /// skipping `MIN_DB` slots so out-of-range / silent bins don't drag
-/// neighbouring samples down. Allocates once per call — per-frame
-/// cost is ~1024 × 57 taps × 2 curves × 4 slots ≈ 450 k muls, well
-/// under a ms even on modest hardware.
-fn smooth_envelope(bounds: &[[f32; 2]]) -> Vec<[f32; 2]> {
+/// neighbouring samples down. Fixed modes use one σ across the grid.
+/// ERB mode computes σ per-point from Moore & Glasberg's critical-band
+/// curve (grid points per octave × ERB half-width at that grid point's
+/// frequency) — wide at the low end, tight at the high end, matching
+/// the main MS curves' shader behaviour in ERB mode.
+fn smooth_envelope(bounds: &[[f32; 2]], smoothing: FreqSmoothing) -> Vec<[f32; 2]> {
     let n = bounds.len();
     let mut out = vec![[MIN_DB, MIN_DB]; n];
     if n == 0 {
         return out;
     }
-    // Precompute symmetric Gaussian weights once (same for both curves).
-    let radius = REF_SMOOTH_RADIUS.min(n.saturating_sub(1));
-    let sigma = REF_SMOOTH_SIGMA.max(0.5);
-    let mut weights = Vec::with_capacity(2 * radius + 1);
-    for k in 0..=(2 * radius) {
-        let d = k as f32 - radius as f32;
-        weights.push((-0.5 * (d / sigma).powi(2)).exp());
+    if matches!(smoothing, FreqSmoothing::None) {
+        out.copy_from_slice(bounds);
+        return out;
     }
+
+    let log_min = REF_FREQ_MIN.ln();
+    let log_max = REF_FREQ_MAX.ln();
+    let log_span = (log_max - log_min).max(1e-6);
+    let points_per_octave = (n.saturating_sub(1)) as f32
+        / (log_span / std::f32::consts::LN_2);
+
+    let fixed_sigma = ref_smooth_sigma_points(smoothing);
 
     let threshold = MIN_DB + 1.0;
     for i in 0..n {
+        // Per-point σ. Fixed modes use one value; ERB scales σ with the
+        // ERB half-width at this grid point's frequency.
+        let sigma = match fixed_sigma {
+            Some(s) => s.max(0.5),
+            None => {
+                let t = i as f32 / (n - 1) as f32;
+                let freq = (log_min + t * log_span).exp();
+                (erb_half_octaves_at(freq) * points_per_octave).max(0.5)
+            }
+        };
+        let radius = (sigma * REF_SMOOTH_RADIUS_SIGMAS).ceil() as usize;
+        let radius = radius.min(n.saturating_sub(1));
         let lo_i = i.saturating_sub(radius);
         let hi_i = (i + radius + 1).min(n);
-        let mut lo_sum = 0.0f32;
+        let inv_sigma_sq = 1.0 / (sigma * sigma);
+        let mut lo_pow_sum = 0.0f32;
         let mut lo_wsum = 0.0f32;
-        let mut hi_sum = 0.0f32;
+        let mut hi_pow_sum = 0.0f32;
         let mut hi_wsum = 0.0f32;
         for j in lo_i..hi_i {
-            let w = weights[radius + j - i];
+            let d = j as f32 - i as f32;
+            let w = (-0.5 * d * d * inv_sigma_sq).exp();
             let pair = bounds[j];
             if pair[0] > threshold {
-                lo_sum += pair[0] * w;
+                lo_pow_sum += 10.0_f32.powf(pair[0] * 0.1) * w;
                 lo_wsum += w;
             }
             if pair[1] > threshold {
-                hi_sum += pair[1] * w;
+                hi_pow_sum += 10.0_f32.powf(pair[1] * 0.1) * w;
                 hi_wsum += w;
             }
         }
         out[i] = [
-            if lo_wsum > 0.0 { lo_sum / lo_wsum } else { MIN_DB },
-            if hi_wsum > 0.0 { hi_sum / hi_wsum } else { MIN_DB },
+            if lo_wsum > 0.0 {
+                10.0 * (lo_pow_sum / lo_wsum).max(1e-30).log10()
+            } else {
+                MIN_DB
+            },
+            if hi_wsum > 0.0 {
+                10.0 * (hi_pow_sum / hi_wsum).max(1e-30).log10()
+            } else {
+                MIN_DB
+            },
         ];
     }
     out
@@ -1755,11 +1923,11 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
     const LR_GATE_DB: f32 = -70.0;
     /// Full silence floor for the gate fade.
     const LR_SILENCE_DB: f32 = -95.0;
-    /// Log2-octave half-width for the per-bin smoothing window. Matches
-    /// `SMOOTH_HALF_OCT_LOG2` (1/24-oct half-width → 1/12-oct
-    /// bandwidth) so the L/R column's visual roughness lines up with
-    /// the MS plot above it.
-    const LR_SMOOTH_HALF_OCT_LOG2: f32 = SMOOTH_HALF_OCT_LOG2;
+    // Smoothing is driven by the toolbar dropdown so the L/R column
+    // tracks the MS plot above it through mode changes. ERB returns
+    // `None` here — we compute the half-width per-row inside the loop.
+    let smoothing = state.params.freq_smoothing.value();
+    let fixed_half = smoothing.fixed_half_octaves();
 
     let sr = state.shared.sample_rate();
     let available = ui.available_size();
@@ -1813,8 +1981,6 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
     }
     let bin_per_hz = fft_size as f32 / sr;
     let max_bin = (num_bins - 1) as f32;
-    let smooth_lo = (-LR_SMOOTH_HALF_OCT_LOG2).exp2();
-    let smooth_hi = LR_SMOOTH_HALF_OCT_LOG2.exp2();
 
     // Walk one point per pixel row (~450 rows at 1x DPI, so cheap).
     let rows = rect.height().ceil() as i32 + 1;
@@ -1828,33 +1994,62 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
         }
         let t = (rect.bottom() - y) / rect.height().max(1.0);
         let freq = (log_min + t * log_span).exp();
-        // Average all bins inside a 1/12-octave window centred on
-        // `freq`. Below ~150 Hz the window collapses to a single bin,
-        // so we fall back to linear inter-bin interpolation there.
+        // Integrate L/R power over the 1/12-octave window with
+        // fractional-bin overlap weights. Power-domain matches the main
+        // MS plot's shader smoothing so the two views read the same way.
+        // When the window is wider than one bin (high freq) this is a
+        // proper integration; when it collapses below one bin (low freq,
+        // where 1/12-oct at 20 Hz is ~1.2 Hz vs 2.7 Hz per FFT bin) the
+        // overlap weights degenerate to a linear lerp between adjacent
+        // bin centres — sub-bin-smooth, no stair-stepping at either end.
+        let half_oct = fixed_half.unwrap_or_else(|| erb_half_octaves_at(freq));
+        let smooth_lo = (-half_oct).exp2();
+        let smooth_hi = half_oct.exp2();
         let bin_lo_f = (freq * smooth_lo * bin_per_hz).clamp(0.0, max_bin);
         let bin_hi_f = (freq * smooth_hi * bin_per_hz).clamp(0.0, max_bin);
-        let bin_lo = bin_lo_f.floor() as usize;
-        let bin_hi = bin_hi_f.ceil() as usize;
-        let (l_db_raw, r_db_raw, corr) = if bin_hi > bin_lo {
-            let mut l_sum = 0.0_f32;
-            let mut r_sum = 0.0_f32;
-            let mut c_sum = 0.0_f32;
-            for b in bin_lo..=bin_hi.min(num_bins - 1) {
-                l_sum += state.left_scratch[b];
-                r_sum += state.right_scratch[b];
-                c_sum += state.correlation_scratch[b];
+        let (l_db_raw, r_db_raw, corr) = if bin_hi_f >= bin_lo_f + 1.0 {
+            let b_start = bin_lo_f.floor() as usize;
+            let b_end = (bin_hi_f.ceil() as usize).min(num_bins - 1);
+            let mut l_pow_sum = 0.0f32;
+            let mut r_pow_sum = 0.0f32;
+            let mut c_sum = 0.0f32;
+            let mut w_sum = 0.0f32;
+            for b in b_start..=b_end {
+                let bin_lo = b as f32;
+                let bin_hi = bin_lo + 1.0;
+                let w = (bin_hi.min(bin_hi_f) - bin_lo.max(bin_lo_f)).max(0.0);
+                if w > 0.0 {
+                    l_pow_sum += 10.0_f32.powf(state.left_scratch[b] * 0.1) * w;
+                    r_pow_sum += 10.0_f32.powf(state.right_scratch[b] * 0.1) * w;
+                    c_sum += state.correlation_scratch[b] * w;
+                    w_sum += w;
+                }
             }
-            let n = (bin_hi.min(num_bins - 1) - bin_lo + 1) as f32;
-            (l_sum / n, r_sum / n, c_sum / n)
+            if w_sum > 0.0 {
+                (
+                    10.0 * (l_pow_sum / w_sum).max(1e-30).log10(),
+                    10.0 * (r_pow_sum / w_sum).max(1e-30).log10(),
+                    c_sum / w_sum,
+                )
+            } else {
+                (MIN_DB, MIN_DB, 0.0)
+            }
         } else {
+            // Sub-bin window: power-domain lerp between adjacent bin
+            // centres. Dropping the old dB-domain lerp kills the
+            // geometric-mean dip at bin boundaries.
             let bin_f = (freq * bin_per_hz).clamp(0.0, max_bin);
             let b0 = bin_f.floor() as usize;
             let b1 = (b0 + 1).min(num_bins - 1);
             let frac = bin_f - b0 as f32;
             let omf = 1.0 - frac;
+            let l_pow = 10.0_f32.powf(state.left_scratch[b0] * 0.1) * omf
+                + 10.0_f32.powf(state.left_scratch[b1] * 0.1) * frac;
+            let r_pow = 10.0_f32.powf(state.right_scratch[b0] * 0.1) * omf
+                + 10.0_f32.powf(state.right_scratch[b1] * 0.1) * frac;
             (
-                state.left_scratch[b0] * omf + state.left_scratch[b1] * frac,
-                state.right_scratch[b0] * omf + state.right_scratch[b1] * frac,
+                10.0 * l_pow.max(1e-30).log10(),
+                10.0 * r_pow.max(1e-30).log10(),
                 state.correlation_scratch[b0] * omf + state.correlation_scratch[b1] * frac,
             )
         };
@@ -2846,6 +3041,49 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
                         setter.begin_set_parameter(&params.reference_curve);
                         setter.set_parameter(&params.reference_curve, ref_val);
                         setter.end_set_parameter(&params.reference_curve);
+                    }
+                }
+            });
+
+        ui.label("Smooth");
+        let mut smooth_val = params.freq_smoothing.value();
+        egui::ComboBox::from_id_salt("freq-smoothing")
+            .selected_text(smooth_val.label())
+            .width(88.0)
+            .show_ui(ui, |ui| {
+                for opt in [
+                    FreqSmoothing::None,
+                    FreqSmoothing::TwentyFourth,
+                    FreqSmoothing::Twelfth,
+                    FreqSmoothing::Sixth,
+                    FreqSmoothing::Third,
+                    FreqSmoothing::Erb,
+                ] {
+                    if ui
+                        .selectable_value(&mut smooth_val, opt, opt.label())
+                        .changed()
+                    {
+                        setter.begin_set_parameter(&params.freq_smoothing);
+                        setter.set_parameter(&params.freq_smoothing, smooth_val);
+                        setter.end_set_parameter(&params.freq_smoothing);
+                    }
+                }
+            });
+
+        ui.label("FFT");
+        let mut fft_val = params.fft_size.value();
+        egui::ComboBox::from_id_salt("fft-size")
+            .selected_text(fft_val.label())
+            .width(54.0)
+            .show_ui(ui, |ui| {
+                for opt in [FftSize::K16, FftSize::K32, FftSize::K64] {
+                    if ui
+                        .selectable_value(&mut fft_val, opt, opt.label())
+                        .changed()
+                    {
+                        setter.begin_set_parameter(&params.fft_size);
+                        setter.set_parameter(&params.fft_size, fft_val);
+                        setter.end_set_parameter(&params.fft_size);
                     }
                 }
             });

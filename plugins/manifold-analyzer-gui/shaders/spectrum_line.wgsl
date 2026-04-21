@@ -42,6 +42,11 @@ struct Uniforms {
     cqt_fmin_hz: f32,
     cqt_bins_per_octave: f32,
     spectrogram_gamma: f32,
+    // 0 = fixed-bandwidth smoothing via `smooth_half_oct_log2`.
+    // 1 = ERB (Moore & Glasberg) — per-pixel half-width derived from
+    //     the critical-band curve, much wider at the low end and
+    //     tightening toward ~1/9 oct above 5 kHz.
+    smoothing_mode: f32,
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -122,14 +127,31 @@ fn sample_bin_db_side(bin_f: f32, num_bins: f32) -> f32 {
     return mix(side_spectrum[bin_lo], side_spectrum[bin_hi], frac);
 }
 
+// Per-pixel smoothing half-width in log2-octaves. Fixed-mode returns
+// the uniform; ERB mode computes Moore & Glasberg's critical-band half-
+// width at `freq`. Equivalent rectangular bandwidth:
+//   ERB_hz(f) = 24.7 * (4.37 * f / 1000 + 1)
+// Half-width in octaves = log2((f + erb/2) / f) = log2(1 + erb/(2f)).
+fn half_octaves_at(freq: f32) -> f32 {
+    if (u.smoothing_mode > 0.5) {
+        if (freq <= 1e-3) {
+            return 0.0;
+        }
+        let erb = 24.7 * (4.37 * freq * 1e-3 + 1.0);
+        return log2(1.0 + (erb * 0.5) / freq);
+    }
+    return u.smooth_half_oct_log2;
+}
+
 fn smoothed_db_mid(freq: f32) -> f32 {
     let num_bins = u.fft_size * 0.5;
     let bins_per_hz = u.fft_size / u.sample_rate;
-    if (u.smooth_half_oct_log2 <= 0.0) {
+    let half_oct = half_octaves_at(freq);
+    if (half_oct <= 0.0) {
         return sample_bin_db_mid(freq * bins_per_hz, num_bins);
     }
     let log_c = log(freq);
-    let log_half = u.smooth_half_oct_log2 * 0.6931471805599453; // ln(2)
+    let log_half = half_oct * 0.6931471805599453; // ln(2)
     let log_lo = log_c - log_half;
     let log_hi = log_c + log_half;
     var power_sum = 0.0;
@@ -146,11 +168,12 @@ fn smoothed_db_mid(freq: f32) -> f32 {
 fn smoothed_db_side(freq: f32) -> f32 {
     let num_bins = u.fft_size * 0.5;
     let bins_per_hz = u.fft_size / u.sample_rate;
-    if (u.smooth_half_oct_log2 <= 0.0) {
+    let half_oct = half_octaves_at(freq);
+    if (half_oct <= 0.0) {
         return sample_bin_db_side(freq * bins_per_hz, num_bins);
     }
     let log_c = log(freq);
-    let log_half = u.smooth_half_oct_log2 * 0.6931471805599453;
+    let log_half = half_oct * 0.6931471805599453;
     let log_lo = log_c - log_half;
     let log_hi = log_c + log_half;
     var power_sum = 0.0;
