@@ -103,9 +103,13 @@ fn tilt_db(freq: f32, raw_db: f32) -> f32 {
     return raw_db + weighting_db(freq);
 }
 
-// Number of samples taken inside the smoothing bandwidth. Fixed loop for
-// simple, branchless sampling; 12 gives a clean 1/12-oct rectangular window.
-const SMOOTH_N: i32 = 12;
+// Upper bound on smoothing taps per pixel. The smoothing loop strides
+// across FFT bins inside the window: narrow windows hit every bin
+// (few taps, cheap), wide windows stride past enough bins to stay
+// under this cap (bounded cost). 64 handles 1/3-oct at 10 kHz with a
+// 16k FFT (~860 bins in window → stride ~13). Bigger = more accurate
+// but slower per pixel.
+const SMOOTH_N_MAX: i32 = 64;
 
 fn sample_bin_db_mid(bin_f: f32, num_bins: f32) -> f32 {
     if (bin_f < 0.0 || bin_f >= num_bins) {
@@ -150,19 +154,27 @@ fn smoothed_db_mid(freq: f32) -> f32 {
     if (half_oct <= 0.0) {
         return sample_bin_db_mid(freq * bins_per_hz, num_bins);
     }
-    let log_c = log(freq);
-    let log_half = half_oct * 0.6931471805599453; // ln(2)
-    let log_lo = log_c - log_half;
-    let log_hi = log_c + log_half;
+    // Stride the smoothing window in bin-index space. When the window
+    // covers fewer bins than the tap cap we hit every bin (step=1); for
+    // wide windows we stride across so the loop count stays bounded and
+    // adjacent pixels sample a near-identical bin set (no aliasing as
+    // centre freq shifts pixel to pixel).
+    let bin_lo_f = clamp(freq * exp2(-half_oct) * bins_per_hz, 0.0, num_bins - 1.0);
+    let bin_hi_f = clamp(freq * exp2(half_oct) * bins_per_hz, 0.0, num_bins - 1.0);
+    let span_bins = max(bin_hi_f - bin_lo_f, 1e-6);
+    // Hold tap count constant so adjacent pixels don't swap sample
+    // counts as the window slides (an integer-n refactor produced
+    // visible sharp dips where the ceil boundary crossed). Fractional
+    // step handles narrow windows by over-sampling inside one bin,
+    // which costs nothing (sample_bin_db_mid is just a linear interp).
+    let step = span_bins / f32(SMOOTH_N_MAX);
     var power_sum = 0.0;
-    for (var i: i32 = 0; i < SMOOTH_N; i = i + 1) {
-        let t = (f32(i) + 0.5) / f32(SMOOTH_N);
-        let f = exp(mix(log_lo, log_hi, t));
-        let db = sample_bin_db_mid(f * bins_per_hz, num_bins);
+    for (var i: i32 = 0; i < SMOOTH_N_MAX; i = i + 1) {
+        let b_f = bin_lo_f + (f32(i) + 0.5) * step;
+        let db = sample_bin_db_mid(b_f, num_bins);
         power_sum = power_sum + pow(10.0, db * 0.1);
     }
-    let avg_power = power_sum / f32(SMOOTH_N);
-    return 10.0 * log(avg_power + 1e-24) / log(10.0);
+    return 10.0 * log(power_sum / f32(SMOOTH_N_MAX) + 1e-24) / log(10.0);
 }
 
 fn smoothed_db_side(freq: f32) -> f32 {
@@ -172,19 +184,17 @@ fn smoothed_db_side(freq: f32) -> f32 {
     if (half_oct <= 0.0) {
         return sample_bin_db_side(freq * bins_per_hz, num_bins);
     }
-    let log_c = log(freq);
-    let log_half = half_oct * 0.6931471805599453;
-    let log_lo = log_c - log_half;
-    let log_hi = log_c + log_half;
+    let bin_lo_f = clamp(freq * exp2(-half_oct) * bins_per_hz, 0.0, num_bins - 1.0);
+    let bin_hi_f = clamp(freq * exp2(half_oct) * bins_per_hz, 0.0, num_bins - 1.0);
+    let span_bins = max(bin_hi_f - bin_lo_f, 1e-6);
+    let step = span_bins / f32(SMOOTH_N_MAX);
     var power_sum = 0.0;
-    for (var i: i32 = 0; i < SMOOTH_N; i = i + 1) {
-        let t = (f32(i) + 0.5) / f32(SMOOTH_N);
-        let f = exp(mix(log_lo, log_hi, t));
-        let db = sample_bin_db_side(f * bins_per_hz, num_bins);
+    for (var i: i32 = 0; i < SMOOTH_N_MAX; i = i + 1) {
+        let b_f = bin_lo_f + (f32(i) + 0.5) * step;
+        let db = sample_bin_db_side(b_f, num_bins);
         power_sum = power_sum + pow(10.0, db * 0.1);
     }
-    let avg_power = power_sum / f32(SMOOTH_N);
-    return 10.0 * log(avg_power + 1e-24) / log(10.0);
+    return 10.0 * log(power_sum / f32(SMOOTH_N_MAX) + 1e-24) / log(10.0);
 }
 
 fn y_px_at_freq_mid(freq: f32) -> f32 {

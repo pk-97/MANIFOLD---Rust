@@ -329,8 +329,19 @@ impl SpectrumGpuRenderer {
         db_min: f32,
         db_max: f32,
     ) {
-        debug_assert_eq!(mid_db.len(), self.num_bins);
-        debug_assert_eq!(side_db.len(), self.num_bins);
+        debug_assert_eq!(mid_db.len(), side_db.len());
+
+        // FFT-size change on the audio thread grows the mailboxes past
+        // our GPU buffer capacity. Rebuild the per-bin buffers on first
+        // sight of a new length so the upload never walks past the end
+        // of a shared Metal buffer (which crashes the host with a bus
+        // error on macOS).
+        let incoming_bins = mid_db.len();
+        if incoming_bins != self.num_bins && incoming_bins > 0 {
+            self.mid_buf = device.create_buffer_shared((incoming_bins * 4) as u64);
+            self.side_buf = device.create_buffer_shared((incoming_bins * 4) as u64);
+            self.num_bins = incoming_bins;
+        }
 
         // Zero-copy upload into the shared-storage spectrum buffers.
         if let Some(ptr) = self.mid_buf.mapped_ptr() {

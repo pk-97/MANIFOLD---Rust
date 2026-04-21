@@ -426,37 +426,49 @@ fn erb_half_octaves_at(f: f32) -> f32 {
 }
 
 /// Chosen FFT size for the front-of-pipeline stereo analyser. Bigger
-/// size = smaller bin width (better low-freq resolution, kills
-/// stair-stepping at the bottom of the curves) at the cost of a longer
-/// time window (transients visually diluted) and more audio-thread
-/// FFT work per hop. 16k ≈ 370 ms window, 64k ≈ 1.5 s.
+/// size = smaller bin width (better low-freq resolution) at the cost
+/// of a longer time window (slower visual response, transients
+/// diluted). Range matches the "live to detail" spread commercial
+/// analysers expose: 2k snappy, 8k SPAN-style default, 32k detailed
+/// analysis. 64k is omitted on purpose — the 1.5 s window reads as
+/// laggy on live material and the low-end win doesn't cover it.
 #[derive(Enum, PartialEq, Eq, Debug, Clone, Copy)]
 pub enum FftSize {
+    #[id = "2k"]
+    #[name = "2k"]
+    K2,
+    #[id = "4k"]
+    #[name = "4k"]
+    K4,
+    #[id = "8k"]
+    #[name = "8k"]
+    K8,
     #[id = "16k"]
     #[name = "16k"]
     K16,
     #[id = "32k"]
     #[name = "32k"]
     K32,
-    #[id = "64k"]
-    #[name = "64k"]
-    K64,
 }
 
 impl FftSize {
     pub fn samples(self) -> usize {
         match self {
+            FftSize::K2 => 2_048,
+            FftSize::K4 => 4_096,
+            FftSize::K8 => 8_192,
             FftSize::K16 => 16_384,
             FftSize::K32 => 32_768,
-            FftSize::K64 => 65_536,
         }
     }
 
     fn label(self) -> &'static str {
         match self {
+            FftSize::K2 => "2k",
+            FftSize::K4 => "4k",
+            FftSize::K8 => "8k",
             FftSize::K16 => "16k",
             FftSize::K32 => "32k",
-            FftSize::K64 => "64k",
         }
     }
 }
@@ -634,7 +646,7 @@ impl AnalyzerParams {
             reference_curve: EnumParam::new("Reference", ReferenceCurve::None),
             lr_range_db: IntParam::new("L/R Range", 20, IntRange::Linear { min: 5, max: 60 }),
             freq_smoothing: EnumParam::new("Smoothing", FreqSmoothing::Twelfth),
-            fft_size: EnumParam::new("FFT Size", FftSize::K16),
+            fft_size: EnumParam::new("FFT Size", FftSize::K4),
         }
     }
 }
@@ -3076,7 +3088,13 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
             .selected_text(fft_val.label())
             .width(54.0)
             .show_ui(ui, |ui| {
-                for opt in [FftSize::K16, FftSize::K32, FftSize::K64] {
+                for opt in [
+                    FftSize::K2,
+                    FftSize::K4,
+                    FftSize::K8,
+                    FftSize::K16,
+                    FftSize::K32,
+                ] {
                     if ui
                         .selectable_value(&mut fft_val, opt, opt.label())
                         .changed()

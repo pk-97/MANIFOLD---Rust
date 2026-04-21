@@ -5,8 +5,8 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 
 /// FFT size used before `initialize` runs and the param-driven size
-/// kicks in. Matches the default `FftSize::K16`.
-const DEFAULT_FFT_SIZE: usize = 16384;
+/// kicks in. Matches the default `FftSize::K4`.
+const DEFAULT_FFT_SIZE: usize = 4096;
 /// Overlap ratio for the StereoAnalyser's sliding window. Kept constant
 /// across FFT-size changes so the hop time stays near ~8–9 ms regardless
 /// of chosen window length.
