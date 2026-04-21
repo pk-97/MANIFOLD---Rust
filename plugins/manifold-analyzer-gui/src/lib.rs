@@ -1710,10 +1710,15 @@ fn draw_ref_bands(
         // tight above 5 kHz).
         let smoothed = smooth_envelope(&envelope.bounds, smoothing_mode);
 
-        // Sub-sample the smoothed envelope at 4× the stored density so
-        // zoomed-in views (narrow Min/Max Hz) still get a smooth line
-        // instead of visible straight-line segments between the 1024
-        // log-spaced grid points.
+        // Sub-sample the smoothed envelope with a Catmull-Rom cubic
+        // spline between adjacent grid points. 4× linear upsample left
+        // visible knot kinks at heavy zoom + wide smoothing — the
+        // segments between two smoothed values read as horizontal
+        // stairs when both values are close, producing a stepped look
+        // on what should be a smooth curve. Catmull-Rom uses four
+        // neighbours to compute each render point with C1 continuity,
+        // indistinguishable from the smooth curves commercial
+        // analysers draw.
         //
         // Break the line into disjoint segments wherever we hit an
         // invalid render point (off-screen, past the codec cutoff, or
@@ -1721,7 +1726,17 @@ fn draw_ref_bands(
         // floor). Otherwise the single-Shape::line approach draws a
         // straight line across the gap, producing misleading descents
         // into noise-floor regions at the low end when Smooth=None.
-        const REF_RENDER_UPSAMPLE: usize = 4;
+        const REF_RENDER_UPSAMPLE: usize = 8;
+        // Catmull-Rom cubic interpolation at fractional position t in
+        // [0,1] between p1 and p2, using neighbours p0 and p3.
+        fn catmull_rom(p0: f32, p1: f32, p2: f32, p3: f32, t: f32) -> f32 {
+            let t2 = t * t;
+            let t3 = t2 * t;
+            0.5 * ((2.0 * p1)
+                + (-p0 + p2) * t
+                + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+                + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
+        }
         let render_points = REF_POINTS * REF_RENDER_UPSAMPLE;
         let render_denom = (render_points - 1) as f32;
         let src_denom = (REF_POINTS - 1) as f32;
@@ -1747,21 +1762,26 @@ fn draw_ref_bands(
                 continue;
             }
             let src_f = t * src_denom;
-            let src_lo = (src_f.floor() as usize).min(REF_POINTS - 1);
-            let src_hi = (src_lo + 1).min(REF_POINTS - 1);
-            let frac = src_f - src_lo as f32;
-            let pair_lo = smoothed[src_lo];
-            let pair_hi = smoothed[src_hi];
-            // Per-curve validity: a sparse-content ref can have p10 at
-            // the silence floor while p90 still carries a real value, so
-            // breaking both curves on one-sided floor hides real upper
-            // content at the low end. Decide upper and lower separately.
-            let upper_valid = pair_lo[1] > floor_threshold && pair_hi[1] > floor_threshold;
-            let lower_valid = pair_lo[0] > floor_threshold && pair_hi[0] > floor_threshold;
+            let src_1 = (src_f.floor() as usize).min(REF_POINTS - 1);
+            let src_2 = (src_1 + 1).min(REF_POINTS - 1);
+            let src_0 = src_1.saturating_sub(1);
+            let src_3 = (src_1 + 2).min(REF_POINTS - 1);
+            let frac = src_f - src_1 as f32;
+            let pair_0 = smoothed[src_0];
+            let pair_1 = smoothed[src_1];
+            let pair_2 = smoothed[src_2];
+            let pair_3 = smoothed[src_3];
+            // Per-curve validity: check the two nearest knots (the
+            // bracketing source points). If either is at floor, the
+            // interp segment is inside a silent region — break it.
+            // Outer knots (0, 3) only affect the spline's shape, not
+            // its validity, so we don't gate on them.
+            let upper_valid = pair_1[1] > floor_threshold && pair_2[1] > floor_threshold;
+            let lower_valid = pair_1[0] > floor_threshold && pair_2[0] > floor_threshold;
             let weight_db = weighting_db_at(weighting, freq) + weight_align;
             let x = freq_to_x(freq, freq_min, freq_max, rect);
             if upper_valid {
-                let hi_val = pair_lo[1] * (1.0 - frac) + pair_hi[1] * frac
+                let hi_val = catmull_rom(pair_0[1], pair_1[1], pair_2[1], pair_3[1], frac)
                     + shift_db
                     + weight_db;
                 cur_upper.push(egui::pos2(x, db_to_y(hi_val, DB_MIN, DB_MAX, rect)));
@@ -1769,7 +1789,7 @@ fn draw_ref_bands(
                 flush_one(&mut cur_upper, &mut upper_segments);
             }
             if lower_valid {
-                let lo_val = pair_lo[0] * (1.0 - frac) + pair_hi[0] * frac
+                let lo_val = catmull_rom(pair_0[0], pair_1[0], pair_2[0], pair_3[0], frac)
                     + shift_db
                     + weight_db;
                 cur_lower.push(egui::pos2(x, db_to_y(lo_val, DB_MIN, DB_MAX, rect)));
