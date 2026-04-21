@@ -6,6 +6,7 @@
 
 mod loudness;
 pub mod reference;
+mod stereo_cross;
 
 pub use loudness::{
     IntegratedScratch, LoudnessMeter, LoudnessSnapshot, compute_integrated_and_lra,
@@ -14,11 +15,12 @@ pub use reference::{
     REF_FFT_SIZE, REF_FREQ_MAX, REF_FREQ_MIN, REF_POINTS, RefAnalysis, RefEnvelope, RefError,
     analyze_ref_file,
 };
+pub use stereo_cross::StereoCrossAnalyzer;
 
 use rustfft::{Fft, FftPlanner, num_complex::Complex};
 use std::sync::Arc;
 
-fn ms_to_alpha(ms: f32, dt_s: f32) -> f32 {
+pub(crate) fn ms_to_alpha(ms: f32, dt_s: f32) -> f32 {
     if ms <= 0.0 {
         1.0
     } else {

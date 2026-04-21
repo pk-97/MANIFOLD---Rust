@@ -1,4 +1,4 @@
-use manifold_analyzer_dsp::{Analyzer, LoudnessMeter};
+use manifold_analyzer_dsp::{Analyzer, LoudnessMeter, StereoCrossAnalyzer};
 use manifold_analyzer_gui::{AnalyzerGuiShared, AnalyzerParams, LoudnessWorker};
 use nih_plug::prelude::*;
 use std::num::NonZeroU32;
@@ -14,6 +14,10 @@ const OVERLAP_RATIO: f32 = 0.975;
 /// of chattering on every frame.
 const ATTACK_MS: f32 = 0.0;
 const RELEASE_MS: f32 = 200.0;
+/// 500 ms power-domain smoothing on the stereo cross-correlation per
+/// bin — steady enough that the colour strip doesn't flicker, fast
+/// enough that a polarity flip reads within half a second.
+const STEREO_CORR_SMOOTH_MS: f32 = 500.0;
 
 struct ManifoldAnalyzer {
     params: Arc<AnalyzerParams>,
@@ -21,6 +25,7 @@ struct ManifoldAnalyzer {
     side_analyzer: Option<Analyzer>,
     left_analyzer: Option<Analyzer>,
     right_analyzer: Option<Analyzer>,
+    stereo_corr: Option<StereoCrossAnalyzer>,
     mid_scratch: Vec<f32>,
     side_scratch: Vec<f32>,
     left_scratch: Vec<f32>,
@@ -42,6 +47,7 @@ impl Default for ManifoldAnalyzer {
             side_analyzer: None,
             left_analyzer: None,
             right_analyzer: None,
+            stereo_corr: None,
             mid_scratch: Vec::new(),
             side_scratch: Vec::new(),
             left_scratch: Vec::new(),
@@ -104,6 +110,10 @@ impl Plugin for ManifoldAnalyzer {
         self.side_analyzer = Some(side);
         self.left_analyzer = Some(left);
         self.right_analyzer = Some(right);
+        let mut stereo_corr = StereoCrossAnalyzer::new(buffer_config.sample_rate, FFT_SIZE);
+        stereo_corr.set_overlap_ratio(OVERLAP_RATIO);
+        stereo_corr.set_smoothing_ms(STEREO_CORR_SMOOTH_MS);
+        self.stereo_corr = Some(stereo_corr);
         let max_block = buffer_config.max_buffer_size as usize;
         self.mid_scratch = vec![0.0; max_block];
         self.side_scratch = vec![0.0; max_block];
@@ -139,6 +149,9 @@ impl Plugin for ManifoldAnalyzer {
         }
         if let Some(a) = self.right_analyzer.as_mut() {
             a.reset();
+        }
+        if let Some(s) = self.stereo_corr.as_mut() {
+            s.reset();
         }
         if let Some(m) = self.loudness.as_mut() {
             m.reset();
@@ -222,6 +235,16 @@ impl Plugin for ManifoldAnalyzer {
         if right_an.push_mono(&self.right_scratch[..i]) {
             self.gui_shared
                 .try_publish_right_db(right_an.latest_spectrum_db());
+        }
+
+        // Per-bin stereo correlation: one stereo FFT per hop, shared
+        // smoothing in the power domain. Publish only on completed
+        // frames to match the spectra update cadence.
+        if let Some(stereo_corr) = self.stereo_corr.as_mut() {
+            if stereo_corr.push_stereo(&self.left_scratch[..i], &self.right_scratch[..i]) {
+                self.gui_shared
+                    .try_publish_correlation(stereo_corr.latest_correlation());
+            }
         }
 
         // Spectrogram: push raw Mid audio samples into the lock-free

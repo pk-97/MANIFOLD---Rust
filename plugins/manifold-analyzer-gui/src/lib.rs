@@ -522,6 +522,9 @@ pub struct AnalyzerGuiShared {
     /// finishes a frame, GUI thread reads each repaint.
     left_db: Mutex<Vec<f32>>,
     right_db: Mutex<Vec<f32>>,
+    /// Per-bin stereo correlation in [-1, 1]. Same mailbox pattern as
+    /// the spectra. Drives the colour strip in the L/R cell.
+    correlation_bins: Mutex<Vec<f32>>,
     /// Raw mid-channel audio samples for the CQT spectrogram. Audio
     /// thread pushes every sample; GUI thread drains and feeds the CQT
     /// pipeline. No FFT on the audio thread for this path.
@@ -594,6 +597,7 @@ impl AnalyzerGuiShared {
             side_db: Mutex::new(vec![MIN_DB; num_bins]),
             left_db: Mutex::new(vec![MIN_DB; num_bins]),
             right_db: Mutex::new(vec![MIN_DB; num_bins]),
+            correlation_bins: Mutex::new(vec![0.0; num_bins]),
             mid_sample_ring: SampleRing::new(SAMPLE_RING_CAPACITY),
             loudness_block_queue: Arc::new(ArrayQueue::new(256)),
             bpm_bits: AtomicU64::new(f64::NAN.to_bits()),
@@ -777,6 +781,24 @@ impl AnalyzerGuiShared {
         }
     }
 
+    pub fn try_publish_correlation(&self, src: &[f32]) -> bool {
+        if let Some(mut guard) = self.correlation_bins.try_lock() {
+            guard.copy_from_slice(src);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn try_read_correlation(&self, dst: &mut [f32]) -> bool {
+        if let Some(guard) = self.correlation_bins.try_lock() {
+            dst.copy_from_slice(&guard);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Full-snapshot publish — only used by the CLI / tests path where
     /// the meter computes integrated + LRA in-line. The plugin runtime
     /// uses `set_fast_loudness` (audio thread) + `set_integrated_lufs`
@@ -912,6 +934,7 @@ struct EditorState {
     side_scratch: Vec<f32>,
     left_scratch: Vec<f32>,
     right_scratch: Vec<f32>,
+    correlation_scratch: Vec<f32>,
     /// Pre-computed weighting curve uploaded to the shader whenever the
     /// mode or visible freq range changes. Replaces the old per-pixel
     /// biquad sin/cos evaluation — shader now samples this LUT with one
@@ -975,6 +998,7 @@ pub fn create_editor(
         side_scratch: vec![MIN_DB; num_bins],
         left_scratch: vec![MIN_DB; num_bins],
         right_scratch: vec![MIN_DB; num_bins],
+        correlation_scratch: vec![0.0; num_bins],
         weighting_lut_cache: WeightingLutCache::default(),
     };
     create_egui_editor(
@@ -1038,6 +1062,9 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     }
     if state.right_scratch.len() != num_bins {
         state.right_scratch.resize(num_bins, MIN_DB);
+    }
+    if state.correlation_scratch.len() != num_bins {
+        state.correlation_scratch.resize(num_bins, 0.0);
     }
 
     // Target render-buffer size: rect × DPI, clamped.
@@ -1104,6 +1131,9 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         let _ = state.shared.try_read_side_db(&mut state.side_scratch);
         let _ = state.shared.try_read_left_db(&mut state.left_scratch);
         let _ = state.shared.try_read_right_db(&mut state.right_scratch);
+        let _ = state
+            .shared
+            .try_read_correlation(&mut state.correlation_scratch);
         let ss_on = state.params.synchrosqueeze.value();
         let top_fraction = state.shared.top_fraction();
         let weighting = state.params.weighting.value();
@@ -1762,7 +1792,6 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
     // Each half of the column spans `range_db` dB of imbalance.
     let px_per_db = (rect.width() * 0.5) / range_db;
 
-    let grid_major = egui::Color32::from_gray(52);
     let grid_minor = egui::Color32::from_gray(32);
     let label_color = egui::Color32::from_gray(150);
 
@@ -1789,17 +1818,17 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
         }
         db_off += step_db;
     }
-    // Centerline (balanced) on top of the minor grid.
-    painter.line_segment(
-        [
-            egui::pos2(center_x, rect.top()),
-            egui::pos2(center_x, rect.bottom()),
-        ],
-        (1.0, grid_major),
-    );
+    // (Centerline is drawn later as a colour strip coloured by
+    // per-bin L/R correlation — red = anti-phase, green = phase-
+    // aligned. The balance line renders over the top so it still
+    // reads clearly against the coloured background.)
 
     let fft_size = state.shared.fft_size();
-    let num_bins = state.left_scratch.len().min(state.right_scratch.len());
+    let num_bins = state
+        .left_scratch
+        .len()
+        .min(state.right_scratch.len())
+        .min(state.correlation_scratch.len());
     if num_bins < 2 {
         return;
     }
@@ -1811,6 +1840,7 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
     // Walk one point per pixel row (~450 rows at 1x DPI, so cheap).
     let rows = rect.height().ceil() as i32 + 1;
     let mut pts = Vec::with_capacity(rows as usize);
+    let mut strip_rows: Vec<(f32, egui::Color32)> = Vec::with_capacity(rows as usize);
 
     for row in 0..rows {
         let y = rect.bottom() - row as f32;
@@ -1826,23 +1856,27 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
         let bin_hi_f = (freq * smooth_hi * bin_per_hz).clamp(0.0, max_bin);
         let bin_lo = bin_lo_f.floor() as usize;
         let bin_hi = bin_hi_f.ceil() as usize;
-        let (l_db_raw, r_db_raw) = if bin_hi > bin_lo {
+        let (l_db_raw, r_db_raw, corr) = if bin_hi > bin_lo {
             let mut l_sum = 0.0_f32;
             let mut r_sum = 0.0_f32;
+            let mut c_sum = 0.0_f32;
             for b in bin_lo..=bin_hi.min(num_bins - 1) {
                 l_sum += state.left_scratch[b];
                 r_sum += state.right_scratch[b];
+                c_sum += state.correlation_scratch[b];
             }
             let n = (bin_hi.min(num_bins - 1) - bin_lo + 1) as f32;
-            (l_sum / n, r_sum / n)
+            (l_sum / n, r_sum / n, c_sum / n)
         } else {
             let bin_f = (freq * bin_per_hz).clamp(0.0, max_bin);
             let b0 = bin_f.floor() as usize;
             let b1 = (b0 + 1).min(num_bins - 1);
             let frac = bin_f - b0 as f32;
+            let omf = 1.0 - frac;
             (
-                state.left_scratch[b0] * (1.0 - frac) + state.left_scratch[b1] * frac,
-                state.right_scratch[b0] * (1.0 - frac) + state.right_scratch[b1] * frac,
+                state.left_scratch[b0] * omf + state.left_scratch[b1] * frac,
+                state.right_scratch[b0] * omf + state.right_scratch[b1] * frac,
+                state.correlation_scratch[b0] * omf + state.correlation_scratch[b1] * frac,
             )
         };
         let weighting_db = weighting_db_at(weighting, freq) + weighting_align;
@@ -1851,23 +1885,43 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
 
         // Soft silence gate: multiply the raw delta by a 0..1 fade
         // based on the louder channel's level. Below `LR_SILENCE_DB`
-        // the line stays dead-centre even if noise-floor bins happen
-        // to show a ±12 dB delta; above `LR_GATE_DB` we show the true
-        // delta. No clamp on the delta — overshoots past ±range just
-        // hit the painter's clip rect and visually "run off" the edge.
+        // the line stays dead-centre and the correlation strip
+        // desaturates to a neutral dark so noise-floor bins don't
+        // flash red/green. No clamp on the delta itself — overshoots
+        // past ±range just hit the painter's clip rect and visually
+        // "run off" the edge.
         let louder = l_db.max(r_db);
         let fade = ((louder - LR_SILENCE_DB) / (LR_GATE_DB - LR_SILENCE_DB)).clamp(0.0, 1.0);
         let delta_db = (l_db - r_db) * fade;
-        // Positive delta (L louder) → push the line LEFT of centre.
         let x = center_x - delta_db * px_per_db;
         pts.push(egui::pos2(x, y));
+
+        // Correlation colour for this row, muted to grey when silent.
+        let corr_color = correlation_color_ramp(corr);
+        let neutral = egui::Color32::from_rgb(28, 32, 38);
+        strip_rows.push((y, lerp_color_rgb(neutral, corr_color, fade)));
     }
 
-    // Single balance curve in a neutral cyan so it's not confused with
-    // Mid (red) / Side (green) / reference slots.
-    let line_color = egui::Color32::from_rgb(170, 220, 255);
+    // Correlation strip: 1-pixel tall rect per row, centred on the
+    // centerline. Drawn BEFORE the balance line so the line renders
+    // cleanly on top of it.
+    let strip_half_w = 7.0_f32;
+    for &(y, color) in &strip_rows {
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(center_x - strip_half_w, y - 0.5),
+                egui::pos2(center_x + strip_half_w, y + 0.5),
+            ),
+            0.0,
+            color,
+        );
+    }
+
+    // Balance curve in white — reads cleanly over the coloured
+    // correlation strip and doesn't compete with Mid/Side/ref colours.
+    let line_color = egui::Color32::from_rgb(240, 245, 250);
     if pts.len() >= 2 {
-        painter.add(egui::Shape::line(pts, egui::Stroke::new(1.4, line_color)));
+        painter.add(egui::Shape::line(pts, egui::Stroke::new(1.5, line_color)));
     }
 
     // L / R side hints in the top corners so the user knows which
@@ -1910,6 +1964,41 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
         egui::FontId::monospace(9.0),
         label_color,
     );
+}
+
+/// Per-bin correlation → red/yellow/green ramp. `-1` = polarity
+/// flipped (red), `0` = uncorrelated (neutral yellow), `+1` = phase-
+/// aligned mono (green). Interpolated in straight sRGB.
+fn correlation_color_ramp(c: f32) -> egui::Color32 {
+    let c = c.clamp(-1.0, 1.0);
+    // Anchor colours: tuned to stay legible against both the bright
+    // cyan balance line and the dark panel background.
+    const RED: [u8; 3] = [220, 60, 60];
+    const YELLOW: [u8; 3] = [220, 200, 60];
+    const GREEN: [u8; 3] = [100, 200, 120];
+    let (a, b, t) = if c >= 0.0 {
+        (YELLOW, GREEN, c)
+    } else {
+        (YELLOW, RED, -c)
+    };
+    let lerp = |x: u8, y: u8, t: f32| {
+        (x as f32 * (1.0 - t) + y as f32 * t).round().clamp(0.0, 255.0) as u8
+    };
+    egui::Color32::from_rgb(lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t))
+}
+
+/// Straight sRGB linear interpolation between two `Color32`s. Used to
+/// fade the correlation strip toward a neutral grey in silent regions.
+fn lerp_color_rgb(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let lerp_u = |x: u8, y: u8| {
+        (x as f32 * (1.0 - t) + y as f32 * t).round().clamp(0.0, 255.0) as u8
+    };
+    egui::Color32::from_rgb(
+        lerp_u(a.r(), b.r()),
+        lerp_u(a.g(), b.g()),
+        lerp_u(a.b(), b.b()),
+    )
 }
 
 /// Right-column container: splits vertically into the L/R comparison
