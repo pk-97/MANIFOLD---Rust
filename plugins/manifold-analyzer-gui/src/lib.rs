@@ -1714,16 +1714,41 @@ fn draw_ref_bands(
         // zoomed-in views (narrow Min/Max Hz) still get a smooth line
         // instead of visible straight-line segments between the 1024
         // log-spaced grid points.
+        //
+        // Break the line into disjoint segments wherever we hit an
+        // invalid render point (off-screen, past the codec cutoff, or
+        // either flanking source grid value sitting at the silence
+        // floor). Otherwise the single-Shape::line approach draws a
+        // straight line across the gap, producing misleading descents
+        // into noise-floor regions at the low end when Smooth=None.
         const REF_RENDER_UPSAMPLE: usize = 4;
         let render_points = REF_POINTS * REF_RENDER_UPSAMPLE;
         let render_denom = (render_points - 1) as f32;
         let src_denom = (REF_POINTS - 1) as f32;
-        let mut upper_pts: Vec<egui::Pos2> = Vec::with_capacity(render_points);
-        let mut lower_pts: Vec<egui::Pos2> = Vec::with_capacity(render_points);
+        let floor_threshold = MIN_DB + 1.0;
+        let src_is_valid = |idx: usize| -> bool {
+            let p = smoothed[idx];
+            p[0] > floor_threshold || p[1] > floor_threshold
+        };
+        let mut upper_segments: Vec<Vec<egui::Pos2>> = Vec::new();
+        let mut lower_segments: Vec<Vec<egui::Pos2>> = Vec::new();
+        let mut cur_upper: Vec<egui::Pos2> = Vec::new();
+        let mut cur_lower: Vec<egui::Pos2> = Vec::new();
+        let mut flush = |cur_upper: &mut Vec<egui::Pos2>,
+                         cur_lower: &mut Vec<egui::Pos2>| {
+            if cur_upper.len() >= 2 {
+                upper_segments.push(std::mem::take(cur_upper));
+                lower_segments.push(std::mem::take(cur_lower));
+            } else {
+                cur_upper.clear();
+                cur_lower.clear();
+            }
+        };
         for render_i in 0..render_points {
             let t = render_i as f32 / render_denom;
             let freq = (log_min + t * grid_span).exp();
             if freq < freq_min || freq > freq_max || freq > upper_cutoff_hz {
+                flush(&mut cur_upper, &mut cur_lower);
                 continue;
             }
             // Linear interp between adjacent smoothed grid points. After
@@ -1733,6 +1758,15 @@ fn draw_ref_bands(
             let src_f = t * src_denom;
             let src_lo = (src_f.floor() as usize).min(REF_POINTS - 1);
             let src_hi = (src_lo + 1).min(REF_POINTS - 1);
+            // If either flanking grid point is at the silence floor,
+            // drop the whole render point and break the segment.
+            // Otherwise the interp descends smoothly toward the floor
+            // between a real value and a silent neighbour — visually
+            // misleading.
+            if !src_is_valid(src_lo) || !src_is_valid(src_hi) {
+                flush(&mut cur_upper, &mut cur_lower);
+                continue;
+            }
             let frac = src_f - src_lo as f32;
             let pair_lo = smoothed[src_lo];
             let pair_hi = smoothed[src_hi];
@@ -1740,29 +1774,29 @@ fn draw_ref_bands(
                 pair_lo[0] * (1.0 - frac) + pair_hi[0] * frac,
                 pair_lo[1] * (1.0 - frac) + pair_hi[1] * frac,
             ];
-            // Smoothing first, then add per-freq weighting offset — the
-            // two commute (weighting is a pointwise add) and smoothing
-            // the raw curves is simpler.
             let weight_db = weighting_db_at(weighting, freq) + weight_align;
             let lo = pair[0] + shift_db + weight_db;
             let hi = pair[1] + shift_db + weight_db;
-            if lo <= MIN_DB + 1.0 && hi <= MIN_DB + 1.0 {
-                continue;
-            }
             let x = freq_to_x(freq, freq_min, freq_max, rect);
-            upper_pts.push(egui::pos2(x, db_to_y(hi, DB_MIN, DB_MAX, rect)));
-            lower_pts.push(egui::pos2(x, db_to_y(lo, DB_MIN, DB_MAX, rect)));
+            cur_upper.push(egui::pos2(x, db_to_y(hi, DB_MIN, DB_MAX, rect)));
+            cur_lower.push(egui::pos2(x, db_to_y(lo, DB_MIN, DB_MAX, rect)));
         }
-        if upper_pts.len() < 2 {
+        flush(&mut cur_upper, &mut cur_lower);
+        if upper_segments.is_empty() {
             continue;
         }
 
         // Two unfilled outlines — upper (90th percentile) and lower
-        // (10th). Fill between them gets busy over the live MS curves;
-        // the two lines already describe the band clearly.
+        // (10th). Each contiguous valid region gets its own
+        // Shape::line so silence gaps show as gaps, not skated-over
+        // straight lines.
         let stroke = egui::Stroke::new(1.25, line_color);
-        painter.add(egui::Shape::line(upper_pts, stroke));
-        painter.add(egui::Shape::line(lower_pts, stroke));
+        for seg in upper_segments {
+            painter.add(egui::Shape::line(seg, stroke));
+        }
+        for seg in lower_segments {
+            painter.add(egui::Shape::line(seg, stroke));
+        }
     }
 }
 
@@ -2045,6 +2079,19 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
     let bin_per_hz = fft_size as f32 / sr;
     let max_bin = (num_bins - 1) as f32;
 
+    // Precompute Blackman-Harris weights once — same weights used for
+    // every row, same shape as the MS shader's tapered window so the
+    // LR column's peaks/valleys read the same way vs the curves above
+    // (and no rectangular plateaus around narrow peaks).
+    const LR_SMOOTH_N: usize = 32;
+    let mut bh_weights = [0.0f32; LR_SMOOTH_N];
+    for i in 0..LR_SMOOTH_N {
+        let phase = (i as f32 + 0.5) * (std::f32::consts::TAU / LR_SMOOTH_N as f32);
+        bh_weights[i] = 0.35875 - 0.48829 * phase.cos()
+            + 0.14128 * (2.0 * phase).cos()
+            - 0.01168 * (3.0 * phase).cos();
+    }
+
     // Walk one point per pixel row (~450 rows at 1x DPI, so cheap).
     let rows = rect.height().ceil() as i32 + 1;
     let mut pts = Vec::with_capacity(rows as usize);
@@ -2057,50 +2104,9 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
         }
         let t = (rect.bottom() - y) / rect.height().max(1.0);
         let freq = (log_min + t * log_span).exp();
-        // Integrate L/R power over the 1/12-octave window with
-        // fractional-bin overlap weights. Power-domain matches the main
-        // MS plot's shader smoothing so the two views read the same way.
-        // When the window is wider than one bin (high freq) this is a
-        // proper integration; when it collapses below one bin (low freq,
-        // where 1/12-oct at 20 Hz is ~1.2 Hz vs 2.7 Hz per FFT bin) the
-        // overlap weights degenerate to a linear lerp between adjacent
-        // bin centres — sub-bin-smooth, no stair-stepping at either end.
         let half_oct = fixed_half.unwrap_or_else(|| erb_half_octaves_at(freq));
-        let smooth_lo = (-half_oct).exp2();
-        let smooth_hi = half_oct.exp2();
-        let bin_lo_f = (freq * smooth_lo * bin_per_hz).clamp(0.0, max_bin);
-        let bin_hi_f = (freq * smooth_hi * bin_per_hz).clamp(0.0, max_bin);
-        let (l_db_raw, r_db_raw, corr) = if bin_hi_f >= bin_lo_f + 1.0 {
-            let b_start = bin_lo_f.floor() as usize;
-            let b_end = (bin_hi_f.ceil() as usize).min(num_bins - 1);
-            let mut l_pow_sum = 0.0f32;
-            let mut r_pow_sum = 0.0f32;
-            let mut c_sum = 0.0f32;
-            let mut w_sum = 0.0f32;
-            for b in b_start..=b_end {
-                let bin_lo = b as f32;
-                let bin_hi = bin_lo + 1.0;
-                let w = (bin_hi.min(bin_hi_f) - bin_lo.max(bin_lo_f)).max(0.0);
-                if w > 0.0 {
-                    l_pow_sum += 10.0_f32.powf(state.left_scratch[b] * 0.1) * w;
-                    r_pow_sum += 10.0_f32.powf(state.right_scratch[b] * 0.1) * w;
-                    c_sum += state.correlation_scratch[b] * w;
-                    w_sum += w;
-                }
-            }
-            if w_sum > 0.0 {
-                (
-                    10.0 * (l_pow_sum / w_sum).max(1e-30).log10(),
-                    10.0 * (r_pow_sum / w_sum).max(1e-30).log10(),
-                    c_sum / w_sum,
-                )
-            } else {
-                (MIN_DB, MIN_DB, 0.0)
-            }
-        } else {
-            // Sub-bin window: power-domain lerp between adjacent bin
-            // centres. Dropping the old dB-domain lerp kills the
-            // geometric-mean dip at bin boundaries.
+        let (l_db_raw, r_db_raw, corr) = if half_oct <= 0.0 {
+            // No smoothing — single-bin linear interp lookup.
             let bin_f = (freq * bin_per_hz).clamp(0.0, max_bin);
             let b0 = bin_f.floor() as usize;
             let b1 = (b0 + 1).min(num_bins - 1);
@@ -2114,6 +2120,39 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
                 10.0 * l_pow.max(1e-30).log10(),
                 10.0 * r_pow.max(1e-30).log10(),
                 state.correlation_scratch[b0] * omf + state.correlation_scratch[b1] * frac,
+            )
+        } else {
+            // BH-tapered weighted average across the window. Matches
+            // the MS shader's window shape so peaks read as bells
+            // here too instead of flat-topped plateaus.
+            let bin_lo_f = (freq * (-half_oct).exp2() * bin_per_hz).clamp(0.0, max_bin);
+            let bin_hi_f = (freq * half_oct.exp2() * bin_per_hz).clamp(0.0, max_bin);
+            let span_bins = (bin_hi_f - bin_lo_f).max(1e-6);
+            let step = span_bins / LR_SMOOTH_N as f32;
+            let mut l_pow_sum = 0.0f32;
+            let mut r_pow_sum = 0.0f32;
+            let mut c_sum = 0.0f32;
+            let mut w_sum = 0.0f32;
+            for i in 0..LR_SMOOTH_N {
+                let w = bh_weights[i];
+                let b_f = (bin_lo_f + (i as f32 + 0.5) * step).clamp(0.0, max_bin);
+                let b0 = b_f.floor() as usize;
+                let b1 = (b0 + 1).min(num_bins - 1);
+                let frac = b_f - b0 as f32;
+                let omf = 1.0 - frac;
+                let l_db_samp = state.left_scratch[b0] * omf + state.left_scratch[b1] * frac;
+                let r_db_samp = state.right_scratch[b0] * omf + state.right_scratch[b1] * frac;
+                let c_samp = state.correlation_scratch[b0] * omf
+                    + state.correlation_scratch[b1] * frac;
+                l_pow_sum += 10.0_f32.powf(l_db_samp * 0.1) * w;
+                r_pow_sum += 10.0_f32.powf(r_db_samp * 0.1) * w;
+                c_sum += c_samp * w;
+                w_sum += w;
+            }
+            (
+                10.0 * (l_pow_sum / w_sum).max(1e-30).log10(),
+                10.0 * (r_pow_sum / w_sum).max(1e-30).log10(),
+                c_sum / w_sum,
             )
         };
         let weighting_db = weighting_db_at(weighting, freq) + weighting_align;
