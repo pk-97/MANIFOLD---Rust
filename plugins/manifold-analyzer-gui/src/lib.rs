@@ -155,39 +155,6 @@ fn weighting_stats(weighting: Weighting, freq_min: f32, freq_max: f32) -> Weight
     }
 }
 
-/// Moore & Glasberg (1990) ERB-rate: number of auditory filters
-/// ("equivalent rectangular bandwidths") between 0 Hz and `f`. Equal
-/// steps on this scale correspond to equal numbers of critical bands,
-/// which is why plotting with equal ERB-per-pixel makes low freq get
-/// more display room than plain log-freq does. Returns "ERBs".
-fn hz_to_erb(f: f32) -> f32 {
-    21.4 * (1.0 + 0.00437 * f.max(0.0)).log10()
-}
-
-/// Inverse of `hz_to_erb`, for placing labels at musical frequencies
-/// when the display is running in ERB mode.
-#[allow(dead_code)]
-fn erb_to_hz(e: f32) -> f32 {
-    ((10.0_f32).powf(e / 21.4) - 1.0) / 0.00437
-}
-
-/// Normalised `[0, 1]` position along the frequency axis, honouring
-/// the ERB / log-freq toggle. `0.0` = `fmin`, `1.0` = `fmax`. Used by
-/// the CPU-side draw code (grid lines, labels, curve sampling).
-fn freq_norm_position(freq: f32, fmin: f32, fmax: f32, erb: bool) -> f32 {
-    if erb {
-        let lo = hz_to_erb(fmin);
-        let hi = hz_to_erb(fmax);
-        let span = (hi - lo).max(1e-6);
-        (hz_to_erb(freq) - lo) / span
-    } else {
-        let lo = fmin.max(1e-6).ln();
-        let hi = fmax.max(1e-6).ln();
-        let span = (hi - lo).max(1e-6);
-        (freq.max(1e-6).ln() - lo) / span
-    }
-}
-
 /// Weighting curve value at a single frequency, matching the shader's
 /// `weighting_db(freq)` function. Used by the reference-curve overlay
 /// and the align-offset integration.
@@ -504,13 +471,6 @@ pub struct AnalyzerParams {
     /// "full analyser floor matching the MS plot".
     #[id = "lr-range"]
     pub lr_range_db: IntParam,
-
-    /// Use ERB-rate axis instead of plain log-frequency across all
-    /// freq axes (MS plot x, spectrogram y, LR column y). Matches the
-    /// Moore & Glasberg ERB scale so equal screen distance corresponds
-    /// to equal number of auditory critical bands.
-    #[id = "erb-axis"]
-    pub erb_axis: BoolParam,
 }
 
 impl AnalyzerParams {
@@ -539,7 +499,6 @@ impl AnalyzerParams {
             weighting: EnumParam::new("Weighting", Weighting::LufsSubAdj),
             reference_curve: EnumParam::new("Reference", ReferenceCurve::None),
             lr_range_db: IntParam::new("L/R Range", 20, IntRange::Linear { min: 5, max: 60 }),
-            erb_axis: BoolParam::new("ERB Axis", false),
         }
     }
 }
@@ -566,19 +525,10 @@ pub struct AnalyzerGuiShared {
     /// Per-bin stereo correlation in [-1, 1]. Same mailbox pattern as
     /// the spectra. Drives the colour strip in the L/R cell.
     correlation_bins: Mutex<Vec<f32>>,
-    /// Raw left / right channel audio samples for the stereo CQT
-    /// pipeline. Audio thread pushes every sample into both; the CQT
-    /// worker drains them in lockstep and derives Mid / Side / L / R
-    /// spectra + per-bin correlation from two CQTs per hop. No FFT
-    /// on the audio thread.
-    pub left_sample_ring: SampleRing,
-    pub right_sample_ring: SampleRing,
-    /// Number of CQT bins the worker is producing. Published once on
-    /// spawn (via `set_cqt_num_bins`) so readers sizing the Mid/Side/
-    /// L/R/correlation mailboxes can allocate to match. `0` means the
-    /// worker hasn't spawned yet — consumers should treat the mailboxes
-    /// as empty and skip reads.
-    cqt_num_bins: AtomicUsize,
+    /// Raw mid-channel audio samples for the CQT spectrogram. Audio
+    /// thread pushes every sample; GUI thread drains and feeds the CQT
+    /// pipeline. No FFT on the audio thread for this path.
+    pub mid_sample_ring: SampleRing,
     /// Lock-free SPSC queue of closed 100 ms loudness-block z values.
     /// Produced by the audio thread's `LoudnessMeter::close_block`;
     /// consumed by the off-thread loudness worker which runs the
@@ -637,55 +587,18 @@ pub struct AnalyzerGuiShared {
 const RIGHT_COLUMN_WIDTH_DEFAULT: f32 = 200.0;
 const TOP_FRACTION_DEFAULT: f32 = 0.5;
 
-/// Mailbox publish helper. Returns `false` if the mailbox is locked
-/// OR the stored length differs from `src.len()` — the latter shields
-/// callers during the brief window after worker spawn where one side
-/// has resized and the other hasn't yet.
-fn publish_vec(mailbox: &Mutex<Vec<f32>>, src: &[f32]) -> bool {
-    if let Some(mut guard) = mailbox.try_lock() {
-        if guard.len() == src.len() {
-            guard.copy_from_slice(src);
-            true
-        } else {
-            false
-        }
-    } else {
-        false
-    }
-}
-
-fn read_vec(mailbox: &Mutex<Vec<f32>>, dst: &mut [f32]) -> bool {
-    if let Some(guard) = mailbox.try_lock() {
-        if guard.len() == dst.len() {
-            dst.copy_from_slice(&guard);
-            true
-        } else {
-            false
-        }
-    } else {
-        false
-    }
-}
-
 impl AnalyzerGuiShared {
     pub fn new(sample_rate: f32, fft_size: usize) -> Self {
-        // Mailbox buffers start empty — the worker lazily resizes them
-        // to `cqt_num_bins` on spawn via `resize_cqt_mailboxes`. Before
-        // that, `try_publish_*` / `try_read_*` no-op on size mismatch,
-        // and `draw_spectrum` / `draw_lr_column` also grow their local
-        // scratches lazily.
-        let _ = fft_size;
+        let num_bins = fft_size / 2;
         Self {
             sample_rate_bits: AtomicU32::new(sample_rate.to_bits()),
             fft_size: AtomicUsize::new(fft_size),
-            mid_db: Mutex::new(Vec::new()),
-            side_db: Mutex::new(Vec::new()),
-            left_db: Mutex::new(Vec::new()),
-            right_db: Mutex::new(Vec::new()),
-            correlation_bins: Mutex::new(Vec::new()),
-            left_sample_ring: SampleRing::new(SAMPLE_RING_CAPACITY),
-            right_sample_ring: SampleRing::new(SAMPLE_RING_CAPACITY),
-            cqt_num_bins: AtomicUsize::new(0),
+            mid_db: Mutex::new(vec![MIN_DB; num_bins]),
+            side_db: Mutex::new(vec![MIN_DB; num_bins]),
+            left_db: Mutex::new(vec![MIN_DB; num_bins]),
+            right_db: Mutex::new(vec![MIN_DB; num_bins]),
+            correlation_bins: Mutex::new(vec![0.0; num_bins]),
+            mid_sample_ring: SampleRing::new(SAMPLE_RING_CAPACITY),
             loudness_block_queue: Arc::new(ArrayQueue::new(256)),
             bpm_bits: AtomicU64::new(f64::NAN.to_bits()),
             beat_pos_bits: AtomicU64::new(f64::NAN.to_bits()),
@@ -770,27 +683,6 @@ impl AnalyzerGuiShared {
         self.fft_size.load(Ordering::Relaxed)
     }
 
-    /// Current CQT bin count published by the worker on spawn. `0`
-    /// until the worker has set it.
-    pub fn cqt_num_bins(&self) -> usize {
-        self.cqt_num_bins.load(Ordering::Relaxed)
-    }
-
-    /// Worker-only: resize the Mid/Side/L/R/correlation mailboxes to
-    /// `num_bins` and publish the new size atomically. Safe to call
-    /// once on worker spawn; consumers pick up the new size on their
-    /// next lazy-resize check.
-    pub fn resize_cqt_mailboxes(&self, num_bins: usize) {
-        // Lock each mailbox briefly — no contention here because the
-        // GUI / worker haven't started publishing yet when this runs.
-        self.mid_db.lock().resize(num_bins, MIN_DB);
-        self.side_db.lock().resize(num_bins, MIN_DB);
-        self.left_db.lock().resize(num_bins, MIN_DB);
-        self.right_db.lock().resize(num_bins, MIN_DB);
-        self.correlation_bins.lock().resize(num_bins, 0.0);
-        self.cqt_num_bins.store(num_bins, Ordering::Release);
-    }
-
     pub fn set_transport(&self, bpm: Option<f64>, beat_pos: Option<f64>, playing: bool) {
         self.bpm_bits
             .store(bpm.unwrap_or(f64::NAN).to_bits(), Ordering::Relaxed);
@@ -815,46 +707,96 @@ impl AnalyzerGuiShared {
     /// ~8 KB memcpy), the update is dropped. Returns `true` when the
     /// publish succeeded.
     pub fn try_publish_mid_db(&self, src: &[f32]) -> bool {
-        publish_vec(&self.mid_db, src)
+        if let Some(mut guard) = self.mid_db.try_lock() {
+            guard.copy_from_slice(src);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn try_publish_side_db(&self, src: &[f32]) -> bool {
-        publish_vec(&self.side_db, src)
+        if let Some(mut guard) = self.side_db.try_lock() {
+            guard.copy_from_slice(src);
+            true
+        } else {
+            false
+        }
     }
 
     /// GUI-thread mailbox read for the averaged Mid spectrum. Returns
-    /// `false` when the worker is mid-write OR the sizes don't match
-    /// yet; callers keep their previous frame's values on miss.
+    /// `false` when the audio thread is mid-write; callers keep their
+    /// previous frame's values on miss.
     pub fn try_read_mid_db(&self, dst: &mut [f32]) -> bool {
-        read_vec(&self.mid_db, dst)
+        if let Some(guard) = self.mid_db.try_lock() {
+            dst.copy_from_slice(&guard);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn try_read_side_db(&self, dst: &mut [f32]) -> bool {
-        read_vec(&self.side_db, dst)
+        if let Some(guard) = self.side_db.try_lock() {
+            dst.copy_from_slice(&guard);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn try_publish_left_db(&self, src: &[f32]) -> bool {
-        publish_vec(&self.left_db, src)
+        if let Some(mut guard) = self.left_db.try_lock() {
+            guard.copy_from_slice(src);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn try_publish_right_db(&self, src: &[f32]) -> bool {
-        publish_vec(&self.right_db, src)
+        if let Some(mut guard) = self.right_db.try_lock() {
+            guard.copy_from_slice(src);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn try_read_left_db(&self, dst: &mut [f32]) -> bool {
-        read_vec(&self.left_db, dst)
+        if let Some(guard) = self.left_db.try_lock() {
+            dst.copy_from_slice(&guard);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn try_read_right_db(&self, dst: &mut [f32]) -> bool {
-        read_vec(&self.right_db, dst)
+        if let Some(guard) = self.right_db.try_lock() {
+            dst.copy_from_slice(&guard);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn try_publish_correlation(&self, src: &[f32]) -> bool {
-        publish_vec(&self.correlation_bins, src)
+        if let Some(mut guard) = self.correlation_bins.try_lock() {
+            guard.copy_from_slice(src);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn try_read_correlation(&self, dst: &mut [f32]) -> bool {
-        read_vec(&self.correlation_bins, dst)
+        if let Some(guard) = self.correlation_bins.try_lock() {
+            dst.copy_from_slice(&guard);
+            true
+        } else {
+            false
+        }
     }
 
     /// Full-snapshot publish — only used by the CLI / tests path where
@@ -1107,33 +1049,23 @@ pub fn create_editor(
 
 fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     let sr = state.shared.sample_rate();
-    // The spectrum/spectrogram renderer takes a `num_bins` that sized
-    // the old linear-FFT half-spectrum (kept for the side_buf/mid_buf
-    // uniform math even though the CQT worker also pipes these with
-    // cqt_num_bins entries). Keep the shader-side scratch sized to
-    // CQT bin count to match the worker's output.
-    let cqt_num_bins = state.shared.cqt_num_bins();
-    let shader_num_bins = if cqt_num_bins > 0 {
-        cqt_num_bins
-    } else {
-        state.shared.fft_size() / 2
-    };
-    if state.mid_scratch.len() != shader_num_bins {
-        state.mid_scratch.resize(shader_num_bins, MIN_DB);
+    let fft_size = state.shared.fft_size();
+    let num_bins = fft_size / 2;
+    if state.mid_scratch.len() != num_bins {
+        state.mid_scratch.resize(num_bins, MIN_DB);
     }
-    if state.side_scratch.len() != shader_num_bins {
-        state.side_scratch.resize(shader_num_bins, MIN_DB);
+    if state.side_scratch.len() != num_bins {
+        state.side_scratch.resize(num_bins, MIN_DB);
     }
-    if state.left_scratch.len() != shader_num_bins {
-        state.left_scratch.resize(shader_num_bins, MIN_DB);
+    if state.left_scratch.len() != num_bins {
+        state.left_scratch.resize(num_bins, MIN_DB);
     }
-    if state.right_scratch.len() != shader_num_bins {
-        state.right_scratch.resize(shader_num_bins, MIN_DB);
+    if state.right_scratch.len() != num_bins {
+        state.right_scratch.resize(num_bins, MIN_DB);
     }
-    if state.correlation_scratch.len() != shader_num_bins {
-        state.correlation_scratch.resize(shader_num_bins, 0.0);
+    if state.correlation_scratch.len() != num_bins {
+        state.correlation_scratch.resize(num_bins, 0.0);
     }
-    let num_bins = shader_num_bins;
 
     // Target render-buffer size: rect × DPI, clamped.
     let ppp = ui.ctx().pixels_per_point();
@@ -1239,7 +1171,6 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             (true, Some(bpm), Some(_)) if bpm > 0.0 && beats_per_window > 0.0
         );
 
-        let erb_axis = state.params.erb_axis.value();
         spec.set_display(DisplayConfig {
             smooth_half_oct_log2: SMOOTH_HALF_OCT_LOG2,
             fill_alpha: FILL_ALPHA,
@@ -1248,7 +1179,6 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             spectrogram_db_max: if ss_on { SPECTROGRAM_DB_MAX_SS } else { SPECTROGRAM_DB_MAX_RAW },
             spectrogram_gamma: SPECTROGRAM_GAMMA,
             sync_mode: sync_active,
-            erb_axis,
         });
 
         // Hand current transport + display knobs to the worker. It reads
@@ -1295,7 +1225,6 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     let freq_max = freq_max_user.min(nyquist).max(freq_min_user * 2.0);
     let freq_min = freq_min_user.min(freq_max * 0.5).max(1.0);
     let top_fraction = state.shared.top_fraction();
-    let erb_axis = state.params.erb_axis.value();
 
     // Spectrum-region rect (top). The spectrogram below is opaque, so
     // chrome underneath it gets hidden — spectrogram grid/labels are
@@ -1319,7 +1248,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     //    via the transparent shader, so grid shows through faintly).
     for &freq in FREQ_MINORS {
         if freq >= freq_min && freq <= freq_max {
-            let x = freq_to_x(freq, freq_min, freq_max, spectrum_rect, erb_axis);
+            let x = freq_to_x(freq, freq_min, freq_max, spectrum_rect);
             painter.line_segment(
                 [
                     egui::pos2(x, spectrum_rect.top()),
@@ -1331,7 +1260,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     }
     for &freq in FREQ_MAJORS {
         if freq >= freq_min && freq <= freq_max {
-            let x = freq_to_x(freq, freq_min, freq_max, spectrum_rect, erb_axis);
+            let x = freq_to_x(freq, freq_min, freq_max, spectrum_rect);
             painter.line_segment(
                 [
                     egui::pos2(x, spectrum_rect.top()),
@@ -1426,7 +1355,6 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         freq_max,
         state.params.weighting.value(),
         state.params.reference_curve.value(),
-        erb_axis,
     );
 
     // 2b. Reference-track percentile bands. Drawn after the static
@@ -1440,14 +1368,13 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         &state.params.ref_slots.read(),
         state.shared.integrated_lufs(),
         state.params.weighting.value(),
-        erb_axis,
     );
 
     // 3. Spectrum-region labels. Transparent shader lets these sit on
     //    top of the curves for readability.
     for &freq in FREQ_MAJORS {
         if freq >= freq_min && freq <= freq_max {
-            let x = freq_to_x(freq, freq_min, freq_max, spectrum_rect, erb_axis);
+            let x = freq_to_x(freq, freq_min, freq_max, spectrum_rect);
             painter.text(
                 egui::pos2(x + 3.0, spectrum_rect.bottom() - 3.0),
                 egui::Align2::LEFT_BOTTOM,
@@ -1487,7 +1414,6 @@ fn draw_reference_curve(
     freq_max: f32,
     weighting: Weighting,
     mode: ReferenceCurve,
-    erb_axis: bool,
 ) {
     if matches!(mode, ReferenceCurve::None) || matches!(weighting, Weighting::Flat) {
         return;
@@ -1508,22 +1434,12 @@ fn draw_reference_curve(
     //                        peak budget without helping loudness)
     let stats = weighting_stats(weighting, freq_min, freq_max);
     let n = 128usize;
-    // Sample the curve on an even axis-position grid so the rendered
-    // polyline has uniform pixel density regardless of axis mode. At
-    // each step, invert the axis mapping back to a frequency, evaluate
-    // the weighting there, and drop a point.
+    let log_min = freq_min.ln();
+    let log_max = freq_max.ln();
     let mut pts = Vec::with_capacity(n);
     for i in 0..n {
         let t = i as f32 / (n - 1) as f32;
-        let freq = if erb_axis {
-            let lo = hz_to_erb(freq_min);
-            let hi = hz_to_erb(freq_max);
-            erb_to_hz(lo + t * (hi - lo))
-        } else {
-            let lo = freq_min.ln();
-            let hi = freq_max.ln();
-            (lo + t * (hi - lo)).exp()
-        };
+        let freq = (log_min + t * (log_max - log_min)).exp();
         let adj_db = weighting_db_at(weighting, freq) - stats.max;
         let x = rect.left() + t * rect.width();
         let y = db_to_y(adj_db, DB_MIN, DB_MAX, rect);
@@ -1549,7 +1465,6 @@ fn draw_ref_bands(
     slots: &RefSlots,
     live_integrated_lufs: f32,
     weighting: Weighting,
-    erb_axis: bool,
 ) {
     if rect.width() <= 0.0 || rect.height() <= 0.0 {
         return;
@@ -1631,7 +1546,7 @@ fn draw_ref_bands(
             if lo <= MIN_DB + 1.0 && hi <= MIN_DB + 1.0 {
                 continue;
             }
-            let x = freq_to_x(freq, freq_min, freq_max, rect, erb_axis);
+            let x = freq_to_x(freq, freq_min, freq_max, rect);
             upper_pts.push(egui::pos2(x, db_to_y(hi, DB_MIN, DB_MAX, rect)));
             lower_pts.push(egui::pos2(x, db_to_y(lo, DB_MIN, DB_MAX, rect)));
         }
@@ -1709,14 +1624,13 @@ fn draw_spectrogram_chrome(
     let grid_over = egui::Color32::from_white_alpha(32);
     let grid_over_bold = egui::Color32::from_white_alpha(60);
     let label_color = egui::Color32::WHITE;
-    let erb_axis = state.params.erb_axis.value();
 
     // Horizontal freq grid lines + right-anchored labels.
     for &freq in FREQ_MAJORS {
         if freq < freq_min || freq > freq_max {
             continue;
         }
-        let t = freq_norm_position(freq, freq_min, freq_max, erb_axis);
+        let t = (freq / freq_min).ln() / (freq_max / freq_min).ln();
         let y = rect.bottom() - t.clamp(0.0, 1.0) * rect.height();
         painter.line_segment(
             [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
@@ -1863,7 +1777,9 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
     let freq_max_user = state.params.freq_max_hz.value() as f32;
     let freq_max = freq_max_user.min(nyquist).max(freq_min_user * 2.0);
     let freq_min = freq_min_user.min(freq_max * 0.5).max(1.0);
-    let erb_axis = state.params.erb_axis.value();
+    let log_min = freq_min.ln();
+    let log_max = freq_max.ln();
+    let log_span = (log_max - log_min).max(1e-6);
 
     // Match the MS plot / spectrogram's perceptual correction: add the
     // same Weighting curve to every per-bin dB value. Without this the
@@ -1872,23 +1788,9 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
     let weighting = state.params.weighting.value();
     let weighting_align = weighting_align_offset(weighting, freq_min, freq_max);
 
-    // Inverse mapping: pixel row → normalised [0, 1] → frequency.
-    // Bottom of rect = freq_min (t = 0), top = freq_max (t = 1).
-    let row_to_freq = |y: f32| -> f32 {
-        let t = ((rect.bottom() - y) / rect.height().max(1.0)).clamp(0.0, 1.0);
-        if erb_axis {
-            let lo = hz_to_erb(freq_min);
-            let hi = hz_to_erb(freq_max);
-            erb_to_hz(lo + t * (hi - lo))
-        } else {
-            let lo = freq_min.max(1e-6).ln();
-            let hi = freq_max.max(1e-6).ln();
-            (lo + t * (hi - lo)).exp()
-        }
-    };
     let freq_to_y = |freq: f32| -> f32 {
-        let t = freq_norm_position(freq, freq_min, freq_max, erb_axis);
-        rect.bottom() - t.clamp(0.0, 1.0) * rect.height()
+        let t = (freq.ln() - log_min) / log_span;
+        rect.bottom() - t * rect.height()
     };
 
     let center_x = rect.center().x;
@@ -1900,6 +1802,7 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
     let grid_over_color = egui::Color32::from_rgba_unmultiplied(18, 22, 28, 160);
     let label_color = egui::Color32::WHITE;
 
+    let fft_size = state.shared.fft_size();
     let num_bins = state
         .left_scratch
         .len()
@@ -1908,16 +1811,10 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
     if num_bins < 2 {
         return;
     }
-    // Left/right/correlation are now CQT-indexed (log-spaced, fixed
-    // bins-per-octave). At 24 bpo each pair of adjacent bins already
-    // spans ~1/12 oct — which is exactly the smoothing bandwidth
-    // `LR_SMOOTH_HALF_OCT_LOG2` targeted on the old linear-FFT path.
-    // So dropping the averaging loop gives the same visual result
-    // without the loop cost, and with smoother low-frequency shape
-    // (no more stair-stepping from coarse FFT bin spacing below
-    // ~150 Hz).
-    let _ = LR_SMOOTH_HALF_OCT_LOG2; // kept as a doc anchor / future hook
+    let bin_per_hz = fft_size as f32 / sr;
     let max_bin = (num_bins - 1) as f32;
+    let smooth_lo = (-LR_SMOOTH_HALF_OCT_LOG2).exp2();
+    let smooth_hi = LR_SMOOTH_HALF_OCT_LOG2.exp2();
 
     // Walk one point per pixel row (~450 rows at 1x DPI, so cheap).
     let rows = rect.height().ceil() as i32 + 1;
@@ -1929,21 +1826,38 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
         if y < rect.top() {
             break;
         }
-        let freq = row_to_freq(y);
-        // Map freq → CQT bin. Two-tap linear interp; the CQT's own
-        // 1/24-oct bin layout IS the smoothing window.
-        let bin_f = (spectrum_gpu::CQT_BINS_PER_OCTAVE as f32
-            * (freq / spectrum_gpu::CQT_FMIN_HZ).log2())
-        .clamp(0.0, max_bin);
-        let b0 = bin_f.floor() as usize;
-        let b1 = (b0 + 1).min(num_bins - 1);
-        let frac = bin_f - b0 as f32;
-        let omf = 1.0 - frac;
-        let (l_db_raw, r_db_raw, corr) = (
-            state.left_scratch[b0] * omf + state.left_scratch[b1] * frac,
-            state.right_scratch[b0] * omf + state.right_scratch[b1] * frac,
-            state.correlation_scratch[b0] * omf + state.correlation_scratch[b1] * frac,
-        );
+        let t = (rect.bottom() - y) / rect.height().max(1.0);
+        let freq = (log_min + t * log_span).exp();
+        // Average all bins inside a 1/12-octave window centred on
+        // `freq`. Below ~150 Hz the window collapses to a single bin,
+        // so we fall back to linear inter-bin interpolation there.
+        let bin_lo_f = (freq * smooth_lo * bin_per_hz).clamp(0.0, max_bin);
+        let bin_hi_f = (freq * smooth_hi * bin_per_hz).clamp(0.0, max_bin);
+        let bin_lo = bin_lo_f.floor() as usize;
+        let bin_hi = bin_hi_f.ceil() as usize;
+        let (l_db_raw, r_db_raw, corr) = if bin_hi > bin_lo {
+            let mut l_sum = 0.0_f32;
+            let mut r_sum = 0.0_f32;
+            let mut c_sum = 0.0_f32;
+            for b in bin_lo..=bin_hi.min(num_bins - 1) {
+                l_sum += state.left_scratch[b];
+                r_sum += state.right_scratch[b];
+                c_sum += state.correlation_scratch[b];
+            }
+            let n = (bin_hi.min(num_bins - 1) - bin_lo + 1) as f32;
+            (l_sum / n, r_sum / n, c_sum / n)
+        } else {
+            let bin_f = (freq * bin_per_hz).clamp(0.0, max_bin);
+            let b0 = bin_f.floor() as usize;
+            let b1 = (b0 + 1).min(num_bins - 1);
+            let frac = bin_f - b0 as f32;
+            let omf = 1.0 - frac;
+            (
+                state.left_scratch[b0] * omf + state.left_scratch[b1] * frac,
+                state.right_scratch[b0] * omf + state.right_scratch[b1] * frac,
+                state.correlation_scratch[b0] * omf + state.correlation_scratch[b1] * frac,
+            )
+        };
         let weighting_db = weighting_db_at(weighting, freq) + weighting_align;
         let l_db = l_db_raw + weighting_db;
         let r_db = r_db_raw + weighting_db;
@@ -2918,24 +2832,6 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
                 }
             });
 
-        // ERB-rate axis toggle. Switches the x-axis on the MS plot,
-        // the y-axis on the spectrogram, and the y-axis on the L/R
-        // column from plain log-frequency to the Moore & Glasberg ERB
-        // scale — equal screen distance → equal number of auditory
-        // critical bands. Display-only; DSP is unchanged.
-        let mut erb_val = params.erb_axis.value();
-        if ui
-            .checkbox(&mut erb_val, "ERB")
-            .on_hover_text(
-                "Use ERB-rate (auditory critical-band) axis instead of plain log frequency. Gives low frequencies more display space in proportion to how the ear resolves them.",
-            )
-            .changed()
-        {
-            setter.begin_set_parameter(&params.erb_axis);
-            setter.set_parameter(&params.erb_axis, erb_val);
-            setter.end_set_parameter(&params.erb_axis);
-        }
-
         ui.label("Ref");
         let mut ref_val = params.reference_curve.value();
         egui::ComboBox::from_id_salt("ref-curve")
@@ -3206,8 +3102,8 @@ fn factor_label(f: SyncFactor) -> &'static str {
     }
 }
 
-fn freq_to_x(freq: f32, fmin: f32, fmax: f32, rect: egui::Rect, erb: bool) -> f32 {
-    let t = freq_norm_position(freq, fmin, fmax, erb);
+fn freq_to_x(freq: f32, fmin: f32, fmax: f32, rect: egui::Rect) -> f32 {
+    let t = (freq / fmin).ln() / (fmax / fmin).ln();
     rect.left() + t.clamp(0.0, 1.0) * rect.width()
 }
 

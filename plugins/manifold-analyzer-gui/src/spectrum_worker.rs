@@ -1,10 +1,8 @@
-//! Dedicated stereo CQT worker thread.
+//! Dedicated CQT worker thread.
 //!
-//! Audio thread pushes raw L + R samples into two `SampleRing`s; this
-//! thread drains both in lockstep, runs two CQTs per hop, derives Mid /
-//! Side / L / R / per-bin-correlation spectra + a (Mid) synchrosqueezed
-//! column, and pushes completed columns into a bounded SPSC ring that
-//! the GUI drains each redraw.
+//! Audio thread pushes raw samples into the `SampleRing`; this thread drains
+//! them, runs the CQT + synchrosqueezing pipeline, and pushes completed
+//! columns into a bounded SPSC ring that the GUI drains each redraw.
 //!
 //! Why a separate thread:
 //! 1. CQT is ~2.5 ms per hop and the GUI used to run it inline. After a
@@ -143,17 +141,10 @@ impl CqtWorker {
         );
         let cqt_num_bins = cqt.num_bins();
 
-        // Build two GPU CQT pipelines — one for L, one for R. Each owns
-        // its per-hop `fft_input` / `fft_output` / `cqt_output`
-        // buffers, so running them back-to-back in `emit_column`
-        // doesn't race the second write over the first's result.
-        // Kernel buffer uploads + MPSGraph compile happen here.
-        let gpu_cqt_l = GpuCqt::new(&device, &cqt);
-        let gpu_cqt_r = GpuCqt::new(&device, &cqt);
-
-        // Publish the CQT bin count + lazily size the shared mailboxes
-        // before anyone reads from them.
-        shared.resize_cqt_mailboxes(cqt_num_bins);
+        // Build the GPU side of the pipeline now so the worker thread
+        // starts processing hops immediately. Kernel buffer uploads +
+        // MPSGraph compile happen here.
+        let gpu_cqt = GpuCqt::new(&device, &cqt);
 
         // Ring sized so the GUI can fall ~1 s behind at 187 hops/sec
         // without loss. Beyond that the producer's `force_push` wins —
@@ -171,8 +162,7 @@ impl CqtWorker {
             thread::Builder::new()
                 .name("manifold-analyzer-cqt".into())
                 .spawn(move || {
-                    let mut state =
-                        WorkerState::new(gpu_cqt_l, gpu_cqt_r, params, sample_rate);
+                    let mut state = WorkerState::new(gpu_cqt, params, sample_rate);
                     worker_loop(&mut state, device, shared, column_ring, config, shutdown);
                 })
                 .expect("spawn manifold-analyzer-cqt thread")
@@ -226,27 +216,17 @@ struct WorkerState {
     cqt_num_bins: usize,
     sample_rate: f32,
 
-    /// Two GPU pipelines — one for the L channel, one for R. Each is an
-    /// independent R2C FFT + sparse CSR mat-vec plan; running them
-    /// sequentially in one `emit_column` call produces two complex
-    /// spectra, from which Mid / Side / L / R dB curves + per-bin
-    /// correlation are derived on CPU.
-    gpu_cqt_l: GpuCqt,
-    gpu_cqt_r: GpuCqt,
-    rolling_l: Vec<f32>,
-    rolling_r: Vec<f32>,
+    /// GPU pipeline: R2C FFT + sparse CSR mat-vec in one command buffer.
+    /// Replaced the CPU `CqtTransform::process_complex` path — that CPU
+    /// transform still exists (kernel construction happens on it at
+    /// plan time) but no longer runs per hop.
+    gpu_cqt: GpuCqt,
+    rolling: Vec<f32>,
     rolling_head: usize,
     samples_since_last_hop: usize,
-    scratch_audio_l: Vec<f32>,
-    scratch_audio_r: Vec<f32>,
+    scratch_audio: Vec<f32>,
 
-    /// Complex CQT of the current hop's Mid channel. Synchrosqueeze
-    /// still reads this (and the `prev*` copies) so its reassignment
-    /// math is unchanged — we just feed it Mid derived from L/R
-    /// instead of running a third CQT on the explicit Mid mix.
     cqt_complex: Vec<CqtComplex<f32>>,
-    cqt_complex_l: Vec<CqtComplex<f32>>,
-    cqt_complex_r: Vec<CqtComplex<f32>>,
     prev_cqt_complex: Vec<CqtComplex<f32>>,
     prev2_cqt_complex: Vec<CqtComplex<f32>>,
     have_prev_cqt: bool,
@@ -255,33 +235,6 @@ struct WorkerState {
     cqt_out: Vec<f32>,
     prev_cqt_out: Vec<f32>,
     have_prev_cqt_out: bool,
-
-    // Asymmetric-EMA accumulators (power domain) for the SPAN-style
-    // Mid/Side/L/R dB curves. Asymmetric so transients read as peaks
-    // (fast attack, slow release), but attack is NOT instant — CQT's
-    // high-freq bins have ~ms kernels, so instant attack would let
-    // hop-to-hop noise teleport into the curve.
-    power_avg_mid: Vec<f32>,
-    power_avg_side: Vec<f32>,
-    power_avg_l: Vec<f32>,
-    power_avg_r: Vec<f32>,
-    db_attack_alpha: f32,
-    db_release_alpha: f32,
-
-    // Symmetric-EMA accumulators (power domain) for per-bin
-    // correlation. Steady 500 ms time constant so the colour strip
-    // doesn't flicker.
-    corr_power_l: Vec<f32>,
-    corr_power_r: Vec<f32>,
-    corr_re_lr: Vec<f32>,
-    corr_alpha: f32,
-
-    // Output buffers published to `shared.try_publish_*` each hop.
-    mid_db_out: Vec<f32>,
-    side_db_out: Vec<f32>,
-    left_db_out: Vec<f32>,
-    right_db_out: Vec<f32>,
-    correlation_out: Vec<f32>,
 
     internal_beat_pos: f64,
     have_internal_beat: bool,
@@ -293,54 +246,21 @@ struct WorkerState {
     clear_pending: bool,
 }
 
-/// 25 ms attack / 200 ms release. Attack is short but not instant so
-/// CQT's near-zero time smoothing at high freq doesn't let hop-to-hop
-/// variation teleport the curve. Release is long enough to read
-/// transients as held peaks.
-const DB_ATTACK_TC_S: f32 = 0.025;
-const DB_RELEASE_TC_S: f32 = 0.200;
-/// Symmetric 500 ms smoother for per-bin correlation — steady enough
-/// that the colour strip doesn't flicker, fast enough that polarity
-/// flips read within half a second.
-const CORR_TC_S: f32 = 0.500;
-/// Below this smoothed power (per channel) the correlation numerator
-/// denominator drops to zero. Power floor mirrors the -120 dB floor
-/// the old analyser used.
-const CORR_POWER_FLOOR: f32 = 1.0e-12; // 10^(-120/10)
-
 impl WorkerState {
-    fn new(
-        gpu_cqt_l: GpuCqt,
-        gpu_cqt_r: GpuCqt,
-        params: CqtBuildParams,
-        sample_rate: f32,
-    ) -> Self {
-        let cqt_num_bins = gpu_cqt_l.num_bins();
-        debug_assert_eq!(gpu_cqt_l.num_bins(), gpu_cqt_r.num_bins());
-        let hop_seconds = params.hop_samples as f32 / sample_rate;
-        // EMA alpha conversion. Both branches use `1 - exp(-dt/τ)`;
-        // asymmetry comes from the different TCs. Correlation is
-        // symmetric so we precompute one alpha.
-        let db_attack_alpha = 1.0 - (-hop_seconds / DB_ATTACK_TC_S).exp();
-        let db_release_alpha = 1.0 - (-hop_seconds / DB_RELEASE_TC_S).exp();
-        let corr_alpha = 1.0 - (-hop_seconds / CORR_TC_S).exp();
+    fn new(gpu_cqt: GpuCqt, params: CqtBuildParams, sample_rate: f32) -> Self {
+        let cqt_num_bins = gpu_cqt.num_bins();
         Self {
             n_fft: params.n_fft,
             hop: params.hop_samples,
             history_cols: params.history_cols,
             cqt_num_bins,
             sample_rate,
-            gpu_cqt_l,
-            gpu_cqt_r,
-            rolling_l: vec![0.0; params.n_fft],
-            rolling_r: vec![0.0; params.n_fft],
+            gpu_cqt,
+            rolling: vec![0.0; params.n_fft],
             rolling_head: 0,
             samples_since_last_hop: 0,
-            scratch_audio_l: vec![0.0; params.n_fft],
-            scratch_audio_r: vec![0.0; params.n_fft],
+            scratch_audio: vec![0.0; params.n_fft],
             cqt_complex: vec![CqtComplex::new(0.0, 0.0); cqt_num_bins],
-            cqt_complex_l: vec![CqtComplex::new(0.0, 0.0); cqt_num_bins],
-            cqt_complex_r: vec![CqtComplex::new(0.0, 0.0); cqt_num_bins],
             prev_cqt_complex: vec![CqtComplex::new(0.0, 0.0); cqt_num_bins],
             prev2_cqt_complex: vec![CqtComplex::new(0.0, 0.0); cqt_num_bins],
             have_prev_cqt: false,
@@ -349,21 +269,6 @@ impl WorkerState {
             cqt_out: vec![WORKER_FLOOR_DB; cqt_num_bins],
             prev_cqt_out: vec![WORKER_FLOOR_DB; cqt_num_bins],
             have_prev_cqt_out: false,
-            power_avg_mid: vec![0.0; cqt_num_bins],
-            power_avg_side: vec![0.0; cqt_num_bins],
-            power_avg_l: vec![0.0; cqt_num_bins],
-            power_avg_r: vec![0.0; cqt_num_bins],
-            db_attack_alpha,
-            db_release_alpha,
-            corr_power_l: vec![0.0; cqt_num_bins],
-            corr_power_r: vec![0.0; cqt_num_bins],
-            corr_re_lr: vec![0.0; cqt_num_bins],
-            corr_alpha,
-            mid_db_out: vec![WORKER_FLOOR_DB; cqt_num_bins],
-            side_db_out: vec![WORKER_FLOOR_DB; cqt_num_bins],
-            left_db_out: vec![WORKER_FLOOR_DB; cqt_num_bins],
-            right_db_out: vec![WORKER_FLOOR_DB; cqt_num_bins],
-            correlation_out: vec![0.0; cqt_num_bins],
             internal_beat_pos: 0.0,
             have_internal_beat: false,
             write_col: params.history_cols - 1,
@@ -405,36 +310,30 @@ impl WorkerState {
         self.last_applied_cfg = cfg;
     }
 
-    /// Process drained samples. `samples_l` / `samples_r` MUST be the same
-    /// length — caller drains both rings and truncates to the shorter side
-    /// so L and R stay sample-aligned. Runs CQT for the most recent hops,
-    /// skipping older ones when the rings backed up. Pushes completed
-    /// columns into the output ring (dropping oldest on overflow — matches
-    /// the "gap, not freeze" policy).
+    /// Process drained samples. Runs CQT for the most recent hops, skipping
+    /// older ones when the ring backed up. Pushes completed columns into the
+    /// output ring (dropping oldest on overflow — matches the "gap, not
+    /// freeze" policy).
     fn process(
         &mut self,
         device: &GpuDevice,
-        shared: &AnalyzerGuiShared,
-        samples_l: &[f32],
-        samples_r: &[f32],
+        samples: &[f32],
         cfg: &WorkerConfig,
         ring: &ArrayQueue<CqtColumnMsg>,
     ) {
-        debug_assert_eq!(samples_l.len(), samples_r.len());
         let beats_per_hop = if cfg.bpm > 0.0 {
             self.hop as f64 / self.sample_rate as f64 * cfg.bpm as f64 / 60.0
         } else {
             0.0
         };
 
-        let pending = self.samples_since_last_hop + samples_l.len();
+        let pending = self.samples_since_last_hop + samples.len();
         let total_hops = pending / self.hop;
         let skip_hops = total_hops.saturating_sub(MAX_HOPS_PER_DRAIN);
         let mut hops_seen: usize = 0;
 
-        for i in 0..samples_l.len() {
-            self.rolling_l[self.rolling_head] = samples_l[i];
-            self.rolling_r[self.rolling_head] = samples_r[i];
+        for &s in samples {
+            self.rolling[self.rolling_head] = s;
             self.rolling_head = (self.rolling_head + 1) % self.n_fft;
             self.samples_since_last_hop += 1;
             if self.samples_since_last_hop >= self.hop {
@@ -447,7 +346,7 @@ impl WorkerState {
                     continue;
                 }
 
-                self.emit_column(device, shared, cfg, ring);
+                self.emit_column(device, cfg, ring);
                 self.internal_beat_pos += beats_per_hop;
             }
         }
@@ -456,109 +355,22 @@ impl WorkerState {
     fn emit_column(
         &mut self,
         device: &GpuDevice,
-        shared: &AnalyzerGuiShared,
         cfg: &WorkerConfig,
         ring: &ArrayQueue<CqtColumnMsg>,
     ) {
-        // Copy both rolling rings into oldest→newest linear order.
+        // Copy rolling ring into oldest→newest linear order.
         let head = self.rolling_head;
-        {
-            let (tail, front) = self.rolling_l.split_at(head);
-            self.scratch_audio_l[..front.len()].copy_from_slice(front);
-            self.scratch_audio_l[front.len()..].copy_from_slice(tail);
-        }
-        {
-            let (tail, front) = self.rolling_r.split_at(head);
-            self.scratch_audio_r[..front.len()].copy_from_slice(front);
-            self.scratch_audio_r[front.len()..].copy_from_slice(tail);
-        }
+        let (tail, front) = self.rolling.split_at(head);
+        self.scratch_audio[..front.len()].copy_from_slice(front);
+        self.scratch_audio[front.len()..].copy_from_slice(tail);
 
-        // Run L + R CQT in sequence. Each instance owns its own
-        // per-hop buffers so the second doesn't stomp the first's
-        // output.
-        self.gpu_cqt_l
-            .process(device, &self.scratch_audio_l, &mut self.cqt_complex_l);
-        self.gpu_cqt_r
-            .process(device, &self.scratch_audio_r, &mut self.cqt_complex_r);
+        // GPU CQT: uploads scratch_audio → runs FFT + sparse mat-vec →
+        // writes result into `cqt_complex`. Synchronous so the CPU-side
+        // synchrosqueezing + column push can run on the same thread
+        // without waiting on a fence.
+        self.gpu_cqt
+            .process(device, &self.scratch_audio, &mut self.cqt_complex);
 
-        // Derive Mid spectrum for the spectrogram + synchrosqueeze
-        // pipeline, and per-bin power / cross-power for the curves
-        // and correlation. One pass over `cqt_num_bins`, all in
-        // pre-allocated scratch.
-        let attack_alpha = self.db_attack_alpha;
-        let release_alpha = self.db_release_alpha;
-        let corr_alpha = self.corr_alpha;
-        let one_minus_corr_alpha = 1.0 - corr_alpha;
-        for k in 0..self.cqt_num_bins {
-            let l = self.cqt_complex_l[k];
-            let r = self.cqt_complex_r[k];
-            // Mid / Side derivation. `0.5 * (L ± R)` keeps the unitless
-            // scaling consistent with an explicit (L+R)/2 and (L-R)/2
-            // Mid/Side mix fed through the same CQT.
-            let m_re = 0.5 * (l.re + r.re);
-            let m_im = 0.5 * (l.im + r.im);
-            let s_re = 0.5 * (l.re - r.re);
-            let s_im = 0.5 * (l.im - r.im);
-            self.cqt_complex[k] = CqtComplex::new(m_re, m_im);
-
-            let p_l = l.re * l.re + l.im * l.im;
-            let p_r = r.re * r.re + r.im * r.im;
-            let p_m = m_re * m_re + m_im * m_im;
-            let p_s = s_re * s_re + s_im * s_im;
-            let re_lr = l.re * r.re + l.im * r.im;
-
-            // Asymmetric EMA on each dB curve.
-            // Attack 25 ms, release 200 ms. Short attack keeps transients
-            // visible without letting a single noisy hop teleport the
-            // curve; long release reads peaks as held.
-            macro_rules! asym_ema {
-                ($acc:expr, $p:expr) => {{
-                    let prev = $acc[k];
-                    let alpha = if $p >= prev { attack_alpha } else { release_alpha };
-                    let new_avg = alpha * $p + (1.0 - alpha) * prev;
-                    $acc[k] = new_avg;
-                    new_avg
-                }};
-            }
-            let avg_m = asym_ema!(self.power_avg_mid, p_m);
-            let avg_s = asym_ema!(self.power_avg_side, p_s);
-            let avg_l = asym_ema!(self.power_avg_l, p_l);
-            let avg_r = asym_ema!(self.power_avg_r, p_r);
-            self.mid_db_out[k] = 10.0 * (avg_m + 1.0e-24).log10();
-            self.side_db_out[k] = 10.0 * (avg_s + 1.0e-24).log10();
-            self.left_db_out[k] = 10.0 * (avg_l + 1.0e-24).log10();
-            self.right_db_out[k] = 10.0 * (avg_r + 1.0e-24).log10();
-
-            // Symmetric EMA on power / cross-power for correlation.
-            let cp_l =
-                corr_alpha * p_l + one_minus_corr_alpha * self.corr_power_l[k];
-            let cp_r =
-                corr_alpha * p_r + one_minus_corr_alpha * self.corr_power_r[k];
-            let cr_lr =
-                corr_alpha * re_lr + one_minus_corr_alpha * self.corr_re_lr[k];
-            self.corr_power_l[k] = cp_l;
-            self.corr_power_r[k] = cp_r;
-            self.corr_re_lr[k] = cr_lr;
-            self.correlation_out[k] = if cp_l < CORR_POWER_FLOOR || cp_r < CORR_POWER_FLOOR {
-                0.0
-            } else {
-                let denom = (cp_l * cp_r).sqrt().max(1.0e-20);
-                (cr_lr / denom).clamp(-1.0, 1.0)
-            };
-        }
-
-        // Publish the latest-frame curves + correlation to the shared
-        // mailboxes. Try-lock so the GUI reader can never block us.
-        let _ = shared.try_publish_mid_db(&self.mid_db_out);
-        let _ = shared.try_publish_side_db(&self.side_db_out);
-        let _ = shared.try_publish_left_db(&self.left_db_out);
-        let _ = shared.try_publish_right_db(&self.right_db_out);
-        let _ = shared.try_publish_correlation(&self.correlation_out);
-
-        // Spectrogram column: synchrosqueeze the Mid complex spectrum
-        // (same behaviour as the pre-Phase-B single-CQT path, but now
-        // `cqt_complex` is derived Mid rather than a separately-CQT'd
-        // mono Mid mix).
         if cfg.synchrosqueeze && self.have_prev_cqt {
             self.synchrosqueeze(cfg);
         } else {
@@ -690,10 +502,8 @@ impl WorkerState {
     }
 
     fn synchrosqueeze(&mut self, cfg: &WorkerConfig) {
-        // Synchrosqueeze is Mid-only; center_freqs/bandwidths come
-        // from either CQT (L and R use identical layouts).
-        let center_freqs = self.gpu_cqt_l.center_freqs();
-        let bandwidths = self.gpu_cqt_l.bandwidths_hz();
+        let center_freqs = self.gpu_cqt.center_freqs();
+        let bandwidths = self.gpu_cqt.bandwidths_hz();
         let num_bins = self.cqt_num_bins;
         let hop = self.hop as f32;
         let two_pi = std::f32::consts::TAU;
@@ -789,42 +599,18 @@ fn worker_loop(
     config: Arc<Mutex<WorkerConfig>>,
     shutdown: Arc<AtomicBool>,
 ) {
-    // Local scratches — keeping these off WorkerState means `process`
-    // can take `&mut self` without borrowing gymnastics around a field
-    // mid-drain.
-    let mut left_scratch: Vec<f32> = Vec::with_capacity(8192);
-    let mut right_scratch: Vec<f32> = Vec::with_capacity(8192);
+    // Local scratch — keeping this off WorkerState means `process` can take
+    // &mut self without borrowing gymnastics around a field mid-drain.
+    let mut sample_scratch: Vec<f32> = Vec::with_capacity(8192);
     while !shutdown.load(Ordering::Acquire) {
-        left_scratch.clear();
-        right_scratch.clear();
-        let drained_l = shared.left_sample_ring.drain_into(&mut left_scratch);
-        let drained_r = shared.right_sample_ring.drain_into(&mut right_scratch);
-        // Keep L and R sample-aligned. The audio thread pushes into
-        // both rings in lockstep, so in steady state they drain to the
-        // same length — but after a stall one side may have dropped
-        // samples ahead of the other. Truncating to the shorter side
-        // keeps the next hop on phase; the unpaired remainder is
-        // dropped (same "gap, not stutter" philosophy as the mono
-        // path).
-        if drained_l == 0 && drained_r == 0 {
+        sample_scratch.clear();
+        let drained = shared.mid_sample_ring.drain_into(&mut sample_scratch);
+        if drained == 0 {
             thread::sleep(IDLE_SLEEP);
             continue;
         }
-        let paired = drained_l.min(drained_r);
-        if paired == 0 {
-            continue;
-        }
-        left_scratch.truncate(paired);
-        right_scratch.truncate(paired);
         let cfg = *config.lock();
         state.apply_config(cfg);
-        state.process(
-            &device,
-            &shared,
-            &left_scratch,
-            &right_scratch,
-            &cfg,
-            &column_ring,
-        );
+        state.process(&device, &sample_scratch, &cfg, &column_ring);
     }
 }

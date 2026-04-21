@@ -101,10 +101,6 @@ pub struct DisplayConfig {
     /// scrolling). Doesn't affect CQT processing itself — that's the
     /// worker's WorkerConfig.
     pub sync_mode: bool,
-    /// `true` → ERB-rate axis on the spectrum x-axis + spectrogram y-axis;
-    /// `false` → plain log-frequency axis. Display-only; CQT storage
-    /// layout is unchanged.
-    pub erb_axis: bool,
 }
 
 impl Default for DisplayConfig {
@@ -117,7 +113,6 @@ impl Default for DisplayConfig {
             spectrogram_db_max: 0.0,
             spectrogram_gamma: 1.0,
             sync_mode: false,
-            erb_axis: false,
         }
     }
 }
@@ -151,8 +146,7 @@ struct SpectrumUniforms {
     cqt_fmin_hz: f32,
     cqt_bins_per_octave: f32,
     spectrogram_gamma: f32,
-    axis_mode: f32,
-    _pad_tail: [f32; 2],
+    _pad_tail: [f32; 3],
 }
 
 pub struct SpectrumGpuRenderer {
@@ -378,8 +372,7 @@ impl SpectrumGpuRenderer {
             cqt_fmin_hz: CQT_FMIN_HZ,
             cqt_bins_per_octave: CQT_BINS_PER_OCTAVE as f32,
             spectrogram_gamma: self.display.spectrogram_gamma,
-            axis_mode: if self.display.erb_axis { 1.0 } else { 0.0 },
-            _pad_tail: [0.0; 2],
+            _pad_tail: [0.0; 3],
         };
         let uniform_bytes: &[u8] = unsafe {
             std::slice::from_raw_parts(
