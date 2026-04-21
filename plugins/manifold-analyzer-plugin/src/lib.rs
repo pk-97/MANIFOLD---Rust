@@ -1,38 +1,21 @@
-use manifold_analyzer_dsp::{LoudnessMeter, StereoAnalyzer};
+use manifold_analyzer_dsp::LoudnessMeter;
 use manifold_analyzer_gui::{AnalyzerGuiShared, AnalyzerParams, LoudnessWorker};
 use nih_plug::prelude::*;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-// Larger FFT + proportionally higher overlap: same ~8.5 ms hop (time
-// resolution) but halves bin width to 2.93 Hz for tighter low-end detail.
-// rustfft on Apple Silicon eats this easily (~100 µs/frame at 16384).
+// FFT size is no longer used on the audio thread — all frequency
+// analysis runs off-thread in the CQT worker. Kept here only to
+// satisfy `AnalyzerGuiShared::new` (the field still exists for legacy
+// reasons; the worker overrides bin sizing via `resize_cqt_mailboxes`
+// on spawn).
 const FFT_SIZE: usize = 16384;
-const OVERLAP_RATIO: f32 = 0.975;
-/// SPAN-style peak response: instant attack so transients register on
-/// the rising edge, 200 ms release so the curve decays smoothly instead
-/// of chattering on every frame.
-const ATTACK_MS: f32 = 0.0;
-const RELEASE_MS: f32 = 200.0;
-/// 500 ms power-domain smoothing on the stereo cross-correlation per
-/// bin — steady enough that the colour strip doesn't flicker, fast
-/// enough that a polarity flip reads within half a second.
-const STEREO_CORR_SMOOTH_MS: f32 = 500.0;
 
 struct ManifoldAnalyzer {
     params: Arc<AnalyzerParams>,
-    /// One analyser for everything: two FFTs per hop (L + R), which
-    /// then feed Mid/Side/L/R dB curves and the per-bin correlation
-    /// used by the centreline strip. Replaces the four mono analysers
-    /// plus the standalone stereo cross analyser.
-    stereo: Option<StereoAnalyzer>,
-    /// Time-domain Mid samples for the CQT spectrogram worker. Kept
-    /// around because the spectrogram pulls raw audio from the sample
-    /// ring, not spectrum output.
-    mid_scratch: Vec<f32>,
     /// Raw L / R kept around for the BS.1770 loudness meter (K-weighting
-    /// wants pre-M/S signals) — the stereo analyser consumes the same
-    /// slices for its FFTs.
+    /// wants pre-M/S signals) and for pushing into the sample rings
+    /// that feed the off-thread CQT worker.
     left_scratch: Vec<f32>,
     right_scratch: Vec<f32>,
     loudness: Option<LoudnessMeter>,
@@ -48,8 +31,6 @@ impl Default for ManifoldAnalyzer {
     fn default() -> Self {
         Self {
             params: Arc::new(AnalyzerParams::new()),
-            stereo: None,
-            mid_scratch: Vec::new(),
             left_scratch: Vec::new(),
             right_scratch: Vec::new(),
             loudness: None,
@@ -94,13 +75,7 @@ impl Plugin for ManifoldAnalyzer {
         buffer_config: &BufferConfig,
         _context: &mut impl InitContext<Self>,
     ) -> bool {
-        let mut stereo = StereoAnalyzer::new(buffer_config.sample_rate, FFT_SIZE);
-        stereo.set_overlap_ratio(OVERLAP_RATIO);
-        stereo.set_attack_release_ms(ATTACK_MS, RELEASE_MS);
-        stereo.set_correlation_smoothing_ms(STEREO_CORR_SMOOTH_MS);
-        self.stereo = Some(stereo);
         let max_block = buffer_config.max_buffer_size as usize;
-        self.mid_scratch = vec![0.0; max_block];
         self.left_scratch = vec![0.0; max_block];
         self.right_scratch = vec![0.0; max_block];
         let mut meter = LoudnessMeter::new(buffer_config.sample_rate);
@@ -122,9 +97,6 @@ impl Plugin for ManifoldAnalyzer {
     }
 
     fn reset(&mut self) {
-        if let Some(s) = self.stereo.as_mut() {
-            s.reset();
-        }
         if let Some(m) = self.loudness.as_mut() {
             m.reset();
             self.gui_shared.set_loudness(m.snapshot());
@@ -141,25 +113,18 @@ impl Plugin for ManifoldAnalyzer {
         self.gui_shared
             .set_transport(transport.tempo, transport.pos_beats(), transport.playing);
 
-        let Some(stereo) = self.stereo.as_mut() else {
-            return ProcessStatus::Normal;
-        };
-
         let num_samples = buffer.samples();
         if num_samples == 0 {
             return ProcessStatus::Normal;
         }
-        if self.mid_scratch.len() < num_samples
-            || self.left_scratch.len() < num_samples
-            || self.right_scratch.len() < num_samples
-        {
+        if self.left_scratch.len() < num_samples || self.right_scratch.len() < num_samples {
             return ProcessStatus::Normal;
         }
 
         // De-interleave L/R (falling back to mono when only one channel
-        // is provided). Mid is derived in-line for the CQT sample ring;
-        // Side no longer needs its own scratch buffer since M/S is
-        // recovered inside the stereo analyser from the L and R FFTs.
+        // is provided). Everything downstream — spectra, spectrogram,
+        // correlation — runs off-thread in the CQT worker. The audio
+        // thread just ships samples.
         let mut i = 0;
         for channel_samples in buffer.iter_samples() {
             let mut iter = channel_samples.into_iter();
@@ -167,7 +132,6 @@ impl Plugin for ManifoldAnalyzer {
             let r = iter.next().map(|s| *s).unwrap_or(l);
             self.left_scratch[i] = l;
             self.right_scratch[i] = r;
-            self.mid_scratch[i] = (l + r) * 0.5;
             i += 1;
         }
 
@@ -187,29 +151,16 @@ impl Plugin for ManifoldAnalyzer {
             self.gui_shared.set_fast_loudness(meter.snapshot());
         }
 
-        // Single stereo analyser: two FFTs per hop (L + R), then
-        // Mid/Side/L/R averaged magnitude curves plus per-bin
-        // correlation all derived in one pass. Publish all five mailboxes
-        // on a completed frame.
-        if stereo.push_stereo(&self.left_scratch[..i], &self.right_scratch[..i]) {
-            self.gui_shared
-                .try_publish_mid_db(stereo.latest_mid_db());
-            self.gui_shared
-                .try_publish_side_db(stereo.latest_side_db());
-            self.gui_shared
-                .try_publish_left_db(stereo.latest_left_db());
-            self.gui_shared
-                .try_publish_right_db(stereo.latest_right_db());
-            self.gui_shared
-                .try_publish_correlation(stereo.latest_correlation());
-        }
-
-        // Spectrogram: push raw Mid audio samples into the lock-free
-        // sample ring; the GUI thread runs the CQT. No FFT work here for
-        // the spectrogram path.
+        // All frequency analysis (Mid/Side curves, L/R balance, per-bin
+        // correlation, spectrogram) runs off-thread. Audio thread just
+        // pushes raw L / R samples into the lock-free sample rings and
+        // lets the CQT worker take it from here.
         self.gui_shared
-            .mid_sample_ring
-            .push(&self.mid_scratch[..i]);
+            .left_sample_ring
+            .push(&self.left_scratch[..i]);
+        self.gui_shared
+            .right_sample_ring
+            .push(&self.right_scratch[..i]);
 
         ProcessStatus::Normal
     }

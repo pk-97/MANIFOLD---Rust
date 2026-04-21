@@ -6,7 +6,6 @@
 
 mod loudness;
 pub mod reference;
-mod stereo_analyzer;
 
 pub use loudness::{
     IntegratedScratch, LoudnessMeter, LoudnessSnapshot, compute_integrated_and_lra,
@@ -15,7 +14,6 @@ pub use reference::{
     REF_FFT_SIZE, REF_FREQ_MAX, REF_FREQ_MIN, REF_POINTS, RefAnalysis, RefEnvelope, RefError,
     analyze_ref_file,
 };
-pub use stereo_analyzer::StereoAnalyzer;
 
 use rustfft::{Fft, FftPlanner, num_complex::Complex};
 use std::sync::Arc;

@@ -42,6 +42,10 @@ struct Uniforms {
     cqt_fmin_hz: f32,
     cqt_bins_per_octave: f32,
     spectrogram_gamma: f32,
+    // 0 = plain log-frequency axis, 1 = ERB-rate axis (Moore & Glasberg).
+    // Applies to BOTH the spectrum region's x-axis and the spectrogram's
+    // y-axis. Storage still log-CQT; only the display mapping changes.
+    axis_mode: f32,
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -76,6 +80,30 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
 fn db_to_y_px(db: f32) -> f32 {
     let t = (db - u.db_min) / (u.db_max - u.db_min);
     return u.spectrum_height * (1.0 - clamp(t, 0.0, 1.0));
+}
+
+// Moore & Glasberg ERB-rate: number of equivalent rectangular bandwidths
+// between DC and `f` Hz. Monotonic, smooth; equal increments correspond
+// to equal numbers of cochlear critical bands.
+fn hz_to_erb(f: f32) -> f32 {
+    return 21.4 * log(1.0 + 0.00437 * max(f, 0.0)) / log(10.0);
+}
+
+fn erb_to_hz(e: f32) -> f32 {
+    return (pow(10.0, e / 21.4) - 1.0) / 0.00437;
+}
+
+// Map a normalised axis position `t ∈ [0, 1]` to a frequency, honouring
+// the current axis mode. `t = 0` → freq_min, `t = 1` → freq_max.
+fn axis_to_freq(t: f32) -> f32 {
+    if (u.axis_mode > 0.5) {
+        let lo = hz_to_erb(u.freq_min);
+        let hi = hz_to_erb(u.freq_max);
+        return erb_to_hz(mix(lo, hi, t));
+    }
+    let lo = log(u.freq_min);
+    let hi = log(u.freq_max);
+    return exp(mix(lo, hi, t));
 }
 
 // Sample the pre-computed weighting LUT by log-freq index. The LUT covers
@@ -122,11 +150,17 @@ fn sample_bin_db_side(bin_f: f32, num_bins: f32) -> f32 {
     return mix(side_spectrum[bin_lo], side_spectrum[bin_hi], frac);
 }
 
+// Map freq → CQT log-bin index. Storage is now stereo-CQT output, so
+// `bin_f = cqt_bins_per_octave * log2(freq / cqt_fmin_hz)`. Below fmin
+// the mapping goes negative; the samplers bounds-check for that.
+fn freq_to_cqt_bin(freq: f32) -> f32 {
+    return u.cqt_bins_per_octave * log2(max(freq, 1e-6) / u.cqt_fmin_hz);
+}
+
 fn smoothed_db_mid(freq: f32) -> f32 {
-    let num_bins = u.fft_size * 0.5;
-    let bins_per_hz = u.fft_size / u.sample_rate;
+    let num_bins = u.log_bins;
     if (u.smooth_half_oct_log2 <= 0.0) {
-        return sample_bin_db_mid(freq * bins_per_hz, num_bins);
+        return sample_bin_db_mid(freq_to_cqt_bin(freq), num_bins);
     }
     let log_c = log(freq);
     let log_half = u.smooth_half_oct_log2 * 0.6931471805599453; // ln(2)
@@ -136,7 +170,7 @@ fn smoothed_db_mid(freq: f32) -> f32 {
     for (var i: i32 = 0; i < SMOOTH_N; i = i + 1) {
         let t = (f32(i) + 0.5) / f32(SMOOTH_N);
         let f = exp(mix(log_lo, log_hi, t));
-        let db = sample_bin_db_mid(f * bins_per_hz, num_bins);
+        let db = sample_bin_db_mid(freq_to_cqt_bin(f), num_bins);
         power_sum = power_sum + pow(10.0, db * 0.1);
     }
     let avg_power = power_sum / f32(SMOOTH_N);
@@ -144,10 +178,9 @@ fn smoothed_db_mid(freq: f32) -> f32 {
 }
 
 fn smoothed_db_side(freq: f32) -> f32 {
-    let num_bins = u.fft_size * 0.5;
-    let bins_per_hz = u.fft_size / u.sample_rate;
+    let num_bins = u.log_bins;
     if (u.smooth_half_oct_log2 <= 0.0) {
-        return sample_bin_db_side(freq * bins_per_hz, num_bins);
+        return sample_bin_db_side(freq_to_cqt_bin(freq), num_bins);
     }
     let log_c = log(freq);
     let log_half = u.smooth_half_oct_log2 * 0.6931471805599453;
@@ -157,7 +190,7 @@ fn smoothed_db_side(freq: f32) -> f32 {
     for (var i: i32 = 0; i < SMOOTH_N; i = i + 1) {
         let t = (f32(i) + 0.5) / f32(SMOOTH_N);
         let f = exp(mix(log_lo, log_hi, t));
-        let db = sample_bin_db_side(f * bins_per_hz, num_bins);
+        let db = sample_bin_db_side(freq_to_cqt_bin(f), num_bins);
         power_sum = power_sum + pow(10.0, db * 0.1);
     }
     let avg_power = power_sum / f32(SMOOTH_N);
@@ -233,10 +266,9 @@ fn spectrogram_pixel(px: vec2<f32>) -> vec4<f32> {
     let spec_y = px.y - u.spectrum_height;
     let spec_h = max(u.resolution.y - u.spectrum_height, 1.0);
     let rel_y = clamp(spec_y / spec_h, 0.0, 1.0);
-    let log_min = log(u.freq_min);
-    let log_max = log(u.freq_max);
-    let log_freq = mix(log_max, log_min, rel_y);
-    let freq = exp(log_freq);
+    // Top of the spectrogram = freq_max, bottom = freq_min. Axis mode
+    // (log or ERB) drives how the freq range is mapped along Y.
+    let freq = axis_to_freq(1.0 - rel_y);
     let log_bin_f = clamp(
         u.cqt_bins_per_octave * log2(freq / u.cqt_fmin_hz),
         0.0,
@@ -295,32 +327,36 @@ fn spectrogram_pixel(px: vec2<f32>) -> vec4<f32> {
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let px = in.uv * u.resolution;
 
-    let log_lo = log(u.freq_min);
-    let log_hi = log(u.freq_max);
-    let log_range = log_hi - log_lo;
-    let dx_per_px = log_range / u.resolution.x;
-    let log_f = log_lo + in.uv.x * log_range;
-    let freq = exp(log_f);
-
     // Spectrogram region — opaque fill, no curves. Uses its own freq axis
-    // (log-y) so `freq` from the curve-mapping above is not used here.
+    // (vertical) so `freq` from the curve-mapping below is not used here.
     if (px.y >= u.spectrum_height) {
         return spectrogram_pixel(px);
     }
 
     // Spectrum region — curves + fills composited over transparency so the
-    // egui-drawn grid behind the paint callback shows through.
-    let my_prev = y_px_at_freq_mid(exp(log_f - dx_per_px));
-    let my_curr = y_px_at_freq_mid(exp(log_f));
-    let my_next = y_px_at_freq_mid(exp(log_f + dx_per_px));
+    // egui-drawn grid behind the paint callback shows through. Adjacent
+    // pixel frequencies come from the same axis mapping so the SDF stays
+    // visually consistent in ERB mode.
+    let inv_res_x = 1.0 / max(u.resolution.x, 1.0);
+    let t_prev = clamp((px.x - 1.0) * inv_res_x, 0.0, 1.0);
+    let t_curr = clamp(px.x * inv_res_x, 0.0, 1.0);
+    let t_next = clamp((px.x + 1.0) * inv_res_x, 0.0, 1.0);
+    let f_prev = axis_to_freq(t_prev);
+    let f_curr = axis_to_freq(t_curr);
+    let f_next = axis_to_freq(t_next);
+    let freq = f_curr;
+
+    let my_prev = y_px_at_freq_mid(f_prev);
+    let my_curr = y_px_at_freq_mid(f_curr);
+    let my_next = y_px_at_freq_mid(f_next);
     let ma = vec2<f32>(px.x - 1.0, my_prev);
     let mb = vec2<f32>(px.x,       my_curr);
     let mc = vec2<f32>(px.x + 1.0, my_next);
     let dm = min(sdf_segment(px, ma, mb), sdf_segment(px, mb, mc));
 
-    let sy_prev = y_px_at_freq_side(exp(log_f - dx_per_px));
-    let sy_curr = y_px_at_freq_side(exp(log_f));
-    let sy_next = y_px_at_freq_side(exp(log_f + dx_per_px));
+    let sy_prev = y_px_at_freq_side(f_prev);
+    let sy_curr = y_px_at_freq_side(f_curr);
+    let sy_next = y_px_at_freq_side(f_next);
     let sa = vec2<f32>(px.x - 1.0, sy_prev);
     let sb = vec2<f32>(px.x,       sy_curr);
     let sc = vec2<f32>(px.x + 1.0, sy_next);
