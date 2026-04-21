@@ -1726,70 +1726,69 @@ fn draw_ref_bands(
         let render_denom = (render_points - 1) as f32;
         let src_denom = (REF_POINTS - 1) as f32;
         let floor_threshold = MIN_DB + 1.0;
-        let src_is_valid = |idx: usize| -> bool {
-            let p = smoothed[idx];
-            p[0] > floor_threshold || p[1] > floor_threshold
-        };
         let mut upper_segments: Vec<Vec<egui::Pos2>> = Vec::new();
         let mut lower_segments: Vec<Vec<egui::Pos2>> = Vec::new();
         let mut cur_upper: Vec<egui::Pos2> = Vec::new();
         let mut cur_lower: Vec<egui::Pos2> = Vec::new();
-        let mut flush = |cur_upper: &mut Vec<egui::Pos2>,
-                         cur_lower: &mut Vec<egui::Pos2>| {
-            if cur_upper.len() >= 2 {
-                upper_segments.push(std::mem::take(cur_upper));
-                lower_segments.push(std::mem::take(cur_lower));
+        let flush_one = |cur: &mut Vec<egui::Pos2>,
+                         segs: &mut Vec<Vec<egui::Pos2>>| {
+            if cur.len() >= 2 {
+                segs.push(std::mem::take(cur));
             } else {
-                cur_upper.clear();
-                cur_lower.clear();
+                cur.clear();
             }
         };
         for render_i in 0..render_points {
             let t = render_i as f32 / render_denom;
             let freq = (log_min + t * grid_span).exp();
             if freq < freq_min || freq > freq_max || freq > upper_cutoff_hz {
-                flush(&mut cur_upper, &mut cur_lower);
+                flush_one(&mut cur_upper, &mut upper_segments);
+                flush_one(&mut cur_lower, &mut lower_segments);
                 continue;
             }
-            // Linear interp between adjacent smoothed grid points. After
-            // smoothing, adjacent values are within a few dB of each
-            // other so dB-linear interp is indistinguishable from
-            // power-linear at these scales.
             let src_f = t * src_denom;
             let src_lo = (src_f.floor() as usize).min(REF_POINTS - 1);
             let src_hi = (src_lo + 1).min(REF_POINTS - 1);
-            // If either flanking grid point is at the silence floor,
-            // drop the whole render point and break the segment.
-            // Otherwise the interp descends smoothly toward the floor
-            // between a real value and a silent neighbour — visually
-            // misleading.
-            if !src_is_valid(src_lo) || !src_is_valid(src_hi) {
-                flush(&mut cur_upper, &mut cur_lower);
-                continue;
-            }
             let frac = src_f - src_lo as f32;
             let pair_lo = smoothed[src_lo];
             let pair_hi = smoothed[src_hi];
-            let pair = [
-                pair_lo[0] * (1.0 - frac) + pair_hi[0] * frac,
-                pair_lo[1] * (1.0 - frac) + pair_hi[1] * frac,
-            ];
+            // Per-curve validity: a sparse-content ref can have p10 at
+            // the silence floor while p90 still carries a real value, so
+            // breaking both curves on one-sided floor hides real upper
+            // content at the low end. Decide upper and lower separately.
+            let upper_valid = pair_lo[1] > floor_threshold && pair_hi[1] > floor_threshold;
+            let lower_valid = pair_lo[0] > floor_threshold && pair_hi[0] > floor_threshold;
             let weight_db = weighting_db_at(weighting, freq) + weight_align;
-            let lo = pair[0] + shift_db + weight_db;
-            let hi = pair[1] + shift_db + weight_db;
             let x = freq_to_x(freq, freq_min, freq_max, rect);
-            cur_upper.push(egui::pos2(x, db_to_y(hi, DB_MIN, DB_MAX, rect)));
-            cur_lower.push(egui::pos2(x, db_to_y(lo, DB_MIN, DB_MAX, rect)));
+            if upper_valid {
+                let hi_val = pair_lo[1] * (1.0 - frac) + pair_hi[1] * frac
+                    + shift_db
+                    + weight_db;
+                cur_upper.push(egui::pos2(x, db_to_y(hi_val, DB_MIN, DB_MAX, rect)));
+            } else {
+                flush_one(&mut cur_upper, &mut upper_segments);
+            }
+            if lower_valid {
+                let lo_val = pair_lo[0] * (1.0 - frac) + pair_hi[0] * frac
+                    + shift_db
+                    + weight_db;
+                cur_lower.push(egui::pos2(x, db_to_y(lo_val, DB_MIN, DB_MAX, rect)));
+            } else {
+                flush_one(&mut cur_lower, &mut lower_segments);
+            }
         }
-        flush(&mut cur_upper, &mut cur_lower);
-        if upper_segments.is_empty() {
+        flush_one(&mut cur_upper, &mut upper_segments);
+        flush_one(&mut cur_lower, &mut lower_segments);
+        if upper_segments.is_empty() && lower_segments.is_empty() {
             continue;
         }
 
         // Two unfilled outlines — upper (90th percentile) and lower
         // (10th). Each contiguous valid region gets its own
         // Shape::line so silence gaps show as gaps, not skated-over
-        // straight lines.
+        // straight lines. Upper and lower break independently so a
+        // sparse low-end where p10 bottoms out doesn't hide p90's
+        // real content.
         let stroke = egui::Stroke::new(1.25, line_color);
         for seg in upper_segments {
             painter.add(egui::Shape::line(seg, stroke));
