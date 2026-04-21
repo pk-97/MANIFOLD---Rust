@@ -102,60 +102,33 @@ fn weighting_align_offset(weighting: Weighting, freq_min: f32, freq_max: f32) ->
     if freq_max <= freq_min {
         return 0.0;
     }
-    let stats = weighting_stats(weighting, freq_min, freq_max);
-    -stats.mean
+    -weighting_mean(weighting, freq_min, freq_max)
 }
 
-#[derive(Copy, Clone)]
-struct WeightingStats {
-    mean: f32,
-    min: f32,
-}
-
-/// Returns mean/min of `weighting_db(f)` over a log-uniform grid in
-/// [freq_min, freq_max]. Mean is used for align-offset (DC bias
-/// removal). Min is used for the reference-curve overlay: pinning the
-/// inverted weighting line to 0 dB at the freq where the weighting is
-/// smallest gives a clean "equal-LUFS-contribution" reading — above
-/// the line = this bin is driving loudness more than its balanced
-/// share; below = room to push.
-fn weighting_stats(weighting: Weighting, freq_min: f32, freq_max: f32) -> WeightingStats {
-    if let Weighting::Flat = weighting {
-        return WeightingStats { mean: 0.0, min: 0.0 };
-    }
+/// Returns the mean of `weighting_db(f)` over a log-uniform grid in
+/// [freq_min, freq_max]. Used to remove the DC bias from the weighting
+/// curve so the shader's adjustment is mean-zero across the visible
+/// range.
+fn weighting_mean(weighting: Weighting, freq_min: f32, freq_max: f32) -> f32 {
     match weighting {
+        Weighting::Flat => 0.0,
         Weighting::Pink | Weighting::Tilted => {
             let slope = weighting.slope_db_per_oct();
             let gm = (freq_min * freq_max).sqrt();
-            let mean = slope * (gm / SLOPE_REF_FREQ).log2();
-            let v_lo = slope * (freq_min / SLOPE_REF_FREQ).log2();
-            let v_hi = slope * (freq_max / SLOPE_REF_FREQ).log2();
-            WeightingStats {
-                mean,
-                min: v_lo.min(v_hi),
-            }
+            slope * (gm / SLOPE_REF_FREQ).log2()
         }
         Weighting::Lufs | Weighting::LufsSubAdj => {
             let n = 64usize;
             let log_min = freq_min.ln();
             let log_max = freq_max.ln();
             let mut sum = 0.0_f32;
-            let mut trough = f32::INFINITY;
             for i in 0..n {
                 let t = (i as f32 + 0.5) / n as f32;
                 let freq = (log_min + t * (log_max - log_min)).exp();
-                let v = lufs_weighting_db(weighting, freq);
-                sum += v;
-                if v < trough {
-                    trough = v;
-                }
+                sum += lufs_weighting_db(weighting, freq);
             }
-            WeightingStats {
-                mean: sum / n as f32,
-                min: trough,
-            }
+            sum / n as f32
         }
-        Weighting::Flat => WeightingStats { mean: 0.0, min: 0.0 },
     }
 }
 
