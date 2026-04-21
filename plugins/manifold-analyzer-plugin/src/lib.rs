@@ -1,4 +1,4 @@
-use manifold_analyzer_dsp::{Analyzer, LoudnessMeter, StereoCrossAnalyzer};
+use manifold_analyzer_dsp::{LoudnessMeter, StereoAnalyzer};
 use manifold_analyzer_gui::{AnalyzerGuiShared, AnalyzerParams, LoudnessWorker};
 use nih_plug::prelude::*;
 use std::num::NonZeroU32;
@@ -10,7 +10,7 @@ use std::sync::Arc;
 const FFT_SIZE: usize = 16384;
 const OVERLAP_RATIO: f32 = 0.975;
 /// SPAN-style peak response: instant attack so transients register on
-/// the rising edge, 100 ms release so the curve decays smoothly instead
+/// the rising edge, 200 ms release so the curve decays smoothly instead
 /// of chattering on every frame.
 const ATTACK_MS: f32 = 0.0;
 const RELEASE_MS: f32 = 200.0;
@@ -21,13 +21,18 @@ const STEREO_CORR_SMOOTH_MS: f32 = 500.0;
 
 struct ManifoldAnalyzer {
     params: Arc<AnalyzerParams>,
-    mid_analyzer: Option<Analyzer>,
-    side_analyzer: Option<Analyzer>,
-    left_analyzer: Option<Analyzer>,
-    right_analyzer: Option<Analyzer>,
-    stereo_corr: Option<StereoCrossAnalyzer>,
+    /// One analyser for everything: two FFTs per hop (L + R), which
+    /// then feed Mid/Side/L/R dB curves and the per-bin correlation
+    /// used by the centreline strip. Replaces the four mono analysers
+    /// plus the standalone stereo cross analyser.
+    stereo: Option<StereoAnalyzer>,
+    /// Time-domain Mid samples for the CQT spectrogram worker. Kept
+    /// around because the spectrogram pulls raw audio from the sample
+    /// ring, not spectrum output.
     mid_scratch: Vec<f32>,
-    side_scratch: Vec<f32>,
+    /// Raw L / R kept around for the BS.1770 loudness meter (K-weighting
+    /// wants pre-M/S signals) — the stereo analyser consumes the same
+    /// slices for its FFTs.
     left_scratch: Vec<f32>,
     right_scratch: Vec<f32>,
     loudness: Option<LoudnessMeter>,
@@ -43,13 +48,8 @@ impl Default for ManifoldAnalyzer {
     fn default() -> Self {
         Self {
             params: Arc::new(AnalyzerParams::new()),
-            mid_analyzer: None,
-            side_analyzer: None,
-            left_analyzer: None,
-            right_analyzer: None,
-            stereo_corr: None,
+            stereo: None,
             mid_scratch: Vec::new(),
-            side_scratch: Vec::new(),
             left_scratch: Vec::new(),
             right_scratch: Vec::new(),
             loudness: None,
@@ -94,29 +94,13 @@ impl Plugin for ManifoldAnalyzer {
         buffer_config: &BufferConfig,
         _context: &mut impl InitContext<Self>,
     ) -> bool {
-        let mut mid = Analyzer::new(buffer_config.sample_rate, FFT_SIZE);
-        mid.set_overlap_ratio(OVERLAP_RATIO);
-        mid.set_attack_release_ms(ATTACK_MS, RELEASE_MS);
-        let mut side = Analyzer::new(buffer_config.sample_rate, FFT_SIZE);
-        side.set_overlap_ratio(OVERLAP_RATIO);
-        side.set_attack_release_ms(ATTACK_MS, RELEASE_MS);
-        let mut left = Analyzer::new(buffer_config.sample_rate, FFT_SIZE);
-        left.set_overlap_ratio(OVERLAP_RATIO);
-        left.set_attack_release_ms(ATTACK_MS, RELEASE_MS);
-        let mut right = Analyzer::new(buffer_config.sample_rate, FFT_SIZE);
-        right.set_overlap_ratio(OVERLAP_RATIO);
-        right.set_attack_release_ms(ATTACK_MS, RELEASE_MS);
-        self.mid_analyzer = Some(mid);
-        self.side_analyzer = Some(side);
-        self.left_analyzer = Some(left);
-        self.right_analyzer = Some(right);
-        let mut stereo_corr = StereoCrossAnalyzer::new(buffer_config.sample_rate, FFT_SIZE);
-        stereo_corr.set_overlap_ratio(OVERLAP_RATIO);
-        stereo_corr.set_smoothing_ms(STEREO_CORR_SMOOTH_MS);
-        self.stereo_corr = Some(stereo_corr);
+        let mut stereo = StereoAnalyzer::new(buffer_config.sample_rate, FFT_SIZE);
+        stereo.set_overlap_ratio(OVERLAP_RATIO);
+        stereo.set_attack_release_ms(ATTACK_MS, RELEASE_MS);
+        stereo.set_correlation_smoothing_ms(STEREO_CORR_SMOOTH_MS);
+        self.stereo = Some(stereo);
         let max_block = buffer_config.max_buffer_size as usize;
         self.mid_scratch = vec![0.0; max_block];
-        self.side_scratch = vec![0.0; max_block];
         self.left_scratch = vec![0.0; max_block];
         self.right_scratch = vec![0.0; max_block];
         let mut meter = LoudnessMeter::new(buffer_config.sample_rate);
@@ -138,19 +122,7 @@ impl Plugin for ManifoldAnalyzer {
     }
 
     fn reset(&mut self) {
-        if let Some(a) = self.mid_analyzer.as_mut() {
-            a.reset();
-        }
-        if let Some(a) = self.side_analyzer.as_mut() {
-            a.reset();
-        }
-        if let Some(a) = self.left_analyzer.as_mut() {
-            a.reset();
-        }
-        if let Some(a) = self.right_analyzer.as_mut() {
-            a.reset();
-        }
-        if let Some(s) = self.stereo_corr.as_mut() {
+        if let Some(s) = self.stereo.as_mut() {
             s.reset();
         }
         if let Some(m) = self.loudness.as_mut() {
@@ -169,12 +141,7 @@ impl Plugin for ManifoldAnalyzer {
         self.gui_shared
             .set_transport(transport.tempo, transport.pos_beats(), transport.playing);
 
-        let (Some(mid), Some(side), Some(left_an), Some(right_an)) = (
-            self.mid_analyzer.as_mut(),
-            self.side_analyzer.as_mut(),
-            self.left_analyzer.as_mut(),
-            self.right_analyzer.as_mut(),
-        ) else {
+        let Some(stereo) = self.stereo.as_mut() else {
             return ProcessStatus::Normal;
         };
 
@@ -182,23 +149,25 @@ impl Plugin for ManifoldAnalyzer {
         if num_samples == 0 {
             return ProcessStatus::Normal;
         }
-        if self.mid_scratch.len() < num_samples || self.side_scratch.len() < num_samples {
+        if self.mid_scratch.len() < num_samples
+            || self.left_scratch.len() < num_samples
+            || self.right_scratch.len() < num_samples
+        {
             return ProcessStatus::Normal;
         }
 
-        // M/S decode: Mid = (L+R)/2, Side = (L-R)/2. Falls back to mono
-        // (r = l → side = 0) when only one channel is provided.
-        // Raw L/R kept in parallel scratch buffers for the BS.1770
-        // loudness meter (K-weighting requires pre-M/S signals).
+        // De-interleave L/R (falling back to mono when only one channel
+        // is provided). Mid is derived in-line for the CQT sample ring;
+        // Side no longer needs its own scratch buffer since M/S is
+        // recovered inside the stereo analyser from the L and R FFTs.
         let mut i = 0;
         for channel_samples in buffer.iter_samples() {
             let mut iter = channel_samples.into_iter();
             let l = iter.next().map(|s| *s).unwrap_or(0.0);
             let r = iter.next().map(|s| *s).unwrap_or(l);
-            self.mid_scratch[i] = (l + r) * 0.5;
-            self.side_scratch[i] = (l - r) * 0.5;
             self.left_scratch[i] = l;
             self.right_scratch[i] = r;
+            self.mid_scratch[i] = (l + r) * 0.5;
             i += 1;
         }
 
@@ -218,33 +187,21 @@ impl Plugin for ManifoldAnalyzer {
             self.gui_shared.set_fast_loudness(meter.snapshot());
         }
 
-        // Averaged curves: push samples into the existing Analyzer pair
-        // (16 384 BH FFT on audio thread) and publish newest averaged dB
-        // per FFT frame via mailbox. try_publish drops the update if
-        // the GUI is mid-read — never blocks the audio thread.
-        if mid.push_mono(&self.mid_scratch[..i]) {
-            self.gui_shared.try_publish_mid_db(mid.latest_spectrum_db());
-        }
-        if side.push_mono(&self.side_scratch[..i]) {
-            self.gui_shared.try_publish_side_db(side.latest_spectrum_db());
-        }
-        if left_an.push_mono(&self.left_scratch[..i]) {
+        // Single stereo analyser: two FFTs per hop (L + R), then
+        // Mid/Side/L/R averaged magnitude curves plus per-bin
+        // correlation all derived in one pass. Publish all five mailboxes
+        // on a completed frame.
+        if stereo.push_stereo(&self.left_scratch[..i], &self.right_scratch[..i]) {
             self.gui_shared
-                .try_publish_left_db(left_an.latest_spectrum_db());
-        }
-        if right_an.push_mono(&self.right_scratch[..i]) {
+                .try_publish_mid_db(stereo.latest_mid_db());
             self.gui_shared
-                .try_publish_right_db(right_an.latest_spectrum_db());
-        }
-
-        // Per-bin stereo correlation: one stereo FFT per hop, shared
-        // smoothing in the power domain. Publish only on completed
-        // frames to match the spectra update cadence.
-        if let Some(stereo_corr) = self.stereo_corr.as_mut() {
-            if stereo_corr.push_stereo(&self.left_scratch[..i], &self.right_scratch[..i]) {
-                self.gui_shared
-                    .try_publish_correlation(stereo_corr.latest_correlation());
-            }
+                .try_publish_side_db(stereo.latest_side_db());
+            self.gui_shared
+                .try_publish_left_db(stereo.latest_left_db());
+            self.gui_shared
+                .try_publish_right_db(stereo.latest_right_db());
+            self.gui_shared
+                .try_publish_correlation(stereo.latest_correlation());
         }
 
         // Spectrogram: push raw Mid audio samples into the lock-free

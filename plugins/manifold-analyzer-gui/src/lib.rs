@@ -1240,7 +1240,9 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
 
     let grid_major = egui::Color32::from_gray(52);
     let grid_minor = egui::Color32::from_gray(32);
-    let label_color = egui::Color32::from_gray(150);
+    // Axis tick labels go pure white so they stand out over the
+    // spectrum fills / spectrogram heatmap at a glance.
+    let label_color = egui::Color32::WHITE;
 
     // 1. Grid lines underneath the spectrum curves (fills sit on top
     //    via the transparent shader, so grid shows through faintly).
@@ -1621,7 +1623,7 @@ fn draw_spectrogram_chrome(
     }
     let grid_over = egui::Color32::from_white_alpha(32);
     let grid_over_bold = egui::Color32::from_white_alpha(60);
-    let label_color = egui::Color32::from_white_alpha(170);
+    let label_color = egui::Color32::WHITE;
 
     // Horizontal freq grid lines + right-anchored labels.
     for &freq in FREQ_MAJORS {
@@ -1694,13 +1696,16 @@ fn draw_spectrogram_chrome(
             [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
             (thickness, color),
         );
-        // Beat number inside the current bar, 1-indexed. Skip if the
-        // step is multiple bars (numbers would all read "1").
+        // Beat/bar label anchored to the *bottom* of the spectrogram
+        // so it doesn't visually collide with the MS plot's bottom
+        // edge / freq axis sitting immediately above.
+        let label_y = rect.bottom() - 2.0;
         if step_beats <= 2.0 {
+            // Beat number inside the current bar, 1-indexed.
             let beat_in_bar = beat_idx_in_bar.rem_euclid(BEATS_PER_BAR as i64) + 1;
             painter.text(
-                egui::pos2(x + 3.0, rect.top() + 1.0),
-                egui::Align2::LEFT_TOP,
+                egui::pos2(x + 3.0, label_y),
+                egui::Align2::LEFT_BOTTOM,
                 format!("{}", beat_in_bar),
                 egui::FontId::monospace(10.0),
                 label_color,
@@ -1709,8 +1714,8 @@ fn draw_spectrogram_chrome(
             // Multi-bar step: show bar number instead.
             let bar_num = beat_idx_in_bar.div_euclid(BEATS_PER_BAR as i64) + 1;
             painter.text(
-                egui::pos2(x + 3.0, rect.top() + 1.0),
-                egui::Align2::LEFT_TOP,
+                egui::pos2(x + 3.0, label_y),
+                egui::Align2::LEFT_BOTTOM,
                 format!("{}.1", bar_num),
                 egui::FontId::monospace(10.0),
                 label_color,
@@ -1792,36 +1797,10 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
     // Each half of the column spans `range_db` dB of imbalance.
     let px_per_db = (rect.width() * 0.5) / range_db;
 
-    let grid_minor = egui::Color32::from_gray(32);
-    let label_color = egui::Color32::from_gray(150);
-
-    // Horizontal frequency grid (same freqs as the MS plot).
-    for &freq in FREQ_MAJORS {
-        if freq >= freq_min && freq <= freq_max {
-            let y = freq_to_y(freq);
-            painter.line_segment(
-                [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-                (1.0, grid_minor),
-            );
-        }
-    }
-    // Symmetric dB tick lines at ±{step,2×step,…} around the centre.
-    let step_db = if range_db >= 20.0 { 10.0_f32 } else { 5.0_f32 };
-    let mut db_off = step_db;
-    while db_off < range_db - 0.5 {
-        let d = db_off * px_per_db;
-        for x in [center_x - d, center_x + d] {
-            painter.line_segment(
-                [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-                (1.0, grid_minor),
-            );
-        }
-        db_off += step_db;
-    }
-    // (Centerline is drawn later as a colour strip coloured by
-    // per-bin L/R correlation — red = anti-phase, green = phase-
-    // aligned. The balance line renders over the top so it still
-    // reads clearly against the coloured background.)
+    // Grid drawn after the correlation heatmap so lines remain
+    // visible over the colours. Alpha'd down so the colours dominate.
+    let grid_over_color = egui::Color32::from_rgba_unmultiplied(18, 22, 28, 160);
+    let label_color = egui::Color32::WHITE;
 
     let fft_size = state.shared.fft_size();
     let num_bins = state
@@ -1898,27 +1877,67 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
 
         // Correlation colour for this row, muted to grey when silent.
         let corr_color = correlation_color_ramp(corr);
-        let neutral = egui::Color32::from_rgb(28, 32, 38);
+        // Silent bins fade all the way to black rather than a neutral
+        // grey — makes the colour band light up only where there's
+        // real signal, and gives the loud regions much more punch.
+        let neutral = egui::Color32::BLACK;
         strip_rows.push((y, lerp_color_rgb(neutral, corr_color, fade)));
     }
 
-    // Correlation strip: 1-pixel tall rect per row, centred on the
-    // centerline. Drawn BEFORE the balance line so the line renders
-    // cleanly on top of it.
-    let strip_half_w = 7.0_f32;
+    // Full-width correlation heatmap: one 1-pixel row of colour per
+    // sampled frequency, spanning the entire column. Acts as the
+    // background for everything else — grid + balance line draw on
+    // top. Makes the colour far more legible than a 14 px centre strip
+    // and lets the balance line show imbalance directly against the
+    // phase-coloured band at each frequency.
     for &(y, color) in &strip_rows {
         painter.rect_filled(
             egui::Rect::from_min_max(
-                egui::pos2(center_x - strip_half_w, y - 0.5),
-                egui::pos2(center_x + strip_half_w, y + 0.5),
+                egui::pos2(rect.left(), y - 0.5),
+                egui::pos2(rect.right(), y + 0.5),
             ),
             0.0,
             color,
         );
     }
 
-    // Balance curve in white — reads cleanly over the coloured
-    // correlation strip and doesn't compete with Mid/Side/ref colours.
+    // Grid on top of the heatmap. Slightly alpha'd so colours read
+    // through; major frequency ticks + dB tick lines keep the axis
+    // readable without fighting the heatmap.
+    for &freq in FREQ_MAJORS {
+        if freq >= freq_min && freq <= freq_max {
+            let y = freq_to_y(freq);
+            painter.line_segment(
+                [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+                (1.0, grid_over_color),
+            );
+        }
+    }
+    let step_db = if range_db >= 20.0 { 10.0_f32 } else { 5.0_f32 };
+    let mut db_off = step_db;
+    while db_off < range_db - 0.5 {
+        let d = db_off * px_per_db;
+        for x in [center_x - d, center_x + d] {
+            painter.line_segment(
+                [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                (1.0, grid_over_color),
+            );
+        }
+        db_off += step_db;
+    }
+    // Centerline stays visible as a slightly stronger vertical tick
+    // so the "balanced" zero-point reads at a glance.
+    let centerline_color = egui::Color32::from_rgba_unmultiplied(10, 14, 20, 200);
+    painter.line_segment(
+        [
+            egui::pos2(center_x, rect.top()),
+            egui::pos2(center_x, rect.bottom()),
+        ],
+        (1.0, centerline_color),
+    );
+
+    // Balance curve in white — reads cleanly over the heatmap and
+    // doesn't compete with Mid/Side/ref colours.
     let line_color = egui::Color32::from_rgb(240, 245, 250);
     if pts.len() >= 2 {
         painter.add(egui::Shape::line(pts, egui::Stroke::new(1.5, line_color)));
@@ -1926,7 +1945,7 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
 
     // L / R side hints in the top corners so the user knows which
     // direction means what without hovering for a tooltip.
-    let side_hint_color = egui::Color32::from_gray(150);
+    let side_hint_color = egui::Color32::WHITE;
     painter.text(
         egui::pos2(rect.left() + 4.0, rect.top() + 3.0),
         egui::Align2::LEFT_TOP,
@@ -2001,23 +2020,43 @@ fn lerp_color_rgb(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32 {
     )
 }
 
-/// Right-column container: splits vertically into the L/R comparison
-/// plot (top row) and the loudness meter (bottom row), using the same
-/// `top_fraction` split as the MS-plot / spectrogram stack on the left
-/// so the 2×2 grid rows line up. Split + column width are driven by
-/// the grab handle at the cross.
+/// Right-column container: splits vertically into the loudness meter
+/// (top row, aligned with the MS plot on the left) and the L/R
+/// balance column (bottom row, aligned with the spectrogram so the
+/// frequency axis reads consistently across the bottom strip). Split
+/// + column width are driven by the grab handle at the cross.
+///
+/// Both cells get an exact-sized rect + child UI with `set_clip_rect`
+/// so their content can't push the parent cursor past the requested
+/// height. This is what keeps the spectrogram top edge lined up with
+/// the LR cell top edge when the top half is small enough that the
+/// loudness readouts would otherwise overflow.
 fn draw_right_column(ui: &mut egui::Ui, state: &mut EditorState) {
     let top_fraction = state.shared.top_fraction();
     ui.spacing_mut().item_spacing.y = 0.0;
     let total = ui.available_size();
     let top_h = total.y * top_fraction;
     let bottom_h = total.y - top_h;
-    ui.allocate_ui(egui::vec2(total.x, top_h), |ui| {
-        draw_lr_column(ui, state);
-    });
-    ui.allocate_ui(egui::vec2(total.x, bottom_h), |ui| {
-        draw_loudness_panel(ui, state);
-    });
+
+    let (top_rect, _) =
+        ui.allocate_exact_size(egui::vec2(total.x, top_h), egui::Sense::hover());
+    let mut top_child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(top_rect)
+            .layout(egui::Layout::top_down(egui::Align::LEFT)),
+    );
+    top_child.set_clip_rect(top_rect);
+    draw_loudness_panel(&mut top_child, state);
+
+    let (bot_rect, _) =
+        ui.allocate_exact_size(egui::vec2(total.x, bottom_h), egui::Sense::hover());
+    let mut bot_child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(bot_rect)
+            .layout(egui::Layout::top_down(egui::Align::LEFT)),
+    );
+    bot_child.set_clip_rect(bot_rect);
+    draw_lr_column(&mut bot_child, state);
 }
 
 /// Floating grab handle at the 2×2 cross. Dragging adjusts both axes
@@ -2167,22 +2206,14 @@ fn draw_loudness_panel(ui: &mut egui::Ui, state: &mut EditorState) {
 
     ui.vertical(|ui| {
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            if ui
-                .button("Reset")
-                .on_hover_text("Reset Integrated, LRA, and Max holds")
-                .clicked()
-            {
-                state.shared.request_loudness_reset();
-            }
-            ui.label(
-                egui::RichText::new("LUFS")
-                    .color(egui::Color32::from_gray(190))
-                    .size(12.0)
-                    .strong(),
-            );
-        });
-        ui.add_space(6.0);
+        if ui
+            .button("Reset")
+            .on_hover_text("Reset Integrated, LRA, and Max holds")
+            .clicked()
+        {
+            state.shared.request_loudness_reset();
+        }
+        ui.add_space(4.0);
 
         // Split horizontally: slim meter column on the left, numeric
         // readouts stacked on the right. The meter's content (column
@@ -2309,7 +2340,7 @@ fn draw_meter_column(painter: egui::Painter, rect: egui::Rect, snap: &LoudnessSn
     }
 
     // Flanking tick marks + right-side labels.
-    let label_color = egui::Color32::from_gray(170);
+    let label_color = egui::Color32::WHITE;
     let target_label_color = egui::Color32::from_rgb(230, 180, 90);
     let tick_color = egui::Color32::from_gray(80);
     let left_tick_x1 = col_left - tick_gap;
@@ -2393,8 +2424,10 @@ fn draw_loudness_readouts(
 ) {
     let elapsed = snap.elapsed_secs;
     let placeholder = warmup_placeholder(ui.ctx());
-    let label_color = egui::Color32::from_gray(150);
-    let value_color = egui::Color32::from_gray(230);
+    // Row labels in a slightly muted white so the values still read
+    // as the primary information; values themselves go pure white.
+    let label_color = egui::Color32::from_gray(200);
+    let value_color = egui::Color32::WHITE;
     let highlight_bg = egui::Color32::from_rgb(40, 60, 110);
 
     // `delta` is an optional precomputed (live − ref, ref_raw) pair for
