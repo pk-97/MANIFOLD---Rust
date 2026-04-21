@@ -1341,8 +1341,11 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             (fmin, fmax)
         };
 
-        // Rebuild the weighting LUT only when mode / range changes.
-        // Uploads to the GPU on every rebuild; skip-op otherwise.
+        // Rebuild the weighting LUT only when mode / range changes (the
+        // computation is a pure CPU pass). Uploading to the GPU is
+        // cheap (4 KB memcpy into a shared Metal buffer) and defending
+        // against edge cases where the buffer might be stale (editor
+        // reopen, underlying texture swap) is worth the per-frame cost.
         let lut_key = (weighting, freq_min_for_lut, freq_max_for_lut);
         if state.weighting_lut_cache.key != Some(lut_key) {
             fill_weighting_lut(
@@ -1352,8 +1355,8 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
                 freq_max_for_lut,
             );
             state.weighting_lut_cache.key = Some(lut_key);
-            spec.set_weighting_lut(&state.weighting_lut_cache.values);
         }
+        spec.set_weighting_lut(&state.weighting_lut_cache.values);
 
         // Resolve sync state for display + worker.
         let (bpm_opt, beat_opt, _playing) = state.shared.transport();
