@@ -375,7 +375,7 @@ pub enum FreqSmoothing {
     #[name = "1/3 oct"]
     Third,
     #[id = "erb"]
-    #[name = "ERB"]
+    #[name = "ERB (Psychoacoustic)"]
     Erb,
 }
 
@@ -387,7 +387,7 @@ impl FreqSmoothing {
             FreqSmoothing::Twelfth => "1/12 oct",
             FreqSmoothing::Sixth => "1/6 oct",
             FreqSmoothing::Third => "1/3 oct",
-            FreqSmoothing::Erb => "ERB",
+            FreqSmoothing::Erb => "ERB (Psychoacoustic)",
         }
     }
 
@@ -1181,6 +1181,17 @@ pub fn create_editor(
             *state.quad.lock() = PainterState::NotYet;
         },
         |ctx, setter, state| {
+            // Honour the host window's native DPI so text, lines, and
+            // widget edges render at physical-pixel resolution on
+            // retina / hi-DPI displays instead of being drawn at 1
+            // logical px = 1 physical px and upscaled by the
+            // framebuffer (blurry). No-op on 1× displays where
+            // native_pixels_per_point == 1.0.
+            if let Some(native) = ctx.native_pixels_per_point() {
+                if (ctx.pixels_per_point() - native).abs() > 0.01 {
+                    ctx.set_pixels_per_point(native);
+                }
+            }
             egui::TopBottomPanel::top("analyzer-controls")
                 .frame(egui::Frame::new().fill(egui::Color32::from_rgb(18, 22, 30)))
                 .exact_height(26.0)
@@ -1270,6 +1281,13 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
                 worker.cqt_num_bins(),
             ) {
                 state.spectrum = Some(spec);
+                // Freshly-allocated GPU LUT buffer is zero-initialised
+                // (= flat weighting). Invalidate the cache so the next
+                // draw re-uploads the current weighting curve; without
+                // this, if the user's selection matched the cached key
+                // from a previous editor open, the weighting wouldn't
+                // re-apply and MS/spectrogram tilt would read as flat.
+                state.weighting_lut_cache.key = None;
             }
         }
     }

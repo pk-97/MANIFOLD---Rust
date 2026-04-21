@@ -219,31 +219,46 @@ fn run_fft_stats(l: &[f32], r: &[f32], sr: f32) -> (RefEnvelope, RefEnvelope) {
 
 /// Reduce per-FFT-bin sample vectors to a `REF_POINTS` log-spaced grid by
 /// taking the nearest FFT bin for each grid freq and extracting low/high
-/// percentiles. Slots whose bin is above source Nyquist (or empty) fall
-/// back to `MIN_DB`.
+/// percentiles. Slots whose bin is above source Nyquist fall back to
+/// `MIN_DB`. Percentiles are computed once per bin into a cache so that
+/// adjacent log slots sharing the same source bin (unavoidable at the
+/// low end where one 2.7 Hz FFT bin spans many log slots) all read the
+/// same real value instead of the first slot winning and the rest
+/// finding the bin empty → silence floor.
 fn collapse_to_log_grid(samples: &mut [Vec<f32>], sr: f32) -> RefEnvelope {
     let bin_hz = sr / REF_FFT_SIZE as f32;
     let log_min = REF_FREQ_MIN.ln();
     let log_max = REF_FREQ_MAX.ln();
     let denom = (REF_POINTS - 1) as f32;
+
+    // Pass 1: percentile cache per bin. `None` = bin was empty / above
+    // source Nyquist. Storage is freed as we go since long tracks stash
+    // ~70 MB in `samples` at 3 min.
+    let mut bin_percentiles: Vec<Option<[f32; 2]>> = Vec::with_capacity(samples.len());
+    for bin_samples in samples.iter_mut() {
+        if bin_samples.is_empty() {
+            bin_percentiles.push(None);
+            continue;
+        }
+        bin_samples.sort_by(|a, b| a.total_cmp(b));
+        let lo = percentile_from_sorted(bin_samples, REF_PERCENTILE_LOW);
+        let hi = percentile_from_sorted(bin_samples, REF_PERCENTILE_HIGH);
+        bin_percentiles.push(Some([lo.min(hi), lo.max(hi)]));
+        bin_samples.clear();
+        bin_samples.shrink_to_fit();
+    }
+
+    // Pass 2: map each log slot to its nearest FFT bin and look up the
+    // cached percentiles.
     let mut bounds = Vec::with_capacity(REF_POINTS);
     for p in 0..REF_POINTS {
         let t = p as f32 / denom;
         let freq = (log_min + t * (log_max - log_min)).exp();
         let bin = (freq / bin_hz).round() as usize;
-        if bin >= samples.len() || samples[bin].is_empty() {
-            bounds.push([MIN_DB, MIN_DB]);
-            continue;
+        match bin_percentiles.get(bin).and_then(|cell| *cell) {
+            Some(pair) => bounds.push(pair),
+            None => bounds.push([MIN_DB, MIN_DB]),
         }
-        let bin_samples = &mut samples[bin];
-        bin_samples.sort_by(|a, b| a.total_cmp(b));
-        let lo = percentile_from_sorted(bin_samples, REF_PERCENTILE_LOW);
-        let hi = percentile_from_sorted(bin_samples, REF_PERCENTILE_HIGH);
-        bounds.push([lo.min(hi), lo.max(hi)]);
-        // Drop per-bin storage as we go — long tracks stash ~70 MB
-        // here at 3 min, so releasing after use keeps peak memory bounded.
-        bin_samples.clear();
-        bin_samples.shrink_to_fit();
     }
     RefEnvelope { bounds }
 }
