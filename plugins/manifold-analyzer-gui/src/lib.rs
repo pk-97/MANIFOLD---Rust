@@ -2826,11 +2826,16 @@ fn draw_right_column(ui: &mut egui::Ui, state: &mut EditorState) {
 /// the hit test isn't eaten by whichever panel owns the underlying
 /// pixel.
 fn draw_layout_grab_handle(ctx: &egui::Context, state: &EditorState) {
-    // Two 26 px top bars (controls + refs) sit above the content
-    // area; see `create_editor`. Content area is everything below.
+    // Two 26 px top bars (refs + controls) and one 26 px bottom bar
+    // (spectrogram + L/R controls) bracket the content area; see
+    // `create_editor`. Subtract both ends so `content_h` is the actual
+    // height of the four-quadrant figure region — without subtracting
+    // the footer, `top_frac` reads off the full window height and the
+    // handle drifts below the visual cross by half the footer's height.
     let screen = ctx.screen_rect();
     let content_top = screen.top() + TOP_BARS_HEIGHT;
-    let content_h = (screen.bottom() - content_top).max(1.0);
+    let content_bottom = screen.bottom() - BOTTOM_BAR_HEIGHT;
+    let content_h = (content_bottom - content_top).max(1.0);
     let col_w = state.shared.right_column_width();
     let top_frac = state.shared.top_fraction();
 
@@ -2839,12 +2844,12 @@ fn draw_layout_grab_handle(ctx: &egui::Context, state: &EditorState) {
     // bottom-right resize grip (and the other corners) can't swallow
     // drags. Stored layout values stay on the logical path so any one
     // figure can collapse its siblings to zero and take the window.
-    const HANDLE_SIZE: f32 = 14.0;
-    const EDGE_MARGIN: f32 = 14.0;
+    const HANDLE_SIZE: f32 = 20.0;
+    const EDGE_MARGIN: f32 = 16.0;
     let logical_x = screen.right() - col_w;
     let logical_y = content_top + content_h * top_frac;
     let handle_x = logical_x.clamp(screen.left() + EDGE_MARGIN, screen.right() - EDGE_MARGIN);
-    let handle_y = logical_y.clamp(content_top + EDGE_MARGIN, screen.bottom() - EDGE_MARGIN);
+    let handle_y = logical_y.clamp(content_top + EDGE_MARGIN, content_bottom - EDGE_MARGIN);
     let handle_rect = egui::Rect::from_center_size(
         egui::pos2(handle_x, handle_y),
         egui::vec2(HANDLE_SIZE, HANDLE_SIZE),
@@ -2860,7 +2865,7 @@ fn draw_layout_grab_handle(ctx: &egui::Context, state: &EditorState) {
         );
 
         if resp.hovered() || resp.dragged() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
         }
 
         if resp.dragged() {
@@ -2884,76 +2889,109 @@ fn draw_layout_grab_handle(ctx: &egui::Context, state: &EditorState) {
 
         let painter = ui.painter();
         let bright = resp.hovered() || resp.dragged();
-        // Accent blue matches the L channel so the handle reads as
-        // "interactive affordance", not another chart element.
         let color = if bright {
-            egui::Color32::from_rgb(170, 220, 255)
+            egui::Color32::from_rgb(220, 235, 255)
         } else {
-            egui::Color32::from_rgb(100, 180, 255)
+            egui::Color32::from_rgb(150, 200, 255)
         };
 
-        // Four-way arrow: a "+" with arrowheads on each tip so the
-        // grab direction is obvious at a glance.
+        // Four-way "move" glyph: solid filled triangular arrowheads
+        // pointing N/S/E/W with thin rectangular shafts joining each
+        // back toward the centre. Centre stays empty so the icon reads
+        // as "drag in any direction" rather than a target reticle.
         let c = handle_rect.center();
-        let arm = 5.0_f32;
-        let head = 2.5_f32;
-        let stroke = egui::Stroke::new(1.5, color);
+        let tip = 9.0_f32;     // outermost point of each arrow
+        let base = 5.5_f32;    // arrowhead base distance from centre
+        let head_w = 3.5_f32;  // half-width of the arrowhead base
+        let shaft_w = 1.25_f32;// half-width of the shaft
+        let shaft_in = 1.5_f32;// inner end of the shaft (centre gap)
 
-        // Shafts.
-        painter.line_segment(
-            [egui::pos2(c.x - arm, c.y), egui::pos2(c.x + arm, c.y)],
-            stroke,
+        // Horizontal shafts.
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(c.x + shaft_in, c.y - shaft_w),
+                egui::pos2(c.x + base, c.y + shaft_w),
+            ),
+            0.0,
+            color,
         );
-        painter.line_segment(
-            [egui::pos2(c.x, c.y - arm), egui::pos2(c.x, c.y + arm)],
-            stroke,
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(c.x - base, c.y - shaft_w),
+                egui::pos2(c.x - shaft_in, c.y + shaft_w),
+            ),
+            0.0,
+            color,
         );
+        // Vertical shafts.
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(c.x - shaft_w, c.y + shaft_in),
+                egui::pos2(c.x + shaft_w, c.y + base),
+            ),
+            0.0,
+            color,
+        );
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(c.x - shaft_w, c.y - base),
+                egui::pos2(c.x + shaft_w, c.y - shaft_in),
+            ),
+            0.0,
+            color,
+        );
+
+        let no_stroke = egui::Stroke::NONE;
         // Right arrowhead.
-        painter.line_segment(
-            [egui::pos2(c.x + arm, c.y), egui::pos2(c.x + arm - head, c.y - head)],
-            stroke,
-        );
-        painter.line_segment(
-            [egui::pos2(c.x + arm, c.y), egui::pos2(c.x + arm - head, c.y + head)],
-            stroke,
-        );
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                egui::pos2(c.x + base, c.y - head_w),
+                egui::pos2(c.x + base, c.y + head_w),
+                egui::pos2(c.x + tip, c.y),
+            ],
+            color,
+            no_stroke,
+        ));
         // Left arrowhead.
-        painter.line_segment(
-            [egui::pos2(c.x - arm, c.y), egui::pos2(c.x - arm + head, c.y - head)],
-            stroke,
-        );
-        painter.line_segment(
-            [egui::pos2(c.x - arm, c.y), egui::pos2(c.x - arm + head, c.y + head)],
-            stroke,
-        );
-        // Up arrowhead.
-        painter.line_segment(
-            [egui::pos2(c.x, c.y - arm), egui::pos2(c.x - head, c.y - arm + head)],
-            stroke,
-        );
-        painter.line_segment(
-            [egui::pos2(c.x, c.y - arm), egui::pos2(c.x + head, c.y - arm + head)],
-            stroke,
-        );
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                egui::pos2(c.x - base, c.y - head_w),
+                egui::pos2(c.x - base, c.y + head_w),
+                egui::pos2(c.x - tip, c.y),
+            ],
+            color,
+            no_stroke,
+        ));
         // Down arrowhead.
-        painter.line_segment(
-            [egui::pos2(c.x, c.y + arm), egui::pos2(c.x - head, c.y + arm - head)],
-            stroke,
-        );
-        painter.line_segment(
-            [egui::pos2(c.x, c.y + arm), egui::pos2(c.x + head, c.y + arm - head)],
-            stroke,
-        );
-
-        if bright {
-            painter.circle_stroke(c, arm + 2.5, (1.0, color));
-        }
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                egui::pos2(c.x - head_w, c.y + base),
+                egui::pos2(c.x + head_w, c.y + base),
+                egui::pos2(c.x, c.y + tip),
+            ],
+            color,
+            no_stroke,
+        ));
+        // Up arrowhead.
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                egui::pos2(c.x - head_w, c.y - base),
+                egui::pos2(c.x + head_w, c.y - base),
+                egui::pos2(c.x, c.y - tip),
+            ],
+            color,
+            no_stroke,
+        ));
     });
 }
 
-/// Total height of the two fixed 26 px top bars (controls + ref slots).
+/// Total height of the two fixed 26 px top bars (refs + controls).
 /// Keep in sync with the `exact_height` calls in `create_editor`.
 const TOP_BARS_HEIGHT: f32 = 26.0 * 2.0;
+/// Height of the bottom-footer panel (spectrogram + L/R controls).
+/// Same 26 px as the top bars so the content area math stays
+/// symmetric. Keep in sync with `create_editor`.
+const BOTTOM_BAR_HEIGHT: f32 = 26.0;
 
 /// Right-side loudness meter. Vertical scale spans both rows; a
 /// filled column shows the momentary level, tick marks flank it on
