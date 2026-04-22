@@ -97,7 +97,11 @@ impl StereoAnalyzer {
         let out_len = fft_size / 2 + 1;
         let window = blackman_harris_window(fft_size);
         let window_sum: f32 = window.iter().sum();
-        let num_bins = fft_size / 2;
+        // fft_size/2 + 1 = positive-half count *including* Nyquist (matches
+        // the realfft output length). DC + Nyquist are single-sided; their
+        // power is corrected in `compute_frame` so they read at the same
+        // dB scale as the folded bins between them.
+        let num_bins = fft_size / 2 + 1;
 
         Self {
             fft_size,
@@ -175,7 +179,7 @@ impl StereoAnalyzer {
     }
 
     pub fn num_bins(&self) -> usize {
-        self.fft_size / 2
+        self.fft_size / 2 + 1
     }
 
     pub fn latest_mid_db(&self) -> &[f32] {
@@ -285,6 +289,7 @@ impl StereoAnalyzer {
         let release_alpha = self.release_alpha;
         let corr_alpha = self.corr_alpha;
         let num_bins = self.num_bins();
+        let last_bin = num_bins - 1; // Nyquist bin index (== fft_size/2)
         // 10^(MIN_DB/10) — anything below this in smoothed power is
         // treated as silence by the correlation block so noise-floor
         // bins settle at 0 instead of ±1.
@@ -300,11 +305,15 @@ impl StereoAnalyzer {
             let s_re = 0.5 * (l.re - r.re);
             let s_im = 0.5 * (l.im - r.im);
 
-            let p_l = (l.re * l.re + l.im * l.im) * norm_sq;
-            let p_r = (r.re * r.re + r.im * r.im) * norm_sq;
-            let p_m = (m_re * m_re + m_im * m_im) * norm_sq;
-            let p_s = (s_re * s_re + s_im * s_im) * norm_sq;
-            let re_lr = (l.re * r.re + l.im * r.im) * norm_sq;
+            // DC + Nyquist are single-sided: no negative-frequency twin to
+            // fold in, so amplitude is /2 (power /4) of the folded bins.
+            let single_sided = bin == 0 || bin == last_bin;
+            let bin_norm_sq = if single_sided { norm_sq * 0.25 } else { norm_sq };
+            let p_l = (l.re * l.re + l.im * l.im) * bin_norm_sq;
+            let p_r = (r.re * r.re + r.im * r.im) * bin_norm_sq;
+            let p_m = (m_re * m_re + m_im * m_im) * bin_norm_sq;
+            let p_s = (s_re * s_re + s_im * s_im) * bin_norm_sq;
+            let re_lr = (l.re * r.re + l.im * r.im) * bin_norm_sq;
 
             // Asymmetric EMA for the four dB curves.
             let (prev_m, prev_s, prev_l, prev_r) = (

@@ -76,7 +76,11 @@ impl Analyzer {
         let scratch_len = fft.get_inplace_scratch_len();
         let window = blackman_harris_window(fft_size);
         let window_sum: f32 = window.iter().sum();
-        let num_bins = fft_size / 2;
+        // Include Nyquist (bin index fft_size/2). DC + Nyquist are
+        // single-sided (no negative-frequency twin) and get a /4 power
+        // correction inside `compute_spectrum` to read at the same dB
+        // scale as the folded bins between them.
+        let num_bins = fft_size / 2 + 1;
 
         Self {
             fft_size,
@@ -155,7 +159,7 @@ impl Analyzer {
     }
 
     pub fn num_bins(&self) -> usize {
-        self.fft_size / 2
+        self.fft_size / 2 + 1
     }
 
     pub fn latest_spectrum_db(&self) -> &[f32] {
@@ -245,10 +249,14 @@ impl Analyzer {
             .process_with_scratch(&mut self.fft_buffer, &mut self.fft_scratch);
 
         // Single-sided magnitude spectrum, normalized by window energy.
-        // Factor of 2 compensates for folding negative frequencies onto positives
-        // (skipping DC and Nyquist bins, but for analyzer display this is fine).
+        // Factor of 2 folds the negative-frequency twins onto the
+        // positive bins (1 ≤ k ≤ N/2-1). DC (k=0) and Nyquist (k=N/2)
+        // have no twin and use a /2 amplitude (= /4 power) correction
+        // applied as `power *= dc_nyquist_scale` below — without this
+        // they would read +6 dB high.
         let norm = 2.0 / self.window_sum;
         let norm_sq = norm * norm;
+        let last_bin = self.num_bins() - 1; // Nyquist
         let attack_alpha = self.attack_alpha;
         let release_alpha = self.release_alpha;
 
@@ -266,7 +274,11 @@ impl Analyzer {
 
         for bin in 0..self.num_bins() {
             let c = self.fft_buffer[bin];
-            let power = (c.re * c.re + c.im * c.im) * norm_sq;
+            let mut power = (c.re * c.re + c.im * c.im) * norm_sq;
+            if bin == 0 || bin == last_bin {
+                // No negative-frequency twin to fold in.
+                power *= 0.25;
+            }
             self.raw_magnitude_db[bin] = 10.0 * (power + 1e-24).log10();
             // Asymmetric EMA: fast alpha when the new sample exceeds the
             // running average (attack), slow alpha when it's below
@@ -298,6 +310,29 @@ impl Analyzer {
 
 pub const MIN_DB: f32 = -120.0;
 
+/// Equivalent Noise Bandwidth of the 4-term Blackman-Harris window in
+/// units of FFT bins. Defined as `N · Σwₙ² / (Σwₙ)²`, this is the width
+/// of an ideal rectangular filter that passes the same broadband noise
+/// power as the windowed FFT bin. Used by callers that want to compare
+/// noise floors across windows or convert to power-spectral-density:
+///
+///   PSD (per Hz) = bin_power / (ENBW · sample_rate / fft_size)
+///
+/// The analyzer's default normalization (`norm = 2/Σwₙ`) is *peak-correct*
+/// — a unit sine reads 0 dBFS regardless of window choice — so the
+/// noise-floor reading on broadband content sits at:
+///
+///   noise_floor_dB - 10·log10(ENBW · sr/fft_size)   (vs PSD at the bin freq)
+///
+/// Compared to a Hann-windowed analyzer (ENBW ≈ 1.5005), the BH noise
+/// floor reads ≈ 10·log10(2.0044/1.5005) ≈ +1.26 dB higher. This is
+/// expected behavior, not a calibration error.
+pub const BH_WINDOW_ENBW_BINS: f32 = 2.0044;
+
+/// ENBW of the Hann window (`N · Σwₙ² / (Σwₙ)²`). Provided for cross-
+/// analyzer comparisons; not used internally.
+pub const HANN_WINDOW_ENBW_BINS: f32 = 1.5005;
+
 #[allow(dead_code)]
 fn hann_window(size: usize) -> Vec<f32> {
     (0..size)
@@ -310,7 +345,8 @@ fn hann_window(size: usize) -> Vec<f32> {
 
 /// Blackman-Harris 4-term window. First sidelobe at ~−92 dB vs Hann's
 /// −31 dB — drastically cleaner display between tones at the cost of a
-/// slightly wider main lobe (~1.62 bins vs 1.44).
+/// wider main lobe (ENBW ≈ 2.00 bins vs Hann's 1.50). See
+/// [`BH_WINDOW_ENBW_BINS`] for noise-floor calibration math.
 pub fn blackman_harris_window(size: usize) -> Vec<f32> {
     const A0: f32 = 0.35875;
     const A1: f32 = 0.48829;
@@ -393,6 +429,48 @@ mod tests {
         assert!(
             peak_db > -1.5 && peak_db < 1.5,
             "peak dB was {peak_db}, expected near 0"
+        );
+    }
+
+    #[test]
+    fn num_bins_includes_nyquist() {
+        let analyzer = Analyzer::new(48000.0, 4096);
+        // Positive half + Nyquist = N/2 + 1.
+        assert_eq!(analyzer.num_bins(), 4096 / 2 + 1);
+        // Last bin's nominal frequency is Nyquist (sr/2).
+        let last = analyzer.num_bins() - 1;
+        let nyquist = analyzer.bin_frequency(last);
+        assert!((nyquist - 24_000.0).abs() < 1e-3, "Nyquist bin reads {nyquist} Hz");
+    }
+
+    #[test]
+    fn dc_input_reads_at_zero_db() {
+        // A pure DC offset of 1.0 should land at 0 dBFS in the DC bin.
+        // Without the /4 single-sided correction it would read +6 dB.
+        let mut analyzer = Analyzer::new(48000.0, 4096);
+        let samples = vec![1.0_f32; 4096 * 4];
+        analyzer.push_mono(&samples);
+        let dc_db = analyzer.latest_raw_spectrum_db()[0];
+        assert!(
+            dc_db > -1.0 && dc_db < 1.0,
+            "DC bin reads {dc_db} dB, expected near 0 (single-sided correction missing?)"
+        );
+    }
+
+    #[test]
+    fn nyquist_input_reads_at_zero_db() {
+        // ±1 alternating = a Nyquist-frequency cosine of amplitude 1.0.
+        // Without the Nyquist /4 correction it would read +6 dB.
+        let fft_size = 4096;
+        let mut analyzer = Analyzer::new(48000.0, fft_size);
+        let samples: Vec<f32> = (0..fft_size * 4)
+            .map(|n| if n % 2 == 0 { 1.0 } else { -1.0 })
+            .collect();
+        analyzer.push_mono(&samples);
+        let nyquist_db = *analyzer.latest_raw_spectrum_db().last().unwrap();
+        assert!(
+            nyquist_db > -1.0 && nyquist_db < 1.0,
+            "Nyquist bin reads {nyquist_db} dB, expected near 0"
         );
     }
 

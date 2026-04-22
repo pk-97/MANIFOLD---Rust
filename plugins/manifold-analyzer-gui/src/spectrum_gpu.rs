@@ -153,7 +153,13 @@ struct SpectrumUniforms {
     cqt_bins_per_octave: f32,
     spectrogram_gamma: f32,
     smoothing_mode: f32,
-    _pad_tail: [f32; 2],
+    /// Real positive-half bin count of the FFT, *including* Nyquist
+    /// (= fft_size/2 + 1). Passed explicitly because deriving it from
+    /// `fft_size * 0.5` would be off by one — and that one bin matters
+    /// at the high end where it would shift the spectrum curve by one
+    /// FFT-bin width.
+    num_bins: f32,
+    _pad_tail: f32,
 }
 
 pub struct SpectrumGpuRenderer {
@@ -366,10 +372,15 @@ impl SpectrumGpuRenderer {
         let spectrum_fraction = self.display.spectrum_fraction.clamp(0.1, 1.0);
         let spectrum_height = (self.target.height as f32 * spectrum_fraction).round();
 
+        // num_bins includes Nyquist (= fft_size/2 + 1) → fft_size = 2·(num_bins - 1).
+        // The shader uses `fft_size` for `bins_per_hz`; if we reconstructed it
+        // from `num_bins * 2` we'd be off by 2, putting the high-end curve a
+        // bin off-position.
+        let fft_size = (self.num_bins.saturating_sub(1) * 2) as f32;
         let uniforms = SpectrumUniforms {
             resolution: [self.target.width as f32, self.target.height as f32],
             sample_rate,
-            fft_size: (self.num_bins * 2) as f32,
+            fft_size,
             freq_min,
             freq_max,
             db_min,
@@ -391,7 +402,8 @@ impl SpectrumGpuRenderer {
             cqt_bins_per_octave: CQT_BINS_PER_OCTAVE as f32,
             spectrogram_gamma: self.display.spectrogram_gamma,
             smoothing_mode: self.display.smoothing_mode,
-            _pad_tail: [0.0; 2],
+            num_bins: self.num_bins as f32,
+            _pad_tail: 0.0,
         };
         let uniform_bytes: &[u8] = unsafe {
             std::slice::from_raw_parts(

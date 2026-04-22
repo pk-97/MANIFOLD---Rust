@@ -1525,7 +1525,14 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             );
         }
     }
+    // Defensive range clip on grid + label draws: with the current
+    // DB_MIN/DB_MAX consts every entry falls inside [-90, 0], but if
+    // the range ever becomes configurable we don't want orphaned grid
+    // lines or labels floating outside the spectrum panel.
     for &db in DB_MINORS {
+        if !(DB_MIN..=DB_MAX).contains(&db) {
+            continue;
+        }
         let y = db_to_y(db, DB_MIN, DB_MAX, spectrum_rect);
         painter.line_segment(
             [
@@ -1536,6 +1543,9 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         );
     }
     for &db in DB_MAJORS {
+        if !(DB_MIN..=DB_MAX).contains(&db) {
+            continue;
+        }
         let y = db_to_y(db, DB_MIN, DB_MAX, spectrum_rect);
         painter.line_segment(
             [
@@ -1644,6 +1654,9 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         }
     }
     for &db in DB_MAJORS {
+        if !(DB_MIN..=DB_MAX).contains(&db) {
+            continue;
+        }
         let y = db_to_y(db, DB_MIN, DB_MAX, spectrum_rect);
         draw_outlined_text(
             &painter,
@@ -2449,14 +2462,20 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
 /// `0` = green, `-0.8` = red, `-1` = white. Piecewise-linear remap onto
 /// the spectrogram's 8-stop ramp so white occupies only the last 10% of
 /// the correlation range — matching the spectrogram's own red→white tail.
+///
+/// Slopes are matched (-0.30 on c) across the c=0 and c=-0.8 join points,
+/// so the color sweeps smoothly as correlation moves through neutral or
+/// into anti-phase — without the visible kink an asymmetric slope
+/// produces on uncorrelated stereo.
 fn correlation_color_ramp(c: f32) -> egui::Color32 {
     let c = c.clamp(-1.0, 1.0);
-    let t = if c >= 0.0 {
-        0.70 - 0.35 * c
-    } else if c >= -0.8 {
-        0.70 + (-c / 0.8) * 0.20
+    let t = if c >= -0.8 {
+        // Single slope -0.30 across c ∈ [-0.8, 1]: c=+1 → 0.40 (cool),
+        // c=0 → 0.70 (warm), c=-0.8 → 0.94 (red).
+        0.70 - 0.30 * c
     } else {
-        0.90 + ((-c - 0.8) / 0.2) * 0.10
+        // Tail to white at c=-1, slope -0.30 maintained.
+        0.94 + 0.30 * (-c - 0.8)
     };
     spectrogram_colormap(t)
 }

@@ -47,6 +47,11 @@ struct Uniforms {
     //     the critical-band curve, much wider at the low end and
     //     tightening toward ~1/9 oct above 5 kHz.
     smoothing_mode: f32,
+    // Real positive-half FFT bin count *including* Nyquist
+    // (= fft_size/2 + 1). Passed explicitly because deriving from
+    // `fft_size * 0.5` would be off by one.
+    num_bins: f32,
+    _pad_tail: f32,
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -79,7 +84,11 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
 }
 
 fn db_to_y_px(db: f32) -> f32 {
-    let t = (db - u.db_min) / (u.db_max - u.db_min);
+    // Guard inverted/zero range — without max(), a misconfigured
+    // db_max == db_min would produce NaN/inf and snap pixels to the
+    // edge non-deterministically.
+    let span = max(u.db_max - u.db_min, 1e-3);
+    let t = (db - u.db_min) / span;
     return u.spectrum_height * (1.0 - clamp(t, 0.0, 1.0));
 }
 
@@ -148,7 +157,7 @@ fn half_octaves_at(freq: f32) -> f32 {
 }
 
 fn smoothed_db_mid(freq: f32) -> f32 {
-    let num_bins = u.fft_size * 0.5;
+    let num_bins = u.num_bins;
     let bins_per_hz = u.fft_size / u.sample_rate;
     let half_oct = half_octaves_at(freq);
     if (half_oct <= 0.0) {
@@ -182,7 +191,7 @@ fn smoothed_db_mid(freq: f32) -> f32 {
 }
 
 fn smoothed_db_side(freq: f32) -> f32 {
-    let num_bins = u.fft_size * 0.5;
+    let num_bins = u.num_bins;
     let bins_per_hz = u.fft_size / u.sample_rate;
     let half_oct = half_octaves_at(freq);
     if (half_oct <= 0.0) {
@@ -311,7 +320,15 @@ fn spectrogram_pixel(px: vec2<f32>) -> vec4<f32> {
         let p = mix(p_lo, p_hi, frac_x);
         raw_db = 10.0 * log(p + 1e-24) / log(10.0);
     } else {
-        let history_idx = i32(floor(u.resolution.x - 1.0 - px.x));
+        // Map screen column ↔ history age via integer pixel index. Using
+        // floor(resolution.x - 1.0 - px.x) was DPI-fragile: with the
+        // pixel-center fragment convention (px.x = i + 0.5), it could
+        // round inconsistently along the edges and produce a 1-pixel
+        // seam at the left under fractional scaling. Computing
+        // `cols_from_right = i - floor(px.x)` is bit-stable per pixel.
+        let res_w_i = i32(u.resolution.x);
+        let px_col = i32(floor(px.x));
+        let history_idx = (res_w_i - 1) - px_col;
         if (history_idx < 0 || history_idx >= history_cols_i) {
             return vec4<f32>(0.0);
         }

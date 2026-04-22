@@ -182,7 +182,8 @@ fn run_fft_stats(l: &[f32], r: &[f32], sr: f32) -> (RefEnvelope, RefEnvelope) {
     side_a.set_overlap_ratio(REF_OVERLAP_RATIO);
     side_a.set_averaging_ms(REF_AVG_MS);
 
-    let num_bins = REF_FFT_SIZE / 2;
+    // Match the live `Analyzer`'s positive-half bin count (includes Nyquist).
+    let num_bins = REF_FFT_SIZE / 2 + 1;
     let mut mid_samples: Vec<Vec<f32>> = (0..num_bins).map(|_| Vec::new()).collect();
     let mut side_samples: Vec<Vec<f32>> = (0..num_bins).map(|_| Vec::new()).collect();
 
@@ -217,14 +218,22 @@ fn run_fft_stats(l: &[f32], r: &[f32], sr: f32) -> (RefEnvelope, RefEnvelope) {
     (mid_env, side_env)
 }
 
-/// Reduce per-FFT-bin sample vectors to a `REF_POINTS` log-spaced grid by
-/// taking the nearest FFT bin for each grid freq and extracting low/high
-/// percentiles. Slots whose bin is above source Nyquist fall back to
-/// `MIN_DB`. Percentiles are computed once per bin into a cache so that
-/// adjacent log slots sharing the same source bin (unavoidable at the
-/// low end where one 2.7 Hz FFT bin spans many log slots) all read the
-/// same real value instead of the first slot winning and the rest
-/// finding the bin empty → silence floor.
+/// Reduce per-FFT-bin sample vectors to a `REF_POINTS` log-spaced grid.
+///
+/// Each FFT bin is reduced once to its [low, high] percentile pair, then
+/// every log-spaced display point linearly interpolates between the two
+/// FFT bins straddling its frequency. This eliminates the visible
+/// "staircase" at low frequency where one 2.7 Hz bin spans many log
+/// slots — adjacent slots now ramp smoothly between the percentiles of
+/// the FFT bins on either side, instead of all snapping to the same
+/// nearest bin's value. At high frequencies where each log slot covers
+/// many bins, the fractional part is small and interpolation degenerates
+/// gracefully to "use the closer bin's percentile."
+///
+/// Percentile-of-mixed-distributions ≠ mix-of-percentiles, but for visual
+/// envelope display the linear blend is the right trade-off: it removes
+/// the bin-aligned discontinuities that read as "broken" without
+/// introducing a smoothing kernel that would distort actual content.
 fn collapse_to_log_grid(samples: &mut [Vec<f32>], sr: f32) -> RefEnvelope {
     let bin_hz = sr / REF_FFT_SIZE as f32;
     let log_min = REF_FREQ_MIN.ln();
@@ -248,17 +257,30 @@ fn collapse_to_log_grid(samples: &mut [Vec<f32>], sr: f32) -> RefEnvelope {
         bin_samples.shrink_to_fit();
     }
 
-    // Pass 2: map each log slot to its nearest FFT bin and look up the
-    // cached percentiles.
+    // Pass 2: linear interpolation between the two FFT bins straddling
+    // each log slot's frequency. Both endpoints must have data; if either
+    // is missing (above source Nyquist) the slot falls back to MIN_DB so
+    // the curve cleanly stops at the source band edge instead of fading
+    // into the noise floor.
     let mut bounds = Vec::with_capacity(REF_POINTS);
     for p in 0..REF_POINTS {
         let t = p as f32 / denom;
         let freq = (log_min + t * (log_max - log_min)).exp();
-        let bin = (freq / bin_hz).round() as usize;
-        match bin_percentiles.get(bin).and_then(|cell| *cell) {
-            Some(pair) => bounds.push(pair),
-            None => bounds.push([MIN_DB, MIN_DB]),
-        }
+        let bin_f = (freq / bin_hz).max(0.0);
+        let bin_lo = bin_f.floor() as usize;
+        let bin_hi = bin_lo + 1;
+        let frac = bin_f - bin_lo as f32;
+        let pair_lo = bin_percentiles.get(bin_lo).and_then(|c| *c);
+        let pair_hi = bin_percentiles.get(bin_hi).and_then(|c| *c);
+        let pair = match (pair_lo, pair_hi) {
+            (Some(a), Some(b)) => [
+                a[0] + (b[0] - a[0]) * frac,
+                a[1] + (b[1] - a[1]) * frac,
+            ],
+            // Past the last valid bin → silence floor.
+            (None, _) | (_, None) => [MIN_DB, MIN_DB],
+        };
+        bounds.push(pair);
     }
     RefEnvelope { bounds }
 }
