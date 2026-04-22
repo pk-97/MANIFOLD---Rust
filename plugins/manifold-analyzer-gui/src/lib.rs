@@ -72,15 +72,21 @@ const DB_MAX: f32 = 0.0;
 /// commercial-release references).
 pub const REF_SLOT_COUNT: usize = 4;
 
-/// Display colours per slot. Chosen to sit in the cyan→magenta half
-/// of the hue wheel so they read clearly against the red Mid and
-/// green Side spectrum fills — colours in the red/green/orange/yellow
-/// quadrant blend into the live curves and become unreadable.
+/// Display colours per slot. Two constraints stack here:
+///
+/// 1. Stay out of the warm half of the wheel so the lines don't sink
+///    into the Mid (chartreuse green ≈ #B8FA61) or Side (orange-red
+///    ≈ #F24D26) fills the GPU shader paints behind them.
+/// 2. Stay distinct from each other when stacked. Keeping all four in
+///    the cyan→magenta band looked tidy but made adjacent slots
+///    indistinguishable; this palette spreads slots across hue *and*
+///    lightness (cyan light, magenta mid, violet dark, near-white max)
+///    so each curve reads as its own line even with all four loaded.
 const REF_SLOT_COLORS: [[u8; 3]; REF_SLOT_COUNT] = [
-    [90, 215, 255],   // cyan
-    [255, 100, 210],  // magenta
-    [150, 150, 255],  // electric blue
-    [210, 150, 255],  // lavender
+    [50, 210, 255],   // cyan        — light, cool blue
+    [255, 75, 205],   // hot magenta — saturated, warm pink (not red)
+    [140, 100, 255],  // violet      — deep blue-purple, darker than the others
+    [240, 240, 240],  // near-white  — neutral, maximum contrast vs every fill
 ];
 
 /// Gaussian smoothing sigma (in log-grid points) per `FreqSmoothing`
