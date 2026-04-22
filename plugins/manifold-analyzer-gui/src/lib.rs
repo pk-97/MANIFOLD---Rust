@@ -60,10 +60,6 @@ const MAX_SPECTRUM_H: u32 = 2048;
 const DB_MIN: f32 = -90.0;
 const DB_MAX: f32 = 0.0;
 
-/// Fixed width of the right-side loudness meter panel (pixels).
-/// Wide enough for a vertical meter column, the scale labels, and
-/// readouts like "-14.4 LUFS" without truncation at the default
-/// egui font size.
 // Right-column width and top/bottom split are runtime-adjustable via the
 // grab handle at the 2×2 cross. See `AnalyzerGuiShared::right_column_width`
 // and `top_fraction`.
@@ -1109,6 +1105,59 @@ struct EditorState {
     /// biquad sin/cos evaluation — shader now samples this LUT with one
     /// 2-tap blend per pixel.
     weighting_lut_cache: WeightingLutCache,
+    /// Cache of Gaussian-smoothed reference envelopes, keyed by
+    /// (analysis fingerprint, smoothing mode). Rebuilt only when a slot
+    /// gets a new analysis or the user switches smoothing mode — the raw
+    /// `smooth_envelope` call is O(REF_POINTS × kernel_radius) with `exp`
+    /// and `powf` in the inner loop, so recomputing it 60× per second was
+    /// burning serious CPU on the GUI thread.
+    ref_envelope_cache: RefEnvelopeCache,
+}
+
+#[derive(Default)]
+struct RefEnvelopeCache {
+    entries: [Option<RefCacheEntry>; REF_SLOT_COUNT],
+}
+
+struct RefCacheEntry {
+    fingerprint: u64,
+    smoothing: FreqSmoothing,
+    smoothed: Vec<[f32; 2]>,
+}
+
+/// Compact fingerprint of a reference analysis. Changes when a new file
+/// is loaded; stable across frames and across visibility toggles. Samples
+/// a handful of envelope points rather than hashing all 1024 — the
+/// probability that two distinct real audio files produce identical values
+/// at every sampled index AND the same integrated LUFS is negligible.
+fn ref_analysis_fingerprint(a: &RefAnalysis) -> u64 {
+    let bounds = a.mid.bounds.as_slice();
+    let n = bounds.len();
+    let pick = |i: usize| -> ([f32; 2], u32) {
+        let b = bounds.get(i).copied().unwrap_or([MIN_DB, MIN_DB]);
+        (b, i as u32)
+    };
+    let samples = [
+        pick(0),
+        pick(n / 4),
+        pick(n / 2),
+        pick((3 * n) / 4),
+        pick(n.saturating_sub(1)),
+    ];
+    let mut h: u64 = 0xcbf29ce484222325; // FNV-1a offset basis
+    let mut mix = |x: u32| {
+        h ^= x as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    };
+    mix(a.integrated_lufs.to_bits());
+    mix(a.lowpass_hz.map(f32::to_bits).unwrap_or(0));
+    mix(a.source_sample_rate.to_bits());
+    for (pair, idx) in samples {
+        mix(pair[0].to_bits());
+        mix(pair[1].to_bits());
+        mix(idx);
+    }
+    h
 }
 
 struct WeightingLutCache {
@@ -1169,6 +1218,7 @@ pub fn create_editor(
         right_scratch: vec![MIN_DB; num_bins],
         correlation_scratch: vec![0.0; num_bins],
         weighting_lut_cache: WeightingLutCache::default(),
+        ref_envelope_cache: RefEnvelopeCache::default(),
     };
     create_egui_editor(
         egui_state,
@@ -1575,6 +1625,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         state.shared.integrated_lufs(),
         state.params.weighting.value(),
         state.params.freq_smoothing.value(),
+        &mut state.ref_envelope_cache,
     );
 
     // 3. Spectrum-region labels. Transparent shader lets these sit on
@@ -1675,6 +1726,7 @@ fn draw_ref_bands(
     live_integrated_lufs: f32,
     weighting: Weighting,
     smoothing_mode: FreqSmoothing,
+    cache: &mut RefEnvelopeCache,
 ) {
     if rect.width() <= 0.0 || rect.height() <= 0.0 {
         return;
@@ -1731,8 +1783,26 @@ fn draw_ref_bands(
         // Gaussian-smoothed percentile curves. Width follows the
         // toolbar smoothing mode; ERB mode varies σ per grid point to
         // match the ear's critical-band curve (wide low-end smoothing,
-        // tight above 5 kHz).
-        let smoothed = smooth_envelope(&envelope.bounds, smoothing_mode);
+        // tight above 5 kHz). Cached per slot — the result only changes
+        // when the user loads a new file or switches smoothing mode, so
+        // reusing it saves ~60–120 K exp/powf calls per frame per slot.
+        let fp = ref_analysis_fingerprint(analysis);
+        let need_rebuild = match &cache.entries[slot_idx] {
+            Some(e) => e.fingerprint != fp || e.smoothing != smoothing_mode,
+            None => true,
+        };
+        if need_rebuild {
+            let smoothed = smooth_envelope(&envelope.bounds, smoothing_mode);
+            cache.entries[slot_idx] = Some(RefCacheEntry {
+                fingerprint: fp,
+                smoothing: smoothing_mode,
+                smoothed,
+            });
+        }
+        let smoothed = &cache.entries[slot_idx]
+            .as_ref()
+            .expect("cache entry populated above")
+            .smoothed;
 
         // Sub-sample the smoothed envelope with a Catmull-Rom cubic
         // spline between adjacent grid points. 4× linear upsample left
@@ -1870,7 +1940,7 @@ fn smooth_envelope(bounds: &[[f32; 2]], smoothing: FreqSmoothing) -> Vec<[f32; 2
     let fixed_sigma = ref_smooth_sigma_points(smoothing);
 
     let threshold = MIN_DB + 1.0;
-    for i in 0..n {
+    for (i, slot) in out.iter_mut().enumerate() {
         // Per-point σ. Fixed modes use one value; ERB scales σ with the
         // ERB half-width at this grid point's frequency.
         let sigma = match fixed_sigma {
@@ -1890,10 +1960,10 @@ fn smooth_envelope(bounds: &[[f32; 2]], smoothing: FreqSmoothing) -> Vec<[f32; 2
         let mut lo_wsum = 0.0f32;
         let mut hi_pow_sum = 0.0f32;
         let mut hi_wsum = 0.0f32;
-        for j in lo_i..hi_i {
+        for (offset, pair) in bounds[lo_i..hi_i].iter().enumerate() {
+            let j = lo_i + offset;
             let d = j as f32 - i as f32;
             let w = (-0.5 * d * d * inv_sigma_sq).exp();
-            let pair = bounds[j];
             if pair[0] > threshold {
                 lo_pow_sum += 10.0_f32.powf(pair[0] * 0.1) * w;
                 lo_wsum += w;
@@ -1903,7 +1973,7 @@ fn smooth_envelope(bounds: &[[f32; 2]], smoothing: FreqSmoothing) -> Vec<[f32; 2
                 hi_wsum += w;
             }
         }
-        out[i] = [
+        *slot = [
             if lo_wsum > 0.0 {
                 10.0 * (lo_pow_sum / lo_wsum).max(1e-30).log10()
             } else {
@@ -2161,17 +2231,25 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
     // (and no rectangular plateaus around narrow peaks).
     const LR_SMOOTH_N: usize = 32;
     let mut bh_weights = [0.0f32; LR_SMOOTH_N];
-    for i in 0..LR_SMOOTH_N {
+    for (i, w) in bh_weights.iter_mut().enumerate() {
         let phase = (i as f32 + 0.5) * (std::f32::consts::TAU / LR_SMOOTH_N as f32);
-        bh_weights[i] = 0.35875 - 0.48829 * phase.cos()
-            + 0.14128 * (2.0 * phase).cos()
+        *w = 0.35875 - 0.48829 * phase.cos() + 0.14128 * (2.0 * phase).cos()
             - 0.01168 * (3.0 * phase).cos();
     }
 
-    // Walk one point per pixel row (~450 rows at 1x DPI, so cheap).
+    // Walk one point per pixel row. Recomputed every frame so the UI
+    // follows the audio publish cadence at display refresh rate — the
+    // smoothed values do change once per audio hop, and tying the
+    // recompute to a cache would introduce visible stepping between
+    // publishes. Packs the balance-line vertices and correlation-strip
+    // mesh in a single pass.
     let rows = rect.height().ceil() as i32 + 1;
     let mut pts = Vec::with_capacity(rows as usize);
-    let mut strip_rows: Vec<(f32, egui::Color32)> = Vec::with_capacity(rows as usize);
+    let mut strip_mesh = egui::epaint::Mesh::default();
+    strip_mesh.vertices.reserve((rows as usize) * 2);
+    strip_mesh
+        .indices
+        .reserve((rows as usize).saturating_sub(1) * 6);
 
     for row in 0..rows {
         let y = rect.bottom() - row as f32;
@@ -2209,8 +2287,7 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
             let mut r_pow_sum = 0.0f32;
             let mut c_sum = 0.0f32;
             let mut w_sum = 0.0f32;
-            for i in 0..LR_SMOOTH_N {
-                let w = bh_weights[i];
+            for (i, &w) in bh_weights.iter().enumerate() {
                 let b_f = (bin_lo_f + (i as f32 + 0.5) * step).clamp(0.0, max_bin);
                 let b0 = b_f.floor() as usize;
                 let b1 = (b0 + 1).min(num_bins - 1);
@@ -2248,30 +2325,34 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
         let x = center_x - delta_db * px_per_db;
         pts.push(egui::pos2(x, y));
 
-        // Correlation colour for this row, muted to grey when silent.
+        // Correlation colour for this row, faded to black in silent bins
+        // so the heatmap only lights up where there's real signal. The
+        // strip used to be ~450 individual `rect_filled` calls per frame
+        // — a real hot spot in egui's tessellator. A single mesh with
+        // two verts per row and two triangles bridging adjacent rows
+        // produces identical output for one shape instead of hundreds.
         let corr_color = correlation_color_ramp(corr);
-        // Silent bins fade all the way to black rather than a neutral
-        // grey — makes the colour band light up only where there's
-        // real signal, and gives the loud regions much more punch.
-        let neutral = egui::Color32::BLACK;
-        strip_rows.push((y, lerp_color_rgb(neutral, corr_color, fade)));
-    }
-
-    // Full-width correlation heatmap: one 1-pixel row of colour per
-    // sampled frequency, spanning the entire column. Acts as the
-    // background for everything else — grid + balance line draw on
-    // top. Makes the colour far more legible than a 14 px centre strip
-    // and lets the balance line show imbalance directly against the
-    // phase-coloured band at each frequency.
-    for &(y, color) in &strip_rows {
-        painter.rect_filled(
-            egui::Rect::from_min_max(
-                egui::pos2(rect.left(), y - 0.5),
-                egui::pos2(rect.right(), y + 0.5),
-            ),
-            0.0,
+        let color = lerp_color_rgb(egui::Color32::BLACK, corr_color, fade);
+        let vi = strip_mesh.vertices.len() as u32;
+        strip_mesh.vertices.push(egui::epaint::Vertex {
+            pos: egui::pos2(rect.left(), y),
+            uv: egui::epaint::WHITE_UV,
             color,
-        );
+        });
+        strip_mesh.vertices.push(egui::epaint::Vertex {
+            pos: egui::pos2(rect.right(), y),
+            uv: egui::epaint::WHITE_UV,
+            color,
+        });
+        if vi >= 2 {
+            strip_mesh.indices.extend_from_slice(&[
+                vi - 2, vi - 1, vi,
+                vi - 1, vi + 1, vi,
+            ]);
+        }
+    }
+    if !strip_mesh.indices.is_empty() {
+        painter.add(egui::Shape::mesh(strip_mesh));
     }
 
     // Grid on top of the heatmap. Slightly alpha'd so colours read
@@ -2363,25 +2444,60 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
     );
 }
 
-/// Per-bin correlation → red/yellow/green ramp. `-1` = polarity
-/// flipped (red), `0` = uncorrelated (neutral yellow), `+1` = phase-
-/// aligned mono (green). Interpolated in straight sRGB.
+/// Per-bin correlation → spectrogram colormap, mapped upside-down so the
+/// worst state (anti-phase) reads as the "loudest" color. `+1` = blue,
+/// `0` = green, `-0.8` = red, `-1` = white. Piecewise-linear remap onto
+/// the spectrogram's 8-stop ramp so white occupies only the last 10% of
+/// the correlation range — matching the spectrogram's own red→white tail.
 fn correlation_color_ramp(c: f32) -> egui::Color32 {
     let c = c.clamp(-1.0, 1.0);
-    // Anchor colours: tuned to stay legible against both the bright
-    // cyan balance line and the dark panel background.
-    const RED: [u8; 3] = [220, 60, 60];
-    const YELLOW: [u8; 3] = [220, 200, 60];
-    const GREEN: [u8; 3] = [100, 200, 120];
-    let (a, b, t) = if c >= 0.0 {
-        (YELLOW, GREEN, c)
+    let t = if c >= 0.0 {
+        0.70 - 0.35 * c
+    } else if c >= -0.8 {
+        0.70 + (-c / 0.8) * 0.20
     } else {
-        (YELLOW, RED, -c)
+        0.90 + ((-c - 0.8) / 0.2) * 0.10
     };
-    let lerp = |x: u8, y: u8, t: f32| {
-        (x as f32 * (1.0 - t) + y as f32 * t).round().clamp(0.0, 255.0) as u8
+    spectrogram_colormap(t)
+}
+
+/// Rust port of the `colormap()` function in `spectrum_line.wgsl`. Kept
+/// value-for-value identical so the correlation strip and the spectrogram
+/// share a single visual vocabulary.
+fn spectrogram_colormap(t_in: f32) -> egui::Color32 {
+    let t = t_in.clamp(0.0, 1.0);
+    const C0: [f32; 3] = [0.00, 0.00, 0.00];
+    const C1: [f32; 3] = [0.00, 0.00, 0.45];
+    const C2: [f32; 3] = [0.00, 0.10, 0.95];
+    const C3: [f32; 3] = [0.00, 0.80, 0.95];
+    const C4: [f32; 3] = [0.20, 0.95, 0.20];
+    const C5: [f32; 3] = [0.95, 0.95, 0.00];
+    const C6: [f32; 3] = [0.95, 0.00, 0.00];
+    const C7: [f32; 3] = [1.00, 1.00, 1.00];
+    let mix = |a: [f32; 3], b: [f32; 3], u: f32| -> [f32; 3] {
+        [
+            a[0] * (1.0 - u) + b[0] * u,
+            a[1] * (1.0 - u) + b[1] * u,
+            a[2] * (1.0 - u) + b[2] * u,
+        ]
     };
-    egui::Color32::from_rgb(lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t))
+    let rgb = if t < 0.15 {
+        mix(C0, C1, t / 0.15)
+    } else if t < 0.35 {
+        mix(C1, C2, (t - 0.15) / 0.20)
+    } else if t < 0.55 {
+        mix(C2, C3, (t - 0.35) / 0.20)
+    } else if t < 0.70 {
+        mix(C3, C4, (t - 0.55) / 0.15)
+    } else if t < 0.80 {
+        mix(C4, C5, (t - 0.70) / 0.10)
+    } else if t < 0.90 {
+        mix(C5, C6, (t - 0.80) / 0.10)
+    } else {
+        mix(C6, C7, (t - 0.90) / 0.10)
+    };
+    let to_u8 = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
+    egui::Color32::from_rgb(to_u8(rgb[0]), to_u8(rgb[1]), to_u8(rgb[2]))
 }
 
 /// Straight sRGB linear interpolation between two `Color32`s. Used to
