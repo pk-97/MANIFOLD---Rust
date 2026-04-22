@@ -159,6 +159,9 @@ pub struct GpuRenderPipeline {
     pub(crate) state: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     pub slot_map: SlotMap,
     pub label: String,
+    /// Whether this pipeline needs a naga sizes buffer bound (fragment or
+    /// vertex shader uses `arrayLength()` on a runtime-sized storage array).
+    pub needs_sizes_buffer: bool,
 }
 
 impl GpuRenderPipeline {
@@ -174,6 +177,7 @@ impl Clone for GpuRenderPipeline {
             state: self.state.clone(),
             slot_map: self.slot_map.clone(),
             label: self.label.clone(),
+            needs_sizes_buffer: self.needs_sizes_buffer,
         }
     }
 }

@@ -27,6 +27,15 @@ pub(crate) enum EncoderState {
 /// resource is already bound at a slot from a previous dispatch.
 const CACHE_SLOTS: usize = 16;
 
+/// Upper bound on the number of Metal buffer slots naga's sizes buffer can
+/// describe. The sizes buffer is an array of `u32` indexed by metal buffer
+/// slot — entry `i` holds the byte-size of the buffer bound at slot `i`,
+/// used by SPIRV-Cross-emitted MSL to resolve `arrayLength()` calls on
+/// runtime-sized storage arrays. Raising this means the `[u32; N]` scratch
+/// grows; Metal itself allows up to 31 buffer args per stage so 32 covers
+/// the entire addressable slot space.
+const MAX_BUFFER_SLOTS: usize = 32;
+
 pub(super) struct ComputeBindCache {
     textures: [*const c_void; CACHE_SLOTS],
     samplers: [*const c_void; CACHE_SLOTS],
@@ -159,9 +168,7 @@ impl GpuEncoder {
             enc.setComputePipelineState(&pipeline.state);
         }
 
-        const MAX_BUFFER_SLOTS: usize = 32;
-        let mut buffer_sizes = [0u32; MAX_BUFFER_SLOTS];
-        let mut buffer_sizes_len: usize = 0;
+        let (buffer_sizes, buffer_sizes_len) = collect_buffer_sizes(&pipeline.slot_map, bindings);
 
         for binding in bindings {
             match binding {
@@ -185,12 +192,6 @@ impl GpuEncoder {
                         }
                         if idx < CACHE_SLOTS {
                             self.compute_cache.buffers[idx] = (id, *offset);
-                        }
-                    }
-                    if idx < MAX_BUFFER_SLOTS {
-                        buffer_sizes[idx] = buffer.size as u32;
-                        if idx >= buffer_sizes_len {
-                            buffer_sizes_len = idx + 1;
                         }
                     }
                 }
@@ -249,15 +250,16 @@ impl GpuEncoder {
         }
 
         if pipeline.needs_sizes_buffer {
-            let slot = pipeline
+            let slot_idx = pipeline
                 .slot_map
                 .get(SIZES_BUFFER_BINDING)
-                .expect("sizes buffer slot missing");
+                .expect("sizes buffer slot missing")
+                .metal_index as usize;
             unsafe {
                 enc.setBytes_length_atIndex(
                     NonNull::new(buffer_sizes.as_ptr() as *mut c_void).unwrap(),
                     buffer_sizes_len * 4,
-                    slot.metal_index as usize,
+                    slot_idx,
                 );
             }
         }
@@ -839,6 +841,8 @@ impl GpuEncoder {
             self.render_cache.vertex_buf_30 = vb_id;
         }
 
+        let (buffer_sizes, buffer_sizes_len) = collect_buffer_sizes(&pipeline.slot_map, bindings);
+
         for binding in bindings {
             match binding {
                 GpuBinding::Buffer {
@@ -944,6 +948,16 @@ impl GpuEncoder {
                     }
                 }
             }
+        }
+
+        if pipeline.needs_sizes_buffer {
+            bind_sizes_buffer_render(
+                &enc,
+                pipeline,
+                &buffer_sizes,
+                buffer_sizes_len,
+                RenderStages::Both,
+            );
         }
 
         unsafe {
@@ -1339,6 +1353,8 @@ fn apply_bindings_draw_fullscreen(
     pipeline: &GpuRenderPipeline,
     bindings: &[GpuBinding],
 ) {
+    let (buffer_sizes, buffer_sizes_len) = collect_buffer_sizes(&pipeline.slot_map, bindings);
+
     for binding in bindings {
         match binding {
             GpuBinding::Buffer {
@@ -1401,6 +1417,16 @@ fn apply_bindings_draw_fullscreen(
             }
         }
     }
+
+    if pipeline.needs_sizes_buffer {
+        bind_sizes_buffer_render(
+            enc,
+            pipeline,
+            &buffer_sizes,
+            buffer_sizes_len,
+            RenderStages::Fragment,
+        );
+    }
 }
 
 /// Apply bindings on both vertex and fragment stages (used for draw_instanced et al.).
@@ -1409,6 +1435,8 @@ fn apply_bindings_draw_both_stages(
     pipeline: &GpuRenderPipeline,
     bindings: &[GpuBinding],
 ) {
+    let (buffer_sizes, buffer_sizes_len) = collect_buffer_sizes(&pipeline.slot_map, bindings);
+
     for binding in bindings {
         match binding {
             GpuBinding::Buffer {
@@ -1478,6 +1506,92 @@ fn apply_bindings_draw_both_stages(
                         slot.metal_index as usize,
                     );
                 }
+            }
+        }
+    }
+
+    if pipeline.needs_sizes_buffer {
+        bind_sizes_buffer_render(
+            enc,
+            pipeline,
+            &buffer_sizes,
+            buffer_sizes_len,
+            RenderStages::Both,
+        );
+    }
+}
+
+/// Which stage(s) receive the naga sizes buffer. Mirrors the stage set that
+/// the corresponding `apply_bindings_draw_*` helper binds resources onto —
+/// fragment-only for the fullscreen path (trivial VS has no bindings),
+/// vertex+fragment for everything else.
+#[derive(Copy, Clone)]
+enum RenderStages {
+    Fragment,
+    Both,
+}
+
+/// Walk a binding list and build the naga "sizes buffer" — a `u32` array
+/// indexed by Metal buffer slot where entry `i` holds the byte-size of the
+/// buffer bound at slot `i`. SPIRV-Cross-generated MSL reads this to resolve
+/// `arrayLength()` on runtime-sized storage arrays.
+///
+/// Returns `(sizes, len)`; `len` is one past the highest slot index that
+/// received a buffer, so only the populated prefix is uploaded.
+fn collect_buffer_sizes(
+    slot_map: &SlotMap,
+    bindings: &[GpuBinding],
+) -> ([u32; MAX_BUFFER_SLOTS], usize) {
+    let mut sizes = [0u32; MAX_BUFFER_SLOTS];
+    let mut len: usize = 0;
+    for binding in bindings {
+        if let GpuBinding::Buffer {
+            binding: b, buffer, ..
+        } = binding
+        {
+            let Some(slot) = slot_map.get(*b) else {
+                continue;
+            };
+            let idx = slot.metal_index as usize;
+            if idx < MAX_BUFFER_SLOTS {
+                sizes[idx] = buffer.size as u32;
+                if idx >= len {
+                    len = idx + 1;
+                }
+            }
+        }
+    }
+    (sizes, len)
+}
+
+/// Upload the sizes buffer as inline bytes to one or both render stages.
+/// Without this the shader's `arrayLength()` reads an unbound buffer slot —
+/// on Apple Silicon that typically returns 0, which silently collapses any
+/// `n < 2` early-out branch. See `spectrum_line.wgsl`'s `weighting_db()`
+/// for the case that surfaced this bug (weighted curves went flat once the
+/// LUT moved off the per-pixel biquad onto a runtime-sized array).
+fn bind_sizes_buffer_render(
+    enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+    pipeline: &GpuRenderPipeline,
+    sizes: &[u32; MAX_BUFFER_SLOTS],
+    len: usize,
+    stages: RenderStages,
+) {
+    let slot_idx = pipeline
+        .slot_map
+        .get(SIZES_BUFFER_BINDING)
+        .expect("sizes buffer slot missing in render pipeline despite needs_sizes_buffer")
+        .metal_index as usize;
+    let ptr = NonNull::new(sizes.as_ptr() as *mut c_void).unwrap();
+    let byte_len = len * 4;
+    unsafe {
+        match stages {
+            RenderStages::Fragment => {
+                enc.setFragmentBytes_length_atIndex(ptr, byte_len, slot_idx);
+            }
+            RenderStages::Both => {
+                enc.setVertexBytes_length_atIndex(ptr, byte_len, slot_idx);
+                enc.setFragmentBytes_length_atIndex(ptr, byte_len, slot_idx);
             }
         }
     }

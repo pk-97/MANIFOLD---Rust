@@ -708,10 +708,12 @@ impl GpuDevice {
         };
         drop(archive_guard);
 
+        let needs_sizes_buffer = slot_map.get(SIZES_BUFFER_BINDING).is_some();
         let pipeline = GpuRenderPipeline {
             state,
             slot_map,
             label: label.to_string(),
+            needs_sizes_buffer,
         };
         self.render_cache
             .lock()
@@ -901,10 +903,12 @@ impl GpuDevice {
         };
         drop(archive_guard);
 
+        let needs_sizes_buffer = slot_map.get(SIZES_BUFFER_BINDING).is_some();
         let pipeline = GpuRenderPipeline {
             state,
             slot_map,
             label: label.to_string(),
+            needs_sizes_buffer,
         };
         self.render_cache
             .lock()
@@ -1131,10 +1135,12 @@ impl GpuDevice {
         };
         drop(archive_guard);
 
+        let needs_sizes_buffer = slot_map.get(SIZES_BUFFER_BINDING).is_some();
         let pipeline = GpuRenderPipeline {
             state,
             slot_map,
             label: label.to_string(),
+            needs_sizes_buffer,
         };
         self.render_cache
             .lock()
