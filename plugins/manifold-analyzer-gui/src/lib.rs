@@ -1659,7 +1659,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     }
 
     // Allocate the rect for the whole spectrum view.
-    let (rect, _) = ui.allocate_exact_size(available, egui::Sense::hover());
+    let (rect, response) = ui.allocate_exact_size(available, egui::Sense::hover());
     let painter = ui.painter_at(rect);
     let nyquist = sr * 0.5;
     let freq_min_user = state.params.freq_min_hz.value() as f32;
@@ -1871,6 +1871,98 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     // the cells, but the chips covered the spectrogram + L/R column
     // content. Keep the cells unobstructed; the toolbar groups every
     // control by purpose anyway.
+
+    // 5. Crosshair + readout when hovering. Two distinct sub-regions
+    //    inside the same ui-allocated rect: the MS plot on top and the
+    //    spectrogram below. Spectrum readout shows freq + cursor-dB +
+    //    actual Mid/Side dB at that freq; spectrogram shows freq +
+    //    beat (sync mode) + channel (stacked L+R mode).
+    if let Some(cursor) = response.hover_pos() {
+        let weighting = state.params.weighting.value();
+        let weighting_align = weighting_align_offset(weighting, freq_min, freq_max);
+        let fft_size = state.shared.fft_size();
+        if spectrum_rect.contains(cursor) {
+            let freq = x_to_freq(cursor.x, freq_min, freq_max, spectrum_rect);
+            let cursor_db = y_to_db(cursor.y, DB_MIN, DB_MAX, spectrum_rect);
+            let w_db = weighting_db_at(weighting, freq) + weighting_align;
+            let mid_raw = sample_bin_db(&state.mid_scratch, freq, sr, fft_size);
+            let side_raw = sample_bin_db(&state.side_scratch, freq, sr, fft_size);
+            let mid_db = mid_raw + w_db;
+            let side_db = side_raw + w_db;
+            let lines = vec![
+                format_hz_readout(freq),
+                format!("y: {:>6.1} dB", cursor_db),
+                format!("M: {:>6.1} dB", mid_db.max(MIN_DB)),
+                format!("S: {:>6.1} dB", side_db.max(MIN_DB)),
+            ];
+            let p = painter.with_clip_rect(spectrum_rect);
+            draw_crosshair(&p, spectrum_rect, cursor, &lines);
+        } else if spectrogram_rect.contains(cursor) && spectrogram_rect.height() > 4.0 {
+            let stacked = matches!(
+                state.shared.spectrogram_source(),
+                SpectrogramSource::LeftRight
+            );
+            let mut lines: Vec<String> = Vec::with_capacity(4);
+            let freq;
+            if stacked {
+                let mid_y = spectrogram_rect.center().y;
+                if cursor.y < mid_y {
+                    let top = egui::Rect::from_min_max(
+                        spectrogram_rect.min,
+                        egui::pos2(spectrogram_rect.right(), mid_y),
+                    );
+                    freq = y_to_freq_log(cursor.y, freq_min, freq_max, top);
+                    lines.push("ch: L".to_string());
+                } else {
+                    let bot = egui::Rect::from_min_max(
+                        egui::pos2(spectrogram_rect.left(), mid_y),
+                        spectrogram_rect.max,
+                    );
+                    freq = y_to_freq_log(cursor.y, freq_min, freq_max, bot);
+                    lines.push("ch: R".to_string());
+                }
+            } else {
+                let label = match state.shared.spectrogram_source() {
+                    SpectrogramSource::Mid => "ch: M",
+                    SpectrogramSource::Side => "ch: S",
+                    SpectrogramSource::LeftRight => "ch: L|R",
+                };
+                lines.push(label.to_string());
+                freq = y_to_freq_log(cursor.y, freq_min, freq_max, spectrogram_rect);
+            }
+            lines.push(format_hz_readout(freq));
+
+            // Sync mode: x → beat position from the current window
+            // start. Non-sync mode skips the time axis (raw history
+            // depends on the worker hop rate, not a user-visible time
+            // base — we'd rather show nothing than a misleading number).
+            let (bpm_opt, beat_opt, _) = state.shared.transport();
+            let sync_on = state.params.sync.value();
+            if sync_on {
+                if let (Some(_bpm), Some(beat_pos)) = (bpm_opt, beat_opt) {
+                    let beats_per_window = state.params.sync_window.value().beats();
+                    if beats_per_window > 0.0 {
+                        let frac = ((cursor.x - spectrogram_rect.left())
+                            / spectrogram_rect.width().max(1.0))
+                            .clamp(0.0, 1.0);
+                        let window_start_beat = (beat_pos / beats_per_window as f64).floor()
+                            * beats_per_window as f64;
+                        let absolute_beat = window_start_beat + (frac * beats_per_window) as f64;
+                        let bar_num =
+                            (absolute_beat.floor() as i64).div_euclid(BEATS_PER_BAR as i64) + 1;
+                        let beat_in_bar =
+                            (absolute_beat.floor() as i64).rem_euclid(BEATS_PER_BAR as i64) + 1;
+                        let beat_frac = absolute_beat - absolute_beat.floor();
+                        lines.push(format!("{}.{}.{:02}", bar_num, beat_in_bar,
+                            (beat_frac * 100.0) as i32));
+                    }
+                }
+            }
+
+            let p = painter.with_clip_rect(spectrogram_rect);
+            draw_crosshair(&p, spectrogram_rect, cursor, &lines);
+        }
+    }
 }
 
 fn draw_reference_curve(
@@ -2434,7 +2526,7 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
         let (_rect, _) = ui.allocate_exact_size(available, egui::Sense::hover());
         return;
     }
-    let (rect, _) = ui.allocate_exact_size(available, egui::Sense::hover());
+    let (rect, response) = ui.allocate_exact_size(available, egui::Sense::hover());
     let painter = ui.painter_at(rect);
 
     painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(8, 10, 14));
@@ -2702,6 +2794,38 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
     // L/R range lives in the global top toolbar (`draw_controls`)
     // alongside the spectrogram source / Sharpen group; keeping the
     // column unobstructed reads better than chips on the visual.
+
+    // Crosshair + readout. Y maps to log-frequency (matching the
+    // freq_to_y closure above); X maps to dB delta around the
+    // centerline. Z lines show the post-weighting L and R levels at
+    // the cursor freq so the readout matches the curve / heatmap.
+    if let Some(cursor) = response.hover_pos() {
+        if rect.contains(cursor) {
+            let freq = y_to_freq_log(cursor.y, freq_min, freq_max, rect);
+            let delta_db = (center_x - cursor.x) / px_per_db.max(1e-6);
+            let l_raw = sample_bin_db(&state.left_scratch, freq, sr, fft_size);
+            let r_raw = sample_bin_db(&state.right_scratch, freq, sr, fft_size);
+            let w_db = weighting_db_at(weighting, freq) + weighting_align;
+            let l_db = (l_raw + w_db).max(MIN_DB);
+            let r_db = (r_raw + w_db).max(MIN_DB);
+            let corr = sample_bin_db(&state.correlation_scratch, freq, sr, fft_size);
+            let balance = if delta_db.abs() < 0.05 {
+                "0.0 dB (centred)".to_string()
+            } else if delta_db > 0.0 {
+                format!("L +{:.1} dB", delta_db)
+            } else {
+                format!("R +{:.1} dB", -delta_db)
+            };
+            let lines = vec![
+                format_hz_readout(freq),
+                balance,
+                format!("L: {:>6.1} dB", l_db),
+                format!("R: {:>6.1} dB", r_db),
+                format!("corr: {:+.2}", corr.clamp(-1.0, 1.0)),
+            ];
+            draw_crosshair(&painter, rect, cursor, &lines);
+        }
+    }
 }
 
 /// Per-bin correlation → spectrogram colormap, mapped upside-down so the
@@ -4018,4 +4142,127 @@ fn freq_to_x(freq: f32, fmin: f32, fmax: f32, rect: egui::Rect) -> f32 {
 fn db_to_y(db: f32, dmin: f32, dmax: f32, rect: egui::Rect) -> f32 {
     let t = (db - dmin) / (dmax - dmin);
     rect.bottom() - t.clamp(0.0, 1.0) * rect.height()
+}
+
+fn x_to_freq(x: f32, fmin: f32, fmax: f32, rect: egui::Rect) -> f32 {
+    let t = ((x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0);
+    fmin * (fmax / fmin).powf(t)
+}
+
+fn y_to_db(y: f32, dmin: f32, dmax: f32, rect: egui::Rect) -> f32 {
+    let t = 1.0 - ((y - rect.top()) / rect.height().max(1.0)).clamp(0.0, 1.0);
+    dmin + t * (dmax - dmin)
+}
+
+fn y_to_freq_log(y: f32, fmin: f32, fmax: f32, rect: egui::Rect) -> f32 {
+    let t = 1.0 - ((y - rect.top()) / rect.height().max(1.0)).clamp(0.0, 1.0);
+    fmin * (fmax / fmin).powf(t)
+}
+
+/// Look up a per-bin dB value at an arbitrary frequency with linear bin
+/// interpolation. Used by the cursor readout — fast, single-tap-per-call;
+/// no smoothing window, so the value is the raw averaged FFT level the
+/// audio thread published (the on-screen smoothing/weighting are layered
+/// on top in the shader).
+fn sample_bin_db(scratch: &[f32], freq: f32, sr: f32, fft_size: usize) -> f32 {
+    if scratch.is_empty() || sr <= 0.0 || fft_size == 0 {
+        return MIN_DB;
+    }
+    let bin_per_hz = fft_size as f32 / sr;
+    let max_bin = (scratch.len() - 1) as f32;
+    let bin_f = (freq * bin_per_hz).clamp(0.0, max_bin);
+    let b0 = bin_f.floor() as usize;
+    let b1 = (b0 + 1).min(scratch.len() - 1);
+    let frac = bin_f - b0 as f32;
+    scratch[b0] * (1.0 - frac) + scratch[b1] * frac
+}
+
+/// Format a frequency for the cursor readout. Sub-1k uses Hz, ≥1k uses
+/// kHz with one decimal where it adds detail (so "1.5k" survives but
+/// "2k" doesn't get a needless ".0").
+fn format_hz_readout(freq: f32) -> String {
+    if freq >= 10000.0 {
+        format!("{:.1} kHz", freq / 1000.0)
+    } else if freq >= 1000.0 {
+        format!("{:.2} kHz", freq / 1000.0)
+    } else if freq >= 100.0 {
+        format!("{:.0} Hz", freq)
+    } else {
+        format!("{:.1} Hz", freq)
+    }
+}
+
+/// Crosshair + tooltip-style readout drawn over a plot when the mouse
+/// hovers it. Lines stack vertically inside a small panel near the
+/// cursor; the panel flips quadrant if the default position would clip
+/// outside `rect`.
+fn draw_crosshair(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    cursor: egui::Pos2,
+    lines: &[String],
+) {
+    let line_color = egui::Color32::from_white_alpha(170);
+    painter.line_segment(
+        [
+            egui::pos2(rect.left(), cursor.y),
+            egui::pos2(rect.right(), cursor.y),
+        ],
+        egui::Stroke::new(1.0, line_color),
+    );
+    painter.line_segment(
+        [
+            egui::pos2(cursor.x, rect.top()),
+            egui::pos2(cursor.x, rect.bottom()),
+        ],
+        egui::Stroke::new(1.0, line_color),
+    );
+    painter.circle_filled(cursor, 2.5, egui::Color32::WHITE);
+
+    if lines.is_empty() {
+        return;
+    }
+    let font = egui::FontId::monospace(11.0);
+    let line_h = 14.0;
+    let pad = egui::vec2(6.0, 4.0);
+    let max_w = lines
+        .iter()
+        .map(|s| {
+            painter
+                .layout_no_wrap(s.clone(), font.clone(), egui::Color32::WHITE)
+                .size()
+                .x
+        })
+        .fold(0.0_f32, f32::max);
+    let box_size = egui::vec2(max_w + pad.x * 2.0, line_h * lines.len() as f32 + pad.y * 2.0);
+    let mut origin = cursor + egui::vec2(12.0, -box_size.y - 12.0);
+    if origin.x + box_size.x > rect.right() - 2.0 {
+        origin.x = cursor.x - box_size.x - 12.0;
+    }
+    if origin.x < rect.left() + 2.0 {
+        origin.x = rect.left() + 2.0;
+    }
+    if origin.y < rect.top() + 2.0 {
+        origin.y = cursor.y + 12.0;
+    }
+    if origin.y + box_size.y > rect.bottom() - 2.0 {
+        origin.y = (rect.bottom() - 2.0 - box_size.y).max(rect.top() + 2.0);
+    }
+    let box_rect = egui::Rect::from_min_size(origin, box_size);
+    painter.rect_filled(box_rect, 3.0, egui::Color32::from_black_alpha(220));
+    painter.rect_stroke(
+        box_rect,
+        3.0,
+        egui::Stroke::new(1.0, egui::Color32::from_white_alpha(120)),
+        egui::StrokeKind::Inside,
+    );
+    for (i, s) in lines.iter().enumerate() {
+        painter.text(
+            origin + pad + egui::vec2(0.0, i as f32 * line_h),
+            egui::Align2::LEFT_TOP,
+            s,
+            font.clone(),
+            egui::Color32::WHITE,
+        );
+    }
 }
