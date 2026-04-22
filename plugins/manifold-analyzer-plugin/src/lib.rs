@@ -40,13 +40,11 @@ struct ManifoldAnalyzer {
     /// the shared mailboxes to match. Avoids re-creating the analyser
     /// (and the ~100 ms rustfft plan bake) every process call.
     current_fft_size: usize,
-    /// Time-domain Mid samples for the CQT spectrogram worker. Kept
-    /// around because the spectrogram pulls raw audio from the sample
-    /// ring, not spectrum output.
-    mid_scratch: Vec<f32>,
-    /// Raw L / R kept around for the BS.1770 loudness meter (K-weighting
-    /// wants pre-M/S signals) — the stereo analyser consumes the same
-    /// slices for its FFTs.
+    /// Raw L / R for the BS.1770 loudness meter (K-weighting wants the
+    /// pre-M/S signals), the stereo analyser's two FFTs, and the
+    /// spectrogram's L/R sample rings. The CQT worker derives Mid/Side
+    /// from the L/R rings on demand based on the GUI's spectrogram
+    /// source mode — no per-channel Mid scratch is computed here.
     left_scratch: Vec<f32>,
     right_scratch: Vec<f32>,
     loudness: Option<LoudnessMeter>,
@@ -64,7 +62,6 @@ impl Default for ManifoldAnalyzer {
             params: Arc::new(AnalyzerParams::new()),
             stereo: None,
             current_fft_size: DEFAULT_FFT_SIZE,
-            mid_scratch: Vec::new(),
             left_scratch: Vec::new(),
             right_scratch: Vec::new(),
             loudness: None,
@@ -119,7 +116,6 @@ impl Plugin for ManifoldAnalyzer {
         stereo.set_balance_smoothing_ms(STEREO_BALANCE_SMOOTH_MS);
         self.stereo = Some(stereo);
         let max_block = buffer_config.max_buffer_size as usize;
-        self.mid_scratch = vec![0.0; max_block];
         self.left_scratch = vec![0.0; max_block];
         self.right_scratch = vec![0.0; max_block];
         let mut meter = LoudnessMeter::new(buffer_config.sample_rate);
@@ -186,17 +182,14 @@ impl Plugin for ManifoldAnalyzer {
         if num_samples == 0 {
             return ProcessStatus::Normal;
         }
-        if self.mid_scratch.len() < num_samples
-            || self.left_scratch.len() < num_samples
-            || self.right_scratch.len() < num_samples
-        {
+        if self.left_scratch.len() < num_samples || self.right_scratch.len() < num_samples {
             return ProcessStatus::Normal;
         }
 
         // De-interleave L/R (falling back to mono when only one channel
-        // is provided). Mid is derived in-line for the CQT sample ring;
-        // Side no longer needs its own scratch buffer since M/S is
-        // recovered inside the stereo analyser from the L and R FFTs.
+        // is provided). Mid/Side are recovered downstream — the stereo
+        // analyser derives M/S from its L and R FFTs, and the CQT worker
+        // mixes M or S sample-by-sample from these L/R rings on demand.
         let mut i = 0;
         for channel_samples in buffer.iter_samples() {
             let mut iter = channel_samples.into_iter();
@@ -204,7 +197,6 @@ impl Plugin for ManifoldAnalyzer {
             let r = iter.next().map(|s| *s).unwrap_or(l);
             self.left_scratch[i] = l;
             self.right_scratch[i] = r;
-            self.mid_scratch[i] = (l + r) * 0.5;
             i += 1;
         }
 
@@ -245,12 +237,17 @@ impl Plugin for ManifoldAnalyzer {
                 .try_publish_correlation(stereo.latest_correlation());
         }
 
-        // Spectrogram: push raw Mid audio samples into the lock-free
-        // sample ring; the GUI thread runs the CQT. No FFT work here for
-        // the spectrogram path.
+        // Spectrogram: push raw L and R audio into the lock-free sample
+        // rings; the worker derives M/S (or runs both channels for L+R
+        // mode) and runs the CQT. No FFT work here for the spectrogram
+        // path. Both rings are pushed in lockstep so the worker can
+        // assume they always advance together.
         self.gui_shared
-            .mid_sample_ring
-            .push(&self.mid_scratch[..i]);
+            .left_sample_ring
+            .push(&self.left_scratch[..i]);
+        self.gui_shared
+            .right_sample_ring
+            .push(&self.right_scratch[..i]);
 
         ProcessStatus::Normal
     }

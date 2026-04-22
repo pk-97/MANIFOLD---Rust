@@ -106,6 +106,11 @@ pub struct DisplayConfig {
     /// scrolling). Doesn't affect CQT processing itself — that's the
     /// worker's WorkerConfig.
     pub sync_mode: bool,
+    /// `false` (single mode): only the primary history buffer is sampled
+    /// — full-height spectrogram for Mid or Side. `true` (stacked mode):
+    /// shader splits the spectrogram region in half and samples the
+    /// secondary buffer for the bottom half — used for L+R compare.
+    pub stacked_mode: bool,
 }
 
 impl Default for DisplayConfig {
@@ -119,6 +124,7 @@ impl Default for DisplayConfig {
             spectrogram_db_max: 0.0,
             spectrogram_gamma: 1.0,
             sync_mode: false,
+            stacked_mode: false,
         }
     }
 }
@@ -159,7 +165,11 @@ struct SpectrumUniforms {
     /// at the high end where it would shift the spectrum curve by one
     /// FFT-bin width.
     num_bins: f32,
-    _pad_tail: f32,
+    /// 0 = single full-height spectrogram (Mid or Side). 1 = stacked
+    /// L+R: shader splits the spectrogram region into top/bottom halves
+    /// and samples `history` for the top (Left) and `history2` for the
+    /// bottom (Right).
+    spectrogram_mode: f32,
 }
 
 pub struct SpectrumGpuRenderer {
@@ -167,6 +177,12 @@ pub struct SpectrumGpuRenderer {
     mid_buf: GpuBuffer,
     side_buf: GpuBuffer,
     history_buf: GpuBuffer,
+    /// Secondary spectrogram history. Always allocated so the shader can
+    /// bind it unconditionally, but only written when the worker emits
+    /// L+R column messages with `data2`. In Mid/Side modes this stays
+    /// at the silence floor and the shader's `spectrogram_mode == 0`
+    /// branch never reads it.
+    history_buf2: GpuBuffer,
     /// Pre-computed weighting curve uploaded from CPU when the weighting
     /// mode or visible freq range changes. See `WEIGHTING_LUT_SIZE`.
     weighting_lut_buf: GpuBuffer,
@@ -176,7 +192,8 @@ pub struct SpectrumGpuRenderer {
     display: DisplayConfig,
     /// Last column index written by `apply_column`. Used by the shader as
     /// the newest-pixel anchor in free-scroll mode and as the wrap point
-    /// in sync mode.
+    /// in sync mode. Both history buffers advance in lockstep so a
+    /// single index covers them.
     write_col: u32,
 }
 
@@ -193,15 +210,22 @@ impl SpectrumGpuRenderer {
         let side_buf = device.create_buffer_shared((num_bins * 4) as u64);
         let history_buf =
             device.create_buffer_shared((cqt_num_bins as u64) * (HISTORY_COLS as u64) * 4);
+        let history_buf2 =
+            device.create_buffer_shared((cqt_num_bins as u64) * (HISTORY_COLS as u64) * 4);
 
         // Shared buffers are zero-initialised. 0 dB would hit the top of the
         // colourmap (solid red) on every unwritten column — fill with a low
         // floor so unseen history reads as silence (black) until real frames
-        // overwrite it.
-        if let Some(ptr) = history_buf.mapped_ptr() {
-            let num_elems = cqt_num_bins * HISTORY_COLS as usize;
-            let slice = unsafe { std::slice::from_raw_parts_mut(ptr as *mut f32, num_elems) };
-            slice.fill(FLOOR_DB);
+        // overwrite it. Both primary and secondary buffers get the same
+        // treatment so the L+R bottom half is silent until the worker
+        // delivers paired column data.
+        for buf in [&history_buf, &history_buf2] {
+            if let Some(ptr) = buf.mapped_ptr() {
+                let num_elems = cqt_num_bins * HISTORY_COLS as usize;
+                let slice =
+                    unsafe { std::slice::from_raw_parts_mut(ptr as *mut f32, num_elems) };
+                slice.fill(FLOOR_DB);
+            }
         }
 
         let weighting_lut_buf =
@@ -224,6 +248,7 @@ impl SpectrumGpuRenderer {
             mid_buf,
             side_buf,
             history_buf,
+            history_buf2,
             weighting_lut_buf,
             pipeline,
             num_bins,
@@ -284,17 +309,18 @@ impl SpectrumGpuRenderer {
     }
 
     /// Apply one CQT column from the worker: optionally clear the
-    /// spectrogram history first (tempo/sync change), then write the
-    /// column data into the history storage buffer. Updates `write_col`
-    /// so the shader tracks the newest column.
+    /// spectrogram history first (tempo / sync / source change), then
+    /// write the column data into the primary history storage buffer.
+    /// In L+R mode `msg.data2` is `Some` and gets written into the
+    /// secondary buffer at the same column index.
     pub fn apply_column(&mut self, msg: &CqtColumnMsg) {
         debug_assert_eq!(msg.data.len(), self.cqt_num_bins);
         if msg.clear_history_before {
             self.clear_history();
         }
+        let stride = self.cqt_num_bins * 4;
+        let col = msg.col_idx as usize;
         if let Some(ptr) = self.history_buf.mapped_ptr() {
-            let stride = self.cqt_num_bins * 4;
-            let col = msg.col_idx as usize;
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     msg.data.as_ptr() as *const u8,
@@ -303,14 +329,29 @@ impl SpectrumGpuRenderer {
                 );
             }
         }
+        if let Some(data2) = msg.data2.as_ref() {
+            debug_assert_eq!(data2.len(), self.cqt_num_bins);
+            if let Some(ptr) = self.history_buf2.mapped_ptr() {
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        data2.as_ptr() as *const u8,
+                        ptr.add(col * stride),
+                        stride,
+                    );
+                }
+            }
+        }
         self.write_col = msg.col_idx;
     }
 
     fn clear_history(&mut self) {
-        if let Some(ptr) = self.history_buf.mapped_ptr() {
-            let num_elems = self.cqt_num_bins * HISTORY_COLS as usize;
-            let slice = unsafe { std::slice::from_raw_parts_mut(ptr as *mut f32, num_elems) };
-            slice.fill(FLOOR_DB);
+        let num_elems = self.cqt_num_bins * HISTORY_COLS as usize;
+        for buf in [&self.history_buf, &self.history_buf2] {
+            if let Some(ptr) = buf.mapped_ptr() {
+                let slice =
+                    unsafe { std::slice::from_raw_parts_mut(ptr as *mut f32, num_elems) };
+                slice.fill(FLOOR_DB);
+            }
         }
     }
 
@@ -403,7 +444,7 @@ impl SpectrumGpuRenderer {
             spectrogram_gamma: self.display.spectrogram_gamma,
             smoothing_mode: self.display.smoothing_mode,
             num_bins: self.num_bins as f32,
-            _pad_tail: 0.0,
+            spectrogram_mode: if self.display.stacked_mode { 1.0 } else { 0.0 },
         };
         let uniform_bytes: &[u8] = unsafe {
             std::slice::from_raw_parts(
@@ -435,6 +476,11 @@ impl SpectrumGpuRenderer {
             GpuBinding::Buffer {
                 binding: 4,
                 buffer: &self.weighting_lut_buf,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 5,
+                buffer: &self.history_buf2,
                 offset: 0,
             },
         ];

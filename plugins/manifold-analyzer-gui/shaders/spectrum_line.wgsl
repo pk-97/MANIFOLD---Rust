@@ -51,7 +51,11 @@ struct Uniforms {
     // (= fft_size/2 + 1). Passed explicitly because deriving from
     // `fft_size * 0.5` would be off by one.
     num_bins: f32,
-    _pad_tail: f32,
+    // 0 = single full-height spectrogram from `history` (Mid or Side).
+    // 1 = stacked L+R: top half samples `history` (Left), bottom half
+    //     samples `history2` (Right). The split lives in the shader so
+    //     the CPU side can flip it at runtime without re-binding.
+    spectrogram_mode: f32,
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -63,6 +67,10 @@ struct Uniforms {
 // changes. Includes the DC-bias align offset baked in. Replaces the
 // per-pixel biquad sin/cos evaluation the shader used to do.
 @group(0) @binding(4) var<storage, read> weighting_lut: array<f32>;
+// Secondary spectrogram history. Always bound; only read when
+// `u.spectrogram_mode > 0.5` (L+R stacked), otherwise the shader's
+// branch ignores it and the buffer stays at the silence floor.
+@group(0) @binding(5) var<storage, read> history2: array<f32>;
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -274,18 +282,124 @@ fn sample_history_db(col: i32, log_bin_f: f32, log_bins_i: i32) -> f32 {
     return 10.0 * log(p + 1e-24) / log(10.0);
 }
 
+// Same lookup against the secondary spectrogram buffer (Right channel
+// in L+R stacked mode). WGSL doesn't allow taking storage-array
+// references as parameters, so the two paths are duplicated rather
+// than parameterised. Kept identical to `sample_history_db` so any
+// future fix lands in both.
+fn sample_history2_db(col: i32, log_bin_f: f32, log_bins_i: i32) -> f32 {
+    let clamped = clamp(log_bin_f, 0.0, f32(log_bins_i) - 1.0);
+    let lo = i32(floor(clamped));
+    let hi = min(lo + 1, log_bins_i - 1);
+    let frac = fract(clamped);
+    let db_lo = history2[col * log_bins_i + lo];
+    let db_hi = history2[col * log_bins_i + hi];
+    let p_lo = pow(10.0, db_lo * 0.1);
+    let p_hi = pow(10.0, db_hi * 0.1);
+    let p = mix(p_lo, p_hi, frac);
+    return 10.0 * log(p + 1e-24) / log(10.0);
+}
+
+// Per-pixel raw dB lookup against the supplied history buffer (Buffer 0
+// = primary `history`, Buffer 1 = secondary `history2`). Keeps the
+// shared X-axis math (free vs sync mode) in one place; the Y-axis
+// log-bin position and the colourmap step both stay in
+// `spectrogram_region` so we don't pay extra log2/pow per channel.
+fn spectrogram_raw_db(
+    buffer_id: i32,
+    log_bin_f: f32,
+    log_bins_i: i32,
+    px_x: f32,
+    history_cols_i: i32,
+    write_col_i: i32,
+) -> f32 {
+    if (u.sync_mode > 0.5) {
+        let rel_x = clamp(px_x / max(u.resolution.x, 1.0), 0.0, 0.9999);
+        let col_f = rel_x * f32(history_cols_i);
+        let col_lo = clamp(i32(floor(col_f)), 0, history_cols_i - 1);
+        let col_hi = min(col_lo + 1, history_cols_i - 1);
+        let frac_x = col_f - f32(col_lo);
+        var db_lo: f32;
+        var db_hi: f32;
+        if (buffer_id == 0) {
+            db_lo = sample_history_db(col_lo, log_bin_f, log_bins_i);
+            db_hi = sample_history_db(col_hi, log_bin_f, log_bins_i);
+        } else {
+            db_lo = sample_history2_db(col_lo, log_bin_f, log_bins_i);
+            db_hi = sample_history2_db(col_hi, log_bin_f, log_bins_i);
+        }
+        let p_lo = pow(10.0, db_lo * 0.1);
+        let p_hi = pow(10.0, db_hi * 0.1);
+        let p = mix(p_lo, p_hi, frac_x);
+        return 10.0 * log(p + 1e-24) / log(10.0);
+    }
+    // Free-scroll: 1 history column = 1 screen pixel, integer-snapped
+    // for bit-stable edges under fractional DPI scaling.
+    let res_w_i = i32(u.resolution.x);
+    let px_col = i32(floor(px_x));
+    let history_idx = (res_w_i - 1) - px_col;
+    if (history_idx < 0 || history_idx >= history_cols_i) {
+        return -1000.0;
+    }
+    var c = write_col_i - history_idx;
+    c = ((c % history_cols_i) + history_cols_i) % history_cols_i;
+    if (buffer_id == 0) {
+        return sample_history_db(c, log_bin_f, log_bins_i);
+    }
+    return sample_history2_db(c, log_bin_f, log_bins_i);
+}
+
+fn raw_to_color(freq: f32, raw_db: f32) -> vec4<f32> {
+    if (raw_db < -999.0) {
+        return vec4<f32>(0.0);
+    }
+    let weighted_db = tilt_db(freq, raw_db);
+    let span = max(u.spectrogram_db_max - u.spectrogram_db_min, 1e-3);
+    let t_lin = clamp((weighted_db - u.spectrogram_db_min) / span, 0.0, 1.0);
+    let gamma = max(u.spectrogram_gamma, 1e-3);
+    let t = pow(t_lin, gamma);
+    let rgb = colormap(t);
+    return vec4<f32>(rgb, 1.0);
+}
+
 fn spectrogram_pixel(px: vec2<f32>) -> vec4<f32> {
     let history_cols_i = i32(u.history_cols);
     let write_col_i = i32(u.write_col);
     let log_bins_i = i32(u.log_bins);
 
-    // Y axis: log-spaced. rel_y=0 → top = freq_max; rel_y=1 → bottom =
-    // freq_min. Map the user-selected freq range onto the CQT's stored
-    // log bins (cqt_fmin_hz + bins_per_octave) so zooming the curves
-    // zooms the spectrogram too.
     let spec_y = px.y - u.spectrum_height;
     let spec_h = max(u.resolution.y - u.spectrum_height, 1.0);
-    let rel_y = clamp(spec_y / spec_h, 0.0, 1.0);
+
+    // Stacked L+R mode: split the spectrogram into top half (Left) and
+    // bottom half (Right). Each half remaps to the full freq range so
+    // both channels share the same vertical axis — squashed half-height
+    // but the bands still line up between L and R for direct compare.
+    var sub_y: f32;
+    var sub_h: f32;
+    var buffer_id: i32;
+    if (u.spectrogram_mode > 0.5) {
+        let half = spec_h * 0.5;
+        if (spec_y < half) {
+            sub_y = spec_y;
+            sub_h = max(half, 1.0);
+            buffer_id = 0;
+        } else {
+            sub_y = spec_y - half;
+            sub_h = max(spec_h - half, 1.0);
+            buffer_id = 1;
+        }
+    } else {
+        sub_y = spec_y;
+        sub_h = spec_h;
+        buffer_id = 0;
+    }
+
+    // Y axis: log-spaced inside whichever sub-region we landed in. rel_y=0
+    // → top of sub-region = freq_max; rel_y=1 → bottom = freq_min. Map
+    // the user-selected freq range onto the CQT's stored log bins
+    // (cqt_fmin_hz + bins_per_octave) so zooming the curves zooms the
+    // spectrogram too.
+    let rel_y = clamp(sub_y / sub_h, 0.0, 1.0);
     let log_min = log(u.freq_min);
     let log_max = log(u.freq_max);
     let log_freq = mix(log_max, log_min, rel_y);
@@ -296,60 +410,15 @@ fn spectrogram_pixel(px: vec2<f32>) -> vec4<f32> {
         f32(log_bins_i) - 1.0,
     );
 
-    // X axis: free mode scrolls newest→right, older→left. Sync mode maps
-    // pixel x onto [0, history_cols) so columns stay pinned to the beat
-    // grid and the write position advances left→right, wrapping to
-    // overwrite the oldest pixels — matches Vision 4X's synced spectrogram.
-    //
-    // Free mode is strictly 1 history column = 1 screen pixel, so integer
-    // snap is exact — no interp needed. Sync mode stretches history_cols
-    // across the screen width; when cols-per-pixel < 1 we'd see stairs
-    // without sub-pixel blending, so lerp adjacent columns in the power
-    // domain (matches the Y-axis behaviour in sample_history_db).
-    var raw_db: f32;
-    if (u.sync_mode > 0.5) {
-        let rel_x = clamp(px.x / max(u.resolution.x, 1.0), 0.0, 0.9999);
-        let col_f = rel_x * f32(history_cols_i);
-        let col_lo = clamp(i32(floor(col_f)), 0, history_cols_i - 1);
-        let col_hi = min(col_lo + 1, history_cols_i - 1);
-        let frac_x = col_f - f32(col_lo);
-        let db_lo = sample_history_db(col_lo, log_bin_f, log_bins_i);
-        let db_hi = sample_history_db(col_hi, log_bin_f, log_bins_i);
-        let p_lo = pow(10.0, db_lo * 0.1);
-        let p_hi = pow(10.0, db_hi * 0.1);
-        let p = mix(p_lo, p_hi, frac_x);
-        raw_db = 10.0 * log(p + 1e-24) / log(10.0);
-    } else {
-        // Map screen column ↔ history age via integer pixel index. Using
-        // floor(resolution.x - 1.0 - px.x) was DPI-fragile: with the
-        // pixel-center fragment convention (px.x = i + 0.5), it could
-        // round inconsistently along the edges and produce a 1-pixel
-        // seam at the left under fractional scaling. Computing
-        // `cols_from_right = i - floor(px.x)` is bit-stable per pixel.
-        let res_w_i = i32(u.resolution.x);
-        let px_col = i32(floor(px.x));
-        let history_idx = (res_w_i - 1) - px_col;
-        if (history_idx < 0 || history_idx >= history_cols_i) {
-            return vec4<f32>(0.0);
-        }
-        var c = write_col_i - history_idx;
-        c = ((c % history_cols_i) + history_cols_i) % history_cols_i;
-        raw_db = sample_history_db(c, log_bin_f, log_bins_i);
-    }
-
-    // Run the same weighting used on the curves so the colourmap reads
-    // perceptually (K-weighting reveals what's driving loudness; linear
-    // tilts give SPAN-style HF brightness).
-    let weighted_db = tilt_db(freq, raw_db);
-    let span = max(u.spectrogram_db_max - u.spectrogram_db_min, 1e-3);
-    let t_lin = clamp((weighted_db - u.spectrogram_db_min) / span, 0.0, 1.0);
-    // Gamma on the colour encoding (not on the stored values) lifts quiet
-    // detail into the visible band without washing out peaks. gamma < 1
-    // brightens, gamma > 1 darkens; gamma == 1 is pass-through.
-    let gamma = max(u.spectrogram_gamma, 1e-3);
-    let t = pow(t_lin, gamma);
-    let rgb = colormap(t);
-    return vec4<f32>(rgb, 1.0);
+    let raw_db = spectrogram_raw_db(
+        buffer_id,
+        log_bin_f,
+        log_bins_i,
+        px.x,
+        history_cols_i,
+        write_col_i,
+    );
+    return raw_to_color(freq, raw_db);
 }
 
 @fragment

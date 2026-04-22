@@ -493,6 +493,42 @@ impl ReferenceCurve {
     }
 }
 
+/// Channel(s) feeding the spectrogram. `Mid` and `Side` route a single
+/// derived stream into the CQT pipeline; `LeftRight` runs two CQT passes
+/// per hop and the renderer splits the spectrogram region in half (top =
+/// L, bottom = R) so the channels can be compared side-by-side.
+///
+/// Stored as `u8` in `AnalyzerGuiShared::spectrogram_source_bits`; values
+/// outside `0..=2` are coerced back to `Mid` on read so a corrupted
+/// atomic never lands the worker in an invalid branch.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum SpectrogramSource {
+    Mid = 0,
+    Side = 1,
+    LeftRight = 2,
+}
+
+impl SpectrogramSource {
+    fn from_bits(b: u8) -> Self {
+        match b {
+            1 => SpectrogramSource::Side,
+            2 => SpectrogramSource::LeftRight,
+            _ => SpectrogramSource::Mid,
+        }
+    }
+
+    /// Two-character chip label for the toolbar buttons. Matches the
+    /// "M / S / L+R" wording used in the corresponding hover tooltips.
+    fn chip_label(self) -> &'static str {
+        match self {
+            SpectrogramSource::Mid => "M",
+            SpectrogramSource::Side => "S",
+            SpectrogramSource::LeftRight => "L+R",
+        }
+    }
+}
+
 /// One loaded reference track. Holds just enough to re-render the band
 /// without re-decoding the source file: the pre-computed percentile
 /// envelopes, the source's integrated LUFS for gain-match, and an
@@ -675,10 +711,19 @@ pub struct AnalyzerGuiShared {
     /// Per-bin stereo correlation in [-1, 1]. Same mailbox pattern as
     /// the spectra. Drives the colour strip in the L/R cell.
     correlation_bins: Mutex<Vec<f32>>,
-    /// Raw mid-channel audio samples for the CQT spectrogram. Audio
-    /// thread pushes every sample; GUI thread drains and feeds the CQT
-    /// pipeline. No FFT on the audio thread for this path.
-    pub mid_sample_ring: SampleRing,
+    /// Raw L/R audio samples for the CQT spectrogram. Audio thread pushes
+    /// every sample to both rings; the worker drains them and derives
+    /// Mid/Side on demand based on the current `SpectrogramSource`. Two
+    /// rings instead of pre-mixing to Mid lets the user switch between
+    /// Mid / Side / L+R modes without re-running the audio thread or
+    /// allocating per-channel buffers there.
+    pub left_sample_ring: SampleRing,
+    pub right_sample_ring: SampleRing,
+    /// Spectrogram source mode. Drives both the worker (which channel(s)
+    /// to CQT) and the renderer (single full-height vs L+R stacked
+    /// split). Stored as `u8` so we can use a single relaxed atomic load
+    /// per frame on the GUI thread.
+    spectrogram_source_bits: AtomicU8,
     /// Lock-free SPSC queue of closed 100 ms loudness-block z values.
     /// Produced by the audio thread's `LoudnessMeter::close_block`;
     /// consumed by the off-thread loudness worker which runs the
@@ -774,7 +819,9 @@ impl AnalyzerGuiShared {
             left_balance_db: Mutex::new(vec![MIN_DB; num_bins]),
             right_balance_db: Mutex::new(vec![MIN_DB; num_bins]),
             correlation_bins: Mutex::new(vec![0.0; num_bins]),
-            mid_sample_ring: SampleRing::new(SAMPLE_RING_CAPACITY),
+            left_sample_ring: SampleRing::new(SAMPLE_RING_CAPACITY),
+            right_sample_ring: SampleRing::new(SAMPLE_RING_CAPACITY),
+            spectrogram_source_bits: AtomicU8::new(SpectrogramSource::Mid as u8),
             loudness_block_queue: Arc::new(ArrayQueue::new(256)),
             bpm_bits: AtomicU64::new(f64::NAN.to_bits()),
             beat_pos_bits: AtomicU64::new(f64::NAN.to_bits()),
@@ -824,6 +871,23 @@ impl AnalyzerGuiShared {
     pub fn reset_layout(&self) {
         self.set_right_column_width(RIGHT_COLUMN_WIDTH_DEFAULT);
         self.set_top_fraction(TOP_FRACTION_DEFAULT);
+    }
+
+    /// Current spectrogram source, recovered from the `u8` atomic. The
+    /// GUI thread reads this once per frame to drive the worker config
+    /// and the shader's split-mode flag.
+    pub fn spectrogram_source(&self) -> SpectrogramSource {
+        SpectrogramSource::from_bits(self.spectrogram_source_bits.load(Ordering::Relaxed))
+    }
+
+    /// GUI-thread setter wired to the chip buttons in the spectrogram
+    /// toolbar. The change is picked up by the worker on its next
+    /// `apply_config` and triggers a history clear so the freshly-
+    /// rendered columns don't blend into stale data from the previous
+    /// channel.
+    pub fn set_spectrogram_source(&self, src: SpectrogramSource) {
+        self.spectrogram_source_bits
+            .store(src as u8, Ordering::Relaxed);
     }
 
     /// GUI flips these while an analysis worker is in flight for slot
@@ -1431,6 +1495,9 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             None => (0.0, 1.0_f32), // ERB — shader computes per-pixel
         };
 
+        let spectrogram_source = state.shared.spectrogram_source();
+        let stacked = matches!(spectrogram_source, SpectrogramSource::LeftRight);
+
         spec.set_display(DisplayConfig {
             smooth_half_oct_log2: smooth_half,
             smoothing_mode,
@@ -1440,11 +1507,15 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             spectrogram_db_max: if ss_on { SPECTROGRAM_DB_MAX_SS } else { SPECTROGRAM_DB_MAX_RAW },
             spectrogram_gamma: SPECTROGRAM_GAMMA,
             sync_mode: sync_active,
+            stacked_mode: stacked,
         });
 
         // Hand current transport + display knobs to the worker. It reads
         // this once per hop; the config lock is uncontested here (only
-        // the worker touches it otherwise).
+        // the worker touches it otherwise). `source` switches drive a
+        // history clear inside the worker so the freshly-rendered
+        // columns don't blend with stale Mid frames after a flip to
+        // Side or L+R.
         worker.post_config(WorkerConfig {
             sync_enabled: sync_active,
             bpm: bpm_opt.map(|v| v as f32).unwrap_or(0.0),
@@ -1453,6 +1524,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             synchrosqueeze: ss_on,
             coherence: state.params.coherence.value(),
             synchro_gate_db: state.params.synchro_gate_db.value(),
+            source: spectrogram_source,
         });
 
         // Drain completed CQT columns from the worker and write them into
@@ -1684,6 +1756,66 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         freq_max,
         state,
     );
+
+    // 5. Source chip buttons (M / S / L+R) overlaid on the top-left of
+    //    the spectrogram region. Drawn last so they sit above the
+    //    chrome grid lines and freq labels.
+    draw_spectrogram_source_chips(ui, spectrogram_rect, &state.shared);
+}
+
+/// Render the M / S / L+R chip buttons overlaid on the top-left of the
+/// spectrogram cell. Uses a child `Ui` placed inside a fresh allocation
+/// at the cell's top-left so the buttons participate in egui's normal
+/// hit-testing without disturbing the surrounding paint callback layout.
+fn draw_spectrogram_source_chips(
+    ui: &mut egui::Ui,
+    spectrogram_rect: egui::Rect,
+    shared: &Arc<AnalyzerGuiShared>,
+) {
+    if spectrogram_rect.height() < 24.0 || spectrogram_rect.width() < 80.0 {
+        return;
+    }
+    let current = shared.spectrogram_source();
+    let chip_origin = spectrogram_rect.min + egui::vec2(6.0, 4.0);
+    let chip_area = egui::Rect::from_min_size(chip_origin, egui::vec2(120.0, 22.0));
+    let mut chip_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(chip_area)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    chip_ui.set_clip_rect(chip_area);
+    chip_ui.spacing_mut().item_spacing.x = 3.0;
+    chip_ui.spacing_mut().button_padding = egui::vec2(6.0, 1.0);
+    for &mode in &[
+        SpectrogramSource::Mid,
+        SpectrogramSource::Side,
+        SpectrogramSource::LeftRight,
+    ] {
+        let selected = mode == current;
+        let label = mode.chip_label();
+        let resp = chip_ui
+            .add(egui::SelectableLabel::new(
+                selected,
+                egui::RichText::new(label)
+                    .monospace()
+                    .size(11.0)
+                    .color(if selected {
+                        egui::Color32::WHITE
+                    } else {
+                        egui::Color32::from_white_alpha(180)
+                    }),
+            ))
+            .on_hover_text(match mode {
+                SpectrogramSource::Mid => "Mid spectrogram (L+R)/2",
+                SpectrogramSource::Side => "Side spectrogram (L−R)/2",
+                SpectrogramSource::LeftRight => {
+                    "Left + Right spectrograms stacked (top = L, bottom = R)"
+                }
+            });
+        if resp.clicked() && !selected {
+            shared.set_spectrogram_source(mode);
+        }
+    }
 }
 
 fn draw_reference_curve(
@@ -2021,26 +2153,78 @@ fn draw_spectrogram_chrome(
     let grid_over = egui::Color32::from_white_alpha(32);
     let grid_over_bold = egui::Color32::from_white_alpha(60);
     let label_color = egui::Color32::WHITE;
+    let stacked = matches!(
+        state.shared.spectrogram_source(),
+        SpectrogramSource::LeftRight
+    );
 
-    // Horizontal freq grid lines + right-anchored labels.
-    for &freq in FREQ_MAJORS {
-        if freq < freq_min || freq > freq_max {
-            continue;
+    // L+R stacked mode: each half remaps the full freq range, so draw
+    // grid + labels into both sub-regions and a thin divider line
+    // between them. Otherwise draw a single full-height grid.
+    if stacked {
+        let mid_y = rect.center().y;
+        let top_rect = egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), mid_y));
+        let bot_rect = egui::Rect::from_min_max(egui::pos2(rect.left(), mid_y), rect.max);
+        for sub_rect in [top_rect, bot_rect] {
+            for &freq in FREQ_MAJORS {
+                if freq < freq_min || freq > freq_max {
+                    continue;
+                }
+                let t = (freq / freq_min).ln() / (freq_max / freq_min).ln();
+                let y = sub_rect.bottom() - t.clamp(0.0, 1.0) * sub_rect.height();
+                painter.line_segment(
+                    [egui::pos2(sub_rect.left(), y), egui::pos2(sub_rect.right(), y)],
+                    (1.0, grid_over),
+                );
+                draw_outlined_text(
+                    painter,
+                    egui::pos2(sub_rect.right() - 4.0, y - 1.0),
+                    egui::Align2::RIGHT_BOTTOM,
+                    &format_hz(freq),
+                    egui::FontId::monospace(10.0),
+                    label_color,
+                );
+            }
         }
-        let t = (freq / freq_min).ln() / (freq_max / freq_min).ln();
-        let y = rect.bottom() - t.clamp(0.0, 1.0) * rect.height();
+        // Channel labels — small badge at the bottom-left of each half
+        // so the user knows which channel is which without referring
+        // back to the chip toolbar at the top.
+        for (sub_rect, tag) in [(top_rect, "L"), (bot_rect, "R")] {
+            draw_outlined_text(
+                painter,
+                egui::pos2(sub_rect.left() + 4.0, sub_rect.bottom() - 2.0),
+                egui::Align2::LEFT_BOTTOM,
+                tag,
+                egui::FontId::monospace(11.0),
+                label_color,
+            );
+        }
+        // Hairline between top (L) and bottom (R). 1.5 px so it stays
+        // visible against bright spectrogram content.
         painter.line_segment(
-            [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-            (1.0, grid_over),
+            [egui::pos2(rect.left(), mid_y), egui::pos2(rect.right(), mid_y)],
+            (1.5, egui::Color32::from_white_alpha(140)),
         );
-        draw_outlined_text(
-            painter,
-            egui::pos2(rect.right() - 4.0, y - 1.0),
-            egui::Align2::RIGHT_BOTTOM,
-            &format_hz(freq),
-            egui::FontId::monospace(10.0),
-            label_color,
-        );
+    } else {
+        for &freq in FREQ_MAJORS {
+            if freq < freq_min || freq > freq_max {
+                continue;
+            }
+            let t = (freq / freq_min).ln() / (freq_max / freq_min).ln();
+            let y = rect.bottom() - t.clamp(0.0, 1.0) * rect.height();
+            painter.line_segment(
+                [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+                (1.0, grid_over),
+            );
+            draw_outlined_text(
+                painter,
+                egui::pos2(rect.right() - 4.0, y - 1.0),
+                egui::Align2::RIGHT_BOTTOM,
+                &format_hz(freq),
+                egui::FontId::monospace(10.0),
+                label_color,
+            );
+        }
     }
 
     // Sync-mode beat grid + beat numbers.
