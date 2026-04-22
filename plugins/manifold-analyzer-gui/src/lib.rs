@@ -1414,6 +1414,16 @@ pub fn create_editor(
                 .show(ctx, |ui| {
                     draw_ref_slots(ui, state);
                 });
+            // Bottom footer mirrors the top header. Holds the Spec
+            // (M / S / L|R + Sharpen + Floor) and L/R range controls
+            // so they sit physically next to the visuals they drive
+            // (spectrogram + L/R column, both bottom-anchored).
+            egui::TopBottomPanel::bottom("analyzer-bottom-controls")
+                .frame(egui::Frame::new().fill(egui::Color32::from_rgb(18, 22, 30)))
+                .exact_height(26.0)
+                .show(ctx, |ui| {
+                    draw_bottom_controls(ui, state, setter);
+                });
             let right_col_w = state.shared.right_column_width();
             egui::SidePanel::right("analyzer-right-column")
                 .frame(egui::Frame::new().fill(egui::Color32::from_rgb(12, 15, 21)))
@@ -3481,74 +3491,9 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
 
         ui.separator();
 
-        // ── Spectrogram-specific group ──────────────────────────────
-        // Source switch + Sharpen + Floor. Grouped so it's obvious
-        // these all affect only the spectrogram cell.
-        ui.label(egui::RichText::new("Spec").color(egui::Color32::from_gray(160)))
-            .on_hover_text("Spectrogram-only controls.");
-        let current_src = state.shared.spectrogram_source();
-        for &mode in &[
-            SpectrogramSource::Mid,
-            SpectrogramSource::Side,
-            SpectrogramSource::LeftRight,
-        ] {
-            let selected = mode == current_src;
-            let label = mode.chip_label();
-            let resp = ui
-                .add(egui::SelectableLabel::new(
-                    selected,
-                    egui::RichText::new(label).monospace(),
-                ))
-                .on_hover_text(match mode {
-                    SpectrogramSource::Mid => {
-                        "Mid: (L+R)/2 - full-height spectrogram of the centre/sum signal."
-                    }
-                    SpectrogramSource::Side => {
-                        "Side: (L-R)/2 - full-height spectrogram of the stereo difference. Centre content disappears."
-                    }
-                    SpectrogramSource::LeftRight => {
-                        "L | R: stacked Left (top) over Right (bottom). Compare channels at a glance."
-                    }
-                });
-            if resp.clicked() && !selected {
-                state.shared.set_spectrogram_source(mode);
-            }
-        }
-
-        let mut ss_val = params.synchrosqueeze.value();
-        if ui
-            .checkbox(&mut ss_val, "Sharpen")
-            .on_hover_text(
-                "Phase-reassigns spectrogram energy to its true frequency. Tonal lines tighten into single pixels; broadband noise stays soft. Toggling clears the spectrogram so before/after stays unambiguous.",
-            )
-            .changed()
-        {
-            setter.begin_set_parameter(&params.synchrosqueeze);
-            setter.set_parameter(&params.synchrosqueeze, ss_val);
-            setter.end_set_parameter(&params.synchrosqueeze);
-        }
-        ui.add_enabled_ui(ss_val, |ui| {
-            ui.label("Floor")
-                .on_hover_text(
-                    "Power threshold for Sharpen. Bins below this don't contribute. Lower = transients survive; higher = cleaner on noise.",
-                );
-            let mut gate_val = params.synchro_gate_db.value();
-            if ui
-                .add(
-                    egui::DragValue::new(&mut gate_val)
-                        .range(SS_GATE_DB_MIN..=SS_GATE_DB_MAX)
-                        .speed(0.5)
-                        .suffix(" dB"),
-                )
-                .changed()
-            {
-                setter.begin_set_parameter(&params.synchro_gate_db);
-                setter.set_parameter(&params.synchro_gate_db, gate_val);
-                setter.end_set_parameter(&params.synchro_gate_db);
-            }
-        });
-
-        ui.separator();
+        // Spectrogram controls (source + Sharpen + Floor) and the L/R
+        // range live in the bottom footer, directly under the visuals
+        // they drive. See `draw_bottom_controls`.
 
         // ── Frequency range ─────────────────────────────────────────
         ui.label("Range")
@@ -3582,26 +3527,6 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
             setter.begin_set_parameter(&params.freq_max_hz);
             setter.set_parameter(&params.freq_max_hz, fmax_val);
             setter.end_set_parameter(&params.freq_max_hz);
-        }
-
-        ui.label("L/R +/-")
-            .on_hover_text("Half-range of the L/R balance axis in dB.");
-        let mut lr_range_val = params.lr_range_db.value();
-        if ui
-            .add(
-                egui::DragValue::new(&mut lr_range_val)
-                    .range(5..=60)
-                    .speed(0.25)
-                    .suffix(" dB"),
-            )
-            .on_hover_text(
-                "Centre of the L/R column = perfect balance. Outer edges = this many dB of imbalance toward Left or Right.",
-            )
-            .changed()
-        {
-            setter.begin_set_parameter(&params.lr_range_db);
-            setter.set_parameter(&params.lr_range_db, lr_range_val);
-            setter.end_set_parameter(&params.lr_range_db);
         }
 
         // ── Display weighting + overlay ─────────────────────────────
@@ -3711,6 +3636,109 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
             ui.label("-- BPM")
                 .on_hover_text("Host isn't reporting tempo. Start playback to populate.");
         }
+    });
+}
+
+/// Bottom-footer toolbar. Holds the controls that drive the
+/// bottom-anchored visuals: the spectrogram source switch + Sharpen
+/// group on the left (under the spectrogram cell), and the L/R range
+/// on the right (under the L/R column). Same row height + frame fill
+/// as the top header so the two read as a matched pair.
+fn draw_bottom_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSetter) {
+    let params = state.params.clone();
+    ui.horizontal_centered(|ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+
+        // ── Spectrogram source + Sharpen group ──────────────────────
+        ui.label(egui::RichText::new("Spec").color(egui::Color32::from_gray(160)))
+            .on_hover_text("Spectrogram-only controls.");
+        let current_src = state.shared.spectrogram_source();
+        for &mode in &[
+            SpectrogramSource::Mid,
+            SpectrogramSource::Side,
+            SpectrogramSource::LeftRight,
+        ] {
+            let selected = mode == current_src;
+            let label = mode.chip_label();
+            let resp = ui
+                .add(egui::SelectableLabel::new(
+                    selected,
+                    egui::RichText::new(label).monospace(),
+                ))
+                .on_hover_text(match mode {
+                    SpectrogramSource::Mid => {
+                        "Mid: (L+R)/2 - full-height spectrogram of the centre/sum signal."
+                    }
+                    SpectrogramSource::Side => {
+                        "Side: (L-R)/2 - full-height spectrogram of the stereo difference. Centre content disappears."
+                    }
+                    SpectrogramSource::LeftRight => {
+                        "L | R: stacked Left (top) over Right (bottom). Compare channels at a glance."
+                    }
+                });
+            if resp.clicked() && !selected {
+                state.shared.set_spectrogram_source(mode);
+            }
+        }
+
+        let mut ss_val = params.synchrosqueeze.value();
+        if ui
+            .checkbox(&mut ss_val, "Sharpen")
+            .on_hover_text(
+                "Phase-reassigns spectrogram energy to its true frequency. Tonal lines tighten into single pixels; broadband noise stays soft. Toggling clears the spectrogram so before/after stays unambiguous.",
+            )
+            .changed()
+        {
+            setter.begin_set_parameter(&params.synchrosqueeze);
+            setter.set_parameter(&params.synchrosqueeze, ss_val);
+            setter.end_set_parameter(&params.synchrosqueeze);
+        }
+        ui.add_enabled_ui(ss_val, |ui| {
+            ui.label("Floor")
+                .on_hover_text(
+                    "Power threshold for Sharpen. Bins below this don't contribute. Lower = transients survive; higher = cleaner on noise.",
+                );
+            let mut gate_val = params.synchro_gate_db.value();
+            if ui
+                .add(
+                    egui::DragValue::new(&mut gate_val)
+                        .range(SS_GATE_DB_MIN..=SS_GATE_DB_MAX)
+                        .speed(0.5)
+                        .suffix(" dB"),
+                )
+                .changed()
+            {
+                setter.begin_set_parameter(&params.synchro_gate_db);
+                setter.set_parameter(&params.synchro_gate_db, gate_val);
+                setter.end_set_parameter(&params.synchro_gate_db);
+            }
+        });
+
+        // ── L/R column range, right-aligned under the L/R cell ──────
+        // Push to the right edge so it sits under the right-side
+        // L/R column, matching the spectrogram chips on the left
+        // sitting under the spectrogram cell.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let mut lr_range_val = params.lr_range_db.value();
+            if ui
+                .add(
+                    egui::DragValue::new(&mut lr_range_val)
+                        .range(5..=60)
+                        .speed(0.25)
+                        .suffix(" dB"),
+                )
+                .on_hover_text(
+                    "Centre of the L/R column = perfect balance. Outer edges = this many dB of imbalance toward Left or Right.",
+                )
+                .changed()
+            {
+                setter.begin_set_parameter(&params.lr_range_db);
+                setter.set_parameter(&params.lr_range_db, lr_range_val);
+                setter.end_set_parameter(&params.lr_range_db);
+            }
+            ui.label("L/R +/-")
+                .on_hover_text("Half-range of the L/R balance axis in dB.");
+        });
     });
 }
 
