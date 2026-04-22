@@ -1,9 +1,9 @@
-//! WGSL → SPIR-V → spirv-opt → SPIRV-Cross → MSL compilation pipeline.
+//! Metal-specific shader emission: SPIR-V → SPIRV-Cross → MSL.
 //!
-//! naga parses WGSL and provides binding introspection for the SlotMap.
-//! spirv-opt runs optimization passes (constant folding, dead code elimination, etc.).
-//! SPIRV-Cross compiles optimized SPIR-V to MSL with explicit resource binding indices
-//! matching the SlotMap assignments. Metal compiles MSL at runtime.
+//! The WGSL → naga → SPIR-V → `spirv-opt` prelude is shared with the Vulkan
+//! backend via `crate::shader_common`. Only the final SPIR-V-to-target step
+//! (SPIRV-Cross with explicit `BindTarget` mappings from our `SlotMap`)
+//! lives here. Metal then compiles the MSL at runtime into a `MTLLibrary`.
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -11,6 +11,10 @@ use objc2_foundation::NSString;
 use objc2_metal::{MTLFunction, MTLLibrary};
 
 use super::*;
+use crate::shader_common::{
+    classify_global, collect_entry_point_globals, compile_to_optimized_spirv,
+    parse_and_validate_wgsl,
+};
 use spirv_cross2::Compiler;
 use spirv_cross2::compile::msl;
 
@@ -28,17 +32,8 @@ pub(super) fn compile_wgsl_to_msl(
     label: &str,
     use_half: bool,
 ) -> (SlotMap, String, String, [u32; 3]) {
-    // Step 1: Parse WGSL
-    let module = naga::front::wgsl::parse_str(wgsl_source)
-        .unwrap_or_else(|e| panic!("{label}: WGSL parse error: {e}"));
-
-    // Step 2: Validate
-    let info = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::all(),
-    )
-    .validate(&module)
-    .unwrap_or_else(|e| panic!("{label}: WGSL validation error: {e}"));
+    // Steps 1 + 2: shared — parse WGSL and run naga validation.
+    let (module, info) = parse_and_validate_wgsl(wgsl_source, label);
 
     // Step 3: Introspect bindings and build slot map
     let (slot_map, _entry_resources) = build_slot_map(&module, entry_point);
@@ -82,14 +77,7 @@ pub(super) fn compile_wgsl_to_msl_render(
     fs_entry: &str,
     label: &str,
 ) -> (SlotMap, String, String) {
-    let module = naga::front::wgsl::parse_str(wgsl_source)
-        .unwrap_or_else(|e| panic!("{label}: WGSL parse error: {e}"));
-    let info = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::all(),
-    )
-    .validate(&module)
-    .unwrap_or_else(|e| panic!("{label}: WGSL validation error: {e}"));
+    let (module, info) = parse_and_validate_wgsl(wgsl_source, label);
 
     // Build a UNIFIED slot map from the union of both entry points' globals.
     // VS and FS share the same Metal argument table, so bindings visible in
@@ -142,34 +130,11 @@ fn build_slot_map(
     let mut next_texture: u32 = 0;
     let mut next_sampler: u32 = 0;
 
-    // Find which global variables are actually used by this entry point.
-    // Multi-entry-point shaders (e.g. fluid_scatter.wgsl) reuse @binding(N)
-    // for different types per entry point — we must only map the ones used.
-    let ep = module.entry_points.iter().find(|ep| ep.name == entry_point);
-
-    // Scan entry point AND all reachable functions for GlobalVariable references.
-    // The entry point's function body may call helper functions that reference
-    // globals (e.g. bloom_compute.wgsl: cs_main → blur13 → source_tex_b).
-    // We must include globals from called functions too, or bindings get dropped.
-    let used_globals: std::collections::HashSet<naga::Handle<naga::GlobalVariable>> =
-        if let Some(ep) = ep {
-            // First collect all functions called from the entry point (transitively).
-            let mut called_fns: std::collections::HashSet<naga::Handle<naga::Function>> =
-                std::collections::HashSet::new();
-            collect_called_functions(&ep.function, module, &mut called_fns);
-
-            // Scan entry point + all called functions for GlobalVariable refs.
-            let mut globals: std::collections::HashSet<naga::Handle<naga::GlobalVariable>> =
-                std::collections::HashSet::new();
-            collect_globals_from_function(&ep.function, &mut globals);
-            for &fn_handle in &called_fns {
-                collect_globals_from_function(&module.functions[fn_handle], &mut globals);
-            }
-            globals
-        } else {
-            // Fallback: include all globals if entry point not found
-            module.global_variables.iter().map(|(h, _)| h).collect()
-        };
+    // Scan entry point + all transitively called helper functions for global
+    // variable references. Multi-entry-point shaders (e.g. fluid_scatter.wgsl)
+    // reuse @binding(N) for different types per entry point — we must only
+    // map the ones reachable from THIS entry.
+    let used_globals = collect_entry_point_globals(module, entry_point);
 
     // Collect bindings only for globals referenced by this entry point
     let mut bindings: Vec<(u32, naga::ResourceBinding, &naga::GlobalVariable)> = Vec::new();
@@ -184,32 +149,14 @@ fn build_slot_map(
     bindings.sort_by_key(|(b, _, _)| *b);
 
     for (binding_num, resource_binding, gv) in &bindings {
-        let ty = &module.types[gv.ty];
-        let is_buffer = matches!(
-            gv.space,
-            naga::AddressSpace::Uniform | naga::AddressSpace::Storage { .. }
-        );
-        let is_sampler = matches!(ty.inner, naga::TypeInner::Sampler { .. });
-        let is_texture = matches!(ty.inner, naga::TypeInner::Image { .. });
-
-        let is_writable = match gv.space {
-            naga::AddressSpace::Storage { access } => access.contains(naga::StorageAccess::STORE),
-            _ => false,
-        } || matches!(
-            ty.inner,
-            naga::TypeInner::Image {
-                class: naga::ImageClass::Storage { access, .. },
-                ..
-            } if access.contains(naga::StorageAccess::STORE)
-        );
-
+        let kind = classify_global(module, gv);
         let mut bind_target = msl::BindTarget::default();
 
-        if is_buffer {
+        if kind.is_buffer {
             let idx = next_buffer;
             next_buffer += 1;
             bind_target.buffer = Some(idx as u8);
-            bind_target.mutable = is_writable;
+            bind_target.mutable = kind.is_writable;
             slot_map.insert(
                 *binding_num,
                 Slot {
@@ -217,7 +164,7 @@ fn build_slot_map(
                     metal_index: idx,
                 },
             );
-        } else if is_sampler {
+        } else if kind.is_sampler {
             let idx = next_sampler;
             next_sampler += 1;
             bind_target.sampler = Some(msl::BindSamplerTarget::Resource(idx as u8));
@@ -228,11 +175,11 @@ fn build_slot_map(
                     metal_index: idx,
                 },
             );
-        } else if is_texture {
+        } else if kind.is_texture {
             let idx = next_texture;
             next_texture += 1;
             bind_target.texture = Some(idx as u8);
-            bind_target.mutable = is_writable;
+            bind_target.mutable = kind.is_writable;
             slot_map.insert(
                 *binding_num,
                 Slot {
@@ -292,7 +239,7 @@ fn build_slot_map(
         next_buffer += 1;
     }
 
-    let _ = (ep, next_buffer); // suppress unused warnings
+    let _ = next_buffer; // final slot counter only needed while assigning above
 
     (slot_map, resources)
 }
@@ -312,32 +259,11 @@ fn build_slot_map_render(
 ) {
     use naga::back::msl;
 
-    // Collect globals from both entry points
-    fn collect_ep_globals(
-        module: &naga::Module,
-        entry_name: &str,
-    ) -> std::collections::HashSet<naga::Handle<naga::GlobalVariable>> {
-        let ep = module.entry_points.iter().find(|ep| ep.name == entry_name);
-        if let Some(ep) = ep {
-            let mut called_fns: std::collections::HashSet<naga::Handle<naga::Function>> =
-                std::collections::HashSet::new();
-            collect_called_functions(&ep.function, module, &mut called_fns);
-            let mut globals: std::collections::HashSet<naga::Handle<naga::GlobalVariable>> =
-                std::collections::HashSet::new();
-            collect_globals_from_function(&ep.function, &mut globals);
-            for &fn_handle in &called_fns {
-                collect_globals_from_function(&module.functions[fn_handle], &mut globals);
-            }
-            globals
-        } else {
-            module.global_variables.iter().map(|(h, _)| h).collect()
-        }
-    }
-
-    let vs_globals = collect_ep_globals(module, vs_entry);
-    let fs_globals = collect_ep_globals(module, fs_entry);
-
-    // Union of both entry points' globals
+    // Union of the globals reachable from vertex and fragment entry points.
+    // Both stages share the same Metal argument table, so bindings visible in
+    // either stage need slots in the unified `SlotMap`.
+    let vs_globals = collect_entry_point_globals(module, vs_entry);
+    let fs_globals = collect_entry_point_globals(module, fs_entry);
     let all_globals: std::collections::HashSet<_> =
         vs_globals.union(&fs_globals).copied().collect();
 
@@ -361,31 +287,14 @@ fn build_slot_map_render(
     let mut next_sampler: u32 = 0;
 
     for (binding_num, resource_binding, gv) in &bindings {
-        let ty = &module.types[gv.ty];
-        let is_buffer = matches!(
-            gv.space,
-            naga::AddressSpace::Uniform | naga::AddressSpace::Storage { .. }
-        );
-        let is_sampler = matches!(ty.inner, naga::TypeInner::Sampler { .. });
-        let is_texture = matches!(ty.inner, naga::TypeInner::Image { .. });
-        let is_writable = match gv.space {
-            naga::AddressSpace::Storage { access } => access.contains(naga::StorageAccess::STORE),
-            _ => false,
-        } || matches!(
-            ty.inner,
-            naga::TypeInner::Image {
-                class: naga::ImageClass::Storage { access, .. },
-                ..
-            } if access.contains(naga::StorageAccess::STORE)
-        );
-
+        let kind = classify_global(module, gv);
         let mut bind_target = msl::BindTarget::default();
 
-        if is_buffer {
+        if kind.is_buffer {
             let idx = next_buffer;
             next_buffer += 1;
             bind_target.buffer = Some(idx as u8);
-            bind_target.mutable = is_writable;
+            bind_target.mutable = kind.is_writable;
             slot_map.insert(
                 *binding_num,
                 Slot {
@@ -393,7 +302,7 @@ fn build_slot_map_render(
                     metal_index: idx,
                 },
             );
-        } else if is_sampler {
+        } else if kind.is_sampler {
             let idx = next_sampler;
             next_sampler += 1;
             bind_target.sampler = Some(msl::BindSamplerTarget::Resource(idx as u8));
@@ -404,11 +313,11 @@ fn build_slot_map_render(
                     metal_index: idx,
                 },
             );
-        } else if is_texture {
+        } else if kind.is_texture {
             let idx = next_texture;
             next_texture += 1;
             bind_target.texture = Some(idx as u8);
-            bind_target.mutable = is_writable;
+            bind_target.mutable = kind.is_writable;
             slot_map.insert(
                 *binding_num,
                 Slot {
@@ -429,96 +338,6 @@ fn build_slot_map_render(
     }
 
     (slot_map, resources_vs, resources_fs)
-}
-
-/// Generate optimized SPIR-V from a naga module:
-///   1. naga Module → SPIR-V (via naga::back::spv)
-///   2. SPIR-V → optimized SPIR-V (via spirv-tools optimizer)
-///
-/// When `use_half` is true, adds RelaxFloatOps + ConvertRelaxedToHalf passes
-/// that convert f32 ALU ops to f16 in the SPIR-V IR. SPIRV-Cross then emits
-/// MSL `half` types, giving 2× ALU throughput on Apple Silicon GPUs.
-fn compile_to_optimized_spirv(
-    module: &naga::Module,
-    info: &naga::valid::ModuleInfo,
-    label: &str,
-    use_half: bool,
-) -> Vec<u32> {
-    let spv_options = naga::back::spv::Options {
-        lang_version: (1, 3),
-        flags: naga::back::spv::WriterFlags::empty(),
-        ..Default::default()
-    };
-    let spv_words = naga::back::spv::write_vec(module, info, &spv_options, None)
-        .unwrap_or_else(|e| panic!("{label}: naga SPIR-V output error: {e}"));
-
-    optimize_spirv(&spv_words, label, use_half)
-}
-
-/// Run spirv-opt optimization passes on SPIR-V words.
-/// Falls back to unoptimized SPIR-V if optimization fails.
-///
-/// When `use_half` is true, two additional passes are registered:
-///  - `RelaxFloatOps`: decorates all f32 results/operands with RelaxedPrecision
-///  - `ConvertRelaxedToHalf`: converts RelaxedPrecision f32 ops to f16
-///
-///   These run after standard optimization so constant folding and DCE have
-///   already simplified the IR. SPIRV-Cross translates f16 → MSL `half`.
-fn optimize_spirv(spv_words: &[u32], label: &str, use_half: bool) -> Vec<u32> {
-    use spirv_tools::opt::{self, Optimizer};
-
-    let mut optimizer = opt::create(None);
-
-    // Register key optimization passes (same categories as spirv-opt -O):
-    optimizer
-        .register_pass(opt::Passes::InlineExhaustive)
-        .register_pass(opt::Passes::EliminateDeadFunctions)
-        .register_pass(opt::Passes::EliminateDeadConstant)
-        .register_pass(opt::Passes::EliminateDeadMembers)
-        .register_pass(opt::Passes::DeadVariableElimination)
-        .register_pass(opt::Passes::ConditionalConstantPropagation)
-        .register_pass(opt::Passes::AggressiveDCE)
-        .register_pass(opt::Passes::Simplification)
-        .register_pass(opt::Passes::StrengthReduction)
-        .register_pass(opt::Passes::BlockMerge)
-        .register_pass(opt::Passes::CFGCleanup)
-        .register_pass(opt::Passes::LocalSingleStoreElim)
-        .register_pass(opt::Passes::LocalMultiStoreElim)
-        .register_pass(opt::Passes::LocalAccessChainConvert)
-        .register_pass(opt::Passes::InsertExtractElim)
-        .register_pass(opt::Passes::CopyPropagateArrays)
-        .register_pass(opt::Passes::VectorDCE)
-        .register_pass(opt::Passes::RedundancyElimination)
-        .register_pass(opt::Passes::ReduceLoadSize)
-        .register_pass(opt::Passes::CombineAccessChains)
-        .register_pass(opt::Passes::CodeSinking)
-        .register_pass(opt::Passes::CompactIds);
-
-    // Half-precision passes: mark all f32 ops as relaxable, then convert to f16.
-    // SPIRV-Cross emits MSL `half`/`half4` for f16 types, giving 2× ALU
-    // throughput on Apple Silicon GPUs. Only safe for non-accumulative shaders.
-    if use_half {
-        optimizer
-            .register_pass(opt::Passes::RelaxFloatOps)
-            .register_pass(opt::Passes::ConvertRelaxedToHalf);
-    }
-
-    match optimizer.optimize(
-        spv_words,
-        &mut |msg| {
-            log::warn!("{label}: spirv-opt: {msg:?}");
-        },
-        None,
-    ) {
-        Ok(binary) => {
-            // binary.as_words() gives us &[u32]
-            binary.as_words().to_vec()
-        }
-        Err(e) => {
-            log::warn!("{label}: spirv-opt optimization failed ({e}), using unoptimized SPIR-V");
-            spv_words.to_vec()
-        }
-    }
 }
 
 /// Compile optimized SPIR-V to MSL via SPIRV-Cross for a single entry point.
@@ -618,77 +437,6 @@ fn add_resource_bindings_from_slot_map(
         };
         if let Err(e) = compiler.add_resource_binding(exec_model, resource_binding, &bind_target) {
             log::warn!("{label}: failed to set MSL sizes buffer binding: {e}");
-        }
-    }
-}
-
-/// Collect GlobalVariable handles referenced in a function's expressions.
-fn collect_globals_from_function(
-    func: &naga::Function,
-    out: &mut std::collections::HashSet<naga::Handle<naga::GlobalVariable>>,
-) {
-    for (_, expr) in func.expressions.iter() {
-        if let naga::Expression::GlobalVariable(handle) = *expr {
-            out.insert(handle);
-        }
-    }
-}
-
-/// Recursively collect all functions called from `func` (transitive closure).
-fn collect_called_functions(
-    func: &naga::Function,
-    module: &naga::Module,
-    out: &mut std::collections::HashSet<naga::Handle<naga::Function>>,
-) {
-    for (_, expr) in func.expressions.iter() {
-        if let naga::Expression::CallResult(fn_handle) = *expr
-            && out.insert(fn_handle)
-        {
-            collect_called_functions(&module.functions[fn_handle], module, out);
-        }
-    }
-    // Also scan block statements for Call statements (not all calls have results)
-    collect_calls_from_block(&func.body, module, out);
-}
-
-/// Scan a naga Block for Call statements and collect called function handles.
-fn collect_calls_from_block(
-    block: &naga::Block,
-    module: &naga::Module,
-    out: &mut std::collections::HashSet<naga::Handle<naga::Function>>,
-) {
-    for stmt in block.iter() {
-        match *stmt {
-            naga::Statement::Call { function, .. } => {
-                if out.insert(function) {
-                    collect_called_functions(&module.functions[function], module, out);
-                }
-            }
-            naga::Statement::Block(ref inner) => {
-                collect_calls_from_block(inner, module, out);
-            }
-            naga::Statement::If {
-                ref accept,
-                ref reject,
-                ..
-            } => {
-                collect_calls_from_block(accept, module, out);
-                collect_calls_from_block(reject, module, out);
-            }
-            naga::Statement::Switch { ref cases, .. } => {
-                for case in cases {
-                    collect_calls_from_block(&case.body, module, out);
-                }
-            }
-            naga::Statement::Loop {
-                ref body,
-                ref continuing,
-                ..
-            } => {
-                collect_calls_from_block(body, module, out);
-                collect_calls_from_block(continuing, module, out);
-            }
-            _ => {}
         }
     }
 }

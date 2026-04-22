@@ -3,6 +3,16 @@ name = "manifold-gpu"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# Backend selection is explicit via feature flag. With no features, the crate
+# uses the Metal backend on macOS and fails to link on other platforms (the
+# intended error — MANIFOLD's primary build is Mac-native). Enabling `vulkan`
+# switches to the Vulkan backend, on any platform. On macOS this routes
+# through MoltenVK, which is a convenient way to validate the cross-platform
+# path from the dev box without booting into Windows/Linux.
+default = []
+vulkan = ["dep:ash"]
+
 [dependencies]
 # WGSL parsing + validation + MSL output + SPIR-V output
 naga = { version = "28", features = ["wgsl-in", "msl-out", "spv-out"] }
@@ -11,8 +21,12 @@ log = "0.4"
 
 # SPIR-V optimization (wraps Google SPIRV-Tools C++)
 spirv-tools = { version = "0.13", features = ["use-compiled-tools"] }
-# SPIR-V → MSL compilation (wraps SPIRV-Cross C)
+# SPIR-V → MSL compilation (wraps SPIRV-Cross C) — Metal backend only.
 spirv-cross2 = { version = "0.4", default-features = false, features = ["msl"] }
+
+# Vulkan loader bindings. Opt-in via the `vulkan` feature — pure FFI loader
+# with no C deps, so enabling it costs essentially no compile time.
+ash = { version = "0.38", optional = true }
 
 # Native Metal backend
 [target.'cfg(target_os = "macos")'.dependencies]
