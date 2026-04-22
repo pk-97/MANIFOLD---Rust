@@ -243,7 +243,6 @@ const SPECTROGRAM_GAMMA: f32 = 0.7;
 /// they can't drift out of sync.
 const SS_GATE_DB_MIN: f32 = -100.0;
 const SS_GATE_DB_MAX: f32 = -10.0;
-const SS_GATE_DB_DEFAULT: f32 = -75.0;
 /// Sample-ring capacity in mono samples. Sized to tolerate ~1.3 s of
 /// GUI stall at 48 kHz before the audio thread starts dropping — well
 /// beyond anything we'd see in normal operation.
@@ -758,27 +757,27 @@ impl AnalyzerParams {
         Self {
             editor_state: EguiState::from_size(INITIAL_SPECTRUM_W, INITIAL_SPECTRUM_H),
             ref_slots: Arc::new(RwLock::new(RefSlots::default())),
-            sync: BoolParam::new("Sync", false),
+            sync: BoolParam::new("Sync", true),
             sync_window: EnumParam::new("Window", SyncWindow::FourBars),
-            synchrosqueeze: BoolParam::new("Synchrosqueeze", true),
+            synchrosqueeze: BoolParam::new("Synchrosqueeze", false),
             coherence: BoolParam::new("Coherence", false),
-            freq_min_hz: IntParam::new("Min Hz", 10, IntRange::Linear { min: 10, max: 2000 }),
+            freq_min_hz: IntParam::new("Min Hz", 20, IntRange::Linear { min: 10, max: 2000 }),
             freq_max_hz: IntParam::new(
                 "Max Hz",
-                22_000,
+                20_000,
                 IntRange::Linear { min: 1000, max: 25_000 },
             ),
             synchro_gate_db: FloatParam::new(
                 "SS Gate",
-                SS_GATE_DB_DEFAULT,
+                -35.0,
                 FloatRange::Linear { min: SS_GATE_DB_MIN, max: SS_GATE_DB_MAX },
             )
             .with_unit(" dB")
             .with_step_size(1.0),
-            weighting: EnumParam::new("Weighting", Weighting::LufsSubAdj),
+            weighting: EnumParam::new("Weighting", Weighting::Pink),
             reference_curve: EnumParam::new("Reference", ReferenceCurve::None),
-            lr_range_db: IntParam::new("L/R Range", 20, IntRange::Linear { min: 5, max: 60 }),
-            freq_smoothing: EnumParam::new("Smoothing", FreqSmoothing::Twelfth),
+            lr_range_db: IntParam::new("L/R Range", 10, IntRange::Linear { min: 5, max: 60 }),
+            freq_smoothing: EnumParam::new("Smoothing", FreqSmoothing::Erb),
             fft_size: EnumParam::new("FFT Size", FftSize::K4),
         }
     }
