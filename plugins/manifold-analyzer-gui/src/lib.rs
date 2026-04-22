@@ -387,19 +387,19 @@ impl Weighting {
     fn tooltip(self) -> &'static str {
         match self {
             Weighting::Flat => {
-                "No tilt — raw dB. Bass dominates visually because there's more energy at low freq."
+                "No tilt - raw dB. Bass dominates visually because there's more energy at low freq."
             }
             Weighting::Pink => {
-                "+3 dB/oct tilt — pink noise reads as a flat horizontal line. Standard for mixing."
+                "+3 dB/oct tilt - pink noise reads as a flat horizontal line. Standard for mixing."
             }
             Weighting::Tilted => {
-                "+4.5 dB/oct tilt — like Pink but a bit more high-end emphasis. Matches SPAN's preset."
+                "+4.5 dB/oct tilt - like Pink but a bit more high-end emphasis. Matches SPAN's preset."
             }
             Weighting::Lufs => {
                 "ITU-R BS.1770 K-weighting (LUFS). Highlights what's actually driving perceived loudness."
             }
             Weighting::LufsSubAdj => {
-                "K-weighting without the 38 Hz high-pass — keeps subsonic content visible for diagnosing rumble."
+                "K-weighting without the 38 Hz high-pass - keeps subsonic content visible for diagnosing rumble."
             }
         }
     }
@@ -448,13 +448,13 @@ impl FreqSmoothing {
 
     fn tooltip(self) -> &'static str {
         match self {
-            FreqSmoothing::None => "Raw FFT bins — every spike is real, but low-end reads jagged.",
-            FreqSmoothing::TwentyFourth => "1/24 octave — barely smoothed; preserves narrow peaks.",
-            FreqSmoothing::Twelfth => "1/12 octave — SPAN default. Clean readout, peaks survive.",
-            FreqSmoothing::Sixth => "1/6 octave — moderate; tonal balance over individual partials.",
-            FreqSmoothing::Third => "1/3 octave — broad bands; reads like a mix-balance overview.",
+            FreqSmoothing::None => "Raw FFT bins - every spike is real, but low-end reads jagged.",
+            FreqSmoothing::TwentyFourth => "1/24 octave - barely smoothed; preserves narrow peaks.",
+            FreqSmoothing::Twelfth => "1/12 octave - SPAN default. Clean readout, peaks survive.",
+            FreqSmoothing::Sixth => "1/6 octave - moderate; tonal balance over individual partials.",
+            FreqSmoothing::Third => "1/3 octave - broad bands; reads like a mix-balance overview.",
             FreqSmoothing::Erb => {
-                "Perceptual critical bands — wide at the low end, tight up top. Matches how the ear groups frequencies."
+                "Perceptual critical bands - wide at the low end, tight up top. Matches how the ear groups frequencies."
             }
         }
     }
@@ -542,11 +542,11 @@ impl FftSize {
 
     fn tooltip(self) -> &'static str {
         match self {
-            FftSize::K2 => "2048 — fastest response, coarsest pitch resolution.",
-            FftSize::K4 => "4096 — balanced default for live monitoring.",
-            FftSize::K8 => "8192 — finer pitch detail, slower transient response.",
-            FftSize::K16 => "16384 — mastering-grade resolution; visible smear on transients.",
-            FftSize::K32 => "32768 — maximum bin count; only for static-tone analysis.",
+            FftSize::K2 => "2048 - fastest response, coarsest pitch resolution.",
+            FftSize::K4 => "4096 - balanced default for live monitoring.",
+            FftSize::K8 => "8192 - finer pitch detail, slower transient response.",
+            FftSize::K16 => "16384 - mastering-grade resolution; visible smear on transients.",
+            FftSize::K32 => "32768 - maximum bin count; only for static-tone analysis.",
         }
     }
 }
@@ -1612,7 +1612,13 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
             beat_pos: beat_opt.unwrap_or(f64::NAN),
             beats_per_window,
             synchrosqueeze: ss_on,
-            coherence: state.params.coherence.value(),
+            // Coherence is force-disabled at the boundary. The param
+            // is kept (with its default false and full worker code path)
+            // for potential future re-exposure, but with no UI to
+            // toggle it back off we don't want a previously-saved
+            // session resurrecting it. Single-source override here so
+            // the param's current value never reaches the worker.
+            coherence: false,
             synchro_gate_db: state.params.synchro_gate_db.value(),
             source: spectrogram_source,
         });
@@ -1910,10 +1916,10 @@ fn draw_spectrogram_toolbar(
             ))
             .on_hover_text(match mode {
                 SpectrogramSource::Mid => {
-                    "Mid: (L+R)/2 — full-height spectrogram of the centre/sum signal."
+                    "Mid: (L+R)/2 - full-height spectrogram of the centre/sum signal."
                 }
                 SpectrogramSource::Side => {
-                    "Side: (L−R)/2 — full-height spectrogram of the stereo difference. Centre content disappears."
+                    "Side: (L-R)/2 - full-height spectrogram of the stereo difference. Centre content disappears."
                 }
                 SpectrogramSource::LeftRight => {
                     "L | R: stacked Left (top) over Right (bottom). Compare channels at a glance."
@@ -1944,7 +1950,7 @@ fn draw_spectrogram_toolbar(
         chip_ui
             .label(egui::RichText::new("Floor").size(11.0))
             .on_hover_text(
-                "Power threshold for Sharpen. Bins below this don't contribute. Lower → transients survive; higher → cleaner on noise.",
+                "Power threshold for Sharpen. Bins below this don't contribute. Lower = transients survive; higher = cleaner on noise.",
             );
         let mut gate_val = params.synchro_gate_db.value();
         if chip_ui
@@ -3530,7 +3536,7 @@ fn fmt_delta(v: f32, unit: DeltaUnit) -> String {
         DeltaUnit::Lu => "LU",
         DeltaUnit::Db => "dB",
     };
-    format!("Δ{:+.1} {}", v, suffix)
+    format!("d{:+.1} {}", v, suffix)
 }
 
 fn fmt_absolute(v: f32, unit: DeltaUnit) -> String {
@@ -3589,10 +3595,10 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
             let resp = ui.checkbox(&mut sync_val, "Beat-Sync");
             let resp = if host_ready {
                 resp.on_hover_text(
-                    "Lock the spectrogram to the host's bars/beats grid. Off = scrolls right→left at native rate.",
+                    "Lock the spectrogram to the host's bars/beats grid. Off = scrolls right-to-left at native rate.",
                 )
             } else {
-                resp.on_hover_text("Host isn't reporting tempo — start playback in Sync-aware host to enable.")
+                resp.on_hover_text("Host isn't reporting tempo - start playback in Sync-aware host to enable.")
             };
             if resp.changed() {
                 setter.begin_set_parameter(&params.sync);
@@ -3778,7 +3784,7 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
             ui.label(format!("{:.1} BPM", bpm))
                 .on_hover_text("Tempo reported by the host. The spectrogram beat grid uses this value when Beat-Sync is on.");
         } else {
-            ui.label("— BPM")
+            ui.label("-- BPM")
                 .on_hover_text("Host isn't reporting tempo. Start playback to populate.");
         }
     });
@@ -3826,7 +3832,7 @@ fn draw_single_ref_slot(
 
     if analyzing {
         ui.label(
-            egui::RichText::new("analysing…")
+            egui::RichText::new("analysing...")
                 .color(egui::Color32::from_gray(200))
                 .italics(),
         );
@@ -3834,7 +3840,7 @@ fn draw_single_ref_slot(
     }
 
     if !loaded {
-        if ui.small_button("Load…").clicked() {
+        if ui.small_button("Load...").clicked() {
             launch_ref_picker(slot_idx, ref_slots.clone(), shared.clone());
         }
         return;
@@ -3865,12 +3871,12 @@ fn draw_single_ref_slot(
         .add(egui::Button::new(
             egui::RichText::new(truncated).color(label_color),
         ))
-        .on_hover_text(format!("{name}\nclick → toggle visibility"));
+        .on_hover_text(format!("{name}\nclick to toggle visibility"));
     if btn.clicked() {
         let mut slots = ref_slots.write();
         slots.slots[slot_idx].visible = !slots.slots[slot_idx].visible;
     }
-    if ui.small_button("×").on_hover_text("Clear slot").clicked() {
+    if ui.small_button("x").on_hover_text("Clear slot").clicked() {
         let mut slots = ref_slots.write();
         slots.slots[slot_idx] = RefSlot::default();
     }
@@ -3883,7 +3889,7 @@ fn truncate_name(s: &str, max_chars: usize) -> String {
     } else {
         let keep = max_chars.saturating_sub(1);
         let mut out: String = s.chars().take(keep).collect();
-        out.push('…');
+        out.push_str("...");
         out
     }
 }
