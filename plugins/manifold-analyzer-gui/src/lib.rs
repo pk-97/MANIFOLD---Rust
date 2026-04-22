@@ -1402,17 +1402,20 @@ pub fn create_editor(
                     ctx.set_pixels_per_point(native);
                 }
             }
-            egui::TopBottomPanel::top("analyzer-controls")
-                .frame(egui::Frame::new().fill(egui::Color32::from_rgb(18, 22, 30)))
-                .exact_height(26.0)
-                .show(ctx, |ui| {
-                    draw_controls(ui, state, setter);
-                });
+            // Refs row sits at the very top so the loaded reference
+            // tracks read like a "tab strip" above the global controls
+            // they affect (overlay + curve match-gain).
             egui::TopBottomPanel::top("analyzer-refs")
                 .frame(egui::Frame::new().fill(egui::Color32::from_rgb(14, 17, 24)))
                 .exact_height(26.0)
                 .show(ctx, |ui| {
                     draw_ref_slots(ui, state);
+                });
+            egui::TopBottomPanel::top("analyzer-controls")
+                .frame(egui::Frame::new().fill(egui::Color32::from_rgb(18, 22, 30)))
+                .exact_height(26.0)
+                .show(ctx, |ui| {
+                    draw_controls(ui, state, setter);
                 });
             // Bottom footer mirrors the top header. Holds the Spec
             // (M / S / L|R + Sharpen + Floor) and L/R range controls
@@ -3629,13 +3632,6 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
                 }
             });
 
-        if let Some(bpm) = bpm_opt {
-            ui.label(format!("{:.1} BPM", bpm))
-                .on_hover_text("Tempo reported by the host. The spectrogram beat grid uses this value when Beat-Sync is on.");
-        } else {
-            ui.label("-- BPM")
-                .on_hover_text("Host isn't reporting tempo. Start playback to populate.");
-        }
     });
 }
 
