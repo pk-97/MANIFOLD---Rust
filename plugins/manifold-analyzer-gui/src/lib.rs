@@ -3420,10 +3420,15 @@ fn draw_loudness_readouts(
                         // varies in width.
                         if let Some((delta_val, ref_val, unit)) = delta {
                             let delta_str = fmt_delta(delta_val, unit);
+                            // Monospace family — egui's bundled Hack font
+                            // covers Δ (U+0394); the proportional default
+                            // Ubuntu-Light doesn't, so without monospace the
+                            // delta glyph would render as tofu.
                             let resp = ui.add(
                                 egui::Label::new(
                                     egui::RichText::new(delta_str)
                                         .color(ref_color)
+                                        .monospace()
                                         .size(10.0),
                                 )
                                 .truncate(),
@@ -3589,7 +3594,11 @@ fn fmt_delta(v: f32, unit: DeltaUnit) -> String {
         DeltaUnit::Lu => "LU",
         DeltaUnit::Db => "dB",
     };
-    format!("d{:+.1} {}", v, suffix)
+    // Δ (U+0394) ships with egui's bundled Hack monospace font but not
+    // its Ubuntu-Light proportional font, so the call site renders this
+    // string in monospace (see `draw_loudness_readouts`). Without that
+    // pairing the glyph would tofu out.
+    format!("Δ{:+.1} {}", v, suffix)
 }
 
 fn fmt_absolute(v: f32, unit: DeltaUnit) -> String {
