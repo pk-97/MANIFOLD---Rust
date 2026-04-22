@@ -4,6 +4,24 @@ A Visual DAW for live video performance. Users create, arrange, and compose vide
 
 The Rust codebase is the complete, authoritative implementation. The Unity codebase at `/Users/peterkiemann/MANIFOLD - Render Engine/` is archived reference only.
 
+## ⚠️ SHELL — NEVER PREPEND `cd` TO COMMANDS
+
+**DO NOT** wrap bash commands in `cd "/Users/peterkiemann/MANIFOLD - Rust" && ...`. The working directory is already the project root. Prepending `cd` turns every command into a compound shell invocation that:
+
+1. Bypasses the user's allowlist (`Bash(git add *)`, `Bash(cargo build *)`, etc. match commands that *start with* `git` or `cargo` — not commands that start with `cd`).
+2. Triggers a fresh permission prompt for the user on every single call, including commands they've already explicitly allowed.
+
+This rule is non-negotiable. It applies to EVERY bash command in EVERY session, not just git/cargo:
+
+- ❌ `cd "/Users/peterkiemann/MANIFOLD - Rust" && git status`
+- ✅ `git status`
+- ❌ `cd "/Users/peterkiemann/MANIFOLD - Rust" && cargo build --release -p foo`
+- ✅ `cargo build --release -p foo`
+- ❌ `cd "/Users/peterkiemann/MANIFOLD - Rust/plugins" && cargo test ...`
+- ✅ Use an absolute path or `./plugins/...` from the project root; or if you genuinely need a different directory, pass `--manifest-path` / `-C` flags rather than `cd`.
+
+The only legitimate `cd` is if the user explicitly asks for it, or you need a transient sub-shell where no other path flag exists. Even then, use a dedicated Bash call — don't chain `&&` with a command that has its own allowlist pattern.
+
 ## CRATE STRUCTURE
 
 | Crate | Role |
