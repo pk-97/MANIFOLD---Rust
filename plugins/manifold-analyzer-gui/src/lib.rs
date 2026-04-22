@@ -1944,34 +1944,18 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             }
             lines.push(format_hz_readout(freq));
 
-            // Sync mode: x → beat position from the current window
-            // start. Non-sync mode skips the time axis (raw history
-            // depends on the worker hop rate, not a user-visible time
-            // base — we'd rather show nothing than a misleading number).
+            // Sync state still affects the column lookup below (it picks
+            // the spread-across-width math vs the 1-pixel-per-column
+            // free-scroll math), but the bar.beat readout itself is not
+            // shown — frequency + dB are what the user actually wants
+            // when probing the heatmap.
             let (bpm_opt, beat_opt, _) = state.shared.transport();
             let sync_on = state.params.sync.value();
-            let mut sync_active = false;
-            if sync_on {
-                if let (Some(_bpm), Some(beat_pos)) = (bpm_opt, beat_opt) {
-                    let beats_per_window = state.params.sync_window.value().beats();
-                    if beats_per_window > 0.0 {
-                        sync_active = true;
-                        let frac = ((cursor.x - spectrogram_rect.left())
-                            / spectrogram_rect.width().max(1.0))
-                            .clamp(0.0, 1.0);
-                        let window_start_beat = (beat_pos / beats_per_window as f64).floor()
-                            * beats_per_window as f64;
-                        let absolute_beat = window_start_beat + (frac * beats_per_window) as f64;
-                        let bar_num =
-                            (absolute_beat.floor() as i64).div_euclid(BEATS_PER_BAR as i64) + 1;
-                        let beat_in_bar =
-                            (absolute_beat.floor() as i64).rem_euclid(BEATS_PER_BAR as i64) + 1;
-                        let beat_frac = absolute_beat - absolute_beat.floor();
-                        lines.push(format!("{}.{}.{:02}", bar_num, beat_in_bar,
-                            (beat_frac * 100.0) as i32));
-                    }
-                }
-            }
+            let beats_per_window = state.params.sync_window.value().beats();
+            let sync_active = sync_on
+                && bpm_opt.map(|b| b > 0.0).unwrap_or(false)
+                && beat_opt.is_some()
+                && beats_per_window > 0.0;
 
             // Spectrogram dB lookup. Mirrors the shader's column math:
             // sync mode spreads HISTORY_COLS columns across rect width;
