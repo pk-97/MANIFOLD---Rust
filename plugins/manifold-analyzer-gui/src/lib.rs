@@ -761,7 +761,9 @@ fn read_if_size_matches(mailbox: &Mutex<Vec<f32>>, dst: &mut [f32]) -> bool {
 
 impl AnalyzerGuiShared {
     pub fn new(sample_rate: f32, fft_size: usize) -> Self {
-        let num_bins = fft_size / 2;
+        // +1 for Nyquist — must match `StereoAnalyzer::num_bins()` so the
+        // size-matched mailbox publish doesn't silently drop every frame.
+        let num_bins = fft_size / 2 + 1;
         Self {
             sample_rate_bits: AtomicU32::new(sample_rate.to_bits()),
             fft_size: AtomicUsize::new(fft_size),
@@ -882,7 +884,8 @@ impl AnalyzerGuiShared {
     /// mailboxes are grown so GUI readers never observe a size > what
     /// the mailboxes can hold.
     pub fn resize_stereo_mailboxes(&self, fft_size: usize) {
-        let num_bins = fft_size / 2;
+        // +1 for Nyquist — must match `StereoAnalyzer::num_bins()`.
+        let num_bins = fft_size / 2 + 1;
         for mailbox in [
             &self.mid_db,
             &self.side_db,
@@ -1203,7 +1206,8 @@ pub fn create_editor(
     params: Arc<AnalyzerParams>,
     shared: Arc<AnalyzerGuiShared>,
 ) -> Option<Box<dyn Editor>> {
-    let num_bins = shared.fft_size() / 2;
+    // +1 for Nyquist — must match `StereoAnalyzer::num_bins()`.
+    let num_bins = shared.fft_size() / 2 + 1;
     let egui_state = params.editor_state.clone();
     let state = EditorState {
         shared,
@@ -1280,7 +1284,9 @@ pub fn create_editor(
 fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     let sr = state.shared.sample_rate();
     let fft_size = state.shared.fft_size();
-    let num_bins = fft_size / 2;
+    // +1 for Nyquist — must match `StereoAnalyzer::num_bins()` and the
+    // mailbox sizing in `AnalyzerGuiShared::new`.
+    let num_bins = fft_size / 2 + 1;
     if state.mid_scratch.len() != num_bins {
         state.mid_scratch.resize(num_bins, MIN_DB);
     }
