@@ -41,7 +41,7 @@ pub struct Analyzer {
     fft_scratch: Vec<Complex<f32>>,
     fft_buffer: Vec<Complex<f32>>,
     power_avg: Vec<f32>,
-    /// Per-direction EMA coefficients. SPAN-style peak metering uses
+    /// Per-direction EMA coefficients. Peak-style metering uses
     /// `attack_alpha = 1.0` (instant rise) and a slower release so peaks
     /// read cleanly while decay stays visible. Set equal for symmetric
     /// averaging (offline reference analysis).
@@ -51,8 +51,8 @@ pub struct Analyzer {
     release_ms: f32,
     magnitude_db: Vec<f32>,
     // Un-averaged per-frame dB. Spectrograms want instantaneous frames so
-    // transients stay sharp; the averaged `magnitude_db` is what the SPAN-
-    // style curve display consumes.
+    // transients stay sharp; the averaged `magnitude_db` is what the
+    // attack/release-smoothed curve display consumes.
     raw_magnitude_db: Vec<f32>,
     // Reassignment state — previous frame's phase per bin and the derived
     // instantaneous frequency per bin. The frequency is where a bin's
@@ -131,7 +131,7 @@ impl Analyzer {
     }
 
     /// Set separate attack (rise) and release (fall) time constants in
-    /// milliseconds. SPAN-style peak metering typically uses
+    /// milliseconds. Peak-style metering typically uses
     /// `attack_ms = 0.0` (instant rise) with a slow release so peaks
     /// register immediately and then decay visibly.
     pub fn set_attack_release_ms(&mut self, attack_ms: f32, release_ms: f32) {
@@ -211,7 +211,7 @@ impl Analyzer {
     }
 
     /// Like `process_mono`, but the callback receives:
-    /// - `avg`: averaged dB spectrum (for SPAN-style curves)
+    /// - `avg`: averaged dB spectrum (for the smoothed display curves)
     /// - `raw`: un-averaged dB spectrum (for spectrograms)
     /// - `inst_freqs`: instantaneous frequency (Hz) per bin derived from
     ///   phase advance between consecutive frames (for spectral reassignment)

@@ -55,8 +55,8 @@ const INITIAL_SPECTRUM_H: u32 = 450;
 const MAX_SPECTRUM_W: u32 = 4096;
 const MAX_SPECTRUM_H: u32 = 2048;
 
-// Matched to SPAN preset: 10 Hz–25 kHz log, -90…-10 dB, +4.5 dB/oct tilt
-// pivoted at 1 kHz, 1/12-oct frequency smoothing, filled display.
+// Default display window: 10 Hz–25 kHz log, -90…-10 dB, +4.5 dB/oct
+// tilt pivoted at 1 kHz, 1/12-oct frequency smoothing, filled display.
 const DB_MIN: f32 = -90.0;
 const DB_MAX: f32 = 0.0;
 
@@ -65,7 +65,8 @@ const DB_MAX: f32 = 0.0;
 // and `top_fraction`.
 
 /// Maximum number of reference-track slots persisted with the plugin.
-/// Matches typical mastering-reference tool conventions (SPAN / Ozone).
+/// Four covers typical mastering workflows (target + a couple of
+/// commercial-release references).
 pub const REF_SLOT_COUNT: usize = 4;
 
 /// Display colours per slot. Chosen to sit in the cyan→magenta half
@@ -219,14 +220,13 @@ const FILL_ALPHA: f32 = 0.45;
 // with SS on we lift the ceiling to +10 dB so those peaks get headroom
 // instead of saturating early. With SS off the raw VQT tops out near
 // 0 dB — keeping the SS headroom would just dim the display, so we
-// fall back to Vision 4X's 0 dB default.
+// fall back to a 0 dB ceiling.
 const SPECTROGRAM_DB_MIN: f32 = -59.0;
 const SPECTROGRAM_DB_MAX_SS: f32 = 10.0;
 const SPECTROGRAM_DB_MAX_RAW: f32 = 0.0;
 /// Gamma applied to the dB→colour mapping (values only; stored dB is
 /// untouched). `< 1` brightens mids, `> 1` darkens. 0.7 lifts quiet
-/// detail into the visible band without washing out peaks, and matches
-/// the perceptual contrast curve used by iZotope RX's heatmap view.
+/// detail into the visible band without washing out peaks.
 const SPECTROGRAM_GAMMA: f32 = 0.7;
 
 /// Synchrosqueeze input-gate range. Single source of truth — used both
@@ -245,8 +245,8 @@ const SAMPLE_RING_CAPACITY: usize = 65_536;
 /// we surface host numerator.
 const BEATS_PER_BAR: f32 = 4.0;
 
-/// SPAN-style major frequency ticks (labeled, heavier grid line). These
-/// get drawn + labeled whenever they fall inside the user's freq window.
+/// Major frequency ticks (labeled, heavier grid line). These get
+/// drawn + labeled whenever they fall inside the user's freq window.
 const FREQ_MAJORS: &[f32] = &[
     10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0, 20_000.0,
 ];
@@ -393,7 +393,7 @@ impl Weighting {
                 "+3 dB/oct tilt - pink noise reads as a flat horizontal line. Standard for mixing."
             }
             Weighting::Tilted => {
-                "+4.5 dB/oct tilt - like Pink but a bit more high-end emphasis. Matches SPAN's preset."
+                "+4.5 dB/oct tilt - like Pink but a bit more high-end emphasis."
             }
             Weighting::Lufs => {
                 "ITU-R BS.1770 K-weighting (LUFS). Highlights what's actually driving perceived loudness."
@@ -410,8 +410,8 @@ impl Weighting {
 /// log-frequency window everywhere. ERB follows Moore & Glasberg's
 /// critical-band curve — very wide at the low end (~2 oct at 20 Hz),
 /// narrowing to ~1/6 oct above 5 kHz. Matches what the ear actually
-/// integrates, which is what mastering analysers like SPAN hide the
-/// low-end stair-stepping behind.
+/// integrates, which is what most mastering-grade analysers use to
+/// hide the low-end stair-stepping behind.
 #[derive(Enum, PartialEq, Eq, Debug, Clone, Copy)]
 pub enum FreqSmoothing {
     #[id = "none"]
@@ -450,7 +450,7 @@ impl FreqSmoothing {
         match self {
             FreqSmoothing::None => "Raw FFT bins - every spike is real, but low-end reads jagged.",
             FreqSmoothing::TwentyFourth => "1/24 octave - barely smoothed; preserves narrow peaks.",
-            FreqSmoothing::Twelfth => "1/12 octave - SPAN default. Clean readout, peaks survive.",
+            FreqSmoothing::Twelfth => "1/12 octave - default. Clean readout, peaks survive.",
             FreqSmoothing::Sixth => "1/6 octave - moderate; tonal balance over individual partials.",
             FreqSmoothing::Third => "1/3 octave - broad bands; reads like a mix-balance overview.",
             FreqSmoothing::Erb => {
@@ -496,8 +496,8 @@ fn erb_half_octaves_at(f: f32) -> f32 {
 /// Chosen FFT size for the front-of-pipeline stereo analyser. Bigger
 /// size = smaller bin width (better low-freq resolution) at the cost
 /// of a longer time window (slower visual response, transients
-/// diluted). Range matches the "live to detail" spread commercial
-/// analysers expose: 2k snappy, 8k SPAN-style default, 32k detailed
+/// diluted). Range covers the typical "live to detail" spread:
+/// 2k snappy, 8k balanced default, 32k detailed offline-style
 /// analysis. 64k is omitted on purpose — the 1.5 s window reads as
 /// laggy on live material and the low-end win doesn't cover it.
 #[derive(Enum, PartialEq, Eq, Debug, Clone, Copy)]
@@ -784,9 +784,9 @@ impl Default for AnalyzerParams {
 pub struct AnalyzerGuiShared {
     sample_rate_bits: AtomicU32,
     fft_size: AtomicUsize,
-    /// Averaged (SPAN-style) Mid/Side spectra for the top curve.
-    /// Accessed via `try_publish_*_db` (audio thread) and
-    /// `try_read_*_db` (GUI thread); neither side blocks on the other.
+    /// Averaged Mid/Side spectra for the top curve. Accessed via
+    /// `try_publish_*_db` (audio thread) and `try_read_*_db` (GUI
+    /// thread); neither side blocks on the other.
     mid_db: Mutex<Vec<f32>>,
     side_db: Mutex<Vec<f32>>,
     /// Averaged Left / Right spectra for the L/R comparison column.
@@ -1420,12 +1420,12 @@ pub fn create_editor(
                 .exact_width(right_col_w)
                 .resizable(false)
                 .show(ctx, |ui| {
-                    draw_right_column(ui, state, setter);
+                    draw_right_column(ui, state);
                 });
             egui::CentralPanel::default()
                 .frame(egui::Frame::new().fill(egui::Color32::from_rgb(8, 10, 14)))
                 .show(ctx, |ui| {
-                    draw_spectrum(ui, state, setter);
+                    draw_spectrum(ui, state);
                 });
             draw_layout_grab_handle(ctx, state);
             // Continuous repaint — the loudness meter column reads
@@ -1437,7 +1437,7 @@ pub fn create_editor(
     )
 }
 
-fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSetter) {
+fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     let sr = state.shared.sample_rate();
     let fft_size = state.shared.fft_size();
     // +1 for Nyquist — must match `StereoAnalyzer::num_bins()` and the
@@ -1853,120 +1853,11 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
         state,
     );
 
-    // 5. Spectrogram-only toolbar overlaid on the top-left of the
-    //    spectrogram region: source chips + Sharpen + Floor. These
-    //    controls only affect the spectrogram so they live with it
-    //    instead of in the global toolbar at the top of the window.
-    //    Drawn last so they sit above the chrome grid + freq labels.
-    draw_spectrogram_toolbar(ui, spectrogram_rect, &state.shared, &state.params, setter);
-}
-
-/// Spectrogram-only chip toolbar: M / S / L|R source switch +
-/// Sharpen on/off + Sharpen Floor (dB). Lives at the spectrogram
-/// cell's top-left because every control here changes only the
-/// spectrogram render — keeping them next to the visual they affect
-/// is more discoverable than burying them in the global top toolbar.
-fn draw_spectrogram_toolbar(
-    ui: &mut egui::Ui,
-    spectrogram_rect: egui::Rect,
-    shared: &Arc<AnalyzerGuiShared>,
-    params: &Arc<AnalyzerParams>,
-    setter: &ParamSetter,
-) {
-    if spectrogram_rect.height() < 24.0 || spectrogram_rect.width() < 80.0 {
-        return;
-    }
-    let current = shared.spectrogram_source();
-    let chip_origin = spectrogram_rect.min + egui::vec2(6.0, 4.0);
-    // Wider than the chip-only version so the Sharpen group fits on
-    // the same row. Capped to the cell width so it never spills off
-    // the right edge in a tiny window.
-    let max_w = (spectrogram_rect.width() - 12.0).max(80.0);
-    let chip_area = egui::Rect::from_min_size(
-        chip_origin,
-        egui::vec2(max_w.min(320.0), 22.0),
-    );
-    let mut chip_ui = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(chip_area)
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
-    );
-    chip_ui.set_clip_rect(chip_area);
-    chip_ui.spacing_mut().item_spacing.x = 3.0;
-    chip_ui.spacing_mut().button_padding = egui::vec2(6.0, 1.0);
-
-    for &mode in &[
-        SpectrogramSource::Mid,
-        SpectrogramSource::Side,
-        SpectrogramSource::LeftRight,
-    ] {
-        let selected = mode == current;
-        let label = mode.chip_label();
-        let resp = chip_ui
-            .add(egui::SelectableLabel::new(
-                selected,
-                egui::RichText::new(label)
-                    .monospace()
-                    .size(11.0)
-                    .color(if selected {
-                        egui::Color32::WHITE
-                    } else {
-                        egui::Color32::from_white_alpha(180)
-                    }),
-            ))
-            .on_hover_text(match mode {
-                SpectrogramSource::Mid => {
-                    "Mid: (L+R)/2 - full-height spectrogram of the centre/sum signal."
-                }
-                SpectrogramSource::Side => {
-                    "Side: (L-R)/2 - full-height spectrogram of the stereo difference. Centre content disappears."
-                }
-                SpectrogramSource::LeftRight => {
-                    "L | R: stacked Left (top) over Right (bottom). Compare channels at a glance."
-                }
-            });
-        if resp.clicked() && !selected {
-            shared.set_spectrogram_source(mode);
-        }
-    }
-
-    chip_ui.add_space(8.0);
-
-    // Sharpen (synchrosqueeze) checkbox + Floor dB. Floor disables
-    // when Sharpen is off so the user can't tune a no-op.
-    let mut ss_val = params.synchrosqueeze.value();
-    if chip_ui
-        .checkbox(&mut ss_val, egui::RichText::new("Sharpen").size(11.0))
-        .on_hover_text(
-            "Phase-reassigns spectrogram energy to its true frequency. Tonal lines tighten into single pixels; broadband noise stays soft.",
-        )
-        .changed()
-    {
-        setter.begin_set_parameter(&params.synchrosqueeze);
-        setter.set_parameter(&params.synchrosqueeze, ss_val);
-        setter.end_set_parameter(&params.synchrosqueeze);
-    }
-    chip_ui.add_enabled_ui(ss_val, |chip_ui| {
-        chip_ui
-            .label(egui::RichText::new("Floor").size(11.0))
-            .on_hover_text(
-                "Power threshold for Sharpen. Bins below this don't contribute. Lower = transients survive; higher = cleaner on noise.",
-            );
-        let mut gate_val = params.synchro_gate_db.value();
-        if chip_ui
-            .add(
-                egui::DragValue::new(&mut gate_val)
-                    .range(SS_GATE_DB_MIN..=SS_GATE_DB_MAX)
-                    .speed(0.5)
-                    .suffix(" dB"),
-            )
-            .changed()
-        {
-            setter.begin_set_parameter(&params.synchro_gate_db);
-            setter.set_parameter(&params.synchro_gate_db, gate_val);
-            setter.end_set_parameter(&params.synchro_gate_db);
-        }
-    });
+    // Source / Sharpen / Floor / L/R range live in the global top
+    // toolbar (`draw_controls`). Earlier iterations overlaid them on
+    // the cells, but the chips covered the spectrogram + L/R column
+    // content. Keep the cells unobstructed; the toolbar groups every
+    // control by purpose anyway.
 }
 
 fn draw_reference_curve(
@@ -2507,7 +2398,7 @@ fn format_hz(freq: f32) -> String {
 /// of centerline = L louder, right = R louder. Weighting is applied
 /// to both channels before the subtraction so the balance reads in
 /// the same perceptual space as the MS plot / spectrogram.
-fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSetter) {
+fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
     // Half-range of the imbalance axis in dB. The axis spans
     // `[−range_db, +range_db]`; the toolbar `L/R dB` control drives
     // this. Anything beyond the range clamps to the column edge.
@@ -2795,57 +2686,9 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSett
         label_color,
     );
 
-    // L/R ± chip overlaid on the cell's top-left. Drawn last so it
-    // sits above the painted background + grid + labels and remains
-    // readable regardless of column content.
-    draw_lr_range_chip(ui, rect, &state.params, setter);
-}
-
-/// L/R ± half-range chip pinned to the top-left of the L/R column.
-/// Mirrors the spectrogram-toolbar pattern: the only control here
-/// changes only this cell, so it lives with the cell.
-fn draw_lr_range_chip(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
-    params: &Arc<AnalyzerParams>,
-    setter: &ParamSetter,
-) {
-    if rect.height() < 24.0 || rect.width() < 60.0 {
-        return;
-    }
-    let chip_origin = rect.min + egui::vec2(4.0, 4.0);
-    let max_w = (rect.width() - 8.0).max(60.0);
-    let chip_area = egui::Rect::from_min_size(
-        chip_origin,
-        egui::vec2(max_w.min(120.0), 22.0),
-    );
-    let mut chip_ui = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(chip_area)
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
-    );
-    chip_ui.set_clip_rect(chip_area);
-    chip_ui.spacing_mut().item_spacing.x = 4.0;
-    chip_ui
-        .label(egui::RichText::new("L/R ±").size(11.0))
-        .on_hover_text("Half-range of the L/R balance axis in dB.");
-    let mut lr_range_val = params.lr_range_db.value();
-    if chip_ui
-        .add(
-            egui::DragValue::new(&mut lr_range_val)
-                .range(5..=60)
-                .speed(0.25)
-                .suffix(" dB"),
-        )
-        .on_hover_text(
-            "Centre of the column = perfect balance. Outer edges = this many dB of imbalance toward Left or Right.",
-        )
-        .changed()
-    {
-        setter.begin_set_parameter(&params.lr_range_db);
-        setter.set_parameter(&params.lr_range_db, lr_range_val);
-        setter.end_set_parameter(&params.lr_range_db);
-    }
+    // L/R range lives in the global top toolbar (`draw_controls`)
+    // alongside the spectrogram source / Sharpen group; keeping the
+    // column unobstructed reads better than chips on the visual.
 }
 
 /// Per-bin correlation → spectrogram colormap, mapped upside-down so the
@@ -2935,7 +2778,7 @@ fn lerp_color_rgb(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32 {
 /// height. This is what keeps the spectrogram top edge lined up with
 /// the LR cell top edge when the top half is small enough that the
 /// loudness readouts would otherwise overflow.
-fn draw_right_column(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSetter) {
+fn draw_right_column(ui: &mut egui::Ui, state: &mut EditorState) {
     let top_fraction = state.shared.top_fraction();
     ui.spacing_mut().item_spacing.y = 0.0;
     let total = ui.available_size();
@@ -2960,7 +2803,7 @@ fn draw_right_column(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamS
             .layout(egui::Layout::top_down(egui::Align::LEFT)),
     );
     bot_child.set_clip_rect(bot_rect);
-    draw_lr_column(&mut bot_child, state, setter);
+    draw_lr_column(&mut bot_child, state);
 }
 
 /// Floating grab handle at the 2×2 cross. Dragging adjusts both axes
@@ -3638,10 +3481,74 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
 
         ui.separator();
 
-        // Sharpen / Stable / Floor moved into the spectrogram cell's
-        // top-left chip toolbar — they only affect the spectrogram so
-        // they live next to it. Stable (`coherence`) is hidden from
-        // the UI for now: the param still exists and defaults to off.
+        // ── Spectrogram-specific group ──────────────────────────────
+        // Source switch + Sharpen + Floor. Grouped so it's obvious
+        // these all affect only the spectrogram cell.
+        ui.label(egui::RichText::new("Spec").color(egui::Color32::from_gray(160)))
+            .on_hover_text("Spectrogram-only controls.");
+        let current_src = state.shared.spectrogram_source();
+        for &mode in &[
+            SpectrogramSource::Mid,
+            SpectrogramSource::Side,
+            SpectrogramSource::LeftRight,
+        ] {
+            let selected = mode == current_src;
+            let label = mode.chip_label();
+            let resp = ui
+                .add(egui::SelectableLabel::new(
+                    selected,
+                    egui::RichText::new(label).monospace(),
+                ))
+                .on_hover_text(match mode {
+                    SpectrogramSource::Mid => {
+                        "Mid: (L+R)/2 - full-height spectrogram of the centre/sum signal."
+                    }
+                    SpectrogramSource::Side => {
+                        "Side: (L-R)/2 - full-height spectrogram of the stereo difference. Centre content disappears."
+                    }
+                    SpectrogramSource::LeftRight => {
+                        "L | R: stacked Left (top) over Right (bottom). Compare channels at a glance."
+                    }
+                });
+            if resp.clicked() && !selected {
+                state.shared.set_spectrogram_source(mode);
+            }
+        }
+
+        let mut ss_val = params.synchrosqueeze.value();
+        if ui
+            .checkbox(&mut ss_val, "Sharpen")
+            .on_hover_text(
+                "Phase-reassigns spectrogram energy to its true frequency. Tonal lines tighten into single pixels; broadband noise stays soft. Toggling clears the spectrogram so before/after stays unambiguous.",
+            )
+            .changed()
+        {
+            setter.begin_set_parameter(&params.synchrosqueeze);
+            setter.set_parameter(&params.synchrosqueeze, ss_val);
+            setter.end_set_parameter(&params.synchrosqueeze);
+        }
+        ui.add_enabled_ui(ss_val, |ui| {
+            ui.label("Floor")
+                .on_hover_text(
+                    "Power threshold for Sharpen. Bins below this don't contribute. Lower = transients survive; higher = cleaner on noise.",
+                );
+            let mut gate_val = params.synchro_gate_db.value();
+            if ui
+                .add(
+                    egui::DragValue::new(&mut gate_val)
+                        .range(SS_GATE_DB_MIN..=SS_GATE_DB_MAX)
+                        .speed(0.5)
+                        .suffix(" dB"),
+                )
+                .changed()
+            {
+                setter.begin_set_parameter(&params.synchro_gate_db);
+                setter.set_parameter(&params.synchro_gate_db, gate_val);
+                setter.end_set_parameter(&params.synchro_gate_db);
+            }
+        });
+
+        ui.separator();
 
         // ── Frequency range ─────────────────────────────────────────
         ui.label("Range")
@@ -3677,8 +3584,25 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
             setter.end_set_parameter(&params.freq_max_hz);
         }
 
-        // L/R ± moved into the L/R cell's top-left chip toolbar —
-        // it only affects that cell so it lives next to it.
+        ui.label("L/R +/-")
+            .on_hover_text("Half-range of the L/R balance axis in dB.");
+        let mut lr_range_val = params.lr_range_db.value();
+        if ui
+            .add(
+                egui::DragValue::new(&mut lr_range_val)
+                    .range(5..=60)
+                    .speed(0.25)
+                    .suffix(" dB"),
+            )
+            .on_hover_text(
+                "Centre of the L/R column = perfect balance. Outer edges = this many dB of imbalance toward Left or Right.",
+            )
+            .changed()
+        {
+            setter.begin_set_parameter(&params.lr_range_db);
+            setter.set_parameter(&params.lr_range_db, lr_range_val);
+            setter.end_set_parameter(&params.lr_range_db);
+        }
 
         // ── Display weighting + overlay ─────────────────────────────
         ui.label("Weighting")

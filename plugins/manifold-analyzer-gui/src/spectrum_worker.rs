@@ -327,7 +327,12 @@ impl WorkerState {
                     || (cfg.beats_per_window - self.last_applied_cfg.beats_per_window).abs()
                         > 1e-3));
         let source_changed = cfg.source != self.last_applied_cfg.source;
-        if sync_changed || source_changed {
+        // Toggling synchrosqueeze fundamentally changes the visual
+        // character of every column (raw CQT vs phase-reassigned), so
+        // mixing the two on screen is confusing. Clear so the user
+        // sees a clean before/after instead of a half-and-half band.
+        let synchro_changed = cfg.synchrosqueeze != self.last_applied_cfg.synchrosqueeze;
+        if sync_changed || source_changed || synchro_changed {
             self.clear_pending = true;
             self.write_col = self.history_cols - 1;
             self.have_internal_beat = false;

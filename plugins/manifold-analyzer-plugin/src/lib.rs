@@ -13,7 +13,7 @@ const DEFAULT_FFT_SIZE: usize = 4096;
 /// frame — while running the FFT ~4× less than the old 0.975 value, which
 /// re-ran at ~470 Hz for no visible benefit on any monitor.
 const OVERLAP_RATIO: f32 = 0.9;
-/// SPAN-style peak response: instant attack so transients register on
+/// Peak-meter style response: instant attack so transients register on
 /// the rising edge, 200 ms release so the curve decays smoothly instead
 /// of chattering on every frame.
 const ATTACK_MS: f32 = 0.0;

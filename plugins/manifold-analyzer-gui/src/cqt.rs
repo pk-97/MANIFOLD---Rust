@@ -5,8 +5,8 @@
 //! bin has the same Q (= center_freq / bandwidth), so low-frequency bins
 //! use long windows (tight freq resolution, coarse time resolution) and
 //! high-frequency bins use short windows (coarse freq resolution, tight
-//! time resolution). Professional spectrograms (iZotope RX, Sonic
-//! Visualiser, librosa) are built on this.
+//! time resolution). Most academic-grade spectrogram tools (e.g. the
+//! `librosa` reference implementation) are built on this.
 //!
 //! We generalise to **VQT** (Schörkhuber & Klapuri 2014, "Matlab toolbox
 //! for efficient CQT/VQT"): each bin's bandwidth is

@@ -13,9 +13,9 @@
 //!
 //! Same Blackman–Harris window, same power-normalisation, same
 //! asymmetric attack/release EMA as the existing mono `Analyzer`, so
-//! swapping it in is a drop-in replacement for the SPAN-style curves.
-//! Correlation gets its own symmetric smoother because it wants a
-//! longer/steadier time constant than the peak-style curves.
+//! swapping it in is a drop-in replacement for the averaged-curve
+//! display path. Correlation gets its own symmetric smoother because
+//! it wants a longer/steadier time constant than the peak-style curves.
 
 use crate::{MIN_DB, blackman_harris_window, ms_to_alpha};
 use realfft::{RealFftPlanner, RealToComplex};
@@ -44,9 +44,9 @@ pub struct StereoAnalyzer {
     fft_out_l: Vec<Complex<f32>>,
     fft_out_r: Vec<Complex<f32>>,
 
-    // SPAN-style asymmetric EMA in power domain, one accumulator per
-    // displayed curve. Separate per-bin floors so attacks register
-    // instantly, releases decay on a slower alpha.
+    // Asymmetric attack/release EMA in the power domain, one
+    // accumulator per displayed curve. Separate per-bin floors so
+    // attacks register instantly while releases decay on a slower alpha.
     power_avg_mid: Vec<f32>,
     power_avg_side: Vec<f32>,
     power_avg_l: Vec<f32>,

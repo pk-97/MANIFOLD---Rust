@@ -1,7 +1,7 @@
 // Spectrum + spectrogram — fullscreen fragment shader.
 //
 // Top region (y < spectrum_height):
-//   SPAN-style Mid + Side line/fill curves. Pipeline:
+//   Mid + Side line/fill curves. Pipeline:
 //     1. For each curve, compute dB at the pixel centre frequency and at
 //        ±1 px in log-freq (for anti-aliased line SDF).
 //     2. Apply 1/N-oct frequency smoothing in the power domain.
@@ -240,7 +240,7 @@ fn sdf_segment(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
     return length(pa - ba * h);
 }
 
-// Vision 4X "Heatmap" style jet — black → navy → blue → cyan → green →
+// Heatmap-style jet ramp — black → navy → blue → cyan → green →
 // yellow → red → white. The top 10% goes red→white so loudest peaks
 // clearly separate from merely-loud content (solves jet's classic
 // red-vs-darker-red crush at the top end).

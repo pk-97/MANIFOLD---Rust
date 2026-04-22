@@ -51,9 +51,9 @@ pub const REF_OVERLAP_RATIO: f32 = 0.5;
 /// from the same distribution as what the live curve ever shows.
 pub const REF_AVG_MS: f32 = 200.0;
 
-/// Percentile bounds for the band. 10 / 90 is the iZotope / Ozone norm —
-/// the band represents "the typical 80 % of spectral content" without
-/// reacting to silence or rare transients at either extreme.
+/// Percentile bounds for the band. 10 / 90 is a common mastering-tool
+/// norm — the band represents "the typical 80 % of spectral content"
+/// without reacting to silence or rare transients at either extreme.
 pub const REF_PERCENTILE_LOW: f32 = 0.10;
 pub const REF_PERCENTILE_HIGH: f32 = 0.90;
 

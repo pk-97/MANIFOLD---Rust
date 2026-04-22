@@ -75,7 +75,7 @@ pub fn cqt_build_params(sample_rate: f32) -> CqtBuildParams {
 /// density even at 4K widths, so sampling is effectively exact.
 pub const WEIGHTING_LUT_SIZE: usize = 1024;
 
-/// SPAN-style display options driving the fragment shader.
+/// Display options driving the spectrum / spectrogram fragment shader.
 #[derive(Copy, Clone, Debug)]
 pub struct DisplayConfig {
     /// Half-bandwidth of frequency smoothing in log2(octave). Set to
@@ -93,8 +93,7 @@ pub struct DisplayConfig {
     /// Remainder is spectrogram. `1.0` disables the spectrogram region.
     pub spectrum_fraction: f32,
     /// dB range that maps onto the spectrogram colourmap (independent of
-    /// the spectrum curve's `db_min`/`db_max` axis). Vision 4X's Heatmap
-    /// default is `-59 … 0`.
+    /// the spectrum curve's `db_min`/`db_max` axis). Default is `-59 … 0`.
     pub spectrogram_db_min: f32,
     pub spectrogram_db_max: f32,
     /// Gamma applied to the dB→colour mapping. `< 1` brightens quiet
