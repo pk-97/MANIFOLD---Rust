@@ -258,10 +258,22 @@ fn collapse_to_log_grid(samples: &mut [Vec<f32>], sr: f32) -> RefEnvelope {
     }
 
     // Pass 2: linear interpolation between the two FFT bins straddling
-    // each log slot's frequency. Both endpoints must have data; if either
-    // is missing (above source Nyquist) the slot falls back to MIN_DB so
-    // the curve cleanly stops at the source band edge instead of fading
-    // into the noise floor.
+    // each log slot's frequency. When one neighbor sits at the silence
+    // floor (typical for low-energy bins between bass partials, or above
+    // source Nyquist), fall back to the valid neighbor — naively
+    // averaging would drag a real value into the floor and the renderer
+    // would then break the line at that slot.
+    let floor_threshold = MIN_DB + 1.0;
+    let blend = |x: f32, y: f32, frac: f32| -> f32 {
+        let x_valid = x > floor_threshold;
+        let y_valid = y > floor_threshold;
+        match (x_valid, y_valid) {
+            (true, true) => x + (y - x) * frac,
+            (true, false) => x,
+            (false, true) => y,
+            (false, false) => MIN_DB,
+        }
+    };
     let mut bounds = Vec::with_capacity(REF_POINTS);
     for p in 0..REF_POINTS {
         let t = p as f32 / denom;
@@ -273,12 +285,10 @@ fn collapse_to_log_grid(samples: &mut [Vec<f32>], sr: f32) -> RefEnvelope {
         let pair_lo = bin_percentiles.get(bin_lo).and_then(|c| *c);
         let pair_hi = bin_percentiles.get(bin_hi).and_then(|c| *c);
         let pair = match (pair_lo, pair_hi) {
-            (Some(a), Some(b)) => [
-                a[0] + (b[0] - a[0]) * frac,
-                a[1] + (b[1] - a[1]) * frac,
-            ],
-            // Past the last valid bin → silence floor.
-            (None, _) | (_, None) => [MIN_DB, MIN_DB],
+            (Some(a), Some(b)) => [blend(a[0], b[0], frac), blend(a[1], b[1], frac)],
+            (Some(a), None) => a,
+            (None, Some(b)) => b,
+            (None, None) => [MIN_DB, MIN_DB],
         };
         bounds.push(pair);
     }
