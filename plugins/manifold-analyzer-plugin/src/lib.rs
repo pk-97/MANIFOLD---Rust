@@ -7,10 +7,12 @@ use std::sync::Arc;
 /// FFT size used before `initialize` runs and the param-driven size
 /// kicks in. Matches the default `FftSize::K4`.
 const DEFAULT_FFT_SIZE: usize = 4096;
-/// Overlap ratio for the StereoAnalyser's sliding window. Kept constant
-/// across FFT-size changes so the hop time stays near ~8–9 ms regardless
-/// of chosen window length.
-const OVERLAP_RATIO: f32 = 0.975;
+/// Overlap ratio for the StereoAnalyser's sliding window. 0.9 keeps the
+/// audio-publish rate at ~117 Hz for the default FFT=4096 @ 48 kHz — well
+/// above 60 Hz display refresh so the MS curve + L/R column update every
+/// frame — while running the FFT ~4× less than the old 0.975 value, which
+/// re-ran at ~470 Hz for no visible benefit on any monitor.
+const OVERLAP_RATIO: f32 = 0.9;
 /// SPAN-style peak response: instant attack so transients register on
 /// the rising edge, 200 ms release so the curve decays smoothly instead
 /// of chattering on every frame.
