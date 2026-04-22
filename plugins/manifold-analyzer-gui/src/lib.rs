@@ -39,7 +39,10 @@ use nih_plug::prelude::*;
 use nih_plug_egui::{EguiState, create_egui_editor, egui};
 use sample_ring::SampleRing;
 use serde::{Deserialize, Serialize};
-use spectrum_gpu::{DisplayConfig, SpectrumGpuRenderer, WEIGHTING_LUT_SIZE};
+use spectrum_gpu::{
+    CQT_BINS_PER_OCTAVE, CQT_FMIN_HZ, DisplayConfig, HISTORY_COLS, SpectrumGpuRenderer,
+    WEIGHTING_LUT_SIZE,
+};
 use spectrum_worker::{CqtWorker, WorkerConfig};
 use crossbeam_queue::ArrayQueue;
 use parking_lot::{Mutex, RwLock};
@@ -1902,8 +1905,15 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
                 state.shared.spectrogram_source(),
                 SpectrogramSource::LeftRight
             );
-            let mut lines: Vec<String> = Vec::with_capacity(4);
+            let mut lines: Vec<String> = Vec::with_capacity(5);
             let freq;
+            // `freq_rect` is the sub-rect that the cursor's y maps into
+            // (top half, bottom half, or full). We use it both to recover
+            // the freq and to compute the column from x — the shader's
+            // x-axis math is on the full spectrogram width, so for the
+            // column lookup we always use spectrogram_rect, not the
+            // sub-rect.
+            let mut buffer_id: u32 = 0;
             if stacked {
                 let mid_y = spectrogram_rect.center().y;
                 if cursor.y < mid_y {
@@ -1913,6 +1923,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
                     );
                     freq = y_to_freq_log(cursor.y, freq_min, freq_max, top);
                     lines.push("ch: L".to_string());
+                    buffer_id = 0;
                 } else {
                     let bot = egui::Rect::from_min_max(
                         egui::pos2(spectrogram_rect.left(), mid_y),
@@ -1920,6 +1931,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
                     );
                     freq = y_to_freq_log(cursor.y, freq_min, freq_max, bot);
                     lines.push("ch: R".to_string());
+                    buffer_id = 1;
                 }
             } else {
                 let label = match state.shared.spectrogram_source() {
@@ -1938,10 +1950,12 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             // base — we'd rather show nothing than a misleading number).
             let (bpm_opt, beat_opt, _) = state.shared.transport();
             let sync_on = state.params.sync.value();
+            let mut sync_active = false;
             if sync_on {
                 if let (Some(_bpm), Some(beat_pos)) = (bpm_opt, beat_opt) {
                     let beats_per_window = state.params.sync_window.value().beats();
                     if beats_per_window > 0.0 {
+                        sync_active = true;
                         let frac = ((cursor.x - spectrogram_rect.left())
                             / spectrogram_rect.width().max(1.0))
                             .clamp(0.0, 1.0);
@@ -1955,6 +1969,43 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
                         let beat_frac = absolute_beat - absolute_beat.floor();
                         lines.push(format!("{}.{}.{:02}", bar_num, beat_in_bar,
                             (beat_frac * 100.0) as i32));
+                    }
+                }
+            }
+
+            // Spectrogram dB lookup. Mirrors the shader's column math:
+            // sync mode spreads HISTORY_COLS columns across rect width;
+            // free-scroll uses 1 texture pixel = 1 column with the right
+            // edge anchored at write_col. Reads the CPU-mappable Metal
+            // shared buffer directly — no GPU work, no cost beyond a
+            // single bin-pair interp.
+            if let Some(spec) = state.spectrum.as_ref() {
+                let log_bin_f = (CQT_BINS_PER_OCTAVE as f32) * (freq / CQT_FMIN_HZ).log2();
+                let history_cols_i = HISTORY_COLS as i32;
+                let col = if sync_active {
+                    let frac = ((cursor.x - spectrogram_rect.left())
+                        / spectrogram_rect.width().max(1.0))
+                        .clamp(0.0, 0.9999);
+                    (frac * HISTORY_COLS as f32) as u32
+                } else {
+                    let ppp = ui.ctx().pixels_per_point();
+                    let texture_w = spec.width() as i32;
+                    let px_col = ((cursor.x - spectrogram_rect.left()) * ppp).floor() as i32;
+                    let history_idx = ((texture_w - 1) - px_col).max(0).min(history_cols_i - 1);
+                    let mut c = spec.write_col() as i32 - history_idx;
+                    c = ((c % history_cols_i) + history_cols_i) % history_cols_i;
+                    c as u32
+                };
+                if let Some(raw_db) = spec.sample_history_db(buffer_id, col, log_bin_f) {
+                    // Floor reads on freshly-cleared columns come back at
+                    // the silence sentinel (~-140 dB). Don't bother
+                    // showing a "level" for those — display "—" instead
+                    // so the user can tell empty cells from real signal.
+                    if raw_db > -130.0 {
+                        let weighted = raw_db + weighting_db_at(weighting, freq);
+                        lines.push(format!("z: {:>6.1} dB", weighted));
+                    } else {
+                        lines.push("z:     —".to_string());
                     }
                 }
             }

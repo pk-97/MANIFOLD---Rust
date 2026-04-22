@@ -361,6 +361,52 @@ impl SpectrumGpuRenderer {
         self.cqt_num_bins
     }
 
+    /// Most recently written column index. Free-scroll mode uses this as
+    /// the right-edge anchor; `(write_col - history_idx) mod HISTORY_COLS`
+    /// is the absolute column for a given pixel offset from the right.
+    pub fn write_col(&self) -> u32 {
+        self.write_col
+    }
+
+    /// CPU-side read of the spectrogram's stored raw dB at a given column
+    /// and fractional log-bin index. Mirrors the shader's
+    /// `sample_history_db` / `sample_history2_db` (linear-in-power
+    /// interpolation between adjacent log bins), so the value matches what
+    /// the colourmap reads at the same `(col, log_bin_f)`. `buffer_id`:
+    /// `0` = primary (Mid / Side / Left), `1` = secondary (Right in L+R).
+    /// Returns `None` if the buffer can't be CPU-mapped (shouldn't happen
+    /// for shared-storage buffers, but plays it safe).
+    pub fn sample_history_db(
+        &self,
+        buffer_id: u32,
+        col: u32,
+        log_bin_f: f32,
+    ) -> Option<f32> {
+        let buf = match buffer_id {
+            0 => &self.history_buf,
+            1 => &self.history_buf2,
+            _ => return None,
+        };
+        let ptr = buf.mapped_ptr()? as *const f32;
+        let log_bins = self.cqt_num_bins;
+        if log_bins == 0 {
+            return None;
+        }
+        let col = col.min(HISTORY_COLS - 1) as usize;
+        let lb = log_bin_f.clamp(0.0, (log_bins - 1) as f32);
+        let lo = lb.floor() as usize;
+        let hi = (lo + 1).min(log_bins - 1);
+        let frac = lb - lo as f32;
+        let base = col * log_bins;
+        let db_lo = unsafe { *ptr.add(base + lo) };
+        let db_hi = unsafe { *ptr.add(base + hi) };
+        // Match shader exactly: interpolate in power, return back to dB.
+        let p_lo = 10.0_f32.powf(db_lo * 0.1);
+        let p_hi = 10.0_f32.powf(db_hi * 0.1);
+        let p = p_lo * (1.0 - frac) + p_hi * frac;
+        Some(10.0 * (p + 1e-24).log10())
+    }
+
     /// Render one frame. `mid_db` / `side_db` feed the Mid + Side curves
     /// (averaged); the spectrogram is drawn from `history_buf` already
     /// populated via `apply_column`.
