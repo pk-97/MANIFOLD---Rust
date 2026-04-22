@@ -261,37 +261,74 @@ const FREQ_MINORS: &[f32] = &[
 const DB_MAJORS: &[f32] = &[0.0, -20.0, -40.0, -60.0, -80.0];
 const DB_MINORS: &[f32] = &[-10.0, -30.0, -50.0, -70.0];
 
-/// Musical time factor selected in Sync mode. Matches Vision 4X's
-/// "Factor" dropdown: the ratio that scales a bar. 1/1 = 1 bar per unit,
-/// 1/2 = half bar, 2/1 = 2 bars, etc. Multiplied by the Multiplier to
-/// get total bars visible on screen.
 #[derive(Enum, PartialEq, Eq, Debug, Clone, Copy)]
-pub enum SyncFactor {
-    #[id = "1-4"]
-    #[name = "1/4"]
-    Quarter,
-    #[id = "1-2"]
-    #[name = "1/2"]
-    Half,
-    #[id = "1-1"]
-    #[name = "1/1"]
-    One,
-    #[id = "2-1"]
-    #[name = "2/1"]
-    Two,
-    #[id = "4-1"]
-    #[name = "4/1"]
-    Four,
+/// Length of the spectrogram's beat-locked horizontal window. Single
+/// dropdown that replaces the previous `Factor × Multiplier` pair —
+/// users pick the window directly ("4 bars") instead of computing it
+/// from two interacting controls.
+///
+/// Values cover sub-bar zooms (one beat / half-bar) for transient
+/// inspection through 64-bar windows for full-section overviews. The
+/// `beats()` method is the single source of truth for every consumer
+/// (worker, beat-grid chrome, sub-pixel column lerp).
+pub enum SyncWindow {
+    #[id = "beat"]
+    #[name = "1 beat"]
+    Beat,
+    #[id = "halfbar"]
+    #[name = "1/2 bar"]
+    HalfBar,
+    #[id = "bar1"]
+    #[name = "1 bar"]
+    Bar,
+    #[id = "bar2"]
+    #[name = "2 bars"]
+    TwoBars,
+    #[id = "bar4"]
+    #[name = "4 bars"]
+    FourBars,
+    #[id = "bar8"]
+    #[name = "8 bars"]
+    EightBars,
+    #[id = "bar16"]
+    #[name = "16 bars"]
+    SixteenBars,
+    #[id = "bar32"]
+    #[name = "32 bars"]
+    ThirtyTwoBars,
+    #[id = "bar64"]
+    #[name = "64 bars"]
+    SixtyFourBars,
 }
 
-impl SyncFactor {
-    fn as_ratio(self) -> f32 {
+impl SyncWindow {
+    /// Window length in beats. Multiplied through `BEATS_PER_BAR`
+    /// (currently 4) anywhere a bar count is needed.
+    fn beats(self) -> f32 {
         match self {
-            SyncFactor::Quarter => 0.25,
-            SyncFactor::Half => 0.5,
-            SyncFactor::One => 1.0,
-            SyncFactor::Two => 2.0,
-            SyncFactor::Four => 4.0,
+            SyncWindow::Beat => 1.0,
+            SyncWindow::HalfBar => BEATS_PER_BAR * 0.5,
+            SyncWindow::Bar => BEATS_PER_BAR,
+            SyncWindow::TwoBars => BEATS_PER_BAR * 2.0,
+            SyncWindow::FourBars => BEATS_PER_BAR * 4.0,
+            SyncWindow::EightBars => BEATS_PER_BAR * 8.0,
+            SyncWindow::SixteenBars => BEATS_PER_BAR * 16.0,
+            SyncWindow::ThirtyTwoBars => BEATS_PER_BAR * 32.0,
+            SyncWindow::SixtyFourBars => BEATS_PER_BAR * 64.0,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            SyncWindow::Beat => "1 beat",
+            SyncWindow::HalfBar => "1/2 bar",
+            SyncWindow::Bar => "1 bar",
+            SyncWindow::TwoBars => "2 bars",
+            SyncWindow::FourBars => "4 bars",
+            SyncWindow::EightBars => "8 bars",
+            SyncWindow::SixteenBars => "16 bars",
+            SyncWindow::ThirtyTwoBars => "32 bars",
+            SyncWindow::SixtyFourBars => "64 bars",
         }
     }
 }
@@ -319,7 +356,7 @@ pub enum Weighting {
     #[name = "LUFS"]
     Lufs,
     #[id = "lufs-sub"]
-    #[name = "LUFS (Sub Adj)"]
+    #[name = "LUFS + Bass"]
     LufsSubAdj,
 }
 
@@ -341,7 +378,29 @@ impl Weighting {
             Weighting::Pink => "Pink",
             Weighting::Tilted => "Tilted",
             Weighting::Lufs => "LUFS",
-            Weighting::LufsSubAdj => "LUFS (Sub Adj)",
+            Weighting::LufsSubAdj => "LUFS + Bass",
+        }
+    }
+
+    /// One-line hover description for the toolbar dropdown. Matches
+    /// what the curve does to the visual, not the math behind it.
+    fn tooltip(self) -> &'static str {
+        match self {
+            Weighting::Flat => {
+                "No tilt — raw dB. Bass dominates visually because there's more energy at low freq."
+            }
+            Weighting::Pink => {
+                "+3 dB/oct tilt — pink noise reads as a flat horizontal line. Standard for mixing."
+            }
+            Weighting::Tilted => {
+                "+4.5 dB/oct tilt — like Pink but a bit more high-end emphasis. Matches SPAN's preset."
+            }
+            Weighting::Lufs => {
+                "ITU-R BS.1770 K-weighting (LUFS). Highlights what's actually driving perceived loudness."
+            }
+            Weighting::LufsSubAdj => {
+                "K-weighting without the 38 Hz high-pass — keeps subsonic content visible for diagnosing rumble."
+            }
         }
     }
 }
@@ -384,6 +443,19 @@ impl FreqSmoothing {
             FreqSmoothing::Sixth => "1/6 oct",
             FreqSmoothing::Third => "1/3 oct",
             FreqSmoothing::Erb => "ERB (Psychoacoustic)",
+        }
+    }
+
+    fn tooltip(self) -> &'static str {
+        match self {
+            FreqSmoothing::None => "Raw FFT bins — every spike is real, but low-end reads jagged.",
+            FreqSmoothing::TwentyFourth => "1/24 octave — barely smoothed; preserves narrow peaks.",
+            FreqSmoothing::Twelfth => "1/12 octave — SPAN default. Clean readout, peaks survive.",
+            FreqSmoothing::Sixth => "1/6 octave — moderate; tonal balance over individual partials.",
+            FreqSmoothing::Third => "1/3 octave — broad bands; reads like a mix-balance overview.",
+            FreqSmoothing::Erb => {
+                "Perceptual critical bands — wide at the low end, tight up top. Matches how the ear groups frequencies."
+            }
         }
     }
 
@@ -467,6 +539,16 @@ impl FftSize {
             FftSize::K32 => "32k",
         }
     }
+
+    fn tooltip(self) -> &'static str {
+        match self {
+            FftSize::K2 => "2048 — fastest response, coarsest pitch resolution.",
+            FftSize::K4 => "4096 — balanced default for live monitoring.",
+            FftSize::K8 => "8192 — finer pitch detail, slower transient response.",
+            FftSize::K16 => "16384 — mastering-grade resolution; visible smear on transients.",
+            FftSize::K32 => "32768 — maximum bin count; only for static-tone analysis.",
+        }
+    }
 }
 
 /// Optional overlay that plots the selected weighting curve directly
@@ -480,7 +562,7 @@ pub enum ReferenceCurve {
     #[name = "None"]
     None,
     #[id = "weighting"]
-    #[name = "Weighting"]
+    #[name = "Weighting Curve"]
     Weighting,
 }
 
@@ -488,7 +570,17 @@ impl ReferenceCurve {
     fn label(self) -> &'static str {
         match self {
             ReferenceCurve::None => "None",
-            ReferenceCurve::Weighting => "Weighting",
+            ReferenceCurve::Weighting => "Weighting Curve",
+        }
+    }
+
+    fn tooltip(self) -> &'static str {
+        match self {
+            ReferenceCurve::None => "No overlay on the MS graph.",
+            ReferenceCurve::Weighting => {
+                "Plots the inverse of the active weighting curve, peak-aligned to 0 dB. \
+                 Line high = perceptually loud band; line low = penalised band."
+            }
         }
     }
 }
@@ -518,13 +610,15 @@ impl SpectrogramSource {
         }
     }
 
-    /// Two-character chip label for the toolbar buttons. Matches the
-    /// "M / S / L+R" wording used in the corresponding hover tooltips.
+    /// Compact chip label for the toolbar buttons. `L | R` is rendered
+    /// rather than `L+R` so the visual reads as "two channels side by
+    /// side" instead of "summed" — `L+R` would suggest a mono-mix
+    /// spectrogram, which is what `M` already does.
     fn chip_label(self) -> &'static str {
         match self {
             SpectrogramSource::Mid => "M",
             SpectrogramSource::Side => "S",
-            SpectrogramSource::LeftRight => "L+R",
+            SpectrogramSource::LeftRight => "L | R",
         }
     }
 }
@@ -581,13 +675,12 @@ pub struct AnalyzerParams {
     #[id = "sync"]
     pub sync: BoolParam,
 
-    /// Factor side of the Sync time window. `window_bars = factor × multiplier`.
-    #[id = "sync-factor"]
-    pub sync_factor: EnumParam<SyncFactor>,
-
-    /// Integer multiplier side of the Sync time window.
-    #[id = "sync-mult"]
-    pub sync_multiplier: IntParam,
+    /// Length of the beat-locked spectrogram window. Replaces the old
+    /// `Factor × Multiplier` pair with a single dropdown so the user
+    /// picks the visible time-span directly rather than multiplying two
+    /// numbers in their head.
+    #[id = "sync-window"]
+    pub sync_window: EnumParam<SyncWindow>,
 
     /// Master synchrosqueezing toggle. When off, the spectrogram shows
     /// the unmodified VQT power spectrum (thicker main lobes, no phase
@@ -657,8 +750,7 @@ impl AnalyzerParams {
             editor_state: EguiState::from_size(INITIAL_SPECTRUM_W, INITIAL_SPECTRUM_H),
             ref_slots: Arc::new(RwLock::new(RefSlots::default())),
             sync: BoolParam::new("Sync", false),
-            sync_factor: EnumParam::new("Factor", SyncFactor::One),
-            sync_multiplier: IntParam::new("Multiplier", 4, IntRange::Linear { min: 1, max: 16 }),
+            sync_window: EnumParam::new("Window", SyncWindow::FourBars),
             synchrosqueeze: BoolParam::new("Synchrosqueeze", true),
             coherence: BoolParam::new("Coherence", false),
             freq_min_hz: IntParam::new("Min Hz", 10, IntRange::Linear { min: 10, max: 2000 }),
@@ -1481,9 +1573,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         // Resolve sync state for display + worker.
         let (bpm_opt, beat_opt, _playing) = state.shared.transport();
         let sync_requested = state.params.sync.value();
-        let factor_ratio = state.params.sync_factor.value().as_ratio();
-        let multiplier = state.params.sync_multiplier.value() as f32;
-        let beats_per_window = factor_ratio * multiplier * BEATS_PER_BAR;
+        let beats_per_window = state.params.sync_window.value().beats();
         let sync_active = matches!(
             (sync_requested, bpm_opt, beat_opt),
             (true, Some(bpm), Some(_)) if bpm > 0.0 && beats_per_window > 0.0
@@ -1806,10 +1896,14 @@ fn draw_spectrogram_source_chips(
                     }),
             ))
             .on_hover_text(match mode {
-                SpectrogramSource::Mid => "Mid spectrogram (L+R)/2",
-                SpectrogramSource::Side => "Side spectrogram (L−R)/2",
+                SpectrogramSource::Mid => {
+                    "Mid: (L+R)/2 — full-height spectrogram of the centre/sum signal."
+                }
+                SpectrogramSource::Side => {
+                    "Side: (L−R)/2 — full-height spectrogram of the stereo difference. Centre content disappears."
+                }
                 SpectrogramSource::LeftRight => {
-                    "Left + Right spectrograms stacked (top = L, bottom = R)"
+                    "L | R: stacked Left (top) over Right (bottom). Compare channels at a glance."
                 }
             });
         if resp.clicked() && !selected {
@@ -2236,9 +2330,7 @@ fn draw_spectrogram_chrome(
     let (Some(_bpm), Some(beat_pos)) = (bpm_opt, beat_opt) else {
         return;
     };
-    let beats_per_window = state.params.sync_factor.value().as_ratio()
-        * state.params.sync_multiplier.value() as f32
-        * BEATS_PER_BAR;
+    let beats_per_window = state.params.sync_window.value().beats();
     if beats_per_window <= 0.0 {
         return;
     }
@@ -3387,55 +3479,65 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
     ui.horizontal_centered(|ui| {
         ui.spacing_mut().item_spacing.x = 10.0;
 
+        // ── Beat-Sync group ─────────────────────────────────────────
         let mut sync_val = params.sync.value();
         let host_ready = bpm_opt.is_some();
         ui.add_enabled_ui(host_ready, |ui| {
-            if ui.checkbox(&mut sync_val, "Sync").changed() {
+            let resp = ui.checkbox(&mut sync_val, "Beat-Sync");
+            let resp = if host_ready {
+                resp.on_hover_text(
+                    "Lock the spectrogram to the host's bars/beats grid. Off = scrolls right→left at native rate.",
+                )
+            } else {
+                resp.on_hover_text("Host isn't reporting tempo — start playback in Sync-aware host to enable.")
+            };
+            if resp.changed() {
                 setter.begin_set_parameter(&params.sync);
                 setter.set_parameter(&params.sync, sync_val);
                 setter.end_set_parameter(&params.sync);
             }
         });
 
-        ui.label("Factor");
-        let mut factor_val = params.sync_factor.value();
-        egui::ComboBox::from_id_salt("sync-factor")
-            .selected_text(factor_label(factor_val))
-            .width(58.0)
+        ui.label("Window")
+            .on_hover_text("Length of the beat-locked spectrogram window in musical time.");
+        let mut window_val = params.sync_window.value();
+        egui::ComboBox::from_id_salt("sync-window")
+            .selected_text(window_val.label())
+            .width(78.0)
             .show_ui(ui, |ui| {
                 for opt in [
-                    SyncFactor::Quarter,
-                    SyncFactor::Half,
-                    SyncFactor::One,
-                    SyncFactor::Two,
-                    SyncFactor::Four,
+                    SyncWindow::Beat,
+                    SyncWindow::HalfBar,
+                    SyncWindow::Bar,
+                    SyncWindow::TwoBars,
+                    SyncWindow::FourBars,
+                    SyncWindow::EightBars,
+                    SyncWindow::SixteenBars,
+                    SyncWindow::ThirtyTwoBars,
+                    SyncWindow::SixtyFourBars,
                 ] {
                     if ui
-                        .selectable_value(&mut factor_val, opt, factor_label(opt))
+                        .selectable_value(&mut window_val, opt, opt.label())
                         .changed()
                     {
-                        setter.begin_set_parameter(&params.sync_factor);
-                        setter.set_parameter(&params.sync_factor, factor_val);
-                        setter.end_set_parameter(&params.sync_factor);
+                        setter.begin_set_parameter(&params.sync_window);
+                        setter.set_parameter(&params.sync_window, window_val);
+                        setter.end_set_parameter(&params.sync_window);
                     }
                 }
             });
 
-        ui.label("Multiplier");
-        let mut mult_val = params.sync_multiplier.value();
-        if ui
-            .add(egui::DragValue::new(&mut mult_val).range(1..=16).speed(0.1))
-            .changed()
-        {
-            setter.begin_set_parameter(&params.sync_multiplier);
-            setter.set_parameter(&params.sync_multiplier, mult_val);
-            setter.end_set_parameter(&params.sync_multiplier);
-        }
-
         ui.separator();
 
+        // ── Sharpen (synchrosqueeze) group ──────────────────────────
         let mut ss_val = params.synchrosqueeze.value();
-        if ui.checkbox(&mut ss_val, "Synchro").changed() {
+        if ui
+            .checkbox(&mut ss_val, "Sharpen")
+            .on_hover_text(
+                "Phase-reassigns spectrogram energy to its true frequency. Tonal lines tighten into single pixels; broadband noise stays soft.",
+            )
+            .changed()
+        {
             setter.begin_set_parameter(&params.synchrosqueeze);
             setter.set_parameter(&params.synchrosqueeze, ss_val);
             setter.end_set_parameter(&params.synchrosqueeze);
@@ -3443,14 +3545,21 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
 
         let mut coh_val = params.coherence.value();
         ui.add_enabled_ui(ss_val, |ui| {
-            if ui.checkbox(&mut coh_val, "Coherence").changed() {
+            if ui
+                .checkbox(&mut coh_val, "Stable")
+                .on_hover_text(
+                    "Only sharpens bins whose pitch is steady across two consecutive frames. Cleaner on noise; can stripe on vibrato.",
+                )
+                .changed()
+            {
                 setter.begin_set_parameter(&params.coherence);
                 setter.set_parameter(&params.coherence, coh_val);
                 setter.end_set_parameter(&params.coherence);
             }
         });
 
-        ui.label("Gate");
+        ui.label("Floor")
+            .on_hover_text("Power threshold for Sharpen. Bins below this don't contribute. Lower → transients survive; higher → cleaner on noise.");
         let mut gate_val = params.synchro_gate_db.value();
         ui.add_enabled_ui(ss_val, |ui| {
             if ui
@@ -3470,25 +3579,33 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
 
         ui.separator();
 
-        ui.label("Min Hz");
+        // ── Frequency range ─────────────────────────────────────────
+        ui.label("Range")
+            .on_hover_text("Visible frequency range. Both spectrum curves and the spectrogram zoom together.");
         let mut fmin_val = params.freq_min_hz.value();
         if ui
-            .add(egui::DragValue::new(&mut fmin_val).range(10..=2000).speed(1.0))
+            .add(
+                egui::DragValue::new(&mut fmin_val)
+                    .range(10..=2000)
+                    .speed(1.0)
+                    .prefix("Lo "),
+            )
+            .on_hover_text("Low edge of the visible frequency range, in Hz.")
             .changed()
         {
             setter.begin_set_parameter(&params.freq_min_hz);
             setter.set_parameter(&params.freq_min_hz, fmin_val);
             setter.end_set_parameter(&params.freq_min_hz);
         }
-
-        ui.label("Max Hz");
         let mut fmax_val = params.freq_max_hz.value();
         if ui
             .add(
                 egui::DragValue::new(&mut fmax_val)
                     .range(1000..=25_000)
-                    .speed(10.0),
+                    .speed(10.0)
+                    .prefix("Hi "),
             )
+            .on_hover_text("High edge of the visible frequency range. Clamped at render time to Nyquist (sample-rate / 2).")
             .changed()
         {
             setter.begin_set_parameter(&params.freq_max_hz);
@@ -3496,7 +3613,8 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
             setter.end_set_parameter(&params.freq_max_hz);
         }
 
-        ui.label("L/R ±");
+        ui.label("L/R ±")
+            .on_hover_text("Half-range of the L/R balance axis in dB.");
         let mut lr_range_val = params.lr_range_db.value();
         if ui
             .add(
@@ -3506,7 +3624,7 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
                     .suffix(" dB"),
             )
             .on_hover_text(
-                "L/R balance axis: centre = balanced, edges = this many dB of imbalance toward L / R.",
+                "Centre of the L/R column = perfect balance. Outer edges = this many dB of imbalance toward Left or Right.",
             )
             .changed()
         {
@@ -3515,7 +3633,9 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
             setter.end_set_parameter(&params.lr_range_db);
         }
 
-        ui.label("Weighting");
+        // ── Display weighting + overlay ─────────────────────────────
+        ui.label("Weighting")
+            .on_hover_text("Frequency tilt applied to both the curves and the spectrogram colourmap. Doesn't affect loudness measurements.");
         let mut weight_val = params.weighting.value();
         egui::ComboBox::from_id_salt("weighting")
             .selected_text(weight_val.label())
@@ -3528,7 +3648,11 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
                     Weighting::Lufs,
                     Weighting::LufsSubAdj,
                 ] {
-                    if ui.selectable_value(&mut weight_val, opt, opt.label()).changed() {
+                    if ui
+                        .selectable_value(&mut weight_val, opt, opt.label())
+                        .on_hover_text(opt.tooltip())
+                        .changed()
+                    {
                         setter.begin_set_parameter(&params.weighting);
                         setter.set_parameter(&params.weighting, weight_val);
                         setter.end_set_parameter(&params.weighting);
@@ -3536,15 +3660,17 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
                 }
             });
 
-        ui.label("Ref");
+        ui.label("Overlay")
+            .on_hover_text("Optional overlay drawn on top of the MS curves.");
         let mut ref_val = params.reference_curve.value();
         egui::ComboBox::from_id_salt("ref-curve")
             .selected_text(ref_val.label())
-            .width(88.0)
+            .width(120.0)
             .show_ui(ui, |ui| {
                 for opt in [ReferenceCurve::None, ReferenceCurve::Weighting] {
                     if ui
                         .selectable_value(&mut ref_val, opt, opt.label())
+                        .on_hover_text(opt.tooltip())
                         .changed()
                     {
                         setter.begin_set_parameter(&params.reference_curve);
@@ -3554,11 +3680,12 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
                 }
             });
 
-        ui.label("Smooth");
+        ui.label("Smooth")
+            .on_hover_text("Frequency-domain smoothing applied to the spectrum curves and reference bands. Wider = smoother shape, less detail.");
         let mut smooth_val = params.freq_smoothing.value();
         egui::ComboBox::from_id_salt("freq-smoothing")
             .selected_text(smooth_val.label())
-            .width(88.0)
+            .width(120.0)
             .show_ui(ui, |ui| {
                 for opt in [
                     FreqSmoothing::None,
@@ -3570,6 +3697,7 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
                 ] {
                     if ui
                         .selectable_value(&mut smooth_val, opt, opt.label())
+                        .on_hover_text(opt.tooltip())
                         .changed()
                     {
                         setter.begin_set_parameter(&params.freq_smoothing);
@@ -3579,7 +3707,8 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
                 }
             });
 
-        ui.label("FFT");
+        ui.label("FFT")
+            .on_hover_text("FFT window size, in samples. Larger = finer pitch resolution; smaller = faster transient response.");
         let mut fft_val = params.fft_size.value();
         egui::ComboBox::from_id_salt("fft-size")
             .selected_text(fft_val.label())
@@ -3594,6 +3723,7 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
                 ] {
                     if ui
                         .selectable_value(&mut fft_val, opt, opt.label())
+                        .on_hover_text(opt.tooltip())
                         .changed()
                     {
                         setter.begin_set_parameter(&params.fft_size);
@@ -3604,9 +3734,11 @@ fn draw_controls(ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSette
             });
 
         if let Some(bpm) = bpm_opt {
-            ui.label(format!("{:.1} BPM", bpm));
+            ui.label(format!("{:.1} BPM", bpm))
+                .on_hover_text("Tempo reported by the host. The spectrogram beat grid uses this value when Beat-Sync is on.");
         } else {
-            ui.label("— BPM");
+            ui.label("— BPM")
+                .on_hover_text("Host isn't reporting tempo. Start playback to populate.");
         }
     });
 }
@@ -3842,16 +3974,6 @@ mod macos {
         let key_win = app.keyWindow()?;
         let view = key_win.contentView()?;
         Some(KeyWindowParent { view })
-    }
-}
-
-fn factor_label(f: SyncFactor) -> &'static str {
-    match f {
-        SyncFactor::Quarter => "1/4",
-        SyncFactor::Half => "1/2",
-        SyncFactor::One => "1/1",
-        SyncFactor::Two => "2/1",
-        SyncFactor::Four => "4/1",
     }
 }
 
