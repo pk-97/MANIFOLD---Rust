@@ -6,6 +6,12 @@ publish = false
 
 [dependencies]
 rustfft = "6"
+# Real-input FFT on top of rustfft. Exploits conjugate symmetry of a
+# real-signal spectrum to compute an N-point FFT as an (N/2)-point complex
+# FFT plus a light post-process — roughly 2× faster and 2× less memory
+# than calling rustfft with Complex{re: x, im: 0.0}. `StereoAnalyzer` uses
+# this on the audio hot path; its consumers only read N/2 bins anyway.
+realfft = "3"
 
 # Lock-free bounded SPSC used to hand closed 100 ms block values from the
 # audio thread to an off-thread integrated/LRA recompute worker. Consumed

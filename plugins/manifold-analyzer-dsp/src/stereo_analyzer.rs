@@ -18,23 +18,31 @@
 //! longer/steadier time constant than the peak-style curves.
 
 use crate::{MIN_DB, blackman_harris_window, ms_to_alpha};
-use rustfft::{Fft, FftPlanner, num_complex::Complex};
+use realfft::{RealFftPlanner, RealToComplex};
+use rustfft::num_complex::Complex;
 use std::sync::Arc;
 
 pub struct StereoAnalyzer {
     fft_size: usize,
     hop_size: usize,
     sample_rate: f32,
-    fft: Arc<dyn Fft<f32>>,
+    fft: Arc<dyn RealToComplex<f32>>,
     window: Vec<f32>,
     window_sum: f32,
     ring_l: Vec<f32>,
     ring_r: Vec<f32>,
     ring_write_pos: usize,
     samples_since_last_fft: usize,
+    // Real-input FFT plumbing. Windowed time-domain samples land in the
+    // `_buf` halves (length fft_size), the complex spectrum comes out in
+    // `_out` (length fft_size/2 + 1, positive half + Nyquist). The DC
+    // bin and Nyquist bin are always purely real; the bins we actually
+    // read (`[0..num_bins = fft_size/2]`) are all within the output.
     fft_scratch: Vec<Complex<f32>>,
-    fft_buf_l: Vec<Complex<f32>>,
-    fft_buf_r: Vec<Complex<f32>>,
+    fft_buf_l: Vec<f32>,
+    fft_buf_r: Vec<f32>,
+    fft_out_l: Vec<Complex<f32>>,
+    fft_out_r: Vec<Complex<f32>>,
 
     // SPAN-style asymmetric EMA in power domain, one accumulator per
     // displayed curve. Separate per-bin floors so attacks register
@@ -83,9 +91,10 @@ impl StereoAnalyzer {
             "fft_size must be a power of two and >= 64"
         );
         let hop_size = fft_size / 2;
-        let mut planner = FftPlanner::<f32>::new();
+        let mut planner = RealFftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(fft_size);
-        let scratch_len = fft.get_inplace_scratch_len();
+        let scratch_len = fft.get_scratch_len();
+        let out_len = fft_size / 2 + 1;
         let window = blackman_harris_window(fft_size);
         let window_sum: f32 = window.iter().sum();
         let num_bins = fft_size / 2;
@@ -102,8 +111,10 @@ impl StereoAnalyzer {
             ring_write_pos: 0,
             samples_since_last_fft: 0,
             fft_scratch: vec![Complex::new(0.0, 0.0); scratch_len],
-            fft_buf_l: vec![Complex::new(0.0, 0.0); fft_size],
-            fft_buf_r: vec![Complex::new(0.0, 0.0); fft_size],
+            fft_buf_l: vec![0.0; fft_size],
+            fft_buf_r: vec![0.0; fft_size],
+            fft_out_l: vec![Complex::new(0.0, 0.0); out_len],
+            fft_out_r: vec![Complex::new(0.0, 0.0); out_len],
             power_avg_mid: vec![0.0; num_bins],
             power_avg_side: vec![0.0; num_bins],
             power_avg_l: vec![0.0; num_bins],
@@ -247,13 +258,26 @@ impl StereoAnalyzer {
         for i in 0..self.fft_size {
             let idx = (start + i) % self.fft_size;
             let w = self.window[i];
-            self.fft_buf_l[i] = Complex::new(self.ring_l[idx] * w, 0.0);
-            self.fft_buf_r[i] = Complex::new(self.ring_r[idx] * w, 0.0);
+            self.fft_buf_l[i] = self.ring_l[idx] * w;
+            self.fft_buf_r[i] = self.ring_r[idx] * w;
         }
+        // realfft's `process_with_scratch` is infallible for the correct
+        // input/output/scratch lengths, which we own — the only failure
+        // mode is size mismatch and those sizes are fixed at construction.
         self.fft
-            .process_with_scratch(&mut self.fft_buf_l, &mut self.fft_scratch);
+            .process_with_scratch(
+                &mut self.fft_buf_l,
+                &mut self.fft_out_l,
+                &mut self.fft_scratch,
+            )
+            .expect("realfft: input/output/scratch sizes are fixed");
         self.fft
-            .process_with_scratch(&mut self.fft_buf_r, &mut self.fft_scratch);
+            .process_with_scratch(
+                &mut self.fft_buf_r,
+                &mut self.fft_out_r,
+                &mut self.fft_scratch,
+            )
+            .expect("realfft: input/output/scratch sizes are fixed");
 
         let norm = 2.0 / self.window_sum;
         let norm_sq = norm * norm;
@@ -267,8 +291,8 @@ impl StereoAnalyzer {
         let floor_power = 10.0_f32.powf(MIN_DB * 0.1);
 
         for bin in 0..num_bins {
-            let l = self.fft_buf_l[bin];
-            let r = self.fft_buf_r[bin];
+            let l = self.fft_out_l[bin];
+            let r = self.fft_out_r[bin];
             // Mid/Side complex spectra are linear combinations of L and R
             // → the 0.5 scaling carries into the power as 0.25.
             let m_re = 0.5 * (l.re + r.re);
