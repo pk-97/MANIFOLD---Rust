@@ -3503,13 +3503,59 @@ fn draw_loudness_readouts(
         }
     };
 
-    row(
-        ui,
-        "Short-term",
-        warmup(WARMUP_ST_SECS, fmt_lufs(snap.short_term_lufs)),
-        false,
-        None,
+    // Short-term gets its own oversized hero row — it's the live "now"
+    // value the user reads from across a room, so it needs to be the
+    // visually dominant readout in the cell. Drawn inline (not via
+    // `row`) because the size + emphasis differ from every other row;
+    // baseline-centred so the large value and the smaller label sit
+    // on the same optical line.
+    egui::Frame::new()
+        .fill(egui::Color32::TRANSPARENT)
+        .inner_margin(egui::Margin {
+            left: 4,
+            right: 4,
+            top: 4,
+            bottom: 6,
+        })
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new("Short-term")
+                            .color(label_color)
+                            .size(14.0)
+                            .strong(),
+                    )
+                    .truncate(),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(warmup(
+                                WARMUP_ST_SECS,
+                                fmt_lufs(snap.short_term_lufs),
+                            ))
+                            .color(value_color)
+                            .size(26.0)
+                            .strong(),
+                        )
+                        .truncate(),
+                    );
+                });
+            });
+        });
+    // Hairline divider so the hero row reads as its own block above the
+    // table of secondary metrics.
+    let avail = ui.available_rect_before_wrap();
+    let sep_y = ui.cursor().min.y;
+    ui.painter().line_segment(
+        [
+            egui::pos2(avail.left() + 4.0, sep_y),
+            egui::pos2(avail.right() - 4.0, sep_y),
+        ],
+        egui::Stroke::new(1.0, egui::Color32::from_white_alpha(40)),
     );
+    ui.add_space(2.0);
     row(
         ui,
         "Integrated",
