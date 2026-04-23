@@ -101,6 +101,43 @@ pub(super) fn dispatch_layer(
             );
             DispatchResult::handled()
         }
+        PanelAction::ToggleLed(idx) => {
+            let clicked_id = project
+                .timeline
+                .layers
+                .get(*idx)
+                .map(|l| l.layer_id.clone())
+                .unwrap_or_default();
+            let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
+                && selection.is_layer_selected(&clicked_id)
+            {
+                selection.selected_layer_ids.iter().cloned().collect()
+            } else {
+                vec![clicked_id]
+            };
+            let new_led = project
+                .timeline
+                .layers
+                .get(*idx)
+                .map(|l| !l.blit_to_led)
+                .unwrap_or(true);
+            for id in &target_ids {
+                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(id) {
+                    layer.blit_to_led = new_led;
+                }
+            }
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::MutateProject(Box::new(move |p| {
+                    for id in &target_ids {
+                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(id) {
+                            layer.blit_to_led = new_led;
+                        }
+                    }
+                })),
+            );
+            DispatchResult::handled()
+        }
         PanelAction::LayerClicked(idx, modifiers) => {
             // From Unity UIState.cs layer selection methods (lines 247-333).
             let layer_id = project

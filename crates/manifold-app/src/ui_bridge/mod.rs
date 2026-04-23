@@ -280,6 +280,7 @@ pub fn dispatch(
         // ── Layer operations ──────────────────────────────────────
         PanelAction::ToggleMute(_)
         | PanelAction::ToggleSolo(_)
+        | PanelAction::ToggleLed(_)
         | PanelAction::LayerClicked(..)
         | PanelAction::LayerDoubleClicked(_)
         | PanelAction::ChevronClicked(_)

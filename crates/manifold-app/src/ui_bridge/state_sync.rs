@@ -521,6 +521,7 @@ pub fn push_state(
         for (i, layer) in project.timeline.layers.iter().enumerate() {
             ui.layer_headers.set_mute_state(tree, i, layer.is_muted);
             ui.layer_headers.set_solo_state(tree, i, layer.is_solo);
+            ui.layer_headers.set_led_state(tree, i, layer.blit_to_led);
             ui.layer_headers
                 .set_blend_mode_text(tree, i, layer.default_blend_mode.display_name());
 
@@ -815,6 +816,7 @@ pub fn sync_project_data(
                                 l.layer_id == *pid && l.is_solo
                             })
                         }),
+                    is_led: layer.blit_to_led,
                     parent_layer_id: layer.parent_layer_id.as_ref().map(|id| id.to_string()),
                     blend_mode: format!("{:?}", layer.default_blend_mode),
                     generator_type: layer.gen_params().map(|g| {

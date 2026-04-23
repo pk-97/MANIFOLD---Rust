@@ -54,6 +54,12 @@ struct ManifoldAnalyzer {
     /// clone of `gui_shared`; the meter feeds it via the shared queue.
     loudness_worker: Option<LoudnessWorker>,
     gui_shared: Arc<AnalyzerGuiShared>,
+    /// Running total of audio samples successfully pushed into the
+    /// shared L/R sample rings since plugin instantiation. Published
+    /// alongside the host beat position so the spectrogram worker can
+    /// derive the host beat for any sample it later drains — the basis
+    /// for sample-accurate Beat-Sync placement.
+    total_pushed_samples: u64,
 }
 
 impl Default for ManifoldAnalyzer {
@@ -68,6 +74,7 @@ impl Default for ManifoldAnalyzer {
             last_loudness_reset_epoch: 0,
             loudness_worker: None,
             gui_shared: Arc::new(AnalyzerGuiShared::new(44100.0, DEFAULT_FFT_SIZE)),
+            total_pushed_samples: 0,
         }
     }
 }
@@ -153,8 +160,18 @@ impl Plugin for ManifoldAnalyzer {
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
         let transport = context.transport();
-        self.gui_shared
-            .set_transport(transport.tempo, transport.pos_beats(), transport.playing);
+        // Publish (bpm, beat, pushed) BEFORE pushing this buffer's
+        // audio. The published `pushed` is the index in the worker's
+        // drain stream of the *first* sample we're about to enqueue —
+        // which is the sample that corresponds to `beat_pos`. The
+        // worker reads all three coherently and derives the host beat
+        // for any later sample it processes.
+        self.gui_shared.set_transport(
+            transport.tempo,
+            transport.pos_beats(),
+            transport.playing,
+            self.total_pushed_samples,
+        );
 
         // Honour a user-driven FFT-size change. Rebuild once, resize
         // the shared mailboxes, and carry on. Uses the current sample
@@ -241,13 +258,18 @@ impl Plugin for ManifoldAnalyzer {
         // rings; the worker derives M/S (or runs both channels for L+R
         // mode) and runs the CQT. No FFT work here for the spectrogram
         // path. Both rings are pushed in lockstep so the worker can
-        // assume they always advance together.
-        self.gui_shared
+        // assume they always advance together. `total_pushed_samples`
+        // tracks what *actually* landed (the rings drop on overflow);
+        // the worker's drain counter stays aligned because dropped
+        // samples never enter the ring.
+        let pushed = self
+            .gui_shared
             .left_sample_ring
             .push(&self.left_scratch[..i]);
         self.gui_shared
             .right_sample_ring
             .push(&self.right_scratch[..i]);
+        self.total_pushed_samples = self.total_pushed_samples.saturating_add(pushed as u64);
 
         ProcessStatus::Normal
     }

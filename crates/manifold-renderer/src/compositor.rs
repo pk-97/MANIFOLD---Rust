@@ -13,6 +13,7 @@ pub struct CompositeLayerDescriptor<'a> {
     pub opacity: f32,
     pub is_muted: bool,
     pub is_solo: bool,
+    pub blit_to_led: bool,
     pub effects: &'a [EffectInstance],
     pub effect_groups: &'a [EffectGroup],
     /// Parent group layer ID (None for root layers).
@@ -94,4 +95,9 @@ pub trait Compositor: Send {
     /// LED tap texture: pre-tonemap composite captured when led_exit_index == 0.
     /// Returns None if exit index is -1.
     fn led_tap_texture(&self) -> Option<&manifold_gpu::GpuTexture>;
+
+    /// Per-layer LED composite texture: final post-tonemap + post-master-FX LED
+    /// output built from layers flagged with `blit_to_led`. Returns None when no
+    /// layers have blit_to_led enabled (fall back to led_tap_texture or output).
+    fn led_composite_texture(&self) -> Option<&manifold_gpu::GpuTexture>;
 }

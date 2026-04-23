@@ -124,6 +124,32 @@ fn solo_style(solo: bool) -> UIStyle {
     }
 }
 
+fn led_style(led: bool) -> UIStyle {
+    let bg = if led {
+        color::LED_COLOR
+    } else {
+        color::BUTTON_DIM
+    };
+    UIStyle {
+        bg_color: bg,
+        hover_bg_color: if led {
+            lighten(color::LED_COLOR, 30)
+        } else {
+            color::BUTTON_HIGHLIGHTED
+        },
+        pressed_bg_color: if led {
+            darken(color::LED_COLOR, 20)
+        } else {
+            color::BUTTON_PRESSED
+        },
+        text_color: color::TEXT_WHITE_C32,
+        font_size: BTN_FONT,
+        corner_radius: LH_BTN_RADIUS,
+        text_align: TextAlign::Center,
+        ..UIStyle::default()
+    }
+}
+
 fn small_button_style() -> UIStyle {
     UIStyle {
         bg_color: color::BUTTON_DIM,
@@ -180,6 +206,7 @@ pub struct LayerInfo {
     pub is_generator: bool,
     pub is_muted: bool,
     pub is_solo: bool,
+    pub is_led: bool,
     pub parent_layer_id: Option<String>,
     pub blend_mode: String,
     pub generator_type: Option<String>,
@@ -211,6 +238,7 @@ struct LayerRowData {
     drag_handle: Rect,
     mute: Rect,
     solo: Rect,
+    led: Rect,
     blend_mode: Rect,
     separator: Rect,
     accent_bar: Rect,
@@ -304,11 +332,13 @@ fn compute_layer_row(
         y += GEN_TYPE_H;
     }
 
-    // ── Button row: M | S | BlendMode ──
+    // ── Button row: M | S | L | BlendMode ──
     let mut btn_x = pad;
     d.mute = Rect::new(btn_x, y, MS_BTN_W, BTN_H);
     btn_x += MS_BTN_W + 2.0;
     d.solo = Rect::new(btn_x, y, MS_BTN_W, BTN_H);
+    btn_x += MS_BTN_W + 2.0;
+    d.led = Rect::new(btn_x, y, MS_BTN_W, BTN_H);
     btn_x += MS_BTN_W + 4.0;
 
     let dd_w = (w - btn_x - pad - RIGHT_GUTTER).max(20.0);
@@ -405,6 +435,7 @@ struct LayerRowIds {
     drag_handle: i32,
     mute: i32,
     solo: i32,
+    led: i32,
     blend_mode: i32,
     separator: i32,
     info: i32,
@@ -435,6 +466,7 @@ impl LayerRowIds {
             self.drag_handle,
             self.mute,
             self.solo,
+            self.led,
             self.blend_mode,
             self.separator,
             self.info,
@@ -470,6 +502,7 @@ impl Default for LayerRowIds {
             drag_handle: -1,
             mute: -1,
             solo: -1,
+            led: -1,
             blend_mode: -1,
             separator: -1,
             info: -1,
@@ -543,6 +576,7 @@ pub struct LayerHeaderPanel {
     // Cached state for dirty-checking
     cached_mute: Vec<bool>,
     cached_solo: Vec<bool>,
+    cached_led: Vec<bool>,
     cached_selected: Vec<bool>,
     cached_colors: Vec<Color32>,
 
@@ -584,6 +618,7 @@ impl LayerHeaderPanel {
             pending_drag_layer: -1,
             cached_mute: Vec::new(),
             cached_solo: Vec::new(),
+            cached_led: Vec::new(),
             cached_selected: Vec::new(),
             cached_colors: Vec::new(),
             active_layer: None,
@@ -745,6 +780,20 @@ impl LayerHeaderPanel {
             }
             if row.solo >= 0 {
                 tree.set_style(row.solo as u32, solo_style(solo));
+            }
+        }
+    }
+
+    pub fn set_led_state(&mut self, tree: &mut UITree, index: usize, led: bool) {
+        if let Some(row) = self.rows.get(index) {
+            if let Some(cached) = self.cached_led.get_mut(index) {
+                if *cached == led {
+                    return;
+                }
+                *cached = led;
+            }
+            if row.led >= 0 {
+                tree.set_style(row.led as u32, led_style(led));
             }
         }
     }
@@ -1199,6 +1248,18 @@ impl LayerHeaderPanel {
             "S",
         ) as i32;
 
+        // LED button — when enabled, this layer composites into the LED output
+        let lr = s(row.led);
+        ids.led = tree.add_button(
+            clip_parent,
+            lr.x,
+            lr.y,
+            lr.width,
+            lr.height,
+            led_style(layer.is_led),
+            "L",
+        ) as i32;
+
         // Blend mode
         let br = s(row.blend_mode);
         ids.blend_mode = tree.add_button(
@@ -1446,6 +1507,9 @@ impl LayerHeaderPanel {
             if id == row.solo {
                 return vec![PanelAction::ToggleSolo(i)];
             }
+            if id == row.led {
+                return vec![PanelAction::ToggleLed(i)];
+            }
             if id == row.chevron {
                 return vec![PanelAction::ChevronClicked(i)];
             }
@@ -1628,6 +1692,7 @@ impl Panel for LayerHeaderPanel {
         // preserve existing values to keep dirty-check logic correct.
         self.cached_mute.resize(layer_count, false);
         self.cached_solo.resize(layer_count, false);
+        self.cached_led.resize(layer_count, false);
         self.cached_selected.resize(layer_count, false);
         self.cached_colors.resize(layer_count, Color32::TRANSPARENT);
 
@@ -1787,6 +1852,7 @@ mod tests {
             is_generator: false,
             is_muted: false,
             is_solo: false,
+            is_led: false,
             parent_layer_id: None,
             blend_mode: "Normal".into(),
             generator_type: None,

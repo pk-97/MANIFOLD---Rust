@@ -97,6 +97,7 @@ pub enum PanelAction {
     // Layer
     ToggleMute(usize),
     ToggleSolo(usize),
+    ToggleLed(usize),
     SetBlendMode(usize, String),
     ExpandLayer(usize),
     CollapseLayer(usize),

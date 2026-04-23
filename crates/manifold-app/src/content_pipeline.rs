@@ -638,6 +638,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 opacity: layer.opacity,
                 is_muted: layer.is_muted,
                 is_solo: layer.is_solo,
+                blit_to_led: layer.blit_to_led,
                 effects: layer.effects.as_deref().unwrap_or(empty_effects),
                 effect_groups: layer.effect_groups.as_deref().unwrap_or(empty_groups),
                 parent_layer_id: layer.parent_layer_id.as_ref(),
@@ -1115,9 +1116,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         self.compositor.output_texture()
     }
 
-    /// LED tap texture: pre-tonemap composite captured when led_exit_index == 0.
-    /// Returns the tap if available, otherwise falls back to the final output.
+    /// LED source texture. Preference chain:
+    /// 1. Per-layer LED composite (built from layers flagged `blit_to_led`,
+    ///    post-tonemap + post-master-FX). Present only when any layer has
+    ///    the flag enabled.
+    /// 2. Legacy LED tap (pre-tonemap composite when `led_exit_index == 0`).
+    /// 3. Final compositor output.
     pub fn led_source_texture(&self) -> &manifold_gpu::GpuTexture {
+        if let Some(tex) = self.compositor.led_composite_texture() {
+            return tex;
+        }
         self.compositor
             .led_tap_texture()
             .unwrap_or_else(|| self.compositor.output_texture())

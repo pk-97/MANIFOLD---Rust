@@ -288,6 +288,16 @@ struct WorkerState {
 
     internal_beat_pos: f64,
     have_internal_beat: bool,
+    /// Running total of samples consumed from the shared L/R rings.
+    /// Combined with the audio thread's published anchor `(beat_at_publish,
+    /// pushed_at_publish)` lets us derive the sample-accurate host beat
+    /// for the most recently processed sample at every emit — so the
+    /// same Ableton song position always lands at the same spectrogram
+    /// column regardless of when sync was enabled or how long the
+    /// session has been running. Saturates instead of wrapping (a 64-bit
+    /// counter at 48 kHz lasts ~12 million years; saturation is just for
+    /// belt-and-braces).
+    drained_total: u64,
     write_col: u32,
     last_applied_cfg: WorkerConfig,
     /// Pending-clear flag — set when config change invalidates history.
@@ -312,6 +322,7 @@ impl WorkerState {
             synchro_power_scratch: vec![0.0; cqt_num_bins],
             internal_beat_pos: 0.0,
             have_internal_beat: false,
+            drained_total: 0,
             write_col: params.history_cols - 1,
             last_applied_cfg: WorkerConfig::OFF,
             clear_pending: false,
@@ -374,6 +385,7 @@ impl WorkerState {
         left: &[f32],
         right: &[f32],
         cfg: &WorkerConfig,
+        anchor: Option<(f64, f64, u64)>,
         ring: &ArrayQueue<CqtColumnMsg>,
     ) {
         debug_assert_eq!(left.len(), right.len());
@@ -404,6 +416,11 @@ impl WorkerState {
                     (self.secondary.rolling_head + 1) % self.n_fft;
             }
             self.samples_since_last_hop += 1;
+            // Drained-sample counter advances per sample so emits inside
+            // the loop see the right "newest sample index" for anchor
+            // math. Saturates rather than wraps — a u64 at 48 kHz lasts
+            // millennia, but cheap insurance.
+            self.drained_total = self.drained_total.saturating_add(1);
             if self.samples_since_last_hop >= self.hop {
                 self.samples_since_last_hop = 0;
                 hops_seen += 1;
@@ -414,7 +431,7 @@ impl WorkerState {
                     continue;
                 }
 
-                self.emit_column(device, cfg, ring, two_channels);
+                self.emit_column(device, cfg, anchor, ring, two_channels);
                 self.internal_beat_pos += beats_per_hop;
             }
         }
@@ -482,6 +499,7 @@ impl WorkerState {
         &mut self,
         device: &GpuDevice,
         cfg: &WorkerConfig,
+        anchor: Option<(f64, f64, u64)>,
         ring: &ArrayQueue<CqtColumnMsg>,
         two_channels: bool,
     ) {
@@ -510,9 +528,32 @@ impl WorkerState {
             );
         }
 
-        // Decide target column(s).
+        // Decide target column(s). In sync mode we derive the host beat
+        // for THIS hop's newest sample directly from the audio thread's
+        // anchor — `(beat_at_publish, bpm, pushed_at_publish)` — so the
+        // same Ableton song position lands at the same column every
+        // time, with no drift across the session and no dependence on
+        // when sync was first enabled. Falls back to the internal clock
+        // only if the host hasn't reported transport yet (early frames
+        // before any process buffer arrived).
         let prev_col = self.write_col;
-        let beat_at_hop = self.internal_beat_pos;
+        let beat_at_hop = if cfg.sync_enabled {
+            match anchor {
+                Some((beat_at_publish, bpm_anchor, pushed_at_publish)) => {
+                    let beats_per_sample = bpm_anchor / 60.0 / self.sample_rate as f64;
+                    // `drained_total` was just incremented to include the
+                    // current sample (loop-internal increment fires per
+                    // sample); subtract 1 to get the newest sample's
+                    // index in the ring's drain timeline.
+                    let newest_idx = self.drained_total.saturating_sub(1) as f64;
+                    let samples_since_publish = newest_idx - pushed_at_publish as f64;
+                    beat_at_publish + samples_since_publish * beats_per_sample
+                }
+                None => self.internal_beat_pos,
+            }
+        } else {
+            self.internal_beat_pos
+        };
         let new_col = if cfg.sync_enabled && cfg.beats_per_window > 0.0 {
             let t = beat_at_hop / cfg.beats_per_window as f64;
             let frac = t - t.floor();
@@ -784,11 +825,18 @@ fn worker_loop(
         }
         let cfg = *config.lock();
         state.apply_config(cfg);
+        // Read the audio thread's transport anchor once per drain
+        // iteration. The anchor is constant for the duration of this
+        // process call (audio thread publishes at most once between
+        // worker iterations); the per-sample loop uses it together
+        // with `drained_total` to derive the host beat for each emit.
+        let anchor = shared.transport_anchor();
         state.process(
             &device,
             &left_scratch[..n],
             &right_scratch[..n],
             &cfg,
+            anchor,
             &column_ring,
         );
         if left_scratch.len() > n {

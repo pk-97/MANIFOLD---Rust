@@ -60,6 +60,8 @@ pub struct Layer {
     #[serde(default)]
     pub is_muted: bool,
     #[serde(default)]
+    pub blit_to_led: bool,
+    #[serde(default)]
     pub default_blend_mode: BlendMode,
     #[serde(default)]
     pub layer_color: Color,
@@ -819,6 +821,7 @@ impl Default for Layer {
             clips: Vec::new(),
             is_solo: false,
             is_muted: false,
+            blit_to_led: false,
             default_blend_mode: BlendMode::Normal,
             layer_color: Color::WHITE,
             opacity: 1.0,

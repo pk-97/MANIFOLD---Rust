@@ -834,8 +834,22 @@ pub struct AnalyzerGuiShared {
     /// process block. `NaN` means "host did not provide this value" — we
     /// can only honour Sync mode when both `bpm_bits` and
     /// `beat_pos_bits` are finite.
+    ///
+    /// `pushed_at_publish_bits` and `transport_seq` form a seqlock-style
+    /// coherent triple `(bpm, beat, pushed)` for the spectrogram worker.
+    /// `pushed_at_publish` is the running total of samples the audio
+    /// thread had pushed into the L/R rings *before* this `set_transport`
+    /// call's audio buffer. Combined with the worker's drain counter
+    /// this lets it back out the host beat for any sample it processes
+    /// — the sample-accurate equivalent of "tell me where this audio
+    /// sits in the song" without any drift between host and analyser.
     bpm_bits: AtomicU64,
     beat_pos_bits: AtomicU64,
+    pushed_at_publish_bits: AtomicU64,
+    /// Single-writer seqlock generation. Even = stable, odd = mid-write.
+    /// Audio thread is the only writer; readers (worker, GUI) loop until
+    /// they observe two equal even values around their reads.
+    transport_seq: AtomicU64,
     playing: AtomicBool,
     /// Loudness-meter readouts published by the audio thread each
     /// process block. All stored as f32 bits; `MIN_DB` means
@@ -925,6 +939,8 @@ impl AnalyzerGuiShared {
             loudness_block_queue: Arc::new(ArrayQueue::new(256)),
             bpm_bits: AtomicU64::new(f64::NAN.to_bits()),
             beat_pos_bits: AtomicU64::new(f64::NAN.to_bits()),
+            pushed_at_publish_bits: AtomicU64::new(0),
+            transport_seq: AtomicU64::new(0),
             playing: AtomicBool::new(false),
             momentary_lufs_bits: AtomicU32::new(MIN_DB.to_bits()),
             short_term_lufs_bits: AtomicU32::new(MIN_DB.to_bits()),
@@ -1023,11 +1039,31 @@ impl AnalyzerGuiShared {
         self.fft_size.load(Ordering::Relaxed)
     }
 
-    pub fn set_transport(&self, bpm: Option<f64>, beat_pos: Option<f64>, playing: bool) {
+    /// Audio-thread call once per process buffer. `pushed_at_publish` is
+    /// the count of samples already in the L/R rings *before* this
+    /// buffer's payload is pushed — i.e. the worker's drain counter at
+    /// the moment `beat_pos` was sampled. Published as a seqlock-coherent
+    /// triple with `bpm` and `beat_pos` so `transport_anchor` can derive
+    /// the host beat for any subsequently drained sample without drift.
+    pub fn set_transport(
+        &self,
+        bpm: Option<f64>,
+        beat_pos: Option<f64>,
+        playing: bool,
+        pushed_at_publish: u64,
+    ) {
+        // Single-writer seqlock: bump to odd, write the triple, bump to
+        // even. `playing` lives outside the seqlock — it's a 1-bit
+        // signal, no need for coherence with the anchor triple.
+        let seq = self.transport_seq.load(Ordering::Relaxed);
+        self.transport_seq.store(seq.wrapping_add(1), Ordering::Release);
         self.bpm_bits
             .store(bpm.unwrap_or(f64::NAN).to_bits(), Ordering::Relaxed);
         self.beat_pos_bits
             .store(beat_pos.unwrap_or(f64::NAN).to_bits(), Ordering::Relaxed);
+        self.pushed_at_publish_bits
+            .store(pushed_at_publish, Ordering::Relaxed);
+        self.transport_seq.store(seq.wrapping_add(2), Ordering::Release);
         self.playing.store(playing, Ordering::Relaxed);
     }
 
@@ -1040,6 +1076,31 @@ impl AnalyzerGuiShared {
             if beat.is_finite() { Some(beat) } else { None },
             playing,
         )
+    }
+
+    /// Coherent (beat, bpm, pushed_at_publish) snapshot for the worker.
+    /// Returns `None` when the host hasn't reported a usable transport
+    /// yet — caller should fall back to its own internal beat clock.
+    /// Seqlock retry: if the audio thread is mid-write, we re-read
+    /// rather than risk a torn triple.
+    pub fn transport_anchor(&self) -> Option<(f64, f64, u64)> {
+        loop {
+            let s1 = self.transport_seq.load(Ordering::Acquire);
+            if s1 & 1 != 0 {
+                std::hint::spin_loop();
+                continue;
+            }
+            let bpm = f64::from_bits(self.bpm_bits.load(Ordering::Relaxed));
+            let beat = f64::from_bits(self.beat_pos_bits.load(Ordering::Relaxed));
+            let pushed = self.pushed_at_publish_bits.load(Ordering::Relaxed);
+            let s2 = self.transport_seq.load(Ordering::Acquire);
+            if s1 == s2 {
+                if bpm.is_finite() && bpm > 0.0 && beat.is_finite() {
+                    return Some((beat, bpm, pushed));
+                }
+                return None;
+            }
+        }
     }
 
     /// Resize all stereo mailboxes to match a new FFT size. Called by
