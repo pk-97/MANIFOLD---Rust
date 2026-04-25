@@ -70,11 +70,6 @@ pub fn cqt_build_params(sample_rate: f32) -> CqtBuildParams {
     }
 }
 
-/// Length of the weighting LUT uploaded to the shader. 1024 samples across
-/// `[freq_min, freq_max]` in log-space is smoother than the display pixel
-/// density even at 4K widths, so sampling is effectively exact.
-pub const WEIGHTING_LUT_SIZE: usize = 1024;
-
 /// Display options driving the spectrum / spectrogram fragment shader.
 #[derive(Copy, Clone, Debug)]
 pub struct DisplayConfig {
@@ -182,9 +177,6 @@ pub struct SpectrumGpuRenderer {
     /// at the silence floor and the shader's `spectrogram_mode == 0`
     /// branch never reads it.
     history_buf2: GpuBuffer,
-    /// Pre-computed weighting curve uploaded from CPU when the weighting
-    /// mode or visible freq range changes. See `WEIGHTING_LUT_SIZE`.
-    weighting_lut_buf: GpuBuffer,
     pipeline: GpuRenderPipeline,
     num_bins: usize,
     cqt_num_bins: usize,
@@ -227,12 +219,6 @@ impl SpectrumGpuRenderer {
             }
         }
 
-        let weighting_lut_buf =
-            device.create_buffer_shared((WEIGHTING_LUT_SIZE as u64) * 4);
-        // Zero-init is already "flat weighting" (no tilt applied), so the
-        // shader renders sensibly on the first frame before the GUI has
-        // uploaded a mode-specific LUT.
-
         let pipeline = device.create_render_pipeline(
             SHADER,
             "vs_main",
@@ -248,7 +234,6 @@ impl SpectrumGpuRenderer {
             side_buf,
             history_buf,
             history_buf2,
-            weighting_lut_buf,
             pipeline,
             num_bins,
             cqt_num_bins,
@@ -257,22 +242,6 @@ impl SpectrumGpuRenderer {
             // written (prev+1 wraps to 0) lands at col 0 rather than col 1.
             write_col: HISTORY_COLS - 1,
         })
-    }
-
-    /// Upload a new weighting curve. `lut` must be `WEIGHTING_LUT_SIZE`
-    /// samples spanning the current displayed freq range, with any
-    /// alignment-offset bias already baked in.
-    pub fn set_weighting_lut(&mut self, lut: &[f32]) {
-        debug_assert_eq!(lut.len(), WEIGHTING_LUT_SIZE);
-        if let Some(ptr) = self.weighting_lut_buf.mapped_ptr() {
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    lut.as_ptr() as *const u8,
-                    ptr,
-                    lut.len() * 4,
-                );
-            }
-        }
     }
 
     pub fn set_display(&mut self, config: DisplayConfig) {
@@ -518,11 +487,10 @@ impl SpectrumGpuRenderer {
                 buffer: &self.history_buf,
                 offset: 0,
             },
-            GpuBinding::Buffer {
-                binding: 4,
-                buffer: &self.weighting_lut_buf,
-                offset: 0,
-            },
+            // (binding 4 was the weighting LUT — now obsolete; weighting
+            // is applied CPU-side to the per-bin dB values before they
+            // hit `mid_buf` / `side_buf` and to each CQT column before
+            // `apply_column`. The shader is tilt-agnostic.)
             GpuBinding::Buffer {
                 binding: 5,
                 buffer: &self.history_buf2,

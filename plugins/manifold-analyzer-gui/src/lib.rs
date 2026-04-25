@@ -41,7 +41,6 @@ use sample_ring::SampleRing;
 use serde::{Deserialize, Serialize};
 use spectrum_gpu::{
     CQT_BINS_PER_OCTAVE, CQT_FMIN_HZ, DisplayConfig, HISTORY_COLS, SpectrumGpuRenderer,
-    WEIGHTING_LUT_SIZE,
 };
 use spectrum_worker::{CqtWorker, WorkerConfig};
 use crossbeam_queue::ArrayQueue;
@@ -1334,11 +1333,17 @@ struct EditorState {
     left_scratch: Vec<f32>,
     right_scratch: Vec<f32>,
     correlation_scratch: Vec<f32>,
-    /// Pre-computed weighting curve uploaded to the shader whenever the
-    /// mode or visible freq range changes. Replaces the old per-pixel
-    /// biquad sin/cos evaluation — shader now samples this LUT with one
-    /// 2-tap blend per pixel.
-    weighting_lut_cache: WeightingLutCache,
+    /// Tilted (weighting-applied) per-FFT-bin scratch uploaded to the GPU.
+    /// Lives separately from `mid_scratch` / `side_scratch` because the
+    /// raw values still feed the cursor readout, the L/R column, the
+    /// auto-gain-match, and the CPU smoothing in the LR balance code —
+    /// all of which apply weighting themselves. Pre-tilting CPU-side
+    /// (instead of in the shader) removes the LUT/sizes-buffer plumbing
+    /// and is also slightly more correct: weighting is applied per-bin
+    /// before smoothing, so the smoothed value reflects the true
+    /// weighted energy across the window.
+    mid_tilted_scratch: Vec<f32>,
+    side_tilted_scratch: Vec<f32>,
     /// Cache of Gaussian-smoothed reference envelopes, keyed by
     /// (analysis fingerprint, smoothing mode). Rebuilt only when a slot
     /// gets a new analysis or the user switches smoothing mode — the raw
@@ -1407,42 +1412,54 @@ fn ref_analysis_fingerprint(a: &RefAnalysis) -> u64 {
     h
 }
 
-struct WeightingLutCache {
-    key: Option<(Weighting, f32, f32)>,
-    values: Vec<f32>,
-}
-
-impl Default for WeightingLutCache {
-    fn default() -> Self {
-        Self {
-            key: None,
-            values: vec![0.0; WEIGHTING_LUT_SIZE],
-        }
-    }
-}
-
-/// Populate `out` with the weighting curve sampled on a log-uniform grid
-/// over `[freq_min, freq_max]`, with the DC-bias align offset baked in
-/// so the shader doesn't need a separate uniform for it.
-fn fill_weighting_lut(
-    out: &mut [f32],
+/// Apply per-bin frequency weighting to a linear-spaced FFT scratch
+/// buffer in place. `dst` and `src` must be the same length;
+/// `dst[i] = src[i] + weighting_db_at(i·sr/N) + align`. Cheap (~2 K
+/// adds + one log2 per bin); runs every frame on the GUI thread.
+///
+/// Replaces the old GPU-side LUT path: weighting is now baked into the
+/// per-bin dB before upload, so the shader can stay completely tilt-
+/// agnostic. The math is also a touch more correct — we apply tilt
+/// to each bin then smooth, instead of smoothing first and tilting at
+/// the window centre.
+fn apply_weighting_to_bins(
+    dst: &mut [f32],
+    src: &[f32],
+    sample_rate: f32,
+    fft_size: usize,
     weighting: Weighting,
-    freq_min: f32,
-    freq_max: f32,
+    weight_align_db: f32,
 ) {
-    debug_assert_eq!(out.len(), WEIGHTING_LUT_SIZE);
-    let align = weighting_align_offset(weighting, freq_min, freq_max);
-    if freq_max <= freq_min {
-        out.fill(align);
+    if dst.len() != src.len() || fft_size == 0 || sample_rate <= 0.0 {
+        if dst.len() == src.len() {
+            dst.copy_from_slice(src);
+        }
         return;
     }
-    let log_min = freq_min.ln();
-    let log_max = freq_max.ln();
-    let denom = (WEIGHTING_LUT_SIZE - 1) as f32;
-    for (i, slot) in out.iter_mut().enumerate() {
-        let t = i as f32 / denom;
-        let freq = (log_min + t * (log_max - log_min)).exp();
-        *slot = weighting_db_at(weighting, freq) + align;
+    let bin_hz = sample_rate / fft_size as f32;
+    for (i, (d, s)) in dst.iter_mut().zip(src.iter()).enumerate() {
+        let freq = (i as f32 * bin_hz).max(1e-3);
+        *d = *s + weighting_db_at(weighting, freq) + weight_align_db;
+    }
+}
+
+/// Apply per-bin weighting to a CQT (log-spaced) column in place. Bin
+/// `i` corresponds to `freq = fmin · 2^(i · log_scale)` where
+/// `log_scale = 1 / bins_per_octave`. Same role as
+/// `apply_weighting_to_bins` but for the spectrogram path.
+fn tilt_cqt_column(
+    col: &mut [f32],
+    weighting: Weighting,
+    weight_align_db: f32,
+    fmin_hz: f32,
+    log_scale: f32,
+) {
+    if matches!(weighting, Weighting::Flat) && weight_align_db.abs() < 1e-6 {
+        return;
+    }
+    for (i, value) in col.iter_mut().enumerate() {
+        let freq = fmin_hz * (i as f32 * log_scale).exp2();
+        *value += weighting_db_at(weighting, freq) + weight_align_db;
     }
 }
 
@@ -1465,7 +1482,8 @@ pub fn create_editor(
         left_scratch: vec![MIN_DB; num_bins],
         right_scratch: vec![MIN_DB; num_bins],
         correlation_scratch: vec![0.0; num_bins],
-        weighting_lut_cache: WeightingLutCache::default(),
+        mid_tilted_scratch: vec![MIN_DB; num_bins],
+        side_tilted_scratch: vec![MIN_DB; num_bins],
         ref_envelope_cache: RefEnvelopeCache::default(),
     };
     create_egui_editor(
@@ -1594,13 +1612,6 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
                 worker.cqt_num_bins(),
             ) {
                 state.spectrum = Some(spec);
-                // Freshly-allocated GPU LUT buffer is zero-initialised
-                // (= flat weighting). Invalidate the cache so the next
-                // draw re-uploads the current weighting curve; without
-                // this, if the user's selection matched the cached key
-                // from a previous editor open, the weighting wouldn't
-                // re-apply and MS/spectrogram tilt would read as flat.
-                state.weighting_lut_cache.key = None;
             }
         }
     }
@@ -1654,22 +1665,35 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             (fmin, fmax)
         };
 
-        // Rebuild the weighting LUT only when mode / range changes (the
-        // computation is a pure CPU pass). Uploading to the GPU is
-        // cheap (4 KB memcpy into a shared Metal buffer) and defending
-        // against edge cases where the buffer might be stale (editor
-        // reopen, underlying texture swap) is worth the per-frame cost.
-        let lut_key = (weighting, freq_min_for_lut, freq_max_for_lut);
-        if state.weighting_lut_cache.key != Some(lut_key) {
-            fill_weighting_lut(
-                &mut state.weighting_lut_cache.values,
-                weighting,
-                freq_min_for_lut,
-                freq_max_for_lut,
-            );
-            state.weighting_lut_cache.key = Some(lut_key);
+        // Apply the user's frequency weighting (Pink / Tilted / LUFS / etc.)
+        // to the per-bin Mid + Side scratch CPU-side, then upload the
+        // tilted values. Cheap (~2 K adds + log2 per bin per frame) and
+        // strictly more correct than the prior shader-side LUT approach,
+        // which applied tilt at the smoothing-window centre frequency
+        // instead of per-bin before smoothing.
+        let weight_align = weighting_align_offset(weighting, freq_min_for_lut, freq_max_for_lut);
+        if state.mid_tilted_scratch.len() != state.mid_scratch.len() {
+            state.mid_tilted_scratch.resize(state.mid_scratch.len(), MIN_DB);
         }
-        spec.set_weighting_lut(&state.weighting_lut_cache.values);
+        if state.side_tilted_scratch.len() != state.side_scratch.len() {
+            state.side_tilted_scratch.resize(state.side_scratch.len(), MIN_DB);
+        }
+        apply_weighting_to_bins(
+            &mut state.mid_tilted_scratch,
+            &state.mid_scratch,
+            sr,
+            fft_size,
+            weighting,
+            weight_align,
+        );
+        apply_weighting_to_bins(
+            &mut state.side_tilted_scratch,
+            &state.side_scratch,
+            sr,
+            fft_size,
+            weighting,
+            weight_align,
+        );
 
         // Resolve sync state for display + worker.
         let (bpm_opt, beat_opt, _playing) = state.shared.transport();
@@ -1725,9 +1749,24 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         });
 
         // Drain completed CQT columns from the worker and write them into
-        // the history storage buffer. `apply_column` handles history clears
-        // on tempo change and advances the renderer's `write_col`.
-        worker.drain_columns(|msg| spec.apply_column(&msg));
+        // the history storage buffer. We pre-tilt each bin's dB value
+        // here using the current weighting so the GPU history holds
+        // already-weighted values — same pattern as the MS scratch path.
+        // Old columns retain whatever weighting was active when they
+        // were emitted; switching weighting therefore takes a few
+        // seconds of new content to propagate through the visible
+        // history. Acceptable trade-off vs the prior shader-side LUT
+        // path (which had its own correctness issues and depended on
+        // the GPU sizes-buffer plumbing).
+        let cqt_log_scale = (CQT_BINS_PER_OCTAVE as f32).recip();
+        let cqt_fmin = CQT_FMIN_HZ;
+        worker.drain_columns(|mut msg| {
+            tilt_cqt_column(&mut msg.data, weighting, weight_align, cqt_fmin, cqt_log_scale);
+            if let Some(d2) = msg.data2.as_mut() {
+                tilt_cqt_column(d2, weighting, weight_align, cqt_fmin, cqt_log_scale);
+            }
+            spec.apply_column(&msg);
+        });
 
         let nyquist = sr * 0.5;
         let freq_min_user = state.params.freq_min_hz.value() as f32;
@@ -1736,8 +1775,8 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         let freq_min = freq_min_user.min(freq_max * 0.5).max(1.0);
         spec.render(
             device,
-            &state.mid_scratch,
-            &state.side_scratch,
+            &state.mid_tilted_scratch,
+            &state.side_tilted_scratch,
             sr,
             freq_min,
             freq_max,

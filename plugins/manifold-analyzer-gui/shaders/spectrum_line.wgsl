@@ -59,14 +59,16 @@ struct Uniforms {
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
+// Per-bin dB values: weighting (Pink / Tilted / LUFS / etc.) is already
+// applied CPU-side before upload, so the shader can stay completely
+// tilt-agnostic. Earlier revisions used a binding=4 weighting LUT here
+// and called `tilt_db = raw + lut(freq)` per pixel; the LUT path was
+// removed because applying tilt per-bin then smoothing is both simpler
+// and slightly more correct than the shader's smooth-then-tilt-at-
+// centre approach.
 @group(0) @binding(1) var<storage, read> mid_spectrum: array<f32>;
 @group(0) @binding(2) var<storage, read> side_spectrum: array<f32>;
 @group(0) @binding(3) var<storage, read> history: array<f32>;
-// Pre-computed weighting curve (dB) over log-uniform [freq_min, freq_max].
-// CPU-side: GUI builds this whenever the weighting mode or freq range
-// changes. Includes the DC-bias align offset baked in. Replaces the
-// per-pixel biquad sin/cos evaluation the shader used to do.
-@group(0) @binding(4) var<storage, read> weighting_lut: array<f32>;
 // Secondary spectrogram history. Always bound; only read when
 // `u.spectrogram_mode > 0.5` (L+R stacked), otherwise the shader's
 // branch ignores it and the buffer stays at the silence floor.
@@ -100,24 +102,12 @@ fn db_to_y_px(db: f32) -> f32 {
     return u.spectrum_height * (1.0 - clamp(t, 0.0, 1.0));
 }
 
-// Sample the pre-computed weighting LUT by log-freq index. The LUT covers
-// [log(freq_min), log(freq_max)] uniformly and has `align_offset_db`
-// baked in, so `tilt_db` is just `raw + lut(freq)`.
-fn weighting_db(freq: f32) -> f32 {
-    let n = f32(arrayLength(&weighting_lut));
-    if (n < 2.0) {
-        return 0.0;
-    }
-    let t = clamp(log(freq / u.freq_min) / log(u.freq_max / u.freq_min), 0.0, 1.0);
-    let idx_f = t * (n - 1.0);
-    let lo = u32(floor(idx_f));
-    let hi = min(lo + 1u, u32(n) - 1u);
-    let frac = fract(idx_f);
-    return mix(weighting_lut[lo], weighting_lut[hi], frac);
-}
-
+// `mid_spectrum` / `side_spectrum` / `history` / `history2` already hold
+// weighting-applied dB values (CPU pre-tilt), so no per-pixel tilt is
+// needed here. Kept as a separate symbol so callers stay readable; an
+// inliner will collapse it.
 fn tilt_db(freq: f32, raw_db: f32) -> f32 {
-    return raw_db + weighting_db(freq);
+    return raw_db;
 }
 
 // Upper bound on smoothing taps per pixel. The smoothing loop strides
