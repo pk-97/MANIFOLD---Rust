@@ -192,40 +192,7 @@ fn build_slot_map(
         resources.resources.insert(*resource_binding, bind_target);
     }
 
-    // Detect runtime-sized arrays in storage buffers.
-    // naga's MSL backend needs a "sizes buffer" containing the byte size of each
-    // runtime-sized buffer so it can resolve arrayLength() calls.
-    // Covers both top-level `array<T>` and struct with last member `array<T>`.
-    let has_runtime_array = bindings.iter().any(|(_, _, gv)| {
-        matches!(gv.space, naga::AddressSpace::Storage { .. }) && {
-            let ty = &module.types[gv.ty];
-            match &ty.inner {
-                // Top-level runtime-sized array: var<storage> foo: array<T>
-                naga::TypeInner::Array {
-                    size: naga::ArraySize::Dynamic,
-                    ..
-                } => true,
-                // Struct with last member being a runtime-sized array
-                naga::TypeInner::Struct { members, .. } => members.last().is_some_and(|m| {
-                    matches!(
-                        module.types[m.ty].inner,
-                        naga::TypeInner::Array {
-                            size: naga::ArraySize::Dynamic,
-                            ..
-                        }
-                    )
-                }),
-                // Binding array (runtime array of resources)
-                naga::TypeInner::BindingArray {
-                    size: naga::ArraySize::Dynamic,
-                    ..
-                } => true,
-                _ => false,
-            }
-        }
-    });
-
-    if has_runtime_array {
+    if module_uses_runtime_array(module, bindings.iter().map(|(_, _, gv)| *gv)) {
         // Assign the sizes buffer to the next available buffer index.
         resources.sizes_buffer = Some(next_buffer as u8);
         // Store in slot map so dispatch can bind it.
@@ -242,6 +209,48 @@ fn build_slot_map(
     let _ = next_buffer; // final slot counter only needed while assigning above
 
     (slot_map, resources)
+}
+
+/// Detect runtime-sized arrays in storage buffers (top-level `array<T>`,
+/// struct with last member `array<T>`, or binding-array of resources).
+/// naga's MSL backend needs a "sizes buffer" containing the byte size of
+/// each runtime-sized buffer so it can resolve `arrayLength()` calls. If
+/// any global needs it, the caller should reserve a slot at
+/// `SIZES_BUFFER_BINDING` and the encoder side will populate it on dispatch.
+///
+/// Shared between compute (`build_slot_map`) and render (`build_slot_map_render`)
+/// — without this in the render path, fragment shaders that use
+/// `arrayLength()` (e.g. analyzer's `weighting_db()` reading the LUT)
+/// silently see length 0 and any `n < 2` early-out collapses.
+fn module_uses_runtime_array<'a>(
+    module: &'a naga::Module,
+    globals: impl IntoIterator<Item = &'a naga::GlobalVariable>,
+) -> bool {
+    globals.into_iter().any(|gv| {
+        matches!(gv.space, naga::AddressSpace::Storage { .. }) && {
+            let ty = &module.types[gv.ty];
+            match &ty.inner {
+                naga::TypeInner::Array {
+                    size: naga::ArraySize::Dynamic,
+                    ..
+                } => true,
+                naga::TypeInner::Struct { members, .. } => members.last().is_some_and(|m| {
+                    matches!(
+                        module.types[m.ty].inner,
+                        naga::TypeInner::Array {
+                            size: naga::ArraySize::Dynamic,
+                            ..
+                        }
+                    )
+                }),
+                naga::TypeInner::BindingArray {
+                    size: naga::ArraySize::Dynamic,
+                    ..
+                } => true,
+                _ => false,
+            }
+        }
+    })
 }
 
 /// Build a unified SlotMap + per-entry-point EntryPointResources for a render
@@ -336,6 +345,27 @@ fn build_slot_map_render(
             .resources
             .insert(*resource_binding, bind_target);
     }
+
+    // Same runtime-array → sizes-buffer reservation as the compute path.
+    // Without this any fragment shader that calls `arrayLength()` on a
+    // runtime-sized storage array (e.g. analyzer's `weighting_db()`) reads
+    // length 0, silently collapsing the look-up to its zero-init guard.
+    // Both stages share the Metal argument table so we reserve once and
+    // expose it to both EntryPointResources.
+    if module_uses_runtime_array(module, bindings.iter().map(|(_, _, gv)| *gv)) {
+        let sizes_idx = next_buffer;
+        resources_vs.sizes_buffer = Some(sizes_idx as u8);
+        resources_fs.sizes_buffer = Some(sizes_idx as u8);
+        slot_map.insert(
+            SIZES_BUFFER_BINDING,
+            Slot {
+                kind: SlotKind::Buffer,
+                metal_index: sizes_idx,
+            },
+        );
+        next_buffer += 1;
+    }
+    let _ = next_buffer;
 
     (slot_map, resources_vs, resources_fs)
 }
