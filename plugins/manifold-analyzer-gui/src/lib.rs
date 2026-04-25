@@ -31,7 +31,7 @@ pub use loudness_worker::LoudnessWorker;
 
 use gl_paint::{PainterState, QuadPainter, SharedPainterState};
 use manifold_analyzer_dsp::{
-    LoudnessSnapshot, MIN_DB, REF_FREQ_MAX, REF_FREQ_MIN, REF_POINTS, RefAnalysis,
+    LoudnessSnapshot, MIN_DB, REF_FFT_SIZE, REF_FREQ_MAX, REF_FREQ_MIN, REF_POINTS, RefAnalysis,
     analyze_ref_file,
 };
 use manifold_gpu::GpuDevice;
@@ -1889,6 +1889,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         freq_max,
         &state.params.ref_slots.read(),
         state.shared.integrated_lufs(),
+        state.shared.fft_size(),
         state.params.weighting.value(),
         state.params.freq_smoothing.value(),
         &mut state.ref_envelope_cache,
@@ -2116,6 +2117,34 @@ fn draw_reference_curve(
 /// honest regardless of relative level. MP3 codec lowpass (if detected)
 /// clips the band at the brickwall so the display doesn't misleadingly
 /// show the ref "falling off" above the codec cutoff.
+/// Per-bin energy correction applied to the loaded reference envelope so
+/// it lands on the same vertical scale as the live MS curves. Two
+/// systematic offsets are corrected here:
+///
+/// 1. **Binwidth**: live uses an N-point FFT; ref analysis uses
+///    `REF_FFT_SIZE`. For broadband content (which is most music)
+///    each bin holds a fraction of total energy proportional to its
+///    bandwidth, so per-bin dB scales with `10·log₁₀(N_ref / N_live)`.
+///    With the default 4 k live and 16 k ref this is ~+6 dB.
+///
+/// 2. **Peak-hold vs symmetric average**: live uses an asymmetric EMA
+///    (instant attack, 200 ms release) which behaves like a max-hold;
+///    ref uses symmetric 200 ms averaging. On music with envelope
+///    motion the hold reads ~+3 dB above the average. Empirically
+///    derived; close enough to make the curves overlay cleanly.
+///
+/// Without this the ref sits ~9 dB below where the eye expects it
+/// even when integrated LUFS line up perfectly. TrueBalance and
+/// Vision 4X handle this implicitly because their live and reference
+/// pipelines share an FFT size and aggregation method.
+const REF_PEAKHOLD_VS_AVG_DB: f32 = 3.0;
+
+fn ref_calibration_offset_db(live_fft_size: usize) -> f32 {
+    let live = live_fft_size.max(1) as f32;
+    let r = REF_FFT_SIZE as f32 / live;
+    10.0 * r.log10() + REF_PEAKHOLD_VS_AVG_DB
+}
+
 fn draw_ref_bands(
     painter: &egui::Painter,
     rect: egui::Rect,
@@ -2123,6 +2152,7 @@ fn draw_ref_bands(
     freq_max: f32,
     slots: &RefSlots,
     live_integrated_lufs: f32,
+    live_fft_size: usize,
     weighting: Weighting,
     smoothing_mode: FreqSmoothing,
     cache: &mut RefEnvelopeCache,
@@ -2155,17 +2185,22 @@ fn draw_ref_bands(
             continue;
         }
 
-        // Match-to-current gain. Only shift when both the ref and the
-        // live mix have a sensible integrated value; otherwise display
-        // at source level so a fresh / silent host doesn't drag the
-        // ref off-screen.
-        let shift_db = if live_integrated_lufs > MIN_DB + 1.0
+        // Match-to-current gain. Only apply the LUFS-difference shift
+        // when both the ref and the live mix have a sensible integrated
+        // value; otherwise display at source level so a fresh / silent
+        // host doesn't drag the ref off-screen. The calibration offset
+        // (FFT-binwidth + peak-hold) is applied unconditionally — it's
+        // a fixed property of how live vs ref are computed, not a live
+        // measurement, so it should be in effect from the first frame.
+        let calibration_db = ref_calibration_offset_db(live_fft_size);
+        let lufs_shift_db = if live_integrated_lufs > MIN_DB + 1.0
             && analysis.integrated_lufs > MIN_DB + 1.0
         {
             live_integrated_lufs - analysis.integrated_lufs
         } else {
             0.0
         };
+        let shift_db = lufs_shift_db + calibration_db;
 
         // Upper cutoff: the band is meaningful only up to min(source
         // Nyquist, LAME lowpass if set). Beyond that the percentile
