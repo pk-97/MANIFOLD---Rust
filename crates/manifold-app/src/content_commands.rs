@@ -269,6 +269,39 @@ impl ContentThread {
                     self.ableton_bridge.validate_mappings(p);
                     self.ableton_bridge.rebuild_listeners(p);
                 }
+                // Honor the persisted LED ON/OFF state. If the project saved
+                // with the LED pipeline enabled, stand it up automatically;
+                // otherwise tear down any previously active controller.
+                let want_led_enabled = self
+                    .engine
+                    .project()
+                    .is_some_and(|p| p.settings.led_enabled);
+                if want_led_enabled {
+                    if !self.led_controller.as_ref().is_some_and(|c| c.is_initialized()) {
+                        let settings = manifold_led::LedSettings {
+                            enabled: true,
+                            ..Default::default()
+                        };
+                        let mut ctrl = manifold_led::LedOutputController::new();
+                        let native_device = self
+                            .content_pipeline
+                            .native_device()
+                            .expect("native device required for LED init");
+                        let strip_count = settings.strip_count;
+                        let leds_per_strip = settings.leds_per_strip;
+                        if ctrl.initialize(native_device, &settings) {
+                            self.led_controller = Some(ctrl);
+                            self.content_pipeline
+                                .set_led_grid_size(strip_count, leds_per_strip);
+                            log::info!(
+                                "[ContentThread] LED output auto-initialised from project."
+                            );
+                        }
+                    }
+                } else if let Some(ref mut ctrl) = self.led_controller {
+                    ctrl.shutdown();
+                    self.led_controller = None;
+                }
             }
             // ── Settings ───────────────────────────────────────────
             ContentCommand::SetFrameRate(fps) => {

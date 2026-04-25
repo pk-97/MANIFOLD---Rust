@@ -40,8 +40,9 @@ pub struct CompositorFrame<'a> {
     /// tonemap + master FX: index 0 routes the raw composite (no tonemap, no
     /// FX) so master effects that break LEDs are bypassed; -1 applies them.
     pub led_exit_index: i32,
-    /// Native LED grid dimensions (strip_count, leds_per_strip). The per-layer
-    /// LED composite is built at this resolution so master FX cost is negligible.
+    /// LED grid dimensions (strip_count, leds_per_strip). The per-layer LED
+    /// composite is built at this resolution so each strip maps 1:1 to one
+    /// column and each LED to one row — no edge-extend transform needed.
     pub led_composite_size: (u32, u32),
     /// Final output dimensions after upscaling. Used by effects that must be
     /// resolution-invariant (edge detect texel size, glitch/dither pixel counts).

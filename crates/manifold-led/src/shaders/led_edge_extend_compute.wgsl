@@ -46,28 +46,23 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Box blur: sample a grid around the center point.
-    // Texel size derived from source texture dimensions.
+    // Vertical-only blur. The LED source is rendered at native strip×LED
+    // resolution (one column per physical strip), so blurring horizontally
+    // would bleed colour between adjacent strips. Blurring vertically (along
+    // the strip) smooths the distribution between LEDs without disturbing
+    // the per-strip mapping. 5-tap binomial weights (1,4,6,4,1)/16 give a
+    // Gaussian-ish kernel; `blur_radius` scales the inter-tap spacing in
+    // source-texel units.
     let tex_size = vec2<f32>(textureDimensions(source_tex, 0));
-    let texel = 1.0 / tex_size;
-    let radius = uniforms.blur_radius;
+    let texel_y = 1.0 / tex_size.y;
+    let r = uniforms.blur_radius;
 
-    // 5-tap cross pattern: center + 4 cardinal offsets at full radius.
-    // Cheaper than a full grid, good enough for LED smoothing.
-    let offset_h = vec2<f32>(radius * texel.x, 0.0);
-    let offset_v = vec2<f32>(0.0, radius * texel.y);
+    let s_n2 = textureSampleLevel(source_tex, tex_sampler, center + vec2<f32>(0.0, -2.0 * r * texel_y), 0.0);
+    let s_n1 = textureSampleLevel(source_tex, tex_sampler, center + vec2<f32>(0.0, -1.0 * r * texel_y), 0.0);
+    let s_0  = textureSampleLevel(source_tex, tex_sampler, center, 0.0);
+    let s_p1 = textureSampleLevel(source_tex, tex_sampler, center + vec2<f32>(0.0,  1.0 * r * texel_y), 0.0);
+    let s_p2 = textureSampleLevel(source_tex, tex_sampler, center + vec2<f32>(0.0,  2.0 * r * texel_y), 0.0);
 
-    var color = textureSampleLevel(source_tex, tex_sampler, center, 0.0) * 2.0;
-    color += textureSampleLevel(source_tex, tex_sampler, center - offset_h, 0.0);
-    color += textureSampleLevel(source_tex, tex_sampler, center + offset_h, 0.0);
-    color += textureSampleLevel(source_tex, tex_sampler, center - offset_v, 0.0);
-    color += textureSampleLevel(source_tex, tex_sampler, center + offset_v, 0.0);
-    // Half-radius diagonals for wider coverage
-    let diag = vec2<f32>(radius * 0.7 * texel.x, radius * 0.7 * texel.y);
-    color += textureSampleLevel(source_tex, tex_sampler, center + vec2<f32>(-diag.x, -diag.y), 0.0);
-    color += textureSampleLevel(source_tex, tex_sampler, center + vec2<f32>( diag.x, -diag.y), 0.0);
-    color += textureSampleLevel(source_tex, tex_sampler, center + vec2<f32>(-diag.x,  diag.y), 0.0);
-    color += textureSampleLevel(source_tex, tex_sampler, center + vec2<f32>( diag.x,  diag.y), 0.0);
-
-    textureStore(output_tex, vec2<i32>(gid.xy), color / 10.0);
+    let color = (s_n2 * 1.0 + s_n1 * 4.0 + s_0 * 6.0 + s_p1 * 4.0 + s_p2 * 1.0) / 16.0;
+    textureStore(output_tex, vec2<i32>(gid.xy), color);
 }

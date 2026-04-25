@@ -69,6 +69,11 @@ pub struct ProjectSettings {
     pub led_exit_index: i32,
     #[serde(default = "default_one")]
     pub led_brightness: f32,
+    /// Whether the LED output pipeline should be initialised when this project
+    /// is loaded (and kept toggled as the user flips the master LED button).
+    /// Persistent so an LED-driven show comes back ON without manual re-toggle.
+    #[serde(default)]
+    pub led_enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub midi_clock_source_name: Option<String>,
     #[serde(default)]
@@ -247,6 +252,7 @@ impl Default for ProjectSettings {
             master_effect_groups: None,
             led_exit_index: -1,
             led_brightness: 1.0,
+            led_enabled: false,
             midi_clock_source_name: None,
             clock_authority: ClockAuthority::Internal,
             osc_send_port: 9001,

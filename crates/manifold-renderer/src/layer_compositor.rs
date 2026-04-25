@@ -9,8 +9,11 @@ use crate::uniform_arena::UniformArena;
 use crate::wet_dry_lerp::WetDryLerpPipeline;
 use ahash::AHashMap;
 use manifold_core::effects::{EffectGroup, EffectInstance};
-use manifold_core::{BlendMode, EffectTypeId};
-use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
+use manifold_core::{BlendMode, EffectTypeId, LayerId};
+use manifold_gpu::{
+    GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
+    GpuTextureUsage,
+};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -399,11 +402,73 @@ pub struct LayerCompositor {
     /// Uses owner_key `LED_MASTER_OWNER_KEY` to keep temporal state separate
     /// from the main master chain.
     led_master_ec: Option<EffectChain>,
+
+    /// Per-group LED scratch buffers, sized at LED grid resolution. One per
+    /// group whose LED-flagged children need to flow through that group's
+    /// effects on the LED path. Reused across frames; reallocated only on
+    /// LED-grid dimension changes.
+    led_group_bufs: Vec<PingPong>,
+    /// Per-group LED effect chains. Distinct from `group_effect_chains` so
+    /// temporal state on the LED path doesn't bleed into the screen path
+    /// (and vice versa). Lazy-allocates at LED grid resolution via the
+    /// EffectContext passed to `apply_effects`.
+    led_group_effect_chains: Vec<EffectChain>,
+    /// How many `led_group_bufs` / `led_group_effect_chains` were used last
+    /// frame, for trim_excess_buffers.
+    last_led_group_buf_used: usize,
+
+    /// 1×1 opaque-black Rgba16Float texture used as a stand-in source when
+    /// compositing **non-LED** layers into the LED stack. The non-L layer's
+    /// own blend mode + opacity still apply, so an opaque Normal-blend layer
+    /// substitutes black-on-black → covers what's below = matches the screen
+    /// "blocked" semantic. Lazy-initialised on first frame any LED layer is
+    /// active; cleared once on creation, then reused indefinitely.
+    led_black_tex: Option<GpuTexture>,
 }
 
 /// Distinct owner_key for the LED master effect chain — must not collide with
 /// owner_key 0 (main master) or any layer/clip hash.
 const LED_MASTER_OWNER_KEY: i64 = i64::MIN + 1;
+
+/// Returns true when blending an opaque-black source with this mode is a
+/// mathematical no-op on the destination RGB.
+///
+/// Used by the LED path to skip dispatches for non-L layers that don't
+/// actually block (these modes produce `out = base` when the foreground is
+/// black). The non-skippable modes — Normal, Multiply, Overlay, Opaque,
+/// Darken — *do* change the output and must run for correct screen-equivalent
+/// blocking semantics.
+///
+/// Note: only safe to skip when the destination's alpha is already 1 (no
+/// downstream blend reads a partial alpha channel). This holds for the
+/// top-level led_main composite (cleared opaque) and blocker-group blends,
+/// but **not** inside a per-group LED scratch (which is cleared transparent
+/// and feeds group FX that may read alpha) — those keep running.
+#[inline]
+fn is_identity_for_black(mode: BlendMode) -> bool {
+    matches!(
+        mode,
+        BlendMode::Additive
+            | BlendMode::Screen
+            | BlendMode::Stencil
+            | BlendMode::Difference
+            | BlendMode::Exclusion
+            | BlendMode::Subtract
+            | BlendMode::ColorDodge
+            | BlendMode::Lighten
+    )
+}
+
+/// Distinct owner_key for the LED group effect chain. Mirrors
+/// `layer_id_owner_key` but mixes in a discriminator so temporal state on the
+/// LED path doesn't collide with the same group's screen-path effect chain.
+fn led_group_owner_key(layer_id: &manifold_core::LayerId) -> i64 {
+    let mut hasher = DefaultHasher::new();
+    layer_id.hash(&mut hasher);
+    "led_group".hash(&mut hasher);
+    (hasher.finish() | (1 << 63)) as i64
+}
+
 
 impl LayerCompositor {
     pub fn new(device: &GpuDevice, width: u32, height: u32) -> Self {
@@ -432,6 +497,10 @@ impl LayerCompositor {
             led_main: None,
             led_tonemap: None,
             led_master_ec: None,
+            led_group_bufs: Vec::new(),
+            led_group_effect_chains: Vec::new(),
+            last_led_group_buf_used: 0,
+            led_black_tex: None,
         }
     }
 
@@ -463,6 +532,42 @@ impl LayerCompositor {
         }
     }
 
+    /// Ensure we have at least `count` LED group scratch buffers at the given
+    /// LED grid resolution. Existing buffers are resized to match if needed.
+    fn ensure_led_group_bufs(
+        &mut self,
+        count: usize,
+        device: &GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
+        width: u32,
+        height: u32,
+    ) {
+        while self.led_group_bufs.len() < count {
+            let idx = self.led_group_bufs.len();
+            self.led_group_bufs.push(PingPong::new(
+                device,
+                pool,
+                width,
+                height,
+                &format!("LED Group Scratch {idx}"),
+            ));
+        }
+        for buf in &mut self.led_group_bufs {
+            if buf.width() != width || buf.height() != height {
+                buf.resize(device, width, height);
+            }
+        }
+    }
+
+    /// Ensure we have at least `count` LED group effect chains available.
+    /// Internal effect-chain buffers lazy-allocate at the LED grid resolution
+    /// via the EffectContext passed to `apply_effects`.
+    fn ensure_led_group_effect_chains(&mut self, count: usize) {
+        while self.led_group_effect_chains.len() < count {
+            self.led_group_effect_chains.push(EffectChain::new());
+        }
+    }
+
     /// Trim oversized layer_bufs and effect_chains down to actual usage + headroom.
     /// Excess textures are dropped immediately (freed by Metal) rather than released
     /// to the TexturePool — compositor scratch buffers are large and rarely re-needed,
@@ -487,6 +592,14 @@ impl LayerCompositor {
         }
         if self.group_effect_chains.len() > target_group_bufs {
             self.group_effect_chains.truncate(target_group_bufs);
+        }
+
+        let target_led_group_bufs = self.last_led_group_buf_used.saturating_add(HEADROOM);
+        if self.led_group_bufs.len() > target_led_group_bufs {
+            self.led_group_bufs.truncate(target_led_group_bufs);
+        }
+        if self.led_group_effect_chains.len() > target_led_group_bufs {
+            self.led_group_effect_chains.truncate(target_led_group_bufs);
         }
     }
 
@@ -736,30 +849,56 @@ impl LayerCompositor {
         }
     }
 
-    /// Blend LED-flagged layers into the LED composite buffer with Normal mode.
+    /// Blend layers into the LED composite buffer with screen-equivalent
+    /// blocking semantics.
     ///
-    /// Runs **before** `fold_groups` so child layers inside groups route to LEDs
-    /// via their own `blit_to_led` flag, independent of the parent group's flag.
+    /// **L (LED-flagged) layers** contribute their actual texture with Normal
+    /// blend + opacity (so multiple L layers stack predictably).
     ///
-    /// Composite resolution is `frame.led_composite_size` — the native LED grid
-    /// dimensions (e.g. 8×120). Master FX cost on this path is therefore
-    /// negligible. Each blend pass uses bilinear sampling to downsample full-res
-    /// layer textures directly to the LED grid; aliasing on small features is
-    /// expected and acceptable since the LED grid itself is the visual output.
+    /// **Non-L layers** are composited too — but with their texture replaced
+    /// by a 1×1 opaque-black stand-in. Their actual blend mode + opacity still
+    /// apply, so an opaque Normal-blend non-L layer above an L layer covers
+    /// the L on the LED frame the same way it covers it on screen. Without
+    /// this, a non-L layer that visually blocks an L layer on screen would
+    /// still leak through to the LEDs.
+    ///
+    /// **Groups with at least one L child** ("L groups") fold all their
+    /// children (with the L/non-L substitution above) into one per-group LED
+    /// scratch buffer, apply group effects at LED resolution, then blend the
+    /// result into `led_main` with Normal + group opacity. Group FX always
+    /// run on the LED path so group-level colouring (hue shifts, grades) is
+    /// preserved. **Groups with no L children** ("blocker groups") skip the
+    /// inner composite (children would all be black anyway) and contribute a
+    /// single black blend with the group's actual blend mode + opacity into
+    /// `led_main`.
+    ///
+    /// **Optimisation:** layers entirely below the bottom-most L contribute
+    /// nothing to the final LED frame (they'd be overwritten). Iteration
+    /// starts at the lowest LayerOutput that is L-flagged or part of an L
+    /// group, skipping the rest.
+    ///
+    /// Runs **before** `fold_groups` so child layers inside groups route via
+    /// their own `blit_to_led` flag, independent of the parent group's flag.
+    /// Composite resolution is `frame.led_composite_size` — the native LED
+    /// grid (e.g. 8×120), so master FX and group FX cost are negligible.
     fn blend_layers_to_led(
         &mut self,
         gpu: &mut GpuEncoder,
         layer_outputs: &[LayerOutput],
-        led_size: (u32, u32),
+        frame: &CompositorFrame,
     ) {
         let any_led = layer_outputs.iter().any(|o| o.blit_to_led);
         if !any_led {
             // No LED routing this frame — release resources.
             self.led_main = None;
+            self.last_led_group_buf_used = 0;
             return;
         }
 
-        let (w, h) = (led_size.0.max(1), led_size.1.max(1));
+        let (w, h) = (
+            frame.led_composite_size.0.max(1),
+            frame.led_composite_size.1.max(1),
+        );
         let needs_new = self
             .led_main
             .as_ref()
@@ -767,29 +906,261 @@ impl LayerCompositor {
         if needs_new {
             self.led_main = Some(PingPong::new(gpu.device, gpu.pool, w, h, "LED Composite"));
         }
-        let led = self.led_main.as_mut().unwrap();
-        led.clear_source(gpu, true);
 
-        for output in layer_outputs {
-            if !output.blit_to_led {
+        // Lazy-create the 1×1 opaque-black stand-in texture used for non-L
+        // layers' blocking blends. Cleared on the first frame; never modified
+        // afterwards (no per-frame work).
+        let black_tex_freshly_created = self.led_black_tex.is_none();
+        if black_tex_freshly_created {
+            self.led_black_tex = Some(gpu.device.create_texture(&GpuTextureDesc {
+                width: 1,
+                height: 1,
+                depth: 1,
+                mip_levels: 1,
+                format: GpuTextureFormat::Rgba16Float,
+                dimension: GpuTextureDimension::D2,
+                usage: GpuTextureUsage::RENDER_TARGET_FULL,
+                label: "LED Black 1x1",
+            }));
+        }
+        // Raw pointers for disjoint borrows. Safety: this function is the sole
+        // writer to led_main / led_group_bufs / led_black_tex during its
+        // scope; pointers are valid until the function returns.
+        let led_main_ptr = self.led_main.as_mut().unwrap() as *mut PingPong;
+        let led_main = unsafe { &mut *led_main_ptr };
+        led_main.clear_source(gpu, true);
+
+        let black_tex_ref: &GpuTexture = self.led_black_tex.as_ref().unwrap();
+        let black_tex_ptr: *const GpuTexture = black_tex_ref;
+        if black_tex_freshly_created {
+            // Initialise once to opaque black.
+            gpu.clear_texture(black_tex_ref, 0.0, 0.0, 0.0, 1.0);
+        }
+
+        // Resolve each LayerOutput's parent group_id once (avoids repeated
+        // O(N) lookups in the inner loop).
+        let parent_ids: Vec<Option<&LayerId>> = layer_outputs
+            .iter()
+            .map(|o| {
+                frame
+                    .find_layer(o.layer_index)
+                    .and_then(|ld| ld.parent_layer_id)
+            })
+            .collect();
+
+        // Determine which group ids contain at least one L child — these are
+        // "L groups" that need a per-group fold + group FX. Other groups are
+        // "blocker groups" handled inline as a single black blend.
+        let mut l_group_ids: Vec<&LayerId> = Vec::new();
+        for (idx, output) in layer_outputs.iter().enumerate() {
+            if output.blit_to_led
+                && let Some(pid) = parent_ids[idx]
+                && !l_group_ids.contains(&pid)
+            {
+                l_group_ids.push(pid);
+            }
+        }
+        let is_l_group = |pid: &LayerId| l_group_ids.iter().any(|id| **id == *pid);
+
+        // Find the bottom-most LayerOutput that's L or part of an L group.
+        // Anything before this position can be skipped (would be overwritten).
+        let start_idx = layer_outputs
+            .iter()
+            .enumerate()
+            .position(|(idx, output)| {
+                output.blit_to_led || parent_ids[idx].is_some_and(&is_l_group)
+            })
+            .unwrap_or(layer_outputs.len());
+
+        let mut processed = vec![false; layer_outputs.len()];
+        let mut led_group_idx = 0usize;
+
+        for i in start_idx..layer_outputs.len() {
+            if processed[i] {
                 continue;
             }
-            let uniforms = BlendUniforms {
-                blend_mode: BlendMode::Normal as u32,
-                opacity: output.opacity,
-                _pad0: 0,
-                _pad1: 0,
-            };
-            self.blend.blend_pass(
-                gpu,
-                &mut self.uniform_arena,
-                led.source_texture(),
-                output.texture(),
-                led.target_texture(),
-                &uniforms,
-            );
-            led.swap();
+
+            let parent_id = parent_ids[i];
+
+            if let Some(pid) = parent_id {
+                // Group child — handle the whole group once on first encounter.
+                let group_desc = frame.layers.iter().find(|l| l.layer_id == pid);
+
+                if is_l_group(pid) {
+                    // L group: fold all children (L with own texture + Normal,
+                    // non-L with black + actual blend mode), apply group FX,
+                    // blend into led_main with Normal + group opacity.
+                    if let Some(group) = group_desc {
+                        self.ensure_led_group_bufs(led_group_idx + 1, gpu.device, gpu.pool, w, h);
+                        self.ensure_led_group_effect_chains(led_group_idx + 1);
+                        let group_buf_ptr =
+                            &mut self.led_group_bufs[led_group_idx] as *mut PingPong;
+                        let group_ec_ptr =
+                            &mut self.led_group_effect_chains[led_group_idx] as *mut EffectChain;
+                        led_group_idx += 1;
+                        let group_buf = unsafe { &mut *group_buf_ptr };
+                        let group_ec = unsafe { &mut *group_ec_ptr };
+
+                        // Transparent initial state matches screen-path
+                        // fold_groups so partial-opacity within group works.
+                        group_buf.clear_source(gpu, false);
+
+                        // Composite EVERY child of this group (L and non-L)
+                        // in iteration order (bottom→top).
+                        for j in i..layer_outputs.len() {
+                            if processed[j] {
+                                continue;
+                            }
+                            if parent_ids[j] != Some(pid) {
+                                continue;
+                            }
+                            let (blend_mode, src_tex) = if layer_outputs[j].blit_to_led {
+                                (BlendMode::Normal, layer_outputs[j].texture())
+                            } else {
+                                (
+                                    layer_outputs[j].blend_mode,
+                                    // Safety: ptr targets the persistent
+                                    // led_black_tex created above.
+                                    unsafe { &*black_tex_ptr },
+                                )
+                            };
+                            let child_uniforms = BlendUniforms {
+                                blend_mode: blend_mode as u32,
+                                opacity: layer_outputs[j].opacity,
+                                _pad0: 0,
+                                _pad1: 0,
+                            };
+                            self.blend.blend_pass(
+                                gpu,
+                                &mut self.uniform_arena,
+                                group_buf.source_texture(),
+                                src_tex,
+                                group_buf.target_texture(),
+                                &child_uniforms,
+                            );
+                            group_buf.swap();
+                            processed[j] = true;
+                        }
+
+                        // Apply group effects (if any) at LED resolution.
+                        let group_source: *const GpuTexture = if has_enabled_effects(group.effects) {
+                            let ctx = EffectContext {
+                                time: frame.time,
+                                beat: frame.beat,
+                                dt: frame.dt,
+                                width: w,
+                                height: h,
+                                output_width: frame.output_width,
+                                output_height: frame.output_height,
+                                owner_key: led_group_owner_key(group.layer_id),
+                                is_clip_level: false,
+                                edge_stretch_width: 0.5625,
+                                frame_count: frame.frame_count as i64,
+                            };
+                            match Self::apply_effects(
+                                group_ec,
+                                &mut self.effect_registry,
+                                &self.wet_dry_lerp,
+                                gpu,
+                                group_buf.source_texture(),
+                                group.effects,
+                                group.effect_groups,
+                                &ctx,
+                            ) {
+                                Some(t) => t,
+                                None => group_buf.source_texture() as *const _,
+                            }
+                        } else {
+                            group_buf.source_texture() as *const _
+                        };
+
+                        // Blend group result into led_main with Normal +
+                        // group opacity (Normal everywhere on LED path).
+                        let final_uniforms = BlendUniforms {
+                            blend_mode: BlendMode::Normal as u32,
+                            opacity: group.opacity,
+                            _pad0: 0,
+                            _pad1: 0,
+                        };
+                        self.blend.blend_pass(
+                            gpu,
+                            &mut self.uniform_arena,
+                            led_main.source_texture(),
+                            unsafe { &*group_source },
+                            led_main.target_texture(),
+                            &final_uniforms,
+                        );
+                        led_main.swap();
+                    }
+                } else {
+                    // Blocker group (no L children): a single BLACK blend
+                    // with the group's actual blend_mode + opacity. Skip the
+                    // dispatch entirely if the blend mode is identity-for-
+                    // black (Add / Screen / etc.) — the group can't change
+                    // led_main with a black source. Then mark all the
+                    // group's children processed regardless.
+                    if let Some(group) = group_desc
+                        && !is_identity_for_black(group.blend_mode)
+                    {
+                        let uniforms = BlendUniforms {
+                            blend_mode: group.blend_mode as u32,
+                            opacity: group.opacity,
+                            _pad0: 0,
+                            _pad1: 0,
+                        };
+                        self.blend.blend_pass(
+                            gpu,
+                            &mut self.uniform_arena,
+                            led_main.source_texture(),
+                            unsafe { &*black_tex_ptr },
+                            led_main.target_texture(),
+                            &uniforms,
+                        );
+                        led_main.swap();
+                    }
+                    for j in i..layer_outputs.len() {
+                        if parent_ids[j] == Some(pid) {
+                            processed[j] = true;
+                        }
+                    }
+                }
+            } else {
+                // Top-level layer.
+                let is_l = layer_outputs[i].blit_to_led;
+                // Skip non-L blends with identity-for-black blend modes —
+                // they can't change led_main with a black source.
+                if !is_l && is_identity_for_black(layer_outputs[i].blend_mode) {
+                    processed[i] = true;
+                    continue;
+                }
+                let (blend_mode, src_tex) = if is_l {
+                    (BlendMode::Normal, layer_outputs[i].texture())
+                } else {
+                    (
+                        layer_outputs[i].blend_mode,
+                        unsafe { &*black_tex_ptr },
+                    )
+                };
+                let uniforms = BlendUniforms {
+                    blend_mode: blend_mode as u32,
+                    opacity: layer_outputs[i].opacity,
+                    _pad0: 0,
+                    _pad1: 0,
+                };
+                self.blend.blend_pass(
+                    gpu,
+                    &mut self.uniform_arena,
+                    led_main.source_texture(),
+                    src_tex,
+                    led_main.target_texture(),
+                    &uniforms,
+                );
+                led_main.swap();
+                processed[i] = true;
+            }
         }
+
+        self.last_led_group_buf_used = led_group_idx;
     }
 
     /// Fold group children into single LayerOutputs.
@@ -951,7 +1322,7 @@ impl LayerCompositor {
         let pre_fold_outputs = unsafe {
             std::slice::from_raw_parts(pre_fold_outputs_ptr, pre_fold_outputs_len)
         };
-        self.blend_layers_to_led(gpu, pre_fold_outputs, frame.led_composite_size);
+        self.blend_layers_to_led(gpu, pre_fold_outputs, frame);
 
         self.fold_groups(gpu, frame);
         // Safety: layer_outputs_scratch contains raw pointers to textures owned
@@ -1199,7 +1570,7 @@ impl LayerCompositor {
         let pre_fold_outputs = unsafe {
             std::slice::from_raw_parts(pre_fold_outputs_ptr, pre_fold_outputs_len)
         };
-        self.blend_layers_to_led(compositor_gpu, pre_fold_outputs, frame.led_composite_size);
+        self.blend_layers_to_led(compositor_gpu, pre_fold_outputs, frame);
 
         // Fold group children into single outputs before blending.
         self.fold_groups(compositor_gpu, frame);
@@ -1229,6 +1600,7 @@ impl Compositor for LayerCompositor {
             self.led_main = None;
             self.led_tonemap = None;
             self.led_master_ec = None;
+            self.last_led_group_buf_used = 0;
             return &self.tonemap.output.texture;
         }
 

@@ -179,11 +179,17 @@ pub(super) fn dispatch_inspector(
 
         // ── LED enabled toggle ───────────────────────────────────
         PanelAction::LedEnabledToggle => {
-            if content_state.led_enabled {
-                // Tear down the entire LED pipeline (socket, compute, buffers).
-                ContentCommand::send(content_tx, ContentCommand::ShutdownLedOutput);
-            } else {
-                // Stand up the LED pipeline with default settings.
+            let new_enabled = !content_state.led_enabled;
+            // Persist the new ON/OFF state in project settings so the LED
+            // pipeline auto-initialises on project load.
+            project.settings.led_enabled = new_enabled;
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::MutateProject(Box::new(move |p| {
+                    p.settings.led_enabled = new_enabled;
+                })),
+            );
+            if new_enabled {
                 let settings = manifold_led::LedSettings {
                     enabled: true,
                     ..Default::default()
@@ -192,6 +198,8 @@ pub(super) fn dispatch_inspector(
                     content_tx,
                     ContentCommand::InitLedOutput(Box::new(settings)),
                 );
+            } else {
+                ContentCommand::send(content_tx, ContentCommand::ShutdownLedOutput);
             }
             DispatchResult::handled()
         }

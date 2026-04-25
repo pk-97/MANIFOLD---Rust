@@ -1736,6 +1736,7 @@ impl Panel for LayerHeaderPanel {
             self.build_layer_row(tree, i, layer, row, self.panel_origin, self.scroll.clip_node_id());
             self.cached_mute[i] = layer.is_muted;
             self.cached_solo[i] = layer.is_solo;
+            self.cached_led[i] = layer.is_led;
             self.cached_selected[i] = layer.is_selected;
             self.cached_colors[i] = layer.color;
         }

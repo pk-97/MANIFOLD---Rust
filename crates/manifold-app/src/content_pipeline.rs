@@ -136,9 +136,9 @@ pub struct ContentPipeline {
     pub(crate) recording_session: Option<manifold_recording::LiveRecordingSession>,
 
     /// Current LED grid dimensions (strip_count, leds_per_strip). Used to size
-    /// the per-layer LED composite buffer at native LED resolution. Updated by
-    /// ContentThread when the LED controller is initialized; defaults to the
-    /// LedSettings defaults when no controller is active.
+    /// the per-layer LED composite buffer at native LED resolution so each
+    /// strip maps 1:1 to one column. Updated by ContentThread when the LED
+    /// controller is initialized; defaults to LedSettings defaults otherwise.
     led_grid_size: (u32, u32),
 }
 
@@ -200,9 +200,9 @@ impl ContentPipeline {
         }
     }
 
-    /// Update the LED grid dimensions used to size the LED composite buffer.
-    /// Called by ContentThread when the LED controller is initialized so the
-    /// compositor renders the LED path at native LED resolution.
+    /// Update the LED grid dimensions. Called by ContentThread when the LED
+    /// controller is initialized so the compositor sizes the per-layer LED
+    /// composite to match the strip grid (1 column per strip).
     pub fn set_led_grid_size(&mut self, strip_count: u32, leds_per_strip: u32) {
         self.led_grid_size = (strip_count.max(1), leds_per_strip.max(1));
     }

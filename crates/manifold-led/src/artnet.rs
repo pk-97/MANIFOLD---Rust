@@ -19,9 +19,6 @@ pub struct ArtNetOutput {
     edge_blit: Option<EdgeExtendBlit>,
     readback: ReadbackRequest,
     pending_brightness: f32,
-    left_edge_width: f32,
-    right_edge_width: f32,
-    blur_radius: f32,
 
     // Network
     udp_socket: Option<UdpSocket>,
@@ -57,9 +54,6 @@ impl ArtNetOutput {
             edge_blit: None,
             readback: ReadbackRequest::new(),
             pending_brightness: 1.0,
-            left_edge_width: 0.2,
-            right_edge_width: 0.2,
-            blur_radius: 12.0,
             udp_socket: None,
             endpoint: SocketAddr::from(([0, 0, 0, 0], 0)),
             dmx_buffers: Vec::new(),
@@ -81,9 +75,10 @@ impl ArtNetOutput {
         self.strip_count = settings.strip_count;
         self.leds_per_strip = settings.leds_per_strip;
         self.is_bgr = settings.is_bgr;
-        self.left_edge_width = settings.left_edge_width;
-        self.right_edge_width = settings.right_edge_width;
-        self.blur_radius = settings.blur_radius;
+        // settings.left_edge_width / right_edge_width / blur_radius are
+        // intentionally ignored — with per-layer LED routing the LED source
+        // is already at native strip×LED resolution, so the edge-extend pass
+        // is forced to identity (1:1 strip-per-column) in process_frame.
 
         // Pre-compute strip start channels and universe count
         self.strip_start_channels = vec![0usize; self.strip_count as usize];
@@ -174,14 +169,15 @@ impl ArtNetOutput {
         // Create a dedicated encoder for LED work.
         let mut enc = device.create_encoder("LED");
 
-        // Dispatch edge-extend compute: source → tiny output texture.
-        blit.blit(
-            &mut enc,
-            source,
-            self.left_edge_width,
-            self.right_edge_width,
-            self.blur_radius,
-        );
+        // The LED source is now the per-layer composite, rendered at native
+        // strip×LED resolution. Each column is one strip — so the edge-slice
+        // math is bypassed (widths = 0.5 → identity in U) and only a
+        // vertical-only blur is applied (along the strip, not between strips)
+        // to smooth the LED distribution. Inter-tap spacing of ~1.5 texels on
+        // the 5-tap binomial kernel gives a small but visible smoothing
+        // without dampening motion.
+        const LED_VERTICAL_BLUR_RADIUS: f32 = 1.5;
+        blit.blit(&mut enc, source, 0.5, 0.5, LED_VERTICAL_BLUR_RADIUS);
 
         // Copy tiny texture to shared-memory readback buffer.
         self.readback.submit(
