@@ -2231,20 +2231,14 @@ fn draw_reference_curve(
     ));
 }
 
-/// Auto-gain-match EMA time constant in seconds. Long enough to absorb
-/// short-term loudness variation (transients, kick patterns, vocal
-/// dynamics) so the ref overlay stays visually steady, while still
-/// tracking real moves (mix-level changes, fade-ins) over ~10 s. The
-/// first valid measurement after a load snaps the EMA so refs overlay
-/// immediately instead of fading in over this window.
-const REF_AUTO_GAIN_TAU_SECS: f32 = 4.0;
-
-/// Live-median EMA time constant. Matched to `REF_AUTO_GAIN_TAU_SECS`
-/// so the white median line and the auto-gain-aligned ref overlay
-/// settle on the same timescale — they're describing the same view
-/// of the signal, just one is the median estimator and the other is
-/// the loudness-match shift.
-const LIVE_MEDIAN_TAU_SECS: f32 = 4.0;
+/// Time constant (seconds) for both the auto-gain-match shift on the
+/// ref overlay and the live-median estimator. They describe the same
+/// long-term view of the signal — kept locked together so neither
+/// settles ahead of the other. 1 s is responsive enough that loudness
+/// changes (mix moves, fade-ins) track in near real time while still
+/// absorbing per-frame jitter from transients.
+const REF_AUTO_GAIN_TAU_SECS: f32 = 1.0;
+const LIVE_MEDIAN_TAU_SECS: f32 = 1.0;
 
 /// Number of log-spaced sample points we use to compute the live ↔ ref
 /// power-mean difference. 64 is dense enough that no narrow peak
