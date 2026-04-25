@@ -20,8 +20,6 @@
 
 struct Uniforms {
     resolution: vec2<f32>,
-    sample_rate: f32,
-    fft_size: f32,
     freq_min: f32,
     freq_max: f32,
     db_min: f32,
@@ -30,9 +28,13 @@ struct Uniforms {
     bg_color: vec4<f32>,
     side_color: vec4<f32>,
     line_thickness: f32,
-    smooth_half_oct_log2: f32,
     fill_alpha: f32,
     spectrum_height: f32,
+    // Number of valid entries in `mid_spectrum` / `side_spectrum`
+    // (= phys_w of the spectrum region). The MS curves are pre-smoothed
+    // CPU-side at one entry per output pixel column, so the fragment
+    // shader is a pure column lookup — no per-pixel BH-window loop.
+    spectrum_columns: f32,
     history_cols: f32,
     write_col: f32,
     spectrogram_db_min: f32,
@@ -42,15 +44,6 @@ struct Uniforms {
     cqt_fmin_hz: f32,
     cqt_bins_per_octave: f32,
     spectrogram_gamma: f32,
-    // 0 = fixed-bandwidth smoothing via `smooth_half_oct_log2`.
-    // 1 = ERB (Moore & Glasberg) — per-pixel half-width derived from
-    //     the critical-band curve, much wider at the low end and
-    //     tightening toward ~1/9 oct above 5 kHz.
-    smoothing_mode: f32,
-    // Real positive-half FFT bin count *including* Nyquist
-    // (= fft_size/2 + 1). Passed explicitly because deriving from
-    // `fft_size * 0.5` would be off by one.
-    num_bins: f32,
     // 0 = single full-height spectrogram from `history` (Mid or Side).
     // 1 = stacked L+R: top half samples `history` (Left), bottom half
     //     samples `history2` (Right). The split lives in the shader so
@@ -102,125 +95,26 @@ fn db_to_y_px(db: f32) -> f32 {
     return u.spectrum_height * (1.0 - clamp(t, 0.0, 1.0));
 }
 
-// `mid_spectrum` / `side_spectrum` / `history` / `history2` already hold
-// weighting-applied dB values (CPU pre-tilt), so no per-pixel tilt is
-// needed here. Kept as a separate symbol so callers stay readable; an
-// inliner will collapse it.
-fn tilt_db(freq: f32, raw_db: f32) -> f32 {
-    return raw_db;
-}
-
-// Upper bound on smoothing taps per pixel. The smoothing loop strides
-// across FFT bins inside the window: narrow windows hit every bin
-// (few taps, cheap), wide windows stride past enough bins to stay
-// under this cap (bounded cost). 64 handles 1/3-oct at 10 kHz with a
-// 16k FFT (~860 bins in window → stride ~13). Bigger = more accurate
-// but slower per pixel.
-const SMOOTH_N_MAX: i32 = 64;
-
-fn sample_bin_db_mid(bin_f: f32, num_bins: f32) -> f32 {
-    if (bin_f < 0.0 || bin_f >= num_bins) {
+// MS curves: the spectrum buffers hold one already-smoothed,
+// already-weighted dB value per output pixel column. Fragment shader
+// reads three adjacent columns (prev / curr / next) for SDF line AA
+// — no smoothing, no tilt, no FFT-bin math.
+fn mid_at_column(col: i32) -> f32 {
+    let n = i32(u.spectrum_columns);
+    if (n <= 0) {
         return u.db_min;
     }
-    let bin_lo = u32(floor(bin_f));
-    let bin_hi = min(bin_lo + 1u, u32(num_bins) - 1u);
-    let frac = fract(bin_f);
-    return mix(mid_spectrum[bin_lo], mid_spectrum[bin_hi], frac);
+    let c = clamp(col, 0, n - 1);
+    return mid_spectrum[c];
 }
 
-fn sample_bin_db_side(bin_f: f32, num_bins: f32) -> f32 {
-    if (bin_f < 0.0 || bin_f >= num_bins) {
+fn side_at_column(col: i32) -> f32 {
+    let n = i32(u.spectrum_columns);
+    if (n <= 0) {
         return u.db_min;
     }
-    let bin_lo = u32(floor(bin_f));
-    let bin_hi = min(bin_lo + 1u, u32(num_bins) - 1u);
-    let frac = fract(bin_f);
-    return mix(side_spectrum[bin_lo], side_spectrum[bin_hi], frac);
-}
-
-// Per-pixel smoothing half-width in log2-octaves. Fixed-mode returns
-// the uniform; ERB mode computes Moore & Glasberg's critical-band half-
-// width at `freq`. Equivalent rectangular bandwidth:
-//   ERB_hz(f) = 24.7 * (4.37 * f / 1000 + 1)
-// Half-width in octaves = log2((f + erb/2) / f) = log2(1 + erb/(2f)).
-fn half_octaves_at(freq: f32) -> f32 {
-    if (u.smoothing_mode > 0.5) {
-        if (freq <= 1e-3) {
-            return 0.0;
-        }
-        let erb = 24.7 * (4.37 * freq * 1e-3 + 1.0);
-        return log2(1.0 + (erb * 0.5) / freq);
-    }
-    return u.smooth_half_oct_log2;
-}
-
-fn smoothed_db_mid(freq: f32) -> f32 {
-    let num_bins = u.num_bins;
-    let bins_per_hz = u.fft_size / u.sample_rate;
-    let half_oct = half_octaves_at(freq);
-    if (half_oct <= 0.0) {
-        return sample_bin_db_mid(freq * bins_per_hz, num_bins);
-    }
-    // Blackman-Harris-tapered weighted average across the window.
-    // Rectangular weighting produced flat-topped plateaus around
-    // narrow peaks; Hann fixed that but left visible "skirt" reach.
-    // BH matches the FFT's own analysis window shape and suppresses
-    // sidelobes ~-92 dB, giving clean bell-shaped peak curves with
-    // effectively no ringing.
-    let bin_lo_f = clamp(freq * exp2(-half_oct) * bins_per_hz, 0.0, num_bins - 1.0);
-    let bin_hi_f = clamp(freq * exp2(half_oct) * bins_per_hz, 0.0, num_bins - 1.0);
-    let span_bins = max(bin_hi_f - bin_lo_f, 1e-6);
-    let step = span_bins / f32(SMOOTH_N_MAX);
-    let two_pi_over_n = 6.28318530717958 / f32(SMOOTH_N_MAX);
-    var power_sum = 0.0;
-    var weight_sum = 0.0;
-    for (var i: i32 = 0; i < SMOOTH_N_MAX; i = i + 1) {
-        let phase = (f32(i) + 0.5) * two_pi_over_n;
-        // 4-term Blackman-Harris: a0 - a1 cos(φ) + a2 cos(2φ) - a3 cos(3φ)
-        let w = 0.35875 - 0.48829 * cos(phase)
-                       + 0.14128 * cos(2.0 * phase)
-                       - 0.01168 * cos(3.0 * phase);
-        let b_f = bin_lo_f + (f32(i) + 0.5) * step;
-        let db = sample_bin_db_mid(b_f, num_bins);
-        power_sum = power_sum + pow(10.0, db * 0.1) * w;
-        weight_sum = weight_sum + w;
-    }
-    return 10.0 * log(power_sum / weight_sum + 1e-24) / log(10.0);
-}
-
-fn smoothed_db_side(freq: f32) -> f32 {
-    let num_bins = u.num_bins;
-    let bins_per_hz = u.fft_size / u.sample_rate;
-    let half_oct = half_octaves_at(freq);
-    if (half_oct <= 0.0) {
-        return sample_bin_db_side(freq * bins_per_hz, num_bins);
-    }
-    let bin_lo_f = clamp(freq * exp2(-half_oct) * bins_per_hz, 0.0, num_bins - 1.0);
-    let bin_hi_f = clamp(freq * exp2(half_oct) * bins_per_hz, 0.0, num_bins - 1.0);
-    let span_bins = max(bin_hi_f - bin_lo_f, 1e-6);
-    let step = span_bins / f32(SMOOTH_N_MAX);
-    let two_pi_over_n = 6.28318530717958 / f32(SMOOTH_N_MAX);
-    var power_sum = 0.0;
-    var weight_sum = 0.0;
-    for (var i: i32 = 0; i < SMOOTH_N_MAX; i = i + 1) {
-        let phase = (f32(i) + 0.5) * two_pi_over_n;
-        let w = 0.35875 - 0.48829 * cos(phase)
-                       + 0.14128 * cos(2.0 * phase)
-                       - 0.01168 * cos(3.0 * phase);
-        let b_f = bin_lo_f + (f32(i) + 0.5) * step;
-        let db = sample_bin_db_side(b_f, num_bins);
-        power_sum = power_sum + pow(10.0, db * 0.1) * w;
-        weight_sum = weight_sum + w;
-    }
-    return 10.0 * log(power_sum / weight_sum + 1e-24) / log(10.0);
-}
-
-fn y_px_at_freq_mid(freq: f32) -> f32 {
-    return db_to_y_px(tilt_db(freq, smoothed_db_mid(freq)));
-}
-
-fn y_px_at_freq_side(freq: f32) -> f32 {
-    return db_to_y_px(tilt_db(freq, smoothed_db_side(freq)));
+    let c = clamp(col, 0, n - 1);
+    return side_spectrum[c];
 }
 
 fn sdf_segment(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
@@ -343,9 +237,10 @@ fn raw_to_color(freq: f32, raw_db: f32) -> vec4<f32> {
     if (raw_db < -999.0) {
         return vec4<f32>(0.0);
     }
-    let weighted_db = tilt_db(freq, raw_db);
+    // `raw_db` is already weighted (CPU pre-tilts each CQT column on
+    // arrival from the worker), so it goes straight into the colourmap.
     let span = max(u.spectrogram_db_max - u.spectrogram_db_min, 1e-3);
-    let t_lin = clamp((weighted_db - u.spectrogram_db_min) / span, 0.0, 1.0);
+    let t_lin = clamp((raw_db - u.spectrogram_db_min) / span, 0.0, 1.0);
     let gamma = max(u.spectrogram_gamma, 1e-3);
     let t = pow(t_lin, gamma);
     let rgb = colormap(t);
@@ -415,32 +310,30 @@ fn spectrogram_pixel(px: vec2<f32>) -> vec4<f32> {
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let px = in.uv * u.resolution;
 
-    let log_lo = log(u.freq_min);
-    let log_hi = log(u.freq_max);
-    let log_range = log_hi - log_lo;
-    let dx_per_px = log_range / u.resolution.x;
-    let log_f = log_lo + in.uv.x * log_range;
-    let freq = exp(log_f);
-
-    // Spectrogram region — opaque fill, no curves. Uses its own freq axis
-    // (log-y) so `freq` from the curve-mapping above is not used here.
+    // Spectrogram region — opaque fill, no curves. Uses its own freq
+    // axis (log-y) inside `spectrogram_pixel`.
     if (px.y >= u.spectrum_height) {
         return spectrogram_pixel(px);
     }
 
-    // Spectrum region — curves + fills composited over transparency so the
-    // egui-drawn grid behind the paint callback shows through.
-    let my_prev = y_px_at_freq_mid(exp(log_f - dx_per_px));
-    let my_curr = y_px_at_freq_mid(exp(log_f));
-    let my_next = y_px_at_freq_mid(exp(log_f + dx_per_px));
+    // Spectrum region — pure column lookup. CPU per-column smoothing
+    // means three adjacent column reads give us prev/curr/next anchors
+    // for the SDF line AA, no per-pixel work required.
+    let col_curr = i32(px.x);
+    let col_prev = col_curr - 1;
+    let col_next = col_curr + 1;
+
+    let my_prev = db_to_y_px(mid_at_column(col_prev));
+    let my_curr = db_to_y_px(mid_at_column(col_curr));
+    let my_next = db_to_y_px(mid_at_column(col_next));
     let ma = vec2<f32>(px.x - 1.0, my_prev);
     let mb = vec2<f32>(px.x,       my_curr);
     let mc = vec2<f32>(px.x + 1.0, my_next);
     let dm = min(sdf_segment(px, ma, mb), sdf_segment(px, mb, mc));
 
-    let sy_prev = y_px_at_freq_side(exp(log_f - dx_per_px));
-    let sy_curr = y_px_at_freq_side(exp(log_f));
-    let sy_next = y_px_at_freq_side(exp(log_f + dx_per_px));
+    let sy_prev = db_to_y_px(side_at_column(col_prev));
+    let sy_curr = db_to_y_px(side_at_column(col_curr));
+    let sy_next = db_to_y_px(side_at_column(col_next));
     let sa = vec2<f32>(px.x - 1.0, sy_prev);
     let sb = vec2<f32>(px.x,       sy_curr);
     let sc = vec2<f32>(px.x + 1.0, sy_next);

@@ -1344,6 +1344,15 @@ struct EditorState {
     /// weighted energy across the window.
     mid_tilted_scratch: Vec<f32>,
     side_tilted_scratch: Vec<f32>,
+    /// Per-screen-column smoothed dB values uploaded to the GPU each
+    /// frame. Replaces the per-FFT-bin upload + per-pixel BH smoothing
+    /// the shader used to do — same final shape, but the smoothing
+    /// runs ~2 K times per frame on CPU instead of ~8 M times per
+    /// frame on the fragment shader. Always sized to `MAX_SPECTRUM_W`
+    /// so the GPU buffer never reallocates on window resize; only the
+    /// first `phys_w` entries are read.
+    mid_smoothed_columns: Vec<f32>,
+    side_smoothed_columns: Vec<f32>,
     /// Per-FFT-bin EMA of raw Mid dB. dB-domain averaging approximates
     /// the geometric mean of power, which equals the median for the
     /// lognormal-ish per-bin distributions typical music produces — same
@@ -1495,6 +1504,8 @@ pub fn create_editor(
         correlation_scratch: vec![0.0; num_bins],
         mid_tilted_scratch: vec![MIN_DB; num_bins],
         side_tilted_scratch: vec![MIN_DB; num_bins],
+        mid_smoothed_columns: vec![MIN_DB; MAX_SPECTRUM_W as usize],
+        side_smoothed_columns: vec![MIN_DB; MAX_SPECTRUM_W as usize],
         live_mid_median_db: vec![MIN_DB; num_bins],
         live_median_warm: false,
         ref_envelope_cache: RefEnvelopeCache::default(),
@@ -1621,7 +1632,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
                 device,
                 INITIAL_SPECTRUM_W,
                 INITIAL_SPECTRUM_H,
-                num_bins,
+                MAX_SPECTRUM_W,
                 worker.cqt_num_bins(),
             ) {
                 state.spectrum = Some(spec);
@@ -1748,18 +1759,10 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             (true, Some(bpm), Some(_)) if bpm > 0.0 && beats_per_window > 0.0
         );
 
-        let smoothing = state.params.freq_smoothing.value();
-        let (smooth_half, smoothing_mode) = match smoothing.fixed_half_octaves() {
-            Some(half) => (half, 0.0_f32),
-            None => (0.0, 1.0_f32), // ERB — shader computes per-pixel
-        };
-
         let spectrogram_source = state.shared.spectrogram_source();
         let stacked = matches!(spectrogram_source, SpectrogramSource::LeftRight);
 
         spec.set_display(DisplayConfig {
-            smooth_half_oct_log2: smooth_half,
-            smoothing_mode,
             fill_alpha: FILL_ALPHA,
             spectrum_fraction: top_fraction,
             spectrogram_db_min: SPECTROGRAM_DB_MIN,
@@ -1817,11 +1820,41 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         let freq_max_user = state.params.freq_max_hz.value() as f32;
         let freq_max = freq_max_user.min(nyquist).max(freq_min_user * 2.0);
         let freq_min = freq_min_user.min(freq_max * 0.5).max(1.0);
+
+        // CPU per-column smoothing — runs once per output column instead
+        // of once per pixel. ~2 K columns × 24 BH taps × 2 channels =
+        // ~100 K powf/frame at 60 FPS = trivial CPU work, eliminates
+        // billions of GPU powf/frame on retina. The fragment shader
+        // becomes a pure column lookup.
+        let cols = phys_w as usize;
+        if state.mid_smoothed_columns.len() < cols {
+            state.mid_smoothed_columns.resize(cols, MIN_DB);
+        }
+        if state.side_smoothed_columns.len() < cols {
+            state.side_smoothed_columns.resize(cols, MIN_DB);
+        }
+        let log_min_d = freq_min.ln();
+        let log_max_d = freq_max.ln();
+        let log_span_d = log_max_d - log_min_d;
+        let smoothing_param = state.params.freq_smoothing.value();
+        let fixed_half = smoothing_param.fixed_half_octaves();
+        let denom = (cols.saturating_sub(1)).max(1) as f32;
+        for col in 0..cols {
+            let t = col as f32 / denom;
+            let freq = (log_min_d + t * log_span_d).exp();
+            let half = fixed_half.unwrap_or_else(|| erb_half_octaves_at(freq));
+            state.mid_smoothed_columns[col] = sample_bh_smoothed_db(
+                &state.mid_tilted_scratch, freq, sr, fft_size, half,
+            );
+            state.side_smoothed_columns[col] = sample_bh_smoothed_db(
+                &state.side_tilted_scratch, freq, sr, fft_size, half,
+            );
+        }
+
         spec.render(
             device,
-            &state.mid_tilted_scratch,
-            &state.side_tilted_scratch,
-            sr,
+            &state.mid_smoothed_columns[..cols],
+            &state.side_smoothed_columns[..cols],
             freq_min,
             freq_max,
             DB_MIN,

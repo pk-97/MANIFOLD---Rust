@@ -71,17 +71,13 @@ pub fn cqt_build_params(sample_rate: f32) -> CqtBuildParams {
 }
 
 /// Display options driving the spectrum / spectrogram fragment shader.
+/// Smoothing controls used to live here too (`smooth_half_oct_log2`,
+/// `smoothing_mode`) but were dropped when MS-curve smoothing moved
+/// to a CPU per-column pass — the GUI thread runs `sample_bh_smoothed_db`
+/// directly and uploads the smoothed values, so the shader doesn't
+/// need to know which smoothing mode is active.
 #[derive(Copy, Clone, Debug)]
 pub struct DisplayConfig {
-    /// Half-bandwidth of frequency smoothing in log2(octave). Set to
-    /// `1.0 / 24.0` for a 1/12-oct smoothing (±1/24 oct either side of the
-    /// centre frequency). `0.0` disables smoothing. Ignored when
-    /// `smoothing_mode` selects ERB (width becomes frequency-dependent).
-    pub smooth_half_oct_log2: f32,
-    /// `0.0` = fixed-bandwidth smoothing driven by `smooth_half_oct_log2`.
-    /// `1.0` = ERB (Moore & Glasberg) perceptual critical-band smoothing,
-    /// frequency-dependent half-width computed in the shader.
-    pub smoothing_mode: f32,
     /// Alpha of the fill below each curve. `0.0` disables fill.
     pub fill_alpha: f32,
     /// Fraction of total render-target height devoted to the spectrum curves.
@@ -110,8 +106,6 @@ pub struct DisplayConfig {
 impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
-            smooth_half_oct_log2: 0.0,
-            smoothing_mode: 0.0,
             fill_alpha: 0.0,
             spectrum_fraction: 1.0,
             spectrogram_db_min: -59.0,
@@ -130,8 +124,6 @@ impl Default for DisplayConfig {
 #[derive(Copy, Clone)]
 struct SpectrumUniforms {
     resolution: [f32; 2],
-    sample_rate: f32,
-    fft_size: f32,
     freq_min: f32,
     freq_max: f32,
     db_min: f32,
@@ -140,9 +132,14 @@ struct SpectrumUniforms {
     bg_color: [f32; 4],
     side_color: [f32; 4],
     line_thickness: f32,
-    smooth_half_oct_log2: f32,
     fill_alpha: f32,
     spectrum_height: f32,
+    /// Number of valid entries in `mid_spectrum` / `side_spectrum`
+    /// (= phys_w of the spectrum region). Replaces `num_bins` /
+    /// `fft_size` / `sample_rate` / `smoothing_mode` / `smooth_half_oct_log2`
+    /// — none of those are needed now that smoothing happens CPU-side
+    /// once per column.
+    spectrum_columns: f32,
     history_cols: f32,
     write_col: f32,
     spectrogram_db_min: f32,
@@ -152,13 +149,6 @@ struct SpectrumUniforms {
     cqt_fmin_hz: f32,
     cqt_bins_per_octave: f32,
     spectrogram_gamma: f32,
-    smoothing_mode: f32,
-    /// Real positive-half bin count of the FFT, *including* Nyquist
-    /// (= fft_size/2 + 1). Passed explicitly because deriving it from
-    /// `fft_size * 0.5` would be off by one — and that one bin matters
-    /// at the high end where it would shift the spectrum curve by one
-    /// FFT-bin width.
-    num_bins: f32,
     /// 0 = single full-height spectrogram (Mid or Side). 1 = stacked
     /// L+R: shader splits the spectrogram region into top/bottom halves
     /// and samples `history` for the top (Left) and `history2` for the
@@ -178,7 +168,11 @@ pub struct SpectrumGpuRenderer {
     /// branch never reads it.
     history_buf2: GpuBuffer,
     pipeline: GpuRenderPipeline,
-    num_bins: usize,
+    /// Capacity of `mid_buf` / `side_buf` in column slots. Stored so we
+    /// can clamp the per-frame upload against the buffer end (the
+    /// caller passes a slice sized to current display width, but a
+    /// brief mismatch during resize shouldn't walk past the buffer).
+    max_columns: u32,
     cqt_num_bins: usize,
     display: DisplayConfig,
     /// Last column index written by `apply_column`. Used by the shader as
@@ -193,12 +187,16 @@ impl SpectrumGpuRenderer {
         device: &GpuDevice,
         width: u32,
         height: u32,
-        num_bins: usize,
+        max_columns: u32,
         cqt_num_bins: usize,
     ) -> Option<Self> {
         let target = IoSurfaceMtlTexture::new(device, width, height)?;
-        let mid_buf = device.create_buffer_shared((num_bins * 4) as u64);
-        let side_buf = device.create_buffer_shared((num_bins * 4) as u64);
+        // The Mid/Side buffers used to hold per-FFT-bin dB values; they
+        // now hold per-screen-column smoothed dB (one entry per pixel
+        // column of the spectrum region). Allocate to `max_columns` so
+        // the buffer never reallocates on window resize.
+        let mid_buf = device.create_buffer_shared((max_columns as u64) * 4);
+        let side_buf = device.create_buffer_shared((max_columns as u64) * 4);
         let history_buf =
             device.create_buffer_shared((cqt_num_bins as u64) * (HISTORY_COLS as u64) * 4);
         let history_buf2 =
@@ -235,7 +233,7 @@ impl SpectrumGpuRenderer {
             history_buf,
             history_buf2,
             pipeline,
-            num_bins,
+            max_columns,
             cqt_num_bins,
             display: DisplayConfig::default(),
             // Start one before index 0 so the first free-scroll column
@@ -376,50 +374,41 @@ impl SpectrumGpuRenderer {
         Some(10.0 * (p + 1e-24).log10())
     }
 
-    /// Render one frame. `mid_db` / `side_db` feed the Mid + Side curves
-    /// (averaged); the spectrogram is drawn from `history_buf` already
-    /// populated via `apply_column`.
+    /// Render one frame. `mid_columns` / `side_columns` are pre-smoothed
+    /// dB values, one entry per pixel column of the spectrum region —
+    /// the GUI thread runs the BH-tapered smoothing once per column,
+    /// the fragment shader becomes a pure column lookup. The spectrogram
+    /// region is drawn from `history_buf` already populated via
+    /// `apply_column`.
     pub fn render(
         &mut self,
         device: &GpuDevice,
-        mid_db: &[f32],
-        side_db: &[f32],
-        sample_rate: f32,
+        mid_columns: &[f32],
+        side_columns: &[f32],
         freq_min: f32,
         freq_max: f32,
         db_min: f32,
         db_max: f32,
     ) {
-        debug_assert_eq!(mid_db.len(), side_db.len());
+        debug_assert_eq!(mid_columns.len(), side_columns.len());
+        let n_cols = mid_columns.len().min(self.max_columns as usize);
 
-        // FFT-size change on the audio thread grows the mailboxes past
-        // our GPU buffer capacity. Rebuild the per-bin buffers on first
-        // sight of a new length so the upload never walks past the end
-        // of a shared Metal buffer (which crashes the host with a bus
-        // error on macOS).
-        let incoming_bins = mid_db.len();
-        if incoming_bins != self.num_bins && incoming_bins > 0 {
-            self.mid_buf = device.create_buffer_shared((incoming_bins * 4) as u64);
-            self.side_buf = device.create_buffer_shared((incoming_bins * 4) as u64);
-            self.num_bins = incoming_bins;
-        }
-
-        // Zero-copy upload into the shared-storage spectrum buffers.
+        // Zero-copy upload into the shared-storage column buffers.
         if let Some(ptr) = self.mid_buf.mapped_ptr() {
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    mid_db.as_ptr() as *const u8,
+                    mid_columns.as_ptr() as *const u8,
                     ptr,
-                    mid_db.len() * 4,
+                    n_cols * 4,
                 );
             }
         }
         if let Some(ptr) = self.side_buf.mapped_ptr() {
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    side_db.as_ptr() as *const u8,
+                    side_columns.as_ptr() as *const u8,
                     ptr,
-                    side_db.len() * 4,
+                    n_cols * 4,
                 );
             }
         }
@@ -427,15 +416,8 @@ impl SpectrumGpuRenderer {
         let spectrum_fraction = self.display.spectrum_fraction.clamp(0.1, 1.0);
         let spectrum_height = (self.target.height as f32 * spectrum_fraction).round();
 
-        // num_bins includes Nyquist (= fft_size/2 + 1) → fft_size = 2·(num_bins - 1).
-        // The shader uses `fft_size` for `bins_per_hz`; if we reconstructed it
-        // from `num_bins * 2` we'd be off by 2, putting the high-end curve a
-        // bin off-position.
-        let fft_size = (self.num_bins.saturating_sub(1) * 2) as f32;
         let uniforms = SpectrumUniforms {
             resolution: [self.target.width as f32, self.target.height as f32],
-            sample_rate,
-            fft_size,
             freq_min,
             freq_max,
             db_min,
@@ -444,9 +426,9 @@ impl SpectrumGpuRenderer {
             bg_color: [0.031, 0.039, 0.055, 1.0],
             side_color: [0.95, 0.30, 0.15, 1.0],
             line_thickness: 1.2,
-            smooth_half_oct_log2: self.display.smooth_half_oct_log2,
             fill_alpha: self.display.fill_alpha,
             spectrum_height,
+            spectrum_columns: n_cols as f32,
             history_cols: HISTORY_COLS as f32,
             write_col: self.write_col as f32,
             spectrogram_db_min: self.display.spectrogram_db_min,
@@ -456,8 +438,6 @@ impl SpectrumGpuRenderer {
             cqt_fmin_hz: CQT_FMIN_HZ,
             cqt_bins_per_octave: CQT_BINS_PER_OCTAVE as f32,
             spectrogram_gamma: self.display.spectrogram_gamma,
-            smoothing_mode: self.display.smoothing_mode,
-            num_bins: self.num_bins as f32,
             spectrogram_mode: if self.display.stacked_mode { 1.0 } else { 0.0 },
         };
         let uniform_bytes: &[u8] = unsafe {
