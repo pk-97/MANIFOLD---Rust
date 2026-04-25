@@ -2170,11 +2170,13 @@ fn draw_reference_curve(
     ));
 }
 
-/// Auto-gain-match EMA time constant in seconds. Long enough that the
-/// shift doesn't jitter on transients but short enough to settle in a
-/// couple of seconds after the user pauses / resumes / changes the mix
-/// level. Roughly matches what TrueBalance and Vision 4X feel like.
-const REF_AUTO_GAIN_TAU_SECS: f32 = 1.0;
+/// Auto-gain-match EMA time constant in seconds. Long enough to absorb
+/// short-term loudness variation (transients, kick patterns, vocal
+/// dynamics) so the ref overlay stays visually steady, while still
+/// tracking real moves (mix-level changes, fade-ins) over ~10 s. The
+/// first valid measurement after a load snaps the EMA so refs overlay
+/// immediately instead of fading in over this window.
+const REF_AUTO_GAIN_TAU_SECS: f32 = 4.0;
 
 /// Number of log-spaced sample points we use to compute the live ↔ ref
 /// power-mean difference. 64 is dense enough that no narrow peak
