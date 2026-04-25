@@ -110,6 +110,15 @@ impl ReadbackRequest {
         self.pending = false;
         Some(out)
     }
+
+    /// Discard any pending readback without consuming it. The GPU still writes
+    /// to the staging buffer (already encoded), but the next `try_read` will
+    /// return `None`. Used when the LED pipeline transitions to blackout — a
+    /// stale in-flight readback would otherwise overwrite the blackout when it
+    /// finally completes a frame or two later.
+    pub fn cancel(&mut self) {
+        self.pending = false;
+    }
 }
 
 /// Round up to the next multiple of 256 (Metal blit copy alignment).

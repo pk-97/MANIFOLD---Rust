@@ -12,7 +12,7 @@ pub use loudness::{
     IntegratedScratch, LoudnessMeter, LoudnessSnapshot, compute_integrated_and_lra,
 };
 pub use reference::{
-    REF_FFT_SIZE, REF_FREQ_MAX, REF_FREQ_MIN, REF_POINTS, RefAnalysis, RefEnvelope, RefError,
+    REF_FREQ_MAX, REF_FREQ_MIN, REF_POINTS, RefAnalysis, RefEnvelope, RefEnvelopeAtFft, RefError,
     analyze_ref_file,
 };
 pub use stereo_analyzer::StereoAnalyzer;

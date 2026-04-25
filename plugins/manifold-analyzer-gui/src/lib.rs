@@ -31,7 +31,7 @@ pub use loudness_worker::LoudnessWorker;
 
 use gl_paint::{PainterState, QuadPainter, SharedPainterState};
 use manifold_analyzer_dsp::{
-    LoudnessSnapshot, MIN_DB, REF_FFT_SIZE, REF_FREQ_MAX, REF_FREQ_MIN, REF_POINTS, RefAnalysis,
+    LoudnessSnapshot, MIN_DB, REF_FREQ_MAX, REF_FREQ_MIN, REF_POINTS, RefAnalysis,
     analyze_ref_file,
 };
 use manifold_gpu::GpuDevice;
@@ -58,9 +58,11 @@ const INITIAL_SPECTRUM_H: u32 = 450;
 const MAX_SPECTRUM_W: u32 = 4096;
 const MAX_SPECTRUM_H: u32 = 2048;
 
-// Default display window: 10 Hz–25 kHz log, -90…-10 dB, +4.5 dB/oct
-// tilt pivoted at 1 kHz, 1/12-oct frequency smoothing, filled display.
-const DB_MIN: f32 = -90.0;
+// Default display window. The dB range shows the top 60 dB of the
+// signal — enough to read mastering-level content without burning half
+// the panel on the noise floor. TrueBalance, Vision 4X, and most
+// mastering-grade analysers settle on the same window.
+const DB_MIN: f32 = -60.0;
 const DB_MAX: f32 = 0.0;
 
 // Right-column width and top/bottom split are runtime-adjustable via the
@@ -230,7 +232,11 @@ const FILL_ALPHA: f32 = 0.45;
 // instead of saturating early. With SS off the raw VQT tops out near
 // 0 dB — keeping the SS headroom would just dim the display, so we
 // fall back to a 0 dB ceiling.
-const SPECTROGRAM_DB_MIN: f32 = -59.0;
+// Floor matched to the MS plot's `DB_MIN` so the heatmap's "cold" colour
+// stops where the curves go off-scale. Keeps the visible dB range
+// consistent across both panes — content too quiet for the curves is
+// also too quiet to register on the heatmap.
+const SPECTROGRAM_DB_MIN: f32 = -60.0;
 const SPECTROGRAM_DB_MAX_SS: f32 = 10.0;
 const SPECTROGRAM_DB_MAX_RAW: f32 = 0.0;
 /// Gamma applied to the dB→colour mapping (values only; stored dB is
@@ -266,8 +272,8 @@ const FREQ_MINORS: &[f32] = &[
 
 /// dB grid ticks for the top MS graph. Linear spacing: 20 dB majors,
 /// 10 dB minors. Range must match DB_MIN..DB_MAX.
-const DB_MAJORS: &[f32] = &[0.0, -20.0, -40.0, -60.0, -80.0];
-const DB_MINORS: &[f32] = &[-10.0, -30.0, -50.0, -70.0];
+const DB_MAJORS: &[f32] = &[0.0, -20.0, -40.0, -60.0];
+const DB_MINORS: &[f32] = &[-10.0, -30.0, -50.0];
 
 #[derive(Enum, PartialEq, Eq, Debug, Clone, Copy)]
 /// Length of the spectrogram's beat-locked horizontal window. Single
@@ -1350,7 +1356,20 @@ struct RefEnvelopeCache {
 struct RefCacheEntry {
     fingerprint: u64,
     smoothing: FreqSmoothing,
-    smoothed: Vec<[f32; 2]>,
+    fft_size: usize,
+    /// Smoothed `[lo, mid, hi]` triples on the REF_POINTS log grid.
+    smoothed: Vec<[f32; 3]>,
+    /// EMA-smoothed auto-gain offset in dB. Each frame we compute the
+    /// power-mean dB difference between the live Mid curve and this
+    /// slot's median across the visible band and roll it into this
+    /// value with a ~1 s time constant. Avoids per-frame jitter while
+    /// still tracking real loudness moves over a few seconds.
+    auto_gain_db: f32,
+    /// Set to `false` until the first valid auto-gain measurement; on
+    /// that first sample we snap the EMA to it instead of fading from
+    /// 0 dB so the ref overlays cleanly on the very first frame after
+    /// a load instead of sliding into place over the EMA window.
+    auto_gain_warm: bool,
 }
 
 /// Compact fingerprint of a reference analysis. Changes when a new file
@@ -1358,20 +1377,9 @@ struct RefCacheEntry {
 /// a handful of envelope points rather than hashing all 1024 — the
 /// probability that two distinct real audio files produce identical values
 /// at every sampled index AND the same integrated LUFS is negligible.
+/// Uses the first available per-FFT envelope (all sizes are derived from
+/// the same source so they fingerprint together).
 fn ref_analysis_fingerprint(a: &RefAnalysis) -> u64 {
-    let bounds = a.mid.bounds.as_slice();
-    let n = bounds.len();
-    let pick = |i: usize| -> ([f32; 2], u32) {
-        let b = bounds.get(i).copied().unwrap_or([MIN_DB, MIN_DB]);
-        (b, i as u32)
-    };
-    let samples = [
-        pick(0),
-        pick(n / 4),
-        pick(n / 2),
-        pick((3 * n) / 4),
-        pick(n.saturating_sub(1)),
-    ];
     let mut h: u64 = 0xcbf29ce484222325; // FNV-1a offset basis
     let mut mix = |x: u32| {
         h ^= x as u64;
@@ -1380,11 +1388,22 @@ fn ref_analysis_fingerprint(a: &RefAnalysis) -> u64 {
     mix(a.integrated_lufs.to_bits());
     mix(a.lowpass_hz.map(f32::to_bits).unwrap_or(0));
     mix(a.source_sample_rate.to_bits());
-    for (pair, idx) in samples {
-        mix(pair[0].to_bits());
-        mix(pair[1].to_bits());
-        mix(idx);
+    let Some(first) = a.mid.per_fft.first() else {
+        return h;
+    };
+    let bounds = first.bounds.as_slice();
+    let n = bounds.len();
+    let pick = |i: usize| -> [f32; 3] {
+        bounds.get(i).copied().unwrap_or([MIN_DB, MIN_DB, MIN_DB])
+    };
+    for &i in &[0, n / 4, n / 2, (3 * n) / 4, n.saturating_sub(1)] {
+        let triple = pick(i);
+        mix(triple[0].to_bits());
+        mix(triple[1].to_bits());
+        mix(triple[2].to_bits());
+        mix(i as u32);
     }
+    mix(first.fft_size as u32);
     h
 }
 
@@ -1888,8 +1907,9 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         freq_min,
         freq_max,
         &state.params.ref_slots.read(),
-        state.shared.integrated_lufs(),
         state.shared.fft_size(),
+        sr,
+        &state.mid_scratch,
         state.params.weighting.value(),
         state.params.freq_smoothing.value(),
         &mut state.ref_envelope_cache,
@@ -2111,48 +2131,120 @@ fn draw_reference_curve(
     ));
 }
 
-/// Draw the loaded reference slots as filled percentile bands on the
-/// MS plot. Each visible slot contributes one band; bands are gain-
-/// matched to the live mix's integrated LUFS so *shape* comparison is
-/// honest regardless of relative level. MP3 codec lowpass (if detected)
-/// clips the band at the brickwall so the display doesn't misleadingly
-/// show the ref "falling off" above the codec cutoff.
-/// Per-bin energy correction applied to the loaded reference envelope so
-/// it lands on the same vertical scale as the live MS curves. Two
-/// systematic offsets are corrected here:
-///
-/// 1. **Binwidth**: live uses an N-point FFT; ref analysis uses
-///    `REF_FFT_SIZE`. For broadband content (which is most music)
-///    each bin holds a fraction of total energy proportional to its
-///    bandwidth, so per-bin dB scales with `10·log₁₀(N_ref / N_live)`.
-///    With the default 4 k live and 16 k ref this is ~+6 dB.
-///
-/// 2. **Peak-hold vs symmetric average**: live uses an asymmetric EMA
-///    (instant attack, 200 ms release) which behaves like a max-hold;
-///    ref uses symmetric 200 ms averaging. On music with envelope
-///    motion the hold reads ~+3 dB above the average. Empirically
-///    derived; close enough to make the curves overlay cleanly.
-///
-/// Without this the ref sits ~9 dB below where the eye expects it
-/// even when integrated LUFS line up perfectly. TrueBalance and
-/// Vision 4X handle this implicitly because their live and reference
-/// pipelines share an FFT size and aggregation method.
-const REF_PEAKHOLD_VS_AVG_DB: f32 = 3.0;
+/// Auto-gain-match EMA time constant in seconds. Long enough that the
+/// shift doesn't jitter on transients but short enough to settle in a
+/// couple of seconds after the user pauses / resumes / changes the mix
+/// level. Roughly matches what TrueBalance and Vision 4X feel like.
+const REF_AUTO_GAIN_TAU_SECS: f32 = 1.0;
 
-fn ref_calibration_offset_db(live_fft_size: usize) -> f32 {
-    let live = live_fft_size.max(1) as f32;
-    let r = REF_FFT_SIZE as f32 / live;
-    10.0 * r.log10() + REF_PEAKHOLD_VS_AVG_DB
+/// Number of log-spaced sample points we use to compute the live ↔ ref
+/// power-mean difference. 64 is dense enough that no narrow peak
+/// dominates the average; small enough that the per-frame cost is
+/// trivial (the inner loop is two `powf` per point per slot).
+const REF_AUTO_GAIN_SAMPLES: usize = 64;
+
+/// Compute the broadband power-mean dB of an arbitrary per-bin scratch
+/// buffer over `[freq_min, freq_max]`, sampled at `REF_AUTO_GAIN_SAMPLES`
+/// log-spaced points. Returns `None` if too few samples land on real
+/// signal (e.g. silence) — caller should hold the existing auto-gain.
+fn power_mean_db_from_scratch(
+    scratch: &[f32],
+    sr: f32,
+    fft_size: usize,
+    freq_min: f32,
+    freq_max: f32,
+) -> Option<f32> {
+    if scratch.is_empty() || sr <= 0.0 || fft_size == 0 || freq_max <= freq_min {
+        return None;
+    }
+    let log_min = freq_min.ln();
+    let log_max = freq_max.ln();
+    let log_span = log_max - log_min;
+    let mut pow_sum = 0.0_f32;
+    let mut n = 0;
+    for i in 0..REF_AUTO_GAIN_SAMPLES {
+        let t = (i as f32 + 0.5) / REF_AUTO_GAIN_SAMPLES as f32;
+        let freq = (log_min + t * log_span).exp();
+        let db = sample_bin_db(scratch, freq, sr, fft_size);
+        if db > MIN_DB + 1.0 {
+            pow_sum += 10.0_f32.powf(db * 0.1);
+            n += 1;
+        }
+    }
+    if n < 8 {
+        return None;
+    }
+    Some(10.0 * (pow_sum / n as f32).log10())
 }
 
+/// Same broadband power-mean computation against the ref's smoothed
+/// `[lo, mid, hi]` triple, picking out one column index. Used to align
+/// the ref median with the live curve, but works for any percentile.
+fn power_mean_db_from_envelope(
+    smoothed: &[[f32; 3]],
+    column: usize,
+    freq_min: f32,
+    freq_max: f32,
+) -> Option<f32> {
+    if smoothed.is_empty() || column > 2 || freq_max <= freq_min {
+        return None;
+    }
+    let log_grid_min = REF_FREQ_MIN.ln();
+    let log_grid_max = REF_FREQ_MAX.ln();
+    let grid_span = log_grid_max - log_grid_min;
+    let log_min = freq_min.ln();
+    let log_max = freq_max.ln();
+    let log_span = log_max - log_min;
+    let denom = (smoothed.len() - 1) as f32;
+    let mut pow_sum = 0.0_f32;
+    let mut n = 0;
+    for i in 0..REF_AUTO_GAIN_SAMPLES {
+        let t = (i as f32 + 0.5) / REF_AUTO_GAIN_SAMPLES as f32;
+        let freq = (log_min + t * log_span).exp();
+        let grid_t = (freq.ln() - log_grid_min) / grid_span;
+        if !grid_t.is_finite() || !(0.0..=1.0).contains(&grid_t) {
+            continue;
+        }
+        let idx_f = grid_t * denom;
+        let lo_idx = idx_f.floor() as usize;
+        let hi_idx = (lo_idx + 1).min(smoothed.len() - 1);
+        let frac = idx_f - lo_idx as f32;
+        let lo_db = smoothed[lo_idx][column];
+        let hi_db = smoothed[hi_idx][column];
+        if lo_db <= MIN_DB + 1.0 || hi_db <= MIN_DB + 1.0 {
+            continue;
+        }
+        let db = lo_db * (1.0 - frac) + hi_db * frac;
+        pow_sum += 10.0_f32.powf(db * 0.1);
+        n += 1;
+    }
+    if n < 8 {
+        return None;
+    }
+    Some(10.0 * (pow_sum / n as f32).log10())
+}
+
+/// Draw the loaded reference slots as percentile lines on the MS plot.
+/// Each visible slot contributes three curves — 10th and 90th percentile
+/// in slot colour, 50th percentile (median) in slot colour but bolder
+/// — and the entire envelope is auto-gain-matched per frame so its
+/// median sits on top of the live Mid curve regardless of FFT size,
+/// smoothing mode, or playback level. Result: the user sees *shape*
+/// deviation from the reference at a glance; absolute loudness is
+/// communicated via the integrated LUFS Δref readout in the loudness
+/// panel.
+///
+/// MP3 codec lowpass (if detected) clips the curves at the brickwall
+/// so they don't misleadingly fall off above the codec cutoff.
 fn draw_ref_bands(
     painter: &egui::Painter,
     rect: egui::Rect,
     freq_min: f32,
     freq_max: f32,
     slots: &RefSlots,
-    live_integrated_lufs: f32,
     live_fft_size: usize,
+    live_sample_rate: f32,
+    live_mid_scratch: &[f32],
     weighting: Weighting,
     smoothing_mode: FreqSmoothing,
     cache: &mut RefEnvelopeCache,
@@ -2173,6 +2265,16 @@ fn draw_ref_bands(
     // normalisation the shader's weighting LUT applies to Mid/Side.
     let weight_align = weighting_align_offset(weighting, freq_min, freq_max);
 
+    // Live broadband power-mean for the auto-gain-match. Computed once
+    // per frame and reused across every slot. `None` means "live too
+    // quiet to measure" — slots hold their existing EMA value.
+    let live_pow_mean_db =
+        power_mean_db_from_scratch(live_mid_scratch, live_sample_rate, live_fft_size,
+                                   freq_min, freq_max);
+    // EMA alpha for ~1 s time constant at 60 Hz redraw. Slow enough to
+    // ignore single-frame jitter, fast enough to track real moves.
+    let alpha = 1.0 / (60.0 * REF_AUTO_GAIN_TAU_SECS);
+
     for (slot_idx, slot) in slots.slots.iter().enumerate() {
         if !slot.visible {
             continue;
@@ -2180,27 +2282,15 @@ fn draw_ref_bands(
         let Some(analysis) = &slot.analysis else {
             continue;
         };
-        let envelope = &analysis.mid;
-        if envelope.bounds.len() != REF_POINTS {
+        // Pick the per-FFT envelope matching the live FFT size so per-bin
+        // dB values are directly comparable. `for_fft` returns the nearest
+        // available size if no exact match (legacy save with fewer sizes).
+        let Some(envelope_at) = analysis.mid.for_fft(live_fft_size) else {
+            continue;
+        };
+        if envelope_at.bounds.len() != REF_POINTS {
             continue;
         }
-
-        // Match-to-current gain. Only apply the LUFS-difference shift
-        // when both the ref and the live mix have a sensible integrated
-        // value; otherwise display at source level so a fresh / silent
-        // host doesn't drag the ref off-screen. The calibration offset
-        // (FFT-binwidth + peak-hold) is applied unconditionally — it's
-        // a fixed property of how live vs ref are computed, not a live
-        // measurement, so it should be in effect from the first frame.
-        let calibration_db = ref_calibration_offset_db(live_fft_size);
-        let lufs_shift_db = if live_integrated_lufs > MIN_DB + 1.0
-            && analysis.integrated_lufs > MIN_DB + 1.0
-        {
-            live_integrated_lufs - analysis.integrated_lufs
-        } else {
-            0.0
-        };
-        let shift_db = lufs_shift_db + calibration_db;
 
         // Upper cutoff: the band is meaningful only up to min(source
         // Nyquist, LAME lowpass if set). Beyond that the percentile
@@ -2218,25 +2308,58 @@ fn draw_ref_bands(
         // toolbar smoothing mode; ERB mode varies σ per grid point to
         // match the ear's critical-band curve (wide low-end smoothing,
         // tight above 5 kHz). Cached per slot — the result only changes
-        // when the user loads a new file or switches smoothing mode, so
-        // reusing it saves ~60–120 K exp/powf calls per frame per slot.
+        // when the user loads a new file, switches smoothing mode, or
+        // changes live FFT size, so reusing it saves ~60–120 K
+        // exp/powf calls per frame per slot.
         let fp = ref_analysis_fingerprint(analysis);
         let need_rebuild = match &cache.entries[slot_idx] {
-            Some(e) => e.fingerprint != fp || e.smoothing != smoothing_mode,
+            Some(e) => {
+                e.fingerprint != fp
+                    || e.smoothing != smoothing_mode
+                    || e.fft_size != envelope_at.fft_size
+            }
             None => true,
         };
         if need_rebuild {
-            let smoothed = smooth_envelope(&envelope.bounds, smoothing_mode);
+            let smoothed = smooth_envelope(&envelope_at.bounds, smoothing_mode);
             cache.entries[slot_idx] = Some(RefCacheEntry {
                 fingerprint: fp,
                 smoothing: smoothing_mode,
+                fft_size: envelope_at.fft_size,
                 smoothed,
+                auto_gain_db: 0.0,
+                auto_gain_warm: false,
             });
         }
-        let smoothed = &cache.entries[slot_idx]
-            .as_ref()
-            .expect("cache entry populated above")
-            .smoothed;
+        let entry = cache.entries[slot_idx]
+            .as_mut()
+            .expect("cache entry populated above");
+
+        // Auto-gain-match: align this slot's median with live Mid by
+        // computing both their broadband power-mean dB across the
+        // visible band, taking the difference, and rolling it into the
+        // EMA. First valid measurement snaps the EMA so the ref
+        // overlays cleanly on the very first drawn frame instead of
+        // sliding into place over a 1 s fade.
+        if let Some(live_db) = live_pow_mean_db {
+            if let Some(ref_mid_db) =
+                power_mean_db_from_envelope(&entry.smoothed, 1, freq_min, freq_max)
+            {
+                let target = live_db - ref_mid_db;
+                if !entry.auto_gain_warm {
+                    entry.auto_gain_db = target;
+                    entry.auto_gain_warm = true;
+                } else {
+                    entry.auto_gain_db = (1.0 - alpha) * entry.auto_gain_db + alpha * target;
+                }
+            }
+        }
+        let shift_db = entry.auto_gain_db;
+        let smoothed: Vec<[f32; 3]> = entry.smoothed.clone();
+        // Drop the &mut to `entry` before the render loop below uses
+        // borrows into the cache entry; clone is REF_POINTS × 12 bytes,
+        // ~12 KB, cheap once per slot per frame and avoids needing
+        // RefCell-style aliasing dance.
 
         // Sub-sample the smoothed envelope with a Catmull-Rom cubic
         // spline between adjacent grid points. 4× linear upsample left
@@ -2248,7 +2371,7 @@ fn draw_ref_bands(
         // indistinguishable from the smooth curves commercial
         // analysers draw.
         //
-        // Break the line into disjoint segments wherever we hit an
+        // Break each curve into disjoint segments wherever we hit an
         // invalid render point (off-screen, past the codec cutoff, or
         // either flanking source grid value sitting at the silence
         // floor). Otherwise the single-Shape::line approach draws a
@@ -2269,10 +2392,15 @@ fn draw_ref_bands(
         let render_denom = (render_points - 1) as f32;
         let src_denom = (REF_POINTS - 1) as f32;
         let floor_threshold = MIN_DB + 1.0;
-        let mut upper_segments: Vec<Vec<egui::Pos2>> = Vec::new();
-        let mut lower_segments: Vec<Vec<egui::Pos2>> = Vec::new();
-        let mut cur_upper: Vec<egui::Pos2> = Vec::new();
-        let mut cur_lower: Vec<egui::Pos2> = Vec::new();
+        // Three independent segment lists — lo / mid / hi can break
+        // independently so a sparse low-end where p10 bottoms out
+        // doesn't hide the median's real content.
+        let mut lo_segments: Vec<Vec<egui::Pos2>> = Vec::new();
+        let mut mid_segments: Vec<Vec<egui::Pos2>> = Vec::new();
+        let mut hi_segments: Vec<Vec<egui::Pos2>> = Vec::new();
+        let mut cur_lo: Vec<egui::Pos2> = Vec::new();
+        let mut cur_mid: Vec<egui::Pos2> = Vec::new();
+        let mut cur_hi: Vec<egui::Pos2> = Vec::new();
         let flush_one = |cur: &mut Vec<egui::Pos2>,
                          segs: &mut Vec<Vec<egui::Pos2>>| {
             if cur.len() >= 2 {
@@ -2285,8 +2413,9 @@ fn draw_ref_bands(
             let t = render_i as f32 / render_denom;
             let freq = (log_min + t * grid_span).exp();
             if freq < freq_min || freq > freq_max || freq > upper_cutoff_hz {
-                flush_one(&mut cur_upper, &mut upper_segments);
-                flush_one(&mut cur_lower, &mut lower_segments);
+                flush_one(&mut cur_lo, &mut lo_segments);
+                flush_one(&mut cur_mid, &mut mid_segments);
+                flush_one(&mut cur_hi, &mut hi_segments);
                 continue;
             }
             let src_f = t * src_denom;
@@ -2295,54 +2424,55 @@ fn draw_ref_bands(
             let src_0 = src_1.saturating_sub(1);
             let src_3 = (src_1 + 2).min(REF_POINTS - 1);
             let frac = src_f - src_1 as f32;
-            let pair_0 = smoothed[src_0];
-            let pair_1 = smoothed[src_1];
-            let pair_2 = smoothed[src_2];
-            let pair_3 = smoothed[src_3];
+            let p0 = smoothed[src_0];
+            let p1 = smoothed[src_1];
+            let p2 = smoothed[src_2];
+            let p3 = smoothed[src_3];
             // Per-curve validity: check the two nearest knots (the
             // bracketing source points). If either is at floor, the
             // interp segment is inside a silent region — break it.
-            // Outer knots (0, 3) only affect the spline's shape, not
-            // its validity, so we don't gate on them.
-            let upper_valid = pair_1[1] > floor_threshold && pair_2[1] > floor_threshold;
-            let lower_valid = pair_1[0] > floor_threshold && pair_2[0] > floor_threshold;
+            let lo_valid = p1[0] > floor_threshold && p2[0] > floor_threshold;
+            let mid_valid = p1[1] > floor_threshold && p2[1] > floor_threshold;
+            let hi_valid = p1[2] > floor_threshold && p2[2] > floor_threshold;
             let weight_db = weighting_db_at(weighting, freq) + weight_align;
             let x = freq_to_x(freq, freq_min, freq_max, rect);
-            if upper_valid {
-                let hi_val = catmull_rom(pair_0[1], pair_1[1], pair_2[1], pair_3[1], frac)
-                    + shift_db
-                    + weight_db;
-                cur_upper.push(egui::pos2(x, db_to_y(hi_val, DB_MIN, DB_MAX, rect)));
-            } else {
-                flush_one(&mut cur_upper, &mut upper_segments);
-            }
-            if lower_valid {
-                let lo_val = catmull_rom(pair_0[0], pair_1[0], pair_2[0], pair_3[0], frac)
-                    + shift_db
-                    + weight_db;
-                cur_lower.push(egui::pos2(x, db_to_y(lo_val, DB_MIN, DB_MAX, rect)));
-            } else {
-                flush_one(&mut cur_lower, &mut lower_segments);
-            }
+            let push = |valid: bool,
+                        col: usize,
+                        cur: &mut Vec<egui::Pos2>,
+                        segs: &mut Vec<Vec<egui::Pos2>>| {
+                if valid {
+                    let v = catmull_rom(p0[col], p1[col], p2[col], p3[col], frac)
+                        + shift_db
+                        + weight_db;
+                    cur.push(egui::pos2(x, db_to_y(v, DB_MIN, DB_MAX, rect)));
+                } else if cur.len() >= 2 {
+                    segs.push(std::mem::take(cur));
+                } else {
+                    cur.clear();
+                }
+            };
+            push(lo_valid, 0, &mut cur_lo, &mut lo_segments);
+            push(mid_valid, 1, &mut cur_mid, &mut mid_segments);
+            push(hi_valid, 2, &mut cur_hi, &mut hi_segments);
         }
-        flush_one(&mut cur_upper, &mut upper_segments);
-        flush_one(&mut cur_lower, &mut lower_segments);
-        if upper_segments.is_empty() && lower_segments.is_empty() {
-            continue;
-        }
+        flush_one(&mut cur_lo, &mut lo_segments);
+        flush_one(&mut cur_mid, &mut mid_segments);
+        flush_one(&mut cur_hi, &mut hi_segments);
 
-        // Two unfilled outlines — upper (90th percentile) and lower
-        // (10th). Each contiguous valid region gets its own
-        // Shape::line so silence gaps show as gaps, not skated-over
-        // straight lines. Upper and lower break independently so a
-        // sparse low-end where p10 bottoms out doesn't hide p90's
-        // real content.
-        let stroke = egui::Stroke::new(1.25, line_color);
-        for seg in upper_segments {
-            painter.add(egui::Shape::line(seg, stroke));
+        // Render: thin lines for lo/hi, bold line for the median.
+        // Same colour for all three so the slot still reads as a
+        // single envelope; the median's extra weight makes it the
+        // visual "this is the centre of the distribution" reference.
+        let thin = egui::Stroke::new(1.0, line_color);
+        let bold = egui::Stroke::new(2.25, line_color);
+        for seg in lo_segments {
+            painter.add(egui::Shape::line(seg, thin));
         }
-        for seg in lower_segments {
-            painter.add(egui::Shape::line(seg, stroke));
+        for seg in hi_segments {
+            painter.add(egui::Shape::line(seg, thin));
+        }
+        for seg in mid_segments {
+            painter.add(egui::Shape::line(seg, bold));
         }
     }
 }
@@ -2354,9 +2484,9 @@ fn draw_ref_bands(
 /// curve (grid points per octave × ERB half-width at that grid point's
 /// frequency) — wide at the low end, tight at the high end, matching
 /// the main MS curves' shader behaviour in ERB mode.
-fn smooth_envelope(bounds: &[[f32; 2]], smoothing: FreqSmoothing) -> Vec<[f32; 2]> {
+fn smooth_envelope(bounds: &[[f32; 3]], smoothing: FreqSmoothing) -> Vec<[f32; 3]> {
     let n = bounds.len();
-    let mut out = vec![[MIN_DB, MIN_DB]; n];
+    let mut out = vec![[MIN_DB, MIN_DB, MIN_DB]; n];
     if n == 0 {
         return out;
     }
@@ -2392,32 +2522,38 @@ fn smooth_envelope(bounds: &[[f32; 2]], smoothing: FreqSmoothing) -> Vec<[f32; 2
         let inv_sigma_sq = 1.0 / (sigma * sigma);
         let mut lo_pow_sum = 0.0f32;
         let mut lo_wsum = 0.0f32;
+        let mut mid_pow_sum = 0.0f32;
+        let mut mid_wsum = 0.0f32;
         let mut hi_pow_sum = 0.0f32;
         let mut hi_wsum = 0.0f32;
-        for (offset, pair) in bounds[lo_i..hi_i].iter().enumerate() {
+        for (offset, triple) in bounds[lo_i..hi_i].iter().enumerate() {
             let j = lo_i + offset;
             let d = j as f32 - i as f32;
             let w = (-0.5 * d * d * inv_sigma_sq).exp();
-            if pair[0] > threshold {
-                lo_pow_sum += 10.0_f32.powf(pair[0] * 0.1) * w;
+            if triple[0] > threshold {
+                lo_pow_sum += 10.0_f32.powf(triple[0] * 0.1) * w;
                 lo_wsum += w;
             }
-            if pair[1] > threshold {
-                hi_pow_sum += 10.0_f32.powf(pair[1] * 0.1) * w;
+            if triple[1] > threshold {
+                mid_pow_sum += 10.0_f32.powf(triple[1] * 0.1) * w;
+                mid_wsum += w;
+            }
+            if triple[2] > threshold {
+                hi_pow_sum += 10.0_f32.powf(triple[2] * 0.1) * w;
                 hi_wsum += w;
             }
         }
+        let to_db = |p: f32, w: f32| -> f32 {
+            if w > 0.0 {
+                10.0 * (p / w).max(1e-30).log10()
+            } else {
+                MIN_DB
+            }
+        };
         *slot = [
-            if lo_wsum > 0.0 {
-                10.0 * (lo_pow_sum / lo_wsum).max(1e-30).log10()
-            } else {
-                MIN_DB
-            },
-            if hi_wsum > 0.0 {
-                10.0 * (hi_pow_sum / hi_wsum).max(1e-30).log10()
-            } else {
-                MIN_DB
-            },
+            to_db(lo_pow_sum, lo_wsum),
+            to_db(mid_pow_sum, mid_wsum),
+            to_db(hi_pow_sum, hi_wsum),
         ];
     }
     out
@@ -4249,7 +4385,18 @@ fn launch_ref_picker(
             .map(String::from)
             .unwrap_or_else(|| format!("ref-{}", slot_idx + 1));
 
-        match analyze_ref_file(&path) {
+        // Analyse at every FFT size the live plugin offers — the worker
+        // re-FFTs the source audio per size so the GUI can pick the
+        // matching envelope at draw time and curves overlay without any
+        // binwidth offset. Adds a few seconds to the analysis but only
+        // happens once per ref load.
+        let fft_sizes: Vec<usize> = [
+            FftSize::K2, FftSize::K4, FftSize::K8, FftSize::K16, FftSize::K32,
+        ]
+        .iter()
+        .map(|s| s.samples())
+        .collect();
+        match analyze_ref_file(&path, &fft_sizes) {
             Ok(analysis) => {
                 let mut slots = ref_slots.write();
                 slots.slots[slot_idx] = RefSlot {

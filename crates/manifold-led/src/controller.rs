@@ -88,8 +88,10 @@ impl LedOutputController {
             return;
         }
 
-        // No active content → blackout
+        // No active content → blackout. Cancel any in-flight readback first so
+        // a stale completion can't overwrite the blackout a frame or two later.
         if active_clip_count == 0 {
+            self.output.discard_pending_readback();
             if !self.sent_blackout {
                 self.output.blackout();
                 self.sent_blackout = true;

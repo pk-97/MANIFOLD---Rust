@@ -392,9 +392,13 @@ pub struct LayerCompositor {
     /// Dedicated tonemap pipeline for the LED composite. Distinct output from
     /// the main tonemap so both can be read independently.
     led_tonemap: Option<TonemapPipeline>,
-    /// Dedicated effect chain index for LED master FX. Uses owner_key
-    /// `LED_MASTER_OWNER_KEY` to keep temporal state separate from main master.
-    led_master_ec_index: Option<usize>,
+    /// Dedicated effect chain for LED master FX. Stored as a standalone field
+    /// (not in `effect_chains` Vec) so the shared resize path doesn't force it
+    /// to full resolution — the LED chain auto-allocates at half-res via
+    /// `ensure_buffers` driven by the LED EffectContext.
+    /// Uses owner_key `LED_MASTER_OWNER_KEY` to keep temporal state separate
+    /// from the main master chain.
+    led_master_ec: Option<EffectChain>,
 }
 
 /// Distinct owner_key for the LED master effect chain — must not collide with
@@ -427,7 +431,7 @@ impl LayerCompositor {
             group_child_positions: Vec::new(),
             led_main: None,
             led_tonemap: None,
-            led_master_ec_index: None,
+            led_master_ec: None,
         }
     }
 
@@ -713,18 +717,6 @@ impl LayerCompositor {
         // Clear main to opaque black
         self.main.clear_source(gpu, true);
 
-        // LED composite: lazy-init and clear if any layer wants blit_to_led.
-        let any_led = layer_outputs.iter().any(|o| o.blit_to_led);
-        if any_led {
-            let (w, h) = (self.main.width(), self.main.height());
-            let needs_new = self.led_main.as_ref()
-                .is_none_or(|l| l.width() != w || l.height() != h);
-            if needs_new {
-                self.led_main = Some(PingPong::new(gpu.device, gpu.pool, w, h, "LED Composite"));
-            }
-            self.led_main.as_mut().unwrap().clear_source(gpu, true);
-        }
-
         for output in layer_outputs {
             let uniforms = BlendUniforms {
                 blend_mode: output.blend_mode as u32,
@@ -741,27 +733,62 @@ impl LayerCompositor {
                 &uniforms,
             );
             self.main.swap();
+        }
+    }
 
-            // Also blend into LED buffer with Normal mode if the layer is flagged.
-            if output.blit_to_led
-                && let Some(ref mut led) = self.led_main
-            {
-                let led_uniforms = BlendUniforms {
-                    blend_mode: BlendMode::Normal as u32,
-                    opacity: output.opacity,
-                    _pad0: 0,
-                    _pad1: 0,
-                };
-                self.blend.blend_pass(
-                    gpu,
-                    &mut self.uniform_arena,
-                    led.source_texture(),
-                    output.texture(),
-                    led.target_texture(),
-                    &led_uniforms,
-                );
-                led.swap();
+    /// Blend LED-flagged layers into the LED composite buffer with Normal mode.
+    ///
+    /// Runs **before** `fold_groups` so child layers inside groups route to LEDs
+    /// via their own `blit_to_led` flag, independent of the parent group's flag.
+    ///
+    /// Composite resolution is `frame.led_composite_size` — the native LED grid
+    /// dimensions (e.g. 8×120). Master FX cost on this path is therefore
+    /// negligible. Each blend pass uses bilinear sampling to downsample full-res
+    /// layer textures directly to the LED grid; aliasing on small features is
+    /// expected and acceptable since the LED grid itself is the visual output.
+    fn blend_layers_to_led(
+        &mut self,
+        gpu: &mut GpuEncoder,
+        layer_outputs: &[LayerOutput],
+        led_size: (u32, u32),
+    ) {
+        let any_led = layer_outputs.iter().any(|o| o.blit_to_led);
+        if !any_led {
+            // No LED routing this frame — release resources.
+            self.led_main = None;
+            return;
+        }
+
+        let (w, h) = (led_size.0.max(1), led_size.1.max(1));
+        let needs_new = self
+            .led_main
+            .as_ref()
+            .is_none_or(|l| l.width() != w || l.height() != h);
+        if needs_new {
+            self.led_main = Some(PingPong::new(gpu.device, gpu.pool, w, h, "LED Composite"));
+        }
+        let led = self.led_main.as_mut().unwrap();
+        led.clear_source(gpu, true);
+
+        for output in layer_outputs {
+            if !output.blit_to_led {
+                continue;
             }
+            let uniforms = BlendUniforms {
+                blend_mode: BlendMode::Normal as u32,
+                opacity: output.opacity,
+                _pad0: 0,
+                _pad1: 0,
+            };
+            self.blend.blend_pass(
+                gpu,
+                &mut self.uniform_arena,
+                led.source_texture(),
+                output.texture(),
+                led.target_texture(),
+                &uniforms,
+            );
+            led.swap();
         }
     }
 
@@ -915,6 +942,17 @@ impl LayerCompositor {
     fn composite_serial(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame, any_solo: bool) {
         self.uniform_arena.reset();
         self.generate_layers(gpu, frame, any_solo);
+        // Route LED-flagged layers BEFORE folding groups so child layers inside
+        // a group route via their own blit_to_led flag (the group's flag controls
+        // only the screen-output blend, not LED routing).
+        // Safety: same lifetime guarantees as the blend_layers call below.
+        let pre_fold_outputs_ptr = self.layer_outputs_scratch.as_ptr();
+        let pre_fold_outputs_len = self.layer_outputs_scratch.len();
+        let pre_fold_outputs = unsafe {
+            std::slice::from_raw_parts(pre_fold_outputs_ptr, pre_fold_outputs_len)
+        };
+        self.blend_layers_to_led(gpu, pre_fold_outputs, frame.led_composite_size);
+
         self.fold_groups(gpu, frame);
         // Safety: layer_outputs_scratch contains raw pointers to textures owned
         // by effect chains, layer bufs, or clip render targets — all valid for
@@ -1153,6 +1191,16 @@ impl LayerCompositor {
                 .wait_event(unsafe { &*async_event }, final_signal);
         }
 
+        // Route LED-flagged layers BEFORE folding groups so child layers inside
+        // a group route via their own blit_to_led flag.
+        // Safety: same as below — outputs are valid for frame duration.
+        let pre_fold_outputs_ptr = self.layer_outputs_scratch.as_ptr();
+        let pre_fold_outputs_len = self.layer_outputs_scratch.len();
+        let pre_fold_outputs = unsafe {
+            std::slice::from_raw_parts(pre_fold_outputs_ptr, pre_fold_outputs_len)
+        };
+        self.blend_layers_to_led(compositor_gpu, pre_fold_outputs, frame.led_composite_size);
+
         // Fold group children into single outputs before blending.
         self.fold_groups(compositor_gpu, frame);
 
@@ -1180,7 +1228,7 @@ impl Compositor for LayerCompositor {
             // Release LED composite resources (nothing to route).
             self.led_main = None;
             self.led_tonemap = None;
-            self.led_master_ec_index = None;
+            self.led_master_ec = None;
             return &self.tonemap.output.texture;
         }
 
@@ -1275,12 +1323,20 @@ impl Compositor for LayerCompositor {
             }
         }
 
-        // ── LED composite: tonemap + master FX (same color treatment as main) ──
-        // Only runs when at least one layer has blit_to_led enabled. Resources
-        // are released below when no LED layers are active.
-        if self.led_main.is_some() {
-            let width = self.main.width();
-            let height = self.main.height();
+        // ── LED composite: tonemap + master FX (gated by led_exit_index) ──
+        // The LED composite is built at native LED grid resolution, so master
+        // FX cost is negligible. `led_exit_index` controls whether to run them:
+        //   * `0` (pre-tonemap tap) — skip both tonemap and master FX. The raw
+        //     blended composite goes straight to the LED edge-extend pass. This
+        //     is the user's escape hatch for FX that don't translate to LEDs.
+        //   * `-1` (default, post-effects) — apply tonemap + master FX so the
+        //     LED color treatment matches the screen.
+        if let Some(ref led_main) = self.led_main
+            && frame.led_exit_index == -1
+        {
+            let (width, height) = frame.led_composite_size;
+            let width = width.max(1);
+            let height = height.max(1);
 
             // Lazy-init / resize LED tonemap pipeline.
             let needs_new_tonemap = self.led_tonemap.as_ref().is_none_or(|t| {
@@ -1291,8 +1347,7 @@ impl Compositor for LayerCompositor {
             }
 
             // Tonemap the LED composite (same settings as main).
-            let led_source_tex_ptr: *const GpuTexture =
-                self.led_main.as_ref().unwrap().source_texture();
+            let led_source_tex_ptr: *const GpuTexture = led_main.source_texture();
             // Safety: led_source_tex_ptr points to led_main.ping/pong which are not
             // reallocated between here and the apply() call below.
             self.led_tonemap
@@ -1303,16 +1358,7 @@ impl Compositor for LayerCompositor {
             // Apply master FX to the LED tonemap output (distinct owner_key so
             // temporal state doesn't bleed between main and LED master chains).
             if has_enabled_effects(frame.master_effects) {
-                let ec_idx = match self.led_master_ec_index {
-                    Some(i) => i,
-                    None => {
-                        let i = self.effect_chains.len();
-                        self.ensure_effect_chains(i + 1);
-                        self.led_master_ec_index = Some(i);
-                        i
-                    }
-                };
-                self.ensure_effect_chains(ec_idx + 1);
+                let led_ec = self.led_master_ec.get_or_insert_with(EffectChain::new);
 
                 let ctx = EffectContext {
                     time: frame.time,
@@ -1328,7 +1374,6 @@ impl Compositor for LayerCompositor {
                     frame_count: frame.frame_count as i64,
                 };
 
-                let led_ec = &mut self.effect_chains[ec_idx];
                 let led_tm_tex_ptr: *const GpuTexture =
                     &self.led_tonemap.as_ref().unwrap().output.texture;
                 // Safety: led_tm_tex_ptr points to led_tonemap.output.texture which
@@ -1352,9 +1397,12 @@ impl Compositor for LayerCompositor {
                 }
             }
         } else {
-            // No LED layers active — release LED resources.
+            // No LED layers active, or exit-path bypasses tonemap+FX — release
+            // tonemap/effect-chain resources. led_main itself is kept (it is
+            // the LED source texture when exit_index == 0) and freed only when
+            // no layer is flagged at all (handled in blend_layers_to_led).
             self.led_tonemap = None;
-            self.led_master_ec_index = None;
+            self.led_master_ec = None;
         }
 
         // Flush uniform arena (recreates buffer if capacity grew).
@@ -1387,15 +1435,12 @@ impl Compositor for LayerCompositor {
         for ec in &mut self.group_effect_chains {
             ec.resize(device, width, height);
         }
-        // LED tap and per-layer LED composite will be recreated at new size on
-        // next frame if needed.
+        // LED tap will be recreated at new size on next frame if needed.
+        // The per-layer LED composite size comes from `frame.led_composite_size`
+        // (the native LED grid), independent of compositor resolution — its
+        // buffers reallocate lazily in blend_layers_to_led / render() if the
+        // frame's LED size differs.
         self.led_tap = None;
-        if let Some(ref mut led) = self.led_main {
-            led.resize(device, width, height);
-        }
-        if let Some(ref mut led_tm) = self.led_tonemap {
-            led_tm.resize(device, width, height);
-        }
     }
 
     fn dimensions(&self) -> (u32, u32) {
@@ -1428,7 +1473,13 @@ impl Compositor for LayerCompositor {
 
     fn led_composite_texture(&self) -> Option<&GpuTexture> {
         // Present only when at least one layer was flagged `blit_to_led` this
-        // frame. Points to the tonemapped + master-FX-processed LED composite.
-        self.led_tonemap.as_ref().map(|t| &t.output.texture)
+        // frame. Returns the tonemapped + master-FX-processed result when the
+        // LED exit path applied them (exit_index == -1), otherwise the raw
+        // blended composite (exit_index == 0).
+        if let Some(tm) = self.led_tonemap.as_ref() {
+            Some(&tm.output.texture)
+        } else {
+            self.led_main.as_ref().map(|l| l.source_texture())
+        }
     }
 }

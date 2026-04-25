@@ -221,6 +221,13 @@ impl ArtNetOutput {
         }
     }
 
+    /// Discard any in-flight readback so a stale completion can't sneak through
+    /// and send DMX after blackout. The GPU work is already submitted; we just
+    /// stop waiting on its result.
+    pub fn discard_pending_readback(&mut self) {
+        self.readback.cancel();
+    }
+
     /// Send all-zeros to every universe (turn off all LEDs).
     pub fn blackout(&mut self) {
         if !self.initialized {

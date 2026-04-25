@@ -1,11 +1,13 @@
 //! Offline reference-track analysis for the MS plot overlay.
 //!
 //! One-shot path: decode an audio file (WAV / MP3 / FLAC / AAC / M4A) via
-//! symphonia, run it through the same BH-windowed 16 384-point FFT the
-//! real-time plugin uses, collect per-bin dB samples over the whole track,
-//! then reduce to low/high percentile envelopes at a fixed log-spaced
-//! frequency grid. Integrated LUFS is computed via the same BS.1770 meter
-//! so the GUI can gain-match the ref to the live mix.
+//! symphonia, run it through the same BH-windowed FFT the real-time
+//! plugin uses (one pass per FFT size in the live plugin's dropdown so
+//! the per-bin distribution overlays the live MS without binwidth
+//! offset), collect per-bin dB samples over the whole track, then reduce
+//! to low/mid/high percentile envelopes at a fixed log-spaced frequency
+//! grid. Integrated LUFS is computed via the same BS.1770 meter so the
+//! GUI can gain-match the ref to the live mix.
 //!
 //! Nothing here runs on the audio thread; the analysis is kicked off from
 //! the GUI thread on file-pick and typically runs on a worker thread.
@@ -36,11 +38,6 @@ pub const REF_FREQ_MIN: f32 = 10.0;
 /// lower-rate sources we just clip above their Nyquist at draw time.
 pub const REF_FREQ_MAX: f32 = 48_000.0;
 
-/// FFT size used for the offline analysis. Matches the real-time plugin
-/// so the bin width and window shape are identical — makes the band
-/// directly comparable to the live curve.
-pub const REF_FFT_SIZE: usize = 16_384;
-
 /// Overlap used for offline analysis. 50 % keeps memory bounded for long
 /// tracks (e.g. a 4 min song is ~2 K frames at 48 k) while still giving
 /// plenty of samples per bin for a stable percentile.
@@ -51,25 +48,53 @@ pub const REF_OVERLAP_RATIO: f32 = 0.5;
 /// from the same distribution as what the live curve ever shows.
 pub const REF_AVG_MS: f32 = 200.0;
 
-/// Percentile bounds for the band. 10 / 90 is a common mastering-tool
-/// norm — the band represents "the typical 80 % of spectral content"
-/// without reacting to silence or rare transients at either extreme.
+/// Percentile bounds for the band. 10 / 50 / 90 is the mastering-tool
+/// norm — `low`/`high` represent "the typical 80 % of spectral content"
+/// without reacting to silence or rare transients at either extreme;
+/// `mid` is the median, drawn as the bold "this is the centre of the
+/// distribution" line a mix should target.
 pub const REF_PERCENTILE_LOW: f32 = 0.10;
+pub const REF_PERCENTILE_MID: f32 = 0.50;
 pub const REF_PERCENTILE_HIGH: f32 = 0.90;
 
-/// Low/high dB percentile per log-spaced frequency slot.
+/// Per-FFT-size envelope. The same source audio is analysed at every
+/// FFT size the live plugin offers so the GUI can pick the matching
+/// envelope at draw time and curves overlay the live MS without any
+/// binwidth offset (per-bin dB scales with `10·log₁₀(N)` for broadband).
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RefEnvelopeAtFft {
+    pub fft_size: usize,
+    /// Triples of `[low_db, mid_db, high_db]` (10 / 50 / 90 percentile)
+    /// at each of `REF_POINTS` log-spaced frequencies spanning
+    /// `[REF_FREQ_MIN, REF_FREQ_MAX]`.
+    pub bounds: Vec<[f32; 3]>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct RefEnvelope {
-    /// Pairs of `[low_db, high_db]` at each of `REF_POINTS` log-spaced
-    /// frequencies spanning `[REF_FREQ_MIN, REF_FREQ_MAX]`.
-    pub bounds: Vec<[f32; 2]>,
+    /// One entry per FFT size analysed. Always non-empty after a
+    /// successful `analyze_ref_file`. Empty after a failed deserialize
+    /// of an older on-disk format — caller should treat that as
+    /// "no usable analysis" and prompt a re-load.
+    #[serde(default)]
+    pub per_fft: Vec<RefEnvelopeAtFft>,
 }
 
 impl RefEnvelope {
     pub fn empty() -> Self {
-        Self {
-            bounds: vec![[MIN_DB, MIN_DB]; REF_POINTS],
-        }
+        Self { per_fft: Vec::new() }
+    }
+
+    /// Pick the envelope whose FFT size matches `fft_size` exactly, or
+    /// the nearest available one if no exact match. Returns `None` only
+    /// when `per_fft` is empty (e.g. legacy save deserialised without
+    /// envelope data).
+    pub fn for_fft(&self, fft_size: usize) -> Option<&RefEnvelopeAtFft> {
+        self.per_fft.iter().min_by_key(|e| {
+            let a = e.fft_size as i64;
+            let b = fft_size as i64;
+            (a - b).unsigned_abs()
+        })
     }
 }
 
@@ -145,9 +170,16 @@ impl std::fmt::Display for RefError {
 
 impl std::error::Error for RefError {}
 
-/// Run the full offline analysis — decode, FFT stats, LUFS, LAME cutoff.
-/// Blocks the calling thread; intended to run on a worker.
-pub fn analyze_ref_file(path: &Path) -> Result<RefAnalysis, RefError> {
+/// Run the full offline analysis — decode, FFT stats at every requested
+/// FFT size, LUFS, LAME cutoff. `fft_sizes` should list every size the
+/// live plugin offers in its FFT-Size dropdown; the worker analyses
+/// each so the GUI can pick the matching envelope at draw time and the
+/// ref overlays the live MS with no binwidth fudge. Blocks the calling
+/// thread; intended to run on a worker.
+pub fn analyze_ref_file(
+    path: &Path,
+    fft_sizes: &[usize],
+) -> Result<RefAnalysis, RefError> {
     let lowpass_hz = read_lame_lowpass(path);
     let (samples_l, samples_r, source_sr) = decode_file(path)?;
     let duration_secs = samples_l.len() as f32 / source_sr.max(1.0);
@@ -156,7 +188,18 @@ pub fn analyze_ref_file(path: &Path) -> Result<RefAnalysis, RefError> {
         return Err(RefError::TooShort);
     }
 
-    let (mid_env, side_env) = run_fft_stats(&samples_l, &samples_r, source_sr);
+    // Run FFT stats once per requested size. Order is preserved so the
+    // GUI's `for_fft` lookup is deterministic.
+    let mut mid_per_fft = Vec::with_capacity(fft_sizes.len());
+    let mut side_per_fft = Vec::with_capacity(fft_sizes.len());
+    for &n_fft in fft_sizes {
+        let (mid_at, side_at) = run_fft_stats(&samples_l, &samples_r, source_sr, n_fft);
+        mid_per_fft.push(mid_at);
+        side_per_fft.push(side_at);
+    }
+    let mid_env = RefEnvelope { per_fft: mid_per_fft };
+    let side_env = RefEnvelope { per_fft: side_per_fft };
+
     let loudness = run_loudness_aggregates(&samples_l, &samples_r, source_sr);
 
     Ok(RefAnalysis {
@@ -174,16 +217,21 @@ pub fn analyze_ref_file(path: &Path) -> Result<RefAnalysis, RefError> {
     })
 }
 
-fn run_fft_stats(l: &[f32], r: &[f32], sr: f32) -> (RefEnvelope, RefEnvelope) {
-    let mut mid_a = Analyzer::new(sr, REF_FFT_SIZE);
+fn run_fft_stats(
+    l: &[f32],
+    r: &[f32],
+    sr: f32,
+    n_fft: usize,
+) -> (RefEnvelopeAtFft, RefEnvelopeAtFft) {
+    let mut mid_a = Analyzer::new(sr, n_fft);
     mid_a.set_overlap_ratio(REF_OVERLAP_RATIO);
     mid_a.set_averaging_ms(REF_AVG_MS);
-    let mut side_a = Analyzer::new(sr, REF_FFT_SIZE);
+    let mut side_a = Analyzer::new(sr, n_fft);
     side_a.set_overlap_ratio(REF_OVERLAP_RATIO);
     side_a.set_averaging_ms(REF_AVG_MS);
 
     // Match the live `Analyzer`'s positive-half bin count (includes Nyquist).
-    let num_bins = REF_FFT_SIZE / 2 + 1;
+    let num_bins = n_fft / 2 + 1;
     let mut mid_samples: Vec<Vec<f32>> = (0..num_bins).map(|_| Vec::new()).collect();
     let mut side_samples: Vec<Vec<f32>> = (0..num_bins).map(|_| Vec::new()).collect();
 
@@ -213,8 +261,8 @@ fn run_fft_stats(l: &[f32], r: &[f32], sr: f32) -> (RefEnvelope, RefEnvelope) {
         i = end;
     }
 
-    let mid_env = collapse_to_log_grid(&mut mid_samples, sr);
-    let side_env = collapse_to_log_grid(&mut side_samples, sr);
+    let mid_env = collapse_to_log_grid(&mut mid_samples, sr, n_fft);
+    let side_env = collapse_to_log_grid(&mut side_samples, sr, n_fft);
     (mid_env, side_env)
 }
 
@@ -234,16 +282,20 @@ fn run_fft_stats(l: &[f32], r: &[f32], sr: f32) -> (RefEnvelope, RefEnvelope) {
 /// envelope display the linear blend is the right trade-off: it removes
 /// the bin-aligned discontinuities that read as "broken" without
 /// introducing a smoothing kernel that would distort actual content.
-fn collapse_to_log_grid(samples: &mut [Vec<f32>], sr: f32) -> RefEnvelope {
-    let bin_hz = sr / REF_FFT_SIZE as f32;
+fn collapse_to_log_grid(
+    samples: &mut [Vec<f32>],
+    sr: f32,
+    n_fft: usize,
+) -> RefEnvelopeAtFft {
+    let bin_hz = sr / n_fft as f32;
     let log_min = REF_FREQ_MIN.ln();
     let log_max = REF_FREQ_MAX.ln();
     let denom = (REF_POINTS - 1) as f32;
 
-    // Pass 1: percentile cache per bin. `None` = bin was empty / above
+    // Pass 1: 3-percentile cache per bin. `None` = bin was empty / above
     // source Nyquist. Storage is freed as we go since long tracks stash
     // ~70 MB in `samples` at 3 min.
-    let mut bin_percentiles: Vec<Option<[f32; 2]>> = Vec::with_capacity(samples.len());
+    let mut bin_percentiles: Vec<Option<[f32; 3]>> = Vec::with_capacity(samples.len());
     for bin_samples in samples.iter_mut() {
         if bin_samples.is_empty() {
             bin_percentiles.push(None);
@@ -251,8 +303,12 @@ fn collapse_to_log_grid(samples: &mut [Vec<f32>], sr: f32) -> RefEnvelope {
         }
         bin_samples.sort_by(|a, b| a.total_cmp(b));
         let lo = percentile_from_sorted(bin_samples, REF_PERCENTILE_LOW);
+        let mid = percentile_from_sorted(bin_samples, REF_PERCENTILE_MID);
         let hi = percentile_from_sorted(bin_samples, REF_PERCENTILE_HIGH);
-        bin_percentiles.push(Some([lo.min(hi), lo.max(hi)]));
+        // Keep ordering invariant for any rounding / equal-values cases.
+        let mut sorted = [lo, mid, hi];
+        sorted.sort_by(|a, b| a.total_cmp(b));
+        bin_percentiles.push(Some(sorted));
         bin_samples.clear();
         bin_samples.shrink_to_fit();
     }
@@ -284,15 +340,19 @@ fn collapse_to_log_grid(samples: &mut [Vec<f32>], sr: f32) -> RefEnvelope {
         let frac = bin_f - bin_lo as f32;
         let pair_lo = bin_percentiles.get(bin_lo).and_then(|c| *c);
         let pair_hi = bin_percentiles.get(bin_hi).and_then(|c| *c);
-        let pair = match (pair_lo, pair_hi) {
-            (Some(a), Some(b)) => [blend(a[0], b[0], frac), blend(a[1], b[1], frac)],
+        let triple = match (pair_lo, pair_hi) {
+            (Some(a), Some(b)) => [
+                blend(a[0], b[0], frac),
+                blend(a[1], b[1], frac),
+                blend(a[2], b[2], frac),
+            ],
             (Some(a), None) => a,
             (None, Some(b)) => b,
-            (None, None) => [MIN_DB, MIN_DB],
+            (None, None) => [MIN_DB, MIN_DB, MIN_DB],
         };
-        bounds.push(pair);
+        bounds.push(triple);
     }
-    RefEnvelope { bounds }
+    RefEnvelopeAtFft { fft_size: n_fft, bounds }
 }
 
 fn percentile_from_sorted(sorted: &[f32], p: f32) -> f32 {
@@ -485,10 +545,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn empty_envelope_has_correct_shape() {
+    fn empty_envelope_has_no_data() {
         let e = RefEnvelope::empty();
-        assert_eq!(e.bounds.len(), REF_POINTS);
-        assert!(e.bounds.iter().all(|b| b[0] == MIN_DB && b[1] == MIN_DB));
+        assert!(e.per_fft.is_empty());
+        assert!(e.for_fft(4096).is_none());
     }
 
     #[test]

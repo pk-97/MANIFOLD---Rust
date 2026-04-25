@@ -134,6 +134,12 @@ pub struct ContentPipeline {
     /// Managed by ContentThread via `set_recording_session` / `take_recording_session`.
     #[cfg(target_os = "macos")]
     pub(crate) recording_session: Option<manifold_recording::LiveRecordingSession>,
+
+    /// Current LED grid dimensions (strip_count, leds_per_strip). Used to size
+    /// the per-layer LED composite buffer at native LED resolution. Updated by
+    /// ContentThread when the LED controller is initialized; defaults to the
+    /// LedSettings defaults when no controller is active.
+    led_grid_size: (u32, u32),
 }
 
 impl ContentPipeline {
@@ -187,7 +193,18 @@ impl ContentPipeline {
             preview_sampler: None,
             #[cfg(target_os = "macos")]
             recording_session: None,
+            led_grid_size: (
+                manifold_led::DEFAULT_STRIP_COUNT,
+                manifold_led::DEFAULT_LEDS_PER_STRIP,
+            ),
         }
+    }
+
+    /// Update the LED grid dimensions used to size the LED composite buffer.
+    /// Called by ContentThread when the LED controller is initialized so the
+    /// compositor renders the LED path at native LED resolution.
+    pub fn set_led_grid_size(&mut self, strip_count: u32, leds_per_strip: u32) {
+        self.led_grid_size = (strip_count.max(1), leds_per_strip.max(1));
     }
 
     /// Initialize the native Metal GPU device, event, and texture pool.
@@ -663,6 +680,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             master_effects,
             master_effect_groups,
             led_exit_index,
+            led_composite_size: self.led_grid_size,
             tonemap: TonemapSettings {
                 exposure: 1.0,
                 hdr_output_enabled: self.edr_headroom > 1.0,
@@ -1116,19 +1134,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         self.compositor.output_texture()
     }
 
-    /// LED source texture. Preference chain:
-    /// 1. Per-layer LED composite (built from layers flagged `blit_to_led`,
-    ///    post-tonemap + post-master-FX). Present only when any layer has
-    ///    the flag enabled.
-    /// 2. Legacy LED tap (pre-tonemap composite when `led_exit_index == 0`).
-    /// 3. Final compositor output.
-    pub fn led_source_texture(&self) -> &manifold_gpu::GpuTexture {
-        if let Some(tex) = self.compositor.led_composite_texture() {
-            return tex;
-        }
-        self.compositor
-            .led_tap_texture()
-            .unwrap_or_else(|| self.compositor.output_texture())
+    /// LED source texture. Returns `Some` only when at least one layer is flagged
+    /// `blit_to_led` and has active clips this frame — the LED composite carries
+    /// just those layers, post-tonemap + post-master-FX. Returns `None` when no
+    /// layer is routed to LEDs; callers should blackout in that case.
+    pub fn led_source_texture(&self) -> Option<&manifold_gpu::GpuTexture> {
+        self.compositor.led_composite_texture()
     }
 
     /// Run the PQ encoder on the final compositor output for HDR export.

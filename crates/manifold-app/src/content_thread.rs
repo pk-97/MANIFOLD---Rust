@@ -626,17 +626,35 @@ impl ContentThread {
             // compositor output, readback tiny pixel grid, send DMX/ArtNet.
             // Uses a dedicated encoder (separate from the content frame).
             if let Some(ref mut led) = self.led_controller {
-                // Poll previous frame's readback (send DMX if ready).
-                led.poll_readback();
-                // Submit new frame: edge-extend compute + readback copy.
                 let native_device = self.content_pipeline.native_device().unwrap();
-                let source = self.content_pipeline.led_source_texture();
-                led.process_frame(
-                    native_device,
-                    source,
-                    tick_result.ready_clips.len(),
-                    self.engine.project().map_or(1.0, |p| p.settings.led_brightness),
-                );
+                let brightness = self
+                    .engine
+                    .project()
+                    .map_or(1.0, |p| p.settings.led_brightness);
+                if let Some(source) = self.content_pipeline.led_source_texture() {
+                    // Poll previous frame's readback (send DMX if ready).
+                    // Only when we still have an LED source — when transitioning
+                    // to blackout we deliberately skip the poll so a stale
+                    // completion can't briefly flash the prior frame on the LEDs.
+                    led.poll_readback();
+                    // Submit new frame: edge-extend compute + readback copy.
+                    led.process_frame(
+                        native_device,
+                        source,
+                        tick_result.ready_clips.len(),
+                        brightness,
+                    );
+                } else {
+                    // No layer is flagged `blit_to_led` (or none have active
+                    // clips) — blackout. The controller cancels any in-flight
+                    // readback inside this call. Texture pointer is unused.
+                    led.process_frame(
+                        native_device,
+                        self.content_pipeline.export_output_texture(),
+                        0,
+                        brightness,
+                    );
+                }
             }
 
             #[cfg(feature = "profiling")]

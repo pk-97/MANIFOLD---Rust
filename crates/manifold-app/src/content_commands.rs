@@ -589,8 +589,11 @@ impl ContentThread {
                 let mut ctrl = manifold_led::LedOutputController::new();
                 let native_device = self.content_pipeline.native_device()
                     .expect("native device required for LED init");
+                let strip_count = settings.strip_count;
+                let leds_per_strip = settings.leds_per_strip;
                 if ctrl.initialize(native_device, &settings) {
                     self.led_controller = Some(ctrl);
+                    self.content_pipeline.set_led_grid_size(strip_count, leds_per_strip);
                     log::info!("[ContentThread] LED output initialized.");
                 } else {
                     log::warn!("[ContentThread] LED output failed to initialize.");
