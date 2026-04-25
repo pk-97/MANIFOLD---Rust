@@ -128,6 +128,13 @@ struct SpectrumUniforms {
     freq_max: f32,
     db_min: f32,
     db_max: f32,
+    /// Naga / WGSL aligns `vec4<f32>` to 16 bytes inside a uniform
+    /// struct; `#[repr(C)]` packs Rust without padding. Without this
+    /// `[f32; 2]` filler, `line_color` lands at offset 24 in Rust vs
+    /// 32 in MSL, and every field after it reads from the wrong slot
+    /// — spectrum_height comes back as history_cols (2048) and the
+    /// spectrogram-vs-curves branch in the shader collapses.
+    _pad0: [f32; 2],
     line_color: [f32; 4],
     bg_color: [f32; 4],
     side_color: [f32; 4],
@@ -422,6 +429,7 @@ impl SpectrumGpuRenderer {
             freq_max,
             db_min,
             db_max,
+            _pad0: [0.0; 2],
             line_color: [0.72, 0.98, 0.38, 1.0],
             bg_color: [0.031, 0.039, 0.055, 1.0],
             side_color: [0.95, 0.30, 0.15, 1.0],
