@@ -1344,6 +1344,17 @@ struct EditorState {
     /// weighted energy across the window.
     mid_tilted_scratch: Vec<f32>,
     side_tilted_scratch: Vec<f32>,
+    /// Per-FFT-bin EMA of raw Mid dB. dB-domain averaging approximates
+    /// the geometric mean of power, which equals the median for the
+    /// lognormal-ish per-bin distributions typical music produces — same
+    /// 50th-percentile interpretation the ref envelope uses, just
+    /// computed as a streaming statistic on the live signal. Rendered
+    /// as a thick white line on top of the MS curves.
+    live_mid_median_db: Vec<f32>,
+    /// First-valid-sample latch: snap the EMA to current values on the
+    /// first frame after init / FFT-size change so the line appears
+    /// immediately rather than fading in from MIN_DB over the EMA window.
+    live_median_warm: bool,
     /// Cache of Gaussian-smoothed reference envelopes, keyed by
     /// (analysis fingerprint, smoothing mode). Rebuilt only when a slot
     /// gets a new analysis or the user switches smoothing mode — the raw
@@ -1484,6 +1495,8 @@ pub fn create_editor(
         correlation_scratch: vec![0.0; num_bins],
         mid_tilted_scratch: vec![MIN_DB; num_bins],
         side_tilted_scratch: vec![MIN_DB; num_bins],
+        live_mid_median_db: vec![MIN_DB; num_bins],
+        live_median_warm: false,
         ref_envelope_cache: RefEnvelopeCache::default(),
     };
     create_egui_editor(
@@ -1664,6 +1677,37 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             let fmin = fmin_u.min(fmax * 0.5).max(1.0);
             (fmin, fmax)
         };
+
+        // Live-median estimator. dB-domain EMA on raw per-bin Mid values
+        // — the same 50th-percentile interpretation the ref envelope
+        // uses, computed online instead of from a known-finite track.
+        // Long τ (12 s) so the line settles to a stable "where the
+        // spectrum has been sitting" curve rather than tracking the
+        // current frame. First valid frame snaps the EMA to current
+        // values so the line is positioned correctly from frame 1.
+        if state.live_mid_median_db.len() != state.mid_scratch.len() {
+            state
+                .live_mid_median_db
+                .resize(state.mid_scratch.len(), MIN_DB);
+            state.live_median_warm = false;
+        }
+        if !state.live_median_warm {
+            state
+                .live_mid_median_db
+                .copy_from_slice(&state.mid_scratch);
+            state.live_median_warm = true;
+        } else {
+            let alpha = 1.0 / (60.0 * LIVE_MEDIAN_TAU_SECS);
+            for (med, &cur) in state
+                .live_mid_median_db
+                .iter_mut()
+                .zip(state.mid_scratch.iter())
+            {
+                if cur > MIN_DB + 1.0 {
+                    *med = (1.0 - alpha) * *med + alpha * cur;
+                }
+            }
+        }
 
         // Apply the user's frequency weighting (Pink / Tilted / LUFS / etc.)
         // to the per-bin Mid + Side scratch CPU-side, then upload the
@@ -1954,6 +1998,23 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         &mut state.ref_envelope_cache,
     );
 
+    // 2c. Live median (50th percentile) line — same statistic the ref
+    //     overlay's bold line shows, computed online from the live
+    //     signal. Drawn after the ref bands so it sits on top, giving
+    //     the user a direct "where is my mix vs where the ref sits"
+    //     side-by-side.
+    draw_live_median(
+        &painter,
+        spectrum_rect,
+        freq_min,
+        freq_max,
+        &state.live_mid_median_db,
+        sr,
+        state.shared.fft_size(),
+        state.params.weighting.value(),
+        state.params.freq_smoothing.value(),
+    );
+
     // 3. Spectrum-region labels. Transparent shader lets these sit on
     //    top of the curves for readability.
     for &freq in FREQ_MAJORS {
@@ -2177,6 +2238,12 @@ fn draw_reference_curve(
 /// first valid measurement after a load snaps the EMA so refs overlay
 /// immediately instead of fading in over this window.
 const REF_AUTO_GAIN_TAU_SECS: f32 = 4.0;
+
+/// Live-median EMA time constant. Longer than the auto-gain-match
+/// because the median is a "where the spectrum sits over time" stat,
+/// not a per-frame loudness measure — should converge to a useful
+/// shape over ~30–60 s of playback while not jumping on transients.
+const LIVE_MEDIAN_TAU_SECS: f32 = 12.0;
 
 /// Number of log-spaced sample points we use to compute the live ↔ ref
 /// power-mean difference. 64 is dense enough that no narrow peak
@@ -2515,6 +2582,108 @@ fn draw_ref_bands(
         for seg in mid_segments {
             painter.add(egui::Shape::line(seg, bold));
         }
+    }
+}
+
+/// BH-tapered weighted power average across a half-octave window —
+/// matches what the live MS shader does per-pixel, but on CPU. Used by
+/// the live-median draw to sample a per-bin scratch buffer at an
+/// arbitrary frequency with the same smoothing the main curves get,
+/// so the median line and the live MS share a visual style.
+fn sample_bh_smoothed_db(
+    scratch: &[f32],
+    freq: f32,
+    sample_rate: f32,
+    fft_size: usize,
+    half_octaves: f32,
+) -> f32 {
+    if scratch.is_empty() || sample_rate <= 0.0 || fft_size == 0 {
+        return MIN_DB;
+    }
+    let bin_per_hz = fft_size as f32 / sample_rate;
+    let max_bin = (scratch.len() - 1) as f32;
+    if half_octaves <= 0.0 {
+        return sample_bin_db(scratch, freq, sample_rate, fft_size);
+    }
+    let bin_lo_f = (freq * (-half_octaves).exp2() * bin_per_hz).clamp(0.0, max_bin);
+    let bin_hi_f = (freq * half_octaves.exp2() * bin_per_hz).clamp(0.0, max_bin);
+    let span_bins = (bin_hi_f - bin_lo_f).max(1e-6);
+    const N_TAPS: usize = 32;
+    let step = span_bins / N_TAPS as f32;
+    let two_pi = std::f32::consts::TAU;
+    let mut p_sum = 0.0_f32;
+    let mut w_sum = 0.0_f32;
+    for i in 0..N_TAPS {
+        let phase = (i as f32 + 0.5) * (two_pi / N_TAPS as f32);
+        let w = 0.35875 - 0.48829 * phase.cos() + 0.14128 * (2.0 * phase).cos()
+            - 0.01168 * (3.0 * phase).cos();
+        let b_f = (bin_lo_f + (i as f32 + 0.5) * step).clamp(0.0, max_bin);
+        let b0 = b_f.floor() as usize;
+        let b1 = (b0 + 1).min(scratch.len() - 1);
+        let frac = b_f - b0 as f32;
+        let db_samp = scratch[b0] * (1.0 - frac) + scratch[b1] * frac;
+        p_sum += 10.0_f32.powf(db_samp * 0.1) * w;
+        w_sum += w;
+    }
+    10.0 * (p_sum / w_sum).max(1e-30).log10()
+}
+
+/// Bold solid white line representing the live signal's per-bin median
+/// (50th percentile), the same statistic the ref envelope's bold line
+/// shows for the loaded track. Computed online via `live_mid_median_db`
+/// (a dB-domain EMA, which approximates the median for the lognormal-ish
+/// per-bin distributions music produces). Smoothing matches the live MS
+/// curves so the median sits visually inside them rather than reading
+/// as a different rendering style.
+fn draw_live_median(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    freq_min: f32,
+    freq_max: f32,
+    live_median_db: &[f32],
+    sample_rate: f32,
+    fft_size: usize,
+    weighting: Weighting,
+    smoothing: FreqSmoothing,
+) {
+    if rect.width() <= 1.0
+        || rect.height() <= 1.0
+        || live_median_db.is_empty()
+        || sample_rate <= 0.0
+        || fft_size == 0
+        || freq_max <= freq_min
+    {
+        return;
+    }
+    let weight_align = weighting_align_offset(weighting, freq_min, freq_max);
+    let log_min = freq_min.ln();
+    let log_max = freq_max.ln();
+    let log_span = log_max - log_min;
+    // One sample per ~1 px column. Catmull-Rom would be overkill — the
+    // EMA already smooths temporally, BH window smooths spatially, and
+    // egui's polyline antialias hides the segment joints.
+    let n = (rect.width().ceil() as usize).max(2);
+    let fixed_half = smoothing.fixed_half_octaves();
+    let mut pts: Vec<egui::Pos2> = Vec::with_capacity(n);
+    for i in 0..n {
+        let t = i as f32 / (n - 1) as f32;
+        let freq = (log_min + t * log_span).exp();
+        let half = fixed_half.unwrap_or_else(|| erb_half_octaves_at(freq));
+        let smoothed_raw =
+            sample_bh_smoothed_db(live_median_db, freq, sample_rate, fft_size, half);
+        if smoothed_raw <= MIN_DB + 1.0 {
+            continue;
+        }
+        let weighted = smoothed_raw + weighting_db_at(weighting, freq) + weight_align;
+        let x = rect.left() + t * rect.width();
+        let y = db_to_y(weighted, DB_MIN, DB_MAX, rect);
+        pts.push(egui::pos2(x, y));
+    }
+    if pts.len() >= 2 {
+        painter.add(egui::Shape::line(
+            pts,
+            egui::Stroke::new(2.5, egui::Color32::WHITE),
+        ));
     }
 }
 
