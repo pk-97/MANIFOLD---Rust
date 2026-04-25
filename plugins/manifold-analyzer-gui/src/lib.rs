@@ -2239,11 +2239,12 @@ fn draw_reference_curve(
 /// immediately instead of fading in over this window.
 const REF_AUTO_GAIN_TAU_SECS: f32 = 4.0;
 
-/// Live-median EMA time constant. Longer than the auto-gain-match
-/// because the median is a "where the spectrum sits over time" stat,
-/// not a per-frame loudness measure — should converge to a useful
-/// shape over ~30–60 s of playback while not jumping on transients.
-const LIVE_MEDIAN_TAU_SECS: f32 = 12.0;
+/// Live-median EMA time constant. Matched to `REF_AUTO_GAIN_TAU_SECS`
+/// so the white median line and the auto-gain-aligned ref overlay
+/// settle on the same timescale — they're describing the same view
+/// of the signal, just one is the median estimator and the other is
+/// the loudness-match shift.
+const LIVE_MEDIAN_TAU_SECS: f32 = 4.0;
 
 /// Number of log-spaced sample points we use to compute the live ↔ ref
 /// power-mean difference. 64 is dense enough that no narrow peak
