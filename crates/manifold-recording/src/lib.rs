@@ -1,8 +1,12 @@
 //! Live recording for MANIFOLD.
 //!
-//! Captures the compositor output and optional audio input into a single MP4
-//! file during live performance. Zero impact on the content thread — recording
-//! runs on a dedicated thread with a pre-allocated texture pool.
+//! Captures the compositor output and optional audio input into a QuickTime
+//! (.mov) file during live performance. Zero impact on the content thread —
+//! recording runs on a dedicated thread with a pre-allocated texture pool.
+//!
+//! Codec: ProRes 422 Proxy for SDR (Apple Silicon ProRes HW encoder, reliable
+//! over arbitrary durations). HEVC Main10 for HDR (lower per-second bitrate
+//! avoids the HEVC encoder's sustained-4K60 malfunction threshold).
 //!
 //! # Architecture
 //!

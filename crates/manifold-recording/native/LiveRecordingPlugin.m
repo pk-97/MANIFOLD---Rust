@@ -1,14 +1,26 @@
 // LiveRecordingPlugin.m — Real-time A/V recording for MANIFOLD live performance.
 //
-// Records the compositor output + optional audio input into a single MP4,
-// using wall-clock timestamps for frame-accurate, time-faithful capture.
+// Records the compositor output + optional audio input into a QuickTime
+// (.mov) container, using wall-clock timestamps for frame-accurate,
+// time-faithful capture.
+//
+// Codec choice:
+//   - SDR: Apple ProRes 422 Proxy. Apple Silicon's HW HEVC encoder exhibits
+//     a long-tail malfunction (kVTVideoEncoderMalfunctionErr / OSStatus
+//     -16364) at ~3 GB of cumulative bitstream output under sustained 4K60
+//     use, regardless of bitrate or fragmentation. ProRes runs on a
+//     separate, mature HW encoder path; I-frame only, 10-bit YCbCr 4:2:2,
+//     ideal for editorial workflows in Resolve / FCP. Fixed bitrate
+//     (~117 Mbps at 4K60 = ~17.5 GB / 20 min).
+//   - HDR: HEVC Main10 (PQ / BT.2020). Lower per-second bitrate than 4K60
+//     SDR keeps it well below the encoder malfunction threshold.
 //
 // Key differences from the offline MetalEncoderPlugin:
 //   - expectsMediaDataInRealTime = YES (optimized for live ingestion)
-//   - kVTCompressionPropertyKey_RealTime = YES (prioritize encoding speed)
+//   - kVTCompressionPropertyKey_RealTime = YES (HDR path; ProRes ignores it)
 //   - Audio track (AAC or ALAC) from system audio input (e.g. BlackHole)
 //   - Wall-clock PTS via CMTimeMakeWithSeconds (not frame-index-based)
-//   - Fragmented MP4 (movieFragmentInterval = 5s) for runtime-failure safety:
+//   - Fragmented MOV (movieFragmentInterval = 5s) for runtime-failure safety:
 //     every completed fragment is independently playable, so AVAssetWriter
 //     transitioning to Failed mid-recording or a process crash leaves a
 //     recoverable file rather than a 0-byte-recoverable mdat-only blob.
@@ -115,8 +127,10 @@ void* LiveRecorder_Create(int width, int height, float fps, const char* outputPa
         [[NSFileManager defaultManager] removeItemAtURL:fileURL error:nil];
 
         NSError* writerError = nil;
+        // QuickTime container — required for ProRes (SDR path) and accepts
+        // HEVC fine for the HDR path. One container fits both codecs.
         state->assetWriter = [[AVAssetWriter alloc] initWithURL:fileURL
-                                                       fileType:AVFileTypeMPEG4
+                                                       fileType:AVFileTypeQuickTimeMovie
                                                           error:&writerError];
         if (state->assetWriter == nil)
         {
@@ -148,8 +162,13 @@ void* LiveRecorder_Create(int width, int height, float fps, const char* outputPa
         if (targetBps < 10000000) targetBps = 10000000;    // 10 Mbps min
         if (targetBps > 250000000) targetBps = 250000000;  // 250 Mbps max
 
-        NSLog(@"[LiveRecorder] Target bitrate: %d bps (%.1f Mbps) for %dx%d @ %d fps",
-              targetBps, targetBps / 1000000.0, width, height, state->fpsNum);
+        if (state->isHDR) {
+            NSLog(@"[LiveRecorder] HEVC Main10 target: %d bps (%.1f Mbps) for %dx%d @ %d fps",
+                  targetBps, targetBps / 1000000.0, width, height, state->fpsNum);
+        } else {
+            NSLog(@"[LiveRecorder] ProRes 422 Proxy (fixed bitrate) for %dx%d @ %d fps",
+                  width, height, state->fpsNum);
+        }
 
         NSDictionary* compressionProps;
         NSDictionary* videoSettings;
@@ -182,27 +201,26 @@ void* LiveRecorder_Create(int width, int height, float fps, const char* outputPa
         }
         else
         {
-            compressionProps = @{
-                AVVideoAverageBitRateKey:             @(targetBps),
-                AVVideoExpectedSourceFrameRateKey:    @(state->fpsNum),
-                AVVideoMaxKeyFrameIntervalKey:        @(state->fpsNum),
-                AVVideoAllowFrameReorderingKey:       @NO,
-                AVVideoProfileLevelKey:               @"HEVC_Main_AutoLevel",
-                @"RealTime":                          @YES,
-            };
-
+            // ProRes Proxy — Apple Silicon's hardware ProRes encoder is on a
+            // separate, mature path from the HEVC encoder (which exhibits a
+            // long-tail malfunction at ~3 GB of cumulative bitstream output
+            // under sustained 4K60 use). ProRes is I-frame only, 10-bit YCbCr
+            // 4:2:2, no GOP / no B-frames — ignores AVVideoCompressionPropertiesKey
+            // and AVVideoAverageBitRateKey (fixed bitrate per resolution+fps).
+            // At 4K60, Proxy ≈ 117 Mbps → ~17.5 GB for a 20-min take.
+            (void)targetBps;
             videoSettings = @{
-                AVVideoCodecKey:                  AVVideoCodecTypeHEVC,
+                AVVideoCodecKey:                  AVVideoCodecTypeAppleProRes422Proxy,
                 AVVideoWidthKey:                  @(width),
                 AVVideoHeightKey:                 @(height),
-                AVVideoCompressionPropertiesKey:  compressionProps,
                 AVVideoColorPropertiesKey: @{
                     AVVideoColorPrimariesKey:          AVVideoColorPrimaries_ITU_R_709_2,
                     AVVideoTransferFunctionKey:        AVVideoTransferFunction_ITU_R_709_2,
                     AVVideoYCbCrMatrixKey:             AVVideoYCbCrMatrix_ITU_R_709_2,
                 },
             };
-
+            // AVAssetWriter accepts BGRA input and converts internally to the
+            // ProRes-native YCbCr 4:2:2 10-bit during encode.
             pixelFormatType = kCVPixelFormatType_32BGRA;
         }
 

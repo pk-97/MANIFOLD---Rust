@@ -33,7 +33,8 @@ impl LiveRecordingConfig {
         // Format as YYYY-MM-DD_HH-MM-SS using chrono-free approach.
         let secs = now.as_secs();
         // Simple timestamp — sufficient for unique filenames.
-        let output_path = format!("{home}/Desktop/MANIFOLD_{secs}.mp4");
+        // .mov container — required for ProRes (SDR) and works fine for HEVC (HDR).
+        let output_path = format!("{home}/Desktop/MANIFOLD_{secs}.mov");
         Self {
             output_path,
             hdr: false,
