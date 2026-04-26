@@ -129,14 +129,15 @@ void* LiveRecorder_Create(int width, int height, float fps, const char* outputPa
 
         // -- Video input ----------------------------------------------------------
 
-        // Bitrate: 0.15 bpp — tuned for real-time hardware encoding.
-        // The offline encoder uses 0.6 bpp but has no real-time constraint.
-        // At 4K60, 0.15 bpp = ~75 Mbps — excellent quality for generative
-        // content and well within VideoToolbox's real-time encoding capacity.
-        // Clamped to 10-100 Mbps.
-        int targetBps = (int)((double)width * height * state->fpsNum * 0.15);
+        // Bitrate: 0.40 bpp — tuned for HEVC Main (8-bit) real-time hardware encoding.
+        // Apple Silicon's real-time HEVC Main path is mature and handles noisy /
+        // fast-motion content well at this budget. Banding on smooth gradients is
+        // mitigated by triangular dither in the format-converter shader. The
+        // offline encoder uses 0.6 bpp (no real-time constraint).
+        // Clamped to 10-250 Mbps. At 4K60, 0.40 bpp = ~199 Mbps.
+        int targetBps = (int)((double)width * height * state->fpsNum * 0.40);
         if (targetBps < 10000000) targetBps = 10000000;    // 10 Mbps min
-        if (targetBps > 100000000) targetBps = 100000000;  // 100 Mbps max
+        if (targetBps > 250000000) targetBps = 250000000;  // 250 Mbps max
 
         NSLog(@"[LiveRecorder] Target bitrate: %d bps (%.1f Mbps) for %dx%d @ %d fps",
               targetBps, targetBps / 1000000.0, width, height, state->fpsNum);
@@ -174,18 +175,23 @@ void* LiveRecorder_Create(int width, int height, float fps, const char* outputPa
         {
             compressionProps = @{
                 AVVideoAverageBitRateKey:             @(targetBps),
-                AVVideoProfileLevelKey:               AVVideoProfileLevelH264HighAutoLevel,
                 AVVideoExpectedSourceFrameRateKey:    @(state->fpsNum),
                 AVVideoMaxKeyFrameIntervalKey:        @(state->fpsNum),
                 AVVideoAllowFrameReorderingKey:       @NO,
-                @"RealTime": @YES,
+                AVVideoProfileLevelKey:               @"HEVC_Main_AutoLevel",
+                @"RealTime":                          @YES,
             };
 
             videoSettings = @{
-                AVVideoCodecKey:                  AVVideoCodecTypeH264,
+                AVVideoCodecKey:                  AVVideoCodecTypeHEVC,
                 AVVideoWidthKey:                  @(width),
                 AVVideoHeightKey:                 @(height),
                 AVVideoCompressionPropertiesKey:  compressionProps,
+                AVVideoColorPropertiesKey: @{
+                    AVVideoColorPrimariesKey:          AVVideoColorPrimaries_ITU_R_709_2,
+                    AVVideoTransferFunctionKey:        AVVideoTransferFunction_ITU_R_709_2,
+                    AVVideoYCbCrMatrixKey:             AVVideoYCbCrMatrix_ITU_R_709_2,
+                },
             };
 
             pixelFormatType = kCVPixelFormatType_32BGRA;
