@@ -8,7 +8,10 @@
 //   - kVTCompressionPropertyKey_RealTime = YES (prioritize encoding speed)
 //   - Audio track (AAC or ALAC) from system audio input (e.g. BlackHole)
 //   - Wall-clock PTS via CMTimeMakeWithSeconds (not frame-index-based)
-//   - Fragmented MP4 (movieFragmentInterval = 10s) for crash safety
+//   - Fragmented MP4 (movieFragmentInterval = 5s) for runtime-failure safety:
+//     every completed fragment is independently playable, so AVAssetWriter
+//     transitioning to Failed mid-recording or a process crash leaves a
+//     recoverable file rather than a 0-byte-recoverable mdat-only blob.
 //
 // Exported C functions (FFI from Rust):
 //   LiveRecorder_Create(...)              -> opaque handle, NULL on failure
@@ -59,6 +62,7 @@ typedef struct
     int                                     audioChannels;
     BOOL                                    isHDR;
     BOOL                                    hasAudio;
+    BOOL                                    hasLoggedWriterFailure; // set on first non-Writing observation
     dispatch_queue_t                        appendQueue;  // serial queue for async appends
 } LiveRecorderState;
 
@@ -123,9 +127,14 @@ void* LiveRecorder_Create(int width, int height, float fps, const char* outputPa
             return NULL;
         }
 
-        // No movieFragmentInterval — fragmented writing causes periodic disk
-        // flush stalls that trigger readyForMoreMediaData=NO and frame drops.
-        // The @try/@catch safety net protects against crashes during recording.
+        // movieFragmentInterval = 5s. Each completed fragment is self-contained
+        // and independently playable (with ffmpeg, QuickTime, Resolve) even if
+        // the writer transitions to Failed mid-recording or the process crashes
+        // before finishWriting can run. Without fragmentation, a single runtime
+        // failure produces a 0-byte-recoverable file regardless of how much
+        // data was written. Brief disk-flush stalls per fragment are sub-frame
+        // on internal SSDs at our bitrate (~25 MB/s × 5s = 125 MB flush).
+        state->assetWriter.movieFragmentInterval = CMTimeMake(5, 1);
 
         // -- Video input ----------------------------------------------------------
 
@@ -301,7 +310,23 @@ int LiveRecorder_EncodeVideoFrame(void* handle, void* metalTexturePtr, double el
         LiveRecorderState* state = (LiveRecorderState*)handle;
 
         if (state->assetWriter.status != AVAssetWriterStatusWriting)
+        {
+            // Surface the FIRST mid-recording transition to non-Writing so the
+            // user sees one obvious line in console — otherwise the writer
+            // dies silently and the next thousands of frames are dropped into
+            // the void. (Repeated calls are silenced; the recording thread
+            // already logs per-frame [RecordingThread] errors.)
+            if (!state->hasLoggedWriterFailure)
+            {
+                state->hasLoggedWriterFailure = YES;
+                NSLog(@"[LiveRecorder] *** WRITER ENTERED NON-WRITING STATE *** "
+                      "status=%ld error=%@ — frames are being dropped. "
+                      "Stop the recording; further frames will not be saved.",
+                      (long)state->assetWriter.status,
+                      state->assetWriter.error);
+            }
             return LR_ERR_WRITER_NOT_READY;
+        }
 
         // Wait for the writer to be ready (brief spin — real-time mode should
         // return immediately in the common case).
@@ -590,29 +615,54 @@ int LiveRecorder_Finalize(void* handle)
 
         @try
         {
-            if (state->assetWriter != nil &&
-                state->assetWriter.status == AVAssetWriterStatusWriting)
+            if (state->assetWriter != nil)
             {
-                [state->videoInput markAsFinished];
-                if (state->audioInput != nil)
-                    [state->audioInput markAsFinished];
+                AVAssetWriterStatus preStatus = state->assetWriter.status;
+                NSLog(@"[LiveRecorder] Finalize: pre-finish status=%ld error=%@",
+                      (long)preStatus, state->assetWriter.error);
 
-                dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-                [state->assetWriter finishWritingWithCompletionHandler:^{
-                    dispatch_semaphore_signal(sem);
-                }];
-                dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 30LL * NSEC_PER_SEC));
-
-                if (state->assetWriter.status == AVAssetWriterStatusFailed)
+                if (preStatus == AVAssetWriterStatusWriting)
                 {
-                    NSLog(@"[LiveRecorder] finishWriting failed: %@", state->assetWriter.error);
+                    // Healthy path — clean finish, full moov written.
+                    [state->videoInput markAsFinished];
+                    if (state->audioInput != nil)
+                        [state->audioInput markAsFinished];
+
+                    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+                    [state->assetWriter finishWritingWithCompletionHandler:^{
+                        dispatch_semaphore_signal(sem);
+                    }];
+                    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 30LL * NSEC_PER_SEC));
+
+                    if (state->assetWriter.status == AVAssetWriterStatusFailed)
+                    {
+                        NSLog(@"[LiveRecorder] finishWriting failed: %@", state->assetWriter.error);
+                        frameCount = -LR_ERR_WRITER_FAILED;
+                    }
+                }
+                else if (preStatus == AVAssetWriterStatusFailed)
+                {
+                    // Writer died mid-recording. Calling finishWriting now would
+                    // throw. With movieFragmentInterval enabled, every flushed
+                    // fragment up to the failure point is independently playable
+                    // — ffmpeg / QuickTime / Resolve will read what's there.
+                    NSLog(@"[LiveRecorder] *** Writer was Failed at finalize *** "
+                          "Fragments up to failure point are recoverable. error=%@",
+                          state->assetWriter.error);
+                    frameCount = -LR_ERR_WRITER_FAILED;
+                }
+                else
+                {
+                    NSLog(@"[LiveRecorder] Unexpected writer status at finalize: %ld",
+                          (long)preStatus);
                     frameCount = -LR_ERR_WRITER_FAILED;
                 }
             }
         }
         @catch (NSException* e)
         {
-            NSLog(@"[LiveRecorder] Finalize exception: %@", e.reason);
+            NSLog(@"[LiveRecorder] Finalize exception: %@ — fragments before "
+                  "failure point should still be playable.", e.reason);
             frameCount = -LR_ERR_WRITER_FAILED;
         }
 
