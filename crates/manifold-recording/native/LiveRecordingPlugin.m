@@ -19,7 +19,10 @@
 //   - expectsMediaDataInRealTime = YES (optimized for live ingestion)
 //   - kVTCompressionPropertyKey_RealTime = YES (HDR path; ProRes ignores it)
 //   - Audio track (AAC or ALAC) from system audio input (e.g. BlackHole)
-//   - Wall-clock PTS via CMTimeMakeWithSeconds (not frame-index-based)
+//   - Wall-clock PTS via timescale-90000 + monotonic clamp (preserves
+//     wall-clock fidelity for audio sync; clamp prevents duplicate PTS
+//     under content-thread jitter, which AVAssetWriter rejects as
+//     OSStatus -16364 / invalid timestamp).
 //   - Fragmented MOV (movieFragmentInterval = 5s) for runtime-failure safety:
 //     every completed fragment is independently playable, so AVAssetWriter
 //     transitioning to Failed mid-recording or a process crash leaves a
@@ -75,6 +78,8 @@ typedef struct
     BOOL                                    isHDR;
     BOOL                                    hasAudio;
     BOOL                                    hasLoggedWriterFailure; // set on first non-Writing observation
+    int64_t                                 lastVideoPTSValue;     // last appended PTS (90000 timescale); -1 = none yet
+    int64_t                                 ptsClampCount;         // count of times monotonic clamp fired
     dispatch_queue_t                        appendQueue;  // serial queue for async appends
 } LiveRecorderState;
 
@@ -99,6 +104,8 @@ void* LiveRecorder_Create(int width, int height, float fps, const char* outputPa
         state->device = device;
         state->commandQueue = [device newCommandQueue];
         atomic_init(&state->videoFramesAppended, 0);
+        state->lastVideoPTSValue = -1;
+        state->ptsClampCount = 0;
         state->appendQueue = dispatch_queue_create("com.manifold.recording.append",
                                                     DISPATCH_QUEUE_SERIAL);
         state->width = width;
@@ -444,7 +451,37 @@ int LiveRecorder_EncodeVideoFrame(void* handle, void* metalTexturePtr, double el
         // Append pixel buffer ASYNC — the VideoToolbox encoding happens on
         // the serial append queue, not the recording thread. This frees the
         // recording thread to process the next frame immediately.
-        CMTime presentTime = CMTimeMakeWithSeconds(elapsedSeconds, 600);
+        //
+        // PTS: timescale 90000 (~11 µs resolution) + monotonic clamp.
+        // AVAssetWriter rejects samples whose PTS <= the previous PTS with
+        // OSStatus -16364 (invalid timestamp). At our previous timescale 600
+        // (1.67 ms), wall-clock content-thread jitter could occasionally
+        // produce two consecutive frames within one timescale unit, rounding
+        // to identical PTS values; over thousands of frames this collision
+        // would happen and put the writer into permanent Failed state.
+        // 90000 makes natural collisions astronomically unlikely; the clamp
+        // is belt-and-suspenders that guarantees strict monotonicity even
+        // under pathological timing.
+        const int32_t kVideoTimescale = 90000;
+        int64_t computedPTSValue = (int64_t)round(elapsedSeconds * (double)kVideoTimescale);
+        int64_t monotonicPTSValue = computedPTSValue;
+        if (state->lastVideoPTSValue >= 0 && computedPTSValue <= state->lastVideoPTSValue)
+        {
+            monotonicPTSValue = state->lastVideoPTSValue + 1;
+            // Rate-limited log: first 5 occurrences, then every 100th. Lets
+            // us see whether duplicate-PTS is actually happening in our
+            // pipeline without spamming the console.
+            int64_t n = state->ptsClampCount;
+            if (n < 5 || (n % 100) == 0)
+            {
+                NSLog(@"[LiveRecorder] PTS clamp #%lld: computed=%lld <= last=%lld → using %lld at %.3fs",
+                      n + 1, computedPTSValue, state->lastVideoPTSValue,
+                      monotonicPTSValue, elapsedSeconds);
+            }
+            state->ptsClampCount++;
+        }
+        state->lastVideoPTSValue = monotonicPTSValue;
+        CMTime presentTime = CMTimeMake(monotonicPTSValue, kVideoTimescale);
         AVAssetWriterInputPixelBufferAdaptor* adaptor = state->videoAdaptor;
         AVAssetWriter* writer = state->assetWriter;
 
@@ -700,9 +737,13 @@ int LiveRecorder_Finalize(void* handle)
         state->commandQueue = nil;
         state->device = nil;
 
+        // Capture before free — must not deref state after this point.
+        int64_t finalClampCount = state->ptsClampCount;
         free(state);
 
-        NSLog(@"[LiveRecorder] Finalized: %d frames", frameCount >= 0 ? frameCount : 0);
+        NSLog(@"[LiveRecorder] Finalized: %d frames, %lld PTS clamps",
+              frameCount >= 0 ? frameCount : 0,
+              finalClampCount);
         return frameCount;
     }
 }
