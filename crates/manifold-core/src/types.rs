@@ -343,6 +343,7 @@ pub enum ResolutionPreset {
     Portrait720 = 5,
     Portrait1080 = 6,
     Portrait1440 = 7,
+    Portrait4K = 8,
 }
 
 impl Serialize for ResolutionPreset {
@@ -364,6 +365,7 @@ impl<'de> Deserialize<'de> for ResolutionPreset {
                 5 => ResolutionPreset::Portrait720,
                 6 => ResolutionPreset::Portrait1080,
                 7 => ResolutionPreset::Portrait1440,
+                8 => ResolutionPreset::Portrait4K,
                 _ => ResolutionPreset::FHD1080p,
             },
             serde_json::Value::String(s) => match s.as_str() {
@@ -376,6 +378,7 @@ impl<'de> Deserialize<'de> for ResolutionPreset {
                 "Portrait720" => ResolutionPreset::Portrait720,
                 "Portrait1080" => ResolutionPreset::Portrait1080,
                 "Portrait1440" => ResolutionPreset::Portrait1440,
+                "Portrait4K" => ResolutionPreset::Portrait4K,
                 // Unity C# enum names
                 "HD_720p" => ResolutionPreset::HD720p,
                 "FHD_1080p" => ResolutionPreset::FHD1080p,
@@ -385,6 +388,7 @@ impl<'de> Deserialize<'de> for ResolutionPreset {
                 "Portrait_720" => ResolutionPreset::Portrait720,
                 "Portrait_1080" => ResolutionPreset::Portrait1080,
                 "Portrait_1440" => ResolutionPreset::Portrait1440,
+                "Portrait_4K" => ResolutionPreset::Portrait4K,
                 _ => ResolutionPreset::FHD1080p,
             },
             _ => ResolutionPreset::FHD1080p,
@@ -402,6 +406,7 @@ impl ResolutionPreset {
         Self::Portrait720,
         Self::Portrait1080,
         Self::Portrait1440,
+        Self::Portrait4K,
     ];
 
     pub fn dimensions(&self) -> (i32, i32) {
@@ -414,6 +419,7 @@ impl ResolutionPreset {
             ResolutionPreset::Portrait720 => (720, 1280),
             ResolutionPreset::Portrait1080 => (1080, 1920),
             ResolutionPreset::Portrait1440 => (1440, 2560),
+            ResolutionPreset::Portrait4K => (2160, 3840),
         }
     }
 
@@ -428,6 +434,7 @@ impl ResolutionPreset {
             Self::Portrait720 => "720v",
             Self::Portrait1080 => "1080v",
             Self::Portrait1440 => "1440v",
+            Self::Portrait4K => "4Kv",
         }
     }
 
