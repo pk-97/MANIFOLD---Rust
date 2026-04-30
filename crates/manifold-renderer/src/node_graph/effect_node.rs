@@ -4,6 +4,7 @@
 use ahash::AHashMap;
 use manifold_core::{Beats, Seconds};
 
+use crate::node_graph::bindings::{NodeInputs, NodeOutputs};
 use crate::node_graph::parameters::{ParamDef, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput};
 
@@ -57,23 +58,29 @@ pub type ParamValues = AHashMap<&'static str, ParamValue>;
 
 /// What an [`EffectNode`] sees during `evaluate`.
 ///
-/// The exact shape of input/output bindings is defined by the graph runtime
-/// (subsequent step). For now the context carries only the minimum needed for
-/// the trait to compile; future runtime work will populate it with concrete
-/// resource handles (GPU encoder, input/output texture bindings, etc.).
+/// The runtime populates this each step with the bindings produced by the
+/// execution plan: which slot supplies each input, which slot receives each
+/// output. A future step will add a `&mut GpuEncoder` and typed
+/// texture/scalar accessors on top of the slot lookups.
 pub struct EffectNodeContext<'a> {
     pub time: FrameTime,
     pub params: &'a ParamValues,
-    // gpu encoder, input bindings, output bindings — added in step 2.
-    _phantom: std::marker::PhantomData<&'a ()>,
+    pub inputs: NodeInputs<'a>,
+    pub outputs: NodeOutputs<'a>,
 }
 
 impl<'a> EffectNodeContext<'a> {
-    pub fn new(time: FrameTime, params: &'a ParamValues) -> Self {
+    pub fn new(
+        time: FrameTime,
+        params: &'a ParamValues,
+        inputs: NodeInputs<'a>,
+        outputs: NodeOutputs<'a>,
+    ) -> Self {
         Self {
             time,
             params,
-            _phantom: std::marker::PhantomData,
+            inputs,
+            outputs,
         }
     }
 }

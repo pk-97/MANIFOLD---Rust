@@ -7,17 +7,21 @@
 //! runtime (topological sort, execution plan, lifetime planner, resource
 //! bindings) lands in subsequent steps.
 
+mod bindings;
 mod effect_node;
+mod execution;
 mod execution_plan;
 mod graph;
 mod parameters;
 mod ports;
 mod validation;
 
+pub use bindings::{NodeInputs, NodeOutputs, Slot};
 pub use effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId, NodeWire,
     ParamValues,
 };
+pub use execution::{Executor, ResourcePool};
 pub use execution_plan::{compile, ExecutionPlan, ExecutionStep, ResourceId};
 pub use graph::{Graph, NodeInstance};
 pub use parameters::{ParamDef, ParamType, ParamValue};

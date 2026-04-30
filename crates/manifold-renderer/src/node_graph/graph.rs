@@ -127,6 +127,10 @@ impl Graph {
         self.nodes.get(&id)
     }
 
+    pub fn get_node_mut(&mut self, id: NodeInstanceId) -> Option<&mut NodeInstance> {
+        self.nodes.get_mut(&id)
+    }
+
     /// Iterate every node in the graph. Iteration order is unspecified.
     pub fn nodes(&self) -> impl Iterator<Item = &NodeInstance> {
         self.nodes.values()
