@@ -1,0 +1,211 @@
+//! Filter primitives: [`Threshold`] (pixel-local), [`Blur`] (neighborhood),
+//! [`MipChain`] (multi-pass).
+//!
+//! These three exercise the different fusion categories: Threshold is fully
+//! fuseable, Blur breaks fusion with its input but accepts pixel-local
+//! tail-fusion, and MipChain runs a series of passes regardless.
+
+use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
+use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
+use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
+
+const SOURCE_INPUT: NodeInput = NodePort {
+    name: "source",
+    ty: PortType::Texture2D,
+    kind: PortKind::Input,
+    required: true,
+};
+
+const OUT_OUTPUT: NodeOutput = NodePort {
+    name: "out",
+    ty: PortType::Texture2D,
+    kind: PortKind::Output,
+    required: false,
+};
+
+// =====================================================================
+// Threshold — keep pixels above a luma cutoff (with optional softness).
+// =====================================================================
+
+pub const THRESHOLD_TYPE_ID: &str = "primitive.threshold";
+
+const THRESHOLD_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];
+const THRESHOLD_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
+
+const THRESHOLD_PARAMS: [ParamDef; 2] = [
+    ParamDef {
+        name: "level",
+        label: "Threshold",
+        ty: ParamType::Float,
+        default: ParamValue::Float(0.5),
+        range: Some((0.0, 1.0)),
+        enum_values: &[],
+    },
+    ParamDef {
+        name: "softness",
+        label: "Softness",
+        ty: ParamType::Float,
+        default: ParamValue::Float(0.0),
+        range: Some((0.0, 1.0)),
+        enum_values: &[],
+    },
+];
+
+#[derive(Debug)]
+pub struct Threshold {
+    type_id: EffectNodeType,
+}
+
+impl Threshold {
+    pub fn new() -> Self {
+        Self {
+            type_id: EffectNodeType::new(THRESHOLD_TYPE_ID),
+        }
+    }
+}
+
+impl Default for Threshold {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl EffectNode for Threshold {
+    fn type_id(&self) -> &EffectNodeType {
+        &self.type_id
+    }
+    fn inputs(&self) -> &[NodeInput] {
+        &THRESHOLD_INPUTS
+    }
+    fn outputs(&self) -> &[NodeOutput] {
+        &THRESHOLD_OUTPUTS
+    }
+    fn parameters(&self) -> &[ParamDef] {
+        &THRESHOLD_PARAMS
+    }
+    fn evaluate(&mut self, _: &mut EffectNodeContext) {}
+}
+
+// =====================================================================
+// Blur — Gaussian/Box/Radial neighborhood blur.
+// =====================================================================
+
+pub const BLUR_TYPE_ID: &str = "primitive.blur";
+
+pub const BLUR_MODES: &[&str] = &["Gaussian", "Box", "Radial"];
+
+const BLUR_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];
+const BLUR_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
+
+const BLUR_PARAMS: [ParamDef; 2] = [
+    ParamDef {
+        name: "radius",
+        label: "Radius",
+        ty: ParamType::Float,
+        default: ParamValue::Float(4.0),
+        range: Some((0.0, 64.0)),
+        enum_values: &[],
+    },
+    ParamDef {
+        name: "mode",
+        label: "Mode",
+        ty: ParamType::Enum,
+        default: ParamValue::Enum(0), // Gaussian
+        range: None,
+        enum_values: BLUR_MODES,
+    },
+];
+
+#[derive(Debug)]
+pub struct Blur {
+    type_id: EffectNodeType,
+}
+
+impl Blur {
+    pub fn new() -> Self {
+        Self {
+            type_id: EffectNodeType::new(BLUR_TYPE_ID),
+        }
+    }
+}
+
+impl Default for Blur {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl EffectNode for Blur {
+    fn type_id(&self) -> &EffectNodeType {
+        &self.type_id
+    }
+    fn inputs(&self) -> &[NodeInput] {
+        &BLUR_INPUTS
+    }
+    fn outputs(&self) -> &[NodeOutput] {
+        &BLUR_OUTPUTS
+    }
+    fn parameters(&self) -> &[ParamDef] {
+        &BLUR_PARAMS
+    }
+    fn evaluate(&mut self, _: &mut EffectNodeContext) {}
+}
+
+// =====================================================================
+// MipChain — emit progressively-downsampled mip levels in a single texture.
+//
+// Output is one Texture2D handle; the convention is that this texture has
+// `levels` mip levels, accessible by downstream nodes that understand mip
+// chains (e.g., a per-level blur in Bloom). This convention is established
+// here so multi-pass composites have a way to encode "stack of textures"
+// without exploding the port count.
+// =====================================================================
+
+pub const MIP_CHAIN_TYPE_ID: &str = "primitive.mip_chain";
+
+const MIP_CHAIN_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];
+const MIP_CHAIN_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
+
+const MIP_CHAIN_PARAMS: [ParamDef; 1] = [ParamDef {
+    name: "levels",
+    label: "Levels",
+    ty: ParamType::Int,
+    default: ParamValue::Int(4),
+    range: Some((1.0, 8.0)),
+    enum_values: &[],
+}];
+
+#[derive(Debug)]
+pub struct MipChain {
+    type_id: EffectNodeType,
+}
+
+impl MipChain {
+    pub fn new() -> Self {
+        Self {
+            type_id: EffectNodeType::new(MIP_CHAIN_TYPE_ID),
+        }
+    }
+}
+
+impl Default for MipChain {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl EffectNode for MipChain {
+    fn type_id(&self) -> &EffectNodeType {
+        &self.type_id
+    }
+    fn inputs(&self) -> &[NodeInput] {
+        &MIP_CHAIN_INPUTS
+    }
+    fn outputs(&self) -> &[NodeOutput] {
+        &MIP_CHAIN_OUTPUTS
+    }
+    fn parameters(&self) -> &[ParamDef] {
+        &MIP_CHAIN_PARAMS
+    }
+    fn evaluate(&mut self, _: &mut EffectNodeContext) {}
+}

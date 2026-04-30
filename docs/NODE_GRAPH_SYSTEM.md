@@ -477,7 +477,7 @@ Things that need answering during implementation. Append as discovered, resolve 
 | Background compile thread + Arc swap | Not started | |
 | Source/FinalOutput boundary nodes | Done (2026-04-30) | `node_graph/boundary_nodes.rs`. Trivial no-op nodes; host pre/post-binds the boundary slots. |
 | Backend abstraction (mock + real seam) | Done (2026-04-30) | `node_graph/backend.rs`. `Backend` trait + `MockBackend`. Real `MetalBackend` lands in step 6. |
-| 10 V1 primitives | Not started | UVTransform, Threshold, Blur, MipChain, Mix, Blend, Luminance, GradientMap, Sample, ColorMatrix. |
+| 10 V1 primitives | Stubs done (2026-04-30) | `node_graph/primitives/`. All 10 declared with proper port shapes + parameters. `evaluate()` is a no-op until Metal backend lands. |
 | 3 V1 atomic nodes | Not started | Plasma, FluidSim 2D (with rich ports), Glitch. |
 | 5 V1 composite presets | Not started | Bloom, Halation, Infrared, Mirror (alias), SoftFocus. |
 | Wrapped legacy nodes (~35) | Not started | One Node trait wrapper per existing effect/generator. |

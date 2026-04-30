@@ -1,0 +1,214 @@
+//! V1 primitive nodes — the building blocks of composite presets.
+//!
+//! Each primitive is a small reusable [`EffectNode`](crate::node_graph::EffectNode)
+//! implementation. For step 6 (this commit), `evaluate()` is a no-op: the
+//! trait surface, port shapes, and parameter definitions are validated
+//! against `MockBackend` before real GPU integration in the next step.
+//!
+//! V1 set (10 primitives):
+//! - **color**: [`Luminance`], [`ColorMatrix`], [`GradientMap`]
+//! - **compose**: [`Mix`], [`Blend`]
+//! - **filter**: [`Threshold`], [`Blur`], [`MipChain`]
+//! - **uv**: [`UVTransform`], [`Sample`]
+//!
+//! Stable type IDs (`primitive.<name>`) are exported as public constants so
+//! the save format and a future registry can resolve them.
+
+mod color;
+mod compose;
+mod filter;
+mod uv;
+
+pub use color::{
+    ColorMatrix, GradientMap, Luminance, COLOR_MATRIX_TYPE_ID, GRADIENT_MAP_TYPE_ID,
+    LUMINANCE_TYPE_ID,
+};
+pub use compose::{Blend, Mix, BLEND_MODES, BLEND_TYPE_ID, MIX_TYPE_ID};
+pub use filter::{
+    Blur, MipChain, Threshold, BLUR_MODES, BLUR_TYPE_ID, MIP_CHAIN_TYPE_ID, THRESHOLD_TYPE_ID,
+};
+pub use uv::{
+    Sample, UVTransform, SAMPLE_FILTER_MODES, SAMPLE_TYPE_ID, SAMPLE_WRAP_MODES,
+    UV_TRANSFORM_MODES, UV_TRANSFORM_TYPE_ID,
+};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    use manifold_core::{Beats, Seconds};
+
+    use crate::node_graph::{
+        compile, validate, EffectNode, Executor, FinalOutput, FrameTime, Graph, ParamType,
+        ParamValue, Source,
+    };
+
+    fn frame_time() -> FrameTime {
+        FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+        }
+    }
+
+    /// Iterate one boxed instance of each V1 primitive so tests can assert
+    /// invariants over the whole catalog without listing them by hand.
+    fn all_primitives() -> Vec<Box<dyn EffectNode>> {
+        vec![
+            Box::new(Luminance::new()),
+            Box::new(ColorMatrix::new()),
+            Box::new(GradientMap::new()),
+            Box::new(Mix::new()),
+            Box::new(Blend::new()),
+            Box::new(Threshold::new()),
+            Box::new(Blur::new()),
+            Box::new(MipChain::new()),
+            Box::new(UVTransform::new()),
+            Box::new(Sample::new()),
+        ]
+    }
+
+    #[test]
+    fn all_v1_primitives_have_unique_type_ids() {
+        let primitives = all_primitives();
+        let ids: HashSet<&str> = primitives.iter().map(|p| p.type_id().as_str()).collect();
+        assert_eq!(ids.len(), 10, "V1 primitive type IDs must be unique");
+    }
+
+    #[test]
+    fn all_v1_primitive_type_ids_have_primitive_prefix() {
+        for p in all_primitives() {
+            assert!(
+                p.type_id().as_str().starts_with("primitive."),
+                "primitive type IDs must start with `primitive.` — got {}",
+                p.type_id().as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn all_v1_primitives_produce_at_least_one_output() {
+        for p in all_primitives() {
+            assert!(
+                !p.outputs().is_empty(),
+                "primitive {} has no outputs",
+                p.type_id().as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn parameter_defaults_match_declared_types() {
+        // Catches typos like `default: ParamValue::Float(...)` on a
+        // `ty: ParamType::Vec3` parameter.
+        for p in all_primitives() {
+            for def in p.parameters() {
+                let ok = matches!(
+                    (def.ty, def.default),
+                    (ParamType::Float, ParamValue::Float(_))
+                        | (ParamType::Int, ParamValue::Int(_))
+                        | (ParamType::Bool, ParamValue::Bool(_))
+                        | (ParamType::Vec2, ParamValue::Vec2(_))
+                        | (ParamType::Vec3, ParamValue::Vec3(_))
+                        | (ParamType::Vec4, ParamValue::Vec4(_))
+                        | (ParamType::Color, ParamValue::Color(_))
+                        | (ParamType::Enum, ParamValue::Enum(_))
+                );
+                assert!(
+                    ok,
+                    "{} param `{}`: default {:?} does not match declared type {:?}",
+                    p.type_id().as_str(),
+                    def.name,
+                    def.default,
+                    def.ty,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn enum_param_defaults_are_in_range() {
+        for p in all_primitives() {
+            for def in p.parameters() {
+                if def.ty == ParamType::Enum {
+                    let ParamValue::Enum(idx) = def.default else {
+                        unreachable!("enforced by parameter_defaults_match_declared_types");
+                    };
+                    assert!(
+                        (idx as usize) < def.enum_values.len(),
+                        "{} param `{}`: default index {} out of bounds for {} options",
+                        p.type_id().as_str(),
+                        def.name,
+                        idx,
+                        def.enum_values.len(),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Hero integration test: assemble the V1 Bloom-as-composite topology
+    /// from primitives + boundary nodes, compile it, execute it. Validates
+    /// that the trait shape and pool work for a real composite preset.
+    ///
+    /// Topology:
+    ///
+    /// ```text
+    ///   Source ──→ MipChain ──→ Blur ──→ Blend.overlay ─→ FinalOutput
+    ///       │                              ↑
+    ///       └─────────────────────────→ Blend.base
+    /// ```
+    ///
+    /// (Threshold is omitted from this test for simplicity — the four-node
+    /// shape is enough to exercise fan-out, multi-input, and the boundary.
+    /// Real Bloom preset will include Threshold before MipChain.)
+    #[test]
+    fn bloom_shape_composite_compiles_and_executes() {
+        let mut g = Graph::new();
+        let src = g.add_node(Box::new(Source::new()));
+        let mips = g.add_node(Box::new(MipChain::new()));
+        let blur = g.add_node(Box::new(Blur::new()));
+        let blend = g.add_node(Box::new(Blend::new()));
+        let out = g.add_node(Box::new(FinalOutput::new()));
+
+        g.connect((src, "out"), (mips, "source")).unwrap();
+        g.connect((mips, "out"), (blur, "source")).unwrap();
+        g.connect((src, "out"), (blend, "base")).unwrap();
+        g.connect((blur, "out"), (blend, "overlay")).unwrap();
+        g.connect((blend, "out"), (out, "in")).unwrap();
+
+        validate(&g).unwrap();
+        let plan = compile(&g).unwrap();
+        assert_eq!(plan.steps().len(), 5);
+
+        let mut exec = Executor::with_mock();
+        exec.execute_frame(&mut g, &plan, frame_time());
+    }
+
+    /// Mix has two required inputs; both must be wired or validate() fails.
+    #[test]
+    fn mix_requires_both_inputs_to_be_wired() {
+        let mut g = Graph::new();
+        let _src = g.add_node(Box::new(Source::new()));
+        let _mix = g.add_node(Box::new(Mix::new()));
+        // Don't wire either of mix's inputs.
+        assert!(matches!(
+            validate(&g),
+            Err(crate::node_graph::GraphError::RequiredInputUnwired { .. })
+        ));
+    }
+
+    /// Param values can be set on a primitive instance through the Graph API.
+    #[test]
+    fn primitive_params_accept_typed_overrides() {
+        let mut g = Graph::new();
+        let id = g.add_node(Box::new(Threshold::new()));
+        g.set_param(id, "level", ParamValue::Float(0.7)).unwrap();
+        g.set_param(id, "softness", ParamValue::Float(0.1)).unwrap();
+        // Unknown param is rejected.
+        assert!(g
+            .set_param(id, "missing", ParamValue::Float(0.0))
+            .is_err());
+    }
+}

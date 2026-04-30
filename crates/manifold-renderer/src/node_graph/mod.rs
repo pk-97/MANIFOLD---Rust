@@ -16,6 +16,7 @@ mod execution_plan;
 mod graph;
 mod parameters;
 mod ports;
+pub mod primitives;
 mod validation;
 
 pub use backend::{Backend, MockBackend};
