@@ -11,6 +11,7 @@ pub mod atomic;
 mod backend;
 mod bindings;
 mod boundary_nodes;
+pub mod composites;
 mod effect_node;
 mod execution;
 mod execution_plan;

@@ -479,7 +479,7 @@ Things that need answering during implementation. Append as discovered, resolve 
 | Backend abstraction (mock + real seam) | Done (2026-04-30) | `node_graph/backend.rs`. `Backend` trait + `MockBackend`. Real `MetalBackend` lands in step 6. |
 | 10 V1 primitives | Stubs done (2026-04-30) | `node_graph/primitives/`. All 10 declared with proper port shapes + parameters. `evaluate()` is a no-op until Metal backend lands. |
 | 3 V1 atomic nodes | Stubs done (2026-04-30) | `node_graph/atomic/`. Plasma (zero-input generator), FluidSim2D (rich ports + scalar input + 4 outputs), Glitch (single-shader effect). Hero test wires FluidSim's `density` aux output through downstream nodes. |
-| 5 V1 composite presets | Not started | Bloom, Halation, Infrared, Mirror (alias), SoftFocus. |
+| 5 V1 composite presets | Done (2026-04-30) | `node_graph/composites/`. Function-based builders return `CompositeHandle` with parameter routing. Mirror, Infrared, SoftFocus, Bloom, Halation all compile + execute. |
 | Wrapped legacy nodes (~35) | Not started | One Node trait wrapper per existing effect/generator. |
 | Project save/load (graphs in V2 ZIP) | Not started | Schema v1, additive design. |
 | Code-driven validation harness | Not started | Build graphs in tests, snapshot diff. |
