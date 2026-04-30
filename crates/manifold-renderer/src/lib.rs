@@ -18,6 +18,7 @@ pub mod layer_compositor;
 pub mod metalfx_upscaler;
 #[cfg(target_os = "macos")]
 pub mod native_text;
+pub mod node_graph;
 #[cfg(target_os = "macos")]
 pub mod text_rasterizer;
 pub mod pq_encoder;

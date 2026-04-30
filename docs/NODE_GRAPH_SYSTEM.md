@@ -29,25 +29,27 @@ The system is **intuitive by default** — drag a node, it works — and exposes
 
 ## 3. Core Concepts
 
-### 3.1 The `Node` abstraction
+### 3.1 The `EffectNode` abstraction
 
-Every effect, generator, primitive, system node, and user-saved composite is a Node. Nodes have:
+Every effect, generator, primitive, boundary node, and user-saved composite is an `EffectNode`. Each `EffectNode` has:
 
-- A **type identity** — stable string ID (`primitive.blur`, `effect.bloom`, `composite.user.<uuid>`)
-- A set of **input ports** — each with a name, type, and required/optional flag
-- A set of **output ports** — each with a name and type, including one designated **default output**
+- A **type identity** (`EffectNodeType`) — stable string ID (`primitive.blur`, `effect.bloom`, `composite.user.<uuid>`)
+- A set of **`NodeInput`s** — each with a name, type, and required/optional flag
+- A set of **`NodeOutput`s** — each with a name and type, including one designated **default output**
 - A set of **parameters** — typed, named, rangeable, with per-parameter expose flag
 - A per-frame **evaluate** step — runs once per frame given inputs, parameters, and a place to write outputs
 - Optional **per-instance state** — held by the node's instance, not by the graph or host
 
-The **default output** convention keeps simple connections one-click: dragging a wire from A to B connects `A.default → B.default` unless the user explicitly picks a different port.
+`NodeInput` and `NodeOutput` are aliases for the underlying `NodePort` struct, distinguished by `PortKind`. Connections between nodes are `NodeWire`s, each binding one node's output port to another node's input port.
+
+The **default output** convention keeps simple connections one-click: dragging a `NodeWire` from A to B connects `A.default → B.default` unless the user explicitly picks a different port.
 
 ### 3.2 Two flavors, same trait
 
-- **Atomic nodes** — implemented in Rust + Metal, opaque internals. FluidSim, Plasma, Glitch, Voronoi, Kaleidoscope, mesh generators, etc.
-- **Composite nodes** — defined as a sub-graph of other nodes. Bloom-rebuilt-from-primitives, user-built customs, alias presets like Mirror.
+- **Atomic `EffectNode`s** — implemented in Rust + Metal, opaque internals. FluidSim, Plasma, Glitch, Voronoi, Kaleidoscope, mesh generators, etc.
+- **Composite `EffectNode`s** — defined as a sub-graph of other `EffectNode`s. Bloom-rebuilt-from-primitives, user-built customs, alias presets like Mirror.
 
-Both implement the same `Node` trait. The graph engine doesn't distinguish them.
+Both implement the same `EffectNode` trait. The graph engine doesn't distinguish them.
 
 ### 3.3 Mix and match is free
 
@@ -58,16 +60,16 @@ Once everything is a node, "generator" and "effect" stop being categories of nod
 
 Inside any graph, any node can be used regardless of how it's typically labelled. A generator graph can use Blur. An effect graph can use Plasma. A FluidSim's `spawn_mask` input can be driven by another clip's pixels, turning the fluid sim from a generator into an effect.
 
-### 3.4 System nodes — Source and Output
+### 3.4 Boundary nodes — Source and FinalOutput
 
-Every composite graph has explicit boundary nodes:
+Every composite graph has explicit boundary `EffectNode`s:
 
-- **Source** nodes have no input ports, only output ports. They represent data coming in from outside the graph (the clip's pixels, depth buffer, audio buffer, etc.).
-- **Output** nodes have only input ports. They represent data leaving the graph for the host.
+- **`Source`** nodes have no `NodeInput`s, only `NodeOutput`s. They represent data coming in from outside the graph (the clip's pixels, depth buffer, audio buffer, etc.).
+- **`FinalOutput`** nodes have only `NodeInput`s. They represent data leaving the graph for the host — the finished result.
 
-Source and Output are always present in composites and cannot be deleted. They are inserted automatically when a new graph is created.
+`Source` and `FinalOutput` are always present in composites and cannot be deleted. They are inserted automatically when a new graph is created.
 
-**V1 constraint:** composites have at most one Source (Texture2D) and exactly one Output (Texture2D). Multi-Source/multi-Output composites — which would let users build their own rich-ports nodes — defer to a later phase.
+**V1 constraint:** composites have at most one `Source` (Texture2D) and exactly one `FinalOutput` (Texture2D). Multi-Source / multi-FinalOutput composites — which would let users build their own rich-ports nodes — defer to a later phase.
 
 ---
 
@@ -92,7 +94,7 @@ Adding a port type later is a real cost — every existing node has to potential
 | Category | Description | V1 count |
 |---|---|---|
 | **Primitives** | Small reusable building blocks. The vocabulary of the graph editor. | 10 |
-| **System nodes** | Source, Output. Graph boundaries. | 2 |
+| **Boundary nodes** | Source, FinalOutput. Graph boundaries. | 2 |
 | **Atomic complex** | Irreducibly one thing — sims, simulations, complex kernels. | 3 |
 | **Composite presets** | Built-in graphs that compose primitives. Cog opens them. | 5 |
 | **Wrapped legacy** | Existing effects/generators implementing the new trait, no decomposition. | ~35 |
@@ -307,7 +309,7 @@ The current ~58 effects/generators map onto the new system as follows:
 
 Existing projects open and play **unchanged**. No migration UI required. Users can opt into rebuilding a clip's effect chain as a graph when they want to; until then, the linear chain runs as a degenerate graph (a straight line of wrapped atomic nodes).
 
-The current `PostProcessEffect` and `Generator` traits eventually retire once the new `Node` trait covers all cases, but both can coexist for the migration period.
+The current `PostProcessEffect` and `Generator` traits eventually retire once the new `EffectNode` trait covers all cases, but both can coexist for the migration period.
 
 ---
 
@@ -359,7 +361,7 @@ Graph file structure (sketch):
   "nodes": [
     { "id": "n1", "type": "primitive.threshold", "params": { "level": 0.8 }, "exposed": ["level"], "editor_pos": [120, 200] }
   ],
-  "edges": [
+  "wires": [
     { "from": ["n1", "out"], "to": ["n2", "in"] }
   ],
   "exposed_parameters": [
@@ -375,10 +377,10 @@ Graph file structure (sketch):
 ### Port types (3)
 Texture2D, Texture3D, Scalar. Buffer ports defer to V2.
 
-### System nodes (2)
-Source, Output. Always present in composites, can't be deleted.
+### Boundary nodes (2)
+Source, FinalOutput. Always present in composites, can't be deleted.
 
-**Constraint:** V1 composites have at most one Source (Texture2D) and exactly one Output (Texture2D).
+**Constraint:** V1 composites have at most one Source (Texture2D) and exactly one FinalOutput (Texture2D).
 
 ### Primitives (10)
 UVTransform, Threshold, Blur, MipChain, Mix, Blend, Luminance, GradientMap, Sample, ColorMatrix.
@@ -445,7 +447,9 @@ Track key architectural decisions and the reasoning behind them. Append-only.
 | 2026-04-30 | UUID + content hash for composite identity | Stable concept ID + edit-tracking snapshot ID. |
 | 2026-04-30 | Live topology editing during playback deferred to V2 | Sidesteps state-continuity questions for V1. |
 | 2026-04-30 | V1 has no editor; validate through code | Editor is months of work; abstraction must be right first. |
-| 2026-04-30 | Source and Output system nodes mark graph boundaries | Self-documenting, supports future multi-port composites. |
+| 2026-04-30 | Source and FinalOutput boundary nodes mark graph edges | Self-documenting, supports future multi-port composites. |
+| 2026-04-30 | Naming: `EffectNode`, `NodeInput`/`NodeOutput`/`NodePort`, `NodeWire`, `Source`, `FinalOutput` | Domain-prefixed names disambiguate from UI tree nodes / network ports. Boundary nodes (Source, FinalOutput) stay un-prefixed since they're standalone graph concepts, not port mechanics. |
+| 2026-04-30 | Step 1 lands as a module inside `manifold-renderer` (not a new crate) | Smallest commitment; split into `manifold-graph` later if it earns it. |
 
 ---
 
@@ -463,14 +467,14 @@ Things that need answering during implementation. Append as discovered, resolve 
 
 | Milestone | Status | Notes |
 |---|---|---|
-| `Node` trait designed and reviewed | Not started | Core abstraction. |
-| Port type system (Texture2D, Texture3D, Scalar) | Not started | |
+| `EffectNode` trait designed and reviewed | Done (2026-04-30) | Core abstraction in `crates/manifold-renderer/src/node_graph/`. |
+| Port type system (Texture2D, Texture3D, Scalar) | Done (2026-04-30) | `node_graph/ports.rs`. |
 | Graph data model (`Graph`, `Edge`, `NodeInstance`) | Not started | |
 | Topological sort + cycle detection | Not started | Allow explicit feedback edges. |
 | Execution plan compiler (no fusion) | Not started | |
 | Texture lifetime planner | Not started | Last-use analysis for pool reuse. |
 | Background compile thread + Arc swap | Not started | |
-| Source/Output system nodes | Not started | |
+| Source/FinalOutput boundary nodes | Not started | |
 | 10 V1 primitives | Not started | UVTransform, Threshold, Blur, MipChain, Mix, Blend, Luminance, GradientMap, Sample, ColorMatrix. |
 | 3 V1 atomic nodes | Not started | Plasma, FluidSim 2D (with rich ports), Glitch. |
 | 5 V1 composite presets | Not started | Bloom, Halation, Infrared, Mirror (alias), SoftFocus. |
