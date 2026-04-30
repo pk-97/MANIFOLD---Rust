@@ -469,8 +469,8 @@ Things that need answering during implementation. Append as discovered, resolve 
 |---|---|---|
 | `EffectNode` trait designed and reviewed | Done (2026-04-30) | Core abstraction in `crates/manifold-renderer/src/node_graph/`. |
 | Port type system (Texture2D, Texture3D, Scalar) | Done (2026-04-30) | `node_graph/ports.rs`. |
-| Graph data model (`Graph`, `Edge`, `NodeInstance`) | Not started | |
-| Topological sort + cycle detection | Not started | Allow explicit feedback edges. |
+| Graph data model (`Graph`, `NodeWire`, `NodeInstance`) | Done (2026-04-30) | `node_graph/graph.rs`. Connection legality enforced at `connect` time. |
+| Topological sort + cycle detection | Done (2026-04-30) | `node_graph/validation.rs`. DAG-only for V1; explicit feedback edges deferred. |
 | Execution plan compiler (no fusion) | Not started | |
 | Texture lifetime planner | Not started | Last-use analysis for pool reuse. |
 | Background compile thread + Arc swap | Not started | |
