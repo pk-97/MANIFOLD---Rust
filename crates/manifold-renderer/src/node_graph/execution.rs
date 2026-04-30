@@ -93,10 +93,13 @@ impl Executor {
                 self.input_scratch.push((port_name, slot));
             }
 
-            // 3. Evaluate.
+            // 3. Evaluate. The context holds an immutable backend ref for
+            // typed accessor resolution. Scoped tightly so the borrow ends
+            // before the release loop's mutable borrow below.
             if let Some(inst) = graph.get_node_mut(step.node) {
-                let inputs = NodeInputs::new(&self.input_scratch);
-                let outputs = NodeOutputs::new(&self.output_scratch);
+                let backend_ref: &dyn Backend = &*self.backend;
+                let inputs = NodeInputs::new(&self.input_scratch, backend_ref);
+                let outputs = NodeOutputs::new(&self.output_scratch, backend_ref);
                 let mut ctx = EffectNodeContext::new(time, &inst.params, inputs, outputs);
                 inst.node.evaluate(&mut ctx);
             }

@@ -15,9 +15,11 @@
 //! implementation are designed together.
 
 use ahash::AHashMap;
+use manifold_gpu::GpuTexture;
 
 use crate::node_graph::bindings::Slot;
 use crate::node_graph::execution_plan::ResourceId;
+use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::ports::PortType;
 
 /// Abstracts physical resource allocation behind the slot-based runtime.
@@ -43,6 +45,19 @@ pub trait Backend: Send {
     /// retained so subsequent allocations don't reuse slots across the
     /// boundary.
     fn clear(&mut self);
+
+    /// Real `GpuTexture` bound to a slot, if this backend tracks textures
+    /// and the slot was allocated as a `Texture2D`.
+    ///
+    /// Mock backends return `None`. A real backend
+    /// ([`MetalBackend`](crate::node_graph::MetalBackend)) returns the
+    /// `&GpuTexture` an EffectNode's evaluate needs to dispatch GPU work.
+    fn texture_2d(&self, slot: Slot) -> Option<&GpuTexture>;
+
+    /// Scalar value bound to a slot. Set by upstream nodes that produce
+    /// scalar outputs (e.g. an audio-level → bloom-intensity wire).
+    /// Mock backends return `None`; real backends look up an inline value.
+    fn scalar(&self, slot: Slot) -> Option<ParamValue>;
 }
 
 /// In-memory backend with no real GPU resources. Tracks slot identity and
@@ -102,6 +117,18 @@ impl Backend for MockBackend {
     fn clear(&mut self) {
         self.bound.clear();
         self.free_by_type.clear();
+    }
+
+    fn texture_2d(&self, _slot: Slot) -> Option<&GpuTexture> {
+        // Mock backend has no real GPU resources. Real EffectNode
+        // implementations that dispatch GPU work require a backend that
+        // returns Some here (see `MetalBackend`). Tests that only exercise
+        // graph mechanics don't call this.
+        None
+    }
+
+    fn scalar(&self, _slot: Slot) -> Option<ParamValue> {
+        None
     }
 }
 

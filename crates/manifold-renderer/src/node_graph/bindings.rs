@@ -1,13 +1,21 @@
 //! Per-step resource bindings exposed to an [`EffectNode`] during `evaluate`.
 //!
 //! The runtime hands each node two views — [`NodeInputs`] for ports it reads
-//! and [`NodeOutputs`] for ports it writes. Both expose the bound [`Slot`] for
-//! a port; the slot is an opaque handle the runtime maps onto a physical
-//! resource (a GPU texture, a scalar value) via its pool.
+//! and [`NodeOutputs`] for ports it writes. Each view exposes:
 //!
-//! Step 4 (this commit) returns slot IDs only. Step 5 will add typed
-//! accessors that resolve a slot to a `&GpuTexture` / `&mut GpuTexture` /
-//! scalar value via the runtime backend.
+//! - **slot lookup** ([`NodeInputs::slot`] / [`NodeOutputs::slot`]) — the
+//!   abstract `Slot` the runtime allocated for this port. Stable across
+//!   backends; useful for introspection and tests.
+//! - **typed lookup** ([`NodeInputs::texture_2d`], [`NodeInputs::scalar`],
+//!   etc.) — resolves the slot to a real GPU resource via the [`Backend`].
+//!   Real EffectNode implementations use these to get a `&GpuTexture` they
+//!   can bind in shader dispatches. With a mock backend the typed lookups
+//!   return `None`, which is fine for tests that don't dispatch GPU work.
+
+use manifold_gpu::GpuTexture;
+
+use crate::node_graph::backend::Backend;
+use crate::node_graph::parameters::ParamValue;
 
 /// Opaque physical-buffer index handed out by the runtime's resource pool.
 ///
@@ -19,14 +27,15 @@ pub struct Slot(pub u32);
 
 /// Read-only view of an [`EffectNode`](crate::node_graph::EffectNode)'s
 /// input port bindings for one frame.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct NodeInputs<'a> {
     bindings: &'a [(&'static str, Slot)],
+    backend: &'a dyn Backend,
 }
 
 impl<'a> NodeInputs<'a> {
-    pub(crate) fn new(bindings: &'a [(&'static str, Slot)]) -> Self {
-        Self { bindings }
+    pub(crate) fn new(bindings: &'a [(&'static str, Slot)], backend: &'a dyn Backend) -> Self {
+        Self { bindings, backend }
     }
 
     /// Slot bound to the named input port, or `None` if the port is optional
@@ -36,6 +45,18 @@ impl<'a> NodeInputs<'a> {
             .iter()
             .find(|(name, _)| *name == port)
             .map(|(_, slot)| *slot)
+    }
+
+    /// `&GpuTexture` bound to the named input port. `None` if unwired,
+    /// or if the backend doesn't track textures (mock).
+    pub fn texture_2d(&self, port: &str) -> Option<&GpuTexture> {
+        self.backend.texture_2d(self.slot(port)?)
+    }
+
+    /// Scalar value bound to the named input port (when wired through a
+    /// scalar output upstream).
+    pub fn scalar(&self, port: &str) -> Option<ParamValue> {
+        self.backend.scalar(self.slot(port)?)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&'static str, Slot)> + '_ {
@@ -53,17 +74,15 @@ impl<'a> NodeInputs<'a> {
 
 /// View of an [`EffectNode`](crate::node_graph::EffectNode)'s output port
 /// bindings for one frame.
-///
-/// Step 4 returns only slot IDs (the node has no actual texture to write to
-/// at the mock layer). Step 5 will add typed accessors for real GPU textures.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct NodeOutputs<'a> {
     bindings: &'a [(&'static str, Slot)],
+    backend: &'a dyn Backend,
 }
 
 impl<'a> NodeOutputs<'a> {
-    pub(crate) fn new(bindings: &'a [(&'static str, Slot)]) -> Self {
-        Self { bindings }
+    pub(crate) fn new(bindings: &'a [(&'static str, Slot)], backend: &'a dyn Backend) -> Self {
+        Self { bindings, backend }
     }
 
     pub fn slot(&self, port: &str) -> Option<Slot> {
@@ -71,6 +90,13 @@ impl<'a> NodeOutputs<'a> {
             .iter()
             .find(|(name, _)| *name == port)
             .map(|(_, slot)| *slot)
+    }
+
+    /// `&GpuTexture` an EffectNode should *write to* for the named output
+    /// port. The encoder uses this as the render-target / storage-texture
+    /// binding when dispatching the node's shader.
+    pub fn texture_2d(&self, port: &str) -> Option<&GpuTexture> {
+        self.backend.texture_2d(self.slot(port)?)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&'static str, Slot)> + '_ {

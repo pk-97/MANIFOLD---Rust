@@ -16,6 +16,7 @@ mod effect_node;
 mod execution;
 mod execution_plan;
 mod graph;
+mod metal_backend;
 mod parameters;
 mod ports;
 pub mod primitives;
@@ -29,6 +30,7 @@ pub use effect_node::{
     ParamValues,
 };
 pub use execution::Executor;
+pub use metal_backend::MetalBackend;
 pub use execution_plan::{compile, ExecutionPlan, ExecutionStep, ResourceId};
 pub use graph::{Graph, NodeInstance};
 pub use parameters::{ParamDef, ParamType, ParamValue};

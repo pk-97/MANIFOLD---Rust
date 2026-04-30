@@ -476,7 +476,8 @@ Things that need answering during implementation. Append as discovered, resolve 
 | Mock executor + resource pool (per-frame) | Done (2026-04-30) | `node_graph/execution.rs`, `node_graph/bindings.rs`. Slot-based pool with per-PortType reuse. |
 | Background compile thread + Arc swap | Not started | |
 | Source/FinalOutput boundary nodes | Done (2026-04-30) | `node_graph/boundary_nodes.rs`. Trivial no-op nodes; host pre/post-binds the boundary slots. |
-| Backend abstraction (mock + real seam) | Done (2026-04-30) | `node_graph/backend.rs`. `Backend` trait + `MockBackend`. Real `MetalBackend` lands in step 6. |
+| Backend abstraction (mock + real seam) | Done (2026-04-30) | `node_graph/backend.rs`. `Backend` trait + `MockBackend`. |
+| Typed accessors + `MetalBackend` skeleton | Done (2026-04-30) | `Backend` trait grew `texture_2d` / `scalar`. `NodeInputs`/`NodeOutputs` resolve typed handles via the backend. `MetalBackend` allocates real `RenderTarget`s via `RenderTargetPool`. Not yet wired into a host. |
 | 10 V1 primitives | Stubs done (2026-04-30) | `node_graph/primitives/`. All 10 declared with proper port shapes + parameters. `evaluate()` is a no-op until Metal backend lands. |
 | 3 V1 atomic nodes | Stubs done (2026-04-30) | `node_graph/atomic/`. Plasma (zero-input generator), FluidSim2D (rich ports + scalar input + 4 outputs), Glitch (single-shader effect). Hero test wires FluidSim's `density` aux output through downstream nodes. |
 | 5 V1 composite presets | Done (2026-04-30) | `node_graph/composites/`. Function-based builders return `CompositeHandle` with parameter routing. Mirror, Infrared, SoftFocus, Bloom, Halation all compile + execute. |
