@@ -7,6 +7,7 @@
 //! runtime (topological sort, execution plan, lifetime planner, resource
 //! bindings) lands in subsequent steps.
 
+pub mod atomic;
 mod backend;
 mod bindings;
 mod boundary_nodes;
