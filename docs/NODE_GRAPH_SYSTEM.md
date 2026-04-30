@@ -475,7 +475,8 @@ Things that need answering during implementation. Append as discovered, resolve 
 | Texture lifetime planner | Done (2026-04-30) | Same module. Last-reader tracking; unread outputs freed immediately at producing step. |
 | Mock executor + resource pool (per-frame) | Done (2026-04-30) | `node_graph/execution.rs`, `node_graph/bindings.rs`. Slot-based pool with per-PortType reuse. |
 | Background compile thread + Arc swap | Not started | |
-| Source/FinalOutput boundary nodes | Not started | |
+| Source/FinalOutput boundary nodes | Done (2026-04-30) | `node_graph/boundary_nodes.rs`. Trivial no-op nodes; host pre/post-binds the boundary slots. |
+| Backend abstraction (mock + real seam) | Done (2026-04-30) | `node_graph/backend.rs`. `Backend` trait + `MockBackend`. Real `MetalBackend` lands in step 6. |
 | 10 V1 primitives | Not started | UVTransform, Threshold, Blur, MipChain, Mix, Blend, Luminance, GradientMap, Sample, ColorMatrix. |
 | 3 V1 atomic nodes | Not started | Plasma, FluidSim 2D (with rich ports), Glitch. |
 | 5 V1 composite presets | Not started | Bloom, Halation, Infrared, Mirror (alias), SoftFocus. |

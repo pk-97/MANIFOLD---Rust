@@ -7,7 +7,9 @@
 //! runtime (topological sort, execution plan, lifetime planner, resource
 //! bindings) lands in subsequent steps.
 
+mod backend;
 mod bindings;
+mod boundary_nodes;
 mod effect_node;
 mod execution;
 mod execution_plan;
@@ -16,12 +18,14 @@ mod parameters;
 mod ports;
 mod validation;
 
+pub use backend::{Backend, MockBackend};
 pub use bindings::{NodeInputs, NodeOutputs, Slot};
+pub use boundary_nodes::{FinalOutput, Source, FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID};
 pub use effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId, NodeWire,
     ParamValues,
 };
-pub use execution::{Executor, ResourcePool};
+pub use execution::Executor;
 pub use execution_plan::{compile, ExecutionPlan, ExecutionStep, ResourceId};
 pub use graph::{Graph, NodeInstance};
 pub use parameters::{ParamDef, ParamType, ParamValue};
