@@ -8,6 +8,7 @@
 //! bindings) lands in subsequent steps.
 
 mod effect_node;
+mod execution_plan;
 mod graph;
 mod parameters;
 mod ports;
@@ -17,6 +18,7 @@ pub use effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId, NodeWire,
     ParamValues,
 };
+pub use execution_plan::{compile, ExecutionPlan, ExecutionStep, ResourceId};
 pub use graph::{Graph, NodeInstance};
 pub use parameters::{ParamDef, ParamType, ParamValue};
 pub use ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};

@@ -471,8 +471,8 @@ Things that need answering during implementation. Append as discovered, resolve 
 | Port type system (Texture2D, Texture3D, Scalar) | Done (2026-04-30) | `node_graph/ports.rs`. |
 | Graph data model (`Graph`, `NodeWire`, `NodeInstance`) | Done (2026-04-30) | `node_graph/graph.rs`. Connection legality enforced at `connect` time. |
 | Topological sort + cycle detection | Done (2026-04-30) | `node_graph/validation.rs`. DAG-only for V1; explicit feedback edges deferred. |
-| Execution plan compiler (no fusion) | Not started | |
-| Texture lifetime planner | Not started | Last-use analysis for pool reuse. |
+| Execution plan compiler (no fusion) | Done (2026-04-30) | `node_graph/execution_plan.rs`. `compile()` produces ordered steps with resource bindings. |
+| Texture lifetime planner | Done (2026-04-30) | Same module. Last-reader tracking; unread outputs freed immediately at producing step. |
 | Background compile thread + Arc swap | Not started | |
 | Source/FinalOutput boundary nodes | Not started | |
 | 10 V1 primitives | Not started | UVTransform, Threshold, Blur, MipChain, Mix, Blend, Luminance, GradientMap, Sample, ColorMatrix. |
