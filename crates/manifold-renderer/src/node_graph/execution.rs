@@ -6,16 +6,15 @@
 //!
 //! ## Mock vs real GPU
 //!
-//! Step 5 (this commit) uses [`MockBackend`] for all tests — slots are
-//! abstract, no real GPU resources are allocated. The executor's logic is
-//! still the focus: order of acquire / evaluate / release; correctness of
-//! resource reuse; correct bindings handed to nodes. None of that depends
-//! on what a slot physically *is*.
+//! [`execute_frame`](Executor::execute_frame) runs without a `GpuEncoder` —
+//! suitable for [`MockBackend`] tests that exercise resource lifetime
+//! logic without touching Metal. [`execute_frame_with_gpu`](Executor::execute_frame_with_gpu)
+//! threads a real encoder through to nodes that issue compute / render
+//! passes, and is the production entry point alongside [`MetalBackend`].
 //!
-//! Step 6 will introduce a `MetalBackend` that wraps
-//! `manifold_gpu::RenderTargetPool` and produces real `GpuTexture`s, plus
-//! typed accessors on `NodeInputs` / `NodeOutputs`.
+//! [`MetalBackend`]: crate::node_graph::MetalBackend
 
+use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::backend::{Backend, MockBackend};
 use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
 use crate::node_graph::effect_node::{EffectNodeContext, FrameTime};
@@ -60,9 +59,31 @@ impl Executor {
         &mut *self.backend
     }
 
-    /// Run one frame of the graph.
+    /// Run one frame of the graph without a GPU encoder.
     ///
-    /// For each step in plan order:
+    /// Convenience entry point for tests against [`MockBackend`] and any
+    /// scenario where the graph contains only nodes that don't issue real
+    /// GPU work (boundary nodes, stub primitives). Nodes that require an
+    /// encoder will panic via [`EffectNodeContext::gpu_encoder`].
+    pub fn execute_frame(&mut self, graph: &mut Graph, plan: &ExecutionPlan, time: FrameTime) {
+        self.execute_frame_inner(graph, plan, time, None);
+    }
+
+    /// Run one frame of the graph with a real `GpuEncoder` available to
+    /// every node. Used by the production renderer integration; pairs with
+    /// [`MetalBackend`](crate::node_graph::MetalBackend) for real
+    /// `GpuTexture` allocation.
+    pub fn execute_frame_with_gpu(
+        &mut self,
+        graph: &mut Graph,
+        plan: &ExecutionPlan,
+        time: FrameTime,
+        gpu: &mut GpuEncoder<'_>,
+    ) {
+        self.execute_frame_inner(graph, plan, time, Some(gpu));
+    }
+
+    /// Shared implementation. For each step in plan order:
     ///   1. Acquire a slot for every output port (so distinct slots from inputs).
     ///   2. Look up slots for every wired input port.
     ///   3. Call `EffectNode::evaluate` with the assembled context.
@@ -71,7 +92,13 @@ impl Executor {
     /// The acquire-then-release order is correct because evaluate writes to
     /// outputs while reading from inputs; freeing inputs before allocating
     /// outputs would let the new acquire reuse the still-being-read slot.
-    pub fn execute_frame(&mut self, graph: &mut Graph, plan: &ExecutionPlan, time: FrameTime) {
+    fn execute_frame_inner(
+        &mut self,
+        graph: &mut Graph,
+        plan: &ExecutionPlan,
+        time: FrameTime,
+        mut gpu: Option<&mut GpuEncoder<'_>>,
+    ) {
         for step in plan.steps() {
             // 1. Acquire output slots.
             self.output_scratch.clear();
@@ -94,13 +121,21 @@ impl Executor {
             }
 
             // 3. Evaluate. The context holds an immutable backend ref for
-            // typed accessor resolution. Scoped tightly so the borrow ends
-            // before the release loop's mutable borrow below.
+            // typed accessor resolution and (optionally) a per-step
+            // mutable reborrow of the host's GpuEncoder. Scoped tightly so
+            // the borrow ends before the release loop's mutable borrow
+            // below.
             if let Some(inst) = graph.get_node_mut(step.node) {
                 let backend_ref: &dyn Backend = &*self.backend;
                 let inputs = NodeInputs::new(&self.input_scratch, backend_ref);
                 let outputs = NodeOutputs::new(&self.output_scratch, backend_ref);
-                let mut ctx = EffectNodeContext::new(time, &inst.params, inputs, outputs);
+                let mut ctx = EffectNodeContext::new(
+                    time,
+                    &inst.params,
+                    inputs,
+                    outputs,
+                    gpu.as_deref_mut(),
+                );
                 inst.node.evaluate(&mut ctx);
             }
 
@@ -206,7 +241,7 @@ mod tests {
         fn parameters(&self) -> &[ParamDef] {
             &[]
         }
-        fn evaluate(&mut self, ctx: &mut EffectNodeContext) {
+        fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
             let inputs: Vec<_> = ctx.inputs.iter().collect();
             let outputs: Vec<_> = ctx.outputs.iter().collect();
             self.log.lock().unwrap().push(EvaluationRecord {

@@ -60,28 +60,59 @@ pub type ParamValues = AHashMap<&'static str, ParamValue>;
 ///
 /// The runtime populates this each step with the bindings produced by the
 /// execution plan: which slot supplies each input, which slot receives each
-/// output. A future step will add a `&mut GpuEncoder` and typed
-/// texture/scalar accessors on top of the slot lookups.
-pub struct EffectNodeContext<'a> {
+/// output, and (for nodes that issue real GPU work) the per-frame
+/// [`GpuEncoder`] borrowed from the host.
+///
+/// The `gpu` field is `None` for tests against [`MockBackend`] — those
+/// exercise the runtime's resource lifetime / acquire-release logic without
+/// needing a real Metal command buffer. Production paths (with
+/// [`MetalBackend`]) thread a real encoder through and any node that
+/// dispatches compute / encodes a render pass should `expect()` it.
+///
+/// Two lifetimes:
+///   - `'ctx` — borrow scope of one `evaluate` call (params, slot bindings,
+///     and the outer encoder reference).
+///   - `'gpu` — internal lifetime of the [`GpuEncoder`]'s wrapped Metal
+///     command buffer / device. Lives longer than `'ctx`.
+///
+/// [`GpuEncoder`]: crate::gpu_encoder::GpuEncoder
+/// [`MockBackend`]: crate::node_graph::MockBackend
+/// [`MetalBackend`]: crate::node_graph::MetalBackend
+pub struct EffectNodeContext<'ctx, 'gpu> {
     pub time: FrameTime,
-    pub params: &'a ParamValues,
-    pub inputs: NodeInputs<'a>,
-    pub outputs: NodeOutputs<'a>,
+    pub params: &'ctx ParamValues,
+    pub inputs: NodeInputs<'ctx>,
+    pub outputs: NodeOutputs<'ctx>,
+    pub gpu: Option<&'ctx mut crate::gpu_encoder::GpuEncoder<'gpu>>,
 }
 
-impl<'a> EffectNodeContext<'a> {
+impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
     pub fn new(
         time: FrameTime,
-        params: &'a ParamValues,
-        inputs: NodeInputs<'a>,
-        outputs: NodeOutputs<'a>,
+        params: &'ctx ParamValues,
+        inputs: NodeInputs<'ctx>,
+        outputs: NodeOutputs<'ctx>,
+        gpu: Option<&'ctx mut crate::gpu_encoder::GpuEncoder<'gpu>>,
     ) -> Self {
         Self {
             time,
             params,
             inputs,
             outputs,
+            gpu,
         }
+    }
+
+    /// Borrow the [`GpuEncoder`], panicking if absent.
+    ///
+    /// Use this in real-GPU node implementations after asserting (in their
+    /// docs / contract) that they require a backend-backed executor.
+    /// Mock-backend tests never call into real-GPU evaluate paths so the
+    /// panic should be unreachable in correctly-typed code.
+    pub fn gpu_encoder(&mut self) -> &mut crate::gpu_encoder::GpuEncoder<'gpu> {
+        self.gpu
+            .as_deref_mut()
+            .expect("EffectNodeContext::gpu_encoder called without a GpuEncoder bound")
     }
 }
 
@@ -120,7 +151,7 @@ pub trait EffectNode: Send {
     fn parameters(&self) -> &[ParamDef];
 
     /// Run one frame of GPU work: read inputs, write outputs.
-    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_>);
+    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>);
 
     /// Reset persistent state (previous-frame textures, accumulators, density
     /// grids). Called on seek so trails and feedback don't carry stale content.

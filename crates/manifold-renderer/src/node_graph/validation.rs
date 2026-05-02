@@ -267,7 +267,7 @@ mod tests {
         fn parameters(&self) -> &[ParamDef] {
             &[]
         }
-        fn evaluate(&mut self, _: &mut EffectNodeContext) {}
+        fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
     }
 
     fn input(name: &'static str, ty: PortType, required: bool) -> NodeInput {

@@ -83,7 +83,7 @@ impl EffectNode for Threshold {
     fn parameters(&self) -> &[ParamDef] {
         &THRESHOLD_PARAMS
     }
-    fn evaluate(&mut self, _: &mut EffectNodeContext) {}
+    fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
 }
 
 // =====================================================================
@@ -148,7 +148,7 @@ impl EffectNode for Blur {
     fn parameters(&self) -> &[ParamDef] {
         &BLUR_PARAMS
     }
-    fn evaluate(&mut self, _: &mut EffectNodeContext) {}
+    fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
 }
 
 // =====================================================================
@@ -207,5 +207,5 @@ impl EffectNode for MipChain {
     fn parameters(&self) -> &[ParamDef] {
         &MIP_CHAIN_PARAMS
     }
-    fn evaluate(&mut self, _: &mut EffectNodeContext) {}
+    fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
 }

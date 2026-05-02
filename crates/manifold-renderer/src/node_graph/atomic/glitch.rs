@@ -100,5 +100,5 @@ impl EffectNode for Glitch {
     fn parameters(&self) -> &[ParamDef] {
         &GLITCH_PARAMS
     }
-    fn evaluate(&mut self, _: &mut EffectNodeContext) {}
+    fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
 }

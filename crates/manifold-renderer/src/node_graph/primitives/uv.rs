@@ -112,7 +112,7 @@ impl EffectNode for UVTransform {
     fn parameters(&self) -> &[ParamDef] {
         &UV_TRANSFORM_PARAMS
     }
-    fn evaluate(&mut self, _: &mut EffectNodeContext) {}
+    fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
 }
 
 // =====================================================================
@@ -191,5 +191,5 @@ impl EffectNode for Sample {
     fn parameters(&self) -> &[ParamDef] {
         &SAMPLE_PARAMS
     }
-    fn evaluate(&mut self, _: &mut EffectNodeContext) {}
+    fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
 }

@@ -86,5 +86,5 @@ impl EffectNode for Plasma {
     fn parameters(&self) -> &[ParamDef] {
         &PLASMA_PARAMS
     }
-    fn evaluate(&mut self, _: &mut EffectNodeContext) {}
+    fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
 }

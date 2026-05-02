@@ -157,7 +157,7 @@ impl EffectNode for FluidSim2D {
     fn parameters(&self) -> &[ParamDef] {
         &FLUID_SIM_2D_PARAMS
     }
-    fn evaluate(&mut self, _: &mut EffectNodeContext) {
+    fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {
         // Stub. Real fluid-simulation kernel (advection + pressure projection
         // + vorticity confinement, with persistent density/velocity grids)
         // arrives in the manifold-gpu integration step.

@@ -78,7 +78,7 @@ impl EffectNode for Mix {
     fn parameters(&self) -> &[ParamDef] {
         &MIX_PARAMS
     }
-    fn evaluate(&mut self, _: &mut EffectNodeContext) {}
+    fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
 }
 
 // =====================================================================
@@ -164,5 +164,5 @@ impl EffectNode for Blend {
     fn parameters(&self) -> &[ParamDef] {
         &BLEND_PARAMS
     }
-    fn evaluate(&mut self, _: &mut EffectNodeContext) {}
+    fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
 }

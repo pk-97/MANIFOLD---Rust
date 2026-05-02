@@ -78,7 +78,7 @@ impl EffectNode for Source {
     fn parameters(&self) -> &[ParamDef] {
         &[]
     }
-    fn evaluate(&mut self, _: &mut EffectNodeContext) {
+    fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {
         // No-op. Host pre-binds the input frame to this node's output slot.
     }
 }
@@ -117,7 +117,7 @@ impl EffectNode for FinalOutput {
     fn parameters(&self) -> &[ParamDef] {
         &[]
     }
-    fn evaluate(&mut self, _: &mut EffectNodeContext) {
+    fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {
         // No-op. Host reads the final result from this node's input slot.
     }
 }

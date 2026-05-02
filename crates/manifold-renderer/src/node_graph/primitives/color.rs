@@ -73,7 +73,7 @@ impl EffectNode for Luminance {
     fn parameters(&self) -> &[ParamDef] {
         &LUMINANCE_PARAMS
     }
-    fn evaluate(&mut self, _: &mut EffectNodeContext) {}
+    fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
 }
 
 // =====================================================================
@@ -152,7 +152,7 @@ impl EffectNode for ColorMatrix {
     fn parameters(&self) -> &[ParamDef] {
         &COLOR_MATRIX_PARAMS
     }
-    fn evaluate(&mut self, _: &mut EffectNodeContext) {}
+    fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
 }
 
 // =====================================================================
@@ -215,5 +215,5 @@ impl EffectNode for GradientMap {
     fn parameters(&self) -> &[ParamDef] {
         &GRADIENT_MAP_PARAMS
     }
-    fn evaluate(&mut self, _: &mut EffectNodeContext) {}
+    fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
 }
