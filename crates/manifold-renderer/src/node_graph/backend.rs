@@ -90,6 +90,10 @@ impl Default for MockBackend {
 
 impl Backend for MockBackend {
     fn acquire(&mut self, id: ResourceId, ty: PortType) -> Slot {
+        // Idempotent on existing bindings — mirrors `MetalBackend`.
+        if let Some(&slot) = self.bound.get(&id) {
+            return slot;
+        }
         let pool = self.free_by_type.entry(ty).or_default();
         let slot = pool.pop().unwrap_or_else(|| {
             let s = Slot(self.next_slot);

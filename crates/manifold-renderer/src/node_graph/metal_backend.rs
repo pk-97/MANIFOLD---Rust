@@ -113,6 +113,27 @@ impl MetalBackend {
         }
     }
 
+    /// Bind a [`ResourceId`] (from the executor's plan) to a host-supplied
+    /// [`RenderTarget`]. Allocates a fresh `Slot`, stores `target` there,
+    /// and records the binding so the executor's next `acquire(id, ...)`
+    /// is idempotent and returns this slot instead of pulling a default
+    /// texture from the pool.
+    ///
+    /// Used by the host to feed input frames into [`Source`] nodes:
+    /// after `compile`, the host looks up `Source.out`'s `ResourceId` in
+    /// the plan and pre-binds the camera/decoder texture to it via this
+    /// method. Re-call each frame to swap in the next frame's input.
+    /// Pair with [`Backend::acquire`]'s idempotency on existing bindings.
+    ///
+    /// [`Source`]: crate::node_graph::Source
+    pub fn pre_bind_texture_2d(&mut self, id: ResourceId, target: RenderTarget) -> Slot {
+        let slot = Slot(self.next_slot);
+        self.next_slot += 1;
+        self.textures_2d.insert(slot, target);
+        self.bound.insert(id, slot);
+        slot
+    }
+
     /// Borrow the `RenderTarget` bound to a slot, if any. Used by the host
     /// to read `FinalOutput`'s input slot after each frame.
     pub fn render_target_2d(&self, slot: Slot) -> Option<&RenderTarget> {
@@ -140,6 +161,13 @@ impl MetalBackend {
 
 impl Backend for MetalBackend {
     fn acquire(&mut self, id: ResourceId, ty: PortType) -> Slot {
+        // Idempotent: if `id` is already bound (host pre-bound a frame
+        // input via `pre_bind_texture_2d`, or this is a duplicate
+        // acquire within the same frame), return the existing slot
+        // rather than pulling a fresh one from the pool.
+        if let Some(&slot) = self.bound.get(&id) {
+            return slot;
+        }
         let pool = self.free_by_type.entry(ty).or_default();
         let slot = pool.pop().unwrap_or_else(|| {
             let s = Slot(self.next_slot);
