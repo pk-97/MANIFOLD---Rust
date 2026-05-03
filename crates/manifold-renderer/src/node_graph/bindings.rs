@@ -49,7 +49,12 @@ impl<'a> NodeInputs<'a> {
 
     /// `&GpuTexture` bound to the named input port. `None` if unwired,
     /// or if the backend doesn't track textures (mock).
-    pub fn texture_2d(&self, port: &str) -> Option<&GpuTexture> {
+    ///
+    /// The returned reference is tied to the backend's lifetime (`'a`),
+    /// not to a temporary borrow of `self`. This lets a node keep input
+    /// texture refs in locals while it later borrows the encoder
+    /// mutably from the same context.
+    pub fn texture_2d(&self, port: &str) -> Option<&'a GpuTexture> {
         self.backend.texture_2d(self.slot(port)?)
     }
 
@@ -95,7 +100,12 @@ impl<'a> NodeOutputs<'a> {
     /// `&GpuTexture` an EffectNode should *write to* for the named output
     /// port. The encoder uses this as the render-target / storage-texture
     /// binding when dispatching the node's shader.
-    pub fn texture_2d(&self, port: &str) -> Option<&GpuTexture> {
+    ///
+    /// The returned reference is tied to the backend's lifetime (`'a`),
+    /// matching `NodeInputs::texture_2d` so a node can hold both input
+    /// and output texture refs in locals across the encoder's mutable
+    /// borrow.
+    pub fn texture_2d(&self, port: &str) -> Option<&'a GpuTexture> {
         self.backend.texture_2d(self.slot(port)?)
     }
 
