@@ -98,8 +98,8 @@ impl Application {
                             .and_then(|p| p.audio_path.clone())
                             .filter(|s| !s.is_empty());
                         if let Some(ref path) = current_audio_path {
-                            if !self.ui_root.layout.waveform_lane_visible {
-                                self.ui_root.layout.waveform_lane_visible = true;
+                            if !self.ws.ui_root.layout.waveform_lane_visible {
+                                self.ws.ui_root.layout.waveform_lane_visible = true;
                                 self.needs_rebuild = true;
                             }
                             let already_loaded =
@@ -202,8 +202,8 @@ impl Application {
             let msg = self.content_state.percussion_status_message.clone();
             let progress = self.content_state.percussion_progress;
             let show = self.content_state.percussion_show_progress && !msg.is_empty();
-            self.ui_root.header.set_import_status(
-                &mut self.ui_root.tree,
+            self.ws.ui_root.header.set_import_status(
+                &mut self.ws.ui_root.tree,
                 &msg,
                 if progress < 0.0 {
                     0.0
@@ -225,8 +225,8 @@ impl Application {
         }
 
         // 1e2. Sync live recording state to layer header record button.
-        self.ui_root.layer_headers.set_recording_active(
-            &mut self.ui_root.tree,
+        self.ws.ui_root.layer_headers.set_recording_active(
+            &mut self.ws.ui_root.tree,
             self.content_state.is_live_recording,
         );
 
@@ -234,10 +234,10 @@ impl Application {
         // Port of Unity: WorkspaceController.OnStemMuteToggled/OnStemSoloToggled refreshing button visuals.
         {
             for i in 0..manifold_playback::stem_audio::STEM_COUNT {
-                self.ui_root
+                self.ws.ui_root
                     .stem_lanes
                     .set_mute_state(i, self.content_state.stem_muted[i]);
-                self.ui_root
+                self.ws.ui_root
                     .stem_lanes
                     .set_solo_state(i, self.content_state.stem_soloed[i]);
             }
@@ -251,22 +251,22 @@ impl Application {
                 .as_ref()
                 .and_then(|p| p.stem_paths.as_ref())
                 .is_some_and(|paths| !paths.is_empty());
-            self.ui_root
+            self.ws.ui_root
                 .waveform_lane
                 .set_stems_available(any_stem_available);
 
             // 1h. Push visibility/text state to UITree nodes (buttons, labels).
-            self.ui_root.update_waveform_stem_nodes();
+            self.ws.ui_root.update_waveform_stem_nodes();
         }
 
         // 2. Process UI events and dispatch actions
-        let mut actions = self.ui_root.process_events();
+        let mut actions = self.ws.ui_root.process_events();
 
         // 2a. Route viewport tracks-area events through InteractionOverlay.
         // These events were stashed by process_events() because the overlay
         // needs &mut TimelineEditingHost which UIRoot can't provide.
         {
-            let viewport_events = self.ui_root.drain_viewport_events();
+            let viewport_events = self.ws.ui_root.drain_viewport_events();
             if !viewport_events.is_empty() {
                 // Sync modifier state to overlay (Unity reads Keyboard.current inline)
                 self.overlay.set_modifiers(self.modifiers);
@@ -295,7 +295,7 @@ impl Application {
                                 false,
                                 &mut host,
                                 &mut self.selection,
-                                &self.ui_root.viewport,
+                                &self.ws.ui_root.viewport,
                             );
                         }
                         UIEvent::DoubleClick { pos, modifiers, .. } => {
@@ -307,7 +307,7 @@ impl Application {
                                 false,
                                 &mut host,
                                 &mut self.selection,
-                                &self.ui_root.viewport,
+                                &self.ws.ui_root.viewport,
                             );
                         }
                         UIEvent::RightClick { pos, .. } => {
@@ -319,7 +319,7 @@ impl Application {
                                 true,
                                 &mut host,
                                 &mut self.selection,
-                                &self.ui_root.viewport,
+                                &self.ws.ui_root.viewport,
                             );
                         }
                         UIEvent::DragBegin { origin, .. } => {
@@ -327,7 +327,7 @@ impl Application {
                                 *origin,
                                 &mut host,
                                 &mut self.selection,
-                                &self.ui_root.viewport,
+                                &self.ws.ui_root.viewport,
                             );
                         }
                         UIEvent::Drag { pos, .. } => {
@@ -335,14 +335,14 @@ impl Application {
                                 *pos,
                                 &mut host,
                                 &mut self.selection,
-                                &self.ui_root.viewport,
+                                &self.ws.ui_root.viewport,
                             );
                         }
                         UIEvent::DragEnd { .. } => {
                             self.overlay.on_end_drag(
                                 &mut host,
                                 &mut self.selection,
-                                &self.ui_root.viewport,
+                                &self.ws.ui_root.viewport,
                             );
                         }
                         _ => {}
@@ -358,14 +358,14 @@ impl Application {
         // Overlay-generated right-click actions (TrackRightClicked, ClipRightClicked)
         // arrive AFTER process_events() has already run its try_open_dropdown pass.
         // Route them through the dropdown system now so context menus actually open.
-        self.ui_root.intercept_overlay_actions(&mut actions);
+        self.ws.ui_root.intercept_overlay_actions(&mut actions);
 
         // Update effect clipboard count for browser popup
-        self.ui_root.effect_clipboard_count = self.effect_clipboard.count();
+        self.ws.ui_root.effect_clipboard_count = self.effect_clipboard.count();
 
         // Trigger Ableton re-discovery when the picker opens so it shows fresh data.
-        if self.ui_root.ableton_rediscovery_needed {
-            self.ui_root.ableton_rediscovery_needed = false;
+        if self.ws.ui_root.ableton_rediscovery_needed {
+            self.ws.ui_root.ableton_rediscovery_needed = false;
             self.send_content_cmd(ContentCommand::AbletonRediscover);
         }
 
@@ -391,7 +391,7 @@ impl Application {
                         let mut config =
                             manifold_recording::LiveRecordingConfig::default_to_desktop();
                         config.audio_device =
-                            self.ui_root.selected_audio_input_device.clone();
+                            self.ws.ui_root.selected_audio_input_device.clone();
                         self.send_content_cmd(
                             ContentCommand::StartLiveRecording(Box::new(config)),
                         );
@@ -400,14 +400,14 @@ impl Application {
                 }
                 PanelAction::SetAudioInputDevice(name) => {
                     let display = if name.is_empty() {
-                        self.ui_root.selected_audio_input_device = None;
+                        self.ws.ui_root.selected_audio_input_device = None;
                         "No audio input".to_string()
                     } else {
-                        self.ui_root.selected_audio_input_device = Some(name.clone());
+                        self.ws.ui_root.selected_audio_input_device = Some(name.clone());
                         name.clone()
                     };
-                    self.ui_root.layer_headers.set_audio_device_name(
-                        &mut self.ui_root.tree,
+                    self.ws.ui_root.layer_headers.set_audio_device_name(
+                        &mut self.ws.ui_root.tree,
                         &display,
                     );
                     continue;
@@ -444,7 +444,7 @@ impl Application {
                 }
                 PanelAction::PasteEffects => {
                     // Browser popup paste button → route through same logic as Cmd+V
-                    let tab = self.ui_root.inspector.last_effect_tab();
+                    let tab = self.ws.ui_root.inspector.last_effect_tab();
                     let target = match tab {
                         manifold_ui::InspectorTab::Master => {
                             manifold_editing::commands::effect_target::EffectTarget::Master
@@ -492,12 +492,13 @@ impl Application {
                 }
                 PanelAction::BrowserSearchClicked => {
                     let r = self
+                        .ws
                         .ui_root
                         .browser_popup
-                        .search_bar_rect(&self.ui_root.tree);
+                        .search_bar_rect(&self.ws.ui_root.tree);
                     self.text_input.begin(
                         crate::text_input::TextInputField::SearchFilter,
-                        &self.ui_root.browser_popup.current_filter,
+                        &self.ws.ui_root.browser_popup.current_filter,
                         crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
                         11.0,
                     );
@@ -506,9 +507,10 @@ impl Application {
                 PanelAction::BpmFieldClicked => {
                     let bpm = Some(&self.local_project).map_or(120.0, |p| p.settings.bpm.0);
                     let r = self
+                        .ws
                         .ui_root
                         .tree
-                        .get_bounds(self.ui_root.transport.bpm_field_id() as u32);
+                        .get_bounds(self.ws.ui_root.transport.bpm_field_id() as u32);
                     self.text_input.begin(
                         crate::text_input::TextInputField::Bpm,
                         &format!("{:.1}", bpm),
@@ -520,9 +522,10 @@ impl Application {
                 PanelAction::FpsFieldClicked => {
                     let fps = Some(&self.local_project).map_or(60.0, |p| p.settings.frame_rate);
                     let r = self
+                        .ws
                         .ui_root
                         .tree
-                        .get_bounds(self.ui_root.footer.fps_field_id() as u32);
+                        .get_bounds(self.ws.ui_root.footer.fps_field_id() as u32);
                     self.text_input.begin(
                         crate::text_input::TextInputField::Fps,
                         &format!("{:.0}", fps),
@@ -536,9 +539,9 @@ impl Application {
                     {
                         let project = &self.local_project;
                         if let Some(layer) = project.timeline.layers.get(*idx) {
-                            let nid = self.ui_root.layer_headers.name_node_id(*idx);
+                            let nid = self.ws.ui_root.layer_headers.name_node_id(*idx);
                             let r = if nid >= 0 {
-                                self.ui_root.tree.get_bounds(nid as u32)
+                                self.ws.ui_root.tree.get_bounds(nid as u32)
                             } else {
                                 manifold_ui::node::Rect::new(100.0, 100.0, 120.0, 20.0)
                             };
@@ -559,8 +562,8 @@ impl Application {
                         let beat = marker.beat;
                         let name = marker.name.clone();
                         // Anchor to marker flag position in the ruler
-                        let px = self.ui_root.viewport.beat_to_pixel(beat);
-                        let ruler = self.ui_root.viewport.ruler_rect();
+                        let px = self.ws.ui_root.viewport.beat_to_pixel(beat);
+                        let ruler = self.ws.ui_root.viewport.ruler_rect();
                         let flag_w = manifold_ui::color::MARKER_FLAG_WIDTH;
                         let r = crate::text_input::AnchorRect::new(
                             px + flag_w * 0.5 + 2.0,
@@ -599,10 +602,11 @@ impl Application {
                             })
                             .unwrap_or_else(|| "Auto".to_string());
                         let r = self
+                            .ws
                             .ui_root
                             .inspector
                             .clip_chrome_mut()
-                            .bpm_button_rect(&self.ui_root.tree);
+                            .bpm_button_rect(&self.ws.ui_root.tree);
                         self.text_input.begin(
                             crate::text_input::TextInputField::ClipBpm,
                             &bpm_text,
@@ -614,11 +618,11 @@ impl Application {
                 }
                 PanelAction::GenStringParamClicked(sp_idx) => {
                     // Open text input for a generator string param.
-                    if let Some(gp) = self.ui_root.inspector.gen_params()
+                    if let Some(gp) = self.ws.ui_root.inspector.gen_params()
                         && let Some(sp) = gp.string_param(*sp_idx)
                     {
                         let current = sp.value.clone();
-                        if let Some(r) = gp.string_param_rect(&self.ui_root.tree, *sp_idx) {
+                        if let Some(r) = gp.string_param_rect(&self.ws.ui_root.tree, *sp_idx) {
                             self.text_input.begin(
                                 crate::text_input::TextInputField::GenStringParam(*sp_idx),
                                 &current,
@@ -631,11 +635,11 @@ impl Application {
                 }
                 PanelAction::GenStringParamDropdownClicked(sp_idx) => {
                     // Open a dropdown for a string param (e.g. font selector).
-                    if let Some(gp) = self.ui_root.inspector.gen_params()
+                    if let Some(gp) = self.ws.ui_root.inspector.gen_params()
                         && let Some(sp) = gp.string_param(*sp_idx)
                     {
                         let key = sp.key.clone();
-                        if let Some(r) = gp.string_param_rect(&self.ui_root.tree, *sp_idx) {
+                        if let Some(r) = gp.string_param_rect(&self.ws.ui_root.tree, *sp_idx) {
                             let items: Vec<manifold_ui::panels::dropdown::DropdownItem> =
                                 if key == "fontFamily" {
                                     manifold_renderer::text_rasterizer::TextRasterizer::available_font_families()
@@ -649,7 +653,7 @@ impl Application {
                                 let trigger = manifold_ui::node::Rect::new(
                                     r.x, r.y, r.width, r.height,
                                 );
-                                self.ui_root.open_dropdown_at(
+                                self.ws.ui_root.open_dropdown_at(
                                     crate::ui_root::DropdownContext::GenStringParamDropdown(*sp_idx),
                                     items,
                                     trigger,
@@ -662,9 +666,10 @@ impl Application {
                 PanelAction::MacroLabelRename(idx) => {
                     if let Some(slot) = self.local_project.settings.macro_bank.slots.get(*idx)
                         && let Some(r) = self
+                            .ws
                             .ui_root
                             .inspector
-                            .macro_label_rect(&self.ui_root.tree, *idx)
+                            .macro_label_rect(&self.ws.ui_root.tree, *idx)
                     {
                         self.text_input.begin(
                             crate::text_input::TextInputField::MacroLabel(*idx),
@@ -712,7 +717,7 @@ impl Application {
                 &mut self.local_project,
                 content_tx,
                 &self.content_state,
-                &mut self.ui_root,
+                &mut self.ws.ui_root,
                 &mut self.selection,
                 &mut self.active_layer_id,
                 &mut self.slider_snapshot,
@@ -753,7 +758,7 @@ impl Application {
                 .as_ref()
                 .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
             crate::ui_bridge::sync_inspector_data(
-                &mut self.ui_root,
+                &mut self.ws.ui_root,
                 &self.local_project,
                 active_idx,
                 &self.selection,
@@ -767,13 +772,13 @@ impl Application {
                 .as_ref()
                 .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
             crate::ui_bridge::sync_project_data(
-                &mut self.ui_root,
+                &mut self.ws.ui_root,
                 &self.local_project,
                 active_idx,
                 &self.selection,
             );
             crate::ui_bridge::sync_inspector_data(
-                &mut self.ui_root,
+                &mut self.ws.ui_root,
                 &self.local_project,
                 active_idx,
                 &self.selection,
@@ -784,13 +789,13 @@ impl Application {
                 .as_ref()
                 .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
             crate::ui_bridge::sync_project_data(
-                &mut self.ui_root,
+                &mut self.ws.ui_root,
                 &self.local_project,
                 active_idx,
                 &self.selection,
             );
             crate::ui_bridge::sync_inspector_data(
-                &mut self.ui_root,
+                &mut self.ws.ui_root,
                 &self.local_project,
                 active_idx,
                 &self.selection,
@@ -819,7 +824,7 @@ impl Application {
                     self.cursor_pos,
                     &mut host,
                     &mut self.selection,
-                    &self.ui_root.viewport,
+                    &self.ws.ui_root.viewport,
                 );
             }
         }
@@ -834,7 +839,7 @@ impl Application {
 
         // 2c. Auto-scroll check for playback (BEFORE build so rebuild includes new scroll)
         let auto_scroll_changed = crate::ui_bridge::check_auto_scroll(
-            &mut self.ui_root,
+            &mut self.ws.ui_root,
             &self.content_state,
             &self.local_project,
         );
@@ -842,8 +847,8 @@ impl Application {
         if auto_scroll_changed {
             self.scroll_dirty.scroll_x = true;
         }
-        let overlay_changed = self.ui_root.overlay_dirty;
-        self.ui_root.overlay_dirty = false;
+        let overlay_changed = self.ws.ui_root.overlay_dirty;
+        self.ws.ui_root.overlay_dirty = false;
         if overlay_changed {
             self.scroll_dirty.visual = true;
         }
@@ -858,14 +863,14 @@ impl Application {
         //
         // GUARD: If the inspector has an active drag (slider being dragged), defer
         // the rebuild to prevent node destruction mid-drag which causes snap-back.
-        let inspector_dragging = self.ui_root.inspector.is_dragging();
-        let layer_dragging = self.ui_root.layer_headers.is_dragging();
+        let inspector_dragging = self.ws.ui_root.inspector.is_dragging();
+        let layer_dragging = self.ws.ui_root.layer_headers.is_dragging();
         if self.needs_rebuild || needs_structural_sync {
             if inspector_dragging {
                 // Defer — keep needs_rebuild set so it fires after drag ends
                 // But still rebuild scroll panels if needed (they're separate from inspector)
                 if scroll_dirty.any() {
-                    self.ui_root.rebuild_scroll_panels(scroll_dirty);
+                    self.ws.ui_root.rebuild_scroll_panels(scroll_dirty);
                     if let Some(cm) = &mut self.ui_cache_manager {
                         cm.invalidate_scroll_panels();
                     }
@@ -875,18 +880,18 @@ impl Application {
                 // destroy the node IDs that handle_drag / handle_drag_end depend on.
             } else {
                 self.needs_rebuild = false;
-                self.ui_root.build();
+                self.ws.ui_root.build();
                 // Re-apply effect card selection visuals after rebuild —
                 // structural changes recreate cards with is_selected=false.
-                self.ui_root
+                self.ws.ui_root
                     .inspector
-                    .apply_selection_visuals(&mut self.ui_root.tree);
+                    .apply_selection_visuals(&mut self.ws.ui_root.tree);
                 if let Some(cm) = &mut self.ui_cache_manager {
                     cm.invalidate_all();
                 }
             }
         } else if scroll_dirty.any() && !layer_dragging {
-            self.ui_root.rebuild_scroll_panels(scroll_dirty);
+            self.ws.ui_root.rebuild_scroll_panels(scroll_dirty);
             if let Some(cm) = &mut self.ui_cache_manager {
                 cm.invalidate_scroll_panels();
             }
@@ -901,7 +906,7 @@ impl Application {
             .as_ref()
             .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
         crate::ui_bridge::push_state(
-            &mut self.ui_root,
+            &mut self.ws.ui_root,
             &self.local_project,
             &self.content_state,
             active_idx,
@@ -916,23 +921,23 @@ impl Application {
         // project model. Outside of drag with no version change, the viewport
         // cache is already current. Skipping saves 50+ string clones per frame.
         if self.mouse_pressed || needs_structural_sync {
-            crate::ui_bridge::sync_clip_positions(&mut self.ui_root, &self.local_project);
+            crate::ui_bridge::sync_clip_positions(&mut self.ws.ui_root, &self.local_project);
         }
 
         // 4c. Apply per-layer bitmap invalidation from editing operations.
         for layer_idx in self.invalidate_layers.drain(..) {
-            self.ui_root.viewport.invalidate_layer_bitmap(layer_idx);
+            self.ws.ui_root.viewport.invalidate_layer_bitmap(layer_idx);
         }
 
         // 5. Push performance metrics to HUD
-        if self.ui_root.perf_hud.is_visible() {
+        if self.ws.ui_root.perf_hud.is_visible() {
             let bpm = Some(&self.local_project)
                 .map(|p| p.settings.bpm)
                 .unwrap_or(manifold_core::Bpm(120.0));
             let clock_source = Some(&self.local_project)
                 .map(|p| p.settings.clock_authority.display_name().to_string())
                 .unwrap_or_else(|| "Internal".to_string());
-            self.ui_root
+            self.ws.ui_root
                 .perf_hud
                 .set_metrics(manifold_ui::panels::perf_hud::PerfMetrics {
                     ui_fps: self.frame_timer.current_fps() as f32,
@@ -955,13 +960,13 @@ impl Application {
         }
 
         // 6. Lightweight update (playhead, insert cursor, layer selection, HUD values)
-        self.ui_root.update();
+        self.ws.ui_root.update();
 
         // 6a. Update waveform lane overlay (position for dirty-checking)
         {
-            let scroll_x = self.ui_root.viewport.scroll_x_beats().as_f32()
-                * self.ui_root.viewport.pixels_per_beat();
-            let wf = &mut self.ui_root.waveform_lane;
+            let scroll_x = self.ws.ui_root.viewport.scroll_x_beats().as_f32()
+                * self.ws.ui_root.viewport.pixels_per_beat();
+            let wf = &mut self.ws.ui_root.waveform_lane;
             if wf.is_ready() {
                 // Get start beat and duration from project percussion import state
                 let (start_beat, duration_beats) = if let Some(proj) = Some(&self.local_project) {
@@ -976,26 +981,26 @@ impl Application {
                 } else {
                     (0.0, 0.0)
                 };
-                let mapper = self.ui_root.viewport.mapper();
+                let mapper = self.ws.ui_root.viewport.mapper();
                 wf.update_overlay(
                     start_beat,
                     duration_beats,
                     scroll_x,
-                    self.ui_root.viewport.tracks_rect().width,
+                    self.ws.ui_root.viewport.tracks_rect().width,
                     mapper,
                 );
             }
 
             // 6a-ii. Update stem lane overlay (same position/scroll as master).
-            if self.ui_root.stem_lanes.is_expanded() {
+            if self.ws.ui_root.stem_lanes.is_expanded() {
                 let start_beat = self
                     .local_project
                     .percussion_import
                     .as_ref()
                     .map_or(0.0, |perc| perc.audio_start_beat.as_f32());
                 let bpm = self.local_project.settings.bpm.0.max(1.0);
-                let mapper = self.ui_root.viewport.mapper();
-                self.ui_root
+                let mapper = self.ws.ui_root.viewport.mapper();
+                self.ws.ui_root
                     .stem_lanes
                     .update_overlay(start_beat, scroll_x, bpm, mapper);
             }
@@ -1005,23 +1010,24 @@ impl Application {
         // Build BitmapRepaintState from current selection/hover.
         {
             let hovered = self
+                .ws
                 .ui_root
                 .viewport
                 .hovered_clip_id()
                 .map(|s| s.to_string());
-            let sel_region = self.ui_root.viewport.selection_region_ref().cloned();
+            let sel_region = self.ws.ui_root.viewport.selection_region_ref().cloned();
             let has_region = sel_region.is_some();
-            let insert_cursor_beat = self.ui_root.viewport.insert_cursor_beat().as_f32();
+            let insert_cursor_beat = self.ws.ui_root.viewport.insert_cursor_beat().as_f32();
             let insert_layer = self
                 .selection
                 .insert_cursor_layer_id
                 .as_ref()
                 .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
             let has_insert = self.selection.has_insert_cursor();
-            let ppb = self.ui_root.viewport.pixels_per_beat();
+            let ppb = self.ws.ui_root.viewport.pixels_per_beat();
             let sel_ver = self.selection.selection_version;
 
-            let marker_lines = self.ui_root.viewport.marker_line_data();
+            let marker_lines = self.ws.ui_root.viewport.marker_line_data();
             let state = manifold_ui::BitmapRepaintState {
                 selection_version: sel_ver,
                 is_selected: &|id: &str| self.selection.is_selected(id),
@@ -1034,19 +1040,19 @@ impl Application {
                 pixels_per_beat: ppb,
                 markers: &marker_lines,
             };
-            self.ui_root.viewport.repaint_dirty_layers(&state);
+            self.ws.ui_root.viewport.repaint_dirty_layers(&state);
         }
 
         // 6c. Upload dirty layer textures to GPU
         if let (Some(gpu), Some(bitmap_gpu)) = (&self.gpu, &mut self.layer_bitmap_gpu) {
-            for (layer_idx, pixels, tw, th) in self.ui_root.viewport.dirty_layer_iter() {
+            for (layer_idx, pixels, tw, th) in self.ws.ui_root.viewport.dirty_layer_iter() {
                 bitmap_gpu.upload_layer(&gpu.device, layer_idx, pixels, tw as u32, th as u32);
             }
 
             // 6d. Repaint + upload waveform lane if dirty
-            let wf_rect = self.ui_root.viewport.waveform_lane_rect();
+            let wf_rect = self.ws.ui_root.viewport.waveform_lane_rect();
             if wf_rect.width > 0.0 && wf_rect.height > 0.0 {
-                let wf = &mut self.ui_root.waveform_lane;
+                let wf = &mut self.ws.ui_root.waveform_lane;
                 // Force dirty on resize
                 if wf.buffer_width != wf_rect.width as usize {
                     wf.dirty = true;
@@ -1067,11 +1073,11 @@ impl Application {
             }
 
             // 6e. Repaint + upload stem lanes if dirty
-            if self.ui_root.stem_lanes.is_expanded() {
-                let sl_rect = self.ui_root.viewport.stem_lanes_rect();
+            if self.ws.ui_root.stem_lanes.is_expanded() {
+                let sl_rect = self.ws.ui_root.viewport.stem_lanes_rect();
                 if sl_rect.width > 0.0 && sl_rect.height > 0.0 {
-                    let sl = &mut self.ui_root.stem_lanes;
-                    let mapper = self.ui_root.viewport.mapper();
+                    let sl = &mut self.ws.ui_root.stem_lanes;
+                    let mapper = self.ws.ui_root.viewport.mapper();
                     if sl.buffer_width != sl_rect.width as usize {
                         sl.dirty = true;
                     }
@@ -1094,15 +1100,15 @@ impl Application {
             }
 
             // 6f. Repaint + upload overview strip bitmap
-            self.ui_root.viewport.repaint_overview();
-            if let Some((pixels, tw, th)) = self.ui_root.viewport.overview_bitmap() {
+            self.ws.ui_root.viewport.repaint_overview();
+            if let Some((pixels, tw, th)) = self.ws.ui_root.viewport.overview_bitmap() {
                 bitmap_gpu.upload_layer(&gpu.device, 1002, pixels, tw as u32, th as u32);
             }
 
             // 6g. Repaint + upload collapsed group bitmaps
-            self.ui_root.viewport.repaint_collapsed_groups();
+            self.ws.ui_root.viewport.repaint_collapsed_groups();
             for (track_idx, pixels, tw, th) in
-                self.ui_root.viewport.dirty_collapsed_group_iter()
+                self.ws.ui_root.viewport.dirty_collapsed_group_iter()
             {
                 bitmap_gpu.upload_layer(
                     &gpu.device,
@@ -1146,15 +1152,15 @@ impl Application {
                 .map_or(0, |b| b.front_index()) as usize;
             if front != self.last_output_front_index {
                 self.last_output_front_index = front;
-                self.offscreen_dirty = true;
+                self.ws.offscreen_dirty = true;
             }
             // Mark dirty if panel nodes changed (structural UI changes, transport
             // text, slider drags, etc.). Overlay nodes (perf HUD, dropdowns,
             // popups) are excluded — they render every frame via the overlay
             // pass and don't need the full offscreen re-render.
-            let panel_end = self.ui_root.perf_hud.first_node();
-            if self.ui_root.tree.has_dirty_in_range(0, panel_end) {
-                self.offscreen_dirty = true;
+            let panel_end = self.ws.ui_root.perf_hud.first_node();
+            if self.ws.ui_root.tree.has_dirty_in_range(0, panel_end) {
+                self.ws.offscreen_dirty = true;
             }
             self.present_all_windows(front);
         }
@@ -1172,7 +1178,7 @@ impl Application {
 
         // ── Panel cache update ──
         let scale = self.scale_factor;
-        let panel_infos = self.ui_root.panel_cache_info();
+        let panel_infos = self.ws.ui_root.panel_cache_info();
         if let (Some(cm), Some(ui)) = (&mut self.ui_cache_manager, &mut self.ui_renderer) {
             // Compute logical surface dimensions
             let (surface_w, surface_h) = self
@@ -1186,11 +1192,11 @@ impl Application {
             cm.set_scale_factor(scale);
             cm.ensure_atlas(&gpu.device, logical_w, logical_h);
             let (_, rendered_ranges) =
-                cm.render_dirty_panels(&gpu.device, ui, &self.ui_root.tree, &panel_infos);
+                cm.render_dirty_panels(&gpu.device, ui, &self.ws.ui_root.tree, &panel_infos);
             // Clear dirty flags only for ranges that were actually rendered.
             // Deferred panels keep their dirty flags for the next frame.
             for (start, end) in &rendered_ranges {
-                self.ui_root.tree.clear_dirty_range(*start, *end);
+                self.ws.ui_root.tree.clear_dirty_range(*start, *end);
             }
         }
 
@@ -1209,7 +1215,7 @@ impl Application {
             .unwrap_or((1, 1));
         let (surface_w, surface_h) = surface_dims;
 
-        let Some(offscreen) = &self.ui_offscreen else {
+        let Some(offscreen) = &self.ws.ui_offscreen else {
             return;
         };
         // Ensure offscreen matches surface (may be stale after resize race).
@@ -1226,9 +1232,9 @@ impl Application {
         // ProMotion adapts refresh rate based on observed frame delivery;
         // skipping presents causes it to drop from 120Hz to 60Hz, producing
         // an 8/16ms nextDrawable bounce when it oscillates back.
-        if !self.offscreen_dirty {
-            if self.surface_resized_this_frame {
-                self.surface_resized_this_frame = false;
+        if !self.ws.offscreen_dirty {
+            if self.ws.surface_resized_this_frame {
+                self.ws.surface_resized_this_frame = false;
                 return;
             }
             let drawable = {
@@ -1270,7 +1276,7 @@ impl Application {
             }
             return;
         }
-        self.offscreen_dirty = false;
+        self.ws.offscreen_dirty = false;
 
         // Reset overlay TextRenderer pool index
         if let Some(ui) = &mut self.ui_renderer {
@@ -1326,7 +1332,7 @@ impl Application {
                 .map(|p| p.get_dimensions())
                 .unwrap_or((1920, 1080));
             let source_aspect = comp_w as f32 / comp_h as f32;
-            let video_rect = self.ui_root.layout.video_area();
+            let video_rect = self.ws.ui_root.layout.video_area();
             let rect_x = video_rect.x * sf;
             let rect_y = video_rect.y * sf;
             let rect_w = video_rect.width * sf;
@@ -1364,27 +1370,27 @@ impl Application {
 
         // Pass 4: Layer bitmaps directly to drawable
         if let Some(bitmap_gpu) = &mut self.layer_bitmap_gpu {
-            let mut rects = self.ui_root.viewport.layer_bitmap_rects();
+            let mut rects = self.ws.ui_root.viewport.layer_bitmap_rects();
 
-            let wf_rect = self.ui_root.viewport.waveform_lane_rect();
+            let wf_rect = self.ws.ui_root.viewport.waveform_lane_rect();
             if wf_rect.width > 0.0 && wf_rect.height > 0.0 {
                 rects.push((1000, wf_rect));
             }
 
-            if self.ui_root.stem_lanes.is_expanded() {
-                let sl_rect = self.ui_root.viewport.stem_lanes_rect();
+            if self.ws.ui_root.stem_lanes.is_expanded() {
+                let sl_rect = self.ws.ui_root.viewport.stem_lanes_rect();
                 if sl_rect.width > 0.0 && sl_rect.height > 0.0 {
                     rects.push((1001, sl_rect));
                 }
             }
 
-            let ov_rect = self.ui_root.viewport.overview_rect();
+            let ov_rect = self.ws.ui_root.viewport.overview_rect();
             if ov_rect.width > 0.0 && ov_rect.height > 0.0 {
                 rects.push((1002, ov_rect));
             }
 
             // Collapsed group bitmaps
-            rects.extend(self.ui_root.viewport.collapsed_group_rects());
+            rects.extend(self.ws.ui_root.viewport.collapsed_group_rects());
 
             if !rects.is_empty() {
                 bitmap_gpu.render_layers(
@@ -1401,9 +1407,9 @@ impl Application {
         // Pass 5: Overlay UI (playhead, HUD, dropdowns, text)
         if let Some(ui) = &mut self.ui_renderer {
             // Waveform/stem lane buttons
-            let wf_first = self.ui_root.waveform_lane.first_node();
-            let sl_first = self.ui_root.stem_lanes.first_node();
-            let overlay_end = self.ui_root.perf_hud.first_node();
+            let wf_first = self.ws.ui_root.waveform_lane.first_node();
+            let sl_first = self.ws.ui_root.stem_lanes.first_node();
+            let overlay_end = self.ws.ui_root.perf_hud.first_node();
             let overlay_start = if wf_first != usize::MAX {
                 Some(wf_first)
             } else if sl_first != usize::MAX {
@@ -1412,13 +1418,13 @@ impl Application {
                 None
             };
             if let Some(start) = overlay_start {
-                ui.render_overlay_range(&self.ui_root.tree, start, overlay_end);
+                ui.render_overlay_range(&self.ws.ui_root.tree, start, overlay_end);
             }
 
             // Playhead line
-            if let Some(px) = self.ui_root.viewport.playhead_pixel() {
-                let ruler = self.ui_root.viewport.ruler_rect();
-                let tr = self.ui_root.viewport.get_tracks_rect();
+            if let Some(px) = self.ws.ui_root.viewport.playhead_pixel() {
+                let ruler = self.ws.ui_root.viewport.ruler_rect();
+                let tr = self.ws.ui_root.viewport.get_tracks_rect();
                 let top = ruler.y;
                 let height = (tr.y + tr.height) - top;
                 ui.draw_rect(
@@ -1431,35 +1437,35 @@ impl Application {
             }
 
             // Perf HUD
-            if self.ui_root.perf_hud.is_visible() {
-                let hud_start = self.ui_root.perf_hud.first_node();
-                let hud_end = if self.ui_root.dropdown.is_open() {
-                    self.ui_root.dropdown.first_node()
-                } else if self.ui_root.browser_popup.is_open() {
-                    self.ui_root.browser_popup.first_node()
-                } else if self.ui_root.ableton_picker.is_open() {
-                    self.ui_root.ableton_picker.first_node()
+            if self.ws.ui_root.perf_hud.is_visible() {
+                let hud_start = self.ws.ui_root.perf_hud.first_node();
+                let hud_end = if self.ws.ui_root.dropdown.is_open() {
+                    self.ws.ui_root.dropdown.first_node()
+                } else if self.ws.ui_root.browser_popup.is_open() {
+                    self.ws.ui_root.browser_popup.first_node()
+                } else if self.ws.ui_root.ableton_picker.is_open() {
+                    self.ws.ui_root.ableton_picker.first_node()
                 } else {
                     usize::MAX
                 };
-                ui.render_overlay_range(&self.ui_root.tree, hud_start, hud_end);
+                ui.render_overlay_range(&self.ws.ui_root.tree, hud_start, hud_end);
             }
 
             // Popups
-            if self.ui_root.dropdown.is_open() {
-                let start = self.ui_root.dropdown.first_node();
-                ui.render_overlay(&self.ui_root.tree, start);
-            } else if self.ui_root.browser_popup.is_open() {
-                let start = self.ui_root.browser_popup.first_node();
-                ui.render_overlay(&self.ui_root.tree, start);
-            } else if self.ui_root.ableton_picker.is_open() {
-                let start = self.ui_root.ableton_picker.first_node();
-                ui.render_overlay(&self.ui_root.tree, start);
+            if self.ws.ui_root.dropdown.is_open() {
+                let start = self.ws.ui_root.dropdown.first_node();
+                ui.render_overlay(&self.ws.ui_root.tree, start);
+            } else if self.ws.ui_root.browser_popup.is_open() {
+                let start = self.ws.ui_root.browser_popup.first_node();
+                ui.render_overlay(&self.ws.ui_root.tree, start);
+            } else if self.ws.ui_root.ableton_picker.is_open() {
+                let start = self.ws.ui_root.ableton_picker.first_node();
+                ui.render_overlay(&self.ws.ui_root.tree, start);
             }
 
             // Effect card drag ghost
-            if let Some(start) = self.ui_root.inspector.card_drag_first_node() {
-                ui.render_overlay(&self.ui_root.tree, start);
+            if let Some(start) = self.ws.ui_root.inspector.card_drag_first_node() {
+                ui.render_overlay(&self.ws.ui_root.tree, start);
             }
 
             // Text input overlay
@@ -1480,7 +1486,7 @@ impl Application {
         // panel cache ranges — overlay nodes (HUD, playhead, popups) live
         // outside those ranges and their DIRTY flags were never cleared,
         // keeping has_dirty permanently true and defeating the fast path.
-        self.ui_root.tree.clear_dirty();
+        self.ws.ui_root.tree.clear_dirty();
 
         // ── Late drawable acquisition ──
         // Acquire the drawable as late as possible to minimize time blocking on
@@ -1491,8 +1497,8 @@ impl Application {
         // drawable pool, and nextDrawable can block up to 1s during the
         // reconfiguration. The offscreen render is still committed above —
         // it just won't be blitted to screen this frame.
-        if self.surface_resized_this_frame {
-            self.surface_resized_this_frame = false;
+        if self.ws.surface_resized_this_frame {
+            self.ws.surface_resized_this_frame = false;
             return;
         }
         let drawable = {

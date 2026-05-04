@@ -32,9 +32,9 @@ use crate::content_state::ContentState;
 
 use crate::frame_timer::FrameTimer;
 use crate::project_io::ProjectIOService;
-use crate::ui_root::UIRoot;
 use crate::user_prefs::UserPrefs;
 use crate::window_registry::{WindowRegistry, WindowRole, WindowState};
+use crate::workspace::{Workspace, WorkspaceKind};
 
 /// Re-export UIState as the selection state (replaces the old SelectionState).
 /// UIState is the 1:1 port of Unity's UIState.cs with proper Ableton semantics:
@@ -236,23 +236,10 @@ pub struct Application {
     pub(crate) blit_sampler: Option<manifold_gpu::GpuSampler>,
     pub(crate) atlas_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     pub(crate) atlas_sampler: Option<manifold_gpu::GpuSampler>,
-    /// Offscreen render target for the UI frame. All render passes target this
-    /// texture instead of the drawable directly. The drawable is acquired late
-    /// (just before present) and receives a single blit from this texture.
-    /// This minimizes time spent holding the drawable / blocking on WindowServer
-    /// IPC during Direct Display synchronization on external monitors.
-    pub(crate) ui_offscreen: Option<manifold_gpu::GpuTexture>,
-    /// CVDisplayLink-driven vsync signal for the UI thread.
-    /// Replaces FrameTimer polling — aligns render submission to MacBook vsync.
-    #[cfg(target_os = "macos")]
-    pub(crate) ui_display_link: Option<crate::display_link::UiDisplayLink>,
     pub(crate) ui_renderer: Option<UIRenderer>,
     pub(crate) ui_cache_manager: Option<manifold_renderer::ui_cache_manager::UICacheManager>,
     pub(crate) layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
     pub(crate) scale_factor: f64,
-    /// Skip drawable acquisition this frame (surface just resized — drawable
-    /// pool may be reconfiguring). Offscreen render still runs; blit skipped.
-    pub(crate) surface_resized_this_frame: bool,
     /// True while a display retarget is in flight — skip all potentially-
     /// blocking surface operations (next_drawable, commit_and_wait_scheduled)
     /// until the UiDisplayLink confirms it's alive on the new display.
@@ -263,10 +250,6 @@ pub struct Application {
     /// (display disconnected entirely), clear the pending flag after 2s
     /// so the app doesn't stay frozen forever.
     pub(crate) display_retarget_deadline: Option<std::time::Instant>,
-    /// True when the offscreen texture needs a fresh render this frame.
-    /// Set by any visual state change (content frame, dirty panels, overlay).
-    /// When false, present_all_windows just re-blits the existing offscreen.
-    pub(crate) offscreen_dirty: bool,
     /// macOS EDR headroom for the primary window (1.0 = SDR, >1.0 = HDR capable).
     /// Drives compositor tonemap (passthrough if > 1.0, ACES if ≤ 1.0).
     pub(crate) edr_headroom: f64,
@@ -274,8 +257,15 @@ pub struct Application {
     /// tonemap blit (ACES if ≤ 1.0 SDR, passthrough if > 1.0 HDR).
     pub(crate) output_edr_headroom: f64,
 
-    // UI
-    pub(crate) ui_root: UIRoot,
+    /// Main timeline workspace. Owns its `UIRoot`, offscreen render
+    /// target, CVDisplayLink, and dirty/resize flags. See
+    /// [`crate::workspace::Workspace`].
+    pub(crate) ws: crate::workspace::Workspace,
+    /// Optional secondary workspace hosting the node-graph editor.
+    /// `None` until the user opens the editor window. Phase 4 wires
+    /// this up.
+    #[allow(dead_code)]
+    pub(crate) graph_editor: Option<crate::workspace::Workspace>,
 
     // Frame timing
     pub(crate) frame_timer: FrameTimer,
@@ -412,20 +402,16 @@ impl Application {
             blit_sampler: None,
             atlas_pipeline: None,
             atlas_sampler: None,
-            ui_offscreen: None,
-            #[cfg(target_os = "macos")]
-            ui_display_link: None,
             ui_renderer: None,
             ui_cache_manager: None,
             layer_bitmap_gpu: None,
             scale_factor: 1.0,
-            surface_resized_this_frame: false,
             display_retarget_pending: false,
             display_retarget_deadline: None,
-            offscreen_dirty: true,
             edr_headroom: 1.0,
             output_edr_headroom: 1.0,
-            ui_root: UIRoot::new(),
+            ws: Workspace::new(WorkspaceKind::Main),
+            graph_editor: None,
             // UI frame rate: uncapped (120fps target, vsync limits actual present).
             // Content thread has its own timer at project FPS — fully decoupled.
             frame_timer: FrameTimer::new(120.0),
@@ -502,7 +488,7 @@ impl Application {
 
     #[cfg(target_os = "macos")]
     fn current_workspace_preview_size(&self) -> (u32, u32) {
-        let video_rect = self.ui_root.layout.video_area();
+        let video_rect = self.ws.ui_root.layout.video_area();
         Self::compute_workspace_preview_size(
             self.local_project.settings.output_width.max(1) as u32,
             self.local_project.settings.output_height.max(1) as u32,
@@ -563,39 +549,39 @@ impl Application {
         }
 
         // Priority 2: Inspector resize edge hover
-        if self.ui_root.inspector_resize_dragging
-            || self.ui_root.is_near_inspector_edge(self.cursor_pos)
+        if self.ws.ui_root.inspector_resize_dragging
+            || self.ws.ui_root.is_near_inspector_edge(self.cursor_pos)
         {
             self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
-            if self.ui_root.inspector_resize_dragging {
-                self.ui_root.set_inspector_handle_drag();
+            if self.ws.ui_root.inspector_resize_dragging {
+                self.ws.ui_root.set_inspector_handle_drag();
             } else {
-                self.ui_root.set_inspector_handle_hover();
+                self.ws.ui_root.set_inspector_handle_hover();
             }
             return;
         }
-        self.ui_root.set_inspector_handle_idle();
+        self.ws.ui_root.set_inspector_handle_idle();
 
         // Priority 3: Video/timeline split handle hover
         // Use the same hit test as click detection (layout.split_handle rect).
         let near_split =
-            self.split_dragging || self.ui_root.layout.is_near_split_handle(self.cursor_pos);
+            self.split_dragging || self.ws.ui_root.layout.is_near_split_handle(self.cursor_pos);
         if near_split {
             if !self.split_dragging {
-                self.ui_root.set_split_handle_hover();
+                self.ws.ui_root.set_split_handle_hover();
             }
             self.cursor_manager.set(TimelineCursor::ResizeVertical);
             self.split_was_hovered = true;
             return;
         } else if self.split_was_hovered && !self.split_dragging {
-            self.ui_root.set_split_handle_idle();
+            self.ws.ui_root.set_split_handle_idle();
             self.split_was_hovered = false;
         }
 
         // Priority 4: Clip trim handle hover
-        let tracks_rect = self.ui_root.viewport.tracks_rect();
+        let tracks_rect = self.ws.ui_root.viewport.tracks_rect();
         if tracks_rect.contains(self.cursor_pos)
-            && let Some(hit) = self.ui_root.viewport.hit_test_clip(self.cursor_pos)
+            && let Some(hit) = self.ws.ui_root.viewport.hit_test_clip(self.cursor_pos)
         {
             match hit.region {
                 manifold_ui::panels::HitRegion::TrimLeft
@@ -630,7 +616,7 @@ impl Application {
             .as_ref()
             .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
         let current_layer = insert_cursor_idx.or(active_idx).unwrap_or(0);
-        let grid_interval = self.ui_root.viewport.grid_step();
+        let grid_interval = self.ws.ui_root.viewport.grid_step();
 
         // Build layer info for navigation (skip collapsed layers)
         let layers: Vec<NavLayerInfo> = Some(&self.local_project)
@@ -847,7 +833,7 @@ impl Application {
             }
             TextInputField::EffectParam(effect_idx, param_idx) => {
                 if let Ok(parsed) = text.parse::<f32>() {
-                    let tab = self.ui_root.inspector.last_effect_tab();
+                    let tab = self.ws.ui_root.inspector.last_effect_tab();
                     // Resolve effect instance to get type + old value
                     let effect_info = match tab {
                         manifold_ui::InspectorTab::Master => self
@@ -1012,7 +998,7 @@ impl Application {
             TextInputField::GroupRename(group_idx) => {
                 let new_name = text.trim().to_string();
                 if !new_name.is_empty() {
-                    let tab = self.ui_root.inspector.last_effect_tab();
+                    let tab = self.ws.ui_root.inspector.last_effect_tab();
                     // Find the group by index
                     let group_info = match tab {
                         manifold_ui::InspectorTab::Master => self
@@ -1066,7 +1052,7 @@ impl Application {
             }
             TextInputField::SearchFilter => {
                 // Update browser popup filter — no undo command
-                self.ui_root
+                self.ws.ui_root
                     .browser_popup
                     .set_filter(text.trim().to_string());
                 self.needs_rebuild = true;
@@ -1304,7 +1290,7 @@ impl ApplicationHandler for Application {
             // render trigger replacing the free-running FrameTimer.
             #[cfg(target_os = "macos")]
             {
-                self.ui_display_link = Some(crate::display_link::UiDisplayLink::new(window_arc));
+                self.ws.ui_display_link = Some(crate::display_link::UiDisplayLink::new(window_arc));
             }
 
             // Blit pipeline (composite output → drawable with aspect-fit viewport)
@@ -1612,13 +1598,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         self.gpu = Some(gpu);
 
         // Pass detected display resolutions to UI
-        self.ui_root
+        self.ws.ui_root
             .set_display_resolutions(self.display_resolutions.clone());
 
         // Build UI at initial window size (logical pixels)
         let logical_w = size.width as f32 / scale as f32;
         let logical_h = size.height as f32 / scale as f32;
-        self.ui_root.resize(logical_w, logical_h);
+        self.ws.ui_root.resize(logical_w, logical_h);
         #[cfg(target_os = "macos")]
         self.sync_workspace_preview_size();
 
@@ -1628,13 +1614,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             .as_ref()
             .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
         crate::ui_bridge::sync_project_data(
-            &mut self.ui_root,
+            &mut self.ws.ui_root,
             &self.local_project,
             active_idx,
             &self.selection,
         );
         crate::ui_bridge::sync_inspector_data(
-            &mut self.ui_root,
+            &mut self.ws.ui_root,
             &self.local_project,
             active_idx,
             &self.selection,
@@ -1668,7 +1654,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     // must happen before we destroy windows or block on joins.
                     #[cfg(target_os = "macos")]
                     {
-                        self.ui_display_link = None;
+                        self.ws.ui_display_link = None;
                     }
 
                     // Shut down content thread
@@ -1704,12 +1690,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             // Skip drawable acquisition this frame — the
                             // drawable pool may be reconfiguring after
                             // set_drawable_size.
-                            self.surface_resized_this_frame = true;
-                            self.offscreen_dirty = true;
+                            self.ws.surface_resized_this_frame = true;
+                            self.ws.offscreen_dirty = true;
                         }
                         let logical_w = size.width as f32 / scale as f32;
                         let logical_h = size.height as f32 / scale as f32;
-                        self.ui_root.resize(logical_w, logical_h);
+                        self.ws.ui_root.resize(logical_w, logical_h);
                     } else {
                         // Output window resized — update drawable.
                         self.send_content_cmd(
@@ -1728,8 +1714,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     if let Some(surface) = &mut ws.surface {
                         surface.resize(size.width, size.height);
                         self.resize_ui_offscreen(size.width, size.height);
-                        self.surface_resized_this_frame = true;
-                        self.offscreen_dirty = true;
+                        self.ws.surface_resized_this_frame = true;
+                        self.ws.offscreen_dirty = true;
                     }
                     // Output windows: drawable stays at project resolution.
                     // NativeOutputPresenter detects changes via bridge generation.
@@ -1737,7 +1723,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     if is_primary {
                         let logical_w = size.width as f32 / scale_factor as f32;
                         let logical_h = size.height as f32 / scale_factor as f32;
-                        self.ui_root.resize(logical_w, logical_h);
+                        self.ws.ui_root.resize(logical_w, logical_h);
                         self.scale_factor = scale_factor;
                     }
                 }
@@ -1764,20 +1750,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     // Split handle drag takes highest priority
                     // From Unity PanelResizeHandle.OnDrag
                     if self.split_dragging {
-                        self.ui_root
+                        self.ws.ui_root
                             .layout
                             .update_split_from_drag(self.cursor_pos.y);
                         self.cursor_manager.set(TimelineCursor::ResizeVertical);
                         self.needs_rebuild = true;
                     }
                     // Inspector resize drag takes next priority
-                    else if self.ui_root.inspector_resize_dragging {
-                        if self.ui_root.update_inspector_resize(self.cursor_pos.x) {
+                    else if self.ws.ui_root.inspector_resize_dragging {
+                        if self.ws.ui_root.update_inspector_resize(self.cursor_pos.x) {
                             self.needs_rebuild = true;
                         }
                         self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
                     } else {
-                        self.ui_root.pointer_event(
+                        self.ws.ui_root.pointer_event(
                             self.cursor_pos,
                             PointerAction::Move,
                             self.time_since_start,
@@ -1803,7 +1789,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                 self.cursor_pos,
                                 &mut host,
                                 &mut self.selection,
-                                &self.ui_root.viewport,
+                                &self.ws.ui_root.viewport,
                             );
                         }
 
@@ -1846,10 +1832,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                     // Matches Unity's InputHandler.inspectorHasFocus.
                                     // Any click outside inspector clears focus and effect selection
                                     // — layer headers, timeline tracks, transport bar, etc.
-                                    let inspector_rect = self.ui_root.layout.inspector();
+                                    let inspector_rect = self.ws.ui_root.layout.inspector();
                                     let in_inspector = inspector_rect.contains(self.cursor_pos);
                                     if !in_inspector && self.input_handler.inspector_has_focus {
-                                        self.ui_root.inspector.clear_effect_selection();
+                                        self.ws.ui_root.inspector.clear_effect_selection();
                                     }
                                     self.input_handler.inspector_has_focus = in_inspector;
 
@@ -1857,12 +1843,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                     // dismiss the dropdown and consume the event so that the
                                     // background node never receives a PointerDown (prevents
                                     // phantom pressed_id on the node behind the dropdown).
-                                    if self.ui_root.dropdown.is_open()
-                                        && !self.ui_root.dropdown.contains_point(self.cursor_pos)
+                                    if self.ws.ui_root.dropdown.is_open()
+                                        && !self.ws.ui_root.dropdown.contains_point(self.cursor_pos)
                                     {
-                                        self.ui_root.dropdown.close(&mut self.ui_root.tree);
+                                        self.ws.ui_root.dropdown.close(&mut self.ws.ui_root.tree);
                                         // Click is consumed by dismiss — do not forward.
                                     } else if self
+                                        .ws
                                         .ui_root
                                         .layout
                                         .is_near_split_handle(self.cursor_pos)
@@ -1870,12 +1857,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                         // Begin video/timeline split drag.
                                         // From Unity PanelResizeHandle.OnPointerDown.
                                         self.split_dragging = true;
-                                        self.ui_root.set_split_handle_drag();
-                                    } else if self.ui_root.is_near_inspector_edge(self.cursor_pos) {
-                                        self.ui_root.begin_inspector_resize(self.cursor_pos.x);
-                                        self.ui_root.set_inspector_handle_drag();
+                                        self.ws.ui_root.set_split_handle_drag();
+                                    } else if self.ws.ui_root.is_near_inspector_edge(self.cursor_pos) {
+                                        self.ws.ui_root.begin_inspector_resize(self.cursor_pos.x);
+                                        self.ws.ui_root.set_inspector_handle_drag();
                                     } else {
-                                        self.ui_root.pointer_event(
+                                        self.ws.ui_root.pointer_event(
                                             self.cursor_pos,
                                             PointerAction::Down,
                                             self.time_since_start,
@@ -1889,21 +1876,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                         // From Unity PanelResizeHandle.OnPointerUp.
                                         self.split_dragging = false;
                                         self.cursor_manager.set_default();
-                                        self.ui_root.set_split_handle_idle();
+                                        self.ws.ui_root.set_split_handle_idle();
                                         // Persist to ProjectSettings (Unity WorkspaceController line 591)
                                         if let Some(project) = Some(&mut self.local_project) {
                                             project.settings.timeline_height_percent =
-                                                self.ui_root.layout.timeline_split_ratio;
+                                                self.ws.ui_root.layout.timeline_split_ratio;
                                         }
-                                    } else if self.ui_root.inspector_resize_dragging {
+                                    } else if self.ws.ui_root.inspector_resize_dragging {
                                         // Persist to ProjectSettings (Unity WorkspaceController line 528)
                                         if let Some(project) = Some(&mut self.local_project) {
                                             project.settings.inspector_width =
-                                                self.ui_root.layout.inspector_width;
+                                                self.ws.ui_root.layout.inspector_width;
                                         }
-                                        self.ui_root.end_inspector_resize();
+                                        self.ws.ui_root.end_inspector_resize();
                                     } else {
-                                        self.ui_root.pointer_event(
+                                        self.ws.ui_root.pointer_event(
                                             self.cursor_pos,
                                             PointerAction::Up,
                                             self.time_since_start,
@@ -1914,7 +1901,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         }
                         MouseButton::Right => {
                             if state == ElementState::Pressed {
-                                self.ui_root.right_click(self.cursor_pos);
+                                self.ws.ui_root.right_click(self.cursor_pos);
                             }
                         }
                         _ => {}
@@ -2021,7 +2008,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 if is_primary {
                     // When the dropdown is open, route scroll to the UIEvent
                     // pipeline so the dropdown can handle it.
-                    if self.ui_root.dropdown.is_open() {
+                    if self.ws.ui_root.dropdown.is_open() {
                         const LINE_DELTA_PX: f32 = 20.0;
                         let (dx, dy) = match delta {
                             winit::event::MouseScrollDelta::LineDelta(x, y) => {
@@ -2031,7 +2018,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                 (pos.x as f32, pos.y as f32)
                             }
                         };
-                        self.ui_root
+                        self.ws.ui_root
                             .input
                             .process_scroll(self.cursor_pos, Vec2::new(dx, dy));
                         return;
@@ -2049,20 +2036,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     };
 
                     let pos = self.cursor_pos;
-                    let inspector_rect = self.ui_root.layout.inspector();
-                    let tracks_rect = self.ui_root.layout.timeline_tracks();
+                    let inspector_rect = self.ws.ui_root.layout.inspector();
+                    let tracks_rect = self.ws.ui_root.layout.timeline_tracks();
 
                     if inspector_rect.contains(pos) {
                         // Scroll the inspector panel — full rebuild (inspector is static)
-                        self.ui_root.inspector.handle_scroll_at(dy, pos.x);
+                        self.ws.ui_root.inspector.handle_scroll_at(dy, pos.x);
                         self.needs_rebuild = true;
                     } else if tracks_rect.contains(pos) {
                         if self.modifiers.alt {
                             // Alt + scroll Y → zoom (step through zoom levels)
                             // Always anchor on the playhead, not the mouse cursor.
                             let playhead_beat = self.content_state.current_beat.as_f32();
-                            let current_ppb = self.ui_root.viewport.pixels_per_beat();
+                            let current_ppb = self.ws.ui_root.viewport.pixels_per_beat();
                             let playhead_px = self
+                                .ws
                                 .ui_root
                                 .viewport
                                 .beat_to_pixel(manifold_core::Beats::from_f32(playhead_beat));
@@ -2094,53 +2082,56 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                 let new_ppb = levels[new_idx];
                                 // Anchor: keep the playhead at the same screen X
                                 let new_scroll = playhead_beat - anchor_x / new_ppb;
-                                self.ui_root.viewport.set_zoom(new_ppb);
-                                self.ui_root.viewport.set_scroll(
+                                self.ws.ui_root.viewport.set_zoom(new_ppb);
+                                self.ws.ui_root.viewport.set_scroll(
                                     new_scroll.max(0.0),
-                                    self.ui_root.viewport.scroll_y_px(),
+                                    self.ws.ui_root.viewport.scroll_y_px(),
                                 );
                                 self.scroll_dirty.zoom = true;
                             }
                         } else if self.modifiers.shift {
                             // Shift + scroll Y → horizontal pan
-                            let ppb = self.ui_root.viewport.pixels_per_beat();
+                            let ppb = self.ws.ui_root.viewport.pixels_per_beat();
                             let beat_delta = dy * manifold_ui::color::SCROLL_SENSITIVITY / ppb;
-                            let new_x = (self.ui_root.viewport.scroll_x_beats().as_f32()
+                            let new_x = (self.ws.ui_root.viewport.scroll_x_beats().as_f32()
                                 - beat_delta)
                                 .max(0.0);
                             if self
+                                .ws
                                 .ui_root
                                 .viewport
-                                .set_scroll(new_x, self.ui_root.viewport.scroll_y_px())
+                                .set_scroll(new_x, self.ws.ui_root.viewport.scroll_y_px())
                             {
                                 self.scroll_dirty.scroll_x = true;
                             }
                         } else {
                             // Plain scroll → vertical track scroll
-                            let new_y = (self.ui_root.viewport.scroll_y_px() - dy).max(0.0);
+                            let new_y = (self.ws.ui_root.viewport.scroll_y_px() - dy).max(0.0);
                             if self
+                                .ws
                                 .ui_root
                                 .viewport
-                                .set_scroll(self.ui_root.viewport.scroll_x_beats().as_f32(), new_y)
+                                .set_scroll(self.ws.ui_root.viewport.scroll_x_beats().as_f32(), new_y)
                             {
                                 // Sync layer headers with viewport vertical scroll
-                                self.ui_root
+                                self.ws.ui_root
                                     .layer_headers
-                                    .set_scroll_y(self.ui_root.viewport.scroll_y_px());
+                                    .set_scroll_y(self.ws.ui_root.viewport.scroll_y_px());
                                 self.scroll_dirty.scroll_y = true;
                             }
                         }
                         // Native horizontal scroll (trackpad two-finger swipe)
                         if dx.abs() > 0.01 && !self.modifiers.alt {
-                            let ppb = self.ui_root.viewport.pixels_per_beat();
+                            let ppb = self.ws.ui_root.viewport.pixels_per_beat();
                             let beat_delta = dx * manifold_ui::color::SCROLL_SENSITIVITY / ppb;
-                            let new_x = (self.ui_root.viewport.scroll_x_beats().as_f32()
+                            let new_x = (self.ws.ui_root.viewport.scroll_x_beats().as_f32()
                                 - beat_delta)
                                 .max(0.0);
                             if self
+                                .ws
                                 .ui_root
                                 .viewport
-                                .set_scroll(new_x, self.ui_root.viewport.scroll_y_px())
+                                .set_scroll(new_x, self.ws.ui_root.viewport.scroll_y_px())
                             {
                                 self.scroll_dirty.scroll_x = true;
                             }
@@ -2158,7 +2149,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     alt: state.alt_key(),
                     command: state.super_key(),
                 };
-                self.ui_root.input.set_modifiers(self.modifiers);
+                self.ws.ui_root.input.set_modifiers(self.modifiers);
             }
 
             // ── Keyboard input ─────────────────────────────────────
@@ -2234,7 +2225,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             && self.text_input.field
                                 == crate::text_input::TextInputField::SearchFilter
                         {
-                            self.ui_root
+                            self.ws.ui_root
                                 .browser_popup
                                 .set_filter(self.text_input.text.trim().to_string());
                             self.needs_rebuild = true;
@@ -2252,7 +2243,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             project: &mut self.local_project,
                             content_tx,
                             content_state: &self.content_state,
-                            ui_root: &mut self.ui_root,
+                            ui_root: &mut self.ws.ui_root,
                             selection: &mut self.selection,
                             active_layer: &mut self.active_layer_id,
                             needs_rebuild: &mut self.needs_rebuild,
@@ -2338,7 +2329,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     && !consumed
                     && let Some(ui_key) = Self::convert_key(&logical_key)
                 {
-                    self.ui_root.key_event(ui_key, self.modifiers);
+                    self.ws.ui_root.key_event(ui_key, self.modifiers);
                 }
 
                 // Output window: Escape no longer closes it — during a live
@@ -2354,14 +2345,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 if is_primary {
                     if self.mouse_pressed {
                         log::debug!("Cursor left window — synthesizing PointerUp to cancel drag");
-                        self.ui_root.pointer_event(
+                        self.ws.ui_root.pointer_event(
                             self.cursor_pos,
                             PointerAction::Up,
                             self.time_since_start,
                         );
                         self.mouse_pressed = false;
-                        if self.ui_root.inspector_resize_dragging {
-                            self.ui_root.end_inspector_resize();
+                        if self.ws.ui_root.inspector_resize_dragging {
+                            self.ws.ui_root.end_inspector_resize();
                         }
                     }
                     // Clear clip hover so bitmap doesn't stay painted in hover state
@@ -2382,14 +2373,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 // Matches Unity OnApplicationFocus(false) in UIBitmapRoot.cs.
                 if is_primary {
                     log::debug!("Window lost focus — synthesizing PointerUp to cancel drag");
-                    self.ui_root.pointer_event(
+                    self.ws.ui_root.pointer_event(
                         self.cursor_pos,
                         PointerAction::Up,
                         self.time_since_start,
                     );
                     self.mouse_pressed = false;
-                    if self.ui_root.inspector_resize_dragging {
-                        self.ui_root.end_inspector_resize();
+                    if self.ws.ui_root.inspector_resize_dragging {
+                        self.ws.ui_root.end_inspector_resize();
                     }
                     // Clear clip hover so bitmap doesn't stay painted in hover state
                     if self.selection.hovered_clip_id.is_some() {
@@ -2530,6 +2521,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         #[cfg(target_os = "macos")]
         if self.display_retarget_pending {
             let link_alive = self
+                .ws
                 .ui_display_link
                 .as_ref()
                 .is_some_and(|dl| dl.is_alive());
@@ -2543,7 +2535,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 );
                 self.display_retarget_pending = false;
                 self.display_retarget_deadline = None;
-                self.offscreen_dirty = true;
+                self.ws.offscreen_dirty = true;
                 self.send_content_cmd(ContentCommand::SetOutputPresentSuspended(false));
             }
         }
@@ -2558,7 +2550,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let should_render = if in_display_transition {
             self.frame_timer.should_tick()
         } else {
-            self.ui_display_link
+            self.ws.ui_display_link
                 .as_ref()
                 .map_or(self.frame_timer.should_tick(), |dl| dl.vsync_ready())
         };
@@ -2643,7 +2635,7 @@ impl Application {
                 && let Some(ws) = self.window_registry.get(&pid)
             {
                 let win = &ws.window;
-                if let Some(dl) = &mut self.ui_display_link {
+                if let Some(dl) = &mut self.ws.ui_display_link {
                     any_changed |= dl.retarget_if_needed(win);
                 }
             }
@@ -2673,7 +2665,7 @@ impl Drop for Application {
         // call request_redraw() which deadlocks if the main thread is blocked.
         #[cfg(target_os = "macos")]
         {
-            self.ui_display_link = None;
+            self.ws.ui_display_link = None;
         }
 
         // Drop GPU resources before the device and surfaces.
@@ -2690,7 +2682,7 @@ impl Drop for Application {
         self.blit_sampler = None;
         self.atlas_pipeline = None;
         self.atlas_sampler = None;
-        self.ui_offscreen = None;
+        self.ws.ui_offscreen = None;
     }
 }
 
@@ -2702,7 +2694,7 @@ impl Application {
         if width == 0 || height == 0 {
             return;
         }
-        self.ui_offscreen = Some(gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
+        self.ws.ui_offscreen = Some(gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
             width,
             height,
             depth: 1,

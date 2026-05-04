@@ -20,7 +20,7 @@ impl Application {
         let is_hover = self.perform.exit_button_rect.contains(cursor_pos);
         if was_hover != is_hover {
             self.perform.exit_button_hover = is_hover;
-            self.offscreen_dirty = true;
+            self.ws.offscreen_dirty = true;
         }
         true
     }
@@ -62,7 +62,7 @@ impl Application {
         }
         if self.perform.exit_button_hover {
             self.perform.exit_button_hover = false;
-            self.offscreen_dirty = true;
+            self.ws.offscreen_dirty = true;
         }
         true
     }

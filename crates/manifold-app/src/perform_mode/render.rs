@@ -39,7 +39,7 @@ impl Application {
         if let Some(ref rx) = self.state_rx {
             while let Ok(state) = rx.try_recv() {
                 if let Some(session) = &state.ableton_session {
-                    self.ui_root.ableton_session = Some(std::sync::Arc::clone(session));
+                    self.ws.ui_root.ableton_session = Some(std::sync::Arc::clone(session));
                 }
                 self.content_state = state;
             }
@@ -65,7 +65,7 @@ impl Application {
             .map(|s| (s.width, s.height))
             .unwrap_or((1, 1));
         let (surface_w, surface_h) = surface_dims;
-        let Some(offscreen) = &self.ui_offscreen else {
+        let Some(offscreen) = &self.ws.ui_offscreen else {
             return;
         };
         if offscreen.width != surface_w || offscreen.height != surface_h {
@@ -113,7 +113,7 @@ impl Application {
         // Snapshot the session Arc (atomic refcount bump, zero data copy).
         // All cue/track/macro reads below borrow from this snapshot, avoiding
         // per-frame clones of cue_points, track names, etc.
-        let session_snapshot = self.ui_root.ableton_session.clone();
+        let session_snapshot = self.ws.ui_root.ableton_session.clone();
         let cue_points: &[manifold_playback::ableton_bridge::CuePoint] = session_snapshot
             .as_ref()
             .map(|s| s.cue_points.as_slice())
@@ -195,8 +195,8 @@ impl Application {
 
         // Skip drawable acquisition on resize frames (same rule as the
         // normal present path).
-        if self.surface_resized_this_frame {
-            self.surface_resized_this_frame = false;
+        if self.ws.surface_resized_this_frame {
+            self.ws.surface_resized_this_frame = false;
             return;
         }
 

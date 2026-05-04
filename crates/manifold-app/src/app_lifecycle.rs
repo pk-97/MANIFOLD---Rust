@@ -24,20 +24,20 @@ impl Application {
     /// Persist current viewport scroll + zoom and UI collapse states into project settings.
     fn save_viewport_state(&mut self) {
         self.local_project.settings.viewport_scroll_x_beats =
-            self.ui_root.viewport.scroll_x_beats().as_f32();
-        self.local_project.settings.viewport_scroll_y_px = self.ui_root.viewport.scroll_y_px();
+            self.ws.ui_root.viewport.scroll_x_beats().as_f32();
+        self.local_project.settings.viewport_scroll_y_px = self.ws.ui_root.viewport.scroll_y_px();
         self.local_project.settings.viewport_pixels_per_beat =
-            self.ui_root.viewport.pixels_per_beat();
+            self.ws.ui_root.viewport.pixels_per_beat();
 
         // Persist inspector collapse states
         self.local_project.settings.macros_collapsed =
-            self.ui_root.inspector.macros_panel().is_collapsed();
+            self.ws.ui_root.inspector.macros_panel().is_collapsed();
         self.local_project.settings.master_chrome_collapsed =
-            self.ui_root.inspector.master_chrome().is_collapsed();
+            self.ws.ui_root.inspector.master_chrome().is_collapsed();
         self.local_project.settings.layer_chrome_collapsed =
-            self.ui_root.inspector.layer_chrome().is_collapsed();
+            self.ws.ui_root.inspector.layer_chrome().is_collapsed();
         self.local_project.settings.clip_chrome_collapsed =
-            self.ui_root.inspector.clip_chrome().is_collapsed();
+            self.ws.ui_root.inspector.clip_chrome().is_collapsed();
     }
 
     /// Save. Delegates to ProjectIOService.save_project.
@@ -359,15 +359,15 @@ impl Application {
             // Audio + stem reset sent to content thread
             self.send_content_cmd(ContentCommand::ResetAudio);
             self.send_content_cmd(ContentCommand::StemReset);
-            self.ui_root.waveform_lane.clear_audio();
-            self.ui_root.stem_lanes.clear_all_stems();
-            self.ui_root.layout.waveform_lane_visible = false;
-            self.ui_root.layout.stem_lanes_expanded = false;
+            self.ws.ui_root.waveform_lane.clear_audio();
+            self.ws.ui_root.stem_lanes.clear_all_stems();
+            self.ws.ui_root.layout.waveform_lane_visible = false;
+            self.ws.ui_root.layout.stem_lanes_expanded = false;
             self.pending_audio_load = None;
             self.loaded_audio_path = None;
 
             // Apply saved layout before initializing
-            self.ui_root.apply_project_layout(&project.settings);
+            self.ws.ui_root.apply_project_layout(&project.settings);
             let saved_time = project.saved_playhead_time;
 
             // Update local_project BEFORE sending to content thread so UI
@@ -407,7 +407,7 @@ impl Application {
                 && !audio_path.is_empty()
             {
                 audio_path_for_load = Some((audio_path.clone(), perc.audio_start_beat.as_f32()));
-                self.ui_root.layout.waveform_lane_visible = true;
+                self.ws.ui_root.layout.waveform_lane_visible = true;
             }
 
             if let Some((audio_path, start_beat)) = audio_path_for_load {
@@ -492,12 +492,12 @@ impl Application {
                 });
 
                 if let Some(decoded) = result.waveform {
-                    self.ui_root.waveform_lane.set_audio_data(
+                    self.ws.ui_root.waveform_lane.set_audio_data(
                         &decoded.samples,
                         decoded.channels,
                         decoded.sample_rate,
                     );
-                    self.ui_root.layout.waveform_lane_visible = true;
+                    self.ws.ui_root.layout.waveform_lane_visible = true;
                     // Rebuild viewport so tracks_rect accounts for waveform lane height.
                     self.needs_rebuild = true;
                     log::info!("[Waveform] Decoded audio for waveform display");

@@ -26,7 +26,7 @@ use manifold_ui::timeline_editing_host::{
 /// Created on the fly when calling InteractionOverlay methods:
 /// ```ignore
 /// let mut host = AppEditingHost::new(&mut self.engine, &mut self.editing_service, ...);
-/// self.ui_root.overlay.on_pointer_click(pos, ..., &mut host, &mut self.selection, &self.ui_root.viewport);
+/// self.ws.ui_root.overlay.on_pointer_click(pos, ..., &mut host, &mut self.selection, &self.ws.ui_root.viewport);
 /// ```
 pub struct AppEditingHost<'a> {
     pub project: &'a mut manifold_core::project::Project,

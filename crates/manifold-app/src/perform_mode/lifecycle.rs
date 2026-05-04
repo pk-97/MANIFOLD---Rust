@@ -23,11 +23,11 @@ impl Application {
                     // Quiesce in-flight UI state so nothing is left dangling
                     // when we resume normal mode on exit.
                     self.text_input.cancel();
-                    self.ui_root.dropdown.close(&mut self.ui_root.tree);
-                    self.ui_root.browser_popup.close();
-                    self.ui_root.ableton_picker.close();
+                    self.ws.ui_root.dropdown.close(&mut self.ws.ui_root.tree);
+                    self.ws.ui_root.browser_popup.close();
+                    self.ws.ui_root.ableton_picker.close();
                     if self.mouse_pressed {
-                        self.ui_root.pointer_event(
+                        self.ws.ui_root.pointer_event(
                             self.cursor_pos,
                             manifold_ui::input::PointerAction::Up,
                             self.time_since_start,
@@ -36,7 +36,7 @@ impl Application {
                     }
                     self.perform.exit_button_hover = false;
                     self.perform.active = true;
-                    self.offscreen_dirty = true;
+                    self.ws.offscreen_dirty = true;
                     log::info!("[Perform] Entered performance mode");
                 } else {
                     log::warn!(
@@ -58,11 +58,11 @@ impl Application {
                 // from the latest content snapshot.
                 self.needs_rebuild = true;
                 self.needs_structural_sync = true;
-                self.ui_root.tree.mark_all_dirty();
+                self.ws.ui_root.tree.mark_all_dirty();
                 if let Some(cm) = &mut self.ui_cache_manager {
                     cm.invalidate_all();
                 }
-                self.offscreen_dirty = true;
+                self.ws.offscreen_dirty = true;
                 log::info!("[Perform] Exited performance mode");
             }
         }

@@ -27,6 +27,7 @@ mod ui_bridge;
 mod ui_root;
 mod user_prefs;
 mod window_registry;
+mod workspace;
 
 fn main() {
     // --- Panic hook (10.1, 10.12) ---
