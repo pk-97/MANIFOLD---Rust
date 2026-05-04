@@ -1730,18 +1730,24 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             }
 
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                if is_graph_editor {
+                    if let Some(ws) = self.window_registry.get_mut(&window_id)
+                        && let Some(surface) = &mut ws.surface
+                    {
+                        let size = ws.window.inner_size();
+                        surface.resize(size.width.max(1), size.height.max(1));
+                    }
+                    return;
+                }
                 if let Some(ws) = self.window_registry.get_mut(&window_id) {
                     let size = ws.window.inner_size();
-                    if let Some(surface) = &mut ws.surface {
-                        surface.resize(size.width, size.height);
-                        self.resize_ui_offscreen(size.width, size.height);
-                        self.ws.surface_resized_this_frame = true;
-                        self.ws.offscreen_dirty = true;
-                    }
-                    // Output windows: drawable stays at project resolution.
-                    // NativeOutputPresenter detects changes via bridge generation.
-
                     if is_primary {
+                        if let Some(surface) = &mut ws.surface {
+                            surface.resize(size.width, size.height);
+                            self.resize_ui_offscreen(size.width, size.height);
+                            self.ws.surface_resized_this_frame = true;
+                            self.ws.offscreen_dirty = true;
+                        }
                         let logical_w = size.width as f32 / scale_factor as f32;
                         let logical_h = size.height as f32 / scale_factor as f32;
                         self.ws.ui_root.resize(logical_w, logical_h);

@@ -1167,7 +1167,6 @@ impl Application {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            // Non-macOS: just call present with index 0 (stub path)
             self.present_all_windows(0);
             self.present_graph_editor_window();
         }
