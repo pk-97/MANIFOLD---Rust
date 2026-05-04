@@ -779,17 +779,20 @@ impl Application {
             return;
         };
 
-        // Smoke test: displaySyncEnabled=true so the surface paces
-        // itself without needing a dedicated CVDisplayLink yet. Phase 3
-        // adds a per-window display link for tighter render coordination.
+        // Smoke test: displaySyncEnabled=false so `next_drawable()`
+        // never blocks the main thread. The editor presents once per
+        // primary-window CVDisplayLink fire, which is fine for a blank
+        // clear. Phase 3 adds a dedicated per-window CVDisplayLink so
+        // the editor can pace independently when on a different display.
         let surface = gpu.device.create_surface(
             &*window,
             size.width.max(1),
             size.height.max(1),
             manifold_gpu::GpuTextureFormat::Bgra8Unorm,
-            true,
+            false,
         );
         surface.set_maximum_drawable_count(3);
+        surface.set_presents_with_transaction(false);
 
         self.window_registry.add(
             wid,
