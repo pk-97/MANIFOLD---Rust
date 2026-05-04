@@ -18,9 +18,8 @@ use crate::ui_root::UIRoot;
 pub enum WorkspaceKind {
     /// The main timeline + inspector window.
     Main,
-    /// The node-graph editor window (Phase 4 — lands when the second
-    /// window opens).
-    #[allow(dead_code)]
+    /// The node-graph editor window. Opened via Cmd+Shift+G (and
+    /// eventually the per-effect-card cog icon).
     GraphEditor,
 }
 

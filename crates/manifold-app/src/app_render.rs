@@ -1163,14 +1163,42 @@ impl Application {
                 self.ws.offscreen_dirty = true;
             }
             self.present_all_windows(front);
+            self.present_graph_editor_window();
         }
         #[cfg(not(target_os = "macos"))]
         {
             // Non-macOS: just call present with index 0 (stub path)
             self.present_all_windows(0);
+            self.present_graph_editor_window();
         }
 
         self.frame_count += 1;
+    }
+
+    /// Present a single frame to the graph editor window (Phase 2
+    /// smoke test). Clears the drawable to a dark grey and presents.
+    /// No-op when the editor isn't open. Phase 3 replaces this with
+    /// a real `UIRoot` render path.
+    fn present_graph_editor_window(&mut self) {
+        let Some(gpu) = &self.gpu else { return };
+        let Some(wid) = self.graph_editor_window_id else {
+            return;
+        };
+        let Some(win_state) = self.window_registry.get(&wid) else {
+            return;
+        };
+        let Some(surface) = win_state.surface.as_ref() else {
+            return;
+        };
+        let Some(drawable) = surface.next_drawable() else {
+            return;
+        };
+        let drawable_tex = drawable.gpu_texture(manifold_gpu::GpuTextureFormat::Bgra8Unorm);
+
+        let mut enc = gpu.device.create_encoder("Graph Editor Frame");
+        enc.clear_texture(&drawable_tex, 0.10, 0.10, 0.12, 1.0);
+        enc.present_drawable(&drawable);
+        enc.commit();
     }
 
     fn present_all_windows(&mut self, front_index: usize) {

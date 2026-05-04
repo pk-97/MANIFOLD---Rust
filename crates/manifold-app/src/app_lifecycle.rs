@@ -724,4 +724,104 @@ impl Application {
         );
     }
 
+    /// Open the node-graph editor window. Sized at 75% of the primary
+    /// window's logical inner size and positioned near it (winit picks
+    /// the placement; the user can drag it onto a secondary monitor).
+    ///
+    /// No-op if the editor is already open. Phase 2 smoke test: the
+    /// window renders a solid dark grey clear each frame; Phase 4
+    /// will host an actual `UIRoot` here.
+    pub(crate) fn open_graph_editor(&mut self, event_loop: &ActiveEventLoop) {
+        if self.graph_editor.is_some() {
+            log::debug!("[GraphEditor] Already open — ignoring open request");
+            return;
+        }
+
+        let primary_id = match self.primary_window_id {
+            Some(id) => id,
+            None => {
+                log::warn!("[GraphEditor] No primary window — cannot open editor");
+                return;
+            }
+        };
+
+        let (logical_w, logical_h, scale) = self
+            .window_registry
+            .get(&primary_id)
+            .map(|ws| {
+                let s = ws.window.inner_size();
+                let sf = ws.window.scale_factor();
+                (
+                    ((s.width as f64 / sf) * 0.75) as u32,
+                    ((s.height as f64 / sf) * 0.75) as u32,
+                    sf,
+                )
+            })
+            .unwrap_or((960, 540, 1.0));
+
+        let attrs = winit::window::Window::default_attributes()
+            .with_title("MANIFOLD — Graph Editor")
+            .with_inner_size(winit::dpi::LogicalSize::new(logical_w, logical_h));
+
+        let window = match event_loop.create_window(attrs) {
+            Ok(w) => std::sync::Arc::new(w),
+            Err(e) => {
+                log::error!("[GraphEditor] Failed to create window: {e}");
+                return;
+            }
+        };
+
+        let size = window.inner_size();
+        let wid = window.id();
+
+        let Some(gpu) = &self.gpu else {
+            log::error!("[GraphEditor] GPU not initialized");
+            return;
+        };
+
+        // Smoke test: displaySyncEnabled=true so the surface paces
+        // itself without needing a dedicated CVDisplayLink yet. Phase 3
+        // adds a per-window display link for tighter render coordination.
+        let surface = gpu.device.create_surface(
+            &*window,
+            size.width.max(1),
+            size.height.max(1),
+            manifold_gpu::GpuTextureFormat::Bgra8Unorm,
+            true,
+        );
+        surface.set_maximum_drawable_count(3);
+
+        self.window_registry.add(
+            wid,
+            WindowState {
+                window: std::sync::Arc::clone(&window),
+                surface: Some(surface),
+                role: WindowRole::Workspace,
+            },
+        );
+
+        self.graph_editor = Some(crate::workspace::Workspace::new(
+            crate::workspace::WorkspaceKind::GraphEditor,
+        ));
+        self.graph_editor_window_id = Some(wid);
+
+        log::info!(
+            "[GraphEditor] Opened ({}x{} logical, scale {:.2})",
+            logical_w,
+            logical_h,
+            scale,
+        );
+    }
+
+    /// Tear down the graph editor window. Drops its workspace and
+    /// removes the window from the registry. Safe to call from
+    /// `WindowEvent::CloseRequested` for the editor's `WindowId`.
+    pub(crate) fn close_graph_editor(&mut self) {
+        if let Some(wid) = self.graph_editor_window_id.take() {
+            self.window_registry.remove(&wid);
+        }
+        self.graph_editor = None;
+        log::info!("[GraphEditor] Closed");
+    }
+
 }

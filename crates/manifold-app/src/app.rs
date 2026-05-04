@@ -262,10 +262,12 @@ pub struct Application {
     /// [`crate::workspace::Workspace`].
     pub(crate) ws: crate::workspace::Workspace,
     /// Optional secondary workspace hosting the node-graph editor.
-    /// `None` until the user opens the editor window. Phase 4 wires
-    /// this up.
-    #[allow(dead_code)]
+    /// `None` until the user opens the editor window via Cmd+Shift+G
+    /// (or, in the future, the per-effect-card cog icon).
     pub(crate) graph_editor: Option<crate::workspace::Workspace>,
+    /// `WindowId` of the graph editor window when open. Paired with
+    /// `graph_editor` — both are `Some` together or both `None`.
+    pub(crate) graph_editor_window_id: Option<WindowId>,
 
     // Frame timing
     pub(crate) frame_timer: FrameTimer,
@@ -345,6 +347,9 @@ pub struct Application {
     pub(crate) pending_toggle_output: bool,
     pub(crate) pending_close_output: bool,
     pub(crate) pending_export: bool,
+    /// Set by Cmd+Shift+G — opens the graph editor window in the next
+    /// `about_to_wait` (where `ActiveEventLoop` is in scope).
+    pub(crate) pending_open_graph_editor: bool,
     /// Performance mode state — see `crate::perform_mode`.
     pub(crate) perform: crate::perform_mode::PerformModeState,
     pub(crate) needs_rebuild: bool,
@@ -412,6 +417,7 @@ impl Application {
             output_edr_headroom: 1.0,
             ws: Workspace::new(WorkspaceKind::Main),
             graph_editor: None,
+            graph_editor_window_id: None,
             // UI frame rate: uncapped (120fps target, vsync limits actual present).
             // Content thread has its own timer at project FPS — fully decoupled.
             frame_timer: FrameTimer::new(120.0),
@@ -453,6 +459,7 @@ impl Application {
             pending_toggle_output: false,
             pending_export: false,
             pending_close_output: false,
+            pending_open_graph_editor: false,
             perform: crate::perform_mode::PerformModeState::new(),
             needs_rebuild: false,
             scroll_dirty: crate::ui_root::ScrollDirty::default(),
@@ -1643,8 +1650,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     ) {
         let is_primary = Some(window_id) == self.primary_window_id;
 
+        let is_graph_editor = Some(window_id) == self.graph_editor_window_id;
+
         match event {
             WindowEvent::CloseRequested => {
+                if is_graph_editor {
+                    self.close_graph_editor();
+                    return;
+                }
                 if is_primary {
                     self.shutting_down = true;
 
@@ -1681,6 +1694,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             }
 
             WindowEvent::Resized(size) => {
+                if is_graph_editor {
+                    if let Some(ws) = self.window_registry.get_mut(&window_id)
+                        && let Some(surface) = &mut ws.surface
+                    {
+                        surface.resize(size.width.max(1), size.height.max(1));
+                    }
+                    return;
+                }
                 if let Some(ws) = self.window_registry.get_mut(&window_id) {
                     let scale = ws.window.scale_factor();
                     if is_primary {
@@ -2165,6 +2186,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 if is_primary && self.perform_handle_key(&logical_key) {
                     return;
                 }
+                // Cmd+Shift+G — open the node-graph editor window.
+                // App-level shortcut, fires before text input or UI
+                // forwarding so it's always available regardless of
+                // focus.
+                if is_primary
+                    && self.modifiers.command
+                    && self.modifiers.shift
+                    && let winit::keyboard::Key::Character(c) = &logical_key
+                    && c.eq_ignore_ascii_case("g")
+                {
+                    self.pending_open_graph_editor = true;
+                    return;
+                }
                 // App-level shortcuts (handled before UI forwarding)
                 let mut consumed = false;
                 let data_version_before = self.content_state.data_version;
@@ -2488,6 +2522,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             } else {
                 self.open_output_window(event_loop, "Output", None, false);
             }
+        }
+
+        // Open graph editor window (Cmd+Shift+G).
+        if self.pending_open_graph_editor {
+            self.pending_open_graph_editor = false;
+            self.open_graph_editor(event_loop);
         }
 
         // Performance mode entry/exit (see crate::perform_mode::lifecycle).
