@@ -30,7 +30,7 @@
 
 use std::sync::Arc;
 
-use ahash::AHashMap;
+use ahash::{AHashMap, AHashSet};
 use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat, TexturePool};
 
 use crate::node_graph::backend::Backend;
@@ -43,8 +43,16 @@ use crate::render_target_pool::RenderTargetPool;
 
 /// `Backend` impl that allocates real `GpuTexture`s via
 /// `RenderTargetPool`. Used by production code paths.
+///
+/// `device` is optional. With `Some(device)` the backend lazy-allocates a
+/// `RenderTarget` on first acquire of a fresh slot — used by the
+/// integration tests that build a MetalBackend up-front. With `None`
+/// (`without_device`) the host must pre-bind every Texture2D resource via
+/// `pre_bind_texture_2d`; lazy-alloc would panic. The "no device" path is
+/// what the live renderer uses, since it constructs effects through
+/// `EffectFactory`'s `&GpuDevice` (no `Arc`) at registry-build time.
 pub struct MetalBackend {
-    device: Arc<GpuDevice>,
+    device: Option<Arc<GpuDevice>>,
     pool: RenderTargetPool,
 
     /// Render resolution and format used for `Texture2D` slot allocations.
@@ -62,6 +70,13 @@ pub struct MetalBackend {
     bound: AHashMap<ResourceId, Slot>,
     next_slot: u32,
 
+    /// Resource IDs that the host has pinned to a host-supplied texture
+    /// via `pre_bind_texture_2d`. The executor's `release` is a no-op for
+    /// these — their bindings persist across frames so the host can call
+    /// `pre_bind_texture_2d` once at graph construction (instead of every
+    /// frame, which would leak slots).
+    pinned: AHashSet<ResourceId>,
+
     // ---- Real backing storage ----
     textures_2d: AHashMap<Slot, RenderTarget>,
     scalars: AHashMap<Slot, ParamValue>,
@@ -78,7 +93,7 @@ impl MetalBackend {
         format: GpuTextureFormat,
     ) -> Self {
         Self {
-            device,
+            device: Some(device),
             pool: RenderTargetPool::new(),
             width,
             height,
@@ -86,6 +101,29 @@ impl MetalBackend {
             free_by_type: AHashMap::default(),
             bound: AHashMap::default(),
             next_slot: 0,
+            pinned: AHashSet::default(),
+            textures_2d: AHashMap::default(),
+            scalars: AHashMap::default(),
+        }
+    }
+
+    /// Construct a backend with no internal device. The host MUST
+    /// pre-bind every Texture2D resource via `pre_bind_texture_2d`
+    /// before `execute_frame_with_gpu` — lazy-allocation on a fresh
+    /// `Texture2D` slot panics in this mode. Used by the live
+    /// renderer's effect path, where `EffectFactory` hands out
+    /// `&GpuDevice` (no `Arc`) at construction.
+    pub fn without_device(width: u32, height: u32, format: GpuTextureFormat) -> Self {
+        Self {
+            device: None,
+            pool: RenderTargetPool::new(),
+            width,
+            height,
+            format,
+            free_by_type: AHashMap::default(),
+            bound: AHashMap::default(),
+            next_slot: 0,
+            pinned: AHashSet::default(),
             textures_2d: AHashMap::default(),
             scalars: AHashMap::default(),
         }
@@ -100,8 +138,10 @@ impl MetalBackend {
 
     /// Borrow the `GpuDevice` for nodes that need to allocate their own
     /// internal resources (e.g. FluidSim's persistent density grid).
-    pub fn device(&self) -> &GpuDevice {
-        &self.device
+    /// Returns `None` if the backend was constructed via
+    /// [`MetalBackend::without_device`].
+    pub fn device(&self) -> Option<&GpuDevice> {
+        self.device.as_deref()
     }
 
     /// Pre-bind a real `RenderTarget` to a slot. Used by the host to feed
@@ -131,6 +171,7 @@ impl MetalBackend {
         self.next_slot += 1;
         self.textures_2d.insert(slot, target);
         self.bound.insert(id, slot);
+        self.pinned.insert(id);
         slot
     }
 
@@ -155,6 +196,7 @@ impl MetalBackend {
         self.scalars.clear();
         self.bound.clear();
         self.free_by_type.clear();
+        self.pinned.clear();
         self.next_slot = 0;
     }
 }
@@ -178,13 +220,19 @@ impl Backend for MetalBackend {
 
         // Lazily allocate a real backing resource for fresh Texture2D
         // slots. Reused slots already have their RenderTarget retained.
+        // Requires `Some(device)` — `without_device` mode expects all
+        // Texture2D resources to have been pre-bound via
+        // `pre_bind_texture_2d`.
         if matches!(ty, PortType::Texture2D)
             && let std::collections::hash_map::Entry::Vacant(e) =
                 self.textures_2d.entry(slot)
         {
+            let device = self.device.as_deref().expect(
+                "MetalBackend lazy-alloc requires a device — use `pre_bind_texture_2d` for every Texture2D resource when constructing via `without_device`",
+            );
             let rt = self
                 .pool
-                .get(&self.device, self.width, self.height, self.format, "node_graph");
+                .get(device, self.width, self.height, self.format, "node_graph");
             e.insert(rt);
         }
 
@@ -192,6 +240,11 @@ impl Backend for MetalBackend {
     }
 
     fn release(&mut self, id: ResourceId, ty: PortType) {
+        // Host-pinned resources (frame inputs pre-bound by the renderer)
+        // stay bound across frames — the host owns their lifetime.
+        if self.pinned.contains(&id) {
+            return;
+        }
         if let Some(slot) = self.bound.remove(&id) {
             self.free_by_type.entry(ty).or_default().push(slot);
         }
@@ -208,8 +261,11 @@ impl Backend for MetalBackend {
     fn clear(&mut self) {
         // Drop bindings and free pools but retain backing textures so
         // subsequent acquires of the same slots don't re-allocate.
+        // Pinned bindings are wiped too — host must re-pre-bind if it
+        // wants the binding back.
         self.bound.clear();
         self.free_by_type.clear();
+        self.pinned.clear();
     }
 
     fn texture_2d(&self, slot: Slot) -> Option<&GpuTexture> {

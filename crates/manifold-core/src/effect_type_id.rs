@@ -79,6 +79,13 @@ impl EffectTypeId {
     pub const AUTO_GAIN: Self = Self(Cow::Borrowed("AutoGain"));
     pub const WATERCOLOR: Self = Self(Cow::Borrowed("Watercolor"));
 
+    /// Test effect proving the node-graph runtime renders to a real layer
+    /// target. Hardcoded internally as `Source × 2 → Mix → FinalOutput`
+    /// with red and blue input textures, the slider crossfades between
+    /// them. First effect to actually exercise the node graph end-to-end
+    /// in the live renderer.
+    pub const NODE_GRAPH_TEST: Self = Self(Cow::Borrowed("NodeGraphTest"));
+
     /// Placeholder for unrecognized/removed effect types.
     /// Renderers skip this — it never applies any GPU work.
     pub const UNKNOWN: Self = Self(Cow::Borrowed("Unknown"));

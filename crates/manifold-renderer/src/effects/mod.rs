@@ -21,6 +21,7 @@ pub mod infrared;
 pub mod invert_colors;
 pub mod kaleidoscope;
 pub mod mirror;
+pub mod node_graph_test;
 pub mod quad_mirror;
 pub mod strobe;
 pub mod stylized_feedback;
