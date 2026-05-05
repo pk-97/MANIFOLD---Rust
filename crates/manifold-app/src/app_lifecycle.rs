@@ -779,20 +779,29 @@ impl Application {
             return;
         };
 
-        // Smoke test: displaySyncEnabled=false so `next_drawable()`
-        // never blocks the main thread. The editor presents once per
-        // primary-window CVDisplayLink fire, which is fine for a blank
-        // clear. Phase 3 adds a dedicated per-window CVDisplayLink so
-        // the editor can pace independently when on a different display.
+        // Phase 3: per-window CVDisplayLink drives editor pacing, so we
+        // can enable displaySyncEnabled — `next_drawable()` blocks until
+        // the editor's own vsync, which our display link wakes us on.
         let surface = gpu.device.create_surface(
             &*window,
             size.width.max(1),
             size.height.max(1),
             manifold_gpu::GpuTextureFormat::Bgra8Unorm,
-            false,
+            true,
         );
         surface.set_maximum_drawable_count(3);
         surface.set_presents_with_transaction(false);
+
+        let offscreen = gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width: size.width.max(1),
+            height: size.height.max(1),
+            depth: 1,
+            format: manifold_gpu::GpuTextureFormat::Bgra8Unorm,
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+            label: "Graph Editor Offscreen",
+            mip_levels: 1,
+        });
 
         self.window_registry.add(
             wid,
@@ -803,9 +812,13 @@ impl Application {
             },
         );
 
-        self.graph_editor = Some(crate::workspace::Workspace::new(
-            crate::workspace::WorkspaceKind::GraphEditor,
-        ));
+        let mut ws = crate::workspace::Workspace::new(crate::workspace::WorkspaceKind::GraphEditor);
+        ws.ui_offscreen = Some(offscreen);
+        #[cfg(target_os = "macos")]
+        {
+            ws.ui_display_link = Some(crate::display_link::UiDisplayLink::new(window));
+        }
+        self.graph_editor = Some(ws);
         self.graph_editor_window_id = Some(wid);
 
         log::info!(
@@ -820,6 +833,14 @@ impl Application {
     /// removes the window from the registry. Safe to call from
     /// `WindowEvent::CloseRequested` for the editor's `WindowId`.
     pub(crate) fn close_graph_editor(&mut self) {
+        // Stop display link FIRST — its callback may call CFRunLoopWakeUp
+        // and the cleanup thread can outlive the window. CVDisplayLinkStop
+        // blocks until the in-flight callback finishes, so we drop the
+        // link before tearing down the surface.
+        #[cfg(target_os = "macos")]
+        if let Some(ws) = self.graph_editor.as_mut() {
+            ws.ui_display_link = None;
+        }
         if let Some(wid) = self.graph_editor_window_id.take() {
             self.window_registry.remove(&wid);
         }

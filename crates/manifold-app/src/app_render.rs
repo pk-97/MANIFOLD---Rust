@@ -1174,30 +1174,118 @@ impl Application {
         self.frame_count += 1;
     }
 
-    /// Present a single frame to the graph editor window (Phase 2
-    /// smoke test). Clears the drawable to a dark grey and presents.
-    /// No-op when the editor isn't open. Phase 3 replaces this with
-    /// a real `UIRoot` render path.
+    /// Render and present one frame to the graph editor window.
+    ///
+    /// Renders to the editor's offscreen via `UIRenderer` (clear + a
+    /// centered "Graph Editor" placeholder label) and blits the result
+    /// to the drawable. Phase 4 replaces the placeholder with a real
+    /// `GraphCanvasPanel`.
+    ///
+    /// Gated on the editor's own CVDisplayLink: when it hasn't fired,
+    /// we skip the present to avoid wasting a drawable slot.
     fn present_graph_editor_window(&mut self) {
         let Some(gpu) = &self.gpu else { return };
         let Some(wid) = self.graph_editor_window_id else {
             return;
         };
+        let Some(ws) = self.graph_editor.as_mut() else {
+            return;
+        };
+
+        // Consume editor vsync signal — skip when no pulse fired.
+        // (Falls through to render when there's no display link, e.g.
+        // non-macOS.)
+        #[cfg(target_os = "macos")]
+        {
+            let pulse = ws
+                .ui_display_link
+                .as_ref()
+                .is_none_or(|dl| dl.vsync_ready());
+            if !pulse {
+                return;
+            }
+        }
+
         let Some(win_state) = self.window_registry.get(&wid) else {
             return;
         };
         let Some(surface) = win_state.surface.as_ref() else {
             return;
         };
+        let scale = win_state.window.scale_factor();
+        let (surface_w, surface_h) = (surface.width, surface.height);
+
+        let Some(offscreen) = ws.ui_offscreen.as_ref() else {
+            return;
+        };
+        // Surface/offscreen size mismatch: a resize is in flight. Skip
+        // until the matching `resize_graph_editor_offscreen()` lands.
+        if offscreen.width != surface_w || offscreen.height != surface_h {
+            return;
+        }
+
+        let logical_w = (surface_w as f64 / scale).max(1.0) as u32;
+        let logical_h = (surface_h as f64 / scale).max(1.0) as u32;
+
+        // ── Build frame: clear + centered placeholder label ──
+        let mut encoder = gpu.device.create_encoder("Graph Editor Frame");
+        encoder.clear_texture(offscreen, 0.10, 0.10, 0.12, 1.0);
+
+        if let Some(ui) = &mut self.ui_renderer {
+            ui.begin_frame();
+            let label = "Graph Editor — Phase 4 coming";
+            let font_size: f32 = 14.0;
+            let text_w = ui
+                .measure_text_cached(label, font_size as u16, FontWeight::Medium)
+                .x;
+            let cx = (logical_w as f32 - text_w) * 0.5;
+            let cy = (logical_h as f32 - font_size) * 0.5;
+            ui.draw_text(cx, cy, label, font_size, [180, 180, 195, 255]);
+
+            if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
+                ui.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
+            }
+        }
+
+        encoder.commit();
+        ws.offscreen_dirty = false;
+
+        // Skip drawable acquisition on the resize frame — drawable pool
+        // may still be reconfiguring.
+        if ws.surface_resized_this_frame {
+            ws.surface_resized_this_frame = false;
+            return;
+        }
+
+        // ── Late drawable acquisition + blit ──
         let Some(drawable) = surface.next_drawable() else {
             return;
         };
         let drawable_tex = drawable.gpu_texture(manifold_gpu::GpuTextureFormat::Bgra8Unorm);
+        let (Some(blit_p), Some(blit_s)) = (&self.blit_pipeline, &self.blit_sampler) else {
+            return;
+        };
 
-        let mut enc = gpu.device.create_encoder("Graph Editor Frame");
-        enc.clear_texture(&drawable_tex, 0.10, 0.10, 0.12, 1.0);
-        enc.present_drawable(&drawable);
-        enc.commit();
+        let mut present_enc = gpu.device.create_encoder("Graph Editor Present");
+        present_enc.draw_fullscreen(
+            blit_p,
+            &drawable_tex,
+            &[
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 0,
+                    texture: offscreen,
+                },
+                manifold_gpu::GpuBinding::Sampler {
+                    binding: 1,
+                    sampler: blit_s,
+                },
+            ],
+            false,
+            true,
+            "Editor Offscreen → Drawable",
+        );
+        present_enc.present_drawable(&drawable);
+        present_enc.commit();
     }
 
     fn present_all_windows(&mut self, front_index: usize) {

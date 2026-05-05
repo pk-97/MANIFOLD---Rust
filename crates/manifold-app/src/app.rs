@@ -1700,6 +1700,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     {
                         surface.resize(size.width.max(1), size.height.max(1));
                     }
+                    self.resize_graph_editor_offscreen(size.width.max(1), size.height.max(1));
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.surface_resized_this_frame = true;
+                        ed.offscreen_dirty = true;
+                    }
                     return;
                 }
                 if let Some(ws) = self.window_registry.get_mut(&window_id) {
@@ -1731,12 +1736,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 if is_graph_editor {
+                    let mut new_size = (1u32, 1u32);
                     if let Some(ws) = self.window_registry.get_mut(&window_id)
                         && let Some(surface) = &mut ws.surface
                     {
                         let size = ws.window.inner_size();
-                        surface.resize(size.width.max(1), size.height.max(1));
+                        new_size = (size.width.max(1), size.height.max(1));
+                        surface.resize(new_size.0, new_size.1);
                     }
+                    self.resize_graph_editor_offscreen(new_size.0, new_size.1);
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.surface_resized_this_frame = true;
+                        ed.offscreen_dirty = true;
+                    }
+                    let _ = scale_factor;
                     return;
                 }
                 if let Some(ws) = self.window_registry.get_mut(&window_id) {
@@ -2748,6 +2761,29 @@ impl Application {
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
             label: "UI Offscreen",
+            mip_levels: 1,
+        }));
+    }
+
+    /// (Re)create the graph editor's offscreen render target. Mirrors
+    /// `resize_ui_offscreen` but writes to `self.graph_editor.ui_offscreen`.
+    /// No-op when the editor isn't open.
+    pub(crate) fn resize_graph_editor_offscreen(&mut self, width: u32, height: u32) {
+        let Some(gpu) = &self.gpu else { return };
+        let Some(ws) = self.graph_editor.as_mut() else {
+            return;
+        };
+        if width == 0 || height == 0 {
+            return;
+        }
+        ws.ui_offscreen = Some(gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width,
+            height,
+            depth: 1,
+            format: manifold_gpu::GpuTextureFormat::Bgra8Unorm,
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+            label: "Graph Editor Offscreen",
             mip_levels: 1,
         }));
     }
