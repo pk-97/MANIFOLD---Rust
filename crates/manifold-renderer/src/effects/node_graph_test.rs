@@ -172,6 +172,15 @@ impl PostProcessEffect for NodeGraphTestFX {
         false
     }
 
+    /// Snapshot the running graph for the editor canvas. Returns `None`
+    /// until `apply` has run at least once (the graph is built lazily on
+    /// first frame, when render resolution is known).
+    fn graph_snapshot(&self) -> Option<crate::node_graph::GraphSnapshot> {
+        self.state
+            .as_ref()
+            .map(|s| crate::node_graph::GraphSnapshot::from_graph(&s.graph))
+    }
+
     fn apply(
         &mut self,
         gpu: &mut GpuEncoder,

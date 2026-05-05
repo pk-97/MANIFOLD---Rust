@@ -94,6 +94,16 @@ pub trait PostProcessEffect: Send {
     /// per-owner textures/buffers (e.g., Feedback, Bloom, PixelSort).
     /// Called when a clip stops to prevent unbounded GPU memory growth.
     fn cleanup_owner_state(&mut self, _owner_key: i64) {}
+
+    /// Read-only snapshot of this effect's internal node graph, for the
+    /// editor UI. Default: `None` — non-graph effects have nothing to
+    /// show. Graph-backed effects override this to walk their internal
+    /// `Graph` and return a `GraphSnapshot`. Called from the content
+    /// thread once per frame while the editor window is open; cost
+    /// scales with the graph size, so keep it cheap.
+    fn graph_snapshot(&self) -> Option<crate::node_graph::GraphSnapshot> {
+        None
+    }
 }
 
 /// Extension for effects that maintain per-owner state (e.g., Feedback, Bloom).

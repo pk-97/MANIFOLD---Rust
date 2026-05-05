@@ -106,4 +106,12 @@ pub trait Compositor: Send {
     /// output built from layers flagged with `blit_to_led`. Returns None when no
     /// layers have blit_to_led enabled (fall back to led_tap_texture or output).
     fn led_composite_texture(&self) -> Option<&manifold_gpu::GpuTexture>;
+
+    /// Read-only snapshot of the first graph-backed effect's internal
+    /// node graph, for the editor canvas. Default `None` — non-graph
+    /// compositors have nothing to expose. The real `LayerCompositor`
+    /// override delegates into its `EffectRegistry`.
+    fn graph_snapshot(&self) -> Option<crate::node_graph::GraphSnapshot> {
+        None
+    }
 }

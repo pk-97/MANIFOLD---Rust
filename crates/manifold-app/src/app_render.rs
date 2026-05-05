@@ -192,6 +192,18 @@ impl Application {
         // 1b. Poll for completed background audio load (waveform stays on UI thread)
         self.poll_pending_audio_load();
 
+        // 1c. Push the latest graph snapshot into the editor canvas
+        // (read-only viewer of the running NodeGraphTestFX).
+        if let (Some(canvas), Some(snap)) = (
+            self.graph_canvas.as_mut(),
+            self.content_state.active_graph_snapshot.as_ref(),
+        ) {
+            canvas.set_snapshot(snap);
+            if let Some(ed) = self.graph_editor.as_mut() {
+                ed.offscreen_dirty = true;
+            }
+        }
+
         // 1d. Percussion import runs on content thread — read status from content_state.
         let was_importing = false; // previous frame state not tracked here
         let is_importing = self.content_state.percussion_importing;

@@ -1,16 +1,23 @@
-//! `GraphCanvas` — the read-only node-graph viewer hosted by the
-//! editor window.
+//! `GraphCanvas` — read-only node-graph viewer hosted by the editor
+//! window.
 //!
-//! Phase 4 scope: render a hardcoded view of the `NodeGraphTestFX`
-//! graph (Source A + Source B → Mix → FinalOutput), with pan
-//! (middle-mouse drag), zoom (scroll wheel), and hover highlight.
-//! No editing, no live data sync to the running graph yet — those
-//! land in subsequent phases.
+//! The canvas is data-driven from `GraphSnapshot`s pushed by the
+//! content thread (one per frame while the editor is open). When a new
+//! topology lands, nodes are auto-laid-out by topological depth: source
+//! nodes (no inputs) on the left, each downstream node placed to the
+//! right of its deepest predecessor. Node positions persist across
+//! parameter-only updates, so the layout doesn't twitch when only
+//! `Mix.amount` changes.
 //!
-//! Rendering goes straight through `UIRenderer` (rect + text), no
-//! `UITree` / `Panel` infrastructure, so the editor stays cheap to
-//! reason about while there's only one panel in the window.
+//! Future-proofing: when V2's editor lets users move nodes, snapshot
+//! `NodeSnapshot.editor_pos` will switch from `None` to `Some`. The
+//! canvas already prefers stored positions over auto-layout when present.
+//!
+//! Rendering goes through `UIRenderer` rect+text primitives — no UITree
+//! / Panel infrastructure. Pan via middle-mouse drag, zoom via scroll
+//! wheel, hover highlights. No editing yet.
 
+use manifold_renderer::node_graph::{GraphSnapshot, PortKindSnapshot};
 use manifold_renderer::ui_renderer::UIRenderer;
 
 const HEADER_HEIGHT: f32 = 28.0;
@@ -21,6 +28,11 @@ const PORT_RADIUS: f32 = 4.0;
 const PORT_COL_WIDTH: f32 = 10.0;
 const NODE_CORNER: f32 = 6.0;
 
+// Auto-layout grid spacing.
+const COL_SPACING: f32 = 220.0;
+const ROW_SPACING: f32 = 130.0;
+const LAYOUT_ORIGIN: (f32, f32) = (60.0, 60.0);
+
 const BG_COLOR: [f32; 4] = [0.10, 0.10, 0.12, 1.0];
 const HEADER_BG: [f32; 4] = [0.14, 0.14, 0.17, 1.0];
 const GRID_DOT: [f32; 4] = [1.0, 1.0, 1.0, 0.06];
@@ -28,41 +40,39 @@ const NODE_BG: [f32; 4] = [0.18, 0.18, 0.22, 1.0];
 const NODE_BG_HOVER: [f32; 4] = [0.22, 0.22, 0.27, 1.0];
 const NODE_HEADER_BG: [f32; 4] = [0.28, 0.30, 0.42, 1.0];
 const NODE_BORDER: [f32; 4] = [0.0, 0.0, 0.0, 0.6];
-const PORT_TEXTURE_COLOR: [f32; 4] = [0.50, 0.78, 1.00, 1.0];
+const PORT_TEXTURE2D_COLOR: [f32; 4] = [0.50, 0.78, 1.00, 1.0];
+const PORT_TEXTURE3D_COLOR: [f32; 4] = [0.78, 0.50, 1.00, 1.0];
+const PORT_SCALAR_COLOR: [f32; 4] = [1.00, 0.78, 0.40, 1.0];
 const WIRE_COLOR: [f32; 4] = [0.50, 0.78, 1.00, 0.85];
 const TEXT_PRIMARY: [u8; 4] = [220, 220, 230, 255];
 const TEXT_SECONDARY: [u8; 4] = [150, 150, 165, 255];
 const TEXT_HEADER: [u8; 4] = [240, 240, 250, 255];
 
-/// One port on a node in the canvas view.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct PortView {
-    name: &'static str,
-    /// Reserved for future per-type port colouring (Float/Bool ports
-    /// will pick a different colour). All Phase 4 test-graph ports are
-    /// `Texture2D`, so it's effectively unused today — but keeping it
-    /// avoids a follow-up refactor.
-    _kind: PortKind,
+    name: String,
+    color: [f32; 4],
 }
 
-#[derive(Debug, Clone, Copy)]
-enum PortKind {
-    Texture2D,
+impl PortView {
+    fn from_kind(name: String, kind: PortKindSnapshot) -> Self {
+        let color = match kind {
+            PortKindSnapshot::Texture2D => PORT_TEXTURE2D_COLOR,
+            PortKindSnapshot::Texture3D => PORT_TEXTURE3D_COLOR,
+            PortKindSnapshot::Scalar => PORT_SCALAR_COLOR,
+        };
+        Self { name, color }
+    }
 }
 
-/// One node in the canvas view.
 #[derive(Debug, Clone)]
 struct NodeView {
-    /// Stable identifier within this view. Matches `NodeInstanceId.0`
-    /// for the hardcoded test graph; eventually sourced from the live
-    /// graph snapshot.
     id: u32,
-    title: &'static str,
-    /// Position of the node's top-left corner in graph-space (logical
-    /// pixels, before pan/zoom).
+    title: String,
+    /// Top-left corner in graph-space (logical pixels, pre pan/zoom).
     pos_graph: (f32, f32),
-    inputs: &'static [PortView],
-    outputs: &'static [PortView],
+    inputs: Vec<PortView>,
+    outputs: Vec<PortView>,
 }
 
 impl NodeView {
@@ -88,13 +98,12 @@ impl NodeView {
     }
 }
 
-/// One wire between two nodes.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct WireView {
     from_node: u32,
-    from_port: &'static str,
+    from_port: String,
     to_node: u32,
-    to_port: &'static str,
+    to_port: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,108 +112,29 @@ enum DragMode {
     Pan,
 }
 
-/// The read-only graph canvas hosted in the editor window.
 pub struct GraphCanvas {
     nodes: Vec<NodeView>,
     wires: Vec<WireView>,
-    /// Pan offset in logical pixels (applied to graph-space before zoom).
+    /// Hash of the current topology (node ids+types + wire endpoints).
+    /// Compared on each `set_snapshot` to skip layout recomputation
+    /// when only parameter values changed.
+    topology_hash: u64,
     pan: (f32, f32),
-    /// Zoom factor — graph-space-to-screen-space multiplier.
     zoom: f32,
-    /// Last known cursor position in window-logical pixels. Updated on
-    /// every `CursorMoved` so click/drag/scroll can transform without
-    /// the caller passing it again.
     cursor: (f32, f32),
     drag_mode: DragMode,
     drag_anchor: (f32, f32),
     drag_pan_start: (f32, f32),
-    /// Hovered node id, if any. Populated on every cursor move.
     hovered: Option<u32>,
 }
 
 impl GraphCanvas {
-    /// Build a canvas seeded with the hardcoded `NodeGraphTestFX`
-    /// graph: Source A + Source B → Mix → FinalOutput.
     pub fn new() -> Self {
-        const SOURCE_OUTS: &[PortView] = &[PortView {
-            name: "out",
-            _kind: PortKind::Texture2D,
-        }];
-        const MIX_INS: &[PortView] = &[
-            PortView {
-                name: "a",
-                _kind: PortKind::Texture2D,
-            },
-            PortView {
-                name: "b",
-                _kind: PortKind::Texture2D,
-            },
-        ];
-        const MIX_OUTS: &[PortView] = &[PortView {
-            name: "out",
-            _kind: PortKind::Texture2D,
-        }];
-        const FINAL_INS: &[PortView] = &[PortView {
-            name: "in",
-            _kind: PortKind::Texture2D,
-        }];
-
-        let nodes = vec![
-            NodeView {
-                id: 0,
-                title: "Source A",
-                pos_graph: (60.0, 80.0),
-                inputs: &[],
-                outputs: SOURCE_OUTS,
-            },
-            NodeView {
-                id: 1,
-                title: "Source B",
-                pos_graph: (60.0, 240.0),
-                inputs: &[],
-                outputs: SOURCE_OUTS,
-            },
-            NodeView {
-                id: 2,
-                title: "Mix",
-                pos_graph: (300.0, 160.0),
-                inputs: MIX_INS,
-                outputs: MIX_OUTS,
-            },
-            NodeView {
-                id: 3,
-                title: "FinalOutput",
-                pos_graph: (540.0, 160.0),
-                inputs: FINAL_INS,
-                outputs: &[],
-            },
-        ];
-
-        let wires = vec![
-            WireView {
-                from_node: 0,
-                from_port: "out",
-                to_node: 2,
-                to_port: "a",
-            },
-            WireView {
-                from_node: 1,
-                from_port: "out",
-                to_node: 2,
-                to_port: "b",
-            },
-            WireView {
-                from_node: 2,
-                from_port: "out",
-                to_node: 3,
-                to_port: "in",
-            },
-        ];
-
         Self {
-            nodes,
-            wires,
-            pan: (40.0, 40.0),
+            nodes: Vec::new(),
+            wires: Vec::new(),
+            topology_hash: 0,
+            pan: (0.0, 0.0),
             zoom: 1.0,
             cursor: (0.0, 0.0),
             drag_mode: DragMode::None,
@@ -214,9 +144,126 @@ impl GraphCanvas {
         }
     }
 
+    /// Push the latest snapshot. Rebuilds nodes+wires; recomputes
+    /// auto-layout only when topology changed.
+    pub fn set_snapshot(&mut self, snap: &GraphSnapshot) {
+        let new_hash = hash_topology(snap);
+        if new_hash == self.topology_hash && !self.nodes.is_empty() {
+            // Topology unchanged — keep existing layout. Nothing else
+            // in the snapshot affects rendering today (params would, but
+            // we don't display values yet).
+            return;
+        }
+        self.topology_hash = new_hash;
+
+        self.nodes = snap
+            .nodes
+            .iter()
+            .map(|n| NodeView {
+                id: n.id,
+                title: n.title.clone(),
+                pos_graph: (0.0, 0.0), // filled in by auto-layout below
+                inputs: n
+                    .inputs
+                    .iter()
+                    .map(|p| PortView::from_kind(p.name.clone(), p.kind))
+                    .collect(),
+                outputs: n
+                    .outputs
+                    .iter()
+                    .map(|p| PortView::from_kind(p.name.clone(), p.kind))
+                    .collect(),
+            })
+            .collect();
+        self.wires = snap
+            .wires
+            .iter()
+            .map(|w| WireView {
+                from_node: w.from_node,
+                from_port: w.from_port.clone(),
+                to_node: w.to_node,
+                to_port: w.to_port.clone(),
+            })
+            .collect();
+
+        // Honour stored positions if any of the snapshot's nodes provide
+        // them; otherwise auto-layout.
+        let any_stored_pos = snap.nodes.iter().any(|n| n.editor_pos.is_some());
+        if any_stored_pos {
+            for (view, snap_node) in self.nodes.iter_mut().zip(snap.nodes.iter()) {
+                if let Some(p) = snap_node.editor_pos {
+                    view.pos_graph = p;
+                }
+            }
+        } else {
+            self.auto_layout();
+        }
+    }
+
+    /// Compute node positions by topological depth. Sources (in-degree
+    /// 0) go in column 0; each downstream node sits one column past
+    /// its deepest predecessor. Within a column, nodes stack vertically
+    /// in id order.
+    fn auto_layout(&mut self) {
+        let n = self.nodes.len();
+        if n == 0 {
+            return;
+        }
+        let mut depth = vec![0i32; n];
+        // Map node id → index in self.nodes for adjacency walks.
+        let id_to_idx: ahash::AHashMap<u32, usize> = self
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, nv)| (nv.id, i))
+            .collect();
+
+        // Iterative relaxation. With a DAG and small n it converges in
+        // ≤ n passes; we cap at n+1 as a safety net against malformed
+        // input (cycles can't occur — Graph::connect rejects them).
+        for _ in 0..=n {
+            let mut changed = false;
+            for w in &self.wires {
+                let (Some(&from_i), Some(&to_i)) =
+                    (id_to_idx.get(&w.from_node), id_to_idx.get(&w.to_node))
+                else {
+                    continue;
+                };
+                let candidate = depth[from_i] + 1;
+                if candidate > depth[to_i] {
+                    depth[to_i] = candidate;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        // Group by column, sorted by id within a column for determinism.
+        let max_depth = depth.iter().copied().max().unwrap_or(0);
+        let mut columns: Vec<Vec<usize>> = vec![Vec::new(); (max_depth as usize) + 1];
+        for (i, &d) in depth.iter().enumerate() {
+            columns[d as usize].push(i);
+        }
+        for col in columns.iter_mut() {
+            col.sort_by_key(|&i| self.nodes[i].id);
+        }
+        for (col_idx, col) in columns.iter().enumerate() {
+            // Vertical-center the column so taller and shorter columns
+            // sit roughly aligned around a common axis.
+            let col_height = col.len() as f32 * ROW_SPACING;
+            let col_start_y = LAYOUT_ORIGIN.1 - col_height * 0.5 + ROW_SPACING * 0.5;
+            for (row_idx, &node_idx) in col.iter().enumerate() {
+                let x = LAYOUT_ORIGIN.0 + col_idx as f32 * COL_SPACING;
+                let y = col_start_y + row_idx as f32 * ROW_SPACING;
+                self.nodes[node_idx].pos_graph = (x, y);
+            }
+        }
+    }
+
     // ── Coordinate transforms ───────────────────────────────────────
 
-    /// Graph-space → window-space (pixel).
     fn to_screen(&self, viewport: Rect, gx: f32, gy: f32) -> (f32, f32) {
         let canvas_x = viewport.x;
         let canvas_y = viewport.y + HEADER_HEIGHT;
@@ -226,7 +273,6 @@ impl GraphCanvas {
         )
     }
 
-    /// Window-space (pixel) → graph-space.
     fn to_graph(&self, viewport: Rect, sx: f32, sy: f32) -> (f32, f32) {
         let canvas_x = viewport.x;
         let canvas_y = viewport.y + HEADER_HEIGHT;
@@ -235,8 +281,6 @@ impl GraphCanvas {
             (sy - canvas_y) / self.zoom - self.pan.1,
         )
     }
-
-    // ── Hit testing ─────────────────────────────────────────────────
 
     fn node_under(&self, viewport: Rect, sx: f32, sy: f32) -> Option<u32> {
         let (gx, gy) = self.to_graph(viewport, sx, sy);
@@ -269,44 +313,39 @@ impl GraphCanvas {
         self.drag_pan_start = self.pan;
     }
 
-    /// Last known cursor position (window-logical pixels). Set by the
-    /// most recent `on_pointer_move`.
-    pub fn cursor(&self) -> (f32, f32) {
-        self.cursor
-    }
-
     pub fn on_pan_button_up(&mut self) {
         self.drag_mode = DragMode::None;
     }
 
-    /// Apply scroll-wheel zoom. `dy` is in logical pixels; positive =
-    /// zoom in. Anchored at the current cursor so the point under the
-    /// cursor stays put across the zoom.
+    pub fn cursor(&self) -> (f32, f32) {
+        self.cursor
+    }
+
     pub fn on_scroll(&mut self, viewport: Rect, dy: f32) {
         let (gx_before, gy_before) = self.to_graph(viewport, self.cursor.0, self.cursor.1);
         let factor = (dy * 0.0015).exp();
         let new_zoom = (self.zoom * factor).clamp(0.25, 4.0);
         self.zoom = new_zoom;
         let (gx_after, gy_after) = self.to_graph(viewport, self.cursor.0, self.cursor.1);
-        // Re-anchor: shift pan so cursor stays over the same graph point.
         self.pan.0 += gx_after - gx_before;
         self.pan.1 += gy_after - gy_before;
     }
 
     // ── Render ──────────────────────────────────────────────────────
 
-    /// Render the canvas into the editor's offscreen via `UIRenderer`.
-    /// `viewport` is the editor window's logical rect (full window).
     pub fn render(&self, ui: &mut UIRenderer, viewport: Rect) {
-        // Solid background covering the whole window.
         ui.draw_rect(viewport.x, viewport.y, viewport.w, viewport.h, BG_COLOR);
 
-        // ── Header bar ──
         ui.draw_rect(viewport.x, viewport.y, viewport.w, HEADER_HEIGHT, HEADER_BG);
+        let header_label = if self.nodes.is_empty() {
+            "No active graph — open a clip with NodeGraphTest"
+        } else {
+            "Live Graph (read-only)"
+        };
         ui.draw_text(
             viewport.x + 10.0,
             viewport.y + (HEADER_HEIGHT - 12.0) * 0.5,
-            "Node Graph Test  (read-only)",
+            header_label,
             12.0,
             TEXT_HEADER,
         );
@@ -329,15 +368,12 @@ impl GraphCanvas {
             return;
         }
 
-        // ── Background dot grid ──
         self.draw_grid(ui, canvas);
 
-        // ── Wires (drawn under nodes) ──
         for wire in &self.wires {
-            self.draw_wire(ui, viewport, *wire);
+            self.draw_wire(ui, viewport, wire);
         }
 
-        // ── Nodes ──
         for node in &self.nodes {
             self.draw_node(ui, viewport, canvas, node);
         }
@@ -347,23 +383,23 @@ impl GraphCanvas {
         const GRAPH_SPACING: f32 = 32.0;
         let spacing = GRAPH_SPACING * self.zoom;
         if spacing < 8.0 {
-            return; // too dense at low zoom
+            return;
         }
-        // Find first dot inside the canvas in graph-space.
-        let (g_min_x, g_min_y) = self.to_graph(canvas_to_viewport(canvas), canvas.x, canvas.y);
+        let viewport = canvas_to_viewport(canvas);
+        let (g_min_x, g_min_y) = self.to_graph(viewport, canvas.x, canvas.y);
         let start_gx = (g_min_x / GRAPH_SPACING).floor() * GRAPH_SPACING;
         let start_gy = (g_min_y / GRAPH_SPACING).floor() * GRAPH_SPACING;
         let mut gy = start_gy;
         while {
-            let (_, sy) = self.to_screen(canvas_to_viewport(canvas), 0.0, gy);
+            let (_, sy) = self.to_screen(viewport, 0.0, gy);
             sy < canvas.y + canvas.h
         } {
             let mut gx = start_gx;
             while {
-                let (sx, _) = self.to_screen(canvas_to_viewport(canvas), gx, 0.0);
+                let (sx, _) = self.to_screen(viewport, gx, 0.0);
                 sx < canvas.x + canvas.w
             } {
-                let (sx, sy) = self.to_screen(canvas_to_viewport(canvas), gx, gy);
+                let (sx, sy) = self.to_screen(viewport, gx, gy);
                 if sx >= canvas.x && sy >= canvas.y {
                     ui.draw_rect(sx - 1.0, sy - 1.0, 2.0, 2.0, GRID_DOT);
                 }
@@ -377,7 +413,6 @@ impl GraphCanvas {
         let (sx, sy) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
         let sw = NODE_WIDTH * self.zoom;
         let sh = node.height() * self.zoom;
-        // Software-clip: skip nodes fully outside the canvas.
         if sx + sw < canvas.x || sx > canvas.x + canvas.w {
             return;
         }
@@ -388,7 +423,6 @@ impl GraphCanvas {
         let hovered = self.hovered == Some(node.id);
         let bg = if hovered { NODE_BG_HOVER } else { NODE_BG };
 
-        // Body
         ui.draw_bordered_rect(
             sx,
             sy,
@@ -400,21 +434,18 @@ impl GraphCanvas {
             NODE_BORDER,
         );
 
-        // Header strip
         let header_h = NODE_HEADER_HEIGHT * self.zoom;
         ui.draw_rounded_rect(sx, sy, sw, header_h, NODE_HEADER_BG, NODE_CORNER * self.zoom);
 
-        // Title
         let title_size = (11.0 * self.zoom).max(8.0);
         ui.draw_text(
             sx + 8.0 * self.zoom,
             sy + (header_h - title_size) * 0.5,
-            node.title,
+            &node.title,
             title_size,
             TEXT_HEADER,
         );
 
-        // Ports
         let port_label_size = (10.0 * self.zoom).max(7.0);
         let port_d = PORT_RADIUS * 2.0 * self.zoom;
         for (i, port) in node.inputs.iter().enumerate() {
@@ -425,13 +456,13 @@ impl GraphCanvas {
                 psy - PORT_RADIUS * self.zoom,
                 port_d,
                 port_d,
-                PORT_TEXTURE_COLOR,
+                port.color,
                 PORT_RADIUS * self.zoom,
             );
             ui.draw_text(
                 psx + PORT_COL_WIDTH * self.zoom,
                 psy - port_label_size * 0.5,
-                port.name,
+                &port.name,
                 port_label_size,
                 TEXT_PRIMARY,
             );
@@ -444,25 +475,25 @@ impl GraphCanvas {
                 psy - PORT_RADIUS * self.zoom,
                 port_d,
                 port_d,
-                PORT_TEXTURE_COLOR,
+                port.color,
                 PORT_RADIUS * self.zoom,
             );
-            // Right-aligned label inside the node body.
             let approx_w = port.name.len() as f32 * port_label_size * 0.55;
             ui.draw_text(
                 psx - PORT_COL_WIDTH * self.zoom - approx_w,
                 psy - port_label_size * 0.5,
-                port.name,
+                &port.name,
                 port_label_size,
                 TEXT_PRIMARY,
             );
         }
     }
 
-    fn draw_wire(&self, ui: &mut UIRenderer, viewport: Rect, wire: WireView) {
-        let from = self.find_node(wire.from_node);
-        let to = self.find_node(wire.to_node);
-        let (Some(from), Some(to)) = (from, to) else {
+    fn draw_wire(&self, ui: &mut UIRenderer, viewport: Rect, wire: &WireView) {
+        let (Some(from), Some(to)) = (
+            self.find_node(wire.from_node),
+            self.find_node(wire.to_node),
+        ) else {
             return;
         };
         let from_idx = from
@@ -480,18 +511,13 @@ impl GraphCanvas {
         let (sx0, sy0) = self.to_screen(viewport, gx0, gy0);
         let (sx1, sy1) = self.to_screen(viewport, gx1, gy1);
 
-        // Cubic bezier control points: pull horizontally so the curve
-        // exits/enters the ports horizontally — TouchDesigner-style.
         let dx = (sx1 - sx0).abs().max(40.0) * 0.5;
         let cx0 = sx0 + dx;
         let cy0 = sy0;
         let cx1 = sx1 - dx;
         let cy1 = sy1;
 
-        // Sample the cubic bezier as small dots. Step count scales with
-        // pixel length so close-up curves stay smooth.
-        let approx_len =
-            ((sx1 - sx0).abs() + (sy1 - sy0).abs() + 2.0 * dx).max(40.0);
+        let approx_len = ((sx1 - sx0).abs() + (sy1 - sy0).abs() + 2.0 * dx).max(40.0);
         let steps = (approx_len / 4.0).clamp(20.0, 160.0) as i32;
         let dot = (2.5 * self.zoom).clamp(1.5, 3.0);
         for i in 0..=steps {
@@ -527,9 +553,6 @@ impl Rect {
 }
 
 fn canvas_to_viewport(canvas: Rect) -> Rect {
-    // The grid + transforms expect a viewport rect (header included),
-    // but we pass in the canvas rect (header excluded). Reconstruct
-    // by subtracting HEADER_HEIGHT from the y.
     Rect {
         x: canvas.x,
         y: canvas.y - HEADER_HEIGHT,
@@ -559,4 +582,22 @@ fn cubic_bezier(
         b0 * x0 + b1 * x1 + b2 * x2 + b3 * x3,
         b0 * y0 + b1 * y1 + b2 * y2 + b3 * y3,
     )
+}
+
+fn hash_topology(snap: &GraphSnapshot) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = ahash::AHasher::default();
+    snap.nodes.len().hash(&mut h);
+    for n in &snap.nodes {
+        n.id.hash(&mut h);
+        n.type_id.hash(&mut h);
+    }
+    snap.wires.len().hash(&mut h);
+    for w in &snap.wires {
+        w.from_node.hash(&mut h);
+        w.from_port.hash(&mut h);
+        w.to_node.hash(&mut h);
+        w.to_port.hash(&mut h);
+    }
+    h.finish()
 }

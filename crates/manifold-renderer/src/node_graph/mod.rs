@@ -20,6 +20,7 @@ mod metal_backend;
 mod parameters;
 mod ports;
 pub mod primitives;
+mod snapshot;
 mod validation;
 
 pub use backend::{Backend, MockBackend};
@@ -35,4 +36,5 @@ pub use execution_plan::{compile, ExecutionPlan, ExecutionStep, ResourceId};
 pub use graph::{Graph, NodeInstance};
 pub use parameters::{ParamDef, ParamType, ParamValue};
 pub use ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+pub use snapshot::{GraphSnapshot, NodeSnapshot, PortKindSnapshot, PortSnapshot, WireSnapshot};
 pub use validation::{topological_sort, validate, GraphError};

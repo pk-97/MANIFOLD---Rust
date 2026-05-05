@@ -1823,6 +1823,7 @@ dependencies = [
 name = "manifold-app"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "arboard",
  "core-foundation 0.10.1",
  "crossbeam-channel",

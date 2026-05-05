@@ -983,6 +983,10 @@ impl ContentThread {
                     .map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode),
                 project_snapshot: snapshot,
                 modulation_snapshot,
+                active_graph_snapshot: self
+                    .content_pipeline
+                    .graph_snapshot()
+                    .map(Arc::new),
             };
 
             // Send state to UI. Unbounded channel — never drops snapshots.

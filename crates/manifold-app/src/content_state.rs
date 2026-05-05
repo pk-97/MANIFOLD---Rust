@@ -128,6 +128,13 @@ pub struct ContentState {
     /// drivers/envelopes wrote this frame. Applied in-place to the UI's
     /// local_project without a full Project clone.
     pub modulation_snapshot: Option<ModulationSnapshot>,
+
+    /// Live snapshot of the first graph-backed effect's internal node
+    /// graph, for the editor canvas. `None` when no graph-backed effect
+    /// has run yet, or when the editor window isn't open. Wrapped in
+    /// `Arc` so cloning the `ContentState` per snapshot is cheap.
+    pub active_graph_snapshot:
+        Option<Arc<manifold_renderer::node_graph::GraphSnapshot>>,
 }
 
 /// Lightweight snapshot of modulated param values.
@@ -356,6 +363,7 @@ impl Default for ContentState {
             osc_sync_mode: OscSyncMode::M4L,
             project_snapshot: None,
             modulation_snapshot: None,
+            active_graph_snapshot: None,
         }
     }
 }

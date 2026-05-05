@@ -1204,4 +1204,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     pub fn last_gpu_poll_ms(&self) -> f64 {
         self.gpu_poll_ms
     }
+
+    /// Snapshot of the first graph-backed effect's internal node graph,
+    /// for the editor canvas. Delegates to the compositor.
+    pub fn graph_snapshot(&self) -> Option<manifold_renderer::node_graph::GraphSnapshot> {
+        self.compositor.graph_snapshot()
+    }
 }
