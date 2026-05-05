@@ -268,6 +268,10 @@ pub struct Application {
     /// `WindowId` of the graph editor window when open. Paired with
     /// `graph_editor` — both are `Some` together or both `None`.
     pub(crate) graph_editor_window_id: Option<WindowId>,
+    /// Read-only graph canvas hosted in the editor. `Some` while the
+    /// editor window is open; cleared on close. Phase 4 seeds it with
+    /// a hardcoded view of `NodeGraphTestFX`'s graph.
+    pub(crate) graph_canvas: Option<crate::graph_canvas::GraphCanvas>,
 
     // Frame timing
     pub(crate) frame_timer: FrameTimer,
@@ -418,6 +422,7 @@ impl Application {
             ws: Workspace::new(WorkspaceKind::Main),
             graph_editor: None,
             graph_editor_window_id: None,
+            graph_canvas: None,
             // UI frame rate: uncapped (120fps target, vsync limits actual present).
             // Content thread has its own timer at project FPS — fully decoupled.
             frame_timer: FrameTimer::new(120.0),
@@ -1771,6 +1776,36 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             // ── Pointer input → UIInputSystem ──────────────────────
             WindowEvent::CursorMoved { position, .. } => {
+                if is_graph_editor {
+                    let (scale, viewport) = self
+                        .window_registry
+                        .get(&window_id)
+                        .map(|ws| {
+                            let s = ws.window.scale_factor();
+                            let sz = ws.window.inner_size();
+                            (
+                                s,
+                                crate::graph_canvas::Rect::new(
+                                    0.0,
+                                    0.0,
+                                    sz.width as f32 / s as f32,
+                                    sz.height as f32 / s as f32,
+                                ),
+                            )
+                        })
+                        .unwrap_or((1.0, crate::graph_canvas::Rect::new(0.0, 0.0, 1.0, 1.0)));
+                    if let Some(canvas) = self.graph_canvas.as_mut() {
+                        canvas.on_pointer_move(
+                            viewport,
+                            position.x as f32 / scale as f32,
+                            position.y as f32 / scale as f32,
+                        );
+                        if let Some(ed) = self.graph_editor.as_mut() {
+                            ed.offscreen_dirty = true;
+                        }
+                    }
+                    return;
+                }
                 if is_primary {
                     // Convert to logical pixels
                     let scale = self
@@ -1858,6 +1893,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             }
 
             WindowEvent::MouseInput { button, state, .. } => {
+                if is_graph_editor {
+                    // Pan with middle button (or ctrl+left).
+                    let is_pan_button = matches!(button, MouseButton::Middle);
+                    if is_pan_button
+                        && let Some(canvas) = self.graph_canvas.as_mut()
+                    {
+                        match state {
+                            ElementState::Pressed => {
+                                let (cx, cy) = canvas.cursor();
+                                canvas.on_pan_button_down(cx, cy);
+                            }
+                            ElementState::Released => canvas.on_pan_button_up(),
+                        }
+                        if let Some(ed) = self.graph_editor.as_mut() {
+                            ed.offscreen_dirty = true;
+                        }
+                    }
+                    return;
+                }
                 if is_primary && self.perform_handle_mouse_input(button, state) {
                     return;
                 }
@@ -2042,6 +2096,34 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             // ── Mouse wheel (scroll / zoom) ──────────────────────────
             WindowEvent::MouseWheel { delta, .. } => {
+                if is_graph_editor
+                    && let Some(canvas) = self.graph_canvas.as_mut()
+                {
+                    const LINE_DELTA_PX: f32 = 20.0;
+                    let dy = match delta {
+                        winit::event::MouseScrollDelta::LineDelta(_, y) => y * LINE_DELTA_PX,
+                        winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
+                    };
+                    let viewport = self
+                        .window_registry
+                        .get(&window_id)
+                        .map(|ws| {
+                            let s = ws.window.scale_factor();
+                            let sz = ws.window.inner_size();
+                            crate::graph_canvas::Rect::new(
+                                0.0,
+                                0.0,
+                                sz.width as f32 / s as f32,
+                                sz.height as f32 / s as f32,
+                            )
+                        })
+                        .unwrap_or(crate::graph_canvas::Rect::new(0.0, 0.0, 1.0, 1.0));
+                    canvas.on_scroll(viewport, dy);
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.offscreen_dirty = true;
+                    }
+                    return;
+                }
                 if is_primary && self.perform_handle_mouse_wheel() {
                     return;
                 }

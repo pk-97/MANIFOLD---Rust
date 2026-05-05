@@ -1227,21 +1227,16 @@ impl Application {
         let logical_w = (surface_w as f64 / scale).max(1.0) as u32;
         let logical_h = (surface_h as f64 / scale).max(1.0) as u32;
 
-        // ── Build frame: clear + centered placeholder label ──
+        // ── Build frame: clear, then draw the canvas ──
         let mut encoder = gpu.device.create_encoder("Graph Editor Frame");
         encoder.clear_texture(offscreen, 0.10, 0.10, 0.12, 1.0);
 
-        if let Some(ui) = &mut self.ui_renderer {
+        if let (Some(ui), Some(canvas)) = (&mut self.ui_renderer, self.graph_canvas.as_ref()) {
             ui.begin_frame();
-            let label = "Graph Editor — Phase 4 coming";
-            let font_size: f32 = 14.0;
-            let text_w = ui
-                .measure_text_cached(label, font_size as u16, FontWeight::Medium)
-                .x;
-            let cx = (logical_w as f32 - text_w) * 0.5;
-            let cy = (logical_h as f32 - font_size) * 0.5;
-            ui.draw_text(cx, cy, label, font_size, [180, 180, 195, 255]);
-
+            canvas.render(
+                ui,
+                crate::graph_canvas::Rect::new(0.0, 0.0, logical_w as f32, logical_h as f32),
+            );
             if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
                 ui.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
             }

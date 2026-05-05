@@ -820,6 +820,7 @@ impl Application {
         }
         self.graph_editor = Some(ws);
         self.graph_editor_window_id = Some(wid);
+        self.graph_canvas = Some(crate::graph_canvas::GraphCanvas::new());
 
         log::info!(
             "[GraphEditor] Opened ({}x{} logical, scale {:.2})",
@@ -845,6 +846,7 @@ impl Application {
             self.window_registry.remove(&wid);
         }
         self.graph_editor = None;
+        self.graph_canvas = None;
         log::info!("[GraphEditor] Closed");
     }
 
