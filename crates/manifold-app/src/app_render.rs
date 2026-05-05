@@ -416,6 +416,13 @@ impl Application {
                     self.pending_toggle_output = true;
                     continue;
                 }
+                PanelAction::OpenGraphEditor(_ei) => {
+                    // The canvas currently shows a hardcoded test graph
+                    // regardless of which effect was clicked; effect_index
+                    // is reserved for the live-data-sync phase.
+                    self.pending_open_graph_editor = true;
+                    continue;
+                }
                 PanelAction::EnterPerformMode => {
                     self.perform.pending_enter = true;
                     continue;

@@ -14,6 +14,7 @@ const HEADER_HEIGHT: f32 = 27.5;
 const DRAG_HANDLE_W: f32 = 18.0;
 const TOGGLE_W: f32 = 30.0;
 const CHEVRON_W: f32 = 18.0;
+const COG_W: f32 = 18.0;
 const BADGE_W: f32 = 36.0;
 const BADGE_H: f32 = 14.0;
 const BADGE_RADIUS: f32 = 7.0;
@@ -159,6 +160,7 @@ pub struct EffectCardPanel {
     name_label_id: i32,
     toggle_btn_id: i32,
     chevron_btn_id: i32,
+    cog_btn_id: i32,
     abl_badge_bg_id: i32,
     abl_badge_text_id: i32,
     env_badge_bg_id: i32,
@@ -223,6 +225,7 @@ impl EffectCardPanel {
             name_label_id: -1,
             toggle_btn_id: -1,
             chevron_btn_id: -1,
+            cog_btn_id: -1,
             abl_badge_bg_id: -1,
             abl_badge_text_id: -1,
             env_badge_bg_id: -1,
@@ -544,7 +547,8 @@ impl EffectCardPanel {
         tree.set_flag(self.header_bg_id as u32, UIFlags::INTERACTIVE);
 
         // Layout (right-to-left for fixed elements)
-        let chevron_x = x + w - PADDING - CHEVRON_W;
+        let cog_x = x + w - PADDING - COG_W;
+        let chevron_x = cog_x - GAP - CHEVRON_W;
         let toggle_x = chevron_x - GAP - TOGGLE_W;
         let drv_x = toggle_x - GAP - BADGE_W;
         let env_x = drv_x - GAP - BADGE_W;
@@ -733,6 +737,47 @@ impl EffectCardPanel {
                 "\u{25BC}"
             },
         ) as i32;
+
+        // "Open in graph editor" affordance. Drawn as three small dots
+        // in a triangle (suggesting graph nodes) rather than a unicode
+        // gear glyph — U+2699 doesn't render reliably through the text
+        // path on every system.
+        self.cog_btn_id = tree.add_button(
+            self.header_bg_id,
+            cog_x,
+            elem_y,
+            COG_W,
+            16.0,
+            UIStyle {
+                bg_color: Color32::TRANSPARENT,
+                hover_bg_color: color::HOVER_OVERLAY,
+                pressed_bg_color: color::PRESS_OVERLAY,
+                ..UIStyle::default()
+            },
+            "",
+        ) as i32;
+        {
+            let dot: f32 = 3.0;
+            let dot_color = color::TEXT_DIMMED_C32;
+            let dot_style = UIStyle {
+                bg_color: dot_color,
+                corner_radius: dot * 0.5,
+                ..UIStyle::default()
+            };
+            // Triangle: top-center, bottom-left, bottom-right.
+            let cx = cog_x + COG_W * 0.5;
+            let cy = elem_y + 8.0;
+            let v_offset = 3.5;
+            let h_offset = 4.0;
+            let positions = [
+                (cx - dot * 0.5, cy - v_offset - dot * 0.5),
+                (cx - h_offset - dot * 0.5, cy + v_offset - dot * 0.5),
+                (cx + h_offset - dot * 0.5, cy + v_offset - dot * 0.5),
+            ];
+            for (px, py) in positions {
+                tree.add_panel(self.cog_btn_id, px, py, dot, dot, dot_style);
+            }
+        }
     }
 
     fn build_sliders(&mut self, tree: &mut UITree, parent: i32, x: f32, start_y: f32, w: f32) {
@@ -1082,6 +1127,9 @@ impl EffectCardPanel {
         }
         if id == self.chevron_btn_id {
             return vec![PanelAction::EffectCollapseToggle(ei)];
+        }
+        if id == self.cog_btn_id {
+            return vec![PanelAction::OpenGraphEditor(ei)];
         }
 
         // D/E buttons

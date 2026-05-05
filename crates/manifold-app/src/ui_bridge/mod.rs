@@ -368,7 +368,9 @@ pub fn dispatch(
         ),
 
         // Handled in app_render.rs (Application-level intercept, never reaches dispatch)
-        PanelAction::CopyOscAddress(_) => DispatchResult::handled(),
+        PanelAction::CopyOscAddress(_) | PanelAction::OpenGraphEditor(_) => {
+            DispatchResult::handled()
+        }
     }
 }
 

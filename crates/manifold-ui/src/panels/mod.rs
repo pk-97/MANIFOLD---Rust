@@ -159,6 +159,10 @@ pub enum PanelAction {
     EffectToggle(usize),
     EffectCollapseToggle(usize),
     EffectCardClicked(usize),
+    /// Open the node-graph editor for this effect (cog icon click).
+    /// Currently shows a hardcoded test graph regardless of which effect
+    /// triggered it; live data sync lands in a future phase.
+    OpenGraphEditor(usize),
     EffectParamSnapshot(usize, usize),
     EffectParamChanged(usize, usize, f32),
     EffectParamCommit(usize, usize),
