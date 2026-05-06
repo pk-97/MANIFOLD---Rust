@@ -5,11 +5,14 @@
 //! fuseable, Blur breaks fusion with its input but accepts pixel-local
 //! tail-fusion, and MipChain runs a series of passes regardless.
 
-use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc};
+use manifold_gpu::{
+    GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc, GpuTextureFormat,
+};
 
 use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
+use crate::render_target::RenderTarget;
 
 const SOURCE_INPUT: NodeInput = NodePort {
     name: "source",
@@ -123,14 +126,22 @@ const BLUR_PARAMS: [ParamDef; 2] = [
 struct BlurUniforms {
     radius: f32,
     mode: u32,
-    _pad0: f32,
-    _pad1: f32,
+    direction: [f32; 2],
 }
+
+/// Format for the per-instance scratch texture used as the ping-pong
+/// target between Blur's horizontal and vertical passes. Matches the
+/// GRAPH_FORMAT used by graph-backed effects.
+const BLUR_SCRATCH_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 
 pub struct Blur {
     type_id: EffectNodeType,
     pipeline: Option<GpuComputePipeline>,
     sampler: Option<GpuSampler>,
+    /// Per-instance ping-pong target. Allocated on first dispatch and
+    /// reused across frames; recreated when the output dimensions
+    /// change (rare — only on resolution change).
+    scratch: Option<RenderTarget>,
 }
 
 impl Blur {
@@ -139,6 +150,7 @@ impl Blur {
             type_id: EffectNodeType::new(BLUR_TYPE_ID),
             pipeline: None,
             sampler: None,
+            scratch: None,
         }
     }
 }
@@ -191,20 +203,38 @@ impl EffectNode for Blur {
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
+        // (Re)allocate the scratch ping-pong texture if missing or sized wrong.
+        let needs_scratch = match &self.scratch {
+            Some(s) => s.width != width || s.height != height,
+            None => true,
+        };
+        if needs_scratch {
+            self.scratch = Some(RenderTarget::new(
+                gpu.device,
+                width,
+                height,
+                BLUR_SCRATCH_FORMAT,
+                "primitive.blur scratch",
+            ));
+        }
+        let scratch_tex = &self
+            .scratch
+            .as_ref()
+            .expect("scratch allocated above")
+            .texture;
 
-        let uniforms = BlurUniforms {
+        // Pass 1: horizontal — source → scratch.
+        let uniforms_h = BlurUniforms {
             radius,
             mode,
-            _pad0: 0.0,
-            _pad1: 0.0,
+            direction: [1.0, 0.0],
         };
-
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
                 GpuBinding::Bytes {
                     binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
+                    data: bytemuck::bytes_of(&uniforms_h),
                 },
                 GpuBinding::Texture {
                     binding: 1,
@@ -216,11 +246,41 @@ impl EffectNode for Blur {
                 },
                 GpuBinding::Texture {
                     binding: 3,
+                    texture: scratch_tex,
+                },
+            ],
+            [width.div_ceil(16), height.div_ceil(16), 1],
+            "primitive.blur (H)",
+        );
+
+        // Pass 2: vertical — scratch → out.
+        let uniforms_v = BlurUniforms {
+            radius,
+            mode,
+            direction: [0.0, 1.0],
+        };
+        gpu.native_enc.dispatch_compute(
+            pipeline,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms_v),
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: scratch_tex,
+                },
+                GpuBinding::Sampler {
+                    binding: 2,
+                    sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
                     texture: out,
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "primitive.blur",
+            "primitive.blur (V)",
         );
     }
 }
