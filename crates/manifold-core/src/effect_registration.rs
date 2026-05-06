@@ -27,11 +27,19 @@ impl EffectMetadata {
     pub fn to_effect_def(&self) -> EffectDef {
         let param_defs: Vec<ParamDef> = self.params.iter().map(|p| p.to_param_def()).collect();
         let param_count = param_defs.len();
+        let id_to_index = self
+            .params
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| !p.id.is_empty())
+            .map(|(i, p)| (p.id.to_string(), i))
+            .collect();
         EffectDef {
             display_name: self.display_name,
             param_count,
             param_defs,
             osc_prefix: Some(self.osc_prefix),
+            id_to_index,
         }
     }
 

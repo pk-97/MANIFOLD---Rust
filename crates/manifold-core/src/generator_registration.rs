@@ -184,6 +184,13 @@ impl GeneratorMetadata {
                 use_dropdown: *dropdown,
             })
             .collect();
+        let id_to_index = self
+            .params
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| !p.id.is_empty())
+            .map(|(i, p)| (p.id.to_string(), i))
+            .collect();
         GeneratorDef {
             display_name: self.display_name,
             is_line_based: self.is_line_based,
@@ -191,6 +198,7 @@ impl GeneratorMetadata {
             param_defs,
             string_param_defs,
             osc_prefix: Some(self.osc_prefix),
+            id_to_index,
         }
     }
 

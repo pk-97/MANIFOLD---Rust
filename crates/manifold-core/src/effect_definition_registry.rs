@@ -1,5 +1,6 @@
 use crate::effect_type_id::EffectTypeId;
 use crate::effects::{EffectInstance, ParamDef};
+use ahash::AHashMap;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
@@ -13,6 +14,13 @@ pub struct EffectDef {
     pub param_count: usize,
     pub param_defs: Vec<ParamDef>,
     pub osc_prefix: Option<&'static str>,
+    /// Stable `ParamSpec::id` → storage index, built once when this def is
+    /// inserted into the registry. The lookup table for every external
+    /// addressing site (drivers, envelopes, Ableton, OSC, macros, project
+    /// file storage). Built from the **authoritative** `ParamSpec` list so
+    /// V1 projects with empty `ParamDef.id` strings still resolve via
+    /// post-load alignment + this table.
+    pub id_to_index: AHashMap<String, usize>,
 }
 
 // ─── Static Registry ───
@@ -42,6 +50,30 @@ pub fn get(effect_type: &EffectTypeId) -> &'static EffectDef {
 /// Matches Unity's `EffectDefinitionRegistry.TryGet(EffectType, out EffectDef)`.
 pub fn try_get(effect_type: &EffectTypeId) -> Option<&'static EffectDef> {
     DEFINITIONS.get(effect_type)
+}
+
+/// Translate a stable `ParamSpec::id` into the param's storage index for the
+/// given effect type. Returns `None` if the effect or id is unknown.
+///
+/// Hot-path: every per-frame addressing dispatch (driver, envelope,
+/// Ableton update, OSC route) goes through this. The lookup is one
+/// `&str → usize` `AHashMap::get` (~50ns); the map is built once when the
+/// registry initializes.
+pub fn param_id_to_index(effect_type: &EffectTypeId, id: &str) -> Option<usize> {
+    DEFINITIONS.get(effect_type)?.id_to_index.get(id).copied()
+}
+
+/// Reverse of [`param_id_to_index`]: storage index → param id (lives as
+/// long as the registry). Returns `None` if the effect or index is
+/// out of range, or the slot has an empty id (V1 unpopulated).
+pub fn param_index_to_id(effect_type: &EffectTypeId, index: usize) -> Option<&str> {
+    let def = DEFINITIONS.get(effect_type)?;
+    let pd = def.param_defs.get(index)?;
+    if pd.id.is_empty() {
+        None
+    } else {
+        Some(pd.id.as_str())
+    }
 }
 
 /// Create a new EffectInstance with default parameter values from the registry.
@@ -295,6 +327,89 @@ mod tests {
         let sorted = get_all_effect_types_sorted();
         for i in 1..sorted.len() {
             assert!(sorted[i - 1].as_str() <= sorted[i].as_str());
+        }
+    }
+
+    #[test]
+    fn param_id_to_index_resolves_known_ids() {
+        // Bloom: single param with id "amount".
+        assert_eq!(
+            param_id_to_index(&EffectTypeId::BLOOM, "amount"),
+            Some(0),
+            "bloom.amount must resolve to slot 0"
+        );
+
+        // Transform: 4 params in registration order (x, y, zoom, rot).
+        assert_eq!(param_id_to_index(&EffectTypeId::TRANSFORM, "x"), Some(0));
+        assert_eq!(param_id_to_index(&EffectTypeId::TRANSFORM, "y"), Some(1));
+        assert_eq!(param_id_to_index(&EffectTypeId::TRANSFORM, "zoom"), Some(2));
+        assert_eq!(param_id_to_index(&EffectTypeId::TRANSFORM, "rot"), Some(3));
+    }
+
+    #[test]
+    fn param_id_to_index_unknown_id_returns_none() {
+        assert_eq!(
+            param_id_to_index(&EffectTypeId::BLOOM, "nope"),
+            None,
+            "unknown id must return None, not a stale or default index"
+        );
+    }
+
+    #[test]
+    fn param_id_to_index_unknown_effect_returns_none() {
+        let phantom = EffectTypeId::from_string("not-a-real-effect-id".to_string());
+        assert_eq!(param_id_to_index(&phantom, "amount"), None);
+    }
+
+    #[test]
+    fn param_index_to_id_round_trips() {
+        // For each test-fixture effect, every (id → index) entry must
+        // round-trip back through param_index_to_id.
+        for effect in [
+            EffectTypeId::TRANSFORM,
+            EffectTypeId::BLOOM,
+            EffectTypeId::DITHER,
+            EffectTypeId::KALEIDOSCOPE,
+        ] {
+            let def = get(&effect);
+            for (i, pd) in def.param_defs.iter().enumerate() {
+                if pd.id.is_empty() {
+                    continue;
+                }
+                assert_eq!(
+                    param_id_to_index(&effect, &pd.id),
+                    Some(i),
+                    "{}::{} must resolve to {}",
+                    effect.as_str(),
+                    pd.id,
+                    i
+                );
+                assert_eq!(
+                    param_index_to_id(&effect, i),
+                    Some(pd.id.as_str()),
+                    "{} index {} must reverse to {}",
+                    effect.as_str(),
+                    i,
+                    pd.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn param_id_to_index_keys_match_param_count() {
+        // Map size must equal the number of params (no dupes, no empties).
+        // This catches accidental collisions when adding new effects.
+        for effect_type in get_all_effect_types() {
+            let def = get(&effect_type);
+            let non_empty_id_count =
+                def.param_defs.iter().filter(|pd| !pd.id.is_empty()).count();
+            assert_eq!(
+                def.id_to_index.len(),
+                non_empty_id_count,
+                "{}: id_to_index size mismatch — possible duplicate or empty ids",
+                effect_type.as_str()
+            );
         }
     }
 }

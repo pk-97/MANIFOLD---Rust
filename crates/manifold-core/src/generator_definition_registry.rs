@@ -1,3 +1,4 @@
+use ahash::AHashMap;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
@@ -27,6 +28,10 @@ pub struct GeneratorDef {
     pub param_defs: Vec<ParamDef>,
     pub string_param_defs: Vec<StringParamDef>,
     pub osc_prefix: Option<&'static str>,
+    /// Stable `ParamSpec::id` → storage index. See
+    /// [`crate::effect_definition_registry::EffectDef::id_to_index`] —
+    /// same role, parallel structure for generators.
+    pub id_to_index: AHashMap<String, usize>,
 }
 
 // ─── Static Registry ───
@@ -60,6 +65,26 @@ pub fn get(gen_type: &GeneratorTypeId) -> &'static GeneratorDef {
 
 pub fn try_get(gen_type: &GeneratorTypeId) -> Option<&'static GeneratorDef> {
     DEFINITIONS.get(gen_type)
+}
+
+/// Translate a stable `ParamSpec::id` into the param's storage index for the
+/// given generator type. Returns `None` if the generator or id is unknown.
+///
+/// Mirrors [`crate::effect_definition_registry::param_id_to_index`].
+pub fn param_id_to_index(gen_type: &GeneratorTypeId, id: &str) -> Option<usize> {
+    DEFINITIONS.get(gen_type)?.id_to_index.get(id).copied()
+}
+
+/// Reverse of [`param_id_to_index`]. Returns `None` if the slot has no id
+/// (V1 unpopulated).
+pub fn param_index_to_id(gen_type: &GeneratorTypeId, index: usize) -> Option<&str> {
+    let def = DEFINITIONS.get(gen_type)?;
+    let pd = def.param_defs.get(index)?;
+    if pd.id.is_empty() {
+        None
+    } else {
+        Some(pd.id.as_str())
+    }
 }
 
 pub fn is_line_based(gen_type: &GeneratorTypeId) -> bool {
@@ -187,6 +212,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
             param_defs: Vec::new(),
             string_param_defs: Vec::new(),
             osc_prefix: None,
+            id_to_index: AHashMap::new(),
         },
     );
 
@@ -194,4 +220,85 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
     // implementation files (manifold-renderer/src/generators/*.rs).
 
     m
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn param_id_to_index_resolves_plasma_ids() {
+        // Plasma — declared in generator_metadata_submissions.rs:
+        //   pattern (0), complexity (1), contrast (2), speed (3), scale (4), snap (5)
+        assert_eq!(
+            param_id_to_index(&GeneratorTypeId::PLASMA, "pattern"),
+            Some(0)
+        );
+        assert_eq!(
+            param_id_to_index(&GeneratorTypeId::PLASMA, "complexity"),
+            Some(1)
+        );
+        assert_eq!(
+            param_id_to_index(&GeneratorTypeId::PLASMA, "contrast"),
+            Some(2)
+        );
+        assert_eq!(
+            param_id_to_index(&GeneratorTypeId::PLASMA, "speed"),
+            Some(3)
+        );
+        assert_eq!(
+            param_id_to_index(&GeneratorTypeId::PLASMA, "scale"),
+            Some(4)
+        );
+        assert_eq!(param_id_to_index(&GeneratorTypeId::PLASMA, "snap"), Some(5));
+    }
+
+    #[test]
+    fn param_id_to_index_unknown_id_returns_none() {
+        assert_eq!(param_id_to_index(&GeneratorTypeId::PLASMA, "nope"), None);
+    }
+
+    #[test]
+    fn param_id_to_index_unknown_generator_returns_none() {
+        let phantom = GeneratorTypeId::from_string("not-a-real-generator-id".to_string());
+        assert_eq!(param_id_to_index(&phantom, "pattern"), None);
+    }
+
+    #[test]
+    fn param_id_to_index_round_trips_for_all_known_generators() {
+        // Every registered generator's id_to_index map must round-trip
+        // each entry through param_index_to_id.
+        for (gen_id, def) in DEFINITIONS.iter() {
+            for (i, pd) in def.param_defs.iter().enumerate() {
+                if pd.id.is_empty() {
+                    continue;
+                }
+                assert_eq!(
+                    param_id_to_index(gen_id, &pd.id),
+                    Some(i),
+                    "{}::{} must resolve to {}",
+                    gen_id.as_str(),
+                    pd.id,
+                    i
+                );
+                assert_eq!(
+                    param_index_to_id(gen_id, i),
+                    Some(pd.id.as_str()),
+                    "{} index {} must reverse to {}",
+                    gen_id.as_str(),
+                    i,
+                    pd.id
+                );
+            }
+            // Map size must equal the number of non-empty ids — no dupes.
+            let non_empty =
+                def.param_defs.iter().filter(|pd| !pd.id.is_empty()).count();
+            assert_eq!(
+                def.id_to_index.len(),
+                non_empty,
+                "{}: id_to_index size mismatch",
+                gen_id.as_str()
+            );
+        }
+    }
 }
