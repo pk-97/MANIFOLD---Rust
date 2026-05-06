@@ -112,6 +112,19 @@ struct RectCommand {
     border_color: [f32; 4],
 }
 
+/// A solid-coloured line drawn as an oriented quad. Piggybacks on the
+/// rect pipeline by emitting four rotated corner positions with
+/// `rect_params = [0; 4]` so the fragment shader's fast path returns a
+/// flat fill (no SDF, no border).
+struct LineCommand {
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    thickness: f32,
+    color: [f32; 4],
+}
+
 /// A batch of rects sharing the same scissor state.
 /// Accumulated during tree traversal, converted to PreparedBatch during prepare.
 struct ScissorBatch {
@@ -153,6 +166,9 @@ pub struct UIRenderer {
 
     // Rect draw queue.
     rect_commands: Vec<RectCommand>,
+
+    // Line draw queue. Drained alongside rect_commands during prepare.
+    line_commands: Vec<LineCommand>,
 
     // Per-frame vertex/index scratch (CPU side).
     vertices: Vec<UIVertex>,
@@ -243,6 +259,7 @@ impl UIRenderer {
             #[cfg(target_os = "macos")]
             text_renderer,
             rect_commands: Vec::with_capacity(256),
+            line_commands: Vec::with_capacity(64),
             vertices: Vec::with_capacity(INITIAL_VERTEX_CAPACITY),
             indices: Vec::with_capacity(INITIAL_INDEX_CAPACITY),
             vbuf_ring,
@@ -320,6 +337,28 @@ impl UIRenderer {
             corner_radius,
             border_width,
             border_color,
+        });
+    }
+
+    /// Queue a solid-coloured line segment with the given thickness.
+    /// Drawn as an oriented filled quad; honours the current scissor
+    /// batch like any rect.
+    pub fn draw_line(
+        &mut self,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        thickness: f32,
+        color: [f32; 4],
+    ) {
+        self.line_commands.push(LineCommand {
+            x0,
+            y0,
+            x1,
+            y1,
+            thickness,
+            color,
         });
     }
 
@@ -727,13 +766,65 @@ impl UIRenderer {
                 .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
         }
 
+        // Emit lines after rects. Each line is an oriented quad — four
+        // corners offset by ±(perpendicular * half_thickness). The
+        // fragment shader's fast path (rect_params zeroed) returns a
+        // flat fill, so we don't need a separate pipeline.
+        let line_idx_offset_after_rects = self.indices.len();
+        for cmd in &self.line_commands {
+            let dx = cmd.x1 - cmd.x0;
+            let dy = cmd.y1 - cmd.y0;
+            let len_sq = dx * dx + dy * dy;
+            if len_sq <= f32::EPSILON {
+                continue;
+            }
+            let inv_len = len_sq.sqrt().recip();
+            let half = cmd.thickness * 0.5;
+            let nx = -dy * inv_len * half;
+            let ny = dx * inv_len * half;
+            let zero_params = [0.0; 4];
+            let zero_border = [0.0; 4];
+            let base = self.vertices.len() as u32;
+            self.vertices.push(UIVertex {
+                position: [cmd.x0 + nx, cmd.y0 + ny],
+                uv: [0.0, 0.0],
+                color: cmd.color,
+                rect_params: zero_params,
+                border_color: zero_border,
+            });
+            self.vertices.push(UIVertex {
+                position: [cmd.x1 + nx, cmd.y1 + ny],
+                uv: [1.0, 0.0],
+                color: cmd.color,
+                rect_params: zero_params,
+                border_color: zero_border,
+            });
+            self.vertices.push(UIVertex {
+                position: [cmd.x1 - nx, cmd.y1 - ny],
+                uv: [1.0, 1.0],
+                color: cmd.color,
+                rect_params: zero_params,
+                border_color: zero_border,
+            });
+            self.vertices.push(UIVertex {
+                position: [cmd.x0 - nx, cmd.y0 - ny],
+                uv: [0.0, 1.0],
+                color: cmd.color,
+                rect_params: zero_params,
+                border_color: zero_border,
+            });
+            self.indices
+                .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        }
+        let line_index_count = self.indices.len() - line_idx_offset_after_rects;
+
         // Build prepared batches from scissor batches.
         // Each rect generates 6 indices (2 triangles, u32 each = 24 bytes).
         self.prepared_batches.clear();
         if self.scissor_batches.is_empty() {
             // No scissor tracking (immediate-mode draws like playhead).
-            // Single batch covering all rects, no scissor.
-            if !self.rect_commands.is_empty() {
+            // Single batch covering all rects + lines, no scissor.
+            if !self.indices.is_empty() {
                 self.prepared_batches.push(PreparedBatch {
                     scissor: None,
                     index_offset: 0,
@@ -761,6 +852,19 @@ impl UIRenderer {
                     scissor,
                     index_offset: (idx_start * std::mem::size_of::<u32>()) as u64,
                     index_count: idx_count as u32,
+                });
+            }
+            // Lines are appended to a final no-scissor batch so they
+            // don't get clipped to the last rect's scissor. Lines and
+            // panel scissor batches don't currently coexist in the same
+            // frame, so this is a future-proofing safety rail.
+            if line_index_count > 0 {
+                self.prepared_batches.push(PreparedBatch {
+                    scissor: None,
+                    index_offset: (line_idx_offset_after_rects
+                        * std::mem::size_of::<u32>())
+                        as u64,
+                    index_count: line_index_count as u32,
                 });
             }
         }
@@ -813,6 +917,7 @@ impl UIRenderer {
         let has_text = false;
 
         self.rect_commands.clear();
+        self.line_commands.clear();
         self.scissor_batches.clear();
 
         self.prepared_index_count > 0 || has_text

@@ -40,6 +40,7 @@ const NODE_BG: [f32; 4] = [0.18, 0.18, 0.22, 1.0];
 const NODE_BG_HOVER: [f32; 4] = [0.22, 0.22, 0.27, 1.0];
 const NODE_HEADER_BG: [f32; 4] = [0.28, 0.30, 0.42, 1.0];
 const NODE_BORDER: [f32; 4] = [0.0, 0.0, 0.0, 0.6];
+const NODE_BORDER_SELECTED: [f32; 4] = [0.50, 0.78, 1.00, 1.0];
 const PORT_TEXTURE2D_COLOR: [f32; 4] = [0.50, 0.78, 1.00, 1.0];
 const PORT_TEXTURE3D_COLOR: [f32; 4] = [0.78, 0.50, 1.00, 1.0];
 const PORT_SCALAR_COLOR: [f32; 4] = [1.00, 0.78, 0.40, 1.0];
@@ -126,6 +127,7 @@ pub struct GraphCanvas {
     drag_anchor: (f32, f32),
     drag_pan_start: (f32, f32),
     hovered: Option<u32>,
+    selected: Option<u32>,
 }
 
 impl GraphCanvas {
@@ -141,6 +143,7 @@ impl GraphCanvas {
             drag_anchor: (0.0, 0.0),
             drag_pan_start: (0.0, 0.0),
             hovered: None,
+            selected: None,
         }
     }
 
@@ -307,6 +310,7 @@ impl GraphCanvas {
         }
     }
 
+    /// Begin panning unconditionally (e.g. middle-mouse drag).
     pub fn on_pan_button_down(&mut self, sx: f32, sy: f32) {
         self.drag_mode = DragMode::Pan;
         self.drag_anchor = (sx, sy);
@@ -314,7 +318,33 @@ impl GraphCanvas {
     }
 
     pub fn on_pan_button_up(&mut self) {
-        self.drag_mode = DragMode::None;
+        if self.drag_mode == DragMode::Pan {
+            self.drag_mode = DragMode::None;
+        }
+    }
+
+    /// Left-mouse button down. Selects the node under the cursor when
+    /// there is one, otherwise clears selection and begins panning the
+    /// viewport. Mirrors the standard "click empty space to pan, click
+    /// a node to select it" pattern from TouchDesigner / Blender.
+    pub fn on_left_button_down(&mut self, viewport: Rect, sx: f32, sy: f32) {
+        match self.node_under(viewport, sx, sy) {
+            Some(id) => {
+                self.selected = Some(id);
+            }
+            None => {
+                self.selected = None;
+                self.drag_mode = DragMode::Pan;
+                self.drag_anchor = (sx, sy);
+                self.drag_pan_start = self.pan;
+            }
+        }
+    }
+
+    pub fn on_left_button_up(&mut self) {
+        if self.drag_mode == DragMode::Pan {
+            self.drag_mode = DragMode::None;
+        }
     }
 
     pub fn cursor(&self) -> (f32, f32) {
@@ -421,7 +451,13 @@ impl GraphCanvas {
         }
 
         let hovered = self.hovered == Some(node.id);
+        let selected = self.selected == Some(node.id);
         let bg = if hovered { NODE_BG_HOVER } else { NODE_BG };
+        let (border, border_w) = if selected {
+            (NODE_BORDER_SELECTED, 2.0)
+        } else {
+            (NODE_BORDER, 1.0)
+        };
 
         ui.draw_bordered_rect(
             sx,
@@ -430,8 +466,8 @@ impl GraphCanvas {
             sh,
             bg,
             NODE_CORNER * self.zoom,
-            1.0,
-            NODE_BORDER,
+            border_w,
+            border,
         );
 
         let header_h = NODE_HEADER_HEIGHT * self.zoom;
@@ -517,13 +553,17 @@ impl GraphCanvas {
         let cx1 = sx1 - dx;
         let cy1 = sy1;
 
+        // Sample the bezier into ~30 short line segments. Step count
+        // scales with screen-space length so close-up curves stay smooth.
         let approx_len = ((sx1 - sx0).abs() + (sy1 - sy0).abs() + 2.0 * dx).max(40.0);
-        let steps = (approx_len / 4.0).clamp(20.0, 160.0) as i32;
-        let dot = (2.5 * self.zoom).clamp(1.5, 3.0);
-        for i in 0..=steps {
+        let steps = (approx_len / 12.0).clamp(16.0, 64.0) as i32;
+        let thickness = (1.6 * self.zoom).clamp(1.2, 2.4);
+        let mut prev = cubic_bezier(0.0, sx0, sy0, cx0, cy0, cx1, cy1, sx1, sy1);
+        for i in 1..=steps {
             let t = i as f32 / steps as f32;
-            let (x, y) = cubic_bezier(t, sx0, sy0, cx0, cy0, cx1, cy1, sx1, sy1);
-            ui.draw_rect(x - dot * 0.5, y - dot * 0.5, dot, dot, WIRE_COLOR);
+            let curr = cubic_bezier(t, sx0, sy0, cx0, cy0, cx1, cy1, sx1, sy1);
+            ui.draw_line(prev.0, prev.1, curr.0, curr.1, thickness, WIRE_COLOR);
+            prev = curr;
         }
     }
 

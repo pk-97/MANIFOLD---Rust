@@ -1894,17 +1894,36 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             WindowEvent::MouseInput { button, state, .. } => {
                 if is_graph_editor {
-                    // Pan with middle button (or ctrl+left).
-                    let is_pan_button = matches!(button, MouseButton::Middle);
-                    if is_pan_button
-                        && let Some(canvas) = self.graph_canvas.as_mut()
-                    {
-                        match state {
-                            ElementState::Pressed => {
-                                let (cx, cy) = canvas.cursor();
+                    if let Some(canvas) = self.graph_canvas.as_mut() {
+                        let viewport = self
+                            .window_registry
+                            .get(&window_id)
+                            .map(|ws| {
+                                let s = ws.window.scale_factor();
+                                let sz = ws.window.inner_size();
+                                crate::graph_canvas::Rect::new(
+                                    0.0,
+                                    0.0,
+                                    sz.width as f32 / s as f32,
+                                    sz.height as f32 / s as f32,
+                                )
+                            })
+                            .unwrap_or(crate::graph_canvas::Rect::new(0.0, 0.0, 1.0, 1.0));
+                        let (cx, cy) = canvas.cursor();
+                        match (button, state) {
+                            (MouseButton::Left, ElementState::Pressed) => {
+                                canvas.on_left_button_down(viewport, cx, cy);
+                            }
+                            (MouseButton::Left, ElementState::Released) => {
+                                canvas.on_left_button_up();
+                            }
+                            (MouseButton::Middle, ElementState::Pressed) => {
                                 canvas.on_pan_button_down(cx, cy);
                             }
-                            ElementState::Released => canvas.on_pan_button_up(),
+                            (MouseButton::Middle, ElementState::Released) => {
+                                canvas.on_pan_button_up();
+                            }
+                            _ => {}
                         }
                         if let Some(ed) = self.graph_editor.as_mut() {
                             ed.offscreen_dirty = true;

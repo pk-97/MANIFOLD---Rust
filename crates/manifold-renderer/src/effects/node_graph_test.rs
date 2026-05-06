@@ -53,16 +53,26 @@ const GRAPH_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 
 pub struct NodeGraphTestFX {
     type_id: EffectTypeId,
-    /// Lazy-initialized on first `apply` once the layer render
-    /// resolution is known. Rebuilt if the resolution changes.
+    /// Graph topology + compiled execution plan. Built once at
+    /// construction — independent of GPU and resolution — so the
+    /// editor canvas can show the graph as soon as a project loads,
+    /// without waiting for the clip to play.
+    graph: Graph,
+    plan: ExecutionPlan,
+    mix_node_id: NodeInstanceId,
+    /// Resource ids captured at compile time so the lazy GPU-resource
+    /// path can re-pre-bind on resolution change without re-walking
+    /// the plan.
+    r_a: ResourceId,
+    r_b: ResourceId,
+    r_mix_out: ResourceId,
+    /// GPU resources — built on first `apply` once the layer render
+    /// resolution is known, rebuilt if the resolution changes.
     state: Option<RenderState>,
 }
 
 struct RenderState {
-    graph: Graph,
-    plan: ExecutionPlan,
     executor: Executor,
-    mix_node_id: NodeInstanceId,
     /// Slot Mix's output is pinned to. Stable across frames.
     mix_output_slot: Slot,
     /// Slots of the pre-bound red/blue inputs. Used once on first
@@ -72,26 +82,13 @@ struct RenderState {
     inputs_initialized: bool,
     width: u32,
     height: u32,
-    #[allow(dead_code)]
-    r_mix_out: ResourceId,
 }
 
 impl NodeGraphTestFX {
-    /// Factory entry. The `&GpuDevice` is unused at construction —
-    /// real allocation is deferred to the first `apply`, when we know
-    /// the layer's render resolution. Keeping the parameter for API
-    /// parity with the rest of the effect factory closures.
+    /// Factory entry. Builds the graph topology eagerly so the editor
+    /// can display it immediately; GPU resource allocation defers to
+    /// the first `apply` when the layer's render resolution is known.
     pub fn new(_device: &GpuDevice) -> Self {
-        Self {
-            type_id: EffectTypeId::NODE_GRAPH_TEST,
-            state: None,
-        }
-    }
-}
-
-impl RenderState {
-    fn build(device: &GpuDevice, width: u32, height: u32) -> Self {
-        // ── Build the graph ────────────────────────────────────────────
         let mut graph = Graph::new();
         let src_a = graph.add_node(Box::new(Source::new()));
         let src_b = graph.add_node(Box::new(Source::new()));
@@ -110,13 +107,32 @@ impl RenderState {
             .connect((mix_node_id, "out"), (final_out, "in"))
             .expect("wire Mix.out → FinalOutput.in");
         let plan = compile(&graph).expect("compile node-graph-test plan");
-
-        // ── Look up the resource IDs the executor assigned ─────────────
         let r_a = output_resource(&plan, src_a, "out");
         let r_b = output_resource(&plan, src_b, "out");
         let r_mix_out = output_resource(&plan, mix_node_id, "out");
+        Self {
+            type_id: EffectTypeId::NODE_GRAPH_TEST,
+            graph,
+            plan,
+            mix_node_id,
+            r_a,
+            r_b,
+            r_mix_out,
+            state: None,
+        }
+    }
+}
 
-        // ── Allocate the host-managed input + output RenderTargets ─────
+impl RenderState {
+    fn build(
+        device: &GpuDevice,
+        width: u32,
+        height: u32,
+        r_a: ResourceId,
+        r_b: ResourceId,
+        r_mix_out: ResourceId,
+    ) -> Self {
+        // Allocate the host-managed input + output RenderTargets.
         let red_target = RenderTarget::new(device, width, height, GRAPH_FORMAT, "ng-test-red");
         let blue_target = RenderTarget::new(device, width, height, GRAPH_FORMAT, "ng-test-blue");
         let mix_output_target =
@@ -133,17 +149,13 @@ impl RenderState {
         let executor = Executor::new(Box::new(backend));
 
         Self {
-            graph,
-            plan,
             executor,
-            mix_node_id,
             mix_output_slot,
             red_slot,
             blue_slot,
             inputs_initialized: false,
             width,
             height,
-            r_mix_out,
         }
     }
 }
@@ -172,13 +184,11 @@ impl PostProcessEffect for NodeGraphTestFX {
         false
     }
 
-    /// Snapshot the running graph for the editor canvas. Returns `None`
-    /// until `apply` has run at least once (the graph is built lazily on
-    /// first frame, when render resolution is known).
+    /// Snapshot the graph topology for the editor canvas. Available
+    /// immediately after construction — the graph isn't tied to GPU or
+    /// resolution, so the editor can render it before the first frame.
     fn graph_snapshot(&self) -> Option<crate::node_graph::GraphSnapshot> {
-        self.state
-            .as_ref()
-            .map(|s| crate::node_graph::GraphSnapshot::from_graph(&s.graph))
+        Some(crate::node_graph::GraphSnapshot::from_graph(&self.graph))
     }
 
     fn apply(
@@ -195,7 +205,14 @@ impl PostProcessEffect for NodeGraphTestFX {
             Some(s) => s.width != ctx.width || s.height != ctx.height,
         };
         if needs_build {
-            self.state = Some(RenderState::build(gpu.device, ctx.width, ctx.height));
+            self.state = Some(RenderState::build(
+                gpu.device,
+                ctx.width,
+                ctx.height,
+                self.r_a,
+                self.r_b,
+                self.r_mix_out,
+            ));
         }
         let state = self.state.as_mut().expect("state initialized above");
 
@@ -217,9 +234,8 @@ impl PostProcessEffect for NodeGraphTestFX {
 
         // 3. Wire the slider into Mix's `amount` parameter.
         let amount = fx.param_values.first().copied().unwrap_or(0.5);
-        state
-            .graph
-            .set_param(state.mix_node_id, "amount", ParamValue::Float(amount))
+        self.graph
+            .set_param(self.mix_node_id, "amount", ParamValue::Float(amount))
             .expect("set Mix.amount each frame");
 
         // 4. Run the graph. Mix writes into the pre-bound mix-output
@@ -231,7 +247,7 @@ impl PostProcessEffect for NodeGraphTestFX {
         };
         state
             .executor
-            .execute_frame_with_gpu(&mut state.graph, &state.plan, frame_time, gpu);
+            .execute_frame_with_gpu(&mut self.graph, &self.plan, frame_time, gpu);
 
         // 5. Blit Mix's output into the layer chain's `target` so the
         //    rest of the chain sees our result.
