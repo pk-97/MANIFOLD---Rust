@@ -343,3 +343,208 @@ fn load_waypoints_large_project() {
         );
     }
 }
+
+// ── Liveschool Live Show V6 — canonical regression for steps 8-14 ──
+//
+// 20-minute live show with 52 layers, ~2828 clips, 155 effects across
+// master + layer chains, 130 drivers, 35 envelopes, 29 Ableton mappings.
+// Every addressing-site migration (steps 8-11 wire up `param_id` for
+// drivers / envelopes / Ableton / macros; step 12 changes `paramValues`
+// to map shape; step 14 bumps `projectVersion`) must preserve every
+// count below. If a future migration regresses any of these, this test
+// is the gate that catches it.
+
+/// Walk every effect chain in a project and call `f` on each EffectInstance.
+/// Covers master effects + layer effects.
+fn for_each_effect<F: FnMut(&manifold_core::effects::EffectInstance)>(
+    project: &manifold_core::project::Project,
+    mut f: F,
+) {
+    for fx in &project.settings.master_effects {
+        f(fx);
+    }
+    for layer in &project.timeline.layers {
+        if let Some(ref effects) = layer.effects {
+            for fx in effects {
+                f(fx);
+            }
+        }
+    }
+}
+
+fn count_drivers(project: &manifold_core::project::Project) -> usize {
+    let mut n = 0;
+    for_each_effect(project, |fx| {
+        n += fx.drivers.as_ref().map(|d| d.len()).unwrap_or(0);
+    });
+    // Generator drivers live on `layer.gen_params().drivers`.
+    for layer in &project.timeline.layers {
+        if let Some(gp) = layer.gen_params() {
+            n += gp.drivers.as_ref().map(|d| d.len()).unwrap_or(0);
+        }
+    }
+    n
+}
+
+fn count_ableton_mappings(project: &manifold_core::project::Project) -> usize {
+    let mut n = 0;
+    for_each_effect(project, |fx| {
+        n += fx.ableton_mappings.as_ref().map(|m| m.len()).unwrap_or(0);
+    });
+    for layer in &project.timeline.layers {
+        if let Some(gp) = layer.gen_params() {
+            n += gp.ableton_mappings.as_ref().map(|m| m.len()).unwrap_or(0);
+        }
+    }
+    n
+}
+
+fn count_envelopes(project: &manifold_core::project::Project) -> usize {
+    // Envelopes live on layers (effect-targeted) and on `layer.genParams`
+    // (generator-targeted). No project-level envelopes.
+    let mut n = 0;
+    for layer in &project.timeline.layers {
+        n += layer.envelopes.as_ref().map(|e| e.len()).unwrap_or(0);
+        if let Some(gp) = layer.gen_params() {
+            n += gp.envelopes.as_ref().map(|e| e.len()).unwrap_or(0);
+        }
+    }
+    n
+}
+
+fn count_effects(project: &manifold_core::project::Project) -> usize {
+    let mut n = 0;
+    for_each_effect(project, |_| n += 1);
+    n
+}
+
+#[test]
+fn load_liveschool_live_show_v6() {
+    let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
+    if !path.exists() {
+        return;
+    }
+
+    let project =
+        loader::load_project(&path).expect("Failed to load Liveschool Live Show V6 LEDS.manifold");
+
+    // Settings — 4K output @ 150.83 BPM.
+    assert!(
+        (project.settings.bpm.0 - 150.83).abs() < 0.01,
+        "BPM should be 150.83, got {}",
+        project.settings.bpm
+    );
+    assert_eq!(project.settings.output_width, 3840);
+    assert_eq!(project.settings.output_height, 2160);
+
+    // Timeline — 52 layers, ~2828 clips. The clip count assertion is
+    // exact: post-load repair removes overlapping clips, so this count
+    // is the after-repair canonical state. If load behavior changes,
+    // bump it intentionally — never silently.
+    assert_eq!(project.timeline.layers.len(), 52, "expected 52 layers");
+    assert_eq!(
+        project.timeline.total_clip_count(),
+        2828,
+        "expected 2828 clips after load repair"
+    );
+
+    // Master effect count — exposes any drift in MasterEffects deserialization.
+    assert_eq!(
+        project.settings.master_effects.len(),
+        5,
+        "expected 5 master effects"
+    );
+
+    // Effect / driver / envelope / Ableton-mapping totals — these are
+    // the counts every migration step (8-11, 12, 14) must preserve.
+    // Drivers and Ableton mappings include both effect-targeted and
+    // generator-targeted (via `layer.genParams`).
+    assert_eq!(count_effects(&project), 160, "effects total drifted");
+    assert_eq!(count_drivers(&project), 130, "drivers total drifted");
+    assert_eq!(count_envelopes(&project), 35, "envelopes total drifted");
+    assert_eq!(
+        count_ableton_mappings(&project),
+        29,
+        "ableton mappings total drifted"
+    );
+
+    // Stress: every clip has valid beats and no layer has overlaps.
+    for layer in &project.timeline.layers {
+        for clip in &layer.clips {
+            assert!(clip.duration_beats > manifold_core::Beats::ZERO);
+            assert!(clip.start_beat >= manifold_core::Beats::ZERO);
+        }
+        assert!(
+            !layer.has_overlapping_clips(),
+            "Layer {:?} still has overlapping clips after load repair",
+            layer.layer_id
+        );
+    }
+}
+
+#[test]
+fn liveschool_roundtrip_preserves_addressing_sites() {
+    // Save → reload → counts must match. This is the gate that future
+    // ParamId migrations (steps 8-14) will run against. If the custom
+    // Deserialize for ParameterDriver / ParamEnvelope / AbletonParamMapping
+    // / paramValues drops or reshapes anything, one of the count
+    // assertions below will fail.
+    let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
+    if !path.exists() {
+        return;
+    }
+
+    let project = loader::load_project(&path).unwrap();
+    let json = serde_json::to_string(&project).expect("serialize liveschool project");
+    let project2 = loader::load_project_from_json(&json).expect("reload liveschool project");
+
+    assert_eq!(
+        project2.timeline.layers.len(),
+        project.timeline.layers.len()
+    );
+    assert_eq!(
+        project2.timeline.total_clip_count(),
+        project.timeline.total_clip_count()
+    );
+    assert_eq!(
+        project2.settings.master_effects.len(),
+        project.settings.master_effects.len()
+    );
+    assert_eq!(count_effects(&project2), count_effects(&project));
+    assert_eq!(count_drivers(&project2), count_drivers(&project));
+    assert_eq!(count_envelopes(&project2), count_envelopes(&project));
+    assert_eq!(
+        count_ableton_mappings(&project2),
+        count_ableton_mappings(&project)
+    );
+
+    // Sample-check that every driver's (paramIndex, beatDivision, waveform)
+    // round-trips byte-equal — catches subtle reshape bugs that preserve
+    // counts but mangle individual values. Covers both effect drivers
+    // and generator drivers (`layer.genParams.drivers`).
+    fn collect_drivers(p: &manifold_core::project::Project) -> Vec<(i32, i32, i32)> {
+        let mut v = Vec::new();
+        for_each_effect(p, |fx| {
+            if let Some(ref ds) = fx.drivers {
+                for d in ds {
+                    v.push((d.param_index, d.beat_division as i32, d.waveform as i32));
+                }
+            }
+        });
+        for layer in &p.timeline.layers {
+            if let Some(gp) = layer.gen_params()
+                && let Some(ref ds) = gp.drivers
+            {
+                for d in ds {
+                    v.push((d.param_index, d.beat_division as i32, d.waveform as i32));
+                }
+            }
+        }
+        v
+    }
+    assert_eq!(
+        collect_drivers(&project),
+        collect_drivers(&project2),
+        "driver shape (effect + generator) must round-trip exactly"
+    );
+}
