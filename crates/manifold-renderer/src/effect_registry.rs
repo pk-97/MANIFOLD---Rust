@@ -72,13 +72,94 @@ impl EffectRegistry {
     }
 
     /// Snapshot the graph of a specific registered effect type.
-    /// Returns `None` if the type isn't registered or doesn't expose
-    /// a graph. This is the lookup the editor canvas uses once the
-    /// user clicks a cog on a specific effect card.
+    ///
+    /// Resolution order:
+    /// 1. Effect overrides `graph_snapshot()` — return that (graph-backed
+    ///    effects use this).
+    /// 2. Otherwise synthesize a degenerate
+    ///    `Source → \<EffectName\> → FinalOutput` snapshot from the
+    ///    effect's metadata. Lets the editor canvas show a cog-icon
+    ///    view for every effect, even ones still implemented as a
+    ///    monolithic compute shader.
+    ///
+    /// Returns `None` only if the type isn't registered at all.
     pub fn graph_snapshot_for(
         &self,
         type_id: &EffectTypeId,
     ) -> Option<crate::node_graph::GraphSnapshot> {
-        self.processors.get(type_id).and_then(|p| p.graph_snapshot())
+        let processor = self.processors.get(type_id)?;
+        if let Some(snap) = processor.graph_snapshot() {
+            return Some(snap);
+        }
+        let metadata = crate::node_graph::metadata_by_id(type_id)?;
+        Some(synthesized_legacy_snapshot(metadata))
+    }
+}
+
+/// Build a `Source → \<legacy\> → FinalOutput` snapshot for an effect
+/// that doesn't expose its own graph. The middle node uses the
+/// `legacy.\<EffectTypeId\>` type id (matching `LegacyPostProcessNode`)
+/// so the canvas can style it differently from primitive nodes.
+fn synthesized_legacy_snapshot(
+    metadata: &'static manifold_core::effect_registration::EffectMetadata,
+) -> crate::node_graph::GraphSnapshot {
+    use crate::node_graph::{
+        GraphSnapshot, NodeSnapshot, PortKindSnapshot, PortSnapshot, WireSnapshot,
+        FINAL_OUTPUT_TYPE_ID, LEGACY_TYPE_ID_PREFIX, SOURCE_TYPE_ID,
+    };
+
+    let source = NodeSnapshot {
+        id: 0,
+        type_id: SOURCE_TYPE_ID.to_string(),
+        title: "Source".to_string(),
+        inputs: Vec::new(),
+        outputs: vec![PortSnapshot {
+            name: "out".to_string(),
+            kind: PortKindSnapshot::Texture2D,
+        }],
+        editor_pos: None,
+    };
+    let legacy = NodeSnapshot {
+        id: 1,
+        type_id: format!("{LEGACY_TYPE_ID_PREFIX}{}", metadata.id.as_str()),
+        title: metadata.display_name.to_string(),
+        inputs: vec![PortSnapshot {
+            name: "source".to_string(),
+            kind: PortKindSnapshot::Texture2D,
+        }],
+        outputs: vec![PortSnapshot {
+            name: "out".to_string(),
+            kind: PortKindSnapshot::Texture2D,
+        }],
+        editor_pos: None,
+    };
+    let final_out = NodeSnapshot {
+        id: 2,
+        type_id: FINAL_OUTPUT_TYPE_ID.to_string(),
+        title: "Final Output".to_string(),
+        inputs: vec![PortSnapshot {
+            name: "in".to_string(),
+            kind: PortKindSnapshot::Texture2D,
+        }],
+        outputs: Vec::new(),
+        editor_pos: None,
+    };
+    let wires = vec![
+        WireSnapshot {
+            from_node: 0,
+            from_port: "out".to_string(),
+            to_node: 1,
+            to_port: "source".to_string(),
+        },
+        WireSnapshot {
+            from_node: 1,
+            from_port: "out".to_string(),
+            to_node: 2,
+            to_port: "in".to_string(),
+        },
+    ];
+    GraphSnapshot {
+        nodes: vec![source, legacy, final_out],
+        wires,
     }
 }
