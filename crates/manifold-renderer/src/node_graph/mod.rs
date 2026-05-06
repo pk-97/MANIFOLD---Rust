@@ -19,6 +19,7 @@ mod graph;
 mod legacy_adapter;
 mod metal_backend;
 mod parameters;
+mod param_binding;
 mod ports;
 pub mod primitives;
 mod snapshot;
@@ -37,6 +38,9 @@ pub use metal_backend::MetalBackend;
 pub use execution_plan::{compile, ExecutionPlan, ExecutionStep, ResourceId};
 pub use graph::{Graph, NodeInstance};
 pub use legacy_adapter::{metadata_by_id, LegacyPostProcessNode, LEGACY_TYPE_ID_PREFIX};
+pub use param_binding::{
+    apply_param_bindings, ParamBinding, ParamConvert, ParamId, ParamTarget,
+};
 pub use parameters::{ParamDef, ParamType, ParamValue};
 pub use ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 pub use snapshot::{GraphSnapshot, NodeSnapshot, PortKindSnapshot, PortSnapshot, WireSnapshot};
