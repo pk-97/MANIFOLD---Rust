@@ -95,6 +95,13 @@ pub struct ContentThread {
     // ── Cached project snapshot (Arc avoids deep clone every modulation frame) ──
     pub cached_project_snapshot: Option<std::sync::Arc<manifold_core::project::Project>>,
 
+    /// Effect type the editor canvas is currently watching. The content
+    /// thread snapshots this effect's internal graph each frame and
+    /// publishes it via `ContentState::active_graph_snapshot`. `None`
+    /// means the editor isn't focused on any effect — canvas stays
+    /// empty until the user clicks a cog.
+    pub watched_graph_effect: Option<manifold_core::EffectTypeId>,
+
     // ── Reusable modulation scratch (flat buffer — zero alloc after first frame) ──
     pub mod_scratch: crate::content_state::ModulationSnapshot,
 
@@ -984,8 +991,9 @@ impl ContentThread {
                 project_snapshot: snapshot,
                 modulation_snapshot,
                 active_graph_snapshot: self
-                    .content_pipeline
-                    .graph_snapshot()
+                    .watched_graph_effect
+                    .as_ref()
+                    .and_then(|tid| self.content_pipeline.graph_snapshot_for(tid))
                     .map(Arc::new),
             };
 

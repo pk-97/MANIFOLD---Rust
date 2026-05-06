@@ -1205,9 +1205,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         self.gpu_poll_ms
     }
 
-    /// Snapshot of the first graph-backed effect's internal node graph,
-    /// for the editor canvas. Delegates to the compositor.
-    pub fn graph_snapshot(&self) -> Option<manifold_renderer::node_graph::GraphSnapshot> {
-        self.compositor.graph_snapshot()
+    /// Snapshot of a specific effect type's internal graph. Delegates
+    /// to the compositor's `graph_snapshot_for` so the editor can
+    /// target the effect the user clicked the cog on.
+    pub fn graph_snapshot_for(
+        &self,
+        type_id: &manifold_core::EffectTypeId,
+    ) -> Option<manifold_renderer::node_graph::GraphSnapshot> {
+        self.compositor.graph_snapshot_for(type_id)
     }
 }

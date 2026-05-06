@@ -71,17 +71,14 @@ impl EffectRegistry {
         !self.processors.is_empty()
     }
 
-    /// Find the first registered effect that exposes an internal node
-    /// graph (`PostProcessEffect::graph_snapshot` returns `Some`).
-    /// Returns `None` if no graph-backed effect has been evaluated yet
-    /// — graph-backed effects build their graph lazily on first apply,
-    /// so the snapshot only becomes available after at least one frame
-    /// has run them.
-    ///
-    /// V1 wires the editor canvas to this single result. Phase 7+ will
-    /// switch to lookup by `(EffectTypeId, owner_key)` once multiple
-    /// graph-backed effects coexist.
-    pub fn first_graph_snapshot(&self) -> Option<crate::node_graph::GraphSnapshot> {
-        self.processors.values().find_map(|p| p.graph_snapshot())
+    /// Snapshot the graph of a specific registered effect type.
+    /// Returns `None` if the type isn't registered or doesn't expose
+    /// a graph. This is the lookup the editor canvas uses once the
+    /// user clicks a cog on a specific effect card.
+    pub fn graph_snapshot_for(
+        &self,
+        type_id: &EffectTypeId,
+    ) -> Option<crate::node_graph::GraphSnapshot> {
+        self.processors.get(type_id).and_then(|p| p.graph_snapshot())
     }
 }

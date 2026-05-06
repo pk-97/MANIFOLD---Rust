@@ -847,6 +847,9 @@ impl Application {
         }
         self.graph_editor = None;
         self.graph_canvas = None;
+        // Tell the content thread to stop snapshotting any effect's
+        // graph — saves the per-frame walk while no editor is open.
+        self.send_content_cmd(ContentCommand::WatchEffectGraph(None));
         log::info!("[GraphEditor] Closed");
     }
 

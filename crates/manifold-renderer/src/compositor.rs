@@ -107,11 +107,14 @@ pub trait Compositor: Send {
     /// layers have blit_to_led enabled (fall back to led_tap_texture or output).
     fn led_composite_texture(&self) -> Option<&manifold_gpu::GpuTexture>;
 
-    /// Read-only snapshot of the first graph-backed effect's internal
-    /// node graph, for the editor canvas. Default `None` — non-graph
-    /// compositors have nothing to expose. The real `LayerCompositor`
-    /// override delegates into its `EffectRegistry`.
-    fn graph_snapshot(&self) -> Option<crate::node_graph::GraphSnapshot> {
+    /// Snapshot of a specific effect type's internal graph, identified
+    /// by its `EffectTypeId`. Default `None` — non-graph compositors
+    /// have nothing to expose. The real `LayerCompositor` override
+    /// delegates into its `EffectRegistry`.
+    fn graph_snapshot_for(
+        &self,
+        _type_id: &manifold_core::EffectTypeId,
+    ) -> Option<crate::node_graph::GraphSnapshot> {
         None
     }
 }

@@ -52,6 +52,10 @@ impl ContentThread {
         match cmd {
             ContentCommand::Shutdown => return true,
 
+            ContentCommand::WatchEffectGraph(type_id) => {
+                self.watched_graph_effect = type_id;
+            }
+
             // ── GPU events ─────────────────────────────────────────
             // SurfaceReady wakes recv() — no action needed, the main
             // loop re-checks is_surface_ready() after handling.

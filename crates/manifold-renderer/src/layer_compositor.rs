@@ -632,13 +632,6 @@ impl LayerCompositor {
         self.effect_registry.cleanup_clip_owner(owner_key);
     }
 
-    /// Snapshot of the first registered graph-backed effect, for the
-    /// editor canvas. Returns `None` until a graph-backed effect has
-    /// run at least one frame (graph instances are built lazily on
-    /// first `apply`).
-    pub fn first_graph_snapshot(&self) -> Option<crate::node_graph::GraphSnapshot> {
-        self.effect_registry.first_graph_snapshot()
-    }
 
     /// Phase A: Process each layer's clips + effects into per-layer output textures.
     ///
@@ -1863,7 +1856,10 @@ impl Compositor for LayerCompositor {
         }
     }
 
-    fn graph_snapshot(&self) -> Option<crate::node_graph::GraphSnapshot> {
-        self.first_graph_snapshot()
+    fn graph_snapshot_for(
+        &self,
+        type_id: &manifold_core::EffectTypeId,
+    ) -> Option<crate::node_graph::GraphSnapshot> {
+        self.effect_registry.graph_snapshot_for(type_id)
     }
 }

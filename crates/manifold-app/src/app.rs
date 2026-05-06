@@ -1583,6 +1583,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 cached_midi_device_names: Vec::new(),
                 last_midi_device_scan_time: manifold_core::Seconds(-10.0),
                 cached_project_snapshot: None,
+                watched_graph_effect: None,
                 mod_scratch: crate::content_state::ModulationSnapshot::empty(),
                 cached_midi_clock_position: Arc::from(""),
                 cached_midi_clock_device: Arc::from(""),

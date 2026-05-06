@@ -428,10 +428,36 @@ impl Application {
                     self.pending_toggle_output = true;
                     continue;
                 }
-                PanelAction::OpenGraphEditor(_ei) => {
-                    // The canvas currently shows a hardcoded test graph
-                    // regardless of which effect was clicked; effect_index
-                    // is reserved for the live-data-sync phase.
+                PanelAction::OpenGraphEditor(ei) => {
+                    // Resolve `ei` (effect index in the active inspector
+                    // tab) to the effect's type id, then ask the content
+                    // thread to start snapshotting that specific graph.
+                    let tab = self.ws.ui_root.inspector.last_effect_tab();
+                    let type_id = match tab {
+                        manifold_ui::InspectorTab::Master => self
+                            .local_project
+                            .settings
+                            .master_effects
+                            .get(*ei)
+                            .map(|e| e.effect_type().clone()),
+                        manifold_ui::InspectorTab::Layer => self
+                            .active_layer_id
+                            .as_ref()
+                            .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
+                            .and_then(|(_, l)| l.effects.as_ref())
+                            .and_then(|effects| effects.get(*ei))
+                            .map(|e| e.effect_type().clone()),
+                        manifold_ui::InspectorTab::Clip => self
+                            .selection
+                            .primary_selected_clip_id
+                            .as_ref()
+                            .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
+                            .and_then(|c| c.effects.get(*ei))
+                            .map(|e| e.effect_type().clone()),
+                    };
+                    if let Some(tid) = type_id {
+                        self.send_content_cmd(ContentCommand::WatchEffectGraph(Some(tid)));
+                    }
                     self.pending_open_graph_editor = true;
                     continue;
                 }
