@@ -16,9 +16,9 @@ inventory::submit! {
         osc_prefix: "infrared",
         legacy_discriminant: Some(37),
         params: &[
-            ParamSpec::continuous("Amount", 0.0, 1.0, 0.0, "F2", ""),
-            ParamSpec::whole_labels("Palette", 0.0, 9.0, 0.0, &["White Hot", "Black Hot", "Green NV", "Iron Bow", "Rainbow", "Lava", "Arctic", "Magenta", "Electric", "Toxic"], "Palette"),
-            ParamSpec::continuous("Contrast", 0.5, 3.0, 1.0, "F2", "Contrast"),
+            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::whole_labels("palette", "Palette", 0.0, 9.0, 0.0, &["White Hot", "Black Hot", "Green NV", "Iron Bow", "Rainbow", "Lava", "Arctic", "Magenta", "Electric", "Toxic"], "Palette"),
+            ParamSpec::continuous("contrast", "Contrast", 0.5, 3.0, 1.0, "F2", "Contrast"),
         ],
     }
 }

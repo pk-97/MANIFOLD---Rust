@@ -36,10 +36,10 @@ inventory::submit! {
         osc_prefix: "watercolor",
         legacy_discriminant: None,
         params: &[
-            ParamSpec::continuous("Amount", 0.0, 1.0, 0.5, "F2", ""),
-            ParamSpec::continuous("Displace", 0.0001, 0.01, 0.001, "F4", "displace"),
-            ParamSpec::continuous("Blur", 0.5, 8.0, 2.0, "F1", "blur"),
-            ParamSpec::continuous("Decay", 0.9, 1.0, 0.99, "F3", "decay"),
+            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.5, "F2", ""),
+            ParamSpec::continuous("displace", "Displace", 0.0001, 0.01, 0.001, "F4", "displace"),
+            ParamSpec::continuous("blur", "Blur", 0.5, 8.0, 2.0, "F1", "blur"),
+            ParamSpec::continuous("decay", "Decay", 0.9, 1.0, 0.99, "F3", "decay"),
         ],
     }
 }

@@ -31,10 +31,10 @@ inventory::submit! {
         osc_prefix: "transform",
         legacy_discriminant: Some(0),
         params: &[
-            ParamSpec::continuous("X", -1.0, 1.0, 0.0, "F2", ""),
-            ParamSpec::continuous("Y", -1.0, 1.0, 0.0, "F2", ""),
-            ParamSpec::continuous("Zoom", 0.1, 5.0, 1.0, "F2", ""),
-            ParamSpec::continuous("Rot", -180.0, 180.0, 0.0, "F2", ""),
+            ParamSpec::continuous("x", "X", -1.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::continuous("y", "Y", -1.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::continuous("zoom", "Zoom", 0.1, 5.0, 1.0, "F2", ""),
+            ParamSpec::continuous("rot", "Rot", -180.0, 180.0, 0.0, "F2", ""),
         ],
     }
 }

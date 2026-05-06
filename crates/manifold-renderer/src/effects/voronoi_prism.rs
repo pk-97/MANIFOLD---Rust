@@ -16,8 +16,8 @@ inventory::submit! {
         osc_prefix: "voronoiPrism",
         legacy_discriminant: Some(16),
         params: &[
-            ParamSpec::continuous("Amount", 0.0, 1.0, 0.0, "F2", ""),
-            ParamSpec::whole("Cells", 4.0, 64.0, 16.0, "CellCount"),
+            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::whole("cells", "Cells", 4.0, 64.0, 16.0, "CellCount"),
         ],
     }
 }

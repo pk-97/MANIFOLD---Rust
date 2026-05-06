@@ -38,8 +38,8 @@ inventory::submit! {
         osc_prefix: "soft_focus_graph",
         legacy_discriminant: None,
         params: &[
-            ParamSpec::continuous("Radius", 0.0, 32.0, 6.0, "F1", "px"),
-            ParamSpec::continuous("Amount", 0.0, 1.0, 0.5, "F2", ""),
+            ParamSpec::continuous("radius", "Radius", 0.0, 32.0, 6.0, "F1", "px"),
+            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.5, "F2", ""),
         ],
     }
 }

@@ -10,8 +10,19 @@ use crate::generator_type_registry::GeneratorTypeRegistration;
 
 /// Static parameter specification — all fields are `'static` so the struct
 /// can live in `inventory::submit!` blocks without allocation.
+///
+/// `id` is the **stable mapping key** referenced by OSC routing, Ableton
+/// macro bindings, modulation drivers, envelopes, and project file
+/// storage. Once shipped, `id` is forever — renaming an `id` is a
+/// breaking change for every saved project. `name` is the editable
+/// display label on the slider; rename it freely.
+///
+/// Convention: `id` is `snake_case`, derived from `name` in most cases
+/// (e.g. `"Beat Division"` → `"beat_division"`). A few effects use
+/// short hand-picked IDs (e.g. `"rot_xy"` rather than `"xy"`).
 #[derive(Debug, Clone)]
 pub struct ParamSpec {
+    pub id: &'static str,
     pub name: &'static str,
     pub min: f32,
     pub max: f32,
@@ -26,6 +37,7 @@ pub struct ParamSpec {
 impl ParamSpec {
     /// Continuous parameter with format string and OSC suffix.
     pub const fn continuous(
+        id: &'static str,
         name: &'static str,
         min: f32,
         max: f32,
@@ -34,6 +46,7 @@ impl ParamSpec {
         osc_suffix: &'static str,
     ) -> Self {
         Self {
+            id,
             name,
             min,
             max,
@@ -48,6 +61,7 @@ impl ParamSpec {
 
     /// Toggle (boolean) parameter.
     pub const fn toggle(
+        id: &'static str,
         name: &'static str,
         min: f32,
         max: f32,
@@ -55,6 +69,7 @@ impl ParamSpec {
         osc_suffix: &'static str,
     ) -> Self {
         Self {
+            id,
             name,
             min,
             max,
@@ -69,6 +84,7 @@ impl ParamSpec {
 
     /// Whole-number parameter (integer steps).
     pub const fn whole(
+        id: &'static str,
         name: &'static str,
         min: f32,
         max: f32,
@@ -76,6 +92,7 @@ impl ParamSpec {
         osc_suffix: &'static str,
     ) -> Self {
         Self {
+            id,
             name,
             min,
             max,
@@ -90,6 +107,7 @@ impl ParamSpec {
 
     /// Whole-number parameter with named labels for each value.
     pub const fn whole_labels(
+        id: &'static str,
         name: &'static str,
         min: f32,
         max: f32,
@@ -98,6 +116,7 @@ impl ParamSpec {
         osc_suffix: &'static str,
     ) -> Self {
         Self {
+            id,
             name,
             min,
             max,
@@ -113,6 +132,7 @@ impl ParamSpec {
     /// Convert to the existing `ParamDef` type (allocates Strings).
     pub fn to_param_def(&self) -> ParamDef {
         ParamDef {
+            id: self.id.to_string(),
             name: self.name.to_string(),
             min: self.min,
             max: self.max,

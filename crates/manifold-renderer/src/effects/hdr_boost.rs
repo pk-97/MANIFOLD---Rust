@@ -20,10 +20,10 @@ inventory::submit! {
         osc_prefix: "hdrBoost",
         legacy_discriminant: Some(41),
         params: &[
-            ParamSpec::continuous("Amount", 0.0, 1.0, 0.0, "F2", ""),
-            ParamSpec::continuous("Gain", 0.0, 5.0, 1.5, "F2", "Gain"),
-            ParamSpec::continuous("Thresh", 0.0, 1.0, 0.15, "F2", "Threshold"),
-            ParamSpec::continuous("Knee", 0.0, 1.0, 0.3, "F2", "Knee"),
+            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::continuous("gain", "Gain", 0.0, 5.0, 1.5, "F2", "Gain"),
+            ParamSpec::continuous("thresh", "Thresh", 0.0, 1.0, 0.15, "F2", "Threshold"),
+            ParamSpec::continuous("knee", "Knee", 0.0, 1.0, 0.3, "F2", "Knee"),
         ],
     }
 }

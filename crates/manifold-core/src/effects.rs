@@ -8,9 +8,21 @@ use serde::{Deserialize, Serialize};
 
 /// Metadata for a single parameter slot.
 /// Port of Unity ParamDef.cs.
+///
+/// `id` is the **stable mapping key** referenced by every external
+/// addressing site (OSC, Ableton, modulation drivers, project file
+/// storage). Once shipped, `id` is forever — renaming an `id` is a
+/// breaking change for every saved project.
+///
+/// `name` is the display label on the slider. Free to edit.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParamDef {
+    /// Stable mapping key. `snake_case` convention. Empty for legacy
+    /// `ParamDef` instances loaded from V1.0.0 project files; the
+    /// post-load alignment pass fills it in from the registry.
+    #[serde(default)]
+    pub id: String,
     pub name: String,
     pub min: f32,
     pub max: f32,
@@ -31,6 +43,7 @@ pub struct ParamDef {
 impl Default for ParamDef {
     fn default() -> Self {
         Self {
+            id: String::new(),
             name: String::new(),
             min: 0.0,
             max: 1.0,

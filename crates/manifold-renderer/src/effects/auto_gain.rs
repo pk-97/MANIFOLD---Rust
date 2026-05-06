@@ -32,13 +32,13 @@ inventory::submit! {
         osc_prefix: "autoGain",
         legacy_discriminant: Some(41),
         params: &[
-            ParamSpec::continuous("Amount", 0.0, 1.0, 0.5, "F2", ""),
-            ParamSpec::continuous("Ratio", 0.0, 1.0, 0.5, "F2", "Ratio"),
-            ParamSpec::continuous("Punch", 0.0, 1.0, 0.5, "F2", "Punch"),
-            ParamSpec::continuous("Target", 0.0, 1.0, 0.5, "F2", "Target"),
-            ParamSpec::continuous("HDR Ret", 0.0, 1.0, 0.5, "F2", "HdrRetention"),
-            ParamSpec::continuous("Color", -1.0, 1.0, 0.0, "F2", "ColorPush"),
-            ParamSpec::whole_labels("Char", 0.0, 4.0, 0.0, &["Clean", "Warm", "Film", "Vivid", "Grit"], "Character"),
+            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.5, "F2", ""),
+            ParamSpec::continuous("ratio", "Ratio", 0.0, 1.0, 0.5, "F2", "Ratio"),
+            ParamSpec::continuous("punch", "Punch", 0.0, 1.0, 0.5, "F2", "Punch"),
+            ParamSpec::continuous("target", "Target", 0.0, 1.0, 0.5, "F2", "Target"),
+            ParamSpec::continuous("hdr_ret", "HDR Ret", 0.0, 1.0, 0.5, "F2", "HdrRetention"),
+            ParamSpec::continuous("color", "Color", -1.0, 1.0, 0.0, "F2", "ColorPush"),
+            ParamSpec::whole_labels("char", "Char", 0.0, 4.0, 0.0, &["Clean", "Warm", "Film", "Vivid", "Grit"], "Character"),
         ],
     }
 }

@@ -16,9 +16,9 @@ inventory::submit! {
         osc_prefix: "strobe",
         legacy_discriminant: Some(19),
         params: &[
-            ParamSpec::continuous("Amount", 0.0, 1.0, 0.0, "F2", ""),
-            ParamSpec::whole_labels("Rate", 0.0, 9.0, 6.0, &["1/1", "1/2", "1/4", "1/4T", "1/8", "1/8T", "1/16", "1/16T", "1/32", "1/64"], "Rate"),
-            ParamSpec::whole_labels("Mode", 0.0, 2.0, 0.0, &["Opacity", "White", "Gain"], "Mode"),
+            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::whole_labels("rate", "Rate", 0.0, 9.0, 6.0, &["1/1", "1/2", "1/4", "1/4T", "1/8", "1/8T", "1/16", "1/16T", "1/32", "1/64"], "Rate"),
+            ParamSpec::whole_labels("mode", "Mode", 0.0, 2.0, 0.0, &["Opacity", "White", "Gain"], "Mode"),
         ],
     }
 }

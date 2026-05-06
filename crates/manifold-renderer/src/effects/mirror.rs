@@ -44,8 +44,8 @@ inventory::submit! {
         osc_prefix: "mirror",
         legacy_discriminant: Some(21),
         params: &[
-            ParamSpec::continuous("Amount", 0.0, 1.0, 1.0, "F2", ""),
-            ParamSpec::whole_labels("Mode", 0.0, 2.0, 0.0, &["Horiz", "Vert", "Both"], "Mode"),
+            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
+            ParamSpec::whole_labels("mode", "Mode", 0.0, 2.0, 0.0, &["Horiz", "Vert", "Both"], "Mode"),
         ],
     }
 }

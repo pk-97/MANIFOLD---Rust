@@ -37,7 +37,7 @@ inventory::submit! {
         osc_prefix: "node_graph_test",
         legacy_discriminant: None,
         params: &[
-            ParamSpec::continuous("Amount", 0.0, 1.0, 0.5, "F2", ""),
+            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.5, "F2", ""),
         ],
     }
 }

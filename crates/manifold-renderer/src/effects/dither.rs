@@ -16,8 +16,8 @@ inventory::submit! {
         osc_prefix: "dither",
         legacy_discriminant: Some(18),
         params: &[
-            ParamSpec::continuous("Amount", 0.0, 1.0, 0.0, "F2", ""),
-            ParamSpec::whole_labels("Algo", 0.0, 5.0, 0.0, &["Bayer", "Halftone", "Lines", "X-Hatch", "Noise", "Diamond"], "Algorithm"),
+            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::whole_labels("algo", "Algo", 0.0, 5.0, 0.0, &["Bayer", "Halftone", "Lines", "X-Hatch", "Noise", "Diamond"], "Algorithm"),
         ],
     }
 }

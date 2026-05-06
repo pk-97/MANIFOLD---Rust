@@ -31,11 +31,11 @@ inventory::submit! {
         osc_prefix: "blobTracking",
         legacy_discriminant: Some(22),
         params: &[
-            ParamSpec::continuous("Amount", 0.0, 1.0, 0.0, "F2", ""),
-            ParamSpec::continuous("Thresh", 0.05, 0.9, 0.65, "F2", "Threshold"),
-            ParamSpec::continuous("Sens", 0.2, 1.0, 0.85, "F2", "Sensitivity"),
-            ParamSpec::continuous("Smooth", 0.0, 1.0, 0.7, "F2", "Smoothing"),
-            ParamSpec::continuous("Connect", 0.0, 1.0, 0.35, "F2", "Connect"),
+            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::continuous("thresh", "Thresh", 0.05, 0.9, 0.65, "F2", "Threshold"),
+            ParamSpec::continuous("sens", "Sens", 0.2, 1.0, 0.85, "F2", "Sensitivity"),
+            ParamSpec::continuous("smooth", "Smooth", 0.0, 1.0, 0.7, "F2", "Smoothing"),
+            ParamSpec::continuous("connect", "Connect", 0.0, 1.0, 0.35, "F2", "Connect"),
         ],
     }
 }

@@ -22,7 +22,7 @@ inventory::submit! {
         osc_prefix: "bloom",
         legacy_discriminant: Some(12),
         params: &[
-            ParamSpec::continuous("Amount", 0.0, 5.0, 0.187, "F2", ""),
+            ParamSpec::continuous("amount", "Amount", 0.0, 5.0, 0.187, "F2", ""),
         ],
     }
 }

@@ -142,7 +142,7 @@ impl EffectNode for LegacyPostProcessNode {
             .metadata
             .params
             .iter()
-            .map(|spec| param_value_to_f32(ctx.params.get(spec.name), spec))
+            .map(|spec| param_value_to_f32(ctx.params.get(spec.id), spec))
             .collect();
 
         let mut fx = EffectInstance::new(self.metadata.id.clone());
@@ -215,8 +215,12 @@ fn param_spec_to_def(spec: &ParamSpec) -> ParamDef {
     } else {
         (ParamType::Float, ParamValue::Float(spec.default_value))
     };
+    // `name` here is the graph-level lookup key (used by
+    // `graph.set_param(node, name, ...)` and `ctx.params.get(name)`),
+    // so it pairs with the ParamSpec's stable `id`. `label` is the
+    // human-readable display string.
     ParamDef {
-        name: spec.name,
+        name: spec.id,
         label: spec.name,
         ty,
         default,
@@ -254,8 +258,8 @@ mod tests {
     use manifold_core::EffectTypeId;
 
     static FAKE_PARAMS: [ParamSpec; 2] = [
-        ParamSpec::continuous("Amount", 0.0, 1.0, 0.5, "F2", ""),
-        ParamSpec::whole_labels("Mode", 0.0, 2.0, 0.0, &["A", "B", "C"], "Mode"),
+        ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.5, "F2", ""),
+        ParamSpec::whole_labels("mode", "Mode", 0.0, 2.0, 0.0, &["A", "B", "C"], "Mode"),
     ];
 
     static FAKE_META: EffectMetadata = EffectMetadata {
@@ -304,9 +308,13 @@ mod tests {
 
         let defs = node.parameters();
         assert_eq!(defs.len(), 2);
-        assert_eq!(defs[0].name, "Amount");
+        // `name` on graph-level ParamDef is the stable lookup key —
+        // pairs with ParamSpec.id. `label` is the display string.
+        assert_eq!(defs[0].name, "amount");
+        assert_eq!(defs[0].label, "Amount");
         assert_eq!(defs[0].ty, ParamType::Float);
-        assert_eq!(defs[1].name, "Mode");
+        assert_eq!(defs[1].name, "mode");
+        assert_eq!(defs[1].label, "Mode");
         assert_eq!(defs[1].ty, ParamType::Enum);
         assert_eq!(defs[1].enum_values.len(), 3);
     }
@@ -323,13 +331,13 @@ mod tests {
 
     #[test]
     fn param_spec_to_def_handles_continuous_whole_toggle_labels() {
-        let cont = ParamSpec::continuous("c", 0.0, 1.0, 0.5, "F2", "");
+        let cont = ParamSpec::continuous("c", "c", 0.0, 1.0, 0.5, "F2", "");
         assert_eq!(param_spec_to_def(&cont).ty, ParamType::Float);
-        let tog = ParamSpec::toggle("t", 0.0, 1.0, 1.0, "");
+        let tog = ParamSpec::toggle("t", "t", 0.0, 1.0, 1.0, "");
         assert_eq!(param_spec_to_def(&tog).ty, ParamType::Bool);
-        let whole = ParamSpec::whole("w", 0.0, 8.0, 4.0, "");
+        let whole = ParamSpec::whole("w", "w", 0.0, 8.0, 4.0, "");
         assert_eq!(param_spec_to_def(&whole).ty, ParamType::Int);
-        let labels = ParamSpec::whole_labels("e", 0.0, 2.0, 0.0, &["x", "y", "z"], "");
+        let labels = ParamSpec::whole_labels("e", "e", 0.0, 2.0, 0.0, &["x", "y", "z"], "");
         assert_eq!(param_spec_to_def(&labels).ty, ParamType::Enum);
     }
 }

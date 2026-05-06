@@ -16,7 +16,7 @@ inventory::submit! {
         osc_prefix: "invert",
         legacy_discriminant: Some(1),
         params: &[
-            ParamSpec::continuous("Amount", 0.0, 1.0, 1.0, "F2", ""),
+            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
         ],
     }
 }

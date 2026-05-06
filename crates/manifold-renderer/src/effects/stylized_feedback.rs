@@ -42,10 +42,10 @@ inventory::submit! {
         osc_prefix: "stylizedFeedback",
         legacy_discriminant: Some(20),
         params: &[
-            ParamSpec::continuous("Amount", 0.0, 1.0, 0.5, "F2", ""),
-            ParamSpec::continuous("Zoom", 0.9, 1.1, 0.95, "F2", "Zoom"),
-            ParamSpec::continuous("Rotate", -10.0, 10.0, 0.0, "F2", "Rotate"),
-            ParamSpec::whole_labels("Mode", 0.0, 2.0, 0.0, &["Screen", "Add", "Max"], "Mode"),
+            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.5, "F2", ""),
+            ParamSpec::continuous("zoom", "Zoom", 0.9, 1.1, 0.95, "F2", "Zoom"),
+            ParamSpec::continuous("rotate", "Rotate", -10.0, 10.0, 0.0, "F2", "Rotate"),
+            ParamSpec::whole_labels("mode", "Mode", 0.0, 2.0, 0.0, &["Screen", "Add", "Max"], "Mode"),
         ],
     }
 }

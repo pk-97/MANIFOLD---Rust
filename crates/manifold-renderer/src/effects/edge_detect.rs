@@ -16,9 +16,9 @@ inventory::submit! {
         osc_prefix: "edgeDetect",
         legacy_discriminant: Some(25),
         params: &[
-            ParamSpec::continuous("Amount", 0.0, 1.0, 0.0, "F2", ""),
-            ParamSpec::continuous("Thresh", 0.0, 1.0, 0.1, "F2", "Threshold"),
-            ParamSpec::whole_labels("Mode", 0.0, 2.0, 0.0, &["Sobel", "Laplacian", "Frei-Chen"], "Mode"),
+            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::continuous("thresh", "Thresh", 0.0, 1.0, 0.1, "F2", "Threshold"),
+            ParamSpec::whole_labels("mode", "Mode", 0.0, 2.0, 0.0, &["Sobel", "Laplacian", "Frei-Chen"], "Mode"),
         ],
     }
 }

@@ -16,11 +16,11 @@ inventory::submit! {
         osc_prefix: "glitch",
         legacy_discriminant: Some(32),
         params: &[
-            ParamSpec::continuous("Amount", 0.0, 1.0, 0.0, "F2", ""),
-            ParamSpec::whole("Block", 4.0, 64.0, 16.0, "BlockSize"),
-            ParamSpec::continuous("RGB Shift", 0.0, 0.05, 0.01, "F2", "RGBShift"),
-            ParamSpec::continuous("Scanline", 0.0, 1.0, 0.3, "F2", "Scanline"),
-            ParamSpec::continuous("Speed", 0.1, 10.0, 2.0, "F2", "Speed"),
+            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::whole("block", "Block", 4.0, 64.0, 16.0, "BlockSize"),
+            ParamSpec::continuous("rgb_shift", "RGB Shift", 0.0, 0.05, 0.01, "F2", "RGBShift"),
+            ParamSpec::continuous("scanline", "Scanline", 0.0, 1.0, 0.3, "F2", "Scanline"),
+            ParamSpec::continuous("speed", "Speed", 0.1, 10.0, 2.0, "F2", "Speed"),
         ],
     }
 }

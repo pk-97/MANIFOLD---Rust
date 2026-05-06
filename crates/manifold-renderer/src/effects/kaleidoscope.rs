@@ -16,8 +16,8 @@ inventory::submit! {
         osc_prefix: "kaleidoscope",
         legacy_discriminant: Some(14),
         params: &[
-            ParamSpec::continuous("Amount", 0.0, 1.0, 0.0, "F2", ""),
-            ParamSpec::whole("Segs", 2.0, 16.0, 6.0, "Segments"),
+            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::whole("segs", "Segs", 2.0, 16.0, 6.0, "Segments"),
         ],
     }
 }

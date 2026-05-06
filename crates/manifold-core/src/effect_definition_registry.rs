@@ -159,10 +159,10 @@ mod tests {
             osc_prefix: "transform",
             legacy_discriminant: Some(0),
             params: &[
-                ParamSpec::continuous("X", -1.0, 1.0, 0.0, "F2", ""),
-                ParamSpec::continuous("Y", -1.0, 1.0, 0.0, "F2", ""),
-                ParamSpec::continuous("Zoom", 0.1, 5.0, 1.0, "F2", ""),
-                ParamSpec::continuous("Rot", -180.0, 180.0, 0.0, "F2", ""),
+                ParamSpec::continuous("x", "X", -1.0, 1.0, 0.0, "F2", ""),
+                ParamSpec::continuous("y", "Y", -1.0, 1.0, 0.0, "F2", ""),
+                ParamSpec::continuous("zoom", "Zoom", 0.1, 5.0, 1.0, "F2", ""),
+                ParamSpec::continuous("rot", "Rot", -180.0, 180.0, 0.0, "F2", ""),
             ],
         }
     }
@@ -175,7 +175,7 @@ mod tests {
             osc_prefix: "bloom",
             legacy_discriminant: Some(12),
             params: &[
-                ParamSpec::continuous("Amount", 0.0, 5.0, 0.187, "F2", ""),
+                ParamSpec::continuous("amount", "Amount", 0.0, 5.0, 0.187, "F2", ""),
             ],
         }
     }
@@ -188,8 +188,8 @@ mod tests {
             osc_prefix: "dither",
             legacy_discriminant: Some(18),
             params: &[
-                ParamSpec::continuous("Amount", 0.0, 1.0, 0.0, "F2", ""),
-                ParamSpec::whole_labels("Algo", 0.0, 5.0, 0.0, &["Bayer", "Halftone", "Lines", "X-Hatch", "Noise", "Diamond"], "Algorithm"),
+                ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+                ParamSpec::whole_labels("algo", "Algo", 0.0, 5.0, 0.0, &["Bayer", "Halftone", "Lines", "X-Hatch", "Noise", "Diamond"], "Algorithm"),
             ],
         }
     }
@@ -202,8 +202,8 @@ mod tests {
             osc_prefix: "kaleidoscope",
             legacy_discriminant: Some(14),
             params: &[
-                ParamSpec::continuous("Amount", 0.0, 1.0, 0.0, "F2", ""),
-                ParamSpec::whole("Segs", 2.0, 16.0, 6.0, "Segments"),
+                ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+                ParamSpec::whole("segs", "Segs", 2.0, 16.0, 6.0, "Segments"),
             ],
         }
     }
@@ -216,8 +216,8 @@ mod tests {
             osc_prefix: "infiniteZoom",
             legacy_discriminant: Some(13),
             params: &[
-                ParamSpec::continuous("Amount", 0.0, 1.0, 0.0, "F2", ""),
-                ParamSpec::continuous("Sharp", 0.0, 1.0, 0.5, "F2", "Sharpness"),
+                ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+                ParamSpec::continuous("sharp", "Sharp", 0.0, 1.0, 0.5, "F2", "Sharpness"),
             ],
         }
     }

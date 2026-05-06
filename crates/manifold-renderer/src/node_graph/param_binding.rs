@@ -284,7 +284,7 @@ mod tests {
     fn feedback_amount_binding(node: NodeInstanceId) -> ParamBinding {
         ParamBinding {
             id: Cow::Borrowed("amount"),
-            spec: ParamSpec::continuous("Amount", 0.0, 1.0, 0.5, "F2", ""),
+            spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.5, "F2", ""),
             target: ParamTarget::Node {
                 node,
                 param: "amount",
@@ -322,7 +322,7 @@ mod tests {
             feedback_amount_binding(feedback),
             ParamBinding {
                 id: Cow::Borrowed("zoom"),
-                spec: ParamSpec::continuous("Zoom", 0.9, 1.1, 0.95, "F2", "Zoom"),
+                spec: ParamSpec::continuous("zoom", "Zoom", 0.9, 1.1, 0.95, "F2", "Zoom"),
                 target: ParamTarget::Node {
                     node: feedback,
                     param: "zoom",
@@ -344,7 +344,7 @@ mod tests {
         let feedback = g.add_node(Box::new(Feedback::new()));
         let binding = ParamBinding {
             id: Cow::Borrowed("nonexistent"),
-            spec: ParamSpec::continuous("Nonexistent", 0.0, 1.0, 0.0, "F2", ""),
+            spec: ParamSpec::continuous("nonexistent", "Nonexistent", 0.0, 1.0, 0.0, "F2", ""),
             target: ParamTarget::Node {
                 node: feedback,
                 param: "nonexistent",
@@ -364,8 +364,7 @@ mod tests {
         let feedback = g.add_node(Box::new(Feedback::new()));
         let binding = ParamBinding {
             id: Cow::Borrowed("mode"),
-            spec: ParamSpec::whole_labels(
-                "Mode",
+            spec: ParamSpec::whole_labels("mode", "Mode",
                 0.0,
                 2.0,
                 0.0,
@@ -401,7 +400,7 @@ mod tests {
         let feedback = g.add_node(Box::new(Feedback::new()));
         let binding = ParamBinding {
             id: Cow::Borrowed("blend_strength"),
-            spec: ParamSpec::continuous("Blend Strength", 0.0, 1.0, 0.5, "F2", ""),
+            spec: ParamSpec::continuous("blend_strength", "Blend Strength", 0.0, 1.0, 0.5, "F2", ""),
             target: ParamTarget::Node {
                 node: feedback,
                 param: "amount",

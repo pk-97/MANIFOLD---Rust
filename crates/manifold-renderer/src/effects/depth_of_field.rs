@@ -45,14 +45,14 @@ inventory::submit! {
         osc_prefix: "dof",
         legacy_discriminant: Some(40),
         params: &[
-            ParamSpec::continuous("Amount", 0.0, 1.0, 0.0, "F2", ""),
-            ParamSpec::whole_labels("Mode", 0.0, 2.0, 0.0, &["Tilt-Shift", "Radial", "Depth"], "Mode"),
-            ParamSpec::continuous("Focus", 0.0, 1.0, 0.5, "F2", "FocusPosition"),
-            ParamSpec::continuous("Focus X", 0.0, 1.0, 0.5, "F2", "FocusX"),
-            ParamSpec::continuous("Width", 0.01, 0.5, 0.15, "F2", "FocusWidth"),
-            ParamSpec::continuous("Blur", 0.0, 1.0, 0.5, "F2", "BlurStrength"),
-            ParamSpec::whole("Angle", 0.0, 360.0, 0.0, "TiltAngle"),
-            ParamSpec::whole_labels("Quality", 0.0, 2.0, 1.0, &["Low", "Medium", "High"], "Quality"),
+            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::whole_labels("mode", "Mode", 0.0, 2.0, 0.0, &["Tilt-Shift", "Radial", "Depth"], "Mode"),
+            ParamSpec::continuous("focus", "Focus", 0.0, 1.0, 0.5, "F2", "FocusPosition"),
+            ParamSpec::continuous("focus_x", "Focus X", 0.0, 1.0, 0.5, "F2", "FocusX"),
+            ParamSpec::continuous("width", "Width", 0.01, 0.5, 0.15, "F2", "FocusWidth"),
+            ParamSpec::continuous("blur", "Blur", 0.0, 1.0, 0.5, "F2", "BlurStrength"),
+            ParamSpec::whole("angle", "Angle", 0.0, 360.0, 0.0, "TiltAngle"),
+            ParamSpec::whole_labels("quality", "Quality", 0.0, 2.0, 1.0, &["Low", "Medium", "High"], "Quality"),
         ],
     }
 }
