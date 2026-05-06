@@ -129,6 +129,8 @@ YOU MUST COMMIT AND PUSH CODE CHANGES AFTER COMPLETING FEATURES OR FIXES.
 | `docs/VSYNC_AND_FRAME_PACING.md` | Working on frame pacing, display links, presentation |
 | `docs/ADDING_EFFECTS_AND_GENERATORS.md` | Adding new effects or generators |
 | `docs/DEVELOPMENT_REFERENCE.md` | Texture formats, math gotchas, module layout |
+| `docs/NODE_GRAPH_SYSTEM.md` | Node-graph effect/generator architecture (overall design) |
+| `docs/EFFECT_RUNTIME_UNIFICATION.md` | Migrating EffectChain → graph runtime; StateStore design; Vulkan-portability constraints |
 
 ## DEBUGGING
 
