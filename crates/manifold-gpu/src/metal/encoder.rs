@@ -1164,6 +1164,36 @@ impl GpuEncoder {
         enc.endEncoding();
     }
 
+    /// Insert a pipeline barrier between dispatches.
+    ///
+    /// On Metal this is a **no-op** — Metal serializes work within a single
+    /// command queue automatically, so a read-after-write between two
+    /// dispatches on the same queue is already ordered. The API exists for
+    /// cross-platform compatibility.
+    ///
+    /// On a future Vulkan backend this would emit `vkCmdPipelineBarrier2`
+    /// with the appropriate stage / access masks derived from the resource
+    /// lists. Vulkan does NOT serialize automatically and requires explicit
+    /// barriers between dependent work.
+    ///
+    /// `reads` and `writes` are the resources the *next* dispatch reads from
+    /// and writes to, respectively. The barrier ensures all prior writes to
+    /// these resources are visible.
+    ///
+    /// Callers (e.g. the node-graph executor) should compute `reads` and
+    /// `writes` from the plan's resource lifetime analysis. Calling
+    /// `pipeline_barrier` between every step is correct (over-conservative)
+    /// on Vulkan; the optimal pattern is to only insert barriers where
+    /// read-after-write hazards exist between consecutive steps.
+    #[allow(unused_variables)]
+    pub fn pipeline_barrier(
+        &mut self,
+        reads: &[&GpuTexture],
+        writes: &[&GpuTexture],
+    ) {
+        // Metal: no-op. Intra-queue ordering is automatic.
+    }
+
     /// Upload CPU data to a 2D texture region via replaceRegion.
     pub fn upload_texture(
         &mut self,
