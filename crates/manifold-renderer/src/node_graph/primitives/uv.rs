@@ -5,6 +5,8 @@
 //! UV-rewriting node in fusion terms; `Sample` is the explicit version
 //! where the UV comes from another texture's RG channels.
 
+use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc};
+
 use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
@@ -80,15 +82,29 @@ const UV_TRANSFORM_PARAMS: [ParamDef; 4] = [
     },
 ];
 
-#[derive(Debug)]
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct UVTransformUniforms {
+    translate: [f32; 2],
+    scale: [f32; 2],
+    rotation: f32,
+    mode: u32,
+    _pad0: f32,
+    _pad1: f32,
+}
+
 pub struct UVTransform {
     type_id: EffectNodeType,
+    pipeline: Option<GpuComputePipeline>,
+    sampler: Option<GpuSampler>,
 }
 
 impl UVTransform {
     pub fn new() -> Self {
         Self {
             type_id: EffectNodeType::new(UV_TRANSFORM_TYPE_ID),
+            pipeline: None,
+            sampler: None,
         }
     }
 }
@@ -112,7 +128,78 @@ impl EffectNode for UVTransform {
     fn parameters(&self) -> &[ParamDef] {
         &UV_TRANSFORM_PARAMS
     }
-    fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let translate = match ctx.params.get("translate") {
+            Some(ParamValue::Vec2(v)) => *v,
+            _ => [0.0, 0.0],
+        };
+        let scale = match ctx.params.get("scale") {
+            Some(ParamValue::Vec2(v)) => *v,
+            _ => [1.0, 1.0],
+        };
+        let rotation = match ctx.params.get("rotation") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 0.0,
+        };
+        let mode = match ctx.params.get("mode") {
+            Some(ParamValue::Enum(i)) => *i,
+            _ => 0,
+        };
+
+        // Resolve textures up-front; lifetimes survive the encoder borrow.
+        let Some(source) = ctx.inputs.texture_2d("source") else {
+            return;
+        };
+        let Some(out) = ctx.outputs.texture_2d("out") else {
+            return;
+        };
+        let (width, height) = (out.width, out.height);
+
+        let gpu = ctx.gpu_encoder();
+        let pipeline = self.pipeline.get_or_insert_with(|| {
+            gpu.device.create_compute_pipeline(
+                include_str!("shaders/uv_transform.wgsl"),
+                "cs_main",
+                "primitive.uv_transform",
+            )
+        });
+        let sampler = self
+            .sampler
+            .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
+
+        let uniforms = UVTransformUniforms {
+            translate,
+            scale,
+            rotation,
+            mode,
+            _pad0: 0.0,
+            _pad1: 0.0,
+        };
+
+        gpu.native_enc.dispatch_compute(
+            pipeline,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: source,
+                },
+                GpuBinding::Sampler {
+                    binding: 2,
+                    sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: out,
+                },
+            ],
+            [width.div_ceil(16), height.div_ceil(16), 1],
+            "primitive.uv_transform",
+        );
+    }
 }
 
 // =====================================================================

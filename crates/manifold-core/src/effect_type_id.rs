@@ -86,6 +86,12 @@ impl EffectTypeId {
     /// in the live renderer.
     pub const NODE_GRAPH_TEST: Self = Self(Cow::Borrowed("NodeGraphTest"));
 
+    /// Mirror, rebuilt as a graph-backed composite. Internally
+    /// `Source → UVTransform[mode=Mirror] → FinalOutput`. Coexists
+    /// with the legacy `Mirror` effect for migration; the legacy one
+    /// retires once the node-graph pipeline covers all needed cases.
+    pub const MIRROR_GRAPH: Self = Self(Cow::Borrowed("MirrorGraph"));
+
     /// Placeholder for unrecognized/removed effect types.
     /// Renderers skip this — it never applies any GPU work.
     pub const UNKNOWN: Self = Self(Cow::Borrowed("Unknown"));
