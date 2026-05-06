@@ -547,11 +547,23 @@ impl GraphCanvas {
         let (sx0, sy0) = self.to_screen(viewport, gx0, gy0);
         let (sx1, sy1) = self.to_screen(viewport, gx1, gy1);
 
-        let dx = (sx1 - sx0).abs().max(40.0) * 0.5;
+        let span_x = (sx1 - sx0).abs();
+        let dx = span_x.max(40.0) * 0.5;
+        // Skip wires (those whose horizontal span exceeds ~1.5 columns)
+        // arc downward so they read as "going around" intermediate
+        // nodes rather than passing through them. Without this, fan-out
+        // wires (e.g., SoftFocus's Source → Mix.a) emerge from the
+        // intermediate node's right edge and look like they originate
+        // there. Magnitude scales with span so longer skips arc more.
+        let skip_bump = if span_x > 320.0 {
+            ((span_x - 320.0) * 0.25).min(80.0)
+        } else {
+            0.0
+        };
         let cx0 = sx0 + dx;
-        let cy0 = sy0;
+        let cy0 = sy0 + skip_bump;
         let cx1 = sx1 - dx;
-        let cy1 = sy1;
+        let cy1 = sy1 + skip_bump;
 
         // Sample the bezier into ~30 short line segments. Step count
         // scales with screen-space length so close-up curves stay smooth.
