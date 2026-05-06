@@ -25,7 +25,7 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::composites::{build_soft_focus, CompositeHandle};
 use crate::node_graph::{
     compile, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend,
-    NodeInstanceId, ParamValue, ResourceId, Slot, Source,
+    NodeInstanceId, ParamValue, PortType, ResourceId, Slot, Source,
 };
 use crate::render_target::RenderTarget;
 
@@ -109,24 +109,47 @@ impl RenderState {
         device: &GpuDevice,
         width: u32,
         height: u32,
+        plan: &ExecutionPlan,
         source_resource: ResourceId,
         output_resource: ResourceId,
     ) -> Self {
-        let source_target =
-            RenderTarget::new(device, width, height, GRAPH_FORMAT, "soft-focus-source");
-        let output_target =
-            RenderTarget::new(device, width, height, GRAPH_FORMAT, "soft-focus-output");
-
         let mut backend = MetalBackend::without_device(width, height, GRAPH_FORMAT);
-        let source_slot = backend.pre_bind_texture_2d(source_resource, source_target);
-        let output_slot = backend.pre_bind_texture_2d(output_resource, output_target);
+        let mut source_slot: Option<Slot> = None;
+        let mut output_slot: Option<Slot> = None;
+
+        // The backend's `without_device` mode requires every Texture2D
+        // resource to be pre-bound — lazy-alloc panics. Walk the plan
+        // and pre-bind one RenderTarget per Texture2D resource. We
+        // allocate a dedicated label for the host-managed source and
+        // output resources so they're identifiable in GPU captures;
+        // intermediate textures get an "intermediate" label.
+        for i in 0..plan.resource_count() {
+            let id = ResourceId(i as u32);
+            if !matches!(plan.resource_type(id), Some(PortType::Texture2D)) {
+                continue;
+            }
+            let (label, is_source, is_output) = if id == source_resource {
+                ("soft-focus-source", true, false)
+            } else if id == output_resource {
+                ("soft-focus-output", false, true)
+            } else {
+                ("soft-focus-intermediate", false, false)
+            };
+            let target = RenderTarget::new(device, width, height, GRAPH_FORMAT, label);
+            let slot = backend.pre_bind_texture_2d(id, target);
+            if is_source {
+                source_slot = Some(slot);
+            } else if is_output {
+                output_slot = Some(slot);
+            }
+        }
 
         let executor = Executor::new(Box::new(backend));
 
         Self {
             executor,
-            source_slot,
-            output_slot,
+            source_slot: source_slot.expect("source_resource must be a Texture2D in the plan"),
+            output_slot: output_slot.expect("output_resource must be a Texture2D in the plan"),
             width,
             height,
         }
@@ -181,6 +204,7 @@ impl PostProcessEffect for SoftFocusGraphFX {
                 gpu.device,
                 ctx.width,
                 ctx.height,
+                &self.plan,
                 self.source_resource,
                 self.output_resource,
             ));
