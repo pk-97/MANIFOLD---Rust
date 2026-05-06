@@ -7,6 +7,7 @@ use manifold_core::{Beats, Seconds};
 use crate::node_graph::bindings::{NodeInputs, NodeOutputs};
 use crate::node_graph::parameters::{ParamDef, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput};
+use crate::node_graph::state_store::{OwnerKey, StateStore};
 
 /// Stable string ID identifying an [`EffectNode`] kind.
 ///
@@ -84,6 +85,17 @@ pub struct EffectNodeContext<'ctx, 'gpu> {
     pub inputs: NodeInputs<'ctx>,
     pub outputs: NodeOutputs<'ctx>,
     pub gpu: Option<&'ctx mut crate::gpu_encoder::GpuEncoder<'gpu>>,
+    /// Persistent state store for stateful nodes. `None` for stateless
+    /// graphs and tests that don't exercise `NodeState`. Identity for
+    /// keying is provided by `node_id` + `owner_key` below.
+    pub state: Option<&'ctx mut StateStore>,
+    /// Identity of the node currently evaluating. Set by the executor
+    /// at each step; nodes use it to key their state buckets.
+    pub node_id: NodeInstanceId,
+    /// Owner identity for state keying — `0` for master, `layer_index +
+    /// 1` for a layer, `hash(clip_id)` for a clip. Matches the legacy
+    /// `EffectContext::owner_key` namespace.
+    pub owner_key: OwnerKey,
 }
 
 impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
@@ -100,6 +112,34 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             inputs,
             outputs,
             gpu,
+            state: None,
+            node_id: NodeInstanceId(0),
+            owner_key: 0,
+        }
+    }
+
+    /// Constructor with state plumbing. Used by the executor's stateful
+    /// execution path; tests and stateless graphs use [`new`] above.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_state(
+        time: FrameTime,
+        params: &'ctx ParamValues,
+        inputs: NodeInputs<'ctx>,
+        outputs: NodeOutputs<'ctx>,
+        gpu: Option<&'ctx mut crate::gpu_encoder::GpuEncoder<'gpu>>,
+        state: Option<&'ctx mut StateStore>,
+        node_id: NodeInstanceId,
+        owner_key: OwnerKey,
+    ) -> Self {
+        Self {
+            time,
+            params,
+            inputs,
+            outputs,
+            gpu,
+            state,
+            node_id,
+            owner_key,
         }
     }
 
@@ -113,6 +153,15 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
         self.gpu
             .as_deref_mut()
             .expect("EffectNodeContext::gpu_encoder called without a GpuEncoder bound")
+    }
+
+    /// Borrow the [`StateStore`], panicking if absent. Use the node's
+    /// `node_id` + `owner_key` (also on this ctx) as the key when
+    /// inserting / fetching typed state.
+    pub fn state_store(&mut self) -> &mut StateStore {
+        self.state
+            .as_deref_mut()
+            .expect("EffectNodeContext::state_store called without a StateStore bound")
     }
 }
 

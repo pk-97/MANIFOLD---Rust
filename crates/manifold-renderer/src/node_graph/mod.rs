@@ -22,6 +22,7 @@ mod parameters;
 mod ports;
 pub mod primitives;
 mod snapshot;
+mod state_store;
 mod validation;
 
 pub use backend::{Backend, MockBackend};
@@ -39,4 +40,5 @@ pub use legacy_adapter::{metadata_by_id, LegacyPostProcessNode, LEGACY_TYPE_ID_P
 pub use parameters::{ParamDef, ParamType, ParamValue};
 pub use ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 pub use snapshot::{GraphSnapshot, NodeSnapshot, PortKindSnapshot, PortSnapshot, WireSnapshot};
+pub use state_store::{NodeState, OwnerKey, StateStore};
 pub use validation::{topological_sort, validate, GraphError};

@@ -20,6 +20,7 @@ use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
 use crate::node_graph::effect_node::{EffectNodeContext, FrameTime};
 use crate::node_graph::execution_plan::ExecutionPlan;
 use crate::node_graph::graph::Graph;
+use crate::node_graph::state_store::{OwnerKey, StateStore};
 
 /// Runs a graph against a precompiled plan, one frame per call.
 ///
@@ -66,7 +67,7 @@ impl Executor {
     /// GPU work (boundary nodes, stub primitives). Nodes that require an
     /// encoder will panic via [`EffectNodeContext::gpu_encoder`].
     pub fn execute_frame(&mut self, graph: &mut Graph, plan: &ExecutionPlan, time: FrameTime) {
-        self.execute_frame_inner(graph, plan, time, None);
+        self.execute_frame_inner(graph, plan, time, None, None, 0);
     }
 
     /// Run one frame of the graph with a real `GpuEncoder` available to
@@ -80,7 +81,24 @@ impl Executor {
         time: FrameTime,
         gpu: &mut GpuEncoder<'_>,
     ) {
-        self.execute_frame_inner(graph, plan, time, Some(gpu));
+        self.execute_frame_inner(graph, plan, time, Some(gpu), None, 0);
+    }
+
+    /// Run one frame of the graph with a real `GpuEncoder` plus a
+    /// `StateStore` for stateful nodes (Bloom mip chains, Feedback prev-
+    /// frame buffers, etc.). The `owner_key` is forwarded to every node
+    /// via `EffectNodeContext::owner_key` and keys per-clip / per-layer
+    /// state in the store.
+    pub fn execute_frame_with_state(
+        &mut self,
+        graph: &mut Graph,
+        plan: &ExecutionPlan,
+        time: FrameTime,
+        gpu: &mut GpuEncoder<'_>,
+        state: &mut StateStore,
+        owner_key: OwnerKey,
+    ) {
+        self.execute_frame_inner(graph, plan, time, Some(gpu), Some(state), owner_key);
     }
 
     /// Shared implementation. For each step in plan order:
@@ -98,6 +116,8 @@ impl Executor {
         plan: &ExecutionPlan,
         time: FrameTime,
         mut gpu: Option<&mut GpuEncoder<'_>>,
+        mut state: Option<&mut StateStore>,
+        owner_key: OwnerKey,
     ) {
         for step in plan.steps() {
             // 1. Acquire output slots.
@@ -122,19 +142,22 @@ impl Executor {
 
             // 3. Evaluate. The context holds an immutable backend ref for
             // typed accessor resolution and (optionally) a per-step
-            // mutable reborrow of the host's GpuEncoder. Scoped tightly so
-            // the borrow ends before the release loop's mutable borrow
-            // below.
+            // mutable reborrow of the host's GpuEncoder + StateStore.
+            // Scoped tightly so the borrows end before the release loop's
+            // mutable borrow below.
             if let Some(inst) = graph.get_node_mut(step.node) {
                 let backend_ref: &dyn Backend = &*self.backend;
                 let inputs = NodeInputs::new(&self.input_scratch, backend_ref);
                 let outputs = NodeOutputs::new(&self.output_scratch, backend_ref);
-                let mut ctx = EffectNodeContext::new(
+                let mut ctx = EffectNodeContext::with_state(
                     time,
                     &inst.params,
                     inputs,
                     outputs,
                     gpu.as_deref_mut(),
+                    state.as_deref_mut(),
+                    step.node,
+                    owner_key,
                 );
                 inst.node.evaluate(&mut ctx);
             }
