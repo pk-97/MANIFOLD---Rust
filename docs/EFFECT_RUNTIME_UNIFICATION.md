@@ -384,7 +384,244 @@ Same as today's CLAUDE.md rules: zero allocations on the hot path (`evaluate`, `
 
 ---
 
-## 7. Stateful effects inventory
+## 7. Parameter binding & addressing
+
+The runtime IR and StateStore handle the *flow of data* through the graph. This section addresses how *user-facing parameters* identify themselves, route through the graph, and survive every change short of removal.
+
+### 7.1 The problem
+
+Today, every parameter is identified by **position in `EffectInstance::param_values: Vec<f32>`**. That index is referenced from at least nine subsystems:
+
+| Subsystem | Storage | Address shape |
+|---|---|---|
+| `EffectInstance.param_values` | Project file | `Vec<f32>` indexed by position |
+| `ParameterDriver.param_index: i32` | Project file | Position |
+| `ParamEnvelope.param_index: i32` | Project file | Position |
+| `AbletonParamMapping.param_index: usize` | Project file | Position |
+| `MacroMappingTarget::*::param_index: usize` | Project file | Position |
+| `PanelAction::EffectParamChanged(fx_idx, param_idx, val)` | Live UI | Position |
+| `ChangeEffectParamCommand.param_index: usize` | Live undo stack | Position |
+| OSC routing | Derived at load | `osc_prefix` + `osc_suffix` (string, but indexed lookup to compute) |
+| `align_to_definition()` | Post-load fixup | Hard-coded per-effect index remap (WireframeDepth 14→12) |
+
+Position is *fragile*: reordering, inserting, or removing a parameter silently corrupts every persisted reference. The existing WireframeDepth-specific remap in `align_to_definition` exists *because of* this fragility. Scaling that pattern to ~20 effects × ongoing development is impractical.
+
+We replace position with **stable string `ParamId`s** at every external addressing site. Internal storage stays positional (it's hot-path code); the conversion happens at the registry boundary.
+
+### 7.2 ParamBinding framework
+
+The user-facing surface of every effect becomes a slice of `ParamBinding`:
+
+```rust
+pub struct ParamBinding {
+    /// Stable identity. Forever rule: never rename, never reuse.
+    pub id: Cow<'static, str>,
+    /// UI metadata — slider label, range, default, format, enum labels.
+    /// `spec.name` is the editable display string; `id` is the stable key.
+    pub spec: ParamSpec,
+    /// Where this parameter's value flows in the graph.
+    pub target: ParamTarget,
+    /// Conversion from f32 (UI/storage) to the typed `ParamValue` the
+    /// graph node receives.
+    pub convert: ParamConvert,
+}
+
+pub enum ParamTarget {
+    /// Routed through a `CompositeHandle`'s exposed-param map.
+    Composite { outer_name: Cow<'static, str> },
+    /// Direct to a node + parameter name. Used by single-primitive effects.
+    Node { node: NodeInstanceId, param: Cow<'static, str> },
+    /// Escape hatch — caller-supplied closure runs each frame.
+    /// For legacy adapters whose routing isn't expressible above.
+    Custom(fn(&mut Graph, f32)),
+}
+
+pub enum ParamConvert {
+    Float,                              // identity
+    IntRound,                           // f.round() as i32 → ParamValue::Int
+    BoolThreshold,                      // f > 0.5 → ParamValue::Bool
+    EnumRound,                          // f.round() as u32 → ParamValue::Enum
+    EnumRemap(Cow<'static, [u32]>),     // legacy idx → graph enum (Mirror's case)
+    Vec2 { x_idx: u8, y_idx: u8 },      // bundle two host params into one Vec2
+    Color,                              // bundle 4 host params into one RGBA
+    // ... grow as needed
+}
+```
+
+`Cow<'static, str>` everywhere — `Borrowed` for compile-time IDs (V1 / developer-defined effects), `Owned` for runtime IDs (V2 / user-exposed params). Same trick as `EffectTypeId`. One type, both lifetimes.
+
+The `&[ParamBinding]` slice attaches to `EffectMetadata` (for type-level developer params) and to `EffectInstance` (for instance-level user-exposed params). The `apply` shim iterates the *concatenation* of both:
+
+```rust
+fn apply_param_bindings(
+    bindings: &[ParamBinding],
+    user_bindings: &[ParamBinding],
+    graph: &mut Graph,
+    handle: &CompositeHandle,
+    values: &[f32],
+) {
+    for (binding, &value) in bindings.iter().chain(user_bindings).zip(values.iter()) {
+        let pv = binding.convert.f32_to_param_value(value);
+        match &binding.target {
+            ParamTarget::Composite { outer_name } => {
+                handle.set_param(graph, outer_name, pv).ok();
+            }
+            ParamTarget::Node { node, param } => {
+                graph.set_param(*node, param, pv).ok();
+            }
+            ParamTarget::Custom(f) => f(graph, value),
+        }
+    }
+}
+```
+
+Every migrated effect's `apply()` becomes ~10 lines (param routing + executor invocation). No more hand-rolled `fx.param_values.first().copied().unwrap_or(...)` boilerplate, no more silent index-shift bugs.
+
+### 7.3 ParamId migration across the addressing sites
+
+Each subsystem migrates from `param_index` → `param_id: ParamId`:
+
+```rust
+// Before:
+pub struct ParameterDriver {
+    pub param_index: i32,
+    // ...
+}
+
+// After:
+pub struct ParameterDriver {
+    pub param_id: ParamId,  // Cow<'static, str>
+    // ...
+}
+```
+
+Same pattern for `ParamEnvelope`, `AbletonParamMapping`, `MacroMappingTarget`, `ChangeEffectParamCommand`, `PanelAction::Effect*`. The runtime keeps internal storage as `Vec<f32>` indexed by position (hot path stays fast); the registry provides `ParamId → index` lookup at addressing boundaries.
+
+```rust
+impl EffectInstance {
+    pub fn get_base_param_by_id(&self, id: &str) -> Option<f32> {
+        let idx = registry::param_id_to_index(&self.effect_type, id)?;
+        self.base_param_values.as_ref()?.get(idx).copied()
+    }
+}
+```
+
+`param_id_to_index` lookups happen on driver evaluation, Ableton mapping update, OSC dispatch — all per-frame but with one `&str → usize` map lookup each (AHashMap; ~50ns). Negligible at chain scale.
+
+### 7.4 OSC routing locks to ParamId
+
+OSC paths are currently derived as `/<scope>/<osc_prefix><osc_suffix>` (e.g., `/master/bloomAmount`). The `osc_suffix` is per-`ParamSpec` and stable. The `param_index` argument to `osc_param_router::PendingWrite` becomes `param_id`. Saved OSC mappings stay external (no project-file change for OSC); the router's internal lookup migrates from `Vec<f32>` indexing to `param_id_to_index` translation.
+
+OSC is the one subsystem whose user-visible surface (the OSC paths themselves) doesn't change. External clients keep working unchanged.
+
+### 7.5 Project file migration
+
+The current project file format serializes:
+
+```json
+{
+  "effectType": 29,
+  "paramValues": [1.0, 144.0, 0.4, 0.0, 0.0, 0.82, 1.0, 1.0, 0.0],
+  "drivers": [{ "paramIndex": 1, "beatDivision": 7, ... }],
+  "abletonMappings": null
+}
+```
+
+After migration, the canonical format is:
+
+```json
+{
+  "effectType": "Bloom",
+  "paramValues": { "amount": 1.0, "threshold": 144.0, "softness": 0.4, ... },
+  "drivers": [{ "paramId": "threshold", "beatDivision": 7, ... }],
+  "abletonMappings": null
+}
+```
+
+Two forms persist at once. We implement **bidirectional custom `Deserialize` impls** that accept *either* shape:
+
+```rust
+impl<'de> Deserialize<'de> for EffectInstance {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = serde_json::Value::deserialize(d)?;
+        let param_values = match raw.get("paramValues") {
+            Some(Value::Array(arr)) => positional_to_id_keyed(&effect_type, arr)?,
+            Some(Value::Object(map)) => id_keyed_to_positional(&effect_type, map)?,
+            _ => Vec::new(),
+        };
+        // ... assemble EffectInstance ...
+    }
+}
+```
+
+The pattern follows the existing `BeatDivision` custom deserializer (which accepts both `7` and `"FourWhole"`) — proven precedent in the codebase.
+
+`ParameterDriver`, `ParamEnvelope`, `AbletonParamMapping`, `MacroMappingTarget` get analogous "accept old `paramIndex` or new `paramId`" deserializers. On load, all are normalized to `ParamId`. On save, everything writes the new form. Old projects keep loading; new projects write the canonical shape.
+
+**`projectVersion` bump.** From `"1.0.0"` → `"1.2.0"`. The `migrate_if_needed` framework already exists (`migrate_v100_to_v110` in `manifold-io/src/migrate.rs`) — we add `migrate_v110_to_v120` running before deserialization so the bidirectional deserializers don't have to handle every legacy quirk.
+
+**Hardcoded `align_to_definition` removed.** WireframeDepth 14→12 becomes a data-driven migration entry: `[("OldName1", "newName1"), ("OldName2", null /* dropped */), ...]`. Lives next to the effect definition. Other effects gain similar declarative migration tables as needed; the `align_to_definition` function disappears.
+
+**Fixture round-trips.** Three test fixtures (`Burn V5.manifold`, `Burn V4.manifold`, `WAYPOINTS.manifold`) round-trip through load → serialize → load with assertions on driver counts, beat divisions, param values. Migration must keep these green at every commit.
+
+### 7.6 V2 user-exposed params
+
+The system supports user exposure from day one. When the user opens a graph editor and ticks "expose `UVTransform.translate`":
+
+1. The editor generates a new `ParamId` (`"user_uvtransform_<n>"` or a name the user supplies).
+2. A new `ParamBinding` is appended to `EffectInstance.user_param_bindings: Vec<ParamBinding>` (owned strings, runtime-allocated).
+3. A new entry appears in `EffectInstance.param_values` at the corresponding ID slot.
+4. The effect card UI rebuilds its slider list; the new param renders identically to developer-defined params.
+5. OSC, Ableton, modulation, and macros can address the new param by its ID — the same way they address developer params.
+6. The project file persists the user binding alongside the effect's other state.
+
+V2 is *additive over V1 mechanics*. The framework is the same; the editor surface is what changes. No rework when V2 lights up — the data model and serialization already support it.
+
+### 7.7 UI surface
+
+The audit confirmed the existing UI infrastructure can host this with minimal scaffolding:
+
+- **Graph canvas already has click-to-select.** `GraphCanvas::selected: Option<u32>` is set on left-button-down and rendered with a cyan border. We reuse this — no new selection plumbing.
+- **Param panel slot.** When a node is selected, a right sidebar (built with `UITree` + `ScrollContainer` — both production-ready in the codebase) lists the node's parameters with expose checkboxes. Pattern: copy from `InspectorCompositePanel`'s two-column layout in `inspector.rs:97-107`.
+- **Effect card EXP badge.** The card already has ABL / ENV / DRV badges (3 × 36px × 14px, right-aligned in the header — `effect_card.rs:611-700`). We add a 4th `EXP` badge with the same dirty-check sync pattern. Visibility tied to `EffectInstance.user_param_bindings.is_empty()`.
+- **`PanelAction::EffectParamExpose(effect_index, node_id, inner_param_name, exposed: bool)`** — new action variant. Routed through the standard content-thread command path (same as `EffectParamChanged`).
+- **Param widget rendering.** `BitmapSlider` already handles continuous, discrete, whole-number, and labeled-enum widgets. User-exposed params reuse the same widget set; they're indistinguishable from developer params at the slider level (intentional — IDs are the same, addressing is the same).
+
+The graph editor canvas does NOT use UITree currently (it's raw `UIRenderer` primitives). The right-sidebar param panel is the first UITree component inside the editor window. Worth treating as scaffolding work in its own commit before the param-expose UI lands.
+
+### 7.8 What's safe vs unsafe to change
+
+Once this lands, the **stability rules** apply forever (just like `EffectTypeId`):
+
+| Change | Safe? | Why |
+|---|---|---|
+| Rename `spec.name` (the slider label) | ✅ | Display string, mappings key off `id` |
+| Rename `id` | ❌ | Forever rule. Add a new ID with deprecation alias if absolutely required. |
+| Reorder `ParamBinding`s in the slice | ✅ | `param_values` is ID-keyed in storage, position is meaningless |
+| Add a binding | ✅ | New ID gets default value; old projects gain a default-valued slot on load |
+| Remove a binding | ❌ | Breaks any mapping referencing that ID. Add a deprecation flag instead — the binding stays but the UI hides it. |
+| Change `target` (route to a different node) | ✅ | Internals are private |
+| Change `convert` (e.g., add EnumRemap) | ⚠️ | Safe *if* the value the user sees vs stores doesn't change. Verify visually. |
+| Decompose an effect into a sub-graph | ✅ | The `target` updates internally; the public IDs stay |
+| Decompose and add new params | ✅ | New IDs append; old IDs route to the new sub-graph |
+
+### 7.9 Generators
+
+Generators have the same parameter shape as effects (`GeneratorParamState` mirrors `EffectInstance`). The same migration applies: `param_index` → `param_id`, same custom deserializer, same `ParamBinding` framework. We do them in lockstep with effects rather than in a separate phase — they're the same code shape and the alternative is two migrations.
+
+Generator-specific concerns:
+- Line-based generators (`is_line_based: bool` in `GeneratorMetadata`) use `Lines` output rather than `Texture2D`. The `ParamBinding` framework doesn't care about output type; routing is the same.
+- String params (e.g., `GeneratorMetadata::string_params`) are a separate addressing system. They're already keyed by `key: &'static str` — already ID-style. No migration needed.
+
+### 7.10 Macros
+
+`MacroMappingTarget` includes `param_index` in 4 of its 5 variants (`MasterEffect`, `LayerEffect`, `GenParam`, etc.). Same migration: `param_index` → `param_id`. Saved projects with macros need the same custom deserializer treatment.
+
+`MacroSlot::ableton_mapping: Option<AbletonParamMapping>` references its own `param_index` for the macro's own value (a macro is itself a parameter that Ableton can map). The pattern recurses cleanly: macros become identifiable by their ID just like effects.
+
+---
+
+## 8. Stateful effects inventory
 
 The 8 effects requiring `StateStore` migration:
 
@@ -418,122 +655,178 @@ Resize-driven reallocation is handled by each `NodeState` impl's `resize` method
 
 ---
 
-## 8. Migration plan with gates
+## 9. Migration plan with gates
 
 ### Phase 0 — Audit + design doc *(this document)*
 
 Complete. Findings synthesized here. Gates:
 
 - ✅ manifold-gpu API audit
-- ✅ Stateful effect inventory  
+- ✅ Stateful effect inventory
 - ✅ Graph runtime internals review
 - ✅ Performance baseline analysis
-- ⏳ User approval of this doc
+- ✅ Parameter addressing audit (drivers, envelopes, Ableton, macros, OSC, UI, commands)
+- ✅ Project file format audit (serialization, versioning, fixtures, custom deserializers)
+- ✅ Editor UI audit (graph canvas, effect card, ScrollContainer, badges)
 
-### Phase 1 — Foundation *(5-7 commits)*
+### Phase 1 — Foundation: barriers, state, plan caching *(4-5 commits)*
 
-**Goal:** State extraction + plan caching + pipeline barrier API.
+**Goal:** Runtime infrastructure for the parameter binding work. Some already shipped during Phase 0/StylizedFeedback POC.
 
-1. **manifold-gpu: pipeline barrier API.** Add `GpuEncoder::pipeline_barrier(reads, writes)`. Metal impl: no-op stub. Document the Vulkan-future contract.
+1. ✅ **manifold-gpu: pipeline barrier API** *(shipped: c62432ca)*. No-op stub for Metal; signature ready for Vulkan.
 2. **manifold-gpu: feature-gate Metal-only modules.** `mps`, `metalfx`, `fft` behind `metal` feature. Audit caller sites.
-3. **node_graph: StateStore API + tests.** Type-erased state buckets keyed by `(NodeInstanceId, owner_key)`. Tests against a fake `NodeState`.
+3. ✅ **node_graph: StateStore API + tests** *(shipped: 9d5b6489)*. Plumbed through `EffectNodeContext`.
 4. **node_graph: edit-driven plan caching.** `Graph::topology_version` + `CachedPlan` pattern. Tests confirming param changes don't invalidate, structural changes do.
-5. **Migrate one stateful effect end-to-end as proof-of-concept.** Recommend **Auto Gain** as the first target — smallest state (4 floats + 16-byte buffer), no resolution dependence, no workers. If Auto Gain ports clean, Phase 1 mechanics are validated.
-6. **Migrate remaining stateful effects.** Bloom, Halation, Watercolor, Stylized Feedback, DOF, BlobTracking, WireframeDepth. Each in its own commit for easy rollback. Workers stay with their effects.
 
-**Gate to Phase 2:** all stateful effects pass their existing tests under the new pattern. No regression in unit tests or visual output (manual A/B).
+**Gate to Phase 2:** plan caching works against the StylizedFeedback graph and any other graph-backed effect.
 
-### Phase 2 — Optimization passes *(2-3 commits)*
+### Phase 2 — Parameter binding system *(8-10 commits)*
 
-**Goal:** Compiler/runtime mechanisms for skip + groups.
+**Goal:** ID-based parameter addressing across every subsystem. Ship V2 in one arc — no V1 staging.
 
-7. **Static elision pass.** `EffectNode::static_passthrough` opt-in. Compiler reroutes wires, drops nodes from plan. Tests against `UVTransform[mode=Identity]`.
-8. **Dynamic bypass instruction.** `Backend::alias_resource`, `bypass_predicate` field on `ExecutionStep`. `LegacyPostProcessNode` exposes inner `should_skip` as predicate. Tests on the executor with a dummy bypass predicate.
-9. **Wet/dry sub-graph translation.** Compiler emits `Mix` + dry-fan-out for groups. Static elision collapses `wet_dry == 0/1`. Tests confirming param routing works, snapshot output equals current chain output.
+This is the largest and most invasive phase. It touches data model, serialization, UI, every effect, every generator, every command. Ordering is critical so each commit individually compiles and tests pass.
 
-**Gate to Phase 3:** wet/dry sub-graph output matches `EffectChain::apply_wet_dry_lerp` output bit-exact (or within float epsilon) for a representative test scene.
+5. **`ParamBinding` / `ParamTarget` / `ParamConvert` types** in `manifold-core`. Pure data types + tests. No callers yet.
+6. **Add `id: Cow<'static, str>` to `ParamSpec`/`ParamDef`.** Mechanical: every `inventory::submit!` call across `manifold-renderer/src/effects/` and `manifold-renderer/src/generators/` gains an explicit `id` field per param. ~33 effect/generator entries, ~120 param entries.
+7. **Registry: `param_id_to_index(effect_type, id) → Option<usize>`.** Used by every addressing site to translate IDs to internal storage indices. Cached `AHashMap` per effect type, built lazily.
+8. **Migrate `ParameterDriver`: `param_index: i32` → `param_id: ParamId`.** Custom Deserialize accepts both old and new shapes. Tests against a synthesized old-format JSON.
+9. **Migrate `ParamEnvelope`: same pattern.**
+10. **Migrate `AbletonParamMapping`: same pattern.**
+11. **Migrate `MacroMappingTarget`: same pattern (4 variants).**
+12. **Migrate `EffectInstance.param_values` serialization.** Custom Deserialize accepts `Vec<f32>` (legacy) and `Map<String, f32>` (canonical). On save, write the map form. `projectVersion` bumps to `"1.2.0"`.
+13. **Migrate `GeneratorParamState`** in lockstep with `EffectInstance`. Same shape, same migration.
+14. **Bump `projectVersion` and add `migrate_v110_to_v120`** in `manifold-io/src/migrate.rs`. Pre-deserialization JSON normalization.
+15. **Replace hardcoded `align_to_definition` per-effect remaps** with declarative `legacy_param_aliases: &[(old_id, new_id)]` per effect. WireframeDepth's 14→12 becomes data, not code.
+16. **Migrate UI command structs**: `ChangeEffectParamCommand`, `PanelAction::Effect*`, `EffectCardConfig::params`. The UI carries `ParamId` from the click site to the content thread.
+17. **Generic `apply_param_bindings` shim** in `manifold-renderer`. Migrated effects use it. Retrofit `MirrorFX`, `SoftFocusGraphFX`, `StylizedFeedbackFX` to use it instead of their hand-rolled routing.
 
-### Phase 3 — Cutover *(1-2 commits)*
+**Gates to Phase 3:**
+- All three project file fixtures (`Burn V5`, `Burn V4`, `WAYPOINTS`) round-trip cleanly under new format.
+- Save → load → save produces byte-identical output (modulo new `projectVersion`).
+- Driver / Ableton / macro / OSC mapping tests still pass.
+- No regression in any visual A/B test.
 
-**Goal:** Replace `EffectChain` with plan-driven executor.
+### Phase 3 — V2 user-exposed parameters UI *(4-5 commits)*
 
-10. **`LayerCompositor` builds and caches per-chain graphs.** One `Graph` per effect chain (master / layer / clip), stored on the compositor. `apply_chain` becomes `executor.execute_frame_with_gpu(graph, plan, ...)`.
-11. **Delete `EffectChain`.** Remove all references. Update tests.
+**Goal:** The cog editor lets users tick checkboxes to expose inner-node params on the effect card. End-to-end: tick → save project → reload → mapping survives.
 
-**Gate to ship:** 
-- Existing 53-layer / 2928-clip benchmark project loads, plays, scrubs. **No visual regression** (frame-by-frame compare against pre-cutover).
-- Frame time at production scale ≤ current `EffectChain` baseline + 5%. (Some headroom because the elision/bypass path is strictly cheaper, but plan rebuilds on edits could spike. Both should average out.)
+18. **Graph canvas: right-sidebar param panel.** Built with `UITree` + `ScrollContainer` (first UITree component inside the editor window). Lists the selected node's parameters with expose checkboxes.
+19. **`PanelAction::EffectParamExpose(effect_index, node_id, inner_param_name, exposed: bool)`.** Routed through the standard content-thread command path.
+20. **`EffectInstance.user_param_bindings: Vec<ParamBinding>`.** Owned-string bindings per instance. `apply_param_bindings` iterates `static_bindings.chain(user_bindings)`.
+21. **Effect card EXP badge.** Visibility tied to `user_param_bindings.is_empty()`. Same dirty-check pattern as ABL/ENV/DRV.
+22. **Project file: serialize `user_param_bindings`.** ID-keyed, owned strings. Full round-trip test: tick a checkbox, save, reload, confirm mapping intact.
+
+**Gate to Phase 4:** A user can open the cog editor on Mirror, expose `UVTransform.translate`, save the project, reopen Manifold, and find the exposed param + any OSC/Ableton mappings made to it intact.
+
+### Phase 4 — Effect runtime unification *(remaining stateful effects + cutover)*
+
+With the ParamBinding framework in place, every remaining stateful migration is mechanical:
+
+23. **Migrate remaining stateful effects** (Auto Gain, Bloom, Halation, Watercolor, DOF, BlobTracking, WireframeDepth). Each in its own commit. Workers stay with their effects. The migrations are now ~100 LOC each (most of the boilerplate is in the framework).
+24. **Static elision pass.** `EffectNode::static_passthrough` opt-in. Compiler reroutes wires, drops nodes from plan.
+25. **Dynamic bypass instruction.** `Backend::alias_resource`, `bypass_predicate` field on `ExecutionStep`. `LegacyPostProcessNode` exposes inner `should_skip` as predicate.
+26. **Wet/dry sub-graph translation.** Compiler emits `Mix` + dry-fan-out for groups.
+27. **`LayerCompositor` builds and caches per-chain graphs.** Replace `EffectChain::apply_chain` with `executor.execute_frame_with_state`.
+28. **Delete `EffectChain`.** Remove all references.
+
+**Gate to ship:**
+- Existing 53-layer / 2928-clip benchmark project loads, plays, scrubs. **No visual regression** (frame-by-frame compare).
+- Frame time ≤ pre-cutover baseline + 5%.
 - All unit tests pass.
 - 24-hour soak in the dev environment with no panics.
 
-### Phase 4 (future, post-arc)
-
-Not part of this migration. Documented for completeness:
+### Phase 5 (future, post-arc)
 
 - **Dispatch fusion compiler.** Adjacent pixel-local primitives compile to a single shader.
 - **Multi-queue / async compute.** Independent branches dispatch on parallel queues.
-- **Vulkan backend.** Once manifold-gpu has a Vulkan implementation, `VulkanBackend: Backend` plugs into the existing executor. No graph-runtime changes.
+- **Vulkan backend.** `VulkanBackend: Backend` plugs into the existing executor. No graph-runtime changes.
 - **User-built composite saving / sharing.** Per `NODE_GRAPH_SYSTEM.md` §13.
 
 ---
 
-## 9. Risks and open questions
+## 10. Risks and open questions
 
 ### Risks
 
-1. **Performance regression at scale.** Mitigated by: analytical baseline (§4.2), edge-driven plan caching, executor scratch reuse. Measured by: 53-layer benchmark Phase 3 gate.
+1. **Performance regression at scale.** Mitigated by: analytical baseline (§4.2), edge-driven plan caching, executor scratch reuse. Measured by: 53-layer benchmark Phase 4 gate.
 
-2. **Stateful migration complexity.** WireframeDepth has 8 RTTs + 4 CPU buffers + 3 workers — a lot of state. Mitigated by: Auto Gain proof-of-concept first; one-effect-per-commit migration.
+2. **Stateful migration complexity.** WireframeDepth has 8 RTTs + 4 CPU buffers + 3 workers — a lot of state. Mitigated by: ParamBinding framework lands first so each migration is mostly composition, not new mechanism. StylizedFeedback POC validates the smaller case.
 
-3. **Wet/dry float-equality at sub-graph cutover.** `Mix` shader vs imperative `WetDryLerpPipeline` should produce identical output, but float ordering can drift. Mitigated by: explicit Phase 2 gate comparing output bit-exact (or within epsilon) before cutover.
+3. **Wet/dry float-equality at sub-graph cutover.** `Mix` shader vs imperative `WetDryLerpPipeline` should produce identical output, but float ordering can drift. Mitigated by: explicit Phase 4 gate comparing output bit-exact (or within epsilon) before cutover.
 
 4. **Background workers + StateStore.** Workers are shared singletons across owners. Their state isn't per-owner. Solution: workers stay with their effects (not in StateStore), but the per-owner *result* state (depth_texture, depth_buffer) lives in StateStore. The split is clean.
 
 5. **Plan recompile during user edits.** If the user holds shift+drag a slider that's actually a topology-affecting param, plan rebuilds every drag-frame. Mitigated by: edit events go through the editing service which already debounces, and plan compile is ~10μs (imperceptible).
 
+6. **Project file fixture round-trips.** Three fixtures must keep loading and serializing identically through Phase 2's serialization migration. Highest-risk piece because failure = corrupted user data. Mitigated by: bidirectional `Deserialize` impls accept both shapes; explicit fixture round-trip tests run on every commit; we keep `projectVersion = "1.0.0"` write-side until late in Phase 2 so old code can read new files until everyone's upgraded.
+
+7. **OSC client compatibility during migration.** OSC paths derive from `osc_prefix` + `osc_suffix`. As long as those don't change per-param (and we won't change them), external OSC clients keep working. Confirmed by the audit — OSC is the one subsystem where the public surface is already string-based.
+
 ### Open questions
 
 1. **Should `EffectInstance.enabled == false` be static elision, dynamic bypass, or both?** Recommend: static. Toggle is a user action (UI click), so it's a topology-version-bump event. Plan rebuilds; the disabled effect doesn't appear in the plan at all.
 
-2. **What's the canonical owner_key namespace under graph-as-chain?** Today: master=0, layer=layer_index+1, clip=hash(clip_id). With per-chain graphs, can we keep this? Yes — owner_key is host-level identity; graphs are unaware. StateStore is per-host-process, keyed by `(NodeInstanceId, owner_key)`.
+2. **What's the canonical owner_key namespace under graph-as-chain?** Today: master=0, layer=layer_index+1, clip=hash(clip_id). With per-chain graphs, we keep this — owner_key is host-level identity; graphs are unaware. StateStore is per-host-process, keyed by `(NodeInstanceId, owner_key)`.
 
-3. **Composite expansion vs in-place sub-graph?** Composites today expand inline (`build_bloom` adds 4 nodes to the parent graph). Should they stay inline or become opaque sub-graphs? Recommend: stay inline. Inline composites participate in static elision and lifetime analysis. Opaque sub-graphs would require a recursive executor.
+3. **Composite expansion vs in-place sub-graph?** Composites today expand inline (`build_bloom` adds 4 nodes to the parent graph). Recommend: stay inline. Inline composites participate in static elision and lifetime analysis. Opaque sub-graphs would require a recursive executor.
 
-4. **Vulkan barrier granularity.** `vkCmdPipelineBarrier2` supports per-stage and per-access masks for finer-grained barriers. Current proposed `pipeline_barrier(reads, writes)` is coarse (full memory + execution barrier). For Phase 1 the coarse barrier is fine; finer granularity is a future Vulkan-side optimization.
+4. **Vulkan barrier granularity.** `vkCmdPipelineBarrier2` supports per-stage and per-access masks for finer-grained barriers. Current proposed `pipeline_barrier(reads, writes)` is coarse (full memory + execution barrier). Coarse is fine for Phase 1; finer granularity is a future Vulkan-side optimization.
 
-5. **Should `Graph` be `Send`?** Plans, yes (immutable, owned). Graphs, currently no (`Box<dyn EffectNode>` not Send). Once `EffectNode: Send` is enforced trait-wide (already is), graphs are Send too. Confirms that content thread can own the graph store.
+5. **`param_values` storage: positional or ID-keyed in memory?** Recommend: stay positional (`Vec<f32>`). Hot-path `apply_param_bindings` iterates the binding slice and indexes by position; switching to `AHashMap<ParamId, f32>` would cost a hash lookup per param per frame. The map form is the *serialization* shape; in-memory we use the registry's `ParamId → index` lookup once at addressing-site boundaries (Ableton update, OSC dispatch, modulation), then index by position from there.
 
----
+6. **User-exposed param ID generation.** Recommend: `"user.<inner_node_type>.<inner_param>.<n>"` where `<n>` disambiguates collisions. E.g., the first user-exposed `UVTransform.translate` is `"user.uv_transform.translate.1"`. Stable, human-readable, collision-resistant. UUIDs are an alternative but they're opaque in project files.
 
-## 10. Implementation order summary
-
-```
-Pre-Phase: manifold-gpu changes
-  • Add pipeline_barrier API (Metal: no-op, Vulkan-ready)
-  • Feature-gate Metal-only modules
-
-Phase 1: Foundation
-  • StateStore API
-  • Plan caching (edit-driven)
-  • Migrate Auto Gain (POC)
-  • Migrate Bloom, Halation, Watercolor, Stylized Feedback
-  • Migrate DOF, BlobTracking, WireframeDepth
-
-Phase 2: Optimization passes
-  • Static elision (EffectNode::static_passthrough)
-  • Dynamic bypass (Backend::alias_resource + bypass_predicate)
-  • Wet/dry sub-graphs (Mix + dry-fan-out)
-
-Phase 3: Cutover
-  • LayerCompositor builds + caches graphs
-  • Delete EffectChain
-```
-
-Total: ~10-12 commits across the arc. Each commit independently shippable. Each phase has a hard gate. Rolling back from any phase leaves the system functional.
+7. **Migration of param removal.** If a developer removes a param (rare, generally forbidden), saved projects with mappings to that ID get orphaned. Recommend: mappings show in a "broken mappings" list in the UI and stay in the project file, so re-adding the ID re-binds them.
 
 ---
 
-## 11. References
+## 11. Implementation order summary
+
+```
+Phase 1: Foundation (4-5 commits, ~half done)
+  ✅ pipeline_barrier API stub
+  ✅ StateStore + EffectNodeContext plumbing
+  □  Feature-gate manifold-gpu Metal-only modules
+  □  Edit-driven plan caching
+
+Phase 2: Parameter binding system (8-10 commits, the big one)
+  □  ParamBinding / ParamTarget / ParamConvert types
+  □  Add `id` to ParamSpec/ParamDef, fill in for all 33 effect+generator entries
+  □  Registry: param_id_to_index lookup
+  □  Migrate ParameterDriver to ParamId
+  □  Migrate ParamEnvelope to ParamId
+  □  Migrate AbletonParamMapping to ParamId
+  □  Migrate MacroMappingTarget to ParamId
+  □  Migrate EffectInstance.param_values serialization (custom Deserialize)
+  □  Migrate GeneratorParamState in lockstep
+  □  projectVersion bump + migrate_v110_to_v120
+  □  Replace align_to_definition with declarative legacy_param_aliases
+  □  Migrate UI commands (ChangeEffectParamCommand, PanelAction::Effect*)
+  □  Generic apply_param_bindings shim; retrofit Mirror, SoftFocus, StylizedFeedback
+
+Phase 3: V2 user-exposed parameters UI (4-5 commits)
+  □  Graph canvas right-sidebar param panel (UITree + ScrollContainer)
+  □  PanelAction::EffectParamExpose action + content thread routing
+  □  EffectInstance.user_param_bindings field + serialization
+  □  Effect card EXP badge
+  □  End-to-end test: tick checkbox, save, reload, mappings intact
+
+Phase 4: Effect runtime unification (~10 commits)
+  □  Migrate remaining stateful effects (Auto Gain, Bloom, Halation, Watercolor, DOF, BlobTracking, WireframeDepth)
+  □  Static elision pass
+  □  Dynamic bypass instruction
+  □  Wet/dry sub-graph translation
+  □  LayerCompositor builds + caches per-chain graphs
+  □  Delete EffectChain
+```
+
+Total: ~25-30 commits across the arc. Each commit independently shippable. Each phase has a hard gate. Rolling back from any phase leaves the system functional.
+
+The bulk is Phase 2 (parameter binding system). It's the largest, riskiest, most invasive piece — and the precondition for everything else doing what it's supposed to. Once it lands, Phase 3 is mostly UI work and Phase 4 is mostly mechanical migrations.
+
+---
+
+## 12. References
 
 - [`docs/NODE_GRAPH_SYSTEM.md`](NODE_GRAPH_SYSTEM.md) — overall node-graph architecture.
 - [`docs/MANIFOLD_GPU_ARCHITECTURE.md`](MANIFOLD_GPU_ARCHITECTURE.md) — manifold-gpu design.
