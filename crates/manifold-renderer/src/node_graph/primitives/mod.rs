@@ -17,6 +17,7 @@
 mod color;
 mod compose;
 mod filter;
+mod temporal;
 mod uv;
 
 pub use color::{
@@ -27,6 +28,7 @@ pub use compose::{Blend, Mix, BLEND_MODES, BLEND_TYPE_ID, MIX_TYPE_ID};
 pub use filter::{
     Blur, MipChain, Threshold, BLUR_MODES, BLUR_TYPE_ID, MIP_CHAIN_TYPE_ID, THRESHOLD_TYPE_ID,
 };
+pub use temporal::{Feedback, FEEDBACK_MODES, FEEDBACK_TYPE_ID};
 pub use uv::{
     Sample, UVTransform, SAMPLE_FILTER_MODES, SAMPLE_TYPE_ID, SAMPLE_WRAP_MODES,
     UV_TRANSFORM_MODES, UV_TRANSFORM_TYPE_ID,
@@ -66,6 +68,7 @@ mod tests {
             Box::new(MipChain::new()),
             Box::new(UVTransform::new()),
             Box::new(Sample::new()),
+            Box::new(Feedback::new()),
         ]
     }
 
@@ -73,7 +76,7 @@ mod tests {
     fn all_v1_primitives_have_unique_type_ids() {
         let primitives = all_primitives();
         let ids: HashSet<&str> = primitives.iter().map(|p| p.type_id().as_str()).collect();
-        assert_eq!(ids.len(), 10, "V1 primitive type IDs must be unique");
+        assert_eq!(ids.len(), 11, "primitive type IDs must be unique");
     }
 
     #[test]

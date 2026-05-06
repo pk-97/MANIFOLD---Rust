@@ -1,16 +1,37 @@
-// Mechanical port of StylizedFeedbackFX.cs.
-// Same logic, same variables, same constants, same edge cases.
+//! [`StylizedFeedbackFX`] — graph-backed Stylized Feedback.
+//!
+//! Internally `Source → Feedback → FinalOutput`. Per-owner prev-frame
+//! state lives in a runtime-owned `StateStore` keyed by
+//! `(NodeInstanceId, OwnerKey)`, not in the effect itself.
+//!
+//! First migration of a stateful effect under the unification arc per
+//! `docs/EFFECT_RUNTIME_UNIFICATION.md`. Validates that the StateStore
+//! API + `EffectNodeContext` plumbing actually supports a real
+//! cross-frame stateful primitive end-to-end with pixel-exact output
+//! parity vs. the legacy compute-shader path.
+//!
+//! Behavior parity guarantees:
+//! - Same `EffectTypeId::STYLIZED_FEEDBACK` (legacy_discriminant 20).
+//! - Same 4 params in the same order: Amount / Zoom / Rotate / Mode.
+//! - Same shader (renamed from `fx_stylized_feedback_compute.wgsl` to
+//!   `primitives/shaders/feedback.wgsl`); same uniform shape, same
+//!   blend math, same NaN guard.
 
-use super::compute_dual_blit_helper::ComputeDualBlitHelper;
-use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
-use crate::gpu_encoder::GpuEncoder;
-use crate::render_target::RenderTarget;
-use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
-use manifold_core::generator_registration::ParamSpec;
 use manifold_core::effects::EffectInstance;
+use manifold_core::generator_registration::ParamSpec;
+use manifold_gpu::{GpuDevice, GpuTextureFormat};
+
+use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::effects::registration::EffectFactory;
+use crate::gpu_encoder::GpuEncoder;
+use crate::node_graph::primitives::Feedback;
+use crate::node_graph::{
+    compile, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend,
+    NodeInstanceId, ParamValue, PortType, ResourceId, Slot, Source, StateStore,
+};
+use crate::render_target::RenderTarget;
 
 inventory::submit! {
     EffectMetadata {
@@ -28,6 +49,7 @@ inventory::submit! {
         ],
     }
 }
+
 inventory::submit! {
     EffectFactory {
         id: EffectTypeId::STYLIZED_FEEDBACK,
@@ -35,66 +57,129 @@ inventory::submit! {
     }
 }
 
-// StylizedFeedbackFX.cs line 34 — Mathf.Deg2Rad
-const DEG_TO_RAD: f32 = std::f32::consts::PI / 180.0;
+const GRAPH_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 
-/// WGSL source — shared across all specialized mode variants.
-const FEEDBACK_WGSL: &str = include_str!("shaders/fx_stylized_feedback_compute.wgsl");
-
-// StylizedFeedbackFX.cs lines 34-37 — uniforms matching StylizedFeedbackEffect.shader Properties
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct StylizedFeedbackUniforms {
-    feedback_amount: f32, // _FeedbackAmount
-    zoom: f32,            // _Zoom
-    rotation: f32,        // _Rotation (radians)
-    mode: f32,            // _Mode (rounded)
-}
-
-/// Per-owner state: the previous frame's feedback buffer.
-struct StylizedFeedbackState {
-    buffer: RenderTarget,
-}
-
-/// Stylized feedback effect — zoom/rotate/blend current frame with previous
-/// frame's state buffer.
 pub struct StylizedFeedbackFX {
-    helper: ComputeDualBlitHelper,
-    /// Specialized pipelines per mode: 0=Screen, 1=Additive, 2=Max.
-    /// Metal compiler dead-code eliminates inactive if/else branches.
-    pipeline_screen: manifold_gpu::GpuComputePipeline,
-    pipeline_additive: manifold_gpu::GpuComputePipeline,
-    pipeline_max: manifold_gpu::GpuComputePipeline,
-    states: AHashMap<i64, StylizedFeedbackState>,
+    type_id: EffectTypeId,
+    graph: Graph,
+    plan: ExecutionPlan,
+    /// `NodeInstanceId` of the `Feedback` primitive — used for
+    /// per-frame param routing via `graph.set_param`.
+    feedback_node: NodeInstanceId,
+    source_resource: ResourceId,
+    output_resource: ResourceId,
+    /// Per-owner persistent state lives here. Each entry's key is
+    /// `(feedback_node, owner_key)`.
+    state_store: StateStore,
+    /// GPU resources — built lazily on first `apply` and rebuilt on
+    /// resolution change.
+    render: Option<RenderState>,
+}
+
+struct RenderState {
+    executor: Executor,
+    source_slot: Slot,
+    output_slot: Slot,
     width: u32,
     height: u32,
 }
 
 impl StylizedFeedbackFX {
-    pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
-        let spec = |mode: &str, label: &str| {
-            device.create_specialized_compute_pipeline(
-                FEEDBACK_WGSL,
-                "cs_main",
-                &[("uniforms.mode", mode)],
-                label,
-            )
-        };
+    pub fn new(_device: &GpuDevice) -> Self {
+        let mut graph = Graph::new();
+        let src = graph.add_node(Box::new(Source::new()));
+        let feedback = graph.add_node(Box::new(Feedback::new()));
+        graph
+            .connect((src, "out"), (feedback, "source"))
+            .expect("wire Source.out → Feedback.source");
+        let final_out = graph.add_node(Box::new(FinalOutput::new()));
+        graph
+            .connect((feedback, "out"), (final_out, "in"))
+            .expect("wire Feedback.out → FinalOutput.in");
+
+        let plan = compile(&graph).expect("compile stylized-feedback plan");
+        let source_resource = output_resource(&plan, src, "out");
+        let output_resource = output_resource(&plan, feedback, "out");
+
         Self {
-            helper: ComputeDualBlitHelper::new(device, FEEDBACK_WGSL, "StylizedFeedback Compute"),
-            pipeline_screen: spec("0.0", "StylizedFeedback Screen"),
-            pipeline_additive: spec("1.0", "StylizedFeedback Additive"),
-            pipeline_max: spec("2.0", "StylizedFeedback Max"),
-            states: AHashMap::new(),
-            width: 0,
-            height: 0,
+            type_id: EffectTypeId::STYLIZED_FEEDBACK,
+            graph,
+            plan,
+            feedback_node: feedback,
+            source_resource,
+            output_resource,
+            state_store: StateStore::new(),
+            render: None,
         }
     }
 }
 
+impl RenderState {
+    fn build(
+        device: &GpuDevice,
+        width: u32,
+        height: u32,
+        plan: &ExecutionPlan,
+        source_resource: ResourceId,
+        output_resource: ResourceId,
+    ) -> Self {
+        let mut backend = MetalBackend::without_device(width, height, GRAPH_FORMAT);
+        let mut source_slot: Option<Slot> = None;
+        let mut output_slot: Option<Slot> = None;
+
+        for i in 0..plan.resource_count() {
+            let id = ResourceId(i as u32);
+            if !matches!(plan.resource_type(id), Some(PortType::Texture2D)) {
+                continue;
+            }
+            let (label, is_source, is_output) = if id == source_resource {
+                ("stylized-feedback-source", true, false)
+            } else if id == output_resource {
+                ("stylized-feedback-output", false, true)
+            } else {
+                ("stylized-feedback-intermediate", false, false)
+            };
+            let target = RenderTarget::new(device, width, height, GRAPH_FORMAT, label);
+            let slot = backend.pre_bind_texture_2d(id, target);
+            if is_source {
+                source_slot = Some(slot);
+            } else if is_output {
+                output_slot = Some(slot);
+            }
+        }
+
+        let executor = Executor::new(Box::new(backend));
+
+        Self {
+            executor,
+            source_slot: source_slot.expect("source_resource must be Texture2D in plan"),
+            output_slot: output_slot.expect("output_resource must be Texture2D in plan"),
+            width,
+            height,
+        }
+    }
+}
+
+fn output_resource(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -> ResourceId {
+    for step in plan.steps() {
+        if step.node == node {
+            for &(name, id) in &step.outputs {
+                if name == port {
+                    return id;
+                }
+            }
+        }
+    }
+    panic!("no output `{port}` on node {node:?}");
+}
+
 impl PostProcessEffect for StylizedFeedbackFX {
     fn effect_type(&self) -> &EffectTypeId {
-        &EffectTypeId::STYLIZED_FEEDBACK
+        &self.type_id
+    }
+
+    fn graph_snapshot(&self) -> Option<crate::node_graph::GraphSnapshot> {
+        Some(crate::node_graph::GraphSnapshot::from_graph(&self.graph))
     }
 
     fn apply(
@@ -105,99 +190,112 @@ impl PostProcessEffect for StylizedFeedbackFX {
         fx: &EffectInstance,
         ctx: &EffectContext,
     ) {
-        self.width = ctx.width;
-        self.height = ctx.height;
-
-        // Ensure state buffer exists — clear to black on creation
-        if !self.states.contains_key(&ctx.owner_key) && self.width > 0 && self.height > 0 {
-            let format = manifold_gpu::GpuTextureFormat::Rgba16Float;
-            let buffer = if let Some(pool) = gpu.pool {
-                RenderTarget::new_pooled(
-                    pool,
-                    self.width,
-                    self.height,
-                    format,
-                    "StylizedFeedback State",
-                )
-            } else {
-                RenderTarget::new(
-                    gpu.device,
-                    self.width,
-                    self.height,
-                    format,
-                    "StylizedFeedback State",
-                )
-            };
-            gpu.clear_texture(&buffer.texture, 0.0, 0.0, 0.0, 0.0);
-            self.states
-                .insert(ctx.owner_key, StylizedFeedbackState { buffer });
+        if ctx.width == 0 || ctx.height == 0 {
+            return;
         }
 
-        let state = self.states.get(&ctx.owner_key).unwrap();
+        // 1. Lazy-init or rebuild on resolution change.
+        let needs_build = match &self.render {
+            None => true,
+            Some(r) => r.width != ctx.width || r.height != ctx.height,
+        };
+        if needs_build {
+            // Resolution change invalidates the prev-frame buffers in
+            // the StateStore — drop them so they get re-allocated black.
+            // (Mirrors legacy resize() which cleared the states map.)
+            self.state_store.cleanup_all();
+            self.render = Some(RenderState::build(
+                gpu.device,
+                ctx.width,
+                ctx.height,
+                &self.plan,
+                self.source_resource,
+                self.output_resource,
+            ));
+        }
+        let render = self.render.as_mut().expect("render initialized above");
 
-        let feedback_amount = fx.param_values.first().copied().unwrap_or(0.5).min(0.98);
-        let zoom = fx
+        // 2. Route effect-card sliders into the inner primitive's params.
+        let amount = fx.param_values.first().copied().unwrap_or(0.5);
+        let zoom = fx.param_values.get(1).copied().unwrap_or(0.95);
+        let rotation_deg = fx.param_values.get(2).copied().unwrap_or(0.0);
+        let mode_idx = fx
             .param_values
-            .get(1)
+            .get(3)
             .copied()
-            .unwrap_or(0.95)
-            .clamp(0.01, 10.0);
-        let rotation = fx.param_values.get(2).copied().unwrap_or(0.0) * DEG_TO_RAD;
-        let mode = fx.param_values.get(3).copied().unwrap_or(0.0).round();
+            .unwrap_or(0.0)
+            .round()
+            .clamp(0.0, 2.0) as u32;
+        self.graph
+            .set_param(self.feedback_node, "amount", ParamValue::Float(amount))
+            .expect("route amount");
+        self.graph
+            .set_param(self.feedback_node, "zoom", ParamValue::Float(zoom))
+            .expect("route zoom");
+        self.graph
+            .set_param(self.feedback_node, "rotation", ParamValue::Float(rotation_deg))
+            .expect("route rotation");
+        self.graph
+            .set_param(self.feedback_node, "mode", ParamValue::Enum(mode_idx))
+            .expect("route mode");
 
-        let uniforms = StylizedFeedbackUniforms {
-            feedback_amount,
-            zoom,
-            rotation,
-            mode,
-        };
+        // 3. Copy the layer's source into the graph's pre-bound Source slot.
+        let backend = render.executor.backend();
+        let source_tex = backend
+            .texture_2d(render.source_slot)
+            .expect("source slot pre-bound");
+        gpu.copy_texture_to_texture(source, source_tex, ctx.width, ctx.height);
 
-        // Select specialized pipeline based on mode
-        let pipeline = match mode.round() as u32 {
-            1 => &self.pipeline_additive,
-            2 => &self.pipeline_max,
-            _ => &self.pipeline_screen,
+        // 4. Run the graph with the per-owner state store.
+        let frame_time = FrameTime {
+            beats: manifold_core::Beats(f64::from(ctx.beat)),
+            seconds: manifold_core::Seconds(f64::from(ctx.time)),
+            delta: manifold_core::Seconds(f64::from(ctx.dt)),
         };
-        self.helper.dispatch_with(
-            pipeline,
+        render.executor.execute_frame_with_state(
+            &mut self.graph,
+            &self.plan,
+            frame_time,
             gpu,
-            source,
-            &state.buffer.texture,
-            target,
-            bytemuck::bytes_of(&uniforms),
-            "StylizedFeedback Pass",
-            ctx.width,
-            ctx.height,
+            &mut self.state_store,
+            ctx.owner_key,
         );
 
-        // PostBlit: copy result → state buffer for next frame
-        let state = self.states.get(&ctx.owner_key).unwrap();
-        gpu.copy_texture_to_texture(target, &state.buffer.texture, ctx.width, ctx.height);
+        // 5. Blit the graph's output into the layer chain's target.
+        let output_tex = render
+            .executor
+            .backend()
+            .texture_2d(render.output_slot)
+            .expect("output slot pre-bound");
+        gpu.copy_texture_to_texture(output_tex, target, ctx.width, ctx.height);
     }
 
     fn clear_state(&mut self) {
-        self.states.clear();
+        // Wipes every owner's prev-frame buffer — used on seek so trails
+        // don't carry stale content.
+        self.state_store.cleanup_all();
     }
 
-    fn resize(&mut self, _device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
-        self.width = width;
-        self.height = height;
-        self.states.clear();
+    fn resize(&mut self, _device: &manifold_gpu::GpuDevice, _width: u32, _height: u32) {
+        // The next apply() observes the new ctx.width/height and rebuilds
+        // automatically; clear stale state so we re-allocate at new dims.
+        self.state_store.cleanup_all();
+        self.render = None;
     }
 
     fn cleanup_owner_state(&mut self, owner_key: i64) {
-        self.states.remove(&owner_key);
+        self.state_store.cleanup_owner(owner_key);
     }
 }
 
 impl StatefulEffect for StylizedFeedbackFX {
     fn clear_state_for_owner(&mut self, owner_key: i64) {
-        self.states.remove(&owner_key);
+        self.state_store.cleanup_owner(owner_key);
     }
     fn cleanup_owner(&mut self, owner_key: i64) {
-        self.states.remove(&owner_key);
+        self.state_store.cleanup_owner(owner_key);
     }
     fn cleanup_all_owners(&mut self, _device: &manifold_gpu::GpuDevice) {
-        self.states.clear();
+        self.state_store.cleanup_all();
     }
 }
