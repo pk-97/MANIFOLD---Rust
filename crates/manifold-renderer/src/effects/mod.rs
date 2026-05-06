@@ -21,7 +21,6 @@ pub mod infrared;
 pub mod invert_colors;
 pub mod kaleidoscope;
 pub mod mirror;
-pub mod mirror_graph;
 pub mod node_graph_test;
 pub mod soft_focus_graph;
 pub mod quad_mirror;

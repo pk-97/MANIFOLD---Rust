@@ -41,6 +41,12 @@ pub const UV_TRANSFORM_MODES: &[&str] = &[
     "MirrorY",
     "FlipY",
     "QuadMirror",
+    // Fold modes — the legacy Mirror effect's kaleidoscope behavior:
+    // each axis is mirrored across its center, so half the source is
+    // visible and the other half is its mirror image.
+    "FoldX",
+    "FoldY",
+    "FoldBoth",
 ];
 
 const UV_TRANSFORM_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];

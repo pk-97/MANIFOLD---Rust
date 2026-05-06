@@ -23,7 +23,8 @@
 //!
 //! ## V1 set
 //!
-//! - [`build_mirror`]: alias preset of `UVTransform[mode=Mirror]`.
+//! - [`build_mirror`]: `UVTransform[mode=Foldᴹ] + Mix(source, folded)`
+//!   — kaleidoscope fold with amount blend.
 //! - [`build_infrared`]: `Luminance → GradientMap`.
 //! - [`build_soft_focus`]: `Blur` + `Mix(source, blurred)`.
 //! - [`build_halation`]: `Threshold → MipChain → Blur → ColorMatrix(tint) → Blend(Add)`,
@@ -39,7 +40,7 @@ mod soft_focus;
 pub use bloom::{build_bloom, BLOOM_TYPE_ID};
 pub use halation::{build_halation, HALATION_TYPE_ID};
 pub use infrared::{build_infrared, INFRARED_TYPE_ID};
-pub use mirror::{build_mirror, MIRROR_TYPE_ID};
+pub use mirror::{build_mirror, legacy_mirror_mode_to_uv, MIRROR_TYPE_ID};
 pub use soft_focus::{build_soft_focus, SOFT_FOCUS_TYPE_ID};
 
 use ahash::AHashMap;
@@ -200,14 +201,25 @@ mod tests {
     }
 
     #[test]
-    fn mirror_alias_compiles_executes_and_uses_one_inner_node() {
-        let (_, handle) = run_composite_in_graph(build_mirror);
+    fn mirror_compiles_executes_and_exposes_amount_and_mode() {
+        let (mut g, handle) = run_composite_in_graph(build_mirror);
         assert_eq!(handle.type_id().as_str(), MIRROR_TYPE_ID);
         assert_eq!(
             handle.inner_nodes().len(),
-            1,
-            "Mirror is an alias preset — exactly one inner UVTransform"
+            2,
+            "Mirror = UVTransform (fold) + Mix (amount blend)"
         );
+        let exposed: HashSet<&'static str> = handle.exposed_params().collect();
+        assert!(exposed.contains("amount"));
+        assert!(exposed.contains("mode"));
+        handle
+            .set_param(&mut g, "amount", ParamValue::Float(0.5))
+            .unwrap();
+        // Mode routes to UVTransform's mode enum directly; legacy values
+        // need the legacy_mirror_mode_to_uv helper at the call site.
+        handle
+            .set_param(&mut g, "mode", ParamValue::Enum(7))
+            .unwrap();
     }
 
     #[test]

@@ -74,7 +74,6 @@ fn build_effect_categories() -> HashMap<EffectTypeId, &'static str> {
     m.insert(EffectTypeId::COLOR_GRADE, POST_PROCESS);
     m.insert(EffectTypeId::WIREFRAME_DEPTH, POST_PROCESS);
     m.insert(EffectTypeId::NODE_GRAPH_TEST, POST_PROCESS);
-    m.insert(EffectTypeId::MIRROR_GRAPH, POST_PROCESS);
     m.insert(EffectTypeId::SOFT_FOCUS_GRAPH, POST_PROCESS);
     // Filmic
     m.insert(EffectTypeId::CHROMATIC_ABERRATION, FILMIC);

@@ -86,12 +86,6 @@ impl EffectTypeId {
     /// in the live renderer.
     pub const NODE_GRAPH_TEST: Self = Self(Cow::Borrowed("NodeGraphTest"));
 
-    /// Mirror, rebuilt as a graph-backed composite. Internally
-    /// `Source → UVTransform[mode=Mirror] → FinalOutput`. Coexists
-    /// with the legacy `Mirror` effect for migration; the legacy one
-    /// retires once the node-graph pipeline covers all needed cases.
-    pub const MIRROR_GRAPH: Self = Self(Cow::Borrowed("MirrorGraph"));
-
     /// Soft Focus, graph-backed. Internally
     /// `Source ─▶ Blur ──▶ Mix.b`
     /// `Source ──────────▶ Mix.a`. The first graph-backed effect with

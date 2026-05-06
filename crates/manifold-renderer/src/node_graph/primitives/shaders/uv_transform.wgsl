@@ -1,6 +1,6 @@
 // primitive.uv_transform — translate / scale / rotate / mirror the input.
 //
-// Single shader covering all 6 modes:
+// Single shader covering all 9 modes:
 //   0 = Identity     — no UV change beyond translate/scale/rotation.
 //   1 = Mirror       — flip horizontally.
 //   2 = MirrorX      — alias of Mirror.
@@ -8,6 +8,11 @@
 //   4 = FlipY        — alias of MirrorY.
 //   5 = QuadMirror   — fold the image into one corner, mirror across both
 //                      axes (visually: 4 mirrored copies in a 2×2 grid).
+//   6 = FoldX        — kaleidoscope fold across the vertical center: left
+//                      half stays, right half mirrors the left.
+//   7 = FoldY        — kaleidoscope fold across the horizontal center: top
+//                      half stays, bottom half mirrors the top.
+//   8 = FoldBoth     — FoldX combined with FoldY.
 //
 // Bindings (canonical layout for one-texture-input primitives):
 //   @binding(0) uniforms
@@ -51,6 +56,14 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         // the result reads as 4 mirrored quadrants.
         let folded = abs(uv - 0.5) * 2.0;  // [0, 1] in each axis
         uv = folded * 0.5 + 0.25;          // pull to [0.25, 0.75]
+    } else if uniforms.mode == 6u || uniforms.mode == 8u {
+        // FoldX / FoldBoth — fold horizontally across center.
+        // 0.5 - abs(uv.x - 0.5) maps [0,1] → [0,0.5] (triangle wave).
+        uv.x = 0.5 - abs(uv.x - 0.5);
+    }
+    if uniforms.mode == 7u || uniforms.mode == 8u {
+        // FoldY / FoldBoth — fold vertically across center.
+        uv.y = 0.5 - abs(uv.y - 0.5);
     }
 
     // 2. Center for rotation/scale.
