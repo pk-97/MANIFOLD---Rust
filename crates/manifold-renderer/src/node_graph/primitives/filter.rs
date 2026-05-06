@@ -5,6 +5,8 @@
 //! fuseable, Blur breaks fusion with its input but accepts pixel-local
 //! tail-fusion, and MipChain runs a series of passes regardless.
 
+use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc};
+
 use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
@@ -116,15 +118,27 @@ const BLUR_PARAMS: [ParamDef; 2] = [
     },
 ];
 
-#[derive(Debug)]
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct BlurUniforms {
+    radius: f32,
+    mode: u32,
+    _pad0: f32,
+    _pad1: f32,
+}
+
 pub struct Blur {
     type_id: EffectNodeType,
+    pipeline: Option<GpuComputePipeline>,
+    sampler: Option<GpuSampler>,
 }
 
 impl Blur {
     pub fn new() -> Self {
         Self {
             type_id: EffectNodeType::new(BLUR_TYPE_ID),
+            pipeline: None,
+            sampler: None,
         }
     }
 }
@@ -148,7 +162,67 @@ impl EffectNode for Blur {
     fn parameters(&self) -> &[ParamDef] {
         &BLUR_PARAMS
     }
-    fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let radius = match ctx.params.get("radius") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 4.0,
+        };
+        let mode = match ctx.params.get("mode") {
+            Some(ParamValue::Enum(i)) => *i,
+            _ => 0,
+        };
+
+        let Some(source) = ctx.inputs.texture_2d("source") else {
+            return;
+        };
+        let Some(out) = ctx.outputs.texture_2d("out") else {
+            return;
+        };
+        let (width, height) = (out.width, out.height);
+
+        let gpu = ctx.gpu_encoder();
+        let pipeline = self.pipeline.get_or_insert_with(|| {
+            gpu.device.create_compute_pipeline(
+                include_str!("shaders/blur.wgsl"),
+                "cs_main",
+                "primitive.blur",
+            )
+        });
+        let sampler = self
+            .sampler
+            .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
+
+        let uniforms = BlurUniforms {
+            radius,
+            mode,
+            _pad0: 0.0,
+            _pad1: 0.0,
+        };
+
+        gpu.native_enc.dispatch_compute(
+            pipeline,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: source,
+                },
+                GpuBinding::Sampler {
+                    binding: 2,
+                    sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: out,
+                },
+            ],
+            [width.div_ceil(16), height.div_ceil(16), 1],
+            "primitive.blur",
+        );
+    }
 }
 
 // =====================================================================

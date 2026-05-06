@@ -92,6 +92,12 @@ impl EffectTypeId {
     /// retires once the node-graph pipeline covers all needed cases.
     pub const MIRROR_GRAPH: Self = Self(Cow::Borrowed("MirrorGraph"));
 
+    /// Soft Focus, graph-backed. Internally
+    /// `Source ─▶ Blur ──▶ Mix.b`
+    /// `Source ──────────▶ Mix.a`. The first graph-backed effect with
+    /// branching topology — exercises source fan-out.
+    pub const SOFT_FOCUS_GRAPH: Self = Self(Cow::Borrowed("SoftFocusGraph"));
+
     /// Placeholder for unrecognized/removed effect types.
     /// Renderers skip this — it never applies any GPU work.
     pub const UNKNOWN: Self = Self(Cow::Borrowed("Unknown"));
