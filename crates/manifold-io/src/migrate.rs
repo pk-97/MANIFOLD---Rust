@@ -25,7 +25,30 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.1.0".to_string());
     }
 
+    if is_version_less_than(&version, "1.2.0") {
+        migrate_v110_to_v120(&mut root);
+        root["projectVersion"] = Value::String("1.2.0".to_string());
+    }
+
     serde_json::to_string_pretty(&root)
+}
+
+/// v1.1.0 → v1.2.0: parameter addressing migration to stable
+/// `param_id`. The bidirectional `Deserialize` impls on
+/// `ParameterDriver`, `ParamEnvelope`, `AbletonParamMapping`,
+/// `MacroMapping`, `EffectInstance`, and `GeneratorParamState`
+/// (steps 8–13) accept both V1.1 (`paramIndex` / `Array`) and V1.2
+/// (`paramId` / `Map`) shapes natively, so this migration only needs
+/// to bump the version stamp — no JSON rewriting required.
+///
+/// Future legacy quirks (e.g., declarative `legacy_param_aliases` from
+/// step 15) may add JSON-level rewrites here.
+fn migrate_v110_to_v120(_root: &mut Value) {
+    // No-op. All addressing-site migrations are handled by the
+    // bidirectional Deserialize impls; the post-load resolver in
+    // `Project::resolve_legacy_param_ids` translates parked
+    // `legacy_param_index` values to stable `param_id` via the
+    // effect/generator registries.
 }
 
 /// v1.0.0 → v1.1.0: Nest percussion fields into percussionImport,
@@ -135,5 +158,47 @@ mod tests {
         assert!(is_version_less_than("1.0.0", "1.1.0"));
         assert!(!is_version_less_than("1.1.0", "1.1.0"));
         assert!(!is_version_less_than("1.2.0", "1.1.0"));
+    }
+
+    #[test]
+    fn test_v110_input_bumps_to_v120() {
+        // V1.1 project with no legacy quirks → migrate_if_needed
+        // bumps the version stamp to 1.2.0 (step 14). The
+        // bidirectional Deserialize impls handle the parameter
+        // addressing migration on load — no JSON rewriting needed.
+        let json = r#"{
+            "projectVersion": "1.1.0",
+            "projectName": "test"
+        }"#;
+        let migrated = migrate_if_needed(json).unwrap();
+        let v: Value = serde_json::from_str(&migrated).unwrap();
+        assert_eq!(v.get("projectVersion").and_then(|x| x.as_str()), Some("1.2.0"));
+    }
+
+    #[test]
+    fn test_v100_chains_through_v110_to_v120() {
+        // V1.0 project should chain: v1.0 → v1.1 (percussion +
+        // genParams nesting) → v1.2 (version stamp only).
+        let json = r#"{
+            "projectVersion": "1.0.0",
+            "projectName": "test",
+            "timeline": {"layers": []}
+        }"#;
+        let migrated = migrate_if_needed(json).unwrap();
+        let v: Value = serde_json::from_str(&migrated).unwrap();
+        assert_eq!(v.get("projectVersion").and_then(|x| x.as_str()), Some("1.2.0"));
+    }
+
+    #[test]
+    fn test_v120_input_is_not_remigrated() {
+        // Already-current projects should pass through unchanged
+        // (no spurious migration attempts).
+        let json = r#"{
+            "projectVersion": "1.2.0",
+            "projectName": "current"
+        }"#;
+        let migrated = migrate_if_needed(json).unwrap();
+        let v: Value = serde_json::from_str(&migrated).unwrap();
+        assert_eq!(v.get("projectVersion").and_then(|x| x.as_str()), Some("1.2.0"));
     }
 }
