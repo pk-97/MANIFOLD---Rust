@@ -173,7 +173,7 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: Beats) -> bool 
                     .iter()
                     .filter(|d| d.enabled && !d.is_paused_by_user)
                     .filter_map(|driver| {
-                        let idx = driver.param_index as usize;
+                        let &idx = gen_def.id_to_index.get(driver.param_id.as_ref())?;
                         if idx >= gen_defs.len() {
                             return None;
                         }
@@ -237,7 +237,7 @@ fn evaluate_effect_drivers(fx: &mut EffectInstance, current_beat: Beats) -> bool
         .iter()
         .filter(|d| d.enabled && !d.is_paused_by_user)
         .filter_map(|driver| {
-            let idx = driver.param_index as usize;
+            let &idx = effect_def.id_to_index.get(driver.param_id.as_ref())?;
             if idx >= effect_defs.len() {
                 return None;
             }

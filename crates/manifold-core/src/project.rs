@@ -123,6 +123,12 @@ impl Project {
         // every value to defaults.
         self.migrate_all_generator_params();
 
+        // V1.1 → V1.2 migration: every driver/envelope/Ableton mapping
+        // deserialized from a legacy `paramIndex: i32` shape needs its
+        // `param_id` filled in from the registry. See
+        // `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 step 8.
+        self.resolve_legacy_param_ids();
+
         // Normalize layer order into tree pre-order (group children contiguous
         // immediately after parent). Also reindexes.
         self.timeline.enforce_tree_order();
@@ -151,6 +157,98 @@ impl Project {
         for layer in &mut self.timeline.layers {
             if let Some(gp) = layer.gen_params_mut() {
                 gp.migrate_to_registry_length();
+            }
+        }
+    }
+
+    /// Resolve every driver / envelope / Ableton-mapping that came in via
+    /// the legacy `paramIndex: i32` shape. The custom `Deserialize` for
+    /// each of those types parks the legacy index in
+    /// `legacy_param_index`; here we walk every site, look up the
+    /// effect/generator's registry definition, and assign
+    /// `param_id = def.param_defs[idx].id`.
+    ///
+    /// After this pass, every driver/envelope/mapping in memory has a
+    /// non-empty `param_id` (assuming the index was in range and the
+    /// effect type is registered). Stragglers — drivers whose param
+    /// disappeared because the effect's param list shrunk — are left
+    /// with empty `param_id` and will be ignored at runtime.
+    fn resolve_legacy_param_ids(&mut self) {
+        use crate::effect_definition_registry;
+        use crate::generator_definition_registry;
+
+        fn resolve_driver_id_for_effect(
+            driver: &mut crate::effects::ParameterDriver,
+            effect_type: &crate::EffectTypeId,
+        ) {
+            if !driver.param_id.is_empty() {
+                driver.legacy_param_index = None;
+                return;
+            }
+            let Some(idx) = driver.legacy_param_index else {
+                return;
+            };
+            let Some(def) = effect_definition_registry::try_get(effect_type) else {
+                return;
+            };
+            if let Some(pd) = def.param_defs.get(idx as usize)
+                && !pd.id.is_empty()
+            {
+                driver.param_id = std::borrow::Cow::Owned(pd.id.clone());
+            }
+            driver.legacy_param_index = None;
+        }
+
+        fn resolve_driver_id_for_generator(
+            driver: &mut crate::effects::ParameterDriver,
+            gen_type: &crate::GeneratorTypeId,
+        ) {
+            if !driver.param_id.is_empty() {
+                driver.legacy_param_index = None;
+                return;
+            }
+            let Some(idx) = driver.legacy_param_index else {
+                return;
+            };
+            let Some(def) = generator_definition_registry::try_get(gen_type) else {
+                return;
+            };
+            if let Some(pd) = def.param_defs.get(idx as usize)
+                && !pd.id.is_empty()
+            {
+                driver.param_id = std::borrow::Cow::Owned(pd.id.clone());
+            }
+            driver.legacy_param_index = None;
+        }
+
+        // Master effects.
+        for fx in &mut self.settings.master_effects {
+            let effect_type = fx.effect_type().clone();
+            if let Some(drivers) = fx.drivers.as_mut() {
+                for d in drivers {
+                    resolve_driver_id_for_effect(d, &effect_type);
+                }
+            }
+        }
+        // Layer effects + generator drivers.
+        for layer in &mut self.timeline.layers {
+            if let Some(ref mut effects) = layer.effects {
+                for fx in effects.iter_mut() {
+                    let effect_type = fx.effect_type().clone();
+                    if let Some(drivers) = fx.drivers.as_mut() {
+                        for d in drivers {
+                            resolve_driver_id_for_effect(d, &effect_type);
+                        }
+                    }
+                }
+            }
+            if let Some(gp) = layer.gen_params_mut() {
+                let gen_type = gp.generator_type().clone();
+                if let Some(drivers) = gp.drivers.as_mut() {
+                    for d in drivers {
+                        resolve_driver_id_for_generator(d, &gen_type);
+                    }
+                }
             }
         }
     }
@@ -322,4 +420,97 @@ impl Default for Project {
 
 fn default_version() -> String {
     "1.1.0".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::EffectTypeId;
+    use crate::effects::{EffectInstance, ParameterDriver};
+    use crate::types::{BeatDivision, DriverWaveform};
+
+    /// Step 8 regression: a driver deserialized from the legacy
+    /// `paramIndex` shape gets its `param_id` filled in by
+    /// `resolve_legacy_param_ids` during `on_after_deserialize`.
+    #[test]
+    fn legacy_param_index_resolved_to_param_id_for_effect_drivers() {
+        let mut p = Project::default();
+        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        fx.param_values = vec![0.5];
+        // Construct a driver as if it came from legacy JSON: empty
+        // param_id, legacy_param_index = Some(0).
+        fx.drivers = Some(vec![ParameterDriver {
+            param_id: std::borrow::Cow::Borrowed(""),
+            beat_division: BeatDivision::Quarter,
+            waveform: DriverWaveform::Sine,
+            enabled: true,
+            phase: 0.0,
+            base_value: 0.0,
+            trim_min: 0.0,
+            trim_max: 1.0,
+            reversed: false,
+            legacy_param_index: Some(0),
+            is_paused_by_user: false,
+        }]);
+        p.settings.master_effects.push(fx);
+
+        p.resolve_legacy_param_ids();
+
+        let d = &p.settings.master_effects[0].drivers.as_ref().unwrap()[0];
+        assert_eq!(d.param_id, "amount", "Bloom paramIndex 0 should resolve to 'amount'");
+        assert_eq!(d.legacy_param_index, None, "legacy index must be cleared");
+    }
+
+    #[test]
+    fn legacy_resolution_idempotent_when_param_id_already_set() {
+        let mut p = Project::default();
+        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        fx.param_values = vec![0.5];
+        fx.drivers = Some(vec![ParameterDriver::new(
+            "amount",
+            BeatDivision::Quarter,
+            DriverWaveform::Sine,
+        )]);
+        p.settings.master_effects.push(fx);
+
+        p.resolve_legacy_param_ids();
+        p.resolve_legacy_param_ids(); // idempotent
+
+        let d = &p.settings.master_effects[0].drivers.as_ref().unwrap()[0];
+        assert_eq!(d.param_id, "amount");
+        assert_eq!(d.legacy_param_index, None);
+    }
+
+    #[test]
+    fn legacy_resolution_leaves_unresolvable_drivers_empty() {
+        // If the legacy index is out of range (effect's param list shrunk
+        // since save), the driver gets `param_id = ""` and is ignored
+        // at runtime. Better than panicking on a stale project.
+        let mut p = Project::default();
+        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        fx.param_values = vec![0.5];
+        fx.drivers = Some(vec![ParameterDriver {
+            param_id: std::borrow::Cow::Borrowed(""),
+            beat_division: BeatDivision::Quarter,
+            waveform: DriverWaveform::Sine,
+            enabled: true,
+            phase: 0.0,
+            base_value: 0.0,
+            trim_min: 0.0,
+            trim_max: 1.0,
+            reversed: false,
+            legacy_param_index: Some(99),
+            is_paused_by_user: false,
+        }]);
+        p.settings.master_effects.push(fx);
+
+        p.resolve_legacy_param_ids();
+
+        let d = &p.settings.master_effects[0].drivers.as_ref().unwrap()[0];
+        assert_eq!(d.param_id, "", "out-of-range index leaves param_id empty");
+        assert_eq!(
+            d.legacy_param_index, None,
+            "legacy index always cleared, even when unresolvable"
+        );
+    }
 }

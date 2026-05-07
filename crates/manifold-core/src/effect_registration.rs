@@ -34,12 +34,14 @@ impl EffectMetadata {
             .filter(|(_, p)| !p.id.is_empty())
             .map(|(i, p)| (p.id.to_string(), i))
             .collect();
+        let param_ids: Vec<&'static str> = self.params.iter().map(|p| p.id).collect();
         EffectDef {
             display_name: self.display_name,
             param_count,
             param_defs,
             osc_prefix: Some(self.osc_prefix),
             id_to_index,
+            param_ids,
         }
     }
 

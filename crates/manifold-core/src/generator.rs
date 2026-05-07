@@ -1,4 +1,4 @@
-use crate::effects::{ParamDef, ParamEnvelope, ParamSource, ParameterDriver};
+use crate::effects::{ParamDef, ParamEnvelope, ParamId, ParamSource, ParameterDriver};
 use crate::generator_type_id::GeneratorTypeId;
 use crate::types::{BeatDivision, DriverWaveform};
 use serde::{Deserialize, Serialize};
@@ -150,13 +150,12 @@ impl GeneratorParamState {
         }
     }
 
-    /// Find the driver for a given param index, or None.
-    /// Unity GeneratorParamState.cs lines 34-40.
-    pub fn find_driver(&self, param_index: i32) -> Option<&ParameterDriver> {
+    /// Find the driver for a given param id, or None.
+    pub fn find_driver(&self, param_id: &str) -> Option<&ParameterDriver> {
         self.drivers
             .as_ref()?
             .iter()
-            .find(|d| d.param_index == param_index)
+            .find(|d| d.param_id == param_id)
     }
 
     /// Find the envelope for a given param index, or None.
@@ -195,6 +194,8 @@ impl GeneratorParamState {
     /// Reset effective param values to base — ONLY for params with active drivers or envelopes.
     /// Port of C# GeneratorParamState.ResetEffectives().
     pub fn reset_effectives(&mut self) {
+        use crate::generator_definition_registry;
+
         if self.param_values.is_empty() {
             return;
         }
@@ -203,11 +204,18 @@ impl GeneratorParamState {
             Some(b) => b,
             None => return,
         };
+        let id_to_index = generator_definition_registry::try_get(&self.generator_type)
+            .map(|d| &d.id_to_index);
 
         if let Some(drivers) = &self.drivers {
             for driver in drivers {
-                let idx = driver.param_index as usize;
-                if driver.enabled && idx < self.param_values.len() && idx < base.len() {
+                if !driver.enabled {
+                    continue;
+                }
+                let Some(&idx) = id_to_index.and_then(|m| m.get(driver.param_id.as_ref())) else {
+                    continue;
+                };
+                if idx < self.param_values.len() && idx < base.len() {
                     self.param_values[idx] = base[idx];
                 }
             }
@@ -348,23 +356,23 @@ impl ParamSource for GeneratorParamState {
         GeneratorParamState::set_param_base(self, index, value);
     }
 
-    fn find_driver(&self, param_index: i32) -> Option<&ParameterDriver> {
-        GeneratorParamState::find_driver(self, param_index)
+    fn find_driver(&self, param_id: &str) -> Option<&ParameterDriver> {
+        GeneratorParamState::find_driver(self, param_id)
     }
 
     fn get_drivers_list(&self) -> Option<&Vec<ParameterDriver>> {
         self.drivers.as_ref()
     }
 
-    fn create_driver(&mut self, param_index: i32) -> &ParameterDriver {
-        let driver = ParameterDriver::new(param_index, BeatDivision::Quarter, DriverWaveform::Sine);
+    fn create_driver(&mut self, param_id: ParamId) -> &ParameterDriver {
+        let driver = ParameterDriver::new(param_id, BeatDivision::Quarter, DriverWaveform::Sine);
         self.drivers_mut().push(driver);
         self.drivers.as_ref().unwrap().last().unwrap()
     }
 
-    fn remove_driver(&mut self, param_index: i32) {
+    fn remove_driver(&mut self, param_id: &str) {
         if let Some(drivers) = &mut self.drivers {
-            drivers.retain(|d| d.param_index != param_index);
+            drivers.retain(|d| d.param_id != param_id);
         }
     }
 }

@@ -844,7 +844,7 @@ fn add_driver_effect_undo_roundtrip() {
         effect_index: 0,
     };
     let driver = ParameterDriver {
-        param_index: 0,
+        param_id: std::borrow::Cow::Borrowed("amount"),
         beat_division: BeatDivision::Quarter,
         waveform: DriverWaveform::Sine,
         enabled: true,
@@ -853,6 +853,7 @@ fn add_driver_effect_undo_roundtrip() {
         trim_min: 0.0,
         trim_max: 1.0,
         reversed: false,
+        legacy_param_index: None,
         is_paused_by_user: false,
     };
 
@@ -884,7 +885,7 @@ fn toggle_driver_enabled_undo_roundtrip() {
     {
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
         fx.drivers = Some(vec![ParameterDriver {
-            param_index: 0,
+            param_id: std::borrow::Cow::Borrowed("amount"),
             enabled: true,
             ..make_driver()
         }]);
@@ -910,7 +911,7 @@ fn change_driver_waveform_undo_roundtrip() {
     {
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
         fx.drivers = Some(vec![ParameterDriver {
-            param_index: 0,
+            param_id: std::borrow::Cow::Borrowed("amount"),
             waveform: DriverWaveform::Sine,
             ..make_driver()
         }]);
@@ -943,7 +944,7 @@ fn change_trim_undo_roundtrip() {
     {
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
         fx.drivers = Some(vec![ParameterDriver {
-            param_index: 0,
+            param_id: std::borrow::Cow::Borrowed("amount"),
             trim_min: 0.0,
             trim_max: 1.0,
             ..make_driver()
@@ -1059,7 +1060,7 @@ fn make_effect(effect_type: &EffectTypeId) -> EffectInstance {
 
 fn make_driver() -> ParameterDriver {
     ParameterDriver {
-        param_index: 0,
+        param_id: std::borrow::Cow::Borrowed("amount"),
         beat_division: BeatDivision::Quarter,
         waveform: DriverWaveform::Sine,
         enabled: true,
@@ -1068,6 +1069,7 @@ fn make_driver() -> ParameterDriver {
         trim_min: 0.0,
         trim_max: 1.0,
         reversed: false,
+        legacy_param_index: None,
         is_paused_by_user: false,
     }
 }

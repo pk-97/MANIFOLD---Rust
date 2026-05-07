@@ -55,9 +55,9 @@ impl Command for AddDriverCommand {
     }
 
     fn undo(&mut self, project: &mut Project) {
-        let param_index = self.driver.param_index;
+        let param_id = self.driver.param_id.clone();
         with_drivers_mut(project, &self.target, |drivers| {
-            if let Some(pos) = drivers.iter().position(|d| d.param_index == param_index) {
+            if let Some(pos) = drivers.iter().position(|d| d.param_id == param_id) {
                 drivers.remove(pos);
             }
         });

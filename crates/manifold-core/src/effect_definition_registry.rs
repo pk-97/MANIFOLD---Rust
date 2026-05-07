@@ -21,6 +21,12 @@ pub struct EffectDef {
     /// V1 projects with empty `ParamDef.id` strings still resolve via
     /// post-load alignment + this table.
     pub id_to_index: AHashMap<String, usize>,
+    /// Storage-index → param id, parallel to `param_defs`. Each entry
+    /// is the same `&'static str` carried in the original `ParamSpec`
+    /// at registration time. Empty for legacy slots where the spec
+    /// did not carry an id. Lets reverse lookups (`param_index_to_id`)
+    /// return `&'static str` without unsafe transmutes.
+    pub param_ids: Vec<&'static str>,
 }
 
 // ─── Static Registry ───
@@ -63,17 +69,14 @@ pub fn param_id_to_index(effect_type: &EffectTypeId, id: &str) -> Option<usize> 
     DEFINITIONS.get(effect_type)?.id_to_index.get(id).copied()
 }
 
-/// Reverse of [`param_id_to_index`]: storage index → param id (lives as
-/// long as the registry). Returns `None` if the effect or index is
-/// out of range, or the slot has an empty id (V1 unpopulated).
-pub fn param_index_to_id(effect_type: &EffectTypeId, index: usize) -> Option<&str> {
+/// Reverse of [`param_id_to_index`]: storage index → param id. Each id
+/// is the original `&'static str` from the `ParamSpec` registration.
+/// Returns `None` if the effect or index is out of range, or the slot
+/// has an empty id (V1 fixture / pre-step-6 entry).
+pub fn param_index_to_id(effect_type: &EffectTypeId, index: usize) -> Option<&'static str> {
     let def = DEFINITIONS.get(effect_type)?;
-    let pd = def.param_defs.get(index)?;
-    if pd.id.is_empty() {
-        None
-    } else {
-        Some(pd.id.as_str())
-    }
+    let id = *def.param_ids.get(index)?;
+    if id.is_empty() { None } else { Some(id) }
 }
 
 /// Create a new EffectInstance with default parameter values from the registry.

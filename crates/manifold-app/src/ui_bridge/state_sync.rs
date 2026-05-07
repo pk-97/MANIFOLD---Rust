@@ -1215,8 +1215,14 @@ fn effects_to_configs(
             let mut driver_dotted = vec![false; n];
             let mut driver_triplet = vec![false; n];
             if let Some(ref drivers) = fx.drivers {
+                let id_to_index = manifold_core::effect_definition_registry::try_get(
+                    fx.effect_type(),
+                )
+                .map(|d| &d.id_to_index);
                 for d in drivers {
-                    let pi = d.param_index as usize;
+                    let Some(&pi) = id_to_index.and_then(|m| m.get(d.param_id.as_ref())) else {
+                        continue;
+                    };
                     if pi < n && d.enabled {
                         has_drv = true;
                         driver_active[pi] = true;
@@ -1405,20 +1411,26 @@ fn gen_params_to_config(
     let mut driver_dotted = vec![false; n];
     let mut driver_triplet = vec![false; n];
     if let Some(ref drivers) = gp.drivers {
+        let id_to_index =
+            manifold_core::generator_definition_registry::try_get(gp.generator_type())
+                .map(|d| &d.id_to_index);
         for d in drivers {
-            if d.enabled {
-                let pi = d.param_index as usize;
-                if pi < n {
-                    driver_active[pi] = true;
-                    trim_min[pi] = d.trim_min;
-                    trim_max[pi] = d.trim_max;
-                    driver_beat_div_idx[pi] =
-                        beat_div_to_button_index(d.beat_division.base_division());
-                    driver_waveform_idx[pi] = d.waveform as i32;
-                    driver_reversed[pi] = d.reversed;
-                    driver_dotted[pi] = d.beat_division.is_dotted();
-                    driver_triplet[pi] = d.beat_division.is_triplet();
-                }
+            if !d.enabled {
+                continue;
+            }
+            let Some(&pi) = id_to_index.and_then(|m| m.get(d.param_id.as_ref())) else {
+                continue;
+            };
+            if pi < n {
+                driver_active[pi] = true;
+                trim_min[pi] = d.trim_min;
+                trim_max[pi] = d.trim_max;
+                driver_beat_div_idx[pi] =
+                    beat_div_to_button_index(d.beat_division.base_division());
+                driver_waveform_idx[pi] = d.waveform as i32;
+                driver_reversed[pi] = d.reversed;
+                driver_dotted[pi] = d.beat_division.is_dotted();
+                driver_triplet[pi] = d.beat_division.is_triplet();
             }
         }
     }

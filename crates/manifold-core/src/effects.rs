@@ -3,6 +3,17 @@ use crate::id::{EffectGroupId, EffectId};
 use crate::types::{BeatDivision, DriverWaveform};
 use crate::units::Beats;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
+
+/// Stable string identifier for a host-visible parameter.
+///
+/// `Cow::Borrowed("amount")` for compile-time IDs (developer-defined
+/// effects). `Cow::Owned(...)` for V2 user-exposed parameters allocated
+/// at runtime. External mappings (OSC, Ableton, MIDI, modulation
+/// drivers, envelopes) all key on this — never on positional indices.
+///
+/// See `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 for the full design.
+pub type ParamId = Cow<'static, str>;
 
 // ─── Param Definition ───
 
@@ -86,10 +97,10 @@ pub trait ParamSource {
     fn set_param(&mut self, index: usize, value: f32);
     fn get_base_param(&self, index: usize) -> f32;
     fn set_base_param(&mut self, index: usize, value: f32);
-    fn find_driver(&self, param_index: i32) -> Option<&ParameterDriver>;
+    fn find_driver(&self, param_id: &str) -> Option<&ParameterDriver>;
     fn get_drivers_list(&self) -> Option<&Vec<ParameterDriver>>;
-    fn create_driver(&mut self, param_index: i32) -> &ParameterDriver;
-    fn remove_driver(&mut self, param_index: i32);
+    fn create_driver(&mut self, param_id: ParamId) -> &ParameterDriver;
+    fn remove_driver(&mut self, param_id: &str);
 }
 
 // ─── Effect Instance ───
@@ -243,12 +254,12 @@ impl EffectInstance {
         }
     }
 
-    /// Find the driver for a given param index, or None.
-    pub fn find_driver(&self, param_index: i32) -> Option<&ParameterDriver> {
+    /// Find the driver for a given param id, or None.
+    pub fn find_driver(&self, param_id: &str) -> Option<&ParameterDriver> {
         self.drivers
             .as_ref()?
             .iter()
-            .find(|d| d.param_index == param_index)
+            .find(|d| d.param_id == param_id)
     }
 
     /// Get drivers list reference (may be None).
@@ -256,17 +267,17 @@ impl EffectInstance {
         self.drivers.as_ref()
     }
 
-    /// Create a driver for a param index. Unity lines 66-71.
-    pub fn create_driver(&mut self, param_index: i32) -> &ParameterDriver {
-        let driver = ParameterDriver::new(param_index, BeatDivision::Quarter, DriverWaveform::Sine);
+    /// Create a driver for a param id.
+    pub fn create_driver(&mut self, param_id: ParamId) -> &ParameterDriver {
+        let driver = ParameterDriver::new(param_id, BeatDivision::Quarter, DriverWaveform::Sine);
         self.drivers_mut().push(driver);
         self.drivers.as_ref().unwrap().last().unwrap()
     }
 
-    /// Remove driver by param index.
-    pub fn remove_driver(&mut self, param_index: i32) {
+    /// Remove driver by param id.
+    pub fn remove_driver(&mut self, param_id: &str) {
         if let Some(drivers) = &mut self.drivers {
-            drivers.retain(|d| d.param_index != param_index);
+            drivers.retain(|d| d.param_id != param_id);
         }
     }
 
@@ -397,20 +408,20 @@ impl ParamSource for EffectInstance {
         EffectInstance::set_base_param(self, index, value);
     }
 
-    fn find_driver(&self, param_index: i32) -> Option<&ParameterDriver> {
-        EffectInstance::find_driver(self, param_index)
+    fn find_driver(&self, param_id: &str) -> Option<&ParameterDriver> {
+        EffectInstance::find_driver(self, param_id)
     }
 
     fn get_drivers_list(&self) -> Option<&Vec<ParameterDriver>> {
         EffectInstance::get_drivers_list(self)
     }
 
-    fn create_driver(&mut self, param_index: i32) -> &ParameterDriver {
-        EffectInstance::create_driver(self, param_index)
+    fn create_driver(&mut self, param_id: ParamId) -> &ParameterDriver {
+        EffectInstance::create_driver(self, param_id)
     }
 
-    fn remove_driver(&mut self, param_index: i32) {
-        EffectInstance::remove_driver(self, param_index);
+    fn remove_driver(&mut self, param_id: &str) {
+        EffectInstance::remove_driver(self, param_id);
     }
 }
 
@@ -454,10 +465,22 @@ impl EffectGroup {
 
 // ─── Parameter Driver (LFO) ───
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// LFO modulating a single effect or generator parameter.
+///
+/// Address shape: `param_id` is the canonical mapping key referenced by
+/// project file storage and (by extension) any external client that
+/// reads/writes saved JSON. Legacy V1 projects stored `paramIndex: i32`
+/// instead — the custom [`Deserialize`] accepts either shape, parking
+/// the legacy index in [`ParameterDriver::legacy_param_index`] for the
+/// post-load resolver to translate via the registry.
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParameterDriver {
-    pub param_index: i32,
+    /// Stable mapping key. After post-load resolution, every driver in
+    /// memory has a non-empty `param_id`. During the brief window
+    /// between `Deserialize` and the post-load pass, a legacy V1
+    /// driver may have `param_id = ""` and `legacy_param_index = Some`.
+    pub param_id: ParamId,
     #[serde(default)]
     pub beat_division: BeatDivision,
     #[serde(default)]
@@ -474,16 +497,27 @@ pub struct ParameterDriver {
     pub trim_max: f32,
     #[serde(default)]
     pub reversed: bool,
+    /// Set during `Deserialize` from the legacy `paramIndex` field.
+    /// The post-load resolver (`crate::param_id_resolve`) walks every
+    /// driver, looks up the effect/generator type's registry def, and
+    /// assigns `param_id = def.param_defs[idx].id`. Once resolved this
+    /// field is cleared. Never serialized.
+    #[serde(skip)]
+    pub legacy_param_index: Option<i32>,
     /// Runtime state, not serialized. Unity ParameterDriver.cs line 59.
     #[serde(skip)]
     pub is_paused_by_user: bool,
 }
 
 impl ParameterDriver {
-    /// Constructor. Unity ParameterDriver.cs lines 63-69.
-    pub fn new(param_index: i32, division: BeatDivision, waveform: DriverWaveform) -> Self {
+    /// Constructor.
+    pub fn new(
+        param_id: impl Into<ParamId>,
+        division: BeatDivision,
+        waveform: DriverWaveform,
+    ) -> Self {
         Self {
-            param_index,
+            param_id: param_id.into(),
             beat_division: division,
             waveform,
             enabled: true,
@@ -492,6 +526,7 @@ impl ParameterDriver {
             trim_min: 0.0,
             trim_max: 1.0,
             reversed: false,
+            legacy_param_index: None,
             is_paused_by_user: false,
         }
     }
@@ -542,6 +577,77 @@ impl ParameterDriver {
                 (h & 0x7FFFFF) as f32 / 0x7FFFFF as f32
             }
         }
+    }
+}
+
+// Custom `Deserialize` accepting both V1.1 (`paramIndex: i32`) and V1.2+
+// (`paramId: "amount"`) project file shapes. The runtime always reads
+// `param_id`; legacy projects park the index in `legacy_param_index`
+// for the post-load resolver to translate. See
+// `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 step 8.
+impl<'de> Deserialize<'de> for ParameterDriver {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // Mirror struct with both shapes accepted. `param_id` and
+        // `param_index` are both optional — the driver must carry one
+        // or the other. If both are present, `param_id` wins (forward
+        // migration takes precedence over legacy index).
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Raw {
+            #[serde(default)]
+            param_id: Option<String>,
+            #[serde(default)]
+            param_index: Option<i32>,
+            #[serde(default)]
+            beat_division: BeatDivision,
+            #[serde(default)]
+            waveform: DriverWaveform,
+            #[serde(default = "default_true")]
+            enabled: bool,
+            #[serde(default)]
+            phase: f32,
+            #[serde(default)]
+            base_value: f32,
+            #[serde(default)]
+            trim_min: f32,
+            #[serde(default = "default_one")]
+            trim_max: f32,
+            #[serde(default)]
+            reversed: bool,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        let (param_id, legacy_param_index) = match (raw.param_id, raw.param_index) {
+            // Canonical V1.2+ shape — param_id present and non-empty.
+            (Some(id), _) if !id.is_empty() => (Cow::Owned(id), None),
+            // Legacy V1.1 shape — only paramIndex present. Park for
+            // post-load resolution.
+            (_, Some(idx)) => (Cow::Borrowed(""), Some(idx)),
+            // Round-tripped shape from a project saved before the
+            // post-load resolver could fill in `param_id` (e.g. test
+            // harness without effect registry, or a future case where
+            // the effect type was unregistered at save time). Treat
+            // as "unresolvable" rather than erroring — driver stays
+            // present but inert until the registry has the metadata
+            // again. Better than refusing to load the project at all.
+            (_, None) => (Cow::Borrowed(""), None),
+        };
+        Ok(ParameterDriver {
+            param_id,
+            beat_division: raw.beat_division,
+            waveform: raw.waveform,
+            enabled: raw.enabled,
+            phase: raw.phase,
+            base_value: raw.base_value,
+            trim_min: raw.trim_min,
+            trim_max: raw.trim_max,
+            reversed: raw.reversed,
+            legacy_param_index,
+            is_paused_by_user: false,
+        })
     }
 }
 
@@ -853,5 +959,118 @@ mod tests {
             0.0,
         );
         assert_eq!(val, val2);
+    }
+
+    // ── ParameterDriver backward-compat Deserialize (step 8) ──────
+
+    #[test]
+    fn driver_deserialize_legacy_param_index() {
+        // V1.1.0 shape: { paramIndex: 1, ... }. The custom Deserialize
+        // parks the index in `legacy_param_index` and leaves
+        // `param_id` empty. The post-load resolver fills `param_id`
+        // later — this test only covers the Deserialize step.
+        let json = r#"{
+            "paramIndex": 2,
+            "beatDivision": 4,
+            "waveform": 0,
+            "enabled": true,
+            "phase": 0.0,
+            "baseValue": 0.0,
+            "trimMin": 0.0,
+            "trimMax": 1.0,
+            "reversed": false
+        }"#;
+        let d: ParameterDriver = serde_json::from_str(json).unwrap();
+        assert!(
+            d.param_id.is_empty(),
+            "legacy shape must leave param_id empty until post-load resolution"
+        );
+        assert_eq!(d.legacy_param_index, Some(2));
+        assert_eq!(d.beat_division, BeatDivision::Half);
+    }
+
+    #[test]
+    fn driver_deserialize_canonical_param_id() {
+        // V1.2+ shape: { paramId: "amount", ... }. No post-load
+        // resolution needed — `param_id` is already set, and
+        // `legacy_param_index` stays None.
+        let json = r#"{
+            "paramId": "amount",
+            "beatDivision": 5,
+            "waveform": 1,
+            "enabled": true,
+            "phase": 0.5,
+            "baseValue": 0.0,
+            "trimMin": 0.1,
+            "trimMax": 0.9,
+            "reversed": false
+        }"#;
+        let d: ParameterDriver = serde_json::from_str(json).unwrap();
+        assert_eq!(d.param_id, "amount");
+        assert_eq!(d.legacy_param_index, None);
+        assert_eq!(d.beat_division, BeatDivision::Whole);
+        assert!((d.phase - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn driver_deserialize_param_id_wins_when_both_present() {
+        // If both fields are sent (forward-migration test fixtures or
+        // a transitional save shape), `param_id` is canonical and
+        // `param_index` is ignored. No legacy resolution scheduled.
+        let json = r#"{
+            "paramId": "threshold",
+            "paramIndex": 99,
+            "beatDivision": 3,
+            "waveform": 0
+        }"#;
+        let d: ParameterDriver = serde_json::from_str(json).unwrap();
+        assert_eq!(d.param_id, "threshold");
+        assert_eq!(d.legacy_param_index, None);
+    }
+
+    #[test]
+    fn driver_deserialize_missing_both_loads_as_unresolvable() {
+        // No paramId, no paramIndex — load doesn't error; the driver
+        // stays present but inert. Better than refusing the entire
+        // project. Real recovery path is the post-load resolver, but
+        // there's nothing for it to do here.
+        let json = r#"{
+            "beatDivision": 4
+        }"#;
+        let d: ParameterDriver = serde_json::from_str(json).unwrap();
+        assert_eq!(d.param_id, "");
+        assert_eq!(d.legacy_param_index, None);
+    }
+
+    #[test]
+    fn driver_serialize_writes_param_id_only() {
+        // After step 8, saved files always carry the new shape. The
+        // legacy `paramIndex` field is never written (skipped via
+        // custom Deserialize / derived Serialize on the canonical
+        // field set).
+        let driver =
+            ParameterDriver::new("amount", BeatDivision::Half, DriverWaveform::Triangle);
+        let json = serde_json::to_string(&driver).unwrap();
+        assert!(json.contains("\"paramId\":\"amount\""));
+        assert!(
+            !json.contains("paramIndex"),
+            "Serialize must not write legacy paramIndex field; got: {json}"
+        );
+        assert!(
+            !json.contains("legacyParamIndex"),
+            "Serialize must not leak the runtime-only legacy_param_index field; got: {json}"
+        );
+    }
+
+    #[test]
+    fn driver_round_trips_through_canonical_shape() {
+        let driver =
+            ParameterDriver::new("threshold", BeatDivision::FourWhole, DriverWaveform::Square);
+        let json = serde_json::to_string(&driver).unwrap();
+        let back: ParameterDriver = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.param_id, driver.param_id);
+        assert_eq!(back.beat_division, driver.beat_division);
+        assert_eq!(back.waveform, driver.waveform);
+        assert_eq!(back.legacy_param_index, None);
     }
 }

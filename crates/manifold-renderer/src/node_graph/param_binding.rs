@@ -38,14 +38,10 @@ use crate::node_graph::graph::Graph;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::validation::GraphError;
 
-/// Stable string identifier for a host-visible parameter.
-///
-/// `Cow::Borrowed("amount")` for compile-time IDs (developer-defined
-/// effects). `Cow::Owned("user.uv_transform.translate.1")` for V2
-/// user-exposed parameters allocated at runtime. Mappings (OSC,
-/// Ableton, modulation, macros) all key on this — never on positional
-/// indices.
-pub type ParamId = Cow<'static, str>;
+// ParamId now lives in `manifold_core::effects` so the data-model layer
+// (ParameterDriver, ParamEnvelope, AbletonParamMapping) can use the
+// same type. Re-exported here for renderer-internal call sites.
+pub use manifold_core::effects::ParamId;
 
 /// Maps a single host-visible parameter to a graph-side route.
 ///

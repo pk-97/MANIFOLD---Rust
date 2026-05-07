@@ -4,7 +4,24 @@
 use manifold_core::effects::{EffectInstance, ParamEnvelope, ParameterDriver};
 use manifold_core::project::Project;
 use manifold_core::types::{BeatDivision, DriverWaveform};
-use manifold_core::{Beats, LayerId, Seconds};
+use manifold_core::{Beats, EffectTypeId, GeneratorTypeId, LayerId, Seconds};
+
+/// Look up the stable `ParamSpec::id` for an effect's positional param
+/// index. Returns `None` if the effect or index is unknown.
+///
+/// PanelActions still carry positional `pi: usize`; the data model
+/// keys drivers/envelopes by `param_id`. Every site that needs to
+/// match a UI-supplied index against a stored driver/envelope routes
+/// through this helper.
+fn effect_param_id(effect_type: &EffectTypeId, pi: usize) -> Option<&'static str> {
+    manifold_core::effect_definition_registry::param_index_to_id(effect_type, pi)
+}
+
+/// Same as [`effect_param_id`] but for layer-generator params
+/// (`layer.gen_params().drivers / .envelopes`).
+fn generator_param_id(gen_type: &GeneratorTypeId, pi: usize) -> Option<&'static str> {
+    manifold_core::generator_definition_registry::param_index_to_id(gen_type, pi)
+}
 use manifold_editing::commands::clip::{ChangeClipLoopCommand, SlipClipCommand};
 use manifold_editing::commands::drivers::{
     AddDriverCommand, ChangeDriverBeatDivCommand, ChangeDriverWaveformCommand, ChangeTrimCommand,
@@ -724,10 +741,12 @@ pub(super) fn dispatch_inspector(
                     effect_target,
                     effect_index: *ei,
                 };
-                let driver_idx = fx
-                    .drivers
-                    .as_ref()
-                    .and_then(|ds| ds.iter().position(|d| d.param_index == *pi as i32));
+                let pid = effect_param_id(fx.effect_type(), *pi);
+                let driver_idx = pid.and_then(|pid| {
+                    fx.drivers
+                        .as_ref()
+                        .and_then(|ds| ds.iter().position(|d| d.param_id == pid))
+                });
                 if let Some(di) = driver_idx {
                     let old = fx.drivers.as_ref().unwrap()[di].enabled;
                     let cmd = ToggleDriverEnabledCommand::new(driver_target, di, old, !old);
@@ -737,9 +756,9 @@ pub(super) fn dispatch_inspector(
                         boxed.execute(project);
                         ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
                     }
-                } else {
+                } else if let Some(pid) = pid {
                     let driver = ParameterDriver {
-                        param_index: *pi as i32,
+                        param_id: std::borrow::Cow::Borrowed(pid),
                         beat_division: BeatDivision::Quarter,
                         waveform: DriverWaveform::Sine,
                         enabled: true,
@@ -748,6 +767,7 @@ pub(super) fn dispatch_inspector(
                         trim_min: 0.0,
                         trim_max: 1.0,
                         reversed: false,
+                        legacy_param_index: None,
                         is_paused_by_user: false,
                     };
                     let cmd = AddDriverCommand::new(driver_target, driver);
@@ -824,10 +844,11 @@ pub(super) fn dispatch_inspector(
             };
             let effects = resolve_effects_ref(tab, project, active_layer, selection);
             if let Some(fx) = effects.and_then(|e| e.get(*ei))
+                && let Some(pid) = effect_param_id(fx.effect_type(), *pi)
                 && let Some(di) = fx
                     .drivers
                     .as_ref()
-                    .and_then(|ds| ds.iter().position(|d| d.param_index == *pi as i32))
+                    .and_then(|ds| ds.iter().position(|d| d.param_id == pid))
             {
                 let driver = &fx.drivers.as_ref().unwrap()[di];
                 match cfg {
@@ -985,10 +1006,11 @@ pub(super) fn dispatch_inspector(
                 let (effects_mut, _) = resolve_effects_mut(tab, project, active_layer, selection);
                 if let Some(effects) = effects_mut
                     && let Some(fx) = effects.get_mut(*ei)
+                    && let Some(pid) = effect_param_id(fx.effect_type(), *pi)
                     && let Some(driver) = fx
                         .drivers_mut()
                         .iter_mut()
-                        .find(|d| d.param_index == *pi as i32)
+                        .find(|d| d.param_id == pid)
                 {
                     driver.trim_min = *min;
                     driver.trim_max = *max;
@@ -1014,10 +1036,12 @@ pub(super) fn dispatch_inspector(
                         };
                         if let Some(effects) = effects
                             && let Some(fx) = effects.get_mut(fi)
+                            && let Some(pid) =
+                                effect_param_id(fx.effect_type(), param_i as usize)
                             && let Some(driver) = fx
                                 .drivers_mut()
                                 .iter_mut()
-                                .find(|d| d.param_index == param_i)
+                                .find(|d| d.param_id == pid)
                         {
                             driver.trim_min = mn;
                             driver.trim_max = mx;
@@ -1087,10 +1111,11 @@ pub(super) fn dispatch_inspector(
             let tab = ui.inspector.last_effect_tab();
             let effects = resolve_effects_ref(tab, project, active_layer, selection);
             if let Some(fx) = effects.and_then(|e| e.get(*ei))
+                && let Some(pid) = effect_param_id(fx.effect_type(), *pi)
                 && let Some(driver) = fx
                     .drivers
                     .as_ref()
-                    .and_then(|ds| ds.iter().find(|d| d.param_index == *pi as i32))
+                    .and_then(|ds| ds.iter().find(|d| d.param_id == pid))
             {
                 *trim_snapshot = Some((driver.trim_min, driver.trim_max));
             }
@@ -1102,10 +1127,11 @@ pub(super) fn dispatch_inspector(
                 let effect_target = super::resolve_effect_target(tab, active_layer, project);
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
                 if let Some(fx) = effects.and_then(|e| e.get(*ei))
+                    && let Some(pid) = effect_param_id(fx.effect_type(), *pi)
                     && let Some(di) = fx
                         .drivers
                         .as_ref()
-                        .and_then(|ds| ds.iter().position(|d| d.param_index == *pi as i32))
+                        .and_then(|ds| ds.iter().position(|d| d.param_id == pid))
                 {
                     let driver = &fx.drivers.as_ref().unwrap()[di];
                     let new_min = driver.trim_min;
@@ -1863,10 +1889,12 @@ pub(super) fn dispatch_inspector(
                 if let Some(layer) = project.timeline.layers.get(layer_idx)
                     && let Some(gp) = layer.gen_params()
                 {
-                    let driver_idx = gp
-                        .drivers
-                        .as_ref()
-                        .and_then(|ds| ds.iter().position(|d| d.param_index == *pi as i32));
+                    let pid = generator_param_id(gp.generator_type(), *pi);
+                    let driver_idx = pid.and_then(|pid| {
+                        gp.drivers
+                            .as_ref()
+                            .and_then(|ds| ds.iter().position(|d| d.param_id == pid))
+                    });
                     if let Some(di) = driver_idx {
                         let old = gp.drivers.as_ref().unwrap()[di].enabled;
                         let cmd = ToggleDriverEnabledCommand::new(target, di, old, !old);
@@ -1876,9 +1904,9 @@ pub(super) fn dispatch_inspector(
                             boxed.execute(project);
                             ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
                         }
-                    } else {
+                    } else if let Some(pid) = pid {
                         let driver = ParameterDriver {
-                            param_index: *pi as i32,
+                            param_id: std::borrow::Cow::Borrowed(pid),
                             beat_division: BeatDivision::Quarter,
                             waveform: DriverWaveform::Sine,
                             enabled: true,
@@ -1887,6 +1915,7 @@ pub(super) fn dispatch_inspector(
                             trim_min: 0.0,
                             trim_max: 1.0,
                             reversed: false,
+                            legacy_param_index: None,
                             is_paused_by_user: false,
                         };
                         let cmd = AddDriverCommand::new(target, driver);
@@ -1943,10 +1972,11 @@ pub(super) fn dispatch_inspector(
                 let target = DriverTarget::GeneratorParam { layer_id };
                 if let Some(layer) = project.timeline.layers.get(layer_idx)
                     && let Some(gp) = layer.gen_params()
+                    && let Some(pid) = generator_param_id(gp.generator_type(), *pi)
                     && let Some(di) = gp
                         .drivers
                         .as_ref()
-                        .and_then(|ds| ds.iter().position(|d| d.param_index == *pi as i32))
+                        .and_then(|ds| ds.iter().position(|d| d.param_id == pid))
                 {
                     let driver = &gp.drivers.as_ref().unwrap()[di];
                     match cfg {
@@ -2093,13 +2123,17 @@ pub(super) fn dispatch_inspector(
             if let Some(layer_idx) = layer_idx {
                 if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
                     && let Some(gp) = layer.gen_params_mut()
-                    && let Some(drivers) = &mut gp.drivers
-                    && let Some(driver) = drivers.iter_mut().find(|d| d.param_index == *pi as i32)
                 {
-                    driver.trim_min = *min;
-                    driver.trim_max = *max;
+                    let pid = generator_param_id(gp.generator_type(), *pi);
+                    if let Some(pid) = pid
+                        && let Some(drivers) = &mut gp.drivers
+                        && let Some(driver) = drivers.iter_mut().find(|d| d.param_id == pid)
+                    {
+                        driver.trim_min = *min;
+                        driver.trim_max = *max;
+                    }
                 }
-                let param_i = *pi as i32;
+                let param_i = *pi;
                 let mn = *min;
                 let mx = *max;
                 let layer_id = active_layer.clone().unwrap_or_default();
@@ -2108,12 +2142,16 @@ pub(super) fn dispatch_inspector(
                     ContentCommand::MutateProject(Box::new(move |p| {
                         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
                             && let Some(gp) = layer.gen_params_mut()
-                            && let Some(drivers) = &mut gp.drivers
-                            && let Some(driver) =
-                                drivers.iter_mut().find(|d| d.param_index == param_i)
                         {
-                            driver.trim_min = mn;
-                            driver.trim_max = mx;
+                            let pid = generator_param_id(gp.generator_type(), param_i);
+                            if let Some(pid) = pid
+                                && let Some(drivers) = &mut gp.drivers
+                                && let Some(driver) =
+                                    drivers.iter_mut().find(|d| d.param_id == pid)
+                            {
+                                driver.trim_min = mn;
+                                driver.trim_max = mx;
+                            }
                         }
                     })),
                 );
@@ -2155,10 +2193,11 @@ pub(super) fn dispatch_inspector(
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
                 && let Some(gp) = layer.gen_params()
+                && let Some(pid) = generator_param_id(gp.generator_type(), *pi)
                 && let Some(driver) = gp
                     .drivers
                     .as_ref()
-                    .and_then(|ds| ds.iter().find(|d| d.param_index == *pi as i32))
+                    .and_then(|ds| ds.iter().find(|d| d.param_id == pid))
             {
                 *trim_snapshot = Some((driver.trim_min, driver.trim_max));
             }
@@ -2170,10 +2209,11 @@ pub(super) fn dispatch_inspector(
                 && let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
                 && let Some(gp) = layer.gen_params()
+                && let Some(pid) = generator_param_id(gp.generator_type(), *pi)
                 && let Some(di) = gp
                     .drivers
                     .as_ref()
-                    .and_then(|ds| ds.iter().position(|d| d.param_index == *pi as i32))
+                    .and_then(|ds| ds.iter().position(|d| d.param_id == pid))
             {
                 let driver = &gp.drivers.as_ref().unwrap()[di];
                 let new_min = driver.trim_min;

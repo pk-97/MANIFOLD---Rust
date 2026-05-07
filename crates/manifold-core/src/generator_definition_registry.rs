@@ -32,6 +32,9 @@ pub struct GeneratorDef {
     /// [`crate::effect_definition_registry::EffectDef::id_to_index`] —
     /// same role, parallel structure for generators.
     pub id_to_index: AHashMap<String, usize>,
+    /// Storage-index → static param id. See
+    /// [`crate::effect_definition_registry::EffectDef::param_ids`].
+    pub param_ids: Vec<&'static str>,
 }
 
 // ─── Static Registry ───
@@ -75,16 +78,13 @@ pub fn param_id_to_index(gen_type: &GeneratorTypeId, id: &str) -> Option<usize> 
     DEFINITIONS.get(gen_type)?.id_to_index.get(id).copied()
 }
 
-/// Reverse of [`param_id_to_index`]. Returns `None` if the slot has no id
-/// (V1 unpopulated).
-pub fn param_index_to_id(gen_type: &GeneratorTypeId, index: usize) -> Option<&str> {
+/// Reverse of [`param_id_to_index`]. Returns the original `&'static
+/// str` from the `ParamSpec` registration. `None` if out of range or
+/// the slot has an empty id (V1 fixture / pre-step-6 entry).
+pub fn param_index_to_id(gen_type: &GeneratorTypeId, index: usize) -> Option<&'static str> {
     let def = DEFINITIONS.get(gen_type)?;
-    let pd = def.param_defs.get(index)?;
-    if pd.id.is_empty() {
-        None
-    } else {
-        Some(pd.id.as_str())
-    }
+    let id = *def.param_ids.get(index)?;
+    if id.is_empty() { None } else { Some(id) }
 }
 
 pub fn is_line_based(gen_type: &GeneratorTypeId) -> bool {
@@ -213,6 +213,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
             string_param_defs: Vec::new(),
             osc_prefix: None,
             id_to_index: AHashMap::new(),
+            param_ids: Vec::new(),
         },
     );
 
