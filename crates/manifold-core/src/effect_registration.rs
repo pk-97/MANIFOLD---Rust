@@ -29,6 +29,37 @@ use crate::generator_registration::ParamSpec;
 /// schema bump only needs to add the latest hop.
 pub type ParamAlias = (&'static str, Option<&'static str>);
 
+/// Resolve a (possibly stale) `param_id` through an effect or generator's
+/// alias table.
+///
+/// - `Some(id)` if `id` is current (not in the alias table) or aliases to a
+///   current id (chained through multiple hops).
+/// - `None` if the alias chain ends at `None` (param was dropped) or a
+///   cycle is detected.
+///
+/// Pure slice utility — no registry coupling. Both `EffectDef` and
+/// `GeneratorDef` carry their own `&[ParamAlias]` slice; this function
+/// walks either.
+///
+/// Termination: bounded chain walk (`aliases.len() + 1` hops). Aliases
+/// are static-author data; cycles indicate a developer mistake at
+/// declaration time and should fail gracefully rather than infinite-loop.
+pub fn resolve_param_alias<'a>(aliases: &'a [ParamAlias], id: &'a str) -> Option<&'a str> {
+    let mut current = id;
+    let mut hops = 0;
+    while hops <= aliases.len() {
+        match aliases.iter().find(|(old, _)| *old == current) {
+            Some((_, Some(new))) => {
+                current = new;
+                hops += 1;
+            }
+            Some((_, None)) => return None,
+            None => return Some(current),
+        }
+    }
+    None
+}
+
 /// Complete metadata for an effect, submitted via `inventory::submit!`.
 pub struct EffectMetadata {
     pub id: EffectTypeId,

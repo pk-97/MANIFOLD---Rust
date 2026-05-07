@@ -69,33 +69,61 @@ pub enum AbletonMappingStatus {
 /// the Ableton-side rack-macro parameter identifier (numeric, comes
 /// from Ableton via OSC). The two `param_id` fields are nested at
 /// different levels so the JSON shape is unambiguous.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+///
+/// Serialization (custom impl below): emits `paramId` when non-empty,
+/// else `paramIndex` when `legacy_param_index` is `Some`. Mirrors the
+/// recovery contract on [`crate::effects::ParameterDriver`].
+#[derive(Debug, Clone)]
 pub struct AbletonParamMapping {
     /// Stable MANIFOLD-side mapping key. Empty after legacy V1.1
     /// deserialization until the post-load resolver fills it in.
     pub param_id: ParamId,
     pub address: AbletonMacroAddress,
     /// Normalized 0–1 trim low (maps Ableton 0 to this point in param range).
-    #[serde(default)]
     pub range_min: f32,
     /// Normalized 0–1 trim high (maps Ableton 1 to this point in param range).
-    #[serde(default = "default_one")]
     pub range_max: f32,
     /// When true, the Ableton value is inverted (1.0 - v) before trim range mapping.
-    #[serde(default)]
     pub inverted: bool,
-    /// Set during `Deserialize` from the legacy `paramIndex` field.
-    /// Resolved to `param_id` by `Project::resolve_legacy_param_ids`
-    /// then cleared. Never serialized.
-    #[serde(skip)]
+    /// Parked legacy `paramIndex: i32` from V1.1 deserialization or
+    /// RegistryMissing fallback. See [`crate::effects::ParameterDriver::legacy_param_index`]
+    /// for the recovery invariant — same contract here.
     pub legacy_param_index: Option<i32>,
     /// Last received value from Ableton (0–1, pre-range-mapping). Runtime only.
-    #[serde(skip)]
     pub last_value: f32,
     /// Runtime status (active/dormant/ambiguous). Not persisted.
-    #[serde(skip)]
     pub status: AbletonMappingStatus,
+}
+
+impl Serialize for AbletonParamMapping {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        let emit_param_id = !self.param_id.is_empty();
+        let emit_legacy_index = !emit_param_id && self.legacy_param_index.is_some();
+
+        // 4 base fields (address, rangeMin, rangeMax, inverted) +
+        // optional addressing field.
+        let mut field_count = 4;
+        if emit_param_id || emit_legacy_index {
+            field_count += 1;
+        }
+
+        let mut s = serializer.serialize_struct("AbletonParamMapping", field_count)?;
+        if emit_param_id {
+            s.serialize_field("paramId", &self.param_id)?;
+        } else if emit_legacy_index {
+            s.serialize_field("paramIndex", &self.legacy_param_index.unwrap())?;
+        }
+        s.serialize_field("address", &self.address)?;
+        s.serialize_field("rangeMin", &self.range_min)?;
+        s.serialize_field("rangeMax", &self.range_max)?;
+        s.serialize_field("inverted", &self.inverted)?;
+        s.end()
+    }
 }
 
 // Custom `Deserialize` accepting both V1.1 (`paramIndex: usize`) and

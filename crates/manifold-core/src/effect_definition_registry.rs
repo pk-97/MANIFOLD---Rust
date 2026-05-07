@@ -32,36 +32,11 @@ pub struct EffectDef {
     pub legacy_param_aliases: &'static [crate::effect_registration::ParamAlias],
 }
 
-/// Resolve a (possibly stale) `param_id` through an effect/generator's
-/// alias table. Returns:
-/// - `Some(id)` if `id` is current (not in the alias table) or aliases
-///   to a current id (chained through multiple hops).
-/// - `None` if the alias chain ends at `None` (param was dropped).
-///
-/// Termination: stops after walking the table once per call (safe for
-/// cycles by construction — alias keys are old ids, values are
-/// current/never-stored ids).
-pub fn resolve_param_alias<'a>(
-    aliases: &'a [crate::effect_registration::ParamAlias],
-    id: &'a str,
-) -> Option<&'a str> {
-    let mut current = id;
-    let mut hops = 0;
-    // Bounded chain walk; `aliases.len() + 1` is a safe upper bound
-    // even if a future entry accidentally introduces a cycle.
-    while hops <= aliases.len() {
-        match aliases.iter().find(|(old, _)| *old == current) {
-            Some((_, Some(new))) => {
-                current = new;
-                hops += 1;
-            }
-            Some((_, None)) => return None,
-            None => return Some(current),
-        }
-    }
-    // Cycle detected — bail out as if the chain ended at None.
-    None
-}
+/// Re-export for callers within this module's namespace. Canonical home
+/// is [`crate::effect_registration::resolve_param_alias`] — it's a pure
+/// slice utility with no registry coupling and lives next to the
+/// [`crate::effect_registration::ParamAlias`] type definition.
+pub use crate::effect_registration::resolve_param_alias;
 
 // ─── Static Registry ───
 

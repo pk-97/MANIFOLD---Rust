@@ -176,8 +176,16 @@ impl ParamBinding {
 ///
 /// Each binding consumes one f32 from `values` at the same index. If
 /// `values` is shorter than `bindings`, the missing slots fall back to
-/// the binding's `spec.default_value`. Errors fail-fast: the first
-/// binding that errors stops the loop and the error propagates.
+/// the binding's `spec.default_value`.
+///
+/// **Per-binding failures are logged, not fatal.** The bindings are
+/// built once at effect construction and target a graph that's owned
+/// by the same effect — a routing error means the graph has been
+/// mutated out from under the binding (target node deleted, param
+/// renamed, etc.). That's a developer bug, but it MUST NOT panic the
+/// content thread mid-frame: the host runs at production FPS for live
+/// performance, and a panic = channel disconnect = entire pipeline
+/// stops. Log loudly, skip the broken binding, keep going.
 ///
 /// This is the per-frame routing shim that migrated effects call from
 /// their `apply()` implementations.
@@ -186,15 +194,35 @@ pub fn apply_param_bindings(
     graph: &mut Graph,
     handle: Option<&CompositeHandle>,
     values: &[f32],
-) -> Result<(), GraphError> {
+) {
     for (i, binding) in bindings.iter().enumerate() {
         let value = values
             .get(i)
             .copied()
             .unwrap_or(binding.spec.default_value);
-        binding.apply(graph, handle, value)?;
+        if let Err(err) = binding.apply(graph, handle, value) {
+            eprintln!(
+                "[manifold-renderer] ParamBinding apply failed: id={} value={} err={:?} — \
+                 skipping this binding for the current frame. The graph topology likely \
+                 changed without rebuilding the bindings list.",
+                binding.id, value, err,
+            );
+        }
     }
-    Ok(())
+}
+
+/// Read a host-visible parameter's current value by stable id, scanning
+/// the binding list for the matching entry. O(n) over the slice — n is
+/// typically 2-6, so the scan is faster than an `AHashMap` lookup at
+/// this scale and avoids per-effect allocation.
+///
+/// Used by effects that need to inspect a param value outside the
+/// normal `apply_param_bindings` flow (e.g. `should_skip` predicates).
+/// Returns `None` if the binding isn't present or the values slice is
+/// shorter than the binding's index.
+pub fn binding_value(bindings: &[ParamBinding], values: &[f32], id: &str) -> Option<f32> {
+    let idx = bindings.iter().position(|b| b.id == id)?;
+    values.get(idx).copied()
 }
 
 #[cfg(test)]
@@ -328,7 +356,7 @@ mod tests {
         ];
 
         // Provide only one value — second falls back to spec default 0.95.
-        apply_param_bindings(&bindings, &mut g, None, &[0.5]).unwrap();
+        apply_param_bindings(&bindings, &mut g, None, &[0.5]);
         let inst = g.get_node(feedback).unwrap();
         assert_eq!(inst.params.get("amount"), Some(&ParamValue::Float(0.5)));
         assert_eq!(inst.params.get("zoom"), Some(&ParamValue::Float(0.95)));

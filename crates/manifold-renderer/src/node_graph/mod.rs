@@ -39,7 +39,7 @@ pub use execution_plan::{compile, ExecutionPlan, ExecutionStep, ResourceId};
 pub use graph::{Graph, NodeInstance};
 pub use legacy_adapter::{metadata_by_id, LegacyPostProcessNode, LEGACY_TYPE_ID_PREFIX};
 pub use param_binding::{
-    apply_param_bindings, ParamBinding, ParamConvert, ParamId, ParamTarget,
+    apply_param_bindings, binding_value, ParamBinding, ParamConvert, ParamId, ParamTarget,
 };
 pub use parameters::{ParamDef, ParamType, ParamValue};
 pub use ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};

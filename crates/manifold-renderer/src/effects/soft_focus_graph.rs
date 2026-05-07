@@ -26,9 +26,9 @@ use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::composites::{build_soft_focus, CompositeHandle};
 use crate::node_graph::{
-    apply_param_bindings, compile, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph,
-    MetalBackend, NodeInstanceId, ParamBinding, ParamConvert, ParamTarget, PortType, ResourceId,
-    Slot, Source,
+    apply_param_bindings, binding_value, compile, ExecutionPlan, Executor, FinalOutput, FrameTime,
+    Graph, MetalBackend, NodeInstanceId, ParamBinding, ParamConvert, ParamTarget, PortType,
+    ResourceId, Slot, Source,
 };
 use crate::render_target::RenderTarget;
 
@@ -202,9 +202,10 @@ impl PostProcessEffect for SoftFocusGraphFX {
     /// Skip when amount = 0 — a fully sharp original is identity. The
     /// default `param[0] <= 0` heuristic would kick in on radius = 0
     /// instead, which is also a valid "skip" but slightly less
-    /// principled. Pin to the amount slot.
+    /// principled. Pin to the amount slot by stable id so reordering
+    /// the bindings list can't silently break the predicate.
     fn should_skip(&self, fx: &EffectInstance) -> bool {
-        fx.param_values.get(1).copied().unwrap_or(0.0) <= 0.0
+        binding_value(&self.bindings, &fx.param_values, "amount").unwrap_or(0.0) <= 0.0
     }
 
     fn graph_snapshot(&self) -> Option<crate::node_graph::GraphSnapshot> {
@@ -244,14 +245,15 @@ impl PostProcessEffect for SoftFocusGraphFX {
         gpu.copy_texture_to_texture(source, source_tex, ctx.width, ctx.height);
 
         // 3. Step 17: route every host param via the declarative
-        //    `bindings` slice through the composite handle.
+        //    `bindings` slice through the composite handle. Per-binding
+        //    routing errors are logged (not fatal) — see
+        //    `apply_param_bindings` docs.
         apply_param_bindings(
             &self.bindings,
             &mut self.graph,
             Some(&self.handle),
             &fx.param_values,
-        )
-        .expect("route soft-focus bindings");
+        );
 
         // 4. Run the graph.
         let frame_time = FrameTime {

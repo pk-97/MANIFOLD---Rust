@@ -272,9 +272,10 @@ impl PostProcessEffect for StylizedFeedbackFX {
         let render = self.render.as_mut().expect("render initialized above");
 
         // 2. Step 17: route every host param via the declarative
-        //    `bindings` slice directly to the `feedback` node.
-        apply_param_bindings(&self.bindings, &mut self.graph, None, &fx.param_values)
-            .expect("route stylized-feedback bindings");
+        //    `bindings` slice directly to the `feedback` node. Per-
+        //    binding routing errors are logged (not fatal) — see
+        //    `apply_param_bindings` docs.
+        apply_param_bindings(&self.bindings, &mut self.graph, None, &fx.param_values);
 
         // 3. Copy the layer's source into the graph's pre-bound Source slot.
         let backend = render.executor.backend();

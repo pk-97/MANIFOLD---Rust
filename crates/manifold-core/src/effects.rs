@@ -167,13 +167,29 @@ impl ParamValuesWire {
     /// If the registry lacks a def for this effect (e.g., test code
     /// without `manifold-renderer` linked, or a forward-incompatible
     /// type from a future version), returns `Vec::new()` for the
-    /// keyed case — `align_to_definition` and the post-load resolver
-    /// will fill in defaults.
+    /// keyed case AND emits an `eprintln!` warning. In production this
+    /// branch is unreachable — the renderer always registers all
+    /// shipping effects — so a warning here means observability has
+    /// caught a real bug (registry-build broken, effect missing from
+    /// the renderer, or new tooling inadvertently using `manifold-io`
+    /// without `manifold-renderer`). `align_to_definition` will fill
+    /// the empty Vec with defaults, but the original Map values are
+    /// gone.
     fn into_positional(self, effect_type: &EffectTypeId) -> Vec<f32> {
         match self {
             ParamValuesWire::Positional(v) => v,
             ParamValuesWire::Keyed(map) => {
                 let Some(def) = crate::effect_definition_registry::try_get(effect_type) else {
+                    eprintln!(
+                        "[manifold-core] WARNING: dropping {} V1.2+ paramValues for unregistered \
+                         effect type '{}' (Map keys: {:?}). align_to_definition will fill with \
+                         registry defaults if the type is registered later, but the saved values \
+                         are lost. In production this should never fire — the renderer registers \
+                         every shipping effect at startup.",
+                        map.len(),
+                        effect_type.as_str(),
+                        map.keys().collect::<Vec<_>>(),
+                    );
                     return Vec::new();
                 };
                 let mut out = vec![0.0_f32; def.param_count];
@@ -190,7 +206,7 @@ impl ParamValuesWire {
                     }
                     // Miss: walk the alias chain. Old id (renamed)
                     // resolves to a current id; dropped ids are skipped.
-                    if let Some(resolved) = crate::effect_definition_registry::resolve_param_alias(
+                    if let Some(resolved) = crate::effect_registration::resolve_param_alias(
                         def.legacy_param_aliases,
                         &id,
                     ) && let Some(&idx) = def.id_to_index.get(resolved)
@@ -205,7 +221,8 @@ impl ParamValuesWire {
     }
 
     /// Generator-registry counterpart to `into_positional`. Used by
-    /// `GeneratorParamState`'s custom Deserialize.
+    /// `GeneratorParamState`'s custom Deserialize. Same registry-miss
+    /// observability contract as the effect-side path.
     pub(crate) fn into_positional_for_generator(
         self,
         gen_type: &crate::GeneratorTypeId,
@@ -214,6 +231,14 @@ impl ParamValuesWire {
             ParamValuesWire::Positional(v) => v,
             ParamValuesWire::Keyed(map) => {
                 let Some(def) = crate::generator_definition_registry::try_get(gen_type) else {
+                    eprintln!(
+                        "[manifold-core] WARNING: dropping {} V1.2+ paramValues for unregistered \
+                         generator type '{}' (Map keys: {:?}). In production this should never \
+                         fire — the renderer registers every shipping generator at startup.",
+                        map.len(),
+                        gen_type.as_str(),
+                        map.keys().collect::<Vec<_>>(),
+                    );
                     return Vec::new();
                 };
                 let mut out = vec![0.0_f32; def.param_count];
@@ -227,7 +252,7 @@ impl ParamValuesWire {
                         out[idx] = value;
                         continue;
                     }
-                    if let Some(resolved) = crate::effect_definition_registry::resolve_param_alias(
+                    if let Some(resolved) = crate::effect_registration::resolve_param_alias(
                         def.legacy_param_aliases,
                         &id,
                     ) && let Some(&idx) = def.id_to_index.get(resolved)
@@ -816,40 +841,91 @@ impl EffectGroup {
 /// instead — the custom [`Deserialize`] accepts either shape, parking
 /// the legacy index in [`ParameterDriver::legacy_param_index`] for the
 /// post-load resolver to translate via the registry.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+///
+/// Serialization (custom impl below): emits `paramId` when non-empty.
+/// When `param_id` is empty AND `legacy_param_index` is `Some`, emits
+/// `paramIndex` instead — this preserves recovery information across
+/// save→load cycles when the load happened on a build whose registry
+/// didn't have the effect type. See [`ParameterDriver::legacy_param_index`].
+#[derive(Debug, Clone)]
 pub struct ParameterDriver {
     /// Stable mapping key. After post-load resolution, every driver in
     /// memory has a non-empty `param_id`. During the brief window
     /// between `Deserialize` and the post-load pass, a legacy V1
     /// driver may have `param_id = ""` and `legacy_param_index = Some`.
     pub param_id: ParamId,
-    #[serde(default)]
     pub beat_division: BeatDivision,
-    #[serde(default)]
     pub waveform: DriverWaveform,
-    #[serde(default = "default_true")]
     pub enabled: bool,
-    #[serde(default)]
     pub phase: f32,
-    #[serde(default)]
     pub base_value: f32,
-    #[serde(default)]
     pub trim_min: f32,
-    #[serde(default = "default_one")]
     pub trim_max: f32,
-    #[serde(default)]
     pub reversed: bool,
-    /// Set during `Deserialize` from the legacy `paramIndex` field.
-    /// The post-load resolver (`crate::param_id_resolve`) walks every
-    /// driver, looks up the effect/generator type's registry def, and
-    /// assigns `param_id = def.param_defs[idx].id`. Once resolved this
-    /// field is cleared. Never serialized.
-    #[serde(skip)]
+    /// Parked legacy `paramIndex: i32` from V1.1 deserialization or from
+    /// a load against an unregistered effect type.
+    ///
+    /// Set by:
+    /// - Custom [`Deserialize`] when a legacy `paramIndex` field is
+    ///   present and `paramId` is missing/empty.
+    /// - Preserved unchanged by [`crate::project::Project::resolve_legacy_param_ids`]
+    ///   when the effect type's registry def is missing
+    ///   (`ResolveOutcome::RegistryMissing`).
+    ///
+    /// Cleared by the resolver in every other case (`Resolved` /
+    /// `NoChange` / `Drop`).
+    ///
+    /// Re-emitted on serialize as `paramIndex` only when `param_id`
+    /// is empty, completing the round-trip recovery loop: load V1.1
+    /// on a build without the registry → save → reload on a build
+    /// with the registry → resolver fills in `param_id` cleanly.
+    ///
+    /// **Invariant:** non-resolver code MUST NOT set this. Outside the
+    /// `Deserialize → on_after_deserialize` window, an in-memory
+    /// driver with `legacy_param_index = Some(_)` AND a non-empty
+    /// `param_id` is a bug.
     pub legacy_param_index: Option<i32>,
     /// Runtime state, not serialized. Unity ParameterDriver.cs line 59.
-    #[serde(skip)]
     pub is_paused_by_user: bool,
+}
+
+// Custom Serialize: keeps the derive(Serialize) field shape but
+// expresses the "emit `paramId` OR `paramIndex` (never both)" policy
+// that derive can't express on its own.
+impl Serialize for ParameterDriver {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        let emit_param_id = !self.param_id.is_empty();
+        let emit_legacy_index = !emit_param_id && self.legacy_param_index.is_some();
+
+        // 8 base fields (beat_division, waveform, enabled, phase,
+        // base_value, trim_min, trim_max, reversed) + addressing field.
+        let mut field_count = 8;
+        if emit_param_id || emit_legacy_index {
+            field_count += 1;
+        }
+
+        let mut s = serializer.serialize_struct("ParameterDriver", field_count)?;
+        if emit_param_id {
+            s.serialize_field("paramId", &self.param_id)?;
+        } else if emit_legacy_index {
+            // SAFETY: emit_legacy_index implies legacy_param_index.is_some().
+            s.serialize_field("paramIndex", &self.legacy_param_index.unwrap())?;
+        }
+        s.serialize_field("beatDivision", &self.beat_division)?;
+        s.serialize_field("waveform", &self.waveform)?;
+        s.serialize_field("enabled", &self.enabled)?;
+        s.serialize_field("phase", &self.phase)?;
+        s.serialize_field("baseValue", &self.base_value)?;
+        s.serialize_field("trimMin", &self.trim_min)?;
+        s.serialize_field("trimMax", &self.trim_max)?;
+        s.serialize_field("reversed", &self.reversed)?;
+        s.end()
+    }
 }
 
 impl ParameterDriver {
@@ -1089,56 +1165,81 @@ pub enum EnvelopeMode {
 /// i32` instead — the custom [`Deserialize`] accepts either shape and
 /// parks legacy indices in [`ParamEnvelope::legacy_param_index`] for
 /// the post-load resolver.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+///
+/// Serialization (custom impl below): emits `paramId` when non-empty,
+/// else `targetParamIndex` when `legacy_param_index` is `Some`. Mirrors
+/// the ParameterDriver round-trip recovery contract.
+#[derive(Debug, Clone)]
 pub struct ParamEnvelope {
-    #[serde(default)]
     pub target_effect_type: EffectTypeId,
     /// Stable mapping key. Empty after legacy V1.1 deserialization
     /// until the post-load resolver fills it in from the registry.
     pub param_id: ParamId,
-    #[serde(default = "default_true")]
     pub enabled: bool,
-    #[serde(default)]
     pub attack_beats: f32,
-    #[serde(default)]
     pub decay_beats: f32,
-    #[serde(default)]
     pub sustain_level: f32,
-    #[serde(default)]
     pub release_beats: f32,
-    #[serde(default = "default_one")]
     pub target_normalized: f32,
     /// Envelope evaluation mode (ADSR or Random).
-    #[serde(default)]
     pub mode: EnvelopeMode,
     /// When mode=Random: true = jump to fully random value, false = walk by step.
-    #[serde(default)]
     pub random_jump: bool,
     /// Random mode range minimum (normalized 0-1). Walk/jump stays within this range.
-    #[serde(default)]
     pub range_min: f32,
     /// Random mode range maximum (normalized 0-1). Walk/jump stays within this range.
-    #[serde(default = "default_one")]
     pub range_max: f32,
-    /// Set during `Deserialize` from the legacy `targetParamIndex`
-    /// field. Resolved to `param_id` by `Project::resolve_legacy_param_ids`
-    /// then cleared. Never serialized.
-    #[serde(skip)]
+    /// Parked legacy `targetParamIndex: i32` from V1.1 deserialization
+    /// or RegistryMissing fallback during post-load resolution. See
+    /// [`ParameterDriver::legacy_param_index`] for the recovery
+    /// invariant — same contract here.
     pub legacy_param_index: Option<i32>,
     /// Cached ADSR output (0-1) for UI display. Not serialized.
-    #[serde(skip)]
     pub current_level: f32,
     /// Current random walk position (normalized 0-1). Runtime only.
-    #[serde(skip)]
     pub walk_value: f32,
     /// Rising edge detection: was a clip active on the previous frame?
-    #[serde(skip)]
     pub was_clip_active: bool,
     /// Previous frame's elapsed beats within the active clip. Used by Random
     /// mode to detect clip restarts and loop points (elapsed decreases).
-    #[serde(skip)]
     pub last_elapsed: f32,
+}
+
+impl Serialize for ParamEnvelope {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        let emit_param_id = !self.param_id.is_empty();
+        let emit_legacy_index = !emit_param_id && self.legacy_param_index.is_some();
+
+        // 11 base fields + addressing field (paramId XOR targetParamIndex).
+        let mut field_count = 11;
+        if emit_param_id || emit_legacy_index {
+            field_count += 1;
+        }
+
+        let mut s = serializer.serialize_struct("ParamEnvelope", field_count)?;
+        s.serialize_field("targetEffectType", &self.target_effect_type)?;
+        if emit_param_id {
+            s.serialize_field("paramId", &self.param_id)?;
+        } else if emit_legacy_index {
+            s.serialize_field("targetParamIndex", &self.legacy_param_index.unwrap())?;
+        }
+        s.serialize_field("enabled", &self.enabled)?;
+        s.serialize_field("attackBeats", &self.attack_beats)?;
+        s.serialize_field("decayBeats", &self.decay_beats)?;
+        s.serialize_field("sustainLevel", &self.sustain_level)?;
+        s.serialize_field("releaseBeats", &self.release_beats)?;
+        s.serialize_field("targetNormalized", &self.target_normalized)?;
+        s.serialize_field("mode", &self.mode)?;
+        s.serialize_field("randomJump", &self.random_jump)?;
+        s.serialize_field("rangeMin", &self.range_min)?;
+        s.serialize_field("rangeMax", &self.range_max)?;
+        s.end()
+    }
 }
 
 impl ParamEnvelope {

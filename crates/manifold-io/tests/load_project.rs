@@ -498,6 +498,30 @@ fn liveschool_roundtrip_preserves_addressing_sites() {
     // Deserialize for ParameterDriver / ParamEnvelope / AbletonParamMapping
     // / paramValues drops or reshapes anything, one of the count
     // assertions below will fail.
+    //
+    // **Test scope:** this test runs in `manifold-io`'s test target,
+    // which intentionally does NOT link `manifold-renderer`. The
+    // effect/generator registries are therefore EMPTY here. Concretely:
+    //
+    // - Driver/envelope/Ableton mappings load with `param_id = ""`,
+    //   `legacy_param_index = Some(idx)` (RegistryMissing path; the
+    //   resolver preserves the parked index for next-load recovery —
+    //   see `Project::resolve_legacy_param_ids`).
+    // - The custom `Serialize` on those types re-emits `paramIndex`
+    //   from the parked index, so the round-trip preserves addressing
+    //   verbatim — this test would FAIL before the recovery-loop
+    //   hardening landed.
+    // - Effect/generator `paramValues` come in as V1.x `Array` shape
+    //   from the on-disk fixture, never enter the Map path here, so
+    //   the registry-missing branch on `into_positional` doesn't fire
+    //   in this test.
+    //
+    // The semantic contract — that `param_id` actually resolves to the
+    // intended parameter slot — is verified by
+    // `manifold-app/tests/legacy_param_id_resolution.rs`, which DOES
+    // link the renderer. **Do not interpret a green run of this test
+    // as confirming `param_id` resolution; this test only confirms
+    // shape preservation.**
     let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
     if !path.exists() {
         return;

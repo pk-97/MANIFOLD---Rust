@@ -52,8 +52,15 @@ impl MacroCurve {
 /// accepts both V1.1 (`paramIndex: usize`) and V1.2+ (`paramId: "amount"`)
 /// shapes; legacy indices are parked on [`MacroMapping::legacy_param_index`]
 /// for the post-load resolver.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase", tag = "type")]
+///
+/// Serialize: this enum has no recovery state of its own — its
+/// [`MacroMapping`] wrapper carries `legacy_param_index`. To preserve
+/// recovery information across save→load when the registry is missing,
+/// the wrapper's custom [`Serialize`] re-renders the variant via
+/// internal helpers (it can't delegate to `derive(Serialize)` here
+/// because the "emit param_id XOR param_index" choice depends on the
+/// wrapper's state, not the variant's).
+#[derive(Debug, Clone)]
 pub enum MacroMappingTarget {
     MasterOpacity,
     MasterEffect {
@@ -77,21 +84,143 @@ pub enum MacroMappingTarget {
 // ── Mapping ────────────────────────────────────────────────────────
 
 /// A single mapping from a macro slot to a project parameter.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct MacroMapping {
     pub target: MacroMappingTarget,
-    #[serde(default)]
     pub range_min: f32,
-    #[serde(default = "default_one")]
     pub range_max: f32,
-    #[serde(default)]
     pub curve: MacroCurve,
-    /// Set during `Deserialize` from the legacy `paramIndex` field of
-    /// the nested `target` variant. Resolved to `target.param_id` by
-    /// `Project::resolve_legacy_param_ids` then cleared. Never serialized.
-    #[serde(skip)]
+    /// Parked legacy `param_index` from V1.1 deserialization or
+    /// RegistryMissing fallback. See
+    /// [`crate::effects::ParameterDriver::legacy_param_index`] for the
+    /// recovery invariant — same contract here, but the param_id lives
+    /// in the target variant rather than on the wrapper.
     pub legacy_param_index: Option<i32>,
+}
+
+// Custom Serialize: the wrapper's `legacy_param_index` plus the variant's
+// `param_id` together determine which addressing shape to emit. We
+// can't delegate to `derive(Serialize)` on `MacroMappingTarget` because
+// the choice depends on the wrapper's state.
+//
+// Wire shape preserved exactly — variant tag is camelCase, target field
+// names are snake_case (matches existing fixtures).
+impl Serialize for MacroMapping {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("MacroMapping", 4)?;
+        s.serialize_field(
+            "target",
+            &MacroMappingTargetSer {
+                target: &self.target,
+                legacy_param_index: self.legacy_param_index,
+            },
+        )?;
+        s.serialize_field("rangeMin", &self.range_min)?;
+        s.serialize_field("rangeMax", &self.range_max)?;
+        s.serialize_field("curve", &self.curve)?;
+        s.end()
+    }
+}
+
+/// Serialize-side wrapper for `MacroMappingTarget` that carries the
+/// outer mapping's `legacy_param_index`. Used to re-emit `param_index`
+/// when the variant's `param_id` is empty AND the index is parked.
+struct MacroMappingTargetSer<'a> {
+    target: &'a MacroMappingTarget,
+    legacy_param_index: Option<i32>,
+}
+
+impl Serialize for MacroMappingTargetSer<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+
+        let leg = self.legacy_param_index;
+        match self.target {
+            MacroMappingTarget::MasterOpacity => {
+                let mut m = serializer.serialize_map(Some(1))?;
+                m.serialize_entry("type", "masterOpacity")?;
+                m.end()
+            }
+            MacroMappingTarget::LayerOpacity { layer_id } => {
+                let mut m = serializer.serialize_map(Some(2))?;
+                m.serialize_entry("type", "layerOpacity")?;
+                m.serialize_entry("layer_id", layer_id)?;
+                m.end()
+            }
+            MacroMappingTarget::MasterEffect {
+                effect_type,
+                param_id,
+            } => {
+                let (emit_id, emit_idx) = decide_emit(param_id, leg);
+                let mut count = 2;
+                if emit_id || emit_idx {
+                    count += 1;
+                }
+                let mut m = serializer.serialize_map(Some(count))?;
+                m.serialize_entry("type", "masterEffect")?;
+                m.serialize_entry("effect_type", effect_type)?;
+                if emit_id {
+                    m.serialize_entry("param_id", param_id)?;
+                } else if emit_idx {
+                    m.serialize_entry("param_index", &leg.unwrap())?;
+                }
+                m.end()
+            }
+            MacroMappingTarget::LayerEffect {
+                layer_id,
+                effect_type,
+                param_id,
+            } => {
+                let (emit_id, emit_idx) = decide_emit(param_id, leg);
+                let mut count = 3;
+                if emit_id || emit_idx {
+                    count += 1;
+                }
+                let mut m = serializer.serialize_map(Some(count))?;
+                m.serialize_entry("type", "layerEffect")?;
+                m.serialize_entry("layer_id", layer_id)?;
+                m.serialize_entry("effect_type", effect_type)?;
+                if emit_id {
+                    m.serialize_entry("param_id", param_id)?;
+                } else if emit_idx {
+                    m.serialize_entry("param_index", &leg.unwrap())?;
+                }
+                m.end()
+            }
+            MacroMappingTarget::GenParam { layer_id, param_id } => {
+                let (emit_id, emit_idx) = decide_emit(param_id, leg);
+                let mut count = 2;
+                if emit_id || emit_idx {
+                    count += 1;
+                }
+                let mut m = serializer.serialize_map(Some(count))?;
+                m.serialize_entry("type", "genParam")?;
+                m.serialize_entry("layer_id", layer_id)?;
+                if emit_id {
+                    m.serialize_entry("param_id", param_id)?;
+                } else if emit_idx {
+                    m.serialize_entry("param_index", &leg.unwrap())?;
+                }
+                m.end()
+            }
+        }
+    }
+}
+
+/// Returns `(emit_param_id, emit_param_index)`. Exactly one is `true`
+/// when there's recoverable addressing data; both are `false` when the
+/// mapping is permanently orphaned (param_id empty AND no legacy idx).
+fn decide_emit(param_id: &ParamId, legacy_index: Option<i32>) -> (bool, bool) {
+    let emit_id = !param_id.is_empty();
+    let emit_idx = !emit_id && legacy_index.is_some();
+    (emit_id, emit_idx)
 }
 
 // Custom `Deserialize` accepting both V1.1 (`paramIndex: usize` inside

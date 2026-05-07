@@ -161,221 +161,278 @@ impl Project {
         }
     }
 
-    /// Resolve every driver / envelope / Ableton-mapping that came in via
-    /// the legacy `paramIndex: i32` shape. The custom `Deserialize` for
-    /// each of those types parks the legacy index in
-    /// `legacy_param_index`; here we walk every site, look up the
-    /// effect/generator's registry definition, and assign
-    /// `param_id = def.param_defs[idx].id`.
+    /// Resolve every driver / envelope / Ableton-mapping / macro-mapping
+    /// addressing site that came in via the legacy `paramIndex: i32`
+    /// shape. The custom `Deserialize` for each of those types parks the
+    /// legacy index in `legacy_param_index`; here we walk every site,
+    /// look up the effect/generator's registry definition, and assign
+    /// `param_id` from `def.param_defs[idx].id`, walking the
+    /// `legacy_param_aliases` table on the way.
     ///
-    /// After this pass, every driver/envelope/mapping in memory has a
-    /// non-empty `param_id` (assuming the index was in range and the
-    /// effect type is registered). Stragglers — drivers whose param
-    /// disappeared because the effect's param list shrunk — are left
-    /// with empty `param_id` and will be ignored at runtime.
+    /// Outcomes (see [`ResolveOutcome`] inside the body):
+    ///
+    /// - **Resolved** — registry knows the type, addressing translates
+    ///   to a current id. Update `param_id`, clear legacy index.
+    /// - **NoChange** — registry knows the type, current id is already
+    ///   stable. Clear legacy index (nothing to do).
+    /// - **Drop** — registry knows the type, but the legacy index is
+    ///   out of range, points at an unnamed slot, or aliases through
+    ///   to `None` (param dropped). The mapping is permanently
+    ///   orphaned. Clear legacy index — there's no recovery possible.
+    /// - **RegistryMissing** — registry has no def for this effect or
+    ///   generator type. **Preserve** the legacy index so a future load
+    ///   on a build that does have the registry can recover. Without
+    ///   this preservation, loading on (e.g.) the `manifold-io` test
+    ///   harness which doesn't link `manifold-renderer` would silently
+    ///   strip every driver's addressing data on the first save.
     fn resolve_legacy_param_ids(&mut self) {
         use crate::effect_definition_registry;
+        use crate::effect_registration::resolve_param_alias;
         use crate::generator_definition_registry;
 
-        // ── Generic addressing-site resolution ──────────────────
-        //
-        // Two helpers (effect-side + generator-side) wrap the
-        // common shape: take an existing `param_id` (or empty) plus
-        // a parked `legacy_param_index`, plus the registry lookup,
-        // and produce the current `param_id` walking through the
-        // alias table to pick up renames or drops.
-        //
-        // Returns `(new_param_id, clear_legacy_index)`. The caller
-        // assigns the returned id and clears the legacy index.
+        /// Outcome of a single addressing-site resolution attempt.
+        ///
+        /// Each variant maps to a distinct policy at the call site:
+        /// clear or preserve `legacy_param_index`, with or without
+        /// writing a new `param_id`. Centralized so every addressing-
+        /// site applies the same policy — the resolver's contract
+        /// lives here.
+        enum ResolveOutcome {
+            /// Param id is current — nothing to write. Clear legacy idx.
+            NoChange,
+            /// New param id resolved (rename or legacy-index translation).
+            /// Write it; clear legacy idx.
+            Update(String),
+            /// Registry knows the type but the addressing is dead.
+            /// Clear legacy idx — no recovery possible.
+            Drop,
+            /// Registry has no def for this effect/generator type. Don't
+            /// touch anything, including the legacy idx, so the
+            /// addressing can recover on a future load with a populated
+            /// registry.
+            RegistryMissing,
+        }
 
-        fn resolve_effect_param_id(
+        // Apply an outcome to a `(param_id, legacy_param_index)` pair.
+        fn apply_outcome(
+            outcome: ResolveOutcome,
+            param_id: &mut crate::effects::ParamId,
+            legacy_param_index: &mut Option<i32>,
+        ) {
+            match outcome {
+                ResolveOutcome::NoChange | ResolveOutcome::Drop => {
+                    *legacy_param_index = None;
+                }
+                ResolveOutcome::Update(id) => {
+                    *param_id = std::borrow::Cow::Owned(id);
+                    *legacy_param_index = None;
+                }
+                ResolveOutcome::RegistryMissing => {
+                    // Preserve both fields for next-load recovery.
+                }
+            }
+        }
+
+        // Common resolution body, parameterized by which registry
+        // supplied the def. Effect and generator defs share enough
+        // shape (`legacy_param_aliases` + `param_defs[].id`) that we
+        // pass them through opaque accessors rather than a trait.
+        fn resolve_against<'a>(
+            current_id: &str,
+            legacy_index: Option<i32>,
+            aliases: &'a [crate::effect_registration::ParamAlias],
+            param_defs: &'a [crate::effects::ParamDef],
+        ) -> ResolveOutcome {
+            if !current_id.is_empty() {
+                // V1.2+ id-keyed reference: walk the alias chain so
+                // schema-bumped renames catch up.
+                if aliases.is_empty() {
+                    return ResolveOutcome::NoChange;
+                }
+                match resolve_param_alias(aliases, current_id) {
+                    Some(resolved) if resolved == current_id => ResolveOutcome::NoChange,
+                    Some(resolved) => ResolveOutcome::Update(resolved.to_string()),
+                    None => ResolveOutcome::Drop,
+                }
+            } else if let Some(idx) = legacy_index {
+                // Legacy positional reference: translate via param_defs,
+                // then walk the alias chain.
+                let Some(pd) = param_defs.get(idx as usize) else {
+                    return ResolveOutcome::Drop;
+                };
+                if pd.id.is_empty() {
+                    return ResolveOutcome::Drop;
+                }
+                match resolve_param_alias(aliases, pd.id.as_str()) {
+                    Some(resolved) => ResolveOutcome::Update(resolved.to_string()),
+                    None => ResolveOutcome::Drop,
+                }
+            } else {
+                // No id, no legacy index — nothing addressable. Registry
+                // is present (caller checked), so clear for consistency.
+                ResolveOutcome::Drop
+            }
+        }
+
+        fn resolve_for_effect(
             effect_type: &crate::EffectTypeId,
             current_id: &str,
             legacy_index: Option<i32>,
-        ) -> Option<String> {
-            let def = effect_definition_registry::try_get(effect_type)?;
-            let aliases = def.legacy_param_aliases;
-
-            if !current_id.is_empty() {
-                // V1.2+ id-keyed reference: walk the alias chain so
-                // future renames catch up automatically.
-                if aliases.is_empty() {
-                    return None; // no change
-                }
-                let resolved =
-                    effect_definition_registry::resolve_param_alias(aliases, current_id)?;
-                if resolved == current_id {
-                    return None; // no change
-                }
-                return Some(resolved.to_string());
-            }
-
-            // Legacy positional reference: translate via param_defs,
-            // then walk the alias chain.
-            let idx = legacy_index?;
-            let pd = def.param_defs.get(idx as usize)?;
-            if pd.id.is_empty() {
-                return None;
-            }
-            let resolved = effect_definition_registry::resolve_param_alias(aliases, pd.id.as_str())
-                .unwrap_or(pd.id.as_str());
-            Some(resolved.to_string())
+        ) -> ResolveOutcome {
+            let Some(def) = effect_definition_registry::try_get(effect_type) else {
+                return ResolveOutcome::RegistryMissing;
+            };
+            resolve_against(current_id, legacy_index, def.legacy_param_aliases, &def.param_defs)
         }
 
-        fn resolve_generator_param_id(
+        fn resolve_for_generator(
             gen_type: &crate::GeneratorTypeId,
             current_id: &str,
             legacy_index: Option<i32>,
-        ) -> Option<String> {
-            let def = generator_definition_registry::try_get(gen_type)?;
-            let aliases = def.legacy_param_aliases;
-
-            if !current_id.is_empty() {
-                if aliases.is_empty() {
-                    return None;
-                }
-                let resolved =
-                    effect_definition_registry::resolve_param_alias(aliases, current_id)?;
-                if resolved == current_id {
-                    return None;
-                }
-                return Some(resolved.to_string());
-            }
-
-            let idx = legacy_index?;
-            let pd = def.param_defs.get(idx as usize)?;
-            if pd.id.is_empty() {
-                return None;
-            }
-            let resolved = effect_definition_registry::resolve_param_alias(aliases, pd.id.as_str())
-                .unwrap_or(pd.id.as_str());
-            Some(resolved.to_string())
+        ) -> ResolveOutcome {
+            let Some(def) = generator_definition_registry::try_get(gen_type) else {
+                return ResolveOutcome::RegistryMissing;
+            };
+            resolve_against(current_id, legacy_index, def.legacy_param_aliases, &def.param_defs)
         }
 
         fn resolve_driver_id_for_effect(
             driver: &mut crate::effects::ParameterDriver,
             effect_type: &crate::EffectTypeId,
         ) {
-            if let Some(id) =
-                resolve_effect_param_id(effect_type, &driver.param_id, driver.legacy_param_index)
-            {
-                driver.param_id = std::borrow::Cow::Owned(id);
-            }
-            driver.legacy_param_index = None;
+            let outcome = resolve_for_effect(
+                effect_type,
+                &driver.param_id,
+                driver.legacy_param_index,
+            );
+            apply_outcome(outcome, &mut driver.param_id, &mut driver.legacy_param_index);
         }
 
         fn resolve_driver_id_for_generator(
             driver: &mut crate::effects::ParameterDriver,
             gen_type: &crate::GeneratorTypeId,
         ) {
-            if let Some(id) =
-                resolve_generator_param_id(gen_type, &driver.param_id, driver.legacy_param_index)
-            {
-                driver.param_id = std::borrow::Cow::Owned(id);
-            }
-            driver.legacy_param_index = None;
+            let outcome = resolve_for_generator(
+                gen_type,
+                &driver.param_id,
+                driver.legacy_param_index,
+            );
+            apply_outcome(outcome, &mut driver.param_id, &mut driver.legacy_param_index);
         }
 
         fn resolve_envelope_id_for_effect(env: &mut crate::effects::ParamEnvelope) {
             let target = env.target_effect_type.clone();
-            if let Some(id) = resolve_effect_param_id(&target, &env.param_id, env.legacy_param_index)
-            {
-                env.param_id = std::borrow::Cow::Owned(id);
-            }
-            env.legacy_param_index = None;
+            let outcome = resolve_for_effect(&target, &env.param_id, env.legacy_param_index);
+            apply_outcome(outcome, &mut env.param_id, &mut env.legacy_param_index);
         }
 
         fn resolve_envelope_id_for_generator(
             env: &mut crate::effects::ParamEnvelope,
             gen_type: &crate::GeneratorTypeId,
         ) {
-            if let Some(id) =
-                resolve_generator_param_id(gen_type, &env.param_id, env.legacy_param_index)
-            {
-                env.param_id = std::borrow::Cow::Owned(id);
-            }
-            env.legacy_param_index = None;
+            let outcome =
+                resolve_for_generator(gen_type, &env.param_id, env.legacy_param_index);
+            apply_outcome(outcome, &mut env.param_id, &mut env.legacy_param_index);
         }
 
         fn resolve_ableton_id_for_effect(
             mapping: &mut crate::ableton_mapping::AbletonParamMapping,
             effect_type: &crate::EffectTypeId,
         ) {
-            if let Some(id) = resolve_effect_param_id(
+            let outcome = resolve_for_effect(
                 effect_type,
                 &mapping.param_id,
                 mapping.legacy_param_index,
-            ) {
-                mapping.param_id = std::borrow::Cow::Owned(id);
-            }
-            mapping.legacy_param_index = None;
+            );
+            apply_outcome(
+                outcome,
+                &mut mapping.param_id,
+                &mut mapping.legacy_param_index,
+            );
         }
 
         fn resolve_ableton_id_for_generator(
             mapping: &mut crate::ableton_mapping::AbletonParamMapping,
             gen_type: &crate::GeneratorTypeId,
         ) {
-            if let Some(id) =
-                resolve_generator_param_id(gen_type, &mapping.param_id, mapping.legacy_param_index)
-            {
-                mapping.param_id = std::borrow::Cow::Owned(id);
-            }
-            mapping.legacy_param_index = None;
+            let outcome = resolve_for_generator(
+                gen_type,
+                &mapping.param_id,
+                mapping.legacy_param_index,
+            );
+            apply_outcome(
+                outcome,
+                &mut mapping.param_id,
+                &mut mapping.legacy_param_index,
+            );
         }
 
         // Macro mappings are stored on `settings.macro_bank.slots[*].mappings`.
         // Each `MacroMapping` carries a `legacy_param_index` parked from the
         // V1.1 shape; the variant tells us whether to look up via the effect
         // or generator registry. `GenParam` requires the layer to be alive
-        // because the generator type isn't recorded on the target itself.
+        // because the generator type isn't recorded on the target itself —
+        // a missing layer is treated as `RegistryMissing` so the index
+        // survives until the layer reappears.
         fn resolve_macro_mapping(
             mapping: &mut crate::macro_bank::MacroMapping,
             timeline: &crate::timeline::Timeline,
         ) {
             use crate::macro_bank::MacroMappingTarget;
             let legacy_idx = mapping.legacy_param_index;
-            match &mut mapping.target {
+            let outcome = match &mapping.target {
                 MacroMappingTarget::MasterOpacity | MacroMappingTarget::LayerOpacity { .. } => {
-                    // No param to resolve.
+                    // No param-bearing variant — drop legacy idx, no id work.
+                    ResolveOutcome::Drop
                 }
                 MacroMappingTarget::MasterEffect {
                     effect_type,
                     param_id,
-                } => {
-                    if let Some(id) =
-                        resolve_effect_param_id(effect_type, param_id, legacy_idx)
-                    {
-                        *param_id = std::borrow::Cow::Owned(id);
-                    }
-                }
+                } => resolve_for_effect(effect_type, param_id, legacy_idx),
                 MacroMappingTarget::LayerEffect {
                     effect_type,
                     param_id,
                     ..
-                } => {
-                    if let Some(id) =
-                        resolve_effect_param_id(effect_type, param_id, legacy_idx)
-                    {
-                        *param_id = std::borrow::Cow::Owned(id);
-                    }
-                }
+                } => resolve_for_effect(effect_type, param_id, legacy_idx),
                 MacroMappingTarget::GenParam { layer_id, param_id } => {
-                    if let Some(layer) = timeline
+                    match timeline
                         .layers
                         .iter()
                         .find(|l| l.layer_id == *layer_id)
-                        && let Some(gp) = layer.gen_params()
-                        && let Some(id) = resolve_generator_param_id(
-                            gp.generator_type(),
-                            param_id,
-                            legacy_idx,
-                        )
+                        .and_then(|l| l.gen_params())
                     {
-                        *param_id = std::borrow::Cow::Owned(id);
+                        Some(gp) => resolve_for_generator(gp.generator_type(), param_id, legacy_idx),
+                        // Layer or its gen_params missing — same recovery
+                        // semantics as registry-missing on effect/generator.
+                        None => ResolveOutcome::RegistryMissing,
                     }
                 }
+            };
+
+            // Apply the outcome to the variant's `param_id` (where it
+            // exists) plus the wrapper's `legacy_param_index`.
+            match (&mut mapping.target, outcome) {
+                (_, ResolveOutcome::NoChange | ResolveOutcome::Drop) => {
+                    mapping.legacy_param_index = None;
+                }
+                (
+                    MacroMappingTarget::MasterEffect { param_id, .. }
+                    | MacroMappingTarget::LayerEffect { param_id, .. }
+                    | MacroMappingTarget::GenParam { param_id, .. },
+                    ResolveOutcome::Update(id),
+                ) => {
+                    *param_id = std::borrow::Cow::Owned(id);
+                    mapping.legacy_param_index = None;
+                }
+                (_, ResolveOutcome::Update(_)) => {
+                    // Update outcome on a no-param variant can't happen
+                    // given the resolve match above, but be safe.
+                    mapping.legacy_param_index = None;
+                }
+                (_, ResolveOutcome::RegistryMissing) => {
+                    // Preserve legacy index for next-load recovery.
+                }
             }
-            mapping.legacy_param_index = None;
         }
 
         // Master effects.
@@ -714,10 +771,12 @@ mod tests {
     }
 
     #[test]
-    fn legacy_resolution_leaves_unresolvable_drivers_empty() {
-        // If the legacy index is out of range (effect's param list shrunk
-        // since save), the driver gets `param_id = ""` and is ignored
-        // at runtime. Better than panicking on a stale project.
+    fn legacy_resolution_drops_orphans_when_effect_known() {
+        // If the registry knows the effect (Bloom) but the legacy index
+        // is out of range (param list shrunk since save), the entry is
+        // permanently orphaned: clear legacy index, leave param_id
+        // empty. Same fail-soft policy as alias-drop. Driver is then
+        // ignored at runtime (`param_id_to_index` returns None on "").
         let mut p = Project::default();
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
         fx.param_values = vec![0.5];
@@ -742,7 +801,112 @@ mod tests {
         assert_eq!(d.param_id, "", "out-of-range index leaves param_id empty");
         assert_eq!(
             d.legacy_param_index, None,
-            "legacy index always cleared, even when unresolvable"
+            "registry-known + out-of-range = Drop; legacy idx cleared"
+        );
+    }
+
+    #[test]
+    fn registry_missing_recovery_round_trip() {
+        // End-to-end: a driver that loaded against an unregistered
+        // effect (RegistryMissing) keeps its `legacy_param_index`
+        // parked. The custom `Serialize` impl re-emits it as
+        // `paramIndex`, so a save→reload cycle on a build without the
+        // registry preserves recovery information verbatim. On a
+        // future load against a populated registry, the resolver fills
+        // in `param_id` cleanly.
+        use crate::effects::{ParameterDriver, ParamId};
+
+        // Step 1: simulate a load where the registry was missing for
+        // this effect type. The driver is in the parked state.
+        let driver = ParameterDriver {
+            param_id: ParamId::Borrowed(""),
+            beat_division: BeatDivision::Half,
+            waveform: DriverWaveform::Sine,
+            enabled: true,
+            phase: 0.25,
+            base_value: 0.0,
+            trim_min: 0.0,
+            trim_max: 1.0,
+            reversed: false,
+            legacy_param_index: Some(2),
+            is_paused_by_user: false,
+        };
+
+        // Step 2: serialize. Custom Serialize re-emits the parked
+        // index as `paramIndex` since param_id is empty.
+        let json = serde_json::to_string(&driver).expect("serialize");
+        assert!(
+            json.contains("\"paramIndex\":2"),
+            "registry-missing driver must re-emit legacy paramIndex on save; got: {json}"
+        );
+        assert!(
+            !json.contains("\"paramId\""),
+            "must NOT emit paramId when it's empty; got: {json}"
+        );
+
+        // Step 3: reload. Deserialize parks the index again.
+        let back: ParameterDriver = serde_json::from_str(&json).expect("deserialize");
+        assert!(back.param_id.is_empty(), "param_id remains empty until resolver");
+        assert_eq!(back.legacy_param_index, Some(2), "index re-parked from wire");
+
+        // Step 4: now imagine the registry just came online (Bloom is
+        // registered in this test crate; pretend the driver was for it).
+        let mut p = Project::default();
+        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        fx.param_values = vec![0.5];
+        let mut driver_for_bloom = back.clone();
+        // (In a real load, the driver lands inside an EffectInstance
+        // from the deserialize tree; here we simulate by re-attaching.)
+        driver_for_bloom.legacy_param_index = Some(0); // Bloom only has 1 param; fake idx 0
+        fx.drivers = Some(vec![driver_for_bloom]);
+        p.settings.master_effects.push(fx);
+
+        // Step 5: resolver runs against the populated registry. Recovery
+        // completes: param_id resolves, legacy index clears.
+        p.resolve_legacy_param_ids();
+        let d = &p.settings.master_effects[0].drivers.as_ref().unwrap()[0];
+        assert_eq!(d.param_id, "amount", "registry came online; resolver fills param_id");
+        assert_eq!(d.legacy_param_index, None, "legacy index cleared on successful resolve");
+    }
+
+    #[test]
+    fn legacy_resolution_preserves_legacy_idx_when_registry_missing() {
+        // The cross-cutting recovery path: if the registry doesn't have a
+        // def for this effect type at load time (e.g., a tooling crate
+        // that didn't link manifold-renderer), the resolver must NOT
+        // clear `legacy_param_index`. Otherwise the next save→reload on
+        // a properly-registered build would silently lose the addressing
+        // forever. The custom Serialize for `ParameterDriver` re-emits
+        // `paramIndex` when `param_id` is empty, completing the recovery
+        // loop end-to-end.
+        let mut p = Project::default();
+        // Synthetic effect type with no registry def in this test build.
+        let unregistered = crate::EffectTypeId::from_string("not-a-real-effect-id".to_string());
+        let mut fx = EffectInstance::new(unregistered);
+        fx.param_values = vec![0.5, 0.5, 0.5];
+        fx.drivers = Some(vec![ParameterDriver {
+            param_id: std::borrow::Cow::Borrowed(""),
+            beat_division: BeatDivision::Quarter,
+            waveform: DriverWaveform::Sine,
+            enabled: true,
+            phase: 0.0,
+            base_value: 0.0,
+            trim_min: 0.0,
+            trim_max: 1.0,
+            reversed: false,
+            legacy_param_index: Some(2),
+            is_paused_by_user: false,
+        }]);
+        p.settings.master_effects.push(fx);
+
+        p.resolve_legacy_param_ids();
+
+        let d = &p.settings.master_effects[0].drivers.as_ref().unwrap()[0];
+        assert_eq!(d.param_id, "", "no registry def -> param_id stays empty");
+        assert_eq!(
+            d.legacy_param_index,
+            Some(2),
+            "RegistryMissing must preserve legacy index for next-load recovery"
         );
     }
 }

@@ -32,9 +32,9 @@ use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::composites::{build_mirror, CompositeHandle};
 use crate::node_graph::{
-    apply_param_bindings, compile, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph,
-    MetalBackend, NodeInstanceId, ParamBinding, ParamConvert, ParamTarget, PortType, ResourceId,
-    Slot, Source,
+    apply_param_bindings, binding_value, compile, ExecutionPlan, Executor, FinalOutput, FrameTime,
+    Graph, MetalBackend, NodeInstanceId, ParamBinding, ParamConvert, ParamTarget, PortType,
+    ResourceId, Slot, Source,
 };
 use crate::render_target::RenderTarget;
 
@@ -214,8 +214,10 @@ impl PostProcessEffect for MirrorFX {
     }
 
     /// Skip when amount = 0 — a fully-original output is identity.
+    /// Read by stable id rather than positional index so reordering
+    /// the bindings can't silently break the skip predicate.
     fn should_skip(&self, fx: &EffectInstance) -> bool {
-        fx.param_values.first().copied().unwrap_or(1.0) <= 0.0
+        binding_value(&self.bindings, &fx.param_values, "amount").unwrap_or(1.0) <= 0.0
     }
 
     fn graph_snapshot(&self) -> Option<crate::node_graph::GraphSnapshot> {
@@ -255,13 +257,14 @@ impl PostProcessEffect for MirrorFX {
         // Step 17: route every host param via the declarative
         // `bindings` slice. Legacy mode→UVTransform remap is encoded
         // as `ParamConvert::EnumRemap` on the binding itself.
+        // apply_param_bindings logs and skips per-binding routing
+        // errors rather than panicking — see its docstring.
         apply_param_bindings(
             &self.bindings,
             &mut self.graph,
             Some(&self.handle),
             &fx.param_values,
-        )
-        .expect("route mirror bindings");
+        );
 
         let frame_time = FrameTime {
             beats: manifold_core::Beats(f64::from(ctx.beat)),
