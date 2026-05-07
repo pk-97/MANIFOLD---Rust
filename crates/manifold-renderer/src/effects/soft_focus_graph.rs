@@ -13,6 +13,8 @@
 //! - `radius` → `Blur.radius` (0..32 typical, capped at 32 in shader)
 //! - `amount` → `Mix.amount` (0 = sharp original, 1 = full blur)
 
+use std::borrow::Cow;
+
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
@@ -24,8 +26,9 @@ use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::composites::{build_soft_focus, CompositeHandle};
 use crate::node_graph::{
-    compile, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend,
-    NodeInstanceId, ParamValue, PortType, ResourceId, Slot, Source,
+    apply_param_bindings, compile, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph,
+    MetalBackend, NodeInstanceId, ParamBinding, ParamConvert, ParamTarget, PortType, ResourceId,
+    Slot, Source,
 };
 use crate::render_target::RenderTarget;
 
@@ -63,6 +66,8 @@ pub struct SoftFocusGraphFX {
     /// effect's exposed `radius` / `amount` slots route to the right
     /// inner nodes each frame.
     handle: CompositeHandle,
+    /// Step 17: declarative routing for the host-visible params.
+    bindings: Vec<ParamBinding>,
     source_resource: ResourceId,
     output_resource: ResourceId,
     state: Option<RenderState>,
@@ -92,11 +97,31 @@ impl SoftFocusGraphFX {
         let source_resource = output_resource(&plan, src, "out");
         let output_resource = output_resource(&plan, handle.output().0, "out");
 
+        let bindings = vec![
+            ParamBinding {
+                id: Cow::Borrowed("radius"),
+                spec: ParamSpec::continuous("radius", "Radius", 0.0, 32.0, 6.0, "F1", "px"),
+                target: ParamTarget::Composite {
+                    outer_name: Cow::Borrowed("radius"),
+                },
+                convert: ParamConvert::Float,
+            },
+            ParamBinding {
+                id: Cow::Borrowed("amount"),
+                spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.5, "F2", ""),
+                target: ParamTarget::Composite {
+                    outer_name: Cow::Borrowed("amount"),
+                },
+                convert: ParamConvert::Float,
+            },
+        ];
+
         Self {
             type_id: EffectTypeId::SOFT_FOCUS_GRAPH,
             graph,
             plan,
             handle,
+            bindings,
             source_resource,
             output_resource,
             state: None,
@@ -218,16 +243,15 @@ impl PostProcessEffect for SoftFocusGraphFX {
             .expect("source slot pre-bound");
         gpu.copy_texture_to_texture(source, source_tex, ctx.width, ctx.height);
 
-        // 3. Route the effect-card sliders into the inner nodes via the
-        //    CompositeHandle. Order matches the ParamSpec list above.
-        let radius = fx.param_values.first().copied().unwrap_or(6.0);
-        let amount = fx.param_values.get(1).copied().unwrap_or(0.5);
-        self.handle
-            .set_param(&mut self.graph, "radius", ParamValue::Float(radius))
-            .expect("route radius");
-        self.handle
-            .set_param(&mut self.graph, "amount", ParamValue::Float(amount))
-            .expect("route amount");
+        // 3. Step 17: route every host param via the declarative
+        //    `bindings` slice through the composite handle.
+        apply_param_bindings(
+            &self.bindings,
+            &mut self.graph,
+            Some(&self.handle),
+            &fx.param_values,
+        )
+        .expect("route soft-focus bindings");
 
         // 4. Run the graph.
         let frame_time = FrameTime {

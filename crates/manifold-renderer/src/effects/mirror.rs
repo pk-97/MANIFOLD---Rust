@@ -25,13 +25,16 @@ use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 
+use std::borrow::Cow;
+
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::composites::{build_mirror, legacy_mirror_mode_to_uv, CompositeHandle};
+use crate::node_graph::composites::{build_mirror, CompositeHandle};
 use crate::node_graph::{
-    compile, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend,
-    NodeInstanceId, ParamValue, PortType, ResourceId, Slot, Source,
+    apply_param_bindings, compile, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph,
+    MetalBackend, NodeInstanceId, ParamBinding, ParamConvert, ParamTarget, PortType, ResourceId,
+    Slot, Source,
 };
 use crate::render_target::RenderTarget;
 
@@ -64,6 +67,10 @@ pub struct MirrorFX {
     graph: Graph,
     plan: ExecutionPlan,
     handle: CompositeHandle,
+    /// Host-visible parameter routing — built once at construction,
+    /// applied per frame via `apply_param_bindings`. Order matches
+    /// the `ParamSpec` slice in the metadata submission.
+    bindings: Vec<ParamBinding>,
     source_resource: ResourceId,
     output_resource: ResourceId,
     state: Option<RenderState>,
@@ -93,11 +100,44 @@ impl MirrorFX {
         let source_resource = output_resource(&plan, src, "out");
         let output_resource = output_resource(&plan, handle.output().0, "out");
 
+        // Bindings mirror the `ParamSpec` slice in the metadata
+        // submission. The legacy mode→UVTransform remap (Horiz/Vert/Both
+        // → FoldX/FoldY/FoldBoth, indices 0/1/2 → 6/7/8) is now declared
+        // as `EnumRemap` rather than expressed by a hand-written
+        // `legacy_mirror_mode_to_uv` call.
+        let bindings = vec![
+            ParamBinding {
+                id: Cow::Borrowed("amount"),
+                spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
+                target: ParamTarget::Composite {
+                    outer_name: Cow::Borrowed("amount"),
+                },
+                convert: ParamConvert::Float,
+            },
+            ParamBinding {
+                id: Cow::Borrowed("mode"),
+                spec: ParamSpec::whole_labels(
+                    "mode",
+                    "Mode",
+                    0.0,
+                    2.0,
+                    0.0,
+                    &["Horiz", "Vert", "Both"],
+                    "Mode",
+                ),
+                target: ParamTarget::Composite {
+                    outer_name: Cow::Borrowed("mode"),
+                },
+                convert: ParamConvert::EnumRemap(Cow::Borrowed(&[6, 7, 8])),
+            },
+        ];
+
         Self {
             type_id: EffectTypeId::MIRROR,
             graph,
             plan,
             handle,
+            bindings,
             source_resource,
             output_resource,
             state: None,
@@ -212,16 +252,16 @@ impl PostProcessEffect for MirrorFX {
             .expect("source slot pre-bound");
         gpu.copy_texture_to_texture(source, source_tex, ctx.width, ctx.height);
 
-        // Param order matches the ParamSpec list above.
-        let amount = fx.param_values.first().copied().unwrap_or(1.0);
-        let mode_legacy = fx.param_values.get(1).copied().unwrap_or(0.0).round() as u32;
-        let mode_uv = legacy_mirror_mode_to_uv(mode_legacy);
-        self.handle
-            .set_param(&mut self.graph, "amount", ParamValue::Float(amount))
-            .expect("route amount");
-        self.handle
-            .set_param(&mut self.graph, "mode", ParamValue::Enum(mode_uv))
-            .expect("route mode");
+        // Step 17: route every host param via the declarative
+        // `bindings` slice. Legacy mode→UVTransform remap is encoded
+        // as `ParamConvert::EnumRemap` on the binding itself.
+        apply_param_bindings(
+            &self.bindings,
+            &mut self.graph,
+            Some(&self.handle),
+            &fx.param_values,
+        )
+        .expect("route mirror bindings");
 
         let frame_time = FrameTime {
             beats: manifold_core::Beats(f64::from(ctx.beat)),

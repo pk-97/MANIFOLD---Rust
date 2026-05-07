@@ -17,6 +17,8 @@
 //!   `primitives/shaders/feedback.wgsl`); same uniform shape, same
 //!   blend math, same NaN guard.
 
+use std::borrow::Cow;
+
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
@@ -28,8 +30,9 @@ use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Feedback;
 use crate::node_graph::{
-    compile, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend,
-    NodeInstanceId, ParamValue, PortType, ResourceId, Slot, Source, StateStore,
+    apply_param_bindings, compile, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph,
+    MetalBackend, NodeInstanceId, ParamBinding, ParamConvert, ParamTarget, PortType, ResourceId,
+    Slot, Source, StateStore,
 };
 use crate::render_target::RenderTarget;
 
@@ -63,13 +66,14 @@ pub struct StylizedFeedbackFX {
     type_id: EffectTypeId,
     graph: Graph,
     plan: ExecutionPlan,
-    /// `NodeInstanceId` of the `Feedback` primitive — used for
-    /// per-frame param routing via `graph.set_param`.
-    feedback_node: NodeInstanceId,
+    /// Step 17: declarative routing for the host-visible params.
+    /// Each entry's `ParamTarget::Node` carries the `feedback`
+    /// node id captured at construction.
+    bindings: Vec<ParamBinding>,
     source_resource: ResourceId,
     output_resource: ResourceId,
     /// Per-owner persistent state lives here. Each entry's key is
-    /// `(feedback_node, owner_key)`.
+    /// `(feedback_node_id, owner_key)`.
     state_store: StateStore,
     /// GPU resources — built lazily on first `apply` and rebuilt on
     /// resolution change.
@@ -101,11 +105,63 @@ impl StylizedFeedbackFX {
         let source_resource = output_resource(&plan, src, "out");
         let output_resource = output_resource(&plan, feedback, "out");
 
+        // Bindings target the inner `Feedback` primitive directly via
+        // `ParamTarget::Node`. The host-visible id `rotate` routes to
+        // the inner node's compile-time param `rotation`. Mode uses an
+        // `EnumRemap` table to preserve the legacy clamp-to-[0, 2]
+        // behavior for out-of-range inputs.
+        let bindings = vec![
+            ParamBinding {
+                id: Cow::Borrowed("amount"),
+                spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.5, "F2", ""),
+                target: ParamTarget::Node {
+                    node: feedback,
+                    param: "amount",
+                },
+                convert: ParamConvert::Float,
+            },
+            ParamBinding {
+                id: Cow::Borrowed("zoom"),
+                spec: ParamSpec::continuous("zoom", "Zoom", 0.9, 1.1, 0.95, "F2", "Zoom"),
+                target: ParamTarget::Node {
+                    node: feedback,
+                    param: "zoom",
+                },
+                convert: ParamConvert::Float,
+            },
+            ParamBinding {
+                id: Cow::Borrowed("rotate"),
+                spec: ParamSpec::continuous("rotate", "Rotate", -10.0, 10.0, 0.0, "F2", "Rotate"),
+                target: ParamTarget::Node {
+                    node: feedback,
+                    param: "rotation",
+                },
+                convert: ParamConvert::Float,
+            },
+            ParamBinding {
+                id: Cow::Borrowed("mode"),
+                spec: ParamSpec::whole_labels(
+                    "mode",
+                    "Mode",
+                    0.0,
+                    2.0,
+                    0.0,
+                    &["Screen", "Add", "Max"],
+                    "Mode",
+                ),
+                target: ParamTarget::Node {
+                    node: feedback,
+                    param: "mode",
+                },
+                convert: ParamConvert::EnumRemap(Cow::Borrowed(&[0, 1, 2])),
+            },
+        ];
+
         Self {
             type_id: EffectTypeId::STYLIZED_FEEDBACK,
             graph,
             plan,
-            feedback_node: feedback,
+            bindings,
             source_resource,
             output_resource,
             state_store: StateStore::new(),
@@ -215,29 +271,10 @@ impl PostProcessEffect for StylizedFeedbackFX {
         }
         let render = self.render.as_mut().expect("render initialized above");
 
-        // 2. Route effect-card sliders into the inner primitive's params.
-        let amount = fx.param_values.first().copied().unwrap_or(0.5);
-        let zoom = fx.param_values.get(1).copied().unwrap_or(0.95);
-        let rotation_deg = fx.param_values.get(2).copied().unwrap_or(0.0);
-        let mode_idx = fx
-            .param_values
-            .get(3)
-            .copied()
-            .unwrap_or(0.0)
-            .round()
-            .clamp(0.0, 2.0) as u32;
-        self.graph
-            .set_param(self.feedback_node, "amount", ParamValue::Float(amount))
-            .expect("route amount");
-        self.graph
-            .set_param(self.feedback_node, "zoom", ParamValue::Float(zoom))
-            .expect("route zoom");
-        self.graph
-            .set_param(self.feedback_node, "rotation", ParamValue::Float(rotation_deg))
-            .expect("route rotation");
-        self.graph
-            .set_param(self.feedback_node, "mode", ParamValue::Enum(mode_idx))
-            .expect("route mode");
+        // 2. Step 17: route every host param via the declarative
+        //    `bindings` slice directly to the `feedback` node.
+        apply_param_bindings(&self.bindings, &mut self.graph, None, &fx.param_values)
+            .expect("route stylized-feedback bindings");
 
         // 3. Copy the layer's source into the graph's pre-bound Source slot.
         let backend = render.executor.backend();
