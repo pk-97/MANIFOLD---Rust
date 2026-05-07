@@ -106,38 +106,290 @@ pub trait ParamSource {
 // ─── Effect Instance ───
 
 /// A single effect applied to a clip, layer, or master chain.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+///
+/// Serialization (custom impls below):
+///
+/// - `paramValues` / `baseParamValues` accept both V1.x (`Array` of
+///   `f32` indexed by position) and V1.2+ (`Object` keyed by stable
+///   `param_id`). On save, V1.2+ canonical Map form is emitted when
+///   the effect's registry def is available; otherwise the legacy
+///   Array form is emitted (preserves test contexts that don't link
+///   `manifold-renderer`).
+///
+/// In-memory storage stays positional (`Vec<f32>`) — the hot path
+/// reads/writes by index. The Map form only exists on the wire.
+/// See `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 step 12.
+#[derive(Debug, Clone)]
 pub struct EffectInstance {
     /// Unique identifier for this effect instance.
-    /// Auto-generated on creation and deserialization (backfills old projects).
-    #[serde(default = "generate_effect_id")]
     pub id: EffectId,
     effect_type: EffectTypeId,
-    #[serde(default = "default_true")]
     pub enabled: bool,
-    #[serde(default)]
     pub collapsed: bool,
-    #[serde(default)]
     pub param_values: Vec<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_param_values: Option<Vec<f32>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drivers: Option<Vec<ParameterDriver>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_id: Option<EffectGroupId>,
 
-    // Legacy flat param fields (V1.0.0 format)
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "param0")]
+    // Legacy flat param fields (V1.0.0 format).
     pub legacy_param0: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "param1")]
     pub legacy_param1: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "param2")]
     pub legacy_param2: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "param3")]
     pub legacy_param3: Option<f32>,
+}
+
+// ─── Wire-format helpers for paramValues ───
+
+/// Wire-format shape for `paramValues` / `baseParamValues`. Accepts
+/// either V1.x positional `Array` or V1.2+ id-keyed `Object`.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ParamValuesWire {
+    Positional(Vec<f32>),
+    Keyed(std::collections::BTreeMap<String, f32>),
+}
+
+impl ParamValuesWire {
+    /// Convert to the in-memory positional `Vec<f32>` form.
+    ///
+    /// - `Positional`: passed through unchanged.
+    /// - `Keyed`: looked up against the effect registry. Each known
+    ///   `param_id` lands at its registry index; unknown keys are
+    ///   dropped (orphan, same policy as drivers/envelopes/Ableton).
+    ///   Missing slots default to the registry's `default_value`.
+    ///
+    /// If the registry lacks a def for this effect (e.g., test code
+    /// without `manifold-renderer` linked, or a forward-incompatible
+    /// type from a future version), returns `Vec::new()` for the
+    /// keyed case — `align_to_definition` and the post-load resolver
+    /// will fill in defaults.
+    fn into_positional(self, effect_type: &EffectTypeId) -> Vec<f32> {
+        match self {
+            ParamValuesWire::Positional(v) => v,
+            ParamValuesWire::Keyed(map) => {
+                let Some(def) = crate::effect_definition_registry::try_get(effect_type) else {
+                    return Vec::new();
+                };
+                let mut out = vec![0.0_f32; def.param_count];
+                for (i, pd) in def.param_defs.iter().enumerate().take(def.param_count) {
+                    out[i] = pd.default_value;
+                }
+                for (id, value) in map {
+                    if let Some(&idx) = def.id_to_index.get(&id)
+                        && idx < out.len()
+                    {
+                        out[idx] = value;
+                    }
+                }
+                out
+            }
+        }
+    }
+}
+
+/// Serialize a positional `Vec<f32>` as the V1.2+ `Object` keyed by
+/// `param_id`, looking up ids via the effect registry.
+///
+/// Falls back to the V1.x `Array` form when the registry is missing
+/// (test contexts) or any param_id is empty (effect predates step 7's
+/// stable-id pass and hasn't been re-registered yet).
+fn serialize_param_values<S>(
+    values: &[f32],
+    effect_type: &EffectTypeId,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::{SerializeMap, SerializeSeq};
+
+    let def = crate::effect_definition_registry::try_get(effect_type);
+    let can_emit_map = def.is_some_and(|d| {
+        values.len() <= d.param_ids.len()
+            && d.param_ids
+                .iter()
+                .take(values.len())
+                .all(|id| !id.is_empty())
+    });
+
+    if can_emit_map {
+        let def = def.expect("checked above");
+        let mut map = serializer.serialize_map(Some(values.len()))?;
+        for (i, &v) in values.iter().enumerate() {
+            map.serialize_entry(def.param_ids[i], &v)?;
+        }
+        map.end()
+    } else {
+        let mut seq = serializer.serialize_seq(Some(values.len()))?;
+        for &v in values {
+            seq.serialize_element(&v)?;
+        }
+        seq.end()
+    }
+}
+
+// ─── Custom Serialize / Deserialize for EffectInstance ───
+
+impl Serialize for EffectInstance {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        // `param_values` always emits; `base_param_values` is optional.
+        // Other optional fields use the same `skip_if_none` policy as
+        // the previous derive(Serialize) impl.
+        let mut field_count = 5; // id, effectType, enabled, collapsed, paramValues
+        if self.base_param_values.is_some() {
+            field_count += 1;
+        }
+        if self.drivers.is_some() {
+            field_count += 1;
+        }
+        if self.ableton_mappings.is_some() {
+            field_count += 1;
+        }
+        if self.group_id.is_some() {
+            field_count += 1;
+        }
+        if self.legacy_param0.is_some() {
+            field_count += 1;
+        }
+        if self.legacy_param1.is_some() {
+            field_count += 1;
+        }
+        if self.legacy_param2.is_some() {
+            field_count += 1;
+        }
+        if self.legacy_param3.is_some() {
+            field_count += 1;
+        }
+
+        let mut s = serializer.serialize_struct("EffectInstance", field_count)?;
+        s.serialize_field("id", &self.id)?;
+        s.serialize_field("effectType", &self.effect_type)?;
+        s.serialize_field("enabled", &self.enabled)?;
+        s.serialize_field("collapsed", &self.collapsed)?;
+        s.serialize_field(
+            "paramValues",
+            &ParamValuesSer {
+                values: &self.param_values,
+                effect_type: &self.effect_type,
+            },
+        )?;
+        if let Some(base) = &self.base_param_values {
+            s.serialize_field(
+                "baseParamValues",
+                &ParamValuesSer {
+                    values: base,
+                    effect_type: &self.effect_type,
+                },
+            )?;
+        }
+        if let Some(d) = &self.drivers {
+            s.serialize_field("drivers", d)?;
+        }
+        if let Some(m) = &self.ableton_mappings {
+            s.serialize_field("abletonMappings", m)?;
+        }
+        if let Some(g) = &self.group_id {
+            s.serialize_field("groupId", g)?;
+        }
+        if let Some(v) = self.legacy_param0 {
+            s.serialize_field("param0", &v)?;
+        }
+        if let Some(v) = self.legacy_param1 {
+            s.serialize_field("param1", &v)?;
+        }
+        if let Some(v) = self.legacy_param2 {
+            s.serialize_field("param2", &v)?;
+        }
+        if let Some(v) = self.legacy_param3 {
+            s.serialize_field("param3", &v)?;
+        }
+        s.end()
+    }
+}
+
+/// Serialize-side wrapper for `paramValues` / `baseParamValues` that
+/// carries the parent's `effect_type` so the field-level `Serialize`
+/// can route to `serialize_param_values`.
+struct ParamValuesSer<'a> {
+    values: &'a [f32],
+    effect_type: &'a EffectTypeId,
+}
+
+impl Serialize for ParamValuesSer<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serialize_param_values(self.values, self.effect_type, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for EffectInstance {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Raw {
+            #[serde(default = "generate_effect_id")]
+            id: EffectId,
+            effect_type: EffectTypeId,
+            #[serde(default = "default_true")]
+            enabled: bool,
+            #[serde(default)]
+            collapsed: bool,
+            #[serde(default)]
+            param_values: Option<ParamValuesWire>,
+            #[serde(default)]
+            base_param_values: Option<ParamValuesWire>,
+            #[serde(default)]
+            drivers: Option<Vec<ParameterDriver>>,
+            #[serde(default)]
+            ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
+            #[serde(default)]
+            group_id: Option<EffectGroupId>,
+            #[serde(default, rename = "param0")]
+            legacy_param0: Option<f32>,
+            #[serde(default, rename = "param1")]
+            legacy_param1: Option<f32>,
+            #[serde(default, rename = "param2")]
+            legacy_param2: Option<f32>,
+            #[serde(default, rename = "param3")]
+            legacy_param3: Option<f32>,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        let param_values = raw
+            .param_values
+            .map(|w| w.into_positional(&raw.effect_type))
+            .unwrap_or_default();
+        let base_param_values = raw
+            .base_param_values
+            .map(|w| w.into_positional(&raw.effect_type));
+
+        Ok(EffectInstance {
+            id: raw.id,
+            effect_type: raw.effect_type,
+            enabled: raw.enabled,
+            collapsed: raw.collapsed,
+            param_values,
+            base_param_values,
+            drivers: raw.drivers,
+            ableton_mappings: raw.ableton_mappings,
+            group_id: raw.group_id,
+            legacy_param0: raw.legacy_param0,
+            legacy_param1: raw.legacy_param1,
+            legacy_param2: raw.legacy_param2,
+            legacy_param3: raw.legacy_param3,
+        })
+    }
 }
 
 impl EffectInstance {
@@ -1226,5 +1478,107 @@ mod tests {
         assert_eq!(back.param_id, env.param_id);
         assert_eq!(back.target_effect_type, env.target_effect_type);
         assert_eq!(back.legacy_param_index, None);
+    }
+
+    // ── EffectInstance paramValues wire format (step 12) ──────────
+
+    #[test]
+    fn effect_instance_deserialize_legacy_array_param_values() {
+        // V1.0 / V1.1 wire format: paramValues is an Array.
+        let json = r#"{
+            "id": "abc12345",
+            "effectType": "ColorGrade",
+            "enabled": true,
+            "collapsed": false,
+            "paramValues": [1.0, 1.0, 1.0, 0.0, 1.5, 0.0, 0.0, 1.0, 0.0],
+            "baseParamValues": [1.0, 1.0, 1.0, 0.0, 1.5, 0.0, 0.0, 1.0, 0.0]
+        }"#;
+        let fx: EffectInstance = serde_json::from_str(json).unwrap();
+        assert_eq!(fx.param_values.len(), 9);
+        assert!((fx.param_values[4] - 1.5).abs() < f32::EPSILON);
+        assert!(fx.base_param_values.is_some());
+        assert_eq!(fx.base_param_values.as_ref().unwrap().len(), 9);
+    }
+
+    #[test]
+    fn effect_instance_deserialize_canonical_map_param_values_without_registry() {
+        // V1.2+ wire format: paramValues is an Object keyed by param_id.
+        // Without manifold-renderer linked, the registry has no def for
+        // "ColorGrade" → into_positional returns empty Vec, leaving
+        // align_to_definition / the resolver to fill in defaults later.
+        let json = r#"{
+            "id": "abc12345",
+            "effectType": "ColorGrade",
+            "enabled": true,
+            "collapsed": false,
+            "paramValues": { "amount": 0.7, "threshold": 0.5 }
+        }"#;
+        let fx: EffectInstance = serde_json::from_str(json).unwrap();
+        // No registry → empty Vec is the safe degraded result.
+        assert!(fx.param_values.is_empty() || fx.param_values.iter().all(|v| *v == 0.0));
+    }
+
+    #[test]
+    fn effect_instance_serialize_falls_back_to_array_without_registry() {
+        // No registry def → Serialize must emit Array form so the
+        // value survives a round-trip through manifold-core's tests.
+        let fx = EffectInstance {
+            id: EffectId::new("abc12345".to_string()),
+            effect_type: EffectTypeId::from_string("UnregisteredTestEffect".to_string()),
+            enabled: true,
+            collapsed: false,
+            param_values: vec![0.1, 0.2, 0.3],
+            base_param_values: None,
+            drivers: None,
+            ableton_mappings: None,
+            group_id: None,
+            legacy_param0: None,
+            legacy_param1: None,
+            legacy_param2: None,
+            legacy_param3: None,
+        };
+        let json = serde_json::to_string(&fx).unwrap();
+        assert!(
+            json.contains("\"paramValues\":[0.1,0.2,0.3]"),
+            "Serialize without registry must emit Array form; got: {json}"
+        );
+        let back: EffectInstance = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.param_values, vec![0.1, 0.2, 0.3]);
+    }
+
+    #[test]
+    fn effect_instance_legacy_param0_through_param3_round_trip() {
+        // V1.0 had flat param0..param3 fields alongside paramValues.
+        // The custom Deserialize must continue to capture them so the
+        // existing align_to_definition migration sees both shapes.
+        let json = r#"{
+            "effectType": "ColorGrade",
+            "enabled": true,
+            "collapsed": false,
+            "paramValues": [],
+            "param0": 0.5,
+            "param1": 1.0
+        }"#;
+        let fx: EffectInstance = serde_json::from_str(json).unwrap();
+        assert_eq!(fx.legacy_param0, Some(0.5));
+        assert_eq!(fx.legacy_param1, Some(1.0));
+        assert_eq!(fx.legacy_param2, None);
+        assert_eq!(fx.legacy_param3, None);
+        // Round-trip preserves them.
+        let json = serde_json::to_string(&fx).unwrap();
+        assert!(json.contains("\"param0\":0.5"));
+        assert!(json.contains("\"param1\":1.0"));
+    }
+
+    #[test]
+    fn effect_instance_skip_serializing_optional_none() {
+        let fx = EffectInstance::new(EffectTypeId::from_string("TestEffect".to_string()));
+        let json = serde_json::to_string(&fx).unwrap();
+        // Verify optional None fields aren't emitted.
+        assert!(!json.contains("\"baseParamValues\""));
+        assert!(!json.contains("\"drivers\""));
+        assert!(!json.contains("\"abletonMappings\""));
+        assert!(!json.contains("\"groupId\""));
+        assert!(!json.contains("\"param0\""));
     }
 }

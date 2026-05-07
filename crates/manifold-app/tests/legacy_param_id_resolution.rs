@@ -365,6 +365,56 @@ fn liveschool_full_registry_resolution() {
 }
 
 #[test]
+fn liveschool_param_values_save_as_id_keyed_map() {
+    // Step 12: with `manifold-renderer` linked, the registry IS
+    // populated, so saving an effect must emit `paramValues` as a
+    // Map<param_id, f32> (V1.2+ canonical), not as an Array (V1.0/1.1).
+    //
+    // Round-trip: load Liveschool (V1.x Array form), serialize one
+    // master effect (registry-aware → Map), deserialize back, assert
+    // the paramValues survive the trip with identical positional
+    // contents.
+    let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
+    if !path.exists() {
+        return;
+    }
+
+    let project = loader::load_project(&path).expect("load Liveschool");
+    assert!(
+        !project.settings.master_effects.is_empty(),
+        "Liveschool must have master effects to test against"
+    );
+
+    // Pick the first non-empty master effect.
+    let fx = project
+        .settings
+        .master_effects
+        .iter()
+        .find(|f| !f.param_values.is_empty())
+        .expect("Liveschool must have at least one master effect with params");
+    let original_values = fx.param_values.clone();
+
+    // Serialize → must be Map shape (registry is loaded).
+    let json = serde_json::to_string(fx).expect("serialize EffectInstance");
+    assert!(
+        json.contains("\"paramValues\":{"),
+        "registry-aware Serialize must emit paramValues as a Map; got: {json}"
+    );
+    assert!(
+        !json.contains("\"paramValues\":["),
+        "must NOT emit Array form when registry def is available; got: {json}"
+    );
+
+    // Deserialize back → values must land in identical positions.
+    let back: manifold_core::effects::EffectInstance =
+        serde_json::from_str(&json).expect("deserialize map form");
+    assert_eq!(
+        back.param_values, original_values,
+        "Map → positional round-trip must preserve all values exactly"
+    );
+}
+
+#[test]
 fn liveschool_macro_mappings_resolve_to_stable_param_ids() {
     let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
     if !path.exists() {
