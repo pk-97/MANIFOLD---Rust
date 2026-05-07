@@ -6,6 +6,7 @@ pub mod dropdown;
 pub mod effect_card;
 pub mod footer;
 pub mod gen_param;
+pub mod graph_editor;
 pub mod header;
 pub mod inspector;
 pub mod layer_chrome;
