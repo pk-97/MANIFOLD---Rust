@@ -158,13 +158,12 @@ impl GeneratorParamState {
             .find(|d| d.param_id == param_id)
     }
 
-    /// Find the envelope for a given param index, or None.
-    /// Unity GeneratorParamState.cs lines 121-127.
-    pub fn find_envelope(&self, param_index: i32) -> Option<&ParamEnvelope> {
+    /// Find the envelope for a given param id, or None.
+    pub fn find_envelope(&self, param_id: &str) -> Option<&ParamEnvelope> {
         self.envelopes
             .as_ref()?
             .iter()
-            .find(|e| e.param_index == param_index)
+            .find(|e| e.param_id == param_id)
     }
 
     /// True if this state has envelopes (no-alloc check).
@@ -223,8 +222,13 @@ impl GeneratorParamState {
 
         if let Some(envelopes) = &self.envelopes {
             for env in envelopes {
-                let idx = env.param_index as usize;
-                if env.enabled && idx < self.param_values.len() && idx < base.len() {
+                if !env.enabled {
+                    continue;
+                }
+                let Some(&idx) = id_to_index.and_then(|m| m.get(env.param_id.as_ref())) else {
+                    continue;
+                };
+                if idx < self.param_values.len() && idx < base.len() {
                     self.param_values[idx] = base[idx];
                 }
             }

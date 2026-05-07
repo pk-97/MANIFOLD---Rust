@@ -977,7 +977,7 @@ fn add_layer_envelope_undo_roundtrip() {
 
     let envelope = ParamEnvelope {
         target_effect_type: EffectTypeId::TRANSFORM,
-        param_index: 0,
+        param_id: std::borrow::Cow::Borrowed("x"),
         enabled: true,
         ..make_envelope()
     };
@@ -1075,7 +1075,7 @@ fn make_driver() -> ParameterDriver {
 }
 
 fn make_envelope() -> ParamEnvelope {
-    let mut env = ParamEnvelope::new_for_gen(0);
+    let mut env = ParamEnvelope::new_for_gen("x");
     env.attack_beats = 0.25;
     env.decay_beats = 0.25;
     env.sustain_level = 1.0;

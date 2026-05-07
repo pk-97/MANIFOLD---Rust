@@ -789,9 +789,12 @@ pub(super) fn dispatch_inspector(
                     .and_then(|e| e.get(*ei))
                     .map(|fx| fx.effect_type().clone())
             };
-            if let Some(et) = effect_type {
-                let et_content = et.clone(); // clone before local use for content thread sync
-                let pi2 = *pi as i32;
+            if let Some(et) = effect_type
+                && let Some(pid) = effect_param_id(&et, *pi)
+            {
+                let et_content = et.clone();
+                let pid_owned: std::borrow::Cow<'static, str> =
+                    std::borrow::Cow::Borrowed(pid);
                 let layer_idx = super::resolve_active_layer_index(active_layer, project);
                 let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
                     InspectorTab::Layer => layer_idx.and_then(|idx| {
@@ -806,28 +809,32 @@ pub(super) fn dispatch_inspector(
                 if let Some(envs) = envs {
                     let env_idx = envs
                         .iter()
-                        .position(|e| e.target_effect_type == et && e.param_index == pi2);
+                        .position(|e| e.target_effect_type == et && e.param_id == pid);
                     if let Some(idx) = env_idx {
                         envs[idx].enabled = !envs[idx].enabled;
                     } else {
-                        envs.push(ParamEnvelope::new_for_effect(et, pi2));
+                        envs.push(ParamEnvelope::new_for_effect(et, pid_owned.clone()));
                     }
                 }
                 // Sync to content thread so the next snapshot doesn't overwrite
                 let et2 = et_content;
+                let pid_for_content = pid_owned;
                 let layer_id = active_layer.clone().unwrap_or_default();
                 ContentCommand::send(
                     content_tx,
                     ContentCommand::MutateProject(Box::new(move |p| {
                         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id) {
                             let envs = layer.envelopes_mut();
-                            let env_idx = envs
-                                .iter()
-                                .position(|e| e.target_effect_type == et2 && e.param_index == pi2);
+                            let env_idx = envs.iter().position(|e| {
+                                e.target_effect_type == et2 && e.param_id == pid_for_content
+                            });
                             if let Some(idx) = env_idx {
                                 envs[idx].enabled = !envs[idx].enabled;
                             } else {
-                                envs.push(ParamEnvelope::new_for_effect(et2, pi2));
+                                envs.push(ParamEnvelope::new_for_effect(
+                                    et2,
+                                    pid_for_content,
+                                ));
                             }
                         }
                     })),
@@ -943,7 +950,9 @@ pub(super) fn dispatch_inspector(
                     .and_then(|e| e.get(*ei))
                     .map(|fx| fx.effect_type().clone())
             };
-            if let Some(ref et) = effect_type {
+            if let Some(ref et) = effect_type
+                && let Some(pid) = effect_param_id(et, *pi)
+            {
                 let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
                     InspectorTab::Layer => layer_idx.and_then(|idx| {
                         project
@@ -957,7 +966,7 @@ pub(super) fn dispatch_inspector(
                 if let Some(envs) = envs
                     && let Some(env) = envs
                         .iter_mut()
-                        .find(|e| e.target_effect_type == *et && e.param_index == *pi as i32)
+                        .find(|e| e.target_effect_type == *et && e.param_id == pid)
                 {
                     match param {
                         manifold_ui::EnvelopeParam::Attack => env.attack_beats = *val,
@@ -968,8 +977,11 @@ pub(super) fn dispatch_inspector(
                 }
             }
             // Sync to content thread
-            if let Some(et) = effect_type {
-                let param_i = *pi as i32;
+            if let Some(et) = effect_type
+                && let Some(pid) = effect_param_id(&et, *pi)
+            {
+                let pid_for_content: std::borrow::Cow<'static, str> =
+                    std::borrow::Cow::Borrowed(pid);
                 let p = *param;
                 let v = *val;
                 let layer_id = active_layer.clone().unwrap_or_default();
@@ -984,9 +996,9 @@ pub(super) fn dispatch_inspector(
                             InspectorTab::Clip | InspectorTab::Master => None,
                         };
                         if let Some(envs) = envs
-                            && let Some(env) = envs
-                                .iter_mut()
-                                .find(|e| e.target_effect_type == et && e.param_index == param_i)
+                            && let Some(env) = envs.iter_mut().find(|e| {
+                                e.target_effect_type == et && e.param_id == pid_for_content
+                            })
                         {
                             match p {
                                 manifold_ui::EnvelopeParam::Attack => env.attack_beats = v,
@@ -1060,7 +1072,9 @@ pub(super) fn dispatch_inspector(
                     .and_then(|e| e.get(*ei))
                     .map(|fx| fx.effect_type().clone())
             };
-            if let Some(ref et) = effect_type {
+            if let Some(ref et) = effect_type
+                && let Some(pid) = effect_param_id(et, *pi)
+            {
                 let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
                     InspectorTab::Layer => layer_idx.and_then(|idx| {
                         project
@@ -1074,13 +1088,16 @@ pub(super) fn dispatch_inspector(
                 if let Some(envs) = envs
                     && let Some(env) = envs
                         .iter_mut()
-                        .find(|e| e.target_effect_type == *et && e.param_index == *pi as i32)
+                        .find(|e| e.target_effect_type == *et && e.param_id == pid)
                 {
                     env.target_normalized = *norm;
                 }
             }
-            if let Some(et) = effect_type {
-                let param_i = *pi as i32;
+            if let Some(et) = effect_type
+                && let Some(pid) = effect_param_id(&et, *pi)
+            {
+                let pid_for_content: std::borrow::Cow<'static, str> =
+                    std::borrow::Cow::Borrowed(pid);
                 let n = *norm;
                 let layer_id = active_layer.clone().unwrap_or_default();
                 ContentCommand::send(
@@ -1094,9 +1111,9 @@ pub(super) fn dispatch_inspector(
                             InspectorTab::Clip | InspectorTab::Master => None,
                         };
                         if let Some(envs) = envs
-                            && let Some(env) = envs
-                                .iter_mut()
-                                .find(|e| e.target_effect_type == et && e.param_index == param_i)
+                            && let Some(env) = envs.iter_mut().find(|e| {
+                                e.target_effect_type == et && e.param_id == pid_for_content
+                            })
                         {
                             env.target_normalized = n;
                         }
@@ -1161,7 +1178,9 @@ pub(super) fn dispatch_inspector(
                     .and_then(|e| e.get(*ei))
                     .map(|fx| fx.effect_type().clone())
             };
-            if let Some(et) = effect_type {
+            if let Some(et) = effect_type
+                && let Some(pid) = effect_param_id(&et, *pi)
+            {
                 let envs: Option<&[ParamEnvelope]> = match tab {
                     InspectorTab::Layer => layer_idx.and_then(|idx| {
                         project
@@ -1186,7 +1205,7 @@ pub(super) fn dispatch_inspector(
                 if let Some(envs) = envs
                     && let Some(env) = envs
                         .iter()
-                        .find(|e| e.target_effect_type == et && e.param_index == *pi as i32)
+                        .find(|e| e.target_effect_type == et && e.param_id == pid)
                 {
                     *target_snapshot = Some(env.target_normalized);
                 }
@@ -1203,7 +1222,9 @@ pub(super) fn dispatch_inspector(
                         .and_then(|e| e.get(*ei))
                         .map(|fx| fx.effect_type().clone())
                 };
-                if let Some(et) = effect_type {
+                if let Some(et) = effect_type
+                    && let Some(pid) = effect_param_id(&et, *pi)
+                {
                     match tab {
                         InspectorTab::Layer => {
                             if let Some(idx) = layer_idx
@@ -1213,7 +1234,7 @@ pub(super) fn dispatch_inspector(
                                 let envs = layer.envelopes.as_deref().unwrap_or(&[]);
                                 if let Some((env_idx, env)) =
                                     envs.iter().enumerate().find(|(_, e)| {
-                                        e.target_effect_type == et && e.param_index == *pi as i32
+                                        e.target_effect_type == et && e.param_id == pid
                                     })
                                     && (old_target - env.target_normalized).abs() > f32::EPSILON
                                 {
@@ -1246,7 +1267,9 @@ pub(super) fn dispatch_inspector(
                     .and_then(|e| e.get(*ei))
                     .map(|fx| fx.effect_type().clone())
             };
-            if let Some(ref et) = effect_type {
+            if let Some(ref et) = effect_type
+                && let Some(pid) = effect_param_id(et, *pi)
+            {
                 let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
                     InspectorTab::Layer => layer_idx.and_then(|idx| {
                         project
@@ -1260,14 +1283,17 @@ pub(super) fn dispatch_inspector(
                 if let Some(envs) = envs
                     && let Some(env) = envs
                         .iter_mut()
-                        .find(|e| e.target_effect_type == *et && e.param_index == *pi as i32)
+                        .find(|e| e.target_effect_type == *et && e.param_id == pid)
                 {
                     env.range_min = *rmin;
                     env.range_max = *rmax;
                 }
             }
-            if let Some(et) = effect_type {
-                let param_i = *pi as i32;
+            if let Some(et) = effect_type
+                && let Some(pid) = effect_param_id(&et, *pi)
+            {
+                let pid_for_content: std::borrow::Cow<'static, str> =
+                    std::borrow::Cow::Borrowed(pid);
                 let rm = *rmin;
                 let rx = *rmax;
                 let layer_id = active_layer.clone().unwrap_or_default();
@@ -1282,9 +1308,9 @@ pub(super) fn dispatch_inspector(
                             InspectorTab::Clip | InspectorTab::Master => None,
                         };
                         if let Some(envs) = envs
-                            && let Some(env) = envs
-                                .iter_mut()
-                                .find(|e| e.target_effect_type == et && e.param_index == param_i)
+                            && let Some(env) = envs.iter_mut().find(|e| {
+                                e.target_effect_type == et && e.param_id == pid_for_content
+                            })
                         {
                             env.range_min = rm;
                             env.range_max = rx;
@@ -1303,7 +1329,9 @@ pub(super) fn dispatch_inspector(
                     .and_then(|e| e.get(*ei))
                     .map(|fx| fx.effect_type().clone())
             };
-            if let Some(et) = effect_type {
+            if let Some(et) = effect_type
+                && let Some(pid) = effect_param_id(&et, *pi)
+            {
                 let envs: Option<&[ParamEnvelope]> = match tab {
                     InspectorTab::Layer => layer_idx.and_then(|idx| {
                         project
@@ -1317,7 +1345,7 @@ pub(super) fn dispatch_inspector(
                 if let Some(envs) = envs
                     && let Some(env) = envs
                         .iter()
-                        .find(|e| e.target_effect_type == et && e.param_index == *pi as i32)
+                        .find(|e| e.target_effect_type == et && e.param_id == pid)
                 {
                     *range_snapshot = Some((env.range_min, env.range_max));
                 }
@@ -1334,7 +1362,9 @@ pub(super) fn dispatch_inspector(
                         .and_then(|e| e.get(*ei))
                         .map(|fx| fx.effect_type().clone())
                 };
-                if let Some(et) = effect_type {
+                if let Some(et) = effect_type
+                    && let Some(pid) = effect_param_id(&et, *pi)
+                {
                     match tab {
                         InspectorTab::Layer => {
                             if let Some(idx) = layer_idx
@@ -1344,7 +1374,7 @@ pub(super) fn dispatch_inspector(
                                 let envs = layer.envelopes.as_deref().unwrap_or(&[]);
                                 if let Some((env_idx, env)) =
                                     envs.iter().enumerate().find(|(_, e)| {
-                                        e.target_effect_type == et && e.param_index == *pi as i32
+                                        e.target_effect_type == et && e.param_id == pid
                                     })
                                     && ((old_min - env.range_min).abs() > f32::EPSILON
                                         || (old_max - env.range_max).abs() > f32::EPSILON)
@@ -1380,7 +1410,9 @@ pub(super) fn dispatch_inspector(
                     .and_then(|e| e.get(*ei))
                     .map(|fx| fx.effect_type().clone())
             };
-            if let Some(et) = effect_type {
+            if let Some(et) = effect_type
+                && let Some(pid) = effect_param_id(&et, *pi)
+            {
                 let envs: Option<&[ParamEnvelope]> = match tab {
                     InspectorTab::Layer => layer_idx.and_then(|idx| {
                         project
@@ -1405,7 +1437,7 @@ pub(super) fn dispatch_inspector(
                 if let Some(envs) = envs
                     && let Some(env) = envs
                         .iter()
-                        .find(|e| e.target_effect_type == et && e.param_index == *pi as i32)
+                        .find(|e| e.target_effect_type == et && e.param_id == pid)
                 {
                     *adsr_snapshot = Some((
                         env.attack_beats,
@@ -1427,7 +1459,9 @@ pub(super) fn dispatch_inspector(
                         .and_then(|e| e.get(*ei))
                         .map(|fx| fx.effect_type().clone())
                 };
-                if let Some(et) = effect_type {
+                if let Some(et) = effect_type
+                    && let Some(pid) = effect_param_id(&et, *pi)
+                {
                     match tab {
                         InspectorTab::Layer => {
                             if let Some(idx) = layer_idx
@@ -1437,7 +1471,7 @@ pub(super) fn dispatch_inspector(
                                 let envs = layer.envelopes.as_deref().unwrap_or(&[]);
                                 if let Some((env_idx, env)) =
                                     envs.iter().enumerate().find(|(_, e)| {
-                                        e.target_effect_type == et && e.param_index == *pi as i32
+                                        e.target_effect_type == et && e.param_id == pid
                                     })
                                 {
                                     let (na, nd, ns, nr) = (
@@ -1480,7 +1514,9 @@ pub(super) fn dispatch_inspector(
                     .and_then(|e| e.get(*ei))
                     .map(|fx| fx.effect_type().clone())
             };
-            if let Some(ref et) = effect_type {
+            if let Some(ref et) = effect_type
+                && let Some(pid) = effect_param_id(et, *pi)
+            {
                 let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
                     InspectorTab::Layer => super::resolve_active_layer_index(active_layer, project)
                         .and_then(|idx| {
@@ -1495,7 +1531,7 @@ pub(super) fn dispatch_inspector(
                 if let Some(envs) = envs
                     && let Some(env) = envs
                         .iter_mut()
-                        .find(|e| e.target_effect_type == *et && e.param_index == *pi as i32)
+                        .find(|e| e.target_effect_type == *et && e.param_id == pid)
                 {
                     use manifold_core::effects::EnvelopeMode;
                     env.mode = match env.mode {
@@ -1509,17 +1545,18 @@ pub(super) fn dispatch_inspector(
                     let new_mode = env.mode;
                     // Sync to content thread
                     let et2 = et.clone();
-                    let pi2 = *pi as i32;
+                    let pid_for_content: std::borrow::Cow<'static, str> =
+                        std::borrow::Cow::Borrowed(pid);
                     let layer_id = active_layer.clone().unwrap_or_default();
                     ContentCommand::send(
                         content_tx,
                         ContentCommand::MutateProject(Box::new(move |p| {
                             if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id) {
                                 let envs = layer.envelopes_mut();
-                                if let Some(env) = envs
-                                    .iter_mut()
-                                    .find(|e| e.target_effect_type == et2 && e.param_index == pi2)
-                                {
+                                if let Some(env) = envs.iter_mut().find(|e| {
+                                    e.target_effect_type == et2
+                                        && e.param_id == pid_for_content
+                                }) {
                                     env.mode = new_mode;
                                     env.was_clip_active = false;
                                     env.walk_value = -1.0;
@@ -1540,7 +1577,9 @@ pub(super) fn dispatch_inspector(
                     .and_then(|e| e.get(*ei))
                     .map(|fx| fx.effect_type().clone())
             };
-            if let Some(ref et) = effect_type {
+            if let Some(ref et) = effect_type
+                && let Some(pid) = effect_param_id(et, *pi)
+            {
                 let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
                     InspectorTab::Layer => super::resolve_active_layer_index(active_layer, project)
                         .and_then(|idx| {
@@ -1555,22 +1594,23 @@ pub(super) fn dispatch_inspector(
                 if let Some(envs) = envs
                     && let Some(env) = envs
                         .iter_mut()
-                        .find(|e| e.target_effect_type == *et && e.param_index == *pi as i32)
+                        .find(|e| e.target_effect_type == *et && e.param_id == pid)
                 {
                     env.random_jump = !env.random_jump;
                     let new_jump = env.random_jump;
                     let et2 = et.clone();
-                    let pi2 = *pi as i32;
+                    let pid_for_content: std::borrow::Cow<'static, str> =
+                        std::borrow::Cow::Borrowed(pid);
                     let layer_id = active_layer.clone().unwrap_or_default();
                     ContentCommand::send(
                         content_tx,
                         ContentCommand::MutateProject(Box::new(move |p| {
                             if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id) {
                                 let envs = layer.envelopes_mut();
-                                if let Some(env) = envs
-                                    .iter_mut()
-                                    .find(|e| e.target_effect_type == et2 && e.param_index == pi2)
-                                {
+                                if let Some(env) = envs.iter_mut().find(|e| {
+                                    e.target_effect_type == et2
+                                        && e.param_id == pid_for_content
+                                }) {
                                     env.random_jump = new_jump;
                                 }
                             }
@@ -1935,30 +1975,34 @@ pub(super) fn dispatch_inspector(
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
                 && let Some(gp) = layer.gen_params_mut()
+                && let Some(pid) = generator_param_id(gp.generator_type(), *pi)
             {
                 let envs = gp.envelopes.get_or_insert_with(Vec::new);
-                let env_idx = envs.iter().position(|e| e.param_index == *pi as i32);
+                let env_idx = envs.iter().position(|e| e.param_id == pid);
                 if let Some(idx) = env_idx {
                     envs[idx].enabled = !envs[idx].enabled;
                 } else {
-                    envs.push(ParamEnvelope::new_for_gen(*pi as i32));
+                    envs.push(ParamEnvelope::new_for_gen(pid));
                 }
             }
-            // Sync to content thread so the next snapshot doesn't overwrite
-            let pi2 = *pi as i32;
+            // Sync to content thread so the next snapshot doesn't overwrite.
+            // Re-resolve `pid` in the closure since `gen_params_mut()` is
+            // a content-thread state read.
+            let pi2 = *pi;
             let layer_id = active_layer.clone().unwrap_or_default();
             ContentCommand::send(
                 content_tx,
                 ContentCommand::MutateProject(Box::new(move |p| {
                     if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
                         && let Some(gp) = layer.gen_params_mut()
+                        && let Some(pid) = generator_param_id(gp.generator_type(), pi2)
                     {
                         let envs = gp.envelopes.get_or_insert_with(Vec::new);
-                        let env_idx = envs.iter().position(|e| e.param_index == pi2);
+                        let env_idx = envs.iter().position(|e| e.param_id == pid);
                         if let Some(idx) = env_idx {
                             envs[idx].enabled = !envs[idx].enabled;
                         } else {
-                            envs.push(ParamEnvelope::new_for_gen(pi2));
+                            envs.push(ParamEnvelope::new_for_gen(pid));
                         }
                     }
                 })),
@@ -2084,17 +2128,21 @@ pub(super) fn dispatch_inspector(
             if let Some(layer_idx) = layer_idx {
                 if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
                     && let Some(gp) = layer.gen_params_mut()
-                    && let Some(envs) = &mut gp.envelopes
-                    && let Some(env) = envs.iter_mut().find(|e| e.param_index == *pi as i32)
                 {
-                    match param {
-                        manifold_ui::EnvelopeParam::Attack => env.attack_beats = *val,
-                        manifold_ui::EnvelopeParam::Decay => env.decay_beats = *val,
-                        manifold_ui::EnvelopeParam::Sustain => env.sustain_level = *val,
-                        manifold_ui::EnvelopeParam::Release => env.release_beats = *val,
+                    let pid = generator_param_id(gp.generator_type(), *pi);
+                    if let Some(pid) = pid
+                        && let Some(envs) = &mut gp.envelopes
+                        && let Some(env) = envs.iter_mut().find(|e| e.param_id == pid)
+                    {
+                        match param {
+                            manifold_ui::EnvelopeParam::Attack => env.attack_beats = *val,
+                            manifold_ui::EnvelopeParam::Decay => env.decay_beats = *val,
+                            manifold_ui::EnvelopeParam::Sustain => env.sustain_level = *val,
+                            manifold_ui::EnvelopeParam::Release => env.release_beats = *val,
+                        }
                     }
                 }
-                let param_i = *pi as i32;
+                let param_i = *pi;
                 let p = *param;
                 let v = *val;
                 let layer_id = active_layer.clone().unwrap_or_default();
@@ -2103,14 +2151,21 @@ pub(super) fn dispatch_inspector(
                     ContentCommand::MutateProject(Box::new(move |proj| {
                         if let Some((_, layer)) = proj.timeline.find_layer_by_id_mut(&layer_id)
                             && let Some(gp) = layer.gen_params_mut()
-                            && let Some(envs) = &mut gp.envelopes
-                            && let Some(env) = envs.iter_mut().find(|e| e.param_index == param_i)
                         {
-                            match p {
-                                manifold_ui::EnvelopeParam::Attack => env.attack_beats = v,
-                                manifold_ui::EnvelopeParam::Decay => env.decay_beats = v,
-                                manifold_ui::EnvelopeParam::Sustain => env.sustain_level = v,
-                                manifold_ui::EnvelopeParam::Release => env.release_beats = v,
+                            let pid = generator_param_id(gp.generator_type(), param_i);
+                            if let Some(pid) = pid
+                                && let Some(envs) = &mut gp.envelopes
+                                && let Some(env) =
+                                    envs.iter_mut().find(|e| e.param_id == pid)
+                            {
+                                match p {
+                                    manifold_ui::EnvelopeParam::Attack => env.attack_beats = v,
+                                    manifold_ui::EnvelopeParam::Decay => env.decay_beats = v,
+                                    manifold_ui::EnvelopeParam::Sustain => {
+                                        env.sustain_level = v
+                                    }
+                                    manifold_ui::EnvelopeParam::Release => env.release_beats = v,
+                                }
                             }
                         }
                     })),
@@ -2163,12 +2218,16 @@ pub(super) fn dispatch_inspector(
             if let Some(layer_idx) = layer_idx {
                 if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
                     && let Some(gp) = layer.gen_params_mut()
-                    && let Some(envs) = &mut gp.envelopes
-                    && let Some(env) = envs.iter_mut().find(|e| e.param_index == *pi as i32)
                 {
-                    env.target_normalized = *norm;
+                    let pid = generator_param_id(gp.generator_type(), *pi);
+                    if let Some(pid) = pid
+                        && let Some(envs) = &mut gp.envelopes
+                        && let Some(env) = envs.iter_mut().find(|e| e.param_id == pid)
+                    {
+                        env.target_normalized = *norm;
+                    }
                 }
-                let param_i = *pi as i32;
+                let param_i = *pi;
                 let n = *norm;
                 let layer_id = active_layer.clone().unwrap_or_default();
                 ContentCommand::send(
@@ -2176,10 +2235,15 @@ pub(super) fn dispatch_inspector(
                     ContentCommand::MutateProject(Box::new(move |p| {
                         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
                             && let Some(gp) = layer.gen_params_mut()
-                            && let Some(envs) = &mut gp.envelopes
-                            && let Some(env) = envs.iter_mut().find(|e| e.param_index == param_i)
                         {
-                            env.target_normalized = n;
+                            let pid = generator_param_id(gp.generator_type(), param_i);
+                            if let Some(pid) = pid
+                                && let Some(envs) = &mut gp.envelopes
+                                && let Some(env) =
+                                    envs.iter_mut().find(|e| e.param_id == pid)
+                            {
+                                env.target_normalized = n;
+                            }
                         }
                     })),
                 );
@@ -2236,8 +2300,9 @@ pub(super) fn dispatch_inspector(
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
                 && let Some(gp) = layer.gen_params()
+                && let Some(pid) = generator_param_id(gp.generator_type(), *pi)
                 && let Some(envs) = &gp.envelopes
-                && let Some(env) = envs.iter().find(|e| e.param_index == *pi as i32)
+                && let Some(env) = envs.iter().find(|e| e.param_id == pid)
             {
                 *target_snapshot = Some(env.target_normalized);
             }
@@ -2249,8 +2314,9 @@ pub(super) fn dispatch_inspector(
                 && let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
                 && let Some(gp) = layer.gen_params()
+                && let Some(pid) = generator_param_id(gp.generator_type(), *pi)
                 && let Some(envs) = &gp.envelopes
-                && let Some(env_idx) = envs.iter().position(|e| e.param_index == *pi as i32)
+                && let Some(env_idx) = envs.iter().position(|e| e.param_id == pid)
             {
                 let env = &envs[env_idx];
                 if (old_target - env.target_normalized).abs() > f32::EPSILON {
@@ -2272,13 +2338,17 @@ pub(super) fn dispatch_inspector(
             if let Some(layer_idx) = layer_idx {
                 if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
                     && let Some(gp) = layer.gen_params_mut()
-                    && let Some(envs) = &mut gp.envelopes
-                    && let Some(env) = envs.iter_mut().find(|e| e.param_index == *pi as i32)
                 {
-                    env.range_min = *rmin;
-                    env.range_max = *rmax;
+                    let pid = generator_param_id(gp.generator_type(), *pi);
+                    if let Some(pid) = pid
+                        && let Some(envs) = &mut gp.envelopes
+                        && let Some(env) = envs.iter_mut().find(|e| e.param_id == pid)
+                    {
+                        env.range_min = *rmin;
+                        env.range_max = *rmax;
+                    }
                 }
-                let param_i = *pi as i32;
+                let param_i = *pi;
                 let rm = *rmin;
                 let rx = *rmax;
                 let layer_id = active_layer.clone().unwrap_or_default();
@@ -2287,12 +2357,16 @@ pub(super) fn dispatch_inspector(
                     ContentCommand::MutateProject(Box::new(move |p| {
                         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
                             && let Some(gp) = layer.gen_params_mut()
-                            && let Some(envs) = &mut gp.envelopes
-                            && let Some(env) =
-                                envs.iter_mut().find(|e| e.param_index == param_i)
                         {
-                            env.range_min = rm;
-                            env.range_max = rx;
+                            let pid = generator_param_id(gp.generator_type(), param_i);
+                            if let Some(pid) = pid
+                                && let Some(envs) = &mut gp.envelopes
+                                && let Some(env) =
+                                    envs.iter_mut().find(|e| e.param_id == pid)
+                            {
+                                env.range_min = rm;
+                                env.range_max = rx;
+                            }
                         }
                     })),
                 );
@@ -2304,8 +2378,9 @@ pub(super) fn dispatch_inspector(
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
                 && let Some(gp) = layer.gen_params()
+                && let Some(pid) = generator_param_id(gp.generator_type(), *pi)
                 && let Some(envs) = &gp.envelopes
-                && let Some(env) = envs.iter().find(|e| e.param_index == *pi as i32)
+                && let Some(env) = envs.iter().find(|e| e.param_id == pid)
             {
                 *range_snapshot = Some((env.range_min, env.range_max));
             }
@@ -2317,8 +2392,9 @@ pub(super) fn dispatch_inspector(
                 && let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
                 && let Some(gp) = layer.gen_params()
+                && let Some(pid) = generator_param_id(gp.generator_type(), *pi)
                 && let Some(envs) = &gp.envelopes
-                && let Some(env_idx) = envs.iter().position(|e| e.param_index == *pi as i32)
+                && let Some(env_idx) = envs.iter().position(|e| e.param_id == pid)
             {
                 let env = &envs[env_idx];
                 if (old_min - env.range_min).abs() > f32::EPSILON
@@ -2344,8 +2420,9 @@ pub(super) fn dispatch_inspector(
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
                 && let Some(gp) = layer.gen_params()
+                && let Some(pid) = generator_param_id(gp.generator_type(), *pi)
                 && let Some(envs) = &gp.envelopes
-                && let Some(env) = envs.iter().find(|e| e.param_index == *pi as i32)
+                && let Some(env) = envs.iter().find(|e| e.param_id == pid)
             {
                 *adsr_snapshot = Some((
                     env.attack_beats,
@@ -2362,8 +2439,9 @@ pub(super) fn dispatch_inspector(
                 && let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
                 && let Some(gp) = layer.gen_params()
+                && let Some(pid) = generator_param_id(gp.generator_type(), *pi)
                 && let Some(envs) = &gp.envelopes
-                && let Some(env_idx) = envs.iter().position(|e| e.param_index == *pi as i32)
+                && let Some(env_idx) = envs.iter().position(|e| e.param_id == pid)
             {
                 let env = &envs[env_idx];
                 let changed = (old_a - env.attack_beats).abs() > f32::EPSILON
@@ -2396,10 +2474,11 @@ pub(super) fn dispatch_inspector(
             if let Some(idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get_mut(idx)
                 && let Some(gp) = layer.gen_params_mut()
+                && let Some(pid) = generator_param_id(gp.generator_type(), *pi)
                 && let Some(envs) = &mut gp.envelopes
                 && let Some(env) = envs
                     .iter_mut()
-                    .find(|e| e.param_index == *pi as i32 && e.enabled)
+                    .find(|e| e.param_id == pid && e.enabled)
             {
                 use manifold_core::effects::EnvelopeMode;
                 env.mode = match env.mode {
@@ -2409,22 +2488,23 @@ pub(super) fn dispatch_inspector(
                 env.was_clip_active = false;
                 env.walk_value = -1.0;
                 let new_mode = env.mode;
-                let pi2 = *pi as i32;
+                let pi2 = *pi;
                 let layer_id = active_layer.clone().unwrap_or_default();
                 ContentCommand::send(
                     content_tx,
                     ContentCommand::MutateProject(Box::new(move |p| {
                         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
                             && let Some(gp) = layer.gen_params_mut()
+                            && let Some(pid) = generator_param_id(gp.generator_type(), pi2)
                             && let Some(envs) = &mut gp.envelopes
                             && let Some(env) = envs
                                 .iter_mut()
-                                .find(|e| e.param_index == pi2 && e.enabled)
+                                .find(|e| e.param_id == pid && e.enabled)
                         {
                             env.mode = new_mode;
                             env.was_clip_active = false;
                             env.walk_value = -1.0;
-                    env.last_elapsed = -1.0;
+                            env.last_elapsed = -1.0;
                         }
                     })),
                 );
@@ -2436,24 +2516,26 @@ pub(super) fn dispatch_inspector(
             if let Some(idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get_mut(idx)
                 && let Some(gp) = layer.gen_params_mut()
+                && let Some(pid) = generator_param_id(gp.generator_type(), *pi)
                 && let Some(envs) = &mut gp.envelopes
                 && let Some(env) = envs
                     .iter_mut()
-                    .find(|e| e.param_index == *pi as i32 && e.enabled)
+                    .find(|e| e.param_id == pid && e.enabled)
             {
                 env.random_jump = !env.random_jump;
                 let new_jump = env.random_jump;
-                let pi2 = *pi as i32;
+                let pi2 = *pi;
                 let layer_id = active_layer.clone().unwrap_or_default();
                 ContentCommand::send(
                     content_tx,
                     ContentCommand::MutateProject(Box::new(move |p| {
                         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
                             && let Some(gp) = layer.gen_params_mut()
+                            && let Some(pid) = generator_param_id(gp.generator_type(), pi2)
                             && let Some(envs) = &mut gp.envelopes
                             && let Some(env) = envs
                                 .iter_mut()
-                                .find(|e| e.param_index == pi2 && e.enabled)
+                                .find(|e| e.param_id == pid && e.enabled)
                         {
                             env.random_jump = new_jump;
                         }

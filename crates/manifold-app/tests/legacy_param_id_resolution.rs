@@ -132,6 +132,65 @@ fn waypoints_generator_drivers_resolve_to_stable_param_ids() {
 }
 
 #[test]
+fn liveschool_envelopes_resolve_to_stable_param_ids() {
+    let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
+    if !path.exists() {
+        return;
+    }
+
+    let project = loader::load_project(&path).expect("load Liveschool");
+
+    // 35 envelopes total: 15 layer (effect-targeted) + 20 gen_params
+    // (generator-targeted). Every one of them should resolve cleanly
+    // — envelopes are simpler than drivers because they don't drift
+    // (envelopes can only be created via the inspector against current
+    // params, while drivers can be inherited from older saves with
+    // out-of-range paramIndexes).
+    let mut total = 0;
+    let mut layer_envs = 0;
+    let mut gen_envs = 0;
+    let mut empty: Vec<String> = Vec::new();
+    for (li, layer) in project.timeline.layers.iter().enumerate() {
+        if let Some(ref envs) = layer.envelopes {
+            for (ei, env) in envs.iter().enumerate() {
+                total += 1;
+                layer_envs += 1;
+                if env.param_id.is_empty() {
+                    empty.push(format!(
+                        "layer[{li}].env[{ei}] (target={})",
+                        env.target_effect_type.as_str()
+                    ));
+                }
+            }
+        }
+        if let Some(gp) = layer.gen_params()
+            && let Some(ref envs) = gp.envelopes
+        {
+            for (ei, env) in envs.iter().enumerate() {
+                total += 1;
+                gen_envs += 1;
+                if env.param_id.is_empty() {
+                    empty.push(format!(
+                        "layer[{li}].gen.env[{ei}] (gen={})",
+                        gp.generator_type().as_str()
+                    ));
+                }
+            }
+        }
+    }
+
+    assert_eq!(total, 35, "Liveschool must have exactly 35 envelopes");
+    assert_eq!(layer_envs, 15, "expected 15 layer-effect envelopes");
+    assert_eq!(gen_envs, 20, "expected 20 gen_params envelopes");
+    assert!(
+        empty.is_empty(),
+        "{} envelopes failed to resolve param_id from registry: {:?}",
+        empty.len(),
+        empty
+    );
+}
+
+#[test]
 fn liveschool_full_registry_resolution() {
     let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
     if !path.exists() {

@@ -738,14 +738,22 @@ pub enum EnvelopeMode {
     Random,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// ADSR / random envelope modulating a single effect or generator
+/// parameter.
+///
+/// Address shape: `param_id` is the canonical mapping key, mirroring
+/// [`ParameterDriver`]. Legacy V1.1 projects stored `targetParamIndex:
+/// i32` instead — the custom [`Deserialize`] accepts either shape and
+/// parks legacy indices in [`ParamEnvelope::legacy_param_index`] for
+/// the post-load resolver.
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParamEnvelope {
     #[serde(default)]
     pub target_effect_type: EffectTypeId,
-    /// Unity V2 serializes this as "targetParamIndex" via [JsonProperty].
-    #[serde(default, rename = "targetParamIndex")]
-    pub param_index: i32,
+    /// Stable mapping key. Empty after legacy V1.1 deserialization
+    /// until the post-load resolver fills it in from the registry.
+    pub param_id: ParamId,
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
@@ -770,6 +778,11 @@ pub struct ParamEnvelope {
     /// Random mode range maximum (normalized 0-1). Walk/jump stays within this range.
     #[serde(default = "default_one")]
     pub range_max: f32,
+    /// Set during `Deserialize` from the legacy `targetParamIndex`
+    /// field. Resolved to `param_id` by `Project::resolve_legacy_param_ids`
+    /// then cleared. Never serialized.
+    #[serde(skip)]
+    pub legacy_param_index: Option<i32>,
     /// Cached ADSR output (0-1) for UI display. Not serialized.
     #[serde(skip)]
     pub current_level: f32,
@@ -786,11 +799,11 @@ pub struct ParamEnvelope {
 }
 
 impl ParamEnvelope {
-    /// Gen param envelope constructor. Unity ParamEnvelope.cs lines 42-45.
-    pub fn new_for_gen(param_index: i32) -> Self {
+    /// Gen param envelope constructor.
+    pub fn new_for_gen(param_id: impl Into<ParamId>) -> Self {
         Self {
             target_effect_type: EffectTypeId::TRANSFORM,
-            param_index,
+            param_id: param_id.into(),
             enabled: true,
             attack_beats: 0.0,
             decay_beats: 0.0,
@@ -801,6 +814,7 @@ impl ParamEnvelope {
             random_jump: false,
             range_min: 0.0,
             range_max: 1.0,
+            legacy_param_index: None,
             current_level: 0.0,
             walk_value: -1.0,
             was_clip_active: false,
@@ -808,11 +822,11 @@ impl ParamEnvelope {
         }
     }
 
-    /// Effect envelope constructor. Unity ParamEnvelope.cs lines 48-52.
-    pub fn new_for_effect(effect_type: EffectTypeId, param_index: i32) -> Self {
+    /// Effect envelope constructor.
+    pub fn new_for_effect(effect_type: EffectTypeId, param_id: impl Into<ParamId>) -> Self {
         Self {
             target_effect_type: effect_type,
-            param_index,
+            param_id: param_id.into(),
             enabled: true,
             attack_beats: 0.0,
             decay_beats: 0.0,
@@ -823,6 +837,7 @@ impl ParamEnvelope {
             random_jump: false,
             range_min: 0.0,
             range_max: 1.0,
+            legacy_param_index: None,
             current_level: 0.0,
             walk_value: -1.0,
             was_clip_active: false,
@@ -886,6 +901,74 @@ impl ParamEnvelope {
         }
 
         s
+    }
+}
+
+// Custom `Deserialize` accepting both V1.1 (`targetParamIndex: i32`)
+// and V1.2+ (`paramId: "amount"`) project file shapes. Mirrors the
+// `ParameterDriver` impl above. See
+// `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 step 9.
+impl<'de> Deserialize<'de> for ParamEnvelope {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Raw {
+            #[serde(default)]
+            target_effect_type: EffectTypeId,
+            #[serde(default)]
+            param_id: Option<String>,
+            #[serde(default, rename = "targetParamIndex")]
+            param_index: Option<i32>,
+            #[serde(default = "default_true")]
+            enabled: bool,
+            #[serde(default)]
+            attack_beats: f32,
+            #[serde(default)]
+            decay_beats: f32,
+            #[serde(default)]
+            sustain_level: f32,
+            #[serde(default)]
+            release_beats: f32,
+            #[serde(default = "default_one")]
+            target_normalized: f32,
+            #[serde(default)]
+            mode: EnvelopeMode,
+            #[serde(default)]
+            random_jump: bool,
+            #[serde(default)]
+            range_min: f32,
+            #[serde(default = "default_one")]
+            range_max: f32,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        let (param_id, legacy_param_index) = match (raw.param_id, raw.param_index) {
+            (Some(id), _) if !id.is_empty() => (Cow::Owned(id), None),
+            (_, Some(idx)) => (Cow::Borrowed(""), Some(idx)),
+            (_, None) => (Cow::Borrowed(""), None),
+        };
+        Ok(ParamEnvelope {
+            target_effect_type: raw.target_effect_type,
+            param_id,
+            enabled: raw.enabled,
+            attack_beats: raw.attack_beats,
+            decay_beats: raw.decay_beats,
+            sustain_level: raw.sustain_level,
+            release_beats: raw.release_beats,
+            target_normalized: raw.target_normalized,
+            mode: raw.mode,
+            random_jump: raw.random_jump,
+            range_min: raw.range_min,
+            range_max: raw.range_max,
+            legacy_param_index,
+            current_level: 0.0,
+            walk_value: -1.0,
+            was_clip_active: false,
+            last_elapsed: -1.0,
+        })
     }
 }
 
@@ -1071,6 +1154,77 @@ mod tests {
         assert_eq!(back.param_id, driver.param_id);
         assert_eq!(back.beat_division, driver.beat_division);
         assert_eq!(back.waveform, driver.waveform);
+        assert_eq!(back.legacy_param_index, None);
+    }
+
+    // ── ParamEnvelope backward-compat Deserialize (step 9) ──────
+
+    #[test]
+    fn envelope_deserialize_legacy_param_index() {
+        // V1.1 shape: { targetEffectType, targetParamIndex: 1, ... }.
+        // Same parking pattern as ParameterDriver.
+        let json = r#"{
+            "targetEffectType": "Bloom",
+            "targetParamIndex": 0,
+            "enabled": true,
+            "attackBeats": 0.25,
+            "decayBeats": 0.25,
+            "sustainLevel": 0.5,
+            "releaseBeats": 0.25,
+            "targetNormalized": 1.0
+        }"#;
+        let e: ParamEnvelope = serde_json::from_str(json).unwrap();
+        assert!(e.param_id.is_empty());
+        assert_eq!(e.legacy_param_index, Some(0));
+        assert_eq!(e.target_effect_type.as_str(), "Bloom");
+    }
+
+    #[test]
+    fn envelope_deserialize_canonical_param_id() {
+        let json = r#"{
+            "targetEffectType": "Bloom",
+            "paramId": "amount",
+            "enabled": true,
+            "attackBeats": 0.5
+        }"#;
+        let e: ParamEnvelope = serde_json::from_str(json).unwrap();
+        assert_eq!(e.param_id, "amount");
+        assert_eq!(e.legacy_param_index, None);
+        assert!((e.attack_beats - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn envelope_deserialize_param_id_wins_when_both_present() {
+        let json = r#"{
+            "targetEffectType": "Bloom",
+            "paramId": "threshold",
+            "targetParamIndex": 99,
+            "enabled": true
+        }"#;
+        let e: ParamEnvelope = serde_json::from_str(json).unwrap();
+        assert_eq!(e.param_id, "threshold");
+        assert_eq!(e.legacy_param_index, None);
+    }
+
+    #[test]
+    fn envelope_serialize_writes_param_id_only() {
+        let env = ParamEnvelope::new_for_effect(EffectTypeId::BLOOM, "amount");
+        let json = serde_json::to_string(&env).unwrap();
+        assert!(json.contains("\"paramId\":\"amount\""));
+        assert!(
+            !json.contains("targetParamIndex"),
+            "Serialize must not write legacy targetParamIndex; got: {json}"
+        );
+        assert!(!json.contains("legacyParamIndex"));
+    }
+
+    #[test]
+    fn envelope_round_trips_through_canonical_shape() {
+        let env = ParamEnvelope::new_for_effect(EffectTypeId::BLOOM, "amount");
+        let json = serde_json::to_string(&env).unwrap();
+        let back: ParamEnvelope = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.param_id, env.param_id);
+        assert_eq!(back.target_effect_type, env.target_effect_type);
         assert_eq!(back.legacy_param_index, None);
     }
 }

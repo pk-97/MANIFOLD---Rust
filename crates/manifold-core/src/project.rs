@@ -221,6 +221,49 @@ impl Project {
             driver.legacy_param_index = None;
         }
 
+        fn resolve_envelope_id_for_effect(env: &mut crate::effects::ParamEnvelope) {
+            // Layer envelopes carry their own `target_effect_type` —
+            // resolution doesn't depend on which layer they live on.
+            if !env.param_id.is_empty() {
+                env.legacy_param_index = None;
+                return;
+            }
+            let Some(idx) = env.legacy_param_index else {
+                return;
+            };
+            let Some(def) = effect_definition_registry::try_get(&env.target_effect_type) else {
+                return;
+            };
+            if let Some(pd) = def.param_defs.get(idx as usize)
+                && !pd.id.is_empty()
+            {
+                env.param_id = std::borrow::Cow::Owned(pd.id.clone());
+            }
+            env.legacy_param_index = None;
+        }
+
+        fn resolve_envelope_id_for_generator(
+            env: &mut crate::effects::ParamEnvelope,
+            gen_type: &crate::GeneratorTypeId,
+        ) {
+            if !env.param_id.is_empty() {
+                env.legacy_param_index = None;
+                return;
+            }
+            let Some(idx) = env.legacy_param_index else {
+                return;
+            };
+            let Some(def) = generator_definition_registry::try_get(gen_type) else {
+                return;
+            };
+            if let Some(pd) = def.param_defs.get(idx as usize)
+                && !pd.id.is_empty()
+            {
+                env.param_id = std::borrow::Cow::Owned(pd.id.clone());
+            }
+            env.legacy_param_index = None;
+        }
+
         // Master effects.
         for fx in &mut self.settings.master_effects {
             let effect_type = fx.effect_type().clone();
@@ -230,7 +273,7 @@ impl Project {
                 }
             }
         }
-        // Layer effects + generator drivers.
+        // Layer effects + layer envelopes + generator drivers/envelopes.
         for layer in &mut self.timeline.layers {
             if let Some(ref mut effects) = layer.effects {
                 for fx in effects.iter_mut() {
@@ -242,11 +285,23 @@ impl Project {
                     }
                 }
             }
+            // Layer-level envelopes target effects on this layer; each
+            // envelope carries its own `target_effect_type`.
+            if let Some(envelopes) = layer.envelopes.as_mut() {
+                for env in envelopes {
+                    resolve_envelope_id_for_effect(env);
+                }
+            }
             if let Some(gp) = layer.gen_params_mut() {
                 let gen_type = gp.generator_type().clone();
                 if let Some(drivers) = gp.drivers.as_mut() {
                     for d in drivers {
                         resolve_driver_id_for_generator(d, &gen_type);
+                    }
+                }
+                if let Some(envelopes) = gp.envelopes.as_mut() {
+                    for env in envelopes {
+                        resolve_envelope_id_for_generator(env, &gen_type);
                     }
                 }
             }
@@ -479,6 +534,43 @@ mod tests {
         let d = &p.settings.master_effects[0].drivers.as_ref().unwrap()[0];
         assert_eq!(d.param_id, "amount");
         assert_eq!(d.legacy_param_index, None);
+    }
+
+    #[test]
+    fn legacy_param_index_resolved_for_layer_envelopes() {
+        use crate::effects::ParamEnvelope;
+        use crate::layer::Layer;
+        use crate::types::LayerType;
+
+        let mut p = Project::default();
+        let mut layer = Layer::new("test".to_string(), LayerType::Generator, 0);
+        // Legacy-shaped envelope targeting Bloom paramIndex 0.
+        layer.envelopes_mut().push(ParamEnvelope {
+            target_effect_type: EffectTypeId::BLOOM,
+            param_id: std::borrow::Cow::Borrowed(""),
+            enabled: true,
+            attack_beats: 0.1,
+            decay_beats: 0.1,
+            sustain_level: 0.5,
+            release_beats: 0.1,
+            target_normalized: 1.0,
+            mode: crate::effects::EnvelopeMode::Adsr,
+            random_jump: false,
+            range_min: 0.0,
+            range_max: 1.0,
+            legacy_param_index: Some(0),
+            current_level: 0.0,
+            walk_value: -1.0,
+            was_clip_active: false,
+            last_elapsed: -1.0,
+        });
+        p.timeline.layers.push(layer);
+
+        p.resolve_legacy_param_ids();
+
+        let env = &p.timeline.layers[0].envelopes.as_ref().unwrap()[0];
+        assert_eq!(env.param_id, "amount");
+        assert_eq!(env.legacy_param_index, None);
     }
 
     #[test]

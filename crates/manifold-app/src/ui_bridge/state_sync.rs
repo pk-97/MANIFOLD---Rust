@@ -1252,9 +1252,17 @@ fn effects_to_configs(
             let mut env_random_jump = vec![false; n];
             let mut env_range_min = vec![0.0f32; n];
             let mut env_range_max = vec![1.0f32; n];
+            let env_id_to_index = manifold_core::effect_definition_registry::try_get(
+                fx.effect_type(),
+            )
+            .map(|d| &d.id_to_index);
             for env in envelopes {
                 if env.target_effect_type == *fx.effect_type() && env.enabled {
-                    let pi = env.param_index as usize;
+                    let Some(&pi) =
+                        env_id_to_index.and_then(|m| m.get(env.param_id.as_ref()))
+                    else {
+                        continue;
+                    };
                     if pi < n {
                         has_env = true;
                         envelope_active[pi] = true;
@@ -1448,21 +1456,27 @@ fn gen_params_to_config(
     let mut env_range_min = vec![0.0f32; n];
     let mut env_range_max = vec![1.0f32; n];
     if let Some(ref envelopes) = gp.envelopes {
+        let env_id_to_index =
+            manifold_core::generator_definition_registry::try_get(gp.generator_type())
+                .map(|d| &d.id_to_index);
         for env in envelopes {
-            if env.enabled {
-                let pi = env.param_index as usize;
-                if pi < n {
-                    envelope_active[pi] = true;
-                    target_norm[pi] = env.target_normalized;
-                    env_attack[pi] = env.attack_beats;
-                    env_decay[pi] = env.decay_beats;
-                    env_sustain[pi] = env.sustain_level;
-                    env_release[pi] = env.release_beats;
-                    env_mode[pi] = env.mode;
-                    env_random_jump[pi] = env.random_jump;
-                    env_range_min[pi] = env.range_min;
-                    env_range_max[pi] = env.range_max;
-                }
+            if !env.enabled {
+                continue;
+            }
+            let Some(&pi) = env_id_to_index.and_then(|m| m.get(env.param_id.as_ref())) else {
+                continue;
+            };
+            if pi < n {
+                envelope_active[pi] = true;
+                target_norm[pi] = env.target_normalized;
+                env_attack[pi] = env.attack_beats;
+                env_decay[pi] = env.decay_beats;
+                env_sustain[pi] = env.sustain_level;
+                env_release[pi] = env.release_beats;
+                env_mode[pi] = env.mode;
+                env_random_jump[pi] = env.random_jump;
+                env_range_min[pi] = env.range_min;
+                env_range_max[pi] = env.range_max;
             }
         }
     }

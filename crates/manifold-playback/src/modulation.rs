@@ -317,7 +317,7 @@ pub fn evaluate_all_envelopes(
             let (
                 enabled,
                 target_effect_type,
-                param_index,
+                param_id,
                 attack,
                 decay,
                 sustain,
@@ -335,7 +335,7 @@ pub fn evaluate_all_envelopes(
                 (
                     env.enabled,
                     env.target_effect_type.clone(),
-                    env.param_index,
+                    env.param_id.clone(),
                     env.attack_beats,
                     env.decay_beats,
                     env.sustain_level,
@@ -401,7 +401,14 @@ pub fn evaluate_all_envelopes(
                         Some(d) => d,
                         None => continue,
                     };
-                let idx = param_index as usize;
+                let Some(&idx) = effect_def.id_to_index.get(param_id.as_ref()) else {
+                    if let Some(envs) = &mut layer.envelopes
+                        && let Some(env) = envs.get_mut(ei)
+                    {
+                        env.was_clip_active = clip_active;
+                    }
+                    continue;
+                };
                 if idx >= effect_def.param_defs.len() || idx >= fx.param_values.len() {
                     if let Some(envs) = &mut layer.envelopes
                         && let Some(env) = envs.get_mut(ei)
@@ -501,7 +508,9 @@ pub fn evaluate_all_envelopes(
                     Some(d) => d,
                     None => continue,
                 };
-            let idx = param_index as usize;
+            let Some(&idx) = effect_def.id_to_index.get(param_id.as_ref()) else {
+                continue;
+            };
             if idx >= effect_def.param_defs.len() || idx >= fx.param_values.len() {
                 continue;
             }
@@ -570,7 +579,7 @@ pub fn evaluate_gen_param_envelopes(
         for ei in 0..env_count {
             let (
                 enabled,
-                param_index,
+                param_id,
                 attack,
                 decay,
                 sustain,
@@ -587,7 +596,7 @@ pub fn evaluate_gen_param_envelopes(
                 let env = &gp.envelopes.as_ref().unwrap()[ei];
                 (
                     env.enabled,
-                    env.param_index,
+                    env.param_id.clone(),
                     env.attack_beats,
                     env.decay_beats,
                     env.sustain_level,
@@ -612,7 +621,14 @@ pub fn evaluate_gen_param_envelopes(
                 continue;
             }
 
-            let idx = param_index as usize;
+            let Some(&idx) = gen_def.id_to_index.get(param_id.as_ref()) else {
+                if let Some(envs) = &mut gp.envelopes
+                    && let Some(env) = envs.get_mut(ei)
+                {
+                    env.was_clip_active = clip_active;
+                }
+                continue;
+            };
             if idx >= gen_defs.len() || idx >= gp.param_values.len() {
                 if let Some(envs) = &mut gp.envelopes
                     && let Some(env) = envs.get_mut(ei)
