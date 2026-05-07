@@ -32,9 +32,9 @@ use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::composites::{build_mirror, CompositeHandle};
 use crate::node_graph::{
-    apply_param_bindings, binding_value, compile, ExecutionPlan, Executor, FinalOutput, FrameTime,
-    Graph, MetalBackend, NodeInstanceId, ParamBinding, ParamConvert, ParamTarget, PortType,
-    ResourceId, Slot, Source,
+    apply_param_bindings, binding_value, compile, user_binding_to_runtime, ExecutionPlan, Executor,
+    FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId, ParamBinding, ParamConvert,
+    ParamTarget, PortType, ResourceId, Slot, Source, UserParamBindingRuntime,
 };
 use crate::render_target::RenderTarget;
 
@@ -71,6 +71,13 @@ pub struct MirrorFX {
     /// applied per frame via `apply_param_bindings`. Order matches
     /// the `ParamSpec` slice in the metadata submission.
     bindings: Vec<ParamBinding>,
+    /// Per-instance V2 user-exposed bindings, hydrated from
+    /// `EffectInstance.user_param_bindings` when its version bumps.
+    /// Reused vec — `clear()` + `extend` keeps capacity, no per-frame
+    /// allocation. `cached_user_version = u32::MAX` forces a first-frame
+    /// rebuild on the very first apply.
+    user_bindings: Vec<UserParamBindingRuntime>,
+    cached_user_version: u32,
     source_resource: ResourceId,
     output_resource: ResourceId,
     state: Option<RenderState>,
@@ -138,6 +145,8 @@ impl MirrorFX {
             plan,
             handle,
             bindings,
+            user_bindings: Vec::new(),
+            cached_user_version: u32::MAX,
             source_resource,
             output_resource,
             state: None,
@@ -215,9 +224,12 @@ impl PostProcessEffect for MirrorFX {
 
     /// Skip when amount = 0 — a fully-original output is identity.
     /// Read by stable id rather than positional index so reordering
-    /// the bindings can't silently break the skip predicate.
+    /// the bindings can't silently break the skip predicate. The
+    /// user-bindings slice is `&[]` for this predicate because user
+    /// bindings can't define a static "amount" — id is owned by the
+    /// effect's static binding list.
     fn should_skip(&self, fx: &EffectInstance) -> bool {
-        binding_value(&self.bindings, &fx.param_values, "amount").unwrap_or(1.0) <= 0.0
+        binding_value(&self.bindings, &[], &fx.param_values, "amount").unwrap_or(1.0) <= 0.0
     }
 
     fn graph_snapshot(&self) -> Option<crate::node_graph::GraphSnapshot> {
@@ -254,6 +266,27 @@ impl PostProcessEffect for MirrorFX {
             .expect("source slot pre-bound");
         gpu.copy_texture_to_texture(source, source_tex, ctx.width, ctx.height);
 
+        // Hydrate the user-binding scratch vec only on version
+        // bumps — string-cloning every frame would defeat the
+        // allocation-free hot-path invariant. clear() + push reuses
+        // the existing capacity.
+        if fx.user_param_bindings_version != self.cached_user_version {
+            self.user_bindings.clear();
+            for ub in &fx.user_param_bindings {
+                if let Some(rt) = user_binding_to_runtime(ub, &self.graph) {
+                    self.user_bindings.push(rt);
+                } else {
+                    eprintln!(
+                        "[manifold-renderer] MirrorFX: failed to hydrate user binding \
+                         id={} node_handle={} inner_param={} — node or param missing in graph. \
+                         Binding will render inert until rebound.",
+                        ub.id, ub.node_handle, ub.inner_param,
+                    );
+                }
+            }
+            self.cached_user_version = fx.user_param_bindings_version;
+        }
+
         // Step 17: route every host param via the declarative
         // `bindings` slice. Legacy mode→UVTransform remap is encoded
         // as `ParamConvert::EnumRemap` on the binding itself.
@@ -261,6 +294,7 @@ impl PostProcessEffect for MirrorFX {
         // errors rather than panicking — see its docstring.
         apply_param_bindings(
             &self.bindings,
+            &self.user_bindings,
             &mut self.graph,
             Some(&self.handle),
             &fx.param_values,

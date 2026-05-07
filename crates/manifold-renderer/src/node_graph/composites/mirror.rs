@@ -35,16 +35,26 @@ const FOLD_X: u32 = 6;
 ///
 /// `mode` is in legacy units (0=Horiz, 1=Vert, 2=Both); the composite
 /// translates it into UVTransform's enum at routing time.
+///
+/// Inner node handles registered for V2 user-exposed parameter
+/// bindings (`Graph::node_id_by_handle`):
+/// - `"uv_transform"` → the fold UVTransform
+/// - `"mix"` → the dry/wet Mix
+///
+/// **Single-composite-per-graph constraint**: since handle names
+/// are unique within a `Graph`, this builder must not run twice in
+/// the same graph. Phase 4 multi-composite effects will need a
+/// prefix-aware variant.
 pub fn build_mirror(
     graph: &mut Graph,
     source: (NodeInstanceId, &'static str),
 ) -> Result<CompositeHandle, GraphError> {
-    let xform = graph.add_node(Box::new(UVTransform::new()));
+    let xform = graph.add_node_named("uv_transform", Box::new(UVTransform::new()));
     // Default to FoldX (horizontal fold). Outer `mode` setter remaps.
     graph.set_param(xform, "mode", ParamValue::Enum(FOLD_X))?;
     graph.connect(source, (xform, "source"))?;
 
-    let mix = graph.add_node(Box::new(Mix::new()));
+    let mix = graph.add_node_named("mix", Box::new(Mix::new()));
     // a = original source, b = folded result. Amount lerps a → b.
     graph.connect(source, (mix, "a"))?;
     graph.connect((xform, "out"), (mix, "b"))?;

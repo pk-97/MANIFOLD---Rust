@@ -30,9 +30,9 @@ use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Feedback;
 use crate::node_graph::{
-    apply_param_bindings, compile, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph,
-    MetalBackend, NodeInstanceId, ParamBinding, ParamConvert, ParamTarget, PortType, ResourceId,
-    Slot, Source, StateStore,
+    apply_param_bindings, compile, user_binding_to_runtime, ExecutionPlan, Executor, FinalOutput,
+    FrameTime, Graph, MetalBackend, NodeInstanceId, ParamBinding, ParamConvert, ParamTarget,
+    PortType, ResourceId, Slot, Source, StateStore, UserParamBindingRuntime,
 };
 use crate::render_target::RenderTarget;
 
@@ -70,6 +70,10 @@ pub struct StylizedFeedbackFX {
     /// Each entry's `ParamTarget::Node` carries the `feedback`
     /// node id captured at construction.
     bindings: Vec<ParamBinding>,
+    /// Per-instance V2 user-exposed bindings, hydrated when
+    /// `EffectInstance.user_param_bindings_version` bumps.
+    user_bindings: Vec<UserParamBindingRuntime>,
+    cached_user_version: u32,
     source_resource: ResourceId,
     output_resource: ResourceId,
     /// Per-owner persistent state lives here. Each entry's key is
@@ -91,8 +95,11 @@ struct RenderState {
 impl StylizedFeedbackFX {
     pub fn new(_device: &GpuDevice) -> Self {
         let mut graph = Graph::new();
+        // Source / FinalOutput stay anonymous (boundary nodes are not
+        // user-exposable). The Feedback primitive gets the stable
+        // handle `"feedback"` so user bindings can target it.
         let src = graph.add_node(Box::new(Source::new()));
-        let feedback = graph.add_node(Box::new(Feedback::new()));
+        let feedback = graph.add_node_named("feedback", Box::new(Feedback::new()));
         graph
             .connect((src, "out"), (feedback, "source"))
             .expect("wire Source.out → Feedback.source");
@@ -162,6 +169,8 @@ impl StylizedFeedbackFX {
             graph,
             plan,
             bindings,
+            user_bindings: Vec::new(),
+            cached_user_version: u32::MAX,
             source_resource,
             output_resource,
             state_store: StateStore::new(),
@@ -271,20 +280,43 @@ impl PostProcessEffect for StylizedFeedbackFX {
         }
         let render = self.render.as_mut().expect("render initialized above");
 
-        // 2. Step 17: route every host param via the declarative
+        // 2. Hydrate user-binding scratch on version bump.
+        if fx.user_param_bindings_version != self.cached_user_version {
+            self.user_bindings.clear();
+            for ub in &fx.user_param_bindings {
+                if let Some(rt) = user_binding_to_runtime(ub, &self.graph) {
+                    self.user_bindings.push(rt);
+                } else {
+                    eprintln!(
+                        "[manifold-renderer] StylizedFeedbackFX: failed to hydrate user binding \
+                         id={} node_handle={} inner_param={} — node or param missing in graph.",
+                        ub.id, ub.node_handle, ub.inner_param,
+                    );
+                }
+            }
+            self.cached_user_version = fx.user_param_bindings_version;
+        }
+
+        // 3. Step 17: route every host param via the declarative
         //    `bindings` slice directly to the `feedback` node. Per-
         //    binding routing errors are logged (not fatal) — see
         //    `apply_param_bindings` docs.
-        apply_param_bindings(&self.bindings, &mut self.graph, None, &fx.param_values);
+        apply_param_bindings(
+            &self.bindings,
+            &self.user_bindings,
+            &mut self.graph,
+            None,
+            &fx.param_values,
+        );
 
-        // 3. Copy the layer's source into the graph's pre-bound Source slot.
+        // 4. Copy the layer's source into the graph's pre-bound Source slot.
         let backend = render.executor.backend();
         let source_tex = backend
             .texture_2d(render.source_slot)
             .expect("source slot pre-bound");
         gpu.copy_texture_to_texture(source, source_tex, ctx.width, ctx.height);
 
-        // 4. Run the graph with the per-owner state store.
+        // 5. Run the graph with the per-owner state store.
         let frame_time = FrameTime {
             beats: manifold_core::Beats(f64::from(ctx.beat)),
             seconds: manifold_core::Seconds(f64::from(ctx.time)),
@@ -299,7 +331,7 @@ impl PostProcessEffect for StylizedFeedbackFX {
             ctx.owner_key,
         );
 
-        // 5. Blit the graph's output into the layer chain's target.
+        // 6. Blit the graph's output into the layer chain's target.
         let output_tex = render
             .executor
             .backend()

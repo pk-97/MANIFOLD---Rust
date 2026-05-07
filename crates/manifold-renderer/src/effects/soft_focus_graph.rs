@@ -26,9 +26,9 @@ use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::composites::{build_soft_focus, CompositeHandle};
 use crate::node_graph::{
-    apply_param_bindings, binding_value, compile, ExecutionPlan, Executor, FinalOutput, FrameTime,
-    Graph, MetalBackend, NodeInstanceId, ParamBinding, ParamConvert, ParamTarget, PortType,
-    ResourceId, Slot, Source,
+    apply_param_bindings, binding_value, compile, user_binding_to_runtime, ExecutionPlan, Executor,
+    FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId, ParamBinding, ParamConvert,
+    ParamTarget, PortType, ResourceId, Slot, Source, UserParamBindingRuntime,
 };
 use crate::render_target::RenderTarget;
 
@@ -68,6 +68,10 @@ pub struct SoftFocusGraphFX {
     handle: CompositeHandle,
     /// Step 17: declarative routing for the host-visible params.
     bindings: Vec<ParamBinding>,
+    /// Per-instance V2 user-exposed bindings, hydrated when
+    /// `EffectInstance.user_param_bindings_version` bumps.
+    user_bindings: Vec<UserParamBindingRuntime>,
+    cached_user_version: u32,
     source_resource: ResourceId,
     output_resource: ResourceId,
     state: Option<RenderState>,
@@ -122,6 +126,8 @@ impl SoftFocusGraphFX {
             plan,
             handle,
             bindings,
+            user_bindings: Vec::new(),
+            cached_user_version: u32::MAX,
             source_resource,
             output_resource,
             state: None,
@@ -203,9 +209,10 @@ impl PostProcessEffect for SoftFocusGraphFX {
     /// default `param[0] <= 0` heuristic would kick in on radius = 0
     /// instead, which is also a valid "skip" but slightly less
     /// principled. Pin to the amount slot by stable id so reordering
-    /// the bindings list can't silently break the predicate.
+    /// the bindings list can't silently break the predicate. Empty
+    /// user-bindings slice — "amount" is a static binding id.
     fn should_skip(&self, fx: &EffectInstance) -> bool {
-        binding_value(&self.bindings, &fx.param_values, "amount").unwrap_or(0.0) <= 0.0
+        binding_value(&self.bindings, &[], &fx.param_values, "amount").unwrap_or(0.0) <= 0.0
     }
 
     fn graph_snapshot(&self) -> Option<crate::node_graph::GraphSnapshot> {
@@ -244,18 +251,36 @@ impl PostProcessEffect for SoftFocusGraphFX {
             .expect("source slot pre-bound");
         gpu.copy_texture_to_texture(source, source_tex, ctx.width, ctx.height);
 
-        // 3. Step 17: route every host param via the declarative
+        // 3. Hydrate user-binding scratch on version bump.
+        if fx.user_param_bindings_version != self.cached_user_version {
+            self.user_bindings.clear();
+            for ub in &fx.user_param_bindings {
+                if let Some(rt) = user_binding_to_runtime(ub, &self.graph) {
+                    self.user_bindings.push(rt);
+                } else {
+                    eprintln!(
+                        "[manifold-renderer] SoftFocusGraphFX: failed to hydrate user binding \
+                         id={} node_handle={} inner_param={} — node or param missing in graph.",
+                        ub.id, ub.node_handle, ub.inner_param,
+                    );
+                }
+            }
+            self.cached_user_version = fx.user_param_bindings_version;
+        }
+
+        // 4. Step 17: route every host param via the declarative
         //    `bindings` slice through the composite handle. Per-binding
         //    routing errors are logged (not fatal) — see
         //    `apply_param_bindings` docs.
         apply_param_bindings(
             &self.bindings,
+            &self.user_bindings,
             &mut self.graph,
             Some(&self.handle),
             &fx.param_values,
         );
 
-        // 4. Run the graph.
+        // 5. Run the graph.
         let frame_time = FrameTime {
             beats: manifold_core::Beats(f64::from(ctx.beat)),
             seconds: manifold_core::Seconds(f64::from(ctx.time)),
@@ -265,7 +290,7 @@ impl PostProcessEffect for SoftFocusGraphFX {
             .executor
             .execute_frame_with_gpu(&mut self.graph, &self.plan, frame_time, gpu);
 
-        // 5. Blit the graph's output into the layer chain's target.
+        // 6. Blit the graph's output into the layer chain's target.
         let output_tex = state
             .executor
             .backend()

@@ -44,6 +44,13 @@ pub struct Graph {
     nodes: AHashMap<NodeInstanceId, NodeInstance>,
     wires: Vec<NodeWire>,
     next_id: u32,
+    /// Stable handle → node id map for V2 user-exposed parameters.
+    /// Populated only by [`Graph::add_node_named`] — anonymous nodes
+    /// added via [`Graph::add_node`] don't appear here. Handles are
+    /// `&'static str` (set at effect construction); user bindings on
+    /// disk store the same string and look up the live id at apply
+    /// time. See `docs/EFFECT_RUNTIME_UNIFICATION.md` §7.
+    handles: AHashMap<&'static str, NodeInstanceId>,
 }
 
 impl Graph {
@@ -52,6 +59,7 @@ impl Graph {
             nodes: AHashMap::default(),
             wires: Vec::new(),
             next_id: 0,
+            handles: AHashMap::default(),
         }
     }
 
@@ -64,11 +72,58 @@ impl Graph {
         id
     }
 
+    /// Add a node with a stable string handle and return its assigned
+    /// [`NodeInstanceId`]. The handle is recorded in a per-graph map
+    /// so user-exposed parameter bindings can address the inner node
+    /// by name across renderer refactors that reorder construction.
+    ///
+    /// Naming convention is up to the effect author: `"uv_transform"`,
+    /// `"feedback"`, `"mix"`, etc. Handles must be unique within the
+    /// graph — passing a duplicate handle panics. This is a programming
+    /// error (the developer wrote the same literal twice), not user
+    /// error, so it's loud at construction time.
+    ///
+    /// Renames go through `EffectNodeAliasMetadata` in `manifold-core`;
+    /// the resolver translates saved bindings on load.
+    pub fn add_node_named(
+        &mut self,
+        handle: &'static str,
+        node: Box<dyn EffectNode>,
+    ) -> NodeInstanceId {
+        let id = self.add_node(node);
+        if let Some(prev) = self.handles.insert(handle, id) {
+            panic!(
+                "Graph::add_node_named: duplicate handle '{handle}' \
+                 (already mapped to {prev:?}, just tried to remap to {id:?}). \
+                 Handles must be unique within a graph."
+            );
+        }
+        id
+    }
+
+    /// Look up a node id by its stable handle. Returns `None` if no
+    /// node was added with that handle (or if the handle has been
+    /// retired — handles are not removed when their node is, since
+    /// `remove_node` is rare and keeping the old mapping doesn't
+    /// break anything).
+    pub fn node_id_by_handle(&self, handle: &str) -> Option<NodeInstanceId> {
+        self.handles.get(handle).copied()
+    }
+
+    /// Iterate the (handle, node id) pairs registered on this graph.
+    pub fn handles(&self) -> impl Iterator<Item = (&'static str, NodeInstanceId)> + '_ {
+        self.handles.iter().map(|(k, v)| (*k, *v))
+    }
+
     /// Remove a node and any wires that touch it. Returns the removed
     /// [`NodeInstance`], or `None` if the id wasn't in the graph.
     pub fn remove_node(&mut self, id: NodeInstanceId) -> Option<NodeInstance> {
         let removed = self.nodes.remove(&id)?;
         self.wires.retain(|w| w.from.0 != id && w.to.0 != id);
+        // Drop any handle that pointed at this node — keeping it would
+        // strand a stale handle->dead-id mapping that future
+        // node_id_by_handle lookups would honor.
+        self.handles.retain(|_, v| *v != id);
         Some(removed)
     }
 
