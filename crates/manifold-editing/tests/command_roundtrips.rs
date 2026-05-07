@@ -18,7 +18,26 @@ use manifold_editing::commands::layer::*;
 use manifold_editing::commands::settings::*;
 
 // Test-only inventory submissions — manifold-renderer isn't linked in editing tests.
+use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
+
+// Step 16: ChangeEffectParamCommand resolves param_id → index via the
+// effect registry on each execute/undo. Tests must register at least
+// the effects they reference (Bloom is the only one used).
+inventory::submit! {
+    EffectMetadata {
+        id: EffectTypeId::BLOOM,
+        display_name: "Bloom",
+        category: "Post-Process",
+        available: true,
+        osc_prefix: "bloom",
+        legacy_discriminant: Some(12),
+        params: &[
+            ParamSpec::continuous("amount", "Amount", 0.0, 5.0, 0.187, "F2", ""),
+            ParamSpec::continuous("threshold", "Threshold", 0.0, 5.0, 1.0, "F2", ""),
+        ],
+    }
+}
 
 inventory::submit! {
     GeneratorMetadata {
@@ -612,14 +631,48 @@ fn change_effect_param_undo_roundtrip() {
         project.settings.master_effects.push(fx);
     }
 
-    let target = EffectTarget::Master;
-    let mut cmd = ChangeEffectParamCommand::new(target, 0, 0, 0.5, 0.9);
+    // Step 16: id-keyed addressing (was positional `0`).
+    let mut cmd = ChangeEffectParamCommand::new(EffectTarget::Master, 0, "amount", 0.5, 0.9);
 
     cmd.execute(&mut project);
     assert!((project.settings.master_effects[0].param_values[0] - 0.9).abs() < 0.001);
 
     cmd.undo(&mut project);
     assert!((project.settings.master_effects[0].param_values[0] - 0.5).abs() < 0.001);
+
+    // Targets `threshold` (index 1) — confirm id-based addressing
+    // routes to the right slot, not just index 0.
+    let mut cmd2 = ChangeEffectParamCommand::new(EffectTarget::Master, 0, "threshold", 0.3, 0.7);
+    cmd2.execute(&mut project);
+    assert!((project.settings.master_effects[0].param_values[1] - 0.7).abs() < 0.001);
+    cmd2.undo(&mut project);
+    assert!((project.settings.master_effects[0].param_values[1] - 0.3).abs() < 0.001);
+}
+
+#[test]
+fn change_effect_param_unknown_id_is_no_op() {
+    // An undo entry that targets a param id which has been dropped
+    // from the schema since the entry was recorded must NOT panic
+    // and must NOT scribble random indices. It silently no-ops.
+    let mut project = make_test_project();
+    let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+    fx.param_values = vec![0.5, 0.3];
+    fx.base_param_values = Some(vec![0.5, 0.3]);
+    project.settings.master_effects.push(fx);
+
+    let mut cmd = ChangeEffectParamCommand::new(
+        EffectTarget::Master,
+        0,
+        "phantom_param",
+        0.5,
+        0.9,
+    );
+
+    cmd.execute(&mut project);
+    // Unchanged — no slot was matched.
+    assert_eq!(project.settings.master_effects[0].param_values, vec![0.5, 0.3]);
+    cmd.undo(&mut project);
+    assert_eq!(project.settings.master_effects[0].param_values, vec![0.5, 0.3]);
 }
 
 #[test]

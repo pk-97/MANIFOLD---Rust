@@ -633,14 +633,16 @@ pub(super) fn dispatch_inspector(
                 let old = fx.get_base_param(*param_idx);
                 if (old - *default_val).abs() > f32::EPSILON {
                     fx.set_base_param(*param_idx, *default_val);
-                    let cmd = ChangeEffectParamCommand::new(
-                        target,
-                        *fx_idx,
-                        *param_idx,
-                        old,
-                        *default_val,
-                    );
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    if let Some(param_id) = effect_param_id(fx.effect_type(), *param_idx) {
+                        let cmd = ChangeEffectParamCommand::new(
+                            target,
+                            *fx_idx,
+                            param_id,
+                            old,
+                            *default_val,
+                        );
+                        ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    }
                 }
             }
             *active_inspector_drag = None;
@@ -716,10 +718,12 @@ pub(super) fn dispatch_inspector(
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
                 if let Some(fx) = effects.and_then(|e| e.get(*fx_idx)) {
                     let new_val = fx.get_base_param(*param_idx);
-                    if (old_val - new_val).abs() > f32::EPSILON {
+                    if (old_val - new_val).abs() > f32::EPSILON
+                        && let Some(param_id) = effect_param_id(fx.effect_type(), *param_idx)
+                    {
                         let target = super::resolve_effect_target(tab, active_layer, project);
                         let cmd = ChangeEffectParamCommand::new(
-                            target, *fx_idx, *param_idx, old_val, new_val,
+                            target, *fx_idx, param_id, old_val, new_val,
                         );
                         ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                     }

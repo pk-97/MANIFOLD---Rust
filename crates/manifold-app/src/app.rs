@@ -882,7 +882,13 @@ impl Application {
                         } else {
                             parsed
                         };
-                        if (old_val - new_val).abs() > f32::EPSILON {
+                        if (old_val - new_val).abs() > f32::EPSILON
+                            && let Some(param_id) =
+                                manifold_core::effect_definition_registry::param_index_to_id(
+                                    effect_type,
+                                    param_idx,
+                                )
+                        {
                             let target = match tab {
                                 manifold_ui::InspectorTab::Master => {
                                     manifold_editing::commands::effect_target::EffectTarget::Master
@@ -897,7 +903,7 @@ impl Application {
                             };
                             let cmd =
                                 manifold_editing::commands::effects::ChangeEffectParamCommand::new(
-                                    target, effect_idx, param_idx, old_val, new_val,
+                                    target, effect_idx, param_id, old_val, new_val,
                                 );
                             if let Some(project) = Some(&mut self.local_project) {
                                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> =

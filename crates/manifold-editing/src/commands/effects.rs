@@ -1,6 +1,6 @@
 use crate::command::Command;
 use crate::commands::effect_target::{EffectTarget, with_effects_mut};
-use manifold_core::effects::EffectInstance;
+use manifold_core::effects::{EffectInstance, ParamId};
 use manifold_core::project::Project;
 
 /// Add an effect to a target's effect chain.
@@ -234,11 +234,18 @@ impl Command for ReorderEffectGroupCommand {
 }
 
 /// Change a single parameter value on an effect.
+///
+/// Addresses the parameter by stable [`ParamId`] (not by position).
+/// The id is resolved against the effect registry on each
+/// `execute`/`undo` so an undo entry stays correct even if the
+/// effect's param list is reordered between recording and replaying.
+///
+/// Step 16 of `docs/EFFECT_RUNTIME_UNIFICATION.md` §11.
 #[derive(Debug)]
 pub struct ChangeEffectParamCommand {
     target: EffectTarget,
     effect_index: usize,
-    param_index: usize,
+    param_id: ParamId,
     old_value: f32,
     new_value: f32,
 }
@@ -247,14 +254,14 @@ impl ChangeEffectParamCommand {
     pub fn new(
         target: EffectTarget,
         effect_index: usize,
-        param_index: usize,
+        param_id: impl Into<ParamId>,
         old_value: f32,
         new_value: f32,
     ) -> Self {
         Self {
             target,
             effect_index,
-            param_index,
+            param_id: param_id.into(),
             old_value,
             new_value,
         }
@@ -264,22 +271,32 @@ impl ChangeEffectParamCommand {
 impl Command for ChangeEffectParamCommand {
     fn execute(&mut self, project: &mut Project) {
         let eidx = self.effect_index;
-        let pidx = self.param_index;
+        let id = self.param_id.clone();
         let val = self.new_value;
         with_effects_mut(project, &self.target, |effects, _groups| {
-            if let Some(effect) = effects.get_mut(eidx) {
-                effect.set_base_param(pidx, val);
+            if let Some(effect) = effects.get_mut(eidx)
+                && let Some(idx) = manifold_core::effect_definition_registry::param_id_to_index(
+                    effect.effect_type(),
+                    id.as_ref(),
+                )
+            {
+                effect.set_base_param(idx, val);
             }
         });
     }
 
     fn undo(&mut self, project: &mut Project) {
         let eidx = self.effect_index;
-        let pidx = self.param_index;
+        let id = self.param_id.clone();
         let val = self.old_value;
         with_effects_mut(project, &self.target, |effects, _groups| {
-            if let Some(effect) = effects.get_mut(eidx) {
-                effect.set_base_param(pidx, val);
+            if let Some(effect) = effects.get_mut(eidx)
+                && let Some(idx) = manifold_core::effect_definition_registry::param_id_to_index(
+                    effect.effect_type(),
+                    id.as_ref(),
+                )
+            {
+                effect.set_base_param(idx, val);
             }
         });
     }
