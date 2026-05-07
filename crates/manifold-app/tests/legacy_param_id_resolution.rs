@@ -191,6 +191,84 @@ fn liveschool_envelopes_resolve_to_stable_param_ids() {
 }
 
 #[test]
+fn liveschool_ableton_mappings_resolve_to_stable_param_ids() {
+    let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
+    if !path.exists() {
+        return;
+    }
+
+    let project = loader::load_project(&path).expect("load Liveschool");
+
+    // 29 Ableton mappings: 12 effect-targeted + 17 generator-targeted.
+    // Same kind of safety net as drivers/envelopes — every mapping
+    // must come out of post-load with a non-empty `param_id` (since
+    // the inspector never creates Ableton mappings against
+    // out-of-range params).
+    let mut effect_maps = 0;
+    let mut gen_maps = 0;
+    let mut empty: Vec<String> = Vec::new();
+    for fx in &project.settings.master_effects {
+        if let Some(ref ms) = fx.ableton_mappings {
+            for (mi, m) in ms.iter().enumerate() {
+                effect_maps += 1;
+                if m.param_id.is_empty() {
+                    empty.push(format!(
+                        "master.fx[{}].abl[{}] (effect={})",
+                        fx.id.as_str(),
+                        mi,
+                        fx.effect_type().as_str()
+                    ));
+                }
+            }
+        }
+    }
+    for (li, layer) in project.timeline.layers.iter().enumerate() {
+        if let Some(ref effects) = layer.effects {
+            for (fi, fx) in effects.iter().enumerate() {
+                if let Some(ref ms) = fx.ableton_mappings {
+                    for (mi, m) in ms.iter().enumerate() {
+                        effect_maps += 1;
+                        if m.param_id.is_empty() {
+                            empty.push(format!(
+                                "layer[{li}].fx[{fi}].abl[{mi}] (effect={})",
+                                fx.effect_type().as_str()
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(gp) = layer.gen_params()
+            && let Some(ref ms) = gp.ableton_mappings
+        {
+            for (mi, m) in ms.iter().enumerate() {
+                gen_maps += 1;
+                if m.param_id.is_empty() {
+                    empty.push(format!(
+                        "layer[{li}].gen.abl[{mi}] (gen={})",
+                        gp.generator_type().as_str()
+                    ));
+                }
+            }
+        }
+    }
+
+    assert_eq!(
+        effect_maps + gen_maps,
+        29,
+        "Liveschool must have exactly 29 Ableton mappings"
+    );
+    assert_eq!(effect_maps, 12, "expected 12 effect-targeted mappings");
+    assert_eq!(gen_maps, 17, "expected 17 generator-targeted mappings");
+    assert!(
+        empty.is_empty(),
+        "{} Ableton mappings failed to resolve param_id from registry: {:?}",
+        empty.len(),
+        empty
+    );
+}
+
+#[test]
 fn liveschool_full_registry_resolution() {
     let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
     if !path.exists() {

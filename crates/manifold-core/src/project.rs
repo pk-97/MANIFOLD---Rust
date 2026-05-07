@@ -264,6 +264,50 @@ impl Project {
             env.legacy_param_index = None;
         }
 
+        fn resolve_ableton_id_for_effect(
+            mapping: &mut crate::ableton_mapping::AbletonParamMapping,
+            effect_type: &crate::EffectTypeId,
+        ) {
+            if !mapping.param_id.is_empty() {
+                mapping.legacy_param_index = None;
+                return;
+            }
+            let Some(idx) = mapping.legacy_param_index else {
+                return;
+            };
+            let Some(def) = effect_definition_registry::try_get(effect_type) else {
+                return;
+            };
+            if let Some(pd) = def.param_defs.get(idx as usize)
+                && !pd.id.is_empty()
+            {
+                mapping.param_id = std::borrow::Cow::Owned(pd.id.clone());
+            }
+            mapping.legacy_param_index = None;
+        }
+
+        fn resolve_ableton_id_for_generator(
+            mapping: &mut crate::ableton_mapping::AbletonParamMapping,
+            gen_type: &crate::GeneratorTypeId,
+        ) {
+            if !mapping.param_id.is_empty() {
+                mapping.legacy_param_index = None;
+                return;
+            }
+            let Some(idx) = mapping.legacy_param_index else {
+                return;
+            };
+            let Some(def) = generator_definition_registry::try_get(gen_type) else {
+                return;
+            };
+            if let Some(pd) = def.param_defs.get(idx as usize)
+                && !pd.id.is_empty()
+            {
+                mapping.param_id = std::borrow::Cow::Owned(pd.id.clone());
+            }
+            mapping.legacy_param_index = None;
+        }
+
         // Master effects.
         for fx in &mut self.settings.master_effects {
             let effect_type = fx.effect_type().clone();
@@ -272,8 +316,13 @@ impl Project {
                     resolve_driver_id_for_effect(d, &effect_type);
                 }
             }
+            if let Some(mappings) = fx.ableton_mappings.as_mut() {
+                for m in mappings {
+                    resolve_ableton_id_for_effect(m, &effect_type);
+                }
+            }
         }
-        // Layer effects + layer envelopes + generator drivers/envelopes.
+        // Layer effects + layer envelopes + generator drivers/envelopes/mappings.
         for layer in &mut self.timeline.layers {
             if let Some(ref mut effects) = layer.effects {
                 for fx in effects.iter_mut() {
@@ -281,6 +330,11 @@ impl Project {
                     if let Some(drivers) = fx.drivers.as_mut() {
                         for d in drivers {
                             resolve_driver_id_for_effect(d, &effect_type);
+                        }
+                    }
+                    if let Some(mappings) = fx.ableton_mappings.as_mut() {
+                        for m in mappings {
+                            resolve_ableton_id_for_effect(m, &effect_type);
                         }
                     }
                 }
@@ -302,6 +356,11 @@ impl Project {
                 if let Some(envelopes) = gp.envelopes.as_mut() {
                     for env in envelopes {
                         resolve_envelope_id_for_generator(env, &gen_type);
+                    }
+                }
+                if let Some(mappings) = gp.ableton_mappings.as_mut() {
+                    for m in mappings {
+                        resolve_ableton_id_for_generator(m, &gen_type);
                     }
                 }
             }

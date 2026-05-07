@@ -124,7 +124,7 @@ fn apply_mapping(
     mapping: &Option<AbletonParamMapping>,
 ) {
     match target {
-        AbletonMappingTarget::MasterEffect { effect_type, param_index } => {
+        AbletonMappingTarget::MasterEffect { effect_type, param_id } => {
             if let Some(fx) = project
                 .settings
                 .master_effects
@@ -132,7 +132,7 @@ fn apply_mapping(
                 .find(|f| f.effect_type() == effect_type)
             {
                 let m = fx.ableton_mappings.get_or_insert_with(Vec::new);
-                m.retain(|x| x.param_index != *param_index);
+                m.retain(|x| x.param_id != *param_id);
                 if let Some(mapping) = mapping {
                     m.push(mapping.clone());
                 }
@@ -141,13 +141,13 @@ fn apply_mapping(
                 }
             }
         }
-        AbletonMappingTarget::LayerEffect { layer_id, effect_type, param_index } => {
+        AbletonMappingTarget::LayerEffect { layer_id, effect_type, param_id } => {
             if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str())
                 && let Some(effects) = &mut layer.effects
                 && let Some(fx) = effects.iter_mut().find(|f| f.effect_type() == effect_type)
             {
                 let m = fx.ableton_mappings.get_or_insert_with(Vec::new);
-                m.retain(|x| x.param_index != *param_index);
+                m.retain(|x| x.param_id != *param_id);
                 if let Some(mapping) = mapping {
                     m.push(mapping.clone());
                 }
@@ -156,12 +156,12 @@ fn apply_mapping(
                 }
             }
         }
-        AbletonMappingTarget::GenParam { layer_id, param_index } => {
+        AbletonMappingTarget::GenParam { layer_id, param_id } => {
             if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str())
                 && let Some(gp) = layer.gen_params_mut()
             {
                 let m = gp.ableton_mappings.get_or_insert_with(Vec::new);
-                m.retain(|x| x.param_index != *param_index);
+                m.retain(|x| x.param_id != *param_id);
                 if let Some(mapping) = mapping {
                     m.push(mapping.clone());
                 }
@@ -180,35 +180,35 @@ fn apply_mapping(
 
 fn set_trim(project: &mut Project, target: &AbletonMappingTarget, min: f32, max: f32) {
     match target {
-        AbletonMappingTarget::MasterEffect { effect_type, param_index } => {
+        AbletonMappingTarget::MasterEffect { effect_type, param_id } => {
             if let Some(fx) = project
                 .settings
                 .master_effects
                 .iter_mut()
                 .find(|f| f.effect_type() == effect_type)
                 && let Some(ms) = &mut fx.ableton_mappings
-                && let Some(m) = ms.iter_mut().find(|m| m.param_index == *param_index)
+                && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
             {
                 m.range_min = min;
                 m.range_max = max;
             }
         }
-        AbletonMappingTarget::LayerEffect { layer_id, effect_type, param_index } => {
+        AbletonMappingTarget::LayerEffect { layer_id, effect_type, param_id } => {
             if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str())
                 && let Some(effects) = &mut layer.effects
                 && let Some(fx) = effects.iter_mut().find(|f| f.effect_type() == effect_type)
                 && let Some(ms) = &mut fx.ableton_mappings
-                && let Some(m) = ms.iter_mut().find(|m| m.param_index == *param_index)
+                && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
             {
                 m.range_min = min;
                 m.range_max = max;
             }
         }
-        AbletonMappingTarget::GenParam { layer_id, param_index } => {
+        AbletonMappingTarget::GenParam { layer_id, param_id } => {
             if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str())
                 && let Some(gp) = layer.gen_params_mut()
                 && let Some(ms) = &mut gp.ableton_mappings
-                && let Some(m) = ms.iter_mut().find(|m| m.param_index == *param_index)
+                && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
             {
                 m.range_min = min;
                 m.range_max = max;

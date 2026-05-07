@@ -2763,12 +2763,15 @@ pub(super) fn dispatch_inspector(
                 resolve_effects_read(tab, project, active_layer, selection);
             if let Some(effects) = effects_ref
                 && let Some(fx) = effects.get(fx_idx)
+                && let Some(pid) = effect_param_id(fx.effect_type(), param_idx)
             {
                 let effect_type = fx.effect_type().clone();
+                let pid_owned: std::borrow::Cow<'static, str> =
+                    std::borrow::Cow::Borrowed(pid);
                 let target = match tab {
                     InspectorTab::Master => AbletonMappingTarget::MasterEffect {
                         effect_type,
-                        param_index: param_idx,
+                        param_id: pid_owned,
                     },
                     InspectorTab::Layer | InspectorTab::Clip => {
                         let layer_id = active_layer.clone().unwrap_or_else(|| {
@@ -2782,7 +2785,7 @@ pub(super) fn dispatch_inspector(
                         AbletonMappingTarget::LayerEffect {
                             layer_id,
                             effect_type,
-                            param_index: param_idx,
+                            param_id: pid_owned,
                         }
                     }
                 };
@@ -2800,10 +2803,12 @@ pub(super) fn dispatch_inspector(
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
+                && let Some(gp) = layer.gen_params()
+                && let Some(pid) = generator_param_id(gp.generator_type(), param_idx)
             {
                 let target = AbletonMappingTarget::GenParam {
                     layer_id: layer.layer_id.clone(),
-                    param_index: param_idx,
+                    param_id: std::borrow::Cow::Borrowed(pid),
                 };
                 ContentCommand::send(
                     content_tx,
@@ -2821,12 +2826,15 @@ pub(super) fn dispatch_inspector(
                 resolve_effects_read(tab, project, active_layer, selection);
             if let Some(effects) = effects_ref
                 && let Some(fx) = effects.get(fx_idx)
+                && let Some(pid) = effect_param_id(fx.effect_type(), param_idx)
             {
                 let effect_type = fx.effect_type().clone();
+                let pid_owned: std::borrow::Cow<'static, str> =
+                    std::borrow::Cow::Borrowed(pid);
                 let target = match tab {
                     InspectorTab::Master => AbletonMappingTarget::MasterEffect {
                         effect_type,
-                        param_index: param_idx,
+                        param_id: pid_owned,
                     },
                     InspectorTab::Layer | InspectorTab::Clip => {
                         let layer_id = active_layer.clone().unwrap_or_else(|| {
@@ -2840,7 +2848,7 @@ pub(super) fn dispatch_inspector(
                         AbletonMappingTarget::LayerEffect {
                             layer_id,
                             effect_type,
-                            param_index: param_idx,
+                            param_id: pid_owned,
                         }
                     }
                 };
@@ -2857,10 +2865,12 @@ pub(super) fn dispatch_inspector(
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
+                && let Some(gp) = layer.gen_params()
+                && let Some(pid) = generator_param_id(gp.generator_type(), param_idx)
             {
                 let target = AbletonMappingTarget::GenParam {
                     layer_id: layer.layer_id.clone(),
-                    param_index: param_idx,
+                    param_id: std::borrow::Cow::Borrowed(pid),
                 };
                 ContentCommand::send(
                     content_tx,
@@ -2906,8 +2916,9 @@ pub(super) fn dispatch_inspector(
                 InspectorTab::Master => {
                     let fx = project.settings.master_effects.get_mut(fx_idx);
                     if let Some(fx) = fx
+                        && let Some(pid) = effect_param_id(fx.effect_type(), param_idx)
                         && let Some(ms) = &mut fx.ableton_mappings
-                        && let Some(m) = ms.iter_mut().find(|m| m.param_index == param_idx)
+                        && let Some(m) = ms.iter_mut().find(|m| m.param_id == pid)
                     {
                         m.range_min = min;
                         m.range_max = max;
@@ -2921,8 +2932,9 @@ pub(super) fn dispatch_inspector(
                         && let Some(layer) = project.timeline.layers.get_mut(li)
                         && let Some(effects) = &mut layer.effects
                         && let Some(fx) = effects.get_mut(fx_idx)
+                        && let Some(pid) = effect_param_id(fx.effect_type(), param_idx)
                         && let Some(ms) = &mut fx.ableton_mappings
-                        && let Some(m) = ms.iter_mut().find(|m| m.param_index == param_idx)
+                        && let Some(m) = ms.iter_mut().find(|m| m.param_id == pid)
                     {
                         m.range_min = min;
                         m.range_max = max;
@@ -2937,7 +2949,11 @@ pub(super) fn dispatch_inspector(
             };
             // Sync to content thread
             let layer_id = active_layer.clone();
-            if let Some(et) = effect_type {
+            if let Some(et) = effect_type
+                && let Some(pid) = effect_param_id(&et, param_idx)
+            {
+                let pid_for_content: std::borrow::Cow<'static, str> =
+                    std::borrow::Cow::Borrowed(pid);
                 ContentCommand::send(
                     content_tx,
                     ContentCommand::MutateProject(Box::new(move |p| {
@@ -2952,7 +2968,8 @@ pub(super) fn dispatch_inspector(
                         if let Some(effects) = effects
                             && let Some(fx) = effects.iter_mut().find(|f| f.effect_type() == &et)
                             && let Some(ms) = &mut fx.ableton_mappings
-                            && let Some(m) = ms.iter_mut().find(|m| m.param_index == param_idx)
+                            && let Some(m) =
+                                ms.iter_mut().find(|m| m.param_id == pid_for_content)
                         {
                             m.range_min = min;
                             m.range_max = max;
@@ -2976,12 +2993,15 @@ pub(super) fn dispatch_inspector(
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
                 && let Some(gp) = layer.gen_params_mut()
+                && let Some(pid) = generator_param_id(gp.generator_type(), param_idx)
                 && let Some(mappings) = &mut gp.ableton_mappings
-                && let Some(m) = mappings.iter_mut().find(|m| m.param_index == param_idx)
+                && let Some(m) = mappings.iter_mut().find(|m| m.param_id == pid)
             {
                 m.range_min = min;
                 m.range_max = max;
                 let layer_id = layer.layer_id.clone();
+                let pid_for_content: std::borrow::Cow<'static, str> =
+                    std::borrow::Cow::Borrowed(pid);
                 ContentCommand::send(
                     content_tx,
                     ContentCommand::MutateProject(Box::new(move |p| {
@@ -2990,7 +3010,7 @@ pub(super) fn dispatch_inspector(
                             && let Some(gp) = layer.gen_params_mut()
                             && let Some(ms) = &mut gp.ableton_mappings
                             && let Some(m) =
-                                ms.iter_mut().find(|m| m.param_index == param_idx)
+                                ms.iter_mut().find(|m| m.param_id == pid_for_content)
                         {
                             m.range_min = min;
                             m.range_max = max;
@@ -3037,8 +3057,9 @@ pub(super) fn dispatch_inspector(
                 InspectorTab::Master => {
                     let fx = project.settings.master_effects.get_mut(fx_idx);
                     if let Some(fx) = fx
+                        && let Some(pid) = effect_param_id(fx.effect_type(), param_idx)
                         && let Some(ms) = &mut fx.ableton_mappings
-                        && let Some(m) = ms.iter_mut().find(|m| m.param_index == param_idx)
+                        && let Some(m) = ms.iter_mut().find(|m| m.param_id == pid)
                     {
                         m.inverted = !m.inverted;
                     }
@@ -3054,8 +3075,9 @@ pub(super) fn dispatch_inspector(
                         && let Some(layer) = project.timeline.layers.get_mut(li)
                         && let Some(effects) = &mut layer.effects
                         && let Some(fx) = effects.get_mut(fx_idx)
+                        && let Some(pid) = effect_param_id(fx.effect_type(), param_idx)
                         && let Some(ms) = &mut fx.ableton_mappings
-                        && let Some(m) = ms.iter_mut().find(|m| m.param_index == param_idx)
+                        && let Some(m) = ms.iter_mut().find(|m| m.param_id == pid)
                     {
                         m.inverted = !m.inverted;
                     }
@@ -3068,7 +3090,11 @@ pub(super) fn dispatch_inspector(
                 InspectorTab::Clip => None,
             };
             let layer_id = active_layer.clone();
-            if let Some(et) = effect_type {
+            if let Some(et) = effect_type
+                && let Some(pid) = effect_param_id(&et, param_idx)
+            {
+                let pid_for_content: std::borrow::Cow<'static, str> =
+                    std::borrow::Cow::Borrowed(pid);
                 ContentCommand::send(
                     content_tx,
                     ContentCommand::MutateProject(Box::new(move |p| {
@@ -3086,7 +3112,7 @@ pub(super) fn dispatch_inspector(
                                 effects.iter_mut().find(|f| f.effect_type() == &et)
                             && let Some(ms) = &mut fx.ableton_mappings
                             && let Some(m) =
-                                ms.iter_mut().find(|m| m.param_index == param_idx)
+                                ms.iter_mut().find(|m| m.param_id == pid_for_content)
                         {
                             m.inverted = !m.inverted;
                         }
@@ -3102,8 +3128,9 @@ pub(super) fn dispatch_inspector(
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
                 && let Some(gp) = layer.gen_params_mut()
+                && let Some(pid) = generator_param_id(gp.generator_type(), param_idx)
                 && let Some(mappings) = &mut gp.ableton_mappings
-                && let Some(m) = mappings.iter_mut().find(|m| m.param_index == param_idx)
+                && let Some(m) = mappings.iter_mut().find(|m| m.param_id == pid)
             {
                 m.inverted = !m.inverted;
             }
@@ -3115,9 +3142,10 @@ pub(super) fn dispatch_inspector(
                         .as_ref()
                         .and_then(|lid| p.timeline.find_layer_by_id_mut(lid.as_str()))
                         && let Some(gp) = layer.gen_params_mut()
+                        && let Some(pid) = generator_param_id(gp.generator_type(), param_idx)
                         && let Some(mappings) = &mut gp.ableton_mappings
                         && let Some(m) =
-                            mappings.iter_mut().find(|m| m.param_index == param_idx)
+                            mappings.iter_mut().find(|m| m.param_id == pid)
                     {
                         m.inverted = !m.inverted;
                     }

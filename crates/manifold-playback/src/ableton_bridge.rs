@@ -877,7 +877,7 @@ impl AbletonBridge {
         match target {
             AbletonMappingTarget::MasterEffect {
                 effect_type,
-                param_index: _,
+                param_id: _,
             } => {
                 if let Some(fx) = project
                     .settings
@@ -891,7 +891,7 @@ impl AbletonBridge {
             AbletonMappingTarget::LayerEffect {
                 layer_id,
                 effect_type,
-                param_index: _,
+                param_id: _,
             } => {
                 if let Some((_, layer)) =
                     project.timeline.find_layer_by_id_mut(layer_id.as_str())
@@ -905,7 +905,7 @@ impl AbletonBridge {
             }
             AbletonMappingTarget::GenParam {
                 layer_id,
-                param_index: _,
+                param_id: _,
             } => {
                 if let Some((_, layer)) =
                     project.timeline.find_layer_by_id_mut(layer_id.as_str())
@@ -2197,10 +2197,15 @@ impl AbletonBridge {
                     );
                     needed.insert(key);
 
-                    let param_def = manifold_core::effect_definition_registry::try_get(
+                    let effect_def = manifold_core::effect_definition_registry::try_get(
                         fx.effect_type(),
-                    )
-                    .and_then(|def| def.param_defs.get(mapping.param_index));
+                    );
+                    let resolved_idx = effect_def
+                        .and_then(|d| d.id_to_index.get(mapping.param_id.as_ref()).copied());
+                    let Some(resolved_idx) = resolved_idx else {
+                        continue;
+                    };
+                    let param_def = effect_def.and_then(|d| d.param_defs.get(resolved_idx));
                     let (pmin, pmax) = param_def
                         .map(|pd| (pd.min, pd.max))
                         .unwrap_or((0.0, 1.0));
@@ -2216,9 +2221,9 @@ impl AbletonBridge {
                         .push(WriteTarget {
                             target: AbletonMappingTarget::MasterEffect {
                                 effect_type: fx.effect_type().clone(),
-                                param_index: mapping.param_index,
+                                param_id: mapping.param_id.clone(),
                             },
-                            param_index: mapping.param_index,
+                            param_index: resolved_idx,
                             ableton_min: abl_min,
                             ableton_max: abl_max,
                             range_min: mapping.range_min,
@@ -2249,11 +2254,18 @@ impl AbletonBridge {
                             );
                             needed.insert(key);
 
-                            let param_def =
+                            let effect_def =
                                 manifold_core::effect_definition_registry::try_get(
                                     fx.effect_type(),
-                                )
-                                .and_then(|def| def.param_defs.get(mapping.param_index));
+                                );
+                            let resolved_idx = effect_def.and_then(|d| {
+                                d.id_to_index.get(mapping.param_id.as_ref()).copied()
+                            });
+                            let Some(resolved_idx) = resolved_idx else {
+                                continue;
+                            };
+                            let param_def =
+                                effect_def.and_then(|d| d.param_defs.get(resolved_idx));
                             let (pmin, pmax) = param_def
                                 .map(|pd| (pd.min, pd.max))
                                 .unwrap_or((0.0, 1.0));
@@ -2270,9 +2282,9 @@ impl AbletonBridge {
                                     target: AbletonMappingTarget::LayerEffect {
                                         layer_id: layer_id.clone(),
                                         effect_type: fx.effect_type().clone(),
-                                        param_index: mapping.param_index,
+                                        param_id: mapping.param_id.clone(),
                                     },
-                                    param_index: mapping.param_index,
+                                    param_index: resolved_idx,
                                     ableton_min: abl_min,
                                     ableton_max: abl_max,
                                     range_min: mapping.range_min,
@@ -2300,11 +2312,15 @@ impl AbletonBridge {
                     );
                     needed.insert(key);
 
-                    let param_def =
-                        manifold_core::generator_definition_registry::try_get(
-                            gp.generator_type(),
-                        )
-                        .and_then(|def| def.param_defs.get(mapping.param_index));
+                    let gen_def = manifold_core::generator_definition_registry::try_get(
+                        gp.generator_type(),
+                    );
+                    let resolved_idx = gen_def
+                        .and_then(|d| d.id_to_index.get(mapping.param_id.as_ref()).copied());
+                    let Some(resolved_idx) = resolved_idx else {
+                        continue;
+                    };
+                    let param_def = gen_def.and_then(|d| d.param_defs.get(resolved_idx));
                     let (pmin, pmax) = param_def
                         .map(|pd| (pd.min, pd.max))
                         .unwrap_or((0.0, 1.0));
@@ -2320,9 +2336,9 @@ impl AbletonBridge {
                         .push(WriteTarget {
                             target: AbletonMappingTarget::GenParam {
                                 layer_id: layer_id.clone(),
-                                param_index: mapping.param_index,
+                                param_id: mapping.param_id.clone(),
                             },
-                            param_index: mapping.param_index,
+                            param_index: resolved_idx,
                             ableton_min: abl_min,
                             ableton_max: abl_max,
                             range_min: mapping.range_min,
@@ -2874,7 +2890,7 @@ mod tests {
     ) -> AbletonParamMapping {
         use manifold_core::ableton_mapping::{AbletonDeviceIdentity, AbletonMacroAddress};
         AbletonParamMapping {
-            param_index: 0,
+            param_id: std::borrow::Cow::Borrowed("amount"),
             address: AbletonMacroAddress {
                 track_id,
                 device_id,
@@ -2889,6 +2905,7 @@ mod tests {
             range_min: 0.0,
             range_max: 1.0,
             inverted: false,
+            legacy_param_index: None,
             last_value: 0.0,
             status: AbletonMappingStatus::Dormant,
         }
@@ -3087,7 +3104,7 @@ mod tests {
         let wt = WriteTarget {
             target: AbletonMappingTarget::MasterEffect {
                 effect_type: manifold_core::EffectTypeId::BLOOM,
-                param_index: 0,
+                param_id: std::borrow::Cow::Borrowed("amount"),
             },
             param_index: 0,
             // Rack macros send 0-127 from Ableton

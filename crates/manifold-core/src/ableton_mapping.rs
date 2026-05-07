@@ -5,8 +5,10 @@
 //! and validated at runtime via structural identity (device class names).
 
 use crate::effect_type_id::EffectTypeId;
+use crate::effects::ParamId;
 use crate::id::LayerId;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 // ── Structural identity ───────────────────────────────────────────
 
@@ -56,10 +58,23 @@ pub enum AbletonMappingStatus {
 ///
 /// Stored alongside `drivers` on `EffectInstance` and `GeneratorParamState`.
 /// Replace mode: when active, the Ableton value overrides `base_param_values`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Address shape: [`AbletonParamMapping::param_id`] is the canonical
+/// MANIFOLD-side mapping key, mirroring [`crate::effects::ParameterDriver`].
+/// Legacy V1.1 projects stored `paramIndex: usize` instead — the custom
+/// [`Deserialize`] accepts either shape and parks legacy indices in
+/// `legacy_param_index` for the post-load resolver.
+///
+/// Note: [`AbletonMacroAddress::param_id`] is a different concept — it's
+/// the Ableton-side rack-macro parameter identifier (numeric, comes
+/// from Ableton via OSC). The two `param_id` fields are nested at
+/// different levels so the JSON shape is unambiguous.
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AbletonParamMapping {
-    pub param_index: usize,
+    /// Stable MANIFOLD-side mapping key. Empty after legacy V1.1
+    /// deserialization until the post-load resolver fills it in.
+    pub param_id: ParamId,
     pub address: AbletonMacroAddress,
     /// Normalized 0–1 trim low (maps Ableton 0 to this point in param range).
     #[serde(default)]
@@ -70,12 +85,60 @@ pub struct AbletonParamMapping {
     /// When true, the Ableton value is inverted (1.0 - v) before trim range mapping.
     #[serde(default)]
     pub inverted: bool,
+    /// Set during `Deserialize` from the legacy `paramIndex` field.
+    /// Resolved to `param_id` by `Project::resolve_legacy_param_ids`
+    /// then cleared. Never serialized.
+    #[serde(skip)]
+    pub legacy_param_index: Option<i32>,
     /// Last received value from Ableton (0–1, pre-range-mapping). Runtime only.
     #[serde(skip)]
     pub last_value: f32,
     /// Runtime status (active/dormant/ambiguous). Not persisted.
     #[serde(skip)]
     pub status: AbletonMappingStatus,
+}
+
+// Custom `Deserialize` accepting both V1.1 (`paramIndex: usize`) and
+// V1.2+ (`paramId: "amount"`) shapes. See
+// `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 step 10.
+impl<'de> Deserialize<'de> for AbletonParamMapping {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Raw {
+            #[serde(default)]
+            param_id: Option<String>,
+            #[serde(default)]
+            param_index: Option<i32>,
+            address: AbletonMacroAddress,
+            #[serde(default)]
+            range_min: f32,
+            #[serde(default = "default_one")]
+            range_max: f32,
+            #[serde(default)]
+            inverted: bool,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        let (param_id, legacy_param_index) = match (raw.param_id, raw.param_index) {
+            (Some(id), _) if !id.is_empty() => (Cow::Owned(id), None),
+            (_, Some(idx)) => (Cow::Borrowed(""), Some(idx)),
+            (_, None) => (Cow::Borrowed(""), None),
+        };
+        Ok(AbletonParamMapping {
+            param_id,
+            address: raw.address,
+            range_min: raw.range_min,
+            range_max: raw.range_max,
+            inverted: raw.inverted,
+            legacy_param_index,
+            last_value: 0.0,
+            status: AbletonMappingStatus::default(),
+        })
+    }
 }
 
 fn default_one() -> f32 {
@@ -120,21 +183,23 @@ pub fn is_default_macro_name(name: &str) -> bool {
 
 /// Which MANIFOLD parameter an Ableton mapping targets.
 /// Mirrors `MacroMappingTarget` but scoped to Ableton bridge.
+///
+/// All variants address parameters by stable [`ParamId`] (since step 10).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum AbletonMappingTarget {
     MasterEffect {
         effect_type: EffectTypeId,
-        param_index: usize,
+        param_id: ParamId,
     },
     LayerEffect {
         layer_id: LayerId,
         effect_type: EffectTypeId,
-        param_index: usize,
+        param_id: ParamId,
     },
     GenParam {
         layer_id: LayerId,
-        param_index: usize,
+        param_id: ParamId,
     },
     MacroSlot {
         slot_index: usize,
@@ -168,11 +233,12 @@ mod tests {
     #[test]
     fn map_value_full_range() {
         let mapping = AbletonParamMapping {
-            param_index: 0,
+            param_id: Cow::Borrowed("amount"),
             address: test_address(),
             range_min: 0.0,
             range_max: 1.0,
             inverted: false,
+            legacy_param_index: None,
             last_value: 0.0,
             status: AbletonMappingStatus::Active,
         };
@@ -182,11 +248,12 @@ mod tests {
     #[test]
     fn map_value_sub_range() {
         let mapping = AbletonParamMapping {
-            param_index: 0,
+            param_id: Cow::Borrowed("amount"),
             address: test_address(),
             range_min: 0.25,
             range_max: 0.75,
             inverted: false,
+            legacy_param_index: None,
             last_value: 0.0,
             status: AbletonMappingStatus::Active,
         };
@@ -199,11 +266,12 @@ mod tests {
     #[test]
     fn map_to_param_range_scales() {
         let mapping = AbletonParamMapping {
-            param_index: 0,
+            param_id: Cow::Borrowed("amount"),
             address: test_address(),
             range_min: 0.0,
             range_max: 1.0,
             inverted: false,
+            legacy_param_index: None,
             last_value: 0.0,
             status: AbletonMappingStatus::Active,
         };
@@ -215,11 +283,12 @@ mod tests {
     #[test]
     fn map_value_inverted() {
         let mapping = AbletonParamMapping {
-            param_index: 0,
+            param_id: Cow::Borrowed("amount"),
             address: test_address(),
             range_min: 0.25,
             range_max: 0.75,
             inverted: true,
+            legacy_param_index: None,
             last_value: 0.0,
             status: AbletonMappingStatus::Active,
         };
@@ -232,11 +301,12 @@ mod tests {
     #[test]
     fn map_value_clamps_input() {
         let mapping = AbletonParamMapping {
-            param_index: 0,
+            param_id: Cow::Borrowed("amount"),
             address: test_address(),
             range_min: 0.0,
             range_max: 1.0,
             inverted: false,
+            legacy_param_index: None,
             last_value: 0.0,
             status: AbletonMappingStatus::Active,
         };
@@ -247,23 +317,113 @@ mod tests {
     #[test]
     fn serde_roundtrip_mapping() {
         let mapping = AbletonParamMapping {
-            param_index: 2,
+            param_id: Cow::Borrowed("threshold"),
             address: test_address(),
             range_min: 0.1,
             range_max: 0.9,
             inverted: true,
+            legacy_param_index: None,
             last_value: 0.5,
             status: AbletonMappingStatus::Active,
         };
         let json = serde_json::to_string(&mapping).unwrap();
         let back: AbletonParamMapping = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.param_index, 2);
+        assert_eq!(back.param_id, "threshold");
         assert!((back.range_min - 0.1).abs() < f32::EPSILON);
         assert!((back.range_max - 0.9).abs() < f32::EPSILON);
         assert!(back.inverted);
         // Runtime fields should be default after deser
         assert!(back.last_value.abs() < f32::EPSILON);
         assert_eq!(back.status, AbletonMappingStatus::Dormant);
+        assert_eq!(back.legacy_param_index, None);
+    }
+
+    // ── Backward-compat Deserialize (step 10) ───────────────────
+
+    #[test]
+    fn deserialize_legacy_param_index() {
+        let json = r#"{
+            "paramIndex": 2,
+            "address": {
+                "trackId": 0,
+                "deviceId": 0,
+                "paramId": 8,
+                "deviceIdentity": {"deviceClassName": "InstrumentGroupDevice"},
+                "trackName": "Bass",
+                "deviceName": "Rack",
+                "macroName": "Filter"
+            },
+            "rangeMin": 0.0,
+            "rangeMax": 1.0,
+            "inverted": false
+        }"#;
+        let m: AbletonParamMapping = serde_json::from_str(json).unwrap();
+        assert!(m.param_id.is_empty());
+        assert_eq!(m.legacy_param_index, Some(2));
+    }
+
+    #[test]
+    fn deserialize_canonical_param_id() {
+        let json = r#"{
+            "paramId": "amount",
+            "address": {
+                "trackId": 0,
+                "deviceId": 0,
+                "paramId": 8,
+                "deviceIdentity": {"deviceClassName": "InstrumentGroupDevice"},
+                "trackName": "Bass",
+                "deviceName": "Rack",
+                "macroName": "Filter"
+            }
+        }"#;
+        let m: AbletonParamMapping = serde_json::from_str(json).unwrap();
+        assert_eq!(m.param_id, "amount");
+        assert_eq!(m.legacy_param_index, None);
+    }
+
+    #[test]
+    fn deserialize_param_id_wins_when_both_present() {
+        // The Ableton-side `address.paramId` (numeric) and the new
+        // top-level `paramId` (string) live at different nesting
+        // levels and don't collide.
+        let json = r#"{
+            "paramId": "threshold",
+            "paramIndex": 99,
+            "address": {
+                "trackId": 0,
+                "deviceId": 0,
+                "paramId": 8,
+                "deviceIdentity": {"deviceClassName": "InstrumentGroupDevice"},
+                "trackName": "Bass",
+                "deviceName": "Rack",
+                "macroName": "Filter"
+            }
+        }"#;
+        let m: AbletonParamMapping = serde_json::from_str(json).unwrap();
+        assert_eq!(m.param_id, "threshold");
+        assert_eq!(m.legacy_param_index, None);
+        // Ableton-side address.paramId stays a separate concept.
+        assert_eq!(m.address.param_id, 8);
+    }
+
+    #[test]
+    fn serialize_writes_param_id_only() {
+        let mapping = AbletonParamMapping {
+            param_id: Cow::Borrowed("amount"),
+            address: test_address(),
+            range_min: 0.0,
+            range_max: 1.0,
+            inverted: false,
+            legacy_param_index: None,
+            last_value: 0.0,
+            status: AbletonMappingStatus::Dormant,
+        };
+        let json = serde_json::to_string(&mapping).unwrap();
+        assert!(json.contains("\"paramId\":\"amount\""));
+        assert!(
+            !json.contains("\"paramIndex\""),
+            "Serialize must not write legacy paramIndex; got: {json}"
+        );
     }
 
     #[test]

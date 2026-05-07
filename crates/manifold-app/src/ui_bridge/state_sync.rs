@@ -1174,11 +1174,16 @@ fn effects_to_configs(
                             )
                         }
                     };
-                    // Check for Ableton mapping on this param
-                    let abl_mapping = fx
-                        .ableton_mappings
-                        .as_ref()
-                        .and_then(|mappings| mappings.iter().find(|m| m.param_index == pi));
+                    // Check for Ableton mapping on this param. The card
+                    // is positional (pi: usize), but mappings key on
+                    // `param_id` — look it up via the param def we're
+                    // already iterating.
+                    let abl_mapping = fx.ableton_mappings.as_ref().and_then(|mappings| {
+                        if pd.id.is_empty() {
+                            return None;
+                        }
+                        mappings.iter().find(|m| m.param_id == pd.id)
+                    });
                     let ableton_display = abl_mapping.map(|mapping| {
                         AbletonMappingDisplay {
                             macro_name: mapping.address.macro_name.clone(),
@@ -1380,10 +1385,12 @@ fn gen_params_to_config(
                     layer_id,
                     pi,
                 );
-            let abl_mapping = gp
-                .ableton_mappings
-                .as_ref()
-                .and_then(|mappings| mappings.iter().find(|m| m.param_index == pi));
+            let abl_mapping = gp.ableton_mappings.as_ref().and_then(|mappings| {
+                if pd.id.is_empty() {
+                    return None;
+                }
+                mappings.iter().find(|m| m.param_id == pd.id)
+            });
             let ableton_display = abl_mapping.map(|mapping| {
                 AbletonMappingDisplay {
                     macro_name: mapping.address.macro_name.clone(),

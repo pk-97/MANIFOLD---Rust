@@ -13,30 +13,29 @@ use crate::content_thread::ContentThread;
 fn get_existing_mapping(
     project: &manifold_core::project::Project,
     target: &manifold_core::ableton_mapping::AbletonMappingTarget,
-    param_index: usize,
 ) -> Option<manifold_core::ableton_mapping::AbletonParamMapping> {
     use manifold_core::ableton_mapping::AbletonMappingTarget;
     match target {
-        AbletonMappingTarget::MasterEffect { effect_type, .. } => {
+        AbletonMappingTarget::MasterEffect { effect_type, param_id } => {
             project.settings.master_effects.iter()
                 .find(|f| f.effect_type() == effect_type)
                 .and_then(|fx| fx.ableton_mappings.as_ref())
-                .and_then(|ms| ms.iter().find(|m| m.param_index == param_index))
+                .and_then(|ms| ms.iter().find(|m| m.param_id == *param_id))
                 .cloned()
         }
-        AbletonMappingTarget::LayerEffect { layer_id, effect_type, .. } => {
+        AbletonMappingTarget::LayerEffect { layer_id, effect_type, param_id } => {
             project.timeline.find_layer_by_id(layer_id.as_str())
                 .and_then(|(_, l)| l.effects.as_ref())
                 .and_then(|es| es.iter().find(|f| f.effect_type() == effect_type))
                 .and_then(|fx| fx.ableton_mappings.as_ref())
-                .and_then(|ms| ms.iter().find(|m| m.param_index == param_index))
+                .and_then(|ms| ms.iter().find(|m| m.param_id == *param_id))
                 .cloned()
         }
-        AbletonMappingTarget::GenParam { layer_id, .. } => {
+        AbletonMappingTarget::GenParam { layer_id, param_id } => {
             project.timeline.find_layer_by_id(layer_id.as_str())
                 .and_then(|(_, l)| l.gen_params())
                 .and_then(|gp| gp.ableton_mappings.as_ref())
-                .and_then(|ms| ms.iter().find(|m| m.param_index == param_index))
+                .and_then(|ms| ms.iter().find(|m| m.param_id == *param_id))
                 .cloned()
         }
         AbletonMappingTarget::MacroSlot { slot_index } => {
@@ -495,14 +494,16 @@ impl ContentThread {
                 };
                 use manifold_editing::commands::ableton::ChangeAbletonMappingCommand;
                 if let Some(p) = self.engine.project_mut() {
-                    let pi = match &target {
-                        AbletonMappingTarget::MasterEffect { param_index, .. }
-                        | AbletonMappingTarget::LayerEffect { param_index, .. }
-                        | AbletonMappingTarget::GenParam { param_index, .. } => *param_index,
-                        AbletonMappingTarget::MacroSlot { slot_index } => *slot_index,
+                    // Effect/gen targets carry the canonical param_id; the
+                    // macro-slot variant doesn't have one (it routes to a
+                    // slot index instead).
+                    let param_id = match &target {
+                        AbletonMappingTarget::MasterEffect { param_id, .. }
+                        | AbletonMappingTarget::LayerEffect { param_id, .. }
+                        | AbletonMappingTarget::GenParam { param_id, .. } => Some(param_id.clone()),
+                        AbletonMappingTarget::MacroSlot { .. } => None,
                     };
-                    // Capture old state for undo
-                    let old_mapping = get_existing_mapping(p, &target, pi);
+                    let old_mapping = get_existing_mapping(p, &target);
                     let (old_label, new_label) = match &target {
                         AbletonMappingTarget::MacroSlot { slot_index } => {
                             let old = p.settings.macro_bank.slots.get(*slot_index)
@@ -513,11 +514,12 @@ impl ContentThread {
                         _ => (None, None),
                     };
                     let new_mapping = AbletonParamMapping {
-                        param_index: pi,
+                        param_id: param_id.unwrap_or(std::borrow::Cow::Borrowed("")),
                         address,
                         range_min: 0.0,
                         range_max: 1.0,
                         inverted: false,
+                        legacy_param_index: None,
                         last_value: 0.0,
                         status: AbletonMappingStatus::Active,
                     };
@@ -532,20 +534,13 @@ impl ContentThread {
                 self.engine.mark_sync_dirty();
             }
             ContentCommand::AbletonUnmapParam { target } => {
-                use manifold_core::ableton_mapping::AbletonMappingTarget;
                 use manifold_editing::commands::ableton::ChangeAbletonMappingCommand;
-                if let Some(p) = self.engine.project_mut() {
-                    let pi = match &target {
-                        AbletonMappingTarget::MasterEffect { param_index, .. }
-                        | AbletonMappingTarget::LayerEffect { param_index, .. }
-                        | AbletonMappingTarget::GenParam { param_index, .. } => *param_index,
-                        AbletonMappingTarget::MacroSlot { slot_index } => *slot_index,
-                    };
-                    if let Some(old) = get_existing_mapping(p, &target, pi) {
-                        let cmd = ChangeAbletonMappingCommand::unmap(target, old);
-                        self.editing_service.execute(Box::new(cmd), p);
-                        self.ableton_bridge.rebuild_listeners(p);
-                    }
+                if let Some(p) = self.engine.project_mut()
+                    && let Some(old) = get_existing_mapping(p, &target)
+                {
+                    let cmd = ChangeAbletonMappingCommand::unmap(target, old);
+                    self.editing_service.execute(Box::new(cmd), p);
+                    self.ableton_bridge.rebuild_listeners(p);
                 }
                 self.engine.mark_sync_dirty();
             }
