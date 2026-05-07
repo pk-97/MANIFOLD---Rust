@@ -129,6 +129,11 @@ impl Project {
         // `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 step 8.
         self.resolve_legacy_param_ids();
 
+        // V2 user-exposed binding node-handle migration. Renames declared
+        // via `EffectNodeAliasMetadata` propagate to saved bindings here.
+        // No-op for fixtures and effects that ship without renames.
+        self.resolve_user_param_binding_node_handles();
+
         // Normalize layer order into tree pre-order (group children contiguous
         // immediately after parent). Also reindexes.
         self.timeline.enforce_tree_order();
@@ -501,6 +506,71 @@ impl Project {
         for slot in &mut self.settings.macro_bank.slots {
             for mapping in &mut slot.mappings {
                 resolve_macro_mapping(mapping, timeline);
+            }
+        }
+    }
+
+    /// Walk every `EffectInstance.user_param_bindings` and resolve
+    /// stale `node_handle` strings against the effect's
+    /// `EffectDef::legacy_node_aliases` table.
+    ///
+    /// Direct analogue of `resolve_legacy_param_ids` but for inner-graph
+    /// node handles. Same outcome semantics:
+    ///
+    /// - **Resolved (rename)** — handle aliases to a current handle.
+    ///   Update `node_handle` in place.
+    /// - **NoChange** — handle is current. No-op.
+    /// - **Drop** — alias chain ends in `None`. The handle is left
+    ///   untouched so the binding remains in the project file as an
+    ///   orphan (visible in a future "broken bindings" UI per
+    ///   `docs/EFFECT_RUNTIME_UNIFICATION.md` §10 question 7). The
+    ///   renderer will fail handle resolution at apply time, log
+    ///   once, and skip — the binding is inert until re-added.
+    /// - **RegistryMissing** — registry has no def. Don't touch.
+    ///   On a future load with the registry present, resolution
+    ///   re-runs.
+    fn resolve_user_param_binding_node_handles(&mut self) {
+        use crate::effect_definition_registry;
+        use crate::effect_registration::resolve_param_alias;
+
+        fn resolve_one(
+            effect_type: &crate::EffectTypeId,
+            binding: &mut crate::effects::UserParamBinding,
+        ) {
+            let Some(def) = effect_definition_registry::try_get(effect_type) else {
+                // RegistryMissing: leave handle untouched for next-load recovery.
+                return;
+            };
+            if def.legacy_node_aliases.is_empty() {
+                // NoChange across the board (no aliases declared).
+                return;
+            }
+            match resolve_param_alias(def.legacy_node_aliases, &binding.node_handle) {
+                // Already current — nothing to do.
+                Some(resolved) if resolved == binding.node_handle => {}
+                Some(resolved) => {
+                    binding.node_handle = resolved.to_string();
+                }
+                // Drop: handle was retired. Leave as-is so the binding
+                // surfaces as orphaned at apply time.
+                None => {}
+            }
+        }
+
+        for fx in &mut self.settings.master_effects {
+            let effect_type = fx.effect_type().clone();
+            for ub in &mut fx.user_param_bindings {
+                resolve_one(&effect_type, ub);
+            }
+        }
+        for layer in &mut self.timeline.layers {
+            if let Some(ref mut effects) = layer.effects {
+                for fx in effects.iter_mut() {
+                    let effect_type = fx.effect_type().clone();
+                    for ub in &mut fx.user_param_bindings {
+                        resolve_one(&effect_type, ub);
+                    }
+                }
             }
         }
     }
@@ -908,5 +978,79 @@ mod tests {
             Some(2),
             "RegistryMissing must preserve legacy index for next-load recovery"
         );
+    }
+
+    // ── User-exposed binding node-handle resolution (Phase 3) ─────
+
+    fn build_user_binding(node_handle: &str) -> crate::effects::UserParamBinding {
+        crate::effects::UserParamBinding {
+            id: format!("user.{}.x.1", node_handle),
+            label: "X".to_string(),
+            node_handle: node_handle.to_string(),
+            inner_param: "x".to_string(),
+            min: 0.0,
+            max: 1.0,
+            default_value: 0.0,
+            convert: crate::effects::UserParamConvert::Float,
+        }
+    }
+
+    #[test]
+    fn user_binding_resolver_noop_when_no_aliases_declared() {
+        // Production case: an effect ships without any node-handle
+        // renames declared. The resolver must leave bindings untouched.
+        let mut p = Project::default();
+        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        fx.user_param_bindings.push(build_user_binding("uv_transform"));
+        fx.user_param_bindings.push(build_user_binding("mix"));
+        p.settings.master_effects.push(fx);
+
+        p.resolve_user_param_binding_node_handles();
+
+        let fx = &p.settings.master_effects[0];
+        assert_eq!(fx.user_param_bindings[0].node_handle, "uv_transform");
+        assert_eq!(fx.user_param_bindings[1].node_handle, "mix");
+    }
+
+    #[test]
+    fn user_binding_resolver_preserves_handle_when_registry_missing() {
+        // RegistryMissing case: effect type isn't registered (e.g.,
+        // future-version fixture loaded on an older build). The
+        // resolver must leave the handle so a future load with the
+        // registry present can recover.
+        let mut p = Project::default();
+        let mut fx =
+            EffectInstance::new(EffectTypeId::from_string("UnknownFutureEffect".to_string()));
+        fx.user_param_bindings
+            .push(build_user_binding("future_node"));
+        p.settings.master_effects.push(fx);
+
+        p.resolve_user_param_binding_node_handles();
+
+        let fx = &p.settings.master_effects[0];
+        assert_eq!(
+            fx.user_param_bindings[0].node_handle, "future_node",
+            "RegistryMissing must preserve node_handle for next-load recovery"
+        );
+    }
+
+    #[test]
+    fn user_binding_resolver_walks_layer_effects() {
+        // Layer effects participate too — not just master.
+        let mut p = Project::default();
+        let mut layer = crate::layer::Layer::new(
+            "L".to_string(),
+            crate::types::LayerType::Video,
+            0,
+        );
+        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+        fx.user_param_bindings.push(build_user_binding("uv_transform"));
+        layer.effects = Some(vec![fx]);
+        p.timeline.layers.push(layer);
+
+        p.resolve_user_param_binding_node_handles();
+
+        let fx = &p.timeline.layers[0].effects.as_ref().unwrap()[0];
+        assert_eq!(fx.user_param_bindings[0].node_handle, "uv_transform");
     }
 }

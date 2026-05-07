@@ -30,6 +30,13 @@ pub struct EffectDef {
     /// Declarative legacy id migration table. See
     /// [`crate::effect_registration::ParamAlias`].
     pub legacy_param_aliases: &'static [crate::effect_registration::ParamAlias],
+    /// Declarative legacy **node-handle** migration table for V2
+    /// user-exposed parameter bindings. Same shape as
+    /// `legacy_param_aliases`, but addresses inner-graph node handles
+    /// (set via `Graph::add_node_named` at effect construction).
+    /// Submitted via [`crate::effect_registration::EffectNodeAliasMetadata`]
+    /// sidecar.
+    pub legacy_node_aliases: &'static [crate::effect_registration::ParamAlias],
 }
 
 /// Re-export for callers within this module's namespace. Canonical home
@@ -52,6 +59,14 @@ static DEFINITIONS: LazyLock<HashMap<EffectTypeId, EffectDef>> = LazyLock::new(|
     for alias_meta in inventory::iter::<crate::effect_registration::EffectAliasMetadata> {
         if let Some(def) = m.get_mut(&alias_meta.id) {
             def.legacy_param_aliases = alias_meta.aliases;
+        }
+    }
+    // Same pattern for **node-handle** aliases — the V2 user-exposed
+    // parameter binding migration table. See
+    // `effect_registration::EffectNodeAliasMetadata`.
+    for alias_meta in inventory::iter::<crate::effect_registration::EffectNodeAliasMetadata> {
+        if let Some(def) = m.get_mut(&alias_meta.id) {
+            def.legacy_node_aliases = alias_meta.aliases;
         }
     }
     m

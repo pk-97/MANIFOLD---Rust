@@ -87,6 +87,37 @@ pub struct EffectAliasMetadata {
 
 inventory::collect!(EffectAliasMetadata);
 
+/// Optional sidecar submission for effects whose **inner-graph node
+/// handles** have been renamed or removed across schema versions.
+/// Direct analogue of [`EffectAliasMetadata`]: parallel inventory,
+/// parallel slice shape, parallel resolver via [`resolve_param_alias`].
+///
+/// User-exposed parameter bindings address inner nodes by stable
+/// `node_handle` (set via `Graph::add_node_named` at the effect's
+/// construction). When an effect refactor renames a node — say
+/// `"feedback"` → `"feedback_a"` — the matching `EffectNodeAliasMetadata`
+/// entry lets saved projects recover their bindings:
+///
+/// ```ignore
+/// inventory::submit! {
+///     EffectNodeAliasMetadata {
+///         id: EffectTypeId::STYLIZED_FEEDBACK,
+///         aliases: &[("feedback", Some("feedback_a"))],
+///     }
+/// }
+/// ```
+///
+/// Discovered at registry-build time and merged into the matching
+/// [`EffectDef::legacy_node_aliases`]. The resolver in
+/// `Project::resolve_legacy_param_ids` walks every user binding's
+/// `node_handle` through this table.
+pub struct EffectNodeAliasMetadata {
+    pub id: EffectTypeId,
+    pub aliases: &'static [ParamAlias],
+}
+
+inventory::collect!(EffectNodeAliasMetadata);
+
 impl EffectMetadata {
     /// Convert to the existing `EffectDef` type.
     pub fn to_effect_def(&self) -> EffectDef {
@@ -108,6 +139,7 @@ impl EffectMetadata {
             id_to_index,
             param_ids,
             legacy_param_aliases: &[],
+            legacy_node_aliases: &[],
         }
     }
 
