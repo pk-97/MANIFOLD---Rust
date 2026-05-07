@@ -1313,3 +1313,201 @@ fn project_load_strips_unknown_effects() {
         EffectTypeId::BLOOM
     );
 }
+
+// ─── ToggleEffectParamExposeCommand (Phase 3 Commit 3) ────────────
+
+fn meta_default() -> InnerParamMeta {
+    InnerParamMeta {
+        label: "Translate".to_string(),
+        min: -1.0,
+        max: 1.0,
+        default_value: 0.0,
+        convert: UserParamConvert::Float,
+    }
+}
+
+#[test]
+fn expose_effect_param_command_undo_roundtrip() {
+    // Build a project with a Bloom master effect that has 2 static
+    // params (amount + threshold per the test inventory at the top
+    // of this file). Expose UVTransform.translate as a user binding;
+    // assert state, undo, assert state.
+    let mut project = make_test_project();
+    let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+    fx.param_values = vec![0.5, 1.0];
+    fx.base_param_values = Some(vec![0.5, 1.0]);
+    project.settings.master_effects.push(fx);
+
+    let mut cmd = ToggleEffectParamExposeCommand::new(
+        EffectTarget::Master,
+        0,
+        "uv_transform".to_string(),
+        "translate".to_string(),
+        true, // expose
+        meta_default(),
+    );
+
+    cmd.execute(&mut project);
+    let fx = &project.settings.master_effects[0];
+    assert_eq!(fx.user_param_bindings.len(), 1);
+    let binding = &fx.user_param_bindings[0];
+    assert_eq!(binding.id, "user.uv_transform.translate.1");
+    assert_eq!(binding.node_handle, "uv_transform");
+    assert_eq!(binding.inner_param, "translate");
+    assert_eq!(binding.label, "Translate");
+    // param_values: [0.5 (amount), 1.0 (threshold), 0.0 (user binding default)].
+    assert_eq!(fx.param_values, vec![0.5, 1.0, 0.0]);
+    assert_eq!(fx.base_param_values.as_ref().unwrap(), &vec![0.5, 1.0, 0.0]);
+
+    cmd.undo(&mut project);
+    let fx = &project.settings.master_effects[0];
+    assert!(fx.user_param_bindings.is_empty());
+    assert_eq!(fx.param_values, vec![0.5, 1.0]);
+    assert_eq!(fx.base_param_values.as_ref().unwrap(), &vec![0.5, 1.0]);
+
+    // Re-execute (redo) yields the same binding id (deterministic
+    // generator: binding list is empty after undo, so we land on
+    // `.1` again).
+    cmd.execute(&mut project);
+    let fx = &project.settings.master_effects[0];
+    assert_eq!(fx.user_param_bindings.len(), 1);
+    assert_eq!(fx.user_param_bindings[0].id, "user.uv_transform.translate.1");
+}
+
+#[test]
+fn expose_already_exposed_is_idempotent_noop() {
+    // Ticking an already-on checkbox is a no-op. The command must
+    // not panic, and undo must also be a no-op (not remove the
+    // pre-existing binding).
+    let mut project = make_test_project();
+    let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+    fx.param_values = vec![0.5, 1.0];
+    fx.base_param_values = Some(vec![0.5, 1.0]);
+    fx.append_user_binding(UserParamBinding {
+        id: "user.uv_transform.translate.1".to_string(),
+        label: "Translate".to_string(),
+        node_handle: "uv_transform".to_string(),
+        inner_param: "translate".to_string(),
+        min: -1.0,
+        max: 1.0,
+        default_value: 0.0,
+        convert: UserParamConvert::Float,
+    });
+    project.settings.master_effects.push(fx);
+
+    let mut cmd = ToggleEffectParamExposeCommand::new(
+        EffectTarget::Master,
+        0,
+        "uv_transform".to_string(),
+        "translate".to_string(),
+        true,
+        meta_default(),
+    );
+    cmd.execute(&mut project);
+    // Still 1 binding (not 2 — execute is idempotent).
+    assert_eq!(project.settings.master_effects[0].user_param_bindings.len(), 1);
+    cmd.undo(&mut project);
+    // Pre-existing binding is preserved (the no-op execute recorded
+    // ReverseState::None, so undo did nothing).
+    assert_eq!(project.settings.master_effects[0].user_param_bindings.len(), 1);
+}
+
+#[test]
+fn unexpose_effect_param_command_undo_roundtrip() {
+    let mut project = make_test_project();
+    let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+    fx.param_values = vec![0.5, 1.0];
+    fx.base_param_values = Some(vec![0.5, 1.0]);
+    fx.append_user_binding(UserParamBinding {
+        id: "user.uv_transform.translate.1".to_string(),
+        label: "Translate".to_string(),
+        node_handle: "uv_transform".to_string(),
+        inner_param: "translate".to_string(),
+        min: -1.0,
+        max: 1.0,
+        default_value: 0.0,
+        convert: UserParamConvert::Float,
+    });
+    // Drag the slider — user-tail at index 2 (n_static=2 + j=0) changed.
+    fx.param_values[2] = 0.42;
+    fx.base_param_values.as_mut().unwrap()[2] = 0.42;
+    project.settings.master_effects.push(fx);
+
+    let mut cmd = ToggleEffectParamExposeCommand::new(
+        EffectTarget::Master,
+        0,
+        "uv_transform".to_string(),
+        "translate".to_string(),
+        false, // unexpose
+        meta_default(),
+    );
+
+    cmd.execute(&mut project);
+    let fx = &project.settings.master_effects[0];
+    assert!(fx.user_param_bindings.is_empty());
+    assert_eq!(fx.param_values, vec![0.5, 1.0]);
+
+    cmd.undo(&mut project);
+    let fx = &project.settings.master_effects[0];
+    assert_eq!(fx.user_param_bindings.len(), 1);
+    assert_eq!(fx.user_param_bindings[0].id, "user.uv_transform.translate.1");
+    // Slot value restored — including the dragged 0.42, NOT the binding default.
+    assert!((fx.param_values[2] - 0.42).abs() < f32::EPSILON);
+    assert!(
+        (fx.base_param_values.as_ref().unwrap()[2] - 0.42).abs() < f32::EPSILON,
+        "base value also restored"
+    );
+}
+
+#[test]
+fn unexpose_when_not_exposed_is_noop() {
+    let mut project = make_test_project();
+    let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+    fx.param_values = vec![0.5, 1.0];
+    project.settings.master_effects.push(fx);
+
+    let mut cmd = ToggleEffectParamExposeCommand::new(
+        EffectTarget::Master,
+        0,
+        "uv_transform".to_string(),
+        "translate".to_string(),
+        false,
+        meta_default(),
+    );
+    cmd.execute(&mut project);
+    cmd.undo(&mut project);
+    assert!(project.settings.master_effects[0].user_param_bindings.is_empty());
+    assert_eq!(project.settings.master_effects[0].param_values, vec![0.5, 1.0]);
+}
+
+#[test]
+fn generate_user_param_id_collision_probe() {
+    // Linear probe lands on the smallest free .n suffix.
+    let existing = vec![
+        UserParamBinding {
+            id: "user.uv_transform.translate.1".to_string(),
+            label: String::new(),
+            node_handle: "uv_transform".to_string(),
+            inner_param: "translate".to_string(),
+            min: 0.0,
+            max: 1.0,
+            default_value: 0.0,
+            convert: UserParamConvert::Float,
+        },
+        UserParamBinding {
+            id: "user.uv_transform.translate.2".to_string(),
+            label: String::new(),
+            node_handle: "uv_transform".to_string(),
+            inner_param: "translate".to_string(),
+            min: 0.0,
+            max: 1.0,
+            default_value: 0.0,
+            convert: UserParamConvert::Float,
+        },
+    ];
+    let id = generate_user_param_id("uv_transform", "translate", &existing);
+    assert_eq!(id, "user.uv_transform.translate.3");
+    // Different inner param under same handle gets a fresh prefix.
+    let id2 = generate_user_param_id("uv_transform", "scale", &existing);
+    assert_eq!(id2, "user.uv_transform.scale.1");
+}

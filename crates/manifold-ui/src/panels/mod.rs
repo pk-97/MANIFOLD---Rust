@@ -200,6 +200,29 @@ pub enum PanelAction {
     EffectReorder(usize, usize),
     /// Reorder multiple effect cards as a group: (sorted source indices, target index).
     EffectReorderGroup(Vec<usize>, usize),
+    /// Toggle whether an inner-graph param is user-exposed on the
+    /// effect card. Sent by the graph-editor right-sidebar checkbox
+    /// when the user ticks/unticks a param. Routes through the
+    /// content thread as a `ToggleEffectParamExposeCommand`.
+    ///
+    /// `label` / `min` / `max` / `default_value` / `convert` are the
+    /// inner-node ParamDef metadata captured at panel-build time —
+    /// the panel reads them from the live graph snapshot when the
+    /// user clicks. The content-thread command uses them to build a
+    /// well-formed `UserParamBinding` without needing access to the
+    /// renderer registry from the UI thread. The same meta is
+    /// preserved on the command for undo of an unexpose.
+    EffectParamExpose {
+        effect_index: usize,
+        node_handle: String,
+        inner_param: String,
+        expose: bool,
+        label: String,
+        min: f32,
+        max: f32,
+        default_value: f32,
+        convert: manifold_core::effects::UserParamConvert,
+    },
 
     // Generator params
     GenTypeClicked(Option<LayerId>), // layer_id

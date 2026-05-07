@@ -846,11 +846,26 @@ impl EffectInstance {
     /// Bumps `user_param_bindings_version` so the renderer's
     /// per-FX scratch rehydrates on the next frame.
     ///
+    /// Calls [`Self::align_to_definition`] first so the static
+    /// prefix matches the registry's `param_count` before the new
+    /// user-tail slot is pushed. Without this, an effect freshly
+    /// constructed via [`Self::new`] (with empty `param_values`)
+    /// would land its first user-binding value at index 0 — wrong
+    /// if the registry says `n_static > 0`. Align is cheap
+    /// (single Vec resize); user-binding mutations are rare (one
+    /// per checkbox click), so the cost is negligible.
+    ///
     /// Caller is responsible for ensuring `binding.id` is unique
     /// within this instance — `generate_user_param_id` (in
     /// `manifold-editing`) provides the canonical collision-free
     /// shape.
     pub fn append_user_binding(&mut self, binding: UserParamBinding) {
+        // Align FIRST (against the current user_param_bindings list,
+        // which doesn't include the new binding yet) so the static
+        // prefix is `n_static` long. Then push — the new tail slot
+        // lands at exactly `n_static + old_user_count`, matching what
+        // `param_id_to_value_index` will compute on lookup.
+        self.align_to_definition();
         let default_v = binding.default_value;
         self.user_param_bindings.push(binding);
         self.param_values.push(default_v);

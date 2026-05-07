@@ -29,7 +29,8 @@ use manifold_editing::commands::drivers::{
 };
 use manifold_editing::commands::effect_target::{DriverTarget, EffectTarget};
 use manifold_editing::commands::effects::{
-    ChangeEffectParamCommand, RemoveEffectCommand, ReorderEffectCommand, ReorderEffectGroupCommand,
+    ChangeEffectParamCommand, InnerParamMeta, RemoveEffectCommand, ReorderEffectCommand,
+    ReorderEffectGroupCommand, ToggleEffectParamExposeCommand,
     ToggleEffectCommand,
 };
 use manifold_editing::commands::envelopes::{
@@ -1655,6 +1656,37 @@ pub(super) fn dispatch_inspector(
             }
             // Selection follows automatically (ID-based, no remapping needed)
             DispatchResult::structural()
+        }
+        PanelAction::EffectParamExpose {
+            effect_index,
+            node_handle,
+            inner_param,
+            expose,
+            label,
+            min,
+            max,
+            default_value,
+            convert,
+        } => {
+            let tab = ui.inspector.last_effect_tab();
+            let target = super::resolve_effect_target(tab, active_layer, project);
+            let meta = InnerParamMeta {
+                label: label.clone(),
+                min: *min,
+                max: *max,
+                default_value: *default_value,
+                convert: convert.clone(),
+            };
+            let cmd = ToggleEffectParamExposeCommand::new(
+                target,
+                *effect_index,
+                node_handle.clone(),
+                inner_param.clone(),
+                *expose,
+                meta,
+            );
+            ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+            DispatchResult::handled()
         }
         PanelAction::EffectReorderGroup(source_indices, target_idx) => {
             // Multi-select reorder: move a group of effects to the target position.

@@ -442,6 +442,8 @@ pub const ABL_TRIM_BAR_C32: Color32 = Color32::new(140, 80, 200, 255);
 pub const ABL_TRIM_BAR_HOVER_C32: Color32 = Color32::new(165, 105, 225, 255);
 pub const ABL_TRIM_FILL_C32: Color32 = Color32::new(140, 80, 200, 38);
 pub const ABL_BADGE_C32: Color32 = Color32::new(140, 80, 200, 255);
+// V2 user-exposed parameter badge — green to distinguish from ABL/ENV/DRV.
+pub const EXP_BADGE_C32: Color32 = Color32::new(80, 170, 100, 255);
 
 // ── Bitmap Effect Card ──────────────────────────────────────────────
 pub const EFFECT_CARD_INNER_BG_C32: Color32 = Color32::new(19, 19, 20, 255);

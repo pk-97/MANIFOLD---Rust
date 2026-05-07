@@ -194,6 +194,7 @@ pub fn dispatch(
         | PanelAction::RemoveEffect(_)
         | PanelAction::EffectReorder(..)
         | PanelAction::EffectReorderGroup(..)
+        | PanelAction::EffectParamExpose { .. }
         | PanelAction::GenTypeClicked(_)
         | PanelAction::GenParamSnapshot(_)
         | PanelAction::GenParamChanged(..)

@@ -1,6 +1,6 @@
 use crate::command::Command;
 use crate::commands::effect_target::{EffectTarget, with_effects_mut};
-use manifold_core::effects::{EffectInstance, ParamId};
+use manifold_core::effects::{EffectInstance, ParamId, UserParamBinding, UserParamConvert};
 use manifold_core::project::Project;
 
 /// Add an effect to a target's effect chain.
@@ -305,3 +305,260 @@ impl Command for ChangeEffectParamCommand {
         "Change Effect Param"
     }
 }
+
+// ─── User-exposed parameter binding (Phase 3) ─────────────────
+
+/// Per-effect inner-node parameter description captured at command
+/// build time. Lets the command construct a [`UserParamBinding`]
+/// without needing the renderer registry on the content thread.
+///
+/// On Unexpose, the dispatcher passes this same metadata so undo of
+/// an Unexpose can rebuild the original binding.
+#[derive(Debug, Clone)]
+pub struct InnerParamMeta {
+    pub label: String,
+    pub min: f32,
+    pub max: f32,
+    pub default_value: f32,
+    pub convert: UserParamConvert,
+}
+
+/// Generate the canonical user-binding id for a given inner-node
+/// addressing under a particular effect instance's existing bindings.
+///
+/// Algorithm: `"user.<short_handle>.<inner_param>.<n>"` where `<n>`
+/// is the smallest positive integer that doesn't collide with any
+/// existing binding's id on this effect. Linear probe — typical N is
+/// small (<10 user bindings per effect).
+///
+/// Two collisions across effects with different `node_handle` /
+/// `inner_param` produce different prefixes and thus never collide.
+pub fn generate_user_param_id(
+    inner_node_handle: &str,
+    inner_param: &str,
+    existing: &[UserParamBinding],
+) -> String {
+    // Strip any "primitive."/"composite." prefix if it ever leaks in
+    // — handles are short by design, but be defensive in case future
+    // composites use dotted handles.
+    let short = inner_node_handle
+        .rsplit_once('.')
+        .map(|(_, t)| t)
+        .unwrap_or(inner_node_handle);
+    let prefix = format!("user.{short}.{inner_param}");
+    let mut n: u32 = 1;
+    loop {
+        let candidate = format!("{prefix}.{n}");
+        if !existing.iter().any(|b| b.id == candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// Toggle whether an inner-graph parameter is user-exposed on an
+/// [`EffectInstance`]. One command for both directions (expose /
+/// unexpose) so a single undo entry covers a single user click.
+///
+/// On execute, [`Self::reverse`] gets populated with the inverse
+/// state needed to undo: the assigned `user_param_id` for an Expose,
+/// or the removed binding + slot values for an Unexpose. Re-executing
+/// after undo is symmetric (deterministic id generation, idempotent
+/// against the live binding state).
+///
+/// See `docs/EFFECT_RUNTIME_UNIFICATION.md` §7.6.
+#[derive(Debug)]
+pub struct ToggleEffectParamExposeCommand {
+    target: EffectTarget,
+    effect_index: usize,
+    /// Identifies the inner-graph addressing being toggled. The
+    /// command keys both directions (Expose creates a binding here;
+    /// Unexpose removes the binding matching this addressing).
+    node_handle: String,
+    inner_param: String,
+    /// Direction of the toggle. Set at command build time from the
+    /// PanelAction's `expose` flag.
+    expose: bool,
+    /// Inner ParamDef metadata, required for Expose (to build the
+    /// new `UserParamBinding`) and used by Unexpose-undo (to rebuild
+    /// the binding if its convert variant is needed).
+    inner_meta: InnerParamMeta,
+    /// Reverse state, populated on first execute(). Persists across
+    /// undo/redo so re-executing produces the same id.
+    reverse: ReverseState,
+}
+
+#[derive(Debug, Default)]
+enum ReverseState {
+    /// Pre-execute or no-op state (the operation produced no change
+    /// because the state was already what the user requested).
+    #[default]
+    None,
+    /// execute() exposed: appended a new binding with this id at the
+    /// tail. undo() removes by id. redo() re-appends with the same id
+    /// (deterministic generator skips holes; if undo cleared the
+    /// binding, the same id is regenerated cleanly).
+    Exposed { user_param_id: String },
+    /// execute() unexposed: removed this binding from this position
+    /// with these values. undo() reinserts at the same position.
+    Unexposed {
+        binding: UserParamBinding,
+        slot_value: f32,
+        slot_base_value: Option<f32>,
+        position: usize,
+    },
+}
+
+impl ToggleEffectParamExposeCommand {
+    pub fn new(
+        target: EffectTarget,
+        effect_index: usize,
+        node_handle: String,
+        inner_param: String,
+        expose: bool,
+        inner_meta: InnerParamMeta,
+    ) -> Self {
+        Self {
+            target,
+            effect_index,
+            node_handle,
+            inner_param,
+            expose,
+            inner_meta,
+            reverse: ReverseState::None,
+        }
+    }
+}
+
+impl Command for ToggleEffectParamExposeCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let eidx = self.effect_index;
+        let node_handle = self.node_handle.clone();
+        let inner_param = self.inner_param.clone();
+        let expose = self.expose;
+        let meta = self.inner_meta.clone();
+        // `with_effects_mut` returns `Option<R>` from the closure; thread
+        // the computed reverse-state out so we can stash it on the
+        // command for undo. None when the target itself is missing.
+        let reverse_out = with_effects_mut(project, &self.target, |effects, _groups| {
+            let Some(effect) = effects.get_mut(eidx) else {
+                return ReverseState::None;
+            };
+            // Locate any existing binding for this (handle, inner_param).
+            let existing_position = effect
+                .user_param_bindings
+                .iter()
+                .position(|b| b.node_handle == node_handle && b.inner_param == inner_param);
+
+            if expose {
+                // Idempotent: if already exposed, no-op.
+                if existing_position.is_some() {
+                    return ReverseState::None;
+                }
+                let id = generate_user_param_id(
+                    &node_handle,
+                    &inner_param,
+                    &effect.user_param_bindings,
+                );
+                let binding = UserParamBinding {
+                    id: id.clone(),
+                    label: meta.label.clone(),
+                    node_handle: node_handle.clone(),
+                    inner_param: inner_param.clone(),
+                    min: meta.min,
+                    max: meta.max,
+                    default_value: meta.default_value,
+                    convert: meta.convert.clone(),
+                };
+                effect.append_user_binding(binding);
+                ReverseState::Exposed { user_param_id: id }
+            } else {
+                // Unexpose: remove the binding matching this addressing.
+                let Some(position) = existing_position else {
+                    return ReverseState::None;
+                };
+                let user_param_id = effect.user_param_bindings[position].id.clone();
+                // Read the current slot values BEFORE removal so undo
+                // can reinstate them.
+                let value_idx = effect.param_id_to_value_index(&user_param_id);
+                let slot_value = value_idx
+                    .and_then(|i| effect.param_values.get(i).copied())
+                    .unwrap_or(meta.default_value);
+                let slot_base_value = value_idx.and_then(|i| {
+                    effect
+                        .base_param_values
+                        .as_ref()
+                        .and_then(|b| b.get(i).copied())
+                });
+                let binding = effect
+                    .remove_user_binding_by_id(&user_param_id)
+                    .expect("position checked above");
+                ReverseState::Unexposed {
+                    binding,
+                    slot_value,
+                    slot_base_value,
+                    position,
+                }
+            }
+        });
+        self.reverse = reverse_out.unwrap_or_default();
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let eidx = self.effect_index;
+        let reverse = std::mem::take(&mut self.reverse);
+        with_effects_mut(project, &self.target, |effects, _groups| {
+            let Some(effect) = effects.get_mut(eidx) else {
+                return;
+            };
+            match reverse {
+                ReverseState::None => {}
+                ReverseState::Exposed { user_param_id } => {
+                    effect.remove_user_binding_by_id(&user_param_id);
+                }
+                ReverseState::Unexposed {
+                    binding,
+                    slot_value,
+                    slot_base_value,
+                    position,
+                } => {
+                    // Re-insert at original position so the user-tail
+                    // slot positions stay stable for any other addressing
+                    // (drivers, Ableton mappings) that referenced the
+                    // user_param_id by string. position is bounded by
+                    // the current vec len, clamp defensively.
+                    let pos = position.min(effect.user_param_bindings.len());
+                    let binding_id = binding.id.clone();
+                    effect.user_param_bindings.insert(pos, binding);
+                    effect.user_param_bindings_version =
+                        effect.user_param_bindings_version.wrapping_add(1);
+                    // Restore the param_values slot at the corresponding
+                    // value-index. With user_param_bindings updated, the
+                    // value index is now resolvable via the helper.
+                    if let Some(value_idx) = effect.param_id_to_value_index(&binding_id) {
+                        if value_idx <= effect.param_values.len() {
+                            effect.param_values.insert(value_idx, slot_value);
+                        } else {
+                            effect.param_values.push(slot_value);
+                        }
+                        if let (Some(base), Some(base_v)) =
+                            (effect.base_param_values.as_mut(), slot_base_value)
+                            && value_idx <= base.len()
+                        {
+                            base.insert(value_idx, base_v);
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    fn description(&self) -> &str {
+        if self.expose {
+            "Expose Effect Param"
+        } else {
+            "Unexpose Effect Param"
+        }
+    }
+}
+
