@@ -177,24 +177,89 @@ impl Project {
         use crate::effect_definition_registry;
         use crate::generator_definition_registry;
 
+        // ── Generic addressing-site resolution ──────────────────
+        //
+        // Two helpers (effect-side + generator-side) wrap the
+        // common shape: take an existing `param_id` (or empty) plus
+        // a parked `legacy_param_index`, plus the registry lookup,
+        // and produce the current `param_id` walking through the
+        // alias table to pick up renames or drops.
+        //
+        // Returns `(new_param_id, clear_legacy_index)`. The caller
+        // assigns the returned id and clears the legacy index.
+
+        fn resolve_effect_param_id(
+            effect_type: &crate::EffectTypeId,
+            current_id: &str,
+            legacy_index: Option<i32>,
+        ) -> Option<String> {
+            let def = effect_definition_registry::try_get(effect_type)?;
+            let aliases = def.legacy_param_aliases;
+
+            if !current_id.is_empty() {
+                // V1.2+ id-keyed reference: walk the alias chain so
+                // future renames catch up automatically.
+                if aliases.is_empty() {
+                    return None; // no change
+                }
+                let resolved =
+                    effect_definition_registry::resolve_param_alias(aliases, current_id)?;
+                if resolved == current_id {
+                    return None; // no change
+                }
+                return Some(resolved.to_string());
+            }
+
+            // Legacy positional reference: translate via param_defs,
+            // then walk the alias chain.
+            let idx = legacy_index?;
+            let pd = def.param_defs.get(idx as usize)?;
+            if pd.id.is_empty() {
+                return None;
+            }
+            let resolved = effect_definition_registry::resolve_param_alias(aliases, pd.id.as_str())
+                .unwrap_or(pd.id.as_str());
+            Some(resolved.to_string())
+        }
+
+        fn resolve_generator_param_id(
+            gen_type: &crate::GeneratorTypeId,
+            current_id: &str,
+            legacy_index: Option<i32>,
+        ) -> Option<String> {
+            let def = generator_definition_registry::try_get(gen_type)?;
+            let aliases = def.legacy_param_aliases;
+
+            if !current_id.is_empty() {
+                if aliases.is_empty() {
+                    return None;
+                }
+                let resolved =
+                    effect_definition_registry::resolve_param_alias(aliases, current_id)?;
+                if resolved == current_id {
+                    return None;
+                }
+                return Some(resolved.to_string());
+            }
+
+            let idx = legacy_index?;
+            let pd = def.param_defs.get(idx as usize)?;
+            if pd.id.is_empty() {
+                return None;
+            }
+            let resolved = effect_definition_registry::resolve_param_alias(aliases, pd.id.as_str())
+                .unwrap_or(pd.id.as_str());
+            Some(resolved.to_string())
+        }
+
         fn resolve_driver_id_for_effect(
             driver: &mut crate::effects::ParameterDriver,
             effect_type: &crate::EffectTypeId,
         ) {
-            if !driver.param_id.is_empty() {
-                driver.legacy_param_index = None;
-                return;
-            }
-            let Some(idx) = driver.legacy_param_index else {
-                return;
-            };
-            let Some(def) = effect_definition_registry::try_get(effect_type) else {
-                return;
-            };
-            if let Some(pd) = def.param_defs.get(idx as usize)
-                && !pd.id.is_empty()
+            if let Some(id) =
+                resolve_effect_param_id(effect_type, &driver.param_id, driver.legacy_param_index)
             {
-                driver.param_id = std::borrow::Cow::Owned(pd.id.clone());
+                driver.param_id = std::borrow::Cow::Owned(id);
             }
             driver.legacy_param_index = None;
         }
@@ -203,41 +268,19 @@ impl Project {
             driver: &mut crate::effects::ParameterDriver,
             gen_type: &crate::GeneratorTypeId,
         ) {
-            if !driver.param_id.is_empty() {
-                driver.legacy_param_index = None;
-                return;
-            }
-            let Some(idx) = driver.legacy_param_index else {
-                return;
-            };
-            let Some(def) = generator_definition_registry::try_get(gen_type) else {
-                return;
-            };
-            if let Some(pd) = def.param_defs.get(idx as usize)
-                && !pd.id.is_empty()
+            if let Some(id) =
+                resolve_generator_param_id(gen_type, &driver.param_id, driver.legacy_param_index)
             {
-                driver.param_id = std::borrow::Cow::Owned(pd.id.clone());
+                driver.param_id = std::borrow::Cow::Owned(id);
             }
             driver.legacy_param_index = None;
         }
 
         fn resolve_envelope_id_for_effect(env: &mut crate::effects::ParamEnvelope) {
-            // Layer envelopes carry their own `target_effect_type` —
-            // resolution doesn't depend on which layer they live on.
-            if !env.param_id.is_empty() {
-                env.legacy_param_index = None;
-                return;
-            }
-            let Some(idx) = env.legacy_param_index else {
-                return;
-            };
-            let Some(def) = effect_definition_registry::try_get(&env.target_effect_type) else {
-                return;
-            };
-            if let Some(pd) = def.param_defs.get(idx as usize)
-                && !pd.id.is_empty()
+            let target = env.target_effect_type.clone();
+            if let Some(id) = resolve_effect_param_id(&target, &env.param_id, env.legacy_param_index)
             {
-                env.param_id = std::borrow::Cow::Owned(pd.id.clone());
+                env.param_id = std::borrow::Cow::Owned(id);
             }
             env.legacy_param_index = None;
         }
@@ -246,20 +289,10 @@ impl Project {
             env: &mut crate::effects::ParamEnvelope,
             gen_type: &crate::GeneratorTypeId,
         ) {
-            if !env.param_id.is_empty() {
-                env.legacy_param_index = None;
-                return;
-            }
-            let Some(idx) = env.legacy_param_index else {
-                return;
-            };
-            let Some(def) = generator_definition_registry::try_get(gen_type) else {
-                return;
-            };
-            if let Some(pd) = def.param_defs.get(idx as usize)
-                && !pd.id.is_empty()
+            if let Some(id) =
+                resolve_generator_param_id(gen_type, &env.param_id, env.legacy_param_index)
             {
-                env.param_id = std::borrow::Cow::Owned(pd.id.clone());
+                env.param_id = std::borrow::Cow::Owned(id);
             }
             env.legacy_param_index = None;
         }
@@ -268,20 +301,12 @@ impl Project {
             mapping: &mut crate::ableton_mapping::AbletonParamMapping,
             effect_type: &crate::EffectTypeId,
         ) {
-            if !mapping.param_id.is_empty() {
-                mapping.legacy_param_index = None;
-                return;
-            }
-            let Some(idx) = mapping.legacy_param_index else {
-                return;
-            };
-            let Some(def) = effect_definition_registry::try_get(effect_type) else {
-                return;
-            };
-            if let Some(pd) = def.param_defs.get(idx as usize)
-                && !pd.id.is_empty()
-            {
-                mapping.param_id = std::borrow::Cow::Owned(pd.id.clone());
+            if let Some(id) = resolve_effect_param_id(
+                effect_type,
+                &mapping.param_id,
+                mapping.legacy_param_index,
+            ) {
+                mapping.param_id = std::borrow::Cow::Owned(id);
             }
             mapping.legacy_param_index = None;
         }
@@ -290,20 +315,10 @@ impl Project {
             mapping: &mut crate::ableton_mapping::AbletonParamMapping,
             gen_type: &crate::GeneratorTypeId,
         ) {
-            if !mapping.param_id.is_empty() {
-                mapping.legacy_param_index = None;
-                return;
-            }
-            let Some(idx) = mapping.legacy_param_index else {
-                return;
-            };
-            let Some(def) = generator_definition_registry::try_get(gen_type) else {
-                return;
-            };
-            if let Some(pd) = def.param_defs.get(idx as usize)
-                && !pd.id.is_empty()
+            if let Some(id) =
+                resolve_generator_param_id(gen_type, &mapping.param_id, mapping.legacy_param_index)
             {
-                mapping.param_id = std::borrow::Cow::Owned(pd.id.clone());
+                mapping.param_id = std::borrow::Cow::Owned(id);
             }
             mapping.legacy_param_index = None;
         }
@@ -318,9 +333,7 @@ impl Project {
             timeline: &crate::timeline::Timeline,
         ) {
             use crate::macro_bank::MacroMappingTarget;
-            let Some(idx) = mapping.legacy_param_index else {
-                return;
-            };
+            let legacy_idx = mapping.legacy_param_index;
             match &mut mapping.target {
                 MacroMappingTarget::MasterOpacity | MacroMappingTarget::LayerOpacity { .. } => {
                     // No param to resolve.
@@ -329,12 +342,10 @@ impl Project {
                     effect_type,
                     param_id,
                 } => {
-                    if param_id.is_empty()
-                        && let Some(def) = effect_definition_registry::try_get(effect_type)
-                        && let Some(pd) = def.param_defs.get(idx as usize)
-                        && !pd.id.is_empty()
+                    if let Some(id) =
+                        resolve_effect_param_id(effect_type, param_id, legacy_idx)
                     {
-                        *param_id = std::borrow::Cow::Owned(pd.id.clone());
+                        *param_id = std::borrow::Cow::Owned(id);
                     }
                 }
                 MacroMappingTarget::LayerEffect {
@@ -342,27 +353,25 @@ impl Project {
                     param_id,
                     ..
                 } => {
-                    if param_id.is_empty()
-                        && let Some(def) = effect_definition_registry::try_get(effect_type)
-                        && let Some(pd) = def.param_defs.get(idx as usize)
-                        && !pd.id.is_empty()
+                    if let Some(id) =
+                        resolve_effect_param_id(effect_type, param_id, legacy_idx)
                     {
-                        *param_id = std::borrow::Cow::Owned(pd.id.clone());
+                        *param_id = std::borrow::Cow::Owned(id);
                     }
                 }
                 MacroMappingTarget::GenParam { layer_id, param_id } => {
-                    if param_id.is_empty()
-                        && let Some(layer) = timeline
-                            .layers
-                            .iter()
-                            .find(|l| l.layer_id == *layer_id)
+                    if let Some(layer) = timeline
+                        .layers
+                        .iter()
+                        .find(|l| l.layer_id == *layer_id)
                         && let Some(gp) = layer.gen_params()
-                        && let Some(def) =
-                            generator_definition_registry::try_get(gp.generator_type())
-                        && let Some(pd) = def.param_defs.get(idx as usize)
-                        && !pd.id.is_empty()
+                        && let Some(id) = resolve_generator_param_id(
+                            gp.generator_type(),
+                            param_id,
+                            legacy_idx,
+                        )
                     {
-                        *param_id = std::borrow::Cow::Owned(pd.id.clone());
+                        *param_id = std::borrow::Cow::Owned(id);
                     }
                 }
             }

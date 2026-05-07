@@ -9,6 +9,26 @@ use crate::effect_type_registry::EffectTypeRegistration;
 use crate::effects::ParamDef;
 use crate::generator_registration::ParamSpec;
 
+/// Declarative migration entry: an old `param_id` and its current
+/// replacement (`Some(new_id)`) or `None` if the param was dropped.
+///
+/// Lives on `EffectMetadata` (and `GeneratorMetadata`) so a schema
+/// change is one literal addition next to the effect's `params`
+/// slice, instead of a hardcoded match arm in
+/// `align_to_definition`. See `docs/EFFECT_RUNTIME_UNIFICATION.md` §7
+/// step 15.
+///
+/// Applied by:
+/// - The post-load `Project::resolve_legacy_param_ids` pass when
+///   resolving driver/envelope/Ableton/macro mapping ids.
+/// - `ParamValuesWire::into_positional` when deserializing V1.2+
+///   id-keyed `paramValues` maps.
+///
+/// Renames and drops compose: an alias table can chain
+/// `("old_a", Some("old_b")) → ("old_b", Some("current"))` so each
+/// schema bump only needs to add the latest hop.
+pub type ParamAlias = (&'static str, Option<&'static str>);
+
 /// Complete metadata for an effect, submitted via `inventory::submit!`.
 pub struct EffectMetadata {
     pub id: EffectTypeId,
@@ -21,6 +41,20 @@ pub struct EffectMetadata {
 }
 
 inventory::collect!(EffectMetadata);
+
+/// Optional sidecar submission for effects whose param list has been
+/// renamed or trimmed across schema versions. Submitted via a
+/// separate `inventory::submit!` block so effects with no aliases —
+/// the common case — don't need to spell out an empty slice.
+///
+/// Discovered at registry-build time and merged into the matching
+/// [`EffectDef::legacy_param_aliases`].
+pub struct EffectAliasMetadata {
+    pub id: EffectTypeId,
+    pub aliases: &'static [ParamAlias],
+}
+
+inventory::collect!(EffectAliasMetadata);
 
 impl EffectMetadata {
     /// Convert to the existing `EffectDef` type.
@@ -42,6 +76,7 @@ impl EffectMetadata {
             osc_prefix: Some(self.osc_prefix),
             id_to_index,
             param_ids,
+            legacy_param_aliases: &[],
         }
     }
 

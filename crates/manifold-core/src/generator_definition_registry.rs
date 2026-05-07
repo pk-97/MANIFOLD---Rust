@@ -35,6 +35,9 @@ pub struct GeneratorDef {
     /// Storage-index → static param id. See
     /// [`crate::effect_definition_registry::EffectDef::param_ids`].
     pub param_ids: Vec<&'static str>,
+    /// Declarative legacy id migration table. See
+    /// [`crate::effect_registration::ParamAlias`].
+    pub legacy_param_aliases: &'static [crate::effect_registration::ParamAlias],
 }
 
 // ─── Static Registry ───
@@ -43,6 +46,13 @@ static DEFINITIONS: LazyLock<HashMap<GeneratorTypeId, GeneratorDef>> = LazyLock:
     let mut m = build_definitions();
     for meta in inventory::iter::<crate::generator_registration::GeneratorMetadata> {
         m.insert(meta.id.clone(), meta.to_generator_def());
+    }
+    // Sidecar alias submissions for generators. See parallel impl in
+    // `effect_definition_registry`.
+    for alias_meta in inventory::iter::<crate::generator_registration::GeneratorAliasMetadata> {
+        if let Some(def) = m.get_mut(&alias_meta.id) {
+            def.legacy_param_aliases = alias_meta.aliases;
+        }
     }
     m
 });
@@ -214,6 +224,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
             osc_prefix: None,
             id_to_index: AHashMap::new(),
             param_ids: Vec::new(),
+            legacy_param_aliases: &[],
         },
     );
 

@@ -169,6 +169,15 @@ pub struct GeneratorMetadata {
 
 inventory::collect!(GeneratorMetadata);
 
+/// Sidecar alias submission for generators. Mirrors
+/// [`crate::effect_registration::EffectAliasMetadata`].
+pub struct GeneratorAliasMetadata {
+    pub id: GeneratorTypeId,
+    pub aliases: &'static [crate::effect_registration::ParamAlias],
+}
+
+inventory::collect!(GeneratorAliasMetadata);
+
 impl GeneratorMetadata {
     /// Convert to the existing `GeneratorDef` type.
     pub fn to_generator_def(&self) -> GeneratorDef {
@@ -201,6 +210,7 @@ impl GeneratorMetadata {
             osc_prefix: Some(self.osc_prefix),
             id_to_index,
             param_ids,
+            legacy_param_aliases: &[],
         }
     }
 

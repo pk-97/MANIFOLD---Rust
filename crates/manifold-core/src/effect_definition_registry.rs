@@ -27,6 +27,40 @@ pub struct EffectDef {
     /// did not carry an id. Lets reverse lookups (`param_index_to_id`)
     /// return `&'static str` without unsafe transmutes.
     pub param_ids: Vec<&'static str>,
+    /// Declarative legacy id migration table. See
+    /// [`crate::effect_registration::ParamAlias`].
+    pub legacy_param_aliases: &'static [crate::effect_registration::ParamAlias],
+}
+
+/// Resolve a (possibly stale) `param_id` through an effect/generator's
+/// alias table. Returns:
+/// - `Some(id)` if `id` is current (not in the alias table) or aliases
+///   to a current id (chained through multiple hops).
+/// - `None` if the alias chain ends at `None` (param was dropped).
+///
+/// Termination: stops after walking the table once per call (safe for
+/// cycles by construction — alias keys are old ids, values are
+/// current/never-stored ids).
+pub fn resolve_param_alias<'a>(
+    aliases: &'a [crate::effect_registration::ParamAlias],
+    id: &'a str,
+) -> Option<&'a str> {
+    let mut current = id;
+    let mut hops = 0;
+    // Bounded chain walk; `aliases.len() + 1` is a safe upper bound
+    // even if a future entry accidentally introduces a cycle.
+    while hops <= aliases.len() {
+        match aliases.iter().find(|(old, _)| *old == current) {
+            Some((_, Some(new))) => {
+                current = new;
+                hops += 1;
+            }
+            Some((_, None)) => return None,
+            None => return Some(current),
+        }
+    }
+    // Cycle detected — bail out as if the chain ended at None.
+    None
 }
 
 // ─── Static Registry ───
@@ -35,6 +69,15 @@ static DEFINITIONS: LazyLock<HashMap<EffectTypeId, EffectDef>> = LazyLock::new(|
     let mut m = build_definitions();
     for meta in inventory::iter::<crate::effect_registration::EffectMetadata> {
         m.insert(meta.id.clone(), meta.to_effect_def());
+    }
+    // Sidecar alias submissions: attach to the matching def. Built
+    // separately from `EffectMetadata` so effects without aliases
+    // (the common case) don't need to spell out an empty slice in
+    // their primary submission. See `effect_registration::EffectAliasMetadata`.
+    for alias_meta in inventory::iter::<crate::effect_registration::EffectAliasMetadata> {
+        if let Some(def) = m.get_mut(&alias_meta.id) {
+            def.legacy_param_aliases = alias_meta.aliases;
+        }
     }
     m
 });
@@ -412,6 +455,77 @@ mod tests {
                 non_empty_id_count,
                 "{}: id_to_index size mismatch — possible duplicate or empty ids",
                 effect_type.as_str()
+            );
+        }
+    }
+
+    // ── ParamAlias resolution (step 15) ────────────────────────────
+
+    #[test]
+    fn resolve_param_alias_passes_through_current_id() {
+        // No alias entry for "amount" → returns it unchanged.
+        let aliases: &[crate::effect_registration::ParamAlias] =
+            &[("old_thing", Some("new_thing"))];
+        assert_eq!(resolve_param_alias(aliases, "amount"), Some("amount"));
+    }
+
+    #[test]
+    fn resolve_param_alias_renames() {
+        let aliases: &[crate::effect_registration::ParamAlias] =
+            &[("cv_flow", Some("flow"))];
+        assert_eq!(resolve_param_alias(aliases, "cv_flow"), Some("flow"));
+    }
+
+    #[test]
+    fn resolve_param_alias_chains_renames() {
+        // Two-hop rename: a → b → c.
+        let aliases: &[crate::effect_registration::ParamAlias] =
+            &[("a", Some("b")), ("b", Some("c"))];
+        assert_eq!(resolve_param_alias(aliases, "a"), Some("c"));
+    }
+
+    #[test]
+    fn resolve_param_alias_drop_returns_none() {
+        let aliases: &[crate::effect_registration::ParamAlias] =
+            &[("face", None)];
+        assert_eq!(resolve_param_alias(aliases, "face"), None);
+    }
+
+    #[test]
+    fn resolve_param_alias_chain_to_drop_returns_none() {
+        // Renamed once, then dropped: a → b → None.
+        let aliases: &[crate::effect_registration::ParamAlias] =
+            &[("a", Some("b")), ("b", None)];
+        assert_eq!(resolve_param_alias(aliases, "a"), None);
+    }
+
+    #[test]
+    fn resolve_param_alias_breaks_cycle() {
+        // Pathological: a → b → a (constructor accident). Should
+        // bail rather than infinite-loop.
+        let aliases: &[crate::effect_registration::ParamAlias] =
+            &[("a", Some("b")), ("b", Some("a"))];
+        assert_eq!(resolve_param_alias(aliases, "a"), None);
+    }
+
+    #[test]
+    fn resolve_param_alias_empty_table_passes_through() {
+        let aliases: &[crate::effect_registration::ParamAlias] = &[];
+        assert_eq!(resolve_param_alias(aliases, "amount"), Some("amount"));
+    }
+
+    #[test]
+    fn all_default_effect_defs_have_empty_alias_table() {
+        // Step 15 ships with no actual renames yet — every effect's
+        // alias table should be empty. New entries land via sidecar
+        // `EffectAliasMetadata` submissions.
+        for effect_type in get_all_effect_types() {
+            let def = get(&effect_type);
+            assert!(
+                def.legacy_param_aliases.is_empty(),
+                "{} unexpectedly has alias entries: {:?}",
+                effect_type.as_str(),
+                def.legacy_param_aliases
             );
         }
     }
