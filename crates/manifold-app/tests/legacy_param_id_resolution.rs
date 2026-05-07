@@ -363,3 +363,88 @@ fn liveschool_full_registry_resolution() {
         orphans
     );
 }
+
+#[test]
+fn liveschool_macro_mappings_resolve_to_stable_param_ids() {
+    let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
+    if !path.exists() {
+        return;
+    }
+
+    let project = loader::load_project(&path).expect("load Liveschool");
+
+    // Macro mappings live on `settings.macro_bank.slots[*].mappings`
+    // and target effect/generator params (parameter-bearing variants)
+    // or master/layer opacity (no-param variants). Step 11 introduced
+    // a `param_id` field on the parameter-bearing variants; the
+    // resolver must populate it from the legacy `param_index` for
+    // every loaded mapping.
+    use manifold_core::macro_bank::MacroMappingTarget;
+    let mut total = 0;
+    let mut param_total = 0;
+    let mut empty: Vec<String> = Vec::new();
+    for (si, slot) in project.settings.macro_bank.slots.iter().enumerate() {
+        for (mi, mapping) in slot.mappings.iter().enumerate() {
+            total += 1;
+            assert_eq!(
+                mapping.legacy_param_index, None,
+                "slot[{si}].mapping[{mi}] legacy index not cleared"
+            );
+            match &mapping.target {
+                MacroMappingTarget::MasterOpacity | MacroMappingTarget::LayerOpacity { .. } => {
+                    // No param to resolve.
+                }
+                MacroMappingTarget::MasterEffect {
+                    effect_type,
+                    param_id,
+                } => {
+                    param_total += 1;
+                    if param_id.is_empty() {
+                        empty.push(format!(
+                            "slot[{si}].mapping[{mi}] master.{}",
+                            effect_type.as_str()
+                        ));
+                    }
+                }
+                MacroMappingTarget::LayerEffect {
+                    effect_type,
+                    param_id,
+                    ..
+                } => {
+                    param_total += 1;
+                    if param_id.is_empty() {
+                        empty.push(format!(
+                            "slot[{si}].mapping[{mi}] layer.{}",
+                            effect_type.as_str()
+                        ));
+                    }
+                }
+                MacroMappingTarget::GenParam { param_id, layer_id } => {
+                    param_total += 1;
+                    if param_id.is_empty() {
+                        empty.push(format!(
+                            "slot[{si}].mapping[{mi}] gen layer={}",
+                            layer_id.as_str()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // The fixture has macro mappings (mix of genParam and layerEffect).
+    // Exact count isn't enforced (less load-bearing than drivers/envs),
+    // but every parameter-bearing mapping must resolve cleanly.
+    assert!(
+        param_total > 0,
+        "Liveschool must have at least one parameter-bearing macro mapping"
+    );
+    assert!(
+        empty.is_empty(),
+        "{} of {} macro mappings failed to resolve param_id: {:?}",
+        empty.len(),
+        param_total,
+        empty
+    );
+    let _ = total;
+}

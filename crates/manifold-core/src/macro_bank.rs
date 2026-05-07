@@ -6,8 +6,10 @@
 //! as `OscParamTarget` so the fan-out reuses the existing parameter write path.
 
 use crate::effect_type_id::EffectTypeId;
+use crate::effects::ParamId;
 use crate::id::LayerId;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 /// Number of macro slots in the bank.
 pub const MACRO_COUNT: usize = 8;
@@ -44,13 +46,19 @@ impl MacroCurve {
 // ── Mapping target ─────────────────────────────────────────────────
 
 /// What a macro mapping points to. Mirrors OscParamTarget but is serializable.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Parameter-bearing variants (`MasterEffect`, `LayerEffect`, `GenParam`)
+/// address by stable [`ParamId`] (since step 11). Custom [`Deserialize`]
+/// accepts both V1.1 (`paramIndex: usize`) and V1.2+ (`paramId: "amount"`)
+/// shapes; legacy indices are parked on [`MacroMapping::legacy_param_index`]
+/// for the post-load resolver.
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum MacroMappingTarget {
     MasterOpacity,
     MasterEffect {
         effect_type: EffectTypeId,
-        param_index: usize,
+        param_id: ParamId,
     },
     LayerOpacity {
         layer_id: LayerId,
@@ -58,18 +66,18 @@ pub enum MacroMappingTarget {
     LayerEffect {
         layer_id: LayerId,
         effect_type: EffectTypeId,
-        param_index: usize,
+        param_id: ParamId,
     },
     GenParam {
         layer_id: LayerId,
-        param_index: usize,
+        param_id: ParamId,
     },
 }
 
 // ── Mapping ────────────────────────────────────────────────────────
 
 /// A single mapping from a macro slot to a project parameter.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MacroMapping {
     pub target: MacroMappingTarget,
@@ -79,6 +87,144 @@ pub struct MacroMapping {
     pub range_max: f32,
     #[serde(default)]
     pub curve: MacroCurve,
+    /// Set during `Deserialize` from the legacy `paramIndex` field of
+    /// the nested `target` variant. Resolved to `target.param_id` by
+    /// `Project::resolve_legacy_param_ids` then cleared. Never serialized.
+    #[serde(skip)]
+    pub legacy_param_index: Option<i32>,
+}
+
+// Custom `Deserialize` accepting both V1.1 (`paramIndex: usize` inside
+// the target variant) and V1.2+ (`paramId: "amount"` inside the target
+// variant) shapes. Legacy indices are parked on the wrapper's
+// `legacy_param_index` field for the post-load resolver to translate.
+//
+// See `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 step 11.
+impl<'de> Deserialize<'de> for MacroMapping {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // Raw target shape: accepts either `paramIndex` or `paramId`.
+        // Variants without parameters (`masterOpacity`, `layerOpacity`)
+        // pass through unchanged.
+        //
+        // Field names on the wire are snake_case (matching legacy V1.1
+        // projects); `rename_all = "camelCase"` here only affects the
+        // variant tag (`masterEffect`, `layerEffect`, …). Adding
+        // `paramId` as the canonical key keeps the rest of the variant
+        // shape stable.
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", tag = "type")]
+        enum RawTarget {
+            MasterOpacity,
+            MasterEffect {
+                effect_type: EffectTypeId,
+                #[serde(default)]
+                param_id: Option<String>,
+                #[serde(default)]
+                param_index: Option<i32>,
+            },
+            LayerOpacity {
+                layer_id: LayerId,
+            },
+            LayerEffect {
+                layer_id: LayerId,
+                effect_type: EffectTypeId,
+                #[serde(default)]
+                param_id: Option<String>,
+                #[serde(default)]
+                param_index: Option<i32>,
+            },
+            GenParam {
+                layer_id: LayerId,
+                #[serde(default)]
+                param_id: Option<String>,
+                #[serde(default)]
+                param_index: Option<i32>,
+            },
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Raw {
+            target: RawTarget,
+            #[serde(default)]
+            range_min: f32,
+            #[serde(default = "default_one")]
+            range_max: f32,
+            #[serde(default)]
+            curve: MacroCurve,
+        }
+
+        fn split_id(
+            param_id: Option<String>,
+            param_index: Option<i32>,
+        ) -> (ParamId, Option<i32>) {
+            match (param_id, param_index) {
+                (Some(id), _) if !id.is_empty() => (Cow::Owned(id), None),
+                (_, Some(idx)) => (Cow::Borrowed(""), Some(idx)),
+                (_, None) => (Cow::Borrowed(""), None),
+            }
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        let (target, legacy_param_index) = match raw.target {
+            RawTarget::MasterOpacity => (MacroMappingTarget::MasterOpacity, None),
+            RawTarget::MasterEffect {
+                effect_type,
+                param_id,
+                param_index,
+            } => {
+                let (param_id, legacy) = split_id(param_id, param_index);
+                (
+                    MacroMappingTarget::MasterEffect {
+                        effect_type,
+                        param_id,
+                    },
+                    legacy,
+                )
+            }
+            RawTarget::LayerOpacity { layer_id } => {
+                (MacroMappingTarget::LayerOpacity { layer_id }, None)
+            }
+            RawTarget::LayerEffect {
+                layer_id,
+                effect_type,
+                param_id,
+                param_index,
+            } => {
+                let (param_id, legacy) = split_id(param_id, param_index);
+                (
+                    MacroMappingTarget::LayerEffect {
+                        layer_id,
+                        effect_type,
+                        param_id,
+                    },
+                    legacy,
+                )
+            }
+            RawTarget::GenParam {
+                layer_id,
+                param_id,
+                param_index,
+            } => {
+                let (param_id, legacy) = split_id(param_id, param_index);
+                (
+                    MacroMappingTarget::GenParam { layer_id, param_id },
+                    legacy,
+                )
+            }
+        };
+
+        Ok(MacroMapping {
+            target,
+            range_min: raw.range_min,
+            range_max: raw.range_max,
+            curve: raw.curve,
+            legacy_param_index,
+        })
+    }
 }
 
 fn default_one() -> f32 {
@@ -164,15 +310,21 @@ impl MacroBank {
                 }
                 MacroMappingTarget::MasterEffect {
                     effect_type,
-                    param_index,
+                    param_id,
                 } => {
+                    let Some(idx) = crate::effect_definition_registry::param_id_to_index(
+                        effect_type,
+                        param_id.as_ref(),
+                    ) else {
+                        continue;
+                    };
                     if let Some(fx) = project
                         .settings
                         .master_effects
                         .iter_mut()
                         .find(|f| f.effect_type() == effect_type)
                     {
-                        fx.set_base_param(*param_index, mapped);
+                        fx.set_base_param(idx, mapped);
                     }
                 }
                 MacroMappingTarget::LayerOpacity { layer_id } => {
@@ -185,26 +337,38 @@ impl MacroBank {
                 MacroMappingTarget::LayerEffect {
                     layer_id,
                     effect_type,
-                    param_index,
+                    param_id,
                 } => {
+                    let Some(idx) = crate::effect_definition_registry::param_id_to_index(
+                        effect_type,
+                        param_id.as_ref(),
+                    ) else {
+                        continue;
+                    };
                     if let Some((_, layer)) =
                         project.timeline.find_layer_by_id_mut(layer_id.as_str())
                         && let Some(effects) = &mut layer.effects
                         && let Some(fx) =
                             effects.iter_mut().find(|f| f.effect_type() == effect_type)
                     {
-                        fx.set_base_param(*param_index, mapped);
+                        fx.set_base_param(idx, mapped);
                     }
                 }
-                MacroMappingTarget::GenParam {
-                    layer_id,
-                    param_index,
-                } => {
+                MacroMappingTarget::GenParam { layer_id, param_id } => {
                     if let Some((_, layer)) =
                         project.timeline.find_layer_by_id_mut(layer_id.as_str())
                         && let Some(gp) = layer.gen_params_mut()
                     {
-                        gp.set_param_base(*param_index, mapped);
+                        let gen_type = gp.generator_type().clone();
+                        let Some(idx) =
+                            crate::generator_definition_registry::param_id_to_index(
+                                &gen_type,
+                                param_id.as_ref(),
+                            )
+                        else {
+                            continue;
+                        };
+                        gp.set_param_base(idx, mapped);
                     }
                 }
             }
@@ -265,5 +429,148 @@ mod tests {
         };
         bank.normalize();
         assert_eq!(bank.slots.len(), MACRO_COUNT);
+    }
+
+    // ── Backward-compat Deserialize (step 11) ───────────────────
+
+    // Field names within target variants are snake_case on the wire
+    // (matches existing V1.1 project files). The variant tag is the
+    // only camelCase identifier — see fixture `Liveschool Live Show V6
+    // LEDS.manifold` for an authoritative shape sample.
+
+    #[test]
+    fn deserialize_legacy_master_effect_param_index() {
+        let json = r#"{
+            "target": {
+                "type": "masterEffect",
+                "effect_type": "Bloom",
+                "param_index": 2
+            },
+            "rangeMin": 0.0,
+            "rangeMax": 1.0
+        }"#;
+        let m: MacroMapping = serde_json::from_str(json).unwrap();
+        match &m.target {
+            MacroMappingTarget::MasterEffect { param_id, .. } => {
+                assert!(param_id.is_empty());
+            }
+            _ => panic!("wrong variant"),
+        }
+        assert_eq!(m.legacy_param_index, Some(2));
+    }
+
+    #[test]
+    fn deserialize_canonical_layer_effect_param_id() {
+        let json = r#"{
+            "target": {
+                "type": "layerEffect",
+                "layer_id": "layer-1",
+                "effect_type": "Mirror",
+                "param_id": "amount"
+            }
+        }"#;
+        let m: MacroMapping = serde_json::from_str(json).unwrap();
+        match &m.target {
+            MacroMappingTarget::LayerEffect { param_id, .. } => {
+                assert_eq!(param_id, "amount");
+            }
+            _ => panic!("wrong variant"),
+        }
+        assert_eq!(m.legacy_param_index, None);
+    }
+
+    #[test]
+    fn deserialize_legacy_gen_param() {
+        let json = r#"{
+            "target": {
+                "type": "genParam",
+                "layer_id": "layer-7",
+                "param_index": 4
+            }
+        }"#;
+        let m: MacroMapping = serde_json::from_str(json).unwrap();
+        match &m.target {
+            MacroMappingTarget::GenParam {
+                layer_id,
+                param_id,
+            } => {
+                assert_eq!(layer_id.as_str(), "layer-7");
+                assert!(param_id.is_empty());
+            }
+            _ => panic!("wrong variant"),
+        }
+        assert_eq!(m.legacy_param_index, Some(4));
+    }
+
+    #[test]
+    fn deserialize_param_id_wins_over_param_index() {
+        let json = r#"{
+            "target": {
+                "type": "masterEffect",
+                "effect_type": "Bloom",
+                "param_id": "threshold",
+                "param_index": 99
+            }
+        }"#;
+        let m: MacroMapping = serde_json::from_str(json).unwrap();
+        match &m.target {
+            MacroMappingTarget::MasterEffect { param_id, .. } => {
+                assert_eq!(param_id, "threshold");
+            }
+            _ => panic!("wrong variant"),
+        }
+        assert_eq!(m.legacy_param_index, None);
+    }
+
+    #[test]
+    fn deserialize_master_opacity_passes_through() {
+        let json = r#"{
+            "target": { "type": "masterOpacity" }
+        }"#;
+        let m: MacroMapping = serde_json::from_str(json).unwrap();
+        assert!(matches!(m.target, MacroMappingTarget::MasterOpacity));
+        assert_eq!(m.legacy_param_index, None);
+    }
+
+    #[test]
+    fn deserialize_layer_opacity_passes_through() {
+        let json = r#"{
+            "target": { "type": "layerOpacity", "layer_id": "layer-3" }
+        }"#;
+        let m: MacroMapping = serde_json::from_str(json).unwrap();
+        match &m.target {
+            MacroMappingTarget::LayerOpacity { layer_id } => {
+                assert_eq!(layer_id.as_str(), "layer-3");
+            }
+            _ => panic!("wrong variant"),
+        }
+        assert_eq!(m.legacy_param_index, None);
+    }
+
+    #[test]
+    fn serialize_emits_param_id_not_param_index() {
+        let mapping = MacroMapping {
+            target: MacroMappingTarget::MasterEffect {
+                effect_type: EffectTypeId::from_string("Bloom".to_string()),
+                param_id: Cow::Borrowed("amount"),
+            },
+            range_min: 0.0,
+            range_max: 1.0,
+            curve: MacroCurve::Linear,
+            legacy_param_index: None,
+        };
+        let json = serde_json::to_string(&mapping).unwrap();
+        assert!(
+            json.contains("\"param_id\":\"amount\""),
+            "Serialize must emit param_id; got: {json}"
+        );
+        assert!(
+            !json.contains("\"param_index\""),
+            "Serialize must not write legacy param_index; got: {json}"
+        );
+        assert!(
+            !json.contains("\"legacy_param_index\"") && !json.contains("\"legacyParamIndex\""),
+            "Serialize must not write internal legacy_param_index; got: {json}"
+        );
     }
 }

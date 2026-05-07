@@ -308,6 +308,67 @@ impl Project {
             mapping.legacy_param_index = None;
         }
 
+        // Macro mappings are stored on `settings.macro_bank.slots[*].mappings`.
+        // Each `MacroMapping` carries a `legacy_param_index` parked from the
+        // V1.1 shape; the variant tells us whether to look up via the effect
+        // or generator registry. `GenParam` requires the layer to be alive
+        // because the generator type isn't recorded on the target itself.
+        fn resolve_macro_mapping(
+            mapping: &mut crate::macro_bank::MacroMapping,
+            timeline: &crate::timeline::Timeline,
+        ) {
+            use crate::macro_bank::MacroMappingTarget;
+            let Some(idx) = mapping.legacy_param_index else {
+                return;
+            };
+            match &mut mapping.target {
+                MacroMappingTarget::MasterOpacity | MacroMappingTarget::LayerOpacity { .. } => {
+                    // No param to resolve.
+                }
+                MacroMappingTarget::MasterEffect {
+                    effect_type,
+                    param_id,
+                } => {
+                    if param_id.is_empty()
+                        && let Some(def) = effect_definition_registry::try_get(effect_type)
+                        && let Some(pd) = def.param_defs.get(idx as usize)
+                        && !pd.id.is_empty()
+                    {
+                        *param_id = std::borrow::Cow::Owned(pd.id.clone());
+                    }
+                }
+                MacroMappingTarget::LayerEffect {
+                    effect_type,
+                    param_id,
+                    ..
+                } => {
+                    if param_id.is_empty()
+                        && let Some(def) = effect_definition_registry::try_get(effect_type)
+                        && let Some(pd) = def.param_defs.get(idx as usize)
+                        && !pd.id.is_empty()
+                    {
+                        *param_id = std::borrow::Cow::Owned(pd.id.clone());
+                    }
+                }
+                MacroMappingTarget::GenParam { layer_id, param_id } => {
+                    if param_id.is_empty()
+                        && let Some(layer) = timeline
+                            .layers
+                            .iter()
+                            .find(|l| l.layer_id == *layer_id)
+                        && let Some(gp) = layer.gen_params()
+                        && let Some(def) =
+                            generator_definition_registry::try_get(gp.generator_type())
+                        && let Some(pd) = def.param_defs.get(idx as usize)
+                        && !pd.id.is_empty()
+                    {
+                        *param_id = std::borrow::Cow::Owned(pd.id.clone());
+                    }
+                }
+            }
+            mapping.legacy_param_index = None;
+        }
+
         // Master effects.
         for fx in &mut self.settings.master_effects {
             let effect_type = fx.effect_type().clone();
@@ -363,6 +424,17 @@ impl Project {
                         resolve_ableton_id_for_generator(m, &gen_type);
                     }
                 }
+            }
+        }
+
+        // Macro mappings live on the bank, but `GenParam` resolution
+        // needs to look up the generator type via the layer. `timeline`
+        // and `settings` are disjoint fields of `Project` so the split
+        // borrow is fine.
+        let timeline = &self.timeline;
+        for slot in &mut self.settings.macro_bank.slots {
+            for mapping in &mut slot.mappings {
+                resolve_macro_mapping(mapping, timeline);
             }
         }
     }

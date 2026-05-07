@@ -1542,13 +1542,13 @@ fn describe_macro_mapping(
         MacroMappingTarget::MasterOpacity => "Master Opacity".to_string(),
         MacroMappingTarget::MasterEffect {
             effect_type,
-            param_index,
+            param_id,
         } => {
-            let effect_name = manifold_core::effect_definition_registry::try_get(effect_type)
-                .map(|d| d.display_name)
-                .unwrap_or(effect_type.as_str());
-            let param_name = manifold_core::effect_definition_registry::try_get(effect_type)
-                .and_then(|d| d.param_defs.get(*param_index))
+            let def = manifold_core::effect_definition_registry::try_get(effect_type);
+            let effect_name = def.map(|d| d.display_name).unwrap_or(effect_type.as_str());
+            let param_name = def
+                .and_then(|d| d.id_to_index.get(param_id.as_ref()).copied())
+                .and_then(|i| def.and_then(|d| d.param_defs.get(i)))
                 .map(|p| p.name.as_str())
                 .unwrap_or("?");
             format!("{} → {}", effect_name, param_name)
@@ -1566,7 +1566,7 @@ fn describe_macro_mapping(
         MacroMappingTarget::LayerEffect {
             layer_id,
             effect_type,
-            param_index,
+            param_id,
         } => {
             let layer_name = project
                 .timeline
@@ -1575,19 +1575,16 @@ fn describe_macro_mapping(
                 .find(|l| l.layer_id == *layer_id)
                 .map(|l| l.name.as_str())
                 .unwrap_or("?");
-            let effect_name = manifold_core::effect_definition_registry::try_get(effect_type)
-                .map(|d| d.display_name)
-                .unwrap_or(effect_type.as_str());
-            let param_name = manifold_core::effect_definition_registry::try_get(effect_type)
-                .and_then(|d| d.param_defs.get(*param_index))
+            let def = manifold_core::effect_definition_registry::try_get(effect_type);
+            let effect_name = def.map(|d| d.display_name).unwrap_or(effect_type.as_str());
+            let param_name = def
+                .and_then(|d| d.id_to_index.get(param_id.as_ref()).copied())
+                .and_then(|i| def.and_then(|d| d.param_defs.get(i)))
                 .map(|p| p.name.as_str())
                 .unwrap_or("?");
             format!("{} {} → {}", layer_name, effect_name, param_name)
         }
-        MacroMappingTarget::GenParam {
-            layer_id,
-            param_index,
-        } => {
+        MacroMappingTarget::GenParam { layer_id, param_id } => {
             let layer = project
                 .timeline
                 .layers
@@ -1597,11 +1594,13 @@ fn describe_macro_mapping(
             let param_name = layer
                 .and_then(|l| l.gen_params())
                 .and_then(|gp| {
-                    manifold_core::generator_definition_registry::try_get(gp.generator_type())
-                        .and_then(|d| d.param_defs.get(*param_index))
-                        .map(|p| p.name.as_str())
+                    let def = manifold_core::generator_definition_registry::try_get(
+                        gp.generator_type(),
+                    )?;
+                    let idx = def.id_to_index.get(param_id.as_ref()).copied()?;
+                    def.param_defs.get(idx).map(|p| p.name.clone())
                 })
-                .unwrap_or("?");
+                .unwrap_or_else(|| "?".to_string());
             format!("{} Gen → {}", layer_name, param_name)
         }
     }

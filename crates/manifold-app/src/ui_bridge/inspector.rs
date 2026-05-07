@@ -2628,10 +2628,24 @@ pub(super) fn dispatch_inspector(
                     .map(|pd| (pd.min, pd.max))
                     .unwrap_or((0.0, 1.0));
 
+                // Resolve the param_id from the registry. If it can't be
+                // resolved (out-of-range index) we skip the mapping —
+                // a UI-driven action against a current effect should
+                // always resolve, but we degrade gracefully if not.
+                let Some(param_id_str) =
+                    manifold_core::effect_definition_registry::param_index_to_id(
+                        &effect_type, param_idx,
+                    )
+                else {
+                    return DispatchResult::handled();
+                };
+                let param_id =
+                    std::borrow::Cow::Borrowed(param_id_str);
+
                 let mapping_target = match tab {
                     InspectorTab::Master => MacroMappingTarget::MasterEffect {
                         effect_type,
-                        param_index: param_idx,
+                        param_id,
                     },
                     InspectorTab::Layer | InspectorTab::Clip => {
                         let layer_id = active_layer.clone().unwrap_or_else(|| {
@@ -2645,7 +2659,7 @@ pub(super) fn dispatch_inspector(
                         MacroMappingTarget::LayerEffect {
                             layer_id,
                             effect_type,
-                            param_index: param_idx,
+                            param_id,
                         }
                     }
                 };
@@ -2655,6 +2669,7 @@ pub(super) fn dispatch_inspector(
                     range_min: min,
                     range_max: max,
                     curve: MacroCurve::Linear,
+                    legacy_param_index: None,
                 };
 
                 project.settings.macro_bank.slots[macro_idx]
@@ -2689,14 +2704,23 @@ pub(super) fn dispatch_inspector(
                         .map(|pd| (pd.min, pd.max))
                         .unwrap_or((0.0, 1.0));
 
+                let Some(param_id_str) =
+                    manifold_core::generator_definition_registry::param_index_to_id(
+                        gp.generator_type(),
+                        param_idx,
+                    )
+                else {
+                    return DispatchResult::handled();
+                };
                 let mapping = MacroMapping {
                     target: MacroMappingTarget::GenParam {
                         layer_id,
-                        param_index: param_idx,
+                        param_id: std::borrow::Cow::Borrowed(param_id_str),
                     },
                     range_min: min,
                     range_max: max,
                     curve: MacroCurve::Linear,
+                    legacy_param_index: None,
                 };
 
                 project.settings.macro_bank.slots[macro_idx]
