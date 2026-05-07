@@ -143,15 +143,20 @@ pub struct EffectInstance {
 
 /// Wire-format shape for `paramValues` / `baseParamValues`. Accepts
 /// either V1.x positional `Array` or V1.2+ id-keyed `Object`.
+///
+/// Shared between `EffectInstance` (this file) and
+/// `GeneratorParamState` (generator.rs); the only difference is which
+/// registry the keyed form looks up against.
 #[derive(Deserialize)]
 #[serde(untagged)]
-enum ParamValuesWire {
+pub(crate) enum ParamValuesWire {
     Positional(Vec<f32>),
     Keyed(std::collections::BTreeMap<String, f32>),
 }
 
 impl ParamValuesWire {
-    /// Convert to the in-memory positional `Vec<f32>` form.
+    /// Convert to the in-memory positional `Vec<f32>` form using the
+    /// effect registry.
     ///
     /// - `Positional`: passed through unchanged.
     /// - `Keyed`: looked up against the effect registry. Each known
@@ -185,6 +190,71 @@ impl ParamValuesWire {
                 out
             }
         }
+    }
+
+    /// Generator-registry counterpart to `into_positional`. Used by
+    /// `GeneratorParamState`'s custom Deserialize.
+    pub(crate) fn into_positional_for_generator(
+        self,
+        gen_type: &crate::GeneratorTypeId,
+    ) -> Vec<f32> {
+        match self {
+            ParamValuesWire::Positional(v) => v,
+            ParamValuesWire::Keyed(map) => {
+                let Some(def) = crate::generator_definition_registry::try_get(gen_type) else {
+                    return Vec::new();
+                };
+                let mut out = vec![0.0_f32; def.param_count];
+                for (i, pd) in def.param_defs.iter().enumerate().take(def.param_count) {
+                    out[i] = pd.default_value;
+                }
+                for (id, value) in map {
+                    if let Some(&idx) = def.id_to_index.get(&id)
+                        && idx < out.len()
+                    {
+                        out[idx] = value;
+                    }
+                }
+                out
+            }
+        }
+    }
+}
+
+/// Generator-registry counterpart to `serialize_param_values`.
+/// Routes through the generator registry's `param_ids` slice.
+pub(crate) fn serialize_param_values_for_generator<S>(
+    values: &[f32],
+    gen_type: &crate::GeneratorTypeId,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::{SerializeMap, SerializeSeq};
+
+    let def = crate::generator_definition_registry::try_get(gen_type);
+    let can_emit_map = def.is_some_and(|d| {
+        values.len() <= d.param_ids.len()
+            && d.param_ids
+                .iter()
+                .take(values.len())
+                .all(|id| !id.is_empty())
+    });
+
+    if can_emit_map {
+        let def = def.expect("checked above");
+        let mut map = serializer.serialize_map(Some(values.len()))?;
+        for (i, &v) in values.iter().enumerate() {
+            map.serialize_entry(def.param_ids[i], &v)?;
+        }
+        map.end()
+    } else {
+        let mut seq = serializer.serialize_seq(Some(values.len()))?;
+        for &v in values {
+            seq.serialize_element(&v)?;
+        }
+        seq.end()
     }
 }
 

@@ -5,29 +5,152 @@ use serde::{Deserialize, Serialize};
 
 /// Per-layer generator parameter state.
 /// Port of Unity GeneratorParamState.cs.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+///
+/// Serialization (custom impls below):
+///
+/// - `paramValues` / `baseParamValues` accept both V1.x positional
+///   `Array<f32>` and V1.2+ id-keyed `Object` shapes. On save, the
+///   id-keyed Map form is emitted when the generator's registry def
+///   is available; otherwise the legacy Array form is emitted.
+///
+/// In-memory storage stays positional (`Vec<f32>`). See
+/// `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 step 13.
+#[derive(Debug, Clone, Default)]
 pub struct GeneratorParamState {
-    #[serde(default)]
     generator_type: GeneratorTypeId,
-    #[serde(default)]
     pub param_values: Vec<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_param_values: Option<Vec<f32>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drivers: Option<Vec<ParameterDriver>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub envelopes: Option<Vec<ParamEnvelope>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
 
-    // Legacy flat fields from V1.0.0 (before genParams nesting)
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "genParamVersion"
-    )]
+    /// Legacy flat field from V1.0.0 (before genParams nesting).
     pub legacy_param_version: Option<i32>,
+}
+
+// ─── Custom Serialize / Deserialize for GeneratorParamState ───
+
+impl Serialize for GeneratorParamState {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        // Field count: generatorType + paramValues, plus optional fields.
+        let mut field_count = 2;
+        if self.base_param_values.is_some() {
+            field_count += 1;
+        }
+        if self.drivers.is_some() {
+            field_count += 1;
+        }
+        if self.envelopes.is_some() {
+            field_count += 1;
+        }
+        if self.ableton_mappings.is_some() {
+            field_count += 1;
+        }
+        if self.legacy_param_version.is_some() {
+            field_count += 1;
+        }
+
+        let mut s = serializer.serialize_struct("GeneratorParamState", field_count)?;
+        s.serialize_field("generatorType", &self.generator_type)?;
+        s.serialize_field(
+            "paramValues",
+            &GenParamValuesSer {
+                values: &self.param_values,
+                gen_type: &self.generator_type,
+            },
+        )?;
+        if let Some(base) = &self.base_param_values {
+            s.serialize_field(
+                "baseParamValues",
+                &GenParamValuesSer {
+                    values: base,
+                    gen_type: &self.generator_type,
+                },
+            )?;
+        }
+        if let Some(d) = &self.drivers {
+            s.serialize_field("drivers", d)?;
+        }
+        if let Some(e) = &self.envelopes {
+            s.serialize_field("envelopes", e)?;
+        }
+        if let Some(m) = &self.ableton_mappings {
+            s.serialize_field("abletonMappings", m)?;
+        }
+        if let Some(v) = self.legacy_param_version {
+            s.serialize_field("genParamVersion", &v)?;
+        }
+        s.end()
+    }
+}
+
+/// Serialize-side wrapper for generator `paramValues` / `baseParamValues`.
+struct GenParamValuesSer<'a> {
+    values: &'a [f32],
+    gen_type: &'a GeneratorTypeId,
+}
+
+impl Serialize for GenParamValuesSer<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        crate::effects::serialize_param_values_for_generator(
+            self.values,
+            self.gen_type,
+            serializer,
+        )
+    }
+}
+
+impl<'de> Deserialize<'de> for GeneratorParamState {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Raw {
+            #[serde(default)]
+            generator_type: GeneratorTypeId,
+            #[serde(default)]
+            param_values: Option<crate::effects::ParamValuesWire>,
+            #[serde(default)]
+            base_param_values: Option<crate::effects::ParamValuesWire>,
+            #[serde(default)]
+            drivers: Option<Vec<ParameterDriver>>,
+            #[serde(default)]
+            envelopes: Option<Vec<ParamEnvelope>>,
+            #[serde(default)]
+            ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
+            #[serde(default, rename = "genParamVersion")]
+            legacy_param_version: Option<i32>,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        let param_values = raw
+            .param_values
+            .map(|w| w.into_positional_for_generator(&raw.generator_type))
+            .unwrap_or_default();
+        let base_param_values = raw
+            .base_param_values
+            .map(|w| w.into_positional_for_generator(&raw.generator_type));
+
+        Ok(GeneratorParamState {
+            generator_type: raw.generator_type,
+            param_values,
+            base_param_values,
+            drivers: raw.drivers,
+            envelopes: raw.envelopes,
+            ableton_mappings: raw.ableton_mappings,
+            legacy_param_version: raw.legacy_param_version,
+        })
+    }
 }
 
 impl GeneratorParamState {
