@@ -110,6 +110,7 @@ fn synthesized_legacy_snapshot(
 
     let source = NodeSnapshot {
         id: 0,
+        node_handle: None,
         type_id: SOURCE_TYPE_ID.to_string(),
         title: "Source".to_string(),
         inputs: Vec::new(),
@@ -117,10 +118,12 @@ fn synthesized_legacy_snapshot(
             name: "out".to_string(),
             kind: PortKindSnapshot::Texture2D,
         }],
+        parameters: Vec::new(),
         editor_pos: None,
     };
     let legacy = NodeSnapshot {
         id: 1,
+        node_handle: None,
         type_id: format!("{LEGACY_TYPE_ID_PREFIX}{}", metadata.id.as_str()),
         title: metadata.display_name.to_string(),
         inputs: vec![PortSnapshot {
@@ -131,10 +134,12 @@ fn synthesized_legacy_snapshot(
             name: "out".to_string(),
             kind: PortKindSnapshot::Texture2D,
         }],
+        parameters: Vec::new(),
         editor_pos: None,
     };
     let final_out = NodeSnapshot {
         id: 2,
+        node_handle: None,
         type_id: FINAL_OUTPUT_TYPE_ID.to_string(),
         title: "Final Output".to_string(),
         inputs: vec![PortSnapshot {
@@ -142,6 +147,7 @@ fn synthesized_legacy_snapshot(
             kind: PortKindSnapshot::Texture2D,
         }],
         outputs: Vec::new(),
+        parameters: Vec::new(),
         editor_pos: None,
     };
     let wires = vec![

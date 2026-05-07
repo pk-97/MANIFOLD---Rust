@@ -44,6 +44,9 @@ pub use param_binding::{
 };
 pub use parameters::{ParamDef, ParamType, ParamValue};
 pub use ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
-pub use snapshot::{GraphSnapshot, NodeSnapshot, PortKindSnapshot, PortSnapshot, WireSnapshot};
+pub use snapshot::{
+    GraphSnapshot, NodeSnapshot, ParamSnapshot, ParamSnapshotKind, PortKindSnapshot, PortSnapshot,
+    WireSnapshot,
+};
 pub use state_store::{NodeState, OwnerKey, StateStore};
 pub use validation::{topological_sort, validate, GraphError};

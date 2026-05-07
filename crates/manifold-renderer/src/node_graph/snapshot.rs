@@ -16,6 +16,7 @@
 //! gate snapshot generation on a topology version counter.
 
 use crate::node_graph::graph::Graph;
+use crate::node_graph::parameters::{ParamType, ParamValue};
 use crate::node_graph::ports::{PortKind, PortType};
 
 /// Owned, `Send`able view of a graph for the editor canvas.
@@ -30,15 +31,63 @@ pub struct GraphSnapshot {
 pub struct NodeSnapshot {
     /// Stable instance id within the graph. Matches `NodeInstanceId.0`.
     pub id: u32,
+    /// Author-assigned stable string handle if this node was registered
+    /// via `Graph::add_node_named`. Used by V2 user-exposed parameter
+    /// bindings to address inner nodes across renderer refactors.
+    /// `None` for anonymous nodes (boundary Source/FinalOutput, etc.).
+    pub node_handle: Option<String>,
     /// `EffectNodeType` string — `primitive.mix`, `effect.bloom`, etc.
     pub type_id: String,
     /// Display title derived from `type_id` (e.g. `primitive.mix` → "Mix").
     pub title: String,
     pub inputs: Vec<PortSnapshot>,
     pub outputs: Vec<PortSnapshot>,
+    /// Inner parameters on this node, exposed for the V2 user-exposed-
+    /// param UI (right-sidebar checkbox list). Owned data — strings
+    /// allocated from `ParamDef`'s `&'static str` fields once per
+    /// snapshot build.
+    pub parameters: Vec<ParamSnapshot>,
     /// Editor-saved position in graph-space, or `None` when the graph
     /// has never been opened in an editor (V1).
     pub editor_pos: Option<(f32, f32)>,
+}
+
+/// Snapshot of one inner-node parameter, sized for the user-exposed-
+/// parameter UI. Mirrors [`crate::node_graph::parameters::ParamDef`]
+/// with owned strings + enum-flattened type info, so the data is
+/// fully `Send`able and free of `'static` references back into the
+/// live graph.
+#[derive(Debug, Clone)]
+pub struct ParamSnapshot {
+    /// Stable parameter name. Used as `inner_param` when constructing
+    /// a `UserParamBinding`.
+    pub name: String,
+    /// Display label. Used as the binding's `label` (initially) and
+    /// as the row label in the right-sidebar list.
+    pub label: String,
+    pub kind: ParamSnapshotKind,
+    /// Numeric default for slider initialization. Bool/Int/Enum
+    /// flattened to f32 so the UI slider has one shape.
+    pub default_value: f32,
+    /// `(min, max)` for sliders. `None` when the underlying ParamDef
+    /// didn't declare a range (e.g. Vec2/Color/Enum often omit it).
+    pub range: Option<(f32, f32)>,
+}
+
+/// Coarse-grained variant of `ParamType` — the user-exposed-param
+/// surface only needs to know "is it a float / int / bool / enum"
+/// to pick the right `UserParamConvert` at expose time. Vec2/Vec3/
+/// Vec4/Color are not user-exposable in the V2 surface (they need
+/// multi-slot routing) and are flagged so the panel can skip them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamSnapshotKind {
+    Float,
+    Int,
+    Bool,
+    Enum,
+    /// Multi-component types (Vec2/Vec3/Vec4/Color) — not exposable
+    /// in the V2 user surface.
+    Other,
 }
 
 /// One port (input or output) on a node snapshot.
@@ -81,6 +130,14 @@ impl GraphSnapshot {
     /// allocates owned strings so the result is fully detached from the
     /// graph's `'static` port-name references.
     pub fn from_graph(graph: &Graph) -> Self {
+        // Reverse the graph's handle map once, so we can look up
+        // node_id → handle in O(1) per node. Handles are unique within
+        // a graph (enforced by add_node_named's panic-on-dup).
+        let id_to_handle: ahash::AHashMap<u32, String> = graph
+            .handles()
+            .map(|(h, id)| (id.0, h.to_string()))
+            .collect();
+
         let mut nodes: Vec<NodeSnapshot> = graph
             .nodes()
             .map(|inst| {
@@ -106,12 +163,26 @@ impl GraphSnapshot {
                         kind: PortKindSnapshot::from(p.ty),
                     })
                     .collect();
+                let parameters = inst
+                    .node
+                    .parameters()
+                    .iter()
+                    .map(|pd| ParamSnapshot {
+                        name: pd.name.to_string(),
+                        label: pd.label.to_string(),
+                        kind: param_snapshot_kind(pd.ty),
+                        default_value: param_default_to_f32(&pd.default),
+                        range: pd.range,
+                    })
+                    .collect();
                 NodeSnapshot {
                     id: inst.id.0,
+                    node_handle: id_to_handle.get(&inst.id.0).cloned(),
                     type_id,
                     title,
                     inputs,
                     outputs,
+                    parameters,
                     editor_pos: None,
                 }
             })
@@ -145,6 +216,41 @@ fn title_from_type_id(type_id: &str) -> String {
     match chars.next() {
         Some(c) => c.to_uppercase().chain(chars).collect(),
         None => String::new(),
+    }
+}
+
+/// Map [`ParamType`] onto the snapshot's coarse-grained kind enum.
+/// Multi-component types (Vec2/Vec3/Vec4/Color) collapse to `Other`
+/// — they're not exposable as user params in the V2 surface.
+fn param_snapshot_kind(ty: ParamType) -> ParamSnapshotKind {
+    match ty {
+        ParamType::Float => ParamSnapshotKind::Float,
+        ParamType::Int => ParamSnapshotKind::Int,
+        ParamType::Bool => ParamSnapshotKind::Bool,
+        ParamType::Enum => ParamSnapshotKind::Enum,
+        _ => ParamSnapshotKind::Other,
+    }
+}
+
+/// Flatten a [`ParamValue`] into an `f32` for the slider UI. Bool
+/// becomes 0.0/1.0, Int/Enum cast to f32, multi-component types
+/// collapse to 0.0 (their snapshot kind is `Other` and they're not
+/// user-exposable, so the value is unused).
+fn param_default_to_f32(value: &ParamValue) -> f32 {
+    match value {
+        ParamValue::Float(f) => *f,
+        ParamValue::Int(i) => *i as f32,
+        ParamValue::Bool(b) => {
+            if *b {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        ParamValue::Enum(u) => *u as f32,
+        ParamValue::Vec2(_) | ParamValue::Vec3(_) | ParamValue::Vec4(_) | ParamValue::Color(_) => {
+            0.0
+        }
     }
 }
 
@@ -224,5 +330,90 @@ mod tests {
         assert_eq!(title_from_type_id("primitive.blur"), "Blur");
         assert_eq!(title_from_type_id("composite.bloom"), "Bloom");
         assert_eq!(title_from_type_id("oddball"), "Oddball");
+    }
+
+    struct ParamfulNode {
+        type_id: EffectNodeType,
+        outputs: Vec<NodeOutput>,
+        params: Vec<ParamDef>,
+    }
+    impl EffectNode for ParamfulNode {
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &[]
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            &self.outputs
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &self.params
+        }
+        fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+    }
+
+    #[test]
+    fn snapshot_captures_node_handle_when_named() {
+        use crate::node_graph::parameters::ParamType;
+        let mut g = Graph::new();
+        let _anon = g.add_node(Box::new(StubNode {
+            type_id: EffectNodeType::new("primitive.source"),
+            inputs: vec![],
+            outputs: vec![output("out")],
+        }));
+        let _named = g.add_node_named(
+            "uv_transform",
+            Box::new(ParamfulNode {
+                type_id: EffectNodeType::new("primitive.uv_transform"),
+                outputs: vec![output("out")],
+                params: vec![
+                    ParamDef {
+                        name: "translate",
+                        label: "Translate",
+                        ty: ParamType::Float,
+                        default: ParamValue::Float(0.0),
+                        range: Some((-1.0, 1.0)),
+                        enum_values: &[],
+                    },
+                    ParamDef {
+                        name: "mode",
+                        label: "Mode",
+                        ty: ParamType::Enum,
+                        default: ParamValue::Enum(0),
+                        range: None,
+                        enum_values: &["A", "B", "C"],
+                    },
+                ],
+            }),
+        );
+
+        let snap = GraphSnapshot::from_graph(&g);
+        let anon = snap.nodes.iter().find(|n| n.title == "Source").unwrap();
+        assert_eq!(anon.node_handle, None);
+        assert!(anon.parameters.is_empty());
+
+        let named = snap
+            .nodes
+            .iter()
+            .find(|n| n.title == "Uv_transform")
+            .unwrap();
+        assert_eq!(named.node_handle.as_deref(), Some("uv_transform"));
+        assert_eq!(named.parameters.len(), 2);
+
+        let translate = named
+            .parameters
+            .iter()
+            .find(|p| p.name == "translate")
+            .unwrap();
+        assert_eq!(translate.label, "Translate");
+        assert_eq!(translate.kind, ParamSnapshotKind::Float);
+        assert_eq!(translate.range, Some((-1.0, 1.0)));
+        assert!((translate.default_value - 0.0).abs() < f32::EPSILON);
+
+        let mode = named.parameters.iter().find(|p| p.name == "mode").unwrap();
+        assert_eq!(mode.kind, ParamSnapshotKind::Enum);
+        // Enum default flattens to f32 via `as f32` cast.
+        assert!((mode.default_value - 0.0).abs() < f32::EPSILON);
     }
 }
