@@ -66,9 +66,6 @@ pub struct EffectCardConfig {
     pub has_env: bool,
     /// Aggregate: true if ANY param has an Ableton mapping.
     pub has_abl: bool,
-    /// V2: true if this effect has any user-exposed parameter bindings.
-    /// Drives the EXP badge.
-    pub has_exp: bool,
     /// Per-param: true if driver exists and is enabled (Unity: driverExpanded[]).
     pub driver_active: Vec<bool>,
     /// Per-param: true if envelope exists and is enabled (Unity: envelopeExpanded[]).
@@ -114,9 +111,6 @@ pub struct EffectCardState {
     pub has_env: bool,
     /// Aggregate: any param has Ableton mapping. Used for ABL badge.
     pub has_abl: bool,
-    /// V2: this effect has at least one user-exposed parameter binding.
-    /// Used for EXP badge.
-    pub has_exp: bool,
     /// Shared per-param modulation state (driver/envelope expansion, trim, target, ADSR, driver config).
     pub mod_state: ParamModState,
 }
@@ -127,7 +121,6 @@ impl EffectCardState {
             has_drv: false,
             has_env: false,
             has_abl: false,
-            has_exp: false,
             mod_state: ParamModState::allocate(param_count),
         }
     }
@@ -160,7 +153,6 @@ pub struct EffectCardPanel {
     cached_has_env: bool,
     cached_has_drv: bool,
     cached_has_abl: bool,
-    cached_has_exp: bool,
 
     // Node IDs — header
     header_bg_id: i32,
@@ -175,8 +167,6 @@ pub struct EffectCardPanel {
     env_badge_text_id: i32,
     drv_badge_bg_id: i32,
     drv_badge_text_id: i32,
-    exp_badge_bg_id: i32,
-    exp_badge_text_id: i32,
 
     // Node IDs — per-param
     slider_ids: Vec<Option<SliderNodeIds>>,
@@ -228,7 +218,6 @@ impl EffectCardPanel {
             cached_has_env: false,
             cached_has_drv: false,
             cached_has_abl: false,
-            cached_has_exp: false,
             border_id: -1,
             inner_bg_id: -1,
             header_bg_id: -1,
@@ -243,8 +232,6 @@ impl EffectCardPanel {
             env_badge_text_id: -1,
             drv_badge_bg_id: -1,
             drv_badge_text_id: -1,
-            exp_badge_bg_id: -1,
-            exp_badge_text_id: -1,
             slider_ids: Vec::new(),
             driver_btn_ids: Vec::new(),
             envelope_btn_ids: Vec::new(),
@@ -286,7 +273,6 @@ impl EffectCardPanel {
         self.state.has_drv = config.has_drv;
         self.state.has_env = config.has_env;
         self.state.has_abl = config.has_abl;
-        self.state.has_exp = config.has_exp;
         self.state.mod_state.sync_from_config(
             n,
             &config.driver_active,
@@ -567,9 +553,8 @@ impl EffectCardPanel {
         let drv_x = toggle_x - GAP - BADGE_W;
         let env_x = drv_x - GAP - BADGE_W;
         let abl_x = env_x - GAP - BADGE_W;
-        let exp_x = abl_x - GAP - BADGE_W;
         let name_x = x + PADDING + DRAG_HANDLE_W + GAP;
-        let name_w = (exp_x - GAP - name_x).max(10.0);
+        let name_w = (abl_x - GAP - name_x).max(10.0);
         let elem_y = y + (HEADER_HEIGHT - 16.0) * 0.5;
         let badge_y = y + (HEADER_HEIGHT - BADGE_H) * 0.5;
 
@@ -620,38 +605,6 @@ impl EffectCardPanel {
                 ..UIStyle::default()
             },
         ) as i32;
-
-        // EXP badge — V2 user-exposed parameter indicator. Visibility
-        // synced from state.has_exp via the dirty-check in update().
-        let show_exp = self.state.has_exp;
-        self.exp_badge_bg_id = tree.add_panel(
-            self.header_bg_id,
-            exp_x,
-            badge_y,
-            BADGE_W,
-            BADGE_H,
-            UIStyle {
-                bg_color: color::EXP_BADGE_C32,
-                corner_radius: BADGE_RADIUS,
-                ..UIStyle::default()
-            },
-        ) as i32;
-        self.exp_badge_text_id = tree.add_label(
-            self.exp_badge_bg_id,
-            exp_x,
-            badge_y,
-            BADGE_W,
-            BADGE_H,
-            "EXP",
-            UIStyle {
-                text_color: color::TEXT_WHITE_C32,
-                font_size: color::FONT_CAPTION,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            },
-        ) as i32;
-        tree.set_visible(self.exp_badge_bg_id as u32, show_exp);
-        tree.set_visible(self.exp_badge_text_id as u32, show_exp);
 
         // ABL badge — visibility synced from state.has_abl via sync_badges()
         let show_abl = self.state.has_abl;
@@ -748,7 +701,6 @@ impl EffectCardPanel {
         self.cached_has_env = show_env;
         self.cached_has_drv = show_drv;
         self.cached_has_abl = show_abl;
-        self.cached_has_exp = show_exp;
         self.cached_enabled = self.enabled;
 
         // Toggle button (ON/OFF)
@@ -1101,20 +1053,16 @@ impl EffectCardPanel {
         if self.state.has_env != self.cached_has_env
             || self.state.has_drv != self.cached_has_drv
             || self.state.has_abl != self.cached_has_abl
-            || self.state.has_exp != self.cached_has_exp
         {
             self.cached_has_env = self.state.has_env;
             self.cached_has_drv = self.state.has_drv;
             self.cached_has_abl = self.state.has_abl;
-            self.cached_has_exp = self.state.has_exp;
             tree.set_visible(self.abl_badge_bg_id as u32, self.cached_has_abl);
             tree.set_visible(self.abl_badge_text_id as u32, self.cached_has_abl);
             tree.set_visible(self.env_badge_bg_id as u32, self.cached_has_env);
             tree.set_visible(self.env_badge_text_id as u32, self.cached_has_env);
             tree.set_visible(self.drv_badge_bg_id as u32, self.cached_has_drv);
             tree.set_visible(self.drv_badge_text_id as u32, self.cached_has_drv);
-            tree.set_visible(self.exp_badge_bg_id as u32, self.cached_has_exp);
-            tree.set_visible(self.exp_badge_text_id as u32, self.cached_has_exp);
         }
 
         // Skip slider sync if collapsed (Unity: if (state.collapsed) return)
@@ -1895,7 +1843,6 @@ mod tests {
             has_drv: false,
             has_env: false,
             has_abl: false,
-            has_exp: false,
             driver_active: vec![false; n],
             envelope_active: vec![false; n],
             trim_min: vec![0.0; n],

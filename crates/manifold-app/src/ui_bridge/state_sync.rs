@@ -1285,9 +1285,6 @@ fn effects_to_configs(
             }
 
             let has_abl = params.iter().any(|p| p.ableton_display.is_some());
-            // V2: EXP badge fires when this effect has any user-exposed
-            // parameter bindings (ticked via the graph editor checkbox).
-            let has_exp = !fx.user_param_bindings.is_empty();
 
             Some(EffectCardConfig {
                 effect_index: i,
@@ -1301,7 +1298,6 @@ fn effects_to_configs(
                 has_drv,
                 has_env,
                 has_abl,
-                has_exp,
                 driver_active,
                 envelope_active,
                 trim_min,

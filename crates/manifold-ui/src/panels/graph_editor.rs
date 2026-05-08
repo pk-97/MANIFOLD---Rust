@@ -344,7 +344,7 @@ impl GraphEditorPanel {
 
 fn checkbox_style(checked: bool, supported: bool) -> UIStyle {
     let bg_color = match (checked, supported) {
-        (true, true) => color::EXP_BADGE_C32,
+        (true, true) => color::ACCENT_BLUE_C32,
         (false, true) => color::EFFECT_CARD_INNER_BG_C32,
         // Disabled (unsupported type) — slightly darker than the panel bg.
         (_, false) => color::EFFECT_CARD_INNER_BG_C32,
