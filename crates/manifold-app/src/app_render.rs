@@ -1350,8 +1350,11 @@ impl Application {
                 ui,
                 crate::graph_canvas::Rect::new(0.0, 0.0, canvas_width, logical_h as f32),
             );
-            // Draw the sidebar UITree on top of the canvas-cleared region.
-            ui.render_overlay(&ws.ui_root.tree, 0);
+            // Layer the sidebar UITree on top. Use the *additive*
+            // variant — `render_overlay` would clear the canvas's
+            // scissor batches and the canvas's nodes/wires/grid would
+            // never reach the GPU.
+            ui.render_overlay_additive(&ws.ui_root.tree, 0);
             if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
                 ui.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
             }

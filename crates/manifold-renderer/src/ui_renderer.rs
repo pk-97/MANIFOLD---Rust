@@ -461,6 +461,35 @@ impl UIRenderer {
         self.flush_scissor_batch();
     }
 
+    /// Like [`Self::render_overlay`], but **preserves** any scissor
+    /// batches accumulated earlier in the same `prepare/draw` cycle.
+    ///
+    /// Use this when emitting a UITree on top of primitives drawn via
+    /// the immediate-mode `draw_*` API (e.g. the graph-editor canvas
+    /// renders its nodes via `draw_bordered_rect` first, then layers
+    /// the right-sidebar UITree on top). Calling
+    /// [`Self::render_overlay`] in that flow would clear the canvas's
+    /// scissor batches and the canvas primitives would never reach
+    /// the GPU.
+    pub fn render_overlay_additive(&mut self, tree: &UITree, start_node: usize) {
+        // Flush whatever batch the caller's earlier `draw_*` calls left
+        // open so subsequent tree primitives accumulate into a fresh
+        // batch (with no inherited clip state). Then walk the tree
+        // additively — `begin_scissor_tracking_additive` does NOT clear
+        // `scissor_batches`, so the caller's batches survive into the
+        // final GPU pass.
+        self.flush_scissor_batch();
+        self.begin_scissor_tracking_additive();
+
+        tree.traverse_range(start_node, usize::MAX, |event| match event {
+            TraversalEvent::Node(node) => self.draw_node(node),
+            TraversalEvent::PushClip(rect) => self.handle_push_clip(rect),
+            TraversalEvent::PopClip => self.handle_pop_clip(),
+        });
+
+        self.flush_scissor_batch();
+    }
+
     /// Render a sub-region using flat sequential traversal.
     /// Used for incremental inspector rendering — correctly handles reparented
     /// nodes (where `traverse_range` would skip them).
