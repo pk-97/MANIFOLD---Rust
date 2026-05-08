@@ -1143,6 +1143,13 @@ enum OscScope<'a> {
 /// Convert a slice of `EffectInstance` into `EffectCardConfig` for the UI.
 /// Build EffectCardConfig from EffectInstance + envelopes.
 /// Unity: EffectCardState.SyncFromDataModel — populates all data-derived visual state.
+///
+/// Iterates BOTH the def-declared static block AND the per-instance
+/// user-tail bindings, producing one [`EffectParamInfo`] per slot in
+/// `effect.param_values` order. The card renders a slider for every
+/// exposed entry; hidden static slots and unchecked user-tail entries
+/// (the latter are removed from `user_param_bindings` rather than
+/// hidden, so they never reach this loop) are filtered at build time.
 fn effects_to_configs(
     effects: &[EffectInstance],
     envelopes: &[ParamEnvelope],
@@ -1153,8 +1160,12 @@ fn effects_to_configs(
         .enumerate()
         .filter_map(|(i, fx)| {
             let reg_def = manifold_core::effect_definition_registry::try_get(fx.effect_type())?;
-            let n = reg_def.param_count;
-            let params: Vec<EffectParamInfo> = reg_def
+            let static_count = reg_def.param_count;
+            let user_count = fx.user_param_bindings.len();
+            let n = static_count + user_count;
+
+            // Static prefix: one EffectParamInfo per def-declared slot.
+            let mut params: Vec<EffectParamInfo> = reg_def
                 .param_defs
                 .iter()
                 .enumerate()
@@ -1213,7 +1224,51 @@ fn effects_to_configs(
                 })
                 .collect();
 
-            // Per-param driver state (Unity: SyncFromDataModel driver loop)
+            // User-tail: append one EffectParamInfo per user binding.
+            // Slot index in param_values is `static_count + j`.
+            for (j, ub) in fx.user_param_bindings.iter().enumerate() {
+                let slot_idx = static_count + j;
+                let abl_mapping = fx.ableton_mappings.as_ref().and_then(|mappings| {
+                    mappings.iter().find(|m| m.param_id == ub.id)
+                });
+                let ableton_display = abl_mapping.map(|mapping| AbletonMappingDisplay {
+                    macro_name: mapping.address.macro_name.clone(),
+                    track_name: mapping.address.track_name.clone(),
+                    device_name: mapping.address.device_name.clone(),
+                    status: mapping.status,
+                    inverted: mapping.inverted,
+                });
+                let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
+                params.push(EffectParamInfo {
+                    name: ub.label.clone(),
+                    min: ub.min,
+                    max: ub.max,
+                    default: ub.default_value,
+                    whole_numbers: matches!(
+                        ub.convert,
+                        manifold_core::effects::UserParamConvert::IntRound
+                            | manifold_core::effects::UserParamConvert::EnumRound
+                    ),
+                    // User-tail bindings are exposed by definition — they
+                    // exist on `user_param_bindings` because the user
+                    // ticked their checkbox. Unchecking removes the
+                    // binding entirely (not just hides it).
+                    exposed: fx.is_param_exposed(slot_idx),
+                    value_labels: None,
+                    // No OSC address for user-tail bindings — the
+                    // existing OSC dispatcher addresses by param_id and
+                    // routes via `param_id_to_value_index`, which
+                    // handles user-tail. Address surfacing on the card
+                    // is a follow-up.
+                    osc_address: None,
+                    ableton_display,
+                    ableton_range,
+                });
+            }
+
+            // Per-param driver state. Sized to `n` (static + user). Lookup
+            // via `param_id_to_value_index` so user-tail driver bindings
+            // also light up their slider's D button.
             let mut has_drv = false;
             let mut driver_active = vec![false; n];
             let mut trim_min = vec![0.0f32; n];
@@ -1224,12 +1279,8 @@ fn effects_to_configs(
             let mut driver_dotted = vec![false; n];
             let mut driver_triplet = vec![false; n];
             if let Some(ref drivers) = fx.drivers {
-                let id_to_index = manifold_core::effect_definition_registry::try_get(
-                    fx.effect_type(),
-                )
-                .map(|d| &d.id_to_index);
                 for d in drivers {
-                    let Some(&pi) = id_to_index.and_then(|m| m.get(d.param_id.as_ref())) else {
+                    let Some(pi) = fx.param_id_to_value_index(d.param_id.as_ref()) else {
                         continue;
                     };
                     if pi < n && d.enabled {
@@ -1237,7 +1288,6 @@ fn effects_to_configs(
                         driver_active[pi] = true;
                         trim_min[pi] = d.trim_min;
                         trim_max[pi] = d.trim_max;
-                        // Driver visual state for button highlighting
                         driver_beat_div_idx[pi] =
                             beat_div_to_button_index(d.beat_division.base_division());
                         driver_waveform_idx[pi] = d.waveform as i32;
@@ -1248,7 +1298,7 @@ fn effects_to_configs(
                 }
             }
 
-            // Per-param envelope state (Unity: SyncFromDataModel envelope loop)
+            // Per-param envelope state. Same sizing + lookup story.
             let mut has_env = false;
             let mut envelope_active = vec![false; n];
             let mut target_norm = vec![1.0f32; n];
@@ -1256,20 +1306,13 @@ fn effects_to_configs(
             let mut env_decay = vec![0.0f32; n];
             let mut env_sustain = vec![0.0f32; n];
             let mut env_release = vec![0.0f32; n];
-            let mut env_mode =
-                vec![manifold_core::effects::EnvelopeMode::Adsr; n];
+            let mut env_mode = vec![manifold_core::effects::EnvelopeMode::Adsr; n];
             let mut env_random_jump = vec![false; n];
             let mut env_range_min = vec![0.0f32; n];
             let mut env_range_max = vec![1.0f32; n];
-            let env_id_to_index = manifold_core::effect_definition_registry::try_get(
-                fx.effect_type(),
-            )
-            .map(|d| &d.id_to_index);
             for env in envelopes {
                 if env.target_effect_type == *fx.effect_type() && env.enabled {
-                    let Some(&pi) =
-                        env_id_to_index.and_then(|m| m.get(env.param_id.as_ref()))
-                    else {
+                    let Some(pi) = fx.param_id_to_value_index(env.param_id.as_ref()) else {
                         continue;
                     };
                     if pi < n {
