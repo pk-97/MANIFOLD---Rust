@@ -35,6 +35,11 @@ pub struct EffectParamInfo {
     pub max: f32,
     pub default: f32,
     pub whole_numbers: bool,
+    /// Whether this slot is exposed as a slider on the card. `false`
+    /// hides the slider widget while preserving slot-index semantics
+    /// (drivers/Ableton mappings keep working — just no visible slider).
+    /// Defaults to `true` for backward compatibility.
+    pub exposed: bool,
     /// Named value labels for discrete params (e.g., ["Horiz", "Vert", "Both"]).
     /// When present, the slider displays the label instead of a numeric value.
     /// Unity: ParamDef.valueLabels → EffectDefinitionRegistry.FormatValue().
@@ -389,6 +394,10 @@ impl EffectCardPanel {
         let mut h = BORDER_W * 2.0 + HEADER_HEIGHT;
         if !self.is_collapsed && !self.param_info.is_empty() {
             for i in 0..self.param_info.len() {
+                // Hidden params consume zero vertical space.
+                if !self.param_info[i].exposed {
+                    continue;
+                }
                 h += ROW_HEIGHT + ROW_SPACING;
                 if self
                     .state
@@ -785,6 +794,12 @@ impl EffectCardPanel {
         let slider_w = w - PADDING * 2.0 - (DE_BUTTON_SIZE + DE_BUTTON_GAP) * 2.0;
 
         for i in 0..self.param_info.len() {
+            // Hidden params: leave slider_ids[i] = None and skip widget
+            // construction entirely. Slot-index semantics for any
+            // attached driver/Ableton mapping/envelope are preserved.
+            if !self.param_info[i].exposed {
+                continue;
+            }
             let info = self.param_info[i].clone();
             let norm = BitmapSlider::value_to_normalized(info.default, info.min, info.max);
             let val_text = format_param_value(
@@ -1825,6 +1840,7 @@ mod tests {
                     max: 100.0,
                     default: 10.0,
                     whole_numbers: true,
+                    exposed: true,
                     value_labels: None,
                     osc_address: None,
                     ableton_display: None,
@@ -1836,6 +1852,7 @@ mod tests {
                     max: 1.0,
                     default: 0.5,
                     whole_numbers: false,
+                    exposed: true,
                     value_labels: None,
                     osc_address: None,
                     ableton_display: None,

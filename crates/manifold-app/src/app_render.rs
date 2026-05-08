@@ -1328,9 +1328,17 @@ impl Application {
             self.current_editor_target.as_ref(),
             &self.local_project,
         );
+        let static_params = build_static_params(
+            self.current_editor_target.as_ref(),
+            &self.local_project,
+        );
         let effect_index = self.current_editor_target.as_ref().map(|(_, ei)| *ei);
-        self.graph_editor_panel
-            .configure(effect_index, view_for_panel.as_ref(), exposed_keys);
+        self.graph_editor_panel.configure(
+            effect_index,
+            static_params,
+            view_for_panel.as_ref(),
+            exposed_keys,
+        );
 
         // Rebuild the editor's UITree from scratch each frame: tree state
         // is small (one panel container + per-param row), so a clear +
@@ -1966,5 +1974,47 @@ fn build_exposed_keys(
     fx.user_param_bindings
         .iter()
         .map(|ub| (ub.node_handle.clone(), ub.inner_param.clone()))
+        .collect()
+}
+
+/// Build the list of static-block param entries (one per def-declared
+/// slot) used by the graph-editor sidebar to render
+/// "Effect Parameters" checkboxes. The label comes from the registry
+/// def; `exposed` comes from the live `EffectInstance.param_values[i].exposed`.
+fn build_static_params(
+    target: Option<&(
+        manifold_editing::commands::effect_target::EffectTarget,
+        usize,
+    )>,
+    project: &manifold_core::project::Project,
+) -> Vec<manifold_ui::panels::graph_editor::GraphEditorStaticParam> {
+    use manifold_editing::commands::effect_target::EffectTarget;
+    let Some((effect_target, effect_index)) = target else {
+        return Vec::new();
+    };
+    let effects: Option<&[manifold_core::effects::EffectInstance]> = match effect_target {
+        EffectTarget::Master => Some(&project.settings.master_effects),
+        EffectTarget::Layer { layer_id } => project
+            .timeline
+            .find_layer_by_id(layer_id)
+            .and_then(|(_, l)| l.effects.as_deref()),
+    };
+    let Some(fx) = effects.and_then(|e| e.get(*effect_index)) else {
+        return Vec::new();
+    };
+    let Some(def) =
+        manifold_core::effect_definition_registry::try_get(fx.effect_type())
+    else {
+        return Vec::new();
+    };
+    def.param_defs
+        .iter()
+        .enumerate()
+        .take(def.param_count)
+        .map(|(i, pd)| manifold_ui::panels::graph_editor::GraphEditorStaticParam {
+            index: i,
+            label: pd.name.clone(),
+            exposed: fx.is_param_exposed(i),
+        })
         .collect()
 }

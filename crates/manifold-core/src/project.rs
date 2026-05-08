@@ -720,7 +720,7 @@ impl Default for Project {
     fn default() -> Self {
         Self {
             project_name: String::new(),
-            project_version: "1.2.0".to_string(),
+            project_version: "1.3.0".to_string(),
             timeline: Timeline::default(),
             video_library: VideoLibrary::default(),
             midi_config: MidiMappingConfig::default(),
@@ -741,7 +741,7 @@ impl Default for Project {
 }
 
 fn default_version() -> String {
-    "1.2.0".to_string()
+    "1.3.0".to_string()
 }
 
 #[cfg(test)]

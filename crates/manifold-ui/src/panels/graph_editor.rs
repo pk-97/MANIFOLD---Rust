@@ -98,21 +98,45 @@ const HEADER_FONT_SIZE: u16 = 14;
 /// Per-row state captured during `build` so `handle_click` can map
 /// a node id back to its parameter without re-walking the snapshot.
 #[derive(Debug, Clone)]
-struct RowState {
-    /// Node id of the checkbox button in the UITree. Used for hit-test.
-    checkbox_node_id: u32,
-    /// Source-of-truth fields to ship in the resulting `PanelAction`.
-    node_handle: String,
-    inner_param: String,
-    label: String,
-    min: f32,
-    max: f32,
-    default_value: f32,
-    convert: UserParamConvert,
-    /// Was this row exposed on the last `configure`? Drives the click
-    /// behavior — checked rows emit `expose: false`, unchecked emit
-    /// `expose: true`.
-    currently_exposed: bool,
+enum RowState {
+    /// A row backed by an inner-node param exposable into the V2 user
+    /// surface. Toggling routes through `EffectParamExpose` →
+    /// `ToggleEffectParamExposeCommand` (creates/removes a binding).
+    InnerNode {
+        checkbox_node_id: u32,
+        node_handle: String,
+        inner_param: String,
+        label: String,
+        min: f32,
+        max: f32,
+        default_value: f32,
+        convert: UserParamConvert,
+        currently_exposed: bool,
+    },
+    /// A row backed by a def-declared static-block param. Toggling
+    /// routes through `EffectStaticParamExpose` →
+    /// `ToggleStaticParamExposeCommand` (flips the slot's `exposed`
+    /// flag without adding/removing bindings).
+    StaticBlock {
+        checkbox_node_id: u32,
+        param_index: usize,
+        currently_exposed: bool,
+    },
+}
+
+/// One entry in the static-block surface — what the effect card
+/// already displays. Surfaced in the sidebar so the user can hide
+/// individual sliders without losing the underlying value or any
+/// driver/Ableton mapping addressing them.
+#[derive(Debug, Clone)]
+pub struct GraphEditorStaticParam {
+    /// Slot index — used to address the slot via
+    /// `EffectInstance.param_values[index]`.
+    pub index: usize,
+    /// Display label.
+    pub label: String,
+    /// Whether this slot is currently exposed (visible on the card).
+    pub exposed: bool,
 }
 
 /// Right-sidebar panel inside the graph-editor window.
@@ -126,6 +150,11 @@ pub struct GraphEditorPanel {
     /// The effect this sidebar is editing — set when the editor
     /// opens for an effect chain. `None` when no effect is active.
     effect_index: Option<usize>,
+    /// Static-block params from the effect's def. Always rendered at
+    /// the top of the sidebar regardless of selection — these are the
+    /// knobs that show on the effect card and the user toggles their
+    /// visibility from here.
+    static_params: Vec<GraphEditorStaticParam>,
     /// View of the currently-selected node, owned. `None` when no
     /// node is selected or the selection is anonymous (no
     /// `node_handle`, so its params are not user-exposable).
@@ -151,10 +180,12 @@ impl GraphEditorPanel {
     pub fn configure(
         &mut self,
         effect_index: Option<usize>,
+        static_params: Vec<GraphEditorStaticParam>,
         selected_node: Option<&GraphEditorNodeView>,
         exposed_keys: HashSet<(String, String)>,
     ) {
         self.effect_index = effect_index;
+        self.static_params = static_params;
         self.selected_node = selected_node.cloned();
         self.exposed_keys = exposed_keys;
     }
@@ -181,14 +212,18 @@ impl GraphEditorPanel {
         ) as i32;
         self.root_id = bg_id;
 
-        // Header: panel title.
+        let mut y = viewport.y + PADDING;
+
+        // ── Effect Parameters section ─────────────────────────────
+        // The static-block surface — what shows on the effect card.
+        // Always rendered at the top regardless of node selection.
         tree.add_label(
             bg_id,
             viewport.x + PADDING,
-            viewport.y + PADDING,
+            y,
             viewport.width - 2.0 * PADDING,
             HEADER_H - PADDING,
-            "Parameters",
+            "Effect Parameters",
             UIStyle {
                 text_color: color::TEXT_WHITE_C32,
                 font_size: HEADER_FONT_SIZE,
@@ -196,6 +231,82 @@ impl GraphEditorPanel {
                 ..UIStyle::default()
             },
         );
+        y += HEADER_H;
+
+        if self.static_params.is_empty() {
+            tree.add_label(
+                bg_id,
+                viewport.x + PADDING,
+                y,
+                viewport.width - 2.0 * PADDING,
+                ROW_H,
+                "(no def-declared parameters)",
+                UIStyle {
+                    text_color: color::TEXT_DIMMED_C32,
+                    font_size: FONT_SIZE,
+                    text_align: TextAlign::Left,
+                    ..UIStyle::default()
+                },
+            );
+            y += ROW_H;
+        } else {
+            for sp in &self.static_params {
+                let cb_x = viewport.x + PADDING;
+                let cb_y = y + (ROW_H - CHECKBOX_H) * 0.5;
+                let cb_style = checkbox_style(sp.exposed, true);
+                let cb_id = tree.add_button(
+                    bg_id,
+                    cb_x,
+                    cb_y,
+                    CHECKBOX_W,
+                    CHECKBOX_H,
+                    cb_style,
+                    if sp.exposed { "✓" } else { "" },
+                );
+
+                let label_x = cb_x + CHECKBOX_W + CHECKBOX_GAP;
+                let label_w = (viewport.x + viewport.width - PADDING - label_x).max(10.0);
+                tree.add_label(
+                    bg_id,
+                    label_x,
+                    y,
+                    label_w,
+                    ROW_H,
+                    &sp.label,
+                    UIStyle {
+                        text_color: color::TEXT_WHITE_C32,
+                        font_size: FONT_SIZE,
+                        text_align: TextAlign::Left,
+                        ..UIStyle::default()
+                    },
+                );
+
+                self.rows.push(RowState::StaticBlock {
+                    checkbox_node_id: cb_id,
+                    param_index: sp.index,
+                    currently_exposed: sp.exposed,
+                });
+                y += ROW_H;
+            }
+        }
+
+        // ── Selected Node section ─────────────────────────────────
+        y += PADDING;
+        tree.add_label(
+            bg_id,
+            viewport.x + PADDING,
+            y,
+            viewport.width - 2.0 * PADDING,
+            HEADER_H - PADDING,
+            "Inner-Node Parameters",
+            UIStyle {
+                text_color: color::TEXT_WHITE_C32,
+                font_size: HEADER_FONT_SIZE,
+                text_align: TextAlign::Left,
+                ..UIStyle::default()
+            },
+        );
+        y += HEADER_H;
 
         // Empty state — nothing selected, or selected node carries no
         // user-exposable parameters.
@@ -203,7 +314,7 @@ impl GraphEditorPanel {
             tree.add_label(
                 bg_id,
                 viewport.x + PADDING,
-                viewport.y + HEADER_H + PADDING,
+                y,
                 viewport.width - 2.0 * PADDING,
                 ROW_H,
                 "Select a node to expose its parameters.",
@@ -221,7 +332,7 @@ impl GraphEditorPanel {
             tree.add_label(
                 bg_id,
                 viewport.x + PADDING,
-                viewport.y + HEADER_H + PADDING,
+                y,
                 viewport.width - 2.0 * PADDING,
                 ROW_H,
                 "This node has no stable handle.",
@@ -235,8 +346,6 @@ impl GraphEditorPanel {
             return;
         };
 
-        // Per-param row.
-        let mut y = viewport.y + HEADER_H + PADDING;
         for ps in &node.parameters {
             // Unsupported types — Vec/Color/etc. — show a row but
             // disabled. V2's single-slot surface can't carry them.
@@ -294,7 +403,7 @@ impl GraphEditorPanel {
                     GraphEditorParamKind::Other => UserParamConvert::Float, // unreachable
                 };
                 let (min, max) = ps.range.unwrap_or((0.0, 1.0));
-                self.rows.push(RowState {
+                self.rows.push(RowState::InnerNode {
                     checkbox_node_id: cb_id,
                     node_handle: handle.clone(),
                     inner_param: ps.name.clone(),
@@ -317,20 +426,49 @@ impl GraphEditorPanel {
         let Some(effect_index) = self.effect_index else {
             return Vec::new();
         };
-        let Some(row) = self.rows.iter().find(|r| r.checkbox_node_id == node_id) else {
+        let row = self.rows.iter().find(|r| match r {
+            RowState::InnerNode {
+                checkbox_node_id, ..
+            } => *checkbox_node_id == node_id,
+            RowState::StaticBlock {
+                checkbox_node_id, ..
+            } => *checkbox_node_id == node_id,
+        });
+        let Some(row) = row else {
             return Vec::new();
         };
-        vec![PanelAction::EffectParamExpose {
-            effect_index,
-            node_handle: row.node_handle.clone(),
-            inner_param: row.inner_param.clone(),
-            expose: !row.currently_exposed,
-            label: row.label.clone(),
-            min: row.min,
-            max: row.max,
-            default_value: row.default_value,
-            convert: row.convert.clone(),
-        }]
+        match row {
+            RowState::InnerNode {
+                node_handle,
+                inner_param,
+                label,
+                min,
+                max,
+                default_value,
+                convert,
+                currently_exposed,
+                ..
+            } => vec![PanelAction::EffectParamExpose {
+                effect_index,
+                node_handle: node_handle.clone(),
+                inner_param: inner_param.clone(),
+                expose: !currently_exposed,
+                label: label.clone(),
+                min: *min,
+                max: *max,
+                default_value: *default_value,
+                convert: convert.clone(),
+            }],
+            RowState::StaticBlock {
+                param_index,
+                currently_exposed,
+                ..
+            } => vec![PanelAction::EffectStaticParamExpose {
+                effect_index,
+                param_index: *param_index,
+                expose: !currently_exposed,
+            }],
+        }
     }
 
     /// Convenience wrapper: walk a slice of clicked button ids, map
@@ -410,25 +548,51 @@ mod tests {
         Rect::new(0.0, 0.0, SIDEBAR_WIDTH, 600.0)
     }
 
+    /// Helper: pull the inner-param name from an InnerNode row.
+    /// Panics if the row is a StaticBlock — used in tests that explicitly
+    /// build inner-node rows.
+    fn inner_param_of(row: &RowState) -> &str {
+        match row {
+            RowState::InnerNode { inner_param, .. } => inner_param.as_str(),
+            RowState::StaticBlock { .. } => panic!("expected InnerNode row"),
+        }
+    }
+
+    fn checkbox_id_of(row: &RowState) -> u32 {
+        match row {
+            RowState::InnerNode {
+                checkbox_node_id, ..
+            } => *checkbox_node_id,
+            RowState::StaticBlock {
+                checkbox_node_id, ..
+            } => *checkbox_node_id,
+        }
+    }
+
     #[test]
     fn build_renders_rows_for_supported_params_only() {
         let mut tree = UITree::new();
         let mut panel = GraphEditorPanel::new();
         let node = snap_node_with_params(Some("uv_transform"));
-        panel.configure(Some(0), Some(&node), HashSet::new());
+        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new());
         panel.build(&mut tree, viewport());
-        // 2 supported params → 2 rows tracked. The Color row exists
-        // visually but isn't clickable.
-        assert_eq!(panel.rows.len(), 2);
-        assert_eq!(panel.rows[0].inner_param, "translate");
-        assert_eq!(panel.rows[1].inner_param, "scale");
+        // 2 supported params → 2 inner-node rows tracked. The Color row
+        // exists visually but isn't clickable.
+        let inner_rows: Vec<&RowState> = panel
+            .rows
+            .iter()
+            .filter(|r| matches!(r, RowState::InnerNode { .. }))
+            .collect();
+        assert_eq!(inner_rows.len(), 2);
+        assert_eq!(inner_param_of(inner_rows[0]), "translate");
+        assert_eq!(inner_param_of(inner_rows[1]), "scale");
     }
 
     #[test]
     fn build_handles_no_selection_with_empty_state() {
         let mut tree = UITree::new();
         let mut panel = GraphEditorPanel::new();
-        panel.configure(Some(0), None, HashSet::new());
+        panel.configure(Some(0), Vec::new(), None, HashSet::new());
         panel.build(&mut tree, viewport());
         assert!(panel.rows.is_empty());
     }
@@ -438,7 +602,7 @@ mod tests {
         let mut tree = UITree::new();
         let mut panel = GraphEditorPanel::new();
         let node = snap_node_with_params(None); // no handle
-        panel.configure(Some(0), Some(&node), HashSet::new());
+        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new());
         panel.build(&mut tree, viewport());
         assert!(
             panel.rows.is_empty(),
@@ -451,10 +615,15 @@ mod tests {
         let mut tree = UITree::new();
         let mut panel = GraphEditorPanel::new();
         let node = snap_node_with_params(Some("uv_transform"));
-        panel.configure(Some(0), Some(&node), HashSet::new());
+        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new());
         panel.build(&mut tree, viewport());
 
-        let translate_cb = panel.rows[0].checkbox_node_id;
+        let inner_rows: Vec<&RowState> = panel
+            .rows
+            .iter()
+            .filter(|r| matches!(r, RowState::InnerNode { .. }))
+            .collect();
+        let translate_cb = checkbox_id_of(inner_rows[0]);
         let actions = panel.handle_click(translate_cb);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
@@ -490,10 +659,15 @@ mod tests {
         let node = snap_node_with_params(Some("uv_transform"));
         let mut exposed = HashSet::new();
         exposed.insert(("uv_transform".to_string(), "translate".to_string()));
-        panel.configure(Some(0), Some(&node), exposed);
+        panel.configure(Some(0), Vec::new(), Some(&node), exposed);
         panel.build(&mut tree, viewport());
 
-        let translate_cb = panel.rows[0].checkbox_node_id;
+        let inner_rows: Vec<&RowState> = panel
+            .rows
+            .iter()
+            .filter(|r| matches!(r, RowState::InnerNode { .. }))
+            .collect();
+        let translate_cb = checkbox_id_of(inner_rows[0]);
         let actions = panel.handle_click(translate_cb);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
@@ -509,7 +683,7 @@ mod tests {
         let mut tree = UITree::new();
         let mut panel = GraphEditorPanel::new();
         let node = snap_node_with_params(Some("uv_transform"));
-        panel.configure(Some(0), Some(&node), HashSet::new());
+        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new());
         panel.build(&mut tree, viewport());
         // Random unrelated node id.
         assert!(panel.handle_click(99999).is_empty());
@@ -522,10 +696,54 @@ mod tests {
         let node = snap_node_with_params(Some("uv_transform"));
         // Configure with effect_index = None: the editor isn't open
         // on a specific effect, so clicks must NOT emit.
-        panel.configure(None, Some(&node), HashSet::new());
+        panel.configure(None, Vec::new(), Some(&node), HashSet::new());
         panel.build(&mut tree, viewport());
         if let Some(row) = panel.rows.first() {
-            assert!(panel.handle_click(row.checkbox_node_id).is_empty());
+            assert!(panel.handle_click(checkbox_id_of(row)).is_empty());
+        }
+    }
+
+    #[test]
+    fn static_block_row_emits_static_param_expose() {
+        let mut tree = UITree::new();
+        let mut panel = GraphEditorPanel::new();
+        let static_params = vec![
+            GraphEditorStaticParam {
+                index: 0,
+                label: "Amount".to_string(),
+                exposed: true,
+            },
+            GraphEditorStaticParam {
+                index: 1,
+                label: "Threshold".to_string(),
+                exposed: true,
+            },
+        ];
+        panel.configure(Some(0), static_params, None, HashSet::new());
+        panel.build(&mut tree, viewport());
+
+        let static_rows: Vec<&RowState> = panel
+            .rows
+            .iter()
+            .filter(|r| matches!(r, RowState::StaticBlock { .. }))
+            .collect();
+        assert_eq!(static_rows.len(), 2);
+
+        let cb_id = checkbox_id_of(static_rows[1]);
+        let actions = panel.handle_click(cb_id);
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            PanelAction::EffectStaticParamExpose {
+                effect_index,
+                param_index,
+                expose,
+            } => {
+                assert_eq!(*effect_index, 0);
+                assert_eq!(*param_index, 1);
+                // Was exposed=true → click emits expose=false.
+                assert!(!expose);
+            }
+            other => panic!("unexpected action: {other:?}"),
         }
     }
 }

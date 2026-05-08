@@ -30,8 +30,8 @@ use manifold_editing::commands::drivers::{
 use manifold_editing::commands::effect_target::{DriverTarget, EffectTarget};
 use manifold_editing::commands::effects::{
     ChangeEffectParamCommand, InnerParamMeta, RemoveEffectCommand, ReorderEffectCommand,
-    ReorderEffectGroupCommand, ToggleEffectParamExposeCommand,
-    ToggleEffectCommand,
+    ReorderEffectGroupCommand, ToggleEffectCommand, ToggleEffectParamExposeCommand,
+    ToggleStaticParamExposeCommand,
 };
 use manifold_editing::commands::envelopes::{
     ChangeLayerEnvelopeADSRCommand, ChangeLayerEnvelopeRangeCommand,
@@ -1684,6 +1684,22 @@ pub(super) fn dispatch_inspector(
                 inner_param.clone(),
                 *expose,
                 meta,
+            );
+            ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+            DispatchResult::handled()
+        }
+        PanelAction::EffectStaticParamExpose {
+            effect_index,
+            param_index,
+            expose,
+        } => {
+            let tab = ui.inspector.last_effect_tab();
+            let target = super::resolve_effect_target(tab, active_layer, project);
+            let cmd = ToggleStaticParamExposeCommand::new(
+                target,
+                *effect_index,
+                *param_index,
+                *expose,
             );
             ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
             DispatchResult::handled()

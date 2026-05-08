@@ -564,3 +564,80 @@ impl Command for ToggleEffectParamExposeCommand {
     }
 }
 
+/// Toggle the `exposed` flag on a static-block param slot. Hidden slots
+/// disappear from the effect card slider list but keep their value,
+/// driver, and Ableton mapping intact — they're still addressable by
+/// `param_id` for OSC / driver / mapping write paths.
+///
+/// Symmetric undo: stores the previous flag value (which is just `!new`
+/// for non-no-op execution). No-op when the slot already matches the
+/// requested state, or when `param_index` is out of bounds.
+#[derive(Debug)]
+pub struct ToggleStaticParamExposeCommand {
+    target: EffectTarget,
+    effect_index: usize,
+    param_index: usize,
+    new_exposed: bool,
+    /// Captured on first execute(). `None` when the call was a no-op.
+    prev_exposed: Option<bool>,
+}
+
+impl ToggleStaticParamExposeCommand {
+    pub fn new(
+        target: EffectTarget,
+        effect_index: usize,
+        param_index: usize,
+        new_exposed: bool,
+    ) -> Self {
+        Self {
+            target,
+            effect_index,
+            param_index,
+            new_exposed,
+            prev_exposed: None,
+        }
+    }
+}
+
+impl Command for ToggleStaticParamExposeCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let eidx = self.effect_index;
+        let pidx = self.param_index;
+        let new_v = self.new_exposed;
+        let prev = with_effects_mut(project, &self.target, |effects, _groups| {
+            let effect = effects.get_mut(eidx)?;
+            let slot = effect.param_values.get_mut(pidx)?;
+            if slot.exposed == new_v {
+                return None;
+            }
+            let was = slot.exposed;
+            slot.exposed = new_v;
+            Some(was)
+        });
+        self.prev_exposed = prev.flatten();
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let Some(prev) = self.prev_exposed else {
+            return;
+        };
+        let eidx = self.effect_index;
+        let pidx = self.param_index;
+        with_effects_mut(project, &self.target, |effects, _groups| {
+            if let Some(effect) = effects.get_mut(eidx)
+                && let Some(slot) = effect.param_values.get_mut(pidx)
+            {
+                slot.exposed = prev;
+            }
+        });
+    }
+
+    fn description(&self) -> &str {
+        if self.new_exposed {
+            "Show Effect Param"
+        } else {
+            "Hide Effect Param"
+        }
+    }
+}
+

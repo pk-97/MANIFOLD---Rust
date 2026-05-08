@@ -195,6 +195,7 @@ pub fn dispatch(
         | PanelAction::EffectReorder(..)
         | PanelAction::EffectReorderGroup(..)
         | PanelAction::EffectParamExpose { .. }
+        | PanelAction::EffectStaticParamExpose { .. }
         | PanelAction::GenTypeClicked(_)
         | PanelAction::GenParamSnapshot(_)
         | PanelAction::GenParamChanged(..)

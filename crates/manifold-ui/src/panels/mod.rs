@@ -224,6 +224,18 @@ pub enum PanelAction {
         default_value: f32,
         convert: manifold_core::effects::UserParamConvert,
     },
+    /// Toggle the `exposed` flag on a static-block param slot. Sent by
+    /// the graph-editor sidebar when the user ticks/unticks a slot that
+    /// belongs to the effect's def-declared static block (as opposed to
+    /// a user-tail binding, which routes through `EffectParamExpose`).
+    /// Hidden static slots disappear from the effect card slider list
+    /// but keep their value, drivers, and Ableton mappings — they're
+    /// still addressable by id, just not visible.
+    EffectStaticParamExpose {
+        effect_index: usize,
+        param_index: usize,
+        expose: bool,
+    },
 
     // Generator params
     GenTypeClicked(Option<LayerId>), // layer_id

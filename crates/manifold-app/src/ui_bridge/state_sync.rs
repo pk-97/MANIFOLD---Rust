@@ -1201,6 +1201,10 @@ fn effects_to_configs(
                         max: pd.max,
                         default: pd.default_value,
                         whole_numbers: pd.whole_numbers,
+                        // Hide the slider when the slot has been
+                        // unchecked in the editor sidebar. Slot index
+                        // `pi` aligns 1:1 with `fx.param_values[pi]`.
+                        exposed: fx.is_param_exposed(pi),
                         value_labels: pd.value_labels.clone(),
                         osc_address,
                         ableton_display,

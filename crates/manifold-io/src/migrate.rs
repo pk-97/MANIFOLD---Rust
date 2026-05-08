@@ -30,7 +30,27 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.2.0".to_string());
     }
 
+    if is_version_less_than(&version, "1.3.0") {
+        migrate_v120_to_v130(&mut root);
+        root["projectVersion"] = Value::String("1.3.0".to_string());
+    }
+
     serde_json::to_string_pretty(&root)
+}
+
+/// v1.2.0 → v1.3.0: per-param exposure (`ParamSlot { value, exposed }`)
+/// surfaces on `EffectInstance.paramValues`. The on-disk shape changes:
+/// V1.2 emitted bare `f32` per slot (positional Array or keyed Map);
+/// V1.3 emits `{ value, exposed }` objects.
+///
+/// No JSON rewriting is required here — `ParamSlot`'s polymorphic
+/// `Deserialize` accepts the legacy bare-f32 shape natively (defaulting
+/// `exposed` to `true`), and the next save canonicalizes to the V1.3
+/// object form. `baseParamValues` continues to use plain f32 (exposure
+/// isn't meaningful on the pre-modulation snapshot), so nothing changes
+/// there. This migration only bumps the version stamp.
+fn migrate_v120_to_v130(_root: &mut Value) {
+    // No-op. Polymorphic ParamSlot deserializer handles V1.2 wire shape.
 }
 
 /// v1.1.0 → v1.2.0: parameter addressing migration to stable
@@ -161,24 +181,25 @@ mod tests {
     }
 
     #[test]
-    fn test_v110_input_bumps_to_v120() {
+    fn test_v110_input_bumps_to_v130() {
         // V1.1 project with no legacy quirks → migrate_if_needed
-        // bumps the version stamp to 1.2.0 (step 14). The
-        // bidirectional Deserialize impls handle the parameter
-        // addressing migration on load — no JSON rewriting needed.
+        // chains forward: 1.1 → 1.2 (param-id) → 1.3 (per-param
+        // exposure). The bidirectional Deserialize impls handle
+        // both shape changes on load — no JSON rewriting needed.
         let json = r#"{
             "projectVersion": "1.1.0",
             "projectName": "test"
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v.get("projectVersion").and_then(|x| x.as_str()), Some("1.2.0"));
+        assert_eq!(v.get("projectVersion").and_then(|x| x.as_str()), Some("1.3.0"));
     }
 
     #[test]
-    fn test_v100_chains_through_v110_to_v120() {
+    fn test_v100_chains_through_to_v130() {
         // V1.0 project should chain: v1.0 → v1.1 (percussion +
-        // genParams nesting) → v1.2 (version stamp only).
+        // genParams nesting) → v1.2 (version stamp) → v1.3 (version
+        // stamp; per-param exposure handled by polymorphic deserializer).
         let json = r#"{
             "projectVersion": "1.0.0",
             "projectName": "test",
@@ -186,19 +207,33 @@ mod tests {
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v.get("projectVersion").and_then(|x| x.as_str()), Some("1.2.0"));
+        assert_eq!(v.get("projectVersion").and_then(|x| x.as_str()), Some("1.3.0"));
     }
 
     #[test]
-    fn test_v120_input_is_not_remigrated() {
+    fn test_v120_input_bumps_to_v130() {
+        // Phase 3 V1.2 projects gain a version bump on save; the
+        // polymorphic ParamSlot deserializer handles the bare-f32
+        // wire format on load.
+        let json = r#"{
+            "projectVersion": "1.2.0",
+            "projectName": "phase3"
+        }"#;
+        let migrated = migrate_if_needed(json).unwrap();
+        let v: Value = serde_json::from_str(&migrated).unwrap();
+        assert_eq!(v.get("projectVersion").and_then(|x| x.as_str()), Some("1.3.0"));
+    }
+
+    #[test]
+    fn test_v130_input_is_not_remigrated() {
         // Already-current projects should pass through unchanged
         // (no spurious migration attempts).
         let json = r#"{
-            "projectVersion": "1.2.0",
+            "projectVersion": "1.3.0",
             "projectName": "current"
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v.get("projectVersion").and_then(|x| x.as_str()), Some("1.2.0"));
+        assert_eq!(v.get("projectVersion").and_then(|x| x.as_str()), Some("1.3.0"));
     }
 }
