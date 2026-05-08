@@ -461,25 +461,45 @@ impl UIRenderer {
         self.flush_scissor_batch();
     }
 
-    /// Like [`Self::render_overlay`], but **preserves** any scissor
-    /// batches accumulated earlier in the same `prepare/draw` cycle.
+    /// Render a UITree on top of immediate-mode primitives that were
+    /// already emitted via the `draw_*` API in the same prepare cycle.
     ///
-    /// Use this when emitting a UITree on top of primitives drawn via
-    /// the immediate-mode `draw_*` API (e.g. the graph-editor canvas
-    /// renders its nodes via `draw_bordered_rect` first, then layers
-    /// the right-sidebar UITree on top). Calling
-    /// [`Self::render_overlay`] in that flow would clear the canvas's
-    /// scissor batches and the canvas primitives would never reach
-    /// the GPU.
+    /// Use this in the graph-editor present path: the canvas emits its
+    /// nodes/wires/grid via `draw_*` first (no scissor management),
+    /// then this layers the right-sidebar UITree on top. The vanilla
+    /// [`Self::render_overlay`] would clear the canvas's prepared
+    /// batches by calling `begin_scissor_tracking` first.
+    ///
+    /// Implementation note: we manually push a covering batch for the
+    /// caller's existing rect commands (rather than calling
+    /// `flush_scissor_batch` + `begin_scissor_tracking_additive`), so
+    /// that we don't read `current_batch_start` — which can hold a
+    /// stale value from the previous frame, since `prepare` clears
+    /// `rect_commands` and `scissor_batches` but not the index. A stale
+    /// `current_batch_start` makes `flush_scissor_batch` underflow on
+    /// `len - start`, producing a malformed batch with a huge
+    /// `rect_count`. That manifests as GPU reads past the end of the
+    /// index buffer (pink flashes + `kIOGPUCommandBufferCallbackErrorInnocentVictim`
+    /// on adjacent command buffers).
     pub fn render_overlay_additive(&mut self, tree: &UITree, start_node: usize) {
-        // Flush whatever batch the caller's earlier `draw_*` calls left
-        // open so subsequent tree primitives accumulate into a fresh
-        // batch (with no inherited clip state). Then walk the tree
-        // additively — `begin_scissor_tracking_additive` does NOT clear
-        // `scissor_batches`, so the caller's batches survive into the
-        // final GPU pass.
-        self.flush_scissor_batch();
-        self.begin_scissor_tracking_additive();
+        let pre_existing = self.rect_commands.len();
+
+        // Cover the caller's immediate-mode rects with a no-scissor
+        // batch. Without this they'd be present in the index buffer
+        // but missing from `prepared_batches`, and `prepare`'s loop
+        // would skip them entirely.
+        if pre_existing > 0 {
+            self.scissor_batches.push(ScissorBatch {
+                scissor: None,
+                rect_start: 0,
+                rect_count: pre_existing,
+            });
+        }
+
+        // Set up batch tracking for the tree's emissions, starting at
+        // the current end of `rect_commands`.
+        self.clip_stack.clear();
+        self.current_batch_start = pre_existing;
 
         tree.traverse_range(start_node, usize::MAX, |event| match event {
             TraversalEvent::Node(node) => self.draw_node(node),
