@@ -274,6 +274,22 @@ impl Application {
         // 2. Process UI events and dispatch actions
         let mut actions = self.ws.ui_root.process_events();
 
+        // 2a. Drain the graph-editor window's UITree events. The editor
+        // doesn't go through `UIRoot::process_events` (its panel set is
+        // a single `GraphEditorPanel`, not the full main-window mix), so
+        // we route raw click events through the panel's own
+        // `handle_click` to translate them into `PanelAction::EffectParamExpose`.
+        // Resulting actions are appended to the main queue and dispatched
+        // through the same `ui_bridge::dispatch` arms as everything else.
+        if let Some(ed) = self.graph_editor.as_mut() {
+            let events = ed.ui_root.input.drain_events();
+            for event in events {
+                if let manifold_ui::input::UIEvent::Click { node_id, .. } = event {
+                    actions.extend(self.graph_editor_panel.handle_click(node_id));
+                }
+            }
+        }
+
         // 2a. Route viewport tracks-area events through InteractionOverlay.
         // These events were stashed by process_events() because the overlay
         // needs &mut TimelineEditingHost which UIRoot can't provide.
@@ -458,6 +474,18 @@ impl Application {
                     if let Some(tid) = type_id {
                         self.send_content_cmd(ContentCommand::WatchEffectGraph(Some(tid)));
                     }
+                    // Remember which effect instance the editor is on so
+                    // the right-sidebar panel can look up its user
+                    // bindings. Clip-scoped effects fall back to the
+                    // active layer's target since `resolve_effect_target`
+                    // doesn't carry a clip variant — Phase 3's user-
+                    // binding feature is master/layer-scoped per the doc.
+                    let target = crate::ui_bridge::resolve_effect_target(
+                        tab,
+                        &self.active_layer_id,
+                        &self.local_project,
+                    );
+                    self.current_editor_target = Some((target, *ei));
                     self.pending_open_graph_editor = true;
                     continue;
                 }
@@ -1272,7 +1300,47 @@ impl Application {
         let logical_w = (surface_w as f64 / scale).max(1.0) as u32;
         let logical_h = (surface_h as f64 / scale).max(1.0) as u32;
 
-        // ── Build frame: clear, then draw the canvas ──
+        // ── Build sidebar UITree (V2 user-exposed parameter checkboxes) ──
+        // The sidebar occupies the rightmost SIDEBAR_WIDTH logical
+        // pixels; the canvas owns the remainder. Build BEFORE rendering
+        // so the tree's nodes (panel + checkbox buttons + labels) are
+        // ready to be drawn alongside the canvas primitives.
+        let sidebar_width = manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
+        let canvas_width = (logical_w as f32 - sidebar_width).max(0.0);
+        let sidebar_x = canvas_width;
+        let sidebar_viewport = manifold_ui::Rect::new(
+            sidebar_x,
+            0.0,
+            sidebar_width,
+            logical_h as f32,
+        );
+
+        // Resolve which `EffectInstance` is being edited and build the
+        // panel inputs. An open editor without `current_editor_target`
+        // is a degenerate state — show the panel's empty placeholder.
+        let snap_arc = self.content_state.active_graph_snapshot.as_ref().cloned();
+        let view_for_panel = build_graph_editor_view(
+            self.current_editor_target.as_ref(),
+            self.graph_canvas.as_ref().and_then(|c| c.selected_node_id()),
+            snap_arc.as_deref(),
+        );
+        let exposed_keys = build_exposed_keys(
+            self.current_editor_target.as_ref(),
+            &self.local_project,
+        );
+        let effect_index = self.current_editor_target.as_ref().map(|(_, ei)| *ei);
+        self.graph_editor_panel
+            .configure(effect_index, view_for_panel.as_ref(), exposed_keys);
+
+        // Rebuild the editor's UITree from scratch each frame: tree state
+        // is small (one panel container + per-param row), so a clear +
+        // rebuild is cheaper than dirty-tracking and means stale rows
+        // can never linger after the selected node changes.
+        ws.ui_root.tree.clear();
+        self.graph_editor_panel
+            .build(&mut ws.ui_root.tree, sidebar_viewport);
+
+        // ── Build frame: clear, then draw the canvas + sidebar ──
         let mut encoder = gpu.device.create_encoder("Graph Editor Frame");
         encoder.clear_texture(offscreen, 0.10, 0.10, 0.12, 1.0);
 
@@ -1280,8 +1348,10 @@ impl Application {
             ui.begin_frame();
             canvas.render(
                 ui,
-                crate::graph_canvas::Rect::new(0.0, 0.0, logical_w as f32, logical_h as f32),
+                crate::graph_canvas::Rect::new(0.0, 0.0, canvas_width, logical_h as f32),
             );
+            // Draw the sidebar UITree on top of the canvas-cleared region.
+            ui.render_overlay(&ws.ui_root.tree, 0);
             if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
                 ui.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
             }
@@ -1815,4 +1885,83 @@ fn render_text_input_overlay(
             }
         }
     }
+}
+
+/// Convert a renderer-side [`manifold_renderer::node_graph::NodeSnapshot`]
+/// into the UI-facing [`manifold_ui::panels::graph_editor::GraphEditorNodeView`]
+/// that the right-sidebar panel consumes.
+///
+/// Returns `None` when:
+/// - no editor target is set,
+/// - no graph snapshot is available, or
+/// - the canvas's selected node is not in the snapshot.
+fn build_graph_editor_view(
+    target: Option<&(
+        manifold_editing::commands::effect_target::EffectTarget,
+        usize,
+    )>,
+    selected_node: Option<u32>,
+    snapshot: Option<&manifold_renderer::node_graph::GraphSnapshot>,
+) -> Option<manifold_ui::panels::graph_editor::GraphEditorNodeView> {
+    use manifold_renderer::node_graph::ParamSnapshotKind;
+    use manifold_ui::panels::graph_editor::{
+        GraphEditorNodeView, GraphEditorParam, GraphEditorParamKind,
+    };
+
+    target?; // editor not on a specific effect → no view
+    let id = selected_node?;
+    let snap = snapshot?;
+    let node = snap.nodes.iter().find(|n| n.id == id)?;
+    let parameters = node
+        .parameters
+        .iter()
+        .map(|p| GraphEditorParam {
+            name: p.name.clone(),
+            label: p.label.clone(),
+            kind: match p.kind {
+                ParamSnapshotKind::Float => GraphEditorParamKind::Float,
+                ParamSnapshotKind::Int => GraphEditorParamKind::Int,
+                ParamSnapshotKind::Bool => GraphEditorParamKind::Bool,
+                ParamSnapshotKind::Enum => GraphEditorParamKind::Enum,
+                ParamSnapshotKind::Other => GraphEditorParamKind::Other,
+            },
+            default_value: p.default_value,
+            range: p.range,
+        })
+        .collect();
+    Some(GraphEditorNodeView {
+        node_handle: node.node_handle.clone(),
+        title: node.title.clone(),
+        parameters,
+    })
+}
+
+/// Build the `(node_handle, inner_param)` set of currently-exposed
+/// bindings for the effect identified by `target`. Used by the panel
+/// to render checkboxes in the correct (checked vs unchecked) state.
+fn build_exposed_keys(
+    target: Option<&(
+        manifold_editing::commands::effect_target::EffectTarget,
+        usize,
+    )>,
+    project: &manifold_core::project::Project,
+) -> std::collections::HashSet<(String, String)> {
+    use manifold_editing::commands::effect_target::EffectTarget;
+    let Some((effect_target, effect_index)) = target else {
+        return Default::default();
+    };
+    let effects: Option<&[manifold_core::effects::EffectInstance]> = match effect_target {
+        EffectTarget::Master => Some(&project.settings.master_effects),
+        EffectTarget::Layer { layer_id } => project
+            .timeline
+            .find_layer_by_id(layer_id)
+            .and_then(|(_, l)| l.effects.as_deref()),
+    };
+    let Some(fx) = effects.and_then(|e| e.get(*effect_index)) else {
+        return Default::default();
+    };
+    fx.user_param_bindings
+        .iter()
+        .map(|ub| (ub.node_handle.clone(), ub.inner_param.clone()))
+        .collect()
 }

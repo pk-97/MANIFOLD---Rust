@@ -272,6 +272,17 @@ pub struct Application {
     /// editor window is open; cleared on close. Phase 4 seeds it with
     /// a hardcoded view of `NodeGraphTestFX`'s graph.
     pub(crate) graph_canvas: Option<crate::graph_canvas::GraphCanvas>,
+    /// Right-sidebar checkbox panel for V2 user-exposed parameters.
+    /// Shares the editor window with `graph_canvas`.
+    pub(crate) graph_editor_panel: manifold_ui::panels::graph_editor::GraphEditorPanel,
+    /// Identifies which `EffectInstance` the editor is currently
+    /// configuring. Set when `OpenGraphEditor(ei)` fires; cleared on
+    /// editor-window close. The editor's right-sidebar reads this to
+    /// look up that effect's `user_param_bindings`.
+    pub(crate) current_editor_target: Option<(
+        manifold_editing::commands::effect_target::EffectTarget,
+        usize,
+    )>,
 
     // Frame timing
     pub(crate) frame_timer: FrameTimer,
@@ -423,6 +434,8 @@ impl Application {
             graph_editor: None,
             graph_editor_window_id: None,
             graph_canvas: None,
+            graph_editor_panel: manifold_ui::panels::graph_editor::GraphEditorPanel::new(),
+            current_editor_target: None,
             // UI frame rate: uncapped (120fps target, vsync limits actual present).
             // Content thread has its own timer at project FPS — fully decoupled.
             frame_timer: FrameTimer::new(120.0),
@@ -1801,15 +1814,31 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             )
                         })
                         .unwrap_or((1.0, crate::graph_canvas::Rect::new(0.0, 0.0, 1.0, 1.0)));
+                    let logical_x = position.x as f32 / scale as f32;
+                    let logical_y = position.y as f32 / scale as f32;
+                    let sidebar_x =
+                        viewport.w - manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
+                    // Always update canvas cursor — graph-space coords
+                    // need it even for clicks that land in the sidebar.
                     if let Some(canvas) = self.graph_canvas.as_mut() {
-                        canvas.on_pointer_move(
-                            viewport,
-                            position.x as f32 / scale as f32,
-                            position.y as f32 / scale as f32,
+                        canvas.on_pointer_move(viewport, logical_x, logical_y);
+                    }
+                    // Forward into the editor's UITree only when the
+                    // cursor sits in the sidebar — Move events outside
+                    // the sidebar would just cause spurious hover/exit
+                    // on tree nodes.
+                    if logical_x >= sidebar_x
+                        && let Some(ed) = self.graph_editor.as_mut()
+                    {
+                        ed.ui_root.input.process_pointer(
+                            &mut ed.ui_root.tree,
+                            Vec2::new(logical_x, logical_y),
+                            manifold_ui::input::PointerAction::Move,
+                            self.time_since_start,
                         );
-                        if let Some(ed) = self.graph_editor.as_mut() {
-                            ed.offscreen_dirty = true;
-                        }
+                    }
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.offscreen_dirty = true;
                     }
                     return;
                 }
@@ -1917,18 +1946,47 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             })
                             .unwrap_or(crate::graph_canvas::Rect::new(0.0, 0.0, 1.0, 1.0));
                         let (cx, cy) = canvas.cursor();
+                        let sidebar_x =
+                            viewport.w - manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
+                        let in_sidebar = cx >= sidebar_x;
                         match (button, state) {
                             (MouseButton::Left, ElementState::Pressed) => {
-                                canvas.on_left_button_down(viewport, cx, cy);
+                                if in_sidebar {
+                                    if let Some(ed) = self.graph_editor.as_mut() {
+                                        ed.ui_root.input.process_pointer(
+                                            &mut ed.ui_root.tree,
+                                            Vec2::new(cx, cy),
+                                            manifold_ui::input::PointerAction::Down,
+                                            self.time_since_start,
+                                        );
+                                    }
+                                } else {
+                                    canvas.on_left_button_down(viewport, cx, cy);
+                                }
                             }
                             (MouseButton::Left, ElementState::Released) => {
-                                canvas.on_left_button_up();
+                                if in_sidebar {
+                                    if let Some(ed) = self.graph_editor.as_mut() {
+                                        ed.ui_root.input.process_pointer(
+                                            &mut ed.ui_root.tree,
+                                            Vec2::new(cx, cy),
+                                            manifold_ui::input::PointerAction::Up,
+                                            self.time_since_start,
+                                        );
+                                    }
+                                } else {
+                                    canvas.on_left_button_up();
+                                }
                             }
                             (MouseButton::Middle, ElementState::Pressed) => {
-                                canvas.on_pan_button_down(cx, cy);
+                                if !in_sidebar {
+                                    canvas.on_pan_button_down(cx, cy);
+                                }
                             }
                             (MouseButton::Middle, ElementState::Released) => {
-                                canvas.on_pan_button_up();
+                                if !in_sidebar {
+                                    canvas.on_pan_button_up();
+                                }
                             }
                             _ => {}
                         }

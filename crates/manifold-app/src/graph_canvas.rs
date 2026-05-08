@@ -351,6 +351,14 @@ impl GraphCanvas {
         self.cursor
     }
 
+    /// Currently-selected node id within the graph the canvas is
+    /// viewing. Set by `on_left_button_down` when the click lands on
+    /// a node. Read by the editor's right-sidebar panel to figure out
+    /// which inner-node parameters to show as expose checkboxes.
+    pub fn selected_node_id(&self) -> Option<u32> {
+        self.selected
+    }
+
     pub fn on_scroll(&mut self, viewport: Rect, dy: f32) {
         let (gx_before, gy_before) = self.to_graph(viewport, self.cursor.0, self.cursor.1);
         let factor = (dy * 0.0015).exp();
