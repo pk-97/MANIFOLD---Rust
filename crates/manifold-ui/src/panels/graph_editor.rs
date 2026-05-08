@@ -343,11 +343,14 @@ impl GraphEditorPanel {
 }
 
 fn checkbox_style(checked: bool, supported: bool) -> UIStyle {
+    // The unchecked state needs a bg that's visibly distinct from the
+    // panel bg behind it (which is `EFFECT_CARD_INNER_BG_C32`), or the
+    // checkbox disappears into the panel and the user has to guess
+    // where to click. Use the standard inactive-button gray.
     let bg_color = match (checked, supported) {
         (true, true) => color::ACCENT_BLUE_C32,
-        (false, true) => color::EFFECT_CARD_INNER_BG_C32,
-        // Disabled (unsupported type) — slightly darker than the panel bg.
-        (_, false) => color::EFFECT_CARD_INNER_BG_C32,
+        (false, true) => color::BUTTON_INACTIVE_C32,
+        (_, false) => color::BUTTON_INACTIVE_C32,
     };
     let mut style = UIStyle {
         bg_color,
@@ -355,7 +358,9 @@ fn checkbox_style(checked: bool, supported: bool) -> UIStyle {
         font_size: HEADER_FONT_SIZE,
         text_align: TextAlign::Center,
         corner_radius: 4.0,
-        border_color: color::CARD_BORDER_C32,
+        // Brighter border than CARD_BORDER_C32 so the checkbox edge
+        // reads against the inactive-button gray.
+        border_color: color::TEXT_DIMMED_C32,
         border_width: 1.0,
         ..UIStyle::default()
     };
