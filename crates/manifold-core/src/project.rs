@@ -748,7 +748,7 @@ fn default_version() -> String {
 mod tests {
     use super::*;
     use crate::EffectTypeId;
-    use crate::effects::{EffectInstance, ParameterDriver};
+    use crate::effects::{EffectInstance, ParamSlot, ParameterDriver};
     use crate::types::{BeatDivision, DriverWaveform};
 
     /// Step 8 regression: a driver deserialized from the legacy
@@ -758,7 +758,7 @@ mod tests {
     fn legacy_param_index_resolved_to_param_id_for_effect_drivers() {
         let mut p = Project::default();
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
-        fx.param_values = vec![0.5];
+        fx.param_values = vec![ParamSlot::exposed(0.5)];
         // Construct a driver as if it came from legacy JSON: empty
         // param_id, legacy_param_index = Some(0).
         fx.drivers = Some(vec![ParameterDriver {
@@ -787,7 +787,7 @@ mod tests {
     fn legacy_resolution_idempotent_when_param_id_already_set() {
         let mut p = Project::default();
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
-        fx.param_values = vec![0.5];
+        fx.param_values = vec![ParamSlot::exposed(0.5)];
         fx.drivers = Some(vec![ParameterDriver::new(
             "amount",
             BeatDivision::Quarter,
@@ -849,7 +849,7 @@ mod tests {
         // ignored at runtime (`param_id_to_index` returns None on "").
         let mut p = Project::default();
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
-        fx.param_values = vec![0.5];
+        fx.param_values = vec![ParamSlot::exposed(0.5)];
         fx.drivers = Some(vec![ParameterDriver {
             param_id: std::borrow::Cow::Borrowed(""),
             beat_division: BeatDivision::Quarter,
@@ -923,7 +923,7 @@ mod tests {
         // registered in this test crate; pretend the driver was for it).
         let mut p = Project::default();
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
-        fx.param_values = vec![0.5];
+        fx.param_values = vec![ParamSlot::exposed(0.5)];
         let mut driver_for_bloom = back.clone();
         // (In a real load, the driver lands inside an EffectInstance
         // from the deserialize tree; here we simulate by re-attaching.)
@@ -953,7 +953,7 @@ mod tests {
         // Synthetic effect type with no registry def in this test build.
         let unregistered = crate::EffectTypeId::from_string("not-a-real-effect-id".to_string());
         let mut fx = EffectInstance::new(unregistered);
-        fx.param_values = vec![0.5, 0.5, 0.5];
+        fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(0.5), ParamSlot::exposed(0.5)];
         fx.drivers = Some(vec![ParameterDriver {
             param_id: std::borrow::Cow::Borrowed(""),
             beat_division: BeatDivision::Quarter,

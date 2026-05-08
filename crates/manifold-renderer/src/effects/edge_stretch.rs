@@ -72,9 +72,9 @@ impl PostProcessEffect for EdgeStretchFX {
         let p = &fx.param_values;
         let uniforms = EdgeStretchUniforms {
             // EdgeStretchFX.cs:13-15 — GetParam(0), GetParam(1), Mathf.Round(GetParam(2))
-            amount: p.first().copied().unwrap_or(1.0),
-            source_width: p.get(1).copied().unwrap_or(0.433).clamp(0.1, 0.9),
-            mode: (p.get(2).copied().unwrap_or(0.0).round() as u32).min(2),
+            amount: p.first().map(|pv| pv.value).unwrap_or(1.0),
+            source_width: p.get(1).map(|pv| pv.value).unwrap_or(0.433).clamp(0.1, 0.9),
+            mode: (p.get(2).map(|pv| pv.value).unwrap_or(0.0).round() as u32).min(2),
             _pad: 0.0,
         };
 

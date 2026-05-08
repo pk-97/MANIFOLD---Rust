@@ -78,11 +78,11 @@ impl PostProcessEffect for GlitchFX {
         // GlitchFX.cs:13-18 — read all 5 params in Unity order
         let p = &fx.param_values;
         let uniforms = GlitchUniforms {
-            amount: p.first().copied().unwrap_or(0.0), // line 13: _Amount
-            block_size: p.get(1).copied().unwrap_or(16.0).max(4.0), // line 14: _BlockSize
-            rgb_shift: p.get(2).copied().unwrap_or(0.01), // line 15: _RGBShift
-            scanline: p.get(3).copied().unwrap_or(0.3), // line 16: _Scanline
-            speed: p.get(4).copied().unwrap_or(2.0),   // line 17: _Speed
+            amount: p.first().map(|pv| pv.value).unwrap_or(0.0), // line 13: _Amount
+            block_size: p.get(1).map(|pv| pv.value).unwrap_or(16.0).max(4.0), // line 14: _BlockSize
+            rgb_shift: p.get(2).map(|pv| pv.value).unwrap_or(0.01), // line 15: _RGBShift
+            scanline: p.get(3).map(|pv| pv.value).unwrap_or(0.3), // line 16: _Scanline
+            speed: p.get(4).map(|pv| pv.value).unwrap_or(2.0),   // line 17: _Speed
             time: ctx.time,                            // line 18: Time.time
             resolution_x: ctx.output_width as f32,
             resolution_y: ctx.output_height as f32,

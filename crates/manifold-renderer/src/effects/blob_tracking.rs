@@ -1125,7 +1125,7 @@ impl PostProcessEffect for BlobTrackingFX {
 
     // BlobTrackingFX.cs line 127: if (amount <= 0f || material == null) return;
     fn should_skip(&self, fx: &EffectInstance) -> bool {
-        fx.param_values.first().copied().unwrap_or(0.0) <= 0.0
+        fx.param_values.first().map(|p| p.value).unwrap_or(0.0) <= 0.0
     }
 
     fn apply(
@@ -1137,16 +1137,16 @@ impl PostProcessEffect for BlobTrackingFX {
         ctx: &EffectContext,
     ) {
         // BlobTrackingFX.cs line 126-127
-        let amount = fx.param_values.first().copied().unwrap_or(0.0);
+        let amount = fx.param_values.first().map(|p| p.value).unwrap_or(0.0);
         if amount <= 0.0 {
             return;
         }
 
         // BlobTrackingFX.cs lines 129-131
-        let threshold = fx.param_values.get(1).copied().unwrap_or(0.65);
-        let sensitivity = fx.param_values.get(2).copied().unwrap_or(0.85);
-        let smoothing = fx.param_values.get(3).copied().unwrap_or(0.7);
-        let connect_dist = fx.param_values.get(4).copied().unwrap_or(0.35);
+        let threshold = fx.param_values.get(1).map(|p| p.value).unwrap_or(0.65);
+        let sensitivity = fx.param_values.get(2).map(|p| p.value).unwrap_or(0.85);
+        let smoothing = fx.param_values.get(3).map(|p| p.value).unwrap_or(0.7);
+        let connect_dist = fx.param_values.get(4).map(|p| p.value).unwrap_or(0.35);
 
         // BlobTrackingFX.cs line 133
         let source_w = source.width;

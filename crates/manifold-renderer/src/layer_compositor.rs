@@ -282,7 +282,7 @@ fn has_enabled_effects(effects: &[EffectInstance]) -> bool {
     for fx in effects {
         if fx.enabled
             && *fx.effect_type() != EffectTypeId::UNKNOWN
-            && fx.param_values.first().copied().unwrap_or(0.0) > 0.0
+            && fx.param_values.first().map(|p| p.value).unwrap_or(0.0) > 0.0
         {
             return true;
         }

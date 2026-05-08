@@ -30,6 +30,7 @@
 
 use std::borrow::Cow;
 
+use manifold_core::effects::ParamSlot;
 use manifold_core::generator_registration::ParamSpec;
 
 use crate::node_graph::composites::CompositeHandle;
@@ -274,12 +275,12 @@ pub fn apply_param_bindings(
     user_bindings: &[UserParamBindingRuntime],
     graph: &mut Graph,
     handle: Option<&CompositeHandle>,
-    values: &[f32],
+    values: &[ParamSlot],
 ) {
     for (i, binding) in static_bindings.iter().enumerate() {
         let value = values
             .get(i)
-            .copied()
+            .map(|p| p.value)
             .unwrap_or(binding.spec.default_value);
         if let Err(err) = binding.apply(graph, handle, value) {
             eprintln!(
@@ -294,7 +295,7 @@ pub fn apply_param_bindings(
     for (j, binding) in user_bindings.iter().enumerate() {
         let value = values
             .get(n + j)
-            .copied()
+            .map(|p| p.value)
             .unwrap_or(binding.default_value);
         if let Err(err) = binding.apply(graph, value) {
             eprintln!(
@@ -318,15 +319,15 @@ pub fn apply_param_bindings(
 pub fn binding_value(
     static_bindings: &[ParamBinding],
     user_bindings: &[UserParamBindingRuntime],
-    values: &[f32],
+    values: &[ParamSlot],
     id: &str,
 ) -> Option<f32> {
     if let Some(idx) = static_bindings.iter().position(|b| b.id == id) {
-        return values.get(idx).copied();
+        return values.get(idx).map(|p| p.value);
     }
     let n = static_bindings.len();
     if let Some(j) = user_bindings.iter().position(|b| b.id == id) {
-        return values.get(n + j).copied();
+        return values.get(n + j).map(|p| p.value);
     }
     None
 }
@@ -462,7 +463,7 @@ mod tests {
         ];
 
         // Provide only one value — second falls back to spec default 0.95.
-        apply_param_bindings(&bindings, &[], &mut g, None, &[0.5]);
+        apply_param_bindings(&bindings, &[], &mut g, None, &[ParamSlot::exposed(0.5)]);
         let inst = g.get_node(feedback).unwrap();
         assert_eq!(inst.params.get("amount"), Some(&ParamValue::Float(0.5)));
         assert_eq!(inst.params.get("zoom"), Some(&ParamValue::Float(0.95)));
@@ -491,7 +492,7 @@ mod tests {
             std::slice::from_ref(&user_runtime),
             &mut g,
             None,
-            &[0.5, 1.05],
+            &[ParamSlot::exposed(0.5), ParamSlot::exposed(1.05)],
         );
         let inst = g.get_node(feedback).unwrap();
         assert_eq!(inst.params.get("amount"), Some(&ParamValue::Float(0.5)));
@@ -520,7 +521,7 @@ mod tests {
             std::slice::from_ref(&user_runtime),
             &mut g,
             None,
-            &[0.5],
+            &[ParamSlot::exposed(0.5)],
         );
         let inst = g.get_node(feedback).unwrap();
         assert_eq!(inst.params.get("zoom"), Some(&ParamValue::Float(0.97)));
@@ -577,7 +578,7 @@ mod tests {
         };
         let user_runtime = user_binding_to_runtime(&core_ub, &g).unwrap();
         let user_slice = std::slice::from_ref(&user_runtime);
-        let values = [0.5, 1.07];
+        let values = [ParamSlot::exposed(0.5), ParamSlot::exposed(1.07)];
         assert_eq!(
             binding_value(&static_bindings, user_slice, &values, "amount"),
             Some(0.5)

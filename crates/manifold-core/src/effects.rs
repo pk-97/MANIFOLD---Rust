@@ -177,21 +177,150 @@ pub struct UserParamBinding {
     pub convert: UserParamConvert,
 }
 
+// ─── Param Value (per-slot state) ───
+
+/// A single parameter slot's runtime state on an [`EffectInstance`].
+///
+/// Wraps the effective (post-modulation) `value` together with the
+/// `exposed` flag that gates whether this slot surfaces as a slider
+/// on the effect card. `exposed` defaults to `true` — the historical
+/// behavior where every static slot was always-visible. Toggling
+/// `exposed` to `false` hides the slider but preserves the underlying
+/// value (and any drivers/Ableton mappings addressing the slot —
+/// they continue to drive the value, just without a visible slider).
+///
+/// Wire format:
+/// - On serialize: always `{ "value": f, "exposed": b }` for clarity.
+/// - On deserialize: accepts either a bare `f32` (V1.x / V1.2 wire
+///   format, exposed defaults to true) or `{ value, exposed? }` object
+///   (V1.3+). Polymorphic deserialization keeps loaders simple.
+///
+/// Type-enforced single struct per slot eliminates the parallel-array
+/// footgun of separate `Vec<f32>` + `Vec<bool>` collections.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ParamSlot {
+    pub value: f32,
+    pub exposed: bool,
+}
+
+impl Default for ParamSlot {
+    fn default() -> Self {
+        Self {
+            value: 0.0,
+            exposed: true,
+        }
+    }
+}
+
+impl ParamSlot {
+    /// Convenience constructor for an exposed slot with the given value.
+    #[inline]
+    pub const fn exposed(value: f32) -> Self {
+        Self {
+            value,
+            exposed: true,
+        }
+    }
+}
+
+impl Serialize for ParamSlot {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("ParamSlot", 2)?;
+        s.serialize_field("value", &self.value)?;
+        s.serialize_field("exposed", &self.exposed)?;
+        s.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for ParamSlot {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct ParamValueVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for ParamValueVisitor {
+            type Value = ParamSlot;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a number (legacy bare f32) or an object {value, exposed?}")
+            }
+
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<ParamSlot, E> {
+                Ok(ParamSlot {
+                    value: v as f32,
+                    exposed: true,
+                })
+            }
+
+            fn visit_f32<E: serde::de::Error>(self, v: f32) -> Result<ParamSlot, E> {
+                Ok(ParamSlot {
+                    value: v,
+                    exposed: true,
+                })
+            }
+
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<ParamSlot, E> {
+                Ok(ParamSlot {
+                    value: v as f32,
+                    exposed: true,
+                })
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<ParamSlot, E> {
+                Ok(ParamSlot {
+                    value: v as f32,
+                    exposed: true,
+                })
+            }
+
+            fn visit_map<M>(self, mut map: M) -> Result<ParamSlot, M::Error>
+            where
+                M: serde::de::MapAccess<'de>,
+            {
+                let mut value: Option<f32> = None;
+                let mut exposed: Option<bool> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "value" => value = Some(map.next_value()?),
+                        "exposed" => exposed = Some(map.next_value()?),
+                        _ => {
+                            let _: serde::de::IgnoredAny = map.next_value()?;
+                        }
+                    }
+                }
+                Ok(ParamSlot {
+                    value: value.unwrap_or(0.0),
+                    exposed: exposed.unwrap_or(true),
+                })
+            }
+        }
+
+        deserializer.deserialize_any(ParamValueVisitor)
+    }
+}
+
 // ─── Effect Instance ───
 
 /// A single effect applied to a clip, layer, or master chain.
 ///
 /// Serialization (custom impls below):
 ///
-/// - `paramValues` / `baseParamValues` accept both V1.x (`Array` of
-///   `f32` indexed by position) and V1.2+ (`Object` keyed by stable
-///   `param_id`). On save, V1.2+ canonical Map form is emitted when
-///   the effect's registry def is available; otherwise the legacy
-///   Array form is emitted (preserves test contexts that don't link
-///   `manifold-renderer`).
+/// - `paramValues` accepts V1.0/1.1 positional `Array<f32>`,
+///   V1.2 keyed `Map<id, f32>`, V1.3 positional `Array<{value, exposed}>`,
+///   and V1.3 keyed `Map<id, {value, exposed}>`. The polymorphic
+///   `ParamSlot` deserializer handles the bare-vs-object distinction
+///   per-element. On save, V1.3+ canonical Map form is emitted when
+///   the effect's registry def is available; otherwise positional Array.
+/// - `baseParamValues` stays as `Vec<f32>` (modulation tracking only —
+///   exposure isn't meaningful for the pre-modulation snapshot).
 ///
-/// In-memory storage stays positional (`Vec<f32>`) — the hot path
-/// reads/writes by index. The Map form only exists on the wire.
+/// In-memory storage stays positional (`Vec<ParamSlot>`) — the hot
+/// path reads/writes by index. The Map form only exists on the wire.
 /// See `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 step 12.
 #[derive(Debug, Clone)]
 pub struct EffectInstance {
@@ -200,7 +329,7 @@ pub struct EffectInstance {
     effect_type: EffectTypeId,
     pub enabled: bool,
     pub collapsed: bool,
-    pub param_values: Vec<f32>,
+    pub param_values: Vec<ParamSlot>,
     pub base_param_values: Option<Vec<f32>>,
     pub drivers: Option<Vec<ParameterDriver>>,
     pub ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
@@ -231,23 +360,26 @@ pub struct EffectInstance {
 
 // ─── Wire-format helpers for paramValues ───
 
-/// Wire-format shape for `paramValues` / `baseParamValues`. Accepts
-/// either V1.x positional `Array` or V1.2+ id-keyed `Object`.
+/// Wire-format shape for `EffectInstance.paramValues`. Accepts
+/// V1.0/1.1 positional `Array<f32>`, V1.2 keyed `Map<id, f32>`,
+/// V1.3 positional `Array<{value, exposed}>`, or V1.3 keyed
+/// `Map<id, {value, exposed}>` — the polymorphic [`ParamSlot`]
+/// deserializer normalizes per-element across versions.
 ///
-/// Shared between `EffectInstance` (this file) and
-/// `GeneratorParamState` (generator.rs); the only difference is which
-/// registry the keyed form looks up against.
+/// Used only by `EffectInstance`. `GeneratorParamState` and
+/// `EffectInstance.baseParamValues` use [`FloatValuesWire`] which
+/// stays plain `Vec<f32>` (exposure is meaningless there).
 #[derive(Deserialize)]
 #[serde(untagged)]
 pub(crate) enum ParamValuesWire {
-    Positional(Vec<f32>),
-    Keyed(std::collections::BTreeMap<String, f32>),
+    Positional(Vec<ParamSlot>),
+    Keyed(std::collections::BTreeMap<String, ParamSlot>),
 }
 
 impl ParamValuesWire {
-    /// Convert to the in-memory positional `Vec<f32>` form using the
-    /// effect registry, with the effect instance's per-instance user
-    /// bindings tail.
+    /// Convert to the in-memory positional `Vec<ParamSlot>` form
+    /// using the effect registry, with the effect instance's
+    /// per-instance user bindings tail.
     ///
     /// - `Positional`: passed through unchanged. (Length is assumed
     ///   to already be `def.param_count + user_bindings.len()` if the
@@ -258,7 +390,8 @@ impl ParamValuesWire {
     ///   `param_id` lands at its slot; unknown keys are dropped
     ///   (orphan, same policy as drivers/envelopes/Ableton). Missing
     ///   slots default to the registry's `default_value` (static
-    ///   prefix) or the user binding's `default_value` (user tail).
+    ///   prefix) or the user binding's `default_value` (user tail),
+    ///   both with `exposed: true`.
     ///
     /// If the registry lacks a def for this effect (e.g., test code
     /// without `manifold-renderer` linked, or a forward-incompatible
@@ -266,16 +399,12 @@ impl ParamValuesWire {
     /// keyed case AND emits an `eprintln!` warning. In production this
     /// branch is unreachable — the renderer always registers all
     /// shipping effects — so a warning here means observability has
-    /// caught a real bug (registry-build broken, effect missing from
-    /// the renderer, or new tooling inadvertently using `manifold-io`
-    /// without `manifold-renderer`). `align_to_definition` will fill
-    /// the empty Vec with defaults, but the original Map values are
-    /// gone.
+    /// caught a real bug.
     fn into_positional(
         self,
         effect_type: &EffectTypeId,
         user_bindings: &[UserParamBinding],
-    ) -> Vec<f32> {
+    ) -> Vec<ParamSlot> {
         match self {
             ParamValuesWire::Positional(v) => v,
             ParamValuesWire::Keyed(map) => {
@@ -295,19 +424,19 @@ impl ParamValuesWire {
                 let n_static = def.param_count;
                 let n_user = user_bindings.len();
                 let total = n_static + n_user;
-                let mut out = vec![0.0_f32; total];
+                let mut out = vec![ParamSlot::default(); total];
                 for (i, pd) in def.param_defs.iter().enumerate().take(n_static) {
-                    out[i] = pd.default_value;
+                    out[i] = ParamSlot::exposed(pd.default_value);
                 }
                 for (j, ub) in user_bindings.iter().enumerate() {
-                    out[n_static + j] = ub.default_value;
+                    out[n_static + j] = ParamSlot::exposed(ub.default_value);
                 }
-                for (id, value) in map {
+                for (id, pv) in map {
                     // Direct hit via the current id_to_index table (static).
                     if let Some(&idx) = def.id_to_index.get(&id)
                         && idx < out.len()
                     {
-                        out[idx] = value;
+                        out[idx] = pv;
                         continue;
                     }
                     // Static alias chain — old id (renamed) resolves to
@@ -318,10 +447,80 @@ impl ParamValuesWire {
                     ) && let Some(&idx) = def.id_to_index.get(resolved)
                         && idx < out.len()
                     {
-                        out[idx] = value;
+                        out[idx] = pv;
                         continue;
                     }
                     // Per-instance user binding lookup.
+                    if let Some(j) = user_bindings.iter().position(|b| b.id == id) {
+                        out[n_static + j] = pv;
+                    }
+                }
+                out
+            }
+        }
+    }
+}
+
+/// Wire-format shape for plain-float param vectors:
+/// `EffectInstance.baseParamValues` and `GeneratorParamState.paramValues`.
+/// Exposure isn't meaningful on these surfaces — base values are a
+/// pre-modulation snapshot, generators don't (yet) participate in the
+/// host-visible exposure surface.
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub(crate) enum FloatValuesWire {
+    Positional(Vec<f32>),
+    Keyed(std::collections::BTreeMap<String, f32>),
+}
+
+impl FloatValuesWire {
+    /// Effect-side `baseParamValues` conversion. Same lookup semantics
+    /// as the rich [`ParamValuesWire::into_positional`] but emits plain
+    /// `Vec<f32>`.
+    fn into_positional_base(
+        self,
+        effect_type: &EffectTypeId,
+        user_bindings: &[UserParamBinding],
+    ) -> Vec<f32> {
+        match self {
+            FloatValuesWire::Positional(v) => v,
+            FloatValuesWire::Keyed(map) => {
+                let Some(def) = crate::effect_definition_registry::try_get(effect_type) else {
+                    eprintln!(
+                        "[manifold-core] WARNING: dropping {} V1.2+ baseParamValues for \
+                         unregistered effect type '{}' (Map keys: {:?}).",
+                        map.len(),
+                        effect_type.as_str(),
+                        map.keys().collect::<Vec<_>>(),
+                    );
+                    return Vec::new();
+                };
+                let n_static = def.param_count;
+                let n_user = user_bindings.len();
+                let total = n_static + n_user;
+                let mut out = vec![0.0_f32; total];
+                for (i, pd) in def.param_defs.iter().enumerate().take(n_static) {
+                    out[i] = pd.default_value;
+                }
+                for (j, ub) in user_bindings.iter().enumerate() {
+                    out[n_static + j] = ub.default_value;
+                }
+                for (id, value) in map {
+                    if let Some(&idx) = def.id_to_index.get(&id)
+                        && idx < out.len()
+                    {
+                        out[idx] = value;
+                        continue;
+                    }
+                    if let Some(resolved) = crate::effect_registration::resolve_param_alias(
+                        def.legacy_param_aliases,
+                        &id,
+                    ) && let Some(&idx) = def.id_to_index.get(resolved)
+                        && idx < out.len()
+                    {
+                        out[idx] = value;
+                        continue;
+                    }
                     if let Some(j) = user_bindings.iter().position(|b| b.id == id) {
                         out[n_static + j] = value;
                     }
@@ -331,16 +530,14 @@ impl ParamValuesWire {
         }
     }
 
-    /// Generator-registry counterpart to `into_positional`. Used by
-    /// `GeneratorParamState`'s custom Deserialize. Same registry-miss
-    /// observability contract as the effect-side path.
+    /// Generator-registry counterpart for `GeneratorParamState.paramValues`.
     pub(crate) fn into_positional_for_generator(
         self,
         gen_type: &crate::GeneratorTypeId,
     ) -> Vec<f32> {
         match self {
-            ParamValuesWire::Positional(v) => v,
-            ParamValuesWire::Keyed(map) => {
+            FloatValuesWire::Positional(v) => v,
+            FloatValuesWire::Keyed(map) => {
                 let Some(def) = crate::generator_definition_registry::try_get(gen_type) else {
                     eprintln!(
                         "[manifold-core] WARNING: dropping {} V1.2+ paramValues for unregistered \
@@ -415,15 +612,16 @@ where
     }
 }
 
-/// Serialize a positional `Vec<f32>` as the V1.2+ `Object` keyed by
-/// `param_id`, looking up ids via the effect registry. The tail past
-/// `def.param_count` is keyed by per-instance `user_bindings[j].id`.
+/// Serialize a positional `Vec<ParamSlot>` as the V1.3 `Object`
+/// keyed by `param_id`, looking up ids via the effect registry. The
+/// tail past `def.param_count` is keyed by per-instance
+/// `user_bindings[j].id`. Each emitted entry is a `{value, exposed}`
+/// object via [`ParamSlot`]'s `Serialize` impl.
 ///
-/// Falls back to the V1.x `Array` form when the registry is missing
-/// (test contexts) or any *static* `param_id` is empty (effect
-/// predates step 7's stable-id pass and hasn't been re-registered yet).
+/// Falls back to the positional `Array` form when the registry is
+/// missing (test contexts) or any *static* `param_id` is empty.
 fn serialize_param_values<S>(
-    values: &[f32],
+    values: &[ParamSlot],
     effect_type: &EffectTypeId,
     user_bindings: &[UserParamBinding],
     serializer: S,
@@ -434,10 +632,6 @@ where
     use serde::ser::{SerializeMap, SerializeSeq};
 
     let def = crate::effect_definition_registry::try_get(effect_type);
-    // Map form is emittable when the registry knows the effect AND
-    // every static slot we'll touch has a non-empty id. The user-binding
-    // tail keys come from the per-instance `user_bindings` slice and
-    // are always non-empty by construction (`generate_user_param_id`).
     let static_count = def.map(|d| d.param_count).unwrap_or(0);
     let static_touch = values.len().min(static_count);
     let can_emit_map = def.is_some_and(|d| {
@@ -450,11 +644,55 @@ where
     if can_emit_map {
         let def = def.expect("checked above");
         let mut map = serializer.serialize_map(Some(values.len()))?;
-        // Static prefix (positions 0..static_count).
+        for (i, pv) in values.iter().take(static_touch).enumerate() {
+            map.serialize_entry(def.param_ids[i], pv)?;
+        }
+        for (j, ub) in user_bindings.iter().enumerate() {
+            let idx = static_count + j;
+            if let Some(pv) = values.get(idx) {
+                map.serialize_entry(&ub.id, pv)?;
+            }
+        }
+        map.end()
+    } else {
+        let mut seq = serializer.serialize_seq(Some(values.len()))?;
+        for pv in values {
+            seq.serialize_element(pv)?;
+        }
+        seq.end()
+    }
+}
+
+/// Serialize a positional `Vec<f32>` for `baseParamValues` — same
+/// addressing rules as [`serialize_param_values`] but emits raw
+/// floats (exposure isn't meaningful on base values).
+fn serialize_base_param_values<S>(
+    values: &[f32],
+    effect_type: &EffectTypeId,
+    user_bindings: &[UserParamBinding],
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::{SerializeMap, SerializeSeq};
+
+    let def = crate::effect_definition_registry::try_get(effect_type);
+    let static_count = def.map(|d| d.param_count).unwrap_or(0);
+    let static_touch = values.len().min(static_count);
+    let can_emit_map = def.is_some_and(|d| {
+        d.param_ids
+            .iter()
+            .take(static_touch)
+            .all(|id| !id.is_empty())
+    });
+
+    if can_emit_map {
+        let def = def.expect("checked above");
+        let mut map = serializer.serialize_map(Some(values.len()))?;
         for (i, &v) in values.iter().take(static_touch).enumerate() {
             map.serialize_entry(def.param_ids[i], &v)?;
         }
-        // User-binding tail (positions static_count..static_count+user_bindings.len()).
         for (j, ub) in user_bindings.iter().enumerate() {
             let idx = static_count + j;
             if let Some(&v) = values.get(idx) {
@@ -528,7 +766,7 @@ impl Serialize for EffectInstance {
         if let Some(base) = &self.base_param_values {
             s.serialize_field(
                 "baseParamValues",
-                &ParamValuesSer {
+                &BaseParamValuesSer {
                     values: base,
                     effect_type: &self.effect_type,
                     user_bindings: &self.user_param_bindings,
@@ -566,11 +804,11 @@ impl Serialize for EffectInstance {
     }
 }
 
-/// Serialize-side wrapper for `paramValues` / `baseParamValues` that
-/// carries the parent's `effect_type` and per-instance user bindings so
-/// the field-level `Serialize` can route to `serialize_param_values`.
+/// Serialize-side wrapper for `paramValues` that carries the parent's
+/// `effect_type` and per-instance user bindings so the field-level
+/// `Serialize` can route to `serialize_param_values`.
 struct ParamValuesSer<'a> {
-    values: &'a [f32],
+    values: &'a [ParamSlot],
     effect_type: &'a EffectTypeId,
     user_bindings: &'a [UserParamBinding],
 }
@@ -581,6 +819,27 @@ impl Serialize for ParamValuesSer<'_> {
         S: serde::Serializer,
     {
         serialize_param_values(
+            self.values,
+            self.effect_type,
+            self.user_bindings,
+            serializer,
+        )
+    }
+}
+
+/// Serialize-side wrapper for `baseParamValues` (plain `Vec<f32>`).
+struct BaseParamValuesSer<'a> {
+    values: &'a [f32],
+    effect_type: &'a EffectTypeId,
+    user_bindings: &'a [UserParamBinding],
+}
+
+impl Serialize for BaseParamValuesSer<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serialize_base_param_values(
             self.values,
             self.effect_type,
             self.user_bindings,
@@ -607,7 +866,7 @@ impl<'de> Deserialize<'de> for EffectInstance {
             #[serde(default)]
             param_values: Option<ParamValuesWire>,
             #[serde(default)]
-            base_param_values: Option<ParamValuesWire>,
+            base_param_values: Option<FloatValuesWire>,
             #[serde(default)]
             drivers: Option<Vec<ParameterDriver>>,
             #[serde(default)]
@@ -640,7 +899,7 @@ impl<'de> Deserialize<'de> for EffectInstance {
             .unwrap_or_default();
         let base_param_values = raw
             .base_param_values
-            .map(|w| w.into_positional(&raw.effect_type, &user_param_bindings));
+            .map(|w| w.into_positional_base(&raw.effect_type, &user_param_bindings));
 
         Ok(EffectInstance {
             id: raw.id,
@@ -712,15 +971,35 @@ impl EffectInstance {
 
     /// Read effective (modulated) param value. Unity lines 86-91.
     pub fn get_param(&self, index: usize) -> f32 {
-        self.param_values.get(index).copied().unwrap_or(0.0)
+        self.param_values
+            .get(index)
+            .map(|p| p.value)
+            .unwrap_or(0.0)
+    }
+
+    /// Read whether a param slot is exposed (visible as a slider on the
+    /// effect card). Unknown slots return `true` — the conservative
+    /// default that preserves historical "always-visible" behavior.
+    pub fn is_param_exposed(&self, index: usize) -> bool {
+        self.param_values
+            .get(index)
+            .map(|p| p.exposed)
+            .unwrap_or(true)
+    }
+
+    /// Toggle a param slot's exposure flag. No-op if `index` is out of range.
+    pub fn set_param_exposed(&mut self, index: usize, exposed: bool) {
+        if let Some(slot) = self.param_values.get_mut(index) {
+            slot.exposed = exposed;
+        }
     }
 
     /// Write to effective (modulated) param value. Unity lines 93-101.
     pub fn set_param(&mut self, index: usize, value: f32) {
         while self.param_values.len() <= index {
-            self.param_values.push(0.0);
+            self.param_values.push(ParamSlot::default());
         }
-        self.param_values[index] = value;
+        self.param_values[index].value = value;
     }
 
     /// Read the user-set base value (before modulation). Unity lines 104-110.
@@ -738,7 +1017,7 @@ impl EffectInstance {
     pub fn set_base_param(&mut self, index: usize, value: f32) {
         self.ensure_base_values();
         while self.param_values.len() <= index {
-            self.param_values.push(0.0);
+            self.param_values.push(ParamSlot::default());
         }
         if let Some(base) = &mut self.base_param_values {
             while base.len() <= index {
@@ -746,7 +1025,7 @@ impl EffectInstance {
             }
             base[index] = value;
         }
-        self.param_values[index] = value;
+        self.param_values[index].value = value;
     }
 
     /// Reset effective param values from base values.
@@ -754,7 +1033,9 @@ impl EffectInstance {
         self.ensure_base_values();
         if let Some(base) = &self.base_param_values {
             let len = self.param_values.len().min(base.len());
-            self.param_values[..len].copy_from_slice(&base[..len]);
+            for (i, &b) in base.iter().enumerate().take(len) {
+                self.param_values[i].value = b;
+            }
         }
     }
 
@@ -766,7 +1047,7 @@ impl EffectInstance {
                 .as_ref()
                 .is_some_and(|b| b.len() != self.param_values.len())
         {
-            self.base_param_values = Some(self.param_values.clone());
+            self.base_param_values = Some(self.param_values.iter().map(|p| p.value).collect());
         }
     }
 
@@ -774,7 +1055,7 @@ impl EffectInstance {
     /// Unity EffectInstance.cs EnsureParamCapacity lines 152-158.
     pub fn ensure_param_capacity(&mut self, count: usize) {
         while self.param_values.len() < count {
-            self.param_values.push(0.0);
+            self.param_values.push(ParamSlot::default());
         }
     }
 
@@ -868,7 +1149,7 @@ impl EffectInstance {
         self.align_to_definition();
         let default_v = binding.default_value;
         self.user_param_bindings.push(binding);
-        self.param_values.push(default_v);
+        self.param_values.push(ParamSlot::exposed(default_v));
         if let Some(base) = self.base_param_values.as_mut() {
             base.push(default_v);
         }
@@ -926,18 +1207,18 @@ impl EffectInstance {
         if self.effect_type == EffectTypeId::WIREFRAME_DEPTH && self.param_values.len() == 14 {
             let old = &self.param_values;
             let migrated = vec![
-                old[0],  // Amount → Amount
-                old[1],  // Density → Density
-                old[2],  // Width → Width
-                old[3],  // ZScale → ZScale
-                old[4],  // Smooth → Smooth
-                old[7],  // Subject → Subject (was index 7)
-                old[8],  // Blend → Blend (was index 8)
-                old[9],  // WireRes → WireRes (was index 9)
-                old[10], // MeshRate → MeshRate (was index 10)
-                old[11], // CVFlow → Flow (was index 11)
-                old[12], // Lock → Lock (was index 12)
-                0.5,     // EdgeFollow default (Face was discrete toggle, not transferable)
+                old[0],                    // Amount → Amount
+                old[1],                    // Density → Density
+                old[2],                    // Width → Width
+                old[3],                    // ZScale → ZScale
+                old[4],                    // Smooth → Smooth
+                old[7],                    // Subject → Subject (was index 7)
+                old[8],                    // Blend → Blend (was index 8)
+                old[9],                    // WireRes → WireRes (was index 9)
+                old[10],                   // MeshRate → MeshRate (was index 10)
+                old[11],                   // CVFlow → Flow (was index 11)
+                old[12],                   // Lock → Lock (was index 12)
+                ParamSlot::exposed(0.5),  // EdgeFollow default (Face was discrete toggle, not transferable)
             ];
             self.param_values = migrated;
             // Migrate base values too
@@ -971,14 +1252,16 @@ impl EffectInstance {
             // declaration, so it's the right trade.
             let old_total = self.param_values.len();
             let static_copy = old_total.min(static_target);
-            let user_tail_now: Vec<f32> = if old_total > static_target {
+            let user_tail_now: Vec<ParamSlot> = if old_total > static_target {
                 self.param_values[static_target..].to_vec()
             } else {
                 Vec::new()
             };
 
-            let mut aligned = vec![0.0f32; target];
-            // Static prefix — copy what we have, pad with registry defaults.
+            let mut aligned = vec![ParamSlot::default(); target];
+            // Static prefix — copy what we have, pad with registry defaults
+            // (exposed=true to match historical always-visible behavior for
+            // freshly-introduced static slots).
             aligned[..static_copy].copy_from_slice(&self.param_values[..static_copy]);
             for (i, slot) in aligned
                 .iter_mut()
@@ -986,18 +1269,18 @@ impl EffectInstance {
                 .take(static_target)
                 .skip(static_copy)
             {
-                *slot = def
-                    .param_defs
-                    .get(i)
-                    .map(|pd| pd.default_value)
-                    .unwrap_or(0.0);
+                *slot = ParamSlot::exposed(
+                    def.param_defs
+                        .get(i)
+                        .map(|pd| pd.default_value)
+                        .unwrap_or(0.0),
+                );
             }
             // User-binding tail — copy what we have, pad from binding defaults.
             for j in 0..n_user {
-                aligned[static_target + j] = user_tail_now
-                    .get(j)
-                    .copied()
-                    .unwrap_or(self.user_param_bindings[j].default_value);
+                aligned[static_target + j] = user_tail_now.get(j).copied().unwrap_or_else(|| {
+                    ParamSlot::exposed(self.user_param_bindings[j].default_value)
+                });
             }
             self.param_values = aligned;
 
@@ -2017,7 +2300,9 @@ mod tests {
         }"#;
         let fx: EffectInstance = serde_json::from_str(json).unwrap();
         assert_eq!(fx.param_values.len(), 9);
-        assert!((fx.param_values[4] - 1.5).abs() < f32::EPSILON);
+        assert!((fx.param_values[4].value - 1.5).abs() < f32::EPSILON);
+        // Legacy bare-f32 wire format → exposed defaults to true.
+        assert!(fx.param_values.iter().all(|p| p.exposed));
         assert!(fx.base_param_values.is_some());
         assert_eq!(fx.base_param_values.as_ref().unwrap().len(), 9);
     }
@@ -2037,7 +2322,7 @@ mod tests {
         }"#;
         let fx: EffectInstance = serde_json::from_str(json).unwrap();
         // No registry → empty Vec is the safe degraded result.
-        assert!(fx.param_values.is_empty() || fx.param_values.iter().all(|v| *v == 0.0));
+        assert!(fx.param_values.is_empty() || fx.param_values.iter().all(|p| p.value == 0.0));
     }
 
     #[test]
@@ -2049,7 +2334,11 @@ mod tests {
             effect_type: EffectTypeId::from_string("UnregisteredTestEffect".to_string()),
             enabled: true,
             collapsed: false,
-            param_values: vec![0.1, 0.2, 0.3],
+            param_values: vec![
+                ParamSlot::exposed(0.1),
+                ParamSlot::exposed(0.2),
+                ParamSlot::exposed(0.3),
+            ],
             base_param_values: None,
             drivers: None,
             ableton_mappings: None,
@@ -2062,12 +2351,70 @@ mod tests {
             legacy_param3: None,
         };
         let json = serde_json::to_string(&fx).unwrap();
+        // V1.3 wire emits {value, exposed} objects per element.
         assert!(
-            json.contains("\"paramValues\":[0.1,0.2,0.3]"),
-            "Serialize without registry must emit Array form; got: {json}"
+            json.contains("\"paramValues\":[{\"value\":0.1,\"exposed\":true}"),
+            "Serialize without registry must emit positional Array of ParamSlot; got: {json}"
         );
         let back: EffectInstance = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.param_values, vec![0.1, 0.2, 0.3]);
+        assert_eq!(back.param_values.len(), 3);
+        assert_eq!(back.param_values[0].value, 0.1);
+        assert!(back.param_values[0].exposed);
+    }
+
+    #[test]
+    fn param_value_deserialize_accepts_bare_f32_or_object() {
+        // Bare f32 (V1.x legacy) → exposed=true.
+        let pv: ParamSlot = serde_json::from_str("0.7").unwrap();
+        assert_eq!(pv.value, 0.7);
+        assert!(pv.exposed);
+        // Object form (V1.3 canonical).
+        let pv: ParamSlot =
+            serde_json::from_str(r#"{"value": 0.42, "exposed": false}"#).unwrap();
+        assert_eq!(pv.value, 0.42);
+        assert!(!pv.exposed);
+        // Object with missing exposed defaults to true.
+        let pv: ParamSlot = serde_json::from_str(r#"{"value": 1.0}"#).unwrap();
+        assert_eq!(pv.value, 1.0);
+        assert!(pv.exposed);
+    }
+
+    #[test]
+    fn effect_instance_serialize_emits_v13_object_form_for_hidden_params() {
+        // Hidden param round-trips through positional Array{value,exposed}.
+        let fx = EffectInstance {
+            id: EffectId::new("abc12345".to_string()),
+            effect_type: EffectTypeId::from_string("UnregisteredTestEffect".to_string()),
+            enabled: true,
+            collapsed: false,
+            param_values: vec![
+                ParamSlot {
+                    value: 0.1,
+                    exposed: true,
+                },
+                ParamSlot {
+                    value: 0.2,
+                    exposed: false,
+                },
+            ],
+            base_param_values: None,
+            drivers: None,
+            ableton_mappings: None,
+            group_id: None,
+            user_param_bindings: Vec::new(),
+            user_param_bindings_version: 0,
+            legacy_param0: None,
+            legacy_param1: None,
+            legacy_param2: None,
+            legacy_param3: None,
+        };
+        let json = serde_json::to_string(&fx).unwrap();
+        let back: EffectInstance = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.param_values.len(), 2);
+        assert_eq!(back.param_values[0].value, 0.1);
+        assert!(back.param_values[0].exposed);
+        assert_eq!(back.param_values[1].value, 0.2);
+        assert!(!back.param_values[1].exposed);
     }
 
     #[test]
@@ -2137,7 +2484,7 @@ mod tests {
         let fx: EffectInstance = serde_json::from_str(json).unwrap();
         // amount should land at index 0; old_phantom_param dropped.
         assert_eq!(fx.param_values.len(), 1);
-        assert!((fx.param_values[0] - 0.7).abs() < f32::EPSILON);
+        assert!((fx.param_values[0].value - 0.7).abs() < f32::EPSILON);
     }
 
     // ── User-exposed parameter bindings (Phase 3 step 20) ─────────
@@ -2191,7 +2538,7 @@ mod tests {
         // user-binding tail values landing in the right param_values
         // slots regardless of JSON key ordering.
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
-        fx.param_values = vec![0.7]; // static prefix
+        fx.param_values = vec![ParamSlot::exposed(0.7)]; // static prefix
         fx.append_user_binding(sample_user_binding(
             "user.uv_transform.translate.1",
             "uv_transform",
@@ -2203,22 +2550,37 @@ mod tests {
             "amount",
         ));
         // After append, param_values should be [0.7, 0.25, 0.25].
-        assert_eq!(fx.param_values, vec![0.7, 0.25, 0.25]);
+        assert_eq!(
+            fx.param_values,
+            vec![
+                ParamSlot::exposed(0.7),
+                ParamSlot::exposed(0.25),
+                ParamSlot::exposed(0.25)
+            ]
+        );
         // Tweak the user-tail values to verify they round-trip.
-        fx.param_values[1] = 0.42;
-        fx.param_values[2] = 0.91;
+        fx.param_values[1].value = 0.42;
+        fx.param_values[2].value = 0.91;
 
         let json = serde_json::to_string(&fx).unwrap();
         assert!(json.contains("\"userParamBindings\""));
-        assert!(json.contains("\"amount\":0.7"));
-        assert!(json.contains("\"user.uv_transform.translate.1\":0.42"));
-        assert!(json.contains("\"user.mix.amount.1\":0.91"));
+        // V1.3 wire emits {value, exposed} objects per entry.
+        assert!(json.contains("\"amount\":{\"value\":0.7,\"exposed\":true}"));
+        assert!(json.contains("\"user.uv_transform.translate.1\":{\"value\":0.42"));
+        assert!(json.contains("\"user.mix.amount.1\":{\"value\":0.91"));
 
         let back: EffectInstance = serde_json::from_str(&json).unwrap();
         assert_eq!(back.user_param_bindings.len(), 2);
         assert_eq!(back.user_param_bindings[0].id, "user.uv_transform.translate.1");
         assert_eq!(back.user_param_bindings[1].id, "user.mix.amount.1");
-        assert_eq!(back.param_values, vec![0.7, 0.42, 0.91]);
+        assert_eq!(
+            back.param_values,
+            vec![
+                ParamSlot::exposed(0.7),
+                ParamSlot::exposed(0.42),
+                ParamSlot::exposed(0.91)
+            ]
+        );
         // user_param_bindings_version is not serialized — load resets to 0.
         assert_eq!(back.user_param_bindings_version, 0);
     }
@@ -2226,12 +2588,15 @@ mod tests {
     #[test]
     fn append_user_binding_grows_param_values_with_default() {
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
-        fx.param_values = vec![0.7];
+        fx.param_values = vec![ParamSlot::exposed(0.7)];
         fx.ensure_base_values();
         let v0 = fx.user_param_bindings_version;
 
         fx.append_user_binding(sample_user_binding("user.a.b.1", "a", "b"));
-        assert_eq!(fx.param_values, vec![0.7, 0.25]);
+        assert_eq!(
+            fx.param_values,
+            vec![ParamSlot::exposed(0.7), ParamSlot::exposed(0.25)]
+        );
         assert_eq!(fx.base_param_values.as_ref().unwrap(), &vec![0.7, 0.25]);
         assert_ne!(fx.user_param_bindings_version, v0, "version must bump");
     }
@@ -2239,27 +2604,30 @@ mod tests {
     #[test]
     fn remove_user_binding_drops_corresponding_value_slot() {
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
-        fx.param_values = vec![0.7];
+        fx.param_values = vec![ParamSlot::exposed(0.7)];
         fx.append_user_binding(sample_user_binding("user.a.b.1", "a", "b"));
         fx.append_user_binding(sample_user_binding("user.c.d.1", "c", "d"));
-        fx.param_values[1] = 0.3;
-        fx.param_values[2] = 0.6;
+        fx.param_values[1].value = 0.3;
+        fx.param_values[2].value = 0.6;
 
         let removed = fx.remove_user_binding_by_id("user.a.b.1");
         assert!(removed.is_some());
         assert_eq!(fx.user_param_bindings.len(), 1);
         // Static prefix preserved + user tail compacted around the gap.
-        assert_eq!(fx.param_values, vec![0.7, 0.6]);
+        assert_eq!(
+            fx.param_values,
+            vec![ParamSlot::exposed(0.7), ParamSlot::exposed(0.6)]
+        );
     }
 
     #[test]
     fn remove_user_binding_unknown_id_returns_none() {
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
-        fx.param_values = vec![0.7];
+        fx.param_values = vec![ParamSlot::exposed(0.7)];
         let v0 = fx.user_param_bindings_version;
         let removed = fx.remove_user_binding_by_id("user.nope.1");
         assert!(removed.is_none());
-        assert_eq!(fx.param_values, vec![0.7]);
+        assert_eq!(fx.param_values, vec![ParamSlot::exposed(0.7)]);
         assert_eq!(
             fx.user_param_bindings_version, v0,
             "no-op remove must not bump version"
@@ -2269,7 +2637,7 @@ mod tests {
     #[test]
     fn param_id_to_value_index_resolves_static_then_user() {
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
-        fx.param_values = vec![0.7];
+        fx.param_values = vec![ParamSlot::exposed(0.7)];
         fx.append_user_binding(sample_user_binding("user.a.b.1", "a", "b"));
         fx.append_user_binding(sample_user_binding("user.c.d.1", "c", "d"));
         // Static id maps to slot 0 via the registry.
@@ -2291,10 +2659,21 @@ mod tests {
         fx.user_param_bindings.push(sample_user_binding("user.a.b.1", "a", "b"));
         fx.user_param_bindings.push(sample_user_binding("user.c.d.1", "c", "d"));
         // Hand-build param_values to mimic what comes out of deserialize.
-        fx.param_values = vec![0.7, 0.42, 0.91];
+        fx.param_values = vec![
+            ParamSlot::exposed(0.7),
+            ParamSlot::exposed(0.42),
+            ParamSlot::exposed(0.91),
+        ];
         fx.align_to_definition();
         // Bloom static count = 1. User tail = 2. Total = 3.
-        assert_eq!(fx.param_values, vec![0.7, 0.42, 0.91]);
+        assert_eq!(
+            fx.param_values,
+            vec![
+                ParamSlot::exposed(0.7),
+                ParamSlot::exposed(0.42),
+                ParamSlot::exposed(0.91)
+            ]
+        );
     }
 
     #[test]
@@ -2304,9 +2683,12 @@ mod tests {
         // hasn't grown yet). align should pad with binding defaults.
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
         fx.user_param_bindings.push(sample_user_binding("user.a.b.1", "a", "b"));
-        fx.param_values = vec![0.7]; // missing tail
+        fx.param_values = vec![ParamSlot::exposed(0.7)]; // missing tail
         fx.align_to_definition();
-        assert_eq!(fx.param_values, vec![0.7, 0.25]);
+        assert_eq!(
+            fx.param_values,
+            vec![ParamSlot::exposed(0.7), ParamSlot::exposed(0.25)]
+        );
     }
 
     #[test]
@@ -2315,12 +2697,17 @@ mod tests {
         // junk data from somewhere. align trims to the actual binding count.
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
         fx.user_param_bindings.push(sample_user_binding("user.a.b.1", "a", "b"));
-        fx.param_values = vec![0.7, 0.42, 0.91, 0.99]; // extra junk at tail
+        fx.param_values = vec![
+            ParamSlot::exposed(0.7),
+            ParamSlot::exposed(0.42),
+            ParamSlot::exposed(0.91),
+            ParamSlot::exposed(0.99),
+        ]; // extra junk at tail
         fx.align_to_definition();
         // After: static=1 (kept) + user=1 (last value taken — split logic
         // pulls the tail count from user_param_bindings).
         assert_eq!(fx.param_values.len(), 2);
-        assert!((fx.param_values[0] - 0.7).abs() < f32::EPSILON);
+        assert!((fx.param_values[0].value - 0.7).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -2391,8 +2778,8 @@ mod tests {
         let fx: EffectInstance = serde_json::from_str(json).unwrap();
         assert_eq!(fx.user_param_bindings.len(), 2);
         assert_eq!(fx.param_values.len(), 3);
-        assert!((fx.param_values[0] - 0.7).abs() < f32::EPSILON);
-        assert!((fx.param_values[1] - 0.3).abs() < f32::EPSILON);
-        assert!((fx.param_values[2] - 0.9).abs() < f32::EPSILON);
+        assert!((fx.param_values[0].value - 0.7).abs() < f32::EPSILON);
+        assert!((fx.param_values[1].value - 0.3).abs() < f32::EPSILON);
+        assert!((fx.param_values[2].value - 0.9).abs() < f32::EPSILON);
     }
 }

@@ -188,11 +188,13 @@ impl ModulationSnapshot {
         }
         self.block_lens.push(macro_count as u16);
 
-        // Master effects
+        // Master effects — pack only `.value` from each ParamSlot;
+        // exposure isn't a modulation concern and must not round-trip
+        // through the per-frame fast path.
         self.master_count = project.settings.master_effects.len() as u16;
         for fx in &project.settings.master_effects {
             let len = fx.param_values.len();
-            self.values.extend_from_slice(&fx.param_values);
+            self.values.extend(fx.param_values.iter().map(|p| p.value));
             self.block_lens.push(len as u16);
         }
 
@@ -208,7 +210,7 @@ impl ModulationSnapshot {
             if let Some(effects) = &layer.effects {
                 for fx in effects {
                     let len = fx.param_values.len();
-                    self.values.extend_from_slice(&fx.param_values);
+                    self.values.extend(fx.param_values.iter().map(|p| p.value));
                     self.block_lens.push(len as u16);
                 }
             }
@@ -241,14 +243,20 @@ impl ModulationSnapshot {
         cursor += macro_len;
         block += 1;
 
-        // Master effects
+        // Master effects — write only `.value` per slot; the `.exposed`
+        // flag is host-state, not modulation-state.
         for i in 0..self.master_count as usize {
             let len = *self.block_lens.get(block).unwrap_or(&0) as usize;
             if let Some(fx) = project.settings.master_effects.get_mut(i)
                 && fx.param_values.len() == len
             {
-                fx.param_values
-                    .copy_from_slice(&self.values[cursor..cursor + len]);
+                for (slot, &v) in fx
+                    .param_values
+                    .iter_mut()
+                    .zip(&self.values[cursor..cursor + len])
+                {
+                    slot.value = v;
+                }
             }
             cursor += len;
             block += 1;
@@ -269,15 +277,19 @@ impl ModulationSnapshot {
                         && let Some(fx) = effects.get_mut(j)
                         && fx.param_values.len() == len
                     {
-                        fx.param_values.copy_from_slice(
-                            &self.values[cursor..cursor + len],
-                        );
+                        for (slot, &v) in fx
+                            .param_values
+                            .iter_mut()
+                            .zip(&self.values[cursor..cursor + len])
+                        {
+                            slot.value = v;
+                        }
                     }
                     cursor += len;
                     block += 1;
                 }
 
-                // Generator params
+                // Generator params (still raw f32; generators not in scope).
                 if has_gen {
                     let len =
                         *self.block_lens.get(block).unwrap_or(&0) as usize;

@@ -181,11 +181,15 @@ pub fn get_osc_address_for_layer(
     Some(format!("/layer/{}/{}{}", layer_id, prefix, suffix))
 }
 
-/// Get default parameter values for an effect type.
-/// Matches Unity's EffectDefinitionRegistry usage for creating new instances.
-pub fn get_defaults(effect_type: &EffectTypeId) -> Vec<f32> {
+/// Get default parameter values for an effect type as freshly-allocated
+/// `ParamSlot` entries, all `exposed: true`. Matches Unity's
+/// `EffectDefinitionRegistry` usage for creating new instances.
+pub fn get_defaults(effect_type: &EffectTypeId) -> Vec<crate::effects::ParamSlot> {
     let def = get(effect_type);
-    def.param_defs.iter().map(|p| p.default_value).collect()
+    def.param_defs
+        .iter()
+        .map(|p| crate::effects::ParamSlot::exposed(p.default_value))
+        .collect()
 }
 
 /// Get all registered effect types (unordered).
@@ -311,7 +315,7 @@ mod tests {
         assert_eq!(*inst.effect_type(), EffectTypeId::BLOOM);
         assert!(inst.enabled);
         assert_eq!(inst.param_values.len(), 1);
-        assert!((inst.param_values[0] - 0.187).abs() < 1e-6);
+        assert!((inst.param_values[0].value - 0.187).abs() < 1e-6);
     }
 
     #[test]

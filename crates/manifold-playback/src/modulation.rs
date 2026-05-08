@@ -264,7 +264,7 @@ fn evaluate_effect_drivers(fx: &mut EffectInstance, current_beat: Beats) -> bool
 
     for (idx, value) in results {
         if idx < fx.param_values.len() {
-            fx.param_values[idx] = value;
+            fx.param_values[idx].value = value;
             any_driven = true;
         }
     }
@@ -461,7 +461,7 @@ pub fn evaluate_all_envelopes(
                     env.last_elapsed = elapsed_f;
                 }
 
-                fx.param_values[idx] = held;
+                fx.param_values[idx].value = held;
                 any_modulated = true;
                 continue;
             }
@@ -518,13 +518,13 @@ pub fn evaluate_all_envelopes(
                 effect_def.param_defs[idx].min,
                 effect_def.param_defs[idx].max,
             );
-            let current_value = fx.param_values[idx];
+            let current_value = fx.param_values[idx].value;
             let target_value = min + (max - min) * target_norm.clamp(0.0, 1.0);
             let offset = (target_value - current_value) * adsr_value;
             let final_value = (current_value + offset).clamp(min, max);
 
             if (final_value - current_value).abs() > f32::EPSILON {
-                fx.param_values[idx] = final_value;
+                fx.param_values[idx].value = final_value;
                 any_modulated = true;
             }
         }

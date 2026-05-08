@@ -97,10 +97,10 @@ impl PostProcessEffect for TransformFX {
     /// Note: the is_clip_level guard is in apply() because ctx is not available here.
     fn should_skip(&self, fx: &EffectInstance) -> bool {
         let p = &fx.param_values;
-        let x = p.first().copied().unwrap_or(0.0);
-        let y = p.get(1).copied().unwrap_or(0.0);
-        let zoom = p.get(2).copied().unwrap_or(1.0);
-        let rot = p.get(3).copied().unwrap_or(0.0);
+        let x = p.first().map(|pv| pv.value).unwrap_or(0.0);
+        let y = p.get(1).map(|pv| pv.value).unwrap_or(0.0);
+        let zoom = p.get(2).map(|pv| pv.value).unwrap_or(1.0);
+        let rot = p.get(3).map(|pv| pv.value).unwrap_or(0.0);
 
         approximately(x, 0.0)
             && approximately(y, 0.0)
@@ -123,13 +123,13 @@ impl PostProcessEffect for TransformFX {
         } else {
             let p = &fx.param_values;
             // TransformFX.cs:29-33 — SetUniforms: GetParam(0..3), p3*Deg2Rad, ctx.Width/Height
-            let tx = p.first().copied().unwrap_or(0.0);
-            let ty = p.get(1).copied().unwrap_or(0.0);
-            let sc = p.get(2).copied().unwrap_or(1.0);
+            let tx = p.first().map(|pv| pv.value).unwrap_or(0.0);
+            let ty = p.get(1).map(|pv| pv.value).unwrap_or(0.0);
+            let sc = p.get(2).map(|pv| pv.value).unwrap_or(1.0);
             // Negate: Unity UVs are Y-up (0 at bottom), compute shader
             // pixel coords are Y-down (id.y=0 at top). Same rotation matrix
             // spins the opposite direction visually, so flip the sign.
-            let rot = -(p.get(3).copied().unwrap_or(0.0) * DEG2RAD);
+            let rot = -(p.get(3).map(|pv| pv.value).unwrap_or(0.0) * DEG2RAD);
             (tx, ty, sc, rot)
         };
 

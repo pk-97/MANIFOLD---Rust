@@ -75,8 +75,8 @@ impl PostProcessEffect for VoronoiPrismFX {
     ) {
         let p = &fx.param_values;
         let uniforms = VoronoiPrismUniforms {
-            amount: p.first().copied().unwrap_or(0.0),
-            cell_count: p.get(1).copied().unwrap_or(16.0),
+            amount: p.first().map(|pv| pv.value).unwrap_or(0.0),
+            cell_count: p.get(1).map(|pv| pv.value).unwrap_or(16.0),
             beat: ctx.beat,
             aspect_ratio: ctx.width as f32 / ctx.height as f32,
             source_width: ctx.edge_stretch_width,

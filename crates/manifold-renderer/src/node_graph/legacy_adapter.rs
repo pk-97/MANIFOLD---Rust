@@ -134,15 +134,22 @@ impl EffectNode for LegacyPostProcessNode {
         };
         let (width, height) = (out.width, out.height);
 
-        // Flatten the current parameter map back into legacy
-        // `Vec<f32>` order. The order matches `metadata.params`, which
-        // is the same order the legacy effect indexes into via
-        // `param_values.first()` / `.get(N)`.
-        let param_values: Vec<f32> = self
+        // Flatten the current parameter map back into legacy slot
+        // order. The order matches `metadata.params`, which is the same
+        // order the legacy effect indexes into via
+        // `param_values.first()` / `.get(N)`. Adapter-injected slots
+        // are exposed by default — exposure gating is host-side, not
+        // a concern of the legacy bridge.
+        let param_values: Vec<manifold_core::effects::ParamSlot> = self
             .metadata
             .params
             .iter()
-            .map(|spec| param_value_to_f32(ctx.params.get(spec.id), spec))
+            .map(|spec| {
+                manifold_core::effects::ParamSlot::exposed(param_value_to_f32(
+                    ctx.params.get(spec.id),
+                    spec,
+                ))
+            })
             .collect();
 
         let mut fx = EffectInstance::new(self.metadata.id.clone());
@@ -276,7 +283,7 @@ mod tests {
     /// vector so we can assert the adapter routed values correctly.
     struct ProbeEffect {
         type_id: EffectTypeId,
-        last_params: Vec<f32>,
+        last_params: Vec<manifold_core::effects::ParamSlot>,
     }
 
     impl PostProcessEffect for ProbeEffect {

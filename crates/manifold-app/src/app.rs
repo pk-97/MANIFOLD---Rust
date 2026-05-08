@@ -131,7 +131,7 @@ impl ActiveInspectorDrag {
                     && let Some(effect) = effects.get_mut(*effect_idx)
                     && *param_idx < effect.param_values.len()
                 {
-                    effect.param_values[*param_idx] = *value;
+                    effect.param_values[*param_idx].value = *value;
                 }
             }
             Self::GenParam {

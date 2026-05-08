@@ -97,7 +97,7 @@ impl PostProcessEffect for InfraredFX {
     }
 
     fn should_skip(&self, fx: &EffectInstance) -> bool {
-        fx.param_values.first().copied().unwrap_or(0.0) <= 0.0
+        fx.param_values.first().map(|p| p.value).unwrap_or(0.0) <= 0.0
     }
 
     fn apply(
@@ -109,12 +109,12 @@ impl PostProcessEffect for InfraredFX {
         ctx: &EffectContext,
     ) {
         let p = &fx.param_values;
-        let palette_idx = p.get(1).copied().unwrap_or(0.0).round() as usize;
+        let palette_idx = p.get(1).map(|pv| pv.value).unwrap_or(0.0).round() as usize;
         let lut = &self.luts[palette_idx.min(PALETTE_COUNT - 1)];
 
         let uniforms = InfraredUniforms {
-            amount: p.first().copied().unwrap_or(0.0),
-            contrast: p.get(2).copied().unwrap_or(1.0),
+            amount: p.first().map(|pv| pv.value).unwrap_or(0.0),
+            contrast: p.get(2).map(|pv| pv.value).unwrap_or(1.0),
             _pad0: 0.0,
             _pad1: 0.0,
         };

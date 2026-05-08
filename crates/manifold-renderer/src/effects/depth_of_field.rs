@@ -398,14 +398,14 @@ impl PostProcessEffect for DepthOfFieldFX {
         ctx: &EffectContext,
     ) {
         // ── Extract parameters ────────────────────────────────────────
-        let amount = fx.param_values.first().copied().unwrap_or(0.0);
-        let focus_mode = fx.param_values.get(1).copied().unwrap_or(0.0).round() as u32;
-        let focus_y = fx.param_values.get(2).copied().unwrap_or(0.5);
-        let focus_x = fx.param_values.get(3).copied().unwrap_or(0.5);
-        let focus_width = fx.param_values.get(4).copied().unwrap_or(0.15);
-        let blur_strength = fx.param_values.get(5).copied().unwrap_or(0.5);
-        let tilt_angle_deg = fx.param_values.get(6).copied().unwrap_or(0.0);
-        let quality = fx.param_values.get(7).copied().unwrap_or(1.0).round() as u32;
+        let amount = fx.param_values.first().map(|p| p.value).unwrap_or(0.0);
+        let focus_mode = fx.param_values.get(1).map(|p| p.value).unwrap_or(0.0).round() as u32;
+        let focus_y = fx.param_values.get(2).map(|p| p.value).unwrap_or(0.5);
+        let focus_x = fx.param_values.get(3).map(|p| p.value).unwrap_or(0.5);
+        let focus_width = fx.param_values.get(4).map(|p| p.value).unwrap_or(0.15);
+        let blur_strength = fx.param_values.get(5).map(|p| p.value).unwrap_or(0.5);
+        let tilt_angle_deg = fx.param_values.get(6).map(|p| p.value).unwrap_or(0.0);
+        let quality = fx.param_values.get(7).map(|p| p.value).unwrap_or(1.0).round() as u32;
         let tilt_angle = tilt_angle_deg * std::f32::consts::PI / 180.0;
 
         // ── Ensure state ──────────────────────────────────────────────

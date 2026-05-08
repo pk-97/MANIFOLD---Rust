@@ -70,8 +70,8 @@ impl PostProcessEffect for DitherFX {
     ) {
         let p = &fx.param_values;
         let uniforms = DitherUniforms {
-            amount: p.first().copied().unwrap_or(0.0),
-            algorithm: (p.get(1).copied().unwrap_or(0.0).round() as u32).min(5),
+            amount: p.first().map(|pv| pv.value).unwrap_or(0.0),
+            algorithm: (p.get(1).map(|pv| pv.value).unwrap_or(0.0).round() as u32).min(5),
             resolution_x: ctx.output_width as f32,
             resolution_y: ctx.output_height as f32,
         };

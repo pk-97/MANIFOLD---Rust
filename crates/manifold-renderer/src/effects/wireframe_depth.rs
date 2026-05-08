@@ -1615,7 +1615,7 @@ impl PostProcessEffect for WireframeDepthFX {
         ctx: &EffectContext,
     ) {
         // WireframeDepthFX.cs line 281-282
-        let amount = fx.param_values.first().copied().unwrap_or(0.0);
+        let amount = fx.param_values.first().map(|p| p.value).unwrap_or(0.0);
         if amount <= 0.0 {
             return;
         }
@@ -1624,14 +1624,14 @@ impl PostProcessEffect for WireframeDepthFX {
         let wire_scale = fx
             .param_values
             .get(7)
-            .copied()
+            .map(|p| p.value)
             .unwrap_or(1.0)
             .clamp(0.5, 1.0);
-        let mesh_rate = fx.param_values.get(8).copied().unwrap_or(1.0).round() as i32;
+        let mesh_rate = fx.param_values.get(8).map(|p| p.value).unwrap_or(1.0).round() as i32;
         let mesh_rate = mesh_rate.clamp(1, 4);
-        let native_flow_enabled = fx.param_values.get(9).copied().unwrap_or(0.0).round() as i32 > 0;
-        let flow_lock_enabled = fx.param_values.get(10).copied().unwrap_or(0.0).round() as i32 > 0;
-        let face_warp_enabled = fx.param_values.get(11).copied().unwrap_or(0.0) > 0.01;
+        let native_flow_enabled = fx.param_values.get(9).map(|p| p.value).unwrap_or(0.0).round() as i32 > 0;
+        let flow_lock_enabled = fx.param_values.get(10).map(|p| p.value).unwrap_or(0.0).round() as i32 > 0;
+        let face_warp_enabled = fx.param_values.get(11).map(|p| p.value).unwrap_or(0.0) > 0.01;
 
         // GetOrCreateOwner needs encoder; owner_states borrow released before later
         // use. We store the owner_key to look up the state again after this call.
@@ -1649,21 +1649,21 @@ impl PostProcessEffect for WireframeDepthFX {
         }
 
         // Read remaining params — new 12-param layout
-        let density = fx.param_values.get(1).copied().unwrap_or(96.0);
-        let line_width = fx.param_values.get(2).copied().unwrap_or(1.2);
-        let depth_scale = fx.param_values.get(3).copied().unwrap_or(1.0);
-        let temporal_smooth = fx.param_values.get(4).copied().unwrap_or(0.8);
+        let density = fx.param_values.get(1).map(|p| p.value).unwrap_or(96.0);
+        let line_width = fx.param_values.get(2).map(|p| p.value).unwrap_or(1.2);
+        let depth_scale = fx.param_values.get(3).map(|p| p.value).unwrap_or(1.0);
+        let temporal_smooth = fx.param_values.get(4).map(|p| p.value).unwrap_or(0.8);
         let persistence = 0.82; // hardcoded default (Persist param removed from UI)
         let subject_isolation = fx
             .param_values
             .get(5)
-            .copied()
+            .map(|p| p.value)
             .unwrap_or(0.0)
             .clamp(0.0, 1.0);
         let blend_mode = fx
             .param_values
             .get(6)
-            .copied()
+            .map(|p| p.value)
             .unwrap_or(0.0)
             .clamp(0.0, 6.0);
         // ── Poll background worker(s) for completed native results ──
@@ -1826,7 +1826,7 @@ impl PostProcessEffect for WireframeDepthFX {
         let edge_follow = fx
             .param_values
             .get(11)
-            .copied()
+            .map(|p| p.value)
             .unwrap_or(0.5)
             .clamp(0.0, 1.0);
         let face_warp_strength = (0.25 + (0.90 - 0.25) * ts01) * edge_follow;

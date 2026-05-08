@@ -71,8 +71,8 @@ impl PostProcessEffect for EdgeDetectFX {
     ) {
         let p = &fx.param_values;
         let uniforms = EdgeDetectUniforms {
-            amount: p.first().copied().unwrap_or(0.0),
-            threshold: p.get(1).copied().unwrap_or(0.1),
+            amount: p.first().map(|pv| pv.value).unwrap_or(0.0),
+            threshold: p.get(1).map(|pv| pv.value).unwrap_or(0.1),
             texel_size_x: 1.0 / ctx.output_width as f32,
             texel_size_y: 1.0 / ctx.output_height as f32,
         };

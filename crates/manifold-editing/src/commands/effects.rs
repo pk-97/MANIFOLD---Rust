@@ -1,6 +1,8 @@
 use crate::command::Command;
 use crate::commands::effect_target::{EffectTarget, with_effects_mut};
-use manifold_core::effects::{EffectInstance, ParamId, UserParamBinding, UserParamConvert};
+use manifold_core::effects::{
+    EffectInstance, ParamId, ParamSlot, UserParamBinding, UserParamConvert,
+};
 use manifold_core::project::Project;
 
 /// Add an effect to a target's effect chain.
@@ -403,7 +405,7 @@ enum ReverseState {
     /// with these values. undo() reinserts at the same position.
     Unexposed {
         binding: UserParamBinding,
-        slot_value: f32,
+        slot_value: ParamSlot,
         slot_base_value: Option<f32>,
         position: usize,
     },
@@ -483,7 +485,7 @@ impl Command for ToggleEffectParamExposeCommand {
                 let value_idx = effect.param_id_to_value_index(&user_param_id);
                 let slot_value = value_idx
                     .and_then(|i| effect.param_values.get(i).copied())
-                    .unwrap_or(meta.default_value);
+                    .unwrap_or(ParamSlot::exposed(meta.default_value));
                 let slot_base_value = value_idx.and_then(|i| {
                     effect
                         .base_param_values

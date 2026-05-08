@@ -75,12 +75,12 @@ impl PostProcessEffect for StrobeFX {
     ) {
         let p = &fx.param_values;
         // Map rate index through NoteRates lookup table (Unity: StrobeFX.cs lines 24-26)
-        let rate_idx = p.get(1).copied().unwrap_or(6.0).round().max(0.0) as usize;
+        let rate_idx = p.get(1).map(|pv| pv.value).unwrap_or(6.0).round().max(0.0) as usize;
         let rate = NOTE_RATES[rate_idx.min(NOTE_RATES.len() - 1)];
         let uniforms = StrobeUniforms {
-            amount: p.first().copied().unwrap_or(0.0),
+            amount: p.first().map(|pv| pv.value).unwrap_or(0.0),
             rate,
-            mode: (p.get(2).copied().unwrap_or(0.0).round() as u32).min(2),
+            mode: (p.get(2).map(|pv| pv.value).unwrap_or(0.0).round() as u32).min(2),
             beat: ctx.beat,
         };
 

@@ -174,7 +174,7 @@ impl PostProcessEffect for BloomFX {
         fx: &EffectInstance,
         ctx: &EffectContext,
     ) {
-        let amount = fx.param_values.first().copied().unwrap_or(0.187);
+        let amount = fx.param_values.first().map(|p| p.value).unwrap_or(0.187);
 
         self.width = ctx.width;
         self.height = ctx.height;

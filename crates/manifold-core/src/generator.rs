@@ -119,9 +119,9 @@ impl<'de> Deserialize<'de> for GeneratorParamState {
             #[serde(default)]
             generator_type: GeneratorTypeId,
             #[serde(default)]
-            param_values: Option<crate::effects::ParamValuesWire>,
+            param_values: Option<crate::effects::FloatValuesWire>,
             #[serde(default)]
-            base_param_values: Option<crate::effects::ParamValuesWire>,
+            base_param_values: Option<crate::effects::FloatValuesWire>,
             #[serde(default)]
             drivers: Option<Vec<ParameterDriver>>,
             #[serde(default)]

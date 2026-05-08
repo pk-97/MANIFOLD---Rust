@@ -1018,10 +1018,11 @@ impl EffectCardPanel {
 
     // ── Sync methods ─────────────────────────────────────────────
 
-    /// Push param values from the engine. Updates sliders on change.
-    /// Unity: EffectCardBitmapPanel.SyncValues — dirty-checks enabled, badges,
-    /// and per-param values. Only updates tree when values actually changed.
-    pub fn sync_values(&mut self, tree: &mut UITree, values: &[f32]) {
+    /// Push param slot state (value + exposure) from the engine. Updates
+    /// sliders on change. Unity: EffectCardBitmapPanel.SyncValues —
+    /// dirty-checks enabled, badges, and per-param values. Only updates
+    /// tree when values actually changed.
+    pub fn sync_values(&mut self, tree: &mut UITree, values: &[manifold_core::effects::ParamSlot]) {
         let copied_label = self
             .copied_flash
             .label_id()
@@ -1071,7 +1072,8 @@ impl EffectCardPanel {
         }
 
         // Per-param slider values + label (dirty-check via param_cache / label_cache)
-        for (i, &val) in values.iter().enumerate().take(self.param_info.len()) {
+        for (i, slot) in values.iter().enumerate().take(self.param_info.len()) {
+            let val = slot.value;
             let info = &self.param_info[i];
             let new_label = Some(info.name.clone());
 
@@ -1928,7 +1930,11 @@ mod tests {
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
         tree.clear_dirty();
-        panel.sync_values(&mut tree, &[50.0, 0.8]);
+        use manifold_core::effects::ParamSlot;
+        panel.sync_values(
+            &mut tree,
+            &[ParamSlot::exposed(50.0), ParamSlot::exposed(0.8)],
+        );
         assert!(tree.has_dirty());
     }
 

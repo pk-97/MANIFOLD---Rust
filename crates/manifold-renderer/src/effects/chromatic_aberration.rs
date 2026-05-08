@@ -75,11 +75,11 @@ impl PostProcessEffect for ChromaticAberrationFX {
     ) {
         // ChromaticAberrationFX.cs:13-17 — read all 5 params in Unity order
         let p = &fx.param_values;
-        let amount = p.first().copied().unwrap_or(0.0); // line 13: _Amount
-        let offset = p.get(1).copied().unwrap_or(0.01); // line 14: _Offset (independent)
-        let mode = p.get(2).copied().unwrap_or(0.0).round() as u32; // line 15: Mathf.Round(_Mode)
-        let angle = p.get(3).copied().unwrap_or(0.0); // line 16: _Angle
-        let falloff = p.get(4).copied().unwrap_or(0.5); // line 17: _Falloff
+        let amount = p.first().map(|pv| pv.value).unwrap_or(0.0); // line 13: _Amount
+        let offset = p.get(1).map(|pv| pv.value).unwrap_or(0.01); // line 14: _Offset (independent)
+        let mode = p.get(2).map(|pv| pv.value).unwrap_or(0.0).round() as u32; // line 15: Mathf.Round(_Mode)
+        let angle = p.get(3).map(|pv| pv.value).unwrap_or(0.0); // line 16: _Angle
+        let falloff = p.get(4).map(|pv| pv.value).unwrap_or(0.5); // line 17: _Falloff
 
         let uniforms = ChromaticAberrationUniforms {
             amount,

@@ -190,23 +190,23 @@ impl PostProcessEffect for WatercolorFX {
         let state = self.states.get(&ctx.owner_key).unwrap();
 
         // Extract user-facing parameters
-        let amount = fx.param_values.first().copied().unwrap_or(0.5);
+        let amount = fx.param_values.first().map(|p| p.value).unwrap_or(0.5);
         let displace_weight = fx
             .param_values
             .get(1)
-            .copied()
+            .map(|p| p.value)
             .unwrap_or(0.001)
             .clamp(0.0001, 0.01);
         let blur_radius = fx
             .param_values
             .get(2)
-            .copied()
+            .map(|p| p.value)
             .unwrap_or(2.0)
             .clamp(0.5, 8.0);
         let decay = fx
             .param_values
             .get(3)
-            .copied()
+            .map(|p| p.value)
             .unwrap_or(0.99)
             .clamp(0.9, 1.0);
 

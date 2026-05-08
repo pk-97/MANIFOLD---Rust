@@ -233,7 +233,7 @@ impl PostProcessEffect for NodeGraphTestFX {
         }
 
         // 3. Wire the slider into Mix's `amount` parameter.
-        let amount = fx.param_values.first().copied().unwrap_or(0.5);
+        let amount = fx.param_values.first().map(|p| p.value).unwrap_or(0.5);
         self.graph
             .set_param(self.mix_node_id, "amount", ParamValue::Float(amount))
             .expect("set Mix.amount each frame");

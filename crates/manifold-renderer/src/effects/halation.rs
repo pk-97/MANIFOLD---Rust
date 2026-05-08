@@ -152,7 +152,7 @@ impl PostProcessEffect for HalationFX {
         fx: &EffectInstance,
         ctx: &EffectContext,
     ) {
-        let amount = fx.param_values.first().copied().unwrap_or(0.0);
+        let amount = fx.param_values.first().map(|p| p.value).unwrap_or(0.0);
 
         self.width = ctx.width;
         self.height = ctx.height;
@@ -163,10 +163,10 @@ impl PostProcessEffect for HalationFX {
             None => return,
         };
 
-        let threshold = fx.param_values.get(1).copied().unwrap_or(0.5);
-        let spread = fx.param_values.get(2).copied().unwrap_or(0.5);
-        let hue = fx.param_values.get(3).copied().unwrap_or(20.0);
-        let saturation = fx.param_values.get(4).copied().unwrap_or(0.6);
+        let threshold = fx.param_values.get(1).map(|p| p.value).unwrap_or(0.5);
+        let spread = fx.param_values.get(2).map(|p| p.value).unwrap_or(0.5);
+        let hue = fx.param_values.get(3).map(|p| p.value).unwrap_or(20.0);
+        let saturation = fx.param_values.get(4).map(|p| p.value).unwrap_or(0.6);
         let (tint_r, tint_g, tint_b) = Self::hsv_to_rgb(hue, saturation, 1.0);
 
         let base = HalationUniforms {

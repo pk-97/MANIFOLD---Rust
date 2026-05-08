@@ -64,7 +64,7 @@ impl PostProcessEffect for InvertColorsFX {
         fx: &EffectInstance,
         ctx: &EffectContext,
     ) {
-        let intensity = fx.param_values.first().copied().unwrap_or(1.0);
+        let intensity = fx.param_values.first().map(|p| p.value).unwrap_or(1.0);
         let uniforms = InvertUniforms {
             intensity,
             _pad: [0.0; 3],

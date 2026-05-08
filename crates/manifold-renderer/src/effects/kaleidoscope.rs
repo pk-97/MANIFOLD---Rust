@@ -70,8 +70,8 @@ impl PostProcessEffect for KaleidoscopeFX {
     ) {
         let p = &fx.param_values;
         let uniforms = KaleidoscopeUniforms {
-            amount: p.first().copied().unwrap_or(0.0),
-            segments: p.get(1).copied().unwrap_or(6.0).max(2.0),
+            amount: p.first().map(|pv| pv.value).unwrap_or(0.0),
+            segments: p.get(1).map(|pv| pv.value).unwrap_or(6.0).max(2.0),
             _pad0: 0.0,
             _pad1: 0.0,
         };

@@ -768,7 +768,7 @@ pub(super) fn dispatch_inspector(
                         waveform: DriverWaveform::Sine,
                         enabled: true,
                         phase: 0.0,
-                        base_value: fx.param_values.get(*pi).copied().unwrap_or(0.0),
+                        base_value: fx.param_values.get(*pi).map(|p| p.value).unwrap_or(0.0),
                         trim_min: 0.0,
                         trim_max: 1.0,
                         reversed: false,

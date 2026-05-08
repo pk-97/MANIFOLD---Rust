@@ -252,13 +252,13 @@ impl PostProcessEffect for AutoGainFX {
         ctx: &EffectContext,
     ) {
         let p = &fx.param_values;
-        let amount = p.first().copied().unwrap_or(0.5);
-        let ratio_param = p.get(1).copied().unwrap_or(0.5);
-        let punch_param = p.get(2).copied().unwrap_or(0.5);
-        let target_param = p.get(3).copied().unwrap_or(0.5);
-        let hdr_retention = p.get(4).copied().unwrap_or(0.5);
-        let color_push = p.get(5).copied().unwrap_or(0.0);
-        let character = p.get(6).copied().unwrap_or(0.0).round() as u32;
+        let amount = p.first().map(|pv| pv.value).unwrap_or(0.5);
+        let ratio_param = p.get(1).map(|pv| pv.value).unwrap_or(0.5);
+        let punch_param = p.get(2).map(|pv| pv.value).unwrap_or(0.5);
+        let target_param = p.get(3).map(|pv| pv.value).unwrap_or(0.5);
+        let hdr_retention = p.get(4).map(|pv| pv.value).unwrap_or(0.5);
+        let color_push = p.get(5).map(|pv| pv.value).unwrap_or(0.0);
+        let character = p.get(6).map(|pv| pv.value).unwrap_or(0.0).round() as u32;
 
         self.ensure_state(gpu.device, ctx.owner_key);
         let state = self.states.get_mut(&ctx.owner_key).unwrap();

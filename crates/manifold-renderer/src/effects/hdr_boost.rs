@@ -68,11 +68,11 @@ impl PostProcessEffect for HdrBoostFX {
 
     fn should_skip(&self, fx: &EffectInstance) -> bool {
         let p = &fx.param_values;
-        let amount = p.first().copied().unwrap_or(0.0);
+        let amount = p.first().map(|pv| pv.value).unwrap_or(0.0);
         if amount <= 0.0 {
             return true;
         }
-        let gain = p.get(1).copied().unwrap_or(1.5);
+        let gain = p.get(1).map(|pv| pv.value).unwrap_or(1.5);
         gain.abs() < EPSILON
     }
 
@@ -86,10 +86,10 @@ impl PostProcessEffect for HdrBoostFX {
     ) {
         let p = &fx.param_values;
         let uniforms = HdrBoostUniforms {
-            amount: p.first().copied().unwrap_or(0.0),
-            gain: p.get(1).copied().unwrap_or(1.5),
-            threshold: p.get(2).copied().unwrap_or(0.15),
-            knee: p.get(3).copied().unwrap_or(0.3),
+            amount: p.first().map(|pv| pv.value).unwrap_or(0.0),
+            gain: p.get(1).map(|pv| pv.value).unwrap_or(1.5),
+            threshold: p.get(2).map(|pv| pv.value).unwrap_or(0.15),
+            knee: p.get(3).map(|pv| pv.value).unwrap_or(0.3),
         };
 
         self.helper.dispatch(

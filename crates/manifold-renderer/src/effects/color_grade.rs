@@ -85,16 +85,16 @@ impl PostProcessEffect for ColorGradeFX {
     // ColorGradeFX.cs:13-26 — ShouldSkip: skip when amount <= 0 OR all params at identity.
     fn should_skip(&self, fx: &EffectInstance) -> bool {
         let p = &fx.param_values;
-        let amount = p.first().copied().unwrap_or(0.0);
+        let amount = p.first().map(|pv| pv.value).unwrap_or(0.0);
         if amount <= 0.0 {
             return true;
         }
 
-        let gain = p.get(1).copied().unwrap_or(1.0);
-        let saturation = p.get(2).copied().unwrap_or(1.0);
-        let hue = p.get(3).copied().unwrap_or(0.0);
-        let contrast = p.get(4).copied().unwrap_or(1.0);
-        let colorize = p.get(5).copied().unwrap_or(0.0);
+        let gain = p.get(1).map(|pv| pv.value).unwrap_or(1.0);
+        let saturation = p.get(2).map(|pv| pv.value).unwrap_or(1.0);
+        let hue = p.get(3).map(|pv| pv.value).unwrap_or(0.0);
+        let contrast = p.get(4).map(|pv| pv.value).unwrap_or(1.0);
+        let colorize = p.get(5).map(|pv| pv.value).unwrap_or(0.0);
 
         (gain - 1.0).abs() < EPSILON
             && (saturation - 1.0).abs() < EPSILON
@@ -113,19 +113,19 @@ impl PostProcessEffect for ColorGradeFX {
     ) {
         // ColorGradeFX.cs:31-39 — read all 9 params in Unity order
         let p = &fx.param_values;
-        let amount = p.first().copied().unwrap_or(0.0);
+        let amount = p.first().map(|pv| pv.value).unwrap_or(0.0);
         // ShouldSkip handles the identity check at the chain level now.
 
         let uniforms = ColorGradeUniforms {
             amount,                                                // line 31
-            gain: p.get(1).copied().unwrap_or(1.0),                // line 32
-            saturation: p.get(2).copied().unwrap_or(1.0),          // line 33
-            hue: p.get(3).copied().unwrap_or(0.0),                 // line 34
-            contrast: p.get(4).copied().unwrap_or(1.0),            // line 35
-            colorize: p.get(5).copied().unwrap_or(0.0),            // line 36
-            colorize_hue: p.get(6).copied().unwrap_or(0.0),        // line 37
-            colorize_saturation: p.get(7).copied().unwrap_or(1.0), // line 38: ParamCount > 7 ? GetParam(7) : 1f
-            colorize_focus: p.get(8).copied().unwrap_or(0.75), // line 39: ParamCount > 8 ? GetParam(8) : 0.75f
+            gain: p.get(1).map(|pv| pv.value).unwrap_or(1.0),                // line 32
+            saturation: p.get(2).map(|pv| pv.value).unwrap_or(1.0),          // line 33
+            hue: p.get(3).map(|pv| pv.value).unwrap_or(0.0),                 // line 34
+            contrast: p.get(4).map(|pv| pv.value).unwrap_or(1.0),            // line 35
+            colorize: p.get(5).map(|pv| pv.value).unwrap_or(0.0),            // line 36
+            colorize_hue: p.get(6).map(|pv| pv.value).unwrap_or(0.0),        // line 37
+            colorize_saturation: p.get(7).map(|pv| pv.value).unwrap_or(1.0), // line 38: ParamCount > 7 ? GetParam(7) : 1f
+            colorize_focus: p.get(8).map(|pv| pv.value).unwrap_or(0.75), // line 39: ParamCount > 8 ? GetParam(8) : 0.75f
             _pad0: 0.0,
             _pad1: 0.0,
             _pad2: 0.0,

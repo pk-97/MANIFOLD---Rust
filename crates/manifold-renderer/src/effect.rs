@@ -42,14 +42,14 @@ pub fn find_chain_param(
     chain
         .iter()
         .find(|fx| fx.effect_type() == effect_type && fx.enabled)
-        .and_then(|fx| fx.param_values.get(param_index).copied())
+        .and_then(|fx| fx.param_values.get(param_index).map(|p| p.value))
         .unwrap_or(default)
 }
 
 /// Default skip check: returns true when param[0] <= 0 (effect has no amount).
 /// Unity ref: SimpleBlitEffect.cs line 37
 pub fn should_skip_default(fx: &EffectInstance) -> bool {
-    fx.param_values.first().copied().unwrap_or(0.0) <= 0.0
+    fx.param_values.first().map(|p| p.value).unwrap_or(0.0) <= 0.0
 }
 
 /// GPU-aware post-process effect processor.
