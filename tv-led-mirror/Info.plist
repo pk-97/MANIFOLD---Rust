@@ -4,8 +4,12 @@
 <dict>
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
+    <!-- launch.sh is the bundle's main executable; it loads optional default
+         CLI flags from ~/Library/Application Support/TVLEDMirror/flags.conf
+         and execs tv-led-mirror with them. Double-click / Dock-launch flows
+         go through here so you can persist flags without rebuilding. -->
     <key>CFBundleExecutable</key>
-    <string>tv-led-mirror</string>
+    <string>launch.sh</string>
     <key>CFBundleIdentifier</key>
     <string>com.latentspace.tv-led-mirror</string>
     <key>CFBundleInfoDictionaryVersion</key>
