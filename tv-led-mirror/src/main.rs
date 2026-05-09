@@ -16,6 +16,9 @@ use manifold_led::{LedOutputController, LedSettings, StripAddressing};
 use parking_lot::Mutex;
 
 mod ffi;
+mod slicer;
+
+use slicer::Slicer;
 
 /// Mirror a macOS display to ArtNet LEDs using Manifold's edge-extend pipeline.
 #[derive(Parser, Debug)]
@@ -86,6 +89,13 @@ struct Cli {
     /// Capture output height (defaults to display native height).
     #[arg(long)]
     cap_height: Option<u32>,
+
+    /// Disable sRGB→linear decoding of captured pixels.
+    /// macOS framebuffers are sRGB-encoded; without decoding, mid-grey reads
+    /// as ~75% photon output and the LEDs look blown out next to the TV.
+    /// Pass this only to compare against the raw byte values.
+    #[arg(long)]
+    no_srgb: bool,
 }
 
 fn main() {
@@ -141,6 +151,7 @@ fn main() {
         eprintln!("LED controller failed to initialize. Bad ArtNet IP/port?");
         std::process::exit(1);
     }
+    let slicer = Slicer::new(&device, settings.strip_count, settings.leds_per_strip);
 
     // Shared state lives on the heap so the CGDisplayStream block + the polling
     // loop both see it. `controller` mutates from both the capture queue (frame
@@ -148,10 +159,15 @@ fn main() {
     let state = Arc::new(SharedState {
         device,
         controller: Mutex::new(controller),
+        slicer,
         retained: Mutex::new(Vec::with_capacity(4)),
         brightness: cli.brightness.clamp(0.0, 1.0),
         cap_w,
         cap_h,
+        left_edge_width: cli.left_edge,
+        right_edge_width: cli.right_edge,
+        blur_radius: cli.blur_radius,
+        decode_srgb: !cli.no_srgb,
         frames_seen: AtomicU64::new(0),
     });
 
@@ -263,6 +279,7 @@ fn main() {
 struct SharedState {
     device: GpuDevice,
     controller: Mutex<LedOutputController>,
+    slicer: Slicer,
     /// IOSurfaces we've handed to the GPU but not yet released. Each entry is a
     /// retained `IOSurfaceRef` plus the wall-clock time we submitted its work,
     /// used to defer release until the GPU has plausibly finished reading it.
@@ -270,6 +287,10 @@ struct SharedState {
     brightness: f32,
     cap_w: u32,
     cap_h: u32,
+    left_edge_width: f32,
+    right_edge_width: f32,
+    blur_radius: f32,
+    decode_srgb: bool,
     frames_seen: AtomicU64,
 }
 
@@ -300,12 +321,35 @@ fn handle_frame(state: &Arc<SharedState>, surface: *const c_void) {
         )
     };
 
+    // 1. Slice the user's left/right edges out of the screen capture, blur,
+    //    decode sRGB→linear, write to a strip×LED texture. This is the work
+    //    that LedOutputController would normally do on Manifold's pre-sliced
+    //    per-layer source — except the controller's widths are hardcoded to
+    //    0.5/0.5 so we have to do it ourselves on a full-screen source.
+    {
+        let mut enc = state.device.create_encoder("tv-led-mirror.slice");
+        state.slicer.dispatch(
+            &mut enc,
+            &texture,
+            state.left_edge_width,
+            state.right_edge_width,
+            state.blur_radius,
+            state.decode_srgb,
+        );
+        enc.commit();
+    }
+
+    // 2. Feed our strip×LED slice to the controller. Its hardcoded 0.5/0.5
+    //    widths now act as identity at strip-aligned input resolution, so
+    //    DMX bytes match what we wrote.
     // active_clip_count: any nonzero value tells the controller "real content
     // is on screen" and skips the blackout fast path. We always have content.
-    state
-        .controller
-        .lock()
-        .process_frame(&state.device, &texture, 1, state.brightness);
+    state.controller.lock().process_frame(
+        &state.device,
+        state.slicer.output(),
+        1,
+        state.brightness,
+    );
     state.frames_seen.fetch_add(1, Ordering::Relaxed);
 
     state.retained.lock().push(RetainedSurface {
@@ -319,9 +363,12 @@ fn handle_frame(state: &Arc<SharedState>, surface: *const c_void) {
 }
 
 /// Release any IOSurface we've held longer than the GPU could plausibly need.
-/// 250 ms is generous — the LED edge-extend compute completes in microseconds.
+/// CGDisplayStream's IOSurface pool is small (~8 surfaces) — holding too long
+/// stalls the framework's frame delivery while it waits for slots to free up.
+/// GPU compute completes in <1ms, so 30ms is a comfortable safety margin
+/// (~2 frame intervals at 60fps) without hogging the pool.
 fn prune_retained(state: &Arc<SharedState>) {
-    const HOLD: Duration = Duration::from_millis(250);
+    const HOLD: Duration = Duration::from_millis(30);
     let mut q = state.retained.lock();
     let now = Instant::now();
     let mut i = 0;

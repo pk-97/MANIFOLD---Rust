@@ -34,6 +34,13 @@ env_logger = "0.11"
 # Threading primitive for the frame-callback shared state.
 parking_lot = "0.12"
 
+# Pod/Zeroable for the slicer's uniform struct.
+bytemuck = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+# Validates the slicer WGSL parses at test time, mirroring manifold-led's pattern.
+naga = { version = "28", features = ["wgsl-in"] }
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
