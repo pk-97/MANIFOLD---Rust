@@ -209,11 +209,26 @@ fn main() {
             )
         }
     };
-    assert!(!stream.is_null(), "CGDisplayStreamCreate failed — check Screen Recording permission");
+    if stream.is_null() {
+        eprintln!();
+        eprintln!("CGDisplayStreamCreateWithDispatchQueue returned NULL.");
+        eprintln!("This almost always means Screen Recording permission was denied.");
+        eprintln!();
+        eprintln!("Fix:");
+        eprintln!("  1. Launch via the .app bundle so the prompt is attributed to");
+        eprintln!("     TVLEDMirror (not to your terminal):");
+        eprintln!("       ./tv-led-mirror/run.sh --display <id> [other flags]");
+        eprintln!("  2. Approve the Screen Recording prompt for TVLEDMirror.");
+        eprintln!("  3. If no prompt appears: open System Settings → Privacy &");
+        eprintln!("     Security → Screen Recording, look for TVLEDMirror, enable it.");
+        eprintln!();
+        std::process::exit(1);
+    }
 
     let start_err = unsafe { ffi::CGDisplayStreamStart(stream) };
     if start_err != 0 {
-        eprintln!("CGDisplayStreamStart failed (kCGError {start_err}). Grant Terminal Screen Recording in System Settings.");
+        eprintln!("CGDisplayStreamStart failed (kCGError {start_err}).");
+        eprintln!("Re-launch via ./tv-led-mirror/run.sh so TCC sees TVLEDMirror.app.");
         std::process::exit(1);
     }
     log::info!("Capture started. Ctrl+C to stop.");

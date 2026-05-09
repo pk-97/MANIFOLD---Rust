@@ -24,6 +24,8 @@ mkdir -p "$APP/Contents/MacOS"
 mkdir -p "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/tv-led-mirror"
 cp "$ROOT/Info.plist" "$APP/Contents/Info.plist"
+# PkgInfo helps LaunchServices treat the directory as a real app for TCC.
+printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 echo "→ Ad-hoc signing"
 # `--sign -` = ad-hoc signature; --identifier locks the bundle identity so
@@ -40,7 +42,8 @@ echo "Done."
 echo "  $APP"
 echo
 echo "Run with:"
-echo "  $APP/Contents/MacOS/tv-led-mirror --display 5"
+echo "  $ROOT/run.sh --display 5"
 echo
-echo "First launch will trigger a Screen Recording prompt for TVLEDMirror"
-echo "(NOT for Terminal). Approve once, then re-launch."
+echo "(run.sh launches via LaunchServices so the Screen Recording prompt"
+echo " is attributed to TVLEDMirror, not to Terminal. Direct binary launch"
+echo " still inherits Terminal's TCC grant due to responsible-process walk.)"
