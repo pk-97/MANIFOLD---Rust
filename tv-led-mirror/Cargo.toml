@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = ["."]
+
+[package]
+name = "tv-led-mirror"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Standalone tool: mirror a macOS display to ArtNet LEDs via Manifold's edge-extend pipeline."
+
+[[bin]]
+name = "tv-led-mirror"
+path = "src/main.rs"
+
+[dependencies]
+# Manifold crates from the parent project — same GPU + LED pipeline as the app.
+manifold-gpu = { path = "../crates/manifold-gpu" }
+manifold-led = { path = "../crates/manifold-led" }
+
+# CLI parsing.
+clap = { version = "4", features = ["derive"] }
+
+# CGDisplayStream's frame callback is a block; matches manifold-gpu's block2 0.6.
+block2 = "0.6"
+
+# Ctrl+C handler so we send a final blackout instead of stranding the LEDs.
+ctrlc = "3"
+
+# Logging — same crates the rest of the project uses.
+log = "0.4"
+env_logger = "0.11"
+
+# Threading primitive for the frame-callback shared state.
+parking_lot = "0.12"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
