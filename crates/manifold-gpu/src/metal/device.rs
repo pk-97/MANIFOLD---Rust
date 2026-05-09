@@ -81,7 +81,9 @@ impl ClearPipelines {
             Rg32Float => Some(&self.rg32float),
             R32Uint => Some(&self.r32uint),
             // No WGSL storage texture support for these formats.
-            R16Float | Rg16Float | R8Unorm | Rgba8UnormSrgb | Depth32Float => None,
+            R16Float | Rg16Float | R8Unorm | Rgba8UnormSrgb | Bgra8UnormSrgb | Depth32Float => {
+                None
+            }
         }
     }
 }

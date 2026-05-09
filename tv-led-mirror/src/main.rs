@@ -7,7 +7,7 @@
 
 use std::ffi::{CString, c_void};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use clap::Parser;
@@ -16,6 +16,7 @@ use manifold_led::{LedOutputController, LedSettings, StripAddressing};
 use parking_lot::Mutex;
 
 mod ffi;
+mod menu_bar;
 mod slicer;
 
 use slicer::Slicer;
@@ -90,12 +91,16 @@ struct Cli {
     #[arg(long)]
     cap_height: Option<u32>,
 
-    /// Disable sRGB→linear decoding of captured pixels.
-    /// macOS framebuffers are sRGB-encoded; without decoding, mid-grey reads
-    /// as ~75% photon output and the LEDs look blown out next to the TV.
-    /// Pass this only to compare against the raw byte values.
-    #[arg(long)]
-    no_srgb: bool,
+    /// Soft-gate dim regions: pixels with linear luminance below this fade
+    /// to black, so dark scenes don't bleed grey ambient onto the wall while
+    /// highlights stay vivid. 0 disables the gate.
+    #[arg(long, default_value_t = 0.0)]
+    luminance_floor: f32,
+
+    /// Width of the smoothstep transition above `--luminance-floor`. Larger =
+    /// gentler fade; smaller = closer to a hard threshold.
+    #[arg(long, default_value_t = 0.05)]
+    luminance_knee: f32,
 }
 
 fn main() {
@@ -167,16 +172,18 @@ fn main() {
         left_edge_width: cli.left_edge,
         right_edge_width: cli.right_edge,
         blur_radius: cli.blur_radius,
-        decode_srgb: !cli.no_srgb,
+        luminance_floor: cli.luminance_floor.clamp(0.0, 1.0),
+        luminance_knee: cli.luminance_knee.max(0.0001),
         frames_seen: AtomicU64::new(0),
     });
 
-    let stop = Arc::new(AtomicBool::new(false));
-    {
-        let stop = stop.clone();
-        ctrlc::set_handler(move || stop.store(true, Ordering::SeqCst))
-            .expect("install ctrl-c handler");
-    }
+    // SIGINT (Ctrl+C from the launching terminal) and SIGTERM (e.g.
+    // `killall tv-led-mirror`) both run our atexit blackout via std::exit.
+    // Cmd+Q / "Quit" from the menu also routes through exit(), so the
+    // blackout fires on every shutdown path. NSApp.run() blocks the main
+    // thread, so we can't unblock it from a signal handler — exit is the
+    // simplest correct behavior.
+    ctrlc::set_handler(|| std::process::exit(0)).expect("install signal handler");
 
     // Build the CGDisplayStream. `properties` stays NULL — we cap fps via a
     // throttle in the callback rather than the dictionary, which keeps the FFI
@@ -247,13 +254,25 @@ fn main() {
         eprintln!("Re-launch via ./tv-led-mirror/run.sh so TCC sees TVLEDMirror.app.");
         std::process::exit(1);
     }
-    log::info!("Capture started. Ctrl+C to stop.");
+    log::info!("Capture started. Quit via the menu-bar item, Cmd+Q, or Ctrl+C.");
 
-    // Main thread: drive readback polling and surface release. Capture happens
-    // on the dispatch queue; we just keep the LED pipeline turning.
+    // Polling lives on a background thread so the main thread is free for the
+    // AppKit run loop (NSApplication.run requires the main thread).
+    {
+        let state = state.clone();
+        std::thread::spawn(move || run_polling_loop(state));
+    }
+
+    // Block here until the user quits. exit() is called from the menu's
+    // terminate: action / Cmd+Q / our SIGINT handler — at which point the
+    // atexit hook in menu_bar runs the controller's shutdown (final blackout).
+    menu_bar::run(state);
+}
+
+fn run_polling_loop(state: Arc<SharedState>) -> ! {
     let mut last_log = Instant::now();
     let mut last_count = 0u64;
-    while !stop.load(Ordering::SeqCst) {
+    loop {
         state.controller.lock().poll_readback();
         prune_retained(&state);
         if last_log.elapsed() >= Duration::from_secs(1) {
@@ -264,14 +283,6 @@ fn main() {
         }
         std::thread::sleep(Duration::from_millis(2));
     }
-
-    log::info!("Stopping capture…");
-    unsafe { ffi::CGDisplayStreamStop(stream) };
-    // Brief grace period for the dispatch queue to drain any in-flight callback.
-    std::thread::sleep(Duration::from_millis(100));
-    state.controller.lock().shutdown(); // sends final blackout
-    drop_all_retained(&state);
-    log::info!("Bye.");
 }
 
 // ─── Shared state + frame plumbing ───────────────────────────────────────────
@@ -290,7 +301,8 @@ struct SharedState {
     left_edge_width: f32,
     right_edge_width: f32,
     blur_radius: f32,
-    decode_srgb: bool,
+    luminance_floor: f32,
+    luminance_knee: f32,
     frames_seen: AtomicU64,
 }
 
@@ -316,7 +328,11 @@ fn handle_frame(state: &Arc<SharedState>, surface: *const c_void) {
             surface,
             state.cap_w,
             state.cap_h,
-            GpuTextureFormat::Bgra8Unorm,
+            // sRGB-aware view of the IOSurface: hardware bilinear filter mixes
+            // pixels in linear space (per-tap sRGB→linear before filtering),
+            // which preserves saturation. Bgra8Unorm here would average bytes
+            // in sRGB space and desaturate vibrant colors.
+            GpuTextureFormat::Bgra8UnormSrgb,
             GpuTextureUsage::SHADER_READ,
         )
     };
@@ -334,7 +350,8 @@ fn handle_frame(state: &Arc<SharedState>, surface: *const c_void) {
             state.left_edge_width,
             state.right_edge_width,
             state.blur_radius,
-            state.decode_srgb,
+            state.luminance_floor,
+            state.luminance_knee,
         );
         enc.commit();
     }
@@ -381,16 +398,6 @@ fn prune_retained(state: &Arc<SharedState>) {
             }
         } else {
             i += 1;
-        }
-    }
-}
-
-fn drop_all_retained(state: &Arc<SharedState>) {
-    let mut q = state.retained.lock();
-    for s in q.drain(..) {
-        unsafe {
-            ffi::IOSurfaceDecrementUseCount(s.surface);
-            ffi::CFRelease(s.surface);
         }
     }
 }

@@ -24,8 +24,9 @@ clap = { version = "4", features = ["derive"] }
 # CGDisplayStream's frame callback is a block; matches manifold-gpu's block2 0.6.
 block2 = "0.6"
 
-# Ctrl+C handler so we send a final blackout instead of stranding the LEDs.
-ctrlc = "3"
+# Ctrl+C / SIGTERM handler so we send a final blackout instead of stranding
+# the LEDs. `termination` feature catches SIGTERM in addition to SIGINT.
+ctrlc = { version = "3", features = ["termination"] }
 
 # Logging — same crates the rest of the project uses.
 log = "0.4"
@@ -36,6 +37,30 @@ parking_lot = "0.12"
 
 # Pod/Zeroable for the slicer's uniform struct.
 bytemuck = { version = "1", features = ["derive"] }
+
+# AppKit menu-bar status item with a Quit action so the app can be killed
+# without going back to the terminal. Versions match the rest of the project.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString"] }
+objc2-app-kit = { version = "0.3", features = [
+    "NSApplication",
+    "NSStatusBar",
+    "NSStatusItem",
+    "NSStatusBarButton",
+    "NSMenu",
+    "NSMenuItem",
+    "NSButton",
+    "NSControl",
+    "NSResponder",
+    "NSView",
+    "NSWindow",
+    "NSImage",
+] }
+
+# atexit hook for sending a final LED blackout when the user picks Quit
+# (NSApplication.terminate calls exit() directly — our SIGINT/SIGTERM path
+# doesn't fire there).
+libc = "0.2"
 
 [dev-dependencies]
 # Validates the slicer WGSL parses at test time, mirroring manifold-led's pattern.

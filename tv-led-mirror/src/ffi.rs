@@ -36,6 +36,9 @@ unsafe extern "C" {
     ) -> *mut c_void;
 
     pub fn CGDisplayStreamStart(stream: *mut c_void) -> i32;
+    // Kept for reference; we exit via libc::exit() now (atexit blackout) so
+    // explicit Stop is unnecessary — kernel teardown releases the stream.
+    #[allow(dead_code)]
     pub fn CGDisplayStreamStop(stream: *mut c_void) -> i32;
 }
 

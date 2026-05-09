@@ -20,9 +20,6 @@
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
-    <!-- Background-only agent: no Dock icon, no menu bar — TCC still prompts. -->
-    <key>LSUIElement</key>
-    <true/>
     <!-- Required: macOS shows this string in the Screen Recording prompt. -->
     <key>NSScreenCaptureUsageDescription</key>
     <string>TV LED Mirror reads pixels from your display so it can sample the edges and stream them to your ArtNet LED controller.</string>

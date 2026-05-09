@@ -22,6 +22,7 @@ pub(crate) fn to_mtl_pixel_format(format: GpuTextureFormat) -> MTLPixelFormat {
         GpuTextureFormat::R32Uint => MTLPixelFormat::R32Uint,
         GpuTextureFormat::Rgba8UnormSrgb => MTLPixelFormat::RGBA8Unorm_sRGB,
         GpuTextureFormat::Bgra8Unorm => MTLPixelFormat::BGRA8Unorm,
+        GpuTextureFormat::Bgra8UnormSrgb => MTLPixelFormat::BGRA8Unorm_sRGB,
         GpuTextureFormat::R8Unorm => MTLPixelFormat::R8Unorm,
         GpuTextureFormat::Depth32Float => MTLPixelFormat::Depth32Float,
     }

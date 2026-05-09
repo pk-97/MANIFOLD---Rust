@@ -48,6 +48,7 @@ fn to_mtl_pixel_format(fmt: GpuTextureFormat) -> MTLPixelFormat {
         GpuTextureFormat::Rgba32Float => MTLPixelFormat::RGBA32Float,
         GpuTextureFormat::Rgba8Unorm => MTLPixelFormat::RGBA8Unorm,
         GpuTextureFormat::Bgra8Unorm => MTLPixelFormat::BGRA8Unorm,
+        GpuTextureFormat::Bgra8UnormSrgb => MTLPixelFormat::BGRA8Unorm_sRGB,
         GpuTextureFormat::R32Float => MTLPixelFormat::R32Float,
         GpuTextureFormat::Rg32Float => MTLPixelFormat::RG32Float,
         GpuTextureFormat::R16Float => MTLPixelFormat::R16Float,

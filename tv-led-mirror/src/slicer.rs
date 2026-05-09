@@ -28,7 +28,11 @@ struct SlicerUniforms {
     left_edge_width: f32,
     right_edge_width: f32,
     blur_radius: f32,
-    decode_srgb: f32,
+    luminance_floor: f32,
+    luminance_knee: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 pub struct Slicer {
@@ -86,13 +90,18 @@ impl Slicer {
         left_edge_width: f32,
         right_edge_width: f32,
         blur_radius: f32,
-        decode_srgb: bool,
+        luminance_floor: f32,
+        luminance_knee: f32,
     ) {
         let uniforms = SlicerUniforms {
             left_edge_width,
             right_edge_width,
             blur_radius,
-            decode_srgb: if decode_srgb { 1.0 } else { 0.0 },
+            luminance_floor,
+            luminance_knee,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
         enc.dispatch_compute(
             &self.pipeline,

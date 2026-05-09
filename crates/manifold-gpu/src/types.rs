@@ -14,6 +14,10 @@ pub enum GpuTextureFormat {
     R32Uint,
     Rgba8UnormSrgb,
     Bgra8Unorm,
+    /// BGRA8 with hardware sRGB→linear decode on sample. Required by
+    /// tv-led-mirror so the GPU's bilinear filter operates in linear space
+    /// when sampling sRGB-encoded screen-capture IOSurfaces.
+    Bgra8UnormSrgb,
     R8Unorm,
     /// 32-bit floating-point depth format for depth-stencil attachments.
     Depth32Float,
@@ -25,7 +29,10 @@ impl GpuTextureFormat {
         match self {
             Self::Rgba16Float => 8,
             Self::Rgba32Float => 16,
-            Self::Rgba8Unorm | Self::Rgba8UnormSrgb | Self::Bgra8Unorm => 4,
+            Self::Rgba8Unorm
+            | Self::Rgba8UnormSrgb
+            | Self::Bgra8Unorm
+            | Self::Bgra8UnormSrgb => 4,
             Self::R32Float | Self::R32Uint => 4,
             Self::Rg32Float => 8,
             Self::R16Float => 2,
