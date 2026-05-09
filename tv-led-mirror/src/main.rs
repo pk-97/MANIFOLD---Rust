@@ -101,6 +101,17 @@ struct Cli {
     /// gentler fade; smaller = closer to a hard threshold.
     #[arg(long, default_value_t = 0.05)]
     luminance_knee: f32,
+
+    /// Soft-gate achromatic content: pixels with HSV saturation below this
+    /// fade to black. Defeats the "all-white desktop blasts the LEDs" case
+    /// while letting any tint of color through. 0 disables the gate.
+    /// Try 0.15 for a moderate dampening of grey/white content.
+    #[arg(long, default_value_t = 0.0)]
+    saturation_floor: f32,
+
+    /// Width of the smoothstep transition above `--saturation-floor`.
+    #[arg(long, default_value_t = 0.05)]
+    saturation_knee: f32,
 }
 
 fn main() {
@@ -174,6 +185,8 @@ fn main() {
         blur_radius: cli.blur_radius,
         luminance_floor: cli.luminance_floor.clamp(0.0, 1.0),
         luminance_knee: cli.luminance_knee.max(0.0001),
+        saturation_floor: cli.saturation_floor.clamp(0.0, 1.0),
+        saturation_knee: cli.saturation_knee.max(0.0001),
         frames_seen: AtomicU64::new(0),
     });
 
@@ -303,6 +316,8 @@ struct SharedState {
     blur_radius: f32,
     luminance_floor: f32,
     luminance_knee: f32,
+    saturation_floor: f32,
+    saturation_knee: f32,
     frames_seen: AtomicU64,
 }
 
@@ -352,6 +367,8 @@ fn handle_frame(state: &Arc<SharedState>, surface: *const c_void) {
             state.blur_radius,
             state.luminance_floor,
             state.luminance_knee,
+            state.saturation_floor,
+            state.saturation_knee,
         );
         enc.commit();
     }

@@ -30,9 +30,9 @@ struct SlicerUniforms {
     blur_radius: f32,
     luminance_floor: f32,
     luminance_knee: f32,
+    saturation_floor: f32,
+    saturation_knee: f32,
     _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
 }
 
 pub struct Slicer {
@@ -83,6 +83,7 @@ impl Slicer {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn dispatch(
         &self,
         enc: &mut GpuEncoder,
@@ -92,6 +93,8 @@ impl Slicer {
         blur_radius: f32,
         luminance_floor: f32,
         luminance_knee: f32,
+        saturation_floor: f32,
+        saturation_knee: f32,
     ) {
         let uniforms = SlicerUniforms {
             left_edge_width,
@@ -99,9 +102,9 @@ impl Slicer {
             blur_radius,
             luminance_floor,
             luminance_knee,
+            saturation_floor,
+            saturation_knee,
             _pad0: 0.0,
-            _pad1: 0.0,
-            _pad2: 0.0,
         };
         enc.dispatch_compute(
             &self.pipeline,

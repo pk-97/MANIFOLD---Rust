@@ -14,12 +14,12 @@
 struct Uniforms {
     left_edge_width: f32,
     right_edge_width: f32,
-    blur_radius: f32,    // in source texels; 0 = no blur
+    blur_radius: f32,     // in source texels; 0 = no blur
     luminance_floor: f32, // soft-gate: pixels with Y below this fade out
     luminance_knee: f32,  // soft-gate: width of the smoothstep transition
+    saturation_floor: f32,// soft-gate: pixels below this HSV saturation fade out
+    saturation_knee: f32, // soft-gate: width of the smoothstep transition
     _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -81,6 +81,20 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let y = dot(color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
         let knee = max(uniforms.luminance_knee, 0.0001);
         let gate = smoothstep(uniforms.luminance_floor, uniforms.luminance_floor + knee, y);
+        color = vec4<f32>(color.rgb * gate, color.a);
+    }
+
+    // Soft saturation gate. White desktops, document editors, and other
+    // achromatic content have ~0 saturation and would otherwise blast the
+    // LEDs full-white because they're high-luminance. HSV saturation =
+    // (max - min) / max — pure white = 0, pure red/blue/green = 1. Below
+    // `floor` we fade to black; above `floor + knee` we pass through.
+    if uniforms.saturation_floor > 0.0 {
+        let mx = max(color.r, max(color.g, color.b));
+        let mn = min(color.r, min(color.g, color.b));
+        let sat = select(0.0, (mx - mn) / mx, mx > 0.0001);
+        let knee = max(uniforms.saturation_knee, 0.0001);
+        let gate = smoothstep(uniforms.saturation_floor, uniforms.saturation_floor + knee, sat);
         color = vec4<f32>(color.rgb * gate, color.a);
     }
 
