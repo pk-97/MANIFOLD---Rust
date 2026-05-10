@@ -37,6 +37,16 @@ struct SlicerUniforms {
     vibrance: f32,
     gamma: f32,
     saturation_bias: f32,
+    wb_r: f32,
+    wb_g: f32,
+    wb_b: f32,
+    max_luminance: f32,
+    black_floor: f32,
+    // 17 floats = 68 bytes. WGSL uniform structs need 16-byte stride →
+    // pad to 80 bytes (20 floats).
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -44,6 +54,11 @@ pub struct ColorGrade {
     pub vibrance: f32,
     pub gamma: f32,
     pub saturation_bias: f32,
+    pub wb_r: f32,
+    pub wb_g: f32,
+    pub wb_b: f32,
+    pub max_luminance: f32,
+    pub black_floor: f32,
 }
 
 impl Default for ColorGrade {
@@ -52,6 +67,11 @@ impl Default for ColorGrade {
             vibrance: 1.0,
             gamma: 1.0,
             saturation_bias: 0.0,
+            wb_r: 1.0,
+            wb_g: 1.0,
+            wb_b: 1.0,
+            max_luminance: 1.0,
+            black_floor: 0.0,
         }
     }
 }
@@ -140,6 +160,14 @@ impl Slicer {
             vibrance: grade.vibrance.max(0.0),
             gamma: grade.gamma.max(0.0001),
             saturation_bias: grade.saturation_bias.max(0.0),
+            wb_r: grade.wb_r.max(0.0),
+            wb_g: grade.wb_g.max(0.0),
+            wb_b: grade.wb_b.max(0.0),
+            max_luminance: grade.max_luminance.clamp(0.0, 1.0),
+            black_floor: grade.black_floor.clamp(0.0, 1.0),
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
         enc.dispatch_compute(
             &self.pipeline,

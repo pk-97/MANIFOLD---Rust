@@ -40,6 +40,21 @@ struct Uniforms {
     // (1 + bias·sat²) so brightly-colored taps pull harder, preserving punchy
     // colors against desaturated backgrounds. 4-10 is a useful range.
     saturation_bias: f32,
+    // Per-channel white balance trim (R, G, B). For SK9822 strips that skew
+    // cool-white (~7500K) vs the TV's D65 (~6500K), pull blue down.
+    wb_r: f32,
+    wb_g: f32,
+    wb_b: f32,
+    // Output luminance ceiling. <1 caps how bright the LEDs can ever go;
+    // RGB is rescaled to preserve chroma when the cap engages.
+    max_luminance: f32,
+    // Below this output value (per channel, post-gamma), drop to 0. Kills
+    // the flickery low-PWM region where SK9822 strips strobe rather than
+    // dim cleanly. Try 0.015 (= 4/255).
+    black_floor: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -138,11 +153,44 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // Output gamma. Squashes mid-tones if gamma > 1 so 50%-grey pixels stop
-    // blasting the LEDs perceptually. Apply LAST so the gates and vibrance
-    // run in linear space.
+    // blasting the LEDs perceptually. Linear→perceptual transform; runs
+    // before the white-balance trim and luminance ceiling so those operate
+    // on output-space values.
     if abs(uniforms.gamma - 1.0) > 0.0001 {
         let safe = max(color.rgb, vec3<f32>(0.0));
         color = vec4<f32>(pow(safe, vec3<f32>(uniforms.gamma)), color.a);
+    }
+
+    // White-balance trim. SK9822 strips skew ~7500K cool-white; multiplying
+    // blue (and slightly green) below 1.0 pulls them toward D65 to match a
+    // typical TV white point. Per-channel multiplier; identity at 1/1/1.
+    color = vec4<f32>(
+        color.r * uniforms.wb_r,
+        color.g * uniforms.wb_g,
+        color.b * uniforms.wb_b,
+        color.a,
+    );
+
+    // Output luminance ceiling. Cap the perceived brightness without
+    // dragging colors toward gray — scale RGB uniformly so chroma is
+    // preserved while Y stays at or below the cap.
+    if uniforms.max_luminance < 0.999 {
+        let y = dot(color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+        if y > uniforms.max_luminance {
+            let scale = uniforms.max_luminance / max(y, 0.0001);
+            color = vec4<f32>(color.rgb * scale, color.a);
+        }
+    }
+
+    // Black floor: anything below the threshold becomes 0 per channel.
+    // Eliminates the flickery sub-PWM region where SK9822 strips strobe.
+    if uniforms.black_floor > 0.0 {
+        color = vec4<f32>(
+            select(0.0, color.r, color.r > uniforms.black_floor),
+            select(0.0, color.g, color.g > uniforms.black_floor),
+            select(0.0, color.b, color.b > uniforms.black_floor),
+            color.a,
+        );
     }
 
     color = vec4<f32>(clamp(color.rgb, vec3<f32>(0.0), vec3<f32>(1.0)), color.a);

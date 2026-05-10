@@ -89,11 +89,10 @@ struct Cli {
     #[arg(long, default_value_t = 1.0)]
     vibrance: f32,
 
-    /// Output gamma. 1.0 = linear (current default behavior). Try 2.2 to map
-    /// linear photons to perceptual brightness — mid-tones get squashed so
-    /// "50% grey" pixels stop blasting the LEDs at 50% PWM (which looks much
-    /// brighter perceptually than a screen at 50%).
-    #[arg(long, default_value_t = 1.0)]
+    /// Output gamma. Default 2.2 matches SK9822's linear PWM to perceptual
+    /// brightness — mid-tones get squashed so "50% grey" pixels stop blasting
+    /// the LEDs at 50% PWM. Set to 1.0 for raw linear output (debug only).
+    #[arg(long, default_value_t = 2.2)]
     gamma: f32,
 
     /// Saturation bias on the blur weights. 0 = pure binomial average (the
@@ -102,6 +101,33 @@ struct Cli {
     /// the average more. Try 4-10. Only meaningful when --blur-radius > 0.
     #[arg(long, default_value_t = 0.0)]
     saturation_bias: f32,
+
+    /// White-balance trim, RED channel. SK9822 strips skew cool (~7500K);
+    /// to pull toward TV D65 (~6500K), leave R=1.0 and dial B down.
+    /// Suggested SK9822 → D65 starting point: --wb-r 1.00 --wb-g 0.97 --wb-b 0.82.
+    #[arg(long, default_value_t = 1.0)]
+    wb_r: f32,
+
+    /// White-balance trim, GREEN channel.
+    #[arg(long, default_value_t = 1.0)]
+    wb_g: f32,
+
+    /// White-balance trim, BLUE channel.
+    #[arg(long, default_value_t = 1.0)]
+    wb_b: f32,
+
+    /// Output luminance ceiling (0..1). Caps how bright the LEDs can ever
+    /// go without dragging colors toward gray (RGB rescales to keep chroma).
+    /// 1.0 = no cap. 0.5-0.7 is a comfortable nighttime ceiling for SK9822
+    /// strips, which can be dazzling at full white.
+    #[arg(long, default_value_t = 1.0)]
+    max_luminance: f32,
+
+    /// Per-channel black floor: any output value below this drops to 0.
+    /// Eliminates the flickery sub-PWM region where SK9822 strips strobe
+    /// instead of dimming cleanly. Try 0.015 (= 4/255).
+    #[arg(long, default_value_t = 0.0)]
+    black_floor: f32,
 
     /// Spatial blur radius in source texels (smooths single-pixel flicker).
     #[arg(long, default_value_t = 12.0)]
@@ -227,6 +253,11 @@ fn main() {
             vibrance: cli.vibrance.max(0.0),
             gamma: cli.gamma.max(0.0001),
             saturation_bias: cli.saturation_bias.max(0.0),
+            wb_r: cli.wb_r.max(0.0),
+            wb_g: cli.wb_g.max(0.0),
+            wb_b: cli.wb_b.max(0.0),
+            max_luminance: cli.max_luminance.clamp(0.0, 1.0),
+            black_floor: cli.black_floor.clamp(0.0, 1.0),
         },
         frames_seen: AtomicU64::new(0),
     });
