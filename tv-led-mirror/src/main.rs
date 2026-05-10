@@ -19,7 +19,7 @@ mod ffi;
 mod menu_bar;
 mod slicer;
 
-use slicer::Slicer;
+use slicer::{Crop, Slicer};
 
 /// Mirror a macOS display to ArtNet LEDs using Manifold's edge-extend pipeline.
 #[derive(Parser, Debug)]
@@ -63,13 +63,25 @@ struct Cli {
     #[arg(long, default_value = "per-universe")]
     addressing: String,
 
-    /// Fraction of source width sampled for the LEFT column of strips (0.0..1.0).
-    #[arg(long, default_value_t = 0.2)]
-    left_edge: f32,
+    /// Crop margin (fraction of source) to skip on the LEFT before sampling.
+    /// Use this to exclude HUD chrome (e.g. a vertical ability column) so it
+    /// doesn't get pulled into the strips. The strip×LED grid is stretched
+    /// across the cropped content rectangle.
+    #[arg(long, default_value_t = 0.0)]
+    crop_left: f32,
 
-    /// Fraction of source width sampled for the RIGHT column of strips.
-    #[arg(long, default_value_t = 0.2)]
-    right_edge: f32,
+    /// Crop margin (fraction of source) to skip on the RIGHT before sampling.
+    #[arg(long, default_value_t = 0.0)]
+    crop_right: f32,
+
+    /// Crop margin (fraction of source) to skip on the TOP before sampling.
+    #[arg(long, default_value_t = 0.0)]
+    crop_top: f32,
+
+    /// Crop margin (fraction of source) to skip on the BOTTOM before sampling.
+    /// Useful for cropping out health/mana bars that sit at the bottom edge.
+    #[arg(long, default_value_t = 0.0)]
+    crop_bottom: f32,
 
     /// Spatial blur radius in source texels (smooths single-pixel flicker).
     #[arg(long, default_value_t = 12.0)]
@@ -145,19 +157,19 @@ fn main() {
         start_universe: cli.start_universe,
         is_bgr: !cli.rgb,
         strip_addressing: parse_addressing(&cli.addressing),
-        left_edge_width: cli.left_edge,
-        right_edge_width: cli.right_edge,
         blur_radius: cli.blur_radius,
         ..LedSettings::default()
     };
     log::info!(
-        "ArtNet → {}:{} | {} strips × {} leds | edges L={:.2} R={:.2} blur={:.1}",
+        "ArtNet → {}:{} | {} strips × {} leds | crop L={:.2} R={:.2} T={:.2} B={:.2} blur={:.1}",
         settings.artnet_ip,
         settings.artnet_port,
         settings.strip_count,
         settings.leds_per_strip,
-        settings.left_edge_width,
-        settings.right_edge_width,
+        cli.crop_left,
+        cli.crop_right,
+        cli.crop_top,
+        cli.crop_bottom,
         settings.blur_radius,
     );
 
@@ -180,13 +192,17 @@ fn main() {
         brightness: cli.brightness.clamp(0.0, 1.0),
         cap_w,
         cap_h,
-        left_edge_width: cli.left_edge,
-        right_edge_width: cli.right_edge,
         blur_radius: cli.blur_radius,
         luminance_floor: cli.luminance_floor.clamp(0.0, 1.0),
         luminance_knee: cli.luminance_knee.max(0.0001),
         saturation_floor: cli.saturation_floor.clamp(0.0, 1.0),
         saturation_knee: cli.saturation_knee.max(0.0001),
+        crop: Crop {
+            left: cli.crop_left.clamp(0.0, 0.49),
+            right: cli.crop_right.clamp(0.0, 0.49),
+            top: cli.crop_top.clamp(0.0, 0.49),
+            bottom: cli.crop_bottom.clamp(0.0, 0.49),
+        },
         frames_seen: AtomicU64::new(0),
     });
 
@@ -311,13 +327,12 @@ struct SharedState {
     brightness: f32,
     cap_w: u32,
     cap_h: u32,
-    left_edge_width: f32,
-    right_edge_width: f32,
     blur_radius: f32,
     luminance_floor: f32,
     luminance_knee: f32,
     saturation_floor: f32,
     saturation_knee: f32,
+    crop: Crop,
     frames_seen: AtomicU64,
 }
 
@@ -362,13 +377,12 @@ fn handle_frame(state: &Arc<SharedState>, surface: *const c_void) {
         state.slicer.dispatch(
             &mut enc,
             &texture,
-            state.left_edge_width,
-            state.right_edge_width,
             state.blur_radius,
             state.luminance_floor,
             state.luminance_knee,
             state.saturation_floor,
             state.saturation_knee,
+            state.crop,
         );
         enc.commit();
     }

@@ -25,14 +25,29 @@ use manifold_gpu::{
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct SlicerUniforms {
-    left_edge_width: f32,
-    right_edge_width: f32,
     blur_radius: f32,
     luminance_floor: f32,
     luminance_knee: f32,
     saturation_floor: f32,
     saturation_knee: f32,
+    crop_left: f32,
+    crop_right: f32,
+    crop_top: f32,
+    crop_bottom: f32,
+    // Pad struct size to a multiple of 16 (Metal uniform alignment).
     _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
+}
+
+/// Margins to crop off the source before slicing, as fractions of the source.
+/// Defaults to all zero (no crop).
+#[derive(Clone, Copy, Default)]
+pub struct Crop {
+    pub left: f32,
+    pub right: f32,
+    pub top: f32,
+    pub bottom: f32,
 }
 
 pub struct Slicer {
@@ -88,23 +103,26 @@ impl Slicer {
         &self,
         enc: &mut GpuEncoder,
         source: &GpuTexture,
-        left_edge_width: f32,
-        right_edge_width: f32,
         blur_radius: f32,
         luminance_floor: f32,
         luminance_knee: f32,
         saturation_floor: f32,
         saturation_knee: f32,
+        crop: Crop,
     ) {
         let uniforms = SlicerUniforms {
-            left_edge_width,
-            right_edge_width,
             blur_radius,
             luminance_floor,
             luminance_knee,
             saturation_floor,
             saturation_knee,
+            crop_left: crop.left.clamp(0.0, 0.49),
+            crop_right: crop.right.clamp(0.0, 0.49),
+            crop_top: crop.top.clamp(0.0, 0.49),
+            crop_bottom: crop.bottom.clamp(0.0, 0.49),
             _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
         enc.dispatch_compute(
             &self.pipeline,

@@ -12,14 +12,19 @@
 // resolution), so DMX bytes match perceptual brightness on the TV.
 
 struct Uniforms {
-    left_edge_width: f32,
-    right_edge_width: f32,
     blur_radius: f32,     // in source texels; 0 = no blur
     luminance_floor: f32, // soft-gate: pixels with Y below this fade out
     luminance_knee: f32,  // soft-gate: width of the smoothstep transition
     saturation_floor: f32,// soft-gate: pixels below this HSV saturation fade out
     saturation_knee: f32, // soft-gate: width of the smoothstep transition
-    _pad0: f32,
+    // Inset margins as fractions of the source. The slicer stretches the
+    // strip×LED output grid across the cropped content rectangle
+    // [crop_left, 1-crop_right] × [crop_top, 1-crop_bottom] so HUD chrome
+    // at the screen edges is excluded.
+    crop_left: f32,
+    crop_right: f32,
+    crop_top: f32,
+    crop_bottom: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -36,15 +41,19 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let raw_uv = (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(dims);
 
-    // Half the strips sample the left edge, half the right.
-    var source_u: f32;
-    if raw_uv.x < 0.5 {
-        source_u = (raw_uv.x / 0.5) * uniforms.left_edge_width;
-    } else {
-        source_u = (1.0 - uniforms.right_edge_width)
-            + ((raw_uv.x - 0.5) / 0.5) * uniforms.right_edge_width;
-    }
-    let center = vec2<f32>(source_u, raw_uv.y);
+    // Stretch the strip×LED grid across the entire cropped content rectangle.
+    // strip 0 → leftmost column of content, strip N-1 → rightmost. Each LED
+    // row is a horizontal slice through the cropped region.
+    let content_left = uniforms.crop_left;
+    let content_right = 1.0 - uniforms.crop_right;
+    let content_top = uniforms.crop_top;
+    let content_bottom = 1.0 - uniforms.crop_bottom;
+    let content_w = max(content_right - content_left, 0.0001);
+    let content_h = max(content_bottom - content_top, 0.0001);
+
+    let source_u = content_left + raw_uv.x * content_w;
+    let source_v = content_top + raw_uv.y * content_h;
+    let center = vec2<f32>(source_u, source_v);
 
     var color: vec4<f32>;
     if uniforms.blur_radius <= 0.0 {
