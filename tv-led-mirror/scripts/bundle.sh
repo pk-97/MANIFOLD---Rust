@@ -6,14 +6,19 @@
 # System Settings → Privacy & Security → Screen Recording under
 # "TVLEDMirror" — independent of Terminal/iTerm/etc.
 #
-# Re-run this whenever you change the source. The ad-hoc signature uses a
-# stable identifier (com.latentspace.tv-led-mirror) so the TCC grant survives
-# rebuilds in practice for personal use.
+# Signing strategy:
+#   - PREFERRED: a self-signed cert "TVLEDMirror Code Signing" in the login
+#     keychain. macOS keys TCC grants on the cert's designated requirement,
+#     which stays the same across rebuilds, so Screen Recording permission
+#     persists. Run scripts/create-signing-cert.sh once to install it.
+#   - FALLBACK: ad-hoc (`--sign -`). Each build gets a fresh cdhash and you
+#     have to delete + re-add the TCC grant for every rebuild.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/target/TVLEDMirror.app"
 BIN="$ROOT/target/release/tv-led-mirror"
+CERT_NAME="TVLEDMirror Code Signing"
 
 echo "→ Building release binary"
 cargo build --release --manifest-path "$ROOT/Cargo.toml"
@@ -29,13 +34,31 @@ cp "$ROOT/Info.plist" "$APP/Contents/Info.plist"
 # PkgInfo helps LaunchServices treat the directory as a real app for TCC.
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
-echo "→ Ad-hoc signing"
-# `--sign -` = ad-hoc signature; --identifier locks the bundle identity so
-# TCC tracks the grant by name rather than by file path.
-codesign --force --sign - \
+# Pick a signing identity. Match by CN against `security find-identity`'s
+# output; that command prints lines like
+#   1) AB12CD34...  "TVLEDMirror Code Signing"
+# We grab the SHA-1 hash so codesign matches even when multiple certs share
+# the same CN (e.g. you re-ran the cert script).
+SIGN_ID=$(security find-identity -v -p codesigning 2>/dev/null \
+    | awk -v cn="$CERT_NAME" '$0 ~ cn {print $2; exit}')
+
+if [ -n "$SIGN_ID" ]; then
+    echo "→ Signing with '$CERT_NAME' ($SIGN_ID) — TCC grants will persist across rebuilds"
+    SIGN_ARG="$SIGN_ID"
+else
+    echo "→ Ad-hoc signing (fallback)"
+    echo "  Note: you'll have to re-grant Screen Recording in System Settings"
+    echo "  on every rebuild. To fix this once and for all, run:"
+    echo "    scripts/create-signing-cert.sh"
+    SIGN_ARG="-"
+fi
+
+# --identifier locks the bundle identity so TCC tracks the grant by bundle
+# ID. Combined with a stable code-signing cert, the grant survives rebuilds.
+codesign --force --sign "$SIGN_ARG" \
     --identifier com.latentspace.tv-led-mirror \
     "$APP/Contents/MacOS/tv-led-mirror"
-codesign --force --sign - \
+codesign --force --sign "$SIGN_ARG" \
     --identifier com.latentspace.tv-led-mirror \
     "$APP"
 

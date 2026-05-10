@@ -80,6 +80,30 @@ dispatch2 = "0.3"
 # doesn't fire there).
 libc = "0.2"
 
+# Hue Entertainment streaming. openssl gives us both DTLS-PSK (for the
+# 25 Hz UDP color stream to the bridge on port 2100) and a TLS client for
+# the bridge's self-signed HTTPS REST API (pairing, area listing, start/stop).
+# `vendored` builds openssl from source so the binary doesn't depend on the
+# system's openssl install.
+openssl = { version = "0.10", features = ["vendored"] }
+# JSON for the bridge's REST responses (pairing, entertainment_configuration list).
+serde_json = "1"
+# Hex decoding for the bridge's clientkey (32 hex chars → 16 raw PSK bytes).
+hex = "0.4"
+
+# Shell-style word splitting for flags.conf so values like
+# `--hue-area "Studio Lights"` survive as one token instead of three.
+shlex = "1"
+
+# Settings GUI: small immediate-mode window with sliders for every
+# live-tunable knob. `glow` backend instead of `wgpu` so we don't pull
+# wgpu into the build for a panel that doesn't need GPU compute.
+# default-features off skips wayland/x11/accesskit/persistence we don't use.
+eframe = { version = "0.29", default-features = false, features = [
+    "glow",
+    "default_fonts",
+] }
+
 [dev-dependencies]
 # Validates the slicer WGSL parses at test time, mirroring manifold-led's pattern.
 naga = { version = "28", features = ["wgsl-in"] }

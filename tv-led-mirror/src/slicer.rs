@@ -45,10 +45,17 @@ struct SlicerUniforms {
     hdr_peak: f32,
     smoothing_alpha: f32,
     apply_p3_to_srgb: f32,
-    // 20 floats = 80 bytes, multiple of 16. No padding needed.
+    /// Bias kernel taps toward bright pixels so wider blur kernels don't
+    /// dilute peaks. `weight *= 1 + peak_bias · luminance²`. Mirrors how
+    /// `saturation_bias` biases toward saturated taps.
+    peak_bias: f32,
+    // 21 floats = 84 bytes; pad to 96 (next 16-byte boundary).
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq)]
 pub struct Crop {
     pub left: f32,
     pub right: f32,
@@ -56,11 +63,16 @@ pub struct Crop {
     pub bottom: f32,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct ColorGrade {
     pub vibrance: f32,
     pub gamma: f32,
     pub saturation_bias: f32,
+    /// Tap weight bias toward BRIGHT taps in the blur kernel. Default 4.0
+    /// keeps peak brightness intact when `blur_radius` widens — without it,
+    /// each LED tile averages its surroundings and bright regions get
+    /// diluted by surrounding darkness. Mirrors `saturation_bias`'s role.
+    pub peak_bias: f32,
     pub wb_r: f32,
     pub wb_g: f32,
     pub wb_b: f32,
@@ -82,6 +94,7 @@ impl Default for ColorGrade {
             vibrance: 1.0,
             gamma: 1.0,
             saturation_bias: 0.0,
+            peak_bias: 4.0,
             wb_r: 1.0,
             wb_g: 1.0,
             wb_b: 1.0,
@@ -253,6 +266,10 @@ impl Slicer {
             hdr_peak: grade.hdr_peak.max(1.0),
             smoothing_alpha: grade.smoothing_alpha.clamp(0.01, 1.0),
             apply_p3_to_srgb: if grade.apply_p3_to_srgb { 1.0 } else { 0.0 },
+            peak_bias: grade.peak_bias.max(0.0),
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
 
         enc.dispatch_compute(
@@ -282,6 +299,15 @@ impl Slicer {
             [self.width.div_ceil(8), self.height.div_ceil(8), 1],
             "tv-led-mirror.slicer",
         );
+    }
+
+    /// Output dimensions (strip count × LEDs per strip). Used by the Hue
+    /// thread to size its CPU readback buffer.
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+    pub fn height(&self) -> u32 {
+        self.height
     }
 
     /// Most recently written ping-pong output. Hand this to the LED controller.

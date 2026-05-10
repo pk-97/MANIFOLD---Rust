@@ -34,6 +34,14 @@ struct Uniforms {
     // P3-to-sRGB matrix toggle. 1.0 = apply Display-P3 → sRGB conversion
     // (when capturing extendedLinearDisplayP3); 0.0 = passthrough.
     apply_p3_to_srgb: f32,
+    // Bias kernel taps toward bright pixels: weight *= 1 + peak_bias·lum².
+    // Counteracts averaging-induced peak loss when blur_radius > 1. 0
+    // disables (pure binomial). Default 4.0 — matches saturation_bias's
+    // role for saturation but applied to luminance.
+    peak_bias: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -109,7 +117,13 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let mn = min(tap.r, min(tap.g, tap.b));
             let sat = select(0.0, (mx - mn) / mx, mx > 0.0001);
             let sat_w = 1.0 + uniforms.saturation_bias * sat * sat;
-            let weight = w[dx] * w[dy] * sat_w;
+            // Peak bias preserves bright detail under wide blur — without
+            // it, a 4× blur radius hands each tap a 16× area average and
+            // bright peaks blur into surrounding darkness. Squared so dim
+            // taps barely move (lum² is small) while bright taps dominate.
+            let lum_tap = max(dot(tap.rgb, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.0);
+            let peak_w = 1.0 + uniforms.peak_bias * lum_tap * lum_tap;
+            let weight = w[dx] * w[dy] * sat_w * peak_w;
             sum = sum + tap * weight;
             total_w = total_w + weight;
         }

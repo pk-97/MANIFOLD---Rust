@@ -67,15 +67,20 @@ fn run(path: PathBuf, state: Arc<SharedState>) {
 
 fn parse_and_apply(path: &PathBuf, state: &Arc<SharedState>) -> Result<usize, String> {
     let raw = std::fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
-    // Same word-splitting launch.sh does: strip comments, ignore blanks.
-    let mut argv: Vec<String> = vec!["tv-led-mirror".to_string()];
+    // Strip line-end `#` comments, then run the whole file through shlex so
+    // shell-style quoting works (`--hue-area "Studio Lights"` is one token).
+    // Without this, a naïve split_whitespace would turn `"Studio Lights"`
+    // into three tokens that clap would reject.
+    let mut clean = String::with_capacity(raw.len());
     for line in raw.lines() {
-        let line = line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-        argv.extend(line.split_whitespace().map(String::from));
+        let stripped = line.split('#').next().unwrap_or("");
+        clean.push_str(stripped);
+        clean.push('\n');
     }
+    let tokens = shlex::split(&clean).ok_or("shell-quote parse error in flags.conf")?;
+    let mut argv: Vec<String> = Vec::with_capacity(tokens.len() + 1);
+    argv.push("tv-led-mirror".to_string());
+    argv.extend(tokens);
 
     let cli = Cli::try_parse_from(argv).map_err(|e| format!("parse: {e}"))?;
     let new_dynamic = DynamicConfig::from_cli(&cli);

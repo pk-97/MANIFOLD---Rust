@@ -11,14 +11,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use clap::Parser;
-use manifold_gpu::{GpuDevice, GpuTextureFormat, GpuTextureUsage};
+use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat, GpuTextureUsage};
 use manifold_led::{LedOutputController, LedSettings, StripAddressing};
 use parking_lot::{Mutex, RwLock};
 
 mod capture;
 mod ffi;
-mod menu_bar;
+mod gui;
+mod hue;
 mod reload;
+mod shutdown;
 mod slicer;
 
 use slicer::{ColorGrade, Crop, Slicer};
@@ -103,6 +105,13 @@ struct Cli {
     /// the average more. Try 4-10. Only meaningful when --blur-radius > 0.
     #[arg(long, default_value_t = 0.0)]
     saturation_bias: f32,
+
+    /// Peak-luminance bias on the blur weights. Without this, increasing
+    /// `--blur-radius` dilutes bright peaks into surrounding darkness
+    /// (averaging is intrinsically peak-suppressing). Default 4.0 keeps
+    /// peaks intact even at wide blur. Set 0 for pure binomial average.
+    #[arg(long, default_value_t = 4.0)]
+    peak_bias: f32,
 
     /// White-balance trim, RED channel. SK9822 strips skew cool (~7500K);
     /// to pull toward TV D65 (~6500K), leave R=1.0 and dial B down.
@@ -205,6 +214,73 @@ struct Cli {
     /// of latency. Try 0.4 for movies, 0.7-1.0 for fast games.
     #[arg(long, default_value_t = 1.0)]
     smoothing: f32,
+
+    // ─── Philips Hue Entertainment streaming ──────────────────────────────
+    //
+    // Streams one dominant+brightest color from the scene to a Hue
+    // Entertainment Area (set up in the Hue app) at 25 Hz over DTLS-PSK.
+    // The side LEDs do detail; the Hue bulbs do the wash.
+    //
+    // First-time setup: run `--hue-pair --hue-bridge <ip>`, follow the
+    // prompts, paste the printed flags into flags.conf.
+    /// One-shot: register this app on the bridge at `--hue-bridge <ip>`,
+    /// print credentials, list available entertainment areas, then exit.
+    /// Doesn't start streaming.
+    #[arg(long)]
+    hue_pair: bool,
+
+    /// Hue bridge IP. Required for both pairing and streaming. Find via the
+    /// Hue app (Settings → My Hue System → bridge name → i icon).
+    #[arg(long)]
+    hue_bridge: Option<String>,
+
+    /// Hue "username" returned by `--hue-pair`. Identifies us to the bridge
+    /// and acts as the DTLS-PSK identity.
+    #[arg(long)]
+    hue_app_key: Option<String>,
+
+    /// Hue "clientkey" (32 hex chars) returned by `--hue-pair`. The DTLS PSK.
+    #[arg(long)]
+    hue_psk: Option<String>,
+
+    /// Entertainment area to drive — case-insensitive name match against
+    /// areas you've created in the Hue app (e.g. "Studio"). Mutually
+    /// exclusive with `--hue-entertainment-id`.
+    #[arg(long)]
+    hue_area: Option<String>,
+
+    /// Entertainment area UUID (alternative to `--hue-area`). Use the value
+    /// printed by `--hue-pair` when name lookup is ambiguous.
+    #[arg(long)]
+    hue_entertainment_id: Option<String>,
+
+    /// Master gain on the color sent to the Hue bulbs. 1.0 = unity. Lower
+    /// for a softer ambient wash; higher to push the bulbs brighter than
+    /// the average scene luminance suggests.
+    #[arg(long, default_value_t = 1.5)]
+    hue_gain: f32,
+
+    /// Saturation boost around the dominant color's luma. 1.0 = none.
+    /// Averaging across the scene desaturates colors; 1.3-1.6 punches the
+    /// bulb color back toward the dominant hue.
+    #[arg(long, default_value_t = 1.4)]
+    hue_saturation: f32,
+
+    /// Comma-separated channel indices that receive the SECONDARY (second-
+    /// most-dominant) color from the hue histogram. Other channels get the
+    /// PRIMARY color. e.g. `--hue-secondary-channels 1` for "channel 0 = TV
+    /// strip (primary hue), channel 1 = ceiling bulb (secondary hue)".
+    /// Empty = single-color mode (every channel gets the primary; cheaper).
+    #[arg(long, default_value = "")]
+    hue_secondary_channels: String,
+
+    /// Per-channel temporal smoothing on the bulb colors (EMA at 25 Hz).
+    /// 1.0 = no smoothing (every tick passes through); 0.3 ≈ 3 frames of
+    /// inertia (~120 ms). Independent of the slicer's `--smoothing` —
+    /// addresses fast hue flicker on the secondary bulb when two histogram
+    /// bins have similar weight and frame-to-frame jitter swaps the winner.
+    #[arg(long, default_value_t = 0.3)]
+    hue_smoothing: f32,
 }
 
 fn main() {
@@ -213,6 +289,21 @@ fn main() {
 
     if cli.list_displays {
         list_displays();
+        return;
+    }
+
+    if cli.hue_pair {
+        let bridge = match cli.hue_bridge.as_deref() {
+            Some(b) => b,
+            None => {
+                eprintln!("--hue-pair requires --hue-bridge <ip>");
+                std::process::exit(1);
+            }
+        };
+        if let Err(e) = hue::pair_and_list(bridge) {
+            eprintln!("hue pairing failed: {e}");
+            std::process::exit(1);
+        }
         return;
     }
 
@@ -266,11 +357,15 @@ fn main() {
     // loop both see it. `controller` mutates from both the capture queue (frame
     // ingest → submit GPU work) and the main thread (poll readback).
     let dynamic = DynamicConfig::from_cli(&cli);
+    // Snapshot the boot-time config so the GUI's "reset to defaults" button
+    // can restore it without us having to re-parse the CLI.
+    let defaults = dynamic.clone();
     let state = Arc::new(SharedState {
         device,
         controller: Mutex::new(controller),
         slicer,
         retained: Mutex::new(Vec::with_capacity(4)),
+        last_source_texture: Mutex::new(None),
         config: RwLock::new(dynamic),
         hdr: cli.hdr,
         frames_seen: AtomicU64::new(0),
@@ -314,13 +409,39 @@ fn main() {
         std::thread::spawn(move || run_polling_loop(state));
     }
 
+    // Heartbeat: re-dispatch the slicer + LED controller every ~33 ms even
+    // if SCK hasn't delivered a new frame. SCK suppresses identical frames
+    // when content is static (paused video, idle desktop), and without this
+    // the LEDs lock to whatever the last delivered frame produced — slider
+    // changes have no visible effect until content changes again.
+    {
+        let state = state.clone();
+        std::thread::spawn(move || run_heartbeat(state));
+    }
+
     // Watch flags.conf for edits and hot-swap the live-tunable knobs.
     reload::spawn(state.clone());
 
-    // Block here until the user quits. exit() is called from the menu's
-    // terminate: action / Cmd+Q / our SIGINT handler — at which point the
-    // atexit hook in menu_bar runs the controller's shutdown (final blackout).
-    menu_bar::run(state);
+    // Always spawn the hue runtime — it idles cheaply if no bridge is
+    // configured yet, and the GUI's pairing wizard will hand it a config
+    // as soon as the user finishes setup.
+    let initial_hue = cli
+        .hue_bridge
+        .clone()
+        .and_then(|bridge| match build_hue_config(&cli, &bridge) {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("hue: ignoring CLI config ({e}) — pair via GUI");
+                None
+            }
+        });
+    let hue_runtime = hue::spawn_runtime(state.clone(), initial_hue);
+
+    // Block here until the user quits. The settings GUI owns the main thread;
+    // closing the window, Cmd+Q, or our SIGINT handler all reach exit(), at
+    // which point the atexit hook in `shutdown` runs the controller's
+    // shutdown (final blackout).
+    gui::run(state, defaults, hue_runtime);
 }
 
 fn run_polling_loop(state: Arc<SharedState>) -> ! {
@@ -339,6 +460,49 @@ fn run_polling_loop(state: Arc<SharedState>) -> ! {
     }
 }
 
+/// Re-runs the slicer + LED controller against the cached source texture
+/// at ~30 Hz. Compensates for SCK suppressing identical-content frames so
+/// that GUI slider changes apply to static screens too.
+///
+/// Safe to run alongside `handle_capture_frame`: Metal serializes work on
+/// the same command queue, and both paths take fresh encoders + a brief
+/// `last_source_texture` lock.
+fn run_heartbeat(state: Arc<SharedState>) -> ! {
+    let interval = Duration::from_millis(33);
+    loop {
+        std::thread::sleep(interval);
+        // Hold the lock for the whole dispatch — texture must outlive the
+        // encoder, and we don't want a new captured frame to swap underneath
+        // us (would also be safe via Metal's automatic retain, but cleaner
+        // to serialize). Lock is held for ~1 ms.
+        let guard = state.last_source_texture.lock();
+        let Some(texture) = guard.as_ref() else {
+            continue; // No frame captured yet.
+        };
+        let cfg: DynamicConfig = state.config.read().clone();
+        let mut enc = state.device.create_encoder("tv-led-mirror.heartbeat");
+        state.slicer.dispatch(
+            &state.device,
+            &mut enc,
+            texture,
+            cfg.blur_radius,
+            cfg.luminance_floor,
+            cfg.luminance_knee,
+            cfg.saturation_floor,
+            cfg.saturation_knee,
+            cfg.crop,
+            cfg.grade,
+        );
+        enc.commit();
+        state.controller.lock().process_frame(
+            &state.device,
+            state.slicer.output(),
+            1,
+            cfg.brightness,
+        );
+    }
+}
+
 // ─── Shared state + frame plumbing ───────────────────────────────────────────
 
 pub(crate) struct SharedState {
@@ -349,6 +513,15 @@ pub(crate) struct SharedState {
     /// retained `IOSurfaceRef` plus the wall-clock time we submitted its work,
     /// used to defer release until the GPU has plausibly finished reading it.
     retained: Mutex<Vec<RetainedSurface>>,
+    /// Most-recent IOSurface-backed source texture, kept so the heartbeat
+    /// thread can re-dispatch the slicer with current settings even when
+    /// SCK isn't delivering new frames (e.g. content is static — a paused
+    /// video, a steady desktop). Without this the LEDs lock to the last
+    /// captured frame and slider drags have no visible effect.
+    ///
+    /// Replaced on every captured frame; the previous texture's drop
+    /// releases its IOSurface back to the OS pool.
+    last_source_texture: Mutex<Option<GpuTexture>>,
     /// Live-tunable knobs, hot-swapped by the flags.conf watcher thread.
     pub(crate) config: RwLock<DynamicConfig>,
     /// Capture-time format setting; switches the IOSurface→GpuTexture format
@@ -359,8 +532,9 @@ pub(crate) struct SharedState {
 
 /// Subset of CLI knobs that the live-reload watcher can swap in on the fly.
 /// Excludes capture/transport settings (display, ip, port, strips, leds,
-/// hdr, p3) which need a recreated stream / controller / socket.
-#[derive(Clone)]
+/// hdr, p3, hue bridge/key/area) which need a recreated stream / controller
+/// / socket.
+#[derive(Clone, PartialEq)]
 pub(crate) struct DynamicConfig {
     pub brightness: f32,
     pub blur_radius: f32,
@@ -370,6 +544,7 @@ pub(crate) struct DynamicConfig {
     pub saturation_knee: f32,
     pub crop: Crop,
     pub grade: ColorGrade,
+    pub hue: hue::HueDynamic,
 }
 
 impl DynamicConfig {
@@ -391,6 +566,7 @@ impl DynamicConfig {
                 vibrance: cli.vibrance.max(0.0),
                 gamma: cli.gamma.max(0.0001),
                 saturation_bias: cli.saturation_bias.max(0.0),
+                peak_bias: cli.peak_bias.max(0.0),
                 wb_r: cli.wb_r.max(0.0),
                 wb_g: cli.wb_g.max(0.0),
                 wb_b: cli.wb_b.max(0.0),
@@ -400,8 +576,71 @@ impl DynamicConfig {
                 smoothing_alpha: cli.smoothing.clamp(0.01, 1.0),
                 apply_p3_to_srgb: cli.p3,
             },
+            hue: hue::HueDynamic {
+                gain: cli.hue_gain.clamp(0.0, 8.0),
+                saturation: cli.hue_saturation.clamp(0.0, 4.0),
+                secondary_channel_mask: parse_channel_mask(&cli.hue_secondary_channels),
+                smoothing: cli.hue_smoothing.clamp(0.01, 1.0),
+            },
         }
     }
+
+    /// Render this config back to CLI-style flag lines suitable for inclusion
+    /// in flags.conf. Used by the GUI's debounced auto-save so every slider
+    /// change persists across restarts.
+    ///
+    /// Only includes the *live-tunable* flags (the ones in `DynamicConfig`);
+    /// capture/transport flags (`--display`, `--ip`, `--port`, `--strips`,
+    /// `--leds`, `--hdr`, `--p3`, `--hue-bridge`, `--hue-app-key`,
+    /// `--hue-psk`, `--hue-area`) are deliberately omitted so this writer
+    /// can't accidentally clobber them.
+    pub(crate) fn to_flag_lines(&self) -> Vec<String> {
+        let mut out = vec![
+            format!("--brightness {}", self.brightness),
+            format!("--blur-radius {}", self.blur_radius),
+            format!("--luminance-floor {}", self.luminance_floor),
+            format!("--luminance-knee {}", self.luminance_knee),
+            format!("--saturation-floor {}", self.saturation_floor),
+            format!("--saturation-knee {}", self.saturation_knee),
+            format!("--crop-left {}", self.crop.left),
+            format!("--crop-right {}", self.crop.right),
+            format!("--crop-top {}", self.crop.top),
+            format!("--crop-bottom {}", self.crop.bottom),
+            format!("--vibrance {}", self.grade.vibrance),
+            format!("--gamma {}", self.grade.gamma),
+            format!("--saturation-bias {}", self.grade.saturation_bias),
+            format!("--peak-bias {}", self.grade.peak_bias),
+            format!("--wb-r {}", self.grade.wb_r),
+            format!("--wb-g {}", self.grade.wb_g),
+            format!("--wb-b {}", self.grade.wb_b),
+            format!("--max-luminance {}", self.grade.max_luminance),
+            format!("--black-floor {}", self.grade.black_floor),
+            format!("--hdr-peak {}", self.grade.hdr_peak),
+            format!("--smoothing {}", self.grade.smoothing_alpha),
+            format!("--hue-gain {}", self.hue.gain),
+            format!("--hue-saturation {}", self.hue.saturation),
+            format!("--hue-smoothing {}", self.hue.smoothing),
+        ];
+        // Empty mask = single-color mode = clap's default. Omit the line
+        // entirely to keep flags.conf tidy.
+        if self.hue.secondary_channel_mask != 0 {
+            out.push(format!(
+                "--hue-secondary-channels {}",
+                channel_mask_to_csv(self.hue.secondary_channel_mask)
+            ));
+        }
+        out
+    }
+}
+
+fn channel_mask_to_csv(mask: u32) -> String {
+    let mut parts = Vec::new();
+    for i in 0..32 {
+        if mask & (1 << i) != 0 {
+            parts.push(i.to_string());
+        }
+    }
+    parts.join(",")
 }
 
 struct RetainedSurface {
@@ -489,10 +728,11 @@ pub(crate) fn handle_capture_frame(
         surface,
         submitted_at: Instant::now(),
     });
-    // The GpuTexture's MTLTexture retains the IOSurface internally for as long
-    // as Metal's command buffer holds the texture, but we keep our own retain
-    // so the kernel's IOSurface pool doesn't reuse the buffer mid-flight.
-    drop(texture);
+    // Cache the texture so the heartbeat thread can re-dispatch the
+    // slicer when SCK isn't delivering new frames (static content). The
+    // previous texture's drop releases its IOSurface back to the pool —
+    // the new one inherits the "currently held" slot.
+    *state.last_source_texture.lock() = Some(texture);
 }
 
 /// Release any IOSurface we've held longer than the GPU could plausibly need.
@@ -551,5 +791,51 @@ fn parse_addressing(s: &str) -> StripAddressing {
         "packed" => StripAddressing::Packed,
         _ => StripAddressing::PerUniverse,
     }
+}
+
+/// Parse a comma-separated channel-index list ("0,2,3") into a bitmask
+/// suitable for `HueDynamic::secondary_channel_mask`. Invalid entries and
+/// channel indices ≥ 32 are silently ignored — no point failing the whole
+/// flag parse over a typo.
+fn parse_channel_mask(s: &str) -> u32 {
+    let mut mask = 0u32;
+    for part in s.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        if let Ok(i) = part.parse::<u32>()
+            && i < 32
+        {
+            mask |= 1 << i;
+        }
+    }
+    mask
+}
+
+/// Assemble the static Hue config from CLI flags. Returns `Ok(None)` if the
+/// user passed `--hue-bridge` but is missing the credentials or area
+/// (so streaming is silently disabled — they probably haven't paired yet),
+/// `Err` if the bridge was reachable but rejected the area lookup.
+fn build_hue_config(cli: &Cli, bridge: &str) -> Result<Option<hue::HueConfig>, String> {
+    let (Some(app_key), Some(psk)) = (cli.hue_app_key.as_deref(), cli.hue_psk.as_deref()) else {
+        log::info!("hue: --hue-bridge set but --hue-app-key/--hue-psk missing — run --hue-pair");
+        return Ok(None);
+    };
+    let area = match (cli.hue_area.as_deref(), cli.hue_entertainment_id.as_deref()) {
+        (Some(a), _) => a,
+        (None, Some(id)) => id,
+        (None, None) => {
+            log::info!(
+                "hue: --hue-area or --hue-entertainment-id required to stream — run --hue-pair to list"
+            );
+            return Ok(None);
+        }
+    };
+    let (id, channel_count, area_name) = hue::resolve_area(bridge, app_key, area)?;
+    Ok(Some(hue::HueConfig {
+        bridge_ip: bridge.to_string(),
+        app_key: app_key.to_string(),
+        psk_hex: psk.to_string(),
+        entertainment_id: id,
+        area_name,
+        channel_count,
+    }))
 }
 
