@@ -19,7 +19,7 @@ mod ffi;
 mod menu_bar;
 mod slicer;
 
-use slicer::{Crop, Slicer};
+use slicer::{ColorGrade, Crop, Slicer};
 
 /// Mirror a macOS display to ArtNet LEDs using Manifold's edge-extend pipeline.
 #[derive(Parser, Debug)]
@@ -82,6 +82,26 @@ struct Cli {
     /// Useful for cropping out health/mana bars that sit at the bottom edge.
     #[arg(long, default_value_t = 0.0)]
     crop_bottom: f32,
+
+    /// Saturation multiplier on the final color. 1.0 = no change, >1 boosts
+    /// (compensates for the LEDs' diffuse look — try 1.3-1.6 for a punchy
+    /// ambient feel), <1 desaturates. Mixes around BT.709 luma.
+    #[arg(long, default_value_t = 1.0)]
+    vibrance: f32,
+
+    /// Output gamma. 1.0 = linear (current default behavior). Try 2.2 to map
+    /// linear photons to perceptual brightness — mid-tones get squashed so
+    /// "50% grey" pixels stop blasting the LEDs at 50% PWM (which looks much
+    /// brighter perceptually than a screen at 50%).
+    #[arg(long, default_value_t = 1.0)]
+    gamma: f32,
+
+    /// Saturation bias on the blur weights. 0 = pure binomial average (the
+    /// math reason small bright-orange regions smear into "warm white"
+    /// against dark backgrounds). Higher = saturated pixels punch through
+    /// the average more. Try 4-10. Only meaningful when --blur-radius > 0.
+    #[arg(long, default_value_t = 0.0)]
+    saturation_bias: f32,
 
     /// Spatial blur radius in source texels (smooths single-pixel flicker).
     #[arg(long, default_value_t = 12.0)]
@@ -202,6 +222,11 @@ fn main() {
             right: cli.crop_right.clamp(0.0, 0.49),
             top: cli.crop_top.clamp(0.0, 0.49),
             bottom: cli.crop_bottom.clamp(0.0, 0.49),
+        },
+        grade: ColorGrade {
+            vibrance: cli.vibrance.max(0.0),
+            gamma: cli.gamma.max(0.0001),
+            saturation_bias: cli.saturation_bias.max(0.0),
         },
         frames_seen: AtomicU64::new(0),
     });
@@ -333,6 +358,7 @@ struct SharedState {
     saturation_floor: f32,
     saturation_knee: f32,
     crop: Crop,
+    grade: ColorGrade,
     frames_seen: AtomicU64,
 }
 
@@ -383,6 +409,7 @@ fn handle_frame(state: &Arc<SharedState>, surface: *const c_void) {
             state.saturation_floor,
             state.saturation_knee,
             state.crop,
+            state.grade,
         );
         enc.commit();
     }

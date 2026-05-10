@@ -34,10 +34,26 @@ struct SlicerUniforms {
     crop_right: f32,
     crop_top: f32,
     crop_bottom: f32,
-    // Pad struct size to a multiple of 16 (Metal uniform alignment).
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
+    vibrance: f32,
+    gamma: f32,
+    saturation_bias: f32,
+}
+
+#[derive(Clone, Copy)]
+pub struct ColorGrade {
+    pub vibrance: f32,
+    pub gamma: f32,
+    pub saturation_bias: f32,
+}
+
+impl Default for ColorGrade {
+    fn default() -> Self {
+        Self {
+            vibrance: 1.0,
+            gamma: 1.0,
+            saturation_bias: 0.0,
+        }
+    }
 }
 
 /// Margins to crop off the source before slicing, as fractions of the source.
@@ -109,6 +125,7 @@ impl Slicer {
         saturation_floor: f32,
         saturation_knee: f32,
         crop: Crop,
+        grade: ColorGrade,
     ) {
         let uniforms = SlicerUniforms {
             blur_radius,
@@ -120,9 +137,9 @@ impl Slicer {
             crop_right: crop.right.clamp(0.0, 0.49),
             crop_top: crop.top.clamp(0.0, 0.49),
             crop_bottom: crop.bottom.clamp(0.0, 0.49),
-            _pad0: 0.0,
-            _pad1: 0.0,
-            _pad2: 0.0,
+            vibrance: grade.vibrance.max(0.0),
+            gamma: grade.gamma.max(0.0001),
+            saturation_bias: grade.saturation_bias.max(0.0),
         };
         enc.dispatch_compute(
             &self.pipeline,

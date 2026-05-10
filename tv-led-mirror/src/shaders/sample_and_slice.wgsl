@@ -25,6 +25,21 @@ struct Uniforms {
     crop_right: f32,
     crop_top: f32,
     crop_bottom: f32,
+    // Vibrance multiplier in linear space. 1.0 = no change, >1 boosts color
+    // toward the LED's punchier look, <1 desaturates. Mixes around BT.709
+    // luma so neutral grays stay neutral.
+    vibrance: f32,
+    // Output gamma. 1.0 = linear (current behavior — pow(x, 1) = x).
+    // 2.2 = perceptual: maps linear photons to a curve that matches how the
+    // eye sees screen mid-tones, so a "50% grey" pixel doesn't blast the LED
+    // at 50% PWM (which looks much brighter perceptually than a screen at 50%).
+    gamma: f32,
+    // Saturation bias on the blur weights. 0 = pure binomial average (a small
+    // bright orange region averages with dark surroundings into a smeared
+    // warm-white). >0 multiplies each tap's binomial weight by
+    // (1 + bias·sat²) so brightly-colored taps pull harder, preserving punchy
+    // colors against desaturated backgrounds. 4-10 is a useful range.
+    saturation_bias: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -60,7 +75,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         color = textureSampleLevel(source_tex, tex_sampler, center, 0.0);
     } else {
         // 5×5 binomial weights sampled in 2D (25 taps). Inter-tap spacing
-        // scales with `blur_radius` in source-texel units.
+        // scales with `blur_radius` in source-texel units. Each tap's binomial
+        // weight is multiplied by (1 + saturation_bias · sat²) so that small
+        // bright-colored regions (an orange flame against dark) punch through
+        // instead of getting smeared into the desaturated linear average.
         let tex_size = vec2<f32>(textureDimensions(source_tex, 0));
         let r = uniforms.blur_radius / tex_size;
         let w = array<f32, 5>(1.0, 4.0, 6.0, 4.0, 1.0);
@@ -70,12 +88,17 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             for (var dx = 0; dx < 5; dx = dx + 1) {
                 let ox = (f32(dx) - 2.0) * r.x;
                 let oy = (f32(dy) - 2.0) * r.y;
-                let weight = w[dx] * w[dy];
-                sum = sum + textureSampleLevel(
+                let tap = textureSampleLevel(
                     source_tex, tex_sampler,
                     center + vec2<f32>(ox, oy),
                     0.0,
-                ) * weight;
+                );
+                let mx = max(tap.r, max(tap.g, tap.b));
+                let mn = min(tap.r, min(tap.g, tap.b));
+                let sat = select(0.0, (mx - mn) / mx, mx > 0.0001);
+                let sat_w = 1.0 + uniforms.saturation_bias * sat * sat;
+                let weight = w[dx] * w[dy] * sat_w;
+                sum = sum + tap * weight;
                 total_w = total_w + weight;
             }
         }
@@ -107,5 +130,21 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         color = vec4<f32>(color.rgb * gate, color.a);
     }
 
+    // Vibrance: mix around the BT.709 gray equivalent. >1 boosts saturation
+    // (good against the LEDs' diffuse look), <1 desaturates. 1.0 = no-op.
+    if abs(uniforms.vibrance - 1.0) > 0.0001 {
+        let y = dot(color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+        color = vec4<f32>(mix(vec3<f32>(y), color.rgb, uniforms.vibrance), color.a);
+    }
+
+    // Output gamma. Squashes mid-tones if gamma > 1 so 50%-grey pixels stop
+    // blasting the LEDs perceptually. Apply LAST so the gates and vibrance
+    // run in linear space.
+    if abs(uniforms.gamma - 1.0) > 0.0001 {
+        let safe = max(color.rgb, vec3<f32>(0.0));
+        color = vec4<f32>(pow(safe, vec3<f32>(uniforms.gamma)), color.a);
+    }
+
+    color = vec4<f32>(clamp(color.rgb, vec3<f32>(0.0), vec3<f32>(1.0)), color.a);
     textureStore(output_tex, vec2<i32>(gid.xy), color);
 }
