@@ -183,14 +183,17 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // Black floor.
+    // Black floor — per-pixel (kills the whole pixel if the brightest channel
+    // is below the threshold), NOT per-channel. Per-channel cuts hue-shift
+    // dim warm colors: a brown like (0.04, 0.025, 0.01) would have blue
+    // snapped to 0, leaving pure red-orange, because warm colors naturally
+    // have a tiny blue component that's the first to fall below the floor.
+    // Per-pixel preserves chroma — the LED either renders the colored pixel
+    // faithfully or stays dark.
     if uniforms.black_floor > 0.0 {
-        color = vec4<f32>(
-            select(0.0, color.r, color.r > uniforms.black_floor),
-            select(0.0, color.g, color.g > uniforms.black_floor),
-            select(0.0, color.b, color.b > uniforms.black_floor),
-            color.a,
-        );
+        let mx = max(color.r, max(color.g, color.b));
+        let live = step(uniforms.black_floor, mx);
+        color = vec4<f32>(color.rgb * live, color.a);
     }
 
     // Temporal blend with previous frame's output. EMA: out = α·new + (1-α)·prev.
