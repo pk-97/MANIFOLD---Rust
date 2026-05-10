@@ -52,9 +52,13 @@ struct Uniforms {
     // the flickery low-PWM region where SK9822 strips strobe rather than
     // dim cleanly. Try 0.015 (= 4/255).
     black_floor: f32,
+    // HDR peak: max linear input value rolled off to 1.0 via Reinhard
+    // (extended). 1.0 = SDR (effectively no-op). Higher = preserve more
+    // headroom — values above 1.0 in extendedLinearSRGB get squashed
+    // smoothly instead of clipped. Applied right after sample.
+    hdr_peak: f32,
     _pad0: f32,
     _pad1: f32,
-    _pad2: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -118,6 +122,16 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
         color = sum / total_w;
+    }
+
+    // HDR roll-off (Reinhard extended). Maps [0, hdr_peak] → [0, 1] smoothly,
+    // preserving headroom that would otherwise clip. peak=1.0 is identity for
+    // SDR content. Applied per-channel so saturated highlights keep their hue.
+    if uniforms.hdr_peak > 1.0001 {
+        let p = uniforms.hdr_peak;
+        let safe = max(color.rgb, vec3<f32>(0.0));
+        let mapped = safe * (1.0 + safe / (p * p)) / (1.0 + safe);
+        color = vec4<f32>(mapped, color.a);
     }
 
     // Soft luminance gate. Linear-luma weights (BT.709). Below `floor` the

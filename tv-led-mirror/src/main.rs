@@ -5,7 +5,7 @@
 //! the IOSurface that `CGDisplayStream` delivers, so the edge-extend compute
 //! shader / DMX packing / ArtNet send path are byte-identical to the main app.
 
-use std::ffi::{CString, c_void};
+use std::ffi::c_void;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -15,6 +15,7 @@ use manifold_gpu::{GpuDevice, GpuTextureFormat, GpuTextureUsage};
 use manifold_led::{LedOutputController, LedSettings, StripAddressing};
 use parking_lot::Mutex;
 
+mod capture;
 mod ffi;
 mod menu_bar;
 mod slicer;
@@ -170,6 +171,22 @@ struct Cli {
     /// Width of the smoothstep transition above `--saturation-floor`.
     #[arg(long, default_value_t = 0.05)]
     saturation_knee: f32,
+
+    /// Enable HDR capture path: ScreenCaptureKit with 16-bit float pixel
+    /// format and extendedLinearSRGB colorspace. Required to actually react
+    /// to HDR content (Q80T ST.2084 etc.) — without this macOS tone-maps the
+    /// captured display down to SDR before we ever see it. SDR sources work
+    /// through this path too.
+    #[arg(long)]
+    hdr: bool,
+
+    /// Peak linear luminance for HDR tone-mapping. Linear extendedSRGB can
+    /// run well above 1.0 — values above this get rolled off via Reinhard.
+    /// Lower = more highlight compression; higher = more dynamic range
+    /// preserved at the cost of mid-tones. 4.0 ≈ 1000 nits if your display
+    /// peaks there. Only used when --hdr is set.
+    #[arg(long, default_value_t = 4.0)]
+    hdr_peak: f32,
 }
 
 fn main() {
@@ -236,8 +253,6 @@ fn main() {
         slicer,
         retained: Mutex::new(Vec::with_capacity(4)),
         brightness: cli.brightness.clamp(0.0, 1.0),
-        cap_w,
-        cap_h,
         blur_radius: cli.blur_radius,
         luminance_floor: cli.luminance_floor.clamp(0.0, 1.0),
         luminance_knee: cli.luminance_knee.max(0.0001),
@@ -258,7 +273,11 @@ fn main() {
             wb_b: cli.wb_b.max(0.0),
             max_luminance: cli.max_luminance.clamp(0.0, 1.0),
             black_floor: cli.black_floor.clamp(0.0, 1.0),
+            // HDR-only knob: peak=1.0 disables the Reinhard roll-off, so
+            // SDR captures pass through unchanged.
+            hdr_peak: if cli.hdr { cli.hdr_peak.max(1.0) } else { 1.0 },
         },
+        hdr: cli.hdr,
         frames_seen: AtomicU64::new(0),
     });
 
@@ -270,59 +289,15 @@ fn main() {
     // simplest correct behavior.
     ctrlc::set_handler(|| std::process::exit(0)).expect("install signal handler");
 
-    // Build the CGDisplayStream. `properties` stays NULL — we cap fps via a
-    // throttle in the callback rather than the dictionary, which keeps the FFI
-    // surface tiny.
-    let queue = unsafe {
-        let label = CString::new("tv-led-mirror.capture").unwrap();
-        ffi::dispatch_queue_create(label.as_ptr(), std::ptr::null_mut())
-    };
-    assert!(!queue.is_null(), "dispatch_queue_create failed");
-
-    let min_frame_interval = if cli.fps > 0 {
-        Some(Duration::from_secs_f64(1.0 / cli.fps as f64))
-    } else {
-        None
-    };
-
-    let stream = {
-        let state = state.clone();
-        let last_processed = Mutex::new(Instant::now() - Duration::from_secs(1));
-        let handler = block2::RcBlock::new(
-            move |status: i32, _display_time: u64, surface: *const c_void, _update: *const c_void| {
-                // CGDisplayStreamFrameStatus: 0 = FrameComplete, 1 = FrameIdle,
-                // 2 = FrameBlank, 3 = Stopped. Only 0 carries a usable surface.
-                if status != 0 || surface.is_null() {
-                    return;
-                }
-                if let Some(min) = min_frame_interval {
-                    let mut last = last_processed.lock();
-                    if last.elapsed() < min {
-                        return;
-                    }
-                    *last = Instant::now();
-                }
-                handle_frame(&state, surface);
-            },
-        );
-        unsafe {
-            ffi::CGDisplayStreamCreateWithDispatchQueue(
-                display_id,
-                cap_w as usize,
-                cap_h as usize,
-                ffi::K_PIXEL_FORMAT_BGRA,
-                std::ptr::null(),
-                queue,
-                block2::RcBlock::as_ptr(&handler) as *const c_void,
-            )
-        }
-    };
-    if stream.is_null() {
+    // ScreenCaptureKit replaces the deprecated CGDisplayStream so we can
+    // request HDR + 16-bit float when --hdr is set, and so we get proper
+    // wide-gamut color metadata. The capture::start blocks until the stream
+    // start completion handler fires (or 5s timeout).
+    if let Err(e) = capture::start(display_id, cap_w, cap_h, cli.hdr, state.clone()) {
         eprintln!();
-        eprintln!("CGDisplayStreamCreateWithDispatchQueue returned NULL.");
-        eprintln!("This almost always means Screen Recording permission was denied.");
+        eprintln!("ScreenCaptureKit start failed: {e}");
         eprintln!();
-        eprintln!("Fix:");
+        eprintln!("Most common cause: Screen Recording permission denied for TVLEDMirror.");
         eprintln!("  1. Launch via the .app bundle so the prompt is attributed to");
         eprintln!("     TVLEDMirror (not to your terminal):");
         eprintln!("       ./tv-led-mirror/run.sh --display <id> [other flags]");
@@ -332,14 +307,10 @@ fn main() {
         eprintln!();
         std::process::exit(1);
     }
-
-    let start_err = unsafe { ffi::CGDisplayStreamStart(stream) };
-    if start_err != 0 {
-        eprintln!("CGDisplayStreamStart failed (kCGError {start_err}).");
-        eprintln!("Re-launch via ./tv-led-mirror/run.sh so TCC sees TVLEDMirror.app.");
-        std::process::exit(1);
-    }
-    log::info!("Capture started. Quit via the menu-bar item, Cmd+Q, or Ctrl+C.");
+    log::info!(
+        "Capture started ({}). Quit via the menu-bar item, Cmd+Q, or Ctrl+C.",
+        if cli.hdr { "HDR / 16-bit float" } else { "SDR / BGRA8" }
+    );
 
     // Polling lives on a background thread so the main thread is free for the
     // AppKit run loop (NSApplication.run requires the main thread).
@@ -381,8 +352,6 @@ struct SharedState {
     /// used to defer release until the GPU has plausibly finished reading it.
     retained: Mutex<Vec<RetainedSurface>>,
     brightness: f32,
-    cap_w: u32,
-    cap_h: u32,
     blur_radius: f32,
     luminance_floor: f32,
     luminance_knee: f32,
@@ -390,6 +359,7 @@ struct SharedState {
     saturation_knee: f32,
     crop: Crop,
     grade: ColorGrade,
+    hdr: bool,
     frames_seen: AtomicU64,
 }
 
@@ -402,7 +372,15 @@ struct RetainedSurface {
 // because we only touch it under `retained`'s mutex.
 unsafe impl Send for RetainedSurface {}
 
-fn handle_frame(state: &Arc<SharedState>, surface: *const c_void) {
+/// Called by `capture::dispatch_frame` for every CMSampleBuffer ScreenCaptureKit
+/// hands us. `width`/`height` come from the CVPixelBuffer (may differ from the
+/// requested cap_w/cap_h after macOS's own scaling); they're authoritative.
+pub(crate) fn handle_capture_frame(
+    state: &Arc<SharedState>,
+    surface: *const c_void,
+    width: u32,
+    height: u32,
+) {
     // Bump use count + CFRetain so the framework's pool can't recycle the
     // backing memory while the GPU is still reading from it.
     unsafe {
@@ -410,16 +388,20 @@ fn handle_frame(state: &Arc<SharedState>, surface: *const c_void) {
         ffi::CFRetain(surface);
     }
 
+    // Pick the texture format that matches the IOSurface's pixel format:
+    // - HDR path: 16-bit float per channel (RGhA), already linear extended-range.
+    // - SDR path: BGRA8 with sRGB hardware decode in the sampler.
+    let format = if state.hdr {
+        GpuTextureFormat::Rgba16Float
+    } else {
+        GpuTextureFormat::Bgra8UnormSrgb
+    };
     let texture = unsafe {
         state.device.create_texture_from_io_surface(
             surface,
-            state.cap_w,
-            state.cap_h,
-            // sRGB-aware view of the IOSurface: hardware bilinear filter mixes
-            // pixels in linear space (per-tap sRGB→linear before filtering),
-            // which preserves saturation. Bgra8Unorm here would average bytes
-            // in sRGB space and desaturate vibrant colors.
-            GpuTextureFormat::Bgra8UnormSrgb,
+            width,
+            height,
+            format,
             GpuTextureUsage::SHADER_READ,
         )
     };

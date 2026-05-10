@@ -56,6 +56,24 @@ objc2-app-kit = { version = "0.3", features = [
     "NSWindow",
     "NSImage",
 ] }
+# ScreenCaptureKit + CoreMedia/CoreVideo for HDR-aware capture. SCK replaces
+# CGDisplayStream so we can request 16-bit float pixel format,
+# extendedLinearSRGB color space, and SCCaptureDynamicRangeHDR — preserving
+# HDR highlights and wide-gamut color that CGDisplayStream's 8-bit SDR path
+# tone-maps away before we see a single pixel.
+objc2-screen-capture-kit = { version = "0.3", features = [
+    "SCStream",
+    "SCShareableContent",
+    "SCError",
+    "block2",
+    "dispatch2",
+    "objc2-core-media",
+    "objc2-core-graphics",
+    "objc2-core-foundation",
+] }
+objc2-core-media = { version = "0.3", features = ["CMSampleBuffer", "CMTime"] }
+objc2-core-video = { version = "0.3", features = ["CVPixelBuffer", "CVImageBuffer", "CVBuffer"] }
+dispatch2 = "0.3"
 
 # atexit hook for sending a final LED blackout when the user picks Quit
 # (NSApplication.terminate calls exit() directly — our SIGINT/SIGTERM path
