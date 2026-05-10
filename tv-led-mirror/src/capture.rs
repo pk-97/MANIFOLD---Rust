@@ -107,6 +107,12 @@ struct CaptureGlobals {
     _stream: Retained<SCStream>,
     _handler: Retained<StreamHandler>,
     _queue: dispatch2::DispatchRetained<DispatchQueue>,
+    // SCStreamConfiguration.setColorSpaceName is documented as
+    // unretained — SCK reads the pointer lazily during
+    // serializeStreamProperties at startCapture time. If we let the NSString
+    // drop after configure, SCK reads a dangling pointer and the process
+    // crashes inside -[SCStream serializeStreamProperties]. Stash it.
+    _color_space_name: Option<Retained<NSString>>,
 }
 
 // SCStream / our handler / dispatch queue are all thread-safe Objective-C
@@ -151,6 +157,7 @@ pub fn start(
     };
 
     let config = unsafe { SCStreamConfiguration::new() };
+    let mut cs_name_keep: Option<Retained<NSString>> = None;
     unsafe {
         config.setWidth(cap_w as usize);
         config.setHeight(cap_h as usize);
@@ -162,9 +169,13 @@ pub fn start(
             // Toll-free bridge NSString → CFString for setColorSpaceName.
             // extendedLinearSRGB gives us linear values potentially >1.0,
             // perfect for HDR tone-mapping in our shader.
+            // CRITICAL: setColorSpaceName is unretained — SCK reads the
+            // pointer lazily during startCapture's serializeStreamProperties.
+            // Keep the NSString alive in CaptureGlobals.
             let cs_name = NSString::from_str("kCGColorSpaceExtendedLinearSRGB");
             let cs_cf: *const c_void = Retained::as_ptr(&cs_name).cast();
             let _: () = msg_send![&*config, setColorSpaceName: cs_cf];
+            cs_name_keep = Some(cs_name);
         } else {
             config.setPixelFormat(PIXEL_FORMAT_BGRA);
             config.setCaptureDynamicRange(SCCaptureDynamicRange::SDR);
@@ -202,6 +213,7 @@ pub fn start(
         _stream: stream.clone(),
         _handler: handler,
         _queue: queue,
+        _color_space_name: cs_name_keep,
     };
     if GLOBAL.set(globals).is_err() {
         return Err("capture::start called twice".into());
