@@ -1,20 +1,20 @@
 //! Edge-slicing compute pass for tv-led-mirror.
 //!
-//! `LedOutputController` hardcodes its edge-extend widths to 0.5/0.5 because
-//! Manifold itself feeds it source textures that are already at strip×LED
-//! resolution (per-layer LED routing pre-slices the edges in the compositor).
-//! Our screen-capture flow doesn't have that pre-slice — we hand the
-//! controller a full-screen IOSurface — so we run our own slicer first that:
-//!   1. samples the leftmost `left_edge_width` and rightmost `right_edge_width`
-//!      vertical bands of the source per the user's CLI flags;
-//!   2. blurs over `blur_radius` source texels to suppress single-pixel
-//!      flicker on physical LEDs;
-//!   3. decodes sRGB→linear so that "perceptual mid-grey on the TV" becomes
-//!      "perceptual mid-grey on the LEDs" instead of "75% photon output".
+//! Per frame:
+//!   1. Lazily allocate (or reuse) a mip-able pyramid texture matching the
+//!      source IOSurface's size + format.
+//!   2. Blit IOSurface mip 0 → pyramid mip 0, then `generate_mipmaps` for the
+//!      rest of the chain.
+//!   3. Run the slicer compute, sampling the pyramid at a per-output LOD that
+//!      matches each LED tile's coverage area (5×5 binomial taps, each one
+//!      itself an area integral over a fraction of the tile).
+//!   4. Write to a ping-pong output texture, blending with the previous
+//!      frame's output for temporal smoothing.
 //!
-//! Output is a persistent strip×LED Rgba8Unorm texture that we hand to
-//! `LedOutputController::process_frame`. The controller's hardcoded 0.5/0.5
-//! widths then act as identity at strip-aligned input resolution.
+//! `output()` returns the most recently written ping-pong texture so the
+//! downstream `LedOutputController` reads what we just produced.
+
+use parking_lot::Mutex;
 
 use manifold_gpu::{
     GpuAddressMode, GpuBinding, GpuComputePipeline, GpuDevice, GpuEncoder, GpuFilterMode,
@@ -43,9 +43,17 @@ struct SlicerUniforms {
     max_luminance: f32,
     black_floor: f32,
     hdr_peak: f32,
-    // 18 floats = 72 bytes. Pad to 80 (20 floats) for 16-byte uniform stride.
-    _pad0: f32,
-    _pad1: f32,
+    smoothing_alpha: f32,
+    apply_p3_to_srgb: f32,
+    // 20 floats = 80 bytes, multiple of 16. No padding needed.
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct Crop {
+    pub left: f32,
+    pub right: f32,
+    pub top: f32,
+    pub bottom: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -58,11 +66,14 @@ pub struct ColorGrade {
     pub wb_b: f32,
     pub max_luminance: f32,
     pub black_floor: f32,
-    /// Peak linear input value to roll off to 1.0 via Reinhard. 1.0 = no
-    /// HDR mapping (SDR clamp). Higher = more dynamic range preserved
-    /// at the cost of mid-tone brightness (mids get pushed lower so the
-    /// curve has somewhere to go).
     pub hdr_peak: f32,
+    /// EMA factor for the temporal blend. 1.0 = no smoothing (pass through),
+    /// 0.3 ≈ heavy smoothing (3 frames of inertia). Trades a few frames of
+    /// latency for flicker-free LEDs on text/UI.
+    pub smoothing_alpha: f32,
+    /// True when capture is in extendedLinearDisplayP3 — turns on the
+    /// P3→sRGB primaries matrix in the slicer.
+    pub apply_p3_to_srgb: bool,
 }
 
 impl Default for ColorGrade {
@@ -77,24 +88,29 @@ impl Default for ColorGrade {
             max_luminance: 1.0,
             black_floor: 0.0,
             hdr_peak: 1.0,
+            smoothing_alpha: 1.0,
+            apply_p3_to_srgb: false,
         }
     }
 }
 
-/// Margins to crop off the source before slicing, as fractions of the source.
-/// Defaults to all zero (no crop).
-#[derive(Clone, Copy, Default)]
-pub struct Crop {
-    pub left: f32,
-    pub right: f32,
-    pub top: f32,
-    pub bottom: f32,
+/// Mip pyramid sized to the captured IOSurface. Lazily (re)allocated when
+/// dimensions or pixel format change.
+struct MipPyramid {
+    texture: GpuTexture,
+    width: u32,
+    height: u32,
+    format: GpuTextureFormat,
 }
 
 pub struct Slicer {
     pipeline: GpuComputePipeline,
     sampler: GpuSampler,
-    output: GpuTexture,
+    /// Two strip×LED outputs. Each frame we write to one and read the other
+    /// as `prev` for the temporal blend; then swap.
+    outputs: [GpuTexture; 2],
+    write_idx: Mutex<usize>,
+    pyramid: Mutex<Option<MipPyramid>>,
     width: u32,
     height: u32,
 }
@@ -107,41 +123,87 @@ impl Slicer {
             "tv-led-mirror.slicer",
         );
 
+        // Trilinear sampler — Linear mip filter blends across LOD boundaries
+        // smoothly so per-tap LOD choice doesn't visibly bracket.
         let sampler = device.create_sampler(&GpuSamplerDesc {
             min_filter: GpuFilterMode::Linear,
             mag_filter: GpuFilterMode::Linear,
-            mip_filter: GpuFilterMode::Nearest,
+            mip_filter: GpuFilterMode::Linear,
             address_mode_u: GpuAddressMode::ClampToEdge,
             address_mode_v: GpuAddressMode::ClampToEdge,
             address_mode_w: GpuAddressMode::ClampToEdge,
             compare: None,
         });
 
-        let output = device.create_texture(&GpuTextureDesc {
-            width: strip_count,
-            height: leds_per_strip,
-            depth: 1,
-            format: GpuTextureFormat::Rgba8Unorm,
-            dimension: GpuTextureDimension::D2,
-            // SHADER_WRITE: we write to it from our compute pass.
-            // SHADER_READ: LedOutputController's edge-extend samples it.
-            usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::SHADER_WRITE,
-            label: "tv-led-mirror.slicer_out",
-            mip_levels: 1,
-        });
+        let make_output = |label| {
+            device.create_texture(&GpuTextureDesc {
+                width: strip_count,
+                height: leds_per_strip,
+                depth: 1,
+                format: GpuTextureFormat::Rgba8Unorm,
+                dimension: GpuTextureDimension::D2,
+                // SHADER_READ for prev_tex sampling, SHADER_WRITE for our
+                // textureStore as output_tex, COPY_SRC for the LED controller's
+                // edge-extend pass to read it.
+                usage: GpuTextureUsage::SHADER_READ
+                    | GpuTextureUsage::SHADER_WRITE
+                    | GpuTextureUsage::COPY_SRC,
+                label,
+                mip_levels: 1,
+            })
+        };
 
         Self {
             pipeline,
             sampler,
-            output,
+            outputs: [make_output("slicer_out_a"), make_output("slicer_out_b")],
+            write_idx: Mutex::new(0),
+            pyramid: Mutex::new(None),
             width: strip_count,
             height: leds_per_strip,
         }
     }
 
+    /// Ensure the pyramid matches the source's dimensions + format,
+    /// (re)allocating if needed.
+    fn ensure_pyramid(&self, device: &GpuDevice, src: &GpuTexture) {
+        let mut slot = self.pyramid.lock();
+        if let Some(p) = slot.as_ref()
+            && p.width == src.width
+            && p.height == src.height
+            && p.format == src.format
+        {
+            return;
+        }
+        let mip_levels = GpuTextureDesc::max_mip_levels(src.width, src.height);
+        let pyramid_tex = device.create_texture(&GpuTextureDesc {
+            width: src.width,
+            height: src.height,
+            depth: 1,
+            format: src.format,
+            dimension: GpuTextureDimension::D2,
+            // SHADER_READ for sampling, COPY_DST for the per-frame blit from
+            // the IOSurface, RENDER_TARGET so generate_mipmaps's blit-encoder
+            // path is happy on every Metal pixel format we use.
+            usage: GpuTextureUsage::SHADER_READ
+                | GpuTextureUsage::COPY_DST
+                | GpuTextureUsage::COPY_SRC
+                | GpuTextureUsage::RENDER_TARGET,
+            label: "tv-led-mirror.slicer.pyramid",
+            mip_levels,
+        });
+        *slot = Some(MipPyramid {
+            texture: pyramid_tex,
+            width: src.width,
+            height: src.height,
+            format: src.format,
+        });
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn dispatch(
         &self,
+        device: &GpuDevice,
         enc: &mut GpuEncoder,
         source: &GpuTexture,
         blur_radius: f32,
@@ -152,8 +214,26 @@ impl Slicer {
         crop: Crop,
         grade: ColorGrade,
     ) {
+        // 1. Refresh pyramid (lazy).
+        self.ensure_pyramid(device, source);
+        let pyramid_guard = self.pyramid.lock();
+        let pyramid = &pyramid_guard.as_ref().expect("ensure_pyramid").texture;
+
+        // 2. Blit IOSurface → pyramid mip 0 → generate the rest of the chain.
+        enc.copy_texture_to_texture(source, pyramid, source.width, source.height, 1);
+        enc.generate_mipmaps(pyramid);
+
+        // 3. Pick output / prev via ping-pong.
+        let mut idx_guard = self.write_idx.lock();
+        let write_idx = *idx_guard;
+        let prev_idx = 1 - write_idx;
+        *idx_guard = prev_idx;
+        drop(idx_guard);
+        let output = &self.outputs[write_idx];
+        let prev = &self.outputs[prev_idx];
+
         let uniforms = SlicerUniforms {
-            blur_radius,
+            blur_radius: blur_radius.max(0.0),
             luminance_floor,
             luminance_knee,
             saturation_floor,
@@ -171,9 +251,10 @@ impl Slicer {
             max_luminance: grade.max_luminance.clamp(0.0, 1.0),
             black_floor: grade.black_floor.clamp(0.0, 1.0),
             hdr_peak: grade.hdr_peak.max(1.0),
-            _pad0: 0.0,
-            _pad1: 0.0,
+            smoothing_alpha: grade.smoothing_alpha.clamp(0.01, 1.0),
+            apply_p3_to_srgb: if grade.apply_p3_to_srgb { 1.0 } else { 0.0 },
         };
+
         enc.dispatch_compute(
             &self.pipeline,
             &[
@@ -183,7 +264,7 @@ impl Slicer {
                 },
                 GpuBinding::Texture {
                     binding: 1,
-                    texture: source,
+                    texture: pyramid,
                 },
                 GpuBinding::Sampler {
                     binding: 2,
@@ -191,7 +272,11 @@ impl Slicer {
                 },
                 GpuBinding::Texture {
                     binding: 3,
-                    texture: &self.output,
+                    texture: output,
+                },
+                GpuBinding::Texture {
+                    binding: 4,
+                    texture: prev,
                 },
             ],
             [self.width.div_ceil(8), self.height.div_ceil(8), 1],
@@ -199,8 +284,13 @@ impl Slicer {
         );
     }
 
+    /// Most recently written ping-pong output. Hand this to the LED controller.
     pub fn output(&self) -> &GpuTexture {
-        &self.output
+        // After dispatch swaps, the texture we wrote to is at the OPPOSITE
+        // index from `write_idx` (because we updated write_idx to prev_idx
+        // before returning). So output is at 1 - *write_idx.
+        let idx = 1 - *self.write_idx.lock();
+        &self.outputs[idx]
     }
 }
 

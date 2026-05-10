@@ -13,11 +13,12 @@ use std::time::{Duration, Instant};
 use clap::Parser;
 use manifold_gpu::{GpuDevice, GpuTextureFormat, GpuTextureUsage};
 use manifold_led::{LedOutputController, LedSettings, StripAddressing};
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 
 mod capture;
 mod ffi;
 mod menu_bar;
+mod reload;
 mod slicer;
 
 use slicer::{ColorGrade, Crop, Slicer};
@@ -130,8 +131,10 @@ struct Cli {
     #[arg(long, default_value_t = 0.0)]
     black_floor: f32,
 
-    /// Spatial blur radius in source texels (smooths single-pixel flicker).
-    #[arg(long, default_value_t = 12.0)]
+    /// Blur multiplier on the LED tile's coverage area. 1.0 = 5×5 binomial
+    /// taps span exactly one LED tile (proper area integration via mipmap
+    /// LOD). >1 = wider blur (tiles bleed into neighbors), <1 = tighter.
+    #[arg(long, default_value_t = 1.0)]
     blur_radius: f32,
 
     /// Master brightness 0..1.
@@ -187,6 +190,21 @@ struct Cli {
     /// peaks there. Only used when --hdr is set.
     #[arg(long, default_value_t = 4.0)]
     hdr_peak: f32,
+
+    /// Capture in extendedLinearDisplayP3 instead of extendedLinearSRGB so
+    /// wide-gamut HDR colors (vivid greens/cyans/magentas outside sRGB
+    /// primaries) survive into the slicer. The shader applies a P3→sRGB
+    /// matrix before LED output. Most useful with --hdr on a P3-capable
+    /// display (e.g. a Samsung Q-series in HDR mode).
+    #[arg(long)]
+    p3: bool,
+
+    /// Temporal smoothing factor (0..1). 1.0 = no smoothing (current frame
+    /// passes through). Smaller = more inertia (3-frame EMA at 0.3). Removes
+    /// per-frame flicker on text/UI/scene cuts at the cost of a few frames
+    /// of latency. Try 0.4 for movies, 0.7-1.0 for fast games.
+    #[arg(long, default_value_t = 1.0)]
+    smoothing: f32,
 }
 
 fn main() {
@@ -247,36 +265,13 @@ fn main() {
     // Shared state lives on the heap so the CGDisplayStream block + the polling
     // loop both see it. `controller` mutates from both the capture queue (frame
     // ingest → submit GPU work) and the main thread (poll readback).
+    let dynamic = DynamicConfig::from_cli(&cli);
     let state = Arc::new(SharedState {
         device,
         controller: Mutex::new(controller),
         slicer,
         retained: Mutex::new(Vec::with_capacity(4)),
-        brightness: cli.brightness.clamp(0.0, 1.0),
-        blur_radius: cli.blur_radius,
-        luminance_floor: cli.luminance_floor.clamp(0.0, 1.0),
-        luminance_knee: cli.luminance_knee.max(0.0001),
-        saturation_floor: cli.saturation_floor.clamp(0.0, 1.0),
-        saturation_knee: cli.saturation_knee.max(0.0001),
-        crop: Crop {
-            left: cli.crop_left.clamp(0.0, 0.49),
-            right: cli.crop_right.clamp(0.0, 0.49),
-            top: cli.crop_top.clamp(0.0, 0.49),
-            bottom: cli.crop_bottom.clamp(0.0, 0.49),
-        },
-        grade: ColorGrade {
-            vibrance: cli.vibrance.max(0.0),
-            gamma: cli.gamma.max(0.0001),
-            saturation_bias: cli.saturation_bias.max(0.0),
-            wb_r: cli.wb_r.max(0.0),
-            wb_g: cli.wb_g.max(0.0),
-            wb_b: cli.wb_b.max(0.0),
-            max_luminance: cli.max_luminance.clamp(0.0, 1.0),
-            black_floor: cli.black_floor.clamp(0.0, 1.0),
-            // HDR-only knob: peak=1.0 disables the Reinhard roll-off, so
-            // SDR captures pass through unchanged.
-            hdr_peak: if cli.hdr { cli.hdr_peak.max(1.0) } else { 1.0 },
-        },
+        config: RwLock::new(dynamic),
         hdr: cli.hdr,
         frames_seen: AtomicU64::new(0),
     });
@@ -293,7 +288,7 @@ fn main() {
     // request HDR + 16-bit float when --hdr is set, and so we get proper
     // wide-gamut color metadata. The capture::start blocks until the stream
     // start completion handler fires (or 5s timeout).
-    if let Err(e) = capture::start(display_id, cap_w, cap_h, cli.hdr, state.clone()) {
+    if let Err(e) = capture::start(display_id, cap_w, cap_h, cli.hdr, cli.p3, state.clone()) {
         eprintln!();
         eprintln!("ScreenCaptureKit start failed: {e}");
         eprintln!();
@@ -319,6 +314,9 @@ fn main() {
         std::thread::spawn(move || run_polling_loop(state));
     }
 
+    // Watch flags.conf for edits and hot-swap the live-tunable knobs.
+    reload::spawn(state.clone());
+
     // Block here until the user quits. exit() is called from the menu's
     // terminate: action / Cmd+Q / our SIGINT handler — at which point the
     // atexit hook in menu_bar runs the controller's shutdown (final blackout).
@@ -343,7 +341,7 @@ fn run_polling_loop(state: Arc<SharedState>) -> ! {
 
 // ─── Shared state + frame plumbing ───────────────────────────────────────────
 
-struct SharedState {
+pub(crate) struct SharedState {
     device: GpuDevice,
     controller: Mutex<LedOutputController>,
     slicer: Slicer,
@@ -351,16 +349,59 @@ struct SharedState {
     /// retained `IOSurfaceRef` plus the wall-clock time we submitted its work,
     /// used to defer release until the GPU has plausibly finished reading it.
     retained: Mutex<Vec<RetainedSurface>>,
-    brightness: f32,
-    blur_radius: f32,
-    luminance_floor: f32,
-    luminance_knee: f32,
-    saturation_floor: f32,
-    saturation_knee: f32,
-    crop: Crop,
-    grade: ColorGrade,
+    /// Live-tunable knobs, hot-swapped by the flags.conf watcher thread.
+    pub(crate) config: RwLock<DynamicConfig>,
+    /// Capture-time format setting; switches the IOSurface→GpuTexture format
+    /// each frame. Not live-tunable (would require recreating the SCK stream).
     hdr: bool,
     frames_seen: AtomicU64,
+}
+
+/// Subset of CLI knobs that the live-reload watcher can swap in on the fly.
+/// Excludes capture/transport settings (display, ip, port, strips, leds,
+/// hdr, p3) which need a recreated stream / controller / socket.
+#[derive(Clone)]
+pub(crate) struct DynamicConfig {
+    pub brightness: f32,
+    pub blur_radius: f32,
+    pub luminance_floor: f32,
+    pub luminance_knee: f32,
+    pub saturation_floor: f32,
+    pub saturation_knee: f32,
+    pub crop: Crop,
+    pub grade: ColorGrade,
+}
+
+impl DynamicConfig {
+    fn from_cli(cli: &Cli) -> Self {
+        Self {
+            brightness: cli.brightness.clamp(0.0, 1.0),
+            blur_radius: cli.blur_radius,
+            luminance_floor: cli.luminance_floor.clamp(0.0, 1.0),
+            luminance_knee: cli.luminance_knee.max(0.0001),
+            saturation_floor: cli.saturation_floor.clamp(0.0, 1.0),
+            saturation_knee: cli.saturation_knee.max(0.0001),
+            crop: Crop {
+                left: cli.crop_left.clamp(0.0, 0.49),
+                right: cli.crop_right.clamp(0.0, 0.49),
+                top: cli.crop_top.clamp(0.0, 0.49),
+                bottom: cli.crop_bottom.clamp(0.0, 0.49),
+            },
+            grade: ColorGrade {
+                vibrance: cli.vibrance.max(0.0),
+                gamma: cli.gamma.max(0.0001),
+                saturation_bias: cli.saturation_bias.max(0.0),
+                wb_r: cli.wb_r.max(0.0),
+                wb_g: cli.wb_g.max(0.0),
+                wb_b: cli.wb_b.max(0.0),
+                max_luminance: cli.max_luminance.clamp(0.0, 1.0),
+                black_floor: cli.black_floor.clamp(0.0, 1.0),
+                hdr_peak: if cli.hdr { cli.hdr_peak.max(1.0) } else { 1.0 },
+                smoothing_alpha: cli.smoothing.clamp(0.01, 1.0),
+                apply_p3_to_srgb: cli.p3,
+            },
+        }
+    }
 }
 
 struct RetainedSurface {
@@ -406,23 +447,27 @@ pub(crate) fn handle_capture_frame(
         )
     };
 
-    // 1. Slice the user's left/right edges out of the screen capture, blur,
-    //    decode sRGB→linear, write to a strip×LED texture. This is the work
-    //    that LedOutputController would normally do on Manifold's pre-sliced
-    //    per-layer source — except the controller's widths are hardcoded to
-    //    0.5/0.5 so we have to do it ourselves on a full-screen source.
+    // Snapshot the live-tunable config under the read lock; release the
+    // lock before any GPU work so the watcher can hot-swap without blocking.
+    let cfg: DynamicConfig = state.config.read().clone();
+
+    // 1. Slice + blur + grade. The slicer auto-builds a mip pyramid of the
+    //    source on first frame so each tap can sample at the correct LOD
+    //    (proper area integration), then ping-pongs strip×LED outputs for
+    //    temporal smoothing.
     {
         let mut enc = state.device.create_encoder("tv-led-mirror.slice");
         state.slicer.dispatch(
+            &state.device,
             &mut enc,
             &texture,
-            state.blur_radius,
-            state.luminance_floor,
-            state.luminance_knee,
-            state.saturation_floor,
-            state.saturation_knee,
-            state.crop,
-            state.grade,
+            cfg.blur_radius,
+            cfg.luminance_floor,
+            cfg.luminance_knee,
+            cfg.saturation_floor,
+            cfg.saturation_knee,
+            cfg.crop,
+            cfg.grade,
         );
         enc.commit();
     }
@@ -436,7 +481,7 @@ pub(crate) fn handle_capture_frame(
         &state.device,
         state.slicer.output(),
         1,
-        state.brightness,
+        cfg.brightness,
     );
     state.frames_seen.fetch_add(1, Ordering::Relaxed);
 

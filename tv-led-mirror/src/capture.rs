@@ -125,13 +125,16 @@ static GLOBAL: OnceLock<CaptureGlobals> = OnceLock::new();
 // ─── Public entry point ──────────────────────────────────────────────────────
 
 /// Spin up a ScreenCaptureKit stream targeting `display_id`, `cap_w`×`cap_h`.
-/// `hdr=true` requests 16-bit float, extendedLinearSRGB, HDR dynamic range.
+/// `hdr=true` requests 16-bit float + HDR dynamic range. `p3=true` requests
+/// extendedLinearDisplayP3 instead of extendedLinearSRGB so wide-gamut colors
+/// outside sRGB primaries survive (the slicer applies the P3→sRGB matrix).
 /// Blocks until the stream's start completion handler fires (or 5s timeout).
 pub fn start(
     display_id: u32,
     cap_w: u32,
     cap_h: u32,
     hdr: bool,
+    p3: bool,
     state: Arc<SharedState>,
 ) -> Result<(), String> {
     let content = fetch_shareable_content()?;
@@ -167,12 +170,19 @@ pub fn start(
             config.setPixelFormat(PIXEL_FORMAT_RGBA_HALF);
             config.setCaptureDynamicRange(SCCaptureDynamicRange::HDRLocalDisplay);
             // Toll-free bridge NSString → CFString for setColorSpaceName.
-            // extendedLinearSRGB gives us linear values potentially >1.0,
-            // perfect for HDR tone-mapping in our shader.
+            // extendedLinearDisplayP3 preserves wide-gamut colors outside
+            // sRGB primaries; extendedLinearSRGB clips them. The slicer
+            // applies a P3→sRGB matrix when --p3 is on.
+            //
             // CRITICAL: setColorSpaceName is unretained — SCK reads the
             // pointer lazily during startCapture's serializeStreamProperties.
             // Keep the NSString alive in CaptureGlobals.
-            let cs_name = NSString::from_str("kCGColorSpaceExtendedLinearSRGB");
+            let cs_str = if p3 {
+                "kCGColorSpaceExtendedLinearDisplayP3"
+            } else {
+                "kCGColorSpaceExtendedLinearSRGB"
+            };
+            let cs_name = NSString::from_str(cs_str);
             let cs_cf: *const c_void = Retained::as_ptr(&cs_name).cast();
             let _: () = msg_send![&*config, setColorSpaceName: cs_cf];
             cs_name_keep = Some(cs_name);
