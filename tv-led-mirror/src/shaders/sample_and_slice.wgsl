@@ -153,10 +153,17 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         color = vec4<f32>(mix(vec3<f32>(y), color.rgb, uniforms.vibrance), color.a);
     }
 
-    // Output gamma.
+    // Output gamma — luminance-preserving form. Apply the curve to BT.709
+    // luminance only and scale RGB by the ratio so chroma is preserved.
+    // Per-channel pow(c, gamma) hue-shifts colored mid-tones (e.g. warm
+    // whites turn red) because gamma squashes low channels harder than high
+    // ones, distorting the R:G:B ratio.
     if abs(uniforms.gamma - 1.0) > 0.0001 {
-        let safe = max(color.rgb, vec3<f32>(0.0));
-        color = vec4<f32>(pow(safe, vec3<f32>(uniforms.gamma)), color.a);
+        let y = dot(max(color.rgb, vec3<f32>(0.0)), vec3<f32>(0.2126, 0.7152, 0.0722));
+        let safe_y = max(y, 0.0001);
+        let y_new = pow(safe_y, uniforms.gamma);
+        let scale = y_new / safe_y;
+        color = vec4<f32>(color.rgb * scale, color.a);
     }
 
     // White balance.
