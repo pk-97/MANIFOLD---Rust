@@ -15,6 +15,7 @@
 //! the save format and a future registry can resolve them.
 
 mod affine_transform;
+mod bloom;
 mod chromatic_offset;
 mod clamp_stretch;
 mod color;
@@ -36,6 +37,7 @@ mod voronoi_prism;
 mod wet_dry_mix;
 
 pub use affine_transform::AffineTransform;
+pub use bloom::{Bloom, BLOOM_TYPE_ID};
 pub use chromatic_offset::ChromaticOffset;
 pub use clamp_stretch::ClampStretch;
 pub use color::{

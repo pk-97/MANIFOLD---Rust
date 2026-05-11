@@ -285,12 +285,12 @@ Each commit: primitive code + WGSL + preset graph replacing the effect + parity 
 
 ### 6.3 Multi-pass primitives + effects (4 commits)
 
-Each effect's pass structure is preserved verbatim; parity holds because intermediate Rgba16Float writes happen in both legacy and graph.
+**Update 2026-05-11:** the original recipe assumed Bloom and Watercolor could decompose into separable-Gaussian + mip-chain primitives. Auditing the legacy shaders showed Bloom uses Unity-style Blur9 tent + Blur13 filmic kernels with a ping-ponging dual mip chain, and Watercolor's edge blur is a 2D non-separable 9-tap. Neither matches a separable Gaussian, so atomic decomposition would break bit-exact parity. Both ship as fused composite primitives (same pattern as Glitch, Strobe, EdgeDetect, VoronoiPrism). `MipChainDown` / `MipChainUp` are deferred — no §6.3 customer; they'll land when there's a real use case in §6.7+ or in a future Bloom-style preset library.
 
-16. `SeparableGaussian` + multi-pass replacement for **QuadMirror** *(simpler test case)*
-17. `MipChainDown` + `MipChainUp` + **Bloom** decomposition
-18. **Halation** decomposition (reuses Gaussian)
-19. **Watercolor** decomposition (adds `PerlinFBM`, `DisplacementMap`, `Feedback` atomic, `Sobel3`)
+16. `SeparableGaussian` (used by Halation + future DoF split; not used by Bloom)
+17. **Bloom** as fused composite primitive (legacy `bloom_compute.wgsl` wrapped, owns mip pyramid state)
+18. **Halation** decomposition via `SeparableGaussian` (H+V) + threshold-tint primitive + `Mix(Add)`
+19. **Watercolor** as fused composite primitive (legacy `fx_watercolor_compute.wgsl` wrapped, owns ping-pong state)
 
 ### 6.4 DoF geometric split (2 commits)
 
