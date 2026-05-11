@@ -1,10 +1,27 @@
 # Effect Runtime Unification
 
-**Status:** Phase 0 (research & design). Not yet implemented. This document captures the audit results, architecture, and phased plan agreed during design discussion.
+**Status:** Phase 1–3 mostly shipped. Phase 4 strategy reframed 2026-05-11 — see §0.
 
-**Last updated:** 2026-05-06
+**Last updated:** 2026-05-11
 
 **Companion docs:** [`NODE_GRAPH_SYSTEM.md`](NODE_GRAPH_SYSTEM.md) — overall node-graph architecture. [`MANIFOLD_GPU_ARCHITECTURE.md`](MANIFOLD_GPU_ARCHITECTURE.md) — manifold-gpu crate.
+
+---
+
+## 0. True goal of this work
+
+The graph node system is a **TouchDesigner-style creative surface** for users *and* AI agents to compose visuals from atomic primitive nodes. MANIFOLD's product goal is intuitive live performance + creative composition without TouchDesigner's "mathy / know-how" barrier. Users wire small composable pieces. AI agents read primitive docs and generate graphs via scripts.
+
+**The primitive library is the product**, not the runtime mechanics. A graph editor that wires monolithic blackboxes (`Bloom-blackbox → ColorGrade-blackbox → Glitch-blackbox`) is not meaningfully more expressive than today's effect chain. The creative leverage comes from the size and orthogonality of the primitive library.
+
+This reframes every downstream decision in this document:
+
+- **Runtime unification is in service of the creative surface, not an end in itself.** Deleting `EffectChain` matters because it removes a parallel runtime that can't host primitive composition. It is not the prize.
+- **Phase 4 is decompose-first**, not wrap-first. Existing effects become *preset graphs* over a primitive library. "Add Bloom" loads a saved graph (`Threshold → MipChain → Gaussian → Mix`); the user can fork it, swap the Gaussian for a box blur, or route the threshold output elsewhere. AI agents emit the same preset shape.
+- **Some effects don't decompose** — BlobTracking (FFI worker + One-Euro filter), WireframeDepth (3 DNN workers, 15 passes), AutoGain (resolution-independent envelope state), DepthEstimate (MiDaS), FlowEstimate. These stay as monolithic custom `EffectNode`s in the library, the way TouchDesigner ships monolithic DNN TOPs. Rough split: ~12–15 of 19 effects decompose; ~5 remain monolithic.
+- **Every primitive needs**: clear semantic purpose, typed ports, named parameters, docstrings, example presets. Not just GPU correctness — the metadata is what makes AI composition possible.
+
+Phase 4 as originally written (wrap each remaining effect in a `LegacyPostProcessNode`, then delete `EffectChain`) would ship faster but produces a graph runtime that runs the same effects. It does not unlock the creative surface. §9 now reflects the decompose-first rewrite.
 
 ---
 
@@ -31,7 +48,13 @@ This document specifies the unification: **collapse both runtimes into the graph
 
 ### Goals
 
-- One runtime path for all effect work. Delete `EffectChain`.
+**Primary (creative surface, per §0):**
+- An orthogonal primitive library users and AI agents compose into custom visuals. Primitives small, semantically named, typed ports, docstrings, example presets.
+- Existing effects (Bloom/Halation/etc.) become preset graphs over primitives. "Add Bloom" loads a graph; users fork and remix.
+- Preset graphs serialize as a stable, AI-readable format (the same project-file graph format).
+
+**Secondary (runtime mechanics that enable the above):**
+- One runtime path for all effect work. Delete `EffectChain` — its existence prevents primitive-level composition.
 - Vulkan-portable IR. The runtime touches manifold-gpu only; no Metal types in graph code.
 - Static elision and dynamic bypass as first-class compiler/runtime features (no per-frame memcpy hacks).
 - Wet/dry effect groups expressed as sub-graphs with `Mix` tails (no imperative snapshot dance).
@@ -718,21 +741,89 @@ This is the largest and most invasive phase. It touches data model, serializatio
 
 **Gate to Phase 4:** A user can open the cog editor on Mirror, expose `UVTransform.translate`, save the project, reopen Manifold, and find the exposed param + any OSC/Ableton mappings made to it intact.
 
-### Phase 4 — Effect runtime unification *(remaining stateful effects + cutover)*
+### Phase 4 — Primitive library + preset graphs + EffectChain cutover
 
-With the ParamBinding framework in place, every remaining stateful migration is mechanical:
+**Rewritten 2026-05-11.** The original Phase 4 plan was wrap-first: take each remaining effect and shove it into a `LegacyPostProcessNode`. That ships fast but delivers a graph runtime that runs the same monolithic effects — it doesn't unlock the §0 creative surface. New plan is decompose-first.
 
-23. **Migrate remaining stateful effects** (Auto Gain, Bloom, Halation, Watercolor, DOF, BlobTracking, WireframeDepth). Each in its own commit. Workers stay with their effects. The migrations are now ~100 LOC each (most of the boilerplate is in the framework).
-24. **Static elision pass.** `EffectNode::static_passthrough` opt-in. Compiler reroutes wires, drops nodes from plan.
-25. **Dynamic bypass instruction.** `Backend::alias_resource`, `bypass_predicate` field on `ExecutionStep`. `LegacyPostProcessNode` exposes inner `should_skip` as predicate.
-26. **Wet/dry sub-graph translation.** Compiler emits `Mix` + dry-fan-out for groups.
-27. **`LayerCompositor` builds and caches per-chain graphs.** Replace `EffectChain::apply_chain` with `executor.execute_frame_with_state`.
-28. **Delete `EffectChain`.** Remove all references.
+#### 4a. Primitive library design + build
+
+The central work. Get this wrong and the creative surface is bad forever. Rough scope: ~30–50 atomic primitives spanning UV/spatial, sampling, color, blur, compositing, multi-pass infra, distortion, edge/structure, noise. Existing primitives (`Source`, `FinalOutput`, `Mix`, `UVTransform`, `Blur`, stubs for `Threshold`/`MipChain`/`Sample`/`Blend`) are the seed.
+
+Sketch of the library (not prescriptive — needs a real design pass that audits every existing effect for primitive candidates):
+
+| Bucket | Primitives (candidate list) |
+|---|---|
+| Spatial / UV | `UVTransform` (translate/scale/rot/fold modes), `Polar`, `Kaleidoscope`, `LookupUV` |
+| Sampling | `Sample` (bilinear/nearest/bicubic switch), `EnvironmentSample`, `Feedback` (prev-frame) |
+| Color | `ColorGrade` (lift/gamma/gain), `HueShift`, `ChannelMix`, `ChannelSwizzle`, `Threshold`, `Tonemap`, `Invert` |
+| Blur | `SeparableGaussian`, `BoxBlur`, `RadialBlur`, `DirectionalBlur` |
+| Compositing | `Mix` (parametric blend modes), `Add`, `Multiply`, `Difference`, `Screen`, `Max` |
+| Multi-pass infra | `MipChain` (downsample pyramid), `MipCombine` (upsample + blend) |
+| Distortion | `ChromaticOffset`, `DisplacementMap`, `Voronoi`, `EdgeStretch` |
+| Edge/structure | `SobelEdge`, `DepthEdge`, `Outline` |
+| Noise | `BlueNoise`, `ValueNoise`, `Hash`, `Dither` |
+| Generators (line) | `LineGenerator`, `LineStyle`, `LineModulate` |
+
+Each primitive ships with: WGSL shader(s), parameter spec with semantic names + docstrings, typed ports, at least one example preset that uses it. Pixel-exact tests against any legacy implementation it replaces.
+
+23a. **Audit every existing effect for primitive candidates.** Output: the actual ~30–50 primitive list (not the sketch above), with rationale per entry.
+23b. **Pixel-exactness decision.** Do existing projects render bit-identical after decomposition, or is "close enough" acceptable? Drives how strict the per-primitive validation is.
+23c. **Build the missing primitives.** Each is small (~50–150 LOC + WGSL). Probably 20–30 new primitives to fill the library.
+
+#### 4b. Preset graphs replace decomposable effects
+
+~12–15 of the 19 existing effects become preset graphs:
+
+- Bloom = `Threshold → MipChain.down → Gaussian (per mip) → MipChain.up → Mix(in)`
+- Halation = `ChannelMix(R-heavy) → Threshold → BoxBlur → Tint → Add(in)`
+- Watercolor = `Feedback → Gaussian → UVTransform(drift) → Mix(in)`
+- Infrared = `ColorGrade(IR LUT)`
+- StylizedFeedback = `Feedback + ColorGrade + Mix`
+- Mirror = `UVTransform(fold mode)` *(already is this)*
+- Transform = `UVTransform` *(already is this)*
+- Invert = `Invert` primitive
+- Kaleidoscope = `Kaleidoscope` primitive (or `UVTransform + Polar`)
+- ChromaticAberration = `ChromaticOffset`
+- Glitch = `Hash → DisplacementMap`
+- Dither = `Dither`
+- HDRBoost = `ColorGrade` variant
+- ColorGrade = `ColorGrade` *(direct)*
+- EdgeDetect = `SobelEdge`
+- EdgeStretch = `EdgeStretch` primitive
+- Strobe = `Mix(time-modulated)`
+- QuadMirror = `Kaleidoscope(n=4)`
+- VoronoiPrism = `Voronoi`
+
+24. **Preset graph format + loader.** Same serialization as project-file graphs. Shipped presets live in `assets/effect-presets/`.
+25. **"Add Effect" UI loads preset.** One-click affordance unchanged; underneath, it loads the preset graph into the layer/master chain.
+26. **Preset save/load UX for user-created graphs.** Critical for the creative surface — users save their forks. AI agents emit graphs into the same format.
+
+#### 4c. Monolithic effects wrapped as custom nodes
+
+The remaining ~5 effects don't decompose into pixel-local primitives — FFI workers, DNN models, custom algorithms:
+
+27. **`BlobTrack`** custom node — wraps existing blob-tracking pipeline + One-Euro filter.
+28. **`WireframeDepth`** custom node — wraps 3-worker DNN pipeline + 15 compute passes.
+29. **`AutoGain`** custom node — resolution-independent envelope, sparse luminance sample.
+30. **`DepthOfField`** custom node — multi-mode (tilt-shift / radial / depth-DNN); the depth-DNN variant uses the same depth state as wireframe.
+
+These are "library primitives that happen to be monolithic," equivalent to TouchDesigner's DNN TOPs. They have typed ports, named parameters, docstrings — they're composable with the rest of the library, just not decomposable.
+
+#### 4d. Runtime cutover
+
+With every effect either a preset graph (4b) or a monolithic node (4c), `EffectChain` has no remaining clients. The original wrap-first runtime work happens here:
+
+31. **Static elision pass.** `EffectNode::static_passthrough` opt-in. Compiler reroutes wires, drops nodes from plan.
+32. **Dynamic bypass instruction.** `Backend::alias_resource`, `bypass_predicate` field on `ExecutionStep`.
+33. **Wet/dry sub-graph translation.** Compiler emits `Mix` + dry-fan-out for groups.
+34. **`LayerCompositor` builds and caches per-chain graphs.** Replace `EffectChain::apply_chain` with `executor.execute_frame_with_state`.
+35. **Delete `EffectChain`.** Remove all references.
 
 **Gate to ship:**
-- Existing 53-layer / 2928-clip benchmark project loads, plays, scrubs. **No visual regression** (frame-by-frame compare).
-- Frame time ≤ pre-cutover baseline + 5%.
+- Existing 53-layer / 2928-clip benchmark project loads, plays, scrubs. **No visual regression** (frame-by-frame compare; tolerance per 4a's pixel-exactness decision).
+- Frame time ≤ pre-cutover baseline + 5% at 120 FPS / 4K target.
 - All unit tests pass.
+- AI agent smoke test: an agent can read primitive docs and emit a working preset graph (the deliverable surface, not just an internal milestone).
 - 24-hour soak in the dev environment with no panics.
 
 ### Phase 5 (future, post-arc)
@@ -811,18 +902,29 @@ Phase 3: V2 user-exposed parameters UI (4-5 commits)
   □  Effect card EXP badge
   □  End-to-end test: tick checkbox, save, reload, mappings intact
 
-Phase 4: Effect runtime unification (~10 commits)
-  □  Migrate remaining stateful effects (Auto Gain, Bloom, Halation, Watercolor, DOF, BlobTracking, WireframeDepth)
-  □  Static elision pass
-  □  Dynamic bypass instruction
-  □  Wet/dry sub-graph translation
-  □  LayerCompositor builds + caches per-chain graphs
-  □  Delete EffectChain
+Phase 4: Primitive library + preset graphs + cutover (~20-25 commits)
+  4a: Primitive library
+    □  Audit existing effects for primitive candidates → real ~30-50 list
+    □  Pixel-exactness decision (bit-identical vs close-enough)
+    □  Build the 20-30 missing primitives, each with docstrings + example presets
+  4b: Preset graphs replace decomposable effects
+    □  Preset graph format + loader
+    □  "Add Effect" UI loads preset
+    □  User preset save/load UX
+    □  Decompose 12-15 effects into preset graphs (Bloom, Halation, Watercolor, ...)
+  4c: Monolithic effects as custom nodes
+    □  BlobTrack, WireframeDepth, AutoGain, DepthOfField, FlowEstimate
+  4d: Runtime cutover
+    □  Static elision pass
+    □  Dynamic bypass instruction
+    □  Wet/dry sub-graph translation
+    □  LayerCompositor builds + caches per-chain graphs
+    □  Delete EffectChain
 ```
 
-Total: ~25-30 commits across the arc. Each commit independently shippable. Each phase has a hard gate. Rolling back from any phase leaves the system functional.
+Total: ~40-50 commits across the arc under the reframed Phase 4 (was ~25-30 with the wrap-first plan). Each commit independently shippable. Each phase has a hard gate. Rolling back from any phase leaves the system functional.
 
-The bulk is Phase 2 (parameter binding system). It's the largest, riskiest, most invasive piece — and the precondition for everything else doing what it's supposed to. Once it lands, Phase 3 is mostly UI work and Phase 4 is mostly mechanical migrations.
+Phases 2 and 4 are the two big design exercises. Phase 2 (parameter binding) was the precondition — done. Phase 4a (primitive library design) is the new center of gravity: it's where the §0 creative surface is actually built. Get the primitive library right and the rest of Phase 4 is composition + cutover; get it wrong and the system has a bad creative surface forever. Treat 4a as the most important design pass in the arc.
 
 ---
 
