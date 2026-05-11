@@ -304,21 +304,27 @@ Each effect's pass structure is preserved verbatim; parity holds because interme
 24. `WireframeDepthNode` — full 15-pass pipeline + DNN workers.
 25. `DoFDepthNode` — MiDaS-based DoF (already #21, just confirms).
 
-### 6.6 Generator shared-infra primitives (~8 commits)
+### 6.6 Effect-only runtime cutover + persistence (~6 commits — early play point)
 
-Extract `Camera3D`, `Rotation3D/4D`, `LineRasterize`, `MeshRender`, `Shadow`, `ParticleScatter/Resolve`, `ParticleSimRK2`, `Raymarch` as separate primitives. Each generator continues to call them internally; parity holds because the math is the same code, just relocated.
+**Strategy decision (2026-05-11): cut over effects first, defer generator decomposition to a separate pass.** Effects sit downstream of generators (texture → chain), so the chain side can be swapped without touching generator code. Smaller cutover batch, real-usage feedback informs the harder generator work that follows.
 
-### 6.7 Generator algorithm primitives (~5 commits)
+26. Graph-JSON preset schema + loader. Bundled presets ship in `assets/effect-presets/*.json`; user-authored graphs save into the project file (`.manifold` archive) with an optional export-to-standalone-JSON path. One schema, one loader, one validator — built-in vs user graphs differ only in storage location.
+27. Effect save-file refactor: `EffectInstance` carries a graph payload (or a reference to a bundled preset) instead of a flat `effect_type` + `param_values` list. V1 → V2 migration in `manifold-io`.
+28. Replace `EffectChain::apply_chain` with graph-runtime execution; static elision, dynamic bypass, wet/dry sub-graphs.
+29. Wire the existing read-only `GraphCanvas` into editing affordances (add node, wire, delete) and save-on-change.
+30. Inspector-side graph picker + library browser (built-in presets + project's saved graphs).
+31. Remove dead `EffectChain` code and the per-effect `EffectInstance.effect_type` enum surface.
 
-Migrate `Plasma`, `StarField`, `ConcentricShapes`, `ParametricSDF`, `BasicShapes` to primitives. Their generators become preset graphs wrapping the primitive.
+`GraphSnapshot` and `GraphEditorPanel` already exist; this phase mostly wires them into editing flows and lays down the persistence path.
 
-### 6.8 Remaining generators as monolithic library nodes (~13 commits)
+### 6.7+ Generator pass (separate, later)
 
-Wrap each remaining generator as a custom `EffectNode` (or `GeneratorNode`) in the library. Same code, just exposed with typed ports + named params for AI/user composition.
+Once §6.6 has shipped and we've used the effect graph system in anger, return to generators with that feedback. Plan placeholder (specifics revisit-able after §6.6):
 
-### 6.9 Runtime cutover (final ~6 commits — §9 Phase 4d)
-
-`EffectChain` deletion, static elision, dynamic bypass, wet/dry sub-graphs.
+- **G1** Generator shared-infra primitives (~8 commits): `Camera3D`, `Rotation3D/4D`, `LineRasterize`, `MeshRender`, `Shadow`, `ParticleScatter/Resolve`, `ParticleSimRK2`, `Raymarch`.
+- **G2** Generator algorithm primitives (~5 commits): `Plasma`, `StarField`, `ConcentricShapes`, `ParametricSDF`, `BasicShapes`.
+- **G3** Remaining generators as monolithic library nodes (~13 commits).
+- **G4** Generator runtime cutover.
 
 ## 7. AI agent surface
 
