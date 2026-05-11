@@ -40,6 +40,7 @@ mod uv;
 mod voronoi_prism;
 mod watercolor;
 mod wet_dry_mix;
+mod wireframe_depth;
 
 pub use affine_transform::AffineTransform;
 pub use auto_gain::{AutoGain, AUTO_GAIN_CHARACTERS, AUTO_GAIN_TYPE_ID};
@@ -76,6 +77,10 @@ pub use temporal::{Feedback, FEEDBACK_MODES, FEEDBACK_TYPE_ID};
 pub use voronoi_prism::VoronoiPrism;
 pub use watercolor::{Watercolor, WATERCOLOR_TYPE_ID};
 pub use wet_dry_mix::{WetDryMix, WET_DRY_MIX_TYPE_ID};
+pub use wireframe_depth::{
+    WireframeDepth, WIREFRAME_DEPTH_BLEND_MODES, WIREFRAME_DEPTH_MESH_RATES,
+    WIREFRAME_DEPTH_ONOFF, WIREFRAME_DEPTH_TYPE_ID,
+};
 pub use uv::{
     Sample, UVTransform, SAMPLE_FILTER_MODES, SAMPLE_TYPE_ID, SAMPLE_WRAP_MODES,
     UV_TRANSFORM_MODES, UV_TRANSFORM_TYPE_ID,
