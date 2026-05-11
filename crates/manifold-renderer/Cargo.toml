@@ -12,6 +12,7 @@ manifold-ui = { path = "../manifold-ui" }
 log = { workspace = true }
 bytemuck = { version = "1", features = ["derive"] }
 half = "2"
+serde = { workspace = true }
 serde_json = "1"
 ahash = { workspace = true }
 inventory = "0.3"

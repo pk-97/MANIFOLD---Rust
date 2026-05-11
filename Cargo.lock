@@ -2010,6 +2010,7 @@ dependencies = [
  "manifold-playback",
  "manifold-ui",
  "naga",
+ "serde",
  "serde_json",
  "tiff 0.9.1",
 ]

@@ -20,6 +20,7 @@ mod legacy_adapter;
 mod metal_backend;
 mod parameters;
 mod param_binding;
+mod persistence;
 mod ports;
 pub mod primitive;
 pub mod primitives;
@@ -44,6 +45,10 @@ pub use param_binding::{
     ParamId, ParamTarget, UserParamBindingRuntime,
 };
 pub use parameters::{ParamDef, ParamType, ParamValue};
+pub use persistence::{
+    GraphDocument, LoadError, NodeConstructor, NodeDocument, PrimitiveRegistry,
+    SerializedParamValue, WireDocument, WireSide, GRAPH_DOCUMENT_VERSION,
+};
 pub use primitive::{Primitive, PrimitiveDescription, PrimitiveSpec};
 pub use ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 pub use snapshot::{
