@@ -4,7 +4,7 @@
 
 **Last updated:** 2026-05-11
 
-**Companion docs:** [`NODE_GRAPH_SYSTEM.md`](NODE_GRAPH_SYSTEM.md) — overall node-graph architecture. [`MANIFOLD_GPU_ARCHITECTURE.md`](MANIFOLD_GPU_ARCHITECTURE.md) — manifold-gpu crate.
+**Companion docs:** [`NODE_GRAPH_SYSTEM.md`](NODE_GRAPH_SYSTEM.md) — overall node-graph architecture. [`MANIFOLD_GPU_ARCHITECTURE.md`](MANIFOLD_GPU_ARCHITECTURE.md) — manifold-gpu crate. [`PRIMITIVE_LIBRARY_DESIGN.md`](PRIMITIVE_LIBRARY_DESIGN.md) — Phase 4a primitive catalog, decomposition recipes, parity test spec.
 
 ---
 
@@ -767,8 +767,8 @@ Sketch of the library (not prescriptive — needs a real design pass that audits
 Each primitive ships with: WGSL shader(s), parameter spec with semantic names + docstrings, typed ports, at least one example preset that uses it. Pixel-exact tests against any legacy implementation it replaces.
 
 23a. **Audit every existing effect for primitive candidates.** Output: the actual ~30–50 primitive list (not the sketch above), with rationale per entry.
-23b. **Pixel-exactness decision.** Do existing projects render bit-identical after decomposition, or is "close enough" acceptable? Drives how strict the per-primitive validation is.
-23c. **Build the missing primitives.** Each is small (~50–150 LOC + WGSL). Probably 20–30 new primitives to fill the library.
+23b. **Pixel-exactness — SETTLED 2026-05-11:** Effects AND generators must be **pixel-perfect and mathematically exact** to current implementations. Primitives must be parameterizable enough to express each effect's exact float math, constants, texture formats, sampler state, and dispatch shapes. If a primitive can't reach bit-exactness for a given effect, that effect goes monolithic instead of being decomposed.
+23c. **Build the missing primitives.** Each is small (~50–150 LOC + WGSL). Probably 20–30 new primitives to fill the library. Each primitive ships with a per-effect-reproduction test that compares output against the legacy shader bit-exactly.
 
 #### 4b. Preset graphs replace decomposable effects
 

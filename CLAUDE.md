@@ -131,6 +131,7 @@ YOU MUST COMMIT AND PUSH CODE CHANGES AFTER COMPLETING FEATURES OR FIXES.
 | `docs/DEVELOPMENT_REFERENCE.md` | Texture formats, math gotchas, module layout |
 | `docs/NODE_GRAPH_SYSTEM.md` | Node-graph effect/generator architecture (overall design) |
 | `docs/EFFECT_RUNTIME_UNIFICATION.md` | Migrating EffectChain → graph runtime; StateStore design; Vulkan-portability constraints |
+| `docs/PRIMITIVE_LIBRARY_DESIGN.md` | Phase 4a primitive catalog (43 primitives), per-effect/generator decomposition recipes, parity test framework |
 
 ## DEBUGGING
 
