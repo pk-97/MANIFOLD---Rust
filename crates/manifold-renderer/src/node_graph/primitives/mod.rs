@@ -25,6 +25,7 @@ mod dither_pattern;
 mod edge_detect;
 mod filter;
 mod glitch;
+mod halation;
 mod highlight_boost;
 mod invert;
 mod kaleido_fold;
@@ -49,6 +50,7 @@ pub use compose::{Blend, Mix, BLEND_MODES, BLEND_TYPE_ID, MIX_MODES, MIX_TYPE_ID
 pub use dither_pattern::DitherPattern;
 pub use edge_detect::EdgeDetect;
 pub use glitch::Glitch;
+pub use halation::{Halation, HALATION_TYPE_ID};
 pub use highlight_boost::HighlightBoost;
 pub use invert::Invert;
 pub use kaleido_fold::KaleidoFold;
