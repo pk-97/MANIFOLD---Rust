@@ -15,6 +15,7 @@
 //! the save format and a future registry can resolve them.
 
 mod color;
+mod color_grade;
 mod compose;
 mod filter;
 mod invert;
@@ -25,6 +26,7 @@ pub use color::{
     ColorMatrix, GradientMap, Luminance, COLOR_MATRIX_TYPE_ID, GRADIENT_MAP_TYPE_ID,
     LUMINANCE_TYPE_ID,
 };
+pub use color_grade::ColorGrade;
 pub use compose::{Blend, Mix, BLEND_MODES, BLEND_TYPE_ID, MIX_TYPE_ID};
 pub use invert::Invert;
 pub use filter::{
