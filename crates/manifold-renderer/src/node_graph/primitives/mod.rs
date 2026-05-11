@@ -32,6 +32,7 @@ mod strobe;
 mod temporal;
 mod uv;
 mod voronoi_prism;
+mod wet_dry_mix;
 
 pub use affine_transform::AffineTransform;
 pub use chromatic_offset::ChromaticOffset;
@@ -41,7 +42,7 @@ pub use color::{
     LUMINANCE_TYPE_ID,
 };
 pub use color_grade::ColorGrade;
-pub use compose::{Blend, Mix, BLEND_MODES, BLEND_TYPE_ID, MIX_TYPE_ID};
+pub use compose::{Blend, Mix, BLEND_MODES, BLEND_TYPE_ID, MIX_MODES, MIX_TYPE_ID};
 pub use dither_pattern::DitherPattern;
 pub use edge_detect::EdgeDetect;
 pub use glitch::Glitch;
@@ -55,6 +56,7 @@ pub use filter::{
 };
 pub use temporal::{Feedback, FEEDBACK_MODES, FEEDBACK_TYPE_ID};
 pub use voronoi_prism::VoronoiPrism;
+pub use wet_dry_mix::{WetDryMix, WET_DRY_MIX_TYPE_ID};
 pub use uv::{
     Sample, UVTransform, SAMPLE_FILTER_MODES, SAMPLE_TYPE_ID, SAMPLE_WRAP_MODES,
     UV_TRANSFORM_MODES, UV_TRANSFORM_TYPE_ID,
@@ -95,6 +97,7 @@ mod tests {
             Box::new(UVTransform::new()),
             Box::new(Sample::new()),
             Box::new(Feedback::new()),
+            Box::new(WetDryMix::new()),
         ]
     }
 
@@ -102,7 +105,7 @@ mod tests {
     fn all_v1_primitives_have_unique_type_ids() {
         let primitives = all_primitives();
         let ids: HashSet<&str> = primitives.iter().map(|p| p.type_id().as_str()).collect();
-        assert_eq!(ids.len(), 11, "primitive type IDs must be unique");
+        assert_eq!(ids.len(), 12, "primitive type IDs must be unique");
     }
 
     #[test]
