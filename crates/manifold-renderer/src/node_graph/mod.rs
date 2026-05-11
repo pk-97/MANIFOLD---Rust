@@ -21,6 +21,7 @@ mod metal_backend;
 mod parameters;
 mod param_binding;
 mod ports;
+pub mod primitive;
 pub mod primitives;
 mod snapshot;
 mod state_store;
@@ -43,6 +44,7 @@ pub use param_binding::{
     ParamId, ParamTarget, UserParamBindingRuntime,
 };
 pub use parameters::{ParamDef, ParamType, ParamValue};
+pub use primitive::{Primitive, PrimitiveDescription, PrimitiveSpec};
 pub use ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 pub use snapshot::{
     GraphSnapshot, NodeSnapshot, ParamSnapshot, ParamSnapshotKind, PortKindSnapshot, PortSnapshot,
