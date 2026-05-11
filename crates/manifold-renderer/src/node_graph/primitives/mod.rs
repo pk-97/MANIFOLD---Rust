@@ -17,6 +17,7 @@
 mod color;
 mod compose;
 mod filter;
+mod invert;
 mod temporal;
 mod uv;
 
@@ -25,6 +26,7 @@ pub use color::{
     LUMINANCE_TYPE_ID,
 };
 pub use compose::{Blend, Mix, BLEND_MODES, BLEND_TYPE_ID, MIX_TYPE_ID};
+pub use invert::Invert;
 pub use filter::{
     Blur, MipChain, Threshold, BLUR_MODES, BLUR_TYPE_ID, MIP_CHAIN_TYPE_ID, THRESHOLD_TYPE_ID,
 };

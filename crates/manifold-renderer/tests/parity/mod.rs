@@ -24,12 +24,18 @@
 //! point would still need the same setup, so the harness is the
 //! foundation either way.
 
+// Integration-test crates each compile this module independently —
+// helpers exercised by one parity test (e.g., `run_primitive_graph`)
+// are dead from the perspective of others (e.g., `parity_sanity`).
+// Suppress at the module level rather than annotating each helper.
+#![allow(dead_code)]
+
 use std::ffi::c_void;
 use std::slice;
 use std::sync::Arc;
 
 use half::f16;
-use manifold_core::EffectTypeId;
+use manifold_core::{Beats, EffectTypeId, Seconds};
 use manifold_core::effects::EffectInstance;
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
@@ -38,6 +44,10 @@ use manifold_renderer::effect::EffectContext;
 use manifold_renderer::effect_chain::EffectChain;
 use manifold_renderer::effect_registry::EffectRegistry;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_renderer::node_graph::{
+    compile, Backend, EffectNode, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph,
+    MetalBackend, NodeInstanceId, ResourceId, Slot, Source,
+};
 use manifold_renderer::render_target::RenderTarget;
 
 /// Fixed render dimensions for parity tests. Small enough that
@@ -153,6 +163,117 @@ impl ParityHarness {
         render_enc.commit_and_wait_completed();
 
         self.readback(&dest.texture)
+    }
+
+    /// Run a single-primitive graph `Source → <primitive> → FinalOutput`
+    /// against the same input + ctx the legacy chain saw, then read the
+    /// output back to host bytes. Companion to [`Self::run_legacy`] —
+    /// the bytewise comparison of the two outputs is the parity test.
+    ///
+    /// Caller provides:
+    /// - `prim` — a fresh boxed primitive instance. Default-constructed
+    ///   via `Box::new(P::default())` at the call site so the test
+    ///   controls the type.
+    /// - `set_params` — closure that translates the legacy
+    ///   `EffectInstance::param_values` (positional, by `ParamSlot`)
+    ///   into named `graph.set_param` calls on the primitive node.
+    ///   This is the *only* place parity tests encode the legacy →
+    ///   primitive param mapping; if the mapping is wrong, the test
+    ///   fails loudly via bytewise mismatch.
+    ///
+    /// Time, beat, and dt are pulled from `ctx` so any time-dependent
+    /// primitive (Strobe, VoronoiPrism in their fused-composite form)
+    /// sees the same clock the legacy chain did.
+    pub fn run_primitive_graph<F>(
+        &self,
+        prim: Box<dyn EffectNode>,
+        input: &GpuTexture,
+        ctx: &EffectContext,
+        set_params: F,
+    ) -> Vec<u8>
+    where
+        F: FnOnce(&mut Graph, NodeInstanceId),
+    {
+        // Build `Source → prim → FinalOutput`.
+        let mut graph = Graph::new();
+        let source = graph.add_node(Box::new(Source::new()));
+        let prim_inputs: Vec<String> = prim
+            .inputs()
+            .iter()
+            .map(|p| p.name.to_string())
+            .collect();
+        let prim_outputs: Vec<String> = prim
+            .outputs()
+            .iter()
+            .map(|p| p.name.to_string())
+            .collect();
+        let prim_id = graph.add_node(prim);
+        let final_out = graph.add_node(Box::new(FinalOutput::new()));
+
+        // Connect Source.out to the primitive's first input.
+        let in_port: &'static str = leak_static_str(
+            prim_inputs
+                .first()
+                .expect("primitive must have at least one input port")
+                .clone(),
+        );
+        let out_port: &'static str = leak_static_str(
+            prim_outputs
+                .first()
+                .expect("primitive must have at least one output port")
+                .clone(),
+        );
+        graph.connect((source, "out"), (prim_id, in_port)).unwrap();
+        graph.connect((prim_id, out_port), (final_out, "in")).unwrap();
+
+        set_params(&mut graph, prim_id);
+
+        let plan = compile(&graph).expect("primitive graph must compile");
+        let source_res = resource_for_output(&plan, source, "out");
+
+        // GPU-copy the fixture (Shared-storage upload texture) into a
+        // Private-storage RenderTarget so the graph runtime samples it
+        // through the same memory mode production graphs use. Rgba16F
+        // → Rgba16F copy is bit-preserving; no parity skew introduced.
+        let source_rt = self.make_target("parity-graph-source");
+        let mut copy_enc = self.device.create_encoder("parity-graph-copy-in");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut copy_enc, &self.device);
+            gpu.copy_texture_to_texture(input, &source_rt.texture, self.width, self.height);
+        }
+        copy_enc.commit_and_wait_completed();
+
+        // Pre-bind only Source.out — lazy-alloc handles the
+        // primitive's output. Capture the next slot watermark so we
+        // know where the primitive's output landed.
+        let mut backend = MetalBackend::new(
+            self.device.clone(),
+            self.width,
+            self.height,
+            self.format,
+        );
+        backend.pre_bind_texture_2d(source_res, source_rt);
+        let prim_output_slot = Slot(backend.slot_count());
+
+        let frame_time = FrameTime {
+            beats: Beats(f64::from(ctx.beat)),
+            seconds: Seconds(f64::from(ctx.time)),
+            delta: Seconds(f64::from(ctx.dt)),
+        };
+
+        let mut native_enc = self.device.create_encoder("parity-graph-render");
+        let mut exec = Executor::new(Box::new(backend));
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &self.device);
+            exec.execute_frame_with_gpu(&mut graph, &plan, frame_time, &mut gpu);
+        }
+        native_enc.commit_and_wait_completed();
+
+        let prim_tex = exec
+            .backend()
+            .texture_2d(prim_output_slot)
+            .expect("primitive output slot must be bound after execution");
+        self.readback(prim_tex)
     }
 
     /// Read a texture's contents back to host memory as raw bytes.
@@ -394,6 +515,32 @@ pub fn make_default_effect(effect_type: EffectTypeId) -> EffectInstance {
     fx.align_to_definition();
     fx.enabled = true;
     fx
+}
+
+/// Look up the `ResourceId` of a node's named output port in an
+/// `ExecutionPlan`. Mirrors `output_resource` in
+/// `node_graph/primitives/compose.rs:207` — same signature, same
+/// fall-through panic message. The plan walker only iterates a
+/// handful of steps in a parity-test graph, so cost is irrelevant.
+fn resource_for_output(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -> ResourceId {
+    for step in plan.steps() {
+        if step.node == node {
+            for &(name, id) in &step.outputs {
+                if name == port {
+                    return id;
+                }
+            }
+        }
+    }
+    panic!("no output `{port}` on node {node:?} in plan");
+}
+
+/// Leak a `String` into a `&'static str` so it satisfies the
+/// `Graph::connect` API which requires static port-name slices. Only
+/// used in tests; the leak is bounded by the (small, finite) number
+/// of parity tests that run per process.
+fn leak_static_str(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
 }
 
 // Suppress dead-code warnings until at least one parity test file
