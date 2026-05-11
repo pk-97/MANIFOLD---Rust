@@ -30,6 +30,7 @@ mod lut1d;
 mod strobe;
 mod temporal;
 mod uv;
+mod voronoi_prism;
 
 pub use affine_transform::AffineTransform;
 pub use chromatic_offset::ChromaticOffset;
@@ -51,6 +52,7 @@ pub use filter::{
     Blur, MipChain, Threshold, BLUR_MODES, BLUR_TYPE_ID, MIP_CHAIN_TYPE_ID, THRESHOLD_TYPE_ID,
 };
 pub use temporal::{Feedback, FEEDBACK_MODES, FEEDBACK_TYPE_ID};
+pub use voronoi_prism::VoronoiPrism;
 pub use uv::{
     Sample, UVTransform, SAMPLE_FILTER_MODES, SAMPLE_TYPE_ID, SAMPLE_WRAP_MODES,
     UV_TRANSFORM_MODES, UV_TRANSFORM_TYPE_ID,

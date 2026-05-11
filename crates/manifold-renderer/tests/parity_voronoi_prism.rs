@@ -1,0 +1,73 @@
+//! Pixel-exact parity test for `primitive.voronoi_prism` vs the
+//! legacy `VoronoiPrismFX` effect. Twelfth §6.1 migration; fused
+//! composite.
+//!
+//! The legacy effect reads `source_width` from the chain context
+//! (`EffectContext::edge_stretch_width`, populated by an upstream
+//! EdgeStretch). The parity test pins `source_width` to the
+//! harness's default ctx value (0.5625) on both paths.
+
+mod parity;
+
+use manifold_core::EffectTypeId;
+use manifold_renderer::node_graph::primitives::VoronoiPrism;
+use manifold_renderer::node_graph::ParamValue;
+use parity::{
+    assert_bytewise_equal, default_ctx, make_default_effect, Fixture, ParityHarness,
+};
+
+const SETUPS: &[(f32, f32, &str)] = &[
+    (0.0, 16.0, "identity"),
+    (0.5, 8.0, "half_amount_8cells"),
+    (1.0, 4.0, "min_cells"),
+    (1.0, 16.0, "default_cells"),
+    (1.0, 32.0, "many_cells"),
+    (1.0, 64.0, "max_cells"),
+];
+
+#[test]
+fn voronoi_prism_is_pixel_exact_across_fixtures_and_setups() {
+    let mut h = ParityHarness::new();
+    let ctx = default_ctx(h.width, h.height);
+
+    for &fixture in Fixture::all() {
+        let input = fixture.build(&h);
+
+        for &(amount, cells, label) in SETUPS {
+            let mut fx = make_default_effect(EffectTypeId::VORONOI_PRISM);
+            fx.param_values[0].value = amount;
+            fx.param_values[1].value = cells;
+
+            let legacy = h.run_legacy(&fx, &input, &ctx);
+            let decomposed = h.run_primitive_graph(
+                Box::new(VoronoiPrism::new()),
+                &input,
+                &ctx,
+                |graph, prim_id| {
+                    graph
+                        .set_param(prim_id, "amount", ParamValue::Float(amount))
+                        .unwrap();
+                    graph
+                        .set_param(prim_id, "cell_count", ParamValue::Float(cells))
+                        .unwrap();
+                    graph
+                        .set_param(prim_id, "beat", ParamValue::Float(ctx.beat))
+                        .unwrap();
+                    graph
+                        .set_param(
+                            prim_id,
+                            "source_width",
+                            ParamValue::Float(ctx.edge_stretch_width),
+                        )
+                        .unwrap();
+                },
+            );
+
+            assert_bytewise_equal(
+                &format!("voronoi_prism/{:?}/setup={label}", fixture),
+                &legacy,
+                &decomposed,
+            );
+        }
+    }
+}
