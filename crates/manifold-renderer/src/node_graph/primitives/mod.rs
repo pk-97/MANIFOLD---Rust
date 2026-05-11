@@ -27,6 +27,7 @@ mod highlight_boost;
 mod invert;
 mod kaleido_fold;
 mod lut1d;
+mod strobe;
 mod temporal;
 mod uv;
 
@@ -45,6 +46,7 @@ pub use highlight_boost::HighlightBoost;
 pub use invert::Invert;
 pub use kaleido_fold::KaleidoFold;
 pub use lut1d::Lut1d;
+pub use strobe::{Strobe, NOTE_RATES as STROBE_NOTE_RATES};
 pub use filter::{
     Blur, MipChain, Threshold, BLUR_MODES, BLUR_TYPE_ID, MIP_CHAIN_TYPE_ID, THRESHOLD_TYPE_ID,
 };
