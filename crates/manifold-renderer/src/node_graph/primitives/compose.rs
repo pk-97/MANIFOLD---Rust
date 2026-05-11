@@ -1,13 +1,22 @@
 //! Composition primitives — combine two textures into one.
 //!
-//! [`Mix`] is a linear crossfade. [`Blend`] applies one of several blend
-//! modes with an opacity. Both are pixel-local and fuseable.
+//! [`Mix`] is the unified compositing primitive: blend `b` on top of `a`
+//! using one of 7 modes, then crossfade the result back against `a` by
+//! `amount`. At `mode = Lerp` it's a pure linear crossfade; at any
+//! other mode `amount` acts as opacity for the blend result. Pixel-local
+//! and fuseable.
+//!
+//! [`Blend`] is a transitional stub kept only because the V1 Bloom and
+//! Halation composite builders still reference it. It will be retired
+//! in §6.3 when those composites are rebuilt around `Mix` /
+//! `WetDryMix`. New code should use [`Mix`].
 
-use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc};
+use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
+use crate::node_graph::primitive::Primitive;
 
 const OUT_OUTPUT: NodeOutput = NodePort {
     name: "out",
@@ -17,93 +26,82 @@ const OUT_OUTPUT: NodeOutput = NodePort {
 };
 
 // =====================================================================
-// Mix — linear crossfade A → B.
+// Mix — combine A and B with a blend mode, crossfaded by amount.
 // =====================================================================
 
-pub const MIX_TYPE_ID: &str = "primitive.mix";
-
-const MIX_INPUTS: [NodeInput; 2] = [
-    NodePort {
-        name: "a",
-        ty: PortType::Texture2D,
-        kind: PortKind::Input,
-        required: true,
-    },
-    NodePort {
-        name: "b",
-        ty: PortType::Texture2D,
-        kind: PortKind::Input,
-        required: true,
-    },
+/// Display labels for [`Mix`]'s `mode` enum. Index = enum value:
+/// 0=Lerp, 1=Screen, 2=Add, 3=Max, 4=Multiply, 5=Difference, 6=Overlay.
+///
+/// `Lerp` collapses the crossfade to pure linear interpolation —
+/// `out = mix(a, b, amount)` — and is the default. Every other mode
+/// computes `blend(a,b)` then mixes it back over `a` by `amount`, so
+/// `amount = 0` always returns `a` unchanged regardless of mode.
+pub const MIX_MODES: &[&str] = &[
+    "Lerp",
+    "Screen",
+    "Add",
+    "Max",
+    "Multiply",
+    "Difference",
+    "Overlay",
 ];
 
-const MIX_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
+crate::primitive! {
+    name: Mix,
+    type_id: "primitive.mix",
+    purpose: "Combine two textures with one of 7 blend modes (Lerp, Screen, Add, Max, Multiply, Difference, Overlay), crossfaded back against A by `amount`. At amount=0 returns A unchanged; at amount=1 returns the full blended result. Lerp mode is a pure linear crossfade.",
+    inputs: {
+        a: Texture2D required,
+        b: Texture2D required,
+    },
+    outputs: {
+        out: Texture2D,
+    },
+    params: [
+        ParamDef {
+            name: "amount",
+            label: "Amount",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.5),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: "mode",
+            label: "Blend Mode",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, 6.0)),
+            enum_values: MIX_MODES,
+        },
+    ],
+    composition_notes: "Use Lerp for pure crossfades; Add/Screen for additive bloom-style merges; Multiply for darkening masks; Max for tonemap-safe brightening; Overlay for contrast-preserving combines.",
+    examples: ["composite.bloom", "composite.halation"],
+}
 
-const MIX_PARAMS: [ParamDef; 1] = [ParamDef {
-    name: "amount",
-    label: "Amount",
-    ty: ParamType::Float,
-    default: ParamValue::Float(0.5),
-    range: Some((0.0, 1.0)),
-    enum_values: &[],
-}];
+pub const MIX_TYPE_ID: &str = "primitive.mix";
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct MixUniforms {
     amount: f32,
-    _pad: [f32; 3],
+    mode: u32,
+    _pad0: f32,
+    _pad1: f32,
 }
 
-/// Linear crossfade `mix(a, b, amount)`. First production-grade
-/// `EffectNode` — both the canonical template for other two-input
-/// primitives and the smoke test for the runtime's GPU integration
-/// (real `MetalBackend` slots, real `GpuEncoder` dispatch, real WGSL
-/// pipeline compile).
-pub struct Mix {
-    type_id: EffectNodeType,
-    pipeline: Option<GpuComputePipeline>,
-    sampler: Option<GpuSampler>,
-}
-
-impl Mix {
-    pub fn new() -> Self {
-        Self {
-            type_id: EffectNodeType::new(MIX_TYPE_ID),
-            pipeline: None,
-            sampler: None,
-        }
-    }
-}
-
-impl Default for Mix {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl EffectNode for Mix {
-    fn type_id(&self) -> &EffectNodeType {
-        &self.type_id
-    }
-    fn inputs(&self) -> &[NodeInput] {
-        &MIX_INPUTS
-    }
-    fn outputs(&self) -> &[NodeOutput] {
-        &MIX_OUTPUTS
-    }
-    fn parameters(&self) -> &[ParamDef] {
-        &MIX_PARAMS
-    }
-    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+impl Primitive for Mix {
+    fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let amount = match ctx.params.get("amount") {
             Some(ParamValue::Float(f)) => *f,
             _ => 0.5,
         };
+        let mode = match ctx.params.get("mode") {
+            Some(ParamValue::Enum(v)) => (*v).min(6),
+            Some(ParamValue::Float(f)) => (f.round() as u32).min(6),
+            _ => 0,
+        };
 
-        // Resolve textures up-front. NodeInputs/NodeOutputs::texture_2d
-        // returns refs tied to the backend's lifetime, so they survive
-        // the encoder's mutable borrow below.
         let Some(a) = ctx.inputs.texture_2d("a") else {
             return;
         };
@@ -129,7 +127,9 @@ impl EffectNode for Mix {
 
         let uniforms = MixUniforms {
             amount,
-            _pad: [0.0; 3],
+            mode,
+            _pad0: 0.0,
+            _pad1: 0.0,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -423,5 +423,133 @@ mod gpu_tests {
             "blue {b} != 0.5 (mix(0,1,0.5))"
         );
         assert!((a - 1.0).abs() < tol, "alpha {a} != 1.0");
+    }
+
+    /// Run Mix end-to-end on 4×4 solid-color inputs and return the
+    /// (0,0) pixel (every pixel is identical for solid-color inputs).
+    /// Shared by the per-mode smoke tests below.
+    fn run_mix_at(a_rgba: [f32; 4], b_rgba: [f32; 4], mode: u32, amount: f32) -> [f32; 4] {
+        let device = Arc::new(GpuDevice::new());
+        let (w, h) = (4u32, 4u32);
+        let format = GpuTextureFormat::Rgba16Float;
+
+        let mut g = Graph::new();
+        let src_a = g.add_node(Box::new(Source::new()));
+        let src_b = g.add_node(Box::new(Source::new()));
+        let mix = g.add_node(Box::new(Mix::new()));
+        let out = g.add_node(Box::new(FinalOutput::new()));
+        g.set_param(mix, "amount", ParamValue::Float(amount)).unwrap();
+        g.set_param(mix, "mode", ParamValue::Enum(mode)).unwrap();
+        g.connect((src_a, "out"), (mix, "a")).unwrap();
+        g.connect((src_b, "out"), (mix, "b")).unwrap();
+        g.connect((mix, "out"), (out, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+
+        let r_a = output_resource(&plan, src_a, "out");
+        let r_b = output_resource(&plan, src_b, "out");
+        let a_target = RenderTarget::new(&device, w, h, format, "test-a");
+        let b_target = RenderTarget::new(&device, w, h, format, "test-b");
+        let mut native_enc = device.create_encoder("mix-modes");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+            gpu.clear_texture(
+                &a_target.texture,
+                a_rgba[0] as f64,
+                a_rgba[1] as f64,
+                a_rgba[2] as f64,
+                a_rgba[3] as f64,
+            );
+            gpu.clear_texture(
+                &b_target.texture,
+                b_rgba[0] as f64,
+                b_rgba[1] as f64,
+                b_rgba[2] as f64,
+                b_rgba[3] as f64,
+            );
+        }
+
+        let mut backend = MetalBackend::new(device.clone(), w, h, format);
+        backend.pre_bind_texture_2d(r_a, a_target);
+        backend.pre_bind_texture_2d(r_b, b_target);
+        let mix_output_slot = Slot(backend.slot_count());
+
+        let mut exec = Executor::new(Box::new(backend));
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+            exec.execute_frame_with_gpu(&mut g, &plan, frame_time(), &mut gpu);
+        }
+        native_enc.commit_and_wait_completed();
+
+        let mix_tex = exec
+            .backend()
+            .texture_2d(mix_output_slot)
+            .expect("mix output texture should be retained on backend");
+        let bytes_per_row = w * 8;
+        let total_bytes = u64::from(h * bytes_per_row);
+        let readback_buf = device.create_buffer_shared(total_bytes);
+        let mut readback_enc = device.create_encoder("mix-modes-readback");
+        readback_enc.copy_texture_to_buffer(mix_tex, &readback_buf, w, h, bytes_per_row);
+        readback_enc.commit_and_wait_completed();
+
+        let ptr = readback_buf
+            .mapped_ptr()
+            .expect("shared buffer should expose mapped pointer");
+        let pixels: &[u16] =
+            unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+        [
+            f16::from_bits(pixels[0]).to_f32(),
+            f16::from_bits(pixels[1]).to_f32(),
+            f16::from_bits(pixels[2]).to_f32(),
+            f16::from_bits(pixels[3]).to_f32(),
+        ]
+    }
+
+    /// At amount = 0 the output must always be A, regardless of mode.
+    #[test]
+    fn mix_amount_zero_returns_a_for_all_modes() {
+        let a = [0.4, 0.6, 0.2, 1.0];
+        let b = [0.3, 0.5, 0.8, 1.0];
+        let tol = 0.01;
+        for mode in 0u32..=6 {
+            let out = run_mix_at(a, b, mode, 0.0);
+            for c in 0..4 {
+                assert!(
+                    (out[c] - a[c]).abs() < tol,
+                    "mode {mode} channel {c}: {} != a={} (amount=0)",
+                    out[c],
+                    a[c]
+                );
+            }
+        }
+    }
+
+    /// At amount = 1, each mode computes the pure blend of A and B.
+    /// The expected values below are hand-derived from the per-mode
+    /// formulas documented in `shaders/mix.wgsl`.
+    #[test]
+    fn mix_modes_apply_correct_blend_at_amount_one() {
+        let a = [0.4, 0.6, 0.2, 1.0];
+        let b = [0.3, 0.5, 0.8, 1.0];
+        let tol = 0.01;
+        let expected: [(u32, &str, [f32; 3]); 7] = [
+            (0, "Lerp", [0.3, 0.5, 0.8]),
+            (1, "Screen", [0.58, 0.8, 0.84]),
+            (2, "Add", [0.7, 1.1, 1.0]),
+            (3, "Max", [0.4, 0.6, 0.8]),
+            (4, "Multiply", [0.12, 0.3, 0.16]),
+            (5, "Difference", [0.1, 0.1, 0.6]),
+            (6, "Overlay", [0.24, 0.6, 0.32]),
+        ];
+        for (mode, label, want_rgb) in expected {
+            let out = run_mix_at(a, b, mode, 1.0);
+            for c in 0..3 {
+                assert!(
+                    (out[c] - want_rgb[c]).abs() < tol,
+                    "{label} (mode {mode}) channel {c}: got {} expected {}",
+                    out[c],
+                    want_rgb[c]
+                );
+            }
+        }
     }
 }
