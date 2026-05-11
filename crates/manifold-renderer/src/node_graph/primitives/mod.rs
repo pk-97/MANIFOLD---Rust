@@ -14,6 +14,7 @@
 //! Stable type IDs (`primitive.<name>`) are exported as public constants so
 //! the save format and a future registry can resolve them.
 
+mod affine_transform;
 mod clamp_stretch;
 mod color;
 mod color_grade;
@@ -24,6 +25,7 @@ mod kaleido_fold;
 mod temporal;
 mod uv;
 
+pub use affine_transform::AffineTransform;
 pub use clamp_stretch::ClampStretch;
 pub use color::{
     ColorMatrix, GradientMap, Luminance, COLOR_MATRIX_TYPE_ID, GRADIENT_MAP_TYPE_ID,
