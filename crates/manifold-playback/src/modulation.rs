@@ -229,7 +229,7 @@ fn evaluate_effect_drivers(fx: &mut EffectInstance, current_beat: Beats) -> bool
         Some(d) => d,
         None => return false,
     };
-    let effect_defs = &effect_def.param_defs;
+    let user_bindings = &fx.user_param_bindings;
     let mut any_driven = false;
 
     // Collect results to avoid borrow conflict between drivers and param_values
@@ -237,11 +237,12 @@ fn evaluate_effect_drivers(fx: &mut EffectInstance, current_beat: Beats) -> bool
         .iter()
         .filter(|d| d.enabled && !d.is_paused_by_user)
         .filter_map(|driver| {
-            let &idx = effect_def.id_to_index.get(driver.param_id.as_ref())?;
-            if idx >= effect_defs.len() {
-                return None;
-            }
-            let (min, max) = (effect_defs[idx].min, effect_defs[idx].max);
+            let resolved = manifold_core::effects::resolve_param_in(
+                effect_def,
+                user_bindings,
+                driver.param_id.as_ref(),
+            )?;
+            let (idx, min, max) = (resolved.idx, resolved.min, resolved.max);
 
             let mut normalized = ParameterDriver::evaluate(
                 current_beat,
@@ -401,7 +402,11 @@ pub fn evaluate_all_envelopes(
                         Some(d) => d,
                         None => continue,
                     };
-                let Some(&idx) = effect_def.id_to_index.get(param_id.as_ref()) else {
+                let Some(resolved) = manifold_core::effects::resolve_param_in(
+                    effect_def,
+                    &fx.user_param_bindings,
+                    param_id.as_ref(),
+                ) else {
                     if let Some(envs) = &mut layer.envelopes
                         && let Some(env) = envs.get_mut(ei)
                     {
@@ -409,7 +414,7 @@ pub fn evaluate_all_envelopes(
                     }
                     continue;
                 };
-                if idx >= effect_def.param_defs.len() || idx >= fx.param_values.len() {
+                if resolved.idx >= fx.param_values.len() {
                     if let Some(envs) = &mut layer.envelopes
                         && let Some(env) = envs.get_mut(ei)
                     {
@@ -417,9 +422,9 @@ pub fn evaluate_all_envelopes(
                     }
                     continue;
                 }
-                let pd = &effect_def.param_defs[idx];
-                let (min, max) = (pd.min, pd.max);
-                let whole = pd.whole_numbers || pd.value_labels.is_some();
+                let idx = resolved.idx;
+                let (min, max) = (resolved.min, resolved.max);
+                let whole = resolved.whole_numbers;
 
                 let new_walk = if trigger {
                     if walk_value < 0.0 {
@@ -508,16 +513,18 @@ pub fn evaluate_all_envelopes(
                     Some(d) => d,
                     None => continue,
                 };
-            let Some(&idx) = effect_def.id_to_index.get(param_id.as_ref()) else {
+            let Some(resolved) = manifold_core::effects::resolve_param_in(
+                effect_def,
+                &fx.user_param_bindings,
+                param_id.as_ref(),
+            ) else {
                 continue;
             };
-            if idx >= effect_def.param_defs.len() || idx >= fx.param_values.len() {
+            if resolved.idx >= fx.param_values.len() {
                 continue;
             }
-            let (min, max) = (
-                effect_def.param_defs[idx].min,
-                effect_def.param_defs[idx].max,
-            );
+            let idx = resolved.idx;
+            let (min, max) = (resolved.min, resolved.max);
             let current_value = fx.param_values[idx].value;
             let target_value = min + (max - min) * target_norm.clamp(0.0, 1.0);
             let offset = (target_value - current_value) * adsr_value;

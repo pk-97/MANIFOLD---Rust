@@ -130,6 +130,59 @@ pub enum UserParamConvert {
     EnumRound,
 }
 
+/// Free-function form of [`EffectInstance::resolve_param`]. Takes the
+/// `EffectDef` and `user_param_bindings` slice directly so callers in
+/// borrow-tight closures (the modulation evaluators iterating
+/// `fx.drivers`) can resolve without a second `&fx` borrow.
+pub fn resolve_param_in(
+    def: &crate::effect_definition_registry::EffectDef,
+    user_bindings: &[UserParamBinding],
+    id: &str,
+) -> Option<ResolvedParam> {
+    if let Some(&idx) = def.id_to_index.get(id) {
+        let pd = &def.param_defs[idx];
+        return Some(ResolvedParam {
+            idx,
+            min: pd.min,
+            max: pd.max,
+            whole_numbers: pd.whole_numbers || pd.value_labels.is_some(),
+        });
+    }
+    let j = user_bindings.iter().position(|b| b.id == id)?;
+    let ub = &user_bindings[j];
+    Some(ResolvedParam {
+        idx: def.param_count + j,
+        min: ub.min,
+        max: ub.max,
+        whole_numbers: matches!(
+            ub.convert,
+            UserParamConvert::IntRound
+                | UserParamConvert::EnumRound
+                | UserParamConvert::BoolThreshold
+        ),
+    })
+}
+
+/// Result of [`EffectInstance::resolve_param`]: slot index plus the
+/// metadata modulation evaluators need to map a normalized 0–1 driver
+/// or envelope output onto the target parameter's value range.
+///
+/// Lives at this layer (not in `manifold-playback`) because the
+/// resolution itself is pure data-model logic — it knows about static
+/// vs user-tail addressing and is unrelated to playback timing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ResolvedParam {
+    /// Slot in `EffectInstance.param_values` to read/write.
+    pub idx: usize,
+    pub min: f32,
+    pub max: f32,
+    /// True when the parameter is integral (registry `whole_numbers`
+    /// or `value_labels` set, or user binding declares an integral
+    /// conversion). Modulation evaluators round the final value when
+    /// this is set.
+    pub whole_numbers: bool,
+}
+
 /// A user-exposed parameter on an [`EffectInstance`].
 ///
 /// V2 user-exposed-params surface (see `docs/EFFECT_RUNTIME_UNIFICATION.md`
@@ -1118,6 +1171,31 @@ impl EffectInstance {
             .map(|d| d.param_count)
             .unwrap_or(0);
         self.user_binding_index(id).map(|j| n_static + j)
+    }
+
+    /// Full resolution for a `param_id`: slot index plus the value
+    /// range and whole-number flag the modulation evaluators need.
+    ///
+    /// Handles both addressing modes the host uses:
+    /// - **Static** (def-declared): pulls range from the registry's
+    ///   `ParamDef` for the resolved slot.
+    /// - **User-tail** (per-instance `UserParamBinding`): pulls range
+    ///   from the binding itself; `whole_numbers` is true when the
+    ///   binding's `convert` is `IntRound` / `EnumRound` / `BoolThreshold`.
+    ///
+    /// Returns `None` when the registry doesn't know the effect type
+    /// (test contexts) or the id matches neither a static slot nor a
+    /// user binding. Cost: one `AHashMap::get` for static hits, plus
+    /// one linear scan of `user_param_bindings` for user-tail hits.
+    /// Suitable for the modulation hot path because the alternative
+    /// (caching the resolution on the driver/envelope) would require
+    /// invalidation on every `align_to_definition` and user-binding
+    /// edit — at typical driver counts (<50) the scan is cheaper than
+    /// the bookkeeping.
+    pub fn resolve_param(&self, id: &str) -> Option<ResolvedParam> {
+        use crate::effect_definition_registry;
+        let def = effect_definition_registry::try_get(&self.effect_type)?;
+        resolve_param_in(def, &self.user_param_bindings, id)
     }
 
     /// Append a user-exposed binding and reserve its `param_values`
