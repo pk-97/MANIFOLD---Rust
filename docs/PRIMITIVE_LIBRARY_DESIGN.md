@@ -145,7 +145,7 @@ Generator-side; each is a generator's algorithm as a graph primitive.
 | EdgeDetect | `EdgeDetect` (fused) | composite — Sobel3+Threshold fused for parity |
 | EdgeStretch | `ClampStretch` | trivial |
 | Glitch | `Glitch` (fused) | composite |
-| HDRBoost | `Threshold(SoftKnee, gain≤5)` | trivial |
+| HDRBoost | `HighlightBoost` | trivial — distinct from Bloom prefilter's threshold math (boosts excess vs extracts highlights) |
 | InvertColors | `Invert` | trivial |
 | Kaleidoscope | `KaleidoFold` | trivial |
 | QuadMirror | `UVTransform(fold=XY) → Mix` | check parity: legacy is 1 pass, decomposed is 2 — may need fused `QuadMirror` primitive |

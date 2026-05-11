@@ -22,6 +22,7 @@ mod color_grade;
 mod compose;
 mod dither_pattern;
 mod filter;
+mod highlight_boost;
 mod invert;
 mod kaleido_fold;
 mod lut1d;
@@ -38,6 +39,7 @@ pub use color::{
 pub use color_grade::ColorGrade;
 pub use compose::{Blend, Mix, BLEND_MODES, BLEND_TYPE_ID, MIX_TYPE_ID};
 pub use dither_pattern::DitherPattern;
+pub use highlight_boost::HighlightBoost;
 pub use invert::Invert;
 pub use kaleido_fold::KaleidoFold;
 pub use lut1d::Lut1d;
