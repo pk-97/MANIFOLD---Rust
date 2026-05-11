@@ -12,6 +12,7 @@ mod backend;
 mod bindings;
 mod boundary_nodes;
 pub mod composites;
+mod effect_graphs;
 mod effect_node;
 mod execution;
 mod execution_plan;
@@ -31,6 +32,9 @@ mod validation;
 pub use backend::{Backend, MockBackend};
 pub use bindings::{NodeInputs, NodeOutputs, Slot};
 pub use boundary_nodes::{FinalOutput, Source, FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID};
+pub use effect_graphs::{
+    build_effect_graph, canonical_document_for, primitive_id_for_effect, EffectGraphError,
+};
 pub use effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId, NodeWire,
     ParamValues,
