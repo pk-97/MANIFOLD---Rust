@@ -15,6 +15,7 @@
 //! the save format and a future registry can resolve them.
 
 mod affine_transform;
+mod chromatic_offset;
 mod clamp_stretch;
 mod color;
 mod color_grade;
@@ -26,6 +27,7 @@ mod temporal;
 mod uv;
 
 pub use affine_transform::AffineTransform;
+pub use chromatic_offset::ChromaticOffset;
 pub use clamp_stretch::ClampStretch;
 pub use color::{
     ColorMatrix, GradientMap, Luminance, COLOR_MATRIX_TYPE_ID, GRADIENT_MAP_TYPE_ID,
