@@ -153,6 +153,22 @@ impl MetalBackend {
         }
     }
 
+    /// Swap the `RenderTarget` at a slot, returning the previous one
+    /// (or `None` if the slot was empty). Unlike
+    /// [`install_texture_2d`], the previous target is **not** released
+    /// to the pool — the caller takes ownership and is responsible
+    /// for its lifecycle.
+    ///
+    /// Used by the chain's graph-runtime dispatch: each frame, the
+    /// chain moves its ping/pong `RenderTarget`s into the runner's
+    /// pre-bound source/output slots, executes, then moves them back
+    /// out so the next effect's ping-pong swap can reuse them. Avoids
+    /// the per-effect `copy_texture_to_texture` overhead that
+    /// `install_texture_2d` + pool ownership would force.
+    pub fn swap_texture_2d(&mut self, slot: Slot, new: RenderTarget) -> Option<RenderTarget> {
+        self.textures_2d.insert(slot, new)
+    }
+
     /// Bind a [`ResourceId`] (from the executor's plan) to a host-supplied
     /// [`RenderTarget`]. Allocates a fresh `Slot`, stores `target` there,
     /// and records the binding so the executor's next `acquire(id, ...)`
@@ -274,6 +290,10 @@ impl Backend for MetalBackend {
 
     fn scalar(&self, slot: Slot) -> Option<ParamValue> {
         self.scalars.get(&slot).copied()
+    }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
     }
 }
 

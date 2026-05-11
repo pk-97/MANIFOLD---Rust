@@ -58,6 +58,15 @@ pub trait Backend: Send {
     /// scalar outputs (e.g. an audio-level → bloom-intensity wire).
     /// Mock backends return `None`; real backends look up an inline value.
     fn scalar(&self, slot: Slot) -> Option<ParamValue>;
+
+    /// Backend-specific downcast hook. Default implementation returns
+    /// `None`. Real backends override to expose themselves for
+    /// implementation-specific calls (e.g., the chain's swap-based
+    /// dispatch reaches through this to call
+    /// [`MetalBackend::swap_texture_2d`](crate::node_graph::MetalBackend::swap_texture_2d)).
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        None
+    }
 }
 
 /// In-memory backend with no real GPU resources. Tracks slot identity and

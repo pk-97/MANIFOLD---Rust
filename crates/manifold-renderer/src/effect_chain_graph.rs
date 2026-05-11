@@ -22,17 +22,23 @@
 //!
 //! [`GraphEffectRunner::apply`] does:
 //!
-//!  1. one GPU `copy_texture_to_texture` from the chain's current
-//!     source into the runner's source slot;
-//!  2. param refresh on the live `Graph`;
-//!  3. `Executor::execute_frame_with_gpu` (real GPU work);
-//!  4. one GPU `copy_texture_to_texture` from the runner's output
-//!     slot into the chain's current target.
+//!  1. `swap_texture_2d` chain's current source `RenderTarget` into
+//!     the backend's pre-bound source slot, retrieving the dummy;
+//!  2. same swap for the target;
+//!  3. param refresh on the live `Graph`;
+//!  4. `Executor::execute_frame_with_gpu` (real GPU work — primitive
+//!     samples directly from chain's source RT and writes directly
+//!     into chain's target RT, no intermediate copies);
+//!  5. swap both RTs back out of the backend, restoring the dummies.
 //!
-//! The two copies are an overhead relative to the legacy
-//! `PostProcessEffect::apply`, which writes directly into the chain's
-//! target buffer. Removing them requires a backend swap-in/swap-out
-//! API (deferred to a follow-up commit).
+//! That makes the graph-runtime dispatch as close to native as
+//! possible while keeping the cached graph + state-preserving
+//! ownership model. The chain itself still pays one
+//! `copy_texture_to_texture` at the very start of `apply_chain` (to
+//! materialise the upstream `&GpuTexture` input into its first ping
+//! RT), since the backend's slot API takes owned `RenderTarget`s, not
+//! borrows. That single up-front copy is paid per chain invocation,
+//! not per effect.
 //!
 //! ## Ownership
 //!
@@ -46,7 +52,7 @@ use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use manifold_core::id::EffectId;
-use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
+use manifold_gpu::{GpuDevice, GpuTextureFormat};
 
 use crate::effect::EffectContext;
 use crate::gpu_encoder::GpuEncoder;
@@ -101,10 +107,17 @@ impl GraphEffectCache {
         }
     }
 
-    /// Run one effect through the graph runtime. Returns `true` if
-    /// the effect was handled (source → target was written via the
-    /// graph); `false` if the effect has no primitive mapping yet
-    /// and the caller should fall back to its legacy dispatch.
+    /// Run one effect through the graph runtime, with the chain's
+    /// current source/target `RenderTarget`s moved through the
+    /// runner's pre-bound slots (no intermediate copies).
+    ///
+    /// Returns `(source, target, dispatched)`. The `RenderTarget`s
+    /// are always returned to the caller — the chain reinstalls them
+    /// into its ping/pong slots whether dispatch happened or not.
+    /// `dispatched == false` means the effect has no primitive
+    /// mapping yet and the caller should fall back to its legacy
+    /// dispatch using the same RTs (their contents are still the
+    /// original source / uninitialised target the caller handed in).
     ///
     /// Lazy-builds the runner on first call for an `EffectId`.
     /// Re-uses it on subsequent frames so primitive state persists.
@@ -113,17 +126,17 @@ impl GraphEffectCache {
         &mut self,
         primitives: &PrimitiveRegistry,
         gpu: &mut GpuEncoder<'_>,
-        source: &GpuTexture,
-        target: &GpuTexture,
+        source: RenderTarget,
+        target: RenderTarget,
         fx: &EffectInstance,
         ctx: &EffectContext,
-    ) -> bool {
+    ) -> (RenderTarget, RenderTarget, bool) {
         // Only attempt the graph path for effects with a primitive
         // mapping. Mirror / SoftFocusGraph / StylizedFeedback don't
         // have one (they're already graph-backed internally and run
         // via `PostProcessEffect::apply` directly).
         if primitive_id_for_effect(fx.effect_type()).is_none() {
-            return false;
+            return (source, target, false);
         }
 
         // Cache key is the stable EffectId. The hash map's borrow
@@ -136,7 +149,7 @@ impl GraphEffectCache {
         };
         if needs_insert {
             let Ok(runner) = GraphEffectRunner::new(fx, primitives) else {
-                return false;
+                return (source, target, false);
             };
             self.runners.insert(fx.id.clone(), runner);
         }
@@ -145,8 +158,8 @@ impl GraphEffectCache {
             .runners
             .get_mut(&fx.id)
             .expect("just inserted or already present");
-        runner.apply(gpu, source, target, fx, ctx);
-        true
+        let (s, t) = runner.apply(gpu, source, target, fx, ctx);
+        (s, t, true)
     }
 
     /// Drop runners whose effect ids are no longer in the chain.
@@ -216,11 +229,11 @@ impl GraphEffectRunner {
     fn apply(
         &mut self,
         gpu: &mut GpuEncoder<'_>,
-        source: &GpuTexture,
-        target: &GpuTexture,
+        source: RenderTarget,
+        target: RenderTarget,
         fx: &EffectInstance,
         ctx: &EffectContext,
-    ) {
+    ) -> (RenderTarget, RenderTarget) {
         let needs_build = match &self.state {
             None => true,
             Some(s) => s.width != ctx.width || s.height != ctx.height,
@@ -237,14 +250,27 @@ impl GraphEffectRunner {
         }
         let state = self.state.as_mut().expect("state initialized above");
 
-        // Copy chain's current source into the runner's pre-bound
-        // source RT. Same shape as MirrorFX/SoftFocusGraphFX.
-        let source_tex = state
+        // Swap chain's source/target RTs INTO the backend's
+        // pre-bound slots, taking the dummies out. The primitive
+        // will sample directly from the chain's source RT and
+        // write directly into the chain's target RT — zero
+        // intermediate copies relative to the legacy dispatch.
+        let prev_source = state
             .executor
-            .backend()
-            .texture_2d(state.source_slot)
-            .expect("source slot pre-bound at state-build time");
-        gpu.copy_texture_to_texture(source, source_tex, ctx.width, ctx.height);
+            .backend_mut()
+            .as_any_mut()
+            .and_then(|a| a.downcast_mut::<MetalBackend>())
+            .expect("RenderState built with MetalBackend")
+            .swap_texture_2d(state.source_slot, source)
+            .expect("source slot was pre-bound at state-build time");
+        let prev_target = state
+            .executor
+            .backend_mut()
+            .as_any_mut()
+            .and_then(|a| a.downcast_mut::<MetalBackend>())
+            .expect("RenderState built with MetalBackend")
+            .swap_texture_2d(state.output_slot, target)
+            .expect("output slot was pre-bound at state-build time");
 
         // Refresh primitive params from the (possibly modulated)
         // EffectInstance. Logged-and-ignored if metadata drifts;
@@ -278,12 +304,27 @@ impl GraphEffectRunner {
             .executor
             .execute_frame_with_gpu(&mut self.graph, &self.plan, frame_time, gpu);
 
-        let output_tex = state
+        // Swap the chain's RTs BACK OUT of the backend, restoring
+        // the dummies so the slots remain bound (the executor's
+        // `acquire` is idempotent on existing bindings — these
+        // dummies stay in place until the next swap-in).
+        let source_back = state
             .executor
-            .backend()
-            .texture_2d(state.output_slot)
-            .expect("output slot pre-bound at state-build time");
-        gpu.copy_texture_to_texture(output_tex, target, ctx.width, ctx.height);
+            .backend_mut()
+            .as_any_mut()
+            .and_then(|a| a.downcast_mut::<MetalBackend>())
+            .expect("RenderState built with MetalBackend")
+            .swap_texture_2d(state.source_slot, prev_source)
+            .expect("source slot was just populated by the inbound swap");
+        let target_back = state
+            .executor
+            .backend_mut()
+            .as_any_mut()
+            .and_then(|a| a.downcast_mut::<MetalBackend>())
+            .expect("RenderState built with MetalBackend")
+            .swap_texture_2d(state.output_slot, prev_target)
+            .expect("output slot was just populated by the inbound swap");
+        (source_back, target_back)
     }
 }
 

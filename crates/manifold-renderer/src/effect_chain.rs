@@ -258,47 +258,83 @@ impl EffectChain {
                     self.use_ping_as_source = true;
                 }
 
-                // Split-borrow access to source/target textures so
-                // the mutable `&mut self.graph_cache` below doesn't
-                // conflict with the immutable `&GpuTexture` borrows.
-                // The legacy `self.source_texture()` / `self.target_texture()`
-                // method calls borrow all of `self`; reaching through
-                // `self.ping`/`self.pong`/`self.use_ping_as_source`
-                // directly tells the borrow checker only those
-                // specific fields are touched.
-                let (source_tex, target_tex): (&GpuTexture, &GpuTexture) = if first_effect_pending {
-                    let tgt = if self.use_ping_as_source {
-                        &self.pong.as_ref().unwrap().texture
+                // Graph-runtime dispatch (swap-based, no per-effect
+                // copies) for primitive-mapped effects.
+                //
+                // The graph runner needs owned `RenderTarget`s it can
+                // install into its backend slots, while the legacy
+                // `PostProcessEffect::apply` takes borrowed
+                // `&GpuTexture`. To get owned RTs for the graph path
+                // we `Option::take` them out of chain.ping/pong,
+                // hand them to the runner, then put them back in
+                // their original ping/pong slots after the runner
+                // returns ownership.
+                //
+                // On the very first effect, chain's `ping` holds
+                // uninitialized garbage from `ensure_buffers` — the
+                // graph runner would sample that instead of the
+                // upstream input. Materialise input → ping with a
+                // single GPU copy first. Pays the cost once per
+                // chain invocation, not once per effect.
+                let mut dispatched_via_graph = false;
+                if has_primitive_mapping {
+                    if first_effect_pending {
+                        let ping_rt = self.ping.as_ref().unwrap();
+                        gpu.copy_texture_to_texture(
+                            input_texture,
+                            &ping_rt.texture,
+                            ctx.width,
+                            ctx.height,
+                        );
+                        first_effect_pending = false;
+                    }
+                    let (source_rt, target_rt) = if self.use_ping_as_source {
+                        (self.ping.take().unwrap(), self.pong.take().unwrap())
                     } else {
-                        &self.ping.as_ref().unwrap().texture
+                        (self.pong.take().unwrap(), self.ping.take().unwrap())
                     };
-                    (input_texture, tgt)
-                } else if self.use_ping_as_source {
-                    (
-                        &self.ping.as_ref().unwrap().texture,
-                        &self.pong.as_ref().unwrap().texture,
-                    )
-                } else {
-                    (
-                        &self.pong.as_ref().unwrap().texture,
-                        &self.ping.as_ref().unwrap().texture,
-                    )
-                };
-
-                let dispatched_via_graph = if has_primitive_mapping {
-                    self.graph_cache.apply(
+                    let (source_back, target_back, did_dispatch) = self.graph_cache.apply(
                         primitive_registry(),
                         gpu,
-                        source_tex,
-                        target_tex,
+                        source_rt,
+                        target_rt,
                         fx,
                         &chain_ctx,
-                    )
-                } else {
-                    false
-                };
+                    );
+                    dispatched_via_graph = did_dispatch;
+                    if self.use_ping_as_source {
+                        self.ping = Some(source_back);
+                        self.pong = Some(target_back);
+                    } else {
+                        self.pong = Some(source_back);
+                        self.ping = Some(target_back);
+                    }
+                }
 
                 if !dispatched_via_graph {
+                    // Legacy dispatch — borrow source/target textures
+                    // from the chain. Reading through `self.ping`/
+                    // `self.pong`/`self.use_ping_as_source` directly
+                    // (rather than `self.target()` / etc.) gives the
+                    // borrow checker per-field visibility.
+                    let (source_tex, target_tex): (&GpuTexture, &GpuTexture) = if first_effect_pending {
+                        let tgt = if self.use_ping_as_source {
+                            &self.pong.as_ref().unwrap().texture
+                        } else {
+                            &self.ping.as_ref().unwrap().texture
+                        };
+                        (input_texture, tgt)
+                    } else if self.use_ping_as_source {
+                        (
+                            &self.ping.as_ref().unwrap().texture,
+                            &self.pong.as_ref().unwrap().texture,
+                        )
+                    } else {
+                        (
+                            &self.pong.as_ref().unwrap().texture,
+                            &self.ping.as_ref().unwrap().texture,
+                        )
+                    };
                     let processor = processor_opt.expect(
                         "should_skip was queried — processor must be present",
                     );
