@@ -1,0 +1,403 @@
+//! Pixel-exact parity test harness for Phase 4a primitive migration.
+//!
+//! For each effect being decomposed into a preset graph, the harness:
+//!
+//! 1. Renders the legacy `EffectChain` against a fixed input texture +
+//!    parameter set.
+//! 2. Renders the new graph-decomposed version against the same input +
+//!    parameters.
+//! 3. Reads both outputs back to CPU and asserts bytewise equality.
+//!
+//! No tolerance. A single byte mismatch fails the test, and the
+//! decomposition is either fixed (typically by collapsing adjacent
+//! primitives into a fused composite) or the effect is reclassified as
+//! monolithic. See `docs/PRIMITIVE_LIBRARY_DESIGN.md` §5 for the full
+//! framework spec and §6.1 for the per-effect migration order.
+//!
+//! ## Why a custom harness rather than a property test
+//!
+//! The legacy path is `EffectChain::apply_chain` (real GPU passes,
+//! per-effect uniforms, ping-pong buffers). The decomposed path is the
+//! graph runtime (`Executor::execute_frame_with_gpu`). Both must drive a
+//! real `GpuDevice` — the existing `wgsl_validation.rs` test only
+//! compiles shaders. A property-based wrapper around the legacy entry
+//! point would still need the same setup, so the harness is the
+//! foundation either way.
+
+use std::ffi::c_void;
+use std::slice;
+use std::sync::Arc;
+
+use half::f16;
+use manifold_core::EffectTypeId;
+use manifold_core::effects::EffectInstance;
+use manifold_gpu::{
+    GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+};
+use manifold_renderer::effect::EffectContext;
+use manifold_renderer::effect_chain::EffectChain;
+use manifold_renderer::effect_registry::EffectRegistry;
+use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_renderer::render_target::RenderTarget;
+
+/// Fixed render dimensions for parity tests. Small enough that
+/// 24 readbacks per effect (4 fixtures × 6 param sets) finish in
+/// seconds; large enough to exercise non-trivial dispatch shapes
+/// (multiple of the 16×16 workgroup size).
+pub const PARITY_WIDTH: u32 = 128;
+pub const PARITY_HEIGHT: u32 = 128;
+
+/// Bytes per pixel for the canonical parity format (`Rgba16Float`).
+const BYTES_PER_PIXEL: u32 = 8;
+
+/// Owns the `GpuDevice`, the populated `EffectRegistry`, and the
+/// canonical render dimensions. A single harness instance is reused
+/// across all variants for one effect's parity sweep.
+pub struct ParityHarness {
+    pub device: Arc<GpuDevice>,
+    pub registry: EffectRegistry,
+    pub width: u32,
+    pub height: u32,
+    pub format: GpuTextureFormat,
+}
+
+impl ParityHarness {
+    pub fn new() -> Self {
+        let device = Arc::new(GpuDevice::new());
+        let registry = EffectRegistry::new(&device);
+        Self {
+            device,
+            registry,
+            width: PARITY_WIDTH,
+            height: PARITY_HEIGHT,
+            format: GpuTextureFormat::Rgba16Float,
+        }
+    }
+
+    pub fn make_target(&self, label: &str) -> RenderTarget {
+        RenderTarget::new(&self.device, self.width, self.height, self.format, label)
+    }
+
+    /// Upload a host-prepared `Vec<f16>` pixel buffer to a fresh
+    /// **CPU-uploadable** texture. Caller is responsible for matching
+    /// `w × h × 4` element count (RGBA, row-major, top-down).
+    ///
+    /// The returned texture uses `CPU_UPLOAD` + `SHADER_READ` +
+    /// `COPY_SRC` so `replaceRegion` works (Shared storage) and the
+    /// effect's first compute pass can read it. This deviates from
+    /// production `RENDER_TARGET_FULL` (Private), but the harness only
+    /// cares that the bytes read by the shader match the fixture —
+    /// which they do, because Metal samples Shared and Private
+    /// textures identically.
+    pub fn upload_f16_rgba(&self, label: &str, pixels: &[f16]) -> GpuTexture {
+        assert_eq!(
+            pixels.len() as u32,
+            self.width * self.height * 4,
+            "fixture buffer size mismatch"
+        );
+        let texture = self.device.create_texture(&GpuTextureDesc {
+            width: self.width,
+            height: self.height,
+            depth: 1,
+            format: self.format,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD
+                | GpuTextureUsage::SHADER_READ
+                | GpuTextureUsage::COPY_SRC,
+            label,
+            mip_levels: 1,
+        });
+        // Reinterpret &[f16] as &[u8] — f16 is bit-identical to its
+        // little-endian u16 representation on our targets.
+        let bytes = unsafe {
+            slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(pixels))
+        };
+        self.device.upload_texture(&texture, bytes);
+        texture
+    }
+
+    /// Run a single `EffectInstance` through the legacy `EffectChain`,
+    /// copy the result into a stable destination texture, read it back
+    /// to host memory. The returned `Vec<u8>` is the raw Rgba16Float
+    /// byte stream — exactly what the parity comparator wants.
+    ///
+    /// Time / beat / dt are fixed deterministic values so any
+    /// time-dependent effect (Glitch, Strobe, VoronoiPrism) produces
+    /// reproducible output across runs.
+    pub fn run_legacy(&mut self, fx: &EffectInstance, input: &GpuTexture, ctx: &EffectContext) -> Vec<u8> {
+        // Stable destination — we GPU-copy the chain's output into here
+        // so readback isn't borrow-locked by the chain's internal
+        // ping-pong buffers.
+        let dest = self.make_target("parity-legacy-dest");
+
+        let mut chain = EffectChain::new();
+        let mut render_enc = self.device.create_encoder("parity-legacy-render");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut render_enc, &self.device);
+            let result = chain.apply_chain(
+                &mut gpu,
+                &mut self.registry,
+                input,
+                slice::from_ref(fx),
+                &[],
+                ctx,
+                None,
+            );
+            // `result == None` means the chain skipped (disabled / no
+            // registered processor / amount==0). Parity-test contract:
+            // the "effect output" in that case equals the input. Same
+            // convention the compositor uses.
+            let final_tex: &GpuTexture = result.unwrap_or(input);
+            gpu.copy_texture_to_texture(final_tex, &dest.texture, self.width, self.height);
+        }
+        render_enc.commit_and_wait_completed();
+
+        self.readback(&dest.texture)
+    }
+
+    /// Read a texture's contents back to host memory as raw bytes.
+    /// Allocates a shared (CPU-visible) Metal buffer, issues a
+    /// texture→buffer copy, commits, waits, and snapshots the bytes.
+    pub fn readback(&self, texture: &GpuTexture) -> Vec<u8> {
+        let bytes_per_row = self.width * BYTES_PER_PIXEL;
+        let total_bytes = u64::from(self.height * bytes_per_row);
+        let buf = self.device.create_buffer_shared(total_bytes);
+
+        let mut enc = self.device.create_encoder("parity-readback");
+        enc.copy_texture_to_buffer(texture, &buf, self.width, self.height, bytes_per_row);
+        enc.commit_and_wait_completed();
+
+        let ptr = buf
+            .mapped_ptr()
+            .expect("shared readback buffer must expose mapped pointer");
+        let bytes: &[u8] = unsafe {
+            slice::from_raw_parts(ptr.cast::<c_void>().cast::<u8>(), total_bytes as usize)
+        };
+        bytes.to_vec()
+    }
+}
+
+impl Default for ParityHarness {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+/// Catalog of canonical input fixtures used across every effect's
+/// parity sweep. Each fixture exercises a different region of the
+/// shader behavior space (HDR vs LDR, smooth gradients vs hard
+/// transitions, single channel vs full RGBA). When a single fixture
+/// passes parity but another fails, the failure surface is narrowed
+/// before we look at math.
+#[derive(Debug, Clone, Copy)]
+pub enum Fixture {
+    /// RGBA linear gradient: R=x, G=y, B=(x+y)/2, A=1.
+    Gradient,
+    /// Deterministic Rgba16Float noise (wang-hash seeded by pixel
+    /// coords). Stresses random-access samplers and per-pixel ops
+    /// without periodicity.
+    Noise,
+    /// HDR bright spots — most pixels at 0.05 luminance, a sparse
+    /// scatter of pixels at 4.0. Targets soft-knee threshold,
+    /// bloom prefilter, halation, HDR boost.
+    BrightSpots,
+    /// 8 solid color swatches arranged in a 4×2 grid:
+    /// red, green, blue, white, gray, cyan, magenta, yellow. Targets
+    /// color-grade / hue-shift / channel mix paths where solid input
+    /// makes math errors obvious.
+    Swatches,
+}
+
+impl Fixture {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Gradient => "fixture-gradient",
+            Self::Noise => "fixture-noise",
+            Self::BrightSpots => "fixture-bright-spots",
+            Self::Swatches => "fixture-swatches",
+        }
+    }
+
+    pub fn build(self, h: &ParityHarness) -> GpuTexture {
+        let (w, ht) = (h.width, h.height);
+        let mut pixels = vec![f16::from_f32(0.0); (w * ht * 4) as usize];
+        match self {
+            Self::Gradient => fill_gradient(&mut pixels, w, ht),
+            Self::Noise => fill_noise(&mut pixels, w, ht),
+            Self::BrightSpots => fill_bright_spots(&mut pixels, w, ht),
+            Self::Swatches => fill_swatches(&mut pixels, w, ht),
+        }
+        h.upload_f16_rgba(self.label(), &pixels)
+    }
+
+    /// Every fixture iterated in canonical order. Test sweeps use this
+    /// so additions show up automatically.
+    pub fn all() -> &'static [Fixture] {
+        &[
+            Fixture::Gradient,
+            Fixture::Noise,
+            Fixture::BrightSpots,
+            Fixture::Swatches,
+        ]
+    }
+}
+
+fn write_rgba(pixels: &mut [f16], idx: usize, r: f32, g: f32, b: f32, a: f32) {
+    pixels[idx] = f16::from_f32(r);
+    pixels[idx + 1] = f16::from_f32(g);
+    pixels[idx + 2] = f16::from_f32(b);
+    pixels[idx + 3] = f16::from_f32(a);
+}
+
+fn fill_gradient(pixels: &mut [f16], w: u32, h: u32) {
+    let wm = (w.max(1) - 1).max(1) as f32;
+    let hm = (h.max(1) - 1).max(1) as f32;
+    for y in 0..h {
+        for x in 0..w {
+            let idx = ((y * w + x) * 4) as usize;
+            let u = x as f32 / wm;
+            let v = y as f32 / hm;
+            write_rgba(pixels, idx, u, v, (u + v) * 0.5, 1.0);
+        }
+    }
+}
+
+/// Wang hash → uniform [0,1). Deterministic per-(x,y); independent of
+/// run order or threading.
+fn wang(mut k: u32) -> f32 {
+    k = (k ^ 61) ^ (k >> 16);
+    k = k.wrapping_mul(9);
+    k ^= k >> 4;
+    k = k.wrapping_mul(0x27d4_eb2d);
+    k ^= k >> 15;
+    (k as f32) * (1.0 / u32::MAX as f32)
+}
+
+fn fill_noise(pixels: &mut [f16], w: u32, h: u32) {
+    for y in 0..h {
+        for x in 0..w {
+            let idx = ((y * w + x) * 4) as usize;
+            let r = wang(x.wrapping_mul(0x9E37_79B9) ^ y);
+            let g = wang(x.wrapping_mul(0x6A09_E667) ^ y.wrapping_mul(3));
+            let b = wang(x.wrapping_mul(0xBB67_AE85) ^ y.wrapping_mul(7));
+            write_rgba(pixels, idx, r, g, b, 1.0);
+        }
+    }
+}
+
+fn fill_bright_spots(pixels: &mut [f16], w: u32, h: u32) {
+    // 0.05 baseline, sparse 4.0 spikes on a deterministic 13×13 lattice.
+    for y in 0..h {
+        for x in 0..w {
+            let idx = ((y * w + x) * 4) as usize;
+            let spike = (x % 13 == 0) && (y % 13 == 0);
+            let v = if spike { 4.0 } else { 0.05 };
+            write_rgba(pixels, idx, v, v, v, 1.0);
+        }
+    }
+}
+
+fn fill_swatches(pixels: &mut [f16], w: u32, h: u32) {
+    const PALETTE: [[f32; 3]; 8] = [
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [1.0, 1.0, 1.0],
+        [0.5, 0.5, 0.5],
+        [0.0, 1.0, 1.0],
+        [1.0, 0.0, 1.0],
+        [1.0, 1.0, 0.0],
+    ];
+    // 4 columns × 2 rows.
+    let col_w = w / 4;
+    let row_h = h / 2;
+    for y in 0..h {
+        for x in 0..w {
+            let cell_x = (x / col_w.max(1)).min(3);
+            let cell_y = (y / row_h.max(1)).min(1);
+            let p = PALETTE[(cell_y * 4 + cell_x) as usize];
+            let idx = ((y * w + x) * 4) as usize;
+            write_rgba(pixels, idx, p[0], p[1], p[2], 1.0);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Comparison
+// ---------------------------------------------------------------------------
+
+/// Strict bytewise comparison. On mismatch, reports the count of
+/// differing bytes plus the first ten differing offsets so failures
+/// localize without dumping the whole buffer.
+pub fn assert_bytewise_equal(label: &str, a: &[u8], b: &[u8]) {
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "{label}: byte length differs (a={}, b={})",
+        a.len(),
+        b.len()
+    );
+    if a == b {
+        return;
+    }
+    let mut diffs: Vec<usize> = a
+        .iter()
+        .zip(b.iter())
+        .enumerate()
+        .filter_map(|(i, (x, y))| if x != y { Some(i) } else { None })
+        .collect();
+    let total = diffs.len();
+    diffs.truncate(10);
+    let detail: Vec<String> = diffs
+        .iter()
+        .map(|&i| format!("[{i}] a={:02x} b={:02x}", a[i], b[i]))
+        .collect();
+    panic!(
+        "{label}: {total} byte(s) differ of {}. First offsets:\n  {}",
+        a.len(),
+        detail.join("\n  "),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Effect context defaults
+// ---------------------------------------------------------------------------
+
+/// Deterministic `EffectContext` for parity runs. Time/beat are fixed so
+/// any time-dependent effect (Glitch, Strobe, VoronoiPrism) produces
+/// reproducible output across runs.
+pub fn default_ctx(width: u32, height: u32) -> EffectContext {
+    EffectContext {
+        time: 1.234,
+        beat: 2.5,
+        dt: 1.0 / 60.0,
+        width,
+        height,
+        output_width: width,
+        output_height: height,
+        owner_key: 0,
+        is_clip_level: false,
+        edge_stretch_width: 0.5625,
+        frame_count: 0,
+    }
+}
+
+/// Default-parameter `EffectInstance` for an effect type. Pulls the
+/// canonical defaults from the registry so tests don't drift from
+/// effect-spec changes.
+pub fn make_default_effect(effect_type: EffectTypeId) -> EffectInstance {
+    let mut fx = EffectInstance::new(effect_type.clone());
+    fx.align_to_definition();
+    fx.enabled = true;
+    fx
+}
+
+// Suppress dead-code warnings until at least one parity test file
+// imports each helper. The harness is a foundation commit — concrete
+// tests follow in §6.1.
+#[allow(dead_code)]
+fn _unused_anchor(_: Fixture, _: ParityHarness, _: EffectContext) {}
