@@ -24,6 +24,7 @@ mod dither_pattern;
 mod filter;
 mod invert;
 mod kaleido_fold;
+mod lut1d;
 mod temporal;
 mod uv;
 
@@ -39,6 +40,7 @@ pub use compose::{Blend, Mix, BLEND_MODES, BLEND_TYPE_ID, MIX_TYPE_ID};
 pub use dither_pattern::DitherPattern;
 pub use invert::Invert;
 pub use kaleido_fold::KaleidoFold;
+pub use lut1d::Lut1d;
 pub use filter::{
     Blur, MipChain, Threshold, BLUR_MODES, BLUR_TYPE_ID, MIP_CHAIN_TYPE_ID, THRESHOLD_TYPE_ID,
 };

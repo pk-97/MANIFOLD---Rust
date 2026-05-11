@@ -276,6 +276,148 @@ impl ParityHarness {
         self.readback(prim_tex)
     }
 
+    /// Multi-input variant of [`Self::run_primitive_graph`]. The
+    /// `aux_inputs` slice maps additional primitive input port names
+    /// to caller-supplied textures (typically Shared-storage upload
+    /// textures produced by [`Self::upload_f16_rgba`] for LUT data
+    /// or other per-frame ancillary inputs). Each aux input is
+    /// GPU-copied into a Private-storage `RenderTarget` and
+    /// pre-bound to the corresponding Source node's `out`
+    /// `ResourceId`, mirroring how the primary fixture is handled.
+    ///
+    /// Suited to primitives like `Lut1d` (in + lut) or future
+    /// `DisplacementMap` (in + displace). For single-input primitives
+    /// the simpler [`Self::run_primitive_graph`] stays available.
+    pub fn run_primitive_graph_with_aux_inputs<F>(
+        &self,
+        prim: Box<dyn EffectNode>,
+        input: &GpuTexture,
+        aux_inputs: &[(&str, &GpuTexture)],
+        ctx: &EffectContext,
+        set_params: F,
+    ) -> Vec<u8>
+    where
+        F: FnOnce(&mut Graph, NodeInstanceId),
+    {
+        let mut graph = Graph::new();
+
+        // Collect port names BEFORE adding the primitive to the graph
+        // — `add_node` consumes the box, so we'd lose access to its
+        // inputs/outputs slice after the call.
+        let prim_inputs: Vec<String> = prim
+            .inputs()
+            .iter()
+            .map(|p| p.name.to_string())
+            .collect();
+        let prim_outputs: Vec<String> = prim
+            .outputs()
+            .iter()
+            .map(|p| p.name.to_string())
+            .collect();
+        assert!(
+            !prim_inputs.is_empty(),
+            "primitive must have at least one input port"
+        );
+        assert!(
+            !prim_outputs.is_empty(),
+            "primitive must have at least one output port"
+        );
+
+        // Primary `Source → prim.<first input> → FinalOutput`.
+        let primary_source = graph.add_node(Box::new(Source::new()));
+        let prim_id = graph.add_node(prim);
+        let final_out = graph.add_node(Box::new(FinalOutput::new()));
+        let primary_port: &'static str = leak_static_str(prim_inputs[0].clone());
+        let out_port: &'static str = leak_static_str(prim_outputs[0].clone());
+        graph.connect((primary_source, "out"), (prim_id, primary_port)).unwrap();
+        graph.connect((prim_id, out_port), (final_out, "in")).unwrap();
+
+        // Aux Source nodes for each (port_name, texture) pair.
+        let mut aux_sources: Vec<NodeInstanceId> = Vec::with_capacity(aux_inputs.len());
+        for &(port_name, _) in aux_inputs {
+            let src = graph.add_node(Box::new(Source::new()));
+            let port_leak: &'static str = leak_static_str(port_name.to_string());
+            graph.connect((src, "out"), (prim_id, port_leak)).unwrap();
+            aux_sources.push(src);
+        }
+
+        set_params(&mut graph, prim_id);
+
+        let plan = compile(&graph).expect("aux-input graph must compile");
+
+        // GPU-copy each Shared-storage input into a Private-storage
+        // RenderTarget so the executor samples through production
+        // memory mode. Aux textures may be smaller than the parity
+        // dims (e.g., LUT is 512×1) — allocate the RT at the aux
+        // texture's actual size to keep the copy bit-preserving.
+        let primary_rt = self.make_target("parity-aux-primary");
+        let mut copy_enc = self.device.create_encoder("parity-aux-copy-in");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut copy_enc, &self.device);
+            gpu.copy_texture_to_texture(input, &primary_rt.texture, self.width, self.height);
+        }
+        // Aux RTs sized per the source texture.
+        let mut aux_rts: Vec<RenderTarget> = Vec::with_capacity(aux_inputs.len());
+        for &(_, tex) in aux_inputs {
+            let rt = RenderTarget::new(
+                &self.device,
+                tex.width,
+                tex.height,
+                self.format,
+                "parity-aux-input",
+            );
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut copy_enc, &self.device);
+                gpu.copy_texture_to_texture(tex, &rt.texture, tex.width, tex.height);
+            }
+            aux_rts.push(rt);
+        }
+        copy_enc.commit_and_wait_completed();
+
+        // Pre-bind primary Source.out + each aux Source.out. Drain
+        // aux_rts via an iterator so each Source consumes a RenderTarget
+        // exactly once (Vec items aren't `Copy`, can't index in a loop
+        // that also borrows from `self.device`).
+        let mut backend = MetalBackend::new(
+            self.device.clone(),
+            self.width,
+            self.height,
+            self.format,
+        );
+        let primary_res = resource_for_output(&plan, primary_source, "out");
+        backend.pre_bind_texture_2d(primary_res, primary_rt);
+        let mut aux_rts_iter = aux_rts.into_iter();
+        for src in &aux_sources {
+            let res = resource_for_output(&plan, *src, "out");
+            let rt = aux_rts_iter
+                .next()
+                .expect("aux_rts count must match aux_sources count");
+            backend.pre_bind_texture_2d(res, rt);
+        }
+
+        let prim_output_slot = Slot(backend.slot_count());
+
+        let frame_time = FrameTime {
+            beats: Beats(f64::from(ctx.beat)),
+            seconds: Seconds(f64::from(ctx.time)),
+            delta: Seconds(f64::from(ctx.dt)),
+        };
+
+        let mut native_enc = self.device.create_encoder("parity-aux-render");
+        let mut exec = Executor::new(Box::new(backend));
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &self.device);
+            exec.execute_frame_with_gpu(&mut graph, &plan, frame_time, &mut gpu);
+        }
+        native_enc.commit_and_wait_completed();
+
+        let prim_tex = exec
+            .backend()
+            .texture_2d(prim_output_slot)
+            .expect("primitive output slot must be bound after execution");
+        self.readback(prim_tex)
+    }
+
     /// Read a texture's contents back to host memory as raw bytes.
     /// Allocates a shared (CPU-visible) Metal buffer, issues a
     /// texture→buffer copy, commits, waits, and snapshots the bytes.
