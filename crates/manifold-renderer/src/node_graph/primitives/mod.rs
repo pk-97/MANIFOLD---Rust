@@ -21,6 +21,7 @@ mod clamp_stretch;
 mod color;
 mod color_grade;
 mod compose;
+mod depth_of_field;
 mod dither_pattern;
 mod edge_detect;
 mod filter;
@@ -48,6 +49,9 @@ pub use color::{
 };
 pub use color_grade::ColorGrade;
 pub use compose::{Blend, Mix, BLEND_MODES, BLEND_TYPE_ID, MIX_MODES, MIX_TYPE_ID};
+pub use depth_of_field::{
+    DepthOfField, DEPTH_OF_FIELD_FOCUS_MODES, DEPTH_OF_FIELD_QUALITIES, DEPTH_OF_FIELD_TYPE_ID,
+};
 pub use dither_pattern::DitherPattern;
 pub use edge_detect::EdgeDetect;
 pub use glitch::Glitch;
