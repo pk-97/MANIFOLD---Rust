@@ -15,6 +15,7 @@
 //! the save format and a future registry can resolve them.
 
 mod affine_transform;
+mod auto_gain;
 mod bloom;
 mod chromatic_offset;
 mod clamp_stretch;
@@ -40,6 +41,7 @@ mod watercolor;
 mod wet_dry_mix;
 
 pub use affine_transform::AffineTransform;
+pub use auto_gain::{AutoGain, AUTO_GAIN_CHARACTERS, AUTO_GAIN_TYPE_ID};
 pub use bloom::{Bloom, BLOOM_TYPE_ID};
 pub use chromatic_offset::ChromaticOffset;
 pub use clamp_stretch::ClampStretch;
