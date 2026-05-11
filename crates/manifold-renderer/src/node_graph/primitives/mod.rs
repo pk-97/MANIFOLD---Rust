@@ -21,6 +21,7 @@ mod color;
 mod color_grade;
 mod compose;
 mod dither_pattern;
+mod edge_detect;
 mod filter;
 mod highlight_boost;
 mod invert;
@@ -39,6 +40,7 @@ pub use color::{
 pub use color_grade::ColorGrade;
 pub use compose::{Blend, Mix, BLEND_MODES, BLEND_TYPE_ID, MIX_TYPE_ID};
 pub use dither_pattern::DitherPattern;
+pub use edge_detect::EdgeDetect;
 pub use highlight_boost::HighlightBoost;
 pub use invert::Invert;
 pub use kaleido_fold::KaleidoFold;
