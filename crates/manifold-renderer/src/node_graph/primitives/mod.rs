@@ -35,6 +35,7 @@ mod strobe;
 mod temporal;
 mod uv;
 mod voronoi_prism;
+mod watercolor;
 mod wet_dry_mix;
 
 pub use affine_transform::AffineTransform;
@@ -65,6 +66,7 @@ pub use filter::{
 };
 pub use temporal::{Feedback, FEEDBACK_MODES, FEEDBACK_TYPE_ID};
 pub use voronoi_prism::VoronoiPrism;
+pub use watercolor::{Watercolor, WATERCOLOR_TYPE_ID};
 pub use wet_dry_mix::{WetDryMix, WET_DRY_MIX_TYPE_ID};
 pub use uv::{
     Sample, UVTransform, SAMPLE_FILTER_MODES, SAMPLE_TYPE_ID, SAMPLE_WRAP_MODES,
