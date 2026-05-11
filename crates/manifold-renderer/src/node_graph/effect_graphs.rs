@@ -111,7 +111,13 @@ pub fn primitive_id_for_effect(effect_type: &EffectTypeId) -> Option<&'static st
         "Glitch" => <primitives::Glitch as PrimitiveSpec>::TYPE_ID,
         "HdrBoost" => <primitives::HighlightBoost as PrimitiveSpec>::TYPE_ID,
         "Kaleidoscope" => <primitives::KaleidoFold as PrimitiveSpec>::TYPE_ID,
-        "Infrared" => <primitives::Lut1d as PrimitiveSpec>::TYPE_ID,
+
+        // `Infrared` doesn't map directly: the legacy effect bakes a
+        // palette LUT internally, while `primitive.lut1d` takes the
+        // LUT as a second texture input. Until a `BakedPalette`
+        // generator primitive lands (composite preset wiring the
+        // palette → LUT path), Infrared keeps its legacy dispatch.
+        // "Infrared" => <primitives::Lut1d as PrimitiveSpec>::TYPE_ID,
         "Strobe" => <primitives::Strobe as PrimitiveSpec>::TYPE_ID,
         "VoronoiPrism" => <primitives::VoronoiPrism as PrimitiveSpec>::TYPE_ID,
 
@@ -174,11 +180,12 @@ fn build_canonical_document(
             // primitive-only param fed by the modulation system).
             continue;
         };
-        let value = instance
+        let raw = instance
             .param_values
             .get(i)
             .map(|slot| slot.value)
             .unwrap_or(spec.default_value);
+        let value = transform_legacy_value(effect_id, spec.id, raw);
         prim_params.insert(
             primitive_name.to_string(),
             SerializedParamValue::Float { value },
@@ -280,6 +287,125 @@ pub fn build_effect_graph(
     materialize_param_overrides(&mut graph, &prim_params);
 
     Ok(graph)
+}
+
+/// Refresh the primitive's parameters on an existing canonical graph
+/// from a (possibly modulated) `EffectInstance`. Used by long-lived
+/// graph-runtime executors that build the graph once and want to
+/// avoid rebuilding it on every frame — primitive state (mip
+/// pyramids, feedback buffers, etc.) lives inside the node and is
+/// lost on rebuild.
+///
+/// Walks the same `EffectMetadata` ordering as [`build_effect_graph`]:
+/// each legacy `params[i].id` is translated to the primitive's param
+/// name via the drift table and coerced from `f32` to the primitive's
+/// declared `ParamType`.
+///
+/// The graph is expected to be a canonical 3-node shape with the
+/// primitive at runtime id `NodeInstanceId(1)` (the layout
+/// `build_effect_graph` always produces).
+pub fn refresh_effect_params(graph: &mut Graph, instance: &EffectInstance) -> Result<(), EffectGraphError> {
+    let metadata = metadata_by_id(instance.effect_type()).ok_or_else(|| {
+        EffectGraphError::MissingMetadata {
+            effect_type: instance.effect_type().as_str().to_string(),
+        }
+    })?;
+
+    let effect_id = instance.effect_type().as_str();
+    let mut prim_params: BTreeMap<String, SerializedParamValue> = BTreeMap::new();
+    for (i, spec) in metadata.params.iter().enumerate() {
+        if spec.id.is_empty() {
+            continue;
+        }
+        let Some(primitive_name) = param_name_for_legacy(effect_id, spec.id) else {
+            continue;
+        };
+        let raw = instance
+            .param_values
+            .get(i)
+            .map(|slot| slot.value)
+            .unwrap_or(spec.default_value);
+        let value = transform_legacy_value(effect_id, spec.id, raw);
+        prim_params.insert(
+            primitive_name.to_string(),
+            SerializedParamValue::Float { value },
+        );
+    }
+    materialize_param_overrides(graph, &prim_params);
+    Ok(())
+}
+
+/// Apply context-derived primitive-only parameters onto the canonical
+/// graph for `effect_type`. Some primitives expose params (`time`,
+/// `beat`, `source_width`) that the legacy effect read directly from
+/// `EffectContext` instead of from its param list; the graph runtime
+/// dispatch needs to inject those values explicitly each frame so the
+/// shader sees the same clock the legacy path did.
+///
+/// Audited against each parity test's `set_params` closure — those
+/// closures wire ctx-derived values straight onto the primitive (e.g.,
+/// `graph.set_param(prim_id, "time", ParamValue::Float(ctx.time))`)
+/// and are the source of truth for what each primitive expects.
+pub fn apply_ctx_params(
+    graph: &mut Graph,
+    effect_type: &EffectTypeId,
+    time: f32,
+    beat: f32,
+    edge_stretch_width: f32,
+) {
+    let prim_id = NodeInstanceId(1);
+    let mut set = |name: &'static str, value: ParamValue| {
+        // Ignore errors — a primitive that doesn't declare `name`
+        // means the bridge over-listed ctx params; the primitive
+        // keeps its declared default in that case.
+        let _ = graph.set_param(prim_id, name, value);
+    };
+
+    match effect_type.as_str() {
+        "Glitch" => {
+            set("time", ParamValue::Float(time));
+        }
+        "Strobe" => {
+            set("beat", ParamValue::Float(beat));
+        }
+        "VoronoiPrism" => {
+            set("beat", ParamValue::Float(beat));
+            set("source_width", ParamValue::Float(edge_stretch_width));
+        }
+        "Watercolor" => {
+            set("time", ParamValue::Float(time));
+        }
+        _ => {}
+    }
+}
+
+/// Translate a legacy `EffectInstance.param_values[i].value` (always
+/// `f32` on the wire) into the value the primitive expects. Most
+/// params pass through unchanged; a handful of legacy effects did
+/// unit conversions inside their pre-GPU bookkeeping that the
+/// primitive's WGSL doesn't replicate. Each entry below is the
+/// inverse of what the legacy `apply` body did before encoding its
+/// uniform.
+fn transform_legacy_value(effect_type: &str, legacy_id: &str, raw: f32) -> f32 {
+    match (effect_type, legacy_id) {
+        // `TransformFX` reads `rot` as degrees, applies
+        // `-rot * PI / 180`, then writes the rotation uniform.
+        // `primitive.affine_transform` takes rotation straight in
+        // radians (Y-down baked in via the negation), so the bridge
+        // does the same conversion at the boundary.
+        ("Transform", "rot") => -(raw * std::f32::consts::PI / 180.0),
+        // `StrobeFX` stores `rate` as an index into its NOTE_RATES
+        // table (0..9). `primitive.strobe` takes the raw rate value
+        // (strobes-per-beat) so the bridge indexes the table here.
+        ("Strobe", "rate") => {
+            let idx = raw.max(0.0).round() as usize;
+            primitives::STROBE_NOTE_RATES
+                .get(idx)
+                .copied()
+                .unwrap_or(*primitives::STROBE_NOTE_RATES.last().unwrap_or(&1.0))
+        }
+        _ => raw,
+    }
 }
 
 /// Apply a `f32`-keyed param map onto the primitive at node id=1 with
@@ -511,7 +637,9 @@ mod tests {
             EffectTypeId::GLITCH,
             EffectTypeId::HDR_BOOST,
             EffectTypeId::KALEIDOSCOPE,
-            EffectTypeId::INFRARED,
+            // Infrared deferred — needs a BakedPalette generator
+            // primitive before its 2-input Lut1d substitute fits the
+            // canonical 3-node shape. See `primitive_id_for_effect`.
             EffectTypeId::STROBE,
             EffectTypeId::VORONOI_PRISM,
             EffectTypeId::BLOOM,
@@ -689,7 +817,9 @@ mod tests {
             EffectTypeId::GLITCH,
             EffectTypeId::HDR_BOOST,
             EffectTypeId::KALEIDOSCOPE,
-            EffectTypeId::INFRARED,
+            // Infrared deferred — needs a BakedPalette generator
+            // primitive before its 2-input Lut1d substitute fits the
+            // canonical 3-node shape. See `primitive_id_for_effect`.
             EffectTypeId::STROBE,
             EffectTypeId::VORONOI_PRISM,
             EffectTypeId::BLOOM,

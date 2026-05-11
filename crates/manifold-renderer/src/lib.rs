@@ -2,6 +2,7 @@ pub mod background_worker;
 pub mod compositor;
 pub mod effect;
 pub mod effect_chain;
+pub mod effect_chain_graph;
 pub mod effect_registry;
 pub mod effects;
 pub mod fsr1;
