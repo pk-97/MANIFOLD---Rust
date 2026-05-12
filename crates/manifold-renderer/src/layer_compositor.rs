@@ -332,9 +332,15 @@ impl LayerOutput {
 pub struct LayerCompositor {
     /// Main accumulation ping-pong (opaque black init).
     main: PingPong,
-    /// Per-layer scratch buffers (lazy, transparent black init).
-    /// One per active multi-clip layer, reused across frames.
-    layer_bufs: Vec<PingPong>,
+    /// Per-layer scratch buffers (lazy, transparent black init),
+    /// keyed by `LayerId`. One per active multi-clip-or-effects
+    /// layer; reused across frames AND across layer reorders.
+    /// PingPongs are cleared at the start of each layer's use, so
+    /// no state can contaminate across layers within a frame —
+    /// the keying is purely for consistency with the chain pools.
+    layer_bufs: AHashMap<LayerId, PingPong>,
+    /// Per-layer-buf last-used frame counter for time-based pruning.
+    layer_buf_last_used_frame: AHashMap<LayerId, u64>,
     /// GPU resources for blend operations (pipeline, sampler).
     blend: BlendResources,
     /// Per-frame uniform sub-allocator — batches all blend uniform writes into
@@ -359,6 +365,11 @@ pub struct LayerCompositor {
     /// Scratch buffer reused each frame to collect active layer IDs
     /// during pre-scan. Stored on `self` to avoid per-frame allocation.
     active_layer_ids_scratch: Vec<LayerId>,
+    /// Subset of `active_layer_ids_scratch` whose layers also need a
+    /// layer scratch buffer (multi-clip or has-layer-effects).
+    /// Pre-scanned so `ensure_layer_buf` can run before the main loop
+    /// (no insertions mid-iteration → safe `get_mut`).
+    active_layer_buf_ids_scratch: Vec<LayerId>,
     /// Dedicated effect chain for the post-blend master FX pass.
     /// Kept SEPARATE from `effect_chains` because the master pass
     /// has no natural `LayerId` to key by — it operates on the
@@ -393,20 +404,19 @@ pub struct LayerCompositor {
     /// Each layer signals base + layer_index; compositor waits for base + layer_count.
     #[cfg(target_os = "macos")]
     async_signal_base: u64,
-    /// How many layer_bufs were actually used last frame.
-    last_layer_buf_used: usize,
-    /// Per-group scratch buffers (lazy, transparent black init).
-    /// One per active group — each group needs its own buffer because
-    /// LayerOutput raw pointers must remain valid until blend_layers.
-    group_bufs: Vec<PingPong>,
+    /// Per-group scratch buffers (lazy, transparent black init),
+    /// keyed by the group container's `LayerId`. One per active
+    /// group — each group needs its own buffer because LayerOutput
+    /// raw pointers must remain valid until blend_layers.
+    group_bufs: AHashMap<LayerId, PingPong>,
+    /// Per-group-buf last-used frame counter for time-based pruning.
+    group_buf_last_used_frame: AHashMap<LayerId, u64>,
     /// Per-group effect chains, keyed by the group container's
     /// `LayerId`. Same structural invariant as `effect_chains`:
     /// the key is stable, iteration-counter indexing won't compile.
     group_effect_chains: AHashMap<LayerId, EffectChain>,
     /// Per-group-chain last-used frame counter for time-based pruning.
     group_chain_last_used_frame: AHashMap<LayerId, u64>,
-    /// How many group_bufs were actually used last frame.
-    last_group_buf_used: usize,
     /// Pre-allocated scratch for child layer indices during group folding.
     group_child_indices: Vec<i32>,
     /// Pre-allocated scratch for child output positions during group folding.
@@ -428,11 +438,14 @@ pub struct LayerCompositor {
     /// from the main master chain.
     led_master_ec: Option<EffectChain>,
 
-    /// Per-group LED scratch buffers, sized at LED grid resolution. One per
-    /// group whose LED-flagged children need to flow through that group's
-    /// effects on the LED path. Reused across frames; reallocated only on
-    /// LED-grid dimension changes.
-    led_group_bufs: Vec<PingPong>,
+    /// Per-group LED scratch buffers at LED grid resolution, keyed
+    /// by the group container's `LayerId`. One per group whose
+    /// LED-flagged children need to flow through that group's
+    /// effects on the LED path. Reused across frames; reallocated
+    /// only on LED-grid dimension changes.
+    led_group_bufs: AHashMap<LayerId, PingPong>,
+    /// Per-LED-group-buf last-used frame counter for time-based pruning.
+    led_group_buf_last_used_frame: AHashMap<LayerId, u64>,
     /// Per-group LED effect chains, keyed by the group container's
     /// `LayerId`. Distinct field from `group_effect_chains` so
     /// temporal state on the LED path doesn't bleed into the screen
@@ -443,8 +456,6 @@ pub struct LayerCompositor {
     led_group_effect_chains: AHashMap<LayerId, EffectChain>,
     /// Per-LED-group-chain last-used frame counter for time-based pruning.
     led_group_chain_last_used_frame: AHashMap<LayerId, u64>,
-    /// How many `led_group_bufs` were used last frame, for trim_excess_buffers.
-    last_led_group_buf_used: usize,
 
     /// 1×1 opaque-black Rgba16Float texture used as a stand-in source when
     /// compositing **non-LED** layers into the LED stack. The non-L layer's
@@ -510,13 +521,15 @@ impl LayerCompositor {
     pub fn new(device: &GpuDevice, width: u32, height: u32) -> Self {
         Self {
             main: PingPong::new(device, None, width, height, "Compositor"),
-            layer_bufs: Vec::new(),
+            layer_bufs: AHashMap::default(),
+            layer_buf_last_used_frame: AHashMap::default(),
             blend: BlendResources::new(device, width, height),
             uniform_arena: UniformArena::new(device),
             effect_chains: AHashMap::default(),
             chain_last_used_frame: AHashMap::default(),
             frame_counter: 0,
             active_layer_ids_scratch: Vec::new(),
+            active_layer_buf_ids_scratch: Vec::new(),
             master_effect_chain: EffectChain::new(),
             effect_registry: EffectRegistry::new(device),
             wet_dry_lerp: WetDryLerpPipeline::new(device),
@@ -527,43 +540,43 @@ impl LayerCompositor {
             async_event: None,
             #[cfg(target_os = "macos")]
             async_signal_base: 0,
-            last_layer_buf_used: 0,
-            group_bufs: Vec::new(),
+            group_bufs: AHashMap::default(),
+            group_buf_last_used_frame: AHashMap::default(),
             group_effect_chains: AHashMap::default(),
             group_chain_last_used_frame: AHashMap::default(),
-            last_group_buf_used: 0,
             group_child_indices: Vec::new(),
             group_child_positions: Vec::new(),
             led_main: None,
             led_tonemap: None,
             led_master_ec: None,
-            led_group_bufs: Vec::new(),
+            led_group_bufs: AHashMap::default(),
+            led_group_buf_last_used_frame: AHashMap::default(),
             led_group_effect_chains: AHashMap::default(),
             led_group_chain_last_used_frame: AHashMap::default(),
-            last_led_group_buf_used: 0,
             led_black_tex: None,
         }
     }
 
-    /// Ensure we have at least `count` layer scratch buffers available.
-    fn ensure_layer_bufs(
+    /// Ensure a layer scratch buffer exists for the given `LayerId`,
+    /// allocating at the current main compositor resolution if missing.
+    /// Stamps last-used so trim keeps it alive. Resolution changes are
+    /// handled in `resize`, which walks all bufs.
+    fn ensure_layer_buf(
         &mut self,
-        count: usize,
+        layer_id: &LayerId,
         device: &GpuDevice,
         pool: Option<&manifold_gpu::TexturePool>,
     ) {
         let w = self.main.width();
         let h = self.main.height();
-        while self.layer_bufs.len() < count {
-            let idx = self.layer_bufs.len();
-            self.layer_bufs.push(PingPong::new(
-                device,
-                pool,
-                w,
-                h,
-                &format!("Layer Scratch {idx}"),
-            ));
+        if !self.layer_bufs.contains_key(layer_id) {
+            self.layer_bufs.insert(
+                layer_id.clone(),
+                PingPong::new(device, pool, w, h, "Layer Scratch"),
+            );
         }
+        self.layer_buf_last_used_frame
+            .insert(layer_id.clone(), self.frame_counter);
     }
 
     /// Ensure a chain exists for the given `LayerId`. Stable across frames and
@@ -584,31 +597,53 @@ impl LayerCompositor {
             .insert(group_id.clone(), self.frame_counter);
     }
 
-    /// Ensure we have at least `count` LED group scratch buffers at the given
-    /// LED grid resolution. Existing buffers are resized to match if needed.
-    fn ensure_led_group_bufs(
+    /// Ensure a group scratch buffer exists for the given group's `LayerId`,
+    /// allocating at the current main compositor resolution if missing.
+    fn ensure_group_buf(
         &mut self,
-        count: usize,
+        group_id: &LayerId,
+        device: &GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
+    ) {
+        let w = self.main.width();
+        let h = self.main.height();
+        if !self.group_bufs.contains_key(group_id) {
+            self.group_bufs.insert(
+                group_id.clone(),
+                PingPong::new(device, pool, w, h, "Group Scratch"),
+            );
+        }
+        self.group_buf_last_used_frame
+            .insert(group_id.clone(), self.frame_counter);
+    }
+
+    /// Ensure an LED group scratch buffer exists for the given group's
+    /// `LayerId` at the supplied LED grid resolution. Resizes the buffer
+    /// (and all other LED group bufs) if the resolution changed since
+    /// the previous frame. Stamps last-used for trim.
+    fn ensure_led_group_buf(
+        &mut self,
+        group_id: &LayerId,
         device: &GpuDevice,
         pool: Option<&manifold_gpu::TexturePool>,
         width: u32,
         height: u32,
     ) {
-        while self.led_group_bufs.len() < count {
-            let idx = self.led_group_bufs.len();
-            self.led_group_bufs.push(PingPong::new(
-                device,
-                pool,
-                width,
-                height,
-                &format!("LED Group Scratch {idx}"),
-            ));
+        if !self.led_group_bufs.contains_key(group_id) {
+            self.led_group_bufs.insert(
+                group_id.clone(),
+                PingPong::new(device, pool, width, height, "LED Group Scratch"),
+            );
         }
-        for buf in &mut self.led_group_bufs {
+        // If the LED grid changed since last frame, resize every entry
+        // (cheap if size already matches).
+        for buf in self.led_group_bufs.values_mut() {
             if buf.width() != width || buf.height() != height {
                 buf.resize(device, width, height);
             }
         }
+        self.led_group_buf_last_used_frame
+            .insert(group_id.clone(), self.frame_counter);
     }
 
     /// Ensure an LED group chain exists for the given `LayerId`.
@@ -622,65 +657,62 @@ impl LayerCompositor {
             .insert(group_id.clone(), self.frame_counter);
     }
 
-    /// Trim oversized layer_bufs and effect_chains down to actual usage + headroom.
-    /// Excess textures are dropped immediately (freed by Metal) rather than released
-    /// to the TexturePool — compositor scratch buffers are large and rarely re-needed,
-    /// so pooling them just delays the memory savings.
-    /// Headroom of 2 prevents oscillation if usage fluctuates frame-to-frame.
+    /// Drop pool entries whose last-used frame is older than
+    /// `CHAIN_GRACE_FRAMES`. All pools are keyed by `LayerId` and
+    /// pruned by the same time-based policy — there's no notion of
+    /// "first N slots" to truncate. Grace period lets brief mute /
+    /// clip gaps preserve primitive state (Bloom mips etc.).
     fn trim_excess_buffers(&mut self) {
-        const HEADROOM: usize = 2;
-
-        let target_layer_bufs = self.last_layer_buf_used.saturating_add(HEADROOM);
-        if self.layer_bufs.len() > target_layer_bufs {
-            self.layer_bufs.truncate(target_layer_bufs);
-        }
-
-        // Drop layer chains that haven't been used in CHAIN_GRACE_FRAMES.
-        // Time-based (not count-based) because the map is keyed by LayerId —
-        // there's no notion of "first N slots" to truncate. Grace period lets
-        // brief mute / clip gaps preserve primitive state (Bloom mips etc.).
         let now = self.frame_counter;
-        let stale: Vec<LayerId> = self
-            .chain_last_used_frame
+        Self::prune_pool(
+            now,
+            &mut self.effect_chains,
+            &mut self.chain_last_used_frame,
+        );
+        Self::prune_pool(
+            now,
+            &mut self.group_effect_chains,
+            &mut self.group_chain_last_used_frame,
+        );
+        Self::prune_pool(
+            now,
+            &mut self.led_group_effect_chains,
+            &mut self.led_group_chain_last_used_frame,
+        );
+        Self::prune_pool(
+            now,
+            &mut self.layer_bufs,
+            &mut self.layer_buf_last_used_frame,
+        );
+        Self::prune_pool(
+            now,
+            &mut self.group_bufs,
+            &mut self.group_buf_last_used_frame,
+        );
+        Self::prune_pool(
+            now,
+            &mut self.led_group_bufs,
+            &mut self.led_group_buf_last_used_frame,
+        );
+    }
+
+    /// Time-based pool pruner shared by every chain / buf map.
+    /// Removes entries whose `last_used` is older than `CHAIN_GRACE_FRAMES`.
+    /// Allocation: the stale list `Vec` allocates zero bytes when no
+    /// entries are stale (steady state).
+    fn prune_pool<V>(
+        now: u64,
+        pool: &mut AHashMap<LayerId, V>,
+        last_used: &mut AHashMap<LayerId, u64>,
+    ) {
+        let stale: Vec<LayerId> = last_used
             .iter()
             .filter(|(_, last)| now.saturating_sub(**last) > CHAIN_GRACE_FRAMES)
             .map(|(id, _)| id.clone())
             .collect();
         for id in stale {
-            self.effect_chains.remove(&id);
-            self.chain_last_used_frame.remove(&id);
-        }
-
-        let target_group_bufs = self.last_group_buf_used.saturating_add(HEADROOM);
-        if self.group_bufs.len() > target_group_bufs {
-            self.group_bufs.truncate(target_group_bufs);
-        }
-        // Group chains: same time-based prune policy as layer chains.
-        let stale_groups: Vec<LayerId> = self
-            .group_chain_last_used_frame
-            .iter()
-            .filter(|(_, last)| now.saturating_sub(**last) > CHAIN_GRACE_FRAMES)
-            .map(|(id, _)| id.clone())
-            .collect();
-        for id in stale_groups {
-            self.group_effect_chains.remove(&id);
-            self.group_chain_last_used_frame.remove(&id);
-        }
-
-        let target_led_group_bufs = self.last_led_group_buf_used.saturating_add(HEADROOM);
-        if self.led_group_bufs.len() > target_led_group_bufs {
-            self.led_group_bufs.truncate(target_led_group_bufs);
-        }
-        // LED group chains: same time-based prune policy.
-        let stale_led_groups: Vec<LayerId> = self
-            .led_group_chain_last_used_frame
-            .iter()
-            .filter(|(_, last)| now.saturating_sub(**last) > CHAIN_GRACE_FRAMES)
-            .map(|(id, _)| id.clone())
-            .collect();
-        for id in stale_led_groups {
-            self.led_group_effect_chains.remove(&id);
-            self.led_group_chain_last_used_frame.remove(&id);
+            pool.remove(&id);
+            last_used.remove(&id);
         }
     }
 
@@ -741,8 +773,22 @@ impl LayerCompositor {
         //     preserved.
         //   - Iteration-counter indexing (`chains[counter]`) won't
         //     compile because `Index<usize>` isn't on AHashMap.
-        let mut multi_clip_layer_count = 0usize;
+        // Pre-scan: collect the set of active `LayerId`s needing a
+        // chain this frame, AND the subset needing a layer scratch
+        // buf (multi-clip OR has-layer-effects). Both pools are
+        // keyed by `LayerId` (a stable Arc<str> per layer), NOT by
+        // iteration order or `layer_index`. This makes the
+        // positional-indexing bug class structurally impossible:
+        //   - Iteration order changing → still the same key → still
+        //     the same EffectChain instance → cached ChainGraph
+        //     survives.
+        //   - Layer reordered in timeline (drag-drop) → `layer_index`
+        //     shifts but `LayerId` doesn't → same EffectChain → state
+        //     preserved.
+        //   - Iteration-counter indexing (`chains[counter]`) won't
+        //     compile because `Index<usize>` isn't on AHashMap.
         self.active_layer_ids_scratch.clear();
+        self.active_layer_buf_ids_scratch.clear();
         {
             let mut ci = 0;
             while ci < clips.len() {
@@ -762,38 +808,34 @@ impl LayerCompositor {
                     layer_desc.is_some_and(|ld| has_enabled_effects(ld.effects));
                 if let Some(ld) = layer_desc {
                     self.active_layer_ids_scratch.push(ld.layer_id.clone());
-                }
-                if clip_count > 1 || has_layer_effects {
-                    multi_clip_layer_count += 1;
+                    if clip_count > 1 || has_layer_effects {
+                        self.active_layer_buf_ids_scratch.push(ld.layer_id.clone());
+                    }
                 }
             }
         }
 
-        // Pre-insert chain entries for every active layer this frame.
-        // Done before the main loop so safe `get_mut` works inside the
-        // loop without `entry()` rehashing the map mid-iteration. Also
-        // stamps the last-used frame so trim_excess_buffers keeps them.
+        // Pre-insert chain entries for every active layer, and buf
+        // entries for every multi-clip / has-effects layer. Doing
+        // both before the main loop keeps `get_mut` safe inside the
+        // loop (no insertions mid-iteration → no rehash).
         for i in 0..self.active_layer_ids_scratch.len() {
-            // Clone the id out — we don't want to hold a borrow on
-            // active_layer_ids_scratch while calling &mut self method.
             let id = self.active_layer_ids_scratch[i].clone();
             self.ensure_chain_for_layer(&id);
         }
-        if multi_clip_layer_count > 0 {
-            self.ensure_layer_bufs(multi_clip_layer_count, gpu.device, gpu.pool);
+        for i in 0..self.active_layer_buf_ids_scratch.len() {
+            let id = self.active_layer_buf_ids_scratch[i].clone();
+            self.ensure_layer_buf(&id, gpu.device, gpu.pool);
         }
 
         self.layer_outputs_scratch.clear();
-        let mut layer_buf_idx = 0usize;
 
         // Split-borrow: take disjoint &muts so safe `get_mut` on
-        // `chains` can coexist with `self.blend.blend_pass` /
-        // `apply_effects` calls below. `layer_bufs` remains a Vec
-        // (raw-ptr indexed by counter); Stage 4 of the refactor
-        // converts it to a map too. Counter access is safe here
-        // because lb_idx is unique per iteration.
+        // each map can coexist with `self.blend.blend_pass` /
+        // `apply_effects` calls below — the borrow checker sees
+        // these as disjoint field accesses.
         let chains = &mut self.effect_chains;
-        let layer_bufs_ptr = self.layer_bufs.as_mut_ptr();
+        let layer_bufs = &mut self.layer_bufs;
 
         // Group clips by layer_index. Clips are sorted by layer_index descending
         // (higher index = bottom of timeline = rendered first as base).
@@ -847,10 +889,21 @@ impl LayerCompositor {
                 });
             } else {
                 // Multi-clip or layer-effects: composite into layer buffer.
-                // Safety: lb_idx is unique per multi-clip layer and < layer_bufs.len().
-                let lb_idx = layer_buf_idx;
-                layer_buf_idx += 1;
-                let layer_buf = unsafe { &mut *layer_bufs_ptr.add(lb_idx) };
+                // Pools are keyed by LayerId, so a layer without a
+                // descriptor (degenerate state — clips referencing a
+                // layer_index that doesn't exist in `frame.layers`)
+                // is skipped here. In the previous Vec-keyed scheme
+                // such layers got a default-blend composite; now
+                // there's no LayerId to key the buf, so we drop the
+                // output entirely. In practice `frame.layers` is the
+                // authoritative source, so this branch is unreachable.
+                let Some(ld) = layer_desc else {
+                    continue;
+                };
+                let layer_id = ld.layer_id;
+                let layer_buf = layer_bufs
+                    .get_mut(layer_id)
+                    .expect("buf pre-inserted in active scan");
 
                 // Clear layer buffer to transparent
                 layer_buf.clear_source(gpu, false);
@@ -878,8 +931,6 @@ impl LayerCompositor {
                 let layer_source = if let Some(ld) = layer_desc
                     && has_enabled_effects(ld.effects)
                 {
-                    // Look up this layer's chain by LayerId. Pre-inserted
-                    // above, so unwrap is safe.
                     let effect_chain = chains
                         .get_mut(ld.layer_id)
                         .expect("chain pre-inserted in active scan");
@@ -922,8 +973,6 @@ impl LayerCompositor {
                 });
             }
         }
-
-        self.last_layer_buf_used = layer_buf_idx;
     }
 
     /// Phase B: Blend all layer outputs into main in order.
@@ -995,7 +1044,6 @@ impl LayerCompositor {
         if !any_led {
             // No LED routing this frame — release resources.
             self.led_main = None;
-            self.last_led_group_buf_used = 0;
             return;
         }
 
@@ -1077,7 +1125,6 @@ impl LayerCompositor {
             .unwrap_or(layer_outputs.len());
 
         let mut processed = vec![false; layer_outputs.len()];
-        let mut led_group_idx = 0usize;
 
         for i in start_idx..layer_outputs.len() {
             if processed[i] {
@@ -1095,19 +1142,26 @@ impl LayerCompositor {
                     // non-L with black + actual blend mode), apply group FX,
                     // blend into led_main with Normal + group opacity.
                     if let Some(group) = group_desc {
-                        self.ensure_led_group_bufs(led_group_idx + 1, gpu.device, gpu.pool, w, h);
-                        // LED group chain is keyed by the group's own
-                        // LayerId — stable across iteration order and
-                        // timeline reorders.
+                        // Both pools keyed by the group's own LayerId —
+                        // stable across iteration order and timeline reorders.
+                        self.ensure_led_group_buf(
+                            group.layer_id,
+                            gpu.device,
+                            gpu.pool,
+                            w,
+                            h,
+                        );
                         self.ensure_led_group_chain(group.layer_id);
-                        let group_buf_ptr =
-                            &mut self.led_group_bufs[led_group_idx] as *mut PingPong;
+                        let group_buf_ptr = self
+                            .led_group_bufs
+                            .get_mut(group.layer_id)
+                            .expect("ensured above")
+                            as *mut PingPong;
                         let group_ec_ptr = self
                             .led_group_effect_chains
                             .get_mut(group.layer_id)
                             .expect("ensured above")
                             as *mut EffectChain;
-                        led_group_idx += 1;
                         let group_buf = unsafe { &mut *group_buf_ptr };
                         let group_ec = unsafe { &mut *group_ec_ptr };
 
@@ -1269,8 +1323,6 @@ impl LayerCompositor {
                 processed[i] = true;
             }
         }
-
-        self.last_led_group_buf_used = led_group_idx;
     }
 
     /// Fold group children into single LayerOutputs.
@@ -1284,13 +1336,8 @@ impl LayerCompositor {
     fn fold_groups(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) {
         // Early exit: no groups → nothing to fold
         if !frame.layers.iter().any(|l| l.is_group) {
-            self.last_group_buf_used = 0;
             return;
         }
-
-        let width = self.main.width();
-        let height = self.main.height();
-        let mut group_buf_idx = 0usize;
 
         // Process each group. Groups are processed in the order they appear in
         // frame.layers (which matches timeline order). Since outputs are sorted
@@ -1320,21 +1367,19 @@ impl LayerCompositor {
                 continue;
             }
 
-            // Each group gets its own PingPong — raw pointers from earlier
-            // groups must remain valid until blend_layers.
-            let gb_idx = group_buf_idx;
-            group_buf_idx += 1;
-            while self.group_bufs.len() <= gb_idx {
-                let idx = self.group_bufs.len();
-                self.group_bufs.push(PingPong::new(
-                    gpu.device,
-                    gpu.pool,
-                    width,
-                    height,
-                    &format!("Group Scratch {idx}"),
-                ));
-            }
-            let group_buf = &mut self.group_bufs[gb_idx];
+            // Allocate this group's buf keyed by its LayerId.
+            self.ensure_group_buf(group_desc.layer_id, gpu.device, gpu.pool);
+            let group_id = group_desc.layer_id;
+            // Take a raw pointer so we can hold &mut group_buf across
+            // the inner call to `self.ensure_group_chain` (which
+            // would otherwise conflict with a live mut borrow on
+            // self.group_bufs). Safety: the pool isn't resized
+            // again within this iteration body.
+            let group_buf_ptr = self
+                .group_bufs
+                .get_mut(group_id)
+                .expect("ensured above") as *mut PingPong;
+            let group_buf = unsafe { &mut *group_buf_ptr };
 
             // Clear to transparent
             group_buf.clear_source(gpu, false);
@@ -1364,25 +1409,24 @@ impl LayerCompositor {
                 if has_enabled_effects(group_desc.effects) {
                     // Each group's chain is keyed by its own LayerId —
                     // stable across iteration order and timeline reorders.
-                    self.ensure_group_chain(group_desc.layer_id);
+                    self.ensure_group_chain(group_id);
                     let effect_chain = self
                         .group_effect_chains
-                        .get_mut(group_desc.layer_id)
+                        .get_mut(group_id)
                         .expect("ensured above");
                     let ctx = EffectContext {
                         time: frame.time,
                         beat: frame.beat,
                         dt: frame.dt,
-                        width,
-                        height,
+                        width: self.main.width(),
+                        height: self.main.height(),
                         output_width: frame.output_width,
                         output_height: frame.output_height,
-                        owner_key: group_id_owner_key(group_desc.layer_id),
+                        owner_key: group_id_owner_key(group_id),
                         is_clip_level: false,
                         edge_stretch_width: 0.5625,
                         frame_count: frame.frame_count as i64,
                     };
-                    let group_buf = &self.group_bufs[gb_idx];
                     let result = Self::apply_effects(
                         effect_chain,
                         &mut self.effect_registry,
@@ -1397,7 +1441,7 @@ impl LayerCompositor {
                         t as *const _
                     })
                 } else {
-                    self.group_bufs[gb_idx].source_texture()
+                    group_buf.source_texture() as *const _
                 };
 
             // Replace child outputs with a single group output.
@@ -1416,8 +1460,6 @@ impl LayerCompositor {
                 self.layer_outputs_scratch.remove(pos);
             }
         }
-
-        self.last_group_buf_used = group_buf_idx;
     }
 
     /// Serial composite path: single encoder for all work.
@@ -1484,14 +1526,10 @@ impl LayerCompositor {
         // is not modified (only signal values change, which is interior mutation).
         let async_event: *const manifold_gpu::GpuEvent = self.async_event.as_ref().unwrap();
 
-        // Pre-scan: count multi-clip layers and collect the set of
-        // active LayerIds needing a chain this frame. Effect chains
-        // are keyed by `LayerId` (stable Arc<str>) so each chain
-        // stays bound to its layer across frames AND across layer
-        // reorders — see `generate_layers` for the structural
-        // rationale.
-        let mut multi_clip_layer_count = 0usize;
+        // Pre-scan: see `generate_layers` for the structural
+        // rationale behind keying chains + bufs by `LayerId`.
         self.active_layer_ids_scratch.clear();
+        self.active_layer_buf_ids_scratch.clear();
         {
             let mut ci = 0;
             while ci < clips.len() {
@@ -1511,32 +1549,30 @@ impl LayerCompositor {
                     layer_desc.is_some_and(|ld| has_enabled_effects(ld.effects));
                 if let Some(ld) = layer_desc {
                     self.active_layer_ids_scratch.push(ld.layer_id.clone());
-                }
-                if clip_count > 1 || has_layer_effects {
-                    multi_clip_layer_count += 1;
+                    if clip_count > 1 || has_layer_effects {
+                        self.active_layer_buf_ids_scratch.push(ld.layer_id.clone());
+                    }
                 }
             }
         }
 
-        // Pre-insert chain entries for every active layer this frame
-        // and stamp their last-used. Done before the loop so safe
-        // `get_mut` never rehashes the map mid-iteration.
+        // Pre-insert all needed chain + buf entries.
         for i in 0..self.active_layer_ids_scratch.len() {
             let id = self.active_layer_ids_scratch[i].clone();
             self.ensure_chain_for_layer(&id);
         }
-        if multi_clip_layer_count > 0 {
-            self.ensure_layer_bufs(multi_clip_layer_count, device, pool);
+        for i in 0..self.active_layer_buf_ids_scratch.len() {
+            let id = self.active_layer_buf_ids_scratch[i].clone();
+            self.ensure_layer_buf(&id, device, pool);
         }
 
-        // Split-borrow: take disjoint &muts so safe `get_mut(id)`
-        // works inside the loop without fighting the borrow checker.
+        // Split-borrow: disjoint &muts so safe `get_mut(id)` works
+        // inside the loop without fighting the borrow checker.
         let chains = &mut self.effect_chains;
-        let layer_bufs_ptr = self.layer_bufs.as_mut_ptr();
+        let layer_bufs = &mut self.layer_bufs;
         let base_signal = self.async_signal_base;
 
         self.layer_outputs_scratch.clear();
-        let mut layer_buf_idx = 0usize;
         let mut layer_signal_idx = 0u64;
 
         // Process each layer on its own command buffer.
@@ -1594,9 +1630,14 @@ impl LayerCompositor {
                         blit_to_led: layer_desc.is_some_and(|ld| ld.blit_to_led),
                     });
                 } else {
-                    let lb_idx = layer_buf_idx;
-                    layer_buf_idx += 1;
-                    let layer_buf = unsafe { &mut *layer_bufs_ptr.add(lb_idx) };
+                    // See `generate_layers` for the no-descriptor rationale.
+                    let Some(ld) = layer_desc else {
+                        continue;
+                    };
+                    let layer_id = ld.layer_id;
+                    let layer_buf = layer_bufs
+                        .get_mut(layer_id)
+                        .expect("buf pre-inserted in active scan");
 
                     layer_buf.clear_source(&mut gpu, false);
 
@@ -1674,8 +1715,6 @@ impl LayerCompositor {
             layer_enc.commit();
         }
 
-        self.last_layer_buf_used = layer_buf_idx;
-
         // Update base for next frame
         self.async_signal_base = base_signal + layer_signal_idx;
 
@@ -1720,13 +1759,11 @@ impl Compositor for LayerCompositor {
             // No layers active — advance frame counter so chains age
             // toward CHAIN_GRACE_FRAMES, then trim stale entries.
             self.frame_counter = self.frame_counter.wrapping_add(1);
-            self.last_layer_buf_used = 0;
             self.trim_excess_buffers();
             // Release LED composite resources (nothing to route).
             self.led_main = None;
             self.led_tonemap = None;
             self.led_master_ec = None;
-            self.last_led_group_buf_used = 0;
             return &self.tonemap.output.texture;
         }
 
@@ -1933,7 +1970,7 @@ impl Compositor for LayerCompositor {
 
     fn resize(&mut self, device: &GpuDevice, width: u32, height: u32) {
         self.main.resize(device, width, height);
-        for lb in &mut self.layer_bufs {
+        for lb in self.layer_bufs.values_mut() {
             lb.resize(device, width, height);
         }
         self.blend.resize(width, height);
@@ -1943,7 +1980,7 @@ impl Compositor for LayerCompositor {
         self.master_effect_chain.resize(device, width, height);
         self.effect_registry.resize_all(device, width, height);
         self.tonemap.resize(device, width, height);
-        for gb in &mut self.group_bufs {
+        for gb in self.group_bufs.values_mut() {
             gb.resize(device, width, height);
         }
         for ec in self.group_effect_chains.values_mut() {
