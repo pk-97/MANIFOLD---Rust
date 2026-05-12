@@ -341,23 +341,32 @@ pub struct LayerCompositor {
     /// a single buffer. On native path, arena buffer is not read (uses inline
     /// set_bytes), but offset tracking is preserved.
     uniform_arena: UniformArena,
-    /// Per-layer effect chain processors, indexed by `layer_idx`. Each
+    /// Per-layer effect chain processors, keyed by `LayerId`. Each
     /// chain stays bound to its layer for the lifetime of the project,
     /// so its cached `ChainGraph` (primitive instances + state)
-    /// survives across frames even as clips fire/end. Inactive layers'
-    /// slots stay empty (no `ChainGraph` cached). Pool grows to match
-    /// the highest active `layer_idx`, then stabilises.
-    effect_chains: Vec<EffectChain>,
+    /// survives across frames even as clips fire/end AND across layer
+    /// reorders (LayerId is stable; `layer_index` is not). Inactive
+    /// layers' chains are dropped after `CHAIN_GRACE_FRAMES` of disuse.
+    /// Type-level invariant: the key is `LayerId`, not `usize`, so
+    /// iteration-counter indexing won't compile.
+    effect_chains: AHashMap<LayerId, EffectChain>,
+    /// Per-chain last-used frame counter. Parallel to `effect_chains`;
+    /// updated each frame the chain is touched. Trimmed once stale.
+    chain_last_used_frame: AHashMap<LayerId, u64>,
+    /// Monotonic frame counter for chain liveness tracking. Wraps at
+    /// u64 (~10⁹ years at 60 fps — i.e., never).
+    frame_counter: u64,
+    /// Scratch buffer reused each frame to collect active layer IDs
+    /// during pre-scan. Stored on `self` to avoid per-frame allocation.
+    active_layer_ids_scratch: Vec<LayerId>,
     /// Dedicated effect chain for the post-blend master FX pass.
-    /// Kept SEPARATE from `effect_chains` because the master pass'
-    /// effects are completely unrelated to any layer's effects —
-    /// sharing `effect_chains[0]` (which is layer 0's slot under
-    /// the layer-idx-indexed scheme) would force a `ChainGraph`
-    /// rebuild every frame when layer 0 has its own effects, and
-    /// each rebuild wipes primitive state (Bloom mips, etc.) and
-    /// re-runs the first-evaluate allocation path on the GPU. The
-    /// dedicated chain costs ~56 bytes of idle struct space when
-    /// unused and zero CPU when no master effects are present.
+    /// Kept SEPARATE from `effect_chains` because the master pass
+    /// has no natural `LayerId` to key by — it operates on the
+    /// composited scene, not a layer. A dedicated field makes the
+    /// distinction structural (different type, different field)
+    /// so master FX and layer FX cannot share a chain. Costs ~56
+    /// bytes of idle struct space when unused and zero CPU when
+    /// no master effects are present.
     master_effect_chain: EffectChain,
     /// Registry of all effect processors.
     effect_registry: EffectRegistry,
@@ -386,8 +395,6 @@ pub struct LayerCompositor {
     async_signal_base: u64,
     /// How many layer_bufs were actually used last frame.
     last_layer_buf_used: usize,
-    /// How many effect_chains were actually used last frame.
-    last_effect_chain_used: usize,
     /// Per-group scratch buffers (lazy, transparent black init).
     /// One per active group — each group needs its own buffer because
     /// LayerOutput raw pointers must remain valid until blend_layers.
@@ -444,6 +451,13 @@ pub struct LayerCompositor {
 /// owner_key 0 (main master) or any layer/clip hash.
 const LED_MASTER_OWNER_KEY: i64 = i64::MIN + 1;
 
+/// How many frames a per-layer effect chain may stay unused before it's
+/// dropped from `effect_chains`. Generous so brief layer mutes, clip gaps,
+/// or scrubbing don't wipe primitive state (Bloom mips, feedback buffers).
+/// At 60 fps this is 2 seconds — long enough to ride out a typical clip
+/// transition, short enough to not accumulate stale chains over a long set.
+const CHAIN_GRACE_FRAMES: u64 = 120;
+
 /// Returns true when blending an opaque-black source with this mode is a
 /// mathematical no-op on the destination RGB.
 ///
@@ -491,7 +505,10 @@ impl LayerCompositor {
             layer_bufs: Vec::new(),
             blend: BlendResources::new(device, width, height),
             uniform_arena: UniformArena::new(device),
-            effect_chains: Vec::new(),
+            effect_chains: AHashMap::default(),
+            chain_last_used_frame: AHashMap::default(),
+            frame_counter: 0,
+            active_layer_ids_scratch: Vec::new(),
             master_effect_chain: EffectChain::new(),
             effect_registry: EffectRegistry::new(device),
             wet_dry_lerp: WetDryLerpPipeline::new(device),
@@ -503,7 +520,6 @@ impl LayerCompositor {
             #[cfg(target_os = "macos")]
             async_signal_base: 0,
             last_layer_buf_used: 0,
-            last_effect_chain_used: 0,
             group_bufs: Vec::new(),
             group_effect_chains: Vec::new(),
             last_group_buf_used: 0,
@@ -540,11 +556,14 @@ impl LayerCompositor {
         }
     }
 
-    /// Ensure we have at least `count` effect chains available.
-    fn ensure_effect_chains(&mut self, count: usize) {
-        while self.effect_chains.len() < count {
-            self.effect_chains.push(EffectChain::new());
-        }
+    /// Ensure a chain exists for the given `LayerId`. Stable across frames and
+    /// layer reorders — the chain's cached `ChainGraph` (with primitive state)
+    /// is preserved as long as the layer is touched within `CHAIN_GRACE_FRAMES`.
+    /// Also marks the chain as used this frame so it survives trimming.
+    fn ensure_chain_for_layer(&mut self, layer_id: &LayerId) {
+        self.effect_chains.entry(layer_id.clone()).or_default();
+        self.chain_last_used_frame
+            .insert(layer_id.clone(), self.frame_counter);
     }
 
     /// Ensure we have at least `count` LED group scratch buffers at the given
@@ -596,9 +615,20 @@ impl LayerCompositor {
             self.layer_bufs.truncate(target_layer_bufs);
         }
 
-        let target_effect_chains = self.last_effect_chain_used.saturating_add(HEADROOM);
-        if self.effect_chains.len() > target_effect_chains {
-            self.effect_chains.truncate(target_effect_chains);
+        // Drop layer chains that haven't been used in CHAIN_GRACE_FRAMES.
+        // Time-based (not count-based) because the map is keyed by LayerId —
+        // there's no notion of "first N slots" to truncate. Grace period lets
+        // brief mute / clip gaps preserve primitive state (Bloom mips etc.).
+        let now = self.frame_counter;
+        let stale: Vec<LayerId> = self
+            .chain_last_used_frame
+            .iter()
+            .filter(|(_, last)| now.saturating_sub(**last) > CHAIN_GRACE_FRAMES)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in stale {
+            self.effect_chains.remove(&id);
+            self.chain_last_used_frame.remove(&id);
         }
 
         let target_group_bufs = self.last_group_buf_used.saturating_add(HEADROOM);
@@ -662,20 +692,21 @@ impl LayerCompositor {
         let width = self.main.width();
         let height = self.main.height();
 
-        // Count active layers for pool sizing. Also track the maximum
-        // layer_index in use this frame — effect chains are indexed by
-        // layer_index (not by iteration order) so the chain bound to a
-        // given layer stays the SAME `EffectChain` instance across
-        // frames. Without that invariant, when the active-clip set
-        // shifts (different clips firing each frame), `EffectChain` at
-        // iteration-index 0 sees layer A's effects one frame and
-        // layer B's the next — every frame becomes a topology
-        // mismatch, the cached `ChainGraph` rebuilds, every
-        // stateful primitive wipes its mip pyramid / feedback buffer
-        // / pipeline cache, and the GPU does ~10ms of extra
-        // first-evaluate work per frame.
+        // Pre-scan: count multi-clip layers and collect the set of
+        // active `LayerId`s that need a chain this frame. Effect
+        // chains are keyed by `LayerId` (a stable Arc<str> per
+        // layer), NOT by iteration order or `layer_index`. This
+        // makes the bug class structurally impossible:
+        //   - Iteration order changing → still the same key → still
+        //     the same EffectChain instance → cached ChainGraph
+        //     survives.
+        //   - Layer reordered in timeline (drag-drop) → `layer_index`
+        //     shifts but `LayerId` doesn't → same EffectChain → state
+        //     preserved.
+        //   - Iteration-counter indexing (`chains[counter]`) won't
+        //     compile because `Index<usize>` isn't on AHashMap.
         let mut multi_clip_layer_count = 0usize;
-        let mut max_active_layer_idx: i32 = -1;
+        self.active_layer_ids_scratch.clear();
         {
             let mut ci = 0;
             while ci < clips.len() {
@@ -693,8 +724,8 @@ impl LayerCompositor {
                 let clip_count = ci - start;
                 let has_layer_effects =
                     layer_desc.is_some_and(|ld| has_enabled_effects(ld.effects));
-                if layer_idx > max_active_layer_idx {
-                    max_active_layer_idx = layer_idx;
+                if let Some(ld) = layer_desc {
+                    self.active_layer_ids_scratch.push(ld.layer_id.clone());
                 }
                 if clip_count > 1 || has_layer_effects {
                     multi_clip_layer_count += 1;
@@ -702,13 +733,16 @@ impl LayerCompositor {
             }
         }
 
-        // Ensure enough effect chains and scratch buffers.
-        // `effect_chains[i]` is dedicated to layer `i` — size to
-        // (max layer_idx + 1) so every active layer has a stable slot.
-        // Inactive layers' slots stay empty (no `ChainGraph` cached,
-        // no per-frame work).
-        let chains_needed = (max_active_layer_idx + 1).max(0) as usize;
-        self.ensure_effect_chains(chains_needed);
+        // Pre-insert chain entries for every active layer this frame.
+        // Done before the main loop so safe `get_mut` works inside the
+        // loop without `entry()` rehashing the map mid-iteration. Also
+        // stamps the last-used frame so trim_excess_buffers keeps them.
+        for i in 0..self.active_layer_ids_scratch.len() {
+            // Clone the id out — we don't want to hold a borrow on
+            // active_layer_ids_scratch while calling &mut self method.
+            let id = self.active_layer_ids_scratch[i].clone();
+            self.ensure_chain_for_layer(&id);
+        }
         if multi_clip_layer_count > 0 {
             self.ensure_layer_bufs(multi_clip_layer_count, gpu.device, gpu.pool);
         }
@@ -716,10 +750,13 @@ impl LayerCompositor {
         self.layer_outputs_scratch.clear();
         let mut layer_buf_idx = 0usize;
 
-        // Raw pointers to avoid borrow checker conflicts between per-layer
-        // effect chains / layer bufs and the rest of self. Each iteration
-        // accesses a unique index — no aliasing.
-        let effect_chains_ptr = self.effect_chains.as_mut_ptr();
+        // Split-borrow: take disjoint &muts so safe `get_mut` on
+        // `chains` can coexist with `self.blend.blend_pass` /
+        // `apply_effects` calls below. `layer_bufs` remains a Vec
+        // (raw-ptr indexed by counter); Stage 4 of the refactor
+        // converts it to a map too. Counter access is safe here
+        // because lb_idx is unique per iteration.
+        let chains = &mut self.effect_chains;
         let layer_bufs_ptr = self.layer_bufs.as_mut_ptr();
 
         // Group clips by layer_index. Clips are sorted by layer_index descending
@@ -760,18 +797,9 @@ impl LayerCompositor {
             // Check if this layer has layer-level effects
             let has_layer_effects = layer_desc.is_some_and(|ld| has_enabled_effects(ld.effects));
 
-            // Acquire this layer's effect chain — indexed by
-            // `layer_idx` so each chain stays bound to its layer
-            // across frames. The `ensure_effect_chains` call above
-            // sized the Vec to `max_active_layer_idx + 1`, so this
-            // is always in bounds. Per-iteration aliasing is safe:
-            // the `i` loop guarantees a single `layer_idx` value
-            // per iteration body.
-            let ec_idx = layer_idx as usize;
-            let effect_chain = unsafe { &mut *effect_chains_ptr.add(ec_idx) };
-
             if group.len() == 1 && !has_layer_effects {
-                // Single clip with NO layer effects — pass texture straight through
+                // Single clip with NO layer effects — pass texture straight through.
+                // No chain access needed.
                 let clip = &group[0];
 
                 self.layer_outputs_scratch.push(LayerOutput {
@@ -782,7 +810,7 @@ impl LayerCompositor {
                     blit_to_led: layer_desc.is_some_and(|ld| ld.blit_to_led),
                 });
             } else {
-                // Multi-clip or layer-effects: composite into layer buffer
+                // Multi-clip or layer-effects: composite into layer buffer.
                 // Safety: lb_idx is unique per multi-clip layer and < layer_bufs.len().
                 let lb_idx = layer_buf_idx;
                 layer_buf_idx += 1;
@@ -814,6 +842,11 @@ impl LayerCompositor {
                 let layer_source = if let Some(ld) = layer_desc
                     && has_enabled_effects(ld.effects)
                 {
+                    // Look up this layer's chain by LayerId. Pre-inserted
+                    // above, so unwrap is safe.
+                    let effect_chain = chains
+                        .get_mut(ld.layer_id)
+                        .expect("chain pre-inserted in active scan");
                     let ctx = EffectContext {
                         time: frame.time,
                         beat: frame.beat,
@@ -822,7 +855,7 @@ impl LayerCompositor {
                         height,
                         output_width: frame.output_width,
                         output_height: frame.output_height,
-                        owner_key: layer_desc.map_or(0, |ld| layer_id_owner_key(ld.layer_id)),
+                        owner_key: layer_id_owner_key(ld.layer_id),
                         is_clip_level: false,
                         edge_stretch_width: 0.5625,
                         frame_count: frame.frame_count as i64,
@@ -854,11 +887,7 @@ impl LayerCompositor {
             }
         }
 
-        // Record actual usage for trim_excess_buffers. Effect chains
-        // are sized to (max_active_layer_idx + 1), so that's the
-        // high-water mark for this frame.
         self.last_layer_buf_used = layer_buf_idx;
-        self.last_effect_chain_used = chains_needed;
     }
 
     /// Phase B: Blend all layer outputs into main in order.
@@ -1411,14 +1440,14 @@ impl LayerCompositor {
         // is not modified (only signal values change, which is interior mutation).
         let async_event: *const manifold_gpu::GpuEvent = self.async_event.as_ref().unwrap();
 
-        // Pre-scan: count multi-clip layers for pool sizing, and
-        // track the max layer_index in use this frame. Effect chains
-        // are indexed by `layer_idx` (not by iteration order) so
-        // each chain stays bound to its layer across frames — see
-        // the matching comment in `generate_layers` for the
-        // rebuild-thrash bug this prevents.
+        // Pre-scan: count multi-clip layers and collect the set of
+        // active LayerIds needing a chain this frame. Effect chains
+        // are keyed by `LayerId` (stable Arc<str>) so each chain
+        // stays bound to its layer across frames AND across layer
+        // reorders — see `generate_layers` for the structural
+        // rationale.
         let mut multi_clip_layer_count = 0usize;
-        let mut max_active_layer_idx: i32 = -1;
+        self.active_layer_ids_scratch.clear();
         {
             let mut ci = 0;
             while ci < clips.len() {
@@ -1436,8 +1465,8 @@ impl LayerCompositor {
                 let clip_count = ci - start;
                 let has_layer_effects =
                     layer_desc.is_some_and(|ld| has_enabled_effects(ld.effects));
-                if layer_idx > max_active_layer_idx {
-                    max_active_layer_idx = layer_idx;
+                if let Some(ld) = layer_desc {
+                    self.active_layer_ids_scratch.push(ld.layer_id.clone());
                 }
                 if clip_count > 1 || has_layer_effects {
                     multi_clip_layer_count += 1;
@@ -1445,13 +1474,20 @@ impl LayerCompositor {
             }
         }
 
-        let chains_needed = (max_active_layer_idx + 1).max(0) as usize;
-        self.ensure_effect_chains(chains_needed);
+        // Pre-insert chain entries for every active layer this frame
+        // and stamp their last-used. Done before the loop so safe
+        // `get_mut` never rehashes the map mid-iteration.
+        for i in 0..self.active_layer_ids_scratch.len() {
+            let id = self.active_layer_ids_scratch[i].clone();
+            self.ensure_chain_for_layer(&id);
+        }
         if multi_clip_layer_count > 0 {
             self.ensure_layer_bufs(multi_clip_layer_count, device, pool);
         }
 
-        let effect_chains_ptr = self.effect_chains.as_mut_ptr();
+        // Split-borrow: take disjoint &muts so safe `get_mut(id)`
+        // works inside the loop without fighting the borrow checker.
+        let chains = &mut self.effect_chains;
         let layer_bufs_ptr = self.layer_bufs.as_mut_ptr();
         let base_signal = self.async_signal_base;
 
@@ -1490,14 +1526,6 @@ impl LayerCompositor {
             }
 
             let has_layer_effects = layer_desc.is_some_and(|ld| has_enabled_effects(ld.effects));
-
-            // Effect chain is indexed by `layer_idx` so it stays
-            // bound to this layer across frames — see the matching
-            // block in `generate_layers` for the rebuild-thrash
-            // bug this prevents. `ensure_effect_chains` above sized
-            // the Vec to `max_active_layer_idx + 1`.
-            let ec_idx = layer_idx as usize;
-            let effect_chain = unsafe { &mut *effect_chains_ptr.add(ec_idx) };
 
             // Create per-layer command buffer
             let mut layer_enc = device.create_encoder("Layer");
@@ -1550,6 +1578,11 @@ impl LayerCompositor {
                     let layer_source = if let Some(ld) = layer_desc
                         && has_enabled_effects(ld.effects)
                     {
+                        // Look up this layer's chain by LayerId. Pre-inserted
+                        // above, so unwrap is safe.
+                        let effect_chain = chains
+                            .get_mut(ld.layer_id)
+                            .expect("chain pre-inserted in active scan");
                         let ctx = EffectContext {
                             time: frame.time,
                             beat: frame.beat,
@@ -1558,7 +1591,7 @@ impl LayerCompositor {
                             height,
                             output_width: frame.output_width,
                             output_height: frame.output_height,
-                            owner_key: layer_desc.map_or(0, |ld| layer_id_owner_key(ld.layer_id)),
+                            owner_key: layer_id_owner_key(ld.layer_id),
                             is_clip_level: false,
                             edge_stretch_width: 0.5625,
                             frame_count: frame.frame_count as i64,
@@ -1597,11 +1630,7 @@ impl LayerCompositor {
             layer_enc.commit();
         }
 
-        // Record actual usage for trim_excess_buffers. Effect chains
-        // are sized to (max_active_layer_idx + 1), so that's the
-        // high-water mark for this frame.
         self.last_layer_buf_used = layer_buf_idx;
-        self.last_effect_chain_used = chains_needed;
 
         // Update base for next frame
         self.async_signal_base = base_signal + layer_signal_idx;
@@ -1644,9 +1673,10 @@ impl Compositor for LayerCompositor {
             // Skips ALL master effects, tonemap, and LED tap — zero GPU draw calls.
             gpu.clear_texture(self.main.source_texture(), 0.0, 0.0, 0.0, 1.0);
             self.tonemap.clear(gpu);
-            // No layers active — trim excess buffers from previous frames.
+            // No layers active — advance frame counter so chains age
+            // toward CHAIN_GRACE_FRAMES, then trim stale entries.
+            self.frame_counter = self.frame_counter.wrapping_add(1);
             self.last_layer_buf_used = 0;
-            self.last_effect_chain_used = 0;
             self.trim_excess_buffers();
             // Release LED composite resources (nothing to route).
             self.led_main = None;
@@ -1655,6 +1685,11 @@ impl Compositor for LayerCompositor {
             self.last_led_group_buf_used = 0;
             return &self.tonemap.output.texture;
         }
+
+        // Advance frame counter so chain-liveness tracking ages stale
+        // entries even when an active layer's chain hasn't been touched
+        // this frame.
+        self.frame_counter = self.frame_counter.wrapping_add(1);
 
         // Choose serial vs parallel composite path.
         // Parallel path creates per-layer command buffers for GPU-concurrent
@@ -1721,12 +1756,10 @@ impl Compositor for LayerCompositor {
             };
 
             // Master effects use a dedicated `EffectChain` instance,
-            // separate from the per-layer chains. Layer chains are
-            // now indexed by `layer_idx`, so reusing
-            // `effect_chains[0]` here would collide with layer 0's
-            // chain — every frame would force a `ChainGraph` rebuild
-            // alternating between layer 0's effects and the master
-            // effects, wiping primitive state.
+            // separate from the per-layer `AHashMap<LayerId, _>`. The
+            // master pass has no `LayerId` (it operates on the
+            // composited scene), so it lives in its own field — the
+            // two cannot collide by construction.
             let master_ec = &mut self.master_effect_chain;
 
             // Feed tonemap output directly into the effect chain — the first
@@ -1860,7 +1893,7 @@ impl Compositor for LayerCompositor {
             lb.resize(device, width, height);
         }
         self.blend.resize(width, height);
-        for ec in &mut self.effect_chains {
+        for ec in self.effect_chains.values_mut() {
             ec.resize(device, width, height);
         }
         self.master_effect_chain.resize(device, width, height);
