@@ -210,6 +210,34 @@ impl EffectChain {
             Some(cg) => !cg.is_compatible(effects, groups, ctx.width, ctx.height),
         };
         if needs_rebuild {
+            // Diagnostic: dump the topology fingerprint on rebuild so
+            // we can see WHICH field is flapping. Gated behind a
+            // separate env var so it doesn't drown the chain-stats
+            // log on rebuild-heavy frames.
+            if std::env::var("MANIFOLD_LOG_REBUILD_REASON").is_ok() {
+                let summary: String = effects
+                    .iter()
+                    .map(|fx| {
+                        format!(
+                            "{}:{}/en={}/g={:?}",
+                            fx.id.as_str(),
+                            fx.effect_type().as_str(),
+                            fx.enabled,
+                            fx.group_id.as_ref().map(|g| g.as_str()),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let group_summary: String = groups
+                    .iter()
+                    .map(|g| format!("{}:en={}", g.id.as_str(), g.enabled))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                eprintln!(
+                    "[rebuild] dims={}x{} effects=[{}] groups=[{}]",
+                    ctx.width, ctx.height, summary, group_summary,
+                );
+            }
             let t0 = std::time::Instant::now();
             self.chain_graph = ChainGraph::try_build(
                 effects,
