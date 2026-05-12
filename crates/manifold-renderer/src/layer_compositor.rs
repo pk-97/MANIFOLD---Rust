@@ -2041,3 +2041,187 @@ impl Compositor for LayerCompositor {
         self.effect_registry.graph_snapshot_for(type_id)
     }
 }
+
+#[cfg(test)]
+mod chain_pool_tests {
+    //! Regression tests for the LayerId-keyed chain/buf pools.
+    //!
+    //! The bug class these guard against: positional indexing
+    //! (`Vec<EffectChain>` indexed by iteration counter or
+    //! `layer_index`) caused chains to be re-bound to different
+    //! layers when the active-clip set shifted or layers were
+    //! reordered, forcing per-frame `ChainGraph` rebuilds and
+    //! wiping primitive state (Bloom mips, feedback buffers).
+    //!
+    //! These tests exercise the pool API directly. The structural
+    //! invariant is: "same `LayerId` → same `EffectChain` map
+    //! entry across frames, regardless of timeline position or
+    //! iteration order." If that holds, every field of the
+    //! `EffectChain` (including the cached `chain_graph`) survives
+    //! by construction.
+    use super::*;
+    use std::sync::Arc;
+
+    /// Build a minimal compositor. Tiny size keeps GPU costs low; tests
+    /// don't render, so resolution doesn't matter.
+    fn make_compositor() -> (Arc<GpuDevice>, LayerCompositor) {
+        let device = Arc::new(GpuDevice::new());
+        let comp = LayerCompositor::new(&device, 64, 64);
+        (device, comp)
+    }
+
+    /// Reserve capacity high enough that test insertions don't trigger
+    /// an `AHashMap` rehash — preserves entry pointers for identity
+    /// comparison.
+    fn reserve_test_capacity(comp: &mut LayerCompositor) {
+        comp.effect_chains.reserve(16);
+        comp.chain_last_used_frame.reserve(16);
+    }
+
+    #[test]
+    fn chain_entry_stable_across_active_set_changes() {
+        // Mirrors the live bug: active layer set shifts frame-to-frame
+        // (clips firing/stopping). Each LayerId's chain entry must
+        // survive intact regardless of which other layers are active.
+        let (_device, mut comp) = make_compositor();
+        reserve_test_capacity(&mut comp);
+
+        let a = LayerId::from("A");
+        let b = LayerId::from("B");
+        let c = LayerId::from("C");
+
+        // Frame 1: A + B active.
+        comp.frame_counter = 1;
+        comp.ensure_chain_for_layer(&a);
+        comp.ensure_chain_for_layer(&b);
+        let a_ptr = comp.effect_chains.get(&a).unwrap() as *const EffectChain;
+        let b_ptr = comp.effect_chains.get(&b).unwrap() as *const EffectChain;
+
+        // Frame 2: B + C active (A goes quiet, C new).
+        comp.frame_counter = 2;
+        comp.ensure_chain_for_layer(&b);
+        comp.ensure_chain_for_layer(&c);
+
+        // B is the same instance — its chain_graph, primitive state,
+        // and all internal buffers are preserved.
+        assert_eq!(
+            comp.effect_chains.get(&b).unwrap() as *const EffectChain,
+            b_ptr,
+            "B's chain instance must be identical across frame transition",
+        );
+        // A is still in the pool (within grace period).
+        assert_eq!(
+            comp.effect_chains.get(&a).unwrap() as *const EffectChain,
+            a_ptr,
+            "A's chain instance must persist within CHAIN_GRACE_FRAMES",
+        );
+
+        // Frame 3: A + B + C all active again.
+        comp.frame_counter = 3;
+        comp.ensure_chain_for_layer(&a);
+        comp.ensure_chain_for_layer(&b);
+        comp.ensure_chain_for_layer(&c);
+
+        // All entries still the same instances.
+        assert_eq!(comp.effect_chains.get(&a).unwrap() as *const _, a_ptr);
+        assert_eq!(comp.effect_chains.get(&b).unwrap() as *const _, b_ptr);
+    }
+
+    #[test]
+    fn chain_entry_independent_of_layer_index() {
+        // The original Vec<EffectChain> indexed by `layer_index as usize`
+        // would have bound chains to timeline positions; dragging a layer
+        // up/down the timeline would have shuffled which chain each layer
+        // received. LayerId keying makes that impossible: only the id
+        // matters, regardless of `layer_index`.
+        //
+        // We can't reorder layers without going through the full render
+        // pipeline, but we can prove the structural invariant directly:
+        // ensure_chain_for_layer takes a LayerId, never a layer_index.
+        // The map is `AHashMap<LayerId, EffectChain>` — `chains[5]`
+        // (a `usize` index) doesn't compile.
+        let (_device, mut comp) = make_compositor();
+        reserve_test_capacity(&mut comp);
+
+        let x = LayerId::from("X");
+        comp.frame_counter = 1;
+        comp.ensure_chain_for_layer(&x);
+        let x_ptr = comp.effect_chains.get(&x).unwrap() as *const EffectChain;
+
+        // Simulate many frames of reorder activity: ensure many other
+        // layers come/go but X stays present.
+        for f in 2..20 {
+            comp.frame_counter = f;
+            // "Other layers at varying timeline positions" — irrelevant
+            // because keying is by LayerId, not position.
+            let other = LayerId::from(format!("other-{f}"));
+            comp.ensure_chain_for_layer(&other);
+            comp.ensure_chain_for_layer(&x);
+        }
+
+        // X's chain is still the same instance.
+        assert_eq!(
+            comp.effect_chains.get(&x).unwrap() as *const EffectChain,
+            x_ptr,
+            "X's chain instance must survive arbitrary other-layer churn",
+        );
+    }
+
+    #[test]
+    fn master_chain_is_separate_field_from_layer_chains() {
+        // The master FX pass operates on the composited scene — it has
+        // no `LayerId` to key by, so it lives in a dedicated field.
+        // This makes "master chain accidentally bound to layer N's chain"
+        // structurally impossible: different types, different fields.
+        let (_device, mut comp) = make_compositor();
+        reserve_test_capacity(&mut comp);
+
+        let any_layer = LayerId::from("any");
+        comp.frame_counter = 1;
+        comp.ensure_chain_for_layer(&any_layer);
+
+        let layer_chain_ptr =
+            comp.effect_chains.get(&any_layer).unwrap() as *const EffectChain;
+        let master_chain_ptr: *const EffectChain = &comp.master_effect_chain;
+
+        assert_ne!(
+            layer_chain_ptr, master_chain_ptr,
+            "master_effect_chain must be a different instance from any layer chain",
+        );
+    }
+
+    #[test]
+    fn aged_chains_pruned_after_grace_period() {
+        // Chains that haven't been touched in CHAIN_GRACE_FRAMES are
+        // dropped by trim_excess_buffers. Until then they survive (so
+        // brief mutes / clip gaps don't wipe primitive state).
+        let (_device, mut comp) = make_compositor();
+        reserve_test_capacity(&mut comp);
+
+        let stale = LayerId::from("stale");
+        let alive = LayerId::from("alive");
+
+        // Frame 1: both active.
+        comp.frame_counter = 1;
+        comp.ensure_chain_for_layer(&stale);
+        comp.ensure_chain_for_layer(&alive);
+
+        // Advance well past the grace window while only refreshing `alive`.
+        let last_frame = CHAIN_GRACE_FRAMES + 50;
+        for f in 2..=last_frame {
+            comp.frame_counter = f;
+            comp.ensure_chain_for_layer(&alive);
+        }
+
+        comp.trim_excess_buffers();
+
+        assert!(
+            !comp.effect_chains.contains_key(&stale),
+            "stale chain must have been pruned after exceeding CHAIN_GRACE_FRAMES",
+        );
+        assert!(
+            comp.effect_chains.contains_key(&alive),
+            "alive chain must still be present",
+        );
+    }
+}
