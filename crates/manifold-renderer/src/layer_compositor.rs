@@ -433,13 +433,17 @@ pub struct LayerCompositor {
     /// effects on the LED path. Reused across frames; reallocated only on
     /// LED-grid dimension changes.
     led_group_bufs: Vec<PingPong>,
-    /// Per-group LED effect chains. Distinct from `group_effect_chains` so
-    /// temporal state on the LED path doesn't bleed into the screen path
-    /// (and vice versa). Lazy-allocates at LED grid resolution via the
-    /// EffectContext passed to `apply_effects`.
-    led_group_effect_chains: Vec<EffectChain>,
-    /// How many `led_group_bufs` / `led_group_effect_chains` were used last
-    /// frame, for trim_excess_buffers.
+    /// Per-group LED effect chains, keyed by the group container's
+    /// `LayerId`. Distinct field from `group_effect_chains` so
+    /// temporal state on the LED path doesn't bleed into the screen
+    /// path (and vice versa) — physically impossible because they
+    /// are different fields, even though both use `LayerId` keys.
+    /// Lazy-allocates at LED grid resolution via the `EffectContext`
+    /// passed to `apply_effects`.
+    led_group_effect_chains: AHashMap<LayerId, EffectChain>,
+    /// Per-LED-group-chain last-used frame counter for time-based pruning.
+    led_group_chain_last_used_frame: AHashMap<LayerId, u64>,
+    /// How many `led_group_bufs` were used last frame, for trim_excess_buffers.
     last_led_group_buf_used: usize,
 
     /// 1×1 opaque-black Rgba16Float texture used as a stand-in source when
@@ -534,7 +538,8 @@ impl LayerCompositor {
             led_tonemap: None,
             led_master_ec: None,
             led_group_bufs: Vec::new(),
-            led_group_effect_chains: Vec::new(),
+            led_group_effect_chains: AHashMap::default(),
+            led_group_chain_last_used_frame: AHashMap::default(),
             last_led_group_buf_used: 0,
             led_black_tex: None,
         }
@@ -606,13 +611,15 @@ impl LayerCompositor {
         }
     }
 
-    /// Ensure we have at least `count` LED group effect chains available.
-    /// Internal effect-chain buffers lazy-allocate at the LED grid resolution
-    /// via the EffectContext passed to `apply_effects`.
-    fn ensure_led_group_effect_chains(&mut self, count: usize) {
-        while self.led_group_effect_chains.len() < count {
-            self.led_group_effect_chains.push(EffectChain::new());
-        }
+    /// Ensure an LED group chain exists for the given `LayerId`.
+    /// Internal effect-chain buffers lazy-allocate at LED grid resolution
+    /// via the `EffectContext` passed to `apply_effects`.
+    fn ensure_led_group_chain(&mut self, group_id: &LayerId) {
+        self.led_group_effect_chains
+            .entry(group_id.clone())
+            .or_default();
+        self.led_group_chain_last_used_frame
+            .insert(group_id.clone(), self.frame_counter);
     }
 
     /// Trim oversized layer_bufs and effect_chains down to actual usage + headroom.
@@ -664,8 +671,16 @@ impl LayerCompositor {
         if self.led_group_bufs.len() > target_led_group_bufs {
             self.led_group_bufs.truncate(target_led_group_bufs);
         }
-        if self.led_group_effect_chains.len() > target_led_group_bufs {
-            self.led_group_effect_chains.truncate(target_led_group_bufs);
+        // LED group chains: same time-based prune policy.
+        let stale_led_groups: Vec<LayerId> = self
+            .led_group_chain_last_used_frame
+            .iter()
+            .filter(|(_, last)| now.saturating_sub(**last) > CHAIN_GRACE_FRAMES)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in stale_led_groups {
+            self.led_group_effect_chains.remove(&id);
+            self.led_group_chain_last_used_frame.remove(&id);
         }
     }
 
@@ -1081,11 +1096,17 @@ impl LayerCompositor {
                     // blend into led_main with Normal + group opacity.
                     if let Some(group) = group_desc {
                         self.ensure_led_group_bufs(led_group_idx + 1, gpu.device, gpu.pool, w, h);
-                        self.ensure_led_group_effect_chains(led_group_idx + 1);
+                        // LED group chain is keyed by the group's own
+                        // LayerId — stable across iteration order and
+                        // timeline reorders.
+                        self.ensure_led_group_chain(group.layer_id);
                         let group_buf_ptr =
                             &mut self.led_group_bufs[led_group_idx] as *mut PingPong;
-                        let group_ec_ptr =
-                            &mut self.led_group_effect_chains[led_group_idx] as *mut EffectChain;
+                        let group_ec_ptr = self
+                            .led_group_effect_chains
+                            .get_mut(group.layer_id)
+                            .expect("ensured above")
+                            as *mut EffectChain;
                         led_group_idx += 1;
                         let group_buf = unsafe { &mut *group_buf_ptr };
                         let group_ec = unsafe { &mut *group_ec_ptr };
