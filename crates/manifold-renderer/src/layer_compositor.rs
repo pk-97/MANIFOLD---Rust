@@ -399,9 +399,13 @@ pub struct LayerCompositor {
     /// One per active group — each group needs its own buffer because
     /// LayerOutput raw pointers must remain valid until blend_layers.
     group_bufs: Vec<PingPong>,
-    /// Per-group effect chains for group-level effects.
-    group_effect_chains: Vec<EffectChain>,
-    /// How many group_bufs / group_effect_chains were actually used last frame.
+    /// Per-group effect chains, keyed by the group container's
+    /// `LayerId`. Same structural invariant as `effect_chains`:
+    /// the key is stable, iteration-counter indexing won't compile.
+    group_effect_chains: AHashMap<LayerId, EffectChain>,
+    /// Per-group-chain last-used frame counter for time-based pruning.
+    group_chain_last_used_frame: AHashMap<LayerId, u64>,
+    /// How many group_bufs were actually used last frame.
     last_group_buf_used: usize,
     /// Pre-allocated scratch for child layer indices during group folding.
     group_child_indices: Vec<i32>,
@@ -521,7 +525,8 @@ impl LayerCompositor {
             async_signal_base: 0,
             last_layer_buf_used: 0,
             group_bufs: Vec::new(),
-            group_effect_chains: Vec::new(),
+            group_effect_chains: AHashMap::default(),
+            group_chain_last_used_frame: AHashMap::default(),
             last_group_buf_used: 0,
             group_child_indices: Vec::new(),
             group_child_positions: Vec::new(),
@@ -564,6 +569,14 @@ impl LayerCompositor {
         self.effect_chains.entry(layer_id.clone()).or_default();
         self.chain_last_used_frame
             .insert(layer_id.clone(), self.frame_counter);
+    }
+
+    /// Same contract as `ensure_chain_for_layer`, but for the group-effect-chain
+    /// pool keyed by the group container's `LayerId`.
+    fn ensure_group_chain(&mut self, group_id: &LayerId) {
+        self.group_effect_chains.entry(group_id.clone()).or_default();
+        self.group_chain_last_used_frame
+            .insert(group_id.clone(), self.frame_counter);
     }
 
     /// Ensure we have at least `count` LED group scratch buffers at the given
@@ -635,8 +648,16 @@ impl LayerCompositor {
         if self.group_bufs.len() > target_group_bufs {
             self.group_bufs.truncate(target_group_bufs);
         }
-        if self.group_effect_chains.len() > target_group_bufs {
-            self.group_effect_chains.truncate(target_group_bufs);
+        // Group chains: same time-based prune policy as layer chains.
+        let stale_groups: Vec<LayerId> = self
+            .group_chain_last_used_frame
+            .iter()
+            .filter(|(_, last)| now.saturating_sub(**last) > CHAIN_GRACE_FRAMES)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in stale_groups {
+            self.group_effect_chains.remove(&id);
+            self.group_chain_last_used_frame.remove(&id);
         }
 
         let target_led_group_bufs = self.last_led_group_buf_used.saturating_add(HEADROOM);
@@ -1320,11 +1341,13 @@ impl LayerCompositor {
             // Apply group-level effects (if any)
             let group_texture: *const GpuTexture =
                 if has_enabled_effects(group_desc.effects) {
-                    // Each group gets its own effect chain too
-                    while self.group_effect_chains.len() <= gb_idx {
-                        self.group_effect_chains.push(EffectChain::new());
-                    }
-                    let effect_chain = &mut self.group_effect_chains[gb_idx];
+                    // Each group's chain is keyed by its own LayerId —
+                    // stable across iteration order and timeline reorders.
+                    self.ensure_group_chain(group_desc.layer_id);
+                    let effect_chain = self
+                        .group_effect_chains
+                        .get_mut(group_desc.layer_id)
+                        .expect("ensured above");
                     let ctx = EffectContext {
                         time: frame.time,
                         beat: frame.beat,
@@ -1902,7 +1925,7 @@ impl Compositor for LayerCompositor {
         for gb in &mut self.group_bufs {
             gb.resize(device, width, height);
         }
-        for ec in &mut self.group_effect_chains {
+        for ec in self.group_effect_chains.values_mut() {
             ec.resize(device, width, height);
         }
         // LED tap will be recreated at new size on next frame if needed.
