@@ -178,6 +178,27 @@ impl Graph {
         Ok(())
     }
 
+    /// Fast-path variant of [`Self::set_param`] for callers that
+    /// constructed the node themselves and know `name` is valid.
+    /// Skips the linear scan over `parameters()`. Silently no-ops on
+    /// unknown `id` — caller is expected to be looping over node ids
+    /// that came out of `add_node`, so the lookup is just a hash hit
+    /// in the steady state.
+    ///
+    /// Used on the per-frame chain-runtime hot path (Mix amount
+    /// refresh, generator-side param injection) — saves O(P) per
+    /// param-set call across every node in every chain every frame.
+    pub fn set_param_unchecked(
+        &mut self,
+        id: NodeInstanceId,
+        name: &'static str,
+        value: ParamValue,
+    ) {
+        if let Some(inst) = self.nodes.get_mut(&id) {
+            inst.params.insert(name, value);
+        }
+    }
+
     pub fn get_node(&self, id: NodeInstanceId) -> Option<&NodeInstance> {
         self.nodes.get(&id)
     }

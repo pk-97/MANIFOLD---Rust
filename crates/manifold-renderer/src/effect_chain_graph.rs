@@ -257,11 +257,13 @@ impl ChainGraph {
             }
         }
 
-        // Preflight: any group with wet_dry < 1.0 that spans
-        // non-contiguous effect positions is currently unsupported.
-        // Walk active_effects and check that each such group's
-        // membership is a single contiguous run.
-        if !groups_are_contiguous_for_partial_wet_dry(
+        // Preflight: every enabled group emits exactly one Mix
+        // sub-graph (see the build loop), so each group's members
+        // must occupy a single contiguous run in `active_effects`.
+        // Interleaved groups would need multiple Mix sub-graphs per
+        // group with shared state, which isn't implemented; fall
+        // back to per-effect legacy dispatch for that rare layout.
+        if !enabled_groups_are_contiguous(
             active_effects.iter().map(|(_, fx)| *fx),
             groups,
         ) {
@@ -290,9 +292,21 @@ impl ChainGraph {
             let fx_group_id = fx.group_id.as_deref();
             let fx_group: Option<&EffectGroup> = fx_group_id
                 .and_then(|gid| groups.iter().find(|g| g.id.as_str() == gid));
-            let needs_mix = fx_group
-                .map(|g| g.enabled && g.wet_dry < 1.0)
-                .unwrap_or(false);
+            // Emit a Mix sub-graph for every enabled group with
+            // effects, regardless of the current `wet_dry` value.
+            // Critically, this avoids a topology rebuild when
+            // `wet_dry` crosses 1.0 — modulation routines very
+            // commonly drive it through the 1.0 boundary, and
+            // rebuilding wipes primitive state (Bloom mip pyramids,
+            // Watercolor feedback, etc.) every crossing.
+            //
+            // At `wet_dry == 1.0` the Mix shader's `lerp(dry, wet, 1.0)`
+            // is the wet path verbatim — same output as a no-Mix
+            // chain — at the cost of one extra single-pass shader
+            // dispatch per group. Worth it: state preservation is a
+            // hard correctness property, the per-frame compute cost
+            // is bounded and small.
+            let needs_mix = fx_group.map(|g| g.enabled).unwrap_or(false);
 
             // Detect group transition.
             let same_open = open_group
@@ -469,11 +483,17 @@ impl ChainGraph {
     ) -> Option<&GpuTexture> {
         // Refresh Mix `amount` for every wet/dry group — picks up
         // live slider drags / modulation without rebuilding the graph.
+        // `set_param_unchecked` skips the per-call linear scan over
+        // the Mix node's `parameters()`: we built these nodes
+        // ourselves at chain-graph construction, so `"amount"` is
+        // guaranteed to resolve.
         for (group_id, mix_node) in &self.group_mix_nodes {
             if let Some(group) = groups.iter().find(|g| g.id == *group_id) {
-                let _ = self
-                    .graph
-                    .set_param(*mix_node, "amount", ParamValue::Float(group.wet_dry));
+                self.graph.set_param_unchecked(
+                    *mix_node,
+                    "amount",
+                    ParamValue::Float(group.wet_dry),
+                );
             }
         }
 
@@ -589,9 +609,13 @@ fn add_effect_node(
 /// `effects` + `groups`. Per-frame param values, drivers,
 /// envelopes, AND continuous wet/dry values are EXCLUDED so live
 /// modulation / live wet-dry slider drags don't trigger rebuilds.
-/// Only the boolean "is partial-wet-dry?" predicate enters the
-/// hash, since that decides whether the group emits a Mix
-/// sub-graph at all.
+///
+/// Every enabled group with effects always emits a Mix sub-graph
+/// (see `try_build`), so `wet_dry`'s value — discrete OR
+/// continuous — never affects topology. The previous design
+/// hashed `(wet_dry < 1.0)`; rebuilds across that boundary wiped
+/// primitive state (Bloom mip pyramids, Watercolor feedback) every
+/// time modulation drove `wet_dry` through 1.0.
 fn compute_topology_hash(
     effects: &[EffectInstance],
     groups: &[EffectGroup],
@@ -612,12 +636,6 @@ fn compute_topology_hash(
     for g in groups {
         g.id.as_str().hash(&mut h);
         g.enabled.hash(&mut h);
-        // Only the "partial wet/dry" predicate enters the hash —
-        // dragging wet_dry from 0.4 to 0.6 doesn't rebuild, since
-        // we just refresh the Mix node's `amount` param. Crossing
-        // the 1.0 boundary does rebuild (group transitions from
-        // Mix-sub-graph mode to linear-series mode).
-        (g.wet_dry < 1.0).hash(&mut h);
     }
     width.hash(&mut h);
     height.hash(&mut h);
@@ -668,36 +686,32 @@ fn close_mix_group(
     Some((mix_id, "out"))
 }
 
-/// Returns `false` if any partial-wet-dry group spans
-/// non-contiguous positions in the active-effects sequence. The
-/// build pipeline emits exactly one Mix sub-graph per contiguous
-/// run; interleaved groups would need multiple Mix sub-graphs and
-/// state-merging that's not implemented yet.
-fn groups_are_contiguous_for_partial_wet_dry<'a>(
+/// Returns `false` if any enabled group spans non-contiguous
+/// positions in the active-effects sequence. The build pipeline
+/// emits exactly one Mix sub-graph per contiguous run; interleaved
+/// groups would need multiple Mix sub-graphs per group with shared
+/// dry-path wiring that isn't implemented yet.
+fn enabled_groups_are_contiguous<'a>(
     active_effects: impl Iterator<Item = &'a EffectInstance>,
     groups: &[EffectGroup],
 ) -> bool {
     use ahash::AHashSet;
-    let partial: AHashSet<&str> = groups
+    let enabled: AHashSet<&str> = groups
         .iter()
-        .filter(|g| g.enabled && g.wet_dry < 1.0)
+        .filter(|g| g.enabled)
         .map(|g| g.id.as_str())
         .collect();
-    if partial.is_empty() {
+    if enabled.is_empty() {
         return true;
     }
     let mut seen_runs: AHashSet<&str> = AHashSet::default();
     let mut current_run: Option<&str> = None;
     for fx in active_effects {
-        let gid = fx
-            .group_id
-            .as_deref()
-            .filter(|gid| partial.contains(gid));
+        let gid = fx.group_id.as_deref().filter(|gid| enabled.contains(gid));
         if gid != current_run {
             if let Some(prev) = current_run.take()
                 && !seen_runs.insert(prev)
             {
-                // We already saw this group in an earlier run.
                 return false;
             }
             current_run = gid;
