@@ -33,8 +33,9 @@ pub use backend::{Backend, MockBackend};
 pub use bindings::{NodeInputs, NodeOutputs, Slot};
 pub use boundary_nodes::{FinalOutput, Source, FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID};
 pub use effect_graphs::{
-    apply_ctx_params, apply_ctx_params_at, build_effect_graph, canonical_document_for,
-    primitive_id_for_effect, refresh_effect_params, refresh_effect_params_at, EffectGraphError,
+    apply_ctx_params, apply_ctx_params_at, apply_refresh_plan, build_ctx_param_plan,
+    build_effect_graph, build_refresh_plan, canonical_document_for, primitive_id_for_effect,
+    refresh_effect_params, refresh_effect_params_at, CtxEntry, EffectGraphError, RefreshEntry,
 };
 pub use effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId, NodeWire,

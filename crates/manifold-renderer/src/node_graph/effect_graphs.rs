@@ -35,7 +35,7 @@ use crate::node_graph::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID};
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::graph::Graph;
 use crate::node_graph::legacy_adapter::metadata_by_id;
-use crate::node_graph::parameters::{ParamType, ParamValue};
+use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::persistence::{
     GraphDocument, LoadError, NodeDocument, PrimitiveRegistry, SerializedParamValue, WireDocument,
     GRAPH_DOCUMENT_VERSION,
@@ -373,6 +373,189 @@ pub fn refresh_effect_params_at(
     }
     materialize_param_overrides_at(graph, node_id, &prim_params);
     Ok(())
+}
+
+/// One entry in a precompiled per-effect refresh plan. Captures
+/// everything needed to convert a single legacy `param_values[idx]`
+/// f32 into the primitive's expected `ParamValue` variant, with the
+/// drift-table transform pre-resolved. Built once at chain-graph
+/// construction; per-frame refresh is one `ParamValues::insert` per
+/// entry — zero allocations, no string interning, no linear scans
+/// over `metadata.params`.
+#[derive(Debug, Clone, Copy)]
+pub enum RefreshEntry {
+    /// Pass-through f32 → `ParamValue::Float`.
+    Float { idx: usize, name: &'static str },
+    /// f32 → `ParamValue::Int(round)`.
+    Int { idx: usize, name: &'static str },
+    /// f32 → `ParamValue::Bool(>= 0.5)`.
+    Bool { idx: usize, name: &'static str },
+    /// f32 → `ParamValue::Enum(round.max(0))`.
+    Enum { idx: usize, name: &'static str },
+    /// Transform-effect rotation: `-(raw * π / 180)` → `Float`.
+    TransformRot { idx: usize, name: &'static str },
+    /// Strobe rate: `STROBE_NOTE_RATES[round(raw)]` → `Float`.
+    StrobeRate { idx: usize, name: &'static str },
+}
+
+impl RefreshEntry {
+    #[inline]
+    fn lookup(&self) -> (usize, &'static str) {
+        match *self {
+            Self::Float { idx, name }
+            | Self::Int { idx, name }
+            | Self::Bool { idx, name }
+            | Self::Enum { idx, name }
+            | Self::TransformRot { idx, name }
+            | Self::StrobeRate { idx, name } => (idx, name),
+        }
+    }
+}
+
+/// Ctx-derived param injection: which `EffectNodeContext::time` /
+/// `beat` / `edge_stretch_width` field maps onto which primitive
+/// parameter name. Built once at chain-graph construction.
+#[derive(Debug, Clone, Copy)]
+pub enum CtxEntry {
+    Time(&'static str),
+    Beat(&'static str),
+    EdgeStretchWidth(&'static str),
+}
+
+/// Build the per-effect refresh plan for a primitive (or legacy
+/// adapter) node, given its declared parameters and the metadata of
+/// the legacy effect it stands in for. Runs at chain-graph build time
+/// — typically once per topology change.
+///
+/// The plan captures: (1) the index into `EffectInstance.param_values`,
+/// (2) the primitive-side param name (`&'static str` — no interning
+/// at runtime), (3) the primitive-side `ParamType` (drives the
+/// `f32 → ParamValue` coercion), and (4) which drift-table transform
+/// applies (radians-from-degrees, strobe-rate-table-lookup).
+///
+/// Returns an empty plan if the effect has no metadata (effectively a
+/// no-op refresh, same behavior as the BTreeMap-based variant on
+/// missing metadata).
+pub fn build_refresh_plan(
+    effect_type: &EffectTypeId,
+    node_params: &[ParamDef],
+) -> Vec<RefreshEntry> {
+    let Some(metadata) = metadata_by_id(effect_type) else {
+        return Vec::new();
+    };
+    let effect_id = effect_type.as_str();
+    let mut plan = Vec::with_capacity(metadata.params.len());
+    for (i, spec) in metadata.params.iter().enumerate() {
+        if spec.id.is_empty() {
+            continue;
+        }
+        let Some(primitive_name) = param_name_for_legacy(effect_id, spec.id) else {
+            continue;
+        };
+        let Some(param_def) = node_params.iter().find(|p| p.name == primitive_name) else {
+            continue;
+        };
+        // Special transforms first (they only apply when the
+        // primitive's param is Float-typed; the drift-table maps to
+        // a continuous primitive value).
+        let entry = match (effect_id, spec.id) {
+            ("Transform", "rot") => {
+                RefreshEntry::TransformRot { idx: i, name: param_def.name }
+            }
+            ("Strobe", "rate") => {
+                RefreshEntry::StrobeRate { idx: i, name: param_def.name }
+            }
+            _ => match param_def.ty {
+                ParamType::Float => RefreshEntry::Float { idx: i, name: param_def.name },
+                ParamType::Int => RefreshEntry::Int { idx: i, name: param_def.name },
+                ParamType::Bool => RefreshEntry::Bool { idx: i, name: param_def.name },
+                ParamType::Enum => RefreshEntry::Enum { idx: i, name: param_def.name },
+                // Vec*/Color — legacy effects don't store these in
+                // `param_values`, so we skip the entry (primitive
+                // keeps its declared default).
+                _ => continue,
+            },
+        };
+        plan.push(entry);
+    }
+    plan
+}
+
+/// Build the ctx-param injection plan for an effect. Returns the
+/// primitive-side param names that the chain runtime should fill from
+/// `EffectContext` each frame.
+pub fn build_ctx_param_plan(effect_type: &EffectTypeId) -> Vec<CtxEntry> {
+    match effect_type.as_str() {
+        "Glitch" => vec![CtxEntry::Time("time")],
+        "Strobe" => vec![CtxEntry::Beat("beat")],
+        "VoronoiPrism" => vec![
+            CtxEntry::Beat("beat"),
+            CtxEntry::EdgeStretchWidth("source_width"),
+        ],
+        "Watercolor" => vec![CtxEntry::Time("time")],
+        _ => Vec::new(),
+    }
+}
+
+/// Apply a precompiled [`RefreshEntry`] plan to a node's parameter
+/// map, plus a [`CtxEntry`] plan with the supplied per-frame values.
+/// Zero allocations — direct `ParamValues::insert` writes on the
+/// node's existing `AHashMap`.
+///
+/// The names captured in each entry came from the node's declared
+/// `parameters()` at plan-build time, so existence is guaranteed and
+/// the legacy `graph.set_param` validation pass is skipped here.
+pub fn apply_refresh_plan(
+    graph: &mut Graph,
+    node_id: NodeInstanceId,
+    refresh: &[RefreshEntry],
+    ctx_plan: &[CtxEntry],
+    instance: &EffectInstance,
+    time: f32,
+    beat: f32,
+    edge_stretch_width: f32,
+) {
+    let Some(inst) = graph.get_node_mut(node_id) else {
+        return;
+    };
+    for entry in refresh {
+        let (idx, name) = entry.lookup();
+        let raw = instance
+            .param_values
+            .get(idx)
+            .map(|s| s.value)
+            .unwrap_or(0.0);
+        let pv = match entry {
+            RefreshEntry::Float { .. } => ParamValue::Float(raw),
+            RefreshEntry::Int { .. } => ParamValue::Int(raw.round() as i32),
+            RefreshEntry::Bool { .. } => ParamValue::Bool(raw >= 0.5),
+            RefreshEntry::Enum { .. } => ParamValue::Enum(raw.max(0.0).round() as u32),
+            RefreshEntry::TransformRot { .. } => {
+                ParamValue::Float(-(raw * std::f32::consts::PI / 180.0))
+            }
+            RefreshEntry::StrobeRate { .. } => {
+                let i = raw.max(0.0).round() as usize;
+                let v = crate::node_graph::primitives::STROBE_NOTE_RATES
+                    .get(i)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        *crate::node_graph::primitives::STROBE_NOTE_RATES
+                            .last()
+                            .unwrap_or(&1.0)
+                    });
+                ParamValue::Float(v)
+            }
+        };
+        inst.params.insert(name, pv);
+    }
+    for entry in ctx_plan {
+        let (name, pv) = match *entry {
+            CtxEntry::Time(name) => (name, ParamValue::Float(time)),
+            CtxEntry::Beat(name) => (name, ParamValue::Float(beat)),
+            CtxEntry::EdgeStretchWidth(name) => (name, ParamValue::Float(edge_stretch_width)),
+        };
+        inst.params.insert(name, pv);
+    }
 }
 
 /// Apply context-derived primitive-only parameters onto the canonical

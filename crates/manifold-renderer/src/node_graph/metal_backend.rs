@@ -153,6 +153,26 @@ impl MetalBackend {
         }
     }
 
+    /// Replace the `GpuTexture` held by the `RenderTarget` at `slot`
+    /// **in place**, dropping the previous texture's `Retained` (one
+    /// atomic release). Zero GPU allocation. Returns `false` if the
+    /// slot has no RT (would be a bug).
+    ///
+    /// Used by `ChainGraph::run` to install the upstream input
+    /// texture into the `Source` node's output slot each frame —
+    /// avoids the per-chain `copy_texture_to_texture` blit that
+    /// `install_texture_2d` would have caused, and avoids ending the
+    /// active compute encoder (which the blit would trigger).
+    pub fn replace_texture_2d(&mut self, slot: Slot, texture: GpuTexture) -> bool {
+        match self.textures_2d.get_mut(&slot) {
+            Some(rt) => {
+                rt.texture = texture;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Swap the `RenderTarget` at a slot, returning the previous one
     /// (or `None` if the slot was empty). Unlike
     /// [`install_texture_2d`], the previous target is **not** released
@@ -167,6 +187,33 @@ impl MetalBackend {
     /// `install_texture_2d` + pool ownership would force.
     pub fn swap_texture_2d(&mut self, slot: Slot, new: RenderTarget) -> Option<RenderTarget> {
         self.textures_2d.insert(slot, new)
+    }
+
+    /// Allocate a fresh slot with the supplied `target`. Unlike
+    /// [`Self::pre_bind_texture_2d`] this does **not** bind any
+    /// `ResourceId` to the slot — callers wire resources up
+    /// separately via [`Self::bind_resource_to_slot`], typically after
+    /// running a slot-recycling simulator against the
+    /// [`ExecutionPlan`](crate::node_graph::ExecutionPlan).
+    ///
+    /// Used by `ChainGraph::try_build` to pre-allocate exactly K
+    /// pooled `RenderTarget`s (where K = the plan's true high-water
+    /// mark, after lifetime-planner recycling) and bind multiple
+    /// resources to each slot. With this, an N-effect chain holds
+    /// 2–3 textures resident (the ping-pong + source) instead of N+1.
+    pub fn allocate_slot(&mut self, target: RenderTarget) -> Slot {
+        let slot = Slot(self.next_slot);
+        self.next_slot += 1;
+        self.textures_2d.insert(slot, target);
+        slot
+    }
+
+    /// Pin a [`ResourceId`] to a pre-existing slot. Idempotent.
+    /// Pairs with [`Self::allocate_slot`] to wire the plan's logical
+    /// resources to a small set of physical render targets.
+    pub fn bind_resource_to_slot(&mut self, id: ResourceId, slot: Slot) {
+        self.bound.insert(id, slot);
+        self.pinned.insert(id);
     }
 
     /// Bind a [`ResourceId`] (from the executor's plan) to a host-supplied

@@ -75,6 +75,13 @@ pub struct LegacyPostProcessNode {
     /// here because `EffectNode::parameters()` returns `&[ParamDef]`
     /// and we need stable storage to hand out a slice.
     params: Box<[ParamDef]>,
+    /// Reusable per-frame `EffectInstance` scratch. The legacy
+    /// `PostProcessEffect::apply` API takes `&EffectInstance` plus
+    /// the legacy `ParamSlot` ordering. Rebuilding this from scratch
+    /// every `evaluate` (every effect, every frame) burned ~100ns of
+    /// alloc per param plus a fresh `EffectTypeId` clone. We
+    /// re-purpose one owned instance instead.
+    scratch_instance: EffectInstance,
 }
 
 impl LegacyPostProcessNode {
@@ -92,11 +99,19 @@ impl LegacyPostProcessNode {
             .map(param_spec_to_def)
             .collect::<Vec<_>>()
             .into_boxed_slice();
+        // Reserve the scratch instance's `param_values` to the
+        // metadata length up-front so per-frame `evaluate` never
+        // grows the vec.
+        let mut scratch_instance = EffectInstance::new(metadata.id.clone());
+        scratch_instance
+            .param_values
+            .reserve(metadata.params.len());
         Self {
             type_id,
             metadata,
             inner,
             params,
+            scratch_instance,
         }
     }
 
@@ -140,20 +155,20 @@ impl EffectNode for LegacyPostProcessNode {
         // `param_values.first()` / `.get(N)`. Adapter-injected slots
         // are exposed by default — exposure gating is host-side, not
         // a concern of the legacy bridge.
-        let param_values: Vec<manifold_core::effects::ParamSlot> = self
-            .metadata
-            .params
-            .iter()
-            .map(|spec| {
+        //
+        // Reuses `self.scratch_instance` across frames — the vec is
+        // truncated and re-extended in place so the heap allocation
+        // amortises after the first call.
+        self.scratch_instance.param_values.clear();
+        self.scratch_instance
+            .param_values
+            .extend(self.metadata.params.iter().map(|spec| {
                 manifold_core::effects::ParamSlot::exposed(param_value_to_f32(
                     ctx.params.get(spec.id),
                     spec,
                 ))
-            })
-            .collect();
-
-        let mut fx = EffectInstance::new(self.metadata.id.clone());
-        fx.param_values = param_values;
+            }));
+        let fx = &self.scratch_instance;
 
         let effect_ctx = EffectContext {
             time: ctx.time.seconds.0 as f32,
@@ -175,12 +190,12 @@ impl EffectNode for LegacyPostProcessNode {
             frame_count: 0,
         };
 
-        if self.inner.should_skip(&fx) {
+        if self.inner.should_skip(fx) {
             return;
         }
 
         let gpu = ctx.gpu_encoder();
-        self.inner.apply(gpu, source, out, &fx, &effect_ctx);
+        self.inner.apply(gpu, source, out, fx, &effect_ctx);
     }
 
     fn clear_state(&mut self) {

@@ -52,17 +52,17 @@ use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::{EffectGroup, EffectInstance};
 use manifold_core::id::{EffectGroupId, EffectId};
-use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
+use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat, TexturePool};
 
 use crate::effect::EffectContext;
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Mix;
 use crate::node_graph::{
-    apply_ctx_params_at, compile, metadata_by_id, primitive_id_for_effect,
-    refresh_effect_params_at, Backend, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph,
+    apply_refresh_plan, build_ctx_param_plan, build_refresh_plan, compile, metadata_by_id,
+    primitive_id_for_effect, CtxEntry, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph,
     LegacyPostProcessNode, MetalBackend, NodeInstanceId, ParamValue, PortType, PrimitiveRegistry,
-    ResourceId, Slot, Source,
+    RefreshEntry, ResourceId, Slot, Source,
 };
 use crate::render_target::RenderTarget;
 
@@ -159,17 +159,36 @@ pub struct ChainGraph {
 }
 
 struct EffectSlot {
+    #[allow(dead_code)]
     effect_id: EffectId,
-    /// Effect type captured at build time. Combined with
-    /// `effect_id` in the topology hash.
+    #[allow(dead_code)]
     effect_type: EffectTypeId,
     node_id: NodeInstanceId,
-    /// `true` if this node is a primitive (via the bridge);
-    /// `false` if it's a [`LegacyPostProcessNode`]. Drives the
-    /// per-frame param refresh path (only primitive nodes need
-    /// ctx-derived param injection; legacy adapters read ctx
-    /// values from [`EffectContext`] directly).
-    is_primitive: bool,
+    /// Index into the chain's `effects` slice at the time this slot
+    /// was constructed. Topology rebuilds are triggered by any change
+    /// to that slice's structural shape (effect added/removed/reordered,
+    /// enabled-bit toggle, group enabled toggle, group crossing the
+    /// 1.0 wet/dry boundary) — see [`compute_topology_hash`]. As long
+    /// as the cached graph is reused, `effects[legacy_index]` is the
+    /// same `EffectInstance` whose modulated `param_values` the
+    /// renderer just updated, so the per-frame refresh can read it
+    /// without rebuilding an `AHashMap<EffectId, &EffectInstance>`.
+    legacy_index: usize,
+    /// Precompiled param-refresh plan. One entry per legacy param that
+    /// maps onto a primitive param the node declares — drift renames,
+    /// `f32 → ParamType` coercions, and the radians/strobe-table
+    /// transforms are baked into the entry variant. Per-frame refresh
+    /// walks this vec and writes directly into the node's
+    /// `ParamValues` map (no `BTreeMap<String, …>` allocation, no
+    /// linear scan of `metadata.params`, no `String::to_string` per
+    /// param).
+    refresh: Vec<RefreshEntry>,
+    /// Precompiled context-param plan — which primitive params get
+    /// filled from `EffectContext::time` / `beat` / `edge_stretch_width`
+    /// each frame. Empty for legacy adapter nodes (they read these
+    /// values from `EffectContext` directly) and for primitives that
+    /// don't expose ctx-driven params.
+    ctx_plan: Vec<CtxEntry>,
 }
 
 impl ChainGraph {
@@ -195,16 +214,22 @@ impl ChainGraph {
         groups: &[EffectGroup],
         primitives: &PrimitiveRegistry,
         device: &GpuDevice,
+        pool: Option<&TexturePool>,
         width: u32,
         height: u32,
     ) -> Option<Self> {
-        let active_effects: Vec<&EffectInstance> = effects
+        // Indexed so we can capture each active effect's original
+        // position in `effects` — used as a per-frame O(1) lookup key
+        // (replaces the previous AHashMap<EffectId, &EffectInstance>
+        // rebuild). Topology changes rebuild this graph, so the
+        // captured indices stay valid for the cache's lifetime.
+        let active_effects: Vec<(usize, &EffectInstance)> = effects
             .iter()
-            .filter(|fx| {
+            .enumerate()
+            .filter(|(_, fx)| {
                 if !fx.enabled {
                     return false;
                 }
-                // Disabled-group effects are dropped.
                 if let Some(gid) = fx.group_id.as_deref()
                     && let Some(group) = groups.iter().find(|g| g.id.as_str() == gid)
                     && !group.enabled
@@ -222,7 +247,7 @@ impl ChainGraph {
         // Preflight: every active effect must be constructable as
         // either a primitive or a legacy adapter. If anything is
         // unconstructable, fall back to the per-effect dispatch.
-        for fx in &active_effects {
+        for (_, fx) in &active_effects {
             let prim = primitive_id_for_effect(fx.effect_type())
                 .map(|tid| primitives.contains(tid))
                 .unwrap_or(false);
@@ -236,7 +261,10 @@ impl ChainGraph {
         // non-contiguous effect positions is currently unsupported.
         // Walk active_effects and check that each such group's
         // membership is a single contiguous run.
-        if !groups_are_contiguous_for_partial_wet_dry(&active_effects, groups) {
+        if !groups_are_contiguous_for_partial_wet_dry(
+            active_effects.iter().map(|(_, fx)| *fx),
+            groups,
+        ) {
             return None;
         }
 
@@ -258,7 +286,7 @@ impl ChainGraph {
         // first effect (the dry path's fan-out source).
         let mut open_group: Option<OpenGroup> = None;
 
-        for fx in &active_effects {
+        for (legacy_index, fx) in &active_effects {
             let fx_group_id = fx.group_id.as_deref();
             let fx_group: Option<&EffectGroup> = fx_group_id
                 .and_then(|gid| groups.iter().find(|g| g.id.as_str() == gid));
@@ -298,11 +326,32 @@ impl ChainGraph {
             graph
                 .connect((prev_node, prev_out_port), (node_id, input_port))
                 .ok()?;
+            // Precompile the per-frame param refresh & ctx-injection
+            // plans against the node's declared parameters — captures
+            // `&'static str` names + variant tags so per-frame work is
+            // a pointer walk + direct `ParamValues::insert`, with no
+            // BTreeMap construction or linear scans.
+            let refresh = build_refresh_plan(
+                fx.effect_type(),
+                graph
+                    .get_node(node_id)
+                    .map(|n| n.node.parameters())
+                    .unwrap_or(&[]),
+            );
+            let ctx_plan = if is_primitive {
+                build_ctx_param_plan(fx.effect_type())
+            } else {
+                // Legacy adapter nodes read ctx values from
+                // `EffectContext` directly inside `LegacyPostProcessNode::evaluate`.
+                Vec::new()
+            };
             effect_nodes.push(EffectSlot {
                 effect_id: fx.id.clone(),
                 effect_type: fx.effect_type().clone(),
                 node_id,
-                is_primitive,
+                legacy_index: *legacy_index,
+                refresh,
+                ctx_plan,
             });
             prev_node = node_id;
             prev_out_port = "out";
@@ -327,46 +376,65 @@ impl ChainGraph {
         let source_resource = output_resource(&plan, source_node, "out");
         let final_output_resource = output_resource(&plan, prev_node, prev_out_port);
 
-        // Pre-bind every Texture2D resource. `MetalBackend::without_device`
-        // panics on lazy-alloc, so every Texture2D in the plan gets a
-        // real `RenderTarget` here. The source slot retains its RT
-        // across frames; the chain `install_texture_2d`s the input
-        // into it each frame.
+        // Assign Texture2D resources to a small set of physical slots
+        // via a lifetime-planner simulation. The source resource gets
+        // its own dedicated slot (the input texture is `replace`d into
+        // it each frame — sharing the slot with a write target would
+        // corrupt the upstream caller's texture), every other resource
+        // ping-pongs across `K` recycled slots driven by the plan's
+        // `free_after` lists. K is typically 2 for a linear chain;
+        // wet/dry groups bump it to 3 (the pre-group texture must stay
+        // alive across the group's effects so the closing `Mix.a`
+        // input can read it).
+        let assignment = assign_texture2d_slots(&plan, source_resource);
+
+        // Allocate exactly one RenderTarget per physical slot. Pool
+        // the allocation when a pool is available — `MTLHeap`
+        // sub-allocation recycles textures across topology rebuilds
+        // (scene switches, effect adds/removes), avoiding fresh
+        // `MTLDevice.newTexture` kernel calls per rebuild.
         let mut backend = MetalBackend::without_device(width, height, GRAPH_FORMAT);
-        let mut source_slot: Option<Slot> = None;
-        let mut output_slot: Option<Slot> = None;
-        for i in 0..plan.resource_count() {
-            let id = ResourceId(i as u32);
-            if !matches!(plan.resource_type(id), Some(PortType::Texture2D)) {
-                continue;
-            }
-            let (label, is_source, is_output) = if id == source_resource {
-                ("chain-graph-source", true, false)
-            } else if id == final_output_resource {
-                ("chain-graph-output", false, true)
-            } else {
-                ("chain-graph-intermediate", false, false)
-            };
-            let target = RenderTarget::new(device, width, height, GRAPH_FORMAT, label);
-            let slot = backend.pre_bind_texture_2d(id, target);
-            if is_source {
-                source_slot = Some(slot);
-            } else if is_output {
-                output_slot = Some(slot);
-            }
+        if let Some(p) = pool {
+            backend.set_texture_pool(p);
         }
+        let mut slot_handles: Vec<Slot> = Vec::with_capacity(assignment.slot_count as usize);
+        for slot_idx in 0..assignment.slot_count {
+            let label = if slot_idx == assignment.source_slot.0 {
+                "chain-graph-source"
+            } else {
+                "chain-graph-pingpong"
+            };
+            let rt = if let Some(p) = pool {
+                RenderTarget::new_pooled(p, width, height, GRAPH_FORMAT, label)
+            } else {
+                RenderTarget::new(device, width, height, GRAPH_FORMAT, label)
+            };
+            slot_handles.push(backend.allocate_slot(rt));
+        }
+        // The simulator returned sim-slot indices in 0..K. allocate_slot
+        // is called in order, so backend slot ids match sim ids 1:1.
+        let resolve = |s: Slot| slot_handles[s.0 as usize];
+        for (res_id, sim_slot) in &assignment.resource_to_slot {
+            backend.bind_resource_to_slot(*res_id, resolve(*sim_slot));
+        }
+        let source_slot = resolve(assignment.source_slot);
+        let output_slot = resolve(
+            *assignment
+                .resource_to_slot
+                .get(&final_output_resource)
+                .expect("plan output resource has an assigned slot"),
+        );
 
         let topology_hash = compute_topology_hash(effects, groups, width, height);
 
-        let _ = source_resource; // used during pre-bind only
         Some(Self {
             graph,
             plan,
             executor: Executor::new(Box::new(backend)),
             effect_nodes,
             group_mix_nodes,
-            source_slot: source_slot.expect("source resource was pre-bound"),
-            output_slot: output_slot.expect("output resource was pre-bound"),
+            source_slot,
+            output_slot,
             width,
             height,
             topology_hash,
@@ -409,56 +477,48 @@ impl ChainGraph {
             }
         }
 
-        // Build a quick lookup from EffectId → &EffectInstance for
-        // the param-refresh pass. The chain rebuilds on topology
-        // change so the set of EffectIds in `effect_nodes` always
-        // exists in `effects` (otherwise it'd be a stale graph and
-        // the topology hash would have caught it).
-        let by_id: AHashMap<&EffectId, &EffectInstance> =
-            effects.iter().map(|fx| (&fx.id, fx)).collect();
-
-        // Refresh per-effect params from the (possibly modulated)
-        // EffectInstance.
+        // Refresh per-effect params using the precompiled refresh
+        // plan — direct `ParamValues::insert` per param, no per-frame
+        // allocation. Effects are looked up by their captured
+        // `legacy_index` (stable across a topology-stable lifetime).
         for slot in &self.effect_nodes {
-            let Some(fx) = by_id.get(&slot.effect_id) else {
-                // Shouldn't happen — topology hash invariant — but
-                // tolerate by skipping rather than panicking on a
-                // live stage.
+            let Some(fx) = effects.get(slot.legacy_index) else {
+                // Index drifted (caller mutated `effects` without
+                // letting the topology hash catch it). Tolerate
+                // rather than panic on a live stage.
                 continue;
             };
-            if let Err(e) = refresh_effect_params_at(&mut self.graph, slot.node_id, fx) {
-                eprintln!(
-                    "[manifold-renderer] ChainGraph: failed to refresh params for \
-                     {} ({}): {e}",
-                    fx.effect_type().as_str(),
-                    slot.effect_id,
-                );
-            }
-            if slot.is_primitive {
-                apply_ctx_params_at(
-                    &mut self.graph,
-                    slot.node_id,
-                    &slot.effect_type,
-                    ctx.time,
-                    ctx.beat,
-                    ctx.edge_stretch_width,
-                );
-            }
+            apply_refresh_plan(
+                &mut self.graph,
+                slot.node_id,
+                &slot.refresh,
+                &slot.ctx_plan,
+                fx,
+                ctx.time,
+                ctx.beat,
+                ctx.edge_stretch_width,
+            );
         }
 
-        // Copy the upstream input texture into the source slot. One
-        // copy per chain invocation, regardless of effect count.
-        // (See module docs for the borrow-vs-owned discussion.)
+        // Install the upstream input texture into the source slot —
+        // no GPU copy. `GpuTexture::clone` is one atomic retain on the
+        // underlying `MTLTexture`; the source slot's `RenderTarget`
+        // adopts the cloned texture in place, dropping its previous
+        // texture's retain. The Source node's evaluate is a no-op, so
+        // the first downstream effect reads the upstream texture
+        // directly via slot lookup. Eliminates the per-chain
+        // `copy_texture_to_texture` (was ~600μs full-screen blit at 4K)
+        // **and** keeps the active compute encoder alive across the
+        // chain boundary (the blit would have ended it, forcing a
+        // fresh compute encoder + cache loss on the first effect).
         let metal = self
             .executor
             .backend_mut()
             .as_any_mut()
             .and_then(|a| a.downcast_mut::<MetalBackend>())
             .expect("ChainGraph backend is MetalBackend");
-        let source_tex = metal
-            .texture_2d(self.source_slot)
-            .expect("source slot pre-bound at build time");
-        gpu.copy_texture_to_texture(input_texture, source_tex, ctx.width, ctx.height);
+        let ok = metal.replace_texture_2d(self.source_slot, input_texture.clone());
+        debug_assert!(ok, "source slot pre-bound at build time");
 
         let frame_time = FrameTime {
             beats: manifold_core::Beats(f64::from(ctx.beat)),
@@ -613,8 +673,8 @@ fn close_mix_group(
 /// build pipeline emits exactly one Mix sub-graph per contiguous
 /// run; interleaved groups would need multiple Mix sub-graphs and
 /// state-merging that's not implemented yet.
-fn groups_are_contiguous_for_partial_wet_dry(
-    active_effects: &[&EffectInstance],
+fn groups_are_contiguous_for_partial_wet_dry<'a>(
+    active_effects: impl Iterator<Item = &'a EffectInstance>,
     groups: &[EffectGroup],
 ) -> bool {
     use ahash::AHashSet;
@@ -649,6 +709,74 @@ fn groups_are_contiguous_for_partial_wet_dry(
         return false;
     }
     true
+}
+
+/// Result of `assign_texture2d_slots`: one physical slot per logical
+/// resource (with sharing for non-overlapping lifetimes), plus the
+/// dedicated source slot and the total slot count.
+struct SlotAssignment {
+    resource_to_slot: AHashMap<ResourceId, Slot>,
+    /// Dedicated slot for the upstream input texture. Held across the
+    /// frame (the chain `replace_texture_2d`s a clone of the input
+    /// into this slot's `RenderTarget` each frame), never recycled
+    /// for intermediate writes — sharing would corrupt the upstream
+    /// caller's texture when a later effect writes its output.
+    source_slot: Slot,
+    /// Total physical slots needed = slots actually allocated.
+    slot_count: u32,
+}
+
+/// Walk the plan in topological order, mirroring the executor's
+/// acquire/release ordering, to compute the minimum set of physical
+/// slots needed for every `Texture2D` resource. The `source_resource`
+/// is bound to slot 0 up-front and never returned to the free pool
+/// (so other resources can't write through it later).
+///
+/// The simulator's slot ids are dense `0..K`. The caller maps them to
+/// real backend slots 1:1 via `allocate_slot`.
+fn assign_texture2d_slots(plan: &ExecutionPlan, source_resource: ResourceId) -> SlotAssignment {
+    let mut resource_to_slot: AHashMap<ResourceId, Slot> = AHashMap::default();
+    let source_slot = Slot(0);
+    resource_to_slot.insert(source_resource, source_slot);
+    let mut next_slot: u32 = 1;
+    let mut free_pool: Vec<Slot> = Vec::new();
+
+    for step in plan.steps() {
+        // Acquire output slots — pop from free pool or grow.
+        for &(_, res_id) in &step.outputs {
+            if res_id == source_resource {
+                continue;
+            }
+            if !matches!(plan.resource_type(res_id), Some(PortType::Texture2D)) {
+                continue;
+            }
+            let slot = free_pool.pop().unwrap_or_else(|| {
+                let s = Slot(next_slot);
+                next_slot += 1;
+                s
+            });
+            resource_to_slot.insert(res_id, slot);
+        }
+        // Release dead resources — return slots to the free pool.
+        for &res_id in &step.free_after {
+            if res_id == source_resource {
+                // Source slot is dedicated. Never recycled.
+                continue;
+            }
+            if !matches!(plan.resource_type(res_id), Some(PortType::Texture2D)) {
+                continue;
+            }
+            if let Some(&slot) = resource_to_slot.get(&res_id) {
+                free_pool.push(slot);
+            }
+        }
+    }
+
+    SlotAssignment {
+        resource_to_slot,
+        source_slot,
+        slot_count: next_slot,
+    }
 }
 
 // Silence the dead-code warning for the `EffectMetadata` import —

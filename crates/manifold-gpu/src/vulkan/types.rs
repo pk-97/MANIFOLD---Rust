@@ -37,6 +37,11 @@ impl GpuBuffer {
 /// Phase 0 holds only the dimensions and format metadata callers already
 /// consume. Phase 1 adds `VkImage`, `VkImageView`, `VkDeviceMemory`, and
 /// a current `VkImageLayout` for barrier bookkeeping.
+///
+/// `Clone` is cheap — the Metal-backed equivalent is one atomic retain.
+/// The portability stub mirrors that contract so chain-runtime call
+/// sites compile against both backends.
+#[derive(Clone)]
 pub struct GpuTexture {
     pub width: u32,
     pub height: u32,

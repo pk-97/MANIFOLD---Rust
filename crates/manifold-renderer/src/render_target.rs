@@ -72,6 +72,26 @@ impl RenderTarget {
         pool.release(self.texture);
     }
 
+    /// Wrap an already-allocated `GpuTexture` as a `RenderTarget` —
+    /// **no GPU allocation**. The cloned texture is an atomic retain
+    /// on the underlying Metal protocol object, so this constructor
+    /// is O(1) and safe to call per-frame.
+    ///
+    /// Used by the node-graph chain runtime to install an upstream
+    /// input texture into a `Source` node's output slot without a
+    /// `copy_texture_to_texture`. Pair with
+    /// [`crate::node_graph::MetalBackend::replace_texture_2d`].
+    pub fn view_of(texture: GpuTexture, label: &str) -> Self {
+        let (width, height, format) = (texture.width, texture.height, texture.format);
+        Self {
+            texture,
+            width,
+            height,
+            format,
+            label: label.to_string(),
+        }
+    }
+
     /// Create a memoryless render target (Apple Silicon only).
     /// Data stays in tile/cache memory — zero VRAM bandwidth.
     /// Only valid as render pass color attachments, NOT for compute storage.

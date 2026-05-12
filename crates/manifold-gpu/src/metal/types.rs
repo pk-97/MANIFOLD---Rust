@@ -13,6 +13,12 @@ use crate::types::*;
 // ─── GpuTexture ───────────────────────────────────────────────────────
 
 /// GPU texture backed by a native Metal texture.
+///
+/// `Clone` is cheap — a `Retained` clone is one atomic retain on the
+/// underlying `MTLTexture`, with no GPU allocation. Used by the
+/// node-graph chain runtime to install an upstream input texture into a
+/// `Source` node's output slot without a `copy_texture_to_texture`.
+#[derive(Clone)]
 pub struct GpuTexture {
     pub(crate) raw: Retained<ProtocolObject<dyn MTLTexture>>,
     pub width: u32,

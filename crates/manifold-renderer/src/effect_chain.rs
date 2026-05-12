@@ -151,6 +151,7 @@ impl EffectChain {
                 groups,
                 primitive_registry(),
                 gpu.device,
+                gpu.pool,
                 ctx.width,
                 ctx.height,
             );
