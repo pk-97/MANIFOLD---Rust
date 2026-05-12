@@ -341,10 +341,24 @@ pub struct LayerCompositor {
     /// a single buffer. On native path, arena buffer is not read (uses inline
     /// set_bytes), but offset tracking is preserved.
     uniform_arena: UniformArena,
-    /// Per-layer effect chain processors. Pool grows to match peak active layer
-    /// count, then stays stable (no per-frame allocation after warmup).
-    /// Index 0..N-1 for clip/layer effects, last entry reserved for master effects.
+    /// Per-layer effect chain processors, indexed by `layer_idx`. Each
+    /// chain stays bound to its layer for the lifetime of the project,
+    /// so its cached `ChainGraph` (primitive instances + state)
+    /// survives across frames even as clips fire/end. Inactive layers'
+    /// slots stay empty (no `ChainGraph` cached). Pool grows to match
+    /// the highest active `layer_idx`, then stabilises.
     effect_chains: Vec<EffectChain>,
+    /// Dedicated effect chain for the post-blend master FX pass.
+    /// Kept SEPARATE from `effect_chains` because the master pass'
+    /// effects are completely unrelated to any layer's effects —
+    /// sharing `effect_chains[0]` (which is layer 0's slot under
+    /// the layer-idx-indexed scheme) would force a `ChainGraph`
+    /// rebuild every frame when layer 0 has its own effects, and
+    /// each rebuild wipes primitive state (Bloom mips, etc.) and
+    /// re-runs the first-evaluate allocation path on the GPU. The
+    /// dedicated chain costs ~56 bytes of idle struct space when
+    /// unused and zero CPU when no master effects are present.
+    master_effect_chain: EffectChain,
     /// Registry of all effect processors.
     effect_registry: EffectRegistry,
     /// Wet/dry lerp pipeline for effect group blending.
@@ -478,6 +492,7 @@ impl LayerCompositor {
             blend: BlendResources::new(device, width, height),
             uniform_arena: UniformArena::new(device),
             effect_chains: Vec::new(),
+            master_effect_chain: EffectChain::new(),
             effect_registry: EffectRegistry::new(device),
             wet_dry_lerp: WetDryLerpPipeline::new(device),
             tonemap: TonemapPipeline::new(device, width, height),
@@ -1705,10 +1720,14 @@ impl Compositor for LayerCompositor {
                 frame_count: frame.frame_count as i64,
             };
 
-            // Use a dedicated effect chain for master effects (index 0 in the
-            // pool — always available since we ensure at least 1 chain exists).
-            self.ensure_effect_chains(1);
-            let master_ec = &mut self.effect_chains[0];
+            // Master effects use a dedicated `EffectChain` instance,
+            // separate from the per-layer chains. Layer chains are
+            // now indexed by `layer_idx`, so reusing
+            // `effect_chains[0]` here would collide with layer 0's
+            // chain — every frame would force a `ChainGraph` rebuild
+            // alternating between layer 0's effects and the master
+            // effects, wiping primitive state.
+            let master_ec = &mut self.master_effect_chain;
 
             // Feed tonemap output directly into the effect chain — the first
             // effect reads from tonemap.output without copying.
@@ -1844,6 +1863,7 @@ impl Compositor for LayerCompositor {
         for ec in &mut self.effect_chains {
             ec.resize(device, width, height);
         }
+        self.master_effect_chain.resize(device, width, height);
         self.effect_registry.resize_all(device, width, height);
         self.tonemap.resize(device, width, height);
         for gb in &mut self.group_bufs {
