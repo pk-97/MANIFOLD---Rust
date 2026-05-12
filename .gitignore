@@ -1,6 +1,9 @@
 /target
 *.manifold
 **/.DS_Store
+# Runtime diagnostic logs from MANIFOLD_LOG_CHAIN_STATS etc.
+chain-stats.log
+*.log
 .codex/tmp/
 .codex/scratch/
 .codex/*.local.md
