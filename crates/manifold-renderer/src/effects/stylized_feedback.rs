@@ -309,14 +309,37 @@ impl PostProcessEffect for StylizedFeedbackFX {
             &fx.param_values,
         );
 
-        // 4. Copy the layer's source into the graph's pre-bound Source slot.
-        let backend = render.executor.backend();
-        let source_tex = backend
-            .texture_2d(render.source_slot)
-            .expect("source slot pre-bound");
-        gpu.copy_texture_to_texture(source, source_tex, ctx.width, ctx.height);
+        // 4. Install `source` + `target` as borrowed textures on the
+        // inner graph's source/output slots. `GpuTexture::clone` is a
+        // single atomic `Retained` bump — no GPU allocation, no
+        // encoder boundary. The inner `Feedback` primitive then
+        // reads upstream's pixels directly and writes its output
+        // into the outer chain's target slot, eliminating the two
+        // per-frame full-screen blits this path used to do
+        // (~0.7ms each at 4K plus a compute↔blit encoder boundary
+        // CPU cost on either side of every blit).
+        //
+        // Safe because `MetalBackend::replace_texture_2d` routes
+        // borrowed textures through `borrowed_2d` (see the metal
+        // backend comments) — they're never pool-released on drop,
+        // so we don't alias the upstream's `MTLTexture` into a
+        // future allocation.
+        let source_slot = render.source_slot;
+        let output_slot = render.output_slot;
+        if let Some(metal) = render
+            .executor
+            .backend_mut()
+            .as_any_mut()
+            .and_then(|a| a.downcast_mut::<MetalBackend>())
+        {
+            metal.replace_texture_2d(source_slot, source.clone());
+            metal.replace_texture_2d(output_slot, target.clone());
+        }
 
-        // 5. Run the graph with the per-owner state store.
+        // 5. Run the graph with the per-owner state store. The inner
+        // Feedback primitive writes its result directly into `target`
+        // (the outer chain's slot) via the borrowed-output install
+        // above, so no copy-out is needed after this returns.
         let frame_time = FrameTime {
             beats: manifold_core::Beats(f64::from(ctx.beat)),
             seconds: manifold_core::Seconds(f64::from(ctx.time)),
@@ -330,14 +353,6 @@ impl PostProcessEffect for StylizedFeedbackFX {
             &mut self.state_store,
             ctx.owner_key,
         );
-
-        // 6. Blit the graph's output into the layer chain's target.
-        let output_tex = render
-            .executor
-            .backend()
-            .texture_2d(render.output_slot)
-            .expect("output slot pre-bound");
-        gpu.copy_texture_to_texture(output_tex, target, ctx.width, ctx.height);
     }
 
     fn clear_state(&mut self) {
