@@ -297,6 +297,9 @@ fn register_builtin(r: &mut PrimitiveRegistry) {
     r.register(primitives::WIREFRAME_DEPTH_TYPE_ID, || {
         Box::new(primitives::WireframeDepth::new())
     });
+    r.register(primitives::INFRARED_TYPE_ID, || {
+        Box::new(primitives::Infrared::new())
+    });
 
     // Remaining single-pass primitives authored via the `primitive!`
     // macro. Each declares a `TYPE_ID` constant via its `PrimitiveSpec`
@@ -717,6 +720,7 @@ mod tests {
             primitives::AUTO_GAIN_TYPE_ID,
             primitives::BLOB_TRACKING_TYPE_ID,
             primitives::WIREFRAME_DEPTH_TYPE_ID,
+            primitives::INFRARED_TYPE_ID,
         ];
         for id in expected {
             assert!(

@@ -112,12 +112,13 @@ pub fn primitive_id_for_effect(effect_type: &EffectTypeId) -> Option<&'static st
         "HdrBoost" => <primitives::HighlightBoost as PrimitiveSpec>::TYPE_ID,
         "Kaleidoscope" => <primitives::KaleidoFold as PrimitiveSpec>::TYPE_ID,
 
-        // `Infrared` doesn't map directly: the legacy effect bakes a
-        // palette LUT internally, while `primitive.lut1d` takes the
-        // LUT as a second texture input. Until a `BakedPalette`
-        // generator primitive lands (composite preset wiring the
-        // palette → LUT path), Infrared keeps its legacy dispatch.
-        // "Infrared" => <primitives::Lut1d as PrimitiveSpec>::TYPE_ID,
+        // §6.6 #5 — Infrared ships as a monolithic wrapper
+        // primitive (same shape as AutoGain / BlobTracking /
+        // WireframeDepth) rather than a `BakedPalette → Lut1d`
+        // decomposition. The legacy effect's 512×1 baked LUTs need
+        // per-slot texture-resolution support in the graph runtime
+        // to decompose without breaking parity — out of scope here.
+        "Infrared" => primitives::INFRARED_TYPE_ID,
         "Strobe" => <primitives::Strobe as PrimitiveSpec>::TYPE_ID,
         "VoronoiPrism" => <primitives::VoronoiPrism as PrimitiveSpec>::TYPE_ID,
 
@@ -530,10 +531,6 @@ fn param_name_for_legacy(effect_type: &str, legacy_id: &str) -> Option<&'static 
         // KaleidoFold / Kaleidoscope.
         ("Kaleidoscope", "segs") => Some("segments"),
 
-        // Lut1d / Infrared — primitive doesn't take a palette enum
-        // (gradient is baked into the LUT); drop silently.
-        ("Infrared", "palette") => None,
-
         // VoronoiPrism.
         ("VoronoiPrism", "cells") => Some("cell_count"),
 
@@ -637,9 +634,7 @@ mod tests {
             EffectTypeId::GLITCH,
             EffectTypeId::HDR_BOOST,
             EffectTypeId::KALEIDOSCOPE,
-            // Infrared deferred — needs a BakedPalette generator
-            // primitive before its 2-input Lut1d substitute fits the
-            // canonical 3-node shape. See `primitive_id_for_effect`.
+            EffectTypeId::INFRARED,
             EffectTypeId::STROBE,
             EffectTypeId::VORONOI_PRISM,
             EffectTypeId::BLOOM,
@@ -796,7 +791,12 @@ mod tests {
             Some("amount")
         );
         // Dropped: legacy param without a primitive counterpart.
-        assert_eq!(param_name_for_legacy("Infrared", "palette"), None);
+        // `Infrared.palette` now maps to `primitive.infrared.palette`
+        // (after the §6.6 #5 monolithic wrapper landed).
+        assert_eq!(
+            param_name_for_legacy("Infrared", "palette"),
+            Some("palette")
+        );
         assert_eq!(param_name_for_legacy("EdgeGlow", "mode"), None);
     }
 
@@ -817,9 +817,7 @@ mod tests {
             EffectTypeId::GLITCH,
             EffectTypeId::HDR_BOOST,
             EffectTypeId::KALEIDOSCOPE,
-            // Infrared deferred — needs a BakedPalette generator
-            // primitive before its 2-input Lut1d substitute fits the
-            // canonical 3-node shape. See `primitive_id_for_effect`.
+            EffectTypeId::INFRARED,
             EffectTypeId::STROBE,
             EffectTypeId::VORONOI_PRISM,
             EffectTypeId::BLOOM,
