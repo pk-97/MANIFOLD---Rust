@@ -1676,7 +1676,7 @@ impl Compositor for LayerCompositor {
 
             // Feed tonemap output directly into the effect chain — the first
             // effect reads from tonemap.output without copying.
-            if let Some(_processed) = Self::apply_effects(
+            if let Some(processed) = Self::apply_effects(
                 master_ec,
                 &mut self.effect_registry,
                 &self.wet_dry_lerp,
@@ -1687,8 +1687,13 @@ impl Compositor for LayerCompositor {
                 &ctx,
             ) {
                 // Copy processed result back into tonemap output via GPU memcpy.
+                // Use the texture `apply_effects` returned directly — under the
+                // ChainGraph fast path, the result lives in the chain graph's
+                // backend (not in `master_ec.ping`/`pong`, which stay None for
+                // graph-dispatched chains). `source_texture_pub()` would
+                // unwrap a None ping in that case.
                 gpu.copy_texture_to_texture(
-                    master_ec.source_texture_pub(),
+                    processed,
                     &self.tonemap.output.texture,
                     width,
                     height,
@@ -1751,7 +1756,7 @@ impl Compositor for LayerCompositor {
                     &self.led_tonemap.as_ref().unwrap().output.texture;
                 // Safety: led_tm_tex_ptr points to led_tonemap.output.texture which
                 // is not reallocated during apply_effects.
-                if let Some(_processed) = Self::apply_effects(
+                if let Some(processed) = Self::apply_effects(
                     led_ec,
                     &mut self.effect_registry,
                     &self.wet_dry_lerp,
@@ -1761,8 +1766,11 @@ impl Compositor for LayerCompositor {
                     frame.master_effect_groups,
                     &ctx,
                 ) {
+                    // Use the texture `apply_effects` returned directly — see
+                    // the master_ec path above for why `source_texture_pub`
+                    // doesn't work post-ChainGraph cutover.
                     gpu.copy_texture_to_texture(
-                        led_ec.source_texture_pub(),
+                        processed,
                         unsafe { &*led_tm_tex_ptr },
                         width,
                         height,
