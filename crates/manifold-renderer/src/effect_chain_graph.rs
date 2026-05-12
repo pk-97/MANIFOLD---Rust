@@ -58,12 +58,14 @@ use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
 use crate::effect::EffectContext;
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
+use crate::node_graph::primitives::Mix;
 use crate::node_graph::{
     apply_ctx_params, apply_ctx_params_at, build_effect_graph, compile, metadata_by_id,
     primitive_id_for_effect, refresh_effect_params, refresh_effect_params_at, Backend,
     ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, LegacyPostProcessNode, MetalBackend,
-    NodeInstanceId, PortType, PrimitiveRegistry, ResourceId, Slot, Source,
+    NodeInstanceId, ParamValue, PortType, PrimitiveRegistry, ResourceId, Slot, Source,
 };
+use manifold_core::id::EffectGroupId;
 use crate::render_target::RenderTarget;
 
 const GRAPH_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
@@ -456,6 +458,12 @@ pub struct ChainGraph {
     /// Per-frame param refresh walks this in parallel with the live
     /// `effects` slice.
     effect_nodes: Vec<EffectSlot>,
+    /// One slot per Mix node introduced for a wet/dry group. The
+    /// Mix's `amount` param is set to the group's `wet_dry` value
+    /// every frame (so dragging a wet/dry slider in the UI doesn't
+    /// rebuild the graph). Keyed by `EffectGroupId` for the
+    /// per-frame lookup.
+    group_mix_nodes: Vec<(EffectGroupId, NodeInstanceId)>,
     source_slot: Slot,
     /// `Slot` containing the chain's final output texture after
     /// `execute_frame_with_gpu`.
@@ -482,10 +490,23 @@ struct EffectSlot {
 }
 
 impl ChainGraph {
-    /// Construct a chain graph from `effects` + `groups` if every
-    /// active effect has a registered factory and no group is in
-    /// partial-wet-dry mode. Returns `None` to signal "fall back to
-    /// the per-effect dispatch path" otherwise.
+    /// Construct a chain graph from `effects` + `groups`. Groups
+    /// with `wet_dry < 1.0` become `Mix` sub-graphs (the
+    /// pre-group texture fans out into both the group's effects in
+    /// series AND a `Mix.a` wire; the group's last effect feeds
+    /// `Mix.b`; `Mix.amount = wet_dry`). Disabled groups skip
+    /// their effects entirely.
+    ///
+    /// Returns `None` to signal "fall back to the per-effect
+    /// dispatch path" if:
+    /// - any active effect can't be constructed (no primitive
+    ///   mapping AND no legacy factory),
+    /// - a group with `wet_dry < 1.0` spans non-contiguous effect
+    ///   positions (the legacy dispatch handles this via repeated
+    ///   snapshot/lerp; this builder produces one Mix per
+    ///   contiguous run, so multi-segment partial-wet-dry groups
+    ///   would need multiple Mix sub-graphs and aren't supported
+    ///   in this version).
     pub fn try_build(
         effects: &[EffectInstance],
         groups: &[EffectGroup],
@@ -494,14 +515,6 @@ impl ChainGraph {
         width: u32,
         height: u32,
     ) -> Option<Self> {
-        // Preflight: any group with wet_dry < 1.0 means we need
-        // Mix sub-graphs; punt back to the legacy chain.
-        for g in groups {
-            if g.enabled && g.wet_dry < 1.0 {
-                return None;
-            }
-        }
-
         let active_effects: Vec<&EffectInstance> = effects
             .iter()
             .filter(|fx| {
@@ -536,20 +549,67 @@ impl ChainGraph {
             }
         }
 
-        // Build the graph: Source → eff_1 → eff_2 → ... → eff_n → FinalOutput.
+        // Preflight: any group with wet_dry < 1.0 that spans
+        // non-contiguous effect positions is currently unsupported.
+        // Walk active_effects and check that each such group's
+        // membership is a single contiguous run.
+        if !groups_are_contiguous_for_partial_wet_dry(&active_effects, groups) {
+            return None;
+        }
+
+        // Build the graph: Source → [eff_1 → eff_2 → … → eff_n,
+        // with Mix sub-graphs straddling wet/dry groups] →
+        // FinalOutput. State machine over `current_group_id` so
+        // entering/exiting a partial-wet-dry group emits the right
+        // fan-out / Mix wiring.
         let mut graph = Graph::new();
         let source_node = graph.add_node(Box::new(Source::new()));
         let mut effect_nodes: Vec<EffectSlot> = Vec::with_capacity(active_effects.len());
+        let mut group_mix_nodes: Vec<(EffectGroupId, NodeInstanceId)> = Vec::new();
 
-        // We chain via the previous node's "out" port → the next
-        // node's input port. Primitive nodes name their input
-        // `"in"` (per the §6.6 bridge convention). Legacy adapter
-        // nodes name their input `"source"`. Track this so we can
-        // pick the right wire.
         let mut prev_node: NodeInstanceId = source_node;
         let mut prev_out_port: &'static str = "out";
 
+        // Tracks the active partial-wet-dry group (if any). When set,
+        // `pre_group` is the (node, port) feeding into the group's
+        // first effect (the dry path's fan-out source).
+        let mut open_group: Option<OpenGroup> = None;
+
         for fx in &active_effects {
+            let fx_group_id = fx.group_id.as_deref();
+            let fx_group: Option<&EffectGroup> = fx_group_id
+                .and_then(|gid| groups.iter().find(|g| g.id.as_str() == gid));
+            let needs_mix = fx_group
+                .map(|g| g.enabled && g.wet_dry < 1.0)
+                .unwrap_or(false);
+
+            // Detect group transition.
+            let same_open = open_group
+                .as_ref()
+                .map(|og| Some(og.group_id.as_str()) == fx_group_id);
+            if same_open != Some(true) {
+                // Close the previously-open partial-wet-dry group
+                // (if any) by emitting its Mix sub-graph.
+                if let Some(closing) = open_group.take() {
+                    let (mix_id, mix_out) =
+                        close_mix_group(&mut graph, &closing, (prev_node, prev_out_port))?;
+                    group_mix_nodes.push((closing.group_id.clone(), mix_id));
+                    prev_node = mix_id;
+                    prev_out_port = mix_out;
+                }
+                // Open the new group if it needs a Mix.
+                if needs_mix {
+                    let group = fx_group.expect("needs_mix implies fx_group");
+                    open_group = Some(OpenGroup {
+                        group_id: group.id.clone(),
+                        pre_node: prev_node,
+                        pre_port: prev_out_port,
+                        wet_dry: group.wet_dry,
+                    });
+                }
+            }
+
+            // Add the effect node and connect it.
             let (node_id, is_primitive, input_port) =
                 add_effect_node(&mut graph, fx, primitives, device)?;
             graph
@@ -565,6 +625,15 @@ impl ChainGraph {
             prev_out_port = "out";
         }
 
+        // Close any still-open partial-wet-dry group at chain end.
+        if let Some(closing) = open_group.take() {
+            let (mix_id, mix_out) =
+                close_mix_group(&mut graph, &closing, (prev_node, prev_out_port))?;
+            group_mix_nodes.push((closing.group_id.clone(), mix_id));
+            prev_node = mix_id;
+            prev_out_port = mix_out;
+        }
+
         let final_out = graph.add_node(Box::new(FinalOutput::new()));
         graph
             .connect((prev_node, prev_out_port), (final_out, "in"))
@@ -573,7 +642,7 @@ impl ChainGraph {
         // Compile and find the resources we need to pin / read.
         let plan = compile(&graph).ok()?;
         let source_resource = output_resource(&plan, source_node, "out");
-        let final_output_resource = output_resource(&plan, prev_node, "out");
+        let final_output_resource = output_resource(&plan, prev_node, prev_out_port);
 
         // Pre-bind every Texture2D resource. `MetalBackend::without_device`
         // panics on lazy-alloc, so every Texture2D in the plan gets a
@@ -612,6 +681,7 @@ impl ChainGraph {
             plan,
             executor: Executor::new(Box::new(backend)),
             effect_nodes,
+            group_mix_nodes,
             source_slot: source_slot.expect("source resource was pre-bound"),
             output_slot: output_slot.expect("output resource was pre-bound"),
             width,
@@ -643,8 +713,19 @@ impl ChainGraph {
         gpu: &mut GpuEncoder<'_>,
         input_texture: &GpuTexture,
         effects: &[EffectInstance],
+        groups: &[EffectGroup],
         ctx: &EffectContext,
     ) -> Option<&GpuTexture> {
+        // Refresh Mix `amount` for every wet/dry group — picks up
+        // live slider drags / modulation without rebuilding the graph.
+        for (group_id, mix_node) in &self.group_mix_nodes {
+            if let Some(group) = groups.iter().find(|g| g.id == *group_id) {
+                let _ = self
+                    .graph
+                    .set_param(*mix_node, "amount", ParamValue::Float(group.wet_dry));
+            }
+        }
+
         // Build a quick lookup from EffectId → &EffectInstance for
         // the param-refresh pass. The chain rebuilds on topology
         // change so the set of EffectIds in `effect_nodes` always
@@ -762,9 +843,12 @@ fn add_effect_node(
 }
 
 /// Topology hash — captures only the layout-affecting fields of
-/// `effects` + `groups`. Per-frame param values, drivers, and
-/// envelopes are EXCLUDED so live modulation doesn't trigger
-/// rebuilds.
+/// `effects` + `groups`. Per-frame param values, drivers,
+/// envelopes, AND continuous wet/dry values are EXCLUDED so live
+/// modulation / live wet-dry slider drags don't trigger rebuilds.
+/// Only the boolean "is partial-wet-dry?" predicate enters the
+/// hash, since that decides whether the group emits a Mix
+/// sub-graph at all.
 fn compute_topology_hash(
     effects: &[EffectInstance],
     groups: &[EffectGroup],
@@ -785,15 +869,103 @@ fn compute_topology_hash(
     for g in groups {
         g.id.as_str().hash(&mut h);
         g.enabled.hash(&mut h);
-        // wet_dry isn't a topology variable per se, but a change
-        // from 1.0 → 0.9 (or vice versa) crosses the "needs Mix
-        // sub-graph" threshold. Hash it so we rebuild and let
-        // `try_build` re-check the precondition.
-        g.wet_dry.to_bits().hash(&mut h);
+        // Only the "partial wet/dry" predicate enters the hash —
+        // dragging wet_dry from 0.4 to 0.6 doesn't rebuild, since
+        // we just refresh the Mix node's `amount` param. Crossing
+        // the 1.0 boundary does rebuild (group transitions from
+        // Mix-sub-graph mode to linear-series mode).
+        (g.wet_dry < 1.0).hash(&mut h);
     }
     width.hash(&mut h);
     height.hash(&mut h);
     h.finish()
+}
+
+/// State tracked for an open partial-wet-dry group during
+/// `try_build`'s walk over active effects. Captures the pre-group
+/// node + port so the Mix's `a` (dry) input wires from the same
+/// source as the group's first effect, and the group's `wet_dry`
+/// value so the Mix's `amount` param can be set at build time.
+struct OpenGroup {
+    group_id: EffectGroupId,
+    pre_node: NodeInstanceId,
+    pre_port: &'static str,
+    wet_dry: f32,
+}
+
+/// Emit the Mix sub-graph for a closing partial-wet-dry group:
+/// `dry = pre_group_output`, `wet = last_effect_output`,
+/// `out = lerp(dry, wet, wet_dry)`. Returns the Mix node id and
+/// its output port (`"out"`).
+fn close_mix_group(
+    graph: &mut Graph,
+    closing: &OpenGroup,
+    last_effect: (NodeInstanceId, &'static str),
+) -> Option<(NodeInstanceId, &'static str)> {
+    let mix_id = graph.add_node(Box::new(Mix::new()));
+    // Mode = Lerp (0) — matches legacy `WetDryLerpPipeline`'s
+    // `lerp(dry, wet, wet_dry)`.
+    graph
+        .set_param(mix_id, "mode", ParamValue::Enum(0))
+        .ok()?;
+    graph
+        .set_param(mix_id, "amount", ParamValue::Float(closing.wet_dry))
+        .ok()?;
+    // Mix.a = dry (pre-group input). Already wired into the
+    // group's first effect via this same output port — output
+    // ports can fan out to many input ports, so adding a second
+    // consumer is legal.
+    graph
+        .connect((closing.pre_node, closing.pre_port), (mix_id, "a"))
+        .ok()?;
+    // Mix.b = wet (post-group result).
+    graph
+        .connect(last_effect, (mix_id, "b"))
+        .ok()?;
+    Some((mix_id, "out"))
+}
+
+/// Returns `false` if any partial-wet-dry group spans
+/// non-contiguous positions in the active-effects sequence. The
+/// build pipeline emits exactly one Mix sub-graph per contiguous
+/// run; interleaved groups would need multiple Mix sub-graphs and
+/// state-merging that's not implemented yet.
+fn groups_are_contiguous_for_partial_wet_dry(
+    active_effects: &[&EffectInstance],
+    groups: &[EffectGroup],
+) -> bool {
+    use ahash::AHashSet;
+    let partial: AHashSet<&str> = groups
+        .iter()
+        .filter(|g| g.enabled && g.wet_dry < 1.0)
+        .map(|g| g.id.as_str())
+        .collect();
+    if partial.is_empty() {
+        return true;
+    }
+    let mut seen_runs: AHashSet<&str> = AHashSet::default();
+    let mut current_run: Option<&str> = None;
+    for fx in active_effects {
+        let gid = fx
+            .group_id
+            .as_deref()
+            .filter(|gid| partial.contains(gid));
+        if gid != current_run {
+            if let Some(prev) = current_run.take()
+                && !seen_runs.insert(prev)
+            {
+                // We already saw this group in an earlier run.
+                return false;
+            }
+            current_run = gid;
+        }
+    }
+    if let Some(prev) = current_run
+        && !seen_runs.insert(prev)
+    {
+        return false;
+    }
+    true
 }
 
 // Silence the dead-code warning for the `EffectMetadata` import —

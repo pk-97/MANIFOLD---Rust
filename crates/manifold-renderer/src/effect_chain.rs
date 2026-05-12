@@ -160,7 +160,7 @@ impl EffectChain {
         let Some(cg) = self.chain_graph.as_mut() else {
             return false;
         };
-        cg.run(gpu, input_texture, effects, ctx).is_some()
+        cg.run(gpu, input_texture, effects, groups, ctx).is_some()
     }
 
     /// Read the chain output texture after a successful
