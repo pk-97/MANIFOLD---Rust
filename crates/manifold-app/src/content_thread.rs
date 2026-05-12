@@ -669,6 +669,47 @@ impl ContentThread {
 
             self.frame_count += 1;
 
+            // Chain-dispatch instrumentation — once a second, print a
+            // summary of how the chain-graph hot path is being used.
+            // Cheap (one atomic-swap per counter). Gated behind the
+            // env var so production builds stay silent.
+            if std::env::var("MANIFOLD_LOG_CHAIN_STATS").is_ok()
+                && self.frame_count.is_multiple_of(60)
+            {
+                let s = manifold_renderer::effect_chain::take_chain_dispatch_stats();
+                if s.dispatches > 0 {
+                    let avg_effects = s.effects as f64 / s.dispatches.max(1) as f64;
+                    let avg_dispatch_us = (s.dispatch_ns as f64 / 1000.0)
+                        / s.dispatches.max(1) as f64;
+                    let avg_graph_run_us = (s.graph_run_ns as f64 / 1000.0)
+                        / s.graph_runs.max(1) as f64;
+                    let avg_rebuild_us = if s.rebuilds > 0 {
+                        (s.rebuild_ns as f64 / 1000.0) / s.rebuilds as f64
+                    } else {
+                        0.0
+                    };
+                    eprintln!(
+                        "[chain-stats] over last 60 frames: dispatches={} \
+                         effects={} (avg {:.1}/chain) graph_runs={} legacy_fallbacks={} \
+                         rebuilds={} | avg dispatch={:.1}μs graph_run={:.1}μs \
+                         rebuild={:.1}μs | totals dispatch={:.2}ms graph_run={:.2}ms \
+                         rebuild={:.2}ms",
+                        s.dispatches,
+                        s.effects,
+                        avg_effects,
+                        s.graph_runs,
+                        s.legacy_fallbacks,
+                        s.rebuilds,
+                        avg_dispatch_us,
+                        avg_graph_run_us,
+                        avg_rebuild_us,
+                        s.dispatch_ns as f64 / 1_000_000.0,
+                        s.graph_run_ns as f64 / 1_000_000.0,
+                        s.rebuild_ns as f64 / 1_000_000.0,
+                    );
+                }
+            }
+
             // Profiling: record frame data
             #[cfg(feature = "profiling")]
             if let Some(ref mut profiler) = self.profiler

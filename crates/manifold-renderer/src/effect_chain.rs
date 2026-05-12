@@ -9,6 +9,70 @@ use manifold_core::EffectTypeId;
 use manifold_core::effects::{EffectGroup, EffectInstance};
 use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+// ---------------------------------------------------------------------------
+// Chain dispatch instrumentation.
+//
+// Lightweight counters incremented from the per-frame `apply_chain` /
+// `try_run_chain_graph` hot path. Content thread is single-threaded so
+// the `Relaxed` ordering is sufficient; the atomics exist so the
+// counters can be read from anywhere (e.g., a periodic logger on the
+// app thread) without `unsafe`.
+//
+// Read via `take_chain_dispatch_stats()` — that resets the counters,
+// so each call returns the deltas since the last call.
+// ---------------------------------------------------------------------------
+
+static CHAIN_DISPATCH_COUNT: AtomicU64 = AtomicU64::new(0);
+static CHAIN_REBUILD_COUNT: AtomicU64 = AtomicU64::new(0);
+static CHAIN_GRAPH_RUN_COUNT: AtomicU64 = AtomicU64::new(0);
+static CHAIN_LEGACY_FALLBACK_COUNT: AtomicU64 = AtomicU64::new(0);
+static CHAIN_EFFECT_COUNT: AtomicU64 = AtomicU64::new(0);
+static CHAIN_DISPATCH_NS: AtomicU64 = AtomicU64::new(0);
+static CHAIN_REBUILD_NS: AtomicU64 = AtomicU64::new(0);
+static CHAIN_GRAPH_RUN_NS: AtomicU64 = AtomicU64::new(0);
+
+/// Snapshot of chain-dispatch counters accumulated since the previous
+/// call to [`take_chain_dispatch_stats`]. All counters reset on read.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ChainDispatchStats {
+    /// Number of `apply_chain` calls that did real work
+    /// (non-empty chain that produced a result).
+    pub dispatches: u64,
+    /// Number of `ChainGraph::try_build` invocations (topology rebuilds).
+    pub rebuilds: u64,
+    /// Number of `ChainGraph::run` invocations (successful fast path).
+    pub graph_runs: u64,
+    /// Number of `apply_chain` invocations that fell back to the
+    /// per-effect legacy dispatch (could not use `ChainGraph`).
+    pub legacy_fallbacks: u64,
+    /// Total enabled effects across all dispatched chains.
+    pub effects: u64,
+    /// Total wall time (ns) spent in `apply_chain` calls (CPU only —
+    /// excludes GPU work the encoder commands).
+    pub dispatch_ns: u64,
+    /// Wall time (ns) spent in `ChainGraph::try_build`.
+    pub rebuild_ns: u64,
+    /// Wall time (ns) spent in `ChainGraph::run` proper (param
+    /// refresh + execute_frame_with_gpu).
+    pub graph_run_ns: u64,
+}
+
+/// Read the chain-dispatch counters and reset them. Returns the
+/// deltas since the previous call. Call once per logging interval.
+pub fn take_chain_dispatch_stats() -> ChainDispatchStats {
+    ChainDispatchStats {
+        dispatches: CHAIN_DISPATCH_COUNT.swap(0, Ordering::Relaxed),
+        rebuilds: CHAIN_REBUILD_COUNT.swap(0, Ordering::Relaxed),
+        graph_runs: CHAIN_GRAPH_RUN_COUNT.swap(0, Ordering::Relaxed),
+        legacy_fallbacks: CHAIN_LEGACY_FALLBACK_COUNT.swap(0, Ordering::Relaxed),
+        effects: CHAIN_EFFECT_COUNT.swap(0, Ordering::Relaxed),
+        dispatch_ns: CHAIN_DISPATCH_NS.swap(0, Ordering::Relaxed),
+        rebuild_ns: CHAIN_REBUILD_NS.swap(0, Ordering::Relaxed),
+        graph_run_ns: CHAIN_GRAPH_RUN_NS.swap(0, Ordering::Relaxed),
+    }
+}
 
 /// Dispatches a chain of effects through the registry, handling group wet/dry.
 ///
@@ -146,6 +210,7 @@ impl EffectChain {
             Some(cg) => !cg.is_compatible(effects, groups, ctx.width, ctx.height),
         };
         if needs_rebuild {
+            let t0 = std::time::Instant::now();
             self.chain_graph = ChainGraph::try_build(
                 effects,
                 groups,
@@ -155,11 +220,19 @@ impl EffectChain {
                 ctx.width,
                 ctx.height,
             );
+            CHAIN_REBUILD_COUNT.fetch_add(1, Ordering::Relaxed);
+            CHAIN_REBUILD_NS.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
         }
         let Some(cg) = self.chain_graph.as_mut() else {
             return false;
         };
-        cg.run(gpu, input_texture, effects, groups, ctx).is_some()
+        let t0 = std::time::Instant::now();
+        let result = cg.run(gpu, input_texture, effects, groups, ctx).is_some();
+        if result {
+            CHAIN_GRAPH_RUN_COUNT.fetch_add(1, Ordering::Relaxed);
+            CHAIN_GRAPH_RUN_NS.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        }
+        result
     }
 
     /// Read the chain output texture after a successful
@@ -191,6 +264,11 @@ impl EffectChain {
             return None;
         }
 
+        let dispatch_t0 = std::time::Instant::now();
+        CHAIN_DISPATCH_COUNT.fetch_add(1, Ordering::Relaxed);
+        let enabled_count = effects.iter().filter(|fx| fx.enabled).count() as u64;
+        CHAIN_EFFECT_COUNT.fetch_add(enabled_count, Ordering::Relaxed);
+
         // Precompute cross-chain params for effects that need them.
         // Unity ref: EffectContext.FindChainParam() — VoronoiPrism reads EdgeStretch width.
         let chain_ctx = EffectContext {
@@ -205,8 +283,11 @@ impl EffectChain {
         // per-effect cache stays alive on fallback paths so its
         // runners survive across mode transitions.)
         if self.try_run_chain_graph(gpu, input_texture, effects, groups, &chain_ctx) {
+            CHAIN_DISPATCH_NS
+                .fetch_add(dispatch_t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
             return self.chain_graph_output();
         }
+        CHAIN_LEGACY_FALLBACK_COUNT.fetch_add(1, Ordering::Relaxed);
 
         // Performance: skip the internal blit that copies input -> ping buffer.
         // The first effect reads directly from input_texture, writing to the
@@ -348,9 +429,12 @@ impl EffectChain {
         // If no effect actually ran (all were ShouldSkip), return None so the
         // caller uses the original input — no blit was needed at all.
         if first_effect_pending {
+            CHAIN_DISPATCH_NS
+                .fetch_add(dispatch_t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
             return None;
         }
 
+        CHAIN_DISPATCH_NS.fetch_add(dispatch_t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
         Some(self.source_texture())
     }
 
