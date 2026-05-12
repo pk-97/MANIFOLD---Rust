@@ -79,6 +79,25 @@ pub struct MetalBackend {
 
     // ---- Real backing storage ----
     textures_2d: AHashMap<Slot, RenderTarget>,
+    /// "Borrowed" textures installed via [`Self::replace_texture_2d`].
+    /// These are clones (one `Retained` bump on the underlying
+    /// `MTLTexture`) of textures the *upstream* caller still owns and
+    /// writes to — typically the layer compositor's tonemap output
+    /// feeding into a chain graph's `Source` slot.
+    ///
+    /// **Must NOT** be returned to the texture pool when the backend
+    /// drops: the upstream still holds its own `Retained`, so releasing
+    /// here would make the pool hand the same `MTLTexture` to another
+    /// caller, who would then write through it and corrupt the
+    /// upstream's frame data. The visible symptom is severe glitching
+    /// on downstream feedback / temporal effects, because feedback
+    /// loops amplify any aliased writes catastrophically.
+    ///
+    /// `texture_2d(slot)` returns the borrowed texture when present,
+    /// shadowing the slot's `textures_2d` entry — so the slot's
+    /// original pool-allocated `RenderTarget` stays untouched and gets
+    /// released back to the pool normally on drop.
+    borrowed_2d: AHashMap<Slot, GpuTexture>,
     scalars: AHashMap<Slot, ParamValue>,
 }
 
@@ -103,6 +122,7 @@ impl MetalBackend {
             next_slot: 0,
             pinned: AHashSet::default(),
             textures_2d: AHashMap::default(),
+            borrowed_2d: AHashMap::default(),
             scalars: AHashMap::default(),
         }
     }
@@ -125,6 +145,7 @@ impl MetalBackend {
             next_slot: 0,
             pinned: AHashSet::default(),
             textures_2d: AHashMap::default(),
+            borrowed_2d: AHashMap::default(),
             scalars: AHashMap::default(),
         }
     }
@@ -153,10 +174,19 @@ impl MetalBackend {
         }
     }
 
-    /// Replace the `GpuTexture` held by the `RenderTarget` at `slot`
-    /// **in place**, dropping the previous texture's `Retained` (one
-    /// atomic release). Zero GPU allocation. Returns `false` if the
-    /// slot has no RT (would be a bug).
+    /// Install a *borrowed* `GpuTexture` clone at `slot` for the
+    /// current frame. Subsequent `texture_2d(slot)` calls return this
+    /// texture instead of the slot's owned `RenderTarget` texture.
+    /// Zero GPU allocation. Returns `false` if `slot` has no owned
+    /// RT (would be a bug — caller must `allocate_slot` first).
+    ///
+    /// The borrowed texture is held in a *separate* map from
+    /// `textures_2d`. Critical: it is **never released to the pool**
+    /// on backend drop. The upstream caller (e.g. the layer
+    /// compositor's tonemap output) still owns the underlying
+    /// `MTLTexture`, so returning our clone to the pool would alias
+    /// it into a future allocation. See [`Self::borrowed_2d`] for the
+    /// failure mode this prevents.
     ///
     /// Used by `ChainGraph::run` to install the upstream input
     /// texture into the `Source` node's output slot each frame —
@@ -164,13 +194,15 @@ impl MetalBackend {
     /// `install_texture_2d` would have caused, and avoids ending the
     /// active compute encoder (which the blit would trigger).
     pub fn replace_texture_2d(&mut self, slot: Slot, texture: GpuTexture) -> bool {
-        match self.textures_2d.get_mut(&slot) {
-            Some(rt) => {
-                rt.texture = texture;
-                true
-            }
-            None => false,
+        if !self.textures_2d.contains_key(&slot) {
+            return false;
         }
+        // Replaces any previous borrow at this slot. Dropping the
+        // previous borrowed `GpuTexture` is one atomic `Retained`
+        // release — the upstream still holds its own ref so the
+        // underlying `MTLTexture` stays alive across the swap.
+        self.borrowed_2d.insert(slot, texture);
+        true
     }
 
     /// Swap the `RenderTarget` at a slot, returning the previous one
@@ -252,10 +284,17 @@ impl MetalBackend {
 
     /// Return all retained textures and scalars to their pools and drop
     /// the high-water mark. Call on graph topology change or shutdown.
+    ///
+    /// Borrowed textures (installed via [`Self::replace_texture_2d`])
+    /// are dropped — **not** pool-released. The upstream owner still
+    /// holds its own `Retained`; pool-releasing would alias the
+    /// underlying `MTLTexture` into a future allocation that some
+    /// other chain would then write through.
     pub fn drop_all_resources(&mut self) {
         for (_, rt) in self.textures_2d.drain() {
             self.pool.release(rt);
         }
+        self.borrowed_2d.clear();
         self.scalars.clear();
         self.bound.clear();
         self.free_by_type.clear();
@@ -332,7 +371,13 @@ impl Backend for MetalBackend {
     }
 
     fn texture_2d(&self, slot: Slot) -> Option<&GpuTexture> {
-        self.textures_2d.get(&slot).map(|rt| &rt.texture)
+        // Borrowed textures (installed via `replace_texture_2d`)
+        // shadow the slot's owned RT for the current frame. The owned
+        // RT still exists in `textures_2d` so it can be released back
+        // to the pool on drop without disturbing the borrowed clone.
+        self.borrowed_2d
+            .get(&slot)
+            .or_else(|| self.textures_2d.get(&slot).map(|rt| &rt.texture))
     }
 
     fn scalar(&self, slot: Slot) -> Option<ParamValue> {
