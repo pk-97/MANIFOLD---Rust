@@ -163,11 +163,13 @@ impl EffectNode for LegacyPostProcessNode {
             height,
             output_width: width,
             output_height: height,
-            // owner_key 0 = master scope. Stateful effects share a
-            // single owner state across the legacy adapter; this is
-            // intentional — adapter graphs run once at the master
-            // level, not per-clip.
-            owner_key: 0,
+            // Pass through the owner_key from the surrounding graph
+            // context so stateful effects (Bloom, Watercolor,
+            // WireframeDepth, etc.) running through this adapter
+            // preserve per-clip / per-layer state correctly. The
+            // chain-as-one-graph dispatch in `ChainGraph` sets this
+            // from `EffectContext::owner_key`.
+            owner_key: ctx.owner_key,
             is_clip_level: false,
             edge_stretch_width: 0.0,
             frame_count: 0,

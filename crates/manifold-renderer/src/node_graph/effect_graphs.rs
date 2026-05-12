@@ -336,6 +336,45 @@ pub fn refresh_effect_params(graph: &mut Graph, instance: &EffectInstance) -> Re
     Ok(())
 }
 
+/// Like [`refresh_effect_params`] but targets a specific
+/// [`NodeInstanceId`] inside a larger graph. Used by the
+/// chain-as-one-graph dispatch where the primitive lives at a
+/// position that depends on chain layout.
+pub fn refresh_effect_params_at(
+    graph: &mut Graph,
+    node_id: NodeInstanceId,
+    instance: &EffectInstance,
+) -> Result<(), EffectGraphError> {
+    let metadata = metadata_by_id(instance.effect_type()).ok_or_else(|| {
+        EffectGraphError::MissingMetadata {
+            effect_type: instance.effect_type().as_str().to_string(),
+        }
+    })?;
+
+    let effect_id = instance.effect_type().as_str();
+    let mut prim_params: BTreeMap<String, SerializedParamValue> = BTreeMap::new();
+    for (i, spec) in metadata.params.iter().enumerate() {
+        if spec.id.is_empty() {
+            continue;
+        }
+        let Some(primitive_name) = param_name_for_legacy(effect_id, spec.id) else {
+            continue;
+        };
+        let raw = instance
+            .param_values
+            .get(i)
+            .map(|slot| slot.value)
+            .unwrap_or(spec.default_value);
+        let value = transform_legacy_value(effect_id, spec.id, raw);
+        prim_params.insert(
+            primitive_name.to_string(),
+            SerializedParamValue::Float { value },
+        );
+    }
+    materialize_param_overrides_at(graph, node_id, &prim_params);
+    Ok(())
+}
+
 /// Apply context-derived primitive-only parameters onto the canonical
 /// graph for `effect_type`. Some primitives expose params (`time`,
 /// `beat`, `source_width`) that the legacy effect read directly from
@@ -354,12 +393,33 @@ pub fn apply_ctx_params(
     beat: f32,
     edge_stretch_width: f32,
 ) {
-    let prim_id = NodeInstanceId(1);
+    apply_ctx_params_at(
+        graph,
+        NodeInstanceId(1),
+        effect_type,
+        time,
+        beat,
+        edge_stretch_width,
+    );
+}
+
+/// Like [`apply_ctx_params`] but targets a specific [`NodeInstanceId`]
+/// inside a larger graph. Used by the chain-as-one-graph dispatch.
+pub fn apply_ctx_params_at(
+    graph: &mut Graph,
+    node_id: NodeInstanceId,
+    effect_type: &EffectTypeId,
+    time: f32,
+    beat: f32,
+    edge_stretch_width: f32,
+) {
     let mut set = |name: &'static str, value: ParamValue| {
         // Ignore errors — a primitive that doesn't declare `name`
         // means the bridge over-listed ctx params; the primitive
-        // keeps its declared default in that case.
-        let _ = graph.set_param(prim_id, name, value);
+        // keeps its declared default in that case. Legacy adapter
+        // nodes never declare these primitive-only names, so the
+        // call is a no-op there.
+        let _ = graph.set_param(node_id, name, value);
     };
 
     match effect_type.as_str() {
@@ -417,10 +477,18 @@ fn materialize_param_overrides(
     graph: &mut Graph,
     params: &BTreeMap<String, SerializedParamValue>,
 ) {
-    let prim_id = NodeInstanceId(1);
-    let inst = graph
-        .get_node(prim_id)
-        .expect("canonical graph always has a node at id=1");
+    materialize_param_overrides_at(graph, NodeInstanceId(1), params);
+}
+
+fn materialize_param_overrides_at(
+    graph: &mut Graph,
+    prim_id: NodeInstanceId,
+    params: &BTreeMap<String, SerializedParamValue>,
+) {
+    let inst = match graph.get_node(prim_id) {
+        Some(inst) => inst,
+        None => return,
+    };
 
     let typed: Vec<(&'static str, ParamType)> = inst
         .node

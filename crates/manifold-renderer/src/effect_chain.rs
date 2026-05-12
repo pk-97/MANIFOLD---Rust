@@ -1,5 +1,5 @@
 use crate::effect::{EffectContext, find_chain_param};
-use crate::effect_chain_graph::GraphEffectCache;
+use crate::effect_chain_graph::{ChainGraph, GraphEffectCache};
 use crate::effect_registry::EffectRegistry;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::{primitive_id_for_effect, PrimitiveRegistry};
@@ -21,10 +21,16 @@ pub struct EffectChain {
     /// Snapshot of dry state before entering a group with wet_dry < 1.0.
     dry_snapshot: Option<RenderTarget>,
     use_ping_as_source: bool,
-    /// Cached per-effect graph runtime executors. Effects with a
-    /// primitive mapping (everything in §6.1–6.5) dispatch through
-    /// this; everything else falls through to the legacy
-    /// `EffectRegistry` path below.
+    /// One cached `Graph` for the whole chain — used as the fast
+    /// path when every effect has a registered factory and no
+    /// group has wet_dry < 1.0. See `ChainGraph` docstring for the
+    /// full precondition list.
+    chain_graph: Option<ChainGraph>,
+    /// Per-effect cached graph runtime executors (the §6.6 #3-#4
+    /// approach). Used when `chain_graph` declines (groups with
+    /// partial wet/dry, future cases). One day, when `chain_graph`
+    /// also handles groups, this whole cache can be deleted along
+    /// with the legacy ping/pong/dry_snapshot plumbing.
     graph_cache: GraphEffectCache,
 }
 
@@ -41,6 +47,7 @@ impl EffectChain {
             pong: None,
             dry_snapshot: None,
             use_ping_as_source: true,
+            chain_graph: None,
             graph_cache: GraphEffectCache::new(),
         }
     }
@@ -115,6 +122,55 @@ impl EffectChain {
         self.use_ping_as_source = !self.use_ping_as_source;
     }
 
+    /// Try the chain-as-one-graph dispatch. Returns `true` if the
+    /// chain ran successfully through `self.chain_graph`; `false`
+    /// to signal "fall back to per-effect dispatch". The chain
+    /// output is then accessible via [`Self::chain_graph_output`]
+    /// — split into two calls because returning a borrowed
+    /// reference from a `&mut self` method here would extend the
+    /// mutable borrow through the rest of `apply_chain`.
+    ///
+    /// Topology changes (effect added/removed/reordered, group
+    /// wet-dry crossing 1.0, render-resolution change) trigger a
+    /// rebuild via `ChainGraph::try_build`. Per-frame param changes
+    /// reuse the cached graph (no rebuild).
+    #[allow(clippy::too_many_arguments)]
+    fn try_run_chain_graph(
+        &mut self,
+        gpu: &mut GpuEncoder<'_>,
+        input_texture: &GpuTexture,
+        effects: &[EffectInstance],
+        groups: &[EffectGroup],
+        ctx: &EffectContext,
+    ) -> bool {
+        let needs_rebuild = match &self.chain_graph {
+            None => true,
+            Some(cg) => !cg.is_compatible(effects, groups, ctx.width, ctx.height),
+        };
+        if needs_rebuild {
+            self.chain_graph = ChainGraph::try_build(
+                effects,
+                groups,
+                primitive_registry(),
+                gpu.device,
+                ctx.width,
+                ctx.height,
+            );
+        }
+        let Some(cg) = self.chain_graph.as_mut() else {
+            return false;
+        };
+        cg.run(gpu, input_texture, effects, ctx).is_some()
+    }
+
+    /// Read the chain output texture after a successful
+    /// [`Self::try_run_chain_graph`]. Returns `None` if the chain
+    /// graph isn't cached (preceding `try_run_chain_graph` either
+    /// wasn't called or returned `false`).
+    fn chain_graph_output(&self) -> Option<&GpuTexture> {
+        self.chain_graph.as_ref()?.output_texture()
+    }
+
     /// Apply a chain of effects. Returns the texture with the final result.
     ///
     /// If the chain is empty or has no enabled effects, returns `None` (caller
@@ -142,6 +198,16 @@ impl EffectChain {
             edge_stretch_width: find_chain_param(effects, &EffectTypeId::EDGE_STRETCH, 1, 0.5625),
             ..*ctx
         };
+
+        // Fast path: try to render the whole chain through one
+        // cached `Graph`. Bails (returns `false`) for chains with
+        // partial-wet-dry groups, unmapped effects, etc. — those
+        // fall through to the per-effect dispatch below. (The
+        // per-effect cache stays alive on fallback paths so its
+        // runners survive across mode transitions.)
+        if self.try_run_chain_graph(gpu, input_texture, effects, groups, &chain_ctx) {
+            return self.chain_graph_output();
+        }
 
         // Performance: skip the internal blit that copies input -> ping buffer.
         // The first effect reads directly from input_texture, writing to the
@@ -410,8 +476,10 @@ impl EffectChain {
         if let Some(snap) = self.dry_snapshot.take() {
             snap.release_to_pool(pool);
         }
-        // Drop cached graph-runtime executors so their per-effect
-        // pre-bound RenderTargets return to the pool too.
+        // Drop cached graph-runtime executors so their pre-bound
+        // RenderTargets return to the pool too. Both the unified
+        // chain graph and the per-effect runner cache get cleared.
+        self.chain_graph = None;
         self.graph_cache.drop_all();
     }
 
@@ -425,10 +493,12 @@ impl EffectChain {
         if let Some(snap) = &mut self.dry_snapshot {
             snap.resize(device, width, height);
         }
-        // Cached graph runners hold their own width/height-sized
+        // Cached graph runners (both the unified chain graph and
+        // the per-effect cache) hold width/height-sized
         // RenderTargets; force a rebuild rather than per-target
         // resize so we don't have to plumb resize through the
         // executor stack.
+        self.chain_graph = None;
         self.graph_cache.drop_all();
     }
 
@@ -437,6 +507,9 @@ impl EffectChain {
     /// existing `EffectRegistry::clear_all_state` call sites — both
     /// paths fire on seek so the chain stays in sync.
     pub fn clear_graph_runner_state(&mut self) {
+        if let Some(cg) = self.chain_graph.as_mut() {
+            cg.clear_state();
+        }
         self.graph_cache.clear_state();
     }
 }
