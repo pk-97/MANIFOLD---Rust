@@ -1,8 +1,8 @@
 use crate::effect::{EffectContext, find_chain_param};
-use crate::effect_chain_graph::{ChainGraph, GraphEffectCache};
+use crate::effect_chain_graph::ChainGraph;
 use crate::effect_registry::EffectRegistry;
 use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::{primitive_id_for_effect, PrimitiveRegistry};
+use crate::node_graph::PrimitiveRegistry;
 use crate::render_target::RenderTarget;
 use crate::wet_dry_lerp::WetDryLerpPipeline;
 use manifold_core::EffectTypeId;
@@ -19,19 +19,18 @@ pub struct EffectChain {
     ping: Option<RenderTarget>,
     pong: Option<RenderTarget>,
     /// Snapshot of dry state before entering a group with wet_dry < 1.0.
+    /// Only used by the per-effect legacy fallback (non-contiguous
+    /// partial-wet-dry groups). `ChainGraph` handles wet/dry inline
+    /// via Mix sub-graphs.
     dry_snapshot: Option<RenderTarget>,
     use_ping_as_source: bool,
-    /// One cached `Graph` for the whole chain — used as the fast
-    /// path when every effect has a registered factory and no
-    /// group has wet_dry < 1.0. See `ChainGraph` docstring for the
-    /// full precondition list.
+    /// One cached `Graph` for the whole chain — the production
+    /// dispatch path for everything `ChainGraph` can express. See
+    /// the [`ChainGraph`] docstring for the precondition list; the
+    /// only known case that falls back to the per-effect legacy
+    /// loop below is a partial-wet-dry group spanning
+    /// non-contiguous positions.
     chain_graph: Option<ChainGraph>,
-    /// Per-effect cached graph runtime executors (the §6.6 #3-#4
-    /// approach). Used when `chain_graph` declines (groups with
-    /// partial wet/dry, future cases). One day, when `chain_graph`
-    /// also handles groups, this whole cache can be deleted along
-    /// with the legacy ping/pong/dry_snapshot plumbing.
-    graph_cache: GraphEffectCache,
 }
 
 impl Default for EffectChain {
@@ -48,7 +47,6 @@ impl EffectChain {
             dry_snapshot: None,
             use_ping_as_source: true,
             chain_graph: None,
-            graph_cache: GraphEffectCache::new(),
         }
     }
 
@@ -295,125 +293,49 @@ impl EffectChain {
                 continue;
             }
 
-            // Apply the effect (skip if ShouldSkip — no GPU work, no swap)
-            // Unity ref: CompositorStack checks ShouldSkip before Apply + buffer swap.
-            //
-            // Dispatch order:
-            //   1. If the effect has a primitive mapping AND should
-            //      not be skipped, route through the graph cache —
-            //      `processor.should_skip` is queried from the legacy
-            //      side because per-effect skip predicates (Mirror's
-            //      amount=0, etc.) are still authoritative until the
-            //      graph runtime grows its own bypass instruction.
-            //   2. Otherwise fall back to the legacy `processor.apply`.
-            // The graph cache returns `false` if the effect has no
-            // primitive mapping yet (Mirror, SoftFocusGraph,
-            // StylizedFeedback, QuadMirror, NodeGraphTest), letting
-            // those keep their existing dispatch.
+            // Fallback per-effect dispatch — pure legacy
+            // `processor.apply()`. Reached only when `ChainGraph`
+            // declined the whole chain (non-contiguous
+            // partial-wet-dry groups, or some effect couldn't be
+            // constructed). Bit-identical to the chain-as-one-graph
+            // dispatch because every primitive wraps the same legacy
+            // FX internally.
             let processor_opt = registry.get_mut(fx.effect_type());
             let should_skip = processor_opt
                 .as_ref()
                 .map(|p| p.should_skip(fx))
                 .unwrap_or(true);
             if !should_skip {
-                let has_primitive_mapping = primitive_id_for_effect(fx.effect_type()).is_some();
-
                 // Lazily create ping/pong buffers on first real effect.
                 if first_effect_pending {
                     self.ensure_buffers(gpu.device, gpu.pool, ctx.width, ctx.height);
                     self.use_ping_as_source = true;
                 }
-
-                // Graph-runtime dispatch (swap-based, no per-effect
-                // copies) for primitive-mapped effects.
-                //
-                // The graph runner needs owned `RenderTarget`s it can
-                // install into its backend slots, while the legacy
-                // `PostProcessEffect::apply` takes borrowed
-                // `&GpuTexture`. To get owned RTs for the graph path
-                // we `Option::take` them out of chain.ping/pong,
-                // hand them to the runner, then put them back in
-                // their original ping/pong slots after the runner
-                // returns ownership.
-                //
-                // On the very first effect, chain's `ping` holds
-                // uninitialized garbage from `ensure_buffers` — the
-                // graph runner would sample that instead of the
-                // upstream input. Materialise input → ping with a
-                // single GPU copy first. Pays the cost once per
-                // chain invocation, not once per effect.
-                let mut dispatched_via_graph = false;
-                if has_primitive_mapping {
-                    if first_effect_pending {
-                        let ping_rt = self.ping.as_ref().unwrap();
-                        gpu.copy_texture_to_texture(
-                            input_texture,
-                            &ping_rt.texture,
-                            ctx.width,
-                            ctx.height,
-                        );
-                        first_effect_pending = false;
-                    }
-                    let (source_rt, target_rt) = if self.use_ping_as_source {
-                        (self.ping.take().unwrap(), self.pong.take().unwrap())
+                let (source_tex, target_tex): (&GpuTexture, &GpuTexture) = if first_effect_pending {
+                    let tgt = if self.use_ping_as_source {
+                        &self.pong.as_ref().unwrap().texture
                     } else {
-                        (self.pong.take().unwrap(), self.ping.take().unwrap())
+                        &self.ping.as_ref().unwrap().texture
                     };
-                    let (source_back, target_back, did_dispatch) = self.graph_cache.apply(
-                        primitive_registry(),
-                        gpu,
-                        source_rt,
-                        target_rt,
-                        fx,
-                        &chain_ctx,
-                    );
-                    dispatched_via_graph = did_dispatch;
-                    if self.use_ping_as_source {
-                        self.ping = Some(source_back);
-                        self.pong = Some(target_back);
-                    } else {
-                        self.pong = Some(source_back);
-                        self.ping = Some(target_back);
-                    }
-                }
-
-                if !dispatched_via_graph {
-                    // Legacy dispatch — borrow source/target textures
-                    // from the chain. Reading through `self.ping`/
-                    // `self.pong`/`self.use_ping_as_source` directly
-                    // (rather than `self.target()` / etc.) gives the
-                    // borrow checker per-field visibility.
-                    let (source_tex, target_tex): (&GpuTexture, &GpuTexture) = if first_effect_pending {
-                        let tgt = if self.use_ping_as_source {
-                            &self.pong.as_ref().unwrap().texture
-                        } else {
-                            &self.ping.as_ref().unwrap().texture
-                        };
-                        (input_texture, tgt)
-                    } else if self.use_ping_as_source {
-                        (
-                            &self.ping.as_ref().unwrap().texture,
-                            &self.pong.as_ref().unwrap().texture,
-                        )
-                    } else {
-                        (
-                            &self.pong.as_ref().unwrap().texture,
-                            &self.ping.as_ref().unwrap().texture,
-                        )
-                    };
-                    let processor = processor_opt.expect(
-                        "should_skip was queried — processor must be present",
-                    );
-                    processor.apply(gpu, source_tex, target_tex, fx, &chain_ctx);
-                }
+                    (input_texture, tgt)
+                } else if self.use_ping_as_source {
+                    (
+                        &self.ping.as_ref().unwrap().texture,
+                        &self.pong.as_ref().unwrap().texture,
+                    )
+                } else {
+                    (
+                        &self.pong.as_ref().unwrap().texture,
+                        &self.ping.as_ref().unwrap().texture,
+                    )
+                };
+                let processor = processor_opt
+                    .expect("should_skip was queried — processor must be present");
+                processor.apply(gpu, source_tex, target_tex, fx, &chain_ctx);
                 self.swap();
                 first_effect_pending = false;
             }
         }
-
-        // Drop runners whose effect ids are no longer in the chain.
-        // Cheap when nothing has changed (set comparison only).
-        self.graph_cache.prune(effects);
 
         // Final group exit — apply wet/dry if needed
         if let Some(prev_gid) = current_group_id
@@ -476,11 +398,9 @@ impl EffectChain {
         if let Some(snap) = self.dry_snapshot.take() {
             snap.release_to_pool(pool);
         }
-        // Drop cached graph-runtime executors so their pre-bound
-        // RenderTargets return to the pool too. Both the unified
-        // chain graph and the per-effect runner cache get cleared.
+        // Drop the cached chain graph too so its pre-bound
+        // RenderTargets return to their pool.
         self.chain_graph = None;
-        self.graph_cache.drop_all();
     }
 
     pub fn resize(&mut self, device: &GpuDevice, width: u32, height: u32) {
@@ -493,24 +413,21 @@ impl EffectChain {
         if let Some(snap) = &mut self.dry_snapshot {
             snap.resize(device, width, height);
         }
-        // Cached graph runners (both the unified chain graph and
-        // the per-effect cache) hold width/height-sized
+        // The cached chain graph holds width/height-sized
         // RenderTargets; force a rebuild rather than per-target
         // resize so we don't have to plumb resize through the
         // executor stack.
         self.chain_graph = None;
-        self.graph_cache.drop_all();
     }
 
-    /// Reset per-effect transient state across the cached graph
-    /// runners (mip pyramids, feedback buffers, etc.). Mirrors the
+    /// Reset per-effect transient state on the cached chain graph
+    /// (mip pyramids, feedback buffers, etc.). Mirrors the
     /// existing `EffectRegistry::clear_all_state` call sites — both
-    /// paths fire on seek so the chain stays in sync.
+    /// fire on seek so the chain stays in sync.
     pub fn clear_graph_runner_state(&mut self) {
         if let Some(cg) = self.chain_graph.as_mut() {
             cg.clear_state();
         }
-        self.graph_cache.clear_state();
     }
 }
 
