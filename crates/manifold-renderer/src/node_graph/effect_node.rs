@@ -238,6 +238,30 @@ pub trait EffectNode: Send {
     /// Run one frame of GPU work: read inputs, write outputs.
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>);
 
+    /// Static declaration of the `(input_port, output_port)` pair
+    /// this node would alias when `skip_passthrough` fires. Must not
+    /// depend on params, frame state, or anything dynamic.
+    ///
+    /// The slot lifetime planner reads this at `compile()` time and
+    /// extends `R(input_port)`'s lifetime to cover every reader of
+    /// `R(output_port)`. Without that extension, a downstream step
+    /// could recycle `R(input_port)`'s physical slot before all
+    /// alias readers complete — the alias holds a clone of the
+    /// underlying `MTLTexture`, so a later write into that slot
+    /// would silently corrupt downstream reads through the alias.
+    /// In linear chains today the bug is latent; in fan-out
+    /// topologies (V2 user composites, multi-output sub-graphs) it
+    /// would manifest.
+    ///
+    /// Default: `None` (node never skips). A node overriding
+    /// [`skip_passthrough`] to return `Some(...)` for any params
+    /// MUST also override this to declare the same port pair —
+    /// the planner uses this declaration, the runtime uses
+    /// `skip_passthrough`. They must agree.
+    fn skip_passthrough_ports(&self) -> Option<(&'static str, &'static str)> {
+        None
+    }
+
     /// Optional skip-passthrough hook: if the node is a no-op for the
     /// current frame (e.g. an `amount`-style param is zero), return
     /// `Some((input_port, output_port))` indicating which input the
@@ -260,6 +284,12 @@ pub trait EffectNode: Send {
     /// of compatible type — currently only `Texture2D` is supported.
     /// Aliases auto-clear at the start of each frame so a non-skip
     /// frame's real write isn't shadowed.
+    ///
+    /// **Must match [`skip_passthrough_ports`]'s declaration** —
+    /// the runtime uses this for the dynamic decision, the planner
+    /// uses `skip_passthrough_ports` for static lifetime extension.
+    /// Returning a different port pair than declared is a programmer
+    /// error and may corrupt downstream reads in fan-out topologies.
     fn skip_passthrough(
         &self,
         _params: &ParamValues,

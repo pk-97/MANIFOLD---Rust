@@ -203,6 +203,14 @@ impl EffectNode for LegacyPostProcessNode {
         self.inner.apply(gpu, source, out, fx, &effect_ctx);
     }
 
+    fn skip_passthrough_ports(&self) -> Option<(&'static str, &'static str)> {
+        // Every legacy adapter wires its single input port as
+        // "source" and its single output port as "out" (see
+        // LEGACY_INPUTS / LEGACY_OUTPUTS). The dynamic decision in
+        // `skip_passthrough` below uses this same pair.
+        Some(("source", "out"))
+    }
+
     fn skip_passthrough(
         &self,
         params: &crate::node_graph::ParamValues,

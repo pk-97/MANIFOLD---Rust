@@ -166,8 +166,62 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         });
     }
 
-    // Third pass: bucket resources by their last_reader step and attach.
-    // Sort within each bucket for deterministic iteration order in tests.
+    // Third pass — Part A: extend R(input) lifetimes for every node
+    // that declares a skip-passthrough port pair. The slot runtime
+    // installs an alias `borrowed_2d[out_slot] = clone(in_slot.texture)`
+    // when the node skips; that alias points at the underlying
+    // `MTLTexture` of the input slot, NOT a snapshot. Without
+    // extension, the planner would free R(input)'s slot after the
+    // skipping node (its only consumer in the planner's model), a
+    // later step would acquire and write to that slot, and the
+    // recycled MTLTexture would be visible through the alias —
+    // silently corrupting downstream reads of R(output).
+    //
+    // The fix: for every node N with `skip_passthrough_ports() =
+    // Some((in_port, out_port))`, extend `last_reader[R(in)]` to at
+    // least `last_reader[R(out)]`. In linear chains this is a no-op
+    // (R(out)'s sole reader is the step after N; R(in)'s last
+    // reader is already N, which precedes that). In fan-out
+    // topologies (V2 user composites) it's load-bearing.
+    //
+    // Done after step-building (so `last_reader` is fully
+    // populated) and before bucketing (so the bumped lifetimes
+    // land in the correct free_at_step bucket).
+    for (step_idx, &node_id) in order.iter().enumerate() {
+        let inst = graph
+            .get_node(node_id)
+            .expect("topo order references existing node");
+        let Some((in_port, out_port)) = inst.node.skip_passthrough_ports() else {
+            continue;
+        };
+        // R(in_port): the resource wired into N's input. If the
+        // port is unwired (optional), skip_passthrough can't fire
+        // at runtime either, so no extension needed.
+        let r_in = wire_by_target
+            .get(&(node_id, in_port))
+            .and_then(|w| output_resources.get(&w.from).copied());
+        let Some(r_in) = r_in else {
+            continue;
+        };
+        // R(out_port): the resource N produces on the output port.
+        let Some(&r_out) = output_resources.get(&(node_id, out_port)) else {
+            continue;
+        };
+        // Last reader of R(out) — the deepest step that consumes it.
+        // Falls back to the producer step if nobody reads R(out),
+        // which is the no-op case for the extension.
+        let r_out_last = *last_reader.get(&r_out).unwrap_or(&step_idx);
+        let entry = last_reader.entry(r_in).or_insert(step_idx);
+        if *entry < r_out_last {
+            *entry = r_out_last;
+        }
+    }
+
+    // Third pass — Part B: bucket resources by their last_reader
+    // step (now reflecting any skip-passthrough extensions) and
+    // attach to the corresponding step's free_after list. Sort
+    // within each bucket for deterministic iteration order in
+    // tests.
     let mut free_at_step: AHashMap<usize, Vec<ResourceId>> = AHashMap::default();
     for (&res_id, &step_idx) in &last_reader {
         free_at_step.entry(step_idx).or_default().push(res_id);
@@ -394,6 +448,154 @@ mod tests {
         )));
         let r = compile(&g);
         assert!(matches!(r, Err(GraphError::RequiredInputUnwired { .. })));
+    }
+
+    /// Test node that declares a static skip-passthrough port pair.
+    /// The dynamic `skip_passthrough(params)` decision isn't
+    /// exercised here — the planner only consults the static
+    /// `skip_passthrough_ports()` declaration.
+    struct SkippableNode {
+        type_id: EffectNodeType,
+        inputs: Vec<NodeInput>,
+        outputs: Vec<NodeOutput>,
+    }
+
+    impl SkippableNode {
+        fn new() -> Self {
+            Self {
+                type_id: EffectNodeType::new("skippable"),
+                inputs: vec![input("in", PortType::Texture2D, true)],
+                outputs: vec![output("out", PortType::Texture2D)],
+            }
+        }
+    }
+
+    impl crate::node_graph::EffectNode for SkippableNode {
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &self.inputs
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            &self.outputs
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+        fn skip_passthrough_ports(&self) -> Option<(&'static str, &'static str)> {
+            Some(("in", "out"))
+        }
+    }
+
+    #[test]
+    fn fan_out_from_skip_passthrough_node_extends_input_lifetime() {
+        // Topology: A → B(skippable) → C
+        //                          \→ D
+        // R(A.out) = R_a, R(B.out) = R_b, R(C.out), R(D.out).
+        //
+        // Without the planner extension: last_reader(R_a) = step B
+        // (B is R_a's only direct reader), so R_a frees after B.
+        // A later step (C or D) could then recycle R_a's slot and
+        // write to it — silently corrupting D's read through B's
+        // alias (which points at R_a's underlying MTLTexture).
+        //
+        // With the extension: B declares skip_passthrough_ports =
+        // ("in", "out"), so the planner extends last_reader(R_a) to
+        // cover last_reader(R_b). R_b is read by both C and D —
+        // whichever is later (step 3) becomes R_b's last reader,
+        // and R_a's last_reader is bumped to match.
+        let mut g = Graph::new();
+        let a = g.add_node(Box::new(TestNode::new(
+            "a",
+            vec![],
+            vec![output("out", PortType::Texture2D)],
+        )));
+        let b = g.add_node(Box::new(SkippableNode::new()));
+        let c = g.add_node(Box::new(TestNode::new(
+            "c",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![output("out", PortType::Texture2D)],
+        )));
+        let d = g.add_node(Box::new(TestNode::new(
+            "d",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![output("out", PortType::Texture2D)],
+        )));
+        g.connect((a, "out"), (b, "in")).unwrap();
+        g.connect((b, "out"), (c, "in")).unwrap();
+        g.connect((b, "out"), (d, "in")).unwrap();
+
+        let plan = compile(&g).unwrap();
+
+        // 4 steps: A, B, C, D in some valid topo order.
+        assert_eq!(plan.steps().len(), 4);
+        let r_a = plan.steps()[0].outputs[0].1;
+        let r_b = plan.steps()[1].outputs[0].1;
+
+        // Find which step is the LAST reader of R_b — that's where
+        // R_a's lifetime extension is forced to land.
+        let mut last_reader_of_r_b = 0;
+        for (idx, step) in plan.steps().iter().enumerate() {
+            if step.inputs.iter().any(|(_, r)| *r == r_b) {
+                last_reader_of_r_b = idx;
+            }
+        }
+        // Sanity: R_b is read by step 2 and step 3.
+        assert!(last_reader_of_r_b >= 2, "R_b should be read after step 1");
+
+        // Without the extension, R_a would be in free_after at step
+        // 1 (B). With the extension, R_a moves to free_after at
+        // step `last_reader_of_r_b`.
+        assert!(
+            !plan.steps()[1].free_after.contains(&r_a),
+            "R_a must NOT be freed at step 1 (skippable B) — that would let \
+             a later step recycle the slot and corrupt the alias"
+        );
+        assert!(
+            plan.steps()[last_reader_of_r_b].free_after.contains(&r_a),
+            "R_a must be freed at the step that's the last reader of R_b \
+             (skip-passthrough alias lifetime extension)"
+        );
+    }
+
+    #[test]
+    fn linear_chain_with_skip_passthrough_unchanged() {
+        // A → B(skippable) → C
+        // R_a is only read by B (= step 1). R_b is only read by C
+        // (= step 2). The extension bumps last_reader(R_a) to
+        // last_reader(R_b) = step 2 — so R_a moves from "free
+        // after step 1" to "free after step 2".
+        //
+        // Semantically correct: R_a's MTLTexture must stay alive
+        // until C has read R_b's alias.
+        let mut g = Graph::new();
+        let a = g.add_node(Box::new(TestNode::new(
+            "a",
+            vec![],
+            vec![output("out", PortType::Texture2D)],
+        )));
+        let b = g.add_node(Box::new(SkippableNode::new()));
+        let c = g.add_node(Box::new(TestNode::new(
+            "c",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![],
+        )));
+        g.connect((a, "out"), (b, "in")).unwrap();
+        g.connect((b, "out"), (c, "in")).unwrap();
+
+        let plan = compile(&g).unwrap();
+        let r_a = plan.steps()[0].outputs[0].1;
+
+        assert!(
+            !plan.steps()[1].free_after.contains(&r_a),
+            "R_a must not be freed at B's step"
+        );
+        assert!(
+            plan.steps()[2].free_after.contains(&r_a),
+            "R_a must be freed at C's step (the alias's last reader)"
+        );
     }
 
     #[test]
