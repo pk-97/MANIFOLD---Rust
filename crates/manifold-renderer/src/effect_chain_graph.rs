@@ -112,17 +112,16 @@ fn output_resource(
 ///
 /// ## When this path is taken
 ///
-/// [`ChainGraph::try_build_or_reuse`] returns `Some` only when:
-/// - Every enabled effect has either a primitive mapping (via
-///   [`primitive_id_for_effect`]) or registered legacy metadata
-///   (via [`metadata_by_id`]) so it can be wrapped as a
-///   [`LegacyPostProcessNode`].
-/// - No effect group has `wet_dry < 1.0` (Mix sub-graphs come in
-///   the next commit; chains with partial wet/dry still go through
-///   the per-effect dispatch).
+/// [`ChainGraph::try_build`] returns `Some` whenever every enabled
+/// effect has either a primitive mapping (via
+/// [`primitive_id_for_effect`]) or registered legacy metadata (via
+/// [`metadata_by_id`]) so it can be wrapped as a
+/// [`LegacyPostProcessNode`]. Disabled groups skip their effects
+/// (the effects are omitted from the chain graph entirely).
 ///
-/// Disabled groups skip their effects (the effects are omitted from
-/// the chain graph entirely).
+/// Effect groups with `wet_dry` ≠ 1.0 are handled via Mix
+/// sub-graphs. Multi-segment groups (members in non-contiguous
+/// chain positions) emit one Mix per segment.
 ///
 /// ## State preservation
 ///
@@ -212,15 +211,15 @@ impl ChainGraph {
     /// their effects entirely.
     ///
     /// Returns `None` to signal "fall back to the per-effect
-    /// dispatch path" if:
-    /// - any active effect can't be constructed (no primitive
-    ///   mapping AND no legacy factory),
-    /// - a group with `wet_dry < 1.0` spans non-contiguous effect
-    ///   positions (the legacy dispatch handles this via repeated
-    ///   snapshot/lerp; this builder produces one Mix per
-    ///   contiguous run, so multi-segment partial-wet-dry groups
-    ///   would need multiple Mix sub-graphs and aren't supported
-    ///   in this version).
+    /// dispatch path" if any active effect can't be constructed
+    /// (no primitive mapping AND no legacy factory).
+    ///
+    /// Multi-segment wet/dry groups (groups whose enabled effects
+    /// sit in non-contiguous chain positions) build successfully:
+    /// the build loop's open/close-on-every-transition pattern
+    /// emits one Mix sub-graph per segment, all registered under
+    /// the same `EffectGroupId` so per-frame `wet_dry` refresh
+    /// applies uniformly to every segment.
     pub fn try_build(
         effects: &[EffectInstance],
         groups: &[EffectGroup],
@@ -267,19 +266,6 @@ impl ChainGraph {
             if !prim && !legacy {
                 return None;
             }
-        }
-
-        // Preflight: every enabled group emits exactly one Mix
-        // sub-graph (see the build loop), so each group's members
-        // must occupy a single contiguous run in `active_effects`.
-        // Interleaved groups would need multiple Mix sub-graphs per
-        // group with shared state, which isn't implemented; fall
-        // back to per-effect legacy dispatch for that rare layout.
-        if !enabled_groups_are_contiguous(
-            active_effects.iter().map(|(_, fx)| *fx),
-            groups,
-        ) {
-            return None;
         }
 
         // Build the graph: Source → [eff_1 → eff_2 → … → eff_n,
@@ -717,45 +703,6 @@ fn close_mix_group(
     Some((mix_id, "out"))
 }
 
-/// Returns `false` if any enabled group spans non-contiguous
-/// positions in the active-effects sequence. The build pipeline
-/// emits exactly one Mix sub-graph per contiguous run; interleaved
-/// groups would need multiple Mix sub-graphs per group with shared
-/// dry-path wiring that isn't implemented yet.
-fn enabled_groups_are_contiguous<'a>(
-    active_effects: impl Iterator<Item = &'a EffectInstance>,
-    groups: &[EffectGroup],
-) -> bool {
-    use ahash::AHashSet;
-    let enabled: AHashSet<&str> = groups
-        .iter()
-        .filter(|g| g.enabled)
-        .map(|g| g.id.as_str())
-        .collect();
-    if enabled.is_empty() {
-        return true;
-    }
-    let mut seen_runs: AHashSet<&str> = AHashSet::default();
-    let mut current_run: Option<&str> = None;
-    for fx in active_effects {
-        let gid = fx.group_id.as_deref().filter(|gid| enabled.contains(gid));
-        if gid != current_run {
-            if let Some(prev) = current_run.take()
-                && !seen_runs.insert(prev)
-            {
-                return false;
-            }
-            current_run = gid;
-        }
-    }
-    if let Some(prev) = current_run
-        && !seen_runs.insert(prev)
-    {
-        return false;
-    }
-    true
-}
-
 /// Result of `assign_texture2d_slots`: one physical slot per logical
 /// resource (with sharing for non-overlapping lifetimes), plus the
 /// dedicated source slot and the total slot count.
@@ -829,3 +776,161 @@ fn assign_texture2d_slots(plan: &ExecutionPlan, source_resource: ResourceId) -> 
 // the use as an alias.
 #[allow(dead_code)]
 type _EffectMetadataAlias = EffectMetadata;
+
+#[cfg(test)]
+mod multi_segment_tests {
+    //! Regression tests for the multi-segment wet/dry group support in
+    //! `ChainGraph::try_build`. A "multi-segment" group is one whose
+    //! enabled effects sit in non-contiguous positions in the chain —
+    //! e.g. group `g` contains effects at indices 0 and 2, with a
+    //! non-group effect at index 1 between them.
+    //!
+    //! Pre-fix: `try_build` rejected this layout via the
+    //! `enabled_groups_are_contiguous` preflight; the chain fell back
+    //! to the legacy per-effect dispatcher.
+    //!
+    //! Post-fix: the build loop's open/close-on-every-transition
+    //! pattern emits one Mix sub-graph per segment, each fed from the
+    //! pre-segment output and feeding the post-segment input. All Mix
+    //! nodes register under the same `EffectGroupId` in
+    //! `group_mix_nodes`, so the per-frame `wet_dry` refresh sets the
+    //! `amount` param on every segment uniformly.
+    use super::*;
+    use manifold_core::effect_definition_registry;
+    use manifold_core::effects::{EffectGroup, EffectInstance};
+    use manifold_core::id::EffectGroupId;
+    use manifold_core::EffectTypeId;
+    use std::sync::Arc;
+
+    fn make_default(ty: EffectTypeId) -> EffectInstance {
+        effect_definition_registry::create_default(&ty)
+    }
+
+    #[test]
+    fn non_contiguous_group_builds_multi_segment_mix() {
+        let device = Arc::new(GpuDevice::new());
+        let primitives = PrimitiveRegistry::with_builtin();
+
+        let g1_id = EffectGroupId::new("g1");
+
+        // Chain: Invert(g1) → ChromaticAberration → Invert(g1)
+        // Effects on either side belong to g1; the middle effect doesn't.
+        let mut e1 = make_default(EffectTypeId::INVERT_COLORS);
+        e1.group_id = Some(g1_id.clone());
+        let e2 = make_default(EffectTypeId::CHROMATIC_ABERRATION);
+        let mut e3 = make_default(EffectTypeId::INVERT_COLORS);
+        e3.group_id = Some(g1_id.clone());
+
+        let g1 = EffectGroup {
+            id: g1_id.clone(),
+            name: "g1".to_string(),
+            enabled: true,
+            collapsed: false,
+            wet_dry: 0.5,
+            parent_group_id: None,
+        };
+
+        let result = ChainGraph::try_build(
+            &[e1, e2, e3],
+            &[g1],
+            &primitives,
+            &device,
+            None,
+            256,
+            256,
+        );
+
+        let cg = result.expect(
+            "ChainGraph should build for a non-contiguous wet/dry group \
+             (multi-segment Mix support)",
+        );
+
+        // Two segments → two Mix sub-graphs, both keyed to g1.
+        assert_eq!(
+            cg.group_mix_nodes.len(),
+            2,
+            "non-contiguous group with 2 segments must emit 2 Mix sub-graphs",
+        );
+        for (gid, _) in &cg.group_mix_nodes {
+            assert_eq!(gid.as_str(), "g1");
+        }
+    }
+
+    #[test]
+    fn contiguous_group_still_builds_single_mix() {
+        // Regression guard: the contiguous case still produces exactly
+        // one Mix sub-graph.
+        let device = Arc::new(GpuDevice::new());
+        let primitives = PrimitiveRegistry::with_builtin();
+
+        let g1_id = EffectGroupId::new("g1");
+
+        let mut e1 = make_default(EffectTypeId::INVERT_COLORS);
+        e1.group_id = Some(g1_id.clone());
+        let mut e2 = make_default(EffectTypeId::CHROMATIC_ABERRATION);
+        e2.group_id = Some(g1_id.clone());
+        let e3 = make_default(EffectTypeId::INVERT_COLORS);
+
+        let g1 = EffectGroup {
+            id: g1_id.clone(),
+            name: "g1".to_string(),
+            enabled: true,
+            collapsed: false,
+            wet_dry: 0.5,
+            parent_group_id: None,
+        };
+
+        let result = ChainGraph::try_build(
+            &[e1, e2, e3],
+            &[g1],
+            &primitives,
+            &device,
+            None,
+            256,
+            256,
+        );
+
+        let cg = result.expect("ChainGraph should build for contiguous group");
+        assert_eq!(cg.group_mix_nodes.len(), 1);
+    }
+
+    #[test]
+    fn three_segment_group_builds_three_mix_sub_graphs() {
+        // Chain: Invert(g1) → Chroma → Invert(g1) → Chroma → Invert(g1)
+        // Group g1 has three non-contiguous segments.
+        let device = Arc::new(GpuDevice::new());
+        let primitives = PrimitiveRegistry::with_builtin();
+
+        let g1_id = EffectGroupId::new("g1");
+        let mut e1 = make_default(EffectTypeId::INVERT_COLORS);
+        e1.group_id = Some(g1_id.clone());
+        let e2 = make_default(EffectTypeId::CHROMATIC_ABERRATION);
+        let mut e3 = make_default(EffectTypeId::INVERT_COLORS);
+        e3.group_id = Some(g1_id.clone());
+        let e4 = make_default(EffectTypeId::CHROMATIC_ABERRATION);
+        let mut e5 = make_default(EffectTypeId::INVERT_COLORS);
+        e5.group_id = Some(g1_id.clone());
+
+        let g1 = EffectGroup {
+            id: g1_id.clone(),
+            name: "g1".to_string(),
+            enabled: true,
+            collapsed: false,
+            wet_dry: 0.3,
+            parent_group_id: None,
+        };
+
+        let result = ChainGraph::try_build(
+            &[e1, e2, e3, e4, e5],
+            &[g1],
+            &primitives,
+            &device,
+            None,
+            256,
+            256,
+        );
+
+        let cg = result.expect("ChainGraph should build for three-segment group");
+        assert_eq!(cg.group_mix_nodes.len(), 3);
+    }
+}
