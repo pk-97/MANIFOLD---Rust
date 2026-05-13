@@ -690,7 +690,7 @@ impl ContentThread {
                     };
                     eprintln!(
                         "[chain-stats] over last 60 frames: dispatches={} \
-                         effects={} (avg {:.1}/chain) graph_runs={} legacy_fallbacks={} \
+                         effects={} (avg {:.1}/chain) graph_runs={} \
                          rebuilds={} | avg dispatch={:.1}μs graph_run={:.1}μs \
                          rebuild={:.1}μs | totals dispatch={:.2}ms graph_run={:.2}ms \
                          rebuild={:.2}ms",
@@ -698,7 +698,6 @@ impl ContentThread {
                         s.effects,
                         avg_effects,
                         s.graph_runs,
-                        s.legacy_fallbacks,
                         s.rebuilds,
                         avg_dispatch_us,
                         avg_graph_run_us,

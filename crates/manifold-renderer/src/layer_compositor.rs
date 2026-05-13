@@ -6,7 +6,6 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use crate::tonemap::TonemapPipeline;
 use crate::uniform_arena::UniformArena;
-use crate::wet_dry_lerp::WetDryLerpPipeline;
 use ahash::AHashMap;
 use manifold_core::effects::{EffectGroup, EffectInstance};
 use manifold_core::{BlendMode, EffectTypeId, LayerId};
@@ -234,13 +233,6 @@ impl PingPong {
     }
 }
 
-/// Deterministic hash of a clip ID string to produce an owner_key for effect context.
-fn clip_id_owner_key(clip_id: &str) -> i64 {
-    let mut hasher = DefaultHasher::new();
-    clip_id.hash(&mut hasher);
-    hasher.finish() as i64
-}
-
 fn layer_id_owner_key(layer_id: &manifold_core::LayerId) -> i64 {
     let mut hasher = DefaultHasher::new();
     layer_id.hash(&mut hasher);
@@ -379,10 +371,12 @@ pub struct LayerCompositor {
     /// bytes of idle struct space when unused and zero CPU when
     /// no master effects are present.
     master_effect_chain: EffectChain,
-    /// Registry of all effect processors.
+    /// Registry of all effect processors. Retained post-legacy-
+    /// dispatch removal for editor snapshot lookup
+    /// (`graph_snapshot_for`) and background-worker flushing on
+    /// export warmup (`flush_all_background_work`). The per-effect
+    /// dispatch / state-storage roles are gone.
     effect_registry: EffectRegistry,
-    /// Wet/dry lerp pipeline for effect group blending.
-    wet_dry_lerp: WetDryLerpPipeline,
     /// ACES tonemapping pipeline. Matches Unity's CompositorStack.tonemapMaterial +
     /// tonemappedOutput. Applied as the final step after master effects.
     tonemap: TonemapPipeline,
@@ -540,7 +534,6 @@ impl LayerCompositor {
             active_layer_buf_ids_scratch: Vec::new(),
             master_effect_chain: EffectChain::new(),
             effect_registry: EffectRegistry::new(device),
-            wet_dry_lerp: WetDryLerpPipeline::new(device),
             tonemap: TonemapPipeline::new(device, width, height),
             led_tap: None,
             layer_outputs_scratch: Vec::new(),
@@ -802,29 +795,26 @@ impl LayerCompositor {
     /// if any effects were applied, or None if the input should be used as-is.
     fn apply_effects<'a>(
         effect_chain: &'a mut EffectChain,
-        registry: &mut EffectRegistry,
-        wet_dry_lerp: &WetDryLerpPipeline,
         gpu: &mut GpuEncoder,
         input_texture: &'a GpuTexture,
         effects: &[EffectInstance],
         groups: &[EffectGroup],
         ctx: &EffectContext,
     ) -> Option<&'a GpuTexture> {
-        effect_chain.apply_chain(
-            gpu,
-            registry,
-            input_texture,
-            effects,
-            groups,
-            ctx,
-            Some(wet_dry_lerp),
-        )
+        effect_chain.apply_chain(gpu, input_texture, effects, groups, ctx)
     }
 
     /// Clean up per-owner effect state for a stopped clip.
-    pub fn cleanup_clip_owner_internal(&mut self, clip_id: &str) {
-        let owner_key = clip_id_owner_key(clip_id);
-        self.effect_registry.cleanup_clip_owner(owner_key);
+    ///
+    /// Per-clip state in the graph-runtime path lives inside each chain's
+    /// `StateStore`, keyed by `(NodeInstanceId, OwnerKey)`. Today every
+    /// chain uses a layer-level owner_key for the chain it owns; clip-
+    /// keyed state only exists for short-circuit per-clip stateful nodes
+    /// (none today). The legacy `EffectRegistry::cleanup_clip_owner`
+    /// call site was deleted along with the legacy dispatcher.
+    pub fn cleanup_clip_owner_internal(&mut self, _clip_id: &str) {
+        // No-op until a graph-runtime primitive declares per-clip state.
+        // See `docs/EFFECT_CHAIN_LIFECYCLE.md`.
     }
 
 
@@ -1031,8 +1021,6 @@ impl LayerCompositor {
                     };
                     Self::apply_effects(
                         effect_chain,
-                        &mut self.effect_registry,
-                        &self.wet_dry_lerp,
                         gpu,
                         layer_buf.source_texture(),
                         ld.effects,
@@ -1305,8 +1293,6 @@ impl LayerCompositor {
                             };
                             match Self::apply_effects(
                                 group_ec,
-                                &mut self.effect_registry,
-                                &self.wet_dry_lerp,
                                 gpu,
                                 group_buf.source_texture(),
                                 group.effects,
@@ -1511,8 +1497,6 @@ impl LayerCompositor {
                     };
                     let result = Self::apply_effects(
                         effect_chain,
-                        &mut self.effect_registry,
-                        &self.wet_dry_lerp,
                         gpu,
                         group_buf.source_texture(),
                         group_desc.effects,
@@ -1765,8 +1749,6 @@ impl LayerCompositor {
                         };
                         Self::apply_effects(
                             effect_chain,
-                            &mut self.effect_registry,
-                            &self.wet_dry_lerp,
                             &mut gpu,
                             layer_buf.source_texture(),
                             ld.effects,
@@ -1936,8 +1918,6 @@ impl Compositor for LayerCompositor {
             // effect reads from tonemap.output without copying.
             if let Some(processed) = Self::apply_effects(
                 master_ec,
-                &mut self.effect_registry,
-                &self.wet_dry_lerp,
                 gpu,
                 &self.tonemap.output.texture,
                 frame.master_effects,
@@ -2016,8 +1996,6 @@ impl Compositor for LayerCompositor {
                 // is not reallocated during apply_effects.
                 if let Some(processed) = Self::apply_effects(
                     led_ec,
-                    &mut self.effect_registry,
-                    &self.wet_dry_lerp,
                     gpu,
                     unsafe { &*led_tm_tex_ptr },
                     frame.master_effects,
@@ -2108,17 +2086,16 @@ impl Compositor for LayerCompositor {
     }
 
     fn clear_all_effect_state(&mut self) {
-        // Two parallel state caches must be cleared together — see
-        // `docs/EFFECT_CHAIN_LIFECYCLE.md` for the full picture.
+        // Single state cache to walk now that the legacy per-effect
+        // dispatcher (and its EffectRegistry-singleton state storage)
+        // is gone. Primitive state — Watercolor feedback, Bloom mip
+        // pyramids, Stylized Feedback history — lives inside each
+        // chain's `chain_graph`, both as instance-level data on the
+        // primitive nodes themselves and as keyed entries in the
+        // chain's per-instance `StateStore`. Walking every pool entry
+        // here resets both styles in one pass.
         //
-        // (1) Legacy effect registry — clears state for effects
-        //     dispatched via the per-effect fallback path.
-        self.effect_registry.clear_all_state();
-        // (2) Cached ChainGraph state in every chain pool — primitives
-        //     (Watercolor feedback, Bloom mip pyramids, Stylized
-        //     Feedback history) live INSIDE each chain's `chain_graph`,
-        //     not in the registry. Skipping this walk caused
-        //     ghost-trails-from-the-previous-project bleed through.
+        // See `docs/EFFECT_CHAIN_LIFECYCLE.md`.
         for chain in self.effect_chains.values_mut() {
             chain.clear_graph_runner_state();
         }

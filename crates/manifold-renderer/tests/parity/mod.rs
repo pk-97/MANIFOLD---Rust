@@ -146,12 +146,10 @@ impl ParityHarness {
             let mut gpu = RendererGpuEncoder::new(&mut render_enc, &self.device);
             let result = chain.apply_chain(
                 &mut gpu,
-                &mut self.registry,
                 input,
                 slice::from_ref(fx),
                 &[],
                 ctx,
-                None,
             );
             // `result == None` means the chain skipped (disabled / no
             // registered processor / amount==0). Parity-test contract:

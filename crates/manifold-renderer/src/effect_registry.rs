@@ -3,10 +3,23 @@ use manifold_core::EffectTypeId;
 use manifold_gpu::GpuDevice;
 use std::collections::HashMap;
 
-/// Factory + singleton storage for all effect processors.
-/// One processor per EffectTypeId — per-owner state lives inside each processor.
+/// Factory + singleton storage for legacy effect processors. Retained
+/// post–legacy-dispatch removal for two remaining roles:
 ///
-/// All effects are registered via `inventory::submit!` in their implementation files.
+/// 1. **Editor snapshot lookup** ([`graph_snapshot_for`]) — every
+///    registered legacy effect can synthesize a
+///    `Source → <Effect> → FinalOutput` snapshot for the canvas.
+/// 2. **Export warmup** ([`flush_all_background_work`]) — plugin-using
+///    legacy effects (DepthEstimator / BlobDetector) hold background
+///    worker handles whose in-flight work must be drained before each
+///    export frame for determinism.
+///
+/// The previous per-effect dispatch path and per-owner state cache are
+/// gone — chains run exclusively through `ChainGraph`. See
+/// `docs/EFFECT_CHAIN_LIFECYCLE.md`.
+///
+/// All effects are registered via `inventory::submit!` in their
+/// implementation files.
 pub struct EffectRegistry {
     processors: HashMap<EffectTypeId, Box<dyn PostProcessEffect>>,
 }
@@ -23,38 +36,14 @@ impl EffectRegistry {
         Self { processors }
     }
 
-    /// Register an effect processor for a given type.
-    pub fn register(&mut self, effect_type: EffectTypeId, processor: Box<dyn PostProcessEffect>) {
-        self.processors.insert(effect_type, processor);
-    }
-
-    /// Get a mutable reference to the processor for an effect type.
-    pub fn get_mut(
-        &mut self,
-        effect_type: &EffectTypeId,
-    ) -> Option<&mut Box<dyn PostProcessEffect>> {
-        self.processors.get_mut(effect_type)
-    }
-
-    /// Clear all temporal state across all processors (e.g., on seek).
-    pub fn clear_all_state(&mut self) {
-        for processor in self.processors.values_mut() {
-            processor.clear_state();
-        }
-    }
-
-    /// Resize all processors to new dimensions.
+    /// Resize all processors to new dimensions. Called on render-
+    /// resolution change so any internal pipelines / scratch buffers
+    /// inside the singletons stay in sync — even though apply() never
+    /// fires on them, some effects key their snapshot output on
+    /// dimensions, and the background workers may need to know.
     pub fn resize_all(&mut self, device: &GpuDevice, width: u32, height: u32) {
         for processor in self.processors.values_mut() {
             processor.resize(device, width, height);
-        }
-    }
-
-    /// Clean up per-owner effect state for a specific clip.
-    /// Called when a clip stops playback to release per-clip GPU resources.
-    pub fn cleanup_clip_owner(&mut self, owner_key: i64) {
-        for processor in self.processors.values_mut() {
-            processor.cleanup_owner_state(owner_key);
         }
     }
 
@@ -64,11 +53,6 @@ impl EffectRegistry {
         for processor in self.processors.values_mut() {
             processor.flush_background_work();
         }
-    }
-
-    /// Check if any processor is registered.
-    pub fn has_any(&self) -> bool {
-        !self.processors.is_empty()
     }
 
     /// Snapshot the graph of a specific registered effect type.

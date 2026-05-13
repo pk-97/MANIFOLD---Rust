@@ -29,4 +29,3 @@ pub mod tonemap;
 pub mod ui_cache_manager;
 pub mod ui_renderer;
 pub mod uniform_arena;
-pub mod wet_dry_lerp;
