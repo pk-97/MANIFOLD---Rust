@@ -14,7 +14,7 @@
 // constants — Metal compiler dead-code eliminates inactive branches.
 
 use super::compute_blit_helper::ComputeBlitHelper;
-use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
+use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
@@ -335,14 +335,3 @@ impl PostProcessEffect for AutoGainFX {
     }
 }
 
-impl StatefulEffect for AutoGainFX {
-    fn clear_state_for_owner(&mut self, owner_key: i64) {
-        self.states.remove(&owner_key);
-    }
-    fn cleanup_owner(&mut self, owner_key: i64) {
-        self.states.remove(&owner_key);
-    }
-    fn cleanup_all_owners(&mut self, _device: &manifold_gpu::GpuDevice) {
-        self.states.clear();
-    }
-}

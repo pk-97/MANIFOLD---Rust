@@ -25,7 +25,7 @@
 
 use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 use crate::background_worker::BackgroundWorker;
-use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
+use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
 use crate::render_target::RenderTarget;
@@ -609,19 +609,3 @@ impl PostProcessEffect for DepthOfFieldFX {
     }
 }
 
-impl StatefulEffect for DepthOfFieldFX {
-    fn clear_state_for_owner(&mut self, owner_key: i64) {
-        self.states.remove(&owner_key);
-        self.depth_states.remove(&owner_key);
-    }
-
-    fn cleanup_owner(&mut self, owner_key: i64) {
-        self.states.remove(&owner_key);
-        self.depth_states.remove(&owner_key);
-    }
-
-    fn cleanup_all_owners(&mut self, _device: &manifold_gpu::GpuDevice) {
-        self.states.clear();
-        self.depth_states.clear();
-    }
-}

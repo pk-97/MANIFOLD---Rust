@@ -9,7 +9,7 @@
 
 use super::HDR_BUFFER_DIVISOR;
 use super::compute_dual_blit_helper::ComputeDualBlitHelper;
-use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
+use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
@@ -265,16 +265,3 @@ impl PostProcessEffect for HalationFX {
     }
 }
 
-impl StatefulEffect for HalationFX {
-    fn clear_state_for_owner(&mut self, owner_key: i64) {
-        self.states.remove(&owner_key);
-    }
-
-    fn cleanup_owner(&mut self, owner_key: i64) {
-        self.states.remove(&owner_key);
-    }
-
-    fn cleanup_all_owners(&mut self, _device: &manifold_gpu::GpuDevice) {
-        self.states.clear();
-    }
-}

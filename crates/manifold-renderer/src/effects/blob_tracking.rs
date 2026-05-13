@@ -6,7 +6,7 @@
 // Unity's OnReadbackComplete callback maps to try_read() polled at apply() start.
 
 use crate::background_worker::BackgroundWorker;
-use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
+use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
 use crate::render_target::RenderTarget;
@@ -1281,11 +1281,14 @@ impl PostProcessEffect for BlobTrackingFX {
         }
     }
 
-    // BlobTrackingFX.cs lines 329-333 — ClearState() (all owners)
+    // Drops per-owner state entries entirely so a project load
+    // doesn't retain previous-project Vec<u32>/Vec<f32> buffers in
+    // the owner_states map. Next apply() lazy-creates fresh entries.
+    // Equivalent to legacy `CleanupAllOwners` behavior — the
+    // "reset flags in place" pattern (E-2) was leaking the
+    // per-owner allocations across project loads.
     fn clear_state(&mut self) {
-        for state in self.owner_states.values_mut() {
-            clear_owner_state(state);
-        }
+        self.owner_states.clear();
     }
 
     fn flush_background_work(&mut self) {
@@ -1309,31 +1312,3 @@ impl PostProcessEffect for BlobTrackingFX {
     }
 }
 
-impl StatefulEffect for BlobTrackingFX {
-    // BlobTrackingFX.cs lines 335-339 — ClearState(int ownerKey)
-    fn clear_state_for_owner(&mut self, owner_key: i64) {
-        if let Some(state) = self.owner_states.get_mut(&owner_key) {
-            clear_owner_state(state);
-        }
-    }
-
-    // BlobTrackingFX.cs lines 350-357 — CleanupOwner
-    fn cleanup_owner(&mut self, owner_key: i64) {
-        // RenderTextureUtil.Release drops the RT; removal from map drops the struct.
-        self.owner_states.remove(&owner_key);
-    }
-
-    // BlobTrackingFX.cs lines 359-364 — CleanupAllOwners
-    fn cleanup_all_owners(&mut self, _device: &GpuDevice) {
-        self.owner_states.clear();
-    }
-}
-
-// BlobTrackingFX.cs lines 341-348 — ClearOwnerState (static helper)
-fn clear_owner_state(state: &mut OwnerState) {
-    state.has_blob_data = false;
-    state.blob_count = 0;
-    state.connection_count = 0;
-    state.tracked_count = 0;
-    state.has_new_detection = false;
-}

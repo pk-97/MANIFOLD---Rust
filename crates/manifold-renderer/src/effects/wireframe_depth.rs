@@ -9,7 +9,7 @@
 // Graphics.Blit → compute dispatch per pass.
 
 use crate::background_worker::BackgroundWorker;
-use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
+use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
 use crate::render_target::RenderTarget;
@@ -2154,28 +2154,16 @@ impl PostProcessEffect for WireframeDepthFX {
 
     // WireframeDepthFX.cs line 915-919 — ClearState (all owners)
     fn clear_state(&mut self) {
-        // We can't call encoder from trait — clear flags + CPU buffers,
-        // GPU cleared on next apply.
-        for state in self.owner_states.values_mut() {
-            state.dnn_readback_pending = false;
-            state.dnn_has_depth = false;
-            state.dnn_depth_dirty = false;
-            state.dnn_has_subject_mask = false;
-            state.dnn_subject_dirty = false;
-            state.has_prev_native_frame = false;
-            state.native_flow_has_data = false;
-            state.native_flow_dirty = false;
-            state.native_flow_ready = false;
-            state.native_request_wants_flow = false;
-            state.native_request_wants_depth = false;
-            state.native_request_wants_subject = false;
-            state.latest_cut_score = 0.0;
-            state.last_subject_request_frame = -1024;
-            state.last_mesh_update_frame = -1024;
-            state.dnn_depth_buffer.fill(0.0);
-            state.dnn_subject_history_buffer.fill(0.0);
-            state.native_flow_buffer.fill(0.0);
-        }
+        // Drops per-owner state entries entirely so a project load
+        // doesn't retain previous-project Vec<f32> buffers
+        // (`dnn_depth_buffer`, `dnn_subject_history_buffer`,
+        // `native_flow_buffer`) in the owner_states map. Next
+        // apply() lazy-creates fresh entries. Equivalent to legacy
+        // `CleanupAllOwners` — the "reset flags in place" pattern
+        // (E-2) was leaking per-owner allocations across project
+        // loads.
+        self.owner_states.clear();
+        self.warned_missing_dnn = false;
     }
 
     fn resize(&mut self, _device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
@@ -2191,42 +2179,6 @@ impl PostProcessEffect for WireframeDepthFX {
     }
 }
 
-impl StatefulEffect for WireframeDepthFX {
-    // WireframeDepthFX.cs line 921-925 — ClearState(ownerKey)
-    fn clear_state_for_owner(&mut self, owner_key: i64) {
-        if let Some(state) = self.owner_states.get_mut(&owner_key) {
-            state.dnn_readback_pending = false;
-            state.dnn_has_depth = false;
-            state.dnn_depth_dirty = false;
-            state.dnn_has_subject_mask = false;
-            state.dnn_subject_dirty = false;
-            state.has_prev_native_frame = false;
-            state.native_flow_has_data = false;
-            state.native_flow_dirty = false;
-            state.native_flow_ready = false;
-            state.native_request_wants_flow = false;
-            state.native_request_wants_depth = false;
-            state.native_request_wants_subject = false;
-            state.latest_cut_score = 0.0;
-            state.last_subject_request_frame = -1024;
-            state.last_mesh_update_frame = -1024;
-            state.dnn_depth_buffer.fill(0.0);
-            state.dnn_subject_history_buffer.fill(0.0);
-            state.native_flow_buffer.fill(0.0);
-        }
-    }
-
-    // WireframeDepthFX.cs line 981-988 — CleanupOwner
-    fn cleanup_owner(&mut self, owner_key: i64) {
-        self.owner_states.remove(&owner_key);
-    }
-
-    // WireframeDepthFX.cs line 990-996 — CleanupAllOwners
-    fn cleanup_all_owners(&mut self, _device: &manifold_gpu::GpuDevice) {
-        self.owner_states.clear();
-        self.warned_missing_dnn = false;
-    }
-}
 
 /// Convert f32 to IEEE 754 half-precision (f16) stored as u16.
 /// Used for Rgba16Float CPU uploads where Unity uses Rgba32Float.

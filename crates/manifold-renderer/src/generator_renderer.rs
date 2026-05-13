@@ -352,6 +352,17 @@ impl GeneratorRenderer {
             for layer_state in self.layer_generators.values_mut() {
                 layer_state.string_params_dirty = true;
             }
+            // Event-based per-layer eviction: any `layer_generators`
+            // entry whose LayerId is no longer present in the project
+            // gets dropped, freeing its GPU resources (particle
+            // buffers, fluid-sim density grids, attractor history
+            // textures — each can be tens of MB). Mirrors the
+            // compositor's `trim_excess_buffers` pattern but runs
+            // only on data_version change (structural edit), not per
+            // frame.
+            let alive: ahash::AHashSet<&manifold_core::LayerId> =
+                layers.iter().map(|l| &l.layer_id).collect();
+            self.layer_generators.retain(|id, _| alive.contains(id));
         }
 
         // Collect clip IDs into pre-allocated scratch to avoid borrow conflict
@@ -750,6 +761,11 @@ impl ClipRenderer for GeneratorRenderer {
         // Release per-layer generator state (particle buffers, density textures, etc.)
         // to prevent GPU memory leaks across project switches.
         self.layer_generators.clear();
+        // Drop the pooled render-target Vec too. Across project
+        // switches at different resolutions, these would otherwise
+        // persist as stale-sized RenderTargets. Lazy-realloc on the
+        // next clip start.
+        self.available_rts.clear();
         // Force layer_index rescan on next render after project reload.
         self.last_data_version = u64::MAX;
     }

@@ -25,7 +25,7 @@ use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 
-use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
+use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Feedback;
@@ -374,14 +374,3 @@ impl PostProcessEffect for StylizedFeedbackFX {
     }
 }
 
-impl StatefulEffect for StylizedFeedbackFX {
-    fn clear_state_for_owner(&mut self, owner_key: i64) {
-        self.state_store.cleanup_owner(owner_key);
-    }
-    fn cleanup_owner(&mut self, owner_key: i64) {
-        self.state_store.cleanup_owner(owner_key);
-    }
-    fn cleanup_all_owners(&mut self, _device: &manifold_gpu::GpuDevice) {
-        self.state_store.cleanup_all();
-    }
-}

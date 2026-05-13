@@ -106,17 +106,3 @@ pub trait PostProcessEffect: Send {
     }
 }
 
-/// Extension for effects that maintain per-owner state (e.g., Feedback, Bloom).
-/// Unity ref: IStatefulEffect.cs
-pub trait StatefulEffect: PostProcessEffect {
-    /// Clear state for a specific owner (e.g., when a clip is removed).
-    fn clear_state_for_owner(&mut self, owner_key: i64);
-
-    /// Clean up all resources for a specific owner.
-    fn cleanup_owner(&mut self, owner_key: i64);
-
-    /// Release ALL per-owner GPU state. Called during Clear() (stop playback),
-    /// ResizeBuffers(), and WarmupShaders().
-    /// Unity ref: IStatefulEffect.cs line 18
-    fn cleanup_all_owners(&mut self, device: &manifold_gpu::GpuDevice);
-}
