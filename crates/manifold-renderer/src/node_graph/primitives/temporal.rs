@@ -282,3 +282,116 @@ impl EffectNode for Feedback {
         // long-lived cache).
     }
 }
+
+#[cfg(test)]
+mod gpu_tests {
+    //! Real-GPU regression test guarding the `temporal::Feedback`
+    //! StateStore contract: dispatching the primitive through an
+    //! `Executor` requires a `StateStore` + `OwnerKey` to be plumbed
+    //! through. Earlier `ChainGraph::run` used `execute_frame_with_gpu`
+    //! which passes neither — Feedback would panic with
+    //! "Feedback::evaluate requires a StateStore" the moment any chain
+    //! included it. The fix routes ChainGraph through
+    //! `execute_frame_with_state` instead; this test locks the
+    //! end-to-end execute_frame_with_state pathway in place by running
+    //! a minimal Source → Feedback → FinalOutput graph through it.
+
+    use std::sync::Arc;
+
+    use manifold_core::{Beats, Seconds};
+    use manifold_gpu::{GpuDevice, GpuTextureFormat};
+
+    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use crate::node_graph::{
+        compile, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend,
+        NodeInstanceId, ResourceId, Source, StateStore,
+    };
+    use crate::render_target::RenderTarget;
+
+    use super::Feedback;
+
+    fn frame_time() -> FrameTime {
+        FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        }
+    }
+
+    fn output_resource(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -> ResourceId {
+        for step in plan.steps() {
+            if step.node == node {
+                for &(name, id) in &step.outputs {
+                    if name == port {
+                        return id;
+                    }
+                }
+            }
+        }
+        panic!("no output `{port}` on node {node:?}");
+    }
+
+    #[test]
+    fn feedback_dispatches_through_state_store_without_panic() {
+        let device = Arc::new(GpuDevice::new());
+        let (w, h) = (4u32, 4u32);
+        let format = GpuTextureFormat::Rgba16Float;
+
+        // Source → Feedback → FinalOutput.
+        let mut g = Graph::new();
+        let src = g.add_node(Box::new(Source::new()));
+        let fb = g.add_node(Box::new(Feedback::new()));
+        let out = g.add_node(Box::new(FinalOutput::new()));
+        g.connect((src, "out"), (fb, "source")).unwrap();
+        g.connect((fb, "out"), (out, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+
+        // Seed a mid-gray source texture.
+        let source_res = output_resource(&plan, src, "out");
+        let source_target = RenderTarget::new(&device, w, h, format, "test-feedback-src");
+        let mut native_enc = device.create_encoder("feedback-smoke");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+            gpu.clear_texture(&source_target.texture, 0.5, 0.5, 0.5, 1.0);
+        }
+
+        let mut backend = MetalBackend::new(device.clone(), w, h, format);
+        backend.pre_bind_texture_2d(source_res, source_target);
+
+        let mut exec = Executor::new(Box::new(backend));
+        let mut store = StateStore::new();
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+            // The pre-fix code path (`execute_frame_with_gpu`) would
+            // have passed `state: None` and panicked here. After the
+            // fix, ChainGraph::run routes through this `with_state`
+            // path; the test mirrors that contract directly.
+            exec.execute_frame_with_state(
+                &mut g,
+                &plan,
+                frame_time(),
+                &mut gpu,
+                &mut store,
+                /* owner_key = */ 7,
+            );
+        }
+        native_enc.commit_and_wait_completed();
+
+        // Run a second frame so the StateStore's prev-frame buffer is
+        // actually read (the first frame allocs + clears it).
+        let mut native_enc = device.create_encoder("feedback-smoke-2");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+            exec.execute_frame_with_state(
+                &mut g,
+                &plan,
+                frame_time(),
+                &mut gpu,
+                &mut store,
+                7,
+            );
+        }
+        native_enc.commit_and_wait_completed();
+    }
+}

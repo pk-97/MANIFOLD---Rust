@@ -62,7 +62,7 @@ use crate::node_graph::{
     apply_refresh_plan, build_ctx_param_plan, build_refresh_plan, compile, metadata_by_id,
     primitive_id_for_effect, CtxEntry, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph,
     LegacyPostProcessNode, MetalBackend, NodeInstanceId, ParamValue, PortType, PrimitiveRegistry,
-    RefreshEntry, ResourceId, Slot, Source,
+    RefreshEntry, ResourceId, Slot, Source, StateStore,
 };
 use crate::render_target::RenderTarget;
 
@@ -156,6 +156,18 @@ pub struct ChainGraph {
     /// Hash of the topology this graph was built for. Compared
     /// each frame to decide whether to rebuild.
     topology_hash: u64,
+    /// State store for stateful primitives that key per-owner state
+    /// off `(node_id, owner_key)` rather than carrying it on the
+    /// node instance directly. Today that's only `temporal::Feedback`,
+    /// but any future primitive that uses the `StateStore` API will
+    /// route through here. The store's lifetime is tied to this
+    /// `ChainGraph` — when the graph rebuilds (topology change /
+    /// resize), the store is dropped along with it, mirroring how
+    /// instance-level state (e.g. Watercolor's `feedback` field) is
+    /// also lost on rebuild. `clear_state()` calls `cleanup_all()`
+    /// on the store so seek / project-load paths reset both styles
+    /// of stateful primitive uniformly.
+    state_store: StateStore,
 }
 
 struct EffectSlot {
@@ -452,6 +464,7 @@ impl ChainGraph {
             width,
             height,
             topology_hash,
+            state_store: StateStore::new(),
         })
     }
 
@@ -551,11 +564,19 @@ impl ChainGraph {
             // throttle gates.
             frame_count: ctx.frame_count,
         };
-        self.executor.execute_frame_with_gpu(
+        // Use the StateStore-aware execute path so stateful primitives
+        // that key per-owner state off `(node_id, owner_key)` — today
+        // only `temporal::Feedback`, but any future primitive using the
+        // StateStore API — get the StateStore + owner_key they need.
+        // The `with_gpu` variant passes `state: None, owner_key: 0`,
+        // which makes those primitives panic.
+        self.executor.execute_frame_with_state(
             &mut self.graph,
             &self.plan,
             frame_time,
             gpu,
+            &mut self.state_store,
+            ctx.owner_key,
         );
 
         // The chain output is in the slot pre-bound to the last
@@ -572,14 +593,18 @@ impl ChainGraph {
     }
 
     /// Forwarded `clear_state` for each effect node — called on seek
-    /// so trails / feedback don't carry stale content across
-    /// playback discontinuities.
+    /// / project load so trails, feedback, and mip pyramids don't
+    /// carry stale content across playback discontinuities. Also
+    /// wipes the chain's `StateStore` so primitives that key state
+    /// there (e.g. `temporal::Feedback`'s prev-frame buffer) reset
+    /// alongside instance-local state.
     pub fn clear_state(&mut self) {
         for slot in &self.effect_nodes {
             if let Some(inst) = self.graph.get_node_mut(slot.node_id) {
                 inst.node.clear_state();
             }
         }
+        self.state_store.cleanup_all();
     }
 }
 
