@@ -224,9 +224,14 @@ pub(super) fn build_effect_instance(
 /// Build a legacy `EffectContext` from the graph's `EffectNodeContext`.
 /// Width/height come from the output texture; time/beat/dt from the
 /// frame's `FrameTime`. Fields the graph doesn't track (`is_clip_level`,
-/// `edge_stretch_width`, `frame_count`, `output_width/height`) get
-/// sensible defaults — primitives that need any of them should be
-/// ported rather than wrapped.
+/// `edge_stretch_width`, `output_width/height`) get sensible defaults —
+/// primitives that need any of them should be ported rather than wrapped.
+///
+/// `frame_count` is forwarded from `FrameTime` so the legacy effects
+/// wrapped here (AutoGain / BlobTracking / WireframeDepth / DepthOfField /
+/// Infrared / Strobe / VoronoiPrism) get correct throttling. Hardcoding
+/// it to 0 previously broke BlobTracking's frame-stamped tracker and
+/// WireframeDepth's mesh-rebuild gate.
 pub(super) fn build_effect_context(
     ctx: &EffectNodeContext<'_, '_>,
     width: u32,
@@ -243,6 +248,6 @@ pub(super) fn build_effect_context(
         owner_key: ctx.owner_key,
         is_clip_level: false,
         edge_stretch_width: 0.5625,
-        frame_count: 0,
+        frame_count: ctx.time.frame_count,
     }
 }
