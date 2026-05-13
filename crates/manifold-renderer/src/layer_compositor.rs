@@ -1,4 +1,4 @@
-use crate::compositor::{Compositor, CompositorFrame};
+use crate::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
 use crate::effect::EffectContext;
 use crate::effect_chain::EffectChain;
 use crate::effect_registry::EffectRegistry;
@@ -470,12 +470,20 @@ pub struct LayerCompositor {
 /// owner_key 0 (main master) or any layer/clip hash.
 const LED_MASTER_OWNER_KEY: i64 = i64::MIN + 1;
 
-/// How many frames a per-layer effect chain may stay unused before it's
-/// dropped from `effect_chains`. Generous so brief layer mutes, clip gaps,
-/// or scrubbing don't wipe primitive state (Bloom mips, feedback buffers).
-/// At 60 fps this is 2 seconds — long enough to ride out a typical clip
-/// transition, short enough to not accumulate stale chains over a long set.
-const CHAIN_GRACE_FRAMES: u64 = 120;
+/// How many render() calls a per-layer effect chain may stay unused before
+/// it's dropped as a memory-hygiene safety net. Acts ALONGSIDE the
+/// event-based eviction in `trim_excess_buffers` (which drops a chain
+/// the moment its `LayerId` disappears from `frame.layers`). The timer
+/// is the catch for the "this layer hasn't been used in ages and the
+/// operator has clearly moved on" case in multi-hour live shows — frees
+/// memory for sections that won't be revisited without waiting for the
+/// project to be edited.
+///
+/// 18000 = 5 minutes at 60 fps. Frame-count, not wall time, so a 30-fps
+/// project effectively gets 10 min, a 120-fps project 2.5 min. Comfortable
+/// margin around typical mid-song mutes / song-to-song transitions
+/// (sub-minute) while still freeing memory inside a long show.
+const CHAIN_GRACE_FRAMES: u64 = 18000;
 
 /// Returns true when blending an opaque-black source with this mode is a
 /// mathematical no-op on the destination RGB.
@@ -657,57 +665,82 @@ impl LayerCompositor {
             .insert(group_id.clone(), self.frame_counter);
     }
 
-    /// Drop pool entries whose last-used frame is older than
-    /// `CHAIN_GRACE_FRAMES`. All pools are keyed by `LayerId` and
-    /// pruned by the same time-based policy — there's no notion of
-    /// "first N slots" to truncate. Grace period lets brief mute /
-    /// clip gaps preserve primitive state (Bloom mips etc.).
-    fn trim_excess_buffers(&mut self) {
+    /// Hybrid pool eviction policy:
+    ///
+    /// 1. **Event-based (immediate)**: drop any pool entry whose `LayerId`
+    ///    is no longer in `current_layers`. Fires the moment a layer is
+    ///    removed from the project — deterministic, no waiting.
+    /// 2. **Time-based (safety net)**: drop entries unused for more than
+    ///    `CHAIN_GRACE_FRAMES`. Catches "operator has clearly moved on
+    ///    from this section" in multi-hour shows where layers technically
+    ///    still exist in the project but won't be revisited.
+    ///
+    /// Together: brief mutes / clip gaps preserve feedback state for
+    /// visual continuity; long idle / layer deletion reclaims memory.
+    fn trim_excess_buffers(&mut self, current_layers: &[CompositeLayerDescriptor]) {
+        // Build a set of LayerIds present in the project this frame.
+        // Group layers are also `CompositeLayerDescriptor`s, so this set
+        // covers both per-layer and per-group pool keys uniformly.
+        let mut alive: ahash::AHashSet<&LayerId> =
+            ahash::AHashSet::with_capacity(current_layers.len());
+        for l in current_layers {
+            alive.insert(l.layer_id);
+        }
+
         let now = self.frame_counter;
         Self::prune_pool(
             now,
+            &alive,
             &mut self.effect_chains,
             &mut self.chain_last_used_frame,
         );
         Self::prune_pool(
             now,
+            &alive,
             &mut self.group_effect_chains,
             &mut self.group_chain_last_used_frame,
         );
         Self::prune_pool(
             now,
+            &alive,
             &mut self.led_group_effect_chains,
             &mut self.led_group_chain_last_used_frame,
         );
         Self::prune_pool(
             now,
+            &alive,
             &mut self.layer_bufs,
             &mut self.layer_buf_last_used_frame,
         );
         Self::prune_pool(
             now,
+            &alive,
             &mut self.group_bufs,
             &mut self.group_buf_last_used_frame,
         );
         Self::prune_pool(
             now,
+            &alive,
             &mut self.led_group_bufs,
             &mut self.led_group_buf_last_used_frame,
         );
     }
 
-    /// Time-based pool pruner shared by every chain / buf map.
-    /// Removes entries whose `last_used` is older than `CHAIN_GRACE_FRAMES`.
-    /// Allocation: the stale list `Vec` allocates zero bytes when no
-    /// entries are stale (steady state).
+    /// Hybrid pool pruner shared by every chain / buf map.
+    /// Drops entries where the `LayerId` is no longer alive in the
+    /// project, OR `last_used` is older than `CHAIN_GRACE_FRAMES`.
+    /// The stale list `Vec` allocates zero bytes when nothing is stale.
     fn prune_pool<V>(
         now: u64,
+        alive: &ahash::AHashSet<&LayerId>,
         pool: &mut AHashMap<LayerId, V>,
         last_used: &mut AHashMap<LayerId, u64>,
     ) {
         let stale: Vec<LayerId> = last_used
             .iter()
-            .filter(|(_, last)| now.saturating_sub(**last) > CHAIN_GRACE_FRAMES)
+            .filter(|(id, last)| {
+                !alive.contains(id) || now.saturating_sub(**last) > CHAIN_GRACE_FRAMES
+            })
             .map(|(id, _)| id.clone())
             .collect();
         for id in stale {
@@ -1759,7 +1792,10 @@ impl Compositor for LayerCompositor {
             // No layers active — advance frame counter so chains age
             // toward CHAIN_GRACE_FRAMES, then trim stale entries.
             self.frame_counter = self.frame_counter.wrapping_add(1);
-            self.trim_excess_buffers();
+            // Pass `frame.layers` so chains for layers that still exist
+            // in the project survive (even if the frame has no clips).
+            // Layers removed from the project get their chains dropped.
+            self.trim_excess_buffers(frame.layers);
             // Release LED composite resources (nothing to route).
             self.led_main = None;
             self.led_tonemap = None;
@@ -1960,10 +1996,11 @@ impl Compositor for LayerCompositor {
         // set_bytes), but we still flush to handle capacity growth.
         self.uniform_arena.flush(gpu.device);
 
-        // Trim oversized buffer pools. Excess textures released to TexturePool
-        // for recycling (or dropped if no pool). Headroom of +2 prevents
-        // oscillation when layer count fluctuates frame-to-frame.
-        self.trim_excess_buffers();
+        // Trim pool entries: drop chains for layers that have been
+        // removed from the project (immediate, event-based) AND chains
+        // unused for more than CHAIN_GRACE_FRAMES (~5 min at 60 fps,
+        // memory-hygiene safety net for long shows).
+        self.trim_excess_buffers(frame.layers);
 
         &self.tonemap.output.texture
     }
@@ -2011,7 +2048,30 @@ impl Compositor for LayerCompositor {
     }
 
     fn clear_all_effect_state(&mut self) {
+        // Two parallel state caches must be cleared together — see
+        // `docs/EFFECT_CHAIN_LIFECYCLE.md` for the full picture.
+        //
+        // (1) Legacy effect registry — clears state for effects
+        //     dispatched via the per-effect fallback path.
         self.effect_registry.clear_all_state();
+        // (2) Cached ChainGraph state in every chain pool — primitives
+        //     (Watercolor feedback, Bloom mip pyramids, Stylized
+        //     Feedback history) live INSIDE each chain's `chain_graph`,
+        //     not in the registry. Skipping this walk caused
+        //     ghost-trails-from-the-previous-project bleed through.
+        for chain in self.effect_chains.values_mut() {
+            chain.clear_graph_runner_state();
+        }
+        for chain in self.group_effect_chains.values_mut() {
+            chain.clear_graph_runner_state();
+        }
+        for chain in self.led_group_effect_chains.values_mut() {
+            chain.clear_graph_runner_state();
+        }
+        self.master_effect_chain.clear_graph_runner_state();
+        if let Some(led_ec) = self.led_master_ec.as_mut() {
+            led_ec.clear_graph_runner_state();
+        }
     }
 
     fn flush_all_background_work(&mut self) {
@@ -2076,6 +2136,25 @@ mod chain_pool_tests {
     fn reserve_test_capacity(comp: &mut LayerCompositor) {
         comp.effect_chains.reserve(16);
         comp.chain_last_used_frame.reserve(16);
+    }
+
+    /// Build a minimal `CompositeLayerDescriptor` for tests that need to
+    /// drive `trim_excess_buffers`. All defaults are inert (no clips,
+    /// no effects, no group).
+    fn make_layer_desc<'a>(layer_id: &'a LayerId, layer_index: i32) -> CompositeLayerDescriptor<'a> {
+        CompositeLayerDescriptor {
+            layer_index,
+            layer_id,
+            blend_mode: BlendMode::Normal,
+            opacity: 1.0,
+            is_muted: false,
+            is_solo: false,
+            blit_to_led: false,
+            effects: &[],
+            effect_groups: &[],
+            parent_layer_id: None,
+            is_group: false,
+        }
     }
 
     #[test]
@@ -2191,29 +2270,70 @@ mod chain_pool_tests {
     }
 
     #[test]
+    fn chain_dropped_immediately_when_layer_removed_from_project() {
+        // Event-based eviction: when a layer disappears from
+        // `frame.layers` (project edit removed it), its chain drops on
+        // the next `trim_excess_buffers` call — no waiting for the
+        // grace timer. This bounds memory tightly to the project's
+        // current layer set.
+        let (_device, mut comp) = make_compositor();
+        reserve_test_capacity(&mut comp);
+
+        let kept = LayerId::from("kept");
+        let removed = LayerId::from("removed");
+
+        // Frame 1: both layers exist and touch their chains.
+        comp.frame_counter = 1;
+        comp.ensure_chain_for_layer(&kept);
+        comp.ensure_chain_for_layer(&removed);
+        assert!(comp.effect_chains.contains_key(&kept));
+        assert!(comp.effect_chains.contains_key(&removed));
+
+        // Frame 2: the user deletes `removed` from the project. The next
+        // CompositorFrame includes only `kept` in its `layers` slice.
+        // Even though `removed`'s chain was just touched, trim drops it
+        // immediately — the layer no longer exists.
+        comp.frame_counter = 2;
+        let layers_after_delete = vec![make_layer_desc(&kept, 0)];
+        comp.trim_excess_buffers(&layers_after_delete);
+
+        assert!(
+            !comp.effect_chains.contains_key(&removed),
+            "chain for a deleted layer must drop on the next trim, not wait for grace",
+        );
+        assert!(
+            comp.effect_chains.contains_key(&kept),
+            "chain for a layer still in the project must survive",
+        );
+    }
+
+    #[test]
     fn aged_chains_pruned_after_grace_period() {
-        // Chains that haven't been touched in CHAIN_GRACE_FRAMES are
-        // dropped by trim_excess_buffers. Until then they survive (so
-        // brief mutes / clip gaps don't wipe primitive state).
+        // Timer-based safety net: a chain whose layer is still in the
+        // project but hasn't been touched in CHAIN_GRACE_FRAMES is
+        // dropped. Catches the "operator moved on from this section
+        // hours ago" case in long live shows.
         let (_device, mut comp) = make_compositor();
         reserve_test_capacity(&mut comp);
 
         let stale = LayerId::from("stale");
         let alive = LayerId::from("alive");
 
-        // Frame 1: both active.
+        // Frame 1: both active and touch their chains.
         comp.frame_counter = 1;
         comp.ensure_chain_for_layer(&stale);
         comp.ensure_chain_for_layer(&alive);
 
         // Advance well past the grace window while only refreshing `alive`.
+        // BOTH layers stay in `frame.layers` — only `stale`'s chain is idle.
         let last_frame = CHAIN_GRACE_FRAMES + 50;
         for f in 2..=last_frame {
             comp.frame_counter = f;
             comp.ensure_chain_for_layer(&alive);
         }
 
-        comp.trim_excess_buffers();
+        let layers = vec![make_layer_desc(&stale, 0), make_layer_desc(&alive, 1)];
+        comp.trim_excess_buffers(&layers);
 
         assert!(
             !comp.effect_chains.contains_key(&stale),
@@ -2222,6 +2342,37 @@ mod chain_pool_tests {
         assert!(
             comp.effect_chains.contains_key(&alive),
             "alive chain must still be present",
+        );
+    }
+
+    #[test]
+    fn chain_survives_layer_idle_within_grace() {
+        // Common live-performance case: a layer mutes / has no active
+        // clip for a short window (typical mid-song breakdown), then
+        // resumes. Its chain — and any feedback state it holds — must
+        // survive the gap so the visual look is continuous.
+        let (_device, mut comp) = make_compositor();
+        reserve_test_capacity(&mut comp);
+
+        let idle = LayerId::from("idle");
+
+        comp.frame_counter = 1;
+        comp.ensure_chain_for_layer(&idle);
+        let initial_ptr = comp.effect_chains.get(&idle).unwrap() as *const EffectChain;
+
+        // Many frames pass without `idle` being touched, but the layer
+        // is still in the project (typical mute / clip-gap scenario).
+        // CHAIN_GRACE_FRAMES is 18000 — pick a value well below it.
+        let layers = vec![make_layer_desc(&idle, 0)];
+        for f in 2..=(CHAIN_GRACE_FRAMES / 4) {
+            comp.frame_counter = f;
+            comp.trim_excess_buffers(&layers);
+        }
+
+        assert_eq!(
+            comp.effect_chains.get(&idle).unwrap() as *const _,
+            initial_ptr,
+            "chain instance must survive layer-idle periods well below grace window",
         );
     }
 }

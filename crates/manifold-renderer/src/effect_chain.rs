@@ -59,6 +59,37 @@ pub struct ChainDispatchStats {
     pub graph_run_ns: u64,
 }
 
+/// Build a human-readable single-line dump of the topology that drives
+/// `compute_topology_hash`. Used by the env-gated rebuild logger so
+/// successive `[rebuild]` lines can be diffed to identify the flapping
+/// field. Only allocates when the env var is set.
+fn topology_dump(
+    effects: &[EffectInstance],
+    groups: &[EffectGroup],
+    width: u32,
+    height: u32,
+) -> String {
+    let summary: String = effects
+        .iter()
+        .map(|fx| {
+            format!(
+                "{}:{}/en={}/g={:?}",
+                fx.id.as_str(),
+                fx.effect_type().as_str(),
+                fx.enabled,
+                fx.group_id.as_ref().map(|g| g.as_str()),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let group_summary: String = groups
+        .iter()
+        .map(|g| format!("{}:en={}", g.id.as_str(), g.enabled))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("dims={width}x{height} effects=[{summary}] groups=[{group_summary}]")
+}
+
 /// Read the chain-dispatch counters and reset them. Returns the
 /// deltas since the previous call. Call once per logging interval.
 pub fn take_chain_dispatch_stats() -> ChainDispatchStats {
@@ -95,6 +126,12 @@ pub struct EffectChain {
     /// loop below is a partial-wet-dry group spanning
     /// non-contiguous positions.
     chain_graph: Option<ChainGraph>,
+    /// Diagnostic-only: human-readable dump of the topology that
+    /// produced the current `chain_graph`. Populated on rebuild
+    /// when `MANIFOLD_LOG_REBUILD_REASON` is set so successive
+    /// rebuild logs can be diffed against the previous topology.
+    /// `None` when the env var is unset (zero overhead in production).
+    last_built_topology_dump: Option<String>,
 }
 
 impl Default for EffectChain {
@@ -111,6 +148,7 @@ impl EffectChain {
             dry_snapshot: None,
             use_ping_as_source: true,
             chain_graph: None,
+            last_built_topology_dump: None,
         }
     }
 
@@ -211,32 +249,21 @@ impl EffectChain {
         };
         if needs_rebuild {
             // Diagnostic: dump the topology fingerprint on rebuild so
-            // we can see WHICH field is flapping. Gated behind a
-            // separate env var so it doesn't drown the chain-stats
-            // log on rebuild-heavy frames.
-            if std::env::var("MANIFOLD_LOG_REBUILD_REASON").is_ok() {
-                let summary: String = effects
-                    .iter()
-                    .map(|fx| {
-                        format!(
-                            "{}:{}/en={}/g={:?}",
-                            fx.id.as_str(),
-                            fx.effect_type().as_str(),
-                            fx.enabled,
-                            fx.group_id.as_ref().map(|g| g.as_str()),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let group_summary: String = groups
-                    .iter()
-                    .map(|g| format!("{}:en={}", g.id.as_str(), g.enabled))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                eprintln!(
-                    "[rebuild] dims={}x{} effects=[{}] groups=[{}]",
-                    ctx.width, ctx.height, summary, group_summary,
-                );
+            // we can see WHICH field flapped. Gated behind a separate
+            // env var so it doesn't drown the chain-stats log on
+            // rebuild-heavy frames. When enabled we also stash the
+            // previous build's dump on `self` so each [rebuild] line
+            // shows both prev and curr — diff-friendly.
+            let log_enabled = std::env::var("MANIFOLD_LOG_REBUILD_REASON").is_ok();
+            if log_enabled {
+                let curr = topology_dump(effects, groups, ctx.width, ctx.height);
+                let prev = self
+                    .last_built_topology_dump
+                    .as_deref()
+                    .unwrap_or("<none — first build>");
+                eprintln!("[rebuild] prev={prev}");
+                eprintln!("[rebuild] curr={curr}");
+                self.last_built_topology_dump = Some(curr);
             }
             let t0 = std::time::Instant::now();
             self.chain_graph = ChainGraph::try_build(

@@ -133,6 +133,7 @@ YOU MUST COMMIT AND PUSH CODE CHANGES AFTER COMPLETING FEATURES OR FIXES.
 | `docs/EFFECT_RUNTIME_UNIFICATION.md` | Migrating EffectChain → graph runtime; StateStore design; Vulkan-portability constraints |
 | `docs/PRIMITIVE_LIBRARY_DESIGN.md` | Phase 4a primitive catalog (43 primitives), per-effect/generator decomposition recipes, parity test framework |
 | `docs/ADDING_PRIMITIVES.md` | Authoring guide for new primitives — `primitive!` macro, parity test pattern, conventions |
+| `docs/EFFECT_CHAIN_LIFECYCLE.md` | Chain pool lifecycle: when feedback state is preserved vs reset (eviction policy, three state caches, symptom → cause table) — READ when chasing feedback bleed-through, ghost trails, or unexpected state reset |
 
 ## DEBUGGING
 
