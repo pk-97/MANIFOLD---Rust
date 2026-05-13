@@ -233,6 +233,77 @@ pub fn start(
     Ok(())
 }
 
+// ─── Display enumeration (for the GUI picker) ────────────────────────────────
+
+/// Summary of one connected display, surfaced to the GUI so the user can
+/// pick by friendly name instead of memorising integer IDs that change
+/// when the TV gets reconnected (different HDMI source, sleep/wake cycle,
+/// macOS update, etc.).
+#[derive(Clone, Debug)]
+pub struct DisplayInfo {
+    pub id: u32,
+    pub width: u32,
+    pub height: u32,
+    /// Best-effort user-visible name from `NSScreen.localizedName()`. None
+    /// if no NSScreen matched the SCK display ID (rare — usually means a
+    /// virtual/mirrored display).
+    pub name: Option<String>,
+}
+
+/// Enumerate all displays SCK can capture, paired with their NSScreen
+/// names. Used by the GUI's display picker.
+///
+/// MUST be called on the main thread — NSScreen access requires it.
+/// Returns an empty list if SCK can't enumerate (usually Screen Recording
+/// permission denied; the GUI shows the capture-error banner in that case
+/// and re-runs this after the user grants permission and relaunches).
+pub fn list_displays(mtm: objc2::MainThreadMarker) -> Vec<DisplayInfo> {
+    let Ok(content) = fetch_shareable_content() else {
+        return Vec::new();
+    };
+    let displays = unsafe { content.displays() };
+    let name_map = nsscreen_name_map(mtm);
+    let mut out = Vec::with_capacity(displays.len());
+    for i in 0..displays.len() {
+        let d = displays.objectAtIndex(i);
+        let id = unsafe { d.displayID() };
+        let width = unsafe { d.width() } as u32;
+        let height = unsafe { d.height() } as u32;
+        out.push(DisplayInfo {
+            id,
+            width,
+            height,
+            name: name_map.get(&id).cloned(),
+        });
+    }
+    out
+}
+
+/// Build a `display_id → localized_name` map by walking `NSScreen.screens`.
+/// Each NSScreen exposes `deviceDescription[@"NSScreenNumber"]` which is
+/// the same `CGDirectDisplayID` SCK uses, so the two enumerations align.
+fn nsscreen_name_map(
+    mtm: objc2::MainThreadMarker,
+) -> std::collections::HashMap<u32, String> {
+    use objc2_app_kit::NSScreen;
+
+    let mut map = std::collections::HashMap::new();
+    let screens = NSScreen::screens(mtm);
+    let key = NSString::from_str("NSScreenNumber");
+    for i in 0..screens.len() {
+        let screen = screens.objectAtIndex(i);
+        let desc = screen.deviceDescription();
+        let Some(num) = desc.objectForKey(&key) else {
+            continue;
+        };
+        // NSScreenNumber is an NSNumber wrapping CGDirectDisplayID (u32).
+        let id: u32 = unsafe { msg_send![&num, unsignedIntValue] };
+        let name = screen.localizedName().to_string();
+        map.insert(id, name);
+    }
+    map
+}
+
 fn fetch_shareable_content() -> Result<Retained<SCShareableContent>, String> {
     use std::sync::mpsc;
     let (tx, rx) = mpsc::sync_channel::<Result<Retained<SCShareableContent>, String>>(1);

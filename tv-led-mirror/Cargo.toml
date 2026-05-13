@@ -55,6 +55,10 @@ objc2-app-kit = { version = "0.3", features = [
     "NSView",
     "NSWindow",
     "NSImage",
+    # NSScreen + deviceDescription for mapping SCK display IDs to user-
+    # friendly names ("Studio Display", "Built-in Retina", etc.) in the
+    # GUI's display picker.
+    "NSScreen",
 ] }
 # ScreenCaptureKit + CoreMedia/CoreVideo for HDR-aware capture. SCK replaces
 # CGDisplayStream so we can request 16-bit float pixel format,

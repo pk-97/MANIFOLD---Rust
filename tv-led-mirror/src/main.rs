@@ -360,6 +360,26 @@ fn main() {
     // Snapshot the boot-time config so the GUI's "reset to defaults" button
     // can restore it without us having to re-parse the CLI.
     let defaults = dynamic.clone();
+    // Enumerate displays before the GUI starts so the picker can list them
+    // immediately. NSScreen access requires the main thread, which we're on.
+    let mtm = objc2::MainThreadMarker::new()
+        .expect("must be on main thread (called from main())");
+    let available_displays = capture::list_displays(mtm);
+    log::info!(
+        "Found {} display(s): {}",
+        available_displays.len(),
+        available_displays
+            .iter()
+            .map(|d| format!(
+                "{}={}×{}",
+                d.name.as_deref().unwrap_or("?"),
+                d.width,
+                d.height
+            ))
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+
     let state = Arc::new(SharedState {
         device,
         controller: Mutex::new(controller),
@@ -369,6 +389,9 @@ fn main() {
         config: RwLock::new(dynamic),
         hdr: cli.hdr,
         frames_seen: AtomicU64::new(0),
+        capture_error: RwLock::new(None),
+        active_display_id: display_id,
+        available_displays,
     });
 
     // SIGINT (Ctrl+C from the launching terminal) and SIGTERM (e.g.
@@ -383,24 +406,29 @@ fn main() {
     // request HDR + 16-bit float when --hdr is set, and so we get proper
     // wide-gamut color metadata. The capture::start blocks until the stream
     // start completion handler fires (or 5s timeout).
-    if let Err(e) = capture::start(display_id, cap_w, cap_h, cli.hdr, cli.p3, state.clone()) {
-        eprintln!();
-        eprintln!("ScreenCaptureKit start failed: {e}");
-        eprintln!();
-        eprintln!("Most common cause: Screen Recording permission denied for TVLEDMirror.");
-        eprintln!("  1. Launch via the .app bundle so the prompt is attributed to");
-        eprintln!("     TVLEDMirror (not to your terminal):");
-        eprintln!("       ./tv-led-mirror/run.sh --display <id> [other flags]");
-        eprintln!("  2. Approve the Screen Recording prompt for TVLEDMirror.");
-        eprintln!("  3. If no prompt appears: open System Settings → Privacy &");
-        eprintln!("     Security → Screen Recording, look for TVLEDMirror, enable it.");
-        eprintln!();
-        std::process::exit(1);
+    //
+    // Failure here is NON-FATAL: we still open the GUI so the user can see
+    // the error, grant Screen Recording in System Settings, and relaunch.
+    // The previous behaviour of `exit(1)` made the app silently disappear
+    // from the user's perspective — terrible UX since the most common
+    // failure (TCC denied) is also the most recoverable.
+    match capture::start(display_id, cap_w, cap_h, cli.hdr, cli.p3, state.clone()) {
+        Ok(()) => {
+            log::info!(
+                "Capture started ({}). Quit via window close, Cmd+Q, or Ctrl+C.",
+                if cli.hdr { "HDR / 16-bit float" } else { "SDR / BGRA8" }
+            );
+        }
+        Err(e) => {
+            eprintln!("ScreenCaptureKit start failed: {e}");
+            eprintln!(
+                "Most common cause: Screen Recording permission denied for TVLEDMirror.\n  \
+                 Fix: System Settings → Privacy & Security → Screen Recording → enable TVLEDMirror,\n  \
+                 then quit and relaunch the app."
+            );
+            *state.capture_error.write() = Some(e);
+        }
     }
-    log::info!(
-        "Capture started ({}). Quit via the menu-bar item, Cmd+Q, or Ctrl+C.",
-        if cli.hdr { "HDR / 16-bit float" } else { "SDR / BGRA8" }
-    );
 
     // Polling lives on a background thread so the main thread is free for the
     // AppKit run loop (NSApplication.run requires the main thread).
@@ -509,6 +537,20 @@ pub(crate) struct SharedState {
     device: GpuDevice,
     controller: Mutex<LedOutputController>,
     slicer: Slicer,
+    /// Capture-init error, if SCK failed to start (usually Screen Recording
+    /// TCC denied). `None` means capture is running. The GUI reads this to
+    /// show a banner and an "Open Privacy Settings" button so the user can
+    /// recover without restarting — instead of the app silently exiting
+    /// before any window opens.
+    pub(crate) capture_error: RwLock<Option<String>>,
+    /// Display ID we're currently trying to capture from. Used by the GUI
+    /// to highlight the active row in the display picker.
+    pub(crate) active_display_id: u32,
+    /// Displays SCK enumerated at startup. Populated on the main thread
+    /// (NSScreen access requires it) before the GUI runs. The picker lets
+    /// the user pick by name; on apply we write `--display <id>` to
+    /// flags.conf and relaunch.
+    pub(crate) available_displays: Vec<capture::DisplayInfo>,
     /// IOSurfaces we've handed to the GPU but not yet released. Each entry is a
     /// retained `IOSurfaceRef` plus the wall-clock time we submitted its work,
     /// used to defer release until the GPU has plausibly finished reading it.

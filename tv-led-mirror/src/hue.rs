@@ -591,6 +591,12 @@ fn try_stream(
     // so secondary-hue bin flips morph rather than snap. Initialized to
     // zero so the first tick fades up from black instead of popping.
     let mut smoothed: Vec<[f32; 3]> = vec![[0.0; 3]; cfg.channel_count as usize];
+    // Stateful dual-color reducer. Owns the smoothed histogram bins and
+    // the last-chosen primary/secondary bin indices so the selection is
+    // stable across frames (no per-frame flipping when two bins are
+    // close in weight). Lives across ticks even when single-color mode
+    // is active, so toggling back to dual doesn't pop.
+    let mut dual_reducer = DualReducer::new();
 
     loop {
         // Cancellable sleep until next tick. Any incoming command preempts.
@@ -638,8 +644,13 @@ fn try_stream(
         // Dual-color path uses a hue histogram to find two visually distinct
         // dominant hues; single-color path uses the cheaper top-20% reducer.
         if dyn_cfg.dual_color() {
-            let (primary, secondary) =
-                reduce_dual(pixels, gamma, dyn_cfg.saturation, dyn_cfg.gain);
+            let (primary, secondary) = dual_reducer.reduce(
+                pixels,
+                gamma,
+                dyn_cfg.smoothing,
+                dyn_cfg.saturation,
+                dyn_cfg.gain,
+            );
             for (i, slot) in channel_colors.iter_mut().enumerate() {
                 let bit = 1u32 << i;
                 *slot = if dyn_cfg.secondary_channel_mask & bit != 0 {
@@ -908,48 +919,187 @@ fn pack_packet(buf: &mut Vec<u8>, uuid: &str, channel_colors: &[[u8; 3]]) {
     }
 }
 
-// ─── Dual-color extraction (hue histogram) ──────────────────────────────────
+// ─── Dual-color extraction (stateful hue histogram + hysteresis) ───────────
 
-/// Find the two most-dominant *distinct* hues in the slicer output.
+/// Number of bins in the hue histogram (10° per bin). Coarse enough to
+/// cluster perceptually-similar hues, fine enough to resolve adjacent
+/// colors like red vs orange.
+const HISTOGRAM_BINS: usize = 36;
+/// Pixels below this saturation bypass the hue histogram and feed an
+/// achromatic accumulator instead. Avoids near-grey pixels (whose hue is
+/// noise) dominating a hue bin.
+const ACHROMATIC_SAT: f32 = 0.10;
+/// Minimum hue distance (in bins) between primary and secondary so the
+/// two outputs look visually distinct. 3 bins = 30°.
+const MIN_BIN_DIST: usize = 3;
+/// To swap the active primary/secondary bin, a new candidate's smoothed
+/// weight must exceed the incumbent's by this factor. Anti-flicker:
+/// without hysteresis, two bins hovering at similar weight would swap
+/// "winner" every frame on tiny fluctuations.
+const HYSTERESIS_MARGIN: f32 = 1.3;
+
+/// Per-frame histogram (rebuilt every tick from raw pixels). Owned briefly
+/// before being EMA-blended into [`DualReducer`]'s smoothed state.
 ///
-/// Algorithm:
-///   1. Linearize each pixel (undo slicer gamma — same as [`reduce_dominant`]).
-///   2. Bin by HSV hue into 36 bins (10° each). Each bin accumulates
-///      `lum × (1 + 4·sat)` weighted RGB. Pixels with sat < 0.1 go into a
-///      separate achromatic accumulator instead of polluting hue bins.
-///   3. Primary = highest-weighted hue bin. Secondary = highest-weighted bin
-///      that is ≥30° away from the primary's hue.
-///   4. If no hue is ≥30° away (uniform-color scene), secondary mirrors
-///      primary so both lights match the scene rather than fighting it.
-///   5. If the scene is entirely achromatic (white/grey), both colors come
-///      from the achromatic accumulator.
-///   6. Saturation boost + gain applied to each output independently.
-fn reduce_dual(
-    rgba: &[u8],
-    gamma: f32,
-    saturation_boost: f32,
-    gain: f32,
-) -> ([u8; 3], [u8; 3]) {
-    if rgba.len() < 4 {
-        return ([0; 3], [0; 3]);
+/// Hand `Default` impl: `[[f32; 3]; 36]` exceeds the array length the
+/// stdlib auto-derives Default for (max 32), so we spell it out.
+#[derive(Clone, Copy)]
+struct FrameHistogram {
+    bin_w: [f32; HISTOGRAM_BINS],
+    bin_rgb: [[f32; 3]; HISTOGRAM_BINS],
+    ach_w: f32,
+    ach_rgb: [f32; 3],
+}
+
+impl Default for FrameHistogram {
+    fn default() -> Self {
+        Self {
+            bin_w: [0.0; HISTOGRAM_BINS],
+            bin_rgb: [[0.0; 3]; HISTOGRAM_BINS],
+            ach_w: 0.0,
+            ach_rgb: [0.0; 3],
+        }
+    }
+}
+
+/// Stateful reducer that finds two dominant hues over time. Caller owns
+/// one of these and calls `reduce()` each tick; the persistent state
+/// (smoothed histogram + last-chosen bins) is what makes the output
+/// stable in the face of frame-to-frame jitter.
+///
+/// Two layers of stability:
+///   - **Bin-weight EMA**: histogram weights are blended frame-to-frame
+///     so transient spikes don't immediately become the winner.
+///   - **Selection hysteresis**: the chosen primary/secondary bin only
+///     changes when a new candidate's smoothed weight beats the
+///     incumbent by [`HYSTERESIS_MARGIN`]. Without this, even smoothed
+///     bins flip when two are nearly tied.
+pub struct DualReducer {
+    smoothed: FrameHistogram,
+    last_primary_bin: Option<usize>,
+    last_secondary_bin: Option<usize>,
+}
+
+impl DualReducer {
+    pub fn new() -> Self {
+        Self {
+            smoothed: FrameHistogram::default(),
+            last_primary_bin: None,
+            last_secondary_bin: None,
+        }
     }
 
+    /// Reduce the current frame's pixels to two dominant hues.
+    ///
+    /// `smoothing` ∈ (0, 1] — the EMA mix factor for the histogram. 1.0
+    /// disables smoothing (per-frame extraction); lower values keep more
+    /// inertia. Same knob that smooths the output colors at the channel
+    /// level, applied here at the bin level for stability.
+    pub fn reduce(
+        &mut self,
+        rgba: &[u8],
+        gamma: f32,
+        smoothing: f32,
+        saturation_boost: f32,
+        gain: f32,
+    ) -> ([u8; 3], [u8; 3]) {
+        let frame = build_frame_histogram(rgba, gamma);
+
+        // EMA-blend per-bin into persistent state. alpha=1 ⇒ pass-through;
+        // smaller alpha ⇒ heavier inertia. Applied to weights AND
+        // weighted-RGB so the bin's centre tracks the smoothed colour.
+        let alpha = smoothing.clamp(0.01, 1.0);
+        for i in 0..HISTOGRAM_BINS {
+            self.smoothed.bin_w[i] =
+                self.smoothed.bin_w[i] * (1.0 - alpha) + frame.bin_w[i] * alpha;
+            for c in 0..3 {
+                self.smoothed.bin_rgb[i][c] =
+                    self.smoothed.bin_rgb[i][c] * (1.0 - alpha) + frame.bin_rgb[i][c] * alpha;
+            }
+        }
+        self.smoothed.ach_w = self.smoothed.ach_w * (1.0 - alpha) + frame.ach_w * alpha;
+        for c in 0..3 {
+            self.smoothed.ach_rgb[c] =
+                self.smoothed.ach_rgb[c] * (1.0 - alpha) + frame.ach_rgb[c] * alpha;
+        }
+
+        // Pick primary with hysteresis.
+        let smoothed = &self.smoothed;
+        let best_primary = (0..HISTOGRAM_BINS)
+            .max_by(|&a, &b| {
+                smoothed.bin_w[a]
+                    .partial_cmp(&smoothed.bin_w[b])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap();
+        let primary_bin = stick_or_swap(
+            self.last_primary_bin,
+            best_primary,
+            &smoothed.bin_w,
+        );
+        self.last_primary_bin = Some(primary_bin);
+
+        let primary_rgb = bin_color(smoothed, primary_bin);
+
+        // Pick secondary with hysteresis. The candidate set excludes bins
+        // too close to the chosen primary (so the two colors stay
+        // visually distinct), then hysteresis stabilises which of those
+        // candidates wins.
+        let candidate_secondary = (0..HISTOGRAM_BINS)
+            .filter(|&i| {
+                circular_bin_dist(i, primary_bin, HISTOGRAM_BINS) >= MIN_BIN_DIST
+                    && smoothed.bin_w[i] > 0.0001
+            })
+            .max_by(|&a, &b| {
+                smoothed.bin_w[a]
+                    .partial_cmp(&smoothed.bin_w[b])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+        // Only keep the previous secondary if it's still far enough from
+        // the (possibly new) primary; otherwise the candidate (or
+        // fallback) takes over.
+        let prev_still_valid = self.last_secondary_bin.is_some_and(|prev| {
+            circular_bin_dist(prev, primary_bin, HISTOGRAM_BINS) >= MIN_BIN_DIST
+                && smoothed.bin_w[prev] > 0.0001
+        });
+        let secondary_bin = match (prev_still_valid, candidate_secondary) {
+            (true, Some(best)) => Some(stick_or_swap(
+                self.last_secondary_bin,
+                best,
+                &smoothed.bin_w,
+            )),
+            (false, best) => best,
+            (true, None) => self.last_secondary_bin, // shouldn't happen — prev valid implies candidate exists
+        };
+        self.last_secondary_bin = secondary_bin;
+
+        let secondary_rgb = secondary_bin
+            .map(|i| bin_color(smoothed, i))
+            .unwrap_or(primary_rgb);
+
+        (
+            finalize_color(primary_rgb, saturation_boost, gain),
+            finalize_color(secondary_rgb, saturation_boost, gain),
+        )
+    }
+}
+
+impl Default for DualReducer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Build a single frame's histogram. Stateless — caller blends into
+/// persistent state via EMA.
+fn build_frame_histogram(rgba: &[u8], gamma: f32) -> FrameHistogram {
+    let mut h = FrameHistogram::default();
+    if rgba.len() < 4 {
+        return h;
+    }
     let do_unlinearize = (gamma - 1.0).abs() > 0.01;
     let inv_y_exp = 1.0 / gamma.max(0.0001) - 1.0;
-
-    const BINS: usize = 36;
-    /// Pixels below this saturation bypass the hue histogram. Avoids near-
-    /// grey pixels (which have noisy/meaningless hue) dominating a bin.
-    const ACHROMATIC_SAT: f32 = 0.10;
-    /// Minimum hue distance (in bins) between primary and secondary so the
-    /// two colors look visually different. 3 bins = 30°.
-    const MIN_BIN_DIST: usize = 3;
-
-    let mut bin_w = [0.0f32; BINS];
-    let mut bin_rgb = [[0.0f32; 3]; BINS];
-    let mut ach_w = 0.0f32;
-    let mut ach_rgb = [0.0f32; 3];
-
     for px in rgba.chunks_exact(4) {
         let mut r = px[0] as f32 / 255.0;
         let mut g = px[1] as f32 / 255.0;
@@ -968,58 +1118,44 @@ fn reduce_dual(
         let w = lum * (1.0 + 4.0 * sat);
 
         if sat < ACHROMATIC_SAT {
-            ach_w += w;
-            ach_rgb[0] += r * w;
-            ach_rgb[1] += g * w;
-            ach_rgb[2] += b * w;
+            h.ach_w += w;
+            h.ach_rgb[0] += r * w;
+            h.ach_rgb[1] += g * w;
+            h.ach_rgb[2] += b * w;
         } else {
-            let h = rgb_to_hue(r, g, b, mx, mn);
-            let bin = ((h / 360.0 * BINS as f32) as usize).min(BINS - 1);
-            bin_w[bin] += w;
-            bin_rgb[bin][0] += r * w;
-            bin_rgb[bin][1] += g * w;
-            bin_rgb[bin][2] += b * w;
+            let hue = rgb_to_hue(r, g, b, mx, mn);
+            let bin = ((hue / 360.0 * HISTOGRAM_BINS as f32) as usize).min(HISTOGRAM_BINS - 1);
+            h.bin_w[bin] += w;
+            h.bin_rgb[bin][0] += r * w;
+            h.bin_rgb[bin][1] += g * w;
+            h.bin_rgb[bin][2] += b * w;
         }
     }
+    h
+}
 
-    // Pick the heaviest hue bin as primary. If no hue bins have weight
-    // (achromatic scene), primary falls back to the achromatic accumulator.
-    let (primary_bin, primary_weight) = (0..BINS)
-        .map(|i| (i, bin_w[i]))
-        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-        .unwrap();
-
-    let primary_rgb = if primary_weight > 0.0001 {
-        [
-            bin_rgb[primary_bin][0] / primary_weight,
-            bin_rgb[primary_bin][1] / primary_weight,
-            bin_rgb[primary_bin][2] / primary_weight,
-        ]
-    } else if ach_w > 0.0001 {
-        [ach_rgb[0] / ach_w, ach_rgb[1] / ach_w, ach_rgb[2] / ach_w]
+/// Average colour for one bin. Falls back to the achromatic accumulator
+/// when the bin is empty (entirely-achromatic scene).
+fn bin_color(h: &FrameHistogram, bin: usize) -> [f32; 3] {
+    let w = h.bin_w[bin];
+    if w > 0.0001 {
+        [h.bin_rgb[bin][0] / w, h.bin_rgb[bin][1] / w, h.bin_rgb[bin][2] / w]
+    } else if h.ach_w > 0.0001 {
+        [h.ach_rgb[0] / h.ach_w, h.ach_rgb[1] / h.ach_w, h.ach_rgb[2] / h.ach_w]
     } else {
         [0.0, 0.0, 0.0]
-    };
+    }
+}
 
-    // Secondary: heaviest bin that is ≥MIN_BIN_DIST away. None when no such
-    // bin exists (uniform-color scene); falls back to primary so the lights
-    // stay consistent rather than the secondary going dark.
-    let secondary_rgb = (0..BINS)
-        .filter(|&i| circular_bin_dist(i, primary_bin, BINS) >= MIN_BIN_DIST && bin_w[i] > 0.0001)
-        .max_by(|&a, &b| bin_w[a].partial_cmp(&bin_w[b]).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|i| {
-            [
-                bin_rgb[i][0] / bin_w[i],
-                bin_rgb[i][1] / bin_w[i],
-                bin_rgb[i][2] / bin_w[i],
-            ]
-        })
-        .unwrap_or(primary_rgb);
-
-    (
-        finalize_color(primary_rgb, saturation_boost, gain),
-        finalize_color(secondary_rgb, saturation_boost, gain),
-    )
+/// Hysteresis: stick with the previous choice unless the new candidate's
+/// smoothed weight beats it by at least [`HYSTERESIS_MARGIN`]. Without
+/// this, two bins hovering near equal weight flip-flop every frame even
+/// after bin-weight smoothing.
+fn stick_or_swap(prev: Option<usize>, best: usize, weights: &[f32; HISTOGRAM_BINS]) -> usize {
+    match prev {
+        Some(p) if p != best && weights[best] < weights[p] * HYSTERESIS_MARGIN => p,
+        _ => best,
+    }
 }
 
 /// Standard HSV hue formula. `mx` / `mn` are the per-pixel max / min
@@ -1194,21 +1330,75 @@ const MANAGED_LIVE_FLAGS: &[&str] = &[
 ];
 
 /// Replace all live-tunable `--*` lines in flags.conf with the supplied
-/// rendering of the current `DynamicConfig`. Other tokens (capture flags,
-/// hue setup credentials, custom flags) are preserved.
-///
-/// Token-level stripping (NOT line-level): an existing line like
-/// `--display 5 --blur-radius 1.0 --gamma 2.2` will keep `--display 5` but
-/// drop `--blur-radius 1.0` and `--gamma 2.2`. Without this, clap rejects
-/// the next launch with "argument cannot be used multiple times" because
-/// our appended managed lines duplicate the in-line ones.
-///
-/// Comments are preserved as standalone lines but not attached to specific
-/// flag positions (we re-emit surviving tokens as one consolidated line).
-///
-/// Atomic via tmp file + rename so a crash mid-write leaves the old
-/// flags.conf intact rather than truncated.
+/// rendering of the current `DynamicConfig`. Capture flags, hue setup
+/// credentials, comments, and any custom flags are preserved.
 pub fn write_live_settings_to_flags(lines_to_write: &[String]) -> Result<(), String> {
+    rewrite_flags_conf(MANAGED_LIVE_FLAGS, lines_to_write)
+}
+
+/// Write (or replace) the four `--hue-*` lines in `flags.conf`. Strips any
+/// existing `--hue-bridge`/`--hue-app-key`/`--hue-psk`/`--hue-area`/
+/// `--hue-entertainment-id` token from anywhere in the file (inline or on
+/// its own line) before appending the fresh values, so re-pairing can't
+/// leave stale credentials behind to be duplicated later by another writer.
+pub fn write_hue_creds_to_flags(
+    bridge: &str,
+    app_key: &str,
+    psk: &str,
+    area: &str,
+) -> Result<(), String> {
+    rewrite_flags_conf(
+        HUE_CRED_FLAGS,
+        &[
+            format!("--hue-bridge {bridge}"),
+            format!("--hue-app-key {app_key}"),
+            format!("--hue-psk {psk}"),
+            // Area name shell-quoted so values like "Studio Lights" survive.
+            format!("--hue-area {}", shell_quote(area)),
+        ],
+    )
+}
+
+/// Flag names this writer owns. Kept as a const so all writers stripping
+/// hue creds (now or in future) reference the same set.
+const HUE_CRED_FLAGS: &[&str] = &[
+    "--hue-bridge",
+    "--hue-app-key",
+    "--hue-psk",
+    "--hue-area",
+    "--hue-entertainment-id",
+];
+
+/// Replace the `--display <N>` flag in flags.conf with the user's pick.
+/// Used by the GUI's display picker. Other flags + comments are preserved.
+pub fn write_display_to_flags(display_id: u32) -> Result<(), String> {
+    rewrite_flags_conf(&["--display"], &[format!("--display {display_id}")])
+}
+
+// ─── Shared flags.conf rewriter ─────────────────────────────────────────────
+
+/// Token-level rewriter that ALL flags.conf writers route through.
+///
+/// Reads the existing file, tokenizes via shlex (so quoted values like
+/// `"Studio Lights"` survive), strips every occurrence of `flags_to_replace`
+/// (and its single value-token), then re-emits as:
+///   1. Comment lines, preserved verbatim at the top.
+///   2. The caller's new lines, in order.
+///   3. Any other surviving tokens, joined on a single line.
+///
+/// Atomic via tmp file + rename, so a crash mid-write can't leave
+/// flags.conf truncated.
+///
+/// **Why all writers must use this**: without unified token-level stripping,
+/// writer A appends new lines on top of the existing file; writer B later
+/// reads the file and re-emits everything (including A's appended values)
+/// on one consolidated line. If A and B touch overlapping flag namespaces,
+/// the values end up duplicated, and clap rejects the next launch with
+/// "argument cannot be used multiple times".
+fn rewrite_flags_conf(
+    flags_to_replace: &[&str],
+    new_lines: &[String],
+) -> Result<(), String> {
     let path = flags_conf_path().ok_or("no $HOME — can't locate flags.conf")?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {parent:?}: {e}"))?;
@@ -1235,28 +1425,31 @@ pub fn write_live_settings_to_flags(lines_to_write: &[String]) -> Result<(), Str
     let tokens = shlex::split(&payload).ok_or("flags.conf shell-quote parse error")?;
 
     // Walk tokens. When we hit a managed `--flag`, swallow it AND the next
-    // token (its value, unless the next token also looks like a flag —
-    // which would mean the value was missing in the original file).
+    // token (its value, unless the next token starts with `--` — which
+    // would mean the value was missing or the flag is boolean).
     let mut kept: Vec<String> = Vec::with_capacity(tokens.len());
     let mut i = 0;
     while i < tokens.len() {
-        let tok = &tokens[i];
-        if MANAGED_LIVE_FLAGS.contains(&tok.as_str()) {
+        if flags_to_replace.contains(&tokens[i].as_str()) {
             i += 1;
             if i < tokens.len() && !tokens[i].starts_with("--") {
                 i += 1;
             }
             continue;
         }
-        kept.push(tok.clone());
+        kept.push(tokens[i].clone());
         i += 1;
     }
 
-    // Re-emit. Comments first (preserved order), then surviving tokens on
-    // one consolidated line, then our managed lines.
+    // Re-emit: comments first (preserved order), then our new lines, then
+    // any other surviving tokens on a single consolidated line.
     let mut out = String::new();
     for c in &comment_lines {
         out.push_str(c);
+        out.push('\n');
+    }
+    for line in new_lines {
+        out.push_str(line);
         out.push('\n');
     }
     if !kept.is_empty() {
@@ -1264,70 +1457,7 @@ pub fn write_live_settings_to_flags(lines_to_write: &[String]) -> Result<(), Str
         out.push_str(&escaped.join(" "));
         out.push('\n');
     }
-    for line in lines_to_write {
-        out.push_str(line);
-        out.push('\n');
-    }
 
-    let tmp = path.with_extension("conf.tmp");
-    std::fs::write(&tmp, out.as_bytes()).map_err(|e| format!("write tmp: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("rename: {e}"))?;
-    Ok(())
-}
-
-/// Write (or replace) the four `--hue-*` lines in `flags.conf`. All other
-/// flags + comments are preserved verbatim. The file is created if missing.
-///
-/// We intentionally write `--hue-area` (not the raw UUID) so the line stays
-/// readable for humans editing the file by hand. `--hue-entertainment-id`
-/// gets stripped if present, since `--hue-area` supersedes it.
-pub fn write_hue_creds_to_flags(
-    bridge: &str,
-    app_key: &str,
-    psk: &str,
-    area: &str,
-) -> Result<(), String> {
-    let path = flags_conf_path().ok_or("no $HOME — can't locate flags.conf")?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {parent:?}: {e}"))?;
-    }
-    let raw = std::fs::read_to_string(&path).unwrap_or_default();
-
-    // Strip any pre-existing hue lines (we'll rewrite them with current
-    // values). A "hue line" is one whose first token after comment-strip
-    // starts with --hue-bridge / --hue-app-key / --hue-psk / --hue-area /
-    // --hue-entertainment-id. Other content (other flags, blank lines,
-    // standalone comments) is preserved.
-    let kept: Vec<String> = raw
-        .lines()
-        .filter(|line| {
-            let no_comment = line.split('#').next().unwrap_or("").trim_start();
-            let first = no_comment.split_whitespace().next().unwrap_or("");
-            !matches!(
-                first,
-                "--hue-bridge"
-                    | "--hue-app-key"
-                    | "--hue-psk"
-                    | "--hue-area"
-                    | "--hue-entertainment-id"
-            )
-        })
-        .map(|s| s.to_string())
-        .collect();
-
-    let mut out = kept.join("\n");
-    if !out.is_empty() && !out.ends_with('\n') {
-        out.push('\n');
-    }
-    // Write each hue flag on its own line. The area name is shell-quoted so
-    // values like "Studio Lights" survive the parser.
-    out.push_str(&format!("--hue-bridge {bridge}\n"));
-    out.push_str(&format!("--hue-app-key {app_key}\n"));
-    out.push_str(&format!("--hue-psk {psk}\n"));
-    out.push_str(&format!("--hue-area {}\n", shell_quote(area)));
-
-    // Atomic-ish: write to a temp file then rename, so a crash mid-write
-    // can't leave flags.conf truncated.
     let tmp = path.with_extension("conf.tmp");
     std::fs::write(&tmp, out.as_bytes()).map_err(|e| format!("write tmp: {e}"))?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("rename: {e}"))?;
@@ -1380,7 +1510,7 @@ mod tests {
     }
 
     #[test]
-    fn reduce_dual_separates_two_distinct_hues() {
+    fn dual_reducer_separates_two_distinct_hues() {
         // Half the pixels vivid red, half vivid blue. Histogram should
         // surface BOTH as distinct primary/secondary.
         let mut pixels = Vec::new();
@@ -1390,9 +1520,9 @@ mod tests {
         for _ in 0..50 {
             pixels.extend_from_slice(&[0, 0, 255, 255]); // blue
         }
-        let (p, s) = reduce_dual(&pixels, 1.0, 1.0, 1.0);
-        // Whichever wins primary, the other should be secondary — they
-        // shouldn't both end up red OR both blue.
+        let mut r = DualReducer::new();
+        // smoothing=1.0 → no inertia, this single call settles immediately.
+        let (p, s) = r.reduce(&pixels, 1.0, 1.0, 1.0, 1.0);
         let primary_is_red = p[0] > p[2];
         let secondary_is_red = s[0] > s[2];
         assert_ne!(
@@ -1402,14 +1532,63 @@ mod tests {
     }
 
     #[test]
-    fn reduce_dual_uniform_scene_falls_back_to_primary() {
-        // Solid red scene → no second hue exists → secondary mirrors
-        // primary (rather than going dark / random).
+    fn dual_reducer_uniform_scene_falls_back_to_primary() {
         let pixels: Vec<u8> = (0..100).flat_map(|_| [255, 0, 0, 255]).collect();
-        let (p, s) = reduce_dual(&pixels, 1.0, 1.0, 1.0);
-        // Both should be reddish.
+        let mut r = DualReducer::new();
+        let (p, s) = r.reduce(&pixels, 1.0, 1.0, 1.0, 1.0);
         assert!(p[0] > p[1] && p[0] > p[2], "primary not red: {p:?}");
         assert_eq!(p, s, "uniform scene: secondary should mirror primary");
+    }
+
+    #[test]
+    fn dual_reducer_hysteresis_locks_secondary() {
+        // Bin weight per pixel: lum × (1 + 4·sat). Pure red lum=0.2126,
+        // green lum=0.7152, blue lum=0.0722. So per-pixel weights are
+        // approximately: red 1.06, green 3.58, blue 0.36. To make RED the
+        // primary, use many more red pixels than green.
+        //
+        // Frame 1: ~3:1 red:green by weight ⇒ primary=red, secondary=green.
+        // Frame 2: add blue with weight only ~10% over green ⇒ challenger
+        //   doesn't clear the 1.3× hysteresis margin, green stays.
+        let mut r = DualReducer::new();
+
+        let mut frame1 = Vec::new();
+        for _ in 0..1000 {
+            frame1.extend_from_slice(&[255, 0, 0, 255]); // red weight ≈ 1063
+        }
+        for _ in 0..100 {
+            frame1.extend_from_slice(&[0, 255, 0, 255]); // green weight ≈ 358
+        }
+        let (p1, s1) = r.reduce(&frame1, 1.0, 1.0, 1.0, 1.0);
+        assert!(
+            p1[0] > p1[1] && p1[0] > p1[2],
+            "frame 1 primary should be red, got {p1:?}"
+        );
+        assert!(
+            s1[1] > s1[0] && s1[1] > s1[2],
+            "frame 1 secondary should be green, got {s1:?}"
+        );
+
+        // Frame 2: blue ~10% heavier than green (394 vs 358). Hysteresis
+        // (1.3×) requires blue ≥ 465 to take over — it doesn't, so green
+        // should stay as secondary.
+        let mut frame2 = Vec::new();
+        for _ in 0..1000 {
+            frame2.extend_from_slice(&[255, 0, 0, 255]);
+        }
+        for _ in 0..100 {
+            frame2.extend_from_slice(&[0, 255, 0, 255]); // incumbent
+        }
+        for _ in 0..1091 {
+            frame2.extend_from_slice(&[0, 0, 255, 255]); // blue ≈ 394
+        }
+        // smoothing=1.0 so the smoothed bins match this frame's raw
+        // weights exactly — isolates the hysteresis logic from the EMA.
+        let (_, s2) = r.reduce(&frame2, 1.0, 1.0, 1.0, 1.0);
+        assert!(
+            s2[1] > s2[2],
+            "hysteresis should keep green secondary, got {s2:?} (G should beat B)"
+        );
     }
 
     #[test]

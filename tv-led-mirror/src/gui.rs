@@ -39,7 +39,8 @@ use eframe::egui;
 
 use crate::hue::{
     AreaSummary, HueConfig, HueRuntime, HueStatus, PairProgress, list_areas_background,
-    pair_background, write_hue_creds_to_flags, write_live_settings_to_flags,
+    pair_background, write_display_to_flags, write_hue_creds_to_flags,
+    write_live_settings_to_flags,
 };
 use crate::{DynamicConfig, SharedState};
 
@@ -155,6 +156,8 @@ impl eframe::App for SettingsApp {
             egui::ScrollArea::vertical()
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
+                    self.draw_capture_error(ui);
+                    self.draw_display_section(ui);
                     self.draw_hue_section(ui);
                     ui.add_space(6.0);
                     ui.separator();
@@ -166,6 +169,144 @@ impl eframe::App for SettingsApp {
         // detect changes vs. last frame and either restart the debounce
         // timer or persist if the timer has elapsed. See module doc.
         self.maybe_persist_dynamic_config();
+    }
+}
+
+// ─── Display picker ──────────────────────────────────────────────────────────
+
+impl SettingsApp {
+    /// Dropdown of all displays SCK can capture. Picking a different one
+    /// writes `--display <id>` to flags.conf and relaunches the .app so
+    /// the new ID takes effect — SCK doesn't expose a hot-swap, and the
+    /// stream's display is fixed at SCContentFilter construction time.
+    ///
+    /// Display IDs change when the TV gets reconnected (HDMI source switch,
+    /// sleep/wake, macOS update); naming via NSScreen.localizedName lets
+    /// the user pick the right one without memorising the integer.
+    fn draw_display_section(&mut self, ui: &mut egui::Ui) {
+        if self.state.available_displays.is_empty() {
+            // Empty when SCK couldn't enumerate — usually because Screen
+            // Recording is denied. The capture-error banner already
+            // surfaces that, no point repeating it here.
+            return;
+        }
+        ui.add_space(4.0);
+        ui.heading("Display");
+        ui.add_space(2.0);
+
+        let active_id = self.state.active_display_id;
+        let active_label = self
+            .state
+            .available_displays
+            .iter()
+            .find(|d| d.id == active_id)
+            .map(label_for_display)
+            .unwrap_or_else(|| format!("Display {active_id} (not found)"));
+
+        let mut clicked_id: Option<u32> = None;
+        egui::ComboBox::from_id_salt("tvled-display-picker")
+            .selected_text(active_label)
+            .width(ui.available_width().min(360.0))
+            .show_ui(ui, |ui| {
+                for d in &self.state.available_displays {
+                    let label = label_for_display(d);
+                    if ui
+                        .selectable_label(d.id == active_id, label)
+                        .clicked()
+                    {
+                        clicked_id = Some(d.id);
+                    }
+                }
+            });
+
+        if let Some(new_id) = clicked_id
+            && new_id != active_id
+        {
+            match write_display_to_flags(new_id) {
+                Ok(()) => relaunch_self(),
+                Err(e) => log::warn!("persist display: {e}"),
+            }
+        }
+
+        ui.add_space(4.0);
+        ui.separator();
+    }
+}
+
+/// Format one display as a single-line user-facing label. Prefers the
+/// NSScreen name; falls back to the integer ID.
+fn label_for_display(d: &crate::capture::DisplayInfo) -> String {
+    let name = d.name.as_deref().unwrap_or("Display");
+    format!("{name} — {}×{} (id {})", d.width, d.height, d.id)
+}
+
+/// Spawn a fresh instance of TVLEDMirror.app via LaunchServices, then exit.
+/// `-n` forces a new instance even if one is already running (it's us, but
+/// our `exit(0)` is racing with the spawn). LaunchServices serialises so the
+/// new instance ends up holding the screen-capture grant cleanly.
+fn relaunch_self() -> ! {
+    if let Ok(exe) = std::env::current_exe() {
+        // exe = .../TVLEDMirror.app/Contents/MacOS/tv-led-mirror
+        // Walk up to the .app: parents are MacOS / Contents / TVLEDMirror.app.
+        if let Some(app_path) = exe.ancestors().nth(3) {
+            let _ = std::process::Command::new("open")
+                .arg("-n")
+                .arg(app_path)
+                .spawn();
+        }
+    }
+    std::process::exit(0);
+}
+
+// ─── Capture-error banner ────────────────────────────────────────────────────
+
+impl SettingsApp {
+    /// Show a red banner + actionable button when ScreenCaptureKit failed to
+    /// start. The most common cause is Screen Recording TCC denied for this
+    /// build — recoverable from System Settings without rebuilding. The
+    /// "Open Privacy Settings" button jumps the user straight to the right
+    /// pane via the macOS x-apple URL scheme.
+    fn draw_capture_error(&mut self, ui: &mut egui::Ui) {
+        let err = self.state.capture_error.read().clone();
+        let Some(msg) = err else { return };
+        ui.add_space(4.0);
+        egui::Frame::group(ui.style())
+            .fill(egui::Color32::from_rgb(56, 16, 16))
+            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(180, 60, 60)))
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new("Screen capture is not running")
+                        .color(egui::Color32::from_rgb(255, 180, 180))
+                        .strong(),
+                );
+                ui.label(
+                    egui::RichText::new(format!("Cause: {msg}"))
+                        .color(egui::Color32::LIGHT_GRAY)
+                        .small(),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "Almost always Screen Recording permission. Enable TVLEDMirror in \
+                         Privacy & Security, then quit and relaunch.",
+                    )
+                    .color(egui::Color32::LIGHT_GRAY)
+                    .small(),
+                );
+                ui.horizontal(|ui| {
+                    if ui.button("Open Privacy Settings").clicked() {
+                        // Deep-links directly to the Screen Recording pane.
+                        // `open` is on every Mac; no extra deps.
+                        let _ = std::process::Command::new("open")
+                            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+                            .spawn();
+                    }
+                    if ui.button("Quit").clicked() {
+                        std::process::exit(0);
+                    }
+                });
+            });
+        ui.add_space(6.0);
+        ui.separator();
     }
 }
 
