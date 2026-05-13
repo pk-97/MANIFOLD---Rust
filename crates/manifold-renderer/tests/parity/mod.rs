@@ -259,6 +259,7 @@ impl ParityHarness {
             beats: Beats(f64::from(ctx.beat)),
             seconds: Seconds(f64::from(ctx.time)),
             delta: Seconds(f64::from(ctx.dt)),
+            frame_count: ctx.frame_count,
         };
 
         let mut native_enc = self.device.create_encoder("parity-graph-render");
@@ -401,6 +402,7 @@ impl ParityHarness {
             beats: Beats(f64::from(ctx.beat)),
             seconds: Seconds(f64::from(ctx.time)),
             delta: Seconds(f64::from(ctx.dt)),
+            frame_count: ctx.frame_count,
         };
 
         let mut native_enc = self.device.create_encoder("parity-aux-render");

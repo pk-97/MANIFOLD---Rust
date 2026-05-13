@@ -544,6 +544,12 @@ impl ChainGraph {
             beats: manifold_core::Beats(f64::from(ctx.beat)),
             seconds: manifold_core::Seconds(f64::from(ctx.time)),
             delta: manifold_core::Seconds(f64::from(ctx.dt)),
+            // Forward host frame counter so legacy effects (DoF /
+            // WireframeDepth / BlobTracking) dispatched via the
+            // ChainGraph fast path can throttle correctly. Was
+            // previously hardcoded to 0 in legacy_adapter, breaking
+            // throttle gates.
+            frame_count: ctx.frame_count,
         };
         self.executor.execute_frame_with_gpu(
             &mut self.graph,

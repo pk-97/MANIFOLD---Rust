@@ -187,7 +187,13 @@ impl EffectNode for LegacyPostProcessNode {
             owner_key: ctx.owner_key,
             is_clip_level: false,
             edge_stretch_width: 0.0,
-            frame_count: 0,
+            // Forward the host's monotonic frame counter so legacy
+            // effects that throttle expensive work (DoF / WireframeDepth
+            // depth inference, BlobTracking frame-stamped entries, mesh
+            // rebuild gates) advance their internal frame counters. This
+            // was hardcoded to 0 previously, which broke throttling on
+            // the ChainGraph fast path.
+            frame_count: ctx.time.frame_count,
         };
 
         if self.inner.should_skip(fx) {

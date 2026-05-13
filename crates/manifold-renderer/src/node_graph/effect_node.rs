@@ -52,6 +52,12 @@ pub struct FrameTime {
     pub beats: Beats,
     pub seconds: Seconds,
     pub delta: Seconds,
+    /// Monotonic frame counter from the host. Effects that throttle
+    /// expensive work (e.g. depth inference / blob detection /
+    /// wireframe mesh rebuild every N frames) gate on the delta of
+    /// this counter. Zero means "host didn't supply" — tests should
+    /// pass 0 unless they specifically exercise throttling logic.
+    pub frame_count: i64,
 }
 
 /// Map of parameter name → current value for one node instance, one frame.

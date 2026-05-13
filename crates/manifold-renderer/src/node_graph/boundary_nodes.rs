@@ -134,6 +134,7 @@ mod tests {
             beats: Beats(0.0),
             seconds: Seconds(0.0),
             delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
         }
     }
 

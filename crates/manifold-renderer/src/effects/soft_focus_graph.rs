@@ -285,6 +285,7 @@ impl PostProcessEffect for SoftFocusGraphFX {
             beats: manifold_core::Beats(f64::from(ctx.beat)),
             seconds: manifold_core::Seconds(f64::from(ctx.time)),
             delta: manifold_core::Seconds(f64::from(ctx.dt)),
+            frame_count: ctx.frame_count,
         };
         state
             .executor
