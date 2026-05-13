@@ -749,6 +749,55 @@ impl LayerCompositor {
         }
     }
 
+    /// For every effect chain whose layer / group did NOT dispatch this
+    /// frame (no active clips, layer muted, or layer outside the solo
+    /// set), wipe persistent primitive state — Watercolor feedback,
+    /// Bloom mip pyramids, Halation buffers, the legacy adapter's inner
+    /// effect's per-owner state, the chain's `StateStore`, etc. The
+    /// chain INSTANCE stays alive (managed by `trim_excess_buffers` /
+    /// `CHAIN_GRACE_FRAMES`) so reactivation has no rebuild cost — only
+    /// the cached state on each node is dropped.
+    ///
+    /// Matches the live-performance intuition: "if nothing is playing
+    /// on this layer right now, the next clip that fires should start
+    /// from a clean slate." Idempotent — `EffectNode::clear_state` is a
+    /// no-op when state is already cleared.
+    ///
+    /// Contract for new stateful primitives: override `clear_state` so
+    /// it drops every persistent texture / accumulator / mip pyramid
+    /// the node owns. The `clear_state` hook is the single integration
+    /// point for this policy — implementing it once on the primitive
+    /// makes the primitive automatically reset on every layer-idle
+    /// transition.
+    fn clear_idle_chain_state(&mut self) {
+        let now = self.frame_counter;
+
+        // Layer-level chains.
+        let last_used = &self.chain_last_used_frame;
+        for (id, chain) in self.effect_chains.iter_mut() {
+            if last_used.get(id) != Some(&now) {
+                chain.clear_graph_runner_state();
+            }
+        }
+
+        // Group-level chains.
+        let last_used = &self.group_chain_last_used_frame;
+        for (id, chain) in self.group_effect_chains.iter_mut() {
+            if last_used.get(id) != Some(&now) {
+                chain.clear_graph_runner_state();
+            }
+        }
+
+        // LED group chains — separate from screen-path groups so LED-
+        // path state can't bleed across pause / mute either.
+        let last_used = &self.led_group_chain_last_used_frame;
+        for (id, chain) in self.led_group_effect_chains.iter_mut() {
+            if last_used.get(id) != Some(&now) {
+                chain.clear_graph_runner_state();
+            }
+        }
+    }
+
     /// Apply effect chain to the given input texture, returning the processed texture
     /// if any effects were applied, or None if the input should be used as-is.
     fn apply_effects<'a>(
@@ -1796,6 +1845,10 @@ impl Compositor for LayerCompositor {
             // in the project survive (even if the frame has no clips).
             // Layers removed from the project get their chains dropped.
             self.trim_excess_buffers(frame.layers);
+            // Frame had zero active clips — every retained chain is by
+            // definition idle this frame, so this wipes all per-chain
+            // feedback state and primitive accumulators in one pass.
+            self.clear_idle_chain_state();
             // Release LED composite resources (nothing to route).
             self.led_main = None;
             self.led_tonemap = None;
@@ -2001,6 +2054,13 @@ impl Compositor for LayerCompositor {
         // unused for more than CHAIN_GRACE_FRAMES (~5 min at 60 fps,
         // memory-hygiene safety net for long shows).
         self.trim_excess_buffers(frame.layers);
+        // Wipe persistent primitive state (feedback buffers, Bloom mip
+        // pyramids, etc.) on every chain whose layer didn't dispatch
+        // this frame. Matches the live-performance intuition: a layer
+        // with no active clips should start fresh on its next clip.
+        // The chain INSTANCE itself stays alive — only its cached
+        // per-effect state is dropped. See `docs/EFFECT_CHAIN_LIFECYCLE.md`.
+        self.clear_idle_chain_state();
 
         &self.tonemap.output.texture
     }

@@ -208,8 +208,21 @@ pub trait EffectNode: Send {
     /// Run one frame of GPU work: read inputs, write outputs.
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>);
 
-    /// Reset persistent state (previous-frame textures, accumulators, density
-    /// grids). Called on seek so trails and feedback don't carry stale content.
-    /// Default: no-op for stateless nodes.
+    /// Reset persistent state (previous-frame textures, accumulators,
+    /// density grids, mip pyramids, StateStore entries — anything the
+    /// node holds across frames). Default: no-op for stateless nodes.
+    ///
+    /// **If your node has any persistent state, you MUST override this.**
+    /// The compositor fires `clear_state` on every chain whose layer
+    /// went idle this frame (no active clips, muted, soloed-out) — a
+    /// non-overriding stateful node will accumulate feedback indefinitely
+    /// across mute/unmute cycles, producing the classic "feedback runs
+    /// away to saturation" bug. It's also fired on seek and project
+    /// load. Override it to drop every persistent texture / buffer the
+    /// node owns (typically `self.feedback = None;` etc.) — next
+    /// `evaluate` re-allocates and re-clears as needed.
+    ///
+    /// See `docs/EFFECT_CHAIN_LIFECYCLE.md` for the full lifecycle
+    /// and the symptom → cause table when feedback effects misbehave.
     fn clear_state(&mut self) {}
 }

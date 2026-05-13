@@ -58,13 +58,15 @@ If you want a layer's look to fade naturally during silence rather than freeze, 
 
 | Trigger | Resets feedback? | Why |
 |---|---|---|
-| Layer mutes briefly (< `CHAIN_GRACE_FRAMES`) and resumes | **No** | Chain survives in the pool. Continuous look. |
-| Layer mutes > `CHAIN_GRACE_FRAMES` and resumes | **Yes** | Chain dropped by timer. Fresh primitive + fresh feedback on resume. |
-| Layer is deleted from the project | **Yes** | Chain dropped immediately on next `trim_excess_buffers`. |
+| Layer has an active clip dispatching effects this frame | **No** | Effect runs, state evolves normally per `amount`/`decay` parameters. |
+| Layer has no active clip this frame (idle / muted / soloed-out) | **YES** | `clear_idle_chain_state` fires `clear_state` on the chain. Per-primitive state (Watercolor feedback, Bloom mips, Halation buffers) wiped. Chain instance stays in the pool — reactivation has no rebuild cost. |
+| Layer is deleted from the project | **Yes** | Chain instance dropped immediately on next `trim_excess_buffers`. |
 | Project is loaded (different `.manifold` file) | **Yes** | `clear_all_effect_state` clears legacy registry AND walks every chain to clear `chain_graph` state. |
 | Compositor resizes (resolution change, render scale change) | **Yes** | `EffectChain::resize` sets `chain_graph = None` → next frame rebuilds with fresh primitives. |
 | Seek (jumping playback head to a different time) | **Partial — currently only clears legacy** | `clear_all_effect_state` is also called on seek paths. After the 2026-05-13 fix, both caches clear consistently. |
 | Topology change (effect added/removed, enabled toggled, group changed) | **Yes** | `is_compatible` returns false → chain_graph rebuilds. Stateful primitives lose their cached state. |
+
+The "no active clip this frame" trigger is the key live-performance behavior: feedback effects start fresh on every clip retrigger after the layer goes idle, but feedback stays continuous *within* a clip and across rapid clip-to-clip transitions where the layer is never truly idle. Matches the operator intuition "if I muted this layer and unmuted it later, I want it to start fresh."
 
 ---
 
@@ -101,9 +103,14 @@ Healthy: `rebuilds=0-2/sec` in steady state. Rebuilds every frame = topology fla
 If you find yourself needing per-frame state for a new effect, **put it inside the primitive instance** (so it lives with the chain_graph) rather than introducing a fourth keyed cache. Three caches is already enough surface area to keep in sync.
 
 When adding a new stateful primitive:
-- Override `clear_state()` to drop persistent textures (see [`primitives/watercolor.rs::clear_state`](../crates/manifold-renderer/src/node_graph/primitives/watercolor.rs)).
-- Set a `feedback_needs_clear: bool` flag on (re)allocation so the first `evaluate()` after a reset writes opaque/transparent black to the feedback.
+- **Override `clear_state()` to drop every persistent texture / accumulator the node owns.** See [`primitives/watercolor.rs::clear_state`](../crates/manifold-renderer/src/node_graph/primitives/watercolor.rs) as the reference impl: drop the `Option<RenderTarget>` fields and the `state_dims` so `ensure_state` knows to re-allocate. This single override hooks the primitive into:
+  - `clear_idle_chain_state` (fires every frame the layer is idle — the live-performance reset).
+  - `ChainGraph::clear_state` (fires on `clear_all_effect_state` — seek, project load).
+  - `EffectChain::resize` (forces graph rebuild on resolution change).
+- Set a `feedback_needs_clear: bool` flag on (re)allocation so the first `evaluate()` after a reset writes opaque/transparent black to the feedback. Reference: same `watercolor.rs`.
 - Document the state in the primitive's docstring so this file's "Where state lives" stays accurate.
+
+If you skip the `clear_state` override, your new primitive accumulates state indefinitely across mute/unmute cycles — the symptom is "feedback never clears, runs away to saturation." It's the silent-failure version of "I forgot to write a destructor."
 
 ---
 
