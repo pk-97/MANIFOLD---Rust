@@ -196,11 +196,31 @@ impl EffectNode for LegacyPostProcessNode {
             frame_count: ctx.time.frame_count,
         };
 
+        let gpu = ctx.gpu_encoder();
         if self.inner.should_skip(fx) {
+            // The effect declared itself a no-op for this frame (e.g.
+            // `amount <= 0`). In the legacy chain dispatch, skipping
+            // meant the chain's ping/pong didn't swap, so downstream
+            // effects implicitly read whatever was upstream. In the
+            // graph-node dispatch each node has its OWN output slot
+            // assigned by the lifetime planner — skipping without
+            // writing leaves that slot frozen with whatever stale
+            // content was last written, which downstream effects then
+            // read as if it were the current frame's input.
+            //
+            // Symptom: a Quad Mirror with amount=0 inside a chain that
+            // feeds Stylized Feedback freezes the SF input on the
+            // previous frame's mirror output → feedback runs away
+            // because it never sees the live source.
+            //
+            // Fix: act as an explicit passthrough — blit source → out.
+            // Single full-screen copy, ~600μs at 4K; equivalent to the
+            // legacy "no swap" behavior. Better: when an upstream
+            // optimizer ports stable presets into the chain plan, the
+            // skipped node can be elided entirely.
+            gpu.copy_texture_to_texture(source, out, width, height);
             return;
         }
-
-        let gpu = ctx.gpu_encoder();
         self.inner.apply(gpu, source, out, fx, &effect_ctx);
     }
 
