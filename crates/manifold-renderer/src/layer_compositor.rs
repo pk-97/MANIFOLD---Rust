@@ -2013,14 +2013,21 @@ impl Compositor for LayerCompositor {
                     );
                 }
             }
-        } else {
-            // No LED layers active, or exit-path bypasses tonemap+FX — release
-            // tonemap/effect-chain resources. led_main itself is kept (it is
-            // the LED source texture when exit_index == 0) and freed only when
-            // no layer is flagged at all (handled in blend_layers_to_led).
+        } else if self.led_main.is_none() {
+            // No LED layers active at all — release the LED tonemap +
+            // master-FX resources. (`blend_layers_to_led` clears
+            // `led_main` when no layer is flagged.) Don't release on
+            // mere exit-path-toggle: that caused churn when live MIDI
+            // control flipped `led_exit_index` per frame, dropping
+            // and reallocating the tonemap pipeline + master FX
+            // ChainGraph (and losing its state) on every toggle.
+            // Closes audit finding C-1.
             self.led_tonemap = None;
             self.led_master_ec = None;
         }
+        // If the LED path is active but exit_index == 0 (pre-tonemap
+        // tap), tonemap + master FX sit warm for the next time the
+        // user flips exit_index back to -1.
 
         // Flush uniform arena (recreates buffer if capacity grew).
         // On native path, arena buffer is not read by GPU dispatches (uses inline
