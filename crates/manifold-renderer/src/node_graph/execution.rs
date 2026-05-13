@@ -64,9 +64,24 @@ impl Executor {
     ///
     /// Convenience entry point for tests against [`MockBackend`] and any
     /// scenario where the graph contains only nodes that don't issue real
-    /// GPU work (boundary nodes, stub primitives). Nodes that require an
-    /// encoder will panic via [`EffectNodeContext::gpu_encoder`].
+    /// GPU work (boundary nodes, stub primitives).
+    ///
+    /// Panics with a clean diagnostic *at entry* if the compiled plan
+    /// contains any node that declares it [`requires`](crate::node_graph::EffectNode::requires)
+    /// a `GpuEncoder` or a `StateStore` — that's a programmer error
+    /// (wrong entry point for the graph), not a per-node `.expect()`.
     pub fn execute_frame(&mut self, graph: &mut Graph, plan: &ExecutionPlan, time: FrameTime) {
+        let r = plan.requires();
+        assert!(
+            !r.gpu_encoder,
+            "Executor::execute_frame called with a plan containing node(s) that require a GpuEncoder \
+             — dispatch through `execute_frame_with_gpu` instead.",
+        );
+        assert!(
+            !r.state_store,
+            "Executor::execute_frame called with a plan containing node(s) that require a StateStore \
+             — dispatch through `execute_frame_with_state` instead.",
+        );
         self.execute_frame_inner(graph, plan, time, None, None, 0);
     }
 
@@ -74,6 +89,10 @@ impl Executor {
     /// every node. Used by the production renderer integration; pairs with
     /// [`MetalBackend`](crate::node_graph::MetalBackend) for real
     /// `GpuTexture` allocation.
+    ///
+    /// Panics with a clean diagnostic *at entry* if the plan contains
+    /// any node that declares it requires a `StateStore` — those
+    /// graphs must dispatch through `execute_frame_with_state`.
     pub fn execute_frame_with_gpu(
         &mut self,
         graph: &mut Graph,
@@ -81,6 +100,13 @@ impl Executor {
         time: FrameTime,
         gpu: &mut GpuEncoder<'_>,
     ) {
+        assert!(
+            !plan.requires().state_store,
+            "Executor::execute_frame_with_gpu called with a plan containing node(s) that require \
+             a StateStore — dispatch through `execute_frame_with_state` instead. \
+             (Common cause: a chain containing `temporal::Feedback` dispatched via a code path \
+             that hasn't been ported to the StateStore-aware execute method.)",
+        );
         self.execute_frame_inner(graph, plan, time, Some(gpu), None, 0);
     }
 
@@ -89,6 +115,10 @@ impl Executor {
     /// frame buffers, etc.). The `owner_key` is forwarded to every node
     /// via `EffectNodeContext::owner_key` and keys per-clip / per-layer
     /// state in the store.
+    ///
+    /// This entry point provides every runtime service today's nodes
+    /// can declare, so there's no entry-side panic for plan-vs-services
+    /// mismatch.
     pub fn execute_frame_with_state(
         &mut self,
         graph: &mut Graph,
@@ -494,5 +524,78 @@ mod tests {
         let mut exec = Executor::with_mock();
         exec.execute_frame(&mut g, &plan, frame_time());
         assert_eq!(exec.backend().slot_count(), 2);
+    }
+
+    // --- NodeRequires entry-point validation -----------------------
+
+    /// Test node that declares a `state_store` requirement.
+    struct NeedsStateNode {
+        type_id: EffectNodeType,
+        outputs: Vec<NodeOutput>,
+    }
+
+    impl NeedsStateNode {
+        fn new() -> Self {
+            Self {
+                type_id: EffectNodeType::new("needs_state"),
+                outputs: vec![output("out", PortType::Texture2D)],
+            }
+        }
+    }
+
+    impl EffectNode for NeedsStateNode {
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &[]
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            &self.outputs
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+        fn requires(&self) -> crate::node_graph::effect_node::NodeRequires {
+            crate::node_graph::effect_node::NodeRequires {
+                state_store: true,
+                gpu_encoder: false,
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "require a StateStore")]
+    fn execute_frame_panics_on_state_requiring_node() {
+        let mut g = Graph::new();
+        g.add_node(Box::new(NeedsStateNode::new()));
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+        exec.execute_frame(&mut g, &plan, frame_time());
+    }
+
+    #[test]
+    fn plan_requires_reflects_node_declaration() {
+        let mut g = Graph::new();
+        g.add_node(Box::new(NeedsStateNode::new()));
+        let plan = compile(&g).unwrap();
+        assert!(plan.requires().state_store);
+        assert!(!plan.requires().gpu_encoder);
+    }
+
+    #[test]
+    fn plan_requires_default_for_stateless_graph() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut g = Graph::new();
+        g.add_node(Box::new(RecordingNode::new(
+            "stateless",
+            vec![],
+            vec![output("out", PortType::Texture2D)],
+            log,
+        )));
+        let plan = compile(&g).unwrap();
+        assert!(!plan.requires().state_store);
+        assert!(!plan.requires().gpu_encoder);
     }
 }

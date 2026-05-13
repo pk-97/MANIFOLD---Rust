@@ -171,6 +171,36 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
     }
 }
 
+/// Runtime services a node may require from the executor during
+/// `evaluate`. Set by overriding [`EffectNode::requires`]; aggregated
+/// across the graph at [`compile`](crate::node_graph::compile) time
+/// and checked at the executor entry point before any node fires.
+///
+/// Catches the "node needs X but the executor entry didn't provide
+/// X" mismatch at the boundary instead of mid-evaluate via an
+/// `.expect()` panic. Today's surface:
+///   - `state_store` — the node calls
+///     [`EffectNodeContext::state_store`] (today only
+///     [`Feedback`](crate::node_graph::primitives::Feedback)).
+///   - `gpu_encoder` — the node calls
+///     [`EffectNodeContext::gpu_encoder`] (every real-GPU primitive).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NodeRequires {
+    pub state_store: bool,
+    pub gpu_encoder: bool,
+}
+
+impl NodeRequires {
+    /// Union with another `NodeRequires`. Used by `compile()` to roll
+    /// up the per-node declarations into a single per-plan summary.
+    pub fn union(self, other: Self) -> Self {
+        Self {
+            state_store: self.state_store || other.state_store,
+            gpu_encoder: self.gpu_encoder || other.gpu_encoder,
+        }
+    }
+}
+
 /// One unit of GPU work in the effect graph.
 ///
 /// Implemented by:
@@ -235,6 +265,23 @@ pub trait EffectNode: Send {
         _params: &ParamValues,
     ) -> Option<(&'static str, &'static str)> {
         None
+    }
+
+    /// Runtime services this node's `evaluate` requires from the
+    /// executor. The compiler aggregates these across all nodes in
+    /// the graph and the executor's entry points validate against
+    /// the aggregate at the boundary — so a graph containing
+    /// [`Feedback`](crate::node_graph::primitives::Feedback) dispatched
+    /// via `execute_frame_with_gpu` (no state) panics with a clean
+    /// message *before* GPU work starts, instead of mid-frame inside
+    /// the primitive's `state_store().expect(...)`.
+    ///
+    /// Default: empty (no requirements). Nodes that call
+    /// [`EffectNodeContext::state_store`] or
+    /// [`EffectNodeContext::gpu_encoder`] inside their `evaluate`
+    /// must override this to declare the corresponding requirement.
+    fn requires(&self) -> NodeRequires {
+        NodeRequires::default()
     }
 
     /// Reset persistent state (previous-frame textures, accumulators,

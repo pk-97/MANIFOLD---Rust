@@ -22,7 +22,7 @@
 
 use ahash::AHashMap;
 
-use crate::node_graph::effect_node::{NodeInstanceId, NodeWire};
+use crate::node_graph::effect_node::{NodeInstanceId, NodeRequires, NodeWire};
 use crate::node_graph::graph::Graph;
 use crate::node_graph::ports::PortType;
 use crate::node_graph::validation::{topological_sort, validate, GraphError};
@@ -63,6 +63,11 @@ pub struct ExecutionPlan {
     /// uses these to size allocations (texture format, dimensions) or to
     /// store scalar values inline.
     resource_types: Vec<PortType>,
+    /// Union of every node's [`NodeRequires`] declaration. The
+    /// executor's entry point checks this against what it can
+    /// provide (encoder, state store) and panics with a clean
+    /// message before evaluating any step.
+    requires: NodeRequires,
 }
 
 impl ExecutionPlan {
@@ -76,6 +81,13 @@ impl ExecutionPlan {
 
     pub fn resource_type(&self, id: ResourceId) -> Option<PortType> {
         self.resource_types.get(id.0 as usize).copied()
+    }
+
+    /// Aggregate runtime-service requirements across all nodes in
+    /// the plan. The executor uses this to validate at the entry
+    /// boundary rather than discovering mid-frame via `.expect()`.
+    pub fn requires(&self) -> NodeRequires {
+        self.requires
     }
 }
 
@@ -167,9 +179,20 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         }
     }
 
+    // Roll up the per-node runtime-service requirements so the
+    // executor can validate at its entry point. Walking the live
+    // graph here (not the topological order) is sufficient because
+    // `requires()` is a static per-node declaration.
+    let requires = graph
+        .nodes()
+        .fold(NodeRequires::default(), |acc, inst| {
+            acc.union(inst.node.requires())
+        });
+
     Ok(ExecutionPlan {
         steps,
         resource_types,
+        requires,
     })
 }
 

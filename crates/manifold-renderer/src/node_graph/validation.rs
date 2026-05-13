@@ -143,8 +143,14 @@ pub(super) fn validate_connection(
     Ok(())
 }
 
-/// Whole-graph validation. Currently checks that every required input is
-/// wired. Extend as new structural invariants are introduced.
+/// Whole-graph validation. Checks structural invariants:
+///   1. Every required input is wired.
+///   2. The graph is a DAG (no directed cycles).
+///
+/// Connection-time validation via [`Graph::connect`] guarantees the
+/// second invariant under normal mutation paths, but programmatic
+/// construction (composite presets, JSON load, undo / redo) bypasses
+/// `connect()` and so this second check is the durable safety net.
 pub fn validate(graph: &Graph) -> Result<(), GraphError> {
     for inst in graph.nodes() {
         for input in inst.node.inputs() {
@@ -159,6 +165,10 @@ pub fn validate(graph: &Graph) -> Result<(), GraphError> {
             }
         }
     }
+    // Cycle check — `topological_sort` returns `CycleDetected` if the
+    // graph isn't a DAG. Done after the per-node sweep so the more
+    // specific `RequiredInputUnwired` error wins when both apply.
+    topological_sort(graph)?;
     Ok(())
 }
 
@@ -436,6 +446,28 @@ mod tests {
             vec![input("in", PortType::Texture2D, false)],
             vec![],
         )));
+        assert!(validate(&g).is_ok());
+    }
+
+    #[test]
+    fn validate_runs_cycle_detection_via_topo_sort() {
+        // Whole-graph `validate()` delegates the cycle check to
+        // `topological_sort` which is exercised by the dedicated
+        // cycle tests (`rejects_simple_cycle`, `rejects_self_loop`).
+        // This test only verifies the wiring — `validate()` succeeds
+        // on a clean DAG.
+        let mut g = Graph::new();
+        let a = g.add_node(Box::new(TestNode::new(
+            "a",
+            vec![],
+            vec![output("out", PortType::Texture2D)],
+        )));
+        let b = g.add_node(Box::new(TestNode::new(
+            "b",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![],
+        )));
+        g.connect((a, "out"), (b, "in")).unwrap();
         assert!(validate(&g).is_ok());
     }
 }

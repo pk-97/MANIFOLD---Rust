@@ -38,8 +38,8 @@ pub use effect_graphs::{
     refresh_effect_params, refresh_effect_params_at, CtxEntry, EffectGraphError, RefreshEntry,
 };
 pub use effect_node::{
-    EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId, NodeWire,
-    ParamValues,
+    EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId, NodeRequires,
+    NodeWire, ParamValues,
 };
 pub use execution::Executor;
 pub use metal_backend::MetalBackend;

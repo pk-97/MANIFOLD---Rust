@@ -281,6 +281,16 @@ impl EffectNode for Feedback {
         // if it ever needs to (currently a no-op — pipeline is a
         // long-lived cache).
     }
+
+    fn requires(&self) -> crate::node_graph::effect_node::NodeRequires {
+        // Feedback dispatches compute (needs a GpuEncoder) and keys
+        // its prev-frame buffer in the StateStore. A graph containing
+        // this primitive must be run via `execute_frame_with_state`.
+        crate::node_graph::effect_node::NodeRequires {
+            state_store: true,
+            gpu_encoder: true,
+        }
+    }
 }
 
 #[cfg(test)]
