@@ -196,32 +196,41 @@ impl EffectNode for LegacyPostProcessNode {
             frame_count: ctx.time.frame_count,
         };
 
+        // Skip-on-amount=0 is now handled by the runtime BEFORE
+        // `evaluate` is called — see `skip_passthrough` below. If we
+        // got here, the effect is supposed to dispatch.
         let gpu = ctx.gpu_encoder();
-        if self.inner.should_skip(fx) {
-            // The effect declared itself a no-op for this frame (e.g.
-            // `amount <= 0`). In the legacy chain dispatch, skipping
-            // meant the chain's ping/pong didn't swap, so downstream
-            // effects implicitly read whatever was upstream. In the
-            // graph-node dispatch each node has its OWN output slot
-            // assigned by the lifetime planner — skipping without
-            // writing leaves that slot frozen with whatever stale
-            // content was last written, which downstream effects then
-            // read as if it were the current frame's input.
-            //
-            // Symptom: a Quad Mirror with amount=0 inside a chain that
-            // feeds Stylized Feedback freezes the SF input on the
-            // previous frame's mirror output → feedback runs away
-            // because it never sees the live source.
-            //
-            // Fix: act as an explicit passthrough — blit source → out.
-            // Single full-screen copy, ~600μs at 4K; equivalent to the
-            // legacy "no swap" behavior. Better: when an upstream
-            // optimizer ports stable presets into the chain plan, the
-            // skipped node can be elided entirely.
-            gpu.copy_texture_to_texture(source, out, width, height);
-            return;
-        }
         self.inner.apply(gpu, source, out, fx, &effect_ctx);
+    }
+
+    fn skip_passthrough(
+        &self,
+        params: &crate::node_graph::ParamValues,
+    ) -> Option<(&'static str, &'static str)> {
+        // Reconstruct the param_values vec the inner effect's
+        // `should_skip` expects. Cheap — small allocation per skipped
+        // step; in steady state, only paid on actual skip transitions.
+        // Could amortize with a scratch field if profiling shows it.
+        let mut probe = self.scratch_instance.clone();
+        probe.param_values.clear();
+        probe
+            .param_values
+            .extend(self.metadata.params.iter().map(|spec| {
+                manifold_core::effects::ParamSlot::exposed(param_value_to_f32(
+                    params.get(spec.id),
+                    spec,
+                ))
+            }));
+        if self.inner.should_skip(&probe) {
+            // The legacy adapter wires its input port as "source" and
+            // output port as "out" (see LEGACY_INPUTS / LEGACY_OUTPUTS).
+            // Runtime aliases input slot's texture onto output slot —
+            // zero GPU work, downstream reads the upstream texture
+            // through `borrowed_2d`.
+            Some(("source", "out"))
+        } else {
+            None
+        }
     }
 
     fn clear_state(&mut self) {

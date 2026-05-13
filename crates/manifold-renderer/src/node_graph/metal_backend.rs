@@ -98,6 +98,17 @@ pub struct MetalBackend {
     /// original pool-allocated `RenderTarget` stays untouched and gets
     /// released back to the pool normally on drop.
     borrowed_2d: AHashMap<Slot, GpuTexture>,
+    /// Slots whose `borrowed_2d` entry was installed by the runtime via
+    /// [`Backend::alias_2d`] as a skip-passthrough (zero-GPU-cost
+    /// "this effect is a no-op this frame, so its output slot just
+    /// shadows the input slot's texture"). Cleared each frame by
+    /// [`Backend::clear_skip_aliases`] so a non-skip frame's real write
+    /// isn't shadowed by a stale borrow from a previous skip frame.
+    ///
+    /// Distinct from host-installed borrows (e.g. the chain source
+    /// slot's per-frame `replace_texture_2d`): those aren't tracked
+    /// here, so `clear_skip_aliases` leaves them alone.
+    skip_aliased_slots: Vec<Slot>,
     scalars: AHashMap<Slot, ParamValue>,
 }
 
@@ -123,6 +134,7 @@ impl MetalBackend {
             pinned: AHashSet::default(),
             textures_2d: AHashMap::default(),
             borrowed_2d: AHashMap::default(),
+            skip_aliased_slots: Vec::new(),
             scalars: AHashMap::default(),
         }
     }
@@ -146,6 +158,7 @@ impl MetalBackend {
             pinned: AHashSet::default(),
             textures_2d: AHashMap::default(),
             borrowed_2d: AHashMap::default(),
+            skip_aliased_slots: Vec::new(),
             scalars: AHashMap::default(),
         }
     }
@@ -295,6 +308,7 @@ impl MetalBackend {
             self.pool.release(rt);
         }
         self.borrowed_2d.clear();
+        self.skip_aliased_slots.clear();
         self.scalars.clear();
         self.bound.clear();
         self.free_by_type.clear();
@@ -387,10 +401,195 @@ impl Backend for MetalBackend {
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
         Some(self)
     }
+
+    fn alias_2d(&mut self, src_slot: Slot, dst_slot: Slot) -> bool {
+        // Refuse to touch a slot that has a host-installed borrow we
+        // don't own (e.g. StylizedFeedback's inner output slot points
+        // at the outer chain's target via `replace_texture_2d`). The
+        // runtime falls back to calling `evaluate` when alias_2d
+        // returns false, which is the correct behavior — overwriting
+        // the host borrow would silently break whatever the host was
+        // routing through that slot.
+        if self.borrowed_2d.contains_key(&dst_slot)
+            && !self.skip_aliased_slots.contains(&dst_slot)
+        {
+            return false;
+        }
+
+        // Look up the current texture at src_slot. Borrow shadow takes
+        // priority over owned; this matches `texture_2d`'s lookup order
+        // so the alias points at whatever a reader would see.
+        let tex = self
+            .borrowed_2d
+            .get(&src_slot)
+            .cloned()
+            .or_else(|| self.textures_2d.get(&src_slot).map(|rt| rt.texture.clone()));
+        let Some(t) = tex else {
+            return false;
+        };
+        // Only alias into slots that actually exist (either owned or
+        // already borrowed). Prevents aliasing onto an unallocated slot
+        // id.
+        if !self.textures_2d.contains_key(&dst_slot)
+            && !self.borrowed_2d.contains_key(&dst_slot)
+        {
+            return false;
+        }
+        // Replaces any previous skip-alias on dst_slot (idempotent for
+        // consecutive skip frames). Tracked for `clear_skip_aliases`
+        // so the borrow auto-clears next frame and a non-skip frame's
+        // real write isn't shadowed.
+        self.borrowed_2d.insert(dst_slot, t);
+        if !self.skip_aliased_slots.contains(&dst_slot) {
+            self.skip_aliased_slots.push(dst_slot);
+        }
+        true
+    }
+
+    fn clear_skip_aliases(&mut self) {
+        for slot in self.skip_aliased_slots.drain(..) {
+            self.borrowed_2d.remove(&slot);
+        }
+    }
 }
 
 impl Drop for MetalBackend {
     fn drop(&mut self) {
         self.drop_all_resources();
+    }
+}
+
+#[cfg(test)]
+mod alias_tests {
+    //! Regression tests for [`MetalBackend::alias_2d`] +
+    //! [`MetalBackend::clear_skip_aliases`] — the zero-GPU-cost
+    //! skip-passthrough mechanism that replaced the per-skip
+    //! `copy_texture_to_texture` blit. See `EffectNode::skip_passthrough`
+    //! for the runtime hook that drives this.
+
+    use std::sync::Arc;
+
+    use manifold_gpu::{GpuDevice, GpuTextureFormat};
+
+    use super::*;
+    use crate::node_graph::backend::Backend;
+    use crate::node_graph::execution_plan::ResourceId;
+    use crate::node_graph::ports::PortType;
+
+    fn make_backend() -> (Arc<GpuDevice>, MetalBackend) {
+        let device = Arc::new(GpuDevice::new());
+        let backend = MetalBackend::new(device.clone(), 16, 16, GpuTextureFormat::Rgba16Float);
+        (device, backend)
+    }
+
+    #[test]
+    fn alias_2d_makes_dst_read_through_src() {
+        let (_device, mut b) = make_backend();
+        let src = b.acquire(ResourceId(0), PortType::Texture2D);
+        let dst = b.acquire(ResourceId(1), PortType::Texture2D);
+
+        // Pre-alias, each slot has its own distinct texture. We compare
+        // raw MTLTexture pointers — each acquire allocates a fresh
+        // texture, so the pointers differ.
+        let pre_src_ptr = b.texture_2d(src).expect("src allocated").raw_ptr();
+        let pre_dst_ptr = b.texture_2d(dst).expect("dst allocated").raw_ptr();
+        assert_ne!(pre_src_ptr, pre_dst_ptr);
+
+        // After alias, dst reads what src reads — same raw pointer.
+        assert!(b.alias_2d(src, dst), "alias should succeed");
+        assert_eq!(
+            b.texture_2d(dst).expect("dst still readable").raw_ptr(),
+            pre_src_ptr,
+            "dst should now shadow src's texture",
+        );
+        // src is unaffected.
+        assert_eq!(b.texture_2d(src).expect("src untouched").raw_ptr(), pre_src_ptr);
+    }
+
+    #[test]
+    fn clear_skip_aliases_restores_dst_to_owned_texture() {
+        let (_device, mut b) = make_backend();
+        let src = b.acquire(ResourceId(0), PortType::Texture2D);
+        let dst = b.acquire(ResourceId(1), PortType::Texture2D);
+
+        let pre_dst_ptr = b.texture_2d(dst).expect("dst allocated").raw_ptr();
+        assert!(b.alias_2d(src, dst));
+
+        // Now clear — dst should be back to its OWN texture, not the
+        // alias.
+        b.clear_skip_aliases();
+        assert_eq!(
+            b.texture_2d(dst).expect("dst still readable").raw_ptr(),
+            pre_dst_ptr,
+            "after clear, dst reads its owned texture again",
+        );
+    }
+
+    #[test]
+    fn alias_2d_refuses_to_clobber_host_installed_borrow() {
+        // StylizedFeedback's inner executor pre-installs the outer
+        // chain's target as a borrowed override on the inner output
+        // slot. The runtime must NOT replace that borrow with a
+        // skip-alias — the host borrow has different lifecycle and
+        // points at off-backend data.
+        let (device, mut b) = make_backend();
+        let src = b.acquire(ResourceId(0), PortType::Texture2D);
+        let dst = b.acquire(ResourceId(1), PortType::Texture2D);
+
+        // Host installs a borrowed override on dst (simulating
+        // StylizedFeedback's `replace_texture_2d` for its output slot).
+        let host_tex = device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width: 16,
+            height: 16,
+            depth: 1,
+            mip_levels: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+            label: "host-borrow",
+        });
+        let host_ptr = host_tex.raw_ptr();
+        assert!(b.replace_texture_2d(dst, host_tex));
+
+        // alias_2d must refuse — host borrow takes priority.
+        assert!(
+            !b.alias_2d(src, dst),
+            "alias_2d must not clobber a host-installed borrow",
+        );
+        assert_eq!(
+            b.texture_2d(dst).expect("dst readable").raw_ptr(),
+            host_ptr,
+            "host borrow survives",
+        );
+
+        // After clear_skip_aliases, the host borrow STILL survives —
+        // clear only wipes runtime-installed aliases.
+        b.clear_skip_aliases();
+        assert_eq!(
+            b.texture_2d(dst).expect("dst still readable").raw_ptr(),
+            host_ptr,
+            "clear_skip_aliases leaves host borrows alone",
+        );
+    }
+
+    #[test]
+    fn consecutive_alias_2d_calls_idempotent() {
+        // A driven `amount` crossing zero on multiple frames means the
+        // runtime calls alias_2d every frame the effect skips. Verify
+        // the alias state stays consistent (no leak in
+        // skip_aliased_slots).
+        let (_device, mut b) = make_backend();
+        let src = b.acquire(ResourceId(0), PortType::Texture2D);
+        let dst = b.acquire(ResourceId(1), PortType::Texture2D);
+
+        for _ in 0..5 {
+            b.clear_skip_aliases();
+            assert!(b.alias_2d(src, dst));
+        }
+        assert_eq!(
+            b.skip_aliased_slots.len(),
+            1,
+            "skip_aliased_slots should contain exactly one entry (dst), not duplicated",
+        );
     }
 }

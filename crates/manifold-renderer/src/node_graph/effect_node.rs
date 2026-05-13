@@ -208,6 +208,35 @@ pub trait EffectNode: Send {
     /// Run one frame of GPU work: read inputs, write outputs.
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>);
 
+    /// Optional skip-passthrough hook: if the node is a no-op for the
+    /// current frame (e.g. an `amount`-style param is zero), return
+    /// `Some((input_port, output_port))` indicating which input the
+    /// runtime should alias onto which output. The runtime then installs
+    /// the input slot's texture into the output slot as a transient
+    /// borrowed override — **zero GPU work** — and skips `evaluate`
+    /// entirely.
+    ///
+    /// Default: `None` (always run `evaluate`).
+    ///
+    /// Equivalent to the legacy chain dispatch's "skip + don't swap"
+    /// semantic: downstream effects see the upstream's content as if
+    /// this node were transparent. Without this hook, a skipping node
+    /// would leave its dedicated output slot frozen at whatever was
+    /// last written there, which downstream effects would read as
+    /// stale data (the classic Quad-Mirror-at-amount=0 +
+    /// Stylized-Feedback runaway from 2026-05-13).
+    ///
+    /// Implementors must ensure the returned port pair maps to slots
+    /// of compatible type — currently only `Texture2D` is supported.
+    /// Aliases auto-clear at the start of each frame so a non-skip
+    /// frame's real write isn't shadowed.
+    fn skip_passthrough(
+        &self,
+        _params: &ParamValues,
+    ) -> Option<(&'static str, &'static str)> {
+        None
+    }
+
     /// Reset persistent state (previous-frame textures, accumulators,
     /// density grids, mip pyramids, StateStore entries — anything the
     /// node holds across frames). Default: no-op for stateless nodes.

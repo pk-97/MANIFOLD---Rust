@@ -67,6 +67,33 @@ pub trait Backend: Send {
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
         None
     }
+
+    /// Install the texture currently bound to `src_slot` into `dst_slot`
+    /// as a transient borrowed override. Used by the runtime when a node
+    /// declares itself a no-op for the frame via
+    /// [`EffectNode::skip_passthrough`] — zero GPU work, just an atomic
+    /// retain bump on the underlying texture.
+    ///
+    /// Downstream nodes that read `dst_slot` see the source texture
+    /// without any compute / blit dispatch.
+    ///
+    /// The override is tracked separately from host-installed borrows
+    /// (those persist across frames; skip-aliases must clear) and is
+    /// wiped by [`Self::clear_skip_aliases`] at the start of each frame.
+    ///
+    /// Default: no-op (mock backends).
+    fn alias_2d(&mut self, _src_slot: Slot, _dst_slot: Slot) -> bool {
+        false
+    }
+
+    /// Clear every transient slot alias installed by [`Self::alias_2d`].
+    /// Called by the executor at the start of each frame so a skip-frame's
+    /// alias doesn't shadow a subsequent non-skip-frame's real write.
+    /// Host-installed borrows (e.g. the chain source slot's per-frame
+    /// `replace_texture_2d`) are untouched.
+    ///
+    /// Default: no-op (mock backends).
+    fn clear_skip_aliases(&mut self) {}
 }
 
 /// In-memory backend with no real GPU resources. Tracks slot identity and

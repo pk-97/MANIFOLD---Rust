@@ -119,6 +119,14 @@ impl Executor {
         mut state: Option<&mut StateStore>,
         owner_key: OwnerKey,
     ) {
+        // Wipe any skip-passthrough aliases installed during the previous
+        // frame. Without this, a slot that was aliased-on-skip last frame
+        // would shadow its real write this frame and downstream reads
+        // would still see the old upstream texture. Host-installed
+        // borrows (e.g. the chain source slot's per-frame
+        // `replace_texture_2d`) are untouched.
+        self.backend.clear_skip_aliases();
+
         for step in plan.steps() {
             // 1. Acquire output slots.
             self.output_scratch.clear();
@@ -140,26 +148,54 @@ impl Executor {
                 self.input_scratch.push((port_name, slot));
             }
 
-            // 3. Evaluate. The context holds an immutable backend ref for
-            // typed accessor resolution and (optionally) a per-step
-            // mutable reborrow of the host's GpuEncoder + StateStore.
-            // Scoped tightly so the borrows end before the release loop's
-            // mutable borrow below.
+            // 3. Evaluate (or skip-passthrough alias). The context holds
+            // an immutable backend ref for typed accessor resolution and
+            // (optionally) a per-step mutable reborrow of the host's
+            // GpuEncoder + StateStore. Scoped tightly so the borrows end
+            // before the release loop's mutable borrow below.
             if let Some(inst) = graph.get_node_mut(step.node) {
-                let backend_ref: &dyn Backend = &*self.backend;
-                let inputs = NodeInputs::new(&self.input_scratch, backend_ref);
-                let outputs = NodeOutputs::new(&self.output_scratch, backend_ref);
-                let mut ctx = EffectNodeContext::with_state(
-                    time,
-                    &inst.params,
-                    inputs,
-                    outputs,
-                    gpu.as_deref_mut(),
-                    state.as_deref_mut(),
-                    step.node,
-                    owner_key,
-                );
-                inst.node.evaluate(&mut ctx);
+                // Query skip-passthrough BEFORE building the full context.
+                // If the node declares itself a no-op, alias the input
+                // slot's texture onto the output slot — zero GPU work
+                // — and skip evaluate. Matches the legacy chain
+                // dispatch's "skip + don't swap" semantic without the
+                // per-skip blit a naive fix would require.
+                let skip_alias = inst.node.skip_passthrough(&inst.params);
+                let mut performed_alias = false;
+                if let Some((in_port, out_port)) = skip_alias {
+                    let in_slot = self
+                        .input_scratch
+                        .iter()
+                        .find(|(name, _)| *name == in_port)
+                        .map(|(_, s)| *s);
+                    let out_slot = self
+                        .output_scratch
+                        .iter()
+                        .find(|(name, _)| *name == out_port)
+                        .map(|(_, s)| *s);
+                    if let (Some(i), Some(o)) = (in_slot, out_slot)
+                        && self.backend.alias_2d(i, o)
+                    {
+                        performed_alias = true;
+                    }
+                }
+
+                if !performed_alias {
+                    let backend_ref: &dyn Backend = &*self.backend;
+                    let inputs = NodeInputs::new(&self.input_scratch, backend_ref);
+                    let outputs = NodeOutputs::new(&self.output_scratch, backend_ref);
+                    let mut ctx = EffectNodeContext::with_state(
+                        time,
+                        &inst.params,
+                        inputs,
+                        outputs,
+                        gpu.as_deref_mut(),
+                        state.as_deref_mut(),
+                        step.node,
+                        owner_key,
+                    );
+                    inst.node.evaluate(&mut ctx);
+                }
             }
 
             // 4. Release dead resources.
