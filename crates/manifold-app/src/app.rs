@@ -1822,36 +1822,42 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // ── Pointer input → UIInputSystem ──────────────────────
             WindowEvent::CursorMoved { position, .. } => {
                 if is_graph_editor {
-                    let (scale, viewport) = self
+                    let (scale, window_w, window_h) = self
                         .window_registry
                         .get(&window_id)
                         .map(|ws| {
                             let s = ws.window.scale_factor();
                             let sz = ws.window.inner_size();
-                            (
-                                s,
-                                crate::graph_canvas::Rect::new(
-                                    0.0,
-                                    0.0,
-                                    sz.width as f32 / s as f32,
-                                    sz.height as f32 / s as f32,
-                                ),
-                            )
+                            (s, sz.width as f32 / s as f32, sz.height as f32 / s as f32)
                         })
-                        .unwrap_or((1.0, crate::graph_canvas::Rect::new(0.0, 0.0, 1.0, 1.0)));
+                        .unwrap_or((1.0, 1.0, 1.0));
                     let logical_x = position.x as f32 / scale as f32;
                     let logical_y = position.y as f32 / scale as f32;
-                    let sidebar_x = viewport.w - manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
+                    let palette_width = manifold_ui::panels::graph_palette::PALETTE_WIDTH;
+                    let sidebar_x = window_w - manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
+                    // Canvas viewport matches the render-time slice
+                    // (offset by palette_width); without this the
+                    // canvas's `to_graph` would treat screen x=0 as the
+                    // canvas left edge and node hit-tests would be off
+                    // by `palette_width` to the left.
+                    let viewport = crate::graph_canvas::Rect::new(
+                        palette_width,
+                        0.0,
+                        (sidebar_x - palette_width).max(0.0),
+                        window_h,
+                    );
                     // Always update canvas cursor — graph-space coords
                     // need it even for clicks that land in the sidebar.
                     if let Some(canvas) = self.graph_canvas.as_mut() {
                         canvas.on_pointer_move(viewport, logical_x, logical_y);
                     }
                     // Forward into the editor's UITree only when the
-                    // cursor sits in the sidebar — Move events outside
-                    // the sidebar would just cause spurious hover/exit
-                    // on tree nodes.
-                    if logical_x >= sidebar_x
+                    // cursor sits in either margin (palette on the left
+                    // or expose-panel sidebar on the right). Move
+                    // events from the canvas region would just cause
+                    // spurious hover/exit on tree nodes.
+                    let in_panel = logical_x < palette_width || logical_x >= sidebar_x;
+                    if in_panel
                         && let Some(ed) = self.graph_editor.as_mut()
                     {
                         ed.ui_root.input.process_pointer(
@@ -1956,30 +1962,36 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             WindowEvent::MouseInput { button, state, .. } => {
                 if is_graph_editor {
                     if let Some(canvas) = self.graph_canvas.as_mut() {
-                        let viewport = self
+                        let window_size = self
                             .window_registry
                             .get(&window_id)
                             .map(|ws| {
                                 let s = ws.window.scale_factor();
                                 let sz = ws.window.inner_size();
-                                crate::graph_canvas::Rect::new(
-                                    0.0,
-                                    0.0,
-                                    sz.width as f32 / s as f32,
-                                    sz.height as f32 / s as f32,
-                                )
+                                (sz.width as f32 / s as f32, sz.height as f32 / s as f32)
                             })
-                            .unwrap_or(crate::graph_canvas::Rect::new(0.0, 0.0, 1.0, 1.0));
+                            .unwrap_or((1.0, 1.0));
                         let (cx, cy) = canvas.cursor();
                         let palette_width =
                             manifold_ui::panels::graph_palette::PALETTE_WIDTH;
                         let sidebar_x =
-                            viewport.w - manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
+                            window_size.0 - manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
                         // The UITree spans the whole editor window — both
                         // the left palette and the right sidebar live in
                         // it. Route any click in either margin to it; the
                         // canvas only sees clicks in the center column.
                         let in_panel = cx < palette_width || cx >= sidebar_x;
+                        // Canvas viewport matches the render-time slice:
+                        // origin at palette_width, width is the remaining
+                        // center column. Passing this (not the full window)
+                        // is what makes `to_graph` translate cursor coords
+                        // into the canvas's coordinate system correctly.
+                        let viewport = crate::graph_canvas::Rect::new(
+                            palette_width,
+                            0.0,
+                            (sidebar_x - palette_width).max(0.0),
+                            window_size.1,
+                        );
                         match (button, state) {
                             (MouseButton::Left, ElementState::Pressed) => {
                                 if in_panel {
