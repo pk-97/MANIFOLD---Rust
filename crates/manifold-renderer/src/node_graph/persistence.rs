@@ -225,14 +225,14 @@ fn register_builtin(r: &mut PrimitiveRegistry) {
     r.register(FINAL_OUTPUT_TYPE_ID, || Box::new(FinalOutput::new()));
 
     // Color primitives.
-    r.register(primitives::LUMINANCE_TYPE_ID, || {
-        Box::new(primitives::Luminance::new())
+    r.register(primitives::BRIGHTNESS_TYPE_ID, || {
+        Box::new(primitives::Brightness::new())
     });
-    r.register(primitives::COLOR_MATRIX_TYPE_ID, || {
-        Box::new(primitives::ColorMatrix::new())
+    r.register(primitives::CHANNEL_MIX_TYPE_ID, || {
+        Box::new(primitives::ChannelMix::new())
     });
-    r.register(primitives::GRADIENT_MAP_TYPE_ID, || {
-        Box::new(primitives::GradientMap::new())
+    r.register(primitives::COLOR_RAMP_TYPE_ID, || {
+        Box::new(primitives::ColorRamp::new())
     });
 
     // Compose primitives.
@@ -253,13 +253,13 @@ fn register_builtin(r: &mut PrimitiveRegistry) {
     r.register(primitives::MIP_CHAIN_TYPE_ID, || {
         Box::new(primitives::MipChain::new())
     });
-    r.register(primitives::SEPARABLE_GAUSSIAN_TYPE_ID, || {
-        Box::new(primitives::SeparableGaussian::new())
+    r.register(primitives::GAUSSIAN_BLUR_TYPE_ID, || {
+        Box::new(primitives::GaussianBlur::new())
     });
 
     // UV primitives.
-    r.register(primitives::UV_TRANSFORM_TYPE_ID, || {
-        Box::new(primitives::UVTransform::new())
+    r.register(primitives::TRANSFORM_TYPE_ID, || {
+        Box::new(primitives::Transform::new())
     });
     r.register(primitives::SAMPLE_TYPE_ID, || {
         Box::new(primitives::Sample::new())
@@ -269,8 +269,8 @@ fn register_builtin(r: &mut PrimitiveRegistry) {
     r.register(primitives::FEEDBACK_TYPE_ID, || {
         Box::new(primitives::Feedback::new())
     });
-    r.register(primitives::WET_DRY_MIX_TYPE_ID, || {
-        Box::new(primitives::WetDryMix::new())
+    r.register(primitives::WET_DRY_TYPE_ID, || {
+        Box::new(primitives::WetDry::new())
     });
 
     // Composite-as-primitive (fused) effects.
@@ -327,7 +327,7 @@ fn register_builtin(r: &mut PrimitiveRegistry) {
         primitives::HighlightBoost,
         primitives::Invert,
         primitives::KaleidoFold,
-        primitives::Lut1d,
+        primitives::ColorLut,
         primitives::Strobe,
         primitives::VoronoiPrism,
     );
@@ -700,19 +700,19 @@ mod tests {
         let expected: &[&str] = &[
             SOURCE_TYPE_ID,
             FINAL_OUTPUT_TYPE_ID,
-            primitives::LUMINANCE_TYPE_ID,
-            primitives::COLOR_MATRIX_TYPE_ID,
-            primitives::GRADIENT_MAP_TYPE_ID,
+            primitives::BRIGHTNESS_TYPE_ID,
+            primitives::CHANNEL_MIX_TYPE_ID,
+            primitives::COLOR_RAMP_TYPE_ID,
             primitives::MIX_TYPE_ID,
             primitives::BLEND_TYPE_ID,
             primitives::THRESHOLD_TYPE_ID,
             primitives::BLUR_TYPE_ID,
             primitives::MIP_CHAIN_TYPE_ID,
-            primitives::SEPARABLE_GAUSSIAN_TYPE_ID,
-            primitives::UV_TRANSFORM_TYPE_ID,
+            primitives::GAUSSIAN_BLUR_TYPE_ID,
+            primitives::TRANSFORM_TYPE_ID,
             primitives::SAMPLE_TYPE_ID,
             primitives::FEEDBACK_TYPE_ID,
-            primitives::WET_DRY_MIX_TYPE_ID,
+            primitives::WET_DRY_TYPE_ID,
             primitives::BLOOM_TYPE_ID,
             primitives::HALATION_TYPE_ID,
             primitives::WATERCOLOR_TYPE_ID,

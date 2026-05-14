@@ -110,7 +110,7 @@ pub enum ParamConvert {
     EnumRound,
     /// Enum remap: index the legacy enum into a static table to get
     /// the new enum value. Used by Mirror, where the legacy mode
-    /// (0=Horiz / 1=Vert / 2=Both) maps to the new UVTransform mode
+    /// (0=Horiz / 1=Vert / 2=Both) maps to the new Transform mode
     /// (6=FoldX / 7=FoldY / 8=FoldBoth) — the host slider keeps its
     /// 0/1/2 surface, the graph node receives 6/7/8.
     ///

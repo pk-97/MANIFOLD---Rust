@@ -10,7 +10,7 @@
 //! conversion at its boundary; the primitive stays a clean building
 //! block other graphs can compose without surprise.
 //!
-//! Distinct from the existing fold-mode `UVTransform` primitive (used
+//! Distinct from the existing fold-mode `Transform` primitive (used
 //! by Mirror, QuadMirror, etc.). Both operate on UV coordinates but
 //! their parameter surfaces and math don't overlap; the AI surface
 //! lists both with composition_notes calling out the difference.
@@ -65,7 +65,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "1:1 building block for the legacy Transform effect. Rotation is in RADIANS — the Transform preset graph converts its degree slider via deg→-rad. Distinct from UVTransform (fold modes for Mirror); use this for affine, that for fold.",
+    composition_notes: "1:1 building block for the legacy Transform effect. Rotation is in RADIANS — the Transform preset graph converts its degree slider via deg→-rad. Distinct from Transform (fold modes for Mirror); use this for affine, that for fold.",
     examples: ["preset.effect.transform"],
 }
 

@@ -23,7 +23,7 @@
 mod parity;
 
 use manifold_core::EffectTypeId;
-use manifold_renderer::node_graph::primitives::Lut1d;
+use manifold_renderer::node_graph::primitives::ColorLut;
 use manifold_renderer::node_graph::ParamValue;
 use parity::{
     assert_bytewise_equal, default_ctx, make_default_effect, Fixture, ParityHarness,
@@ -240,7 +240,7 @@ fn lut1d_is_pixel_exact_across_fixtures_palettes_setups() {
 
                 let legacy = h.run_legacy(&fx, &input, &ctx);
                 let decomposed = h.run_primitive_graph_with_aux_inputs(
-                    Box::new(Lut1d::new()),
+                    Box::new(ColorLut::new()),
                     &input,
                     &[("lut", &lut_tex)],
                     &ctx,

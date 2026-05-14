@@ -1,4 +1,4 @@
-//! Color-domain primitives: [`Luminance`], [`ColorMatrix`], [`GradientMap`].
+//! Color-domain primitives: [`Brightness`], [`ChannelMix`], [`ColorRamp`].
 //!
 //! All three are pixel-local: each output pixel depends only on the same
 //! input pixel and parameters. They will fuse cleanly with each other and
@@ -23,15 +23,15 @@ const OUT_OUTPUT: NodeOutput = NodePort {
 };
 
 // =====================================================================
-// Luminance — RGB → grayscale via per-channel weights.
+// Brightness — RGB → grayscale via per-channel weights.
 // =====================================================================
 
-pub const LUMINANCE_TYPE_ID: &str = "node.brightness";
+pub const BRIGHTNESS_TYPE_ID: &str = "node.brightness";
 
-const LUMINANCE_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];
-const LUMINANCE_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
+const BRIGHTNESS_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];
+const BRIGHTNESS_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
 
-const LUMINANCE_PARAMS: [ParamDef; 1] = [ParamDef {
+const BRIGHTNESS_PARAMS: [ParamDef; 1] = [ParamDef {
     name: "weights",
     label: "RGB Weights",
     ty: ParamType::Vec3,
@@ -42,50 +42,50 @@ const LUMINANCE_PARAMS: [ParamDef; 1] = [ParamDef {
 }];
 
 #[derive(Debug)]
-pub struct Luminance {
+pub struct Brightness {
     type_id: EffectNodeType,
 }
 
-impl Luminance {
+impl Brightness {
     pub fn new() -> Self {
         Self {
-            type_id: EffectNodeType::new(LUMINANCE_TYPE_ID),
+            type_id: EffectNodeType::new(BRIGHTNESS_TYPE_ID),
         }
     }
 }
 
-impl Default for Luminance {
+impl Default for Brightness {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl EffectNode for Luminance {
+impl EffectNode for Brightness {
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }
     fn inputs(&self) -> &[NodeInput] {
-        &LUMINANCE_INPUTS
+        &BRIGHTNESS_INPUTS
     }
     fn outputs(&self) -> &[NodeOutput] {
-        &LUMINANCE_OUTPUTS
+        &BRIGHTNESS_OUTPUTS
     }
     fn parameters(&self) -> &[ParamDef] {
-        &LUMINANCE_PARAMS
+        &BRIGHTNESS_PARAMS
     }
     fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
 }
 
 // =====================================================================
-// ColorMatrix — 4x4 RGBA transformation.
+// ChannelMix — 4x4 RGBA transformation.
 // =====================================================================
 
-pub const COLOR_MATRIX_TYPE_ID: &str = "node.channel_mix";
+pub const CHANNEL_MIX_TYPE_ID: &str = "node.channel_mix";
 
-const COLOR_MATRIX_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];
-const COLOR_MATRIX_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
+const CHANNEL_MIX_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];
+const CHANNEL_MIX_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
 
-const COLOR_MATRIX_PARAMS: [ParamDef; 4] = [
+const CHANNEL_MIX_PARAMS: [ParamDef; 4] = [
     ParamDef {
         name: "row0",
         label: "Row 0 (R)",
@@ -121,50 +121,50 @@ const COLOR_MATRIX_PARAMS: [ParamDef; 4] = [
 ];
 
 #[derive(Debug)]
-pub struct ColorMatrix {
+pub struct ChannelMix {
     type_id: EffectNodeType,
 }
 
-impl ColorMatrix {
+impl ChannelMix {
     pub fn new() -> Self {
         Self {
-            type_id: EffectNodeType::new(COLOR_MATRIX_TYPE_ID),
+            type_id: EffectNodeType::new(CHANNEL_MIX_TYPE_ID),
         }
     }
 }
 
-impl Default for ColorMatrix {
+impl Default for ChannelMix {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl EffectNode for ColorMatrix {
+impl EffectNode for ChannelMix {
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }
     fn inputs(&self) -> &[NodeInput] {
-        &COLOR_MATRIX_INPUTS
+        &CHANNEL_MIX_INPUTS
     }
     fn outputs(&self) -> &[NodeOutput] {
-        &COLOR_MATRIX_OUTPUTS
+        &CHANNEL_MIX_OUTPUTS
     }
     fn parameters(&self) -> &[ParamDef] {
-        &COLOR_MATRIX_PARAMS
+        &CHANNEL_MIX_PARAMS
     }
     fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
 }
 
 // =====================================================================
-// GradientMap — luma → two-stop gradient lookup.
+// ColorRamp — luma → two-stop gradient lookup.
 // =====================================================================
 
-pub const GRADIENT_MAP_TYPE_ID: &str = "node.color_ramp";
+pub const COLOR_RAMP_TYPE_ID: &str = "node.color_ramp";
 
-const GRADIENT_MAP_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];
-const GRADIENT_MAP_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
+const COLOR_RAMP_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];
+const COLOR_RAMP_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
 
-const GRADIENT_MAP_PARAMS: [ParamDef; 2] = [
+const COLOR_RAMP_PARAMS: [ParamDef; 2] = [
     ParamDef {
         name: "color_a",
         label: "Color A",
@@ -184,36 +184,36 @@ const GRADIENT_MAP_PARAMS: [ParamDef; 2] = [
 ];
 
 #[derive(Debug)]
-pub struct GradientMap {
+pub struct ColorRamp {
     type_id: EffectNodeType,
 }
 
-impl GradientMap {
+impl ColorRamp {
     pub fn new() -> Self {
         Self {
-            type_id: EffectNodeType::new(GRADIENT_MAP_TYPE_ID),
+            type_id: EffectNodeType::new(COLOR_RAMP_TYPE_ID),
         }
     }
 }
 
-impl Default for GradientMap {
+impl Default for ColorRamp {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl EffectNode for GradientMap {
+impl EffectNode for ColorRamp {
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }
     fn inputs(&self) -> &[NodeInput] {
-        &GRADIENT_MAP_INPUTS
+        &COLOR_RAMP_INPUTS
     }
     fn outputs(&self) -> &[NodeOutput] {
-        &GRADIENT_MAP_OUTPUTS
+        &COLOR_RAMP_OUTPUTS
     }
     fn parameters(&self) -> &[ParamDef] {
-        &GRADIENT_MAP_PARAMS
+        &COLOR_RAMP_PARAMS
     }
     fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
 }

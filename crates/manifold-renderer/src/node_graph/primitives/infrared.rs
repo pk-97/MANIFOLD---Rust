@@ -5,7 +5,7 @@
 //! Infrared bakes 10 palette LUT textures at 512×1 resolution at
 //! construction time and runs a single compute pass that samples
 //! pixel luminance into the chosen LUT. Decomposing it into
-//! `BakedPalette → Lut1d` primitives would either break bit-exact
+//! `BakedPalette → ColorLut` primitives would either break bit-exact
 //! parity (the graph runtime doesn't support per-slot texture
 //! resolutions yet, so a baked palette at full render resolution
 //! would interpolate differently than the legacy 512×1 LUT) or

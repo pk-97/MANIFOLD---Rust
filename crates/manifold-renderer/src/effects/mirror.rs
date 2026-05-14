@@ -3,7 +3,7 @@
 //! Internally:
 //!
 //! ```text
-//! Source ──▶ UVTransform[mode=Foldᴹ] ──▶ Mix.b
+//! Source ──▶ Transform[mode=Foldᴹ] ──▶ Mix.b
 //! Source ───────────────────────────────▶ Mix.a
 //! Mix.out ─────────────────────────────▶ FinalOutput.in
 //! ```
@@ -16,7 +16,7 @@
 //!
 //! Exposes:
 //! - `Amount` (param 0) → `Mix.amount` (0 = original, 1 = full fold)
-//! - `Mode`   (param 1) → `UVTransform.mode` after legacy→fold remap
+//! - `Mode`   (param 1) → `Transform.mode` after legacy→fold remap
 //!   (0=Horiz=FoldX, 1=Vert=FoldY, 2=Both=FoldBoth)
 
 use manifold_core::EffectTypeId;
@@ -108,7 +108,7 @@ impl MirrorFX {
         let output_resource = output_resource(&plan, handle.output().0, "out");
 
         // Bindings mirror the `ParamSpec` slice in the metadata
-        // submission. The legacy mode→UVTransform remap (Horiz/Vert/Both
+        // submission. The legacy mode→Transform remap (Horiz/Vert/Both
         // → FoldX/FoldY/FoldBoth, indices 0/1/2 → 6/7/8) is now declared
         // as `EnumRemap` rather than expressed by a hand-written
         // `legacy_mirror_mode_to_uv` call.
@@ -168,8 +168,8 @@ impl RenderState {
         let mut output_slot: Option<Slot> = None;
 
         // Pre-bind every Texture2D resource — `MetalBackend::without_device`
-        // panics on lazy-alloc. Mirror's intermediate is `UVTransform.out`
-        // (between UVTransform and Mix), so we cannot just hand-pick
+        // panics on lazy-alloc. Mirror's intermediate is `Transform.out`
+        // (between Transform and Mix), so we cannot just hand-pick
         // source + output.
         for i in 0..plan.resource_count() {
             let id = ResourceId(i as u32);
@@ -288,7 +288,7 @@ impl PostProcessEffect for MirrorFX {
         }
 
         // Step 17: route every host param via the declarative
-        // `bindings` slice. Legacy mode→UVTransform remap is encoded
+        // `bindings` slice. Legacy mode→Transform remap is encoded
         // as `ParamConvert::EnumRemap` on the binding itself.
         // apply_param_bindings logs and skips per-binding routing
         // errors rather than panicking — see its docstring.

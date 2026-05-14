@@ -21,7 +21,7 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
-    name: Lut1d,
+    name: ColorLut,
     type_id: "node.color_lut",
     purpose: "1D LUT remap: sample a W×1 LUT texture indexed by BT.601 luminance (with contrast adjust), then crossfade against the source. The Infrared preset graph supplies the LUT.",
     inputs: {
@@ -62,7 +62,7 @@ struct Lut1dUniforms {
     _pad1: f32,
 }
 
-impl Primitive for Lut1d {
+impl Primitive for ColorLut {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let amount = match ctx.params.get("amount") {
             Some(ParamValue::Float(f)) => *f,

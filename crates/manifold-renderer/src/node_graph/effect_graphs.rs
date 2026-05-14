@@ -114,7 +114,7 @@ pub fn primitive_id_for_effect(effect_type: &EffectTypeId) -> Option<&'static st
 
         // §6.6 #5 — Infrared ships as a monolithic wrapper
         // primitive (same shape as AutoGain / BlobTracking /
-        // WireframeDepth) rather than a `BakedPalette → Lut1d`
+        // WireframeDepth) rather than a `BakedPalette → ColorLut`
         // decomposition. The legacy effect's 512×1 baked LUTs need
         // per-slot texture-resolution support in the graph runtime
         // to decompose without breaking parity — out of scope here.

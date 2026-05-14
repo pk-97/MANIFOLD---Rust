@@ -23,11 +23,11 @@
 //!
 //! ## V1 set
 //!
-//! - [`build_mirror`]: `UVTransform[mode=Foldᴹ] + Mix(source, folded)`
+//! - [`build_mirror`]: `Transform[mode=Foldᴹ] + Mix(source, folded)`
 //!   — kaleidoscope fold with amount blend.
-//! - [`build_infrared`]: `Luminance → GradientMap`.
+//! - [`build_infrared`]: `Brightness → ColorRamp`.
 //! - [`build_soft_focus`]: `Blur` + `Mix(source, blurred)`.
-//! - [`build_halation`]: `Threshold → MipChain → Blur → ColorMatrix(tint) → Blend(Add)`,
+//! - [`build_halation`]: `Threshold → MipChain → Blur → ChannelMix(tint) → Blend(Add)`,
 //!   with the source fanning to the blend base.
 //! - [`build_bloom`]: same shape as Halation minus the tint.
 
@@ -208,7 +208,7 @@ mod tests {
         assert_eq!(
             handle.inner_nodes().len(),
             2,
-            "Mirror = UVTransform (fold) + Mix (amount blend)"
+            "Mirror = Transform (fold) + Mix (amount blend)"
         );
         let exposed: HashSet<&'static str> = handle.exposed_params().collect();
         assert!(exposed.contains("amount"));
@@ -216,7 +216,7 @@ mod tests {
         handle
             .set_param(&mut g, "amount", ParamValue::Float(0.5))
             .unwrap();
-        // Mode routes to UVTransform's mode enum directly; legacy values
+        // Mode routes to Transform's mode enum directly; legacy values
         // need the legacy_mirror_mode_to_uv helper at the call site.
         handle
             .set_param(&mut g, "mode", ParamValue::Enum(7))
@@ -230,7 +230,7 @@ mod tests {
         assert_eq!(handle.inner_nodes().len(), 2);
 
         // Outer param routing: setting `color_a` on the handle routes to
-        // GradientMap's `color_a`.
+        // ColorRamp's `color_a`.
         handle
             .set_param(&mut g, "color_a", ParamValue::Color([1.0, 0.0, 0.0, 1.0]))
             .unwrap();
@@ -271,7 +271,7 @@ mod tests {
         assert_eq!(
             handle.inner_nodes().len(),
             5,
-            "Halation = Threshold + MipChain + Blur + ColorMatrix + Blend"
+            "Halation = Threshold + MipChain + Blur + ChannelMix + Blend"
         );
     }
 

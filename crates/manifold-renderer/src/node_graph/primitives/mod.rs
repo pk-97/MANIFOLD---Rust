@@ -42,8 +42,8 @@ pub use bloom::{Bloom, BLOOM_TYPE_ID};
 pub use chromatic_offset::ChromaticOffset;
 pub use clamp_stretch::ClampStretch;
 pub use color::{
-    ColorMatrix, GradientMap, Luminance, COLOR_MATRIX_TYPE_ID, GRADIENT_MAP_TYPE_ID,
-    LUMINANCE_TYPE_ID,
+    ChannelMix, ColorRamp, Brightness, CHANNEL_MIX_TYPE_ID, COLOR_RAMP_TYPE_ID,
+    BRIGHTNESS_TYPE_ID,
 };
 pub use color_grade::ColorGrade;
 pub use compose::{Blend, Mix, BLEND_MODES, BLEND_TYPE_ID, MIX_MODES, MIX_TYPE_ID};
@@ -58,10 +58,10 @@ pub use highlight_boost::HighlightBoost;
 pub use infrared::{Infrared, INFRARED_PALETTES, INFRARED_TYPE_ID};
 pub use invert::Invert;
 pub use kaleido_fold::KaleidoFold;
-pub use lut1d::Lut1d;
+pub use lut1d::ColorLut;
 pub use separable_gaussian::{
-    SeparableGaussian, SEPARABLE_GAUSSIAN_AXES, SEPARABLE_GAUSSIAN_KERNELS,
-    SEPARABLE_GAUSSIAN_TYPE_ID,
+    GaussianBlur, GAUSSIAN_BLUR_AXES, GAUSSIAN_BLUR_KERNELS,
+    GAUSSIAN_BLUR_TYPE_ID,
 };
 pub use strobe::{Strobe, NOTE_RATES as STROBE_NOTE_RATES};
 pub use filter::{
@@ -70,14 +70,14 @@ pub use filter::{
 pub use temporal::{Feedback, FEEDBACK_MODES, FEEDBACK_TYPE_ID};
 pub use voronoi_prism::VoronoiPrism;
 pub use watercolor::{Watercolor, WATERCOLOR_TYPE_ID};
-pub use wet_dry_mix::{WetDryMix, WET_DRY_MIX_TYPE_ID};
+pub use wet_dry_mix::{WetDry, WET_DRY_TYPE_ID};
 pub use wireframe_depth::{
     WireframeDepth, WIREFRAME_DEPTH_BLEND_MODES, WIREFRAME_DEPTH_MESH_RATES,
     WIREFRAME_DEPTH_ONOFF, WIREFRAME_DEPTH_TYPE_ID,
 };
 pub use uv::{
-    Sample, UVTransform, SAMPLE_FILTER_MODES, SAMPLE_TYPE_ID, SAMPLE_WRAP_MODES,
-    UV_TRANSFORM_MODES, UV_TRANSFORM_TYPE_ID,
+    Sample, Transform, SAMPLE_FILTER_MODES, SAMPLE_TYPE_ID, SAMPLE_WRAP_MODES,
+    TRANSFORM_MODES, TRANSFORM_TYPE_ID,
 };
 
 #[cfg(test)]
@@ -105,18 +105,18 @@ mod tests {
     /// invariants over the whole catalog without listing them by hand.
     fn all_primitives() -> Vec<Box<dyn EffectNode>> {
         vec![
-            Box::new(Luminance::new()),
-            Box::new(ColorMatrix::new()),
-            Box::new(GradientMap::new()),
+            Box::new(Brightness::new()),
+            Box::new(ChannelMix::new()),
+            Box::new(ColorRamp::new()),
             Box::new(Mix::new()),
             Box::new(Blend::new()),
             Box::new(Threshold::new()),
             Box::new(Blur::new()),
             Box::new(MipChain::new()),
-            Box::new(UVTransform::new()),
+            Box::new(Transform::new()),
             Box::new(Sample::new()),
             Box::new(Feedback::new()),
-            Box::new(WetDryMix::new()),
+            Box::new(WetDry::new()),
         ]
     }
 

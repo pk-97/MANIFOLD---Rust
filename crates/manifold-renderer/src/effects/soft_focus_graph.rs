@@ -35,7 +35,7 @@ use crate::render_target::RenderTarget;
 inventory::submit! {
     EffectMetadata {
         id: EffectTypeId::SOFT_FOCUS_GRAPH,
-        display_name: "Soft Focus (Graph)",
+        display_name: "Soft Focus",
         category: "Post-Process",
         available: true,
         osc_prefix: "soft_focus_graph",

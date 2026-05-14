@@ -10,7 +10,7 @@ use crate::effects::registration::EffectFactory;
 inventory::submit! {
     EffectMetadata {
         id: EffectTypeId::INVERT_COLORS,
-        display_name: "Invert Colors",
+        display_name: "Invert",
         category: "Spatial",
         available: true,
         osc_prefix: "invert",

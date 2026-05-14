@@ -13,7 +13,7 @@
 //! prefilter math (which also uses threshold+knee but with a
 //! response curve that *extracts* highlights for downstream blur).
 //! Bloom's prefilter will become its own primitive when §6.3 lands
-//! `SeparableGaussian` + `MipChain` + the Bloom preset graph.
+//! `GaussianBlur` + `MipChain` + the Bloom preset graph.
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 

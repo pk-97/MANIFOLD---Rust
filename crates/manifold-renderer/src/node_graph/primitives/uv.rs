@@ -1,7 +1,7 @@
-//! UV-domain primitives: [`UVTransform`] (rewrite UVs), [`Sample`] (sample
+//! UV-domain primitives: [`Transform`] (rewrite UVs), [`Sample`] (sample
 //! with explicit per-pixel UVs).
 //!
-//! Both are the foundation for UV manipulation. `UVTransform` is a
+//! Both are the foundation for UV manipulation. `Transform` is a
 //! UV-rewriting node in fusion terms; `Sample` is the explicit version
 //! where the UV comes from another texture's RG channels.
 
@@ -26,15 +26,15 @@ const OUT_OUTPUT: NodeOutput = NodePort {
 };
 
 // =====================================================================
-// UVTransform — translate / scale / rotate / mirror the input.
+// Transform — translate / scale / rotate / mirror the input.
 //
 // One node covers Mirror, QuadMirror, and Transform from the existing
 // effect catalog (those become alias presets that pre-set `mode`).
 // =====================================================================
 
-pub const UV_TRANSFORM_TYPE_ID: &str = "node.transform";
+pub const TRANSFORM_TYPE_ID: &str = "node.transform";
 
-pub const UV_TRANSFORM_MODES: &[&str] = &[
+pub const TRANSFORM_MODES: &[&str] = &[
     "Identity",
     "Mirror",
     "MirrorX",
@@ -49,10 +49,10 @@ pub const UV_TRANSFORM_MODES: &[&str] = &[
     "FoldBoth",
 ];
 
-const UV_TRANSFORM_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];
-const UV_TRANSFORM_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
+const TRANSFORM_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];
+const TRANSFORM_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
 
-const UV_TRANSFORM_PARAMS: [ParamDef; 4] = [
+const TRANSFORM_PARAMS: [ParamDef; 4] = [
     ParamDef {
         name: "translate",
         label: "Translate",
@@ -84,7 +84,7 @@ const UV_TRANSFORM_PARAMS: [ParamDef; 4] = [
         ty: ParamType::Enum,
         default: ParamValue::Enum(0), // Identity
         range: None,
-        enum_values: UV_TRANSFORM_MODES,
+        enum_values: TRANSFORM_MODES,
     },
 ];
 
@@ -99,40 +99,40 @@ struct UVTransformUniforms {
     _pad1: f32,
 }
 
-pub struct UVTransform {
+pub struct Transform {
     type_id: EffectNodeType,
     pipeline: Option<GpuComputePipeline>,
     sampler: Option<GpuSampler>,
 }
 
-impl UVTransform {
+impl Transform {
     pub fn new() -> Self {
         Self {
-            type_id: EffectNodeType::new(UV_TRANSFORM_TYPE_ID),
+            type_id: EffectNodeType::new(TRANSFORM_TYPE_ID),
             pipeline: None,
             sampler: None,
         }
     }
 }
 
-impl Default for UVTransform {
+impl Default for Transform {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl EffectNode for UVTransform {
+impl EffectNode for Transform {
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }
     fn inputs(&self) -> &[NodeInput] {
-        &UV_TRANSFORM_INPUTS
+        &TRANSFORM_INPUTS
     }
     fn outputs(&self) -> &[NodeOutput] {
-        &UV_TRANSFORM_OUTPUTS
+        &TRANSFORM_OUTPUTS
     }
     fn parameters(&self) -> &[ParamDef] {
-        &UV_TRANSFORM_PARAMS
+        &TRANSFORM_PARAMS
     }
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let translate = match ctx.params.get("translate") {

@@ -18,13 +18,13 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
 /// Display labels for the `kernel_size` enum, indexed by enum value.
-pub const SEPARABLE_GAUSSIAN_KERNELS: &[&str] = &["9-tap", "17-tap", "25-tap"];
+pub const GAUSSIAN_BLUR_KERNELS: &[&str] = &["9-tap", "17-tap", "25-tap"];
 
 /// Display labels for the `axis` enum, indexed by enum value.
-pub const SEPARABLE_GAUSSIAN_AXES: &[&str] = &["Horizontal", "Vertical"];
+pub const GAUSSIAN_BLUR_AXES: &[&str] = &["Horizontal", "Vertical"];
 
 crate::primitive! {
-    name: SeparableGaussian,
+    name: GaussianBlur,
     type_id: "node.gaussian_blur",
     purpose: "Single-axis Gaussian blur. Pair an H pass with a V pass (same kernel + step) for an isotropic blur. 9-tap (σ≈2), 17-tap (σ≈4), or 25-tap (σ≈6) precomputed kernels.",
     inputs: {
@@ -40,7 +40,7 @@ crate::primitive! {
             ty: ParamType::Enum,
             default: ParamValue::Enum(1),
             range: Some((0.0, 2.0)),
-            enum_values: SEPARABLE_GAUSSIAN_KERNELS,
+            enum_values: GAUSSIAN_BLUR_KERNELS,
         },
         ParamDef {
             name: "axis",
@@ -48,7 +48,7 @@ crate::primitive! {
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
             range: Some((0.0, 1.0)),
-            enum_values: SEPARABLE_GAUSSIAN_AXES,
+            enum_values: GAUSSIAN_BLUR_AXES,
         },
         ParamDef {
             name: "step",
@@ -63,7 +63,7 @@ crate::primitive! {
     examples: ["composite.bloom", "composite.halation", "composite.watercolor"],
 }
 
-pub const SEPARABLE_GAUSSIAN_TYPE_ID: &str = "node.gaussian_blur";
+pub const GAUSSIAN_BLUR_TYPE_ID: &str = "node.gaussian_blur";
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -78,7 +78,7 @@ struct SeparableGaussianUniforms {
     _pad2: f32,
 }
 
-impl Primitive for SeparableGaussian {
+impl Primitive for GaussianBlur {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let kernel_size = match ctx.params.get("kernel_size") {
             Some(ParamValue::Enum(v)) => (*v).min(2),
@@ -156,7 +156,7 @@ impl Primitive for SeparableGaussian {
 
 #[cfg(test)]
 mod gpu_tests {
-    //! Real-GPU smoke tests. SeparableGaussian is a new primitive
+    //! Real-GPU smoke tests. GaussianBlur is a new primitive
     //! (no 1:1 legacy effect) — validation is against analytical
     //! invariants: DC preservation, axis isolation, and known
     //! kernel response on a delta-function input.
@@ -177,7 +177,7 @@ mod gpu_tests {
     };
     use crate::render_target::RenderTarget;
 
-    use super::SeparableGaussian;
+    use super::GaussianBlur;
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -201,7 +201,7 @@ mod gpu_tests {
         panic!("no output `{port}` on node {node:?}");
     }
 
-    /// Run SeparableGaussian on `w × h` input. The caller supplies a
+    /// Run GaussianBlur on `w × h` input. The caller supplies a
     /// closure that fills the input texture (a one-shot encoder is
     /// passed through). Returns the full RGBA output as f32.
     fn run_gaussian<F: FnOnce(&mut RendererGpuEncoder<'_>, &RenderTarget)>(
@@ -217,7 +217,7 @@ mod gpu_tests {
 
         let mut g = Graph::new();
         let src = g.add_node(Box::new(Source::new()));
-        let gauss = g.add_node(Box::new(SeparableGaussian::new()));
+        let gauss = g.add_node(Box::new(GaussianBlur::new()));
         let out = g.add_node(Box::new(FinalOutput::new()));
         g.set_param(gauss, "kernel_size", ParamValue::Enum(kernel_size))
             .unwrap();

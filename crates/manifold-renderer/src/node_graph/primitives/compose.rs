@@ -9,7 +9,7 @@
 //! [`Blend`] is a transitional stub kept only because the V1 Bloom and
 //! Halation composite builders still reference it. It will be retired
 //! in §6.3 when those composites are rebuilt around `Mix` /
-//! `WetDryMix`. New code should use [`Mix`].
+//! `WetDry`. New code should use [`Mix`].
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 

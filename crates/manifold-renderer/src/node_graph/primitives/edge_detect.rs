@@ -26,7 +26,7 @@ use crate::node_graph::primitive::Primitive;
 crate::primitive! {
     name: EdgeDetect,
     type_id: "node.edge_detect",
-    purpose: "Sobel 3×3 edge detection with smoothstep threshold, crossfaded against the source by amount. Luminance-based; no glow — chain with Bloom or Halation for glow.",
+    purpose: "Sobel 3×3 edge detection with smoothstep threshold, crossfaded against the source by amount. Brightness-based; no glow — chain with Bloom or Halation for glow.",
     inputs: {
         in: Texture2D required,
     },

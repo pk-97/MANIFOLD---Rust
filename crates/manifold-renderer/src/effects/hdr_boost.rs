@@ -14,7 +14,7 @@ use crate::effects::registration::EffectFactory;
 inventory::submit! {
     EffectMetadata {
         id: EffectTypeId::HDR_BOOST,
-        display_name: "HDR Boost",
+        display_name: "Highlight Boost",
         category: "Filmic",
         available: true,
         osc_prefix: "hdrBoost",

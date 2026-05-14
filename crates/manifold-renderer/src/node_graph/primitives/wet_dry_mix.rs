@@ -15,7 +15,7 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
-    name: WetDryMix,
+    name: WetDry,
     type_id: "node.wet_dry",
     purpose: "Crossfade a processed `wet` texture back over the original `dry` texture by a `wet_dry` factor [0,1]. At 0 returns dry unchanged; at 1 returns wet. RGBA-wide lerp.",
     inputs: {
@@ -39,7 +39,7 @@ crate::primitive! {
     examples: ["composite.bloom", "composite.halation", "composite.watercolor"],
 }
 
-pub const WET_DRY_MIX_TYPE_ID: &str = "node.wet_dry";
+pub const WET_DRY_TYPE_ID: &str = "node.wet_dry";
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -50,7 +50,7 @@ struct WetDryMixUniforms {
     _pad2: f32,
 }
 
-impl Primitive for WetDryMix {
+impl Primitive for WetDry {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let wet_dry = match ctx.params.get("wet_dry") {
             Some(ParamValue::Float(f)) => *f,
@@ -119,7 +119,7 @@ impl Primitive for WetDryMix {
 
 #[cfg(test)]
 mod gpu_tests {
-    //! Real-GPU smoke tests. WetDryMix is a new primitive — no legacy
+    //! Real-GPU smoke tests. WetDry is a new primitive — no legacy
     //! effect to parity-check against directly — so we validate at the
     //! boundary values (wet_dry = 0 → dry, wet_dry = 1 → wet, wet_dry
     //! = 0.5 → exact half).
@@ -140,7 +140,7 @@ mod gpu_tests {
     };
     use crate::render_target::RenderTarget;
 
-    use super::WetDryMix;
+    use super::WetDry;
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -172,7 +172,7 @@ mod gpu_tests {
         let mut g = Graph::new();
         let src_dry = g.add_node(Box::new(Source::new()));
         let src_wet = g.add_node(Box::new(Source::new()));
-        let mix = g.add_node(Box::new(WetDryMix::new()));
+        let mix = g.add_node(Box::new(WetDry::new()));
         let out = g.add_node(Box::new(FinalOutput::new()));
         g.set_param(mix, "wet_dry", ParamValue::Float(wet_dry)).unwrap();
         g.connect((src_dry, "out"), (mix, "dry")).unwrap();

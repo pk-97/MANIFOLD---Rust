@@ -8,37 +8,37 @@
 //! Internal shape:
 //!
 //! ```text
-//! Source ──▶ UVTransform[mode=Foldᴹ] ──▶ Mix.b
+//! Source ──▶ Transform[mode=Foldᴹ] ──▶ Mix.b
 //! Source ──────────────────────────────▶ Mix.a
 //! Mix.out (composite output)
 //! ```
 //!
 //! Exposed outer params:
 //! - `amount` → `Mix.amount` (0 = original, 1 = full fold)
-//! - `mode`   → `UVTransform.mode` as an integer where 0 = horizontal
+//! - `mode`   → `Transform.mode` as an integer where 0 = horizontal
 //!   fold, 1 = vertical fold, 2 = both. The composite remaps these into
-//!   the UVTransform mode enum (FoldX = 6, FoldY = 7, FoldBoth = 8).
+//!   the Transform mode enum (FoldX = 6, FoldY = 7, FoldBoth = 8).
 
 use crate::node_graph::composites::CompositeHandle;
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::graph::Graph;
 use crate::node_graph::parameters::ParamValue;
-use crate::node_graph::primitives::{Mix, UVTransform};
+use crate::node_graph::primitives::{Mix, Transform};
 use crate::node_graph::validation::GraphError;
 
 pub const MIRROR_TYPE_ID: &str = "composite.mirror";
 
-/// UVTransform mode index for FoldX. Matches `UV_TRANSFORM_MODES`.
+/// Transform mode index for FoldX. Matches `TRANSFORM_MODES`.
 const FOLD_X: u32 = 6;
 
 /// Mirror — kaleidoscope fold with optional blend back to the source.
 ///
 /// `mode` is in legacy units (0=Horiz, 1=Vert, 2=Both); the composite
-/// translates it into UVTransform's enum at routing time.
+/// translates it into Transform's enum at routing time.
 ///
 /// Inner node handles registered for V2 user-exposed parameter
 /// bindings (`Graph::node_id_by_handle`):
-/// - `"uv_transform"` → the fold UVTransform
+/// - `"uv_transform"` → the fold Transform
 /// - `"mix"` → the dry/wet Mix
 ///
 /// **Single-composite-per-graph constraint**: since handle names
@@ -49,7 +49,7 @@ pub fn build_mirror(
     graph: &mut Graph,
     source: (NodeInstanceId, &'static str),
 ) -> Result<CompositeHandle, GraphError> {
-    let xform = graph.add_node_named("uv_transform", Box::new(UVTransform::new()));
+    let xform = graph.add_node_named("uv_transform", Box::new(Transform::new()));
     // Default to FoldX (horizontal fold). Outer `mode` setter remaps.
     graph.set_param(xform, "mode", ParamValue::Enum(FOLD_X))?;
     graph.connect(source, (xform, "source"))?;
@@ -74,7 +74,7 @@ pub fn build_mirror(
 }
 
 /// Translate legacy mirror mode (0=Horiz, 1=Vert, 2=Both) into the
-/// UVTransform enum value. Out-of-range values clamp to FoldX.
+/// Transform enum value. Out-of-range values clamp to FoldX.
 pub fn legacy_mirror_mode_to_uv(mode: u32) -> u32 {
     match mode {
         0 => 6, // FoldX

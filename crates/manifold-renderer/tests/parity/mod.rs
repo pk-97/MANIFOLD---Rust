@@ -284,7 +284,7 @@ impl ParityHarness {
     /// pre-bound to the corresponding Source node's `out`
     /// `ResourceId`, mirroring how the primary fixture is handled.
     ///
-    /// Suited to primitives like `Lut1d` (in + lut) or future
+    /// Suited to primitives like `ColorLut` (in + lut) or future
     /// `DisplacementMap` (in + displace). For single-input primitives
     /// the simpler [`Self::run_primitive_graph`] stays available.
     pub fn run_primitive_graph_with_aux_inputs<F>(

@@ -25,7 +25,7 @@ use manifold_gpu::{
 inventory::submit! {
     EffectMetadata {
         id: EffectTypeId::BLOB_TRACKING,
-        display_name: "Blob Tracking",
+        display_name: "Blob Track",
         category: "Post-Process",
         available: true,
         osc_prefix: "blobTracking",

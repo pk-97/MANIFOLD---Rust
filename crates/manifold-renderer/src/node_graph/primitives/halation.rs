@@ -5,7 +5,7 @@
 //! Three passes: Pass 0 fuses threshold, tint, and H Gaussian
 //! per-tap (no fp16 intermediate); Pass 1 is V Gaussian; Pass 2 is
 //! composite (source plus halo times amount). Splitting Pass 0 into
-//! atomic threshold-tint then SeparableGaussian H would round through
+//! atomic threshold-tint then GaussianBlur H would round through
 //! fp16 at the intermediate texture and lose bit-exact parity. Same
 //! reason Glitch, Strobe, EdgeDetect, VoronoiPrism, and Bloom were
 //! fused.
@@ -219,7 +219,7 @@ impl Halation {
         PrimitiveDescription {
             type_id: HALATION_TYPE_ID,
             purpose: "Filmic halo: extracts bright pixels above `threshold`, tints them by an HSV-defined color, blurs with a 17-tap separable Gaussian, and composites the halo back over the source by `amount`.",
-            composition_notes: "Fused composite — Pass 0 applies threshold-tint per Gaussian tap, which doesn't decompose into atomic threshold + SeparableGaussian without fp16 intermediate quantization.",
+            composition_notes: "Fused composite — Pass 0 applies threshold-tint per Gaussian tap, which doesn't decompose into atomic threshold + GaussianBlur without fp16 intermediate quantization.",
             examples: &["preset.effect.halation"],
             inputs: &HALATION_INPUTS,
             outputs: &HALATION_OUTPUTS,
