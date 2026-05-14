@@ -518,13 +518,17 @@ impl Application {
                         self.watched_effect_id.as_ref(),
                         self.watched_catalog_default.as_ref(),
                     ) {
+                        // Drop below the auto-laid catalog row so the
+                        // new node is visible without panning. Auto
+                        // layout uses (60,60) origin + (220,130)
+                        // spacing, so y≈350 sits one row below the
+                        // typical 4-node Mirror chain. The user drags
+                        // it into place from there.
+                        let drop_pos = (300.0, 350.0);
                         let cmd = manifold_editing::commands::graph::AddGraphNodeCommand::new(
                             eid.clone(),
                             type_id.clone(),
-                            // Phase 4: drop at canvas origin until we
-                            // route the cursor through; the user can
-                            // drag it from there.
-                            Some((0.0, 0.0)),
+                            Some(drop_pos),
                             default.clone(),
                         );
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));

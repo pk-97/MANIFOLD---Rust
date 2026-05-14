@@ -244,17 +244,18 @@ impl GraphCanvas {
             })
             .collect();
 
-        // Honour stored positions if any of the snapshot's nodes provide
-        // them; otherwise auto-layout.
-        let any_stored_pos = snap.nodes.iter().any(|n| n.editor_pos.is_some());
-        if any_stored_pos {
-            for (view, snap_node) in self.nodes.iter_mut().zip(snap.nodes.iter()) {
-                if let Some(p) = snap_node.editor_pos {
-                    view.pos_graph = p;
-                }
+        // Always auto-layout first so every node has a sensible
+        // default, then overlay any stored editor_pos on top. The
+        // previous "either/or" branch left nodes without a stored
+        // position stuck at (0,0) whenever *any* other node had one —
+        // which happened the instant the user added a new atom from
+        // the palette (the new node carries editor_pos, the existing
+        // ones don't), squashing the whole graph onto origin.
+        self.auto_layout();
+        for (view, snap_node) in self.nodes.iter_mut().zip(snap.nodes.iter()) {
+            if let Some(p) = snap_node.editor_pos {
+                view.pos_graph = p;
             }
-        } else {
-            self.auto_layout();
         }
     }
 
