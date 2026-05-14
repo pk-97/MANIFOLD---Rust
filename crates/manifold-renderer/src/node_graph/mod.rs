@@ -19,6 +19,7 @@ mod execution_plan;
 mod graph;
 mod legacy_adapter;
 mod metal_backend;
+mod palette;
 mod param_binding;
 mod parameters;
 mod persistence;
@@ -47,6 +48,7 @@ pub use execution_plan::{ExecutionPlan, ExecutionStep, ResourceId, compile};
 pub use graph::{Graph, NodeInstance};
 pub use legacy_adapter::{LEGACY_TYPE_ID_PREFIX, LegacyPostProcessNode, metadata_by_id};
 pub use metal_backend::MetalBackend;
+pub use palette::{catalog_graph_def_for, palette_atoms, PaletteAtom};
 pub use param_binding::{
     ParamBinding, ParamConvert, ParamId, ParamTarget, UserParamBindingRuntime,
     apply_param_bindings, binding_value, user_binding_to_runtime,

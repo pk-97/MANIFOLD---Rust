@@ -275,6 +275,13 @@ pub struct Application {
     /// Right-sidebar checkbox panel for V2 user-exposed parameters.
     /// Shares the editor window with `graph_canvas`.
     pub(crate) graph_editor_panel: manifold_ui::panels::graph_editor::GraphEditorPanel,
+    /// Left-sidebar palette listing atoms the user can drop into the
+    /// watched graph. Mirrors `graph_editor_panel`'s lifecycle —
+    /// configured each frame, drained for clicks.
+    pub(crate) graph_palette: manifold_ui::panels::graph_palette::GraphPalette,
+    /// Built-once list of atoms shown in the palette. Cloned (cheap)
+    /// per frame into `GraphPalette::configure`.
+    pub(crate) palette_atoms_cache: Vec<manifold_ui::panels::graph_palette::GraphPaletteAtom>,
     /// Identifies which `EffectInstance` the editor is currently
     /// configuring. Set when `OpenGraphEditor(ei)` fires; cleared on
     /// editor-window close. The editor's right-sidebar reads this to
@@ -283,6 +290,15 @@ pub struct Application {
         manifold_editing::commands::effect_target::EffectTarget,
         usize,
     )>,
+    /// Stable `EffectId` for the watched effect. Mirrors what was
+    /// sent over `WatchEffectGraph` and is the key Phase 3 graph
+    /// commands address. `None` when no editor is open.
+    pub(crate) watched_effect_id: Option<manifold_core::EffectId>,
+    /// Catalog-default graph def for the watched effect's type.
+    /// Cached at editor-open time so the mutation commands have it
+    /// available to lift `None` graphs on first edit.
+    pub(crate) watched_catalog_default:
+        Option<manifold_core::effect_graph_def::EffectGraphDef>,
 
     // Frame timing
     pub(crate) frame_timer: FrameTimer,
@@ -435,7 +451,17 @@ impl Application {
             graph_editor_window_id: None,
             graph_canvas: None,
             graph_editor_panel: manifold_ui::panels::graph_editor::GraphEditorPanel::new(),
+            graph_palette: manifold_ui::panels::graph_palette::GraphPalette::new(),
+            palette_atoms_cache: manifold_renderer::node_graph::palette_atoms()
+                .into_iter()
+                .map(|a| manifold_ui::panels::graph_palette::GraphPaletteAtom {
+                    label: a.label,
+                    type_id: a.type_id,
+                })
+                .collect(),
             current_editor_target: None,
+            watched_effect_id: None,
+            watched_catalog_default: None,
             // UI frame rate: uncapped (120fps target, vsync limits actual present).
             // Content thread has its own timer at project FPS — fully decoupled.
             frame_timer: FrameTimer::new(120.0),
@@ -1945,12 +1971,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             })
                             .unwrap_or(crate::graph_canvas::Rect::new(0.0, 0.0, 1.0, 1.0));
                         let (cx, cy) = canvas.cursor();
+                        let palette_width =
+                            manifold_ui::panels::graph_palette::PALETTE_WIDTH;
                         let sidebar_x =
                             viewport.w - manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
-                        let in_sidebar = cx >= sidebar_x;
+                        // The UITree spans the whole editor window — both
+                        // the left palette and the right sidebar live in
+                        // it. Route any click in either margin to it; the
+                        // canvas only sees clicks in the center column.
+                        let in_panel = cx < palette_width || cx >= sidebar_x;
                         match (button, state) {
                             (MouseButton::Left, ElementState::Pressed) => {
-                                if in_sidebar {
+                                if in_panel {
                                     if let Some(ed) = self.graph_editor.as_mut() {
                                         ed.ui_root.input.process_pointer(
                                             &mut ed.ui_root.tree,
@@ -1964,7 +1996,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                 }
                             }
                             (MouseButton::Left, ElementState::Released) => {
-                                if in_sidebar {
+                                if in_panel {
                                     if let Some(ed) = self.graph_editor.as_mut() {
                                         ed.ui_root.input.process_pointer(
                                             &mut ed.ui_root.tree,
@@ -1974,16 +2006,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                         );
                                     }
                                 } else {
-                                    canvas.on_left_button_up();
+                                    canvas.on_left_button_up(viewport, cx, cy);
                                 }
                             }
                             (MouseButton::Middle, ElementState::Pressed) => {
-                                if !in_sidebar {
+                                if !in_panel {
                                     canvas.on_pan_button_down(cx, cy);
                                 }
                             }
                             (MouseButton::Middle, ElementState::Released) => {
-                                if !in_sidebar {
+                                if !in_panel {
                                     canvas.on_pan_button_up();
                                 }
                             }
@@ -2365,6 +2397,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 ..
             } => {
                 if is_primary && self.perform_handle_key(&logical_key) {
+                    return;
+                }
+                // Editor window: Delete/Backspace removes the currently
+                // selected node. Has to happen before primary keyboard
+                // routing because the editor window has its own focus
+                // semantics.
+                if is_graph_editor
+                    && matches!(
+                        logical_key,
+                        winit::keyboard::Key::Named(winit::keyboard::NamedKey::Delete)
+                            | winit::keyboard::Key::Named(winit::keyboard::NamedKey::Backspace)
+                    )
+                {
+                    if let Some(canvas) = self.graph_canvas.as_mut() {
+                        canvas.request_delete_selected();
+                    }
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.offscreen_dirty = true;
+                    }
                     return;
                 }
                 // Cmd+Shift+G — open the node-graph editor window.

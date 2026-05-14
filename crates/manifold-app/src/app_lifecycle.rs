@@ -843,6 +843,13 @@ impl Application {
         }
         self.graph_editor = None;
         self.graph_canvas = None;
+        // Clear the Phase 4 caches alongside — `watched_effect_id` is
+        // the gate for the palette being active, and stale caches
+        // would let the user trigger commands against a dead effect
+        // if they reopened the window on a different one.
+        self.current_editor_target = None;
+        self.watched_effect_id = None;
+        self.watched_catalog_default = None;
         // Tell the content thread to stop snapshotting any effect's
         // graph — saves the per-frame walk while no editor is open.
         self.send_content_cmd(ContentCommand::WatchEffectGraph(None));

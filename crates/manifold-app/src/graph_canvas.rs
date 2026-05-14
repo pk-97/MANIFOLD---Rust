@@ -19,6 +19,7 @@
 
 use manifold_renderer::node_graph::{GraphSnapshot, PortKindSnapshot};
 use manifold_renderer::ui_renderer::UIRenderer;
+use manifold_ui::PanelAction;
 
 const HEADER_HEIGHT: f32 = 28.0;
 const NODE_WIDTH: f32 = 140.0;
@@ -107,10 +108,43 @@ struct WireView {
     to_port: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 enum DragMode {
     None,
     Pan,
+    /// Dragging from an output port to draw a wire. On release over an
+    /// input port, emits `PanelAction::ConnectPorts`.
+    WireFrom {
+        from_node: u32,
+        from_port: String,
+    },
+    /// Dragging a node by its header. `anchor_offset` is the graph-space
+    /// (cursor - node_origin) at button-down so the node doesn't snap
+    /// to the cursor on pickup. `start_pos` is the node's pre-drag
+    /// position, retained so the `MoveGraphNode` action emitted on
+    /// release reflects only the net delta and the undo command has a
+    /// clean previous-pos to restore.
+    NodeMove {
+        node_id: u32,
+        anchor_offset: (f32, f32),
+        #[allow(dead_code)]
+        start_pos: (f32, f32),
+    },
+}
+
+impl DragMode {
+    fn is_pan(&self) -> bool {
+        matches!(self, DragMode::Pan)
+    }
+}
+
+/// A port resolved from a screen-space cursor position. Used by the
+/// wire-drag hit test.
+#[derive(Debug, Clone)]
+struct PortHit {
+    node_id: u32,
+    port_name: String,
+    is_output: bool,
 }
 
 pub struct GraphCanvas {
@@ -128,6 +162,9 @@ pub struct GraphCanvas {
     drag_pan_start: (f32, f32),
     hovered: Option<u32>,
     selected: Option<u32>,
+    /// Actions accumulated this frame from canvas interactions.
+    /// Drained by the editor window's input loop after each event.
+    pending_actions: Vec<PanelAction>,
 }
 
 impl GraphCanvas {
@@ -144,6 +181,24 @@ impl GraphCanvas {
             drag_pan_start: (0.0, 0.0),
             hovered: None,
             selected: None,
+            pending_actions: Vec::new(),
+        }
+    }
+
+    /// Drain editor actions queued by canvas interactions. Called
+    /// once per input event by the editor window's present path.
+    pub fn drain_actions(&mut self) -> Vec<PanelAction> {
+        std::mem::take(&mut self.pending_actions)
+    }
+
+    /// Emit a `RemoveGraphNode` action for the currently-selected
+    /// node, if any. Wired to the Delete/Backspace key handler on the
+    /// editor window. Clears the selection on emit so the next frame
+    /// doesn't double-fire.
+    pub fn request_delete_selected(&mut self) {
+        if let Some(id) = self.selected.take() {
+            self.pending_actions
+                .push(PanelAction::RemoveGraphNode { node_id: id });
         }
     }
 
@@ -297,16 +352,89 @@ impl GraphCanvas {
         None
     }
 
+    /// Returns `true` if the cursor is over the header strip of the
+    /// node it's hovering. Used to distinguish "click body to select"
+    /// from "drag header to move".
+    fn header_under(&self, viewport: Rect, sx: f32, sy: f32) -> Option<u32> {
+        let (gx, gy) = self.to_graph(viewport, sx, sy);
+        for node in self.nodes.iter().rev() {
+            let (nx, ny) = node.pos_graph;
+            if gx >= nx
+                && gx <= nx + NODE_WIDTH
+                && gy >= ny
+                && gy <= ny + NODE_HEADER_HEIGHT
+            {
+                return Some(node.id);
+            }
+        }
+        None
+    }
+
+    /// Hit-test ports near the cursor. Searches all output then input
+    /// ports of every node, returning the first within `PORT_HIT_RADIUS`
+    /// graph-space units of the cursor. Outputs take priority over
+    /// inputs when both are nearby (only matters in degenerate layouts
+    /// since ports are on opposite edges).
+    fn port_under(&self, viewport: Rect, sx: f32, sy: f32) -> Option<PortHit> {
+        const PORT_HIT_RADIUS: f32 = 10.0;
+        let (gx, gy) = self.to_graph(viewport, sx, sy);
+        for node in self.nodes.iter().rev() {
+            for (i, port) in node.outputs.iter().enumerate() {
+                let (px, py) = node.output_port_pos_graph(i);
+                let dx = gx - px;
+                let dy = gy - py;
+                if dx * dx + dy * dy <= PORT_HIT_RADIUS * PORT_HIT_RADIUS {
+                    return Some(PortHit {
+                        node_id: node.id,
+                        port_name: port.name.clone(),
+                        is_output: true,
+                    });
+                }
+            }
+            for (i, port) in node.inputs.iter().enumerate() {
+                let (px, py) = node.input_port_pos_graph(i);
+                let dx = gx - px;
+                let dy = gy - py;
+                if dx * dx + dy * dy <= PORT_HIT_RADIUS * PORT_HIT_RADIUS {
+                    return Some(PortHit {
+                        node_id: node.id,
+                        port_name: port.name.clone(),
+                        is_output: false,
+                    });
+                }
+            }
+        }
+        None
+    }
+
     // ── Input handlers ──────────────────────────────────────────────
 
     pub fn on_pointer_move(&mut self, viewport: Rect, sx: f32, sy: f32) {
         self.cursor = (sx, sy);
-        if self.drag_mode == DragMode::Pan {
-            let dx = (sx - self.drag_anchor.0) / self.zoom;
-            let dy = (sy - self.drag_anchor.1) / self.zoom;
-            self.pan = (self.drag_pan_start.0 + dx, self.drag_pan_start.1 + dy);
-        } else {
-            self.hovered = self.node_under(viewport, sx, sy);
+        match &self.drag_mode {
+            DragMode::Pan => {
+                let dx = (sx - self.drag_anchor.0) / self.zoom;
+                let dy = (sy - self.drag_anchor.1) / self.zoom;
+                self.pan = (self.drag_pan_start.0 + dx, self.drag_pan_start.1 + dy);
+            }
+            DragMode::NodeMove {
+                node_id,
+                anchor_offset,
+                ..
+            } => {
+                let nid = *node_id;
+                let offset = *anchor_offset;
+                let (gx, gy) = self.to_graph(viewport, sx, sy);
+                if let Some(n) = self.nodes.iter_mut().find(|n| n.id == nid) {
+                    n.pos_graph = (gx - offset.0, gy - offset.1);
+                }
+            }
+            DragMode::WireFrom { .. } => {
+                // Cursor position is enough — render reads `self.cursor`.
+            }
+            DragMode::None => {
+                self.hovered = self.node_under(viewport, sx, sy);
+            }
         }
     }
 
@@ -318,16 +446,45 @@ impl GraphCanvas {
     }
 
     pub fn on_pan_button_up(&mut self) {
-        if self.drag_mode == DragMode::Pan {
+        if self.drag_mode.is_pan() {
             self.drag_mode = DragMode::None;
         }
     }
 
-    /// Left-mouse button down. Selects the node under the cursor when
-    /// there is one, otherwise clears selection and begins panning the
-    /// viewport. Mirrors the standard "click empty space to pan, click
-    /// a node to select it" pattern from TouchDesigner / Blender.
+    /// Left-mouse button down. Priority order:
+    /// 1. Output port → start wire-drag.
+    /// 2. Input port → swallow (no action for V1 — disconnect lives
+    ///    elsewhere later).
+    /// 3. Node header → start node-move drag.
+    /// 4. Node body → select.
+    /// 5. Empty canvas → clear selection, start pan.
     pub fn on_left_button_down(&mut self, viewport: Rect, sx: f32, sy: f32) {
+        if let Some(hit) = self.port_under(viewport, sx, sy) {
+            if hit.is_output {
+                self.drag_mode = DragMode::WireFrom {
+                    from_node: hit.node_id,
+                    from_port: hit.port_name,
+                };
+                return;
+            }
+            // Click on input port — V1 swallows the click (don't
+            // accidentally start a pan). Disconnect-by-click is a
+            // future polish item.
+            return;
+        }
+        if let Some(node_id) = self.header_under(viewport, sx, sy) {
+            self.selected = Some(node_id);
+            let (gx, gy) = self.to_graph(viewport, sx, sy);
+            if let Some(node) = self.nodes.iter().find(|n| n.id == node_id) {
+                let anchor_offset = (gx - node.pos_graph.0, gy - node.pos_graph.1);
+                self.drag_mode = DragMode::NodeMove {
+                    node_id,
+                    anchor_offset,
+                    start_pos: node.pos_graph,
+                };
+            }
+            return;
+        }
         match self.node_under(viewport, sx, sy) {
             Some(id) => {
                 self.selected = Some(id);
@@ -341,9 +498,36 @@ impl GraphCanvas {
         }
     }
 
-    pub fn on_left_button_up(&mut self) {
-        if self.drag_mode == DragMode::Pan {
-            self.drag_mode = DragMode::None;
+    pub fn on_left_button_up(&mut self, viewport: Rect, sx: f32, sy: f32) {
+        let prev = std::mem::replace(&mut self.drag_mode, DragMode::None);
+        match prev {
+            DragMode::Pan | DragMode::None => {}
+            DragMode::WireFrom {
+                from_node,
+                from_port,
+            } => {
+                // Only commit on drop over an input port — drop on
+                // empty or an output cancels silently.
+                if let Some(hit) = self.port_under(viewport, sx, sy)
+                    && !hit.is_output
+                    && hit.node_id != from_node
+                {
+                    self.pending_actions.push(PanelAction::ConnectPorts {
+                        from_node,
+                        from_port,
+                        to_node: hit.node_id,
+                        to_port: hit.port_name,
+                    });
+                }
+            }
+            DragMode::NodeMove { node_id, .. } => {
+                if let Some(node) = self.nodes.iter().find(|n| n.id == node_id) {
+                    self.pending_actions.push(PanelAction::MoveGraphNode {
+                        node_id,
+                        new_pos: node.pos_graph,
+                    });
+                }
+            }
         }
     }
 
@@ -412,8 +596,57 @@ impl GraphCanvas {
             self.draw_wire(ui, viewport, wire);
         }
 
+        // Ghost wire while the user is dragging from an output port.
+        // Drawn beneath nodes so the wire passes "through" the cursor
+        // visually if the cursor overlaps a node.
+        if let DragMode::WireFrom {
+            from_node,
+            from_port,
+        } = &self.drag_mode
+        {
+            self.draw_ghost_wire(ui, viewport, *from_node, from_port);
+        }
+
         for node in &self.nodes {
             self.draw_node(ui, viewport, canvas, node);
+        }
+    }
+
+    fn draw_ghost_wire(
+        &self,
+        ui: &mut UIRenderer,
+        viewport: Rect,
+        from_node: u32,
+        from_port: &str,
+    ) {
+        let Some(node) = self.find_node(from_node) else {
+            return;
+        };
+        let idx = match node.outputs.iter().position(|p| p.name == from_port) {
+            Some(i) => i,
+            None => return,
+        };
+        let (gx0, gy0) = node.output_port_pos_graph(idx);
+        let (sx0, sy0) = self.to_screen(viewport, gx0, gy0);
+        let (sx1, sy1) = self.cursor;
+
+        // Same bezier shape as `draw_wire`, sampled lightly.
+        let span_x = (sx1 - sx0).abs();
+        let dx = span_x.max(40.0) * 0.5;
+        let cx0 = sx0 + dx;
+        let cy0 = sy0;
+        let cx1 = sx1 - dx;
+        let cy1 = sy1;
+        let approx_len = ((sx1 - sx0).abs() + (sy1 - sy0).abs() + 2.0 * dx).max(40.0);
+        let steps = (approx_len / 12.0).clamp(16.0, 64.0) as i32;
+        let thickness = (1.4 * self.zoom).clamp(1.0, 2.2);
+        let ghost_color = [WIRE_COLOR[0], WIRE_COLOR[1], WIRE_COLOR[2], 0.55];
+        let mut prev = cubic_bezier(0.0, sx0, sy0, cx0, cy0, cx1, cy1, sx1, sy1);
+        for i in 1..=steps {
+            let t = i as f32 / steps as f32;
+            let curr = cubic_bezier(t, sx0, sy0, cx0, cy0, cx1, cy1, sx1, sy1);
+            ui.draw_line(prev.0, prev.1, curr.0, curr.1, thickness, ghost_color);
+            prev = curr;
         }
     }
 

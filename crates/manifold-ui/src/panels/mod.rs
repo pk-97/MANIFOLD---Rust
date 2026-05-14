@@ -7,6 +7,7 @@ pub mod effect_card;
 pub mod footer;
 pub mod gen_param;
 pub mod graph_editor;
+pub mod graph_palette;
 pub mod header;
 pub mod inspector;
 pub mod layer_chrome;
@@ -236,6 +237,30 @@ pub enum PanelAction {
         param_index: usize,
         expose: bool,
     },
+
+    // ── Graph editor mutations (Phase 4) ──────────────────────────────
+    //
+    // Sent by the graph-editor canvas + palette. The app layer resolves
+    // each into the matching command from
+    // `manifold_editing::commands::graph` using the watched effect's
+    // EffectId and catalog default.
+    /// Add a new node of `type_id` to the watched graph at the canvas
+    /// center. Emitted by clicking an entry in the palette.
+    AddGraphNode { type_id: String },
+    /// Connect an output port to an input port. Emitted by the
+    /// wire-drag completion path on the canvas.
+    ConnectPorts {
+        from_node: u32,
+        from_port: String,
+        to_node: u32,
+        to_port: String,
+    },
+    /// Remove a node from the watched graph plus every wire that
+    /// touches it. Emitted by the canvas's delete-key handler.
+    RemoveGraphNode { node_id: u32 },
+    /// Update a node's editor position. Emitted by the canvas's
+    /// node-drag completion path.
+    MoveGraphNode { node_id: u32, new_pos: (f32, f32) },
 
     // Generator params
     GenTypeClicked(Option<LayerId>), // layer_id

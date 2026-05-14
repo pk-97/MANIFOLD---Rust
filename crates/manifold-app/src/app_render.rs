@@ -289,8 +289,16 @@ impl Application {
             for event in events {
                 if let manifold_ui::input::UIEvent::Click { node_id, .. } = event {
                     actions.extend(self.graph_editor_panel.handle_click(node_id));
+                    actions.extend(self.graph_palette.handle_click(node_id));
                 }
             }
+        }
+        // 2b. Drain editor-canvas actions (wire-drag completions,
+        // node-drag releases, delete-key requests). Bypasses the
+        // UITree event path because the canvas owns its own pointer
+        // state — see `GraphCanvas::drain_actions`.
+        if let Some(canvas) = self.graph_canvas.as_mut() {
+            actions.extend(canvas.drain_actions());
         }
 
         // 2a. Route viewport tracks-area events through InteractionOverlay.
@@ -475,9 +483,21 @@ impl Application {
                             .and_then(|c| c.effects.get(*ei))
                             .map(|e| e.id.clone()),
                     };
-                    if let Some(eid) = effect_id {
+                    if let Some(eid) = effect_id.clone() {
                         self.send_content_cmd(ContentCommand::WatchEffectGraph(Some(eid)));
                     }
+                    // Phase 4: capture the watched effect's id + its
+                    // catalog-default graph def so the per-card editing
+                    // commands (AddGraphNode, ConnectPorts, ...) can
+                    // lift `instance.graph` from `None` on first edit
+                    // without round-tripping through the renderer.
+                    self.watched_effect_id = effect_id.clone();
+                    self.watched_catalog_default = effect_id.as_ref().and_then(|eid| {
+                        let instance = self.local_project.find_effect_by_id(eid)?;
+                        manifold_renderer::node_graph::catalog_graph_def_for(
+                            instance.effect_type(),
+                        )
+                    });
                     // Remember which effect instance the editor is on so
                     // the right-sidebar panel can look up its user
                     // bindings. Clip-scoped effects fall back to the
@@ -491,6 +511,75 @@ impl Application {
                     );
                     self.current_editor_target = Some((target, *ei));
                     self.pending_open_graph_editor = true;
+                    continue;
+                }
+                PanelAction::AddGraphNode { type_id } => {
+                    if let (Some(eid), Some(default)) = (
+                        self.watched_effect_id.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd = manifold_editing::commands::graph::AddGraphNodeCommand::new(
+                            eid.clone(),
+                            type_id.clone(),
+                            // Phase 4: drop at canvas origin until we
+                            // route the cursor through; the user can
+                            // drag it from there.
+                            Some((0.0, 0.0)),
+                            default.clone(),
+                        );
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                PanelAction::ConnectPorts {
+                    from_node,
+                    from_port,
+                    to_node,
+                    to_port,
+                } => {
+                    if let (Some(eid), Some(default)) = (
+                        self.watched_effect_id.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd = manifold_editing::commands::graph::ConnectPortsCommand::new(
+                            eid.clone(),
+                            *from_node,
+                            from_port.clone(),
+                            *to_node,
+                            to_port.clone(),
+                            default.clone(),
+                        );
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                PanelAction::RemoveGraphNode { node_id } => {
+                    if let (Some(eid), Some(default)) = (
+                        self.watched_effect_id.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd = manifold_editing::commands::graph::RemoveGraphNodeCommand::new(
+                            eid.clone(),
+                            *node_id,
+                            default.clone(),
+                        );
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                PanelAction::MoveGraphNode { node_id, new_pos } => {
+                    if let (Some(eid), Some(default)) = (
+                        self.watched_effect_id.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd = manifold_editing::commands::graph::MoveGraphNodeCommand::new(
+                            eid.clone(),
+                            *node_id,
+                            *new_pos,
+                            default.clone(),
+                        );
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
                     continue;
                 }
                 PanelAction::EnterPerformMode => {
@@ -1308,16 +1397,19 @@ impl Application {
         let logical_w = (surface_w as f64 / scale).max(1.0) as u32;
         let logical_h = (surface_h as f64 / scale).max(1.0) as u32;
 
-        // ── Build sidebar UITree (V2 user-exposed parameter checkboxes) ──
-        // The sidebar occupies the rightmost SIDEBAR_WIDTH logical
-        // pixels; the canvas owns the remainder. Build BEFORE rendering
-        // so the tree's nodes (panel + checkbox buttons + labels) are
-        // ready to be drawn alongside the canvas primitives.
+        // ── Editor window layout ──────────────────────────────────────
+        // Left palette (atoms) + center canvas + right sidebar (param
+        // expose). Built BEFORE rendering so the tree's nodes (panels +
+        // buttons + labels) are ready to draw alongside the canvas.
+        let palette_width = manifold_ui::panels::graph_palette::PALETTE_WIDTH;
         let sidebar_width = manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
-        let canvas_width = (logical_w as f32 - sidebar_width).max(0.0);
-        let sidebar_x = canvas_width;
+        let canvas_x = palette_width;
+        let canvas_width = (logical_w as f32 - palette_width - sidebar_width).max(0.0);
+        let sidebar_x = canvas_x + canvas_width;
         let sidebar_viewport =
             manifold_ui::Rect::new(sidebar_x, 0.0, sidebar_width, logical_h as f32);
+        let palette_viewport =
+            manifold_ui::Rect::new(0.0, 0.0, palette_width, logical_h as f32);
 
         // Resolve which `EffectInstance` is being edited and build the
         // panel inputs. An open editor without `current_editor_target`
@@ -1342,11 +1434,21 @@ impl Application {
             exposed_keys,
         );
 
+        // Configure the left palette. Active whenever we have a
+        // watched effect id — that's the gate for "edits will land
+        // somewhere" since every graph command keys on EffectId.
+        self.graph_palette.configure(
+            self.watched_effect_id.is_some() && self.watched_catalog_default.is_some(),
+            self.palette_atoms_cache.clone(),
+        );
+
         // Rebuild the editor's UITree from scratch each frame: tree state
         // is small (one panel container + per-param row), so a clear +
         // rebuild is cheaper than dirty-tracking and means stale rows
         // can never linger after the selected node changes.
         ws.ui_root.tree.clear();
+        self.graph_palette
+            .build(&mut ws.ui_root.tree, palette_viewport);
         self.graph_editor_panel
             .build(&mut ws.ui_root.tree, sidebar_viewport);
 
@@ -1358,7 +1460,7 @@ impl Application {
             ui.begin_frame();
             canvas.render(
                 ui,
-                crate::graph_canvas::Rect::new(0.0, 0.0, canvas_width, logical_h as f32),
+                crate::graph_canvas::Rect::new(canvas_x, 0.0, canvas_width, logical_h as f32),
             );
             // Layer the sidebar UITree on top. Use the *additive*
             // variant — `render_overlay` would clear the canvas's
