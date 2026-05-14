@@ -24,6 +24,7 @@ use manifold_ui::PanelAction;
 const HEADER_HEIGHT: f32 = 28.0;
 const NODE_WIDTH: f32 = 140.0;
 const NODE_HEADER_HEIGHT: f32 = 22.0;
+const SUMMARY_ROW_HEIGHT: f32 = 16.0;
 const PORT_ROW_HEIGHT: f32 = 18.0;
 const PORT_RADIUS: f32 = 4.0;
 const PORT_COL_WIDTH: f32 = 10.0;
@@ -71,6 +72,11 @@ impl PortView {
 struct NodeView {
     id: u32,
     title: String,
+    /// Compact one-line summary of the node's most informative
+    /// parameter — e.g. "Mode: FoldX" for Mirror's Transform. Lets the
+    /// user read what a node is *doing* from the canvas without
+    /// opening the inspector. `None` if the node has no parameters.
+    summary: Option<String>,
     /// Top-left corner in graph-space (logical pixels, pre pan/zoom).
     pos_graph: (f32, f32),
     inputs: Vec<PortView>,
@@ -80,14 +86,30 @@ struct NodeView {
 impl NodeView {
     fn height(&self) -> f32 {
         let port_rows = self.inputs.len().max(self.outputs.len()) as f32;
-        NODE_HEADER_HEIGHT + port_rows * PORT_ROW_HEIGHT + 6.0
+        let summary_h = if self.summary.is_some() {
+            SUMMARY_ROW_HEIGHT
+        } else {
+            0.0
+        };
+        NODE_HEADER_HEIGHT + summary_h + port_rows * PORT_ROW_HEIGHT + 6.0
+    }
+
+    /// Y offset where port rows start, accounting for an optional
+    /// inline summary line below the header.
+    fn ports_y_offset(&self) -> f32 {
+        let summary_h = if self.summary.is_some() {
+            SUMMARY_ROW_HEIGHT
+        } else {
+            0.0
+        };
+        NODE_HEADER_HEIGHT + summary_h
     }
 
     fn input_port_pos_graph(&self, idx: usize) -> (f32, f32) {
         let (x, y) = self.pos_graph;
         (
             x,
-            y + NODE_HEADER_HEIGHT + idx as f32 * PORT_ROW_HEIGHT + PORT_ROW_HEIGHT * 0.5,
+            y + self.ports_y_offset() + idx as f32 * PORT_ROW_HEIGHT + PORT_ROW_HEIGHT * 0.5,
         )
     }
 
@@ -95,9 +117,45 @@ impl NodeView {
         let (x, y) = self.pos_graph;
         (
             x + NODE_WIDTH,
-            y + NODE_HEADER_HEIGHT + idx as f32 * PORT_ROW_HEIGHT + PORT_ROW_HEIGHT * 0.5,
+            y + self.ports_y_offset() + idx as f32 * PORT_ROW_HEIGHT + PORT_ROW_HEIGHT * 0.5,
         )
     }
+}
+
+/// Pick the most informative parameter to surface in the inline node
+/// summary. Heuristic: prefer enum params (whose label is descriptive,
+/// e.g. "FoldX"), then floats, then anything else. Returns `None` if
+/// the node has no parameters.
+fn build_summary(parameters: &[manifold_renderer::node_graph::ParamSnapshot]) -> Option<String> {
+    use manifold_renderer::node_graph::ParamSnapshotKind;
+    let pick = parameters
+        .iter()
+        .find(|p| p.kind == ParamSnapshotKind::Enum)
+        .or_else(|| {
+            parameters
+                .iter()
+                .find(|p| matches!(p.kind, ParamSnapshotKind::Float | ParamSnapshotKind::Int))
+        })
+        .or_else(|| parameters.first())?;
+
+    let value_str = match pick.kind {
+        ParamSnapshotKind::Enum => pick
+            .enum_labels
+            .as_ref()
+            .and_then(|labels| labels.get(pick.current_value as usize).cloned())
+            .unwrap_or_else(|| format!("{}", pick.current_value as i64)),
+        ParamSnapshotKind::Bool => {
+            if pick.current_value >= 0.5 {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        }
+        ParamSnapshotKind::Int => format!("{}", pick.current_value as i64),
+        ParamSnapshotKind::Float => format!("{:.2}", pick.current_value),
+        ParamSnapshotKind::Other => "—".to_string(),
+    };
+    Some(format!("{}: {}", pick.label, value_str))
 }
 
 #[derive(Debug, Clone)]
@@ -231,6 +289,7 @@ impl GraphCanvas {
             .map(|n| NodeView {
                 id: n.id,
                 title: n.title.clone(),
+                summary: build_summary(&n.parameters),
                 pos_graph: prev_positions
                     .get(&n.id)
                     .copied()
@@ -765,6 +824,31 @@ impl GraphCanvas {
             title_size,
             TEXT_HEADER,
         );
+
+        // Inline summary line (e.g., "Mode: FoldX") so users can tell
+        // what each node is doing without opening the inspector.
+        // Truncate gracefully if it'd overflow the node width.
+        if let Some(summary) = node.summary.as_deref() {
+            let summary_size = (9.0 * self.zoom).max(7.0);
+            let summary_y = sy + header_h + (SUMMARY_ROW_HEIGHT * self.zoom - summary_size) * 0.5;
+            let max_chars =
+                ((NODE_WIDTH * self.zoom - 16.0 * self.zoom) / (summary_size * 0.55)) as usize;
+            let display: std::borrow::Cow<'_, str> = if summary.len() > max_chars && max_chars > 1 {
+                std::borrow::Cow::Owned(format!(
+                    "{}…",
+                    &summary[..summary.len().min(max_chars.saturating_sub(1))]
+                ))
+            } else {
+                std::borrow::Cow::Borrowed(summary)
+            };
+            ui.draw_text(
+                sx + 8.0 * self.zoom,
+                summary_y,
+                &display,
+                summary_size,
+                TEXT_SECONDARY,
+            );
+        }
 
         let port_label_size = (10.0 * self.zoom).max(7.0);
         let port_d = PORT_RADIUS * 2.0 * self.zoom;

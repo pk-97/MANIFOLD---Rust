@@ -72,9 +72,17 @@ pub struct ParamSnapshot {
     /// Numeric default for slider initialization. Bool/Int/Enum
     /// flattened to f32 so the UI slider has one shape.
     pub default_value: f32,
+    /// Current value on the live node — what the renderer is actually
+    /// using this frame. Editor inspector reads this so users can see
+    /// what each node is currently doing instead of just topology.
+    pub current_value: f32,
     /// `(min, max)` for sliders. `None` when the underlying ParamDef
     /// didn't declare a range (e.g. Vec2/Color/Enum often omit it).
     pub range: Option<(f32, f32)>,
+    /// For `Enum` kind: the option labels indexed by enum value, so
+    /// the inspector can render "FoldX" instead of `6`. `None` for
+    /// non-enum params.
+    pub enum_labels: Option<Vec<String>>,
 }
 
 /// Coarse-grained variant of `ParamType` — the user-exposed-param
@@ -170,12 +178,35 @@ impl GraphSnapshot {
                     .node
                     .parameters()
                     .iter()
-                    .map(|pd| ParamSnapshot {
-                        name: pd.name.to_string(),
-                        label: pd.label.to_string(),
-                        kind: param_snapshot_kind(pd.ty),
-                        default_value: param_default_to_f32(&pd.default),
-                        range: pd.range,
+                    .map(|pd| {
+                        // Read the live current value off the node
+                        // instance's param map — falling back to the
+                        // declared default if the key isn't present
+                        // (shouldn't happen for properly-initialized
+                        // graphs, but harmless if it does).
+                        let current = inst
+                            .params
+                            .get(pd.name)
+                            .copied()
+                            .unwrap_or(pd.default);
+                        ParamSnapshot {
+                            name: pd.name.to_string(),
+                            label: pd.label.to_string(),
+                            kind: param_snapshot_kind(pd.ty),
+                            default_value: param_default_to_f32(&pd.default),
+                            current_value: param_default_to_f32(&current),
+                            range: pd.range,
+                            enum_labels: if matches!(pd.ty, ParamType::Enum) {
+                                Some(
+                                    pd.enum_values
+                                        .iter()
+                                        .map(|s| (*s).to_string())
+                                        .collect(),
+                                )
+                            } else {
+                                None
+                            },
+                        }
                     })
                     .collect();
                 NodeSnapshot {

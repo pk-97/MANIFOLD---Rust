@@ -61,9 +61,16 @@ pub struct GraphEditorParam {
     pub label: String,
     pub kind: GraphEditorParamKind,
     pub default_value: f32,
+    /// Current value on the live node — what the renderer is actually
+    /// using this frame. Drives the inspector's read-out so users can
+    /// see what each node is configured to do.
+    pub current_value: f32,
     /// `(min, max)` for sliders. `None` when the underlying ParamDef
     /// didn't declare a range.
     pub range: Option<(f32, f32)>,
+    /// Enum option labels indexed by enum value, for rendering
+    /// "FoldX" instead of `6`. `None` for non-enum params.
+    pub enum_labels: Option<Vec<String>>,
 }
 
 /// UI-facing view of the currently-selected node, decoupled from the
@@ -374,7 +381,12 @@ impl GraphEditorPanel {
             );
 
             let label_x = cb_x + CHECKBOX_W + CHECKBOX_GAP;
-            let label_w = (viewport.x + viewport.width - PADDING - label_x).max(10.0);
+            // Row split: label on the left, current value on the
+            // right. Lets the user see what each inner param is
+            // *currently set to*, not just what it's named.
+            let row_remaining = (viewport.x + viewport.width - PADDING - label_x).max(10.0);
+            let value_w = (row_remaining * 0.45).max(60.0);
+            let label_w = (row_remaining - value_w).max(10.0);
             tree.add_label(
                 bg_id,
                 label_x,
@@ -390,6 +402,22 @@ impl GraphEditorPanel {
                     },
                     font_size: FONT_SIZE,
                     text_align: TextAlign::Left,
+                    ..UIStyle::default()
+                },
+            );
+            // Current-value readout.
+            let value_str = format_inner_param_value(ps);
+            tree.add_label(
+                bg_id,
+                label_x + label_w,
+                y,
+                value_w,
+                ROW_H,
+                &value_str,
+                UIStyle {
+                    text_color: color::TEXT_DIMMED_C32,
+                    font_size: FONT_SIZE,
+                    text_align: TextAlign::Right,
                     ..UIStyle::default()
                 },
             );
@@ -480,6 +508,29 @@ impl GraphEditorPanel {
     }
 }
 
+/// Format the current value of an inner-node parameter for display
+/// in the right sidebar. Enums resolve to their label (e.g., "FoldX"),
+/// bools to "true"/"false", and numerics to a short fixed-point form.
+fn format_inner_param_value(p: &GraphEditorParam) -> String {
+    match p.kind {
+        GraphEditorParamKind::Enum => p
+            .enum_labels
+            .as_ref()
+            .and_then(|labels| labels.get(p.current_value as usize).cloned())
+            .unwrap_or_else(|| format!("{}", p.current_value as i64)),
+        GraphEditorParamKind::Bool => {
+            if p.current_value >= 0.5 {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        }
+        GraphEditorParamKind::Int => format!("{}", p.current_value as i64),
+        GraphEditorParamKind::Float => format!("{:.2}", p.current_value),
+        GraphEditorParamKind::Other => "—".to_string(),
+    }
+}
+
 fn checkbox_style(checked: bool, supported: bool) -> UIStyle {
     // The unchecked state needs a bg that's visibly distinct from the
     // panel bg behind it (which is `EFFECT_CARD_INNER_BG_C32`), or the
@@ -524,21 +575,27 @@ mod tests {
                     label: "Translate".to_string(),
                     kind: GraphEditorParamKind::Float,
                     default_value: 0.0,
+                    current_value: 0.0,
                     range: Some((-1.0, 1.0)),
+                    enum_labels: None,
                 },
                 GraphEditorParam {
                     name: "scale".to_string(),
                     label: "Scale".to_string(),
                     kind: GraphEditorParamKind::Float,
                     default_value: 1.0,
+                    current_value: 1.0,
                     range: Some((0.0, 4.0)),
+                    enum_labels: None,
                 },
                 GraphEditorParam {
                     name: "color".to_string(),
                     label: "Color".to_string(),
                     kind: GraphEditorParamKind::Other, // disabled — multi-component
                     default_value: 0.0,
+                    current_value: 0.0,
                     range: None,
+                    enum_labels: None,
                 },
             ],
         }

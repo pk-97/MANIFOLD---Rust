@@ -2045,7 +2045,9 @@ fn build_graph_editor_view(
                 ParamSnapshotKind::Other => GraphEditorParamKind::Other,
             },
             default_value: p.default_value,
+            current_value: p.current_value,
             range: p.range,
+            enum_labels: p.enum_labels.clone(),
         })
         .collect();
     Some(GraphEditorNodeView {
