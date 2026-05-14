@@ -261,6 +261,18 @@ pub enum PanelAction {
     /// Update a node's editor position. Emitted by the canvas's
     /// node-drag completion path.
     MoveGraphNode { node_id: u32, new_pos: (f32, f32) },
+    /// Set an inner-node parameter to a new value. Emitted by the
+    /// right-sidebar inspector when the user clicks a Bool toggle,
+    /// cycles an Enum cell, or drag-scrubs a Float/Int value. The
+    /// `node_id` matches the graph-editor canvas's stable node id;
+    /// `new_value` is already coerced to the inner param's expected
+    /// kind (Float / Int / Bool / Enum), so the app-side handler can
+    /// hand it straight to `SetGraphNodeParamCommand`.
+    SetGraphNodeParam {
+        node_id: u32,
+        param_name: String,
+        new_value: manifold_core::effect_graph_def::SerializedParamValue,
+    },
 
     // Generator params
     GenTypeClicked(Option<LayerId>), // layer_id

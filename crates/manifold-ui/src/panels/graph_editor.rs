@@ -29,8 +29,10 @@
 use std::collections::HashSet;
 
 use crate::color;
+use crate::input::UIEvent;
 use crate::node::*;
 use crate::tree::UITree;
+use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::effects::UserParamConvert;
 
 use super::PanelAction;
@@ -79,6 +81,11 @@ pub struct GraphEditorParam {
 /// this shape.
 #[derive(Debug, Clone)]
 pub struct GraphEditorNodeView {
+    /// Canvas-stable runtime id for the selected node. Used as the
+    /// `node_id` when emitting `PanelAction::SetGraphNodeParam` so the
+    /// app-side handler can build a `SetGraphNodeParamCommand` keyed
+    /// on the same stable id the canvas uses for selection.
+    pub runtime_node_id: u32,
     /// Stable handle if the node was registered with one. `None` for
     /// anonymous boundary nodes (Source / FinalOutput) — those have no
     /// user-exposable params.
@@ -102,21 +109,44 @@ const CHECKBOX_GAP: f32 = 10.0;
 const FONT_SIZE: u16 = 12;
 const HEADER_FONT_SIZE: u16 = 14;
 
-/// Per-row state captured during `build` so `handle_click` can map
-/// a node id back to its parameter without re-walking the snapshot.
+/// Per-row state captured during `build` so `handle_event` can map
+/// a tree node id back to its parameter without re-walking the
+/// snapshot. Inner-node rows track BOTH the expose checkbox and the
+/// editable value cell, since each lands on a distinct tree node id
+/// and emits a distinct `PanelAction`.
 #[derive(Debug, Clone)]
 enum RowState {
     /// A row backed by an inner-node param exposable into the V2 user
-    /// surface. Toggling routes through `EffectParamExpose` →
-    /// `ToggleEffectParamExposeCommand` (creates/removes a binding).
+    /// surface and editable in place.
+    ///
+    /// - Click on `checkbox_node_id` → `EffectParamExpose`
+    ///   (toggle the user-binding for the V2 effect-card surface).
+    /// - Click / drag on `value_cell_node_id` → `SetGraphNodeParam`
+    ///   (mutate the per-card graph through
+    ///   `SetGraphNodeParamCommand`).
     InnerNode {
         checkbox_node_id: u32,
+        /// Tree id of the editable value cell (rendered as a button
+        /// so it receives drag events). `None` for `Other`-kind params
+        /// that have no editable representation in V1.
+        value_cell_node_id: Option<u32>,
+        /// Canvas-stable id of the underlying graph node. Used as the
+        /// `node_id` carried by `SetGraphNodeParam`.
+        node_runtime_id: u32,
         node_handle: String,
         inner_param: String,
         label: String,
+        kind: GraphEditorParamKind,
         min: f32,
         max: f32,
         default_value: f32,
+        /// Current value before this row's pending edit. Drag-scrub
+        /// uses this as the starting anchor (drag delta is applied
+        /// relative to it).
+        current_value: f32,
+        /// Enum option count, snapshot from the live ParamDef. Click-
+        /// cycle on an enum cell wraps modulo this count.
+        enum_labels_count: usize,
         convert: UserParamConvert,
         currently_exposed: bool,
     },
@@ -130,6 +160,38 @@ enum RowState {
         currently_exposed: bool,
     },
 }
+
+/// In-progress drag scrub on a Float/Int value cell. Captured when
+/// `DragBegin` lands on a value cell and consumed by `Drag` /
+/// `DragEnd`. The panel only allows one drag at a time — `DragBegin`
+/// while a drag is already active replaces the prior anchor.
+#[derive(Debug, Clone, Copy)]
+struct DragState {
+    /// Tree id of the value-cell button being dragged.
+    value_cell_node_id: u32,
+    /// Canvas-stable graph node id — used to build the
+    /// `SetGraphNodeParam` action.
+    node_runtime_id: u32,
+    /// Whether to emit Float or Int values during the drag.
+    kind: GraphEditorParamKind,
+    /// `(min, max)` for the param being dragged. Drag delta is scaled
+    /// so a `DRAG_FULL_RANGE_PX` movement covers the full range.
+    range: (f32, f32),
+    /// Value at the start of the drag. Each `Drag` event applies the
+    /// cumulative delta to this anchor — much steadier than chaining
+    /// deltas through the live snapshot, which lags by one frame.
+    start_value: f32,
+    /// Screen-x at the press origin (from `DragBegin.origin.x`). Used
+    /// together with `Drag.pos.x` to compute the cumulative drag
+    /// delta in pixels, then mapped to value-space via
+    /// `DRAG_FULL_RANGE_PX`.
+    press_origin_x: f32,
+}
+
+/// Pixels of horizontal drag corresponding to a full param range
+/// sweep. Slightly larger than the typical sidebar width so a single
+/// dramatic drag covers the full range.
+const DRAG_FULL_RANGE_PX: f32 = 240.0;
 
 /// One entry in the static-block surface — what the effect card
 /// already displays. Surfaced in the sidebar so the user can hide
@@ -174,6 +236,12 @@ pub struct GraphEditorPanel {
     /// Root container for everything this panel owns inside the tree.
     /// `-1` until first build.
     root_id: i32,
+    /// In-progress drag scrub on a Float/Int value cell. `None` when
+    /// no drag is active. Tree rebuilds preserve this so a drag that
+    /// began before a rebuild keeps emitting `SetGraphNodeParam`
+    /// against the same anchor (otherwise the value would snap back
+    /// to the live snapshot every frame).
+    drag: Option<DragState>,
 }
 
 impl GraphEditorPanel {
@@ -405,22 +473,51 @@ impl GraphEditorPanel {
                     ..UIStyle::default()
                 },
             );
-            // Current-value readout.
+            // Current-value cell. Editable params render as an
+            // interactive button so the tree's input system gives us
+            // click + drag events on it; `Other`-kind params (Vec/
+            // Color/etc.) render as a plain label since V1 has no
+            // editor for them.
             let value_str = format_inner_param_value(ps);
-            tree.add_label(
-                bg_id,
-                label_x + label_w,
-                y,
-                value_w,
-                ROW_H,
-                &value_str,
-                UIStyle {
-                    text_color: color::TEXT_DIMMED_C32,
-                    font_size: FONT_SIZE,
-                    text_align: TextAlign::Right,
-                    ..UIStyle::default()
-                },
-            );
+            let value_x = label_x + label_w;
+            let value_cell_node_id = if supported {
+                let id = tree.add_button(
+                    bg_id,
+                    value_x,
+                    y,
+                    value_w,
+                    ROW_H,
+                    UIStyle {
+                        bg_color: color::BUTTON_INACTIVE_C32,
+                        hover_bg_color: color::HOVER_OVERLAY,
+                        text_color: color::TEXT_WHITE_C32,
+                        font_size: FONT_SIZE,
+                        text_align: TextAlign::Right,
+                        corner_radius: 3.0,
+                        border_color: color::TEXT_DIMMED_C32,
+                        border_width: 1.0,
+                        ..UIStyle::default()
+                    },
+                    &value_str,
+                );
+                Some(id)
+            } else {
+                tree.add_label(
+                    bg_id,
+                    value_x,
+                    y,
+                    value_w,
+                    ROW_H,
+                    &value_str,
+                    UIStyle {
+                        text_color: color::TEXT_DIMMED_C32,
+                        font_size: FONT_SIZE,
+                        text_align: TextAlign::Right,
+                        ..UIStyle::default()
+                    },
+                );
+                None
+            };
 
             if supported {
                 let convert = match ps.kind {
@@ -433,12 +530,21 @@ impl GraphEditorPanel {
                 let (min, max) = ps.range.unwrap_or((0.0, 1.0));
                 self.rows.push(RowState::InnerNode {
                     checkbox_node_id: cb_id,
+                    value_cell_node_id,
+                    node_runtime_id: node.runtime_node_id,
                     node_handle: handle.clone(),
                     inner_param: ps.name.clone(),
                     label: ps.label.clone(),
+                    kind: ps.kind,
                     min,
                     max,
                     default_value: ps.default_value,
+                    current_value: ps.current_value,
+                    enum_labels_count: ps
+                        .enum_labels
+                        .as_ref()
+                        .map(|l| l.len())
+                        .unwrap_or(0),
                     convert,
                     currently_exposed: is_exposed,
                 });
@@ -448,63 +554,239 @@ impl GraphEditorPanel {
         }
     }
 
-    /// Map a click on a UITree button back to a `PanelAction`. Returns
-    /// an empty Vec when the click didn't land on one of our rows.
-    pub fn handle_click(&self, node_id: u32) -> Vec<PanelAction> {
-        let Some(effect_index) = self.effect_index else {
-            return Vec::new();
-        };
-        let row = self.rows.iter().find(|r| match r {
-            RowState::InnerNode {
-                checkbox_node_id, ..
-            } => *checkbox_node_id == node_id,
-            RowState::StaticBlock {
-                checkbox_node_id, ..
-            } => *checkbox_node_id == node_id,
-        });
-        let Some(row) = row else {
-            return Vec::new();
-        };
-        match row {
-            RowState::InnerNode {
-                node_handle,
-                inner_param,
-                label,
-                min,
-                max,
-                default_value,
-                convert,
-                currently_exposed,
-                ..
-            } => vec![PanelAction::EffectParamExpose {
-                effect_index,
-                node_handle: node_handle.clone(),
-                inner_param: inner_param.clone(),
-                expose: !currently_exposed,
-                label: label.clone(),
-                min: *min,
-                max: *max,
-                default_value: *default_value,
-                convert: convert.clone(),
-            }],
-            RowState::StaticBlock {
-                param_index,
-                currently_exposed,
-                ..
-            } => vec![PanelAction::EffectStaticParamExpose {
-                effect_index,
-                param_index: *param_index,
-                expose: !currently_exposed,
-            }],
+    /// Translate a single UITree event into zero or more `PanelAction`s.
+    ///
+    /// Click on an inner-param checkbox / static-block checkbox →
+    /// `EffectParamExpose` / `EffectStaticParamExpose`.
+    ///
+    /// Click on an inner-param value cell:
+    /// - Bool → emit `SetGraphNodeParam` with the toggled bool.
+    /// - Enum → emit `SetGraphNodeParam` with `(current + 1) %
+    ///   enum_count`; wraps to 0 past the last option.
+    /// - Float / Int → no-op; numeric edits go through drag.
+    ///
+    /// `DragBegin` on a Float/Int value cell captures the anchor
+    /// (`start_value`). Subsequent `Drag` events scale the cumulative
+    /// pixel delta into a value delta over `DRAG_FULL_RANGE_PX` and
+    /// emit one `SetGraphNodeParam` per delta. `DragEnd` clears the
+    /// captured anchor.
+    pub fn handle_event(&mut self, event: &UIEvent) -> Vec<PanelAction> {
+        match event {
+            UIEvent::Click { node_id, .. } => self.handle_click_event(*node_id),
+            UIEvent::DragBegin {
+                node_id, origin, ..
+            } => self.handle_drag_begin(*node_id, origin.x),
+            UIEvent::Drag { node_id, pos, .. } => self.handle_drag(*node_id, pos.x),
+            UIEvent::DragEnd { node_id, .. } => {
+                if let Some(drag) = self.drag
+                    && drag.value_cell_node_id == *node_id
+                {
+                    self.drag = None;
+                }
+                Vec::new()
+            }
+            _ => Vec::new(),
         }
     }
 
+    /// Backwards-compatible shim — pre-Phase-B callers passed click
+    /// node ids directly. Tests still use this; runtime is migrated
+    /// to `handle_event`.
+    pub fn handle_click(&mut self, node_id: u32) -> Vec<PanelAction> {
+        self.handle_click_event(node_id)
+    }
+
+    fn handle_click_event(&mut self, node_id: u32) -> Vec<PanelAction> {
+        let Some(effect_index) = self.effect_index else {
+            return Vec::new();
+        };
+        // Checkbox-row clicks: route through the existing expose
+        // path. Value-cell clicks: route through SetGraphNodeParam.
+        // Static-block rows have no value cell, just the checkbox.
+        for row in &self.rows {
+            match row {
+                RowState::InnerNode {
+                    checkbox_node_id,
+                    value_cell_node_id,
+                    node_runtime_id,
+                    node_handle,
+                    inner_param,
+                    label,
+                    kind,
+                    min,
+                    max,
+                    default_value,
+                    current_value,
+                    enum_labels_count,
+                    convert,
+                    currently_exposed,
+                } => {
+                    if *checkbox_node_id == node_id {
+                        return vec![PanelAction::EffectParamExpose {
+                            effect_index,
+                            node_handle: node_handle.clone(),
+                            inner_param: inner_param.clone(),
+                            expose: !currently_exposed,
+                            label: label.clone(),
+                            min: *min,
+                            max: *max,
+                            default_value: *default_value,
+                            convert: convert.clone(),
+                        }];
+                    }
+                    if value_cell_node_id.map(|v| v == node_id).unwrap_or(false) {
+                        if let Some(new_value) = value_cell_click_to_param(
+                            *kind,
+                            *current_value,
+                            *enum_labels_count,
+                        ) {
+                            return vec![PanelAction::SetGraphNodeParam {
+                                node_id: *node_runtime_id,
+                                param_name: inner_param.clone(),
+                                new_value,
+                            }];
+                        }
+                        return Vec::new();
+                    }
+                }
+                RowState::StaticBlock {
+                    checkbox_node_id,
+                    param_index,
+                    currently_exposed,
+                } => {
+                    if *checkbox_node_id == node_id {
+                        return vec![PanelAction::EffectStaticParamExpose {
+                            effect_index,
+                            param_index: *param_index,
+                            expose: !currently_exposed,
+                        }];
+                    }
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    fn handle_drag_begin(&mut self, node_id: u32, origin_x: f32) -> Vec<PanelAction> {
+        // Numeric-value-cell drag opens a scrub anchor. Bool / Enum
+        // edits happen on click, so drag on them is a no-op.
+        for row in &self.rows {
+            if let RowState::InnerNode {
+                value_cell_node_id: Some(cell),
+                node_runtime_id,
+                kind,
+                min,
+                max,
+                current_value,
+                ..
+            } = row
+                && *cell == node_id
+                && matches!(
+                    kind,
+                    GraphEditorParamKind::Float | GraphEditorParamKind::Int
+                )
+            {
+                self.drag = Some(DragState {
+                    value_cell_node_id: node_id,
+                    node_runtime_id: *node_runtime_id,
+                    kind: *kind,
+                    range: (*min, *max),
+                    start_value: *current_value,
+                    press_origin_x: origin_x,
+                });
+                return Vec::new();
+            }
+        }
+        Vec::new()
+    }
+
+    fn handle_drag(&mut self, node_id: u32, pos_x: f32) -> Vec<PanelAction> {
+        let Some(drag) = self.drag else {
+            return Vec::new();
+        };
+        if drag.value_cell_node_id != node_id {
+            return Vec::new();
+        }
+        // Cumulative pixel-delta from the press anchor → value-delta
+        // over `DRAG_FULL_RANGE_PX`. We anchor on `start_value` so
+        // hand-drift across a long drag doesn't accumulate
+        // floating-point error.
+        let (min, max) = drag.range;
+        let range_span = (max - min).max(f32::EPSILON);
+        let delta_px = pos_x - drag.press_origin_x;
+        let delta_value = delta_px * (range_span / DRAG_FULL_RANGE_PX);
+        let mut new_v = (drag.start_value + delta_value).clamp(min, max);
+        if matches!(drag.kind, GraphEditorParamKind::Int) {
+            new_v = new_v.round();
+        }
+        let serialized = match drag.kind {
+            GraphEditorParamKind::Float => SerializedParamValue::Float { value: new_v },
+            GraphEditorParamKind::Int => SerializedParamValue::Int { value: new_v as i32 },
+            _ => return Vec::new(),
+        };
+        // Look up the param name via the row table. The row layout
+        // doesn't move mid-drag (the editor rebuilds the tree each
+        // frame, but `build` preserves drag-state and re-emits the
+        // same value-cell ids by the same shape).
+        let inner_param = self.rows.iter().find_map(|r| match r {
+            RowState::InnerNode {
+                value_cell_node_id: Some(v),
+                inner_param,
+                ..
+            } if *v == node_id => Some(inner_param.clone()),
+            _ => None,
+        });
+        let Some(param_name) = inner_param else {
+            return Vec::new();
+        };
+        vec![PanelAction::SetGraphNodeParam {
+            node_id: drag.node_runtime_id,
+            param_name,
+            new_value: serialized,
+        }]
+    }
+
     /// Convenience wrapper: walk a slice of clicked button ids, map
-    /// each to a `PanelAction` via `handle_click`. Used by the
-    /// editor-window present path which produces a Vec<u32> of clicks
-    /// from the tree's pointer events each frame.
-    pub fn dispatch_clicks(&self, clicks: &[u32]) -> Vec<PanelAction> {
-        clicks.iter().flat_map(|&n| self.handle_click(n)).collect()
+    /// each through `handle_click`. Used by the editor-window present
+    /// path's compatibility shim where only click ids were captured.
+    pub fn dispatch_clicks(&mut self, clicks: &[u32]) -> Vec<PanelAction> {
+        clicks
+            .iter()
+            .flat_map(|&n| self.handle_click_event(n))
+            .collect()
+    }
+}
+
+/// Translate a click on an inner-param value cell into a
+/// `SerializedParamValue` for the resulting `SetGraphNodeParam` —
+/// `None` when click on this kind shouldn't emit anything (Float/Int
+/// edits happen via drag, not click).
+///
+/// - **Bool** → toggled bool.
+/// - **Enum** → `(current + 1) mod enum_count`. Empty `enum_count`
+///   (zero) is a defensive no-op — should not occur for properly-
+///   declared params but isn't worth panicking over.
+/// - **Float / Int / Other** → `None`.
+fn value_cell_click_to_param(
+    kind: GraphEditorParamKind,
+    current_value: f32,
+    enum_count: usize,
+) -> Option<SerializedParamValue> {
+    match kind {
+        GraphEditorParamKind::Bool => Some(SerializedParamValue::Bool {
+            value: current_value < 0.5,
+        }),
+        GraphEditorParamKind::Enum => {
+            if enum_count == 0 {
+                return None;
+            }
+            let current = current_value.round() as i32;
+            let next = (current + 1).rem_euclid(enum_count as i32);
+            Some(SerializedParamValue::Enum { value: next as u32 })
+        }
+        GraphEditorParamKind::Float | GraphEditorParamKind::Int | GraphEditorParamKind::Other => {
+            None
+        }
     }
 }
 
@@ -567,6 +849,7 @@ mod tests {
 
     fn snap_node_with_params(handle: Option<&str>) -> GraphEditorNodeView {
         GraphEditorNodeView {
+            runtime_node_id: 42,
             node_handle: handle.map(|h| h.to_string()),
             title: "UV Transform".to_string(),
             parameters: vec![
@@ -757,6 +1040,262 @@ mod tests {
         panel.build(&mut tree, viewport());
         if let Some(row) = panel.rows.first() {
             assert!(panel.handle_click(checkbox_id_of(row)).is_empty());
+        }
+    }
+
+    /// Helper: pull a row's value-cell tree id, returning None if it
+    /// isn't an editable inner-node row.
+    fn value_cell_id_of(row: &RowState) -> Option<u32> {
+        match row {
+            RowState::InnerNode {
+                value_cell_node_id, ..
+            } => *value_cell_node_id,
+            RowState::StaticBlock { .. } => None,
+        }
+    }
+
+    /// Snapshot of a Transform-like node with a Mode enum + Bool +
+    /// Float, so the click/drag/cycle tests can each exercise their
+    /// own kind without re-stating the whole structure.
+    fn snap_node_with_mixed_kinds() -> GraphEditorNodeView {
+        GraphEditorNodeView {
+            runtime_node_id: 7,
+            node_handle: Some("uv_transform".to_string()),
+            title: "Transform".to_string(),
+            parameters: vec![
+                GraphEditorParam {
+                    name: "scale".to_string(),
+                    label: "Scale".to_string(),
+                    kind: GraphEditorParamKind::Float,
+                    default_value: 1.0,
+                    current_value: 1.0,
+                    range: Some((0.0, 4.0)),
+                    enum_labels: None,
+                },
+                GraphEditorParam {
+                    name: "enabled".to_string(),
+                    label: "Enabled".to_string(),
+                    kind: GraphEditorParamKind::Bool,
+                    default_value: 0.0,
+                    current_value: 0.0,
+                    range: None,
+                    enum_labels: None,
+                },
+                GraphEditorParam {
+                    name: "mode".to_string(),
+                    label: "Mode".to_string(),
+                    kind: GraphEditorParamKind::Enum,
+                    default_value: 0.0,
+                    current_value: 1.0,
+                    range: None,
+                    enum_labels: Some(vec![
+                        "FoldX".into(),
+                        "FoldY".into(),
+                        "FoldBoth".into(),
+                    ]),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn bool_value_cell_click_toggles_via_set_graph_node_param() {
+        let mut tree = UITree::new();
+        let mut panel = GraphEditorPanel::new();
+        let node = snap_node_with_mixed_kinds();
+        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new());
+        panel.build(&mut tree, viewport());
+
+        let bool_row = panel
+            .rows
+            .iter()
+            .find(
+                |r| matches!(r, RowState::InnerNode { inner_param, .. } if inner_param == "enabled"),
+            )
+            .expect("bool row exists");
+        let cell = value_cell_id_of(bool_row).expect("bool row has value cell");
+        let actions = panel.handle_click(cell);
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            PanelAction::SetGraphNodeParam {
+                node_id,
+                param_name,
+                new_value,
+            } => {
+                assert_eq!(*node_id, 7);
+                assert_eq!(param_name, "enabled");
+                assert_eq!(*new_value, SerializedParamValue::Bool { value: true });
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn enum_value_cell_click_cycles_modulo_count() {
+        let mut tree = UITree::new();
+        let mut panel = GraphEditorPanel::new();
+        let node = snap_node_with_mixed_kinds(); // mode current_value = 1
+        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new());
+        panel.build(&mut tree, viewport());
+
+        let mode_row = panel
+            .rows
+            .iter()
+            .find(|r| matches!(r, RowState::InnerNode { inner_param, .. } if inner_param == "mode"))
+            .expect("mode row exists");
+        let cell = value_cell_id_of(mode_row).expect("mode row has value cell");
+        let actions = panel.handle_click(cell);
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            PanelAction::SetGraphNodeParam {
+                param_name,
+                new_value,
+                ..
+            } => {
+                assert_eq!(param_name, "mode");
+                assert_eq!(*new_value, SerializedParamValue::Enum { value: 2 });
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn enum_wrap_around_from_last_option_returns_zero() {
+        let mut tree = UITree::new();
+        let mut panel = GraphEditorPanel::new();
+        let mut node = snap_node_with_mixed_kinds();
+        // Park on the last enum option so the cycle wraps.
+        let mode = node.parameters.iter_mut().find(|p| p.name == "mode").unwrap();
+        mode.current_value = 2.0;
+        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new());
+        panel.build(&mut tree, viewport());
+
+        let mode_row = panel
+            .rows
+            .iter()
+            .find(|r| matches!(r, RowState::InnerNode { inner_param, .. } if inner_param == "mode"))
+            .unwrap();
+        let cell = value_cell_id_of(mode_row).unwrap();
+        match &panel.handle_click(cell)[0] {
+            PanelAction::SetGraphNodeParam { new_value, .. } => {
+                assert_eq!(*new_value, SerializedParamValue::Enum { value: 0 });
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn float_drag_emits_set_graph_node_param_for_each_drag_event() {
+        use crate::input::{Modifiers, UIEvent};
+        use crate::node::Vec2;
+
+        let mut tree = UITree::new();
+        let mut panel = GraphEditorPanel::new();
+        let node = snap_node_with_mixed_kinds(); // scale: 1.0, range (0..4)
+        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new());
+        panel.build(&mut tree, viewport());
+
+        let scale_row = panel
+            .rows
+            .iter()
+            .find(
+                |r| matches!(r, RowState::InnerNode { inner_param, .. } if inner_param == "scale"),
+            )
+            .unwrap();
+        let cell = value_cell_id_of(scale_row).unwrap();
+
+        // DragBegin at x = 100. No action emitted yet.
+        let begin = UIEvent::DragBegin {
+            node_id: cell,
+            pos: Vec2::new(100.0, 0.0),
+            origin: Vec2::new(100.0, 0.0),
+            modifiers: Modifiers::default(),
+        };
+        assert!(panel.handle_event(&begin).is_empty());
+
+        // Drag right by 60 px → 0.25 of the (0..4) range → +1.0.
+        // start_value 1.0 + 1.0 = 2.0.
+        let drag = UIEvent::Drag {
+            node_id: cell,
+            pos: Vec2::new(160.0, 0.0),
+            delta: Vec2::new(60.0, 0.0),
+        };
+        let acts = panel.handle_event(&drag);
+        assert_eq!(acts.len(), 1);
+        match &acts[0] {
+            PanelAction::SetGraphNodeParam {
+                node_id,
+                param_name,
+                new_value,
+            } => {
+                assert_eq!(*node_id, 7);
+                assert_eq!(param_name, "scale");
+                match new_value {
+                    SerializedParamValue::Float { value } => {
+                        assert!(
+                            (*value - 2.0).abs() < 0.01,
+                            "expected ~2.0, got {value}"
+                        );
+                    }
+                    other => panic!("expected Float, got {other:?}"),
+                }
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+
+        // DragEnd clears state; subsequent drags on this cell are no-ops.
+        let end = UIEvent::DragEnd {
+            node_id: cell,
+            pos: Vec2::new(160.0, 0.0),
+        };
+        assert!(panel.handle_event(&end).is_empty());
+        assert!(panel.drag.is_none());
+    }
+
+    #[test]
+    fn float_drag_clamps_to_range() {
+        use crate::input::{Modifiers, UIEvent};
+        use crate::node::Vec2;
+
+        let mut tree = UITree::new();
+        let mut panel = GraphEditorPanel::new();
+        let node = snap_node_with_mixed_kinds();
+        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new());
+        panel.build(&mut tree, viewport());
+
+        let cell = panel
+            .rows
+            .iter()
+            .find_map(|r| match r {
+                RowState::InnerNode {
+                    value_cell_node_id: Some(v),
+                    inner_param,
+                    ..
+                } if inner_param == "scale" => Some(*v),
+                _ => None,
+            })
+            .unwrap();
+
+        panel.handle_event(&UIEvent::DragBegin {
+            node_id: cell,
+            pos: Vec2::new(0.0, 0.0),
+            origin: Vec2::new(0.0, 0.0),
+            modifiers: Modifiers::default(),
+        });
+        // Drag way past the right edge — must clamp to max=4.0.
+        let acts = panel.handle_event(&UIEvent::Drag {
+            node_id: cell,
+            pos: Vec2::new(10_000.0, 0.0),
+            delta: Vec2::new(10_000.0, 0.0),
+        });
+        match &acts[0] {
+            PanelAction::SetGraphNodeParam {
+                new_value: SerializedParamValue::Float { value },
+                ..
+            } => {
+                assert!((*value - 4.0).abs() < 1e-3, "expected clamp to 4.0, got {value}");
+            }
+            _ => panic!("expected clamped Float"),
         }
     }
 

@@ -375,7 +375,8 @@ pub fn dispatch(
         | PanelAction::AddGraphNode { .. }
         | PanelAction::ConnectPorts { .. }
         | PanelAction::RemoveGraphNode { .. }
-        | PanelAction::MoveGraphNode { .. } => DispatchResult::handled(),
+        | PanelAction::MoveGraphNode { .. }
+        | PanelAction::SetGraphNodeParam { .. } => DispatchResult::handled(),
     }
 }
 

@@ -287,8 +287,12 @@ impl Application {
         if let Some(ed) = self.graph_editor.as_mut() {
             let events = ed.ui_root.input.drain_events();
             for event in events {
+                // Forward every event into the inspector panel — it
+                // wants Click (toggle/cycle) plus DragBegin/Drag/
+                // DragEnd (numeric scrub). The palette only cares
+                // about Click since it just lists clickable atoms.
+                actions.extend(self.graph_editor_panel.handle_event(&event));
                 if let manifold_ui::input::UIEvent::Click { node_id, .. } = event {
-                    actions.extend(self.graph_editor_panel.handle_click(node_id));
                     actions.extend(self.graph_palette.handle_click(node_id));
                 }
             }
@@ -580,6 +584,26 @@ impl Application {
                             eid.clone(),
                             *node_id,
                             *new_pos,
+                            default.clone(),
+                        );
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                PanelAction::SetGraphNodeParam {
+                    node_id,
+                    param_name,
+                    new_value,
+                } => {
+                    if let (Some(eid), Some(default)) = (
+                        self.watched_effect_id.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+                            eid.clone(),
+                            *node_id,
+                            param_name.clone(),
+                            *new_value,
                             default.clone(),
                         );
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
@@ -2051,6 +2075,7 @@ fn build_graph_editor_view(
         })
         .collect();
     Some(GraphEditorNodeView {
+        runtime_node_id: node.id,
         node_handle: node.node_handle.clone(),
         title: node.title.clone(),
         parameters,
