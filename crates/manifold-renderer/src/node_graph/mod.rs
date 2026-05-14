@@ -19,8 +19,8 @@ mod execution_plan;
 mod graph;
 mod legacy_adapter;
 mod metal_backend;
-mod parameters;
 mod param_binding;
+mod parameters;
 mod persistence;
 mod ports;
 pub mod primitive;
@@ -31,35 +31,36 @@ mod validation;
 
 pub use backend::{Backend, MockBackend};
 pub use bindings::{NodeInputs, NodeOutputs, Slot};
-pub use boundary_nodes::{FinalOutput, Source, FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID};
+pub use boundary_nodes::{FINAL_OUTPUT_TYPE_ID, FinalOutput, SOURCE_TYPE_ID, Source};
 pub use effect_graphs::{
-    apply_ctx_params, apply_ctx_params_at, apply_refresh_plan, build_ctx_param_plan,
-    build_effect_graph, build_refresh_plan, canonical_document_for, primitive_id_for_effect,
-    refresh_effect_params, refresh_effect_params_at, CtxEntry, EffectGraphError, RefreshEntry,
+    CtxEntry, EffectGraphError, RefreshEntry, apply_ctx_params, apply_ctx_params_at,
+    apply_refresh_plan, build_ctx_param_plan, build_effect_graph, build_refresh_plan,
+    canonical_document_for, primitive_id_for_effect, refresh_effect_params,
+    refresh_effect_params_at,
 };
 pub use effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId, NodeRequires,
     NodeWire, ParamValues,
 };
 pub use execution::Executor;
-pub use metal_backend::MetalBackend;
-pub use execution_plan::{compile, ExecutionPlan, ExecutionStep, ResourceId};
+pub use execution_plan::{ExecutionPlan, ExecutionStep, ResourceId, compile};
 pub use graph::{Graph, NodeInstance};
-pub use legacy_adapter::{metadata_by_id, LegacyPostProcessNode, LEGACY_TYPE_ID_PREFIX};
+pub use legacy_adapter::{LEGACY_TYPE_ID_PREFIX, LegacyPostProcessNode, metadata_by_id};
+pub use metal_backend::MetalBackend;
 pub use param_binding::{
-    apply_param_bindings, binding_value, user_binding_to_runtime, ParamBinding, ParamConvert,
-    ParamId, ParamTarget, UserParamBindingRuntime,
+    ParamBinding, ParamConvert, ParamId, ParamTarget, UserParamBindingRuntime,
+    apply_param_bindings, binding_value, user_binding_to_runtime,
 };
 pub use parameters::{ParamDef, ParamType, ParamValue};
 pub use persistence::{
-    GraphDocument, LoadError, NodeConstructor, NodeDocument, PrimitiveRegistry,
-    SerializedParamValue, WireDocument, WireSide, GRAPH_DOCUMENT_VERSION,
+    EffectGraphDefExt, GRAPH_DOCUMENT_VERSION, GraphDocument, LoadError, NodeConstructor,
+    NodeDocument, PrimitiveRegistry, SerializedParamValue, WireDocument, WireSide,
 };
-pub use primitive::{Primitive, PrimitiveDescription, PrimitiveSpec};
 pub use ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+pub use primitive::{Primitive, PrimitiveDescription, PrimitiveSpec};
 pub use snapshot::{
     GraphSnapshot, NodeSnapshot, ParamSnapshot, ParamSnapshotKind, PortKindSnapshot, PortSnapshot,
     WireSnapshot,
 };
 pub use state_store::{NodeState, OwnerKey, StateStore};
-pub use validation::{topological_sort, validate, GraphError};
+pub use validation::{GraphError, topological_sort, validate};

@@ -1,119 +1,64 @@
-//! Graph-JSON persistence — the on-disk format for effect graphs.
+//! Graph-JSON persistence — converts between live [`Graph`]s and the
+//! on-disk schema in [`manifold_core::effect_graph_def`].
+//!
+//! The schema itself (`EffectGraphDef`, `EffectGraphNode`,
+//! `EffectGraphWire`, `SerializedParamValue`) lives in `manifold-core`
+//! so [`manifold_core::effects::EffectInstance`] can carry a
+//! per-instance graph by value. This module owns the runtime-coupled
+//! pieces: the [`PrimitiveRegistry`] that maps `type_id` strings to
+//! node constructors, the [`ParamValue`] ↔ [`SerializedParamValue`]
+//! conversions, and the [`from_graph`](EffectGraphDefExt::from_graph)
+//! / [`into_graph`](EffectGraphDefExt::into_graph) entry points.
 //!
 //! Both bundled effect presets (`assets/effect-presets/*.json`) and
-//! user-authored graphs stored inside the project archive use this same
-//! schema. The format is intentionally minimal: a list of nodes (each
-//! with a stable `type_id`, parameter values, and optional editor
-//! position) plus a list of wires. No execution metadata, no resource
-//! ids — those are recomputed from the live graph at runtime.
+//! user-authored per-instance overrides use this same shape. The
+//! format is intentionally minimal: a list of nodes (each with a
+//! stable `type_id`, parameter values, and optional editor position)
+//! plus a list of wires. No execution metadata, no resource ids —
+//! those are recomputed from the live graph at runtime.
 //!
 //! ## Round-trip
 //!
-//! [`GraphDocument::from_graph`] serializes a live [`Graph`] to a
-//! document. [`GraphDocument::into_graph`] materializes a document back
-//! into a live [`Graph`] using a [`PrimitiveRegistry`] to look up node
+//! [`EffectGraphDefExt::from_graph`] serializes a live [`Graph`].
+//! [`EffectGraphDefExt::into_graph`] materializes a def back into a
+//! live [`Graph`] using a [`PrimitiveRegistry`] to look up node
 //! constructors by `type_id`. The two are inverses (modulo
 //! constructor-supplied defaults vs. the explicit per-param values the
-//! document records).
-//!
-//! ## Param values on the wire
-//!
-//! [`SerializedParamValue`] is a tagged enum (`{"type": "Float",
-//! "value": 0.5}`) so the loader can round-trip every [`ParamValue`]
-//! variant without ambiguity. Tagged form, not untagged, because
-//! `Float(0.0)` and `Int(0)` and `Bool(false)` would otherwise
-//! deserialize identically.
+//! def records).
 //!
 //! ## Versioning
 //!
-//! `GraphDocument::version` starts at `1`. When the schema needs a
-//! breaking change, bump the version and route through a migrator in
-//! [`GraphDocument::from_value`].
+//! `EffectGraphDef::version` starts at `1`. When the schema needs a
+//! breaking change, bump
+//! [`manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION`] and add a
+//! migrator.
 
 use std::collections::BTreeMap;
 
 use ahash::AHashMap;
-use serde::{Deserialize, Serialize};
 
-use crate::node_graph::boundary_nodes::{FinalOutput, Source, FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID};
+use manifold_core::effect_graph_def::{
+    EFFECT_GRAPH_VERSION, EffectGraphDef, EffectGraphNode, EffectGraphWire,
+};
+
+use crate::node_graph::boundary_nodes::{
+    FINAL_OUTPUT_TYPE_ID, FinalOutput, SOURCE_TYPE_ID, Source,
+};
 use crate::node_graph::effect_node::{EffectNode, NodeInstanceId};
 use crate::node_graph::graph::Graph;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::primitives;
 
-/// Current schema version emitted by [`GraphDocument::from_graph`].
-/// On-disk documents with a higher version fail to load — old binaries
-/// don't know how to read future graphs.
-pub const GRAPH_DOCUMENT_VERSION: u32 = 1;
-
-// ---------------------------------------------------------------------------
-// Schema
-// ---------------------------------------------------------------------------
-
-/// Top-level JSON shape for one effect graph.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GraphDocument {
-    pub version: u32,
-    /// Display name for the preset library / saved graph picker.
-    /// `None` when the graph is anonymous (e.g., scratch state).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Free-form description shown in the picker tooltip. `None` when
-    /// the author didn't supply one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    pub nodes: Vec<NodeDocument>,
-    pub wires: Vec<WireDocument>,
-}
-
-/// One node in the document. `id` is unique within the document and
-/// is the wire-endpoint key — it survives load by mapping to a fresh
-/// runtime [`NodeInstanceId`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NodeDocument {
-    pub id: u32,
-    pub type_id: String,
-    /// Stable string handle to pass to [`Graph::add_node_named`] so
-    /// user-exposed parameter bindings can address this inner node
-    /// across renderer refactors. `None` for anonymous nodes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub handle: Option<String>,
-    /// Per-parameter overrides keyed by stable param name. Missing
-    /// keys fall through to the node's declared defaults.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub params: BTreeMap<String, SerializedParamValue>,
-    /// Editor-saved position in graph-space. `None` for documents
-    /// authored without an editor (hand-rolled bundled presets).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub editor_pos: Option<(f32, f32)>,
-}
-
-/// One wire in the document. Endpoint ids reference `NodeDocument::id`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WireDocument {
-    pub from_node: u32,
-    pub from_port: String,
-    pub to_node: u32,
-    pub to_port: String,
-}
-
-/// Tagged-enum wire form of [`ParamValue`]. Tagged because untagged
-/// would conflate `Float(0.0)` / `Int(0)` / `Bool(false)`.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "PascalCase")]
-pub enum SerializedParamValue {
-    Float { value: f32 },
-    Int { value: i32 },
-    Bool { value: bool },
-    Vec2 { value: [f32; 2] },
-    Vec3 { value: [f32; 3] },
-    Vec4 { value: [f32; 4] },
-    Color { value: [f32; 4] },
-    Enum { value: u32 },
-}
+// Re-export the core schema under the legacy renderer-side names so
+// existing call sites keep compiling. New code should prefer the
+// `EffectGraphDef` names directly from `manifold_core`. The
+// `SerializedParamValue` re-export is also what brings the type into
+// scope for this module's `From<ParamValue>` impls below.
+pub use manifold_core::effect_graph_def::SerializedParamValue;
+pub use manifold_core::effect_graph_def::{
+    EFFECT_GRAPH_VERSION as GRAPH_DOCUMENT_VERSION, EffectGraphDef as GraphDocument,
+    EffectGraphNode as NodeDocument, EffectGraphWire as WireDocument,
+};
 
 impl From<ParamValue> for SerializedParamValue {
     fn from(v: ParamValue) -> Self {
@@ -236,9 +181,7 @@ fn register_builtin(r: &mut PrimitiveRegistry) {
     });
 
     // Compose primitives.
-    r.register(primitives::MIX_TYPE_ID, || {
-        Box::new(primitives::Mix::new())
-    });
+    r.register(primitives::MIX_TYPE_ID, || Box::new(primitives::Mix::new()));
     r.register(primitives::BLEND_TYPE_ID, || {
         Box::new(primitives::Blend::new())
     });
@@ -369,10 +312,7 @@ pub enum LoadError {
     },
     /// Wire targets a port that doesn't exist or has the wrong kind /
     /// type on the receiving node.
-    InvalidWire {
-        wire_index: usize,
-        reason: String,
-    },
+    InvalidWire { wire_index: usize, reason: String },
 }
 
 impl std::fmt::Display for LoadError {
@@ -399,10 +339,7 @@ impl std::fmt::Display for LoadError {
                 node_id,
                 type_id,
                 param,
-            } => write!(
-                f,
-                "node {node_id} ({type_id}): unknown parameter '{param}'"
-            ),
+            } => write!(f, "node {node_id} ({type_id}): unknown parameter '{param}'"),
             Self::ParamTypeMismatch {
                 node_id,
                 type_id,
@@ -430,33 +367,51 @@ pub enum WireSide {
 }
 
 // ---------------------------------------------------------------------------
-// Save: Graph → GraphDocument
+// Save: Graph → EffectGraphDef
+// Load: EffectGraphDef → Graph
+//
+// `EffectGraphDef` is a foreign type (in `manifold-core`), so we expose
+// these via an extension trait. Existing call sites that use
+// `GraphDocument::from_graph(&g)` / `doc.into_graph(&registry)` continue
+// to work because the trait is re-exported from this module.
 // ---------------------------------------------------------------------------
 
-impl GraphDocument {
-    /// Serialize a live [`Graph`] to a document. Captures every node's
-    /// current parameter values (defaults that haven't been overridden
-    /// are still written — round-trip equality matters more than
-    /// document terseness).
-    pub fn from_graph(graph: &Graph) -> Self {
+/// Extension trait that adds [`Graph`] round-trip methods to
+/// [`EffectGraphDef`]. The trait must be in scope at the call site —
+/// it's re-exported from this module's parent.
+pub trait EffectGraphDefExt: Sized {
+    /// Serialize a live [`Graph`] to a definition. Captures every
+    /// node's current parameter values (defaults that haven't been
+    /// overridden are still written — round-trip equality matters more
+    /// than document terseness).
+    fn from_graph(graph: &Graph) -> Self;
+
+    /// Materialize a definition into a live [`Graph`] using `registry`
+    /// to look up node constructors by `type_id`.
+    ///
+    /// On failure, returns the first [`LoadError`] encountered.
+    /// Partial graphs are never returned — the document is parsed in
+    /// two passes (build nodes, then wire) so a wire error doesn't
+    /// leak half-built state.
+    fn into_graph(self, registry: &PrimitiveRegistry) -> Result<Graph, LoadError>;
+}
+
+impl EffectGraphDefExt for EffectGraphDef {
+    fn from_graph(graph: &Graph) -> Self {
         let id_to_handle: AHashMap<u32, String> = graph
             .handles()
             .map(|(h, id)| (id.0, h.to_string()))
             .collect();
 
-        let mut nodes: Vec<NodeDocument> = graph
+        let mut nodes: Vec<EffectGraphNode> = graph
             .nodes()
             .map(|inst| {
                 let mut params = BTreeMap::new();
                 for def in inst.node.parameters() {
-                    let value = inst
-                        .params
-                        .get(def.name)
-                        .copied()
-                        .unwrap_or(def.default);
+                    let value = inst.params.get(def.name).copied().unwrap_or(def.default);
                     params.insert(def.name.to_string(), value.into());
                 }
-                NodeDocument {
+                EffectGraphNode {
                     id: inst.id.0,
                     type_id: inst.node.type_id().as_str().to_string(),
                     handle: id_to_handle.get(&inst.id.0).cloned(),
@@ -468,10 +423,10 @@ impl GraphDocument {
         // Stable order so saved documents diff cleanly across rebuilds.
         nodes.sort_by_key(|n| n.id);
 
-        let mut wires: Vec<WireDocument> = graph
+        let mut wires: Vec<EffectGraphWire> = graph
             .wires()
             .iter()
-            .map(|w| WireDocument {
+            .map(|w| EffectGraphWire {
                 from_node: w.from.0.0,
                 from_port: w.from.1.to_string(),
                 to_node: w.to.0.0,
@@ -486,8 +441,8 @@ impl GraphDocument {
                 .then(a.from_port.cmp(&b.from_port))
         });
 
-        Self {
-            version: GRAPH_DOCUMENT_VERSION,
+        EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION,
             name: None,
             description: None,
             nodes,
@@ -495,35 +450,11 @@ impl GraphDocument {
         }
     }
 
-    /// Set the display name. Builder-style convenience for bundled
-    /// preset constructors.
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
-        self
-    }
-
-    /// Set the description. Builder-style.
-    pub fn with_description(mut self, desc: impl Into<String>) -> Self {
-        self.description = Some(desc.into());
-        self
-    }
-
-    // -----------------------------------------------------------------
-    // Load: GraphDocument → Graph
-    // -----------------------------------------------------------------
-
-    /// Materialize a document into a live [`Graph`] using `registry`
-    /// to look up node constructors by `type_id`.
-    ///
-    /// On failure, returns the first [`LoadError`] encountered.
-    /// Partial graphs are never returned — the document is parsed in
-    /// two passes (build nodes, then wire) so a wire error doesn't
-    /// leak half-built state.
-    pub fn into_graph(self, registry: &PrimitiveRegistry) -> Result<Graph, LoadError> {
-        if self.version > GRAPH_DOCUMENT_VERSION {
+    fn into_graph(self, registry: &PrimitiveRegistry) -> Result<Graph, LoadError> {
+        if self.version > EFFECT_GRAPH_VERSION {
             return Err(LoadError::UnsupportedVersion {
                 found: self.version,
-                max: GRAPH_DOCUMENT_VERSION,
+                max: EFFECT_GRAPH_VERSION,
             });
         }
 
@@ -596,33 +527,37 @@ impl GraphDocument {
         }
 
         for (i, wire) in self.wires.iter().enumerate() {
-            let from_runtime = *id_map.get(&wire.from_node).ok_or(LoadError::UnknownNodeRef {
-                wire_index: i,
-                node_id: wire.from_node,
-                side: WireSide::From,
-            })?;
+            let from_runtime = *id_map
+                .get(&wire.from_node)
+                .ok_or(LoadError::UnknownNodeRef {
+                    wire_index: i,
+                    node_id: wire.from_node,
+                    side: WireSide::From,
+                })?;
             let to_runtime = *id_map.get(&wire.to_node).ok_or(LoadError::UnknownNodeRef {
                 wire_index: i,
                 node_id: wire.to_node,
                 side: WireSide::To,
             })?;
 
-            let from_port: &'static str = leak_port_name(&wire.from_port, &graph, from_runtime, true)?
-                .ok_or_else(|| LoadError::InvalidWire {
-                    wire_index: i,
-                    reason: format!(
-                        "from node {} has no output port '{}'",
-                        wire.from_node, wire.from_port
-                    ),
+            let from_port: &'static str =
+                leak_port_name(&wire.from_port, &graph, from_runtime, true)?.ok_or_else(|| {
+                    LoadError::InvalidWire {
+                        wire_index: i,
+                        reason: format!(
+                            "from node {} has no output port '{}'",
+                            wire.from_node, wire.from_port
+                        ),
+                    }
                 })?;
             let to_port: &'static str = leak_port_name(&wire.to_port, &graph, to_runtime, false)?
                 .ok_or_else(|| LoadError::InvalidWire {
-                    wire_index: i,
-                    reason: format!(
-                        "to node {} has no input port '{}'",
-                        wire.to_node, wire.to_port
-                    ),
-                })?;
+                wire_index: i,
+                reason: format!(
+                    "to node {} has no input port '{}'",
+                    wire.to_node, wire.to_port
+                ),
+            })?;
 
             graph
                 .connect((from_runtime, from_port), (to_runtime, to_port))
@@ -738,7 +673,8 @@ mod tests {
         let out = g.add_node(Box::new(FinalOutput::new()));
         g.connect((src, "out"), (thresh, "source")).unwrap();
         g.connect((thresh, "out"), (out, "in")).unwrap();
-        g.set_param(thresh, "level", ParamValue::Float(0.8)).unwrap();
+        g.set_param(thresh, "level", ParamValue::Float(0.8))
+            .unwrap();
         g.set_param(thresh, "softness", ParamValue::Float(0.05))
             .unwrap();
 
@@ -875,10 +811,7 @@ mod tests {
     fn param_type_mismatch_is_a_clean_error() {
         let mut params = BTreeMap::new();
         // Threshold.level is a Float; we send an Enum.
-        params.insert(
-            "level".to_string(),
-            SerializedParamValue::Enum { value: 3 },
-        );
+        params.insert("level".to_string(), SerializedParamValue::Enum { value: 3 });
         let doc = GraphDocument {
             version: 1,
             name: None,
@@ -894,9 +827,7 @@ mod tests {
         };
         let err = expect_err(doc.into_graph(&registry()));
         match err {
-            LoadError::ParamTypeMismatch {
-                expected, got, ..
-            } => {
+            LoadError::ParamTypeMismatch { expected, got, .. } => {
                 assert_eq!(expected, "Float");
                 assert_eq!(got, "Enum");
             }

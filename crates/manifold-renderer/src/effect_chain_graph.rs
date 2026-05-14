@@ -59,10 +59,10 @@ use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Mix;
 use crate::node_graph::{
-    apply_refresh_plan, build_ctx_param_plan, build_refresh_plan, compile, metadata_by_id,
-    primitive_id_for_effect, CtxEntry, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph,
-    LegacyPostProcessNode, MetalBackend, NodeInstanceId, ParamValue, PortType, PrimitiveRegistry,
-    RefreshEntry, ResourceId, Slot, Source, StateStore,
+    CtxEntry, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, LegacyPostProcessNode,
+    MetalBackend, NodeInstanceId, ParamValue, PortType, PrimitiveRegistry, RefreshEntry,
+    ResourceId, Slot, Source, StateStore, apply_refresh_plan, build_ctx_param_plan,
+    build_refresh_plan, compile, metadata_by_id, primitive_id_for_effect,
 };
 use crate::render_target::RenderTarget;
 
@@ -288,8 +288,8 @@ impl ChainGraph {
 
         for (legacy_index, fx) in &active_effects {
             let fx_group_id = fx.group_id.as_deref();
-            let fx_group: Option<&EffectGroup> = fx_group_id
-                .and_then(|gid| groups.iter().find(|g| g.id.as_str() == gid));
+            let fx_group: Option<&EffectGroup> =
+                fx_group_id.and_then(|gid| groups.iter().find(|g| g.id.as_str() == gid));
             // Emit a Mix sub-graph for every enabled group with
             // effects, regardless of the current `wet_dry` value.
             // Critically, this avoids a topology rebuild when
@@ -616,7 +616,13 @@ fn add_effect_node(
     let factory = inventory::iter::<EffectFactory>
         .into_iter()
         .find(|f| f.id == *fx.effect_type())?;
-    let inner = (factory.create)(device);
+    let mut inner = (factory.create)(device);
+    // Phase 1 per-card-divergence: if this instance carries a graph
+    // override, hand it to the FX to replace its catalog default.
+    // Non-graph FXs ignore the call via the trait's default impl.
+    if let Some(def) = &fx.graph {
+        inner.hydrate_graph(def);
+    }
     let adapter = LegacyPostProcessNode::new(metadata, inner);
     let node_id = graph.add_node(Box::new(adapter));
     Some((node_id, false, "source"))
@@ -683,9 +689,7 @@ fn close_mix_group(
     let mix_id = graph.add_node(Box::new(Mix::new()));
     // Mode = Lerp (0) — matches legacy `WetDryLerpPipeline`'s
     // `lerp(dry, wet, wet_dry)`.
-    graph
-        .set_param(mix_id, "mode", ParamValue::Enum(0))
-        .ok()?;
+    graph.set_param(mix_id, "mode", ParamValue::Enum(0)).ok()?;
     graph
         .set_param(mix_id, "amount", ParamValue::Float(closing.wet_dry))
         .ok()?;
@@ -697,9 +701,7 @@ fn close_mix_group(
         .connect((closing.pre_node, closing.pre_port), (mix_id, "a"))
         .ok()?;
     // Mix.b = wet (post-group result).
-    graph
-        .connect(last_effect, (mix_id, "b"))
-        .ok()?;
+    graph.connect(last_effect, (mix_id, "b")).ok()?;
     Some((mix_id, "out"))
 }
 
@@ -796,10 +798,10 @@ mod multi_segment_tests {
     //! `group_mix_nodes`, so the per-frame `wet_dry` refresh sets the
     //! `amount` param on every segment uniformly.
     use super::*;
+    use manifold_core::EffectTypeId;
     use manifold_core::effect_definition_registry;
     use manifold_core::effects::{EffectGroup, EffectInstance};
     use manifold_core::id::EffectGroupId;
-    use manifold_core::EffectTypeId;
     use std::sync::Arc;
 
     fn make_default(ty: EffectTypeId) -> EffectInstance {
@@ -830,15 +832,8 @@ mod multi_segment_tests {
             parent_group_id: None,
         };
 
-        let result = ChainGraph::try_build(
-            &[e1, e2, e3],
-            &[g1],
-            &primitives,
-            &device,
-            None,
-            256,
-            256,
-        );
+        let result =
+            ChainGraph::try_build(&[e1, e2, e3], &[g1], &primitives, &device, None, 256, 256);
 
         let cg = result.expect(
             "ChainGraph should build for a non-contiguous wet/dry group \
@@ -880,15 +875,8 @@ mod multi_segment_tests {
             parent_group_id: None,
         };
 
-        let result = ChainGraph::try_build(
-            &[e1, e2, e3],
-            &[g1],
-            &primitives,
-            &device,
-            None,
-            256,
-            256,
-        );
+        let result =
+            ChainGraph::try_build(&[e1, e2, e3], &[g1], &primitives, &device, None, 256, 256);
 
         let cg = result.expect("ChainGraph should build for contiguous group");
         assert_eq!(cg.group_mix_nodes.len(), 1);

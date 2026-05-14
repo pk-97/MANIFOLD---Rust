@@ -37,8 +37,8 @@ use crate::node_graph::graph::Graph;
 use crate::node_graph::legacy_adapter::metadata_by_id;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::persistence::{
-    GraphDocument, LoadError, NodeDocument, PrimitiveRegistry, SerializedParamValue, WireDocument,
-    GRAPH_DOCUMENT_VERSION,
+    EffectGraphDefExt, GRAPH_DOCUMENT_VERSION, GraphDocument, LoadError, NodeDocument,
+    PrimitiveRegistry, SerializedParamValue, WireDocument,
 };
 use crate::node_graph::primitive::PrimitiveSpec;
 use crate::node_graph::primitives;
@@ -77,7 +77,10 @@ impl std::fmt::Display for EffectGraphError {
                  (renderer startup should have inserted one)"
             ),
             Self::LoadFailure { effect_type, inner } => {
-                write!(f, "effect '{effect_type}': canonical graph load failed: {inner}")
+                write!(
+                    f,
+                    "effect '{effect_type}': canonical graph load failed: {inner}"
+                )
             }
         }
     }
@@ -251,18 +254,16 @@ pub fn build_effect_graph(
     instance: &EffectInstance,
     registry: &PrimitiveRegistry,
 ) -> Result<Graph, EffectGraphError> {
-    let prim_id =
-        primitive_id_for_effect(instance.effect_type()).ok_or_else(|| {
-            EffectGraphError::UnsupportedEffectType {
-                effect_type: instance.effect_type().as_str().to_string(),
-            }
-        })?;
-    let metadata =
-        metadata_by_id(instance.effect_type()).ok_or_else(|| {
-            EffectGraphError::MissingMetadata {
-                effect_type: instance.effect_type().as_str().to_string(),
-            }
-        })?;
+    let prim_id = primitive_id_for_effect(instance.effect_type()).ok_or_else(|| {
+        EffectGraphError::UnsupportedEffectType {
+            effect_type: instance.effect_type().as_str().to_string(),
+        }
+    })?;
+    let metadata = metadata_by_id(instance.effect_type()).ok_or_else(|| {
+        EffectGraphError::MissingMetadata {
+            effect_type: instance.effect_type().as_str().to_string(),
+        }
+    })?;
 
     let doc = build_canonical_document(instance, metadata, prim_id);
 
@@ -278,12 +279,12 @@ pub fn build_effect_graph(
         .unwrap_or_default();
     let stripped = strip_node_params(doc, 1);
 
-    let mut graph = stripped.into_graph(registry).map_err(|e| {
-        EffectGraphError::LoadFailure {
+    let mut graph = stripped
+        .into_graph(registry)
+        .map_err(|e| EffectGraphError::LoadFailure {
             effect_type: instance.effect_type().as_str().to_string(),
             inner: e,
-        }
-    })?;
+        })?;
 
     materialize_param_overrides(&mut graph, &prim_params);
 
@@ -305,7 +306,10 @@ pub fn build_effect_graph(
 /// The graph is expected to be a canonical 3-node shape with the
 /// primitive at runtime id `NodeInstanceId(1)` (the layout
 /// `build_effect_graph` always produces).
-pub fn refresh_effect_params(graph: &mut Graph, instance: &EffectInstance) -> Result<(), EffectGraphError> {
+pub fn refresh_effect_params(
+    graph: &mut Graph,
+    instance: &EffectInstance,
+) -> Result<(), EffectGraphError> {
     let metadata = metadata_by_id(instance.effect_type()).ok_or_else(|| {
         EffectGraphError::MissingMetadata {
             effect_type: instance.effect_type().as_str().to_string(),
@@ -459,17 +463,31 @@ pub fn build_refresh_plan(
         // primitive's param is Float-typed; the drift-table maps to
         // a continuous primitive value).
         let entry = match (effect_id, spec.id) {
-            ("Transform", "rot") => {
-                RefreshEntry::TransformRot { idx: i, name: param_def.name }
-            }
-            ("Strobe", "rate") => {
-                RefreshEntry::StrobeRate { idx: i, name: param_def.name }
-            }
+            ("Transform", "rot") => RefreshEntry::TransformRot {
+                idx: i,
+                name: param_def.name,
+            },
+            ("Strobe", "rate") => RefreshEntry::StrobeRate {
+                idx: i,
+                name: param_def.name,
+            },
             _ => match param_def.ty {
-                ParamType::Float => RefreshEntry::Float { idx: i, name: param_def.name },
-                ParamType::Int => RefreshEntry::Int { idx: i, name: param_def.name },
-                ParamType::Bool => RefreshEntry::Bool { idx: i, name: param_def.name },
-                ParamType::Enum => RefreshEntry::Enum { idx: i, name: param_def.name },
+                ParamType::Float => RefreshEntry::Float {
+                    idx: i,
+                    name: param_def.name,
+                },
+                ParamType::Int => RefreshEntry::Int {
+                    idx: i,
+                    name: param_def.name,
+                },
+                ParamType::Bool => RefreshEntry::Bool {
+                    idx: i,
+                    name: param_def.name,
+                },
+                ParamType::Enum => RefreshEntry::Enum {
+                    idx: i,
+                    name: param_def.name,
+                },
                 // Vec*/Color — legacy effects don't store these in
                 // `param_values`, so we skip the entry (primitive
                 // keeps its declared default).
@@ -656,10 +674,7 @@ fn transform_legacy_value(effect_type: &str, legacy_id: &str, raw: f32) -> f32 {
 /// `ParamType`-driven coercion. Unknown keys are skipped silently —
 /// same policy as the legacy chain, which would also ignore drift
 /// between effect metadata and the live processor.
-fn materialize_param_overrides(
-    graph: &mut Graph,
-    params: &BTreeMap<String, SerializedParamValue>,
-) {
+fn materialize_param_overrides(graph: &mut Graph, params: &BTreeMap<String, SerializedParamValue>) {
     materialize_param_overrides_at(graph, NodeInstanceId(1), params);
 }
 
@@ -1020,10 +1035,7 @@ mod tests {
             param_name_for_legacy("InvertColors", "amount"),
             Some("intensity")
         );
-        assert_eq!(
-            param_name_for_legacy("Transform", "zoom"),
-            Some("scale")
-        );
+        assert_eq!(param_name_for_legacy("Transform", "zoom"), Some("scale"));
         assert_eq!(
             param_name_for_legacy("ColorGrade", "tint_hue"),
             Some("colorize_hue")
@@ -1037,10 +1049,7 @@ mod tests {
             Some("segments")
         );
         // Pass-through: no rename → returns the input name.
-        assert_eq!(
-            param_name_for_legacy("Bloom", "amount"),
-            Some("amount")
-        );
+        assert_eq!(param_name_for_legacy("Bloom", "amount"), Some("amount"));
         // Dropped: legacy param without a primitive counterpart.
         // `Infrared.palette` now maps to `node.infrared.palette`
         // (after the §6.6 #5 monolithic wrapper landed).
@@ -1082,8 +1091,8 @@ mod tests {
 
         let reg = registry();
         for ty in cases {
-            let metadata = metadata_by_id(ty)
-                .unwrap_or_else(|| panic!("no metadata for {}", ty.as_str()));
+            let metadata =
+                metadata_by_id(ty).unwrap_or_else(|| panic!("no metadata for {}", ty.as_str()));
             let prim_id = primitive_id_for_effect(ty)
                 .unwrap_or_else(|| panic!("no primitive for {}", ty.as_str()));
             let boxed = reg

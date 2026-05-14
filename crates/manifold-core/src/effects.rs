@@ -1,3 +1,4 @@
+use crate::effect_graph_def::EffectGraphDef;
 use crate::effect_type_id::EffectTypeId;
 use crate::id::{EffectGroupId, EffectId};
 use crate::types::{BeatDivision, DriverWaveform};
@@ -404,6 +405,24 @@ pub struct EffectInstance {
     /// `u32::MAX` on the renderer side forces a first-frame rebuild.
     pub user_param_bindings_version: u32,
 
+    /// Per-instance graph topology override. `None` means "use the
+    /// catalog default graph for this effect type" — every shipping
+    /// fixture today loads with `graph: None` and round-trips
+    /// byte-identically (the field is skipped when serializing).
+    /// `Some(def)` carries a full graph definition that the renderer
+    /// hydrates from instead of calling the catalog `build_*` helper.
+    /// Phase 1 of the per-card-divergence work — see
+    /// `docs/NODE_GRAPH_SYSTEM.md`.
+    pub graph: Option<EffectGraphDef>,
+
+    /// Monotonically bumped each time `graph` is replaced. Renderer
+    /// caches the last seen version per instance, rebuilds the runtime
+    /// `Graph` + plan + render state when it differs. Not serialized;
+    /// resets to 0 on load — the renderer's `u32::MAX` sentinel forces
+    /// a first-frame hydration whenever the loaded instance has a
+    /// `Some(graph)`.
+    pub graph_version: u32,
+
     // Legacy flat param fields (V1.0.0 format).
     pub legacy_param0: Option<f32>,
     pub legacy_param1: Option<f32>,
@@ -790,6 +809,9 @@ impl Serialize for EffectInstance {
         if !self.user_param_bindings.is_empty() {
             field_count += 1;
         }
+        if self.graph.is_some() {
+            field_count += 1;
+        }
         if self.legacy_param0.is_some() {
             field_count += 1;
         }
@@ -840,6 +862,12 @@ impl Serialize for EffectInstance {
         // byte-identically — no new field appears in their JSON.
         if !self.user_param_bindings.is_empty() {
             s.serialize_field("userParamBindings", &self.user_param_bindings)?;
+        }
+        // `graph` is skipped when None — same round-trip-invariance
+        // policy. `None` means "use the catalog default for this
+        // effect type"; only per-instance overrides emit.
+        if let Some(graph) = &self.graph {
+            s.serialize_field("graph", graph)?;
         }
         if let Some(v) = self.legacy_param0 {
             s.serialize_field("param0", &v)?;
@@ -928,6 +956,8 @@ impl<'de> Deserialize<'de> for EffectInstance {
             group_id: Option<EffectGroupId>,
             #[serde(default)]
             user_param_bindings: Option<Vec<UserParamBinding>>,
+            #[serde(default)]
+            graph: Option<EffectGraphDef>,
             #[serde(default, rename = "param0")]
             legacy_param0: Option<f32>,
             #[serde(default, rename = "param1")]
@@ -966,6 +996,8 @@ impl<'de> Deserialize<'de> for EffectInstance {
             group_id: raw.group_id,
             user_param_bindings,
             user_param_bindings_version: 0,
+            graph: raw.graph,
+            graph_version: 0,
             legacy_param0: raw.legacy_param0,
             legacy_param1: raw.legacy_param1,
             legacy_param2: raw.legacy_param2,
@@ -990,6 +1022,8 @@ impl EffectInstance {
             group_id: None,
             user_param_bindings: Vec::new(),
             user_param_bindings_version: 0,
+            graph: None,
+            graph_version: 0,
             legacy_param0: None,
             legacy_param1: None,
             legacy_param2: None,
@@ -1024,10 +1058,7 @@ impl EffectInstance {
 
     /// Read effective (modulated) param value. Unity lines 86-91.
     pub fn get_param(&self, index: usize) -> f32 {
-        self.param_values
-            .get(index)
-            .map(|p| p.value)
-            .unwrap_or(0.0)
+        self.param_values.get(index).map(|p| p.value).unwrap_or(0.0)
     }
 
     /// Read whether a param slot is exposed (visible as a slider on the
@@ -1285,18 +1316,18 @@ impl EffectInstance {
         if self.effect_type == EffectTypeId::WIREFRAME_DEPTH && self.param_values.len() == 14 {
             let old = &self.param_values;
             let migrated = vec![
-                old[0],                    // Amount → Amount
-                old[1],                    // Density → Density
-                old[2],                    // Width → Width
-                old[3],                    // ZScale → ZScale
-                old[4],                    // Smooth → Smooth
-                old[7],                    // Subject → Subject (was index 7)
-                old[8],                    // Blend → Blend (was index 8)
-                old[9],                    // WireRes → WireRes (was index 9)
-                old[10],                   // MeshRate → MeshRate (was index 10)
-                old[11],                   // CVFlow → Flow (was index 11)
-                old[12],                   // Lock → Lock (was index 12)
-                ParamSlot::exposed(0.5),  // EdgeFollow default (Face was discrete toggle, not transferable)
+                old[0],                  // Amount → Amount
+                old[1],                  // Density → Density
+                old[2],                  // Width → Width
+                old[3],                  // ZScale → ZScale
+                old[4],                  // Smooth → Smooth
+                old[7],                  // Subject → Subject (was index 7)
+                old[8],                  // Blend → Blend (was index 8)
+                old[9],                  // WireRes → WireRes (was index 9)
+                old[10],                 // MeshRate → MeshRate (was index 10)
+                old[11],                 // CVFlow → Flow (was index 11)
+                old[12],                 // Lock → Lock (was index 12)
+                ParamSlot::exposed(0.5), // EdgeFollow default (Face was discrete toggle, not transferable)
             ];
             self.param_values = migrated;
             // Migrate base values too
@@ -2266,8 +2297,7 @@ mod tests {
         // legacy `paramIndex` field is never written (skipped via
         // custom Deserialize / derived Serialize on the canonical
         // field set).
-        let driver =
-            ParameterDriver::new("amount", BeatDivision::Half, DriverWaveform::Triangle);
+        let driver = ParameterDriver::new("amount", BeatDivision::Half, DriverWaveform::Triangle);
         let json = serde_json::to_string(&driver).unwrap();
         assert!(json.contains("\"paramId\":\"amount\""));
         assert!(
@@ -2423,6 +2453,8 @@ mod tests {
             group_id: None,
             user_param_bindings: Vec::new(),
             user_param_bindings_version: 0,
+            graph: None,
+            graph_version: 0,
             legacy_param0: None,
             legacy_param1: None,
             legacy_param2: None,
@@ -2447,8 +2479,7 @@ mod tests {
         assert_eq!(pv.value, 0.7);
         assert!(pv.exposed);
         // Object form (V1.3 canonical).
-        let pv: ParamSlot =
-            serde_json::from_str(r#"{"value": 0.42, "exposed": false}"#).unwrap();
+        let pv: ParamSlot = serde_json::from_str(r#"{"value": 0.42, "exposed": false}"#).unwrap();
         assert_eq!(pv.value, 0.42);
         assert!(!pv.exposed);
         // Object with missing exposed defaults to true.
@@ -2481,6 +2512,8 @@ mod tests {
             group_id: None,
             user_param_bindings: Vec::new(),
             user_param_bindings_version: 0,
+            graph: None,
+            graph_version: 0,
             legacy_param0: None,
             legacy_param1: None,
             legacy_param2: None,
@@ -2622,11 +2655,7 @@ mod tests {
             "uv_transform",
             "translate",
         ));
-        fx.append_user_binding(sample_user_binding(
-            "user.mix.amount.1",
-            "mix",
-            "amount",
-        ));
+        fx.append_user_binding(sample_user_binding("user.mix.amount.1", "mix", "amount"));
         // After append, param_values should be [0.7, 0.25, 0.25].
         assert_eq!(
             fx.param_values,
@@ -2649,7 +2678,10 @@ mod tests {
 
         let back: EffectInstance = serde_json::from_str(&json).unwrap();
         assert_eq!(back.user_param_bindings.len(), 2);
-        assert_eq!(back.user_param_bindings[0].id, "user.uv_transform.translate.1");
+        assert_eq!(
+            back.user_param_bindings[0].id,
+            "user.uv_transform.translate.1"
+        );
         assert_eq!(back.user_param_bindings[1].id, "user.mix.amount.1");
         assert_eq!(
             back.param_values,
@@ -2734,8 +2766,10 @@ mod tests {
         // per-instance — same EffectInstance), and align runs. The
         // user-binding tail values must survive.
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
-        fx.user_param_bindings.push(sample_user_binding("user.a.b.1", "a", "b"));
-        fx.user_param_bindings.push(sample_user_binding("user.c.d.1", "c", "d"));
+        fx.user_param_bindings
+            .push(sample_user_binding("user.a.b.1", "a", "b"));
+        fx.user_param_bindings
+            .push(sample_user_binding("user.c.d.1", "c", "d"));
         // Hand-build param_values to mimic what comes out of deserialize.
         fx.param_values = vec![
             ParamSlot::exposed(0.7),
@@ -2760,7 +2794,8 @@ mod tests {
         // (e.g., the binding was added in memory but param_values
         // hasn't grown yet). align should pad with binding defaults.
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
-        fx.user_param_bindings.push(sample_user_binding("user.a.b.1", "a", "b"));
+        fx.user_param_bindings
+            .push(sample_user_binding("user.a.b.1", "a", "b"));
         fx.param_values = vec![ParamSlot::exposed(0.7)]; // missing tail
         fx.align_to_definition();
         assert_eq!(
@@ -2774,7 +2809,8 @@ mod tests {
         // param_values has more user-tail slots than user bindings —
         // junk data from somewhere. align trims to the actual binding count.
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
-        fx.user_param_bindings.push(sample_user_binding("user.a.b.1", "a", "b"));
+        fx.user_param_bindings
+            .push(sample_user_binding("user.a.b.1", "a", "b"));
         fx.param_values = vec![
             ParamSlot::exposed(0.7),
             ParamSlot::exposed(0.42),
@@ -2859,5 +2895,92 @@ mod tests {
         assert!((fx.param_values[0].value - 0.7).abs() < f32::EPSILON);
         assert!((fx.param_values[1].value - 0.3).abs() < f32::EPSILON);
         assert!((fx.param_values[2].value - 0.9).abs() < f32::EPSILON);
+    }
+
+    // ─── Per-instance graph override (Phase 1) ──────────────────
+
+    #[test]
+    fn new_effect_instance_has_no_graph_override() {
+        let fx = EffectInstance::new(EffectTypeId::new("Mirror"));
+        assert!(fx.graph.is_none());
+        assert_eq!(fx.graph_version, 0);
+    }
+
+    #[test]
+    fn graph_field_skipped_when_none() {
+        // Existing fixtures (Liveschool, Burn, WAYPOINTS) must
+        // continue to round-trip byte-identically — the new field
+        // must not appear in their JSON unless explicitly set.
+        let fx = EffectInstance::new(EffectTypeId::new("Mirror"));
+        let json = serde_json::to_string(&fx).unwrap();
+        assert!(
+            !json.contains("\"graph\""),
+            "graph field must be skipped when None — got: {json}"
+        );
+    }
+
+    #[test]
+    fn graph_field_round_trips_when_present() {
+        use crate::effect_graph_def::{
+            EFFECT_GRAPH_VERSION, EffectGraphDef, EffectGraphNode, EffectGraphWire,
+            SerializedParamValue,
+        };
+
+        let mut params = std::collections::BTreeMap::new();
+        params.insert("mode".to_string(), SerializedParamValue::Enum { value: 7 });
+
+        let def = EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            nodes: vec![
+                EffectGraphNode {
+                    id: 0,
+                    type_id: "system.source".to_string(),
+                    handle: Some("source".to_string()),
+                    params: Default::default(),
+                    editor_pos: None,
+                },
+                EffectGraphNode {
+                    id: 1,
+                    type_id: "node.transform".to_string(),
+                    handle: Some("uv_transform".to_string()),
+                    params,
+                    editor_pos: Some((100.0, 200.0)),
+                },
+            ],
+            wires: vec![EffectGraphWire {
+                from_node: 0,
+                from_port: "out".to_string(),
+                to_node: 1,
+                to_port: "source".to_string(),
+            }],
+        };
+
+        let mut fx = EffectInstance::new(EffectTypeId::new("Mirror"));
+        fx.graph = Some(def.clone());
+
+        let json = serde_json::to_string(&fx).unwrap();
+        assert!(json.contains("\"graph\""));
+
+        let back: EffectInstance = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.graph, Some(def));
+        // `graph_version` is not serialized — it resets on load.
+        assert_eq!(back.graph_version, 0);
+    }
+
+    #[test]
+    fn legacy_fixture_without_graph_field_still_loads() {
+        // Pre-Phase-1 fixtures have no `graph` field at all. Loading
+        // them must succeed with `graph: None`.
+        let json = r#"{
+            "id": "abc12345",
+            "effectType": "Mirror",
+            "enabled": true,
+            "collapsed": false,
+            "paramValues": [{"value": 1.0, "exposed": true}, {"value": 0.0, "exposed": true}]
+        }"#;
+        let fx: EffectInstance = serde_json::from_str(json).unwrap();
+        assert!(fx.graph.is_none());
     }
 }

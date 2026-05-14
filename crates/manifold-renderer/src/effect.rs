@@ -104,5 +104,17 @@ pub trait PostProcessEffect: Send {
     fn graph_snapshot(&self) -> Option<crate::node_graph::GraphSnapshot> {
         None
     }
-}
 
+    /// Replace this effect's internal graph with one materialized from
+    /// `def`. Default: no-op — non-graph effects ignore the call.
+    /// Graph-backed effects override to rebuild their `Graph`, plan,
+    /// resource lookups, and composite handle from the def, then
+    /// invalidate cached render state so the next frame re-allocates
+    /// from scratch.
+    ///
+    /// Called by the chain builder when `EffectInstance.graph` is
+    /// `Some(def)` — i.e., the user has overridden the catalog default
+    /// topology for this instance. See `docs/NODE_GRAPH_SYSTEM.md`
+    /// Phase 1 for the per-card-divergence model.
+    fn hydrate_graph(&mut self, _def: &manifold_core::effect_graph_def::EffectGraphDef) {}
+}

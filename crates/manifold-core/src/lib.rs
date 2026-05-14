@@ -5,6 +5,7 @@ pub mod clip;
 pub mod color;
 pub mod effect_category_registry;
 pub mod effect_definition_registry;
+pub mod effect_graph_def;
 pub mod effect_registration;
 pub mod effect_type_id;
 pub mod effect_type_registry;

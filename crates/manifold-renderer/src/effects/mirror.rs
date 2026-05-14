@@ -30,11 +30,11 @@ use std::borrow::Cow;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::composites::{build_mirror, CompositeHandle};
+use crate::node_graph::composites::{CompositeHandle, MIRROR_TYPE_ID, build_mirror};
 use crate::node_graph::{
-    apply_param_bindings, binding_value, compile, user_binding_to_runtime, ExecutionPlan, Executor,
-    FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId, ParamBinding, ParamConvert,
-    ParamTarget, PortType, ResourceId, Slot, Source, UserParamBindingRuntime,
+    ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId,
+    ParamBinding, ParamConvert, ParamTarget, PortType, ResourceId, Slot, Source,
+    UserParamBindingRuntime, apply_param_bindings, binding_value, compile, user_binding_to_runtime,
 };
 use crate::render_target::RenderTarget;
 
@@ -93,11 +93,22 @@ struct RenderState {
 
 impl MirrorFX {
     pub fn new(_device: &GpuDevice) -> Self {
+        Self::with_default_graph()
+    }
+
+    /// Internal constructor — builds the catalog graph + handle and
+    /// returns the assembled FX. Doesn't touch the GPU, so tests can
+    /// call this directly without needing a `GpuDevice`.
+    fn with_default_graph() -> Self {
         let mut graph = Graph::new();
-        let src = graph.add_node(Box::new(Source::new()));
+        // Name Source and FinalOutput so they survive a save → load
+        // round-trip with stable identities. Without handles, the
+        // hydration path can't look them up after `into_graph` mints
+        // fresh ids — see `hydrate_graph` below.
+        let src = graph.add_node_named("source", Box::new(Source::new()));
         let handle = build_mirror(&mut graph, (src, "out"))
             .expect("build_mirror should never fail with a valid source");
-        let final_out = graph.add_node(Box::new(FinalOutput::new()));
+        let final_out = graph.add_node_named("final_output", Box::new(FinalOutput::new()));
         graph
             .connect(handle.output(), (final_out, "in"))
             .expect("wire Mix.out → FinalOutput.in");
@@ -236,6 +247,89 @@ impl PostProcessEffect for MirrorFX {
         Some(crate::node_graph::GraphSnapshot::from_graph(&self.graph))
     }
 
+    /// Replace this Mirror's catalog graph with one materialized from
+    /// `def`. Phase 1 of per-card-divergence.
+    ///
+    /// Requires the def to preserve the handle names introduced by
+    /// `build_mirror` + `MirrorFX::new` (`"source"`, `"uv_transform"`,
+    /// `"mix"`, `"final_output"`). Missing handles → log + keep the
+    /// existing catalog graph (no partial swap).
+    fn hydrate_graph(&mut self, def: &manifold_core::effect_graph_def::EffectGraphDef) {
+        use crate::node_graph::{EffectGraphDefExt, PrimitiveRegistry};
+
+        let registry = PrimitiveRegistry::with_builtin();
+        let new_graph = match def.clone().into_graph(&registry) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!(
+                    "[manifold-renderer] MirrorFX::hydrate_graph: \
+                     failed to materialize per-instance graph: {e}. \
+                     Falling back to catalog default."
+                );
+                return;
+            }
+        };
+
+        // Required handles for routing. Any missing → bail, keep the
+        // existing graph.
+        let Some(uv_id) = new_graph.node_id_by_handle("uv_transform") else {
+            eprintln!(
+                "[manifold-renderer] MirrorFX::hydrate_graph: \
+                 hydrated graph missing 'uv_transform' handle. \
+                 Falling back to catalog default."
+            );
+            return;
+        };
+        let Some(mix_id) = new_graph.node_id_by_handle("mix") else {
+            eprintln!(
+                "[manifold-renderer] MirrorFX::hydrate_graph: \
+                 hydrated graph missing 'mix' handle. \
+                 Falling back to catalog default."
+            );
+            return;
+        };
+        let Some(src_id) = new_graph.node_id_by_handle("source") else {
+            eprintln!(
+                "[manifold-renderer] MirrorFX::hydrate_graph: \
+                 hydrated graph missing 'source' handle. \
+                 Falling back to catalog default."
+            );
+            return;
+        };
+
+        let new_plan = match compile(&new_graph) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!(
+                    "[manifold-renderer] MirrorFX::hydrate_graph: \
+                     hydrated graph failed to compile: {e:?}. \
+                     Falling back to catalog default."
+                );
+                return;
+            }
+        };
+
+        let new_source = output_resource(&new_plan, src_id, "out");
+        let new_output = output_resource(&new_plan, mix_id, "out");
+
+        // Re-derive composite routing. Outer params route the same way
+        // as `build_mirror` (amount → mix.amount, mode → uv.mode).
+        let mut new_handle = CompositeHandle::new(MIRROR_TYPE_ID, (mix_id, "out"));
+        new_handle.add_inner(uv_id).add_inner(mix_id);
+        new_handle.expose_param("amount", mix_id, "amount");
+        new_handle.expose_param("mode", uv_id, "mode");
+
+        self.graph = new_graph;
+        self.plan = new_plan;
+        self.handle = new_handle;
+        self.source_resource = new_source;
+        self.output_resource = new_output;
+        // Force RenderState to be rebuilt on the next apply — the
+        // ResourceIds in the new plan won't match the old state's
+        // pre-bound textures.
+        self.state = None;
+    }
+
     fn apply(
         &mut self,
         gpu: &mut GpuEncoder,
@@ -316,5 +410,83 @@ impl PostProcessEffect for MirrorFX {
             .texture_2d(state.output_slot)
             .expect("output slot pre-bound");
         gpu.copy_texture_to_texture(output_tex, target, ctx.width, ctx.height);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::node_graph::EffectGraphDefExt;
+    use manifold_core::effect_graph_def::EffectGraphDef;
+
+    /// Round-trip the catalog graph through `from_graph` + `into_graph`
+    /// via `hydrate_graph` — node count and named handles must survive.
+    #[test]
+    fn hydrate_graph_preserves_topology_on_round_trip() {
+        let mut fx = MirrorFX::with_default_graph();
+        let original_node_count = fx.graph.node_count();
+        let original_wire_count = fx.graph.wires().len();
+
+        // Serialize the catalog graph and feed it back in.
+        let def = EffectGraphDef::from_graph(&fx.graph);
+        fx.hydrate_graph(&def);
+
+        assert_eq!(fx.graph.node_count(), original_node_count);
+        assert_eq!(fx.graph.wires().len(), original_wire_count);
+        // All four required handles survived.
+        assert!(fx.graph.node_id_by_handle("source").is_some());
+        assert!(fx.graph.node_id_by_handle("uv_transform").is_some());
+        assert!(fx.graph.node_id_by_handle("mix").is_some());
+        assert!(fx.graph.node_id_by_handle("final_output").is_some());
+        // State is invalidated so the next apply rebuilds.
+        assert!(fx.state.is_none());
+    }
+
+    /// A def missing the `uv_transform` handle should leave the FX
+    /// unchanged (fall back to catalog default, not partially-swap).
+    #[test]
+    fn hydrate_graph_falls_back_when_required_handle_missing() {
+        let mut fx = MirrorFX::with_default_graph();
+        let original_node_count = fx.graph.node_count();
+
+        // Empty def — has no nodes at all.
+        let bad_def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            nodes: Vec::new(),
+            wires: Vec::new(),
+        };
+        fx.hydrate_graph(&bad_def);
+
+        // Original graph still intact.
+        assert_eq!(fx.graph.node_count(), original_node_count);
+        assert!(fx.graph.node_id_by_handle("uv_transform").is_some());
+    }
+
+    /// A def whose nodes reference an unknown type id should fall back
+    /// to catalog default. Exercises the `LoadError::UnknownTypeId`
+    /// branch inside `hydrate_graph`.
+    #[test]
+    fn hydrate_graph_falls_back_on_unknown_type_id() {
+        let mut fx = MirrorFX::with_default_graph();
+        let original_node_count = fx.graph.node_count();
+
+        let bad_def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            nodes: vec![manifold_core::effect_graph_def::EffectGraphNode {
+                id: 0,
+                type_id: "node.does_not_exist".to_string(),
+                handle: Some("uv_transform".to_string()),
+                params: Default::default(),
+                editor_pos: None,
+            }],
+            wires: Vec::new(),
+        };
+        fx.hydrate_graph(&bad_def);
+
+        assert_eq!(fx.graph.node_count(), original_node_count);
     }
 }
