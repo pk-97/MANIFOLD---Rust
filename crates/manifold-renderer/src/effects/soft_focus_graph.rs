@@ -72,6 +72,9 @@ pub struct SoftFocusGraphFX {
     /// `EffectInstance.user_param_bindings_version` bumps.
     user_bindings: Vec<UserParamBindingRuntime>,
     cached_user_version: u32,
+    /// See [`MirrorFX::last_applied`]. Skips outer→inner writes when
+    /// the outer slot hasn't moved.
+    last_applied: crate::node_graph::LastAppliedCache,
     source_resource: ResourceId,
     output_resource: ResourceId,
     state: Option<RenderState>,
@@ -128,6 +131,7 @@ impl SoftFocusGraphFX {
             bindings,
             user_bindings: Vec::new(),
             cached_user_version: u32::MAX,
+            last_applied: crate::node_graph::LastAppliedCache::new(),
             source_resource,
             output_resource,
             state: None,
@@ -289,6 +293,7 @@ impl PostProcessEffect for SoftFocusGraphFX {
             &mut self.graph,
             Some(&self.handle),
             &fx.param_values,
+            &mut self.last_applied,
         );
 
         // 5. Run the graph.

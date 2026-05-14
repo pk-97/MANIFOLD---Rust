@@ -74,6 +74,9 @@ pub struct StylizedFeedbackFX {
     /// `EffectInstance.user_param_bindings_version` bumps.
     user_bindings: Vec<UserParamBindingRuntime>,
     cached_user_version: u32,
+    /// See [`MirrorFX::last_applied`]. Skips outer→inner writes when
+    /// the outer slot hasn't moved.
+    last_applied: crate::node_graph::LastAppliedCache,
     source_resource: ResourceId,
     output_resource: ResourceId,
     /// Per-owner persistent state lives here. Each entry's key is
@@ -171,6 +174,7 @@ impl StylizedFeedbackFX {
             bindings,
             user_bindings: Vec::new(),
             cached_user_version: u32::MAX,
+            last_applied: crate::node_graph::LastAppliedCache::new(),
             source_resource,
             output_resource,
             state_store: StateStore::new(),
@@ -315,6 +319,7 @@ impl PostProcessEffect for StylizedFeedbackFX {
             &mut self.graph,
             None,
             &fx.param_values,
+            &mut self.last_applied,
         );
 
         // 4. Install `source` + `target` as borrowed textures on the

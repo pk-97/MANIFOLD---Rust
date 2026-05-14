@@ -276,12 +276,28 @@ pub fn apply_param_bindings(
     graph: &mut Graph,
     handle: Option<&CompositeHandle>,
     values: &[ParamSlot],
+    last_applied: &mut LastAppliedCache,
 ) {
+    last_applied
+        .static_outer
+        .resize(static_bindings.len(), None);
+    last_applied.user_outer.resize(user_bindings.len(), None);
+
     for (i, binding) in static_bindings.iter().enumerate() {
         let value = values
             .get(i)
             .map(|p| p.value)
             .unwrap_or(binding.spec.default_value);
+        // Skip the write when the outer slot hasn't changed since
+        // the last apply. This is what makes per-card edits to
+        // outer-routed inner params survive: when the outer slider
+        // is at rest, `apply_param_bindings` doesn't overwrite the
+        // inner. When the slider moves (or is driven by an
+        // envelope / driver / Ableton mapping), the value differs
+        // frame-to-frame and the write fires as before.
+        if last_applied.static_outer[i] == Some(value) {
+            continue;
+        }
         if let Err(err) = binding.apply(graph, handle, value) {
             eprintln!(
                 "[manifold-renderer] ParamBinding apply failed: id={} value={} err={:?} — \
@@ -289,7 +305,9 @@ pub fn apply_param_bindings(
                  changed without rebuilding the bindings list.",
                 binding.id, value, err,
             );
+            continue;
         }
+        last_applied.static_outer[i] = Some(value);
     }
     let n = static_bindings.len();
     for (j, binding) in user_bindings.iter().enumerate() {
@@ -297,13 +315,55 @@ pub fn apply_param_bindings(
             .get(n + j)
             .map(|p| p.value)
             .unwrap_or(binding.default_value);
+        if last_applied.user_outer[j] == Some(value) {
+            continue;
+        }
         if let Err(err) = binding.apply(graph, value) {
             eprintln!(
                 "[manifold-renderer] UserParamBinding apply failed: id={} value={} err={:?} — \
                  skipping this user binding for the current frame.",
                 binding.id, value, err,
             );
+            continue;
         }
+        last_applied.user_outer[j] = Some(value);
+    }
+}
+
+/// Per-effect cache of "last outer value applied" parallel to a
+/// binding list. Lives on the effect instance (not on the bindings)
+/// because `ParamBinding` is `Clone`able / sharable between catalog
+/// constructors and tests — adding mutable cache state would force
+/// every caller to wrap it in an interior-mutability cell.
+///
+/// **Why this exists.** The binding apply path runs every frame to
+/// power drivers / envelopes / Ableton mappings. Without skip-on-
+/// unchanged, that turns inner-node param edits into a 60Hz tug-of-
+/// war the outer always wins. With this cache, the binding writes
+/// only when the outer slot's value actually changes — inner edits
+/// survive when the outer is at rest, and the outer reclaims control
+/// the moment it moves.
+///
+/// Both lists auto-grow on first `apply_param_bindings`; constructors
+/// can leave them empty.
+#[derive(Debug, Clone, Default)]
+pub struct LastAppliedCache {
+    pub static_outer: Vec<Option<f32>>,
+    pub user_outer: Vec<Option<f32>>,
+}
+
+impl LastAppliedCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Reset every tracked outer value so the next apply behaves as
+    /// if no value has ever been written. Called after a topology
+    /// change that may have moved bindings around (e.g.
+    /// [`MirrorFX::hydrate_graph`] rebuilds the bindings list).
+    pub fn clear(&mut self) {
+        self.static_outer.clear();
+        self.user_outer.clear();
     }
 }
 
@@ -529,7 +589,14 @@ mod tests {
         ];
 
         // Provide only one value — second falls back to spec default 0.95.
-        apply_param_bindings(&bindings, &[], &mut g, None, &[ParamSlot::exposed(0.5)]);
+        apply_param_bindings(
+            &bindings,
+            &[],
+            &mut g,
+            None,
+            &[ParamSlot::exposed(0.5)],
+            &mut LastAppliedCache::new(),
+        );
         let inst = g.get_node(feedback).unwrap();
         assert_eq!(inst.params.get("amount"), Some(&ParamValue::Float(0.5)));
         assert_eq!(inst.params.get("zoom"), Some(&ParamValue::Float(0.95)));
@@ -559,6 +626,7 @@ mod tests {
             &mut g,
             None,
             &[ParamSlot::exposed(0.5), ParamSlot::exposed(1.05)],
+            &mut LastAppliedCache::new(),
         );
         let inst = g.get_node(feedback).unwrap();
         assert_eq!(inst.params.get("amount"), Some(&ParamValue::Float(0.5)));
@@ -588,6 +656,7 @@ mod tests {
             &mut g,
             None,
             &[ParamSlot::exposed(0.5)],
+            &mut LastAppliedCache::new(),
         );
         let inst = g.get_node(feedback).unwrap();
         assert_eq!(inst.params.get("zoom"), Some(&ParamValue::Float(0.97)));
@@ -662,6 +731,106 @@ mod tests {
             binding_value(&static_bindings, user_slice, &values, "nope"),
             None
         );
+    }
+
+    /// First apply writes; second apply with the same outer value
+    /// skips. Validates the per-frame no-op invariant that lets inner
+    /// edits survive against an unchanging outer routing.
+    #[test]
+    fn apply_param_bindings_skips_when_outer_value_unchanged() {
+        let mut g = Graph::new();
+        let feedback = g.add_node(Box::new(Feedback::new()));
+        let bindings = vec![feedback_amount_binding(feedback)];
+        let values = [ParamSlot::exposed(0.5)];
+        let mut cache = LastAppliedCache::new();
+
+        // 1st apply: write should land — amount goes from 0.0 default
+        // → 0.5.
+        apply_param_bindings(&bindings, &[], &mut g, None, &values, &mut cache);
+        assert_eq!(
+            g.get_node(feedback).unwrap().params.get("amount"),
+            Some(&ParamValue::Float(0.5)),
+        );
+        assert_eq!(cache.static_outer[0], Some(0.5));
+
+        // Simulate the inspector editing the inner directly while
+        // the outer slot is at rest.
+        g.set_param(feedback, "amount", ParamValue::Float(0.9))
+            .unwrap();
+
+        // 2nd apply with the same outer value: skip — inner edit
+        // must survive.
+        apply_param_bindings(&bindings, &[], &mut g, None, &values, &mut cache);
+        assert_eq!(
+            g.get_node(feedback).unwrap().params.get("amount"),
+            Some(&ParamValue::Float(0.9)),
+            "skip-on-unchanged must not overwrite the inner edit",
+        );
+    }
+
+    /// When the outer slot changes (drag, envelope, driver), the
+    /// binding writes again and overwrites any inner edit. Confirms
+    /// the outer reclaims control as soon as it moves.
+    #[test]
+    fn apply_param_bindings_writes_when_outer_value_changes() {
+        let mut g = Graph::new();
+        let feedback = g.add_node(Box::new(Feedback::new()));
+        let bindings = vec![feedback_amount_binding(feedback)];
+        let mut cache = LastAppliedCache::new();
+
+        apply_param_bindings(
+            &bindings,
+            &[],
+            &mut g,
+            None,
+            &[ParamSlot::exposed(0.5)],
+            &mut cache,
+        );
+        // Inner edit.
+        g.set_param(feedback, "amount", ParamValue::Float(0.9))
+            .unwrap();
+        // Outer slot moves: 0.5 → 0.25. Binding writes.
+        apply_param_bindings(
+            &bindings,
+            &[],
+            &mut g,
+            None,
+            &[ParamSlot::exposed(0.25)],
+            &mut cache,
+        );
+        assert_eq!(
+            g.get_node(feedback).unwrap().params.get("amount"),
+            Some(&ParamValue::Float(0.25)),
+            "outer change must overwrite the inner edit",
+        );
+        assert_eq!(cache.static_outer[0], Some(0.25));
+    }
+
+    /// Per-frame outer animation (envelope / driver) writes every
+    /// frame the value advances. Confirms the cache doesn't trap
+    /// active automation.
+    #[test]
+    fn apply_param_bindings_keeps_writing_under_continuous_automation() {
+        let mut g = Graph::new();
+        let feedback = g.add_node(Box::new(Feedback::new()));
+        let bindings = vec![feedback_amount_binding(feedback)];
+        let mut cache = LastAppliedCache::new();
+
+        for (i, v) in [0.10_f32, 0.20, 0.30, 0.40].iter().enumerate() {
+            apply_param_bindings(
+                &bindings,
+                &[],
+                &mut g,
+                None,
+                &[ParamSlot::exposed(*v)],
+                &mut cache,
+            );
+            assert_eq!(
+                g.get_node(feedback).unwrap().params.get("amount"),
+                Some(&ParamValue::Float(*v)),
+                "frame {i}: animated outer must overwrite inner",
+            );
+        }
     }
 
     #[test]

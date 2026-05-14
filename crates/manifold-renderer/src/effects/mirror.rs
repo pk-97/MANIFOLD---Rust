@@ -79,6 +79,11 @@ pub struct MirrorFX {
     /// rebuild on the very first apply.
     user_bindings: Vec<UserParamBindingRuntime>,
     cached_user_version: u32,
+    /// Outer-slot values written on the previous frame. The binding
+    /// apply path uses this to skip writes when the outer hasn't
+    /// moved, which is what lets per-card inner-param edits survive
+    /// frame-to-frame against the outer routing.
+    last_applied: crate::node_graph::LastAppliedCache,
     source_resource: ResourceId,
     output_resource: ResourceId,
     state: Option<RenderState>,
@@ -159,6 +164,7 @@ impl MirrorFX {
             bindings,
             user_bindings: Vec::new(),
             cached_user_version: u32::MAX,
+            last_applied: crate::node_graph::LastAppliedCache::new(),
             source_resource,
             output_resource,
             state: None,
@@ -431,6 +437,7 @@ impl PostProcessEffect for MirrorFX {
             &mut self.graph,
             Some(&self.handle),
             &fx.param_values,
+            &mut self.last_applied,
         );
 
         let frame_time = FrameTime {

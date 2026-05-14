@@ -443,16 +443,17 @@ impl GraphEditorPanel {
                 .exposed_keys
                 .contains(&(handle.clone(), ps.name.clone()));
             // Outer-driven: an outer effect-card slider routes into
-            // this inner param every frame, so any edit here would
-            // be stomped on the next render. The row stays visible
-            // but the value cell becomes a non-interactive label
-            // showing "Driven by '<outer>'" so the user can see why
-            // the inline editor is disabled.
+            // this inner param every frame. The row stays editable
+            // — the binding apply path skips when the outer slot is
+            // unchanged, so inline edits survive — but a "↳ <outer>"
+            // hint after the label tells the user *which* outer
+            // slider will reclaim control if they move it (or if it
+            // has automation that does so each frame).
             let outer_driver = self
                 .outer_driven
                 .get(&(handle.clone(), ps.name.clone()))
                 .cloned();
-            let editable = supported && outer_driver.is_none();
+            let editable = supported;
 
             let cb_x = viewport.x + PADDING;
             let cb_y = y + (ROW_H - CHECKBOX_H) * 0.5;
@@ -474,13 +475,21 @@ impl GraphEditorPanel {
             let row_remaining = (viewport.x + viewport.width - PADDING - label_x).max(10.0);
             let value_w = (row_remaining * 0.45).max(60.0);
             let label_w = (row_remaining - value_w).max(10.0);
+            // Label + optional "↳ Outer" hint inline so the user can
+            // see at a glance which outer slider will overwrite this
+            // value if it moves.
+            let label_str = if let Some(outer) = outer_driver.as_ref() {
+                format!("{}  ↳ {outer}", ps.label)
+            } else {
+                ps.label.clone()
+            };
             tree.add_label(
                 bg_id,
                 label_x,
                 y,
                 label_w,
                 ROW_H,
-                &ps.label,
+                &label_str,
                 UIStyle {
                     text_color: if supported {
                         color::TEXT_WHITE_C32
@@ -492,12 +501,12 @@ impl GraphEditorPanel {
                     ..UIStyle::default()
                 },
             );
-            // Current-value cell. Three rendering modes:
-            //   - editable          → button (Click/Drag flow)
-            //   - outer-driven      → label showing "↳ Outer" badge
-            //                         + current value (read-only)
-            //   - unsupported kind  → plain dimmed label (no edits
-            //                         possible in V1)
+            // Current-value cell. Editable kinds render as an
+            // interactive button (Click/Drag → SetGraphNodeParam);
+            // unsupported kinds (Vec/Color) render as a dimmed label
+            // since V1 has no editor for them. Outer-driven status
+            // doesn't affect editability anymore — the binding apply
+            // path skips when the outer slot is unchanged.
             let value_str = format_inner_param_value(ps);
             let value_x = label_x + label_w;
             let value_cell_node_id = if editable {
@@ -521,27 +530,6 @@ impl GraphEditorPanel {
                     &value_str,
                 );
                 Some(id)
-            } else if let Some(outer) = outer_driver.as_ref() {
-                // Read-only — show both the live value and the outer
-                // slider driving it. Truncates if the label is long
-                // (rendered text gets ellipsized at the cell edge by
-                // the tree, so no manual trimming needed).
-                let driven_str = format!("↳ {outer} = {value_str}");
-                tree.add_label(
-                    bg_id,
-                    value_x,
-                    y,
-                    value_w,
-                    ROW_H,
-                    &driven_str,
-                    UIStyle {
-                        text_color: color::TEXT_DIMMED_C32,
-                        font_size: FONT_SIZE,
-                        text_align: TextAlign::Right,
-                        ..UIStyle::default()
-                    },
-                );
-                None
             } else {
                 tree.add_label(
                     bg_id,
@@ -1341,10 +1329,11 @@ mod tests {
     }
 
     #[test]
-    fn outer_driven_inner_row_does_not_emit_set_graph_node_param() {
-        // Mark `mode` as outer-driven; clicking its row must NOT
-        // produce a SetGraphNodeParam (the row's value cell is
-        // rendered as a non-interactive label).
+    fn outer_driven_row_stays_editable_so_inner_edits_emit_set_graph_node_param() {
+        // The bidirectional model: even when an outer slider drives
+        // this inner param every frame, the inner cell is still
+        // editable. The renderer's binding apply skips writes when
+        // the outer slot hasn't moved, so inline edits survive.
         let mut tree = UITree::new();
         let mut panel = GraphEditorPanel::new();
         let node = snap_node_with_mixed_kinds();
@@ -1356,49 +1345,27 @@ mod tests {
         panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new(), driven);
         panel.build(&mut tree, viewport());
 
-        let mode_row = panel
+        let mode_cell = panel
             .rows
             .iter()
-            .find(|r| matches!(r, RowState::InnerNode { inner_param, .. } if inner_param == "mode"))
-            .expect("mode row still tracked for checkbox handling");
-        // The row exists (for its checkbox), but its value cell is
-        // disabled — `value_cell_node_id` is None.
-        match mode_row {
-            RowState::InnerNode {
-                value_cell_node_id, ..
-            } => assert!(
-                value_cell_node_id.is_none(),
-                "outer-driven row must not register a clickable value cell",
-            ),
-            _ => unreachable!(),
-        }
-    }
+            .find_map(|r| match r {
+                RowState::InnerNode {
+                    value_cell_node_id: Some(v),
+                    inner_param,
+                    ..
+                } if inner_param == "mode" => Some(*v),
+                _ => None,
+            })
+            .expect("outer-driven row remains editable");
 
-    #[test]
-    fn editable_rows_remain_when_outer_driven_set_is_unrelated() {
-        // The "scale" param is not outer-driven, so its value cell
-        // is still editable even when another row on the same node
-        // is.
-        let mut tree = UITree::new();
-        let mut panel = GraphEditorPanel::new();
-        let node = snap_node_with_mixed_kinds();
-        let mut driven = HashMap::new();
-        driven.insert(
-            ("uv_transform".to_string(), "mode".to_string()),
-            "Mode".to_string(),
-        );
-        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new(), driven);
-        panel.build(&mut tree, viewport());
-
-        let scale_cell = panel.rows.iter().find_map(|r| match r {
-            RowState::InnerNode {
-                value_cell_node_id: Some(v),
-                inner_param,
-                ..
-            } if inner_param == "scale" => Some(*v),
-            _ => None,
-        });
-        assert!(scale_cell.is_some(), "scale row remains editable");
+        // Clicking still emits a SetGraphNodeParam — the user can
+        // override the outer.
+        let actions = panel.handle_click(mode_cell);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(
+            &actions[0],
+            PanelAction::SetGraphNodeParam { .. }
+        ));
     }
 
     #[test]
