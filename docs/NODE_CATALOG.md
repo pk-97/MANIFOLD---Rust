@@ -77,11 +77,11 @@ Implementation kinds:
 | 14 | **Invert** | `node.invert` | shader | Invert RGB channels |
 | 15 | **Kaleidoscope** | `node.kaleidoscope` | shader | Radial mirror folding into N segments |
 | 16 | **Mirror** | `node.mirror` | preset | Horizontal / vertical mirror (one Transform atom) |
-| 17 | **Quad Mirror** | `node.quad_mirror` | preset | Four-way mirror fold (one Transform atom, XY fold) |
+| 17 | **Quad Mirror** | `node.quad_mirror` | shader | Four-way mirror fold with fill-quadrant zoom + additive crossfade |
 | 18 | **Soft Focus** | `node.soft_focus` | preset | Dreamy Gaussian-blurred look (one Gaussian Blur atom) |
 | 19 | **Strobe** | `node.strobe` | shader | Beat-synced flicker / flash / gain pulse |
 | 20 | **Stylized Feedback** | `node.stylized_feedback` | preset | Trailing echo / motion smear (one Feedback atom) |
-| 21 | **Transform** | `node.transform_effect` | preset | Translate / scale / rotate (one Transform atom with `mode = Identity`) |
+| 21 | **Transform** | `node.transform_effect` | shader | Translate / scale / rotate with aspect-correct rotation and hard-OOB clipping (legacy semantics; the Transform atom does plain UV-space math) |
 | 22 | **Voronoi Prism** | `node.voronoi_prism` | shader | Voronoi-cell shatter / pop on beat |
 | 23 | **Watercolor** | `node.watercolor` | composite | Painterly bleed (flow map + displace + blur + edge + feedback) |
 | 24 | **Wireframe Depth** | `node.wireframe_depth` | monolith | Wireframe overlay from DNN depth estimation (15 passes + 3 workers) |
@@ -103,13 +103,11 @@ Implementation kinds:
 
 ### Why thin presets exist
 
-Five effects (Mirror, Quad Mirror, Transform, Soft Focus, Stylized Feedback) are conceptually just an atom with curated defaults. They are **alias presets** — separate palette entries that instantiate the same atom with different default params. Implementation is one shader; palette is five entries.
+Three effects (Mirror, Soft Focus, Stylized Feedback) are genuinely just an atom with curated defaults. They are **alias presets** — separate palette entries that instantiate the same atom with different default params. Implementation is one shader; palette is three entries.
 
 | Preset effect | Atom | Curated defaults |
 |---|---|---|
 | Mirror | `node.transform` | `mode = FoldX` (matches legacy) |
-| Quad Mirror | `node.transform` | `mode = FoldBoth` |
-| Transform | `node.transform` | `mode = Identity` |
 | Soft Focus | `node.gaussian_blur` | curated sigma |
 | Stylized Feedback | `node.feedback` | curated decay / transform / blend |
 
@@ -118,6 +116,8 @@ Why keep them as separate Effects rather than collapsing into their atom:
 - **Discoverability.** A user looking for "mirror" should find it by that name, not have to know it's a `node.transform` with `fold = X`.
 - **AI surface.** An agent generating a graph from a high-level intent ("add a mirror") benefits from a named entry.
 - **Zero cost.** A preset is one registry entry pointing at existing shader code — no new shader, no new EffectNode impl.
+
+**Transform and Quad Mirror are NOT presets.** Investigation 2026-05-14 found their legacy shaders have semantics the Transform atom doesn't reproduce: aspect-ratio-correct rotation, legacy-subtract-translate, hard-OOB rejection (Transform), and fill-quadrant zoom plus additive piecewise blend (Quad Mirror). Migrating to atom-presets would visually regress existing projects. They stay classified as monolithic shader effects — same category as Glitch, Strobe, Voronoi Prism.
 
 ## 3. Generators (23) — deferred
 
@@ -132,7 +132,7 @@ Per design principle: "Monolithic remainders are first-class library members." T
 - **Wireframe Depth** — 15 passes + 3 DNN workers
 - **Depth of Field** (DNN variant) — MiDaS-based selective blur
 
-The remaining 20 effects either are decomposed already (the 5 presets), are decomposable today (the 12 single-shader effects, trivial), or will decompose when the missing atoms land (Bloom, Halation, Watercolor + DoF-Geometric — composites).
+The remaining 20 effects either are decomposed already (Mirror, Soft Focus, Stylized Feedback — 3 presets), have their own monolithic shaders (the 14 single-shader effects including Transform and Quad Mirror, whose legacy semantics don't reduce to the atom), or will decompose when the missing atoms land (Bloom, Halation, Watercolor — composites).
 
 ## 5. What's deferred
 
@@ -145,20 +145,20 @@ The remaining 20 effects either are decomposed already (the 5 presets), are deco
 
 ## 6. Migration of existing projects
 
-Every type-ID rename and every preset collapse needs a one-line entry in the V1→V2 loader's HashMap. Three shapes:
+The current rename pass keeps the legacy `EffectTypeId` save-format strings (PascalCase: `"Bloom"`, `"Mirror"`, `"Transform"`, etc.) untouched. The new `node.*` type IDs are internal to the node-graph runtime. Old projects load without any migration shim.
 
-1. **Trivial alias** (most renames) — `"primitive.invert" → "node.invert"`, etc. Same param schema, just a different ID string.
-2. **Preset alias with default override** — `"transform" → "node.transform"` with `mode = Identity`; `"mirror" → "node.transform"` with `mode = FoldX`; `"quad_mirror" → "node.transform"` with `mode = FoldBoth`. The atom replaces three legacy effects.
-3. **Param-shape migration** — Transform's legacy `(x, y, zoom, rot_deg)` packs into the atom's `(translate: vec2, scale: vec2, rotation: rad, mode)`. A few lines of arithmetic in the loader.
-
-The shim lives in `manifold-io`'s project loader alongside existing V1→V2 migrations.
+If a future pass renames the legacy `EffectTypeId` strings or removes a legacy effect, the V1→V2 loader in `manifold-io` will need a HashMap mapping old → new. None of that is required today.
 
 ## 7. Done definition
 
 The rename pass is shipped when:
 
-- Atom type IDs match the catalog (renamed in `crates/manifold-renderer/src/node_graph/primitives/`).
-- Effect type IDs match the catalog; preset effects (Mirror, Quad Mirror, Transform, Soft Focus, Stylized Feedback) collapsed to alias-presets of their atoms.
-- Display names on atoms and effects match the catalog.
-- Migration shim loads old projects without error and produces visually identical output.
-- `cargo clippy --workspace -- -D warnings` and `cargo test --workspace` are green.
+- Atom type IDs match the catalog (renamed in `crates/manifold-renderer/src/node_graph/primitives/`). ✅ Phase A
+- Effect type IDs match the catalog. ✅ Phase A (internal `node.*` strings; legacy `EffectTypeId` save keys unchanged).
+- Display names on effects match the catalog. ✅ Phase B1.
+- Rust struct/const names match the catalog. ✅ Phase B2.
+- Preset effects (Mirror, Soft Focus, Stylized Feedback) are graph-backed via atom composites. ✅ pre-existing from the foundation pass.
+- Transform and Quad Mirror remain monolithic shaders (legacy semantics not reducible to atom composites — see §2.3 note).
+- `cargo clippy --workspace -- -D warnings` and `cargo test --workspace` are green. ✅
+
+All criteria met as of 2026-05-14.
