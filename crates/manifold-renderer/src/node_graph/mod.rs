@@ -50,8 +50,8 @@ pub use legacy_adapter::{LEGACY_TYPE_ID_PREFIX, LegacyPostProcessNode, metadata_
 pub use metal_backend::MetalBackend;
 pub use palette::{catalog_graph_def_for, palette_atoms, PaletteAtom};
 pub use param_binding::{
-    LastAppliedCache, ParamBinding, ParamConvert, ParamId, ParamTarget, UserParamBindingRuntime,
-    apply_param_bindings, binding_value, outer_routings_from_bindings,
+    BindingCacheEntry, LastAppliedCache, ParamBinding, ParamConvert, ParamId, ParamTarget,
+    UserParamBindingRuntime, apply_param_bindings, binding_value, outer_routings_from_bindings,
     user_binding_to_runtime,
 };
 pub use parameters::{ParamDef, ParamType, ParamValue};

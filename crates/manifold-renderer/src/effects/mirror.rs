@@ -110,7 +110,7 @@ impl MirrorFX {
         // Name Source and FinalOutput so they survive a save → load
         // round-trip with stable identities. Without handles, the
         // hydration path can't look them up after `into_graph` mints
-        // fresh ids — see `hydrate_graph` below.
+        // fresh ids — see `apply_graph_def` below.
         let src = graph.add_node_named("source", Box::new(Source::new()));
         let handle = build_mirror(&mut graph, (src, "out"))
             .expect("build_mirror should never fail with a valid source");
@@ -277,7 +277,7 @@ impl PostProcessEffect for MirrorFX {
     /// `build_mirror` + `MirrorFX::new` (`"source"`, `"uv_transform"`,
     /// `"mix"`, `"final_output"`). Missing handles → log + keep the
     /// existing catalog graph (no partial swap).
-    fn hydrate_graph(&mut self, def: &manifold_core::effect_graph_def::EffectGraphDef) {
+    fn apply_graph_def(&mut self, def: &manifold_core::effect_graph_def::EffectGraphDef) {
         use crate::node_graph::{EffectGraphDefExt, PrimitiveRegistry};
 
         let registry = PrimitiveRegistry::with_builtin();
@@ -285,7 +285,7 @@ impl PostProcessEffect for MirrorFX {
             Ok(g) => g,
             Err(e) => {
                 eprintln!(
-                    "[manifold-renderer] MirrorFX::hydrate_graph: \
+                    "[manifold-renderer] MirrorFX::apply_graph_def: \
                      failed to materialize per-instance graph: {e}. \
                      Falling back to catalog default."
                 );
@@ -297,7 +297,7 @@ impl PostProcessEffect for MirrorFX {
         // existing graph.
         let Some(uv_id) = new_graph.node_id_by_handle("uv_transform") else {
             eprintln!(
-                "[manifold-renderer] MirrorFX::hydrate_graph: \
+                "[manifold-renderer] MirrorFX::apply_graph_def: \
                  hydrated graph missing 'uv_transform' handle. \
                  Falling back to catalog default."
             );
@@ -305,7 +305,7 @@ impl PostProcessEffect for MirrorFX {
         };
         let Some(mix_id) = new_graph.node_id_by_handle("mix") else {
             eprintln!(
-                "[manifold-renderer] MirrorFX::hydrate_graph: \
+                "[manifold-renderer] MirrorFX::apply_graph_def: \
                  hydrated graph missing 'mix' handle. \
                  Falling back to catalog default."
             );
@@ -313,7 +313,7 @@ impl PostProcessEffect for MirrorFX {
         };
         let Some(src_id) = new_graph.node_id_by_handle("source") else {
             eprintln!(
-                "[manifold-renderer] MirrorFX::hydrate_graph: \
+                "[manifold-renderer] MirrorFX::apply_graph_def: \
                  hydrated graph missing 'source' handle. \
                  Falling back to catalog default."
             );
@@ -324,7 +324,7 @@ impl PostProcessEffect for MirrorFX {
             Ok(p) => p,
             Err(e) => {
                 eprintln!(
-                    "[manifold-renderer] MirrorFX::hydrate_graph: \
+                    "[manifold-renderer] MirrorFX::apply_graph_def: \
                      hydrated graph failed to compile: {e:?}. \
                      Falling back to catalog default."
                 );
@@ -333,7 +333,7 @@ impl PostProcessEffect for MirrorFX {
                 // "canvas showed a wire that wasn't actually saved"
                 // from "wire is saved but with the wrong port name".
                 eprintln!(
-                    "[manifold-renderer] MirrorFX::hydrate_graph: def \
+                    "[manifold-renderer] MirrorFX::apply_graph_def: def \
                      contains {} node(s) and {} wire(s):",
                     def.nodes.len(),
                     def.wires.len()
@@ -373,6 +373,40 @@ impl PostProcessEffect for MirrorFX {
         // ResourceIds in the new plan won't match the old state's
         // pre-bound textures.
         self.state = None;
+
+        // Mark each outer binding whose inner target the def
+        // explicitly overrode as "skip the next apply." Without
+        // this, the chain rebuild's fresh `LastAppliedCache` would
+        // let the first `apply_param_bindings` overwrite the
+        // hydrated value with whatever the outer slot currently
+        // says, defeating the bidirectional editor flow.
+        for (i, binding) in self.bindings.iter().enumerate() {
+            let outer_name = match &binding.target {
+                ParamTarget::Composite { outer_name } => outer_name.as_ref(),
+                _ => continue,
+            };
+            let Some((inner_node, inner_param)) =
+                self.handle.inner_routing_for(outer_name)
+            else {
+                continue;
+            };
+            let inner_handle = match inner_node {
+                id if id == uv_id => "uv_transform",
+                id if id == mix_id => "mix",
+                _ => continue,
+            };
+            // Check whether the def has this inner param explicitly
+            // set on this inner-node handle. Presence in
+            // `node.params` is what `SetGraphNodeParamCommand`
+            // toggles; catalog defaults leave params empty.
+            let overridden = def.nodes.iter().any(|n| {
+                n.handle.as_deref() == Some(inner_handle)
+                    && n.params.contains_key(inner_param)
+            });
+            if overridden {
+                self.last_applied.mark_skip_once(i);
+            }
+        }
     }
 
     fn apply(
@@ -466,16 +500,16 @@ mod tests {
     use manifold_core::effect_graph_def::EffectGraphDef;
 
     /// Round-trip the catalog graph through `from_graph` + `into_graph`
-    /// via `hydrate_graph` — node count and named handles must survive.
+    /// via `apply_graph_def` — node count and named handles must survive.
     #[test]
-    fn hydrate_graph_preserves_topology_on_round_trip() {
+    fn apply_graph_def_preserves_topology_on_round_trip() {
         let mut fx = MirrorFX::with_default_graph();
         let original_node_count = fx.graph.node_count();
         let original_wire_count = fx.graph.wires().len();
 
         // Serialize the catalog graph and feed it back in.
         let def = EffectGraphDef::from_graph(&fx.graph);
-        fx.hydrate_graph(&def);
+        fx.apply_graph_def(&def);
 
         assert_eq!(fx.graph.node_count(), original_node_count);
         assert_eq!(fx.graph.wires().len(), original_wire_count);
@@ -491,7 +525,7 @@ mod tests {
     /// A def missing the `uv_transform` handle should leave the FX
     /// unchanged (fall back to catalog default, not partially-swap).
     #[test]
-    fn hydrate_graph_falls_back_when_required_handle_missing() {
+    fn apply_graph_def_falls_back_when_required_handle_missing() {
         let mut fx = MirrorFX::with_default_graph();
         let original_node_count = fx.graph.node_count();
 
@@ -503,7 +537,7 @@ mod tests {
             nodes: Vec::new(),
             wires: Vec::new(),
         };
-        fx.hydrate_graph(&bad_def);
+        fx.apply_graph_def(&bad_def);
 
         // Original graph still intact.
         assert_eq!(fx.graph.node_count(), original_node_count);
@@ -512,9 +546,9 @@ mod tests {
 
     /// A def whose nodes reference an unknown type id should fall back
     /// to catalog default. Exercises the `LoadError::UnknownTypeId`
-    /// branch inside `hydrate_graph`.
+    /// branch inside `apply_graph_def`.
     #[test]
-    fn hydrate_graph_falls_back_on_unknown_type_id() {
+    fn apply_graph_def_falls_back_on_unknown_type_id() {
         let mut fx = MirrorFX::with_default_graph();
         let original_node_count = fx.graph.node_count();
 
@@ -531,7 +565,7 @@ mod tests {
             }],
             wires: Vec::new(),
         };
-        fx.hydrate_graph(&bad_def);
+        fx.apply_graph_def(&bad_def);
 
         assert_eq!(fx.graph.node_count(), original_node_count);
     }

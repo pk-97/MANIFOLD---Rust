@@ -280,23 +280,28 @@ pub fn apply_param_bindings(
 ) {
     last_applied
         .static_outer
-        .resize(static_bindings.len(), None);
-    last_applied.user_outer.resize(user_bindings.len(), None);
+        .resize(static_bindings.len(), BindingCacheEntry::Unset);
+    last_applied
+        .user_outer
+        .resize(user_bindings.len(), BindingCacheEntry::Unset);
 
     for (i, binding) in static_bindings.iter().enumerate() {
         let value = values
             .get(i)
             .map(|p| p.value)
             .unwrap_or(binding.spec.default_value);
-        // Skip the write when the outer slot hasn't changed since
-        // the last apply. This is what makes per-card edits to
-        // outer-routed inner params survive: when the outer slider
-        // is at rest, `apply_param_bindings` doesn't overwrite the
-        // inner. When the slider moves (or is driven by an
-        // envelope / driver / Ableton mapping), the value differs
-        // frame-to-frame and the write fires as before.
-        if last_applied.static_outer[i] == Some(value) {
-            continue;
+        match last_applied.static_outer[i] {
+            BindingCacheEntry::SkipOnce => {
+                // Post-hydrate path: the def installed an inner value
+                // we must not overwrite. Just record the current outer
+                // so next frame's compare-and-skip resumes normally.
+                last_applied.static_outer[i] = BindingCacheEntry::Applied(value);
+                continue;
+            }
+            BindingCacheEntry::Applied(prev) if prev == value => {
+                continue;
+            }
+            BindingCacheEntry::Unset | BindingCacheEntry::Applied(_) => {}
         }
         if let Err(err) = binding.apply(graph, handle, value) {
             eprintln!(
@@ -307,7 +312,7 @@ pub fn apply_param_bindings(
             );
             continue;
         }
-        last_applied.static_outer[i] = Some(value);
+        last_applied.static_outer[i] = BindingCacheEntry::Applied(value);
     }
     let n = static_bindings.len();
     for (j, binding) in user_bindings.iter().enumerate() {
@@ -315,8 +320,15 @@ pub fn apply_param_bindings(
             .get(n + j)
             .map(|p| p.value)
             .unwrap_or(binding.default_value);
-        if last_applied.user_outer[j] == Some(value) {
-            continue;
+        match last_applied.user_outer[j] {
+            BindingCacheEntry::SkipOnce => {
+                last_applied.user_outer[j] = BindingCacheEntry::Applied(value);
+                continue;
+            }
+            BindingCacheEntry::Applied(prev) if prev == value => {
+                continue;
+            }
+            BindingCacheEntry::Unset | BindingCacheEntry::Applied(_) => {}
         }
         if let Err(err) = binding.apply(graph, value) {
             eprintln!(
@@ -326,7 +338,7 @@ pub fn apply_param_bindings(
             );
             continue;
         }
-        last_applied.user_outer[j] = Some(value);
+        last_applied.user_outer[j] = BindingCacheEntry::Applied(value);
     }
 }
 
@@ -348,8 +360,31 @@ pub fn apply_param_bindings(
 /// can leave them empty.
 #[derive(Debug, Clone, Default)]
 pub struct LastAppliedCache {
-    pub static_outer: Vec<Option<f32>>,
-    pub user_outer: Vec<Option<f32>>,
+    pub static_outer: Vec<BindingCacheEntry>,
+    pub user_outer: Vec<BindingCacheEntry>,
+}
+
+/// One entry in [`LastAppliedCache`]. Tagged because the *first*
+/// apply after construction needs different semantics depending on
+/// whether the effect was just hydrated from a per-card def:
+///
+/// - **`Unset`** — never applied. The catalog/default state for a
+///   binding: next apply writes outer → inner, then transitions to
+///   `Applied(value)`. This is what lets a freshly-constructed
+///   effect initialize the inner from the outer slot.
+/// - **`SkipOnce`** — set by `apply_graph_def` for params that the
+///   per-card def overrode. Next apply does NOT write, just records
+///   the current outer value and transitions to `Applied`. This is
+///   what makes the hydrated value survive the first frame after a
+///   chain rebuild.
+/// - **`Applied(v)`** — last value written. Subsequent applies skip
+///   when this frame's outer equals `v` and write otherwise.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum BindingCacheEntry {
+    #[default]
+    Unset,
+    SkipOnce,
+    Applied(f32),
 }
 
 impl LastAppliedCache {
@@ -360,10 +395,27 @@ impl LastAppliedCache {
     /// Reset every tracked outer value so the next apply behaves as
     /// if no value has ever been written. Called after a topology
     /// change that may have moved bindings around (e.g.
-    /// [`MirrorFX::hydrate_graph`] rebuilds the bindings list).
+    /// [`MirrorFX::apply_graph_def`] rebuilds the bindings list).
     pub fn clear(&mut self) {
         self.static_outer.clear();
         self.user_outer.clear();
+    }
+
+    /// Mark a static-binding entry as "skip the next apply, then
+    /// behave normally." Used by `apply_graph_def` impls right after
+    /// they write a per-card def value into the inner graph — the
+    /// next `apply_param_bindings` must not overwrite it, but every
+    /// apply after that should resume the normal skip-on-unchanged
+    /// behavior.
+    ///
+    /// Auto-grows the underlying vec to `index + 1` if needed; safe
+    /// to call before the first `apply_param_bindings` resizes it.
+    pub fn mark_skip_once(&mut self, index: usize) {
+        if index >= self.static_outer.len() {
+            self.static_outer
+                .resize(index + 1, BindingCacheEntry::Unset);
+        }
+        self.static_outer[index] = BindingCacheEntry::SkipOnce;
     }
 }
 
@@ -751,7 +803,7 @@ mod tests {
             g.get_node(feedback).unwrap().params.get("amount"),
             Some(&ParamValue::Float(0.5)),
         );
-        assert_eq!(cache.static_outer[0], Some(0.5));
+        assert_eq!(cache.static_outer[0], BindingCacheEntry::Applied(0.5));
 
         // Simulate the inspector editing the inner directly while
         // the outer slot is at rest.
@@ -803,7 +855,7 @@ mod tests {
             Some(&ParamValue::Float(0.25)),
             "outer change must overwrite the inner edit",
         );
-        assert_eq!(cache.static_outer[0], Some(0.25));
+        assert_eq!(cache.static_outer[0], BindingCacheEntry::Applied(0.25));
     }
 
     /// Per-frame outer animation (envelope / driver) writes every
@@ -831,6 +883,82 @@ mod tests {
                 "frame {i}: animated outer must overwrite inner",
             );
         }
+    }
+
+    /// `mark_skip_once` + first apply: the value the def installed
+    /// is preserved on the next frame even when the outer slot
+    /// differs from the value that would otherwise be written.
+    /// Mirrors the chain-rebuild-after-edit case end-to-end.
+    #[test]
+    fn skip_once_preserves_hydrated_inner_against_outer_default() {
+        let mut g = Graph::new();
+        let feedback = g.add_node(Box::new(Feedback::new()));
+        let bindings = vec![feedback_amount_binding(feedback)];
+        let mut cache = LastAppliedCache::new();
+
+        // Pretend hydrate just installed inner amount = 0.9 and marked
+        // binding 0 as "skip the next outer write."
+        g.set_param(feedback, "amount", ParamValue::Float(0.9))
+            .unwrap();
+        cache.mark_skip_once(0);
+
+        // First apply with the catalog-default outer (0.5): must NOT
+        // overwrite the hydrated value.
+        apply_param_bindings(
+            &bindings,
+            &[],
+            &mut g,
+            None,
+            &[ParamSlot::exposed(0.5)],
+            &mut cache,
+        );
+        assert_eq!(
+            g.get_node(feedback).unwrap().params.get("amount"),
+            Some(&ParamValue::Float(0.9)),
+            "SkipOnce must not overwrite the hydrated value on first apply",
+        );
+        // The skip transitioned to Applied(0.5) so subsequent applies
+        // with the same outer skip too, but an outer drag reclaims.
+        assert_eq!(
+            cache.static_outer[0],
+            BindingCacheEntry::Applied(0.5),
+        );
+    }
+
+    #[test]
+    fn skip_once_lets_outer_drag_reclaim_control() {
+        let mut g = Graph::new();
+        let feedback = g.add_node(Box::new(Feedback::new()));
+        let bindings = vec![feedback_amount_binding(feedback)];
+        let mut cache = LastAppliedCache::new();
+
+        g.set_param(feedback, "amount", ParamValue::Float(0.9))
+            .unwrap();
+        cache.mark_skip_once(0);
+
+        // First apply with outer 0.5: SkipOnce → no write.
+        apply_param_bindings(
+            &bindings,
+            &[],
+            &mut g,
+            None,
+            &[ParamSlot::exposed(0.5)],
+            &mut cache,
+        );
+        // Outer moves to 0.2 → write fires, inner gets stomped.
+        apply_param_bindings(
+            &bindings,
+            &[],
+            &mut g,
+            None,
+            &[ParamSlot::exposed(0.2)],
+            &mut cache,
+        );
+        assert_eq!(
+            g.get_node(feedback).unwrap().params.get("amount"),
+            Some(&ParamValue::Float(0.2)),
+            "outer-drag after a SkipOnce frame must reclaim control",
+        );
     }
 
     #[test]

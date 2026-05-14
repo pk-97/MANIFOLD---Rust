@@ -97,7 +97,27 @@ impl ExecutionPlan {
 /// as [`GraphError`]. The graph is not consumed.
 pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     validate(graph)?;
-    let order = topological_sort(graph)?;
+    // Topological order, then filter to nodes whose output is
+    // (transitively) consumed by a FinalOutput. Anything outside
+    // that set is dead — the executor mustn't try to evaluate it
+    // (its required inputs aren't bound), and validate() already
+    // skipped its required-input check on the same reachability
+    // grounds. Keeps editing-time graphs (orphan nodes in flight)
+    // compilable instead of falling back to catalog.
+    let full_order = topological_sort(graph)?;
+    let has_final_output = graph.nodes().any(|inst| {
+        inst.node.type_id().as_str()
+            == crate::node_graph::FINAL_OUTPUT_TYPE_ID
+    });
+    let order: Vec<NodeInstanceId> = if has_final_output {
+        let live = crate::node_graph::validation::reachable_from_final_output(graph);
+        full_order
+            .into_iter()
+            .filter(|id| live.contains(id))
+            .collect()
+    } else {
+        full_order
+    };
 
     // Index wires by their target (input) port for O(1) lookup during
     // input-binding construction.

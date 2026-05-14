@@ -3,7 +3,7 @@
 
 use std::collections::{HashSet, VecDeque};
 
-use ahash::AHashMap;
+use ahash::{AHashMap, AHashSet};
 
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::graph::Graph;
@@ -150,7 +150,25 @@ pub(super) fn validate_connection(
 /// construction (composite presets, JSON load, undo / redo) bypasses
 /// `connect()` and so this second check is the durable safety net.
 pub fn validate(graph: &Graph) -> Result<(), GraphError> {
+    let live = reachable_from_final_output(graph);
+    // Reachability filtering only kicks in when a FinalOutput is
+    // actually present. Graphs without one (most unit-test
+    // fixtures, plus any caller that builds a graph for its side
+    // effects rather than to render) fall back to validating every
+    // node — there's no "what reaches the output?" to compute.
+    let has_final_output = graph.nodes().any(|inst| {
+        inst.node.type_id().as_str()
+            == crate::node_graph::boundary_nodes::FINAL_OUTPUT_TYPE_ID
+    });
     for inst in graph.nodes() {
+        // Nodes that can't reach any FinalOutput don't run, so their
+        // required inputs aren't actually required this frame.
+        // Skipping them here makes editing-time graphs robust: the
+        // user can drop a Sample into the canvas before wiring it
+        // without the renderer falling back to catalog default.
+        if has_final_output && !live.contains(&inst.id) {
+            continue;
+        }
         for input in inst.node.inputs() {
             if input.required {
                 let wired = graph.wires().iter().any(|w| w.to == (inst.id, input.name));
@@ -168,6 +186,31 @@ pub fn validate(graph: &Graph) -> Result<(), GraphError> {
     // specific `RequiredInputUnwired` error wins when both apply.
     topological_sort(graph)?;
     Ok(())
+}
+
+/// Set of nodes whose output is (transitively) consumed by a
+/// `system.final_output` boundary node. Built by BFS backward across
+/// `wires` from every FinalOutput. Anything outside this set is dead
+/// — the executor won't run it and the validator shouldn't reject it.
+pub(crate) fn reachable_from_final_output(graph: &Graph) -> AHashSet<NodeInstanceId> {
+    use crate::node_graph::boundary_nodes::FINAL_OUTPUT_TYPE_ID;
+    let mut live: AHashSet<NodeInstanceId> = AHashSet::default();
+    let mut frontier: Vec<NodeInstanceId> = graph
+        .nodes()
+        .filter(|inst| inst.node.type_id().as_str() == FINAL_OUTPUT_TYPE_ID)
+        .map(|inst| inst.id)
+        .collect();
+    while let Some(id) = frontier.pop() {
+        if !live.insert(id) {
+            continue;
+        }
+        for w in graph.wires() {
+            if w.to.0 == id {
+                frontier.push(w.from.0);
+            }
+        }
+    }
+    live
 }
 
 /// Return nodes in evaluation order (dependencies before dependents).
@@ -443,6 +486,41 @@ mod tests {
             "b",
             vec![input("in", PortType::Texture2D, false)],
             vec![],
+        )));
+        assert!(validate(&g).is_ok());
+    }
+
+    /// Regression: an orphan node (a Sample dropped into the canvas
+    /// before its source input is wired) must NOT fail validation
+    /// once a FinalOutput exists in the graph. The orphan isn't
+    /// reachable from FinalOutput so the executor will skip it; the
+    /// validator should agree. Without this, hydrate falls back to
+    /// catalog default mid-edit and the user loses all their other
+    /// per-card param changes.
+    #[test]
+    fn unreachable_node_with_required_input_does_not_break_validate() {
+        use crate::node_graph::FINAL_OUTPUT_TYPE_ID;
+        let mut g = Graph::new();
+        // Live chain: source → final_output.
+        let source = g.add_node(Box::new(TestNode::new(
+            "source",
+            vec![],
+            vec![output("out", PortType::Texture2D)],
+        )));
+        let final_out = g.add_node(Box::new(TestNode::new(
+            FINAL_OUTPUT_TYPE_ID,
+            vec![input("in", PortType::Texture2D, true)],
+            vec![],
+        )));
+        g.connect((source, "out"), (final_out, "in")).unwrap();
+
+        // Orphan node — required input unwired, output not consumed
+        // by anything reaching FinalOutput. Pre-fix this would
+        // poison validate(); post-fix, it's a silent no-op.
+        let _orphan = g.add_node(Box::new(TestNode::new(
+            "orphan_sample",
+            vec![input("source", PortType::Texture2D, true)],
+            vec![output("out", PortType::Texture2D)],
         )));
         assert!(validate(&g).is_ok());
     }

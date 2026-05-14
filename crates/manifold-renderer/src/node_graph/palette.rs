@@ -119,7 +119,7 @@ pub fn catalog_graph_def_for(effect_type: &EffectTypeId) -> Option<EffectGraphDe
         // their catalog graphs aren't promoted to named handles yet —
         // they'd need the same "source"/"final_output" handle pass that
         // Mirror went through in Phase 1. Deferred until those FXs
-        // implement `hydrate_graph` end-to-end.
+        // implement `apply_graph_def` end-to-end.
         _ => None,
     }
 }

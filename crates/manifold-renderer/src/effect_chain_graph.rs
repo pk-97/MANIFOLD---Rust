@@ -621,7 +621,7 @@ fn add_effect_node(
     // override, hand it to the FX to replace its catalog default.
     // Non-graph FXs ignore the call via the trait's default impl.
     if let Some(def) = &fx.graph {
-        inner.hydrate_graph(def);
+        inner.apply_graph_def(def);
     }
     let adapter = LegacyPostProcessNode::new(metadata, inner);
     let node_id = graph.add_node(Box::new(adapter));
@@ -658,7 +658,7 @@ fn compute_topology_hash(
         // Phase 3: per-card graph divergence. Bumping `graph_version`
         // when an editing command mutates `fx.graph` flips this hash,
         // forcing a chain rebuild on the next frame so the renderer
-        // re-runs `hydrate_graph` with the new def. Primitive state is
+        // re-runs `apply_graph_def` with the new def. Primitive state is
         // lost across the rebuild — acceptable because graph edits are
         // editing-time events, not performance-time.
         fx.graph_version.hash(&mut h);

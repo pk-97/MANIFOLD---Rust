@@ -128,5 +128,5 @@ pub trait PostProcessEffect: Send {
     /// `Some(def)` — i.e., the user has overridden the catalog default
     /// topology for this instance. See `docs/NODE_GRAPH_SYSTEM.md`
     /// Phase 1 for the per-card-divergence model.
-    fn hydrate_graph(&mut self, _def: &manifold_core::effect_graph_def::EffectGraphDef) {}
+    fn apply_graph_def(&mut self, _def: &manifold_core::effect_graph_def::EffectGraphDef) {}
 }
