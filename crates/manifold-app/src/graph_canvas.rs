@@ -1,4 +1,4 @@
-//! `GraphCanvas` — read-only node-graph viewer hosted by the editor
+//! `GraphCanvas` — editable node-graph view hosted by the editor
 //! window.
 //!
 //! The canvas is data-driven from `GraphSnapshot`s pushed by the
@@ -560,9 +560,9 @@ impl GraphCanvas {
 
         ui.draw_rect(viewport.x, viewport.y, viewport.w, HEADER_HEIGHT, HEADER_BG);
         let header_label = if self.nodes.is_empty() {
-            "No active graph — open a clip with NodeGraphTest"
+            "No active graph — open an effect card"
         } else {
-            "Live Graph (read-only)"
+            "Live Graph"
         };
         ui.draw_text(
             viewport.x + 10.0,

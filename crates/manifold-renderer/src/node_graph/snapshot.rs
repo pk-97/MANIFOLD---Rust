@@ -221,17 +221,30 @@ impl GraphSnapshot {
     /// like "no active graph" rather than showing a partial state.
     pub fn from_def(def: &EffectGraphDef) -> Option<Self> {
         let registry = PrimitiveRegistry::with_builtin();
-        match def.clone().into_graph(&registry) {
-            Ok(g) => Some(Self::from_graph(&g)),
+        let graph = match def.clone().into_graph(&registry) {
+            Ok(g) => g,
             Err(e) => {
                 eprintln!(
                     "[manifold-renderer] GraphSnapshot::from_def: \
                      failed to materialize per-instance graph: {e}. \
                      Editor canvas will treat this as empty."
                 );
-                None
+                return None;
             }
+        };
+        let mut snap = Self::from_graph(&graph);
+
+        // Overlay `editor_pos` from the def. `into_graph` assigns
+        // runtime ids sequentially (0..n) in def order, and
+        // `from_graph` sorts snap.nodes by runtime id — so iterating
+        // both in parallel lines up doc nodes with their snap entries.
+        // Without this overlay, the snapshot loses any positions the
+        // user set via `MoveGraphNodeCommand` and the canvas
+        // auto-lays-out from scratch on every editor reopen.
+        for (snap_node, doc_node) in snap.nodes.iter_mut().zip(def.nodes.iter()) {
+            snap_node.editor_pos = doc_node.editor_pos;
         }
+        Some(snap)
     }
 }
 
@@ -490,6 +503,41 @@ mod tests {
             .nodes
             .iter()
             .any(|n| n.node_handle.as_deref() == Some("final_output")));
+    }
+
+    /// Regression: `editor_pos` saved in the def must survive
+    /// `from_def`. Without the overlay step the round-trip through a
+    /// live `Graph` strips positions and the editor canvas
+    /// auto-lays-out on every reopen.
+    #[test]
+    fn from_def_preserves_editor_pos_through_overlay() {
+        use crate::node_graph::EffectGraphDefExt;
+        use manifold_core::effect_graph_def::EffectGraphDef;
+
+        // Build a minimal Mirror graph with a moved Source node.
+        let mut g = Graph::new();
+        let src = g.add_node_named(
+            "source",
+            Box::new(crate::node_graph::boundary_nodes::Source::new()),
+        );
+        let handle = crate::node_graph::composites::build_mirror(&mut g, (src, "out"))
+            .expect("build_mirror");
+        let final_out = g.add_node_named(
+            "final_output",
+            Box::new(crate::node_graph::boundary_nodes::FinalOutput::new()),
+        );
+        g.connect(handle.output(), (final_out, "in")).unwrap();
+        let mut def = EffectGraphDef::from_graph(&g);
+        // Simulate a MoveGraphNodeCommand on the Source node (doc id 0).
+        def.nodes[0].editor_pos = Some((123.0, 456.0));
+
+        let snap = GraphSnapshot::from_def(&def).expect("from_def succeeds");
+        let snap_source = snap
+            .nodes
+            .iter()
+            .find(|n| n.node_handle.as_deref() == Some("source"))
+            .unwrap();
+        assert_eq!(snap_source.editor_pos, Some((123.0, 456.0)));
     }
 
     #[test]
