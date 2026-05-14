@@ -305,6 +305,28 @@ impl PostProcessEffect for MirrorFX {
                      hydrated graph failed to compile: {e:?}. \
                      Falling back to catalog default."
                 );
+                // Diagnostic dump — what the renderer sees in the def
+                // when hydration is rejected. Helps disambiguate
+                // "canvas showed a wire that wasn't actually saved"
+                // from "wire is saved but with the wrong port name".
+                eprintln!(
+                    "[manifold-renderer] MirrorFX::hydrate_graph: def \
+                     contains {} node(s) and {} wire(s):",
+                    def.nodes.len(),
+                    def.wires.len()
+                );
+                for n in &def.nodes {
+                    eprintln!(
+                        "  node id={} type={} handle={:?}",
+                        n.id, n.type_id, n.handle
+                    );
+                }
+                for w in &def.wires {
+                    eprintln!(
+                        "  wire {}.{} -> {}.{}",
+                        w.from_node, w.from_port, w.to_node, w.to_port
+                    );
+                }
                 return;
             }
         };
