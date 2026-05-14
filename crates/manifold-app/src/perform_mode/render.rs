@@ -86,8 +86,7 @@ impl Application {
         let btn_h = 36.0_f32;
         let btn_x = (lw - btn_w) * 0.5;
         let btn_y = lh - btn_h - 24.0;
-        self.perform.exit_button_rect =
-            manifold_ui::node::Rect::new(btn_x, btn_y, btn_w, btn_h);
+        self.perform.exit_button_rect = manifold_ui::node::Rect::new(btn_x, btn_y, btn_w, btn_h);
 
         // Snapshot HUD inputs from content_state + persistent ui_root cache.
         let current_beat = self.content_state.current_beat.0;
@@ -101,14 +100,8 @@ impl Application {
             link_peers: self.content_state.link_peers,
             midi_clock_enabled: self.content_state.midi_clock_enabled,
             midi_clock_receiving: self.content_state.midi_clock_receiving,
-            midi_clock_position_display: self
-                .content_state
-                .midi_clock_position_display
-                .clone(),
-            midi_clock_device_name: self
-                .content_state
-                .midi_clock_device_name
-                .clone(),
+            midi_clock_position_display: self.content_state.midi_clock_position_display.clone(),
+            midi_clock_device_name: self.content_state.midi_clock_device_name.clone(),
         };
         // Snapshot the session Arc (atomic refcount bump, zero data copy).
         // All cue/track/macro reads below borrow from this snapshot, avoiding
@@ -119,31 +112,18 @@ impl Application {
             .map(|s| s.cue_points.as_slice())
             .unwrap_or(&[]);
         let analysis = cue::analyze(cue_points, current_beat);
-        let current_name = analysis
-            .current
-            .map(|c| c.name.as_str())
-            .unwrap_or("—");
-        let next_name = analysis
-            .next
-            .map(|c| c.name.as_str())
-            .unwrap_or("—");
+        let current_name = analysis.current.map(|c| c.name.as_str()).unwrap_or("—");
+        let next_name = analysis.next.map(|c| c.name.as_str()).unwrap_or("—");
         let countdown = analysis
             .beats_to_next
             .map(|b| cue::format_countdown(b, beats_per_bar));
-        let section_progress = cue::section_progress(
-            analysis.current,
-            analysis.next,
-            current_beat,
-        );
+        let section_progress = cue::section_progress(analysis.current, analysis.next, current_beat);
         let bar_beat = cue::format_bar_beat(current_beat, beats_per_bar);
 
         // Tracks playing in the *current* section: any non-muted clip
         // overlapping `[current.time, next.time)` (variant (a)).
         let now_section_tracks: Vec<&str> = if let Some(cur_cue) = analysis.current {
-            let section_end = analysis
-                .next
-                .map(|c| c.time)
-                .unwrap_or(f64::INFINITY);
+            let section_end = analysis.next.map(|c| c.time).unwrap_or(f64::INFINITY);
             session_snapshot
                 .as_ref()
                 .and_then(|s| s.play_group.as_ref())
@@ -183,14 +163,12 @@ impl Application {
             Vec::new()
         };
 
-// Macros: snapshot mapped Ableton macros for the left column.
+        // Macros: snapshot mapped Ableton macros for the left column.
         // Top-N for now to avoid overflowing tall projects with many macros.
         const MACRO_DISPLAY_LIMIT: usize = 12;
         let macros_snapshot: Vec<perform_macros::MacroDisplay> = session_snapshot
             .as_ref()
-            .map(|s| {
-                perform_macros::snapshot(&self.local_project, s, MACRO_DISPLAY_LIMIT)
-            })
+            .map(|s| perform_macros::snapshot(&self.local_project, s, MACRO_DISPLAY_LIMIT))
             .unwrap_or_default();
 
         // Skip drawable acquisition on resize frames (same rule as the
@@ -260,8 +238,7 @@ impl Application {
             let bridge_gen = bridge.generation();
             if bridge_gen != self.last_preview_bridge_generation {
                 self.last_preview_bridge_generation = bridge_gen;
-                let textures: [manifold_gpu::GpuTexture;
-                    crate::shared_texture::SURFACE_COUNT] =
+                let textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT] =
                     std::array::from_fn(|i| unsafe {
                         bridge.import_texture_native(&gpu.device, i)
                     });
@@ -437,7 +414,9 @@ fn draw_sync_indicators(ui: &mut UIRenderer, sync: &SyncStatus) {
 
     // Helper: draw a badge (rounded rect with centered text).
     let draw_badge = |ui: &mut UIRenderer, x: f32, label: &str, bg: [f32; 4]| -> f32 {
-        let text_w = ui.measure_text_cached(label, badge_font, FontWeight::Medium).x;
+        let text_w = ui
+            .measure_text_cached(label, badge_font, FontWeight::Medium)
+            .x;
         let w = text_w + badge_pad_h * 2.0;
         ui.draw_rounded_rect(x, y, w, badge_h, bg, badge_radius);
         ui.draw_text(x + badge_pad_h, text_y, label, badge_font as f32, white);
@@ -510,25 +489,28 @@ fn draw_sync_indicators(ui: &mut UIRenderer, sync: &SyncStatus) {
 
     // Device name badge (always inactive bg, like the standard bar).
     let device_text = if sync.midi_clock_device_name.is_empty() {
-        if sync.midi_clock_enabled { "MIDI" } else { "Select..." }
+        if sync.midi_clock_enabled {
+            "MIDI"
+        } else {
+            "Select..."
+        }
     } else {
         &sync.midi_clock_device_name
     };
     let w = draw_badge(ui, x, device_text, inactive_bg);
     x += w + item_gap;
 
-    let (clk_dot_color, clk_status, clk_text_color): (_, &str, _) =
-        if !sync.midi_clock_enabled {
-            (dot_inactive, "Off", dimmed)
-        } else if sync.midi_clock_receiving {
-            if sync.midi_clock_position_display.is_empty() {
-                (dot_green, "Receiving", white)
-            } else {
-                (dot_green, &sync.midi_clock_position_display, white)
-            }
+    let (clk_dot_color, clk_status, clk_text_color): (_, &str, _) = if !sync.midi_clock_enabled {
+        (dot_inactive, "Off", dimmed)
+    } else if sync.midi_clock_receiving {
+        if sync.midi_clock_position_display.is_empty() {
+            (dot_green, "Receiving", white)
         } else {
-            (dot_yellow, "Waiting", dimmed)
-        };
+            (dot_green, &sync.midi_clock_position_display, white)
+        }
+    } else {
+        (dot_yellow, "Waiting", dimmed)
+    };
 
     draw_dot(ui, x, clk_dot_color);
     x += dot_size + text_gap;
@@ -643,9 +625,9 @@ fn draw_cue_hud(
         .unwrap_or(99.0);
     let urgency = ((4.0 - bars_remaining) / 2.0).clamp(0.0, 1.0); // 0=yellow, 1=red
     let next_color = [
-        (240.0 + (255.0 - 240.0) * urgency) as u8,  // R: 240→255
-        (200.0 - 140.0 * urgency) as u8,              // G: 200→60
-        (60.0 - 30.0 * urgency) as u8,                // B: 60→30
+        (240.0 + (255.0 - 240.0) * urgency) as u8, // R: 240→255
+        (200.0 - 140.0 * urgency) as u8,           // G: 200→60
+        (60.0 - 30.0 * urgency) as u8,             // B: 60→30
         255u8,
     ];
     let next_color_f = [
@@ -685,7 +667,9 @@ fn draw_cue_hud(
     if !now_section_tracks.is_empty() {
         let mut ny = now_track_top;
         for name in now_section_tracks.iter().take(MAX_TRACKS) {
-            let w = ui.measure_text_cached(name, track_size, FontWeight::Medium).x;
+            let w = ui
+                .measure_text_cached(name, track_size, FontWeight::Medium)
+                .x;
             ui.draw_text((lw - w) * 0.5, ny, name, track_size as f32, now_green_dim);
             ny += track_line_h;
         }
@@ -698,8 +682,7 @@ fn draw_cue_hud(
     let label_next_dim = ui.measure_text_cached(label_next, label_size, FontWeight::Medium);
     let next_name_dim = ui.measure_text_cached(next_name, next_size, FontWeight::Medium);
     // Position NEXT below the 5-track slot so it never overlaps NOW.
-    let next_top = (now_track_top + MAX_TRACKS as f32 * track_line_h + 16.0)
-        .max(lh * 0.32);
+    let next_top = (now_track_top + MAX_TRACKS as f32 * track_line_h + 16.0).max(lh * 0.32);
     ui.draw_text(
         (lw - label_next_dim.x) * 0.5,
         next_top,
@@ -720,8 +703,16 @@ fn draw_cue_hud(
     if !next_section_tracks.is_empty() {
         next_content_y += 10.0;
         for name in next_section_tracks.iter().take(MAX_TRACKS) {
-            let w = ui.measure_text_cached(name, track_size, FontWeight::Medium).x;
-            ui.draw_text((lw - w) * 0.5, next_content_y, name, track_size as f32, next_color);
+            let w = ui
+                .measure_text_cached(name, track_size, FontWeight::Medium)
+                .x;
+            ui.draw_text(
+                (lw - w) * 0.5,
+                next_content_y,
+                name,
+                track_size as f32,
+                next_color,
+            );
             next_content_y += track_line_h;
         }
     }
@@ -822,7 +813,11 @@ fn draw_cue_hud(
     }
 
     let bpm_value = format!("{:.1}", bpm);
-    let play_value = if is_playing { "▶ PLAYING" } else { "■ STOPPED" };
+    let play_value = if is_playing {
+        "▶ PLAYING"
+    } else {
+        "■ STOPPED"
+    };
     let conn_value = if !ableton_connected {
         "DISCONNECTED"
     } else if cues_empty {
@@ -848,63 +843,58 @@ fn draw_cue_hud(
 
     let label_value_gap = 8.0_f32;
 
-    let draw_numeric_cell =
-        |ui: &mut UIRenderer, center_x: f32, label: &str, value: &str| {
-            let label_w = ui
-                .measure_text_cached(label, status_size, FontWeight::Medium)
-                .x;
-            let value_w = numeric_text_width(ui, value, status_size);
-            let total_w = label_w + label_value_gap + value_w;
-            let start_x = center_x - total_w * 0.5;
-            ui.draw_text(start_x, status_y, label, status_size as f32, dim);
-            draw_numeric_text(
-                ui,
-                start_x + label_w + label_value_gap,
-                status_y,
-                value,
-                status_size,
-                dim,
-            );
-        };
+    let draw_numeric_cell = |ui: &mut UIRenderer, center_x: f32, label: &str, value: &str| {
+        let label_w = ui
+            .measure_text_cached(label, status_size, FontWeight::Medium)
+            .x;
+        let value_w = numeric_text_width(ui, value, status_size);
+        let total_w = label_w + label_value_gap + value_w;
+        let start_x = center_x - total_w * 0.5;
+        ui.draw_text(start_x, status_y, label, status_size as f32, dim);
+        draw_numeric_text(
+            ui,
+            start_x + label_w + label_value_gap,
+            status_y,
+            value,
+            status_size,
+            dim,
+        );
+    };
 
-    let draw_slotted_cell =
-        |ui: &mut UIRenderer,
-         center_x: f32,
-         label: &str,
-         value: &str,
-         max_value: &str,
-         color: [u8; 4]| {
-            let label_w = if label.is_empty() {
-                0.0
-            } else {
-                ui.measure_text_cached(label, status_size, FontWeight::Medium)
-                    .x
-            };
-            let slot_w = ui
-                .measure_text_cached(max_value, status_size, FontWeight::Medium)
-                .x;
-            let value_w = ui
-                .measure_text_cached(value, status_size, FontWeight::Medium)
-                .x;
-            let gap = if label.is_empty() { 0.0 } else { label_value_gap };
-            let total_w = label_w + gap + slot_w;
-            let start_x = center_x - total_w * 0.5;
-            if !label.is_empty() {
-                ui.draw_text(start_x, status_y, label, status_size as f32, dim);
-            }
-            let value_x = start_x + label_w + gap + (slot_w - value_w) * 0.5;
-            ui.draw_text(value_x, status_y, value, status_size as f32, color);
+    let draw_slotted_cell = |ui: &mut UIRenderer,
+                             center_x: f32,
+                             label: &str,
+                             value: &str,
+                             max_value: &str,
+                             color: [u8; 4]| {
+        let label_w = if label.is_empty() {
+            0.0
+        } else {
+            ui.measure_text_cached(label, status_size, FontWeight::Medium)
+                .x
         };
+        let slot_w = ui
+            .measure_text_cached(max_value, status_size, FontWeight::Medium)
+            .x;
+        let value_w = ui
+            .measure_text_cached(value, status_size, FontWeight::Medium)
+            .x;
+        let gap = if label.is_empty() {
+            0.0
+        } else {
+            label_value_gap
+        };
+        let total_w = label_w + gap + slot_w;
+        let start_x = center_x - total_w * 0.5;
+        if !label.is_empty() {
+            ui.draw_text(start_x, status_y, label, status_size as f32, dim);
+        }
+        let value_x = start_x + label_w + gap + (slot_w - value_w) * 0.5;
+        ui.draw_text(value_x, status_y, value, status_size as f32, color);
+    };
 
     draw_numeric_cell(ui, cell_centers[0], "BPM", &bpm_value);
-    draw_slotted_cell(
-        ui,
-        cell_centers[1],
-        "",
-        play_value,
-        "▶ PLAYING",
-        dim,
-    );
+    draw_slotted_cell(ui, cell_centers[1], "", play_value, "▶ PLAYING", dim);
     draw_slotted_cell(
         ui,
         cell_centers[2],
@@ -923,11 +913,7 @@ fn draw_cue_hud(
 /// caller when the snapshot is empty (no macros mapped).
 ///
 /// Caller must have already called `ui.begin_frame()`.
-fn draw_macros_column(
-    ui: &mut UIRenderer,
-    lh: f32,
-    macros: &[perform_macros::MacroDisplay],
-) {
+fn draw_macros_column(ui: &mut UIRenderer, lh: f32, macros: &[perform_macros::MacroDisplay]) {
     let dim = [140u8, 140u8, 145u8, 255u8];
     let white = [240u8, 240u8, 240u8, 255u8];
     // Ableton purple — matches the macro accent used elsewhere in the

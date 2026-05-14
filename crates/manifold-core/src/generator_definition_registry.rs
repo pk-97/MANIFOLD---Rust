@@ -303,8 +303,7 @@ mod tests {
                 );
             }
             // Map size must equal the number of non-empty ids — no dupes.
-            let non_empty =
-                def.param_defs.iter().filter(|pd| !pd.id.is_empty()).count();
+            let non_empty = def.param_defs.iter().filter(|pd| !pd.id.is_empty()).count();
             assert_eq!(
                 def.id_to_index.len(),
                 non_empty,

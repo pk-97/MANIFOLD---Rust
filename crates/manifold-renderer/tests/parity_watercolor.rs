@@ -13,11 +13,9 @@
 mod parity;
 
 use manifold_core::EffectTypeId;
-use manifold_renderer::node_graph::primitives::Watercolor;
 use manifold_renderer::node_graph::ParamValue;
-use parity::{
-    assert_bytewise_equal, default_ctx, make_default_effect, Fixture, ParityHarness,
-};
+use manifold_renderer::node_graph::primitives::Watercolor;
+use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
 
 #[derive(Debug, Clone, Copy)]
 struct Setup {
@@ -29,14 +27,62 @@ struct Setup {
 }
 
 const SETUPS: &[Setup] = &[
-    Setup { label: "identity",     amount: 0.0, displace: 0.001,  blur: 2.0, decay: 0.99 },
-    Setup { label: "default",      amount: 0.5, displace: 0.001,  blur: 2.0, decay: 0.99 },
-    Setup { label: "full_wet",     amount: 1.0, displace: 0.001,  blur: 2.0, decay: 0.99 },
-    Setup { label: "high_displace",amount: 1.0, displace: 0.01,   blur: 2.0, decay: 0.99 },
-    Setup { label: "low_displace", amount: 1.0, displace: 0.0001, blur: 2.0, decay: 0.99 },
-    Setup { label: "wide_blur",    amount: 1.0, displace: 0.001,  blur: 8.0, decay: 0.99 },
-    Setup { label: "tight_blur",   amount: 1.0, displace: 0.001,  blur: 0.5, decay: 0.99 },
-    Setup { label: "fast_decay",   amount: 1.0, displace: 0.001,  blur: 2.0, decay: 0.90 },
+    Setup {
+        label: "identity",
+        amount: 0.0,
+        displace: 0.001,
+        blur: 2.0,
+        decay: 0.99,
+    },
+    Setup {
+        label: "default",
+        amount: 0.5,
+        displace: 0.001,
+        blur: 2.0,
+        decay: 0.99,
+    },
+    Setup {
+        label: "full_wet",
+        amount: 1.0,
+        displace: 0.001,
+        blur: 2.0,
+        decay: 0.99,
+    },
+    Setup {
+        label: "high_displace",
+        amount: 1.0,
+        displace: 0.01,
+        blur: 2.0,
+        decay: 0.99,
+    },
+    Setup {
+        label: "low_displace",
+        amount: 1.0,
+        displace: 0.0001,
+        blur: 2.0,
+        decay: 0.99,
+    },
+    Setup {
+        label: "wide_blur",
+        amount: 1.0,
+        displace: 0.001,
+        blur: 8.0,
+        decay: 0.99,
+    },
+    Setup {
+        label: "tight_blur",
+        amount: 1.0,
+        displace: 0.001,
+        blur: 0.5,
+        decay: 0.99,
+    },
+    Setup {
+        label: "fast_decay",
+        amount: 1.0,
+        displace: 0.001,
+        blur: 2.0,
+        decay: 0.90,
+    },
 ];
 
 #[test]

@@ -106,7 +106,7 @@ struct MarkerNodeGroup {
 /// Structured storage for one track's background nodes.
 struct TrackBgGroup {
     bg_id: i32,
-    accent_id: i32,    // -1 if no accent bar
+    accent_id: i32, // -1 if no accent bar
     separator_id: i32,
 }
 
@@ -439,7 +439,8 @@ impl TimelineViewportPanel {
         self.collapsed_group_bitmaps.clear();
         for track in &self.tracks {
             if track.is_group && track.is_collapsed && !track.child_layer_indices.is_empty() {
-                self.collapsed_group_bitmaps.push(Some(CollapsedGroupBitmap::new()));
+                self.collapsed_group_bitmaps
+                    .push(Some(CollapsedGroupBitmap::new()));
             } else {
                 self.collapsed_group_bitmaps.push(None);
             }
@@ -468,9 +469,7 @@ impl TimelineViewportPanel {
             clip_fp = clip_fp
                 .wrapping_mul(31)
                 .wrapping_add(c.duration_beats.as_f32().to_bits() as u64);
-            clip_fp = clip_fp
-                .wrapping_mul(31)
-                .wrapping_add(c.layer_index as u64);
+            clip_fp = clip_fp.wrapping_mul(31).wrapping_add(c.layer_index as u64);
         }
         if clip_fp != self.overview_last_clip_fingerprint {
             self.overview_clips_dirty = true;
@@ -910,11 +909,12 @@ impl TimelineViewportPanel {
         }
 
         // Iterate clips on this layer in reverse order (topmost/last wins)
-        let layer_clips = self.clips_by_layer.get(layer_index)
+        let layer_clips = self
+            .clips_by_layer
+            .get(layer_index)
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
         for clip in layer_clips.iter().rev() {
-
             let clip_start_f32 = clip.start_beat.as_f32();
             let clip_end = clip_start_f32 + clip.duration_beats.as_f32();
             if beat < clip_start_f32 || beat >= clip_end {
@@ -1026,7 +1026,9 @@ impl TimelineViewportPanel {
         // Neighboring clip edges on the same layer (uses pixel-based threshold).
         // Clip edges that are closer than the grid snap win — this lets you
         // align clip boundaries precisely even between grid lines.
-        let layer_clips = self.clips_by_layer.get(layer_index)
+        let layer_clips = self
+            .clips_by_layer
+            .get(layer_index)
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
         for clip in layer_clips {
@@ -1393,8 +1395,9 @@ impl Panel for TimelineViewportPanel {
                 if self.drag_mode == ViewportDragMode::RulerScrub {
                     // Clamp pixel to ruler rect so dragging outside the viewport
                     // doesn't seek to extreme positions.
-                    let clamped_x =
-                        pos.x.clamp(self.ruler_rect.x, self.ruler_rect.x + self.ruler_rect.width);
+                    let clamped_x = pos
+                        .x
+                        .clamp(self.ruler_rect.x, self.ruler_rect.x + self.ruler_rect.width);
                     let raw = self.pixel_to_beat(clamped_x);
                     let beat = self.scrub_snap_beat(raw, self.scrub_free);
                     return vec![PanelAction::Seek(beat.as_f32())];
@@ -1524,12 +1527,12 @@ impl TimelineViewportPanel {
 
         // ── Layer 1: Clip layer (cached, only repainted on clip data change) ──
         if clips_need_repaint {
-            self.overview_clip_pixels.resize(total, Color32::TRANSPARENT);
+            self.overview_clip_pixels
+                .resize(total, Color32::TRANSPARENT);
             self.overview_clip_pixels.fill(Color32::TRANSPARENT);
 
             // Remap: skip group layers
-            let mut non_group_row: Vec<Option<usize>> =
-                Vec::with_capacity(self.tracks.len());
+            let mut non_group_row: Vec<Option<usize>> = Vec::with_capacity(self.tracks.len());
             let mut non_group_count: usize = 0;
             for track in &self.tracks {
                 if track.is_group {
@@ -1552,8 +1555,7 @@ impl TimelineViewportPanel {
                     let end_norm =
                         (clip.start_beat.as_f32() + clip.duration_beats.as_f32()) / max_beat;
                     let x = (start_norm * tex_w as f32).round() as i32;
-                    let w =
-                        ((end_norm - start_norm) * tex_w as f32).round().max(1.0) as i32;
+                    let w = ((end_norm - start_norm) * tex_w as f32).round().max(1.0) as i32;
                     let y = (row as f32 * row_h).round() as i32;
                     let h = row_h.round().max(1.0) as i32;
 
@@ -1574,7 +1576,8 @@ impl TimelineViewportPanel {
 
         // ── Layer 2: Composite — copy cached clips, then overlay indicator + playhead ──
         self.overview_pixels.resize(total, Color32::TRANSPARENT);
-        self.overview_pixels.copy_from_slice(&self.overview_clip_pixels);
+        self.overview_pixels
+            .copy_from_slice(&self.overview_clip_pixels);
 
         // Viewport indicator (semi-transparent blue)
         if ppb > 0.0 {
@@ -1582,9 +1585,7 @@ impl TimelineViewportPanel {
             let vp_start_norm = scroll_x / max_beat;
             let vp_width_norm = viewport_width_beats / max_beat;
             let vp_x = (vp_start_norm * tex_w as f32).round() as i32;
-            let vp_w = (vp_width_norm * tex_w as f32)
-                .round()
-                .min(tex_w as f32) as i32;
+            let vp_w = (vp_width_norm * tex_w as f32).round().min(tex_w as f32) as i32;
             bitmap_painter::fill_rect(
                 &mut self.overview_pixels,
                 tex_w,
@@ -1628,10 +1629,7 @@ impl TimelineViewportPanel {
 
     /// Overview bitmap data for GPU upload. Returns (pixels, w, h) if dirty.
     pub fn overview_bitmap(&mut self) -> Option<(&[Color32], usize, usize)> {
-        if self.overview_dirty
-            && self.overview_tex_w > 0
-            && self.overview_tex_h > 0
-        {
+        if self.overview_dirty && self.overview_tex_w > 0 && self.overview_tex_h > 0 {
             self.overview_dirty = false;
             Some((
                 &self.overview_pixels,
@@ -2211,7 +2209,11 @@ impl TimelineViewportPanel {
                 label_y,
                 color::MARKER_LABEL_WIDTH,
                 color::MARKER_LABEL_HEIGHT,
-                if marker.name.is_empty() { "" } else { &marker.name },
+                if marker.name.is_empty() {
+                    ""
+                } else {
+                    &marker.name
+                },
                 UIStyle {
                     bg_color: color::MARKER_LABEL_BG,
                     text_color: mc,
@@ -2305,9 +2307,10 @@ impl TimelineViewportPanel {
                 tick_count += 1;
 
                 if (beat % label_step).abs() < 0.001
-                    && !self.markers.iter().any(|m| {
-                        (m.beat.as_f32() - beat).abs() < 0.001 && !m.name.is_empty()
-                    })
+                    && !self
+                        .markers
+                        .iter()
+                        .any(|m| (m.beat.as_f32() - beat).abs() < 0.001 && !m.name.is_empty())
                 {
                     label_count += 1;
                 }
@@ -2316,9 +2319,7 @@ impl TimelineViewportPanel {
         }
 
         // Count mismatch → fallback to full rebuild
-        if tick_count != self.ruler_tick_ids.len()
-            || label_count != self.ruler_label_ids.len()
-        {
+        if tick_count != self.ruler_tick_ids.len() || label_count != self.ruler_label_ids.len() {
             return false;
         }
 
@@ -2430,9 +2431,8 @@ impl TimelineViewportPanel {
             let has_out = self.export_out_beat > self.export_in_beat;
 
             let in_px = self.beat_to_pixel(self.export_in_beat);
-            let in_vis = enabled
-                && in_px >= self.tracks_rect.x
-                && in_px <= self.tracks_rect.x_max();
+            let in_vis =
+                enabled && in_px >= self.tracks_rect.x && in_px <= self.tracks_rect.x_max();
             tree.set_visible(self.export_in_marker_id as u32, in_vis);
             if in_vis {
                 tree.set_bounds(
@@ -2539,8 +2539,7 @@ impl TimelineViewportPanel {
             tree.set_visible(group.label_id as u32, in_view && has_name);
             if in_view && has_name {
                 let label_x = flag_x + flag_w + 2.0;
-                let label_y_m =
-                    flag_y + (flag_h - color::MARKER_LABEL_HEIGHT) * 0.5;
+                let label_y_m = flag_y + (flag_h - color::MARKER_LABEL_HEIGHT) * 0.5;
                 tree.set_bounds(
                     group.label_id as u32,
                     Rect::new(
@@ -2568,9 +2567,7 @@ impl TimelineViewportPanel {
     /// Returns `true` if successful, `false` if full rebuild needed.
     pub fn try_update_vertical_scroll(&mut self, tree: &mut UITree) -> bool {
         // Guard: must match current track count
-        if self.track_bg_groups.len() != self.tracks.len()
-            || self.track_bg_groups.is_empty()
-        {
+        if self.track_bg_groups.len() != self.tracks.len() || self.track_bg_groups.is_empty() {
             return false;
         }
 

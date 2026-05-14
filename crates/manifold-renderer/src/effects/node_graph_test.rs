@@ -23,8 +23,8 @@ use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Mix;
 use crate::node_graph::{
-    compile, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId,
-    ParamValue, ResourceId, Slot, Source,
+    ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId,
+    ParamValue, ResourceId, Slot, Source, compile,
 };
 use crate::render_target::RenderTarget;
 

@@ -6,12 +6,11 @@
 //! content thread drops the frame.
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use manifold_gpu::{
-    GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
-    GpuTextureUsage,
+    GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 
 /// Default number of textures in the pool.
@@ -67,7 +66,8 @@ impl TextureRingPool {
                 depth: 1,
                 format,
                 dimension: GpuTextureDimension::D2,
-                usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::SHADER_WRITE
+                usage: GpuTextureUsage::SHADER_READ
+                    | GpuTextureUsage::SHADER_WRITE
                     | GpuTextureUsage::COPY_SRC,
                 label: &label,
                 mip_levels: 1,
@@ -76,9 +76,7 @@ impl TextureRingPool {
             available.push(Arc::new(AtomicBool::new(true)));
         }
 
-        log::info!(
-            "[TextureRingPool] Allocated {count} textures: {width}x{height} {format:?}",
-        );
+        log::info!("[TextureRingPool] Allocated {count} textures: {width}x{height} {format:?}",);
 
         Self {
             textures,
@@ -123,5 +121,4 @@ impl TextureRingPool {
     pub fn texture(&self, index: usize) -> &GpuTexture {
         &self.textures[index]
     }
-
 }

@@ -828,8 +828,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 layers_to_group,
                 original_order,
             );
-            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                Box::new(cmd);
+            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
             boxed.execute(project);
             ContentCommand::send(
                 self.content_tx,
@@ -877,8 +876,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 child_ids,
                 original_order,
             );
-            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                Box::new(cmd);
+            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
             boxed.execute(project);
             ContentCommand::send(
                 self.content_tx,

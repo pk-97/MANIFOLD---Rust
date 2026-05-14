@@ -607,14 +607,13 @@ impl GenParamPanel {
                             .copied()
                             .unwrap_or(EnvelopeMode::Adsr);
                         if env_mode == EnvelopeMode::Random {
-                            self.envelope_range_ids[i] =
-                                Some(build_envelope_range_handles(
-                                    tree,
-                                    slider.track as i32,
-                                    slider.track_rect,
-                                    &self.state.mod_state,
-                                    i,
-                                ));
+                            self.envelope_range_ids[i] = Some(build_envelope_range_handles(
+                                tree,
+                                slider.track as i32,
+                                slider.track_rect,
+                                &self.state.mod_state,
+                                i,
+                            ));
                         } else {
                             self.target_ids[i] = Some(build_envelope_target(
                                 tree,
@@ -701,16 +700,15 @@ impl GenParamPanel {
                             .copied()
                             .unwrap_or(EnvelopeMode::Adsr);
                         // Always build the random config buttons
-                        self.envelope_random_config_ids[i] =
-                            Some(build_envelope_random_config(
-                                tree,
-                                -1,
-                                cx,
-                                cy,
-                                config_w,
-                                &self.state.mod_state,
-                                i,
-                            ));
+                        self.envelope_random_config_ids[i] = Some(build_envelope_random_config(
+                            tree,
+                            -1,
+                            cx,
+                            cy,
+                            config_w,
+                            &self.state.mod_state,
+                            i,
+                        ));
                         cy += ENV_RANDOM_CONFIG_HEIGHT;
                         // Only show ADSR sliders when in ADSR mode
                         if env_mode == EnvelopeMode::Adsr {
@@ -751,9 +749,8 @@ impl GenParamPanel {
 
                     // Ableton config drawer (auto-shows when mapping exists)
                     if let Some(ref display) = self.param_info[i].ableton_display {
-                        self.ableton_config_ids[i] = Some(build_ableton_config(
-                            tree, -1, cx, cy, config_w, display,
-                        ));
+                        self.ableton_config_ids[i] =
+                            Some(build_ableton_config(tree, -1, cx, cy, config_w, display));
                         cy += ABL_CONFIG_HEIGHT;
                     }
                 }
@@ -1025,7 +1022,11 @@ impl GenParamPanel {
         // String param buttons → open text input or dropdown
         for (si, &btn_id) in self.string_param_btn_ids.iter().enumerate() {
             if id == btn_id {
-                if self.string_param_info.get(si).is_some_and(|sp| sp.use_dropdown) {
+                if self
+                    .string_param_info
+                    .get(si)
+                    .is_some_and(|sp| sp.use_dropdown)
+                {
                     return vec![PanelAction::GenStringParamDropdownClicked(si)];
                 }
                 return vec![PanelAction::GenStringParamClicked(si)];
@@ -1317,23 +1318,15 @@ impl GenParamPanel {
                 };
                 self.param_info[pi].ableton_range = Some((new_min, new_max));
 
-                if let Some(t) =
-                    self.ableton_trim_ids.get(pi).and_then(|t| t.as_ref())
-                {
+                if let Some(t) = self.ableton_trim_ids.get(pi).and_then(|t| t.as_ref()) {
                     let usable = slider.track_rect.width - OVERLAY_INSET * 2.0;
                     let base_x = slider.track_rect.x + OVERLAY_INSET;
                     let fill_x = base_x + new_min * usable;
                     let fill_w = (new_max - new_min) * usable;
-                    let fill_h =
-                        slider.track_rect.height - OVERLAY_INSET * 2.0;
+                    let fill_h = slider.track_rect.height - OVERLAY_INSET * 2.0;
                     tree.set_bounds(
                         t.fill_id as u32,
-                        Rect::new(
-                            fill_x,
-                            slider.track_rect.y + OVERLAY_INSET,
-                            fill_w,
-                            fill_h,
-                        ),
+                        Rect::new(fill_x, slider.track_rect.y + OVERLAY_INSET, fill_w, fill_h),
                     );
                     tree.set_bounds(
                         t.min_bar_id as u32,
@@ -1355,9 +1348,7 @@ impl GenParamPanel {
                     );
                 }
 
-                return vec![PanelAction::AbletonGenTrimChanged(
-                    pi, new_min, new_max,
-                )];
+                return vec![PanelAction::AbletonGenTrimChanged(pi, new_min, new_max)];
             }
         }
 

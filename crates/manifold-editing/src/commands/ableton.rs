@@ -34,10 +34,7 @@ impl ChangeAbletonMappingCommand {
         }
     }
 
-    pub fn unmap(
-        target: AbletonMappingTarget,
-        old_mapping: AbletonParamMapping,
-    ) -> Self {
+    pub fn unmap(target: AbletonMappingTarget, old_mapping: AbletonParamMapping) -> Self {
         Self {
             target,
             old_mapping: Some(old_mapping),
@@ -98,7 +95,13 @@ impl ChangeAbletonTrimCommand {
         new_min: f32,
         new_max: f32,
     ) -> Self {
-        Self { target, old_min, old_max, new_min, new_max }
+        Self {
+            target,
+            old_min,
+            old_max,
+            new_min,
+            new_max,
+        }
     }
 }
 
@@ -124,7 +127,10 @@ fn apply_mapping(
     mapping: &Option<AbletonParamMapping>,
 ) {
     match target {
-        AbletonMappingTarget::MasterEffect { effect_type, param_id } => {
+        AbletonMappingTarget::MasterEffect {
+            effect_type,
+            param_id,
+        } => {
             if let Some(fx) = project
                 .settings
                 .master_effects
@@ -141,7 +147,11 @@ fn apply_mapping(
                 }
             }
         }
-        AbletonMappingTarget::LayerEffect { layer_id, effect_type, param_id } => {
+        AbletonMappingTarget::LayerEffect {
+            layer_id,
+            effect_type,
+            param_id,
+        } => {
             if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str())
                 && let Some(effects) = &mut layer.effects
                 && let Some(fx) = effects.iter_mut().find(|f| f.effect_type() == effect_type)
@@ -180,7 +190,10 @@ fn apply_mapping(
 
 fn set_trim(project: &mut Project, target: &AbletonMappingTarget, min: f32, max: f32) {
     match target {
-        AbletonMappingTarget::MasterEffect { effect_type, param_id } => {
+        AbletonMappingTarget::MasterEffect {
+            effect_type,
+            param_id,
+        } => {
             if let Some(fx) = project
                 .settings
                 .master_effects
@@ -193,7 +206,11 @@ fn set_trim(project: &mut Project, target: &AbletonMappingTarget, min: f32, max:
                 m.range_max = max;
             }
         }
-        AbletonMappingTarget::LayerEffect { layer_id, effect_type, param_id } => {
+        AbletonMappingTarget::LayerEffect {
+            layer_id,
+            effect_type,
+            param_id,
+        } => {
             if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str())
                 && let Some(effects) = &mut layer.effects
                 && let Some(fx) = effects.iter_mut().find(|f| f.effect_type() == effect_type)

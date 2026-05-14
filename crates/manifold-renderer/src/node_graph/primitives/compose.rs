@@ -269,8 +269,8 @@ mod gpu_tests {
     use crate::node_graph::bindings::Slot;
     use crate::node_graph::execution_plan::ResourceId;
     use crate::node_graph::{
-        compile, primitives::compose::Mix, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph,
-        MetalBackend, NodeInstanceId, ParamValue, Source,
+        ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId,
+        ParamValue, Source, compile, primitives::compose::Mix,
     };
     use crate::render_target::RenderTarget;
 
@@ -419,10 +419,7 @@ mod gpu_tests {
             "red channel {r} != 0.5 (mix(1,0,0.5))"
         );
         assert!(g_chan.abs() < tol, "green {g_chan} != 0.0");
-        assert!(
-            (b - 0.5).abs() < tol,
-            "blue {b} != 0.5 (mix(0,1,0.5))"
-        );
+        assert!((b - 0.5).abs() < tol, "blue {b} != 0.5 (mix(0,1,0.5))");
         assert!((a - 1.0).abs() < tol, "alpha {a} != 1.0");
     }
 
@@ -439,7 +436,8 @@ mod gpu_tests {
         let src_b = g.add_node(Box::new(Source::new()));
         let mix = g.add_node(Box::new(Mix::new()));
         let out = g.add_node(Box::new(FinalOutput::new()));
-        g.set_param(mix, "amount", ParamValue::Float(amount)).unwrap();
+        g.set_param(mix, "amount", ParamValue::Float(amount))
+            .unwrap();
         g.set_param(mix, "mode", ParamValue::Enum(mode)).unwrap();
         g.connect((src_a, "out"), (mix, "a")).unwrap();
         g.connect((src_b, "out"), (mix, "b")).unwrap();

@@ -152,8 +152,7 @@ impl StrangeAttractorGenerator {
         let sim_src = include_str!("shaders/strange_attractor_simulate.wgsl");
         let simulate_pipeline =
             device.create_compute_pipeline(sim_src, "cs_simulate", "Attractor Simulate");
-        let seed_pipeline =
-            device.create_compute_pipeline(sim_src, "cs_seed", "Attractor Seed");
+        let seed_pipeline = device.create_compute_pipeline(sim_src, "cs_seed", "Attractor Seed");
 
         let splat_pipeline = device.create_compute_pipeline(
             include_str!("shaders/strange_attractor_scatter.wgsl"),
@@ -251,11 +250,11 @@ impl StrangeAttractorGenerator {
 
     fn attractor_center(atype: u32) -> [f32; 3] {
         match atype {
-            0 => [0.0, 0.0, 25.0],  // Lorenz
-            1 => [0.0, 0.0, 2.0],   // Rössler
-            2 => [0.0, 0.0, 0.5],   // Aizawa
-            3 => [0.0, 0.0, 0.0],   // Thomas
-            _ => [0.0, 0.0, 0.0],   // Halvorsen
+            0 => [0.0, 0.0, 25.0], // Lorenz
+            1 => [0.0, 0.0, 2.0],  // Rössler
+            2 => [0.0, 0.0, 0.5],  // Aizawa
+            3 => [0.0, 0.0, 0.0],  // Thomas
+            _ => [0.0, 0.0, 0.0],  // Halvorsen
         }
     }
 
@@ -325,7 +324,9 @@ impl Generator for StrangeAttractorGenerator {
             if ctx.trigger_count as i32 != self.last_trigger_count {
                 self.last_trigger_count = ctx.trigger_count as i32;
             }
-            param(ctx, TYPE, 0.0).round().clamp(0.0, (ATTRACTOR_COUNT - 1) as f32) as u32
+            param(ctx, TYPE, 0.0)
+                .round()
+                .clamp(0.0, (ATTRACTOR_COUNT - 1) as f32) as u32
         };
 
         let active_count = (millions * 1_000_000.0)

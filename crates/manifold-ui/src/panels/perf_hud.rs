@@ -190,7 +190,11 @@ impl PerfHudPanel {
         fmt_set!(self.ui_fps_value_id, "{:.0}", m.ui_fps);
         fmt_set!(self.ui_frame_time_id, "{:.1} ms", m.ui_frame_time_ms);
         fmt_set!(self.render_fps_value_id, "{:.0}", m.render_fps);
-        fmt_set!(self.render_frame_time_id, "{:.1} ms", m.render_frame_time_ms);
+        fmt_set!(
+            self.render_frame_time_id,
+            "{:.1} ms",
+            m.render_frame_time_ms
+        );
         if self.gpu_fence_wait_id >= 0 {
             if m.gpu_fence_wait_ms > 0.1 {
                 fmt_set!(self.gpu_fence_wait_id, "{:.1} ms", m.gpu_fence_wait_ms);
@@ -216,7 +220,12 @@ impl PerfHudPanel {
                 );
             }
         }
-        fmt_set!(self.active_clips_id, "{} / {}", m.active_clips, m.preparing_clips);
+        fmt_set!(
+            self.active_clips_id,
+            "{} / {}",
+            m.active_clips,
+            m.preparing_clips
+        );
         fmt_set!(self.beat_id, "{:.2}", m.current_beat.0);
         if self.time_id >= 0 {
             let secs = m.current_time_secs;

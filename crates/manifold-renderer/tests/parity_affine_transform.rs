@@ -14,11 +14,9 @@
 mod parity;
 
 use manifold_core::EffectTypeId;
-use manifold_renderer::node_graph::primitives::AffineTransform;
 use manifold_renderer::node_graph::ParamValue;
-use parity::{
-    assert_bytewise_equal, default_ctx, make_default_effect, Fixture, ParityHarness,
-};
+use manifold_renderer::node_graph::primitives::AffineTransform;
+use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
 
 const DEG2RAD: f32 = std::f32::consts::PI / 180.0;
 
@@ -33,13 +31,55 @@ struct Xform {
 }
 
 const XFORMS: &[Xform] = &[
-    Xform { label: "identity", x: 0.0, y: 0.0, zoom: 1.0, rot_deg: 0.0 },
-    Xform { label: "translate", x: 0.2, y: -0.15, zoom: 1.0, rot_deg: 0.0 },
-    Xform { label: "zoom_in", x: 0.0, y: 0.0, zoom: 2.0, rot_deg: 0.0 },
-    Xform { label: "zoom_out", x: 0.0, y: 0.0, zoom: 0.5, rot_deg: 0.0 },
-    Xform { label: "rotate_30", x: 0.0, y: 0.0, zoom: 1.0, rot_deg: 30.0 },
-    Xform { label: "rotate_neg_90", x: 0.0, y: 0.0, zoom: 1.0, rot_deg: -90.0 },
-    Xform { label: "combo", x: 0.1, y: 0.1, zoom: 1.3, rot_deg: 45.0 },
+    Xform {
+        label: "identity",
+        x: 0.0,
+        y: 0.0,
+        zoom: 1.0,
+        rot_deg: 0.0,
+    },
+    Xform {
+        label: "translate",
+        x: 0.2,
+        y: -0.15,
+        zoom: 1.0,
+        rot_deg: 0.0,
+    },
+    Xform {
+        label: "zoom_in",
+        x: 0.0,
+        y: 0.0,
+        zoom: 2.0,
+        rot_deg: 0.0,
+    },
+    Xform {
+        label: "zoom_out",
+        x: 0.0,
+        y: 0.0,
+        zoom: 0.5,
+        rot_deg: 0.0,
+    },
+    Xform {
+        label: "rotate_30",
+        x: 0.0,
+        y: 0.0,
+        zoom: 1.0,
+        rot_deg: 30.0,
+    },
+    Xform {
+        label: "rotate_neg_90",
+        x: 0.0,
+        y: 0.0,
+        zoom: 1.0,
+        rot_deg: -90.0,
+    },
+    Xform {
+        label: "combo",
+        x: 0.1,
+        y: 0.1,
+        zoom: 1.3,
+        rot_deg: 45.0,
+    },
 ];
 
 #[test]

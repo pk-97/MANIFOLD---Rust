@@ -26,15 +26,15 @@
 use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 use crate::background_worker::BackgroundWorker;
 use crate::effect::{EffectContext, PostProcessEffect};
+use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
-use manifold_core::generator_registration::ParamSpec;
 use manifold_core::effects::EffectInstance;
-use crate::effects::registration::EffectFactory;
+use manifold_core::generator_registration::ParamSpec;
 
 inventory::submit! {
     EffectMetadata {
@@ -399,13 +399,23 @@ impl PostProcessEffect for DepthOfFieldFX {
     ) {
         // ── Extract parameters ────────────────────────────────────────
         let amount = fx.param_values.first().map(|p| p.value).unwrap_or(0.0);
-        let focus_mode = fx.param_values.get(1).map(|p| p.value).unwrap_or(0.0).round() as u32;
+        let focus_mode = fx
+            .param_values
+            .get(1)
+            .map(|p| p.value)
+            .unwrap_or(0.0)
+            .round() as u32;
         let focus_y = fx.param_values.get(2).map(|p| p.value).unwrap_or(0.5);
         let focus_x = fx.param_values.get(3).map(|p| p.value).unwrap_or(0.5);
         let focus_width = fx.param_values.get(4).map(|p| p.value).unwrap_or(0.15);
         let blur_strength = fx.param_values.get(5).map(|p| p.value).unwrap_or(0.5);
         let tilt_angle_deg = fx.param_values.get(6).map(|p| p.value).unwrap_or(0.0);
-        let quality = fx.param_values.get(7).map(|p| p.value).unwrap_or(1.0).round() as u32;
+        let quality = fx
+            .param_values
+            .get(7)
+            .map(|p| p.value)
+            .unwrap_or(1.0)
+            .round() as u32;
         let tilt_angle = tilt_angle_deg * std::f32::consts::PI / 180.0;
 
         // ── Ensure state ──────────────────────────────────────────────
@@ -608,4 +618,3 @@ impl PostProcessEffect for DepthOfFieldFX {
         }
     }
 }
-

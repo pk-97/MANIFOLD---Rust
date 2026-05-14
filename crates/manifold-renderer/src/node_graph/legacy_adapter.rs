@@ -85,14 +85,9 @@ pub struct LegacyPostProcessNode {
 }
 
 impl LegacyPostProcessNode {
-    pub fn new(
-        metadata: &'static EffectMetadata,
-        inner: Box<dyn PostProcessEffect>,
-    ) -> Self {
-        let type_id = EffectNodeType::new(format!(
-            "{LEGACY_TYPE_ID_PREFIX}{}",
-            metadata.id.as_str()
-        ));
+    pub fn new(metadata: &'static EffectMetadata, inner: Box<dyn PostProcessEffect>) -> Self {
+        let type_id =
+            EffectNodeType::new(format!("{LEGACY_TYPE_ID_PREFIX}{}", metadata.id.as_str()));
         let params = metadata
             .params
             .iter()
@@ -103,9 +98,7 @@ impl LegacyPostProcessNode {
         // metadata length up-front so per-frame `evaluate` never
         // grows the vec.
         let mut scratch_instance = EffectInstance::new(metadata.id.clone());
-        scratch_instance
-            .param_values
-            .reserve(metadata.params.len());
+        scratch_instance.param_values.reserve(metadata.params.len());
         Self {
             type_id,
             metadata,
@@ -250,9 +243,7 @@ impl EffectNode for LegacyPostProcessNode {
 /// `inventory` collection is one-shot at startup; cache the lookup so
 /// repeated callers (snapshot fallback, future graph factories) don't
 /// rescan the iterator.
-pub fn metadata_by_id(
-    id: &manifold_core::EffectTypeId,
-) -> Option<&'static EffectMetadata> {
+pub fn metadata_by_id(id: &manifold_core::EffectTypeId) -> Option<&'static EffectMetadata> {
     static MAP: OnceLock<ahash::AHashMap<manifold_core::EffectTypeId, &'static EffectMetadata>> =
         OnceLock::new();
     let map = MAP.get_or_init(|| {

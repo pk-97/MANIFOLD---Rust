@@ -27,11 +27,9 @@
 mod parity;
 
 use manifold_core::EffectTypeId;
-use manifold_renderer::node_graph::primitives::Invert;
 use manifold_renderer::node_graph::ParamValue;
-use parity::{
-    assert_bytewise_equal, default_ctx, make_default_effect, Fixture, ParityHarness,
-};
+use manifold_renderer::node_graph::primitives::Invert;
+use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
 
 /// Six representative intensity values per fixture: min, max, default,
 /// and three mid-range values that exercise different mix coefficients.
@@ -54,16 +52,12 @@ fn invert_is_pixel_exact_across_fixtures_and_intensities() {
             fx.param_values[0].value = intensity;
 
             let legacy = h.run_legacy(&fx, &input, &ctx);
-            let decomposed = h.run_primitive_graph(
-                Box::new(Invert::new()),
-                &input,
-                &ctx,
-                |graph, prim_id| {
+            let decomposed =
+                h.run_primitive_graph(Box::new(Invert::new()), &input, &ctx, |graph, prim_id| {
                     graph
                         .set_param(prim_id, "intensity", ParamValue::Float(intensity))
                         .expect("node.invert must accept `intensity` param");
-                },
-            );
+                });
 
             assert_bytewise_equal(
                 &format!(
@@ -91,16 +85,12 @@ fn invert_at_zero_intensity_is_passthrough() {
     fx.param_values[0].value = 0.0;
 
     let legacy = h.run_legacy(&fx, &input, &ctx);
-    let decomposed = h.run_primitive_graph(
-        Box::new(Invert::new()),
-        &input,
-        &ctx,
-        |graph, prim_id| {
+    let decomposed =
+        h.run_primitive_graph(Box::new(Invert::new()), &input, &ctx, |graph, prim_id| {
             graph
                 .set_param(prim_id, "intensity", ParamValue::Float(0.0))
                 .unwrap();
-        },
-    );
+        });
 
     assert_bytewise_equal("invert/passthrough", &legacy, &decomposed);
 }
@@ -118,16 +108,12 @@ fn invert_at_full_intensity_matches_legacy() {
     fx.param_values[0].value = 1.0;
 
     let legacy = h.run_legacy(&fx, &input, &ctx);
-    let decomposed = h.run_primitive_graph(
-        Box::new(Invert::new()),
-        &input,
-        &ctx,
-        |graph, prim_id| {
+    let decomposed =
+        h.run_primitive_graph(Box::new(Invert::new()), &input, &ctx, |graph, prim_id| {
             graph
                 .set_param(prim_id, "intensity", ParamValue::Float(1.0))
                 .unwrap();
-        },
-    );
+        });
 
     assert_bytewise_equal("invert/full-strength", &legacy, &decomposed);
 }

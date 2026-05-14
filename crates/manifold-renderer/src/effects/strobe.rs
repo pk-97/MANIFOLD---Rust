@@ -1,11 +1,11 @@
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
+use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
-use manifold_core::generator_registration::ParamSpec;
 use manifold_core::effects::EffectInstance;
-use crate::effects::registration::EffectFactory;
+use manifold_core::generator_registration::ParamSpec;
 
 inventory::submit! {
     EffectMetadata {

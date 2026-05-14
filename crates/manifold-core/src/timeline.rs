@@ -224,8 +224,7 @@ impl Timeline {
         // root indices in their original order. A "root" is any layer with no
         // parent_layer_id, or whose parent_layer_id does not match an existing
         // layer in this timeline (orphan rescue).
-        let id_set: ahash::AHashSet<&LayerId> =
-            self.layers.iter().map(|l| &l.layer_id).collect();
+        let id_set: ahash::AHashSet<&LayerId> = self.layers.iter().map(|l| &l.layer_id).collect();
 
         let mut children: AHashMap<LayerId, Vec<usize>> = AHashMap::new();
         let mut roots: Vec<usize> = Vec::with_capacity(n);
@@ -269,7 +268,11 @@ impl Timeline {
         }
 
         // Fast path: already in tree order — skip the rebuild.
-        if new_order.iter().enumerate().all(|(new_i, &old_i)| new_i == old_i) {
+        if new_order
+            .iter()
+            .enumerate()
+            .all(|(new_i, &old_i)| new_i == old_i)
+        {
             self.reindex_layers();
             return;
         }
@@ -392,11 +395,7 @@ impl Timeline {
     /// Get active clips at a given beat (respecting mute/solo with group hierarchy).
     /// Ensures sort caches are up-to-date, then queries into caller-provided buffer.
     /// From Unity Timeline.cs GetActiveClipsAtBeat (lines 331-374).
-    pub fn get_active_clips_at_beat(
-        &mut self,
-        beat: Beats,
-        results: &mut Vec<(usize, usize)>,
-    ) {
+    pub fn get_active_clips_at_beat(&mut self, beat: Beats, results: &mut Vec<(usize, usize)>) {
         self.ensure_layers_sorted();
         self.get_active_clips_at_beat_ref(beat, results);
     }
@@ -405,11 +404,7 @@ impl Timeline {
     /// IMPORTANT: Caller must ensure sort caches are current via `ensure_layers_sorted()`
     /// before calling this. Use `get_active_clips_at_beat()` if unsure.
     /// Zero per-frame allocation — uses caller's pre-allocated buffer.
-    pub fn get_active_clips_at_beat_ref(
-        &self,
-        beat: Beats,
-        results: &mut Vec<(usize, usize)>,
-    ) {
+    pub fn get_active_clips_at_beat_ref(&self, beat: Beats, results: &mut Vec<(usize, usize)>) {
         let any_solo = self.layers.iter().any(|l| l.is_solo);
         results.clear();
         let mut active_indices = Vec::new();
@@ -441,8 +436,7 @@ impl Timeline {
             }
 
             active_indices.clear();
-            self.layers[li]
-                .collect_active_clips_at_beat(beat, &mut active_indices);
+            self.layers[li].collect_active_clips_at_beat(beat, &mut active_indices);
             for ci in &active_indices {
                 if !self.layers[li].clips[*ci].is_muted {
                     results.push((li, *ci));
@@ -627,11 +621,9 @@ mod enforce_tree_order_tests {
         parent(&mut b, &group);
         t.layers = vec![mk("Top"), group, mk("Mid"), a, b, mk("Bot")];
         t.enforce_tree_order();
-        let after_first: Vec<String> =
-            t.layers.iter().map(|l| l.name.clone()).collect();
+        let after_first: Vec<String> = t.layers.iter().map(|l| l.name.clone()).collect();
         t.enforce_tree_order();
-        let after_second: Vec<String> =
-            t.layers.iter().map(|l| l.name.clone()).collect();
+        let after_second: Vec<String> = t.layers.iter().map(|l| l.name.clone()).collect();
         assert_eq!(after_first, after_second);
     }
 

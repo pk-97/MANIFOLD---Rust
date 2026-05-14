@@ -16,11 +16,9 @@
 mod parity;
 
 use manifold_core::EffectTypeId;
-use manifold_renderer::node_graph::primitives::AutoGain;
 use manifold_renderer::node_graph::ParamValue;
-use parity::{
-    assert_bytewise_equal, default_ctx, make_default_effect, Fixture, ParityHarness,
-};
+use manifold_renderer::node_graph::primitives::AutoGain;
+use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
 
 #[derive(Debug, Clone, Copy)]
 struct Setup {
@@ -35,15 +33,96 @@ struct Setup {
 }
 
 const SETUPS: &[Setup] = &[
-    Setup { label: "identity",        amount: 0.0, ratio: 0.5, punch: 0.5, target: 0.5, hdr_ret: 0.5, color: 0.0,  character: 0 },
-    Setup { label: "clean_default",   amount: 1.0, ratio: 0.5, punch: 0.5, target: 0.5, hdr_ret: 0.5, color: 0.0,  character: 0 },
-    Setup { label: "warm_default",    amount: 1.0, ratio: 0.5, punch: 0.5, target: 0.5, hdr_ret: 0.5, color: 0.0,  character: 1 },
-    Setup { label: "film_default",    amount: 1.0, ratio: 0.5, punch: 0.5, target: 0.5, hdr_ret: 0.5, color: 0.0,  character: 2 },
-    Setup { label: "vivid_default",   amount: 1.0, ratio: 0.5, punch: 0.5, target: 0.5, hdr_ret: 0.5, color: 0.0,  character: 3 },
-    Setup { label: "grit_default",    amount: 1.0, ratio: 0.5, punch: 0.5, target: 0.5, hdr_ret: 0.5, color: 0.0,  character: 4 },
-    Setup { label: "color_pos",       amount: 1.0, ratio: 0.5, punch: 0.5, target: 0.5, hdr_ret: 0.5, color: 1.0,  character: 0 },
-    Setup { label: "color_neg",       amount: 1.0, ratio: 0.5, punch: 0.5, target: 0.5, hdr_ret: 0.5, color: -1.0, character: 0 },
-    Setup { label: "high_hdr_ret",    amount: 1.0, ratio: 0.5, punch: 0.5, target: 0.5, hdr_ret: 1.0, color: 0.0,  character: 0 },
+    Setup {
+        label: "identity",
+        amount: 0.0,
+        ratio: 0.5,
+        punch: 0.5,
+        target: 0.5,
+        hdr_ret: 0.5,
+        color: 0.0,
+        character: 0,
+    },
+    Setup {
+        label: "clean_default",
+        amount: 1.0,
+        ratio: 0.5,
+        punch: 0.5,
+        target: 0.5,
+        hdr_ret: 0.5,
+        color: 0.0,
+        character: 0,
+    },
+    Setup {
+        label: "warm_default",
+        amount: 1.0,
+        ratio: 0.5,
+        punch: 0.5,
+        target: 0.5,
+        hdr_ret: 0.5,
+        color: 0.0,
+        character: 1,
+    },
+    Setup {
+        label: "film_default",
+        amount: 1.0,
+        ratio: 0.5,
+        punch: 0.5,
+        target: 0.5,
+        hdr_ret: 0.5,
+        color: 0.0,
+        character: 2,
+    },
+    Setup {
+        label: "vivid_default",
+        amount: 1.0,
+        ratio: 0.5,
+        punch: 0.5,
+        target: 0.5,
+        hdr_ret: 0.5,
+        color: 0.0,
+        character: 3,
+    },
+    Setup {
+        label: "grit_default",
+        amount: 1.0,
+        ratio: 0.5,
+        punch: 0.5,
+        target: 0.5,
+        hdr_ret: 0.5,
+        color: 0.0,
+        character: 4,
+    },
+    Setup {
+        label: "color_pos",
+        amount: 1.0,
+        ratio: 0.5,
+        punch: 0.5,
+        target: 0.5,
+        hdr_ret: 0.5,
+        color: 1.0,
+        character: 0,
+    },
+    Setup {
+        label: "color_neg",
+        amount: 1.0,
+        ratio: 0.5,
+        punch: 0.5,
+        target: 0.5,
+        hdr_ret: 0.5,
+        color: -1.0,
+        character: 0,
+    },
+    Setup {
+        label: "high_hdr_ret",
+        amount: 1.0,
+        ratio: 0.5,
+        punch: 0.5,
+        target: 0.5,
+        hdr_ret: 1.0,
+        color: 0.0,
+        character: 0,
+    },
 ];
 
 #[test]
@@ -71,11 +150,8 @@ fn auto_gain_is_pixel_exact_across_fixtures_and_setups() {
             fx.param_values[6].value = s.character as f32;
 
             let legacy = h.run_legacy(&fx, &input, &ctx);
-            let decomposed = h.run_primitive_graph(
-                Box::new(AutoGain::new()),
-                &input,
-                &ctx,
-                |graph, prim_id| {
+            let decomposed =
+                h.run_primitive_graph(Box::new(AutoGain::new()), &input, &ctx, |graph, prim_id| {
                     graph
                         .set_param(prim_id, "amount", ParamValue::Float(s.amount))
                         .unwrap();
@@ -97,8 +173,7 @@ fn auto_gain_is_pixel_exact_across_fixtures_and_setups() {
                     graph
                         .set_param(prim_id, "char", ParamValue::Enum(s.character))
                         .unwrap();
-                },
-            );
+                });
 
             assert_bytewise_equal(
                 &format!("auto_gain/{:?}/setup={}", fixture, s.label),

@@ -198,7 +198,6 @@ impl FrameTimer {
         self.target_frame_duration = Duration::from_secs_f64(1.0 / fps);
     }
 
-
     pub fn target_fps(&self) -> f64 {
         self.target_fps
     }

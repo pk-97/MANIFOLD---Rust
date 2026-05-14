@@ -9,7 +9,7 @@ use ahash::AHashMap;
 
 use crate::node_graph::effect_node::{EffectNode, NodeInstanceId, NodeWire, ParamValues};
 use crate::node_graph::parameters::ParamValue;
-use crate::node_graph::validation::{validate_connection, GraphError};
+use crate::node_graph::validation::{GraphError, validate_connection};
 
 /// One instance of an [`EffectNode`] within a [`Graph`].
 ///

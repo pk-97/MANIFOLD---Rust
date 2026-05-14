@@ -112,12 +112,7 @@ impl ParticleTextGenerator {
         }
     }
 
-    fn ensure_text_texture(
-        &mut self,
-        device: &manifold_gpu::GpuDevice,
-        width: u32,
-        height: u32,
-    ) {
+    fn ensure_text_texture(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
         if self.text_tex_dims == (width, height) && self.text_texture.is_some() {
             return;
         }
@@ -137,12 +132,7 @@ impl ParticleTextGenerator {
     }
 
     /// Dispatch the text-seeding compute pass.
-    fn dispatch_text_seed(
-        &self,
-        gpu: &mut GpuEncoder,
-        output_width: u32,
-        output_height: u32,
-    ) {
+    fn dispatch_text_seed(&self, gpu: &mut GpuEncoder, output_width: u32, output_height: u32) {
         let text_tex = match self.text_texture.as_ref() {
             Some(t) => t,
             None => return,
@@ -225,7 +215,10 @@ impl Generator for ParticleTextGenerator {
                 },
                 ..Default::default()
             };
-            match self.rasterizer.rasterize(&self.pending_text, font_size, &opts) {
+            match self
+                .rasterizer
+                .rasterize(&self.pending_text, font_size, &opts)
+            {
                 Some(result) => {
                     self.ensure_text_texture(gpu.device, result.width, result.height);
                     if let Some(ref texture) = self.text_texture {

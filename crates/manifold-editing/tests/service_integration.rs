@@ -374,7 +374,9 @@ fn data_version_increments() {
     let mut service = EditingService::new();
     assert_eq!(service.data_version(), 0);
 
-    let (cmd, _) = EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(4.0), 0.5).unwrap();
+    let (cmd, _) =
+        EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(4.0), 0.5)
+            .unwrap();
     service.execute(cmd, &mut project);
     assert_eq!(service.data_version(), 1);
 
@@ -392,7 +394,9 @@ fn dirty_flag_tracks_saves() {
 
     assert!(!service.is_dirty());
 
-    let (cmd, _) = EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(4.0), 0.5).unwrap();
+    let (cmd, _) =
+        EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(4.0), 0.5)
+            .unwrap();
     service.execute(cmd, &mut project);
     assert!(service.is_dirty());
 
@@ -735,7 +739,12 @@ fn delete_region_undo_restores_original() {
     service.undo(&mut project);
 
     let clips = &project.timeline.layers[0].clips;
-    assert_eq!(clips.len(), 1, "undo should restore to 1 clip, got {}", clips.len());
+    assert_eq!(
+        clips.len(),
+        1,
+        "undo should restore to 1 clip, got {}",
+        clips.len()
+    );
     let clip = &clips[0];
     assert_eq!(clip.id, id1);
     assert!((clip.start_beat - Beats(0.0)).abs() < Beats(0.001));

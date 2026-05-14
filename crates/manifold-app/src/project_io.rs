@@ -109,10 +109,7 @@ impl ProjectIOService {
     // ── Open Project ────────────────────────────────────────────────
 
     /// Unity ProjectIOService.OnOpenProject / OnOpenProjectAsync (lines 92-106).
-    pub fn open_project(
-        &mut self,
-        user_prefs: &mut UserPrefs,
-    ) -> ProjectIOAction {
+    pub fn open_project(&mut self, user_prefs: &mut UserPrefs) -> ProjectIOAction {
         let last_dir =
             dialog_path_memory::get_last_directory(DialogContext::ProjectOpen, user_prefs);
 
@@ -447,11 +444,8 @@ impl ProjectIOService {
             // AddClipCommand enforces non-overlap internally.
             let layer_idx = drop_layer_index as usize;
             if layer_idx < project.timeline.layers.len() {
-                let mut add_cmd = AddClipCommand::new(
-                    timeline_clip,
-                    drop_layer_id,
-                    seconds_per_beat,
-                );
+                let mut add_cmd =
+                    AddClipCommand::new(timeline_clip, drop_layer_id, seconds_per_beat);
                 add_cmd.execute(project);
                 drop_commands.push(Box::new(add_cmd));
             }

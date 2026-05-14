@@ -24,11 +24,11 @@ use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::composites::{build_soft_focus, CompositeHandle};
+use crate::node_graph::composites::{CompositeHandle, build_soft_focus};
 use crate::node_graph::{
-    apply_param_bindings, binding_value, compile, user_binding_to_runtime, ExecutionPlan, Executor,
-    FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId, ParamBinding, ParamConvert,
-    ParamTarget, PortType, ResourceId, Slot, Source, UserParamBindingRuntime,
+    ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId,
+    ParamBinding, ParamConvert, ParamTarget, PortType, ResourceId, Slot, Source,
+    UserParamBindingRuntime, apply_param_bindings, binding_value, compile, user_binding_to_runtime,
 };
 use crate::render_target::RenderTarget;
 

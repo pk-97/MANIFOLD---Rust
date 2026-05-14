@@ -370,14 +370,15 @@ impl GpuFenceWaiter {
         use block2::RcBlock;
 
         let wake = std::sync::Mutex::new(Some(wake));
-        let block = RcBlock::new(move |_event: std::ptr::NonNull<ProtocolObject<dyn MTLSharedEvent>>,
-                                       _value: u64| {
-            if let Ok(mut guard) = wake.lock()
-                && let Some(f) = guard.take()
-            {
-                f();
-            }
-        });
+        let block = RcBlock::new(
+            move |_event: std::ptr::NonNull<ProtocolObject<dyn MTLSharedEvent>>, _value: u64| {
+                if let Ok(mut guard) = wake.lock()
+                    && let Some(f) = guard.take()
+                {
+                    f();
+                }
+            },
+        );
         unsafe {
             event.raw().notifyListener_atValue_block(
                 &self.listener,
@@ -387,4 +388,3 @@ impl GpuFenceWaiter {
         }
     }
 }
-

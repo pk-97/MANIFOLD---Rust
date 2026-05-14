@@ -16,32 +16,42 @@ fn get_existing_mapping(
 ) -> Option<manifold_core::ableton_mapping::AbletonParamMapping> {
     use manifold_core::ableton_mapping::AbletonMappingTarget;
     match target {
-        AbletonMappingTarget::MasterEffect { effect_type, param_id } => {
-            project.settings.master_effects.iter()
-                .find(|f| f.effect_type() == effect_type)
-                .and_then(|fx| fx.ableton_mappings.as_ref())
-                .and_then(|ms| ms.iter().find(|m| m.param_id == *param_id))
-                .cloned()
-        }
-        AbletonMappingTarget::LayerEffect { layer_id, effect_type, param_id } => {
-            project.timeline.find_layer_by_id(layer_id.as_str())
-                .and_then(|(_, l)| l.effects.as_ref())
-                .and_then(|es| es.iter().find(|f| f.effect_type() == effect_type))
-                .and_then(|fx| fx.ableton_mappings.as_ref())
-                .and_then(|ms| ms.iter().find(|m| m.param_id == *param_id))
-                .cloned()
-        }
-        AbletonMappingTarget::GenParam { layer_id, param_id } => {
-            project.timeline.find_layer_by_id(layer_id.as_str())
-                .and_then(|(_, l)| l.gen_params())
-                .and_then(|gp| gp.ableton_mappings.as_ref())
-                .and_then(|ms| ms.iter().find(|m| m.param_id == *param_id))
-                .cloned()
-        }
-        AbletonMappingTarget::MacroSlot { slot_index } => {
-            project.settings.macro_bank.slots.get(*slot_index)
-                .and_then(|s| s.ableton_mapping.clone())
-        }
+        AbletonMappingTarget::MasterEffect {
+            effect_type,
+            param_id,
+        } => project
+            .settings
+            .master_effects
+            .iter()
+            .find(|f| f.effect_type() == effect_type)
+            .and_then(|fx| fx.ableton_mappings.as_ref())
+            .and_then(|ms| ms.iter().find(|m| m.param_id == *param_id))
+            .cloned(),
+        AbletonMappingTarget::LayerEffect {
+            layer_id,
+            effect_type,
+            param_id,
+        } => project
+            .timeline
+            .find_layer_by_id(layer_id.as_str())
+            .and_then(|(_, l)| l.effects.as_ref())
+            .and_then(|es| es.iter().find(|f| f.effect_type() == effect_type))
+            .and_then(|fx| fx.ableton_mappings.as_ref())
+            .and_then(|ms| ms.iter().find(|m| m.param_id == *param_id))
+            .cloned(),
+        AbletonMappingTarget::GenParam { layer_id, param_id } => project
+            .timeline
+            .find_layer_by_id(layer_id.as_str())
+            .and_then(|(_, l)| l.gen_params())
+            .and_then(|gp| gp.ableton_mappings.as_ref())
+            .and_then(|ms| ms.iter().find(|m| m.param_id == *param_id))
+            .cloned(),
+        AbletonMappingTarget::MacroSlot { slot_index } => project
+            .settings
+            .macro_bank
+            .slots
+            .get(*slot_index)
+            .and_then(|s| s.ableton_mapping.clone()),
     }
 }
 
@@ -66,11 +76,11 @@ impl ContentThread {
                 // User-initiated transport: clear any stale suppress flag so
                 // OscPositionSender doesn't silently swallow this change.
                 // Also claim ownership so MIDI Clock doesn't fight us.
-                if self.osc_sender.is_sender_enabled()
-                    || self.ableton_bridge.is_transport_enabled()
+                if self.osc_sender.is_sender_enabled() || self.ableton_bridge.is_transport_enabled()
                 {
                     self.sync_arbiter.suppress_next_transport = false;
-                    self.sync_arbiter.set_manifold_owns_at(self.time_since_start);
+                    self.sync_arbiter
+                        .set_manifold_owns_at(self.time_since_start);
                     // Suppress MIDI Clock position sync during the play→seek
                     // round-trip. Without this, stale MIDI Clock positions
                     // arriving before Ableton processes our deferred seek
@@ -79,26 +89,29 @@ impl ContentThread {
                 }
                 // Align transport to active external beat source BEFORE
                 // the first sync pass. Port of C# PlaybackController.Play() lines 631-643.
-                let authority = self.engine.project()
+                let authority = self
+                    .engine
+                    .project()
                     .map_or(ClockAuthority::Internal, |p| p.settings.clock_authority);
                 if authority == ClockAuthority::MidiClock
                     && !self.sync_arbiter.manifold_owns_playback
                     && let Some(ref clk) = self.transport_controller.midi_clock_sync
-                        && clk.is_midi_clock_enabled() {
-                            let midi_beat = Beats::from_f32(clk.current_clock_beat());
-                            self.engine.set_beat(midi_beat);
-                            let time = self.engine.beat_to_timeline_time(midi_beat);
-                            self.engine.set_time(Seconds(time.0.max(0.0)));
-                        }
+                    && clk.is_midi_clock_enabled()
+                {
+                    let midi_beat = Beats::from_f32(clk.current_clock_beat());
+                    self.engine.set_beat(midi_beat);
+                    let time = self.engine.beat_to_timeline_time(midi_beat);
+                    self.engine.set_time(Seconds(time.0.max(0.0)));
+                }
                 self.engine.play();
                 self.cache_link_beat_offset();
             }
             ContentCommand::Pause => {
-                if self.osc_sender.is_sender_enabled()
-                    || self.ableton_bridge.is_transport_enabled()
+                if self.osc_sender.is_sender_enabled() || self.ableton_bridge.is_transport_enabled()
                 {
                     self.sync_arbiter.suppress_next_transport = false;
-                    self.sync_arbiter.set_manifold_owns_at(self.time_since_start);
+                    self.sync_arbiter
+                        .set_manifold_owns_at(self.time_since_start);
                 }
                 // End tempo recording session on pause.
                 // Port of C# PlaybackController.Pause → tempoRecorder.EndSessionIfActive.
@@ -106,11 +119,11 @@ impl ContentThread {
                 self.engine.pause();
             }
             ContentCommand::Stop => {
-                if self.osc_sender.is_sender_enabled()
-                    || self.ableton_bridge.is_transport_enabled()
+                if self.osc_sender.is_sender_enabled() || self.ableton_bridge.is_transport_enabled()
                 {
                     self.sync_arbiter.suppress_next_transport = false;
-                    self.sync_arbiter.set_manifold_owns_at(self.time_since_start);
+                    self.sync_arbiter
+                        .set_manifold_owns_at(self.time_since_start);
                 }
                 // End tempo recording session on stop.
                 self.end_tempo_recording_session();
@@ -159,7 +172,12 @@ impl ContentThread {
                 // Port of Unity WorkspaceController.OnUndoRedo() which calls
                 // ApplyProjectResolutionFromFooter() + ApplyProjectFpsFromFooter().
                 let pre = self.engine.project().map(|p| {
-                    (p.settings.output_width, p.settings.output_height, p.settings.frame_rate, p.settings.render_scale)
+                    (
+                        p.settings.output_width,
+                        p.settings.output_height,
+                        p.settings.frame_rate,
+                        p.settings.render_scale,
+                    )
                 });
                 if let Some(p) = self.engine.project_mut() {
                     let _ = self.editing_service.undo(p);
@@ -168,13 +186,24 @@ impl ContentThread {
                 self.engine.mark_sync_dirty();
                 // Apply resolution/FPS changes if the undo altered project settings.
                 let post = self.engine.project().map(|p| {
-                    (p.settings.output_width, p.settings.output_height, p.settings.frame_rate, p.settings.render_scale)
+                    (
+                        p.settings.output_width,
+                        p.settings.output_height,
+                        p.settings.frame_rate,
+                        p.settings.render_scale,
+                    )
                 });
-                if let (Some((pre_w, pre_h, pre_fps, pre_rs)), Some((post_w, post_h, post_fps, post_rs))) = (pre, post) {
+                if let (
+                    Some((pre_w, pre_h, pre_fps, pre_rs)),
+                    Some((post_w, post_h, post_fps, post_rs)),
+                ) = (pre, post)
+                {
                     if post_w != pre_w || post_h != pre_h || (post_rs - pre_rs).abs() > 0.01 {
                         self.content_pipeline.resize(
                             &mut self.engine,
-                            post_w as u32, post_h as u32, post_rs,
+                            post_w as u32,
+                            post_h as u32,
+                            post_rs,
                         );
                     }
                     if (post_fps - pre_fps).abs() > 0.01 {
@@ -189,7 +218,12 @@ impl ContentThread {
             ContentCommand::Redo => {
                 // Same pre/post settings detection as Undo.
                 let pre = self.engine.project().map(|p| {
-                    (p.settings.output_width, p.settings.output_height, p.settings.frame_rate, p.settings.render_scale)
+                    (
+                        p.settings.output_width,
+                        p.settings.output_height,
+                        p.settings.frame_rate,
+                        p.settings.render_scale,
+                    )
                 });
                 if let Some(p) = self.engine.project_mut() {
                     let _ = self.editing_service.redo(p);
@@ -198,13 +232,24 @@ impl ContentThread {
                 self.engine.mark_sync_dirty();
                 // Apply resolution/FPS changes if the redo altered project settings.
                 let post = self.engine.project().map(|p| {
-                    (p.settings.output_width, p.settings.output_height, p.settings.frame_rate, p.settings.render_scale)
+                    (
+                        p.settings.output_width,
+                        p.settings.output_height,
+                        p.settings.frame_rate,
+                        p.settings.render_scale,
+                    )
                 });
-                if let (Some((pre_w, pre_h, pre_fps, pre_rs)), Some((post_w, post_h, post_fps, post_rs))) = (pre, post) {
+                if let (
+                    Some((pre_w, pre_h, pre_fps, pre_rs)),
+                    Some((post_w, post_h, post_fps, post_rs)),
+                ) = (pre, post)
+                {
                     if post_w != pre_w || post_h != pre_h || (post_rs - pre_rs).abs() > 0.01 {
                         self.content_pipeline.resize(
                             &mut self.engine,
-                            post_w as u32, post_h as u32, post_rs,
+                            post_w as u32,
+                            post_h as u32,
+                            post_rs,
                         );
                     }
                     if (post_fps - pre_fps).abs() > 0.01 {
@@ -280,7 +325,11 @@ impl ContentThread {
                     .project()
                     .is_some_and(|p| p.settings.led_enabled);
                 if want_led_enabled {
-                    if !self.led_controller.as_ref().is_some_and(|c| c.is_initialized()) {
+                    if !self
+                        .led_controller
+                        .as_ref()
+                        .is_some_and(|c| c.is_initialized())
+                    {
                         let settings = manifold_led::LedSettings {
                             enabled: true,
                             ..Default::default()
@@ -296,9 +345,7 @@ impl ContentThread {
                             self.led_controller = Some(ctrl);
                             self.content_pipeline
                                 .set_led_grid_size(strip_count, leds_per_strip);
-                            log::info!(
-                                "[ContentThread] LED output auto-initialised from project."
-                            );
+                            log::info!("[ContentThread] LED output auto-initialised from project.");
                         }
                     }
                 } else if let Some(ref mut ctrl) = self.led_controller {
@@ -316,7 +363,8 @@ impl ContentThread {
 
             // ── GPU ────────────────────────────────────────────────
             ContentCommand::ResizeContent(w, h, render_scale) => {
-                self.content_pipeline.resize(&mut self.engine, w, h, render_scale);
+                self.content_pipeline
+                    .resize(&mut self.engine, w, h, render_scale);
             }
             ContentCommand::ResizeWorkspacePreview(w, h) => {
                 self.content_pipeline.resize_workspace_preview(w, h);
@@ -327,26 +375,29 @@ impl ContentThread {
                 self.transport_controller.toggle_link(&mut self.engine);
             }
             ContentCommand::ToggleMidiClock => {
-                self.transport_controller.toggle_midi_clock(&mut self.engine);
+                self.transport_controller
+                    .toggle_midi_clock(&mut self.engine);
             }
             ContentCommand::SetMidiClockDevice(index) => {
                 if let Some(ref mut clk) = self.transport_controller.midi_clock_sync {
                     clk.change_source(index);
-                    log::info!("[ContentThread] MIDI clock device changed to index {}", index);
+                    log::info!(
+                        "[ContentThread] MIDI clock device changed to index {}",
+                        index
+                    );
                 }
             }
             ContentCommand::ResetBpm => {
-                TransportController::reset_bpm(
-                    &mut self.engine, &mut self.editing_service,
-                );
+                TransportController::reset_bpm(&mut self.engine, &mut self.editing_service);
             }
 
             // ── Audio ──────────────────────────────────────────────
             ContentCommand::AudioLoaded { preloaded } => {
                 if let Some(ref mut audio_sync) = self.audio_sync
-                    && let Err(e) = audio_sync.apply_preloaded(*preloaded) {
-                        log::warn!("[ContentThread] Failed to apply loaded audio: {}", e);
-                    }
+                    && let Err(e) = audio_sync.apply_preloaded(*preloaded)
+                {
+                    log::warn!("[ContentThread] Failed to apply loaded audio: {}", e);
+                }
             }
             ContentCommand::ResetAudio => {
                 if let Some(ref mut audio_sync) = self.audio_sync {
@@ -359,19 +410,23 @@ impl ContentThread {
                 if let Some(ref mut stem) = self.stem_audio {
                     // Auto-load stems on first expand if paths available but not yet loaded.
                     // Port of Unity WorkspaceController.EnsureStemAudioController lazy init.
-                    if expand && !stem.stems_ready()
-                        && let Some(stem_paths_vec) = self.engine.project()
+                    if expand
+                        && !stem.stems_ready()
+                        && let Some(stem_paths_vec) = self
+                            .engine
+                            .project()
                             .and_then(|p| p.percussion_import.as_ref())
                             .and_then(|perc| perc.stem_paths.as_ref())
-                        {
-                            let mut paths: [Option<String>; manifold_playback::stem_audio::STEM_COUNT] = Default::default();
-                            for (i, p) in stem_paths_vec.iter().enumerate() {
-                                if i < manifold_playback::stem_audio::STEM_COUNT {
-                                    paths[i] = Some(p.clone());
-                                }
+                    {
+                        let mut paths: [Option<String>; manifold_playback::stem_audio::STEM_COUNT] =
+                            Default::default();
+                        for (i, p) in stem_paths_vec.iter().enumerate() {
+                            if i < manifold_playback::stem_audio::STEM_COUNT {
+                                paths[i] = Some(p.clone());
                             }
-                            stem.load_stems(&paths);
                         }
+                        stem.load_stems(&paths);
+                    }
                     stem.set_expanded(expand, self.audio_sync.as_mut());
                 }
             }
@@ -417,15 +472,26 @@ impl ContentThread {
             ContentCommand::CopyClips { clip_ids, region } => {
                 if let Some(p) = self.engine.project() {
                     let spb = 60.0 / p.settings.bpm.0.max(1.0);
-                    self.editing_service.copy_clips(p, &clip_ids, region.as_ref(), spb);
+                    self.editing_service
+                        .copy_clips(p, &clip_ids, region.as_ref(), spb);
                 }
             }
-            ContentCommand::PasteClips { target_beat, target_layer, result_tx } => {
+            ContentCommand::PasteClips {
+                target_beat,
+                target_layer,
+                result_tx,
+            } => {
                 if let Some(p) = self.engine.project_mut() {
                     let spb = 60.0 / p.settings.bpm.0.max(1.0);
-                    let result = self.editing_service.paste_clips(p, target_beat, target_layer, spb);
+                    let result =
+                        self.editing_service
+                            .paste_clips(p, target_beat, target_layer, spb);
                     if !result.commands.is_empty() {
-                        self.editing_service.execute_batch(result.commands, "Paste clips".into(), p);
+                        self.editing_service.execute_batch(
+                            result.commands,
+                            "Paste clips".into(),
+                            p,
+                        );
                     }
                     let _ = result_tx.send(result.pasted_clip_ids);
                 } else {
@@ -436,7 +502,9 @@ impl ContentThread {
             // ── Percussion ────────────────────────────────────────
             ContentCommand::PercussionImport(path) => {
                 let beat = self.engine.current_beat();
-                let beats_per_bar = self.engine.project()
+                let beats_per_bar = self
+                    .engine
+                    .project()
                     .map_or(4, |p| p.settings.time_signature_numerator.max(1));
                 if let Some(p) = self.engine.project_mut() {
                     self.percussion_orchestrator.on_import_percussion_map(
@@ -450,10 +518,8 @@ impl ContentThread {
             }
             ContentCommand::ReAnalyzeTriggers(instrument_group) => {
                 if let Some(p) = self.engine.project_mut() {
-                    self.percussion_orchestrator.on_re_analyze_triggers(
-                        &instrument_group,
-                        p,
-                    );
+                    self.percussion_orchestrator
+                        .on_re_analyze_triggers(&instrument_group, p);
                 }
             }
             ContentCommand::ReImportStems => {
@@ -461,12 +527,18 @@ impl ContentThread {
                     self.percussion_orchestrator.on_re_import_stems(p);
                 }
             }
-            ContentCommand::PercussionCalibrateDownbeat { playhead_beat, beats_per_bar } => {
+            ContentCommand::PercussionCalibrateDownbeat {
+                playhead_beat,
+                beats_per_bar,
+            } => {
                 if let Some(p) = self.engine.project_mut() {
                     self.percussion_orchestrator
                         .calibrate_imported_percussion_downbeat_at_playhead(
-                            p, &mut self.editing_service,
-                            playhead_beat.as_f32(), beats_per_bar, true,
+                            p,
+                            &mut self.editing_service,
+                            playhead_beat.as_f32(),
+                            beats_per_bar,
+                            true,
                         );
                 }
             }
@@ -474,16 +546,17 @@ impl ContentThread {
                 if let Some(p) = self.engine.project_mut() {
                     self.percussion_orchestrator
                         .nudge_imported_percussion_alignment(
-                            delta_beats.as_f32(), p, &mut self.editing_service, true,
+                            delta_beats.as_f32(),
+                            p,
+                            &mut self.editing_service,
+                            true,
                         );
                 }
             }
             ContentCommand::PercussionResetAlignment => {
                 if let Some(p) = self.engine.project_mut() {
                     self.percussion_orchestrator
-                        .reset_imported_percussion_alignment(
-                            p, &mut self.editing_service, true,
-                        );
+                        .reset_imported_percussion_alignment(p, &mut self.editing_service, true);
                 }
             }
 
@@ -506,7 +579,11 @@ impl ContentThread {
                     let old_mapping = get_existing_mapping(p, &target);
                     let (old_label, new_label) = match &target {
                         AbletonMappingTarget::MacroSlot { slot_index } => {
-                            let old = p.settings.macro_bank.slots.get(*slot_index)
+                            let old = p
+                                .settings
+                                .macro_bank
+                                .slots
+                                .get(*slot_index)
                                 .map(|s| s.label.clone());
                             let new = Some(address.macro_name.clone());
                             (old, new)
@@ -524,12 +601,15 @@ impl ContentThread {
                         status: AbletonMappingStatus::Active,
                     };
                     let cmd = ChangeAbletonMappingCommand::map(
-                        target, new_mapping, old_mapping, old_label, new_label,
+                        target,
+                        new_mapping,
+                        old_mapping,
+                        old_label,
+                        new_label,
                     );
                     self.editing_service.execute(Box::new(cmd), p);
                     self.ableton_bridge.rebuild_listeners(p);
-                    p.settings.ableton_set_context =
-                        Some(self.ableton_bridge.build_set_context());
+                    p.settings.ableton_set_context = Some(self.ableton_bridge.build_set_context());
                 }
                 self.engine.mark_sync_dirty();
             }
@@ -554,8 +634,7 @@ impl ContentThread {
                 // Toggle AbletonOSC transport sync on/off.
                 // Sets mode to AbletonOsc and enables/disables transport listeners.
                 if let Some(p) = self.engine.project_mut() {
-                    p.settings.osc_sync_mode =
-                        manifold_core::types::OscSyncMode::AbletonOsc;
+                    p.settings.osc_sync_mode = manifold_core::types::OscSyncMode::AbletonOsc;
                 }
                 if self.ableton_bridge.is_transport_enabled() {
                     self.ableton_bridge.disable_transport_sync();
@@ -577,7 +656,11 @@ impl ContentThread {
                 log::info!(
                     "[EDR] Content thread: headroom updated to {:.2}x (mode={})",
                     headroom,
-                    if headroom > 1.0 { "passthrough" } else { "ACES tonemap" },
+                    if headroom > 1.0 {
+                        "passthrough"
+                    } else {
+                        "ACES tonemap"
+                    },
                 );
                 self.content_pipeline.edr_headroom = headroom;
                 self.engine.mark_compositor_dirty(Seconds::ZERO);
@@ -598,7 +681,8 @@ impl ContentThread {
             }
             #[cfg(target_os = "macos")]
             ContentCommand::SetOutputPresentSuspended(suspended) => {
-                self.content_pipeline.set_output_present_suspended(suspended);
+                self.content_pipeline
+                    .set_output_present_suspended(suspended);
             }
 
             // ── Generator ─────────────────────────────────────────
@@ -619,13 +703,16 @@ impl ContentThread {
             // ── LED output ─────────────────────────────────────────────
             ContentCommand::InitLedOutput(settings) => {
                 let mut ctrl = manifold_led::LedOutputController::new();
-                let native_device = self.content_pipeline.native_device()
+                let native_device = self
+                    .content_pipeline
+                    .native_device()
                     .expect("native device required for LED init");
                 let strip_count = settings.strip_count;
                 let leds_per_strip = settings.leds_per_strip;
                 if ctrl.initialize(native_device, &settings) {
                     self.led_controller = Some(ctrl);
-                    self.content_pipeline.set_led_grid_size(strip_count, leds_per_strip);
+                    self.content_pipeline
+                        .set_led_grid_size(strip_count, leds_per_strip);
                     log::info!("[ContentThread] LED output initialized.");
                 } else {
                     log::warn!("[ContentThread] LED output failed to initialize.");
@@ -655,14 +742,13 @@ impl ContentThread {
                 }
                 let device = self.content_pipeline.native_device();
                 let (w, h) = self.content_pipeline.output_dimensions();
-                let fps = self.engine.project().map_or(
-                    60.0,
-                    |p| p.settings.frame_rate,
-                );
+                let fps = self
+                    .engine
+                    .project()
+                    .map_or(60.0, |p| p.settings.frame_rate);
                 if let Some(device) = device {
-                    match manifold_recording::LiveRecordingSession::new(
-                        *config, device, w, h, fps,
-                    ) {
+                    match manifold_recording::LiveRecordingSession::new(*config, device, w, h, fps)
+                    {
                         Ok(session) => {
                             log::info!("[ContentThread] Live recording started");
                             self.content_pipeline.recording_session = Some(session);
@@ -706,42 +792,67 @@ impl ContentThread {
             // ── Profiling ────────────────────────────────────────────
             #[cfg(feature = "profiling")]
             ContentCommand::StartProfiling {
-                project_name, project_path, resolution, target_fps, gpu_name,
+                project_name,
+                project_path,
+                resolution,
+                target_fps,
+                gpu_name,
             } => {
                 log::info!("[ContentThread] profiling session started");
                 let mut session = manifold_profiler::ProfileSession::new(
-                    project_name, project_path, resolution, target_fps, gpu_name,
+                    project_name,
+                    project_path,
+                    resolution,
+                    target_fps,
+                    gpu_name,
                 );
 
                 // Build timeline snapshot from current project state
                 if let Some(p) = self.engine.project() {
-                    let layers = p.timeline.layers.iter().map(|layer| {
-                        let clips = layer.clips.iter()
-                            .map(|c| manifold_profiler::ClipSnapshot {
-                                id: c.id.to_string(),
-                                start_beat: c.start_beat.as_f32(),
-                                duration_beats: c.duration_beats.as_f32(),
-                                generator_type: c.generator_type.to_string(),
-                                effect_count: c.effects.len(),
-                            })
-                            .collect();
-                        let effects = layer.effects.as_deref().unwrap_or(&[]).iter()
-                            .map(|fx| manifold_profiler::EffectSnapshot {
-                                effect_type: fx.effect_type().to_string(),
-                                enabled: fx.enabled,
-                            })
-                            .collect();
-                        manifold_profiler::LayerSnapshot {
-                            index: layer.index,
-                            generator_type: layer.gen_params()
-                                .map_or("None".to_string(), |gp| gp.generator_type().to_string()),
-                            blend_mode: format!("{:?}", layer.default_blend_mode),
-                            is_muted: layer.is_muted,
-                            clips,
-                            effects,
-                        }
-                    }).collect();
-                    let master_effects = p.settings.master_effects.iter()
+                    let layers = p
+                        .timeline
+                        .layers
+                        .iter()
+                        .map(|layer| {
+                            let clips = layer
+                                .clips
+                                .iter()
+                                .map(|c| manifold_profiler::ClipSnapshot {
+                                    id: c.id.to_string(),
+                                    start_beat: c.start_beat.as_f32(),
+                                    duration_beats: c.duration_beats.as_f32(),
+                                    generator_type: c.generator_type.to_string(),
+                                    effect_count: c.effects.len(),
+                                })
+                                .collect();
+                            let effects = layer
+                                .effects
+                                .as_deref()
+                                .unwrap_or(&[])
+                                .iter()
+                                .map(|fx| manifold_profiler::EffectSnapshot {
+                                    effect_type: fx.effect_type().to_string(),
+                                    enabled: fx.enabled,
+                                })
+                                .collect();
+                            manifold_profiler::LayerSnapshot {
+                                index: layer.index,
+                                generator_type: layer
+                                    .gen_params()
+                                    .map_or("None".to_string(), |gp| {
+                                        gp.generator_type().to_string()
+                                    }),
+                                blend_mode: format!("{:?}", layer.default_blend_mode),
+                                is_muted: layer.is_muted,
+                                clips,
+                                effects,
+                            }
+                        })
+                        .collect();
+                    let master_effects = p
+                        .settings
+                        .master_effects
+                        .iter()
                         .map(|fx| manifold_profiler::EffectSnapshot {
                             effect_type: fx.effect_type().to_string(),
                             enabled: fx.enabled,

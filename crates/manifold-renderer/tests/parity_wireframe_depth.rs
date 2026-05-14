@@ -15,11 +15,9 @@
 mod parity;
 
 use manifold_core::EffectTypeId;
-use manifold_renderer::node_graph::primitives::WireframeDepth;
 use manifold_renderer::node_graph::ParamValue;
-use parity::{
-    assert_bytewise_equal, default_ctx, make_default_effect, Fixture, ParityHarness,
-};
+use manifold_renderer::node_graph::primitives::WireframeDepth;
+use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
 
 #[derive(Debug, Clone, Copy)]
 struct Setup {
@@ -55,14 +53,43 @@ const DEFAULT: Setup = Setup {
 };
 
 const SETUPS: &[Setup] = &[
-    Setup { label: "identity",     amount: 0.0, ..DEFAULT },
+    Setup {
+        label: "identity",
+        amount: 0.0,
+        ..DEFAULT
+    },
     DEFAULT,
-    Setup { label: "low_density",  density: 16.0, ..DEFAULT },
-    Setup { label: "high_density", density: 280.0, ..DEFAULT },
-    Setup { label: "wide_lines",   width: 3.0, ..DEFAULT },
-    Setup { label: "blend_add",    blend: 1, ..DEFAULT },
-    Setup { label: "blend_screen", blend: 3, ..DEFAULT },
-    Setup { label: "flow_off",     flow: 0, lock: 0, ..DEFAULT },
+    Setup {
+        label: "low_density",
+        density: 16.0,
+        ..DEFAULT
+    },
+    Setup {
+        label: "high_density",
+        density: 280.0,
+        ..DEFAULT
+    },
+    Setup {
+        label: "wide_lines",
+        width: 3.0,
+        ..DEFAULT
+    },
+    Setup {
+        label: "blend_add",
+        blend: 1,
+        ..DEFAULT
+    },
+    Setup {
+        label: "blend_screen",
+        blend: 3,
+        ..DEFAULT
+    },
+    Setup {
+        label: "flow_off",
+        flow: 0,
+        lock: 0,
+        ..DEFAULT
+    },
 ];
 
 #[test]

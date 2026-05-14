@@ -290,10 +290,7 @@ pub trait EffectNode: Send {
     /// uses `skip_passthrough_ports` for static lifetime extension.
     /// Returning a different port pair than declared is a programmer
     /// error and may corrupt downstream reads in fan-out topologies.
-    fn skip_passthrough(
-        &self,
-        _params: &ParamValues,
-    ) -> Option<(&'static str, &'static str)> {
+    fn skip_passthrough(&self, _params: &ParamValues) -> Option<(&'static str, &'static str)> {
         None
     }
 

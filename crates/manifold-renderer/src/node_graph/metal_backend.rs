@@ -116,12 +116,7 @@ impl MetalBackend {
     /// Construct a backend tied to a specific `GpuDevice`, render
     /// resolution, and texture format. Width/height are the dimensions of
     /// every `Texture2D` slot the backend allocates.
-    pub fn new(
-        device: Arc<GpuDevice>,
-        width: u32,
-        height: u32,
-        format: GpuTextureFormat,
-    ) -> Self {
+    pub fn new(device: Arc<GpuDevice>, width: u32, height: u32, format: GpuTextureFormat) -> Self {
         Self {
             device: Some(device),
             pool: RenderTargetPool::new(),
@@ -340,8 +335,7 @@ impl Backend for MetalBackend {
         // Texture2D resources to have been pre-bound via
         // `pre_bind_texture_2d`.
         if matches!(ty, PortType::Texture2D)
-            && let std::collections::hash_map::Entry::Vacant(e) =
-                self.textures_2d.entry(slot)
+            && let std::collections::hash_map::Entry::Vacant(e) = self.textures_2d.entry(slot)
         {
             let device = self.device.as_deref().expect(
                 "MetalBackend lazy-alloc requires a device — use `pre_bind_texture_2d` for every Texture2D resource when constructing via `without_device`",
@@ -410,8 +404,7 @@ impl Backend for MetalBackend {
         // returns false, which is the correct behavior — overwriting
         // the host borrow would silently break whatever the host was
         // routing through that slot.
-        if self.borrowed_2d.contains_key(&dst_slot)
-            && !self.skip_aliased_slots.contains(&dst_slot)
+        if self.borrowed_2d.contains_key(&dst_slot) && !self.skip_aliased_slots.contains(&dst_slot)
         {
             return false;
         }
@@ -430,9 +423,7 @@ impl Backend for MetalBackend {
         // Only alias into slots that actually exist (either owned or
         // already borrowed). Prevents aliasing onto an unallocated slot
         // id.
-        if !self.textures_2d.contains_key(&dst_slot)
-            && !self.borrowed_2d.contains_key(&dst_slot)
-        {
+        if !self.textures_2d.contains_key(&dst_slot) && !self.borrowed_2d.contains_key(&dst_slot) {
             return false;
         }
         // Replaces any previous skip-alias on dst_slot (idempotent for
@@ -503,7 +494,10 @@ mod alias_tests {
             "dst should now shadow src's texture",
         );
         // src is unaffected.
-        assert_eq!(b.texture_2d(src).expect("src untouched").raw_ptr(), pre_src_ptr);
+        assert_eq!(
+            b.texture_2d(src).expect("src untouched").raw_ptr(),
+            pre_src_ptr
+        );
     }
 
     #[test]

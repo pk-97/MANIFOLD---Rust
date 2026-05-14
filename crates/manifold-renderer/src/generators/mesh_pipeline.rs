@@ -85,12 +85,7 @@ impl MeshPipeline {
     }
 
     /// Ensure the depth texture matches the target dimensions.
-    fn ensure_depth_texture(
-        &mut self,
-        device: &manifold_gpu::GpuDevice,
-        width: u32,
-        height: u32,
-    ) {
+    fn ensure_depth_texture(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
         if self.depth_width == width && self.depth_height == height && self.depth_texture.is_some()
         {
             return;

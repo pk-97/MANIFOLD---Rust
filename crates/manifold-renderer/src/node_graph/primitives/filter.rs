@@ -5,9 +5,7 @@
 //! fuseable, Blur breaks fusion with its input but accepts pixel-local
 //! tail-fusion, and MipChain runs a series of passes regardless.
 
-use manifold_gpu::{
-    GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc, GpuTextureFormat,
-};
+use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc, GpuTextureFormat};
 
 use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};

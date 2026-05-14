@@ -354,7 +354,9 @@ impl FooterPanel {
             return vec![PanelAction::SetTonemapCurve(TonemapCurve::Agx)];
         }
         if id == self.tonemap_khr_id {
-            return vec![PanelAction::SetTonemapCurve(TonemapCurve::KhronosPbrNeutral)];
+            return vec![PanelAction::SetTonemapCurve(
+                TonemapCurve::KhronosPbrNeutral,
+            )];
         }
         Vec::new()
     }

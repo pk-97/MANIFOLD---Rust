@@ -5,7 +5,7 @@
 //   1. Deflection map bake — volumetric geodesic trace, only on camera/param change.
 //   2. Display — samples deflection map, applies cinematic disk shading.
 
-use super::compute_common::{Particle, FIXED_POINT_SCALE};
+use super::compute_common::{FIXED_POINT_SCALE, Particle};
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
@@ -186,11 +186,8 @@ impl BlackHoleGenerator {
         let particles_src = include_str!("shaders/black_hole_particles.wgsl");
         let particles_seed_pipeline =
             device.create_compute_pipeline(particles_src, "seed", "BlackHole Particles Seed");
-        let particles_sim_pipeline = device.create_compute_pipeline(
-            particles_src,
-            "simulate",
-            "BlackHole Particles Sim",
-        );
+        let particles_sim_pipeline =
+            device.create_compute_pipeline(particles_src, "simulate", "BlackHole Particles Sim");
         let particles_scatter_pipeline = device.create_compute_pipeline(
             include_str!("shaders/black_hole_scatter.wgsl"),
             "splat",
@@ -464,9 +461,18 @@ impl Generator for BlackHoleGenerator {
                             binding: 0,
                             data: bytemuck::bytes_of(&blur_uniforms),
                         },
-                        manifold_gpu::GpuBinding::Texture { binding: 1, texture: src },
-                        manifold_gpu::GpuBinding::Sampler { binding: 2, sampler: &self.sampler },
-                        manifold_gpu::GpuBinding::Texture { binding: 3, texture: dst },
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 1,
+                            texture: src,
+                        },
+                        manifold_gpu::GpuBinding::Sampler {
+                            binding: 2,
+                            sampler: &self.sampler,
+                        },
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 3,
+                            texture: dst,
+                        },
                     ],
                     blur_groups,
                     label,
@@ -498,9 +504,18 @@ impl Generator for BlackHoleGenerator {
                             binding: 0,
                             data: bytemuck::bytes_of(&blur_uniforms),
                         },
-                        manifold_gpu::GpuBinding::Texture { binding: 1, texture: src },
-                        manifold_gpu::GpuBinding::Sampler { binding: 2, sampler: &self.sampler },
-                        manifold_gpu::GpuBinding::Texture { binding: 3, texture: dst },
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 1,
+                            texture: src,
+                        },
+                        manifold_gpu::GpuBinding::Sampler {
+                            binding: 2,
+                            sampler: &self.sampler,
+                        },
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 3,
+                            texture: dst,
+                        },
                     ],
                     blur_groups,
                     label,
@@ -682,9 +697,18 @@ impl Generator for BlackHoleGenerator {
                         binding: 0,
                         data: bytemuck::bytes_of(&polar_blur_uniforms),
                     },
-                    manifold_gpu::GpuBinding::Texture { binding: 1, texture: src },
-                    manifold_gpu::GpuBinding::Sampler { binding: 2, sampler: &self.sampler },
-                    manifold_gpu::GpuBinding::Texture { binding: 3, texture: dst },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1,
+                        texture: src,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 2,
+                        sampler: &self.sampler,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 3,
+                        texture: dst,
+                    },
                 ],
                 polar_blur_groups,
                 label,
@@ -702,9 +726,18 @@ impl Generator for BlackHoleGenerator {
                         binding: 0,
                         data: bytemuck::bytes_of(&polar_blur_uniforms),
                     },
-                    manifold_gpu::GpuBinding::Texture { binding: 1, texture: src },
-                    manifold_gpu::GpuBinding::Sampler { binding: 2, sampler: &self.sampler },
-                    manifold_gpu::GpuBinding::Texture { binding: 3, texture: dst },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1,
+                        texture: src,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 2,
+                        sampler: &self.sampler,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 3,
+                        texture: dst,
+                    },
                 ],
                 polar_blur_groups,
                 label,

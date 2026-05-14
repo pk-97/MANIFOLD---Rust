@@ -202,7 +202,6 @@ pub const GRID_BEAT_LINE: Color32 = Color32::new(82, 82, 87, 77);
 pub const GRID_SUBDIVISION_LINE: Color32 = Color32::new(71, 71, 77, 38);
 pub const GRID_SIXTEENTH_LINE: Color32 = Color32::new(71, 71, 77, 20);
 
-
 // ── Layer color picker palette ──────────────────────────────────────
 // 7 columns × 10 rows = 70 high-contrast colors. Modeled after Ableton's
 // color grid: each column is a hue family, rows go from light → saturated → dark.

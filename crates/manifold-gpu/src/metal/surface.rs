@@ -71,7 +71,10 @@ unsafe fn new_metal_layer() -> *mut c_void {
     }
 }
 
-unsafe fn layer_set_device(layer: *mut c_void, device: &ProtocolObject<dyn objc2_metal::MTLDevice>) {
+unsafe fn layer_set_device(
+    layer: *mut c_void,
+    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+) {
     unsafe {
         let layer_obj: *mut AnyObject = layer.cast();
         let dev_ptr: *const AnyObject = device as *const _ as *const AnyObject;
@@ -126,7 +129,10 @@ unsafe impl Encode for CGSize {
 unsafe fn layer_set_drawable_size(layer: *mut c_void, w: f64, h: f64) {
     unsafe {
         let layer_obj: *mut AnyObject = layer.cast();
-        let size = CGSize { width: w, height: h };
+        let size = CGSize {
+            width: w,
+            height: h,
+        };
         let _: () = msg_send![layer_obj, setDrawableSize: size];
     }
 }

@@ -172,8 +172,8 @@ mod gpu_tests {
     use crate::node_graph::bindings::Slot;
     use crate::node_graph::execution_plan::ResourceId;
     use crate::node_graph::{
-        compile, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend,
-        NodeInstanceId, ParamValue, Source,
+        ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId,
+        ParamValue, Source, compile,
     };
     use crate::render_target::RenderTarget;
 
@@ -257,9 +257,7 @@ mod gpu_tests {
         readback_enc.copy_texture_to_buffer(out_tex, &readback_buf, w, h, bytes_per_row);
         readback_enc.commit_and_wait_completed();
 
-        let ptr = readback_buf
-            .mapped_ptr()
-            .expect("shared buffer pointer");
+        let ptr = readback_buf.mapped_ptr().expect("shared buffer pointer");
         let halfs: &[u16] =
             unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
         (0..(w * h) as usize)
@@ -282,15 +280,7 @@ mod gpu_tests {
     /// reassembled in §6.3 commits 3–6.
     const K9_GAIN: f32 = 0.16501 + 2.0 * (0.15019 + 0.11325 + 0.07076 + 0.03664);
     const K17_GAIN: f32 = 0.10315
-        + 2.0
-            * (0.09998
-                + 0.09103
-                + 0.07786
-                + 0.06257
-                + 0.04723
-                + 0.03350
-                + 0.02232
-                + 0.01396);
+        + 2.0 * (0.09998 + 0.09103 + 0.07786 + 0.06257 + 0.04723 + 0.03350 + 0.02232 + 0.01396);
     const K25_GAIN: f32 = 0.07087
         + 2.0
             * (0.06947

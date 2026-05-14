@@ -527,8 +527,8 @@ impl FluidSimCore {
                     rotation_deg_snap += 180.0 * self.snap_envelope;
                 }
                 2 => {
-                    slope_snap = params.slope
-                        + ((-params.slope) - params.slope) * self.snap_envelope;
+                    slope_snap =
+                        params.slope + ((-params.slope) - params.slope) * self.snap_envelope;
                 }
                 _ => {}
             }

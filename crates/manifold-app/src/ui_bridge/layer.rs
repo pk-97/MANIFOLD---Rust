@@ -332,8 +332,7 @@ pub(super) fn dispatch_layer(
                 // means "join that group" (parent = group), not "adopt the group's
                 // own parent".
                 let target_layer = old_order.get(*to);
-                let target_is_group =
-                    target_layer.is_some_and(|l| l.is_group());
+                let target_is_group = target_layer.is_some_and(|l| l.is_group());
                 let target_parent = if target_is_group {
                     target_layer.map(|l| l.layer_id.clone())
                 } else {

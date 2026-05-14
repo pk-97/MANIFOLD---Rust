@@ -198,8 +198,7 @@ impl OilyFluidGenerator {
         let oily = include_str!("shaders/oily_fluid.wgsl");
         let composed = format!("{}\n{}", common, oily);
 
-        let seed_pipeline =
-            device.create_compute_pipeline(&composed, "cs_seed", "OilyFluid Seed");
+        let seed_pipeline = device.create_compute_pipeline(&composed, "cs_seed", "OilyFluid Seed");
         let downsample_pipeline =
             device.create_compute_pipeline(&composed, "cs_downsample", "OilyFluid Downsample");
         let velocity_pipeline =
@@ -212,8 +211,7 @@ impl OilyFluidGenerator {
         // Reuse the shared Gaussian blur compute shader — same binary serves
         // both horizontal and vertical passes via its direction uniform.
         let blur_src = include_str!("shaders/gaussian_blur_compute.wgsl");
-        let blur_pipeline =
-            device.create_compute_pipeline(blur_src, "cs_main", "OilyFluid Blur");
+        let blur_pipeline = device.create_compute_pipeline(blur_src, "cs_main", "OilyFluid Blur");
 
         let sampler_repeat = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
             address_mode_u: manifold_gpu::GpuAddressMode::Repeat,

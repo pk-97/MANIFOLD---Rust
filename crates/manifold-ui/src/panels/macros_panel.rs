@@ -6,9 +6,9 @@
 use super::PanelAction;
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_slider_shared::{
-    ABL_CONFIG_HEIGHT, AbletonConfigIds, AbletonConfigClick, AbletonMappingDisplay,
-    TrimHandleIds, build_ableton_config, build_trim_handles_explicit,
-    check_ableton_config_click, OVERLAY_INSET, TRIM_BAR_W,
+    ABL_CONFIG_HEIGHT, AbletonConfigClick, AbletonConfigIds, AbletonMappingDisplay, OVERLAY_INSET,
+    TRIM_BAR_W, TrimHandleIds, build_ableton_config, build_trim_handles_explicit,
+    check_ableton_config_click,
 };
 use crate::color;
 use crate::node::*;
@@ -377,12 +377,7 @@ impl MacrosPanel {
                     let fill_h = ids.track_rect.height - OVERLAY_INSET * 2.0;
                     tree.set_bounds(
                         t.fill_id as u32,
-                        Rect::new(
-                            fill_x,
-                            ids.track_rect.y + OVERLAY_INSET,
-                            fill_w,
-                            fill_h,
-                        ),
+                        Rect::new(fill_x, ids.track_rect.y + OVERLAY_INSET, fill_w, fill_h),
                     );
                     tree.set_bounds(
                         t.min_bar_id as u32,
@@ -404,9 +399,7 @@ impl MacrosPanel {
                     );
                 }
 
-                return vec![PanelAction::AbletonMacroTrimChanged(
-                    i, new_min, new_max,
-                )];
+                return vec![PanelAction::AbletonMacroTrimChanged(i, new_min, new_max)];
             }
         }
         // Slider drag

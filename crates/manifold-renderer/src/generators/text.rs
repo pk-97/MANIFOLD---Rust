@@ -1,9 +1,9 @@
-use std::collections::BTreeMap;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
 use crate::text_rasterizer::{HAlign, RasterizeOptions, TextRasterizer};
 use manifold_core::GeneratorTypeId;
+use std::collections::BTreeMap;
 
 use crate::generators::registration::GeneratorFactory;
 
@@ -63,11 +63,7 @@ pub struct TextGenerator {
 
 impl TextGenerator {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
-        let pipeline = device.create_compute_pipeline(
-            TEXT_WGSL,
-            "cs_main",
-            "Text",
-        );
+        let pipeline = device.create_compute_pipeline(TEXT_WGSL, "cs_main", "Text");
         Self {
             pipeline,
             rasterizer: TextRasterizer::new(),
@@ -84,12 +80,7 @@ impl TextGenerator {
         }
     }
 
-    fn ensure_texture(
-        &mut self,
-        device: &manifold_gpu::GpuDevice,
-        width: u32,
-        height: u32,
-    ) {
+    fn ensure_texture(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
         if self.text_tex_dims == (width, height) && self.text_texture.is_some() {
             return;
         }
@@ -171,7 +162,10 @@ impl Generator for TextGenerator {
                 letter_spacing,
                 line_spacing,
             };
-            match self.rasterizer.rasterize(&self.pending_text, font_size, &opts) {
+            match self
+                .rasterizer
+                .rasterize(&self.pending_text, font_size, &opts)
+            {
                 Some(result) => {
                     self.ensure_texture(gpu.device, result.width, result.height);
                     if let Some(ref texture) = self.text_texture {

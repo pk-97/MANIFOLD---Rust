@@ -10,11 +10,9 @@
 mod parity;
 
 use manifold_core::EffectTypeId;
-use manifold_renderer::node_graph::primitives::{Strobe, STROBE_NOTE_RATES};
 use manifold_renderer::node_graph::ParamValue;
-use parity::{
-    assert_bytewise_equal, default_ctx, make_default_effect, Fixture, ParityHarness,
-};
+use manifold_renderer::node_graph::primitives::{STROBE_NOTE_RATES, Strobe};
+use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
 
 /// (rate_idx, mode, amount, label).
 const SETUPS: &[(usize, u32, f32, &str)] = &[
@@ -44,11 +42,8 @@ fn strobe_is_pixel_exact_across_fixtures_and_setups() {
             fx.param_values[2].value = mode as f32;
 
             let legacy = h.run_legacy(&fx, &input, &ctx);
-            let decomposed = h.run_primitive_graph(
-                Box::new(Strobe::new()),
-                &input,
-                &ctx,
-                |graph, prim_id| {
+            let decomposed =
+                h.run_primitive_graph(Box::new(Strobe::new()), &input, &ctx, |graph, prim_id| {
                     graph
                         .set_param(prim_id, "amount", ParamValue::Float(amount))
                         .unwrap();
@@ -63,8 +58,7 @@ fn strobe_is_pixel_exact_across_fixtures_and_setups() {
                     graph
                         .set_param(prim_id, "beat", ParamValue::Float(ctx.beat))
                         .unwrap();
-                },
-            );
+                });
 
             assert_bytewise_equal(
                 &format!("strobe/{:?}/setup={label}", fixture),

@@ -442,8 +442,7 @@ mod tests {
         // This catches accidental collisions when adding new effects.
         for effect_type in get_all_effect_types() {
             let def = get(&effect_type);
-            let non_empty_id_count =
-                def.param_defs.iter().filter(|pd| !pd.id.is_empty()).count();
+            let non_empty_id_count = def.param_defs.iter().filter(|pd| !pd.id.is_empty()).count();
             assert_eq!(
                 def.id_to_index.len(),
                 non_empty_id_count,
@@ -465,8 +464,7 @@ mod tests {
 
     #[test]
     fn resolve_param_alias_renames() {
-        let aliases: &[crate::effect_registration::ParamAlias] =
-            &[("cv_flow", Some("flow"))];
+        let aliases: &[crate::effect_registration::ParamAlias] = &[("cv_flow", Some("flow"))];
         assert_eq!(resolve_param_alias(aliases, "cv_flow"), Some("flow"));
     }
 
@@ -480,16 +478,14 @@ mod tests {
 
     #[test]
     fn resolve_param_alias_drop_returns_none() {
-        let aliases: &[crate::effect_registration::ParamAlias] =
-            &[("face", None)];
+        let aliases: &[crate::effect_registration::ParamAlias] = &[("face", None)];
         assert_eq!(resolve_param_alias(aliases, "face"), None);
     }
 
     #[test]
     fn resolve_param_alias_chain_to_drop_returns_none() {
         // Renamed once, then dropped: a → b → None.
-        let aliases: &[crate::effect_registration::ParamAlias] =
-            &[("a", Some("b")), ("b", None)];
+        let aliases: &[crate::effect_registration::ParamAlias] = &[("a", Some("b")), ("b", None)];
         assert_eq!(resolve_param_alias(aliases, "a"), None);
     }
 

@@ -457,11 +457,8 @@ impl Command for ToggleEffectParamExposeCommand {
                 if existing_position.is_some() {
                     return ReverseState::None;
                 }
-                let id = generate_user_param_id(
-                    &node_handle,
-                    &inner_param,
-                    &effect.user_param_bindings,
-                );
+                let id =
+                    generate_user_param_id(&node_handle, &inner_param, &effect.user_param_bindings);
                 let binding = UserParamBinding {
                     id: id.clone(),
                     label: meta.label.clone(),
@@ -640,4 +637,3 @@ impl Command for ToggleStaticParamExposeCommand {
         }
     }
 }
-

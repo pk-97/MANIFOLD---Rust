@@ -41,11 +41,7 @@ impl FormatConverter {
                     texture: dest,
                 },
             ],
-            [
-                dest.width.div_ceil(16),
-                dest.height.div_ceil(16),
-                1,
-            ],
+            [dest.width.div_ceil(16), dest.height.div_ceil(16), 1],
             "Recording sRGB Convert",
         );
     }

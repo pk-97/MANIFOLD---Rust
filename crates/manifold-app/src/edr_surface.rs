@@ -48,7 +48,11 @@ pub(crate) fn register_screen_change_observer() {
     use objc2_foundation::NSString;
 
     // Callback: sets the atomic flag when any screen change occurs.
-    extern "C" fn on_screen_changed(_this: *mut AnyObject, _cmd: Sel, _notification: *mut AnyObject) {
+    extern "C" fn on_screen_changed(
+        _this: *mut AnyObject,
+        _cmd: Sel,
+        _notification: *mut AnyObject,
+    ) {
         EDR_SCREEN_CHANGED.store(true, Ordering::Relaxed);
     }
 

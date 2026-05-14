@@ -20,11 +20,9 @@
 mod parity;
 
 use manifold_core::EffectTypeId;
-use manifold_renderer::node_graph::primitives::DepthOfField;
 use manifold_renderer::node_graph::ParamValue;
-use parity::{
-    assert_bytewise_equal, default_ctx, make_default_effect, Fixture, ParityHarness,
-};
+use manifold_renderer::node_graph::primitives::DepthOfField;
+use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
 
 #[derive(Debug, Clone, Copy)]
 struct Setup {
@@ -40,14 +38,94 @@ struct Setup {
 }
 
 const SETUPS: &[Setup] = &[
-    Setup { label: "identity",          amount: 0.0, mode: 0, focus: 0.5, focus_x: 0.5, width: 0.15, blur: 0.5, angle: 0.0,  quality: 1 },
-    Setup { label: "tilt_default",      amount: 1.0, mode: 0, focus: 0.5, focus_x: 0.5, width: 0.15, blur: 0.5, angle: 0.0,  quality: 1 },
-    Setup { label: "tilt_rotated",      amount: 1.0, mode: 0, focus: 0.5, focus_x: 0.5, width: 0.15, blur: 0.5, angle: 45.0, quality: 1 },
-    Setup { label: "tilt_wide",         amount: 1.0, mode: 0, focus: 0.3, focus_x: 0.5, width: 0.40, blur: 0.8, angle: 0.0,  quality: 2 },
-    Setup { label: "tilt_low_quality",  amount: 1.0, mode: 0, focus: 0.5, focus_x: 0.5, width: 0.15, blur: 0.5, angle: 0.0,  quality: 0 },
-    Setup { label: "radial_default",    amount: 1.0, mode: 1, focus: 0.5, focus_x: 0.5, width: 0.15, blur: 0.5, angle: 0.0,  quality: 1 },
-    Setup { label: "radial_offset",     amount: 1.0, mode: 1, focus: 0.7, focus_x: 0.3, width: 0.20, blur: 0.6, angle: 0.0,  quality: 1 },
-    Setup { label: "radial_max_blur",   amount: 1.0, mode: 1, focus: 0.5, focus_x: 0.5, width: 0.10, blur: 1.0, angle: 0.0,  quality: 2 },
+    Setup {
+        label: "identity",
+        amount: 0.0,
+        mode: 0,
+        focus: 0.5,
+        focus_x: 0.5,
+        width: 0.15,
+        blur: 0.5,
+        angle: 0.0,
+        quality: 1,
+    },
+    Setup {
+        label: "tilt_default",
+        amount: 1.0,
+        mode: 0,
+        focus: 0.5,
+        focus_x: 0.5,
+        width: 0.15,
+        blur: 0.5,
+        angle: 0.0,
+        quality: 1,
+    },
+    Setup {
+        label: "tilt_rotated",
+        amount: 1.0,
+        mode: 0,
+        focus: 0.5,
+        focus_x: 0.5,
+        width: 0.15,
+        blur: 0.5,
+        angle: 45.0,
+        quality: 1,
+    },
+    Setup {
+        label: "tilt_wide",
+        amount: 1.0,
+        mode: 0,
+        focus: 0.3,
+        focus_x: 0.5,
+        width: 0.40,
+        blur: 0.8,
+        angle: 0.0,
+        quality: 2,
+    },
+    Setup {
+        label: "tilt_low_quality",
+        amount: 1.0,
+        mode: 0,
+        focus: 0.5,
+        focus_x: 0.5,
+        width: 0.15,
+        blur: 0.5,
+        angle: 0.0,
+        quality: 0,
+    },
+    Setup {
+        label: "radial_default",
+        amount: 1.0,
+        mode: 1,
+        focus: 0.5,
+        focus_x: 0.5,
+        width: 0.15,
+        blur: 0.5,
+        angle: 0.0,
+        quality: 1,
+    },
+    Setup {
+        label: "radial_offset",
+        amount: 1.0,
+        mode: 1,
+        focus: 0.7,
+        focus_x: 0.3,
+        width: 0.20,
+        blur: 0.6,
+        angle: 0.0,
+        quality: 1,
+    },
+    Setup {
+        label: "radial_max_blur",
+        amount: 1.0,
+        mode: 1,
+        focus: 0.5,
+        focus_x: 0.5,
+        width: 0.10,
+        blur: 1.0,
+        angle: 0.0,
+        quality: 2,
+    },
 ];
 
 #[test]

@@ -35,8 +35,8 @@ use std::slice;
 use std::sync::Arc;
 
 use half::f16;
-use manifold_core::{Beats, EffectTypeId, Seconds};
 use manifold_core::effects::EffectInstance;
+use manifold_core::{Beats, EffectTypeId, Seconds};
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
@@ -45,8 +45,8 @@ use manifold_renderer::effect_chain::EffectChain;
 use manifold_renderer::effect_registry::EffectRegistry;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::node_graph::{
-    compile, Backend, EffectNode, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph,
-    MetalBackend, NodeInstanceId, ResourceId, Slot, Source,
+    Backend, EffectNode, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend,
+    NodeInstanceId, ResourceId, Slot, Source, compile,
 };
 use manifold_renderer::render_target::RenderTarget;
 
@@ -134,7 +134,12 @@ impl ParityHarness {
     /// Time / beat / dt are fixed deterministic values so any
     /// time-dependent effect (Glitch, Strobe, VoronoiPrism) produces
     /// reproducible output across runs.
-    pub fn run_legacy(&mut self, fx: &EffectInstance, input: &GpuTexture, ctx: &EffectContext) -> Vec<u8> {
+    pub fn run_legacy(
+        &mut self,
+        fx: &EffectInstance,
+        input: &GpuTexture,
+        ctx: &EffectContext,
+    ) -> Vec<u8> {
         // Stable destination — we GPU-copy the chain's output into here
         // so readback isn't borrow-locked by the chain's internal
         // ping-pong buffers.
@@ -144,13 +149,7 @@ impl ParityHarness {
         let mut render_enc = self.device.create_encoder("parity-legacy-render");
         {
             let mut gpu = RendererGpuEncoder::new(&mut render_enc, &self.device);
-            let result = chain.apply_chain(
-                &mut gpu,
-                input,
-                slice::from_ref(fx),
-                &[],
-                ctx,
-            );
+            let result = chain.apply_chain(&mut gpu, input, slice::from_ref(fx), &[], ctx);
             // `result == None` means the chain skipped (disabled / no
             // registered processor / amount==0). Parity-test contract:
             // the "effect output" in that case equals the input. Same
@@ -195,16 +194,8 @@ impl ParityHarness {
         // Build `Source → prim → FinalOutput`.
         let mut graph = Graph::new();
         let source = graph.add_node(Box::new(Source::new()));
-        let prim_inputs: Vec<String> = prim
-            .inputs()
-            .iter()
-            .map(|p| p.name.to_string())
-            .collect();
-        let prim_outputs: Vec<String> = prim
-            .outputs()
-            .iter()
-            .map(|p| p.name.to_string())
-            .collect();
+        let prim_inputs: Vec<String> = prim.inputs().iter().map(|p| p.name.to_string()).collect();
+        let prim_outputs: Vec<String> = prim.outputs().iter().map(|p| p.name.to_string()).collect();
         let prim_id = graph.add_node(prim);
         let final_out = graph.add_node(Box::new(FinalOutput::new()));
 
@@ -222,7 +213,9 @@ impl ParityHarness {
                 .clone(),
         );
         graph.connect((source, "out"), (prim_id, in_port)).unwrap();
-        graph.connect((prim_id, out_port), (final_out, "in")).unwrap();
+        graph
+            .connect((prim_id, out_port), (final_out, "in"))
+            .unwrap();
 
         set_params(&mut graph, prim_id);
 
@@ -244,12 +237,8 @@ impl ParityHarness {
         // Pre-bind only Source.out — lazy-alloc handles the
         // primitive's output. Capture the next slot watermark so we
         // know where the primitive's output landed.
-        let mut backend = MetalBackend::new(
-            self.device.clone(),
-            self.width,
-            self.height,
-            self.format,
-        );
+        let mut backend =
+            MetalBackend::new(self.device.clone(), self.width, self.height, self.format);
         backend.pre_bind_texture_2d(source_res, source_rt);
         let prim_output_slot = Slot(backend.slot_count());
 
@@ -303,16 +292,8 @@ impl ParityHarness {
         // Collect port names BEFORE adding the primitive to the graph
         // — `add_node` consumes the box, so we'd lose access to its
         // inputs/outputs slice after the call.
-        let prim_inputs: Vec<String> = prim
-            .inputs()
-            .iter()
-            .map(|p| p.name.to_string())
-            .collect();
-        let prim_outputs: Vec<String> = prim
-            .outputs()
-            .iter()
-            .map(|p| p.name.to_string())
-            .collect();
+        let prim_inputs: Vec<String> = prim.inputs().iter().map(|p| p.name.to_string()).collect();
+        let prim_outputs: Vec<String> = prim.outputs().iter().map(|p| p.name.to_string()).collect();
         assert!(
             !prim_inputs.is_empty(),
             "primitive must have at least one input port"
@@ -328,8 +309,12 @@ impl ParityHarness {
         let final_out = graph.add_node(Box::new(FinalOutput::new()));
         let primary_port: &'static str = leak_static_str(prim_inputs[0].clone());
         let out_port: &'static str = leak_static_str(prim_outputs[0].clone());
-        graph.connect((primary_source, "out"), (prim_id, primary_port)).unwrap();
-        graph.connect((prim_id, out_port), (final_out, "in")).unwrap();
+        graph
+            .connect((primary_source, "out"), (prim_id, primary_port))
+            .unwrap();
+        graph
+            .connect((prim_id, out_port), (final_out, "in"))
+            .unwrap();
 
         // Aux Source nodes for each (port_name, texture) pair.
         let mut aux_sources: Vec<NodeInstanceId> = Vec::with_capacity(aux_inputs.len());
@@ -377,12 +362,8 @@ impl ParityHarness {
         // aux_rts via an iterator so each Source consumes a RenderTarget
         // exactly once (Vec items aren't `Copy`, can't index in a loop
         // that also borrows from `self.device`).
-        let mut backend = MetalBackend::new(
-            self.device.clone(),
-            self.width,
-            self.height,
-            self.format,
-        );
+        let mut backend =
+            MetalBackend::new(self.device.clone(), self.width, self.height, self.format);
         let primary_res = resource_for_output(&plan, primary_source, "out");
         backend.pre_bind_texture_2d(primary_res, primary_rt);
         let mut aux_rts_iter = aux_rts.into_iter();

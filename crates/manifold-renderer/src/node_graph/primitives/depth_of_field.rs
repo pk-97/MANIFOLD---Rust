@@ -157,16 +157,13 @@ impl DepthOfField {
             device.create_specialized_compute_pipeline(DOF_WGSL, "cs_main", &constants, label)
         };
         if self.pipeline_coc_tilt_shift.is_none() {
-            self.pipeline_coc_tilt_shift =
-                Some(spec("0u", Some("0u"), "node.dof.coc.tilt_shift"));
+            self.pipeline_coc_tilt_shift = Some(spec("0u", Some("0u"), "node.dof.coc.tilt_shift"));
         }
         if self.pipeline_coc_radial.is_none() {
-            self.pipeline_coc_radial =
-                Some(spec("0u", Some("1u"), "node.dof.coc.radial"));
+            self.pipeline_coc_radial = Some(spec("0u", Some("1u"), "node.dof.coc.radial"));
         }
         if self.pipeline_coc_depth.is_none() {
-            self.pipeline_coc_depth =
-                Some(spec("0u", Some("2u"), "node.dof.coc.depth"));
+            self.pipeline_coc_depth = Some(spec("0u", Some("2u"), "node.dof.coc.depth"));
         }
         if self.pipeline_blur_h.is_none() {
             self.pipeline_blur_h = Some(spec("1u", None, "node.dof.blur_h"));
@@ -208,9 +205,7 @@ impl DepthOfField {
             })
         });
         if self.depth_worker.is_none() {
-            log::warn!(
-                "[node.depth_of_field] Depth worker unavailable — depth mode disabled"
-            );
+            log::warn!("[node.depth_of_field] Depth worker unavailable — depth mode disabled");
         }
     }
 
@@ -407,9 +402,7 @@ impl EffectNode for DepthOfField {
         let depth_tex_for_coc: Option<&GpuTexture> = if focus_mode == FOCUS_DEPTH {
             self.ensure_depth_worker();
             self.ensure_depth_state(gpu.device, width, height);
-            if let (Some(ds), Some(dw)) =
-                (self.depth_state.as_mut(), self.depth_worker.as_mut())
-            {
+            if let (Some(ds), Some(dw)) = (self.depth_state.as_mut(), self.depth_worker.as_mut()) {
                 // Poll readback → submit to worker.
                 if ds.readback_pending
                     && let Some(pixels) = ds.readback.try_read()
@@ -661,4 +654,3 @@ fn dispatch_dof(
         label,
     );
 }
-

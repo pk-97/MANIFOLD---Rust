@@ -23,11 +23,9 @@
 mod parity;
 
 use manifold_core::EffectTypeId;
-use manifold_renderer::node_graph::primitives::ColorLut;
 use manifold_renderer::node_graph::ParamValue;
-use parity::{
-    assert_bytewise_equal, default_ctx, make_default_effect, Fixture, ParityHarness,
-};
+use manifold_renderer::node_graph::primitives::ColorLut;
+use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
 
 const LUT_SIZE: u32 = 512;
 const LUT_MAX_LUM: f32 = 2.0;
@@ -65,9 +63,16 @@ fn gradient(stops: &[(f32, [f32; 3])], t: f32) -> [f32; 3] {
     ]
 }
 
-fn p_white_hot(t: f32) -> [f32; 3] { [t, t, t] }
-fn p_black_hot(t: f32) -> [f32; 3] { let v = 1.0 - t; [v, v, v] }
-fn p_green_nv(t: f32) -> [f32; 3] { [t * 0.15, t, t * 0.1] }
+fn p_white_hot(t: f32) -> [f32; 3] {
+    [t, t, t]
+}
+fn p_black_hot(t: f32) -> [f32; 3] {
+    let v = 1.0 - t;
+    [v, v, v]
+}
+fn p_green_nv(t: f32) -> [f32; 3] {
+    [t * 0.15, t, t * 0.1]
+}
 fn p_iron_bow(t: f32) -> [f32; 3] {
     gradient(
         &[

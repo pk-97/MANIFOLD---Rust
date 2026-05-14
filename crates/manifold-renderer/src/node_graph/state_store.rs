@@ -95,12 +95,7 @@ impl StateStore {
 
     /// Insert state for `(node_id, owner_key)`, replacing any existing
     /// entry. The replaced state's `cleanup` hook fires before its drop.
-    pub fn insert<T: NodeState>(
-        &mut self,
-        node_id: NodeInstanceId,
-        owner_key: OwnerKey,
-        state: T,
-    ) {
+    pub fn insert<T: NodeState>(&mut self, node_id: NodeInstanceId, owner_key: OwnerKey, state: T) {
         if let Some(mut prev) = self.buckets.insert((node_id, owner_key), Box::new(state)) {
             prev.cleanup();
         }

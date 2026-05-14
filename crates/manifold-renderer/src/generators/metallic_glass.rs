@@ -72,7 +72,7 @@ struct ProcessUniforms {
     mirror_angle: f32,
     width: f32,
     height: f32,
-    temporal_blend: f32,  // 0.0 = frozen, 1.0 = no smoothing
+    temporal_blend: f32, // 0.0 = frozen, 1.0 = no smoothing
     _pad0: f32,
     _pad1: f32,
     _pad2: f32,
@@ -173,11 +173,10 @@ impl MetallicGlassGenerator {
             "MetallicGlass Render",
         );
 
-        let depth_stencil =
-            device.create_depth_stencil_state(&manifold_gpu::GpuDepthStencilDesc {
-                compare: manifold_gpu::GpuCompareFunction::Less,
-                write_enabled: true,
-            });
+        let depth_stencil = device.create_depth_stencil_state(&manifold_gpu::GpuDepthStencilDesc {
+            compare: manifold_gpu::GpuCompareFunction::Less,
+            write_enabled: true,
+        });
 
         let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
             min_filter: manifold_gpu::GpuFilterMode::Linear,

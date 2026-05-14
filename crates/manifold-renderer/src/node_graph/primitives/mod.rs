@@ -36,48 +36,46 @@ mod wet_dry_mix;
 mod wireframe_depth;
 
 pub use affine_transform::AffineTransform;
-pub use auto_gain::{AutoGain, AUTO_GAIN_CHARACTERS, AUTO_GAIN_TYPE_ID};
-pub use blob_tracking::{BlobTracking, BLOB_TRACKING_TYPE_ID};
-pub use bloom::{Bloom, BLOOM_TYPE_ID};
+pub use auto_gain::{AUTO_GAIN_CHARACTERS, AUTO_GAIN_TYPE_ID, AutoGain};
+pub use blob_tracking::{BLOB_TRACKING_TYPE_ID, BlobTracking};
+pub use bloom::{BLOOM_TYPE_ID, Bloom};
 pub use chromatic_offset::ChromaticOffset;
 pub use clamp_stretch::ClampStretch;
 pub use color::{
-    ChannelMix, ColorRamp, Brightness, CHANNEL_MIX_TYPE_ID, COLOR_RAMP_TYPE_ID,
-    BRIGHTNESS_TYPE_ID,
+    BRIGHTNESS_TYPE_ID, Brightness, CHANNEL_MIX_TYPE_ID, COLOR_RAMP_TYPE_ID, ChannelMix, ColorRamp,
 };
 pub use color_grade::ColorGrade;
-pub use compose::{Blend, Mix, BLEND_MODES, BLEND_TYPE_ID, MIX_MODES, MIX_TYPE_ID};
+pub use compose::{BLEND_MODES, BLEND_TYPE_ID, Blend, MIX_MODES, MIX_TYPE_ID, Mix};
 pub use depth_of_field::{
-    DepthOfField, DEPTH_OF_FIELD_FOCUS_MODES, DEPTH_OF_FIELD_QUALITIES, DEPTH_OF_FIELD_TYPE_ID,
+    DEPTH_OF_FIELD_FOCUS_MODES, DEPTH_OF_FIELD_QUALITIES, DEPTH_OF_FIELD_TYPE_ID, DepthOfField,
 };
 pub use dither_pattern::DitherPattern;
 pub use edge_detect::EdgeDetect;
+pub use filter::{
+    BLUR_MODES, BLUR_TYPE_ID, Blur, MIP_CHAIN_TYPE_ID, MipChain, THRESHOLD_TYPE_ID, Threshold,
+};
 pub use glitch::Glitch;
-pub use halation::{Halation, HALATION_TYPE_ID};
+pub use halation::{HALATION_TYPE_ID, Halation};
 pub use highlight_boost::HighlightBoost;
-pub use infrared::{Infrared, INFRARED_PALETTES, INFRARED_TYPE_ID};
+pub use infrared::{INFRARED_PALETTES, INFRARED_TYPE_ID, Infrared};
 pub use invert::Invert;
 pub use kaleido_fold::KaleidoFold;
 pub use lut1d::ColorLut;
 pub use separable_gaussian::{
-    GaussianBlur, GAUSSIAN_BLUR_AXES, GAUSSIAN_BLUR_KERNELS,
-    GAUSSIAN_BLUR_TYPE_ID,
+    GAUSSIAN_BLUR_AXES, GAUSSIAN_BLUR_KERNELS, GAUSSIAN_BLUR_TYPE_ID, GaussianBlur,
 };
-pub use strobe::{Strobe, NOTE_RATES as STROBE_NOTE_RATES};
-pub use filter::{
-    Blur, MipChain, Threshold, BLUR_MODES, BLUR_TYPE_ID, MIP_CHAIN_TYPE_ID, THRESHOLD_TYPE_ID,
-};
-pub use temporal::{Feedback, FEEDBACK_MODES, FEEDBACK_TYPE_ID};
-pub use voronoi_prism::VoronoiPrism;
-pub use watercolor::{Watercolor, WATERCOLOR_TYPE_ID};
-pub use wet_dry_mix::{WetDry, WET_DRY_TYPE_ID};
-pub use wireframe_depth::{
-    WireframeDepth, WIREFRAME_DEPTH_BLEND_MODES, WIREFRAME_DEPTH_MESH_RATES,
-    WIREFRAME_DEPTH_ONOFF, WIREFRAME_DEPTH_TYPE_ID,
-};
+pub use strobe::{NOTE_RATES as STROBE_NOTE_RATES, Strobe};
+pub use temporal::{FEEDBACK_MODES, FEEDBACK_TYPE_ID, Feedback};
 pub use uv::{
-    Sample, Transform, SAMPLE_FILTER_MODES, SAMPLE_TYPE_ID, SAMPLE_WRAP_MODES,
-    TRANSFORM_MODES, TRANSFORM_TYPE_ID,
+    SAMPLE_FILTER_MODES, SAMPLE_TYPE_ID, SAMPLE_WRAP_MODES, Sample, TRANSFORM_MODES,
+    TRANSFORM_TYPE_ID, Transform,
+};
+pub use voronoi_prism::VoronoiPrism;
+pub use watercolor::{WATERCOLOR_TYPE_ID, Watercolor};
+pub use wet_dry_mix::{WET_DRY_TYPE_ID, WetDry};
+pub use wireframe_depth::{
+    WIREFRAME_DEPTH_BLEND_MODES, WIREFRAME_DEPTH_MESH_RATES, WIREFRAME_DEPTH_ONOFF,
+    WIREFRAME_DEPTH_TYPE_ID, WireframeDepth,
 };
 
 #[cfg(test)]
@@ -88,8 +86,8 @@ mod tests {
     use manifold_core::{Beats, Seconds};
 
     use crate::node_graph::{
-        compile, validate, EffectNode, Executor, FinalOutput, FrameTime, Graph, ParamType,
-        ParamValue, Source,
+        EffectNode, Executor, FinalOutput, FrameTime, Graph, ParamType, ParamValue, Source,
+        compile, validate,
     };
 
     fn frame_time() -> FrameTime {
@@ -258,8 +256,6 @@ mod tests {
         g.set_param(id, "level", ParamValue::Float(0.7)).unwrap();
         g.set_param(id, "softness", ParamValue::Float(0.1)).unwrap();
         // Unknown param is rejected.
-        assert!(g
-            .set_param(id, "missing", ParamValue::Float(0.0))
-            .is_err());
+        assert!(g.set_param(id, "missing", ParamValue::Float(0.0)).is_err());
     }
 }

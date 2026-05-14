@@ -37,11 +37,11 @@ mod infrared;
 mod mirror;
 mod soft_focus;
 
-pub use bloom::{build_bloom, BLOOM_TYPE_ID};
-pub use halation::{build_halation, HALATION_TYPE_ID};
-pub use infrared::{build_infrared, INFRARED_TYPE_ID};
-pub use mirror::{build_mirror, legacy_mirror_mode_to_uv, MIRROR_TYPE_ID};
-pub use soft_focus::{build_soft_focus, SOFT_FOCUS_TYPE_ID};
+pub use bloom::{BLOOM_TYPE_ID, build_bloom};
+pub use halation::{HALATION_TYPE_ID, build_halation};
+pub use infrared::{INFRARED_TYPE_ID, build_infrared};
+pub use mirror::{MIRROR_TYPE_ID, build_mirror, legacy_mirror_mode_to_uv};
+pub use soft_focus::{SOFT_FOCUS_TYPE_ID, build_soft_focus};
 
 use ahash::AHashMap;
 
@@ -88,7 +88,8 @@ impl CompositeHandle {
         inner_node: NodeInstanceId,
         inner_param: &'static str,
     ) -> &mut Self {
-        self.param_routing.insert(outer_name, (inner_node, inner_param));
+        self.param_routing
+            .insert(outer_name, (inner_node, inner_param));
         self
     }
 
@@ -120,15 +121,13 @@ impl CompositeHandle {
         outer_name: &str,
         value: ParamValue,
     ) -> Result<(), GraphError> {
-        let (node, inner_name) =
-            self.param_routing
-                .get(outer_name)
-                .copied()
-                .ok_or_else(|| GraphError::ParamNotFound {
-                    // sentinel: this is a composite-level lookup, not a node-level one.
-                    node: NodeInstanceId(u32::MAX),
-                    param: outer_name.to_string(),
-                })?;
+        let (node, inner_name) = self.param_routing.get(outer_name).copied().ok_or_else(|| {
+            GraphError::ParamNotFound {
+                // sentinel: this is a composite-level lookup, not a node-level one.
+                node: NodeInstanceId(u32::MAX),
+                param: outer_name.to_string(),
+            }
+        })?;
         graph.set_param(node, inner_name, value)
     }
 }
@@ -140,9 +139,7 @@ mod tests {
 
     use manifold_core::{Beats, Seconds};
 
-    use crate::node_graph::{
-        compile, validate, Executor, FinalOutput, FrameTime, Graph, Source,
-    };
+    use crate::node_graph::{Executor, FinalOutput, FrameTime, Graph, Source, compile, validate};
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -156,7 +153,10 @@ mod tests {
     /// Helper: build `[Source → composite_builder → FinalOutput]` and run
     /// it once. Used by every composite test below for symmetry.
     fn run_composite_in_graph(
-        builder: impl FnOnce(&mut Graph, (NodeInstanceId, &'static str)) -> Result<CompositeHandle, GraphError>,
+        builder: impl FnOnce(
+            &mut Graph,
+            (NodeInstanceId, &'static str),
+        ) -> Result<CompositeHandle, GraphError>,
     ) -> (Graph, CompositeHandle) {
         let mut g = Graph::new();
         let src = g.add_node(Box::new(Source::new()));
@@ -235,9 +235,11 @@ mod tests {
             .set_param(&mut g, "color_a", ParamValue::Color([1.0, 0.0, 0.0, 1.0]))
             .unwrap();
         // Unknown outer param surfaces as a clean error.
-        assert!(handle
-            .set_param(&mut g, "nonexistent", ParamValue::Float(0.0))
-            .is_err());
+        assert!(
+            handle
+                .set_param(&mut g, "nonexistent", ParamValue::Float(0.0))
+                .is_err()
+        );
     }
 
     #[test]
@@ -286,7 +288,8 @@ mod tests {
         let bloomed = build_bloom(&mut g, (src, "out")).unwrap();
         let infrared_after_bloom = build_infrared(&mut g, bloomed.output()).unwrap();
         let out = g.add_node(Box::new(FinalOutput::new()));
-        g.connect(infrared_after_bloom.output(), (out, "in")).unwrap();
+        g.connect(infrared_after_bloom.output(), (out, "in"))
+            .unwrap();
 
         validate(&g).unwrap();
         let plan = compile(&g).unwrap();

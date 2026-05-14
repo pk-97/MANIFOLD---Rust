@@ -25,9 +25,7 @@
 
 use std::sync::OnceLock;
 
-use manifold_gpu::{
-    GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc, GpuTextureFormat,
-};
+use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc, GpuTextureFormat};
 
 use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -35,8 +33,7 @@ use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortTy
 use crate::node_graph::primitive::PrimitiveDescription;
 use crate::render_target::RenderTarget;
 
-const WATERCOLOR_WGSL: &str =
-    include_str!("../../effects/shaders/fx_watercolor_compute.wgsl");
+const WATERCOLOR_WGSL: &str = include_str!("../../effects/shaders/fx_watercolor_compute.wgsl");
 
 pub const WATERCOLOR_TYPE_ID: &str = "node.watercolor";
 
@@ -99,20 +96,27 @@ impl Watercolor {
         }
     }
 
-    fn ensure_state(
-        &mut self,
-        device: &manifold_gpu::GpuDevice,
-        width: u32,
-        height: u32,
-    ) {
+    fn ensure_state(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
         if self.state_dims == Some((width, height)) {
             return;
         }
         let format = GpuTextureFormat::Rgba16Float;
         let flow_w = (width / 2).max(1);
         let flow_h = (height / 2).max(1);
-        self.feedback = Some(RenderTarget::new(device, width, height, format, "WC Feedback"));
-        self.flow_map = Some(RenderTarget::new(device, flow_w, flow_h, format, "WC FlowMap"));
+        self.feedback = Some(RenderTarget::new(
+            device,
+            width,
+            height,
+            format,
+            "WC Feedback",
+        ));
+        self.flow_map = Some(RenderTarget::new(
+            device,
+            flow_w,
+            flow_h,
+            format,
+            "WC FlowMap",
+        ));
         self.temp_a = Some(RenderTarget::new(device, width, height, format, "WC TempA"));
         self.temp_b = Some(RenderTarget::new(device, width, height, format, "WC TempB"));
         self.state_dims = Some((width, height));
@@ -311,13 +315,7 @@ impl EffectNode for Watercolor {
         // Clear feedback on first frame after (re)allocation. Matches
         // legacy `apply` which clears on `ensure_state`.
         if self.feedback_needs_clear {
-            gpu.clear_texture(
-                &self.feedback.as_ref().unwrap().texture,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-            );
+            gpu.clear_texture(&self.feedback.as_ref().unwrap().texture, 0.0, 0.0, 0.0, 0.0);
             self.feedback_needs_clear = false;
         }
 
@@ -356,7 +354,15 @@ impl EffectNode for Watercolor {
 
         // Pass 1: Grain + Max — source ⊕ (feedback * decay) → temp_a
         dispatch_watercolor(
-            gpu, p_max, source, &feedback.texture, &temp_a.texture, sampler, ubytes, width, height,
+            gpu,
+            p_max,
+            source,
+            &feedback.texture,
+            &temp_a.texture,
+            sampler,
+            ubytes,
+            width,
+            height,
             "node.watercolor.max",
         );
 
@@ -364,37 +370,85 @@ impl EffectNode for Watercolor {
         let flow_w = flow_map.width;
         let flow_h = flow_map.height;
         dispatch_watercolor(
-            gpu, p_flow, source, source, &flow_map.texture, sampler, ubytes, flow_w, flow_h,
+            gpu,
+            p_flow,
+            source,
+            source,
+            &flow_map.texture,
+            sampler,
+            ubytes,
+            flow_w,
+            flow_h,
             "node.watercolor.flow_gen",
         );
 
         // Pass 3: Displacement — temp_a + flow_map → temp_b
         dispatch_watercolor(
-            gpu, p_disp, &temp_a.texture, &flow_map.texture, &temp_b.texture, sampler, ubytes,
-            width, height, "node.watercolor.displace",
+            gpu,
+            p_disp,
+            &temp_a.texture,
+            &flow_map.texture,
+            &temp_b.texture,
+            sampler,
+            ubytes,
+            width,
+            height,
+            "node.watercolor.displace",
         );
 
         // Pass 4: Edge Diffusion Blur — temp_b → temp_a
         dispatch_watercolor(
-            gpu, p_blur, &temp_b.texture, &temp_b.texture, &temp_a.texture, sampler, ubytes,
-            width, height, "node.watercolor.blur",
+            gpu,
+            p_blur,
+            &temp_b.texture,
+            &temp_b.texture,
+            &temp_a.texture,
+            sampler,
+            ubytes,
+            width,
+            height,
+            "node.watercolor.blur",
         );
 
         // Pass 5: Slope Displacement — source + temp_a → temp_b
         dispatch_watercolor(
-            gpu, p_slope, source, &temp_a.texture, &temp_b.texture, sampler, ubytes, width,
-            height, "node.watercolor.slope",
+            gpu,
+            p_slope,
+            source,
+            &temp_a.texture,
+            &temp_b.texture,
+            sampler,
+            ubytes,
+            width,
+            height,
+            "node.watercolor.slope",
         );
 
         // Pass 6: Luma Blur — temp_b → feedback (persistent)
         dispatch_watercolor(
-            gpu, p_luma, &temp_b.texture, &temp_b.texture, &feedback.texture, sampler, ubytes,
-            width, height, "node.watercolor.luma",
+            gpu,
+            p_luma,
+            &temp_b.texture,
+            &temp_b.texture,
+            &feedback.texture,
+            sampler,
+            ubytes,
+            width,
+            height,
+            "node.watercolor.luma",
         );
 
         // Pass 7: Wet/Dry Blend — feedback + source → target
         dispatch_watercolor(
-            gpu, p_blend, &feedback.texture, source, target, sampler, ubytes, width, height,
+            gpu,
+            p_blend,
+            &feedback.texture,
+            source,
+            target,
+            sampler,
+            ubytes,
+            width,
+            height,
             "node.watercolor.blend",
         );
     }

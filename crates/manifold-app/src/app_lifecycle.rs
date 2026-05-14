@@ -324,9 +324,7 @@ impl Application {
     /// Open. Delegates to ProjectIOService.open_project.
     pub(crate) fn open_project(&mut self) {
         self.send_content_cmd(ContentCommand::PauseRendering);
-        let action = self
-            .project_io
-            .open_project(&mut self.user_prefs);
+        let action = self.project_io.open_project(&mut self.user_prefs);
         self.send_content_cmd(ContentCommand::ResumeRendering);
         self.apply_project_io_action(action);
     }
@@ -696,12 +694,10 @@ impl Application {
                 manifold_gpu::GpuTextureFormat::Rgba16Float,
                 true,
             );
-            self.send_content_cmd(
-                crate::content_command::ContentCommand::SetOutputSurface(surface),
-            );
-            self.send_content_cmd(
-                crate::content_command::ContentCommand::UpdateEdrHeadroom(h),
-            );
+            self.send_content_cmd(crate::content_command::ContentCommand::SetOutputSurface(
+                surface,
+            ));
+            self.send_content_cmd(crate::content_command::ContentCommand::UpdateEdrHeadroom(h));
         }
 
         let state = WindowState {
@@ -852,5 +848,4 @@ impl Application {
         self.send_content_cmd(ContentCommand::WatchEffectGraph(None));
         log::info!("[GraphEditor] Closed");
     }
-
 }

@@ -25,7 +25,7 @@ use ahash::AHashMap;
 use crate::node_graph::effect_node::{NodeInstanceId, NodeRequires, NodeWire};
 use crate::node_graph::graph::Graph;
 use crate::node_graph::ports::PortType;
-use crate::node_graph::validation::{topological_sort, validate, GraphError};
+use crate::node_graph::validation::{GraphError, topological_sort, validate};
 
 /// Identifier for one logical resource (texture, scalar) flowing on a wire.
 ///
@@ -237,11 +237,9 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     // executor can validate at its entry point. Walking the live
     // graph here (not the topological order) is sufficient because
     // `requires()` is a static per-node declaration.
-    let requires = graph
-        .nodes()
-        .fold(NodeRequires::default(), |acc, inst| {
-            acc.union(inst.node.requires())
-        });
+    let requires = graph.nodes().fold(NodeRequires::default(), |acc, inst| {
+        acc.union(inst.node.requires())
+    });
 
     Ok(ExecutionPlan {
         steps,

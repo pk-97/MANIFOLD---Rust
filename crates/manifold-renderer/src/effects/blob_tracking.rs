@@ -7,15 +7,15 @@
 
 use crate::background_worker::BackgroundWorker;
 use crate::effect::{EffectContext, PostProcessEffect};
+use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
-use manifold_core::generator_registration::ParamSpec;
 use manifold_core::effects::EffectInstance;
-use crate::effects::registration::EffectFactory;
+use manifold_core::generator_registration::ParamSpec;
 use manifold_gpu::{
     GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer, GpuComputePipeline,
     GpuDevice, GpuFilterMode, GpuLoadAction, GpuRenderPipeline, GpuSampler, GpuSamplerDesc,
@@ -767,41 +767,13 @@ impl BlobTrackingFX {
             let gx1 = gauge_pos[0] + gauge_w;
             let gy1 = gauge_pos[1] - gauge_h;
             // Top edge (horizontal, thickness in Y)
-            push_solid(
-                quads,
-                gx0,
-                gy0 - thin_v / 2.0,
-                gx1,
-                gy0 + thin_v / 2.0,
-                1.0,
-            );
+            push_solid(quads, gx0, gy0 - thin_v / 2.0, gx1, gy0 + thin_v / 2.0, 1.0);
             // Bottom edge (horizontal, thickness in Y)
-            push_solid(
-                quads,
-                gx0,
-                gy1 - thin_v / 2.0,
-                gx1,
-                gy1 + thin_v / 2.0,
-                1.0,
-            );
+            push_solid(quads, gx0, gy1 - thin_v / 2.0, gx1, gy1 + thin_v / 2.0, 1.0);
             // Left edge (vertical, thickness in X)
-            push_solid(
-                quads,
-                gx0 - thin_u / 2.0,
-                gy1,
-                gx0 + thin_u / 2.0,
-                gy0,
-                1.0,
-            );
+            push_solid(quads, gx0 - thin_u / 2.0, gy1, gx0 + thin_u / 2.0, gy0, 1.0);
             // Right edge (vertical, thickness in X)
-            push_solid(
-                quads,
-                gx1 - thin_u / 2.0,
-                gy1,
-                gx1 + thin_u / 2.0,
-                gy0,
-                1.0,
-            );
+            push_solid(quads, gx1 - thin_u / 2.0, gy1, gx1 + thin_u / 2.0, gy0, 1.0);
             // Fill quad
             if gauge_fill > 0.0 {
                 push_solid(quads, gx0, gy1, gx0 + gauge_w * gauge_fill, gy0, 0.4);
@@ -1311,4 +1283,3 @@ impl PostProcessEffect for BlobTrackingFX {
         self.owner_states.remove(&owner_key);
     }
 }
-

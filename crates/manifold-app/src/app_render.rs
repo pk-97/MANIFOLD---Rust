@@ -246,10 +246,12 @@ impl Application {
         // Port of Unity: WorkspaceController.OnStemMuteToggled/OnStemSoloToggled refreshing button visuals.
         {
             for i in 0..manifold_playback::stem_audio::STEM_COUNT {
-                self.ws.ui_root
+                self.ws
+                    .ui_root
                     .stem_lanes
                     .set_mute_state(i, self.content_state.stem_muted[i]);
-                self.ws.ui_root
+                self.ws
+                    .ui_root
                     .stem_lanes
                     .set_solo_state(i, self.content_state.stem_soloed[i]);
             }
@@ -263,7 +265,8 @@ impl Application {
                 .as_ref()
                 .and_then(|p| p.stem_paths.as_ref())
                 .is_some_and(|paths| !paths.is_empty());
-            self.ws.ui_root
+            self.ws
+                .ui_root
                 .waveform_lane
                 .set_stems_available(any_stem_available);
 
@@ -418,11 +421,8 @@ impl Application {
                     } else {
                         let mut config =
                             manifold_recording::LiveRecordingConfig::default_to_desktop();
-                        config.audio_device =
-                            self.ws.ui_root.selected_audio_input_device.clone();
-                        self.send_content_cmd(
-                            ContentCommand::StartLiveRecording(Box::new(config)),
-                        );
+                        config.audio_device = self.ws.ui_root.selected_audio_input_device.clone();
+                        self.send_content_cmd(ContentCommand::StartLiveRecording(Box::new(config)));
                     }
                     continue;
                 }
@@ -434,10 +434,10 @@ impl Application {
                         self.ws.ui_root.selected_audio_input_device = Some(name.clone());
                         name.clone()
                     };
-                    self.ws.ui_root.layer_headers.set_audio_device_name(
-                        &mut self.ws.ui_root.tree,
-                        &display,
-                    );
+                    self.ws
+                        .ui_root
+                        .layer_headers
+                        .set_audio_device_name(&mut self.ws.ui_root.tree, &display);
                     continue;
                 }
                 PanelAction::ToggleMonitor => {
@@ -713,21 +713,23 @@ impl Application {
                     {
                         let key = sp.key.clone();
                         if let Some(r) = gp.string_param_rect(&self.ws.ui_root.tree, *sp_idx) {
-                            let items: Vec<manifold_ui::panels::dropdown::DropdownItem> =
-                                if key == "fontFamily" {
-                                    manifold_renderer::text_rasterizer::TextRasterizer::available_font_families()
+                            let items: Vec<manifold_ui::panels::dropdown::DropdownItem> = if key
+                                == "fontFamily"
+                            {
+                                manifold_renderer::text_rasterizer::TextRasterizer::available_font_families()
                                         .into_iter()
                                         .map(|name| manifold_ui::panels::dropdown::DropdownItem::new(&name))
                                         .collect()
-                                } else {
-                                    vec![]
-                                };
+                            } else {
+                                vec![]
+                            };
                             if !items.is_empty() {
-                                let trigger = manifold_ui::node::Rect::new(
-                                    r.x, r.y, r.width, r.height,
-                                );
+                                let trigger =
+                                    manifold_ui::node::Rect::new(r.x, r.y, r.width, r.height);
                                 self.ws.ui_root.open_dropdown_at(
-                                    crate::ui_root::DropdownContext::GenStringParamDropdown(*sp_idx),
+                                    crate::ui_root::DropdownContext::GenStringParamDropdown(
+                                        *sp_idx,
+                                    ),
                                     items,
                                     trigger,
                                 );
@@ -956,7 +958,8 @@ impl Application {
                 self.ws.ui_root.build();
                 // Re-apply effect card selection visuals after rebuild —
                 // structural changes recreate cards with is_selected=false.
-                self.ws.ui_root
+                self.ws
+                    .ui_root
                     .inspector
                     .apply_selection_visuals(&mut self.ws.ui_root.tree);
                 if let Some(cm) = &mut self.ui_cache_manager {
@@ -1010,7 +1013,8 @@ impl Application {
             let clock_source = Some(&self.local_project)
                 .map(|p| p.settings.clock_authority.display_name().to_string())
                 .unwrap_or_else(|| "Internal".to_string());
-            self.ws.ui_root
+            self.ws
+                .ui_root
                 .perf_hud
                 .set_metrics(manifold_ui::panels::perf_hud::PerfMetrics {
                     ui_fps: self.frame_timer.current_fps() as f32,
@@ -1073,7 +1077,8 @@ impl Application {
                     .map_or(0.0, |perc| perc.audio_start_beat.as_f32());
                 let bpm = self.local_project.settings.bpm.0.max(1.0);
                 let mapper = self.ws.ui_root.viewport.mapper();
-                self.ws.ui_root
+                self.ws
+                    .ui_root
                     .stem_lanes
                     .update_overlay(start_beat, scroll_x, bpm, mapper);
             }
@@ -1180,8 +1185,7 @@ impl Application {
 
             // 6g. Repaint + upload collapsed group bitmaps
             self.ws.ui_root.viewport.repaint_collapsed_groups();
-            for (track_idx, pixels, tw, th) in
-                self.ws.ui_root.viewport.dirty_collapsed_group_iter()
+            for (track_idx, pixels, tw, th) in self.ws.ui_root.viewport.dirty_collapsed_group_iter()
             {
                 bitmap_gpu.upload_layer(
                     &gpu.device,
@@ -1308,12 +1312,8 @@ impl Application {
         let sidebar_width = manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
         let canvas_width = (logical_w as f32 - sidebar_width).max(0.0);
         let sidebar_x = canvas_width;
-        let sidebar_viewport = manifold_ui::Rect::new(
-            sidebar_x,
-            0.0,
-            sidebar_width,
-            logical_h as f32,
-        );
+        let sidebar_viewport =
+            manifold_ui::Rect::new(sidebar_x, 0.0, sidebar_width, logical_h as f32);
 
         // Resolve which `EffectInstance` is being edited and build the
         // panel inputs. An open editor without `current_editor_target`
@@ -1321,17 +1321,15 @@ impl Application {
         let snap_arc = self.content_state.active_graph_snapshot.as_ref().cloned();
         let view_for_panel = build_graph_editor_view(
             self.current_editor_target.as_ref(),
-            self.graph_canvas.as_ref().and_then(|c| c.selected_node_id()),
+            self.graph_canvas
+                .as_ref()
+                .and_then(|c| c.selected_node_id()),
             snap_arc.as_deref(),
         );
-        let exposed_keys = build_exposed_keys(
-            self.current_editor_target.as_ref(),
-            &self.local_project,
-        );
-        let static_params = build_static_params(
-            self.current_editor_target.as_ref(),
-            &self.local_project,
-        );
+        let exposed_keys =
+            build_exposed_keys(self.current_editor_target.as_ref(), &self.local_project);
+        let static_params =
+            build_static_params(self.current_editor_target.as_ref(), &self.local_project);
         let effect_index = self.current_editor_target.as_ref().map(|(_, ei)| *ei);
         self.graph_editor_panel.configure(
             effect_index,
@@ -2002,19 +2000,19 @@ fn build_static_params(
     let Some(fx) = effects.and_then(|e| e.get(*effect_index)) else {
         return Vec::new();
     };
-    let Some(def) =
-        manifold_core::effect_definition_registry::try_get(fx.effect_type())
-    else {
+    let Some(def) = manifold_core::effect_definition_registry::try_get(fx.effect_type()) else {
         return Vec::new();
     };
     def.param_defs
         .iter()
         .enumerate()
         .take(def.param_count)
-        .map(|(i, pd)| manifold_ui::panels::graph_editor::GraphEditorStaticParam {
-            index: i,
-            label: pd.name.clone(),
-            exposed: fx.is_param_exposed(i),
-        })
+        .map(
+            |(i, pd)| manifold_ui::panels::graph_editor::GraphEditorStaticParam {
+                index: i,
+                label: pd.name.clone(),
+                exposed: fx.is_param_exposed(i),
+            },
+        )
         .collect()
 }

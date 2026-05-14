@@ -42,18 +42,15 @@ pub(crate) fn snapshot(
     let mut seen: HashSet<(i32, i32, i32)> = HashSet::new();
     let mut keys: Vec<(i32, i32, i32)> = Vec::new();
 
-    let mut visit_mappings = |mappings: &Vec<manifold_core::ableton_mapping::AbletonParamMapping>| {
-        for m in mappings {
-            let key = (
-                m.address.track_id,
-                m.address.device_id,
-                m.address.param_id,
-            );
-            if seen.insert(key) {
-                keys.push(key);
+    let mut visit_mappings =
+        |mappings: &Vec<manifold_core::ableton_mapping::AbletonParamMapping>| {
+            for m in mappings {
+                let key = (m.address.track_id, m.address.device_id, m.address.param_id);
+                if seen.insert(key) {
+                    keys.push(key);
+                }
             }
-        }
-    };
+        };
 
     for fx in &project.settings.master_effects {
         if let Some(ms) = &fx.ableton_mappings {
@@ -76,11 +73,7 @@ pub(crate) fn snapshot(
     }
     for slot in &project.settings.macro_bank.slots {
         if let Some(m) = &slot.ableton_mapping {
-            let key = (
-                m.address.track_id,
-                m.address.device_id,
-                m.address.param_id,
-            );
+            let key = (m.address.track_id, m.address.device_id, m.address.param_id);
             if seen.insert(key) {
                 keys.push(key);
             }

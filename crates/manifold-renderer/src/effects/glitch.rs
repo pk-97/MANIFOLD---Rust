@@ -1,11 +1,11 @@
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
+use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
-use manifold_core::generator_registration::ParamSpec;
 use manifold_core::effects::EffectInstance;
-use crate::effects::registration::EffectFactory;
+use manifold_core::generator_registration::ParamSpec;
 
 inventory::submit! {
     EffectMetadata {
@@ -83,7 +83,7 @@ impl PostProcessEffect for GlitchFX {
             rgb_shift: p.get(2).map(|pv| pv.value).unwrap_or(0.01), // line 15: _RGBShift
             scanline: p.get(3).map(|pv| pv.value).unwrap_or(0.3), // line 16: _Scanline
             speed: p.get(4).map(|pv| pv.value).unwrap_or(2.0),   // line 17: _Speed
-            time: ctx.time,                            // line 18: Time.time
+            time: ctx.time,                                      // line 18: Time.time
             resolution_x: ctx.output_width as f32,
             resolution_y: ctx.output_height as f32,
         };

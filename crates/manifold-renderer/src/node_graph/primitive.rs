@@ -177,7 +177,10 @@ pub struct PrimitiveDescription {
 /// call site rather than three lines of `OnceLock::get_or_init` glue
 /// per primitive.
 #[doc(hidden)]
-pub fn init_cached_type_id(cell: &'static OnceLock<EffectNodeType>, id: &'static str) -> &'static EffectNodeType {
+pub fn init_cached_type_id(
+    cell: &'static OnceLock<EffectNodeType>,
+    id: &'static str,
+) -> &'static EffectNodeType {
     cell.get_or_init(|| EffectNodeType::new(id))
 }
 
@@ -437,7 +440,10 @@ mod tests {
         let d = SmokeTestPrim::description();
         assert_eq!(d.type_id, "node.__smoke_test");
         assert!(!d.purpose.is_empty());
-        assert_eq!(d.composition_notes, "Used by tests; do not reference from real code.");
+        assert_eq!(
+            d.composition_notes,
+            "Used by tests; do not reference from real code."
+        );
         assert_eq!(d.examples, &["test.smoke_preset"]);
         assert_eq!(d.inputs.len(), 2);
         assert_eq!(d.outputs.len(), 1);

@@ -968,16 +968,15 @@ impl EffectCardPanel {
                     .copied()
                     .unwrap_or(EnvelopeMode::Adsr);
                 // Always build the random config buttons (mode toggle + jump toggle)
-                self.envelope_random_config_ids[i] =
-                    Some(build_envelope_random_config(
-                        tree,
-                        parent,
-                        x + PADDING,
-                        cy,
-                        config_w,
-                        &self.state.mod_state,
-                        i,
-                    ));
+                self.envelope_random_config_ids[i] = Some(build_envelope_random_config(
+                    tree,
+                    parent,
+                    x + PADDING,
+                    cy,
+                    config_w,
+                    &self.state.mod_state,
+                    i,
+                ));
                 cy += ENV_RANDOM_CONFIG_HEIGHT;
                 // Only show ADSR sliders when in ADSR mode
                 if env_mode == EnvelopeMode::Adsr {
@@ -1684,12 +1683,7 @@ impl EffectCardPanel {
                     let fill_h = slider.track_rect.height - OVERLAY_INSET * 2.0;
                     tree.set_bounds(
                         t.fill_id as u32,
-                        Rect::new(
-                            fill_x,
-                            slider.track_rect.y + OVERLAY_INSET,
-                            fill_w,
-                            fill_h,
-                        ),
+                        Rect::new(fill_x, slider.track_rect.y + OVERLAY_INSET, fill_w, fill_h),
                     );
                     tree.set_bounds(
                         t.min_bar_id as u32,

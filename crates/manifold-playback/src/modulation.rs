@@ -369,8 +369,8 @@ pub fn evaluate_all_envelopes(
             //   3. First evaluation after mode switch (last_elapsed sentinel)
             if mode == EnvelopeMode::Random {
                 let elapsed_f = active_elapsed.as_f32();
-                let trigger = clip_active
-                    && (last_elapsed < 0.0 || elapsed_f < last_elapsed || !was_active);
+                let trigger =
+                    clip_active && (last_elapsed < 0.0 || elapsed_f < last_elapsed || !was_active);
 
                 let layer_effects = match &mut layer.effects {
                     Some(effects) => effects,
@@ -397,11 +397,10 @@ pub fn evaluate_all_envelopes(
                         continue;
                     }
                 };
-                let effect_def =
-                    match effect_definition_registry::try_get(fx.effect_type()) {
-                        Some(d) => d,
-                        None => continue,
-                    };
+                let effect_def = match effect_definition_registry::try_get(fx.effect_type()) {
+                    Some(d) => d,
+                    None => continue,
+                };
                 let Some(resolved) = manifold_core::effects::resolve_param_in(
                     effect_def,
                     &fx.user_param_bindings,
@@ -428,13 +427,17 @@ pub fn evaluate_all_envelopes(
 
                 let new_walk = if trigger {
                     if walk_value < 0.0 {
-                        compute_random_step(
-                            0.5, 1.0, true, whole, min, max, range_min, range_max,
-                        )
+                        compute_random_step(0.5, 1.0, true, whole, min, max, range_min, range_max)
                     } else {
                         compute_random_step(
-                            walk_value, 0.15, random_jump, whole, min, max,
-                            range_min, range_max,
+                            walk_value,
+                            0.15,
+                            random_jump,
+                            whole,
+                            min,
+                            max,
+                            range_min,
+                            range_max,
                         )
                     }
                 } else if walk_value < 0.0 {
@@ -508,11 +511,10 @@ pub fn evaluate_all_envelopes(
                 Some(f) => f,
                 None => continue,
             };
-            let effect_def =
-                match effect_definition_registry::try_get(fx.effect_type()) {
-                    Some(d) => d,
-                    None => continue,
-                };
+            let effect_def = match effect_definition_registry::try_get(fx.effect_type()) {
+                Some(d) => d,
+                None => continue,
+            };
             let Some(resolved) = manifold_core::effects::resolve_param_in(
                 effect_def,
                 &fx.user_param_bindings,
@@ -655,19 +657,23 @@ pub fn evaluate_gen_param_envelopes(
             //   3. First evaluation after mode switch (last_elapsed sentinel)
             if mode == EnvelopeMode::Random {
                 let elapsed_f = active_elapsed.as_f32();
-                let trigger = clip_active
-                    && (last_elapsed < 0.0 || elapsed_f < last_elapsed || !was_active);
+                let trigger =
+                    clip_active && (last_elapsed < 0.0 || elapsed_f < last_elapsed || !was_active);
                 let whole = pd.whole_numbers || pd.value_labels.is_some();
 
                 let new_walk = if trigger {
                     if walk_value < 0.0 {
-                        compute_random_step(
-                            0.5, 1.0, true, whole, min, max, range_min, range_max,
-                        )
+                        compute_random_step(0.5, 1.0, true, whole, min, max, range_min, range_max)
                     } else {
                         compute_random_step(
-                            walk_value, 0.15, random_jump, whole, min, max,
-                            range_min, range_max,
+                            walk_value,
+                            0.15,
+                            random_jump,
+                            whole,
+                            min,
+                            max,
+                            range_min,
+                            range_max,
                         )
                     }
                 } else if walk_value < 0.0 {

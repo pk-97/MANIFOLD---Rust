@@ -7,7 +7,7 @@
 use crate::node_graph::composites::CompositeHandle;
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::graph::Graph;
-use crate::node_graph::primitives::{ColorRamp, Brightness};
+use crate::node_graph::primitives::{Brightness, ColorRamp};
 use crate::node_graph::validation::GraphError;
 
 pub const INFRARED_TYPE_ID: &str = "composite.infrared";

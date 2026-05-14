@@ -186,10 +186,7 @@ pub(super) fn dispatch_editing(
                 if !commands.is_empty() {
                     ContentCommand::send(
                         content_tx,
-                        ContentCommand::ExecuteBatch(
-                            commands,
-                            "Duplicate clip".to_string(),
-                        ),
+                        ContentCommand::ExecuteBatch(commands, "Duplicate clip".to_string()),
                     );
                 }
             }
@@ -369,27 +366,20 @@ pub(super) fn dispatch_editing(
                 });
                 if valid {
                     let original_order = project.timeline.layers.clone();
-                    let cmd =
-                        manifold_editing::commands::layer::GroupLayersCommand::new(
-                            selected_ids, original_order,
-                        );
+                    let cmd = manifold_editing::commands::layer::GroupLayersCommand::new(
+                        selected_ids,
+                        original_order,
+                    );
                     {
-                        let mut boxed: Box<
-                            dyn manifold_editing::command::Command + Send,
-                        > = Box::new(cmd);
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(cmd);
                         boxed.execute(project);
-                        ContentCommand::send(
-                            content_tx,
-                            ContentCommand::Execute(boxed),
-                        );
+                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
                     }
                     selection.clear_selection();
                 }
             }
-            ContentCommand::send(
-                content_tx,
-                ContentCommand::MarkCompositorDirty,
-            );
+            ContentCommand::send(content_tx, ContentCommand::MarkCompositorDirty);
             DispatchResult::structural()
         }
         PanelAction::ContextUngroup(layer_idx) => {
@@ -397,39 +387,29 @@ pub(super) fn dispatch_editing(
             if let Some(layer) = project.timeline.layers.get(idx)
                 && layer.is_group()
             {
-                    let group_layer = layer.clone();
-                    let group_id = group_layer.layer_id.clone();
-                    let child_ids: Vec<manifold_core::LayerId> = project
-                        .timeline
-                        .layers
-                        .iter()
-                        .filter(|l| {
-                            l.parent_layer_id.as_ref() == Some(&group_id)
-                        })
-                        .map(|l| l.layer_id.clone())
-                        .collect();
-                    let original_order = project.timeline.layers.clone();
-                    let cmd =
-                        manifold_editing::commands::layer::UngroupLayersCommand::new(
-                            group_layer,
-                            child_ids,
-                            original_order,
-                        );
-                    {
-                        let mut boxed: Box<
-                            dyn manifold_editing::command::Command + Send,
-                        > = Box::new(cmd);
-                        boxed.execute(project);
-                        ContentCommand::send(
-                            content_tx,
-                            ContentCommand::Execute(boxed),
-                        );
-                    }
+                let group_layer = layer.clone();
+                let group_id = group_layer.layer_id.clone();
+                let child_ids: Vec<manifold_core::LayerId> = project
+                    .timeline
+                    .layers
+                    .iter()
+                    .filter(|l| l.parent_layer_id.as_ref() == Some(&group_id))
+                    .map(|l| l.layer_id.clone())
+                    .collect();
+                let original_order = project.timeline.layers.clone();
+                let cmd = manifold_editing::commands::layer::UngroupLayersCommand::new(
+                    group_layer,
+                    child_ids,
+                    original_order,
+                );
+                {
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        Box::new(cmd);
+                    boxed.execute(project);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
                 }
-            ContentCommand::send(
-                content_tx,
-                ContentCommand::MarkCompositorDirty,
-            );
+            }
+            ContentCommand::send(content_tx, ContentCommand::MarkCompositorDirty);
             DispatchResult::structural()
         }
 

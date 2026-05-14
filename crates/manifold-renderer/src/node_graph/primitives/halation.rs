@@ -16,9 +16,7 @@
 
 use std::sync::OnceLock;
 
-use manifold_gpu::{
-    GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc, GpuTextureFormat,
-};
+use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc, GpuTextureFormat};
 
 use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -71,21 +69,24 @@ impl Halation {
         }
     }
 
-    fn ensure_buffers(
-        &mut self,
-        device: &manifold_gpu::GpuDevice,
-        width: u32,
-        height: u32,
-    ) {
+    fn ensure_buffers(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
         if self.buf_dims == Some((width, height)) {
             return;
         }
         let format = GpuTextureFormat::Rgba16Float;
         self.buf_a = Some(RenderTarget::new(
-            device, width, height, format, "HalationA",
+            device,
+            width,
+            height,
+            format,
+            "HalationA",
         ));
         self.buf_b = Some(RenderTarget::new(
-            device, width, height, format, "HalationB",
+            device,
+            width,
+            height,
+            format,
+            "HalationB",
         ));
         self.buf_dims = Some((width, height));
     }

@@ -123,9 +123,7 @@ impl Command for DeleteLayerCommand {
 
             // Restore parent_layer_id on previously orphaned children
             for (child_id, old_parent) in &self.orphaned_children {
-                if let Some((_, child)) =
-                    project.timeline.find_layer_by_id_mut(child_id)
-                {
+                if let Some((_, child)) = project.timeline.find_layer_by_id_mut(child_id) {
                     child.parent_layer_id = old_parent.clone();
                 }
             }

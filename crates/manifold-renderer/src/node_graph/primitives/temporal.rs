@@ -8,9 +8,7 @@
 //! pattern every future stateful primitive (frame difference, motion
 //! blur, accumulators) follows.
 
-use manifold_gpu::{
-    GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc, GpuTextureFormat,
-};
+use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc, GpuTextureFormat};
 
 use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -222,7 +220,11 @@ impl EffectNode for Feedback {
             store.insert(
                 node_id,
                 owner_key,
-                FeedbackState { prev, width, height },
+                FeedbackState {
+                    prev,
+                    width,
+                    height,
+                },
             );
         }
         let state = store
@@ -313,8 +315,8 @@ mod gpu_tests {
 
     use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use crate::node_graph::{
-        compile, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend,
-        NodeInstanceId, ResourceId, Source, StateStore,
+        ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId,
+        ResourceId, Source, StateStore, compile,
     };
     use crate::render_target::RenderTarget;
 
@@ -393,14 +395,7 @@ mod gpu_tests {
         let mut native_enc = device.create_encoder("feedback-smoke-2");
         {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
-            exec.execute_frame_with_state(
-                &mut g,
-                &plan,
-                frame_time(),
-                &mut gpu,
-                &mut store,
-                7,
-            );
+            exec.execute_frame_with_state(&mut g, &plan, frame_time(), &mut gpu, &mut store, 7);
         }
         native_enc.commit_and_wait_completed();
     }

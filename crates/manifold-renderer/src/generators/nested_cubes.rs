@@ -50,12 +50,12 @@ const POSE_COUNT: u32 = 6;
 
 /// Preset angular arrangements (degrees) for each of the 5 instances.
 const POSES: [[f32; 5]; 6] = [
-    [0.0, 90.0, 180.0, 270.0, 360.0],     // cross
-    [0.0, 45.0, 90.0, 135.0, 180.0],       // fan
-    [0.0, 72.0, 144.0, 216.0, 288.0],      // pentagonal
-    [0.0, 30.0, 120.0, 210.0, 300.0],      // asymmetric star
-    [0.0, 60.0, 60.0, 120.0, 180.0],       // nested pairs
-    [0.0, 0.0, 90.0, 90.0, 180.0],         // stacked pairs
+    [0.0, 90.0, 180.0, 270.0, 360.0], // cross
+    [0.0, 45.0, 90.0, 135.0, 180.0],  // fan
+    [0.0, 72.0, 144.0, 216.0, 288.0], // pentagonal
+    [0.0, 30.0, 120.0, 210.0, 300.0], // asymmetric star
+    [0.0, 60.0, 60.0, 120.0, 180.0],  // nested pairs
+    [0.0, 0.0, 90.0, 90.0, 180.0],    // stacked pairs
 ];
 
 /// Uniform data matching the WGSL `Uniforms` struct.
@@ -148,15 +148,8 @@ impl NestedCubesGenerator {
         }
     }
 
-    fn ensure_depth_texture(
-        &mut self,
-        device: &manifold_gpu::GpuDevice,
-        width: u32,
-        height: u32,
-    ) {
-        if self.depth_width == width
-            && self.depth_height == height
-            && self.depth_texture.is_some()
+    fn ensure_depth_texture(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+        if self.depth_width == width && self.depth_height == height && self.depth_texture.is_some()
         {
             return;
         }
@@ -346,4 +339,3 @@ impl Generator for NestedCubesGenerator {
         self.pose_index = 0;
     }
 }
-

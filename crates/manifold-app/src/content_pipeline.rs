@@ -286,7 +286,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         if pending == 0 {
             return true;
         }
-        self.native_event.as_ref().is_none_or(|e| e.is_done(pending))
+        self.native_event
+            .as_ref()
+            .is_none_or(|e| e.is_done(pending))
     }
 
     /// Register a GPU notification for when the current surface becomes
@@ -304,17 +306,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         if pending == 0 {
             return false;
         }
-        if let (Some(event), Some(waiter)) =
-            (&self.native_event, &self.fence_waiter)
-        {
+        if let (Some(event), Some(waiter)) = (&self.native_event, &self.fence_waiter) {
             if event.is_done(pending) {
                 return false;
             }
             let tx = cmd_tx.clone();
             waiter.register(event, pending, move || {
-                let _ = tx.send(
-                    crate::content_command::ContentCommand::SurfaceReady,
-                );
+                let _ = tx.send(crate::content_command::ContentCommand::SurfaceReady);
             });
             true
         } else {
@@ -389,12 +387,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 None,
                 "Output Present Blit",
             ));
-            self.output_sampler =
-                Some(device.create_sampler(&manifold_gpu::GpuSamplerDesc {
-                    min_filter: manifold_gpu::GpuFilterMode::Linear,
-                    mag_filter: manifold_gpu::GpuFilterMode::Linear,
-                    ..Default::default()
-                }));
+            self.output_sampler = Some(device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+                min_filter: manifold_gpu::GpuFilterMode::Linear,
+                mag_filter: manifold_gpu::GpuFilterMode::Linear,
+                ..Default::default()
+            }));
         }
         self.output_surface = Some(surface);
         log::info!("[ContentPipeline] Output surface attached — direct present");
@@ -747,9 +744,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 && let Some(ref sampler) = self.output_sampler
                 && let Some(drawable) = surface.next_drawable()
             {
-                let target = drawable.gpu_texture(
-                    manifold_gpu::GpuTextureFormat::Rgba16Float,
-                );
+                let target = drawable.gpu_texture(manifold_gpu::GpuTextureFormat::Rgba16Float);
                 let draw_w = surface.width as f32;
                 let draw_h = surface.height as f32;
                 let source_aspect = self.output_w as f32 / self.output_h as f32;

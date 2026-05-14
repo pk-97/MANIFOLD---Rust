@@ -7,6 +7,7 @@
 //! Design philosophy: MANIFOLD is the active party — it reaches into Ableton,
 //! reads the session, and pulls what it needs. Ableton stays untouched.
 
+use crate::sync::SyncArbiter;
 use ahash::{AHashMap, AHashSet};
 use manifold_core::Seconds;
 use manifold_core::ableton_mapping::{
@@ -14,7 +15,6 @@ use manifold_core::ableton_mapping::{
     AbletonTrackSignature,
 };
 use manifold_core::project::Project;
-use crate::sync::SyncArbiter;
 use parking_lot::Mutex;
 use std::net::UdpSocket;
 use std::sync::Arc;
@@ -297,9 +297,7 @@ enum DiscoveryState {
     /// Not discovering.
     Idle,
     /// Sent /live/song/get/num_tracks, waiting for response.
-    WaitingTrackCount {
-        started: f64,
-    },
+    WaitingTrackCount { started: f64 },
     /// Querying track names one by one.
     QueryingTracks {
         expected_count: i32,
@@ -532,9 +530,7 @@ impl AbletonBridge {
         let recv_addr = format!("0.0.0.0:{ABLETON_RECV_PORT}");
         match UdpSocket::bind(&recv_addr) {
             Ok(sock) => {
-                if let Err(e) =
-                    sock.set_read_timeout(Some(std::time::Duration::from_millis(100)))
-                {
+                if let Err(e) = sock.set_read_timeout(Some(std::time::Duration::from_millis(100))) {
                     log::error!("[AbletonBridge] Failed to set recv timeout: {e}");
                     return;
                 }
@@ -567,39 +563,32 @@ impl AbletonBridge {
 
                         // Wrap message processing in catch_unwind so a
                         // malformed packet can't kill the receiver thread.
-                        let result = std::panic::catch_unwind(
-                            std::panic::AssertUnwindSafe(|| {
-                                // Fast path: parse parameter value updates
-                                // directly from raw bytes — zero allocation,
-                                // bypasses rosc + message queue entirely.
-                                if let Some((tid, did, pid, val)) =
-                                    try_parse_param_value_fast(&buf[..size])
-                                {
-                                    pending_values
-                                        .lock()
-                                        .insert((tid, did, pid), val);
-                                    return;
-                                }
-                                // Slow path: full rosc decode for discovery,
-                                // transport, and any other message types.
-                                match rosc::decoder::decode_udp(&buf[..size]) {
-                                    Ok((_, packet)) => {
-                                        Self::handle_packet_static(
-                                            packet, &queue,
-                                        );
-                                    }
-                                    Err(e) => {
-                                        log::error!(
-                                            "[AbletonBridge] OSC decode \
-                                             error: {e}"
-                                        );
-                                    }
-                                }
-                            }),
-                        );
-                        if let Err(e) = result {
-                            let msg = if let Some(s) = e.downcast_ref::<&str>()
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            // Fast path: parse parameter value updates
+                            // directly from raw bytes — zero allocation,
+                            // bypasses rosc + message queue entirely.
+                            if let Some((tid, did, pid, val)) =
+                                try_parse_param_value_fast(&buf[..size])
                             {
+                                pending_values.lock().insert((tid, did, pid), val);
+                                return;
+                            }
+                            // Slow path: full rosc decode for discovery,
+                            // transport, and any other message types.
+                            match rosc::decoder::decode_udp(&buf[..size]) {
+                                Ok((_, packet)) => {
+                                    Self::handle_packet_static(packet, &queue);
+                                }
+                                Err(e) => {
+                                    log::error!(
+                                        "[AbletonBridge] OSC decode \
+                                             error: {e}"
+                                    );
+                                }
+                            }
+                        }));
+                        if let Err(e) = result {
+                            let msg = if let Some(s) = e.downcast_ref::<&str>() {
                                 (*s).to_string()
                             } else if let Some(s) = e.downcast_ref::<String>() {
                                 s.clone()
@@ -618,17 +607,13 @@ impl AbletonBridge {
                 self.recv_thread = Some(handle);
             }
             Err(e) => {
-                log::error!(
-                    "[AbletonBridge] Failed to bind recv socket on {recv_addr}: {e}"
-                );
+                log::error!("[AbletonBridge] Failed to bind recv socket on {recv_addr}: {e}");
                 self.send_socket = None;
                 return;
             }
         }
 
-        log::info!(
-            "[AbletonBridge] Connected — send:{ABLETON_SEND_PORT} recv:{ABLETON_RECV_PORT}"
-        );
+        log::info!("[AbletonBridge] Connected — send:{ABLETON_SEND_PORT} recv:{ABLETON_RECV_PORT}");
     }
 
     /// Stop the bridge: shutdown receiver, clear state.
@@ -662,10 +647,7 @@ impl AbletonBridge {
         log::info!("[AbletonBridge] Disconnected");
     }
 
-    fn handle_packet_static(
-        packet: rosc::OscPacket,
-        queue: &Arc<Mutex<AbletonMessageQueue>>,
-    ) {
+    fn handle_packet_static(packet: rosc::OscPacket, queue: &Arc<Mutex<AbletonMessageQueue>>) {
         match packet {
             rosc::OscPacket::Message(msg) => {
                 queue.lock().messages.push(OscMessage {
@@ -692,9 +674,7 @@ impl AbletonBridge {
 
         // If the recv thread panicked, tear down and reconnect automatically.
         if self.recv_thread_panicked.load(Ordering::Relaxed) {
-            log::warn!(
-                "[AbletonBridge] Recv thread died — reconnecting automatically"
-            );
+            log::warn!("[AbletonBridge] Recv thread died — reconnecting automatically");
             self.disconnect();
             self.connect();
             return;
@@ -751,14 +731,15 @@ impl AbletonBridge {
                 if !self.write_targets.contains_key(&key) {
                     continue;
                 }
-                let entry = self.filtered_sources.entry(key).or_insert_with(|| {
-                    FilteredSource {
+                let entry = self
+                    .filtered_sources
+                    .entry(key)
+                    .or_insert_with(|| FilteredSource {
                         filter: OneEuroFilter::new(),
                         target_raw: raw_value,
                         last_output: f32::NAN,
                         last_update: now,
-                    }
-                });
+                    });
                 entry.target_raw = raw_value;
                 entry.last_update = now;
             }
@@ -807,8 +788,7 @@ impl AbletonBridge {
                         normalized = 1.0 - normalized;
                     }
                     // Apply user trim handles.
-                    let mapped =
-                        wt.range_min + (wt.range_max - wt.range_min) * normalized;
+                    let mapped = wt.range_min + (wt.range_max - wt.range_min) * normalized;
                     // Map into MANIFOLD parameter range.
                     let value = wt.param_min + (wt.param_max - wt.param_min) * mapped;
                     Self::write_to_project(project, &wt.target, wt.param_index, value);
@@ -842,15 +822,9 @@ impl AbletonBridge {
                 if src.last_output.is_nan() {
                     continue;
                 }
-                if let Some(track) = self
-                    .session
-                    .tracks
-                    .iter_mut()
-                    .find(|t| t.track_id == *tid)
-                    && let Some(device) =
-                        track.devices.iter_mut().find(|d| d.device_id == *did)
-                    && let Some(macro_) =
-                        device.macros.iter_mut().find(|m| m.param_id == *pid)
+                if let Some(track) = self.session.tracks.iter_mut().find(|t| t.track_id == *tid)
+                    && let Some(device) = track.devices.iter_mut().find(|d| d.device_id == *did)
+                    && let Some(macro_) = device.macros.iter_mut().find(|m| m.param_id == *pid)
                 {
                     let span = (macro_.max - macro_.min).abs().max(f32::EPSILON);
                     let normalized_delta = (macro_.value - src.last_output).abs() / span;
@@ -893,12 +867,9 @@ impl AbletonBridge {
                 effect_type,
                 param_id: _,
             } => {
-                if let Some((_, layer)) =
-                    project.timeline.find_layer_by_id_mut(layer_id.as_str())
+                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str())
                     && let Some(effects) = &mut layer.effects
-                    && let Some(fx) = effects
-                        .iter_mut()
-                        .find(|f| f.effect_type() == effect_type)
+                    && let Some(fx) = effects.iter_mut().find(|f| f.effect_type() == effect_type)
                 {
                     fx.set_base_param(param_index, value);
                 }
@@ -907,17 +878,14 @@ impl AbletonBridge {
                 layer_id,
                 param_id: _,
             } => {
-                if let Some((_, layer)) =
-                    project.timeline.find_layer_by_id_mut(layer_id.as_str())
+                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str())
                     && let Some(gp) = layer.gen_params_mut()
                 {
                     gp.set_param_base(param_index, value);
                 }
             }
             AbletonMappingTarget::MacroSlot { slot_index } => {
-                manifold_core::macro_bank::MacroBank::apply_macro(
-                    project, *slot_index, value,
-                );
+                manifold_core::macro_bank::MacroBank::apply_macro(project, *slot_index, value);
             }
         }
     }
@@ -1012,9 +980,7 @@ impl AbletonBridge {
             "/live/track/get/mute" if self.play_group_discovery.in_progress => {
                 self.handle_play_group_mute(msg);
             }
-            "/live/track/get/arrangement_clips/name"
-                if self.play_group_discovery.in_progress =>
-            {
+            "/live/track/get/arrangement_clips/name" if self.play_group_discovery.in_progress => {
                 self.handle_play_group_clip_names(msg);
             }
             "/live/track/get/arrangement_clips/start_time"
@@ -1027,9 +993,7 @@ impl AbletonBridge {
             {
                 self.handle_play_group_clip_ends(msg);
             }
-            "/live/track/get/arrangement_clips/muted"
-                if self.play_group_discovery.in_progress =>
-            {
+            "/live/track/get/arrangement_clips/muted" if self.play_group_discovery.in_progress => {
                 self.handle_play_group_clip_muted(msg);
             }
             // We use the binary parameter value (handled via fast path), not
@@ -1088,7 +1052,11 @@ impl AbletonBridge {
             cues.push(CuePoint { time, name });
             i += 2;
         }
-        cues.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
+        cues.sort_by(|a, b| {
+            a.time
+                .partial_cmp(&b.time)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         log::info!("[AbletonBridge] Parsed {} cue point(s)", cues.len());
         self.session.cue_points = cues;
         self.session_version += 1;
@@ -1140,10 +1108,7 @@ impl AbletonBridge {
         if !self.play_group_discovery.leaf_indices.contains(&tid) {
             return;
         }
-        let names: Vec<String> = msg.args[1..]
-            .iter()
-            .filter_map(osc_arg_string)
-            .collect();
+        let names: Vec<String> = msg.args[1..].iter().filter_map(osc_arg_string).collect();
         self.play_group_discovery.clip_names.insert(tid, names);
         self.maybe_advance_play_group_phase_2();
     }
@@ -1225,8 +1190,10 @@ impl AbletonBridge {
         let count = msg.args.first().and_then(osc_arg_int).unwrap_or(0);
 
         // Check if track count changed (re-discovery needed)
-        if matches!(self.discovery_state, DiscoveryState::Idle | DiscoveryState::Complete)
-            && self.session.tracks.len() as i32 != count
+        if matches!(
+            self.discovery_state,
+            DiscoveryState::Idle | DiscoveryState::Complete
+        ) && self.session.tracks.len() as i32 != count
             && !self.session.tracks.is_empty()
         {
             log::info!(
@@ -1270,13 +1237,12 @@ impl AbletonBridge {
             return;
         };
 
-        let track_id =
-            msg.args.first().and_then(osc_arg_int).unwrap_or(*next_track);
-        let name = msg
+        let track_id = msg
             .args
-            .get(1)
-            .and_then(osc_arg_string)
-            .unwrap_or_default();
+            .first()
+            .and_then(osc_arg_int)
+            .unwrap_or(*next_track);
+        let name = msg.args.get(1).and_then(osc_arg_string).unwrap_or_default();
 
         tracks.push((track_id, name.clone()));
         *next_track = track_id + 1;
@@ -1299,8 +1265,7 @@ impl AbletonBridge {
                     &[rosc::OscType::Int(*tid)],
                 );
             }
-            let pending: Vec<(i32, String)> =
-                track_list.into_iter().rev().collect();
+            let pending: Vec<(i32, String)> = track_list.into_iter().rev().collect();
             self.discovery_state = DiscoveryState::QueryingDevices {
                 tracks: Vec::new(),
                 pending_tracks: pending,
@@ -1323,10 +1288,7 @@ impl AbletonBridge {
         };
 
         let tid = msg.args.first().and_then(osc_arg_int).unwrap_or(-1);
-        let names: Vec<String> = msg.args[1..]
-            .iter()
-            .filter_map(osc_arg_string)
-            .collect();
+        let names: Vec<String> = msg.args[1..].iter().filter_map(osc_arg_string).collect();
 
         // Store names on the track entry (create if needed)
         if let Some(track) = tracks.iter_mut().find(|t| t.track_id == tid) {
@@ -1382,10 +1344,7 @@ impl AbletonBridge {
         };
 
         let tid = msg.args.first().and_then(osc_arg_int).unwrap_or(-1);
-        let classes: Vec<String> = msg.args[1..]
-            .iter()
-            .filter_map(osc_arg_string)
-            .collect();
+        let classes: Vec<String> = msg.args[1..].iter().filter_map(osc_arg_string).collect();
 
         if let Some(track) = tracks.iter_mut().find(|t| t.track_id == tid) {
             for (i, cls) in classes.iter().enumerate() {
@@ -1490,21 +1449,9 @@ impl AbletonBridge {
             // Burst-send param name/min/max queries for ALL rack devices
             for (rtid, rdid, _, _) in &all_racks {
                 let args = &[rosc::OscType::Int(*rtid), rosc::OscType::Int(*rdid)];
-                send_osc_to(
-                    &self.send_socket,
-                    "/live/device/get/parameters/name",
-                    args,
-                );
-                send_osc_to(
-                    &self.send_socket,
-                    "/live/device/get/parameters/min",
-                    args,
-                );
-                send_osc_to(
-                    &self.send_socket,
-                    "/live/device/get/parameters/max",
-                    args,
-                );
+                send_osc_to(&self.send_socket, "/live/device/get/parameters/name", args);
+                send_osc_to(&self.send_socket, "/live/device/get/parameters/min", args);
+                send_osc_to(&self.send_socket, "/live/device/get/parameters/max", args);
             }
             let pending_racks: Vec<(i32, i32, String, String)> =
                 all_racks.into_iter().rev().collect();
@@ -1529,10 +1476,7 @@ impl AbletonBridge {
 
         let tid = msg.args.first().and_then(osc_arg_int).unwrap_or(-1);
         let did = msg.args.get(1).and_then(osc_arg_int).unwrap_or(-1);
-        let names: Vec<String> = msg.args[2..]
-            .iter()
-            .filter_map(osc_arg_string)
-            .collect();
+        let names: Vec<String> = msg.args[2..].iter().filter_map(osc_arg_string).collect();
 
         if let Some(track) = tracks.iter_mut().find(|t| t.track_id == tid)
             && let Some(device) = track.devices.iter_mut().find(|d| d.device_id == did)
@@ -1571,10 +1515,7 @@ impl AbletonBridge {
 
         let tid = msg.args.first().and_then(osc_arg_int).unwrap_or(-1);
         let did = msg.args.get(1).and_then(osc_arg_int).unwrap_or(-1);
-        let mins: Vec<f32> = msg.args[2..]
-            .iter()
-            .filter_map(osc_arg_float)
-            .collect();
+        let mins: Vec<f32> = msg.args[2..].iter().filter_map(osc_arg_float).collect();
 
         if let Some(track) = tracks.iter_mut().find(|t| t.track_id == tid)
             && let Some(device) = track.devices.iter_mut().find(|d| d.device_id == did)
@@ -1603,10 +1544,7 @@ impl AbletonBridge {
 
         let tid = msg.args.first().and_then(osc_arg_int).unwrap_or(-1);
         let did = msg.args.get(1).and_then(osc_arg_int).unwrap_or(-1);
-        let maxs: Vec<f32> = msg.args[2..]
-            .iter()
-            .filter_map(osc_arg_float)
-            .collect();
+        let maxs: Vec<f32> = msg.args[2..].iter().filter_map(osc_arg_float).collect();
 
         if let Some(track) = tracks.iter_mut().find(|t| t.track_id == tid)
             && let Some(device) = track.devices.iter_mut().find(|d| d.device_id == did)
@@ -1641,17 +1579,16 @@ impl AbletonBridge {
                 .iter()
                 .find(|t| t.track_id == *rtid)
                 .and_then(|t| t.devices.iter().find(|d| d.device_id == *rdid))
-                .is_some_and(|d| !d.macros.is_empty() && d.macros.iter().all(|m| !m.name.is_empty()))
+                .is_some_and(|d| {
+                    !d.macros.is_empty() && d.macros.iter().all(|m| !m.name.is_empty())
+                })
         });
 
         if !all_done {
             return;
         }
 
-        let DiscoveryState::QueryingParams {
-            ref tracks, ..
-        } = self.discovery_state
-        else {
+        let DiscoveryState::QueryingParams { ref tracks, .. } = self.discovery_state else {
             return;
         };
         let final_tracks = tracks.clone();
@@ -1781,9 +1718,7 @@ impl AbletonBridge {
             })
             .map(|t| (t.track_id, t.name.clone(), normalize_group_name(&t.name)))
             .collect();
-        log::debug!(
-            "[AbletonBridge] PLAY-group: top-level foldable candidates = {candidates:?}"
-        );
+        log::debug!("[AbletonBridge] PLAY-group: top-level foldable candidates = {candidates:?}");
 
         let play_idx = tracks.iter().position(|t| {
             pg.foldable.get(&t.track_id).copied().unwrap_or(false)
@@ -1894,7 +1829,6 @@ impl AbletonBridge {
     /// Validate all Ableton mappings in the project against the current session.
     /// Auto-updates when unambiguous, flags when ambiguous.
     pub fn validate_mappings(&self, project: &mut Project) {
-
         if !self.connected || self.session.tracks.is_empty() {
             // Mark all dormant
             Self::set_all_mapping_status(project, AbletonMappingStatus::Dormant);
@@ -1962,18 +1896,14 @@ impl AbletonBridge {
     ///    change" behavior.
     /// 5. **Dormant** — none of the above resolved. Mapping is visibly
     ///    broken; no parameter writes will fire for it.
-    fn validate_single_mapping(
-        &self,
-        mapping: &mut AbletonParamMapping,
-    ) -> AbletonMappingStatus {
+    fn validate_single_mapping(&self, mapping: &mut AbletonParamMapping) -> AbletonMappingStatus {
         let target_class = mapping.address.device_identity.device_class_name.clone();
         let stored_track_name = mapping.address.track_name.clone();
         let stored_device_name = mapping.address.device_name.clone();
         let stored_macro_name = mapping.address.macro_name.clone();
         let stored_param_id = mapping.address.param_id;
 
-        let have_names = !stored_track_name.is_empty()
-            && !stored_device_name.is_empty();
+        let have_names = !stored_track_name.is_empty() && !stored_device_name.is_empty();
 
         // ── 1+2. Canonical: by (track_name, device_name) then macro ──
         //
@@ -2005,8 +1935,7 @@ impl AbletonBridge {
             // under the original name, that's the canonical match
             // regardless of which slot it lives in now.
             if !stored_macro_name.is_empty()
-                && let Some(mac) =
-                    device.macros.iter().find(|m| m.name == stored_macro_name)
+                && let Some(mac) = device.macros.iter().find(|m| m.name == stored_macro_name)
             {
                 let slot_changed = mac.param_id != stored_param_id;
                 mapping.address.track_id = track.track_id;
@@ -2024,9 +1953,7 @@ impl AbletonBridge {
             }
             // Original macro_name not found in the device → either it
             // was renamed (trust the slot) or removed entirely.
-            if let Some(mac) =
-                device.macros.iter().find(|m| m.param_id == stored_param_id)
-            {
+            if let Some(mac) = device.macros.iter().find(|m| m.param_id == stored_param_id) {
                 if mac.name != stored_macro_name {
                     log::info!(
                         "[AbletonBridge] Macro renamed: \
@@ -2061,9 +1988,7 @@ impl AbletonBridge {
             {
                 mapping.address.track_name = track.name.clone();
                 mapping.address.device_name = device.name.clone();
-                if let Some(mac) =
-                    device.macros.iter().find(|m| m.param_id == stored_param_id)
-                {
+                if let Some(mac) = device.macros.iter().find(|m| m.param_id == stored_param_id) {
                     mapping.address.macro_name = mac.name.clone();
                 }
                 log::info!(
@@ -2084,8 +2009,7 @@ impl AbletonBridge {
         for track in &self.session.tracks {
             for device in &track.devices {
                 if device.class_name == target_class
-                    && let Some(mac) =
-                        device.macros.iter().find(|m| m.param_id == stored_param_id)
+                    && let Some(mac) = device.macros.iter().find(|m| m.param_id == stored_param_id)
                 {
                     matches.push((
                         track.track_id,
@@ -2163,12 +2087,20 @@ impl AbletonBridge {
     /// Rack macros are typically 0-127 (raw MIDI) but may have custom ranges.
     fn ableton_param_range(&self, track_id: i32, device_id: i32, param_id: i32) -> (f32, f32) {
         for track in &self.session.tracks {
-            if track.track_id != track_id { continue; }
+            if track.track_id != track_id {
+                continue;
+            }
             for device in &track.devices {
-                if device.device_id != device_id { continue; }
+                if device.device_id != device_id {
+                    continue;
+                }
                 for mac in &device.macros {
                     if mac.param_id == param_id {
-                        let hi = if mac.max > mac.min { mac.max } else { mac.min + 1.0 };
+                        let hi = if mac.max > mac.min {
+                            mac.max
+                        } else {
+                            mac.min + 1.0
+                        };
                         return (mac.min, hi);
                     }
                 }
@@ -2180,8 +2112,7 @@ impl AbletonBridge {
     /// Scan all Active mappings in the project and subscribe/unsubscribe accordingly.
     pub fn rebuild_listeners(&mut self, project: &Project) {
         let mut needed: AHashSet<(i32, i32, i32)> = AHashSet::new();
-        let mut new_write_targets: AHashMap<(i32, i32, i32), Vec<WriteTarget>> =
-            AHashMap::new();
+        let mut new_write_targets: AHashMap<(i32, i32, i32), Vec<WriteTarget>> = AHashMap::new();
 
         // Collect from master effects
         for fx in &project.settings.master_effects {
@@ -2197,41 +2128,35 @@ impl AbletonBridge {
                     );
                     needed.insert(key);
 
-                    let effect_def = manifold_core::effect_definition_registry::try_get(
-                        fx.effect_type(),
-                    );
+                    let effect_def =
+                        manifold_core::effect_definition_registry::try_get(fx.effect_type());
                     let resolved_idx = effect_def
                         .and_then(|d| d.id_to_index.get(mapping.param_id.as_ref()).copied());
                     let Some(resolved_idx) = resolved_idx else {
                         continue;
                     };
                     let param_def = effect_def.and_then(|d| d.param_defs.get(resolved_idx));
-                    let (pmin, pmax) = param_def
-                        .map(|pd| (pd.min, pd.max))
-                        .unwrap_or((0.0, 1.0));
+                    let (pmin, pmax) = param_def.map(|pd| (pd.min, pd.max)).unwrap_or((0.0, 1.0));
                     let (abl_min, abl_max) = self.ableton_param_range(
                         mapping.address.track_id,
                         mapping.address.device_id,
                         mapping.address.param_id,
                     );
 
-                    new_write_targets
-                        .entry(key)
-                        .or_default()
-                        .push(WriteTarget {
-                            target: AbletonMappingTarget::MasterEffect {
-                                effect_type: fx.effect_type().clone(),
-                                param_id: mapping.param_id.clone(),
-                            },
-                            param_index: resolved_idx,
-                            ableton_min: abl_min,
-                            ableton_max: abl_max,
-                            range_min: mapping.range_min,
-                            range_max: mapping.range_max,
-                            inverted: mapping.inverted,
-                            param_min: pmin,
-                            param_max: pmax,
-                        });
+                    new_write_targets.entry(key).or_default().push(WriteTarget {
+                        target: AbletonMappingTarget::MasterEffect {
+                            effect_type: fx.effect_type().clone(),
+                            param_id: mapping.param_id.clone(),
+                        },
+                        param_index: resolved_idx,
+                        ableton_min: abl_min,
+                        ableton_max: abl_max,
+                        range_min: mapping.range_min,
+                        range_max: mapping.range_max,
+                        inverted: mapping.inverted,
+                        param_min: pmin,
+                        param_max: pmax,
+                    });
                 }
             }
         }
@@ -2254,45 +2179,39 @@ impl AbletonBridge {
                             );
                             needed.insert(key);
 
-                            let effect_def =
-                                manifold_core::effect_definition_registry::try_get(
-                                    fx.effect_type(),
-                                );
+                            let effect_def = manifold_core::effect_definition_registry::try_get(
+                                fx.effect_type(),
+                            );
                             let resolved_idx = effect_def.and_then(|d| {
                                 d.id_to_index.get(mapping.param_id.as_ref()).copied()
                             });
                             let Some(resolved_idx) = resolved_idx else {
                                 continue;
                             };
-                            let param_def =
-                                effect_def.and_then(|d| d.param_defs.get(resolved_idx));
-                            let (pmin, pmax) = param_def
-                                .map(|pd| (pd.min, pd.max))
-                                .unwrap_or((0.0, 1.0));
+                            let param_def = effect_def.and_then(|d| d.param_defs.get(resolved_idx));
+                            let (pmin, pmax) =
+                                param_def.map(|pd| (pd.min, pd.max)).unwrap_or((0.0, 1.0));
                             let (abl_min, abl_max) = self.ableton_param_range(
                                 mapping.address.track_id,
                                 mapping.address.device_id,
                                 mapping.address.param_id,
                             );
 
-                            new_write_targets
-                                .entry(key)
-                                .or_default()
-                                .push(WriteTarget {
-                                    target: AbletonMappingTarget::LayerEffect {
-                                        layer_id: layer_id.clone(),
-                                        effect_type: fx.effect_type().clone(),
-                                        param_id: mapping.param_id.clone(),
-                                    },
-                                    param_index: resolved_idx,
-                                    ableton_min: abl_min,
-                                    ableton_max: abl_max,
-                                    range_min: mapping.range_min,
-                                    range_max: mapping.range_max,
-                                    inverted: mapping.inverted,
-                                    param_min: pmin,
-                                    param_max: pmax,
-                                });
+                            new_write_targets.entry(key).or_default().push(WriteTarget {
+                                target: AbletonMappingTarget::LayerEffect {
+                                    layer_id: layer_id.clone(),
+                                    effect_type: fx.effect_type().clone(),
+                                    param_id: mapping.param_id.clone(),
+                                },
+                                param_index: resolved_idx,
+                                ableton_min: abl_min,
+                                ableton_max: abl_max,
+                                range_min: mapping.range_min,
+                                range_max: mapping.range_max,
+                                inverted: mapping.inverted,
+                                param_min: pmin,
+                                param_max: pmax,
+                            });
                         }
                     }
                 }
@@ -2312,41 +2231,35 @@ impl AbletonBridge {
                     );
                     needed.insert(key);
 
-                    let gen_def = manifold_core::generator_definition_registry::try_get(
-                        gp.generator_type(),
-                    );
-                    let resolved_idx = gen_def
-                        .and_then(|d| d.id_to_index.get(mapping.param_id.as_ref()).copied());
+                    let gen_def =
+                        manifold_core::generator_definition_registry::try_get(gp.generator_type());
+                    let resolved_idx =
+                        gen_def.and_then(|d| d.id_to_index.get(mapping.param_id.as_ref()).copied());
                     let Some(resolved_idx) = resolved_idx else {
                         continue;
                     };
                     let param_def = gen_def.and_then(|d| d.param_defs.get(resolved_idx));
-                    let (pmin, pmax) = param_def
-                        .map(|pd| (pd.min, pd.max))
-                        .unwrap_or((0.0, 1.0));
+                    let (pmin, pmax) = param_def.map(|pd| (pd.min, pd.max)).unwrap_or((0.0, 1.0));
                     let (abl_min, abl_max) = self.ableton_param_range(
                         mapping.address.track_id,
                         mapping.address.device_id,
                         mapping.address.param_id,
                     );
 
-                    new_write_targets
-                        .entry(key)
-                        .or_default()
-                        .push(WriteTarget {
-                            target: AbletonMappingTarget::GenParam {
-                                layer_id: layer_id.clone(),
-                                param_id: mapping.param_id.clone(),
-                            },
-                            param_index: resolved_idx,
-                            ableton_min: abl_min,
-                            ableton_max: abl_max,
-                            range_min: mapping.range_min,
-                            range_max: mapping.range_max,
-                            inverted: mapping.inverted,
-                            param_min: pmin,
-                            param_max: pmax,
-                        });
+                    new_write_targets.entry(key).or_default().push(WriteTarget {
+                        target: AbletonMappingTarget::GenParam {
+                            layer_id: layer_id.clone(),
+                            param_id: mapping.param_id.clone(),
+                        },
+                        param_index: resolved_idx,
+                        ableton_min: abl_min,
+                        ableton_max: abl_max,
+                        range_min: mapping.range_min,
+                        range_max: mapping.range_max,
+                        inverted: mapping.inverted,
+                        param_min: pmin,
+                        param_max: pmax,
+                    });
                 }
             }
         }
@@ -2369,20 +2282,17 @@ impl AbletonBridge {
                     mapping.address.param_id,
                 );
 
-                new_write_targets
-                    .entry(key)
-                    .or_default()
-                    .push(WriteTarget {
-                        target: AbletonMappingTarget::MacroSlot { slot_index: i },
-                        param_index: 0,
-                        ableton_min: abl_min,
-                        ableton_max: abl_max,
-                        range_min: mapping.range_min,
-                        range_max: mapping.range_max,
-                        inverted: mapping.inverted,
-                        param_min: 0.0,
-                        param_max: 1.0,
-                    });
+                new_write_targets.entry(key).or_default().push(WriteTarget {
+                    target: AbletonMappingTarget::MacroSlot { slot_index: i },
+                    param_index: 0,
+                    ableton_min: abl_min,
+                    ableton_max: abl_max,
+                    range_min: mapping.range_min,
+                    range_max: mapping.range_max,
+                    inverted: mapping.inverted,
+                    param_min: 0.0,
+                    param_max: 1.0,
+                });
             }
         }
 
@@ -2445,9 +2355,7 @@ impl AbletonBridge {
             return;
         }
         if self.send_socket.is_none() {
-            log::warn!(
-                "[AbletonBridge] Cannot enable transport sync — no send socket"
-            );
+            log::warn!("[AbletonBridge] Cannot enable transport sync — no send socket");
             return;
         }
         self.transport_enabled = true;
@@ -2456,7 +2364,9 @@ impl AbletonBridge {
         // Seed initial state
         self.send_osc("/live/song/get/is_playing", &[]);
         self.send_osc("/live/song/get/tempo", &[]);
-        log::info!("[AbletonBridge] Transport sync enabled (commands + tempo only, MIDI CLK handles timing)");
+        log::info!(
+            "[AbletonBridge] Transport sync enabled (commands + tempo only, MIDI CLK handles timing)"
+        );
     }
 
     /// Unsubscribe transport listeners.
@@ -2596,10 +2506,7 @@ impl AbletonBridge {
                 for _ in 0..TRANSPORT_SEND_COUNT {
                     self.send_osc("/live/song/stop_playing", &[]);
                 }
-                log::debug!(
-                    "[ABL-TRANSPORT] STOP (3x, beat was {:.1})",
-                    current_beat
-                );
+                log::debug!("[ABL-TRANSPORT] STOP (3x, beat was {:.1})", current_beat);
             }
 
             self.last_sent_playing = Some(is_playing);
@@ -2655,8 +2562,7 @@ impl AbletonBridge {
         // 2. Seek detection: compare current beat to expected beat
         if is_playing && seconds_per_beat > 0.0 {
             let elapsed = (now - self.transport_last_sent_realtime) as f32;
-            let expected_beat =
-                self.transport_last_sent_beat + elapsed / seconds_per_beat;
+            let expected_beat = self.transport_last_sent_beat + elapsed / seconds_per_beat;
             let beat_delta = (current_beat - expected_beat).abs();
 
             if beat_delta > SEEK_THRESHOLD_BEATS {
@@ -2711,9 +2617,7 @@ fn send_osc_to(socket: &Option<UdpSocket>, address: &str, args: &[rosc::OscType]
         match rosc::encoder::encode(&packet) {
             Ok(buf) => {
                 if let Err(e) = sock.send(&buf) {
-                    log::warn!(
-                        "[AbletonBridge] OSC send failed for {address}: {e}"
-                    );
+                    log::warn!("[AbletonBridge] OSC send failed for {address}: {e}");
                 }
             }
             Err(e) => {
@@ -2812,7 +2716,12 @@ fn try_parse_param_value_fast(buf: &[u8]) -> Option<(i32, i32, i32, f32)> {
 
     // The value arg may be float ('f') or int ('i') depending on the parameter.
     let value_type = buf[PARAM_VALUE_TAG_OFFSET + 4]; // 4th type char after ','
-    let value_bytes = [buf[args + 12], buf[args + 13], buf[args + 14], buf[args + 15]];
+    let value_bytes = [
+        buf[args + 12],
+        buf[args + 13],
+        buf[args + 14],
+        buf[args + 15],
+    ];
     let value = match value_type {
         b'f' => f32::from_be_bytes(value_bytes),
         b'i' => i32::from_be_bytes(value_bytes) as f32,
@@ -2855,7 +2764,12 @@ mod tests {
         }
     }
 
-    fn device_(device_id: i32, name: &str, class: &str, macros: Vec<AbletonMacro>) -> AbletonDevice {
+    fn device_(
+        device_id: i32,
+        name: &str,
+        class: &str,
+        macros: Vec<AbletonMacro>,
+    ) -> AbletonDevice {
         AbletonDevice {
             device_id,
             name: name.to_string(),
@@ -2919,16 +2833,30 @@ mod tests {
         // same rack lives at track_id=5, device_id=3. Resolver should
         // find it via name and update the IDs.
         let bridge = bridge_with_session(vec![
-            track_(0, "Bass", vec![]),  // unrelated
-            track_(5, "Lead Synth", vec![
-                device_(0, "Compressor", "Compressor2", vec![]),
-                device_(3, "SERUM CHORDS", "InstrumentGroupDevice", vec![
-                    macro_(1, "LFO (X)"),
-                    macro_(2, "DETUNE (Y)"),
-                ]),
-            ]),
+            track_(0, "Bass", vec![]), // unrelated
+            track_(
+                5,
+                "Lead Synth",
+                vec![
+                    device_(0, "Compressor", "Compressor2", vec![]),
+                    device_(
+                        3,
+                        "SERUM CHORDS",
+                        "InstrumentGroupDevice",
+                        vec![macro_(1, "LFO (X)"), macro_(2, "DETUNE (Y)")],
+                    ),
+                ],
+            ),
         ]);
-        let mut m = mapping_(2, 1, 1, "Lead Synth", "SERUM CHORDS", "LFO (X)", "InstrumentGroupDevice");
+        let mut m = mapping_(
+            2,
+            1,
+            1,
+            "Lead Synth",
+            "SERUM CHORDS",
+            "LFO (X)",
+            "InstrumentGroupDevice",
+        );
         let s = bridge.validate_single_mapping(&mut m);
         assert_eq!(s, AbletonMappingStatus::Active);
         assert_eq!(m.address.track_id, 5);
@@ -2945,20 +2873,40 @@ mod tests {
         // names, so the wrong-rack-at-same-id is rejected and we fall
         // through to fuzzy search (which here finds the right one).
         let bridge = bridge_with_session(vec![
-            track_(5, "Some Other Track", vec![
-                // Same class as the original, same numeric IDs, but wrong
-                // names. This is what the broken resolver was matching.
-                device_(2, "Wrong Rack", "InstrumentGroupDevice", vec![
-                    macro_(1, "Macro 1"),
-                ]),
-            ]),
-            track_(7, "Lead Synth", vec![
-                device_(0, "SERUM CHORDS", "InstrumentGroupDevice", vec![
-                    macro_(1, "LFO (X)"),
-                ]),
-            ]),
+            track_(
+                5,
+                "Some Other Track",
+                vec![
+                    // Same class as the original, same numeric IDs, but wrong
+                    // names. This is what the broken resolver was matching.
+                    device_(
+                        2,
+                        "Wrong Rack",
+                        "InstrumentGroupDevice",
+                        vec![macro_(1, "Macro 1")],
+                    ),
+                ],
+            ),
+            track_(
+                7,
+                "Lead Synth",
+                vec![device_(
+                    0,
+                    "SERUM CHORDS",
+                    "InstrumentGroupDevice",
+                    vec![macro_(1, "LFO (X)")],
+                )],
+            ),
         ]);
-        let mut m = mapping_(5, 2, 1, "Lead Synth", "SERUM CHORDS", "LFO (X)", "InstrumentGroupDevice");
+        let mut m = mapping_(
+            5,
+            2,
+            1,
+            "Lead Synth",
+            "SERUM CHORDS",
+            "LFO (X)",
+            "InstrumentGroupDevice",
+        );
         let s = bridge.validate_single_mapping(&mut m);
         assert_eq!(s, AbletonMappingStatus::Active);
         assert_eq!(m.address.track_id, 7);
@@ -2970,18 +2918,31 @@ mod tests {
     fn resolver_handles_macro_reorder_within_rack() {
         // User dragged macros around in the rack. Slot index changed but
         // the macro name is still findable in the same rack.
-        let bridge = bridge_with_session(vec![
-            track_(5, "Lead Synth", vec![
-                device_(0, "SERUM CHORDS", "InstrumentGroupDevice", vec![
+        let bridge = bridge_with_session(vec![track_(
+            5,
+            "Lead Synth",
+            vec![device_(
+                0,
+                "SERUM CHORDS",
+                "InstrumentGroupDevice",
+                vec![
                     // "LFO (X)" used to be slot 1, now it's slot 4
                     macro_(1, "DETUNE (Y)"),
                     macro_(2, "PHASE"),
                     macro_(3, "DELAY"),
                     macro_(4, "LFO (X)"),
-                ]),
-            ]),
-        ]);
-        let mut m = mapping_(5, 0, 1, "Lead Synth", "SERUM CHORDS", "LFO (X)", "InstrumentGroupDevice");
+                ],
+            )],
+        )]);
+        let mut m = mapping_(
+            5,
+            0,
+            1,
+            "Lead Synth",
+            "SERUM CHORDS",
+            "LFO (X)",
+            "InstrumentGroupDevice",
+        );
         let s = bridge.validate_single_mapping(&mut m);
         assert_eq!(s, AbletonMappingStatus::Active);
         assert_eq!(m.address.param_id, 4); // slot updated
@@ -2993,18 +2954,31 @@ mod tests {
         // Macro at the stored slot was renamed. Original name no longer
         // appears in the rack at all. Resolver trusts the slot and
         // updates the cached name.
-        let bridge = bridge_with_session(vec![
-            track_(5, "Lead Synth", vec![
-                device_(0, "SERUM CHORDS", "InstrumentGroupDevice", vec![
-                    macro_(1, "OSC LFO"),  // was "LFO (X)"
-                ]),
-            ]),
-        ]);
-        let mut m = mapping_(5, 0, 1, "Lead Synth", "SERUM CHORDS", "LFO (X)", "InstrumentGroupDevice");
+        let bridge = bridge_with_session(vec![track_(
+            5,
+            "Lead Synth",
+            vec![device_(
+                0,
+                "SERUM CHORDS",
+                "InstrumentGroupDevice",
+                vec![
+                    macro_(1, "OSC LFO"), // was "LFO (X)"
+                ],
+            )],
+        )]);
+        let mut m = mapping_(
+            5,
+            0,
+            1,
+            "Lead Synth",
+            "SERUM CHORDS",
+            "LFO (X)",
+            "InstrumentGroupDevice",
+        );
         let s = bridge.validate_single_mapping(&mut m);
         assert_eq!(s, AbletonMappingStatus::Active);
-        assert_eq!(m.address.param_id, 1);  // slot unchanged
-        assert_eq!(m.address.macro_name, "OSC LFO");  // name updated
+        assert_eq!(m.address.param_id, 1); // slot unchanged
+        assert_eq!(m.address.macro_name, "OSC LFO"); // name updated
     }
 
     #[test]
@@ -3012,13 +2986,16 @@ mod tests {
         // Project saved before name-resolution existed: names are empty.
         // Resolver falls back to numeric IDs + class match and writes
         // the names so the next save migrates the mapping forward.
-        let bridge = bridge_with_session(vec![
-            track_(5, "Lead Synth", vec![
-                device_(2, "SERUM CHORDS", "InstrumentGroupDevice", vec![
-                    macro_(1, "LFO (X)"),
-                ]),
-            ]),
-        ]);
+        let bridge = bridge_with_session(vec![track_(
+            5,
+            "Lead Synth",
+            vec![device_(
+                2,
+                "SERUM CHORDS",
+                "InstrumentGroupDevice",
+                vec![macro_(1, "LFO (X)")],
+            )],
+        )]);
         let mut m = mapping_(5, 2, 1, "", "", "", "InstrumentGroupDevice");
         let s = bridge.validate_single_mapping(&mut m);
         assert_eq!(s, AbletonMappingStatus::Active);
@@ -3033,14 +3010,36 @@ mod tests {
         // racks of the same class exist, so the fuzzy search is
         // ambiguous → mapping is marked Ambiguous (not silently rebound).
         let bridge = bridge_with_session(vec![
-            track_(0, "Lead (renamed)", vec![
-                device_(0, "Rack A", "InstrumentGroupDevice", vec![macro_(1, "X")]),
-            ]),
-            track_(1, "Bass", vec![
-                device_(0, "Rack B", "InstrumentGroupDevice", vec![macro_(1, "Y")]),
-            ]),
+            track_(
+                0,
+                "Lead (renamed)",
+                vec![device_(
+                    0,
+                    "Rack A",
+                    "InstrumentGroupDevice",
+                    vec![macro_(1, "X")],
+                )],
+            ),
+            track_(
+                1,
+                "Bass",
+                vec![device_(
+                    0,
+                    "Rack B",
+                    "InstrumentGroupDevice",
+                    vec![macro_(1, "Y")],
+                )],
+            ),
         ]);
-        let mut m = mapping_(0, 0, 1, "Lead Synth", "SERUM CHORDS", "LFO (X)", "InstrumentGroupDevice");
+        let mut m = mapping_(
+            0,
+            0,
+            1,
+            "Lead Synth",
+            "SERUM CHORDS",
+            "LFO (X)",
+            "InstrumentGroupDevice",
+        );
         let s = bridge.validate_single_mapping(&mut m);
         assert_eq!(s, AbletonMappingStatus::Ambiguous);
     }
@@ -3048,12 +3047,20 @@ mod tests {
     #[test]
     fn resolver_dormant_when_no_match_at_all() {
         // Mapping references a class that doesn't exist in the session.
-        let bridge = bridge_with_session(vec![
-            track_(0, "Bass", vec![
-                device_(0, "Compressor", "Compressor2", vec![]),
-            ]),
-        ]);
-        let mut m = mapping_(0, 0, 1, "Lead Synth", "SERUM CHORDS", "LFO (X)", "InstrumentGroupDevice");
+        let bridge = bridge_with_session(vec![track_(
+            0,
+            "Bass",
+            vec![device_(0, "Compressor", "Compressor2", vec![])],
+        )]);
+        let mut m = mapping_(
+            0,
+            0,
+            1,
+            "Lead Synth",
+            "SERUM CHORDS",
+            "LFO (X)",
+            "InstrumentGroupDevice",
+        );
         let s = bridge.validate_single_mapping(&mut m);
         assert_eq!(s, AbletonMappingStatus::Dormant);
     }

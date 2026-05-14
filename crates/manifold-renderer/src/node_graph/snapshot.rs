@@ -393,11 +393,7 @@ mod tests {
         assert_eq!(anon.node_handle, None);
         assert!(anon.parameters.is_empty());
 
-        let named = snap
-            .nodes
-            .iter()
-            .find(|n| n.title == "Transform")
-            .unwrap();
+        let named = snap.nodes.iter().find(|n| n.title == "Transform").unwrap();
         assert_eq!(named.node_handle.as_deref(), Some("uv_transform"));
         assert_eq!(named.parameters.len(), 2);
 

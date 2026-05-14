@@ -88,8 +88,8 @@ fn synthesized_legacy_snapshot(
     metadata: &'static manifold_core::effect_registration::EffectMetadata,
 ) -> crate::node_graph::GraphSnapshot {
     use crate::node_graph::{
-        GraphSnapshot, NodeSnapshot, PortKindSnapshot, PortSnapshot, WireSnapshot,
-        FINAL_OUTPUT_TYPE_ID, LEGACY_TYPE_ID_PREFIX, SOURCE_TYPE_ID,
+        FINAL_OUTPUT_TYPE_ID, GraphSnapshot, LEGACY_TYPE_ID_PREFIX, NodeSnapshot, PortKindSnapshot,
+        PortSnapshot, SOURCE_TYPE_ID, WireSnapshot,
     };
 
     let source = NodeSnapshot {

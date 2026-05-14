@@ -15,9 +15,9 @@ mod fluid_sim;
 mod glitch;
 mod plasma;
 
-pub use fluid_sim::{FluidSim2D, FLUID_SIM_2D_TYPE_ID};
-pub use glitch::{Glitch, GLITCH_MODES, GLITCH_TYPE_ID};
-pub use plasma::{Plasma, PLASMA_TYPE_ID};
+pub use fluid_sim::{FLUID_SIM_2D_TYPE_ID, FluidSim2D};
+pub use glitch::{GLITCH_MODES, GLITCH_TYPE_ID, Glitch};
+pub use plasma::{PLASMA_TYPE_ID, Plasma};
 
 #[cfg(test)]
 mod tests {
@@ -27,7 +27,7 @@ mod tests {
     use manifold_core::{Beats, Seconds};
 
     use crate::node_graph::{
-        compile, validate, EffectNode, Executor, FinalOutput, FrameTime, Graph, PortType, Source,
+        EffectNode, Executor, FinalOutput, FrameTime, Graph, PortType, Source, compile, validate,
     };
 
     fn frame_time() -> FrameTime {

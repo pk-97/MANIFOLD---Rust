@@ -155,9 +155,7 @@ impl ClipScheduler {
         for entry in &merged {
             if !currently_active_ids.contains(&entry.clip_id) {
                 let remaining = entry.end_beat() - current_beat;
-                if remaining < min_remaining_beats
-                    && !looping_clip_ids.contains(&entry.clip_id)
-                {
+                if remaining < min_remaining_beats && !looping_clip_ids.contains(&entry.clip_id) {
                     continue;
                 }
                 to_start.push(entry.clone());
@@ -433,8 +431,9 @@ mod tests {
         let looping = AHashSet::new();
 
         // First call — allocates buffers.
-        let clips: Vec<ActiveClipRef> =
-            (0..20).map(|i| make_ref(&format!("c{i}"), i, 0.0, 10.0)).collect();
+        let clips: Vec<ActiveClipRef> = (0..20)
+            .map(|i| make_ref(&format!("c{i}"), i, 0.0, 10.0))
+            .collect();
         let result = sched.compute_sync(
             Seconds(1.0),
             Beats(1.0),

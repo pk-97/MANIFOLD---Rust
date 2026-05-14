@@ -86,7 +86,6 @@ impl ClipHitTester {
 
         // Unity lines 72-97: iterate this layer's clips in reverse (topmost/last wins)
         for clip in clips_for_layer(layer_index).iter().rev() {
-
             let clip_start_f32 = clip.start_beat.as_f32();
             let clip_end = clip_start_f32 + clip.duration_beats.as_f32();
             // Unity line 76: beat range check
@@ -222,7 +221,10 @@ mod tests {
         let by_layer = bucket(&clips, 1);
         // Click at beat 2.0, Y=30 (center of 60px track), padding=6
         let result = ClipHitTester::hit_test(
-            2.0, 30.0, 6.0, &mapper,
+            2.0,
+            30.0,
+            6.0,
+            &mapper,
             |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
             no_groups,
         );
@@ -238,7 +240,10 @@ mod tests {
         let clips = vec![make_clip("c1", 0, 0.0, 4.0)];
         let by_layer = bucket(&clips, 1);
         let result = ClipHitTester::hit_test(
-            0.05, 30.0, 6.0, &mapper,
+            0.05,
+            30.0,
+            6.0,
+            &mapper,
             |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
             no_groups,
         );
@@ -251,7 +256,10 @@ mod tests {
         let clips = vec![make_clip("c1", 0, 0.0, 4.0)];
         let by_layer = bucket(&clips, 1);
         let result = ClipHitTester::hit_test(
-            3.95, 30.0, 6.0, &mapper,
+            3.95,
+            30.0,
+            6.0,
+            &mapper,
             |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
             no_groups,
         );
@@ -264,7 +272,10 @@ mod tests {
         let clips = vec![make_clip("c1", 0, 0.0, 0.1)];
         let by_layer = bucket(&clips, 1);
         let result = ClipHitTester::hit_test(
-            0.005, 30.0, 6.0, &mapper,
+            0.005,
+            30.0,
+            6.0,
+            &mapper,
             |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
             no_groups,
         );
@@ -277,7 +288,10 @@ mod tests {
         let clips = vec![make_clip("c1", 0, 0.0, 2.0), make_clip("c2", 0, 4.0, 2.0)];
         let by_layer = bucket(&clips, 1);
         let result = ClipHitTester::hit_test(
-            3.0, 30.0, 6.0, &mapper,
+            3.0,
+            30.0,
+            6.0,
+            &mapper,
             |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
             no_groups,
         );
@@ -290,7 +304,10 @@ mod tests {
         let clips = vec![make_clip("c1", 0, 0.0, 4.0)];
         let by_layer = bucket(&clips, 1);
         let result = ClipHitTester::hit_test(
-            2.0, 2.0, 6.0, &mapper,
+            2.0,
+            2.0,
+            6.0,
+            &mapper,
             |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
             no_groups,
         );
@@ -303,7 +320,10 @@ mod tests {
         let clips = vec![make_clip("c1", 0, 0.0, 4.0)];
         let by_layer = bucket(&clips, 1);
         let result = ClipHitTester::hit_test(
-            2.0, 30.0, 6.0, &mapper,
+            2.0,
+            30.0,
+            6.0,
+            &mapper,
             |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
             |_| true,
         );
@@ -319,7 +339,10 @@ mod tests {
         ];
         let by_layer = bucket(&clips, 1);
         let result = ClipHitTester::hit_test(
-            2.0, 30.0, 6.0, &mapper,
+            2.0,
+            30.0,
+            6.0,
+            &mapper,
             |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
             no_groups,
         );
@@ -337,9 +360,13 @@ mod tests {
         let by_layer = bucket(&clips, 3);
         // Region: beats 1-4, layers 0-1
         let result = ClipHitTester::box_select(
-            1.0, 4.0, 0, 1,
+            1.0,
+            4.0,
+            0,
+            1,
             |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
-            3, no_groups,
+            3,
+            no_groups,
         );
         assert!(result.contains(&ClipId::new("c1"))); // 0-2 overlaps 1-4
         assert!(result.contains(&ClipId::new("c2"))); // 3-5 overlaps 1-4
@@ -353,9 +380,13 @@ mod tests {
         let by_layer = bucket(&clips, 2);
         // Layer 0 is a group
         let result = ClipHitTester::box_select(
-            0.0, 4.0, 0, 1,
+            0.0,
+            4.0,
+            0,
+            1,
             |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
-            2, |i| i == 0,
+            2,
+            |i| i == 0,
         );
         assert!(!result.contains(&ClipId::new("c1"))); // group layer skipped
         assert!(result.contains(&ClipId::new("c2"))); // non-group collected

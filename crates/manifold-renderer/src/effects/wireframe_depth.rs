@@ -10,15 +10,15 @@
 
 use crate::background_worker::BackgroundWorker;
 use crate::effect::{EffectContext, PostProcessEffect};
+use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
-use manifold_core::generator_registration::ParamSpec;
 use manifold_core::effects::EffectInstance;
-use crate::effects::registration::EffectFactory;
+use manifold_core::generator_registration::ParamSpec;
 
 inventory::submit! {
     EffectMetadata {
@@ -1597,7 +1597,6 @@ impl WireframeDepthFX {
         Self::release_transient(gpu, coord_regularized);
         Self::release_transient(gpu, surface_next);
     }
-
 }
 
 impl PostProcessEffect for WireframeDepthFX {
@@ -1627,10 +1626,27 @@ impl PostProcessEffect for WireframeDepthFX {
             .map(|p| p.value)
             .unwrap_or(1.0)
             .clamp(0.5, 1.0);
-        let mesh_rate = fx.param_values.get(8).map(|p| p.value).unwrap_or(1.0).round() as i32;
+        let mesh_rate = fx
+            .param_values
+            .get(8)
+            .map(|p| p.value)
+            .unwrap_or(1.0)
+            .round() as i32;
         let mesh_rate = mesh_rate.clamp(1, 4);
-        let native_flow_enabled = fx.param_values.get(9).map(|p| p.value).unwrap_or(0.0).round() as i32 > 0;
-        let flow_lock_enabled = fx.param_values.get(10).map(|p| p.value).unwrap_or(0.0).round() as i32 > 0;
+        let native_flow_enabled = fx
+            .param_values
+            .get(9)
+            .map(|p| p.value)
+            .unwrap_or(0.0)
+            .round() as i32
+            > 0;
+        let flow_lock_enabled = fx
+            .param_values
+            .get(10)
+            .map(|p| p.value)
+            .unwrap_or(0.0)
+            .round() as i32
+            > 0;
         let face_warp_enabled = fx.param_values.get(11).map(|p| p.value).unwrap_or(0.0) > 0.01;
 
         // GetOrCreateOwner needs encoder; owner_states borrow released before later
@@ -2178,7 +2194,6 @@ impl PostProcessEffect for WireframeDepthFX {
         self.owner_states.remove(&owner_key);
     }
 }
-
 
 /// Convert f32 to IEEE 754 half-precision (f16) stored as u16.
 /// Used for Rgba16Float CPU uploads where Unity uses Rgba32Float.

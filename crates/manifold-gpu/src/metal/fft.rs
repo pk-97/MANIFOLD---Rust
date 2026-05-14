@@ -130,16 +130,10 @@ impl GpuFft {
         let cmd_buf = enc.raw_cmd_buf();
 
         unsafe {
-            let input_data = tensor_data_for_buffer(
-                &input.raw,
-                &self.input_shape(),
-                self.input_dtype(),
-            );
-            let output_data = tensor_data_for_buffer(
-                &output.raw,
-                &self.output_shape(),
-                self.output_dtype(),
-            );
+            let input_data =
+                tensor_data_for_buffer(&input.raw, &self.input_shape(), self.input_dtype());
+            let output_data =
+                tensor_data_for_buffer(&output.raw, &self.output_shape(), self.output_dtype());
 
             let inputs = NSArray::from_retained_slice(&[input_data]);
             let outputs = NSArray::from_retained_slice(&[output_data]);
@@ -152,12 +146,13 @@ impl GpuFft {
             let exec_desc = MPSGraphExecutableExecutionDescriptor::new();
             exec_desc.setWaitUntilCompleted(false);
 
-            self.executable.encodeToCommandBuffer_inputsArray_resultsArray_executionDescriptor(
-                &mps_cmd_buf,
-                &inputs,
-                Some(&outputs),
-                Some(&exec_desc),
-            );
+            self.executable
+                .encodeToCommandBuffer_inputsArray_resultsArray_executionDescriptor(
+                    &mps_cmd_buf,
+                    &inputs,
+                    Some(&outputs),
+                    Some(&exec_desc),
+                );
         }
     }
 
@@ -192,11 +187,7 @@ impl GpuFft {
 
 // ─── Graph construction ────────────────────────────────────────────────
 
-fn build_plan(
-    device: &ProtocolObject<dyn MTLDevice>,
-    kind: FftKind,
-    n: usize,
-) -> GpuFft {
+fn build_plan(device: &ProtocolObject<dyn MTLDevice>, kind: FftKind, n: usize) -> GpuFft {
     unsafe {
         let graph = MPSGraph::new();
 
@@ -209,11 +200,8 @@ fn build_plan(
             FftKind::ComplexToComplex { .. } => MPSDataType::ComplexFloat32,
         };
 
-        let input_tensor = graph.placeholderWithShape_dataType_name(
-            Some(&input_shape),
-            input_dtype,
-            None,
-        );
+        let input_tensor =
+            graph.placeholderWithShape_dataType_name(Some(&input_shape), input_dtype, None);
 
         // FFT descriptor. No scaling — the analyzer applies its own
         // `2/Σw` kernel normalisation so a raw unscaled transform keeps
@@ -259,13 +247,14 @@ fn build_plan(
         let compile_desc = MPSGraphCompilationDescriptor::new();
         compile_desc.setWaitForCompilationCompletion(true);
 
-        let executable = graph.compileWithDevice_feeds_targetTensors_targetOperations_compilationDescriptor(
-            Some(&mps_device),
-            &feeds,
-            &targets,
-            None,
-            Some(&compile_desc),
-        );
+        let executable = graph
+            .compileWithDevice_feeds_targetTensors_targetOperations_compilationDescriptor(
+                Some(&mps_device),
+                &feeds,
+                &targets,
+                None,
+                Some(&compile_desc),
+            );
 
         GpuFft {
             kind,
@@ -279,10 +268,7 @@ fn build_plan(
 // ─── Helpers ───────────────────────────────────────────────────────────
 
 fn nsnumber_array(dims: &[usize]) -> Retained<NSArray<NSNumber>> {
-    let numbers: Vec<Retained<NSNumber>> = dims
-        .iter()
-        .map(|&d| NSNumber::new_usize(d))
-        .collect();
+    let numbers: Vec<Retained<NSNumber>> = dims.iter().map(|&d| NSNumber::new_usize(d)).collect();
     NSArray::from_retained_slice(&numbers)
 }
 

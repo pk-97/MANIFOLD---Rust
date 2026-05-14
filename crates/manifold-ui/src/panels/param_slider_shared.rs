@@ -715,8 +715,16 @@ pub(crate) fn build_envelope_range_handles(
     param_idx: usize,
 ) -> TrimHandleIds {
     let usable = track_rect.width - OVERLAY_INSET * 2.0;
-    let rmin = mod_state.env_range_min.get(param_idx).copied().unwrap_or(0.0);
-    let rmax = mod_state.env_range_max.get(param_idx).copied().unwrap_or(1.0);
+    let rmin = mod_state
+        .env_range_min
+        .get(param_idx)
+        .copied()
+        .unwrap_or(0.0);
+    let rmax = mod_state
+        .env_range_max
+        .get(param_idx)
+        .copied()
+        .unwrap_or(1.0);
 
     let fill_x = track_rect.x + OVERLAY_INSET + rmin * usable;
     let fill_w = (rmax - rmin) * usable;
@@ -1031,11 +1039,7 @@ pub(crate) fn build_ableton_config(
         inv_btn_y,
         inv_btn_w,
         inv_btn_h,
-        config_btn_style_colored(
-            display.inverted,
-            color::ABL_BADGE_C32,
-            color::FONT_CAPTION,
-        ),
+        config_btn_style_colored(display.inverted, color::ABL_BADGE_C32, color::FONT_CAPTION),
         "INV",
     ) as i32;
 
@@ -1045,9 +1049,7 @@ pub(crate) fn build_ableton_config(
     // was originally mapped) immediately visible without changing any
     // routing — the values still flow wherever the resolver landed,
     // but the user can audit it from the effect card.
-    let composite_label = if display.track_name.is_empty()
-        && display.device_name.is_empty()
-    {
+    let composite_label = if display.track_name.is_empty() && display.device_name.is_empty() {
         display.macro_name.clone()
     } else {
         format!(

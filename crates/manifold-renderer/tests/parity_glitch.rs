@@ -10,11 +10,9 @@
 mod parity;
 
 use manifold_core::EffectTypeId;
-use manifold_renderer::node_graph::primitives::Glitch;
 use manifold_renderer::node_graph::ParamValue;
-use parity::{
-    assert_bytewise_equal, default_ctx, make_default_effect, Fixture, ParityHarness,
-};
+use manifold_renderer::node_graph::primitives::Glitch;
+use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
 
 #[derive(Debug, Clone, Copy)]
 struct Setup {
@@ -27,14 +25,70 @@ struct Setup {
 }
 
 const SETUPS: &[Setup] = &[
-    Setup { label: "identity",      amount: 0.0, block_size: 16.0, rgb_shift: 0.01, scanline: 0.3, speed: 2.0 },
-    Setup { label: "default",       amount: 1.0, block_size: 16.0, rgb_shift: 0.01, scanline: 0.3, speed: 2.0 },
-    Setup { label: "small_blocks",  amount: 1.0, block_size: 4.0,  rgb_shift: 0.01, scanline: 0.3, speed: 2.0 },
-    Setup { label: "large_blocks",  amount: 1.0, block_size: 64.0, rgb_shift: 0.01, scanline: 0.3, speed: 2.0 },
-    Setup { label: "rgb_max",       amount: 1.0, block_size: 16.0, rgb_shift: 0.05, scanline: 0.3, speed: 2.0 },
-    Setup { label: "scanline_max",  amount: 1.0, block_size: 16.0, rgb_shift: 0.01, scanline: 1.0, speed: 2.0 },
-    Setup { label: "fast_time",     amount: 1.0, block_size: 16.0, rgb_shift: 0.01, scanline: 0.3, speed: 10.0 },
-    Setup { label: "half_amount",   amount: 0.5, block_size: 16.0, rgb_shift: 0.025, scanline: 0.5, speed: 2.0 },
+    Setup {
+        label: "identity",
+        amount: 0.0,
+        block_size: 16.0,
+        rgb_shift: 0.01,
+        scanline: 0.3,
+        speed: 2.0,
+    },
+    Setup {
+        label: "default",
+        amount: 1.0,
+        block_size: 16.0,
+        rgb_shift: 0.01,
+        scanline: 0.3,
+        speed: 2.0,
+    },
+    Setup {
+        label: "small_blocks",
+        amount: 1.0,
+        block_size: 4.0,
+        rgb_shift: 0.01,
+        scanline: 0.3,
+        speed: 2.0,
+    },
+    Setup {
+        label: "large_blocks",
+        amount: 1.0,
+        block_size: 64.0,
+        rgb_shift: 0.01,
+        scanline: 0.3,
+        speed: 2.0,
+    },
+    Setup {
+        label: "rgb_max",
+        amount: 1.0,
+        block_size: 16.0,
+        rgb_shift: 0.05,
+        scanline: 0.3,
+        speed: 2.0,
+    },
+    Setup {
+        label: "scanline_max",
+        amount: 1.0,
+        block_size: 16.0,
+        rgb_shift: 0.01,
+        scanline: 1.0,
+        speed: 2.0,
+    },
+    Setup {
+        label: "fast_time",
+        amount: 1.0,
+        block_size: 16.0,
+        rgb_shift: 0.01,
+        scanline: 0.3,
+        speed: 10.0,
+    },
+    Setup {
+        label: "half_amount",
+        amount: 0.5,
+        block_size: 16.0,
+        rgb_shift: 0.025,
+        scanline: 0.5,
+        speed: 2.0,
+    },
 ];
 
 #[test]
@@ -54,11 +108,8 @@ fn glitch_is_pixel_exact_across_fixtures_and_setups() {
             fx.param_values[4].value = s.speed;
 
             let legacy = h.run_legacy(&fx, &input, &ctx);
-            let decomposed = h.run_primitive_graph(
-                Box::new(Glitch::new()),
-                &input,
-                &ctx,
-                |graph, prim_id| {
+            let decomposed =
+                h.run_primitive_graph(Box::new(Glitch::new()), &input, &ctx, |graph, prim_id| {
                     graph
                         .set_param(prim_id, "amount", ParamValue::Float(s.amount))
                         .unwrap();
@@ -77,8 +128,7 @@ fn glitch_is_pixel_exact_across_fixtures_and_setups() {
                     graph
                         .set_param(prim_id, "time", ParamValue::Float(ctx.time))
                         .unwrap();
-                },
-            );
+                });
 
             assert_bytewise_equal(
                 &format!("glitch/{:?}/setup={}", fixture, s.label),

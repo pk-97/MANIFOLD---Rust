@@ -30,9 +30,9 @@ use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Feedback;
 use crate::node_graph::{
-    apply_param_bindings, compile, user_binding_to_runtime, ExecutionPlan, Executor, FinalOutput,
-    FrameTime, Graph, MetalBackend, NodeInstanceId, ParamBinding, ParamConvert, ParamTarget,
-    PortType, ResourceId, Slot, Source, StateStore, UserParamBindingRuntime,
+    ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId,
+    ParamBinding, ParamConvert, ParamTarget, PortType, ResourceId, Slot, Source, StateStore,
+    UserParamBindingRuntime, apply_param_bindings, compile, user_binding_to_runtime,
 };
 use crate::render_target::RenderTarget;
 
@@ -373,4 +373,3 @@ impl PostProcessEffect for StylizedFeedbackFX {
         self.state_store.cleanup_owner(owner_key);
     }
 }
-

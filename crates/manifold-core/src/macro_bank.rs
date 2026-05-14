@@ -286,10 +286,7 @@ impl<'de> Deserialize<'de> for MacroMapping {
             curve: MacroCurve,
         }
 
-        fn split_id(
-            param_id: Option<String>,
-            param_index: Option<i32>,
-        ) -> (ParamId, Option<i32>) {
+        fn split_id(param_id: Option<String>, param_index: Option<i32>) -> (ParamId, Option<i32>) {
             match (param_id, param_index) {
                 (Some(id), _) if !id.is_empty() => (Cow::Owned(id), None),
                 (_, Some(idx)) => (Cow::Borrowed(""), Some(idx)),
@@ -339,10 +336,7 @@ impl<'de> Deserialize<'de> for MacroMapping {
                 param_index,
             } => {
                 let (param_id, legacy) = split_id(param_id, param_index);
-                (
-                    MacroMappingTarget::GenParam { layer_id, param_id },
-                    legacy,
-                )
+                (MacroMappingTarget::GenParam { layer_id, param_id }, legacy)
             }
         };
 
@@ -489,12 +483,10 @@ impl MacroBank {
                         && let Some(gp) = layer.gen_params_mut()
                     {
                         let gen_type = gp.generator_type().clone();
-                        let Some(idx) =
-                            crate::generator_definition_registry::param_id_to_index(
-                                &gen_type,
-                                param_id.as_ref(),
-                            )
-                        else {
+                        let Some(idx) = crate::generator_definition_registry::param_id_to_index(
+                            &gen_type,
+                            param_id.as_ref(),
+                        ) else {
                             continue;
                         };
                         gp.set_param_base(idx, mapped);
@@ -619,10 +611,7 @@ mod tests {
         }"#;
         let m: MacroMapping = serde_json::from_str(json).unwrap();
         match &m.target {
-            MacroMappingTarget::GenParam {
-                layer_id,
-                param_id,
-            } => {
+            MacroMappingTarget::GenParam { layer_id, param_id } => {
                 assert_eq!(layer_id.as_str(), "layer-7");
                 assert!(param_id.is_empty());
             }

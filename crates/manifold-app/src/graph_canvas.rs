@@ -479,7 +479,14 @@ impl GraphCanvas {
         );
 
         let header_h = NODE_HEADER_HEIGHT * self.zoom;
-        ui.draw_rounded_rect(sx, sy, sw, header_h, NODE_HEADER_BG, NODE_CORNER * self.zoom);
+        ui.draw_rounded_rect(
+            sx,
+            sy,
+            sw,
+            header_h,
+            NODE_HEADER_BG,
+            NODE_CORNER * self.zoom,
+        );
 
         let title_size = (11.0 * self.zoom).max(8.0);
         ui.draw_text(
@@ -534,10 +541,8 @@ impl GraphCanvas {
     }
 
     fn draw_wire(&self, ui: &mut UIRenderer, viewport: Rect, wire: &WireView) {
-        let (Some(from), Some(to)) = (
-            self.find_node(wire.from_node),
-            self.find_node(wire.to_node),
-        ) else {
+        let (Some(from), Some(to)) = (self.find_node(wire.from_node), self.find_node(wire.to_node))
+        else {
             return;
         };
         let from_idx = from

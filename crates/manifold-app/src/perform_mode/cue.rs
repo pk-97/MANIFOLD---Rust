@@ -23,10 +23,7 @@ pub(crate) struct CueAnalysis<'a> {
 /// `cues` MUST be sorted by `time` ascending (the bridge sorts on receipt).
 pub(crate) fn analyze<'a>(cues: &'a [CuePoint], current_beat: f64) -> CueAnalysis<'a> {
     // current = last cue with time <= current_beat
-    let current = cues
-        .iter()
-        .rev()
-        .find(|c| c.time <= current_beat);
+    let current = cues.iter().rev().find(|c| c.time <= current_beat);
     // next = first cue with time > current_beat
     let next = cues.iter().find(|c| c.time > current_beat);
     let beats_to_next = next.map(|c| c.time - current_beat);

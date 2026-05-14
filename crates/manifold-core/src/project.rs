@@ -287,7 +287,12 @@ impl Project {
             let Some(def) = effect_definition_registry::try_get(effect_type) else {
                 return ResolveOutcome::RegistryMissing;
             };
-            resolve_against(current_id, legacy_index, def.legacy_param_aliases, &def.param_defs)
+            resolve_against(
+                current_id,
+                legacy_index,
+                def.legacy_param_aliases,
+                &def.param_defs,
+            )
         }
 
         fn resolve_for_generator(
@@ -298,31 +303,38 @@ impl Project {
             let Some(def) = generator_definition_registry::try_get(gen_type) else {
                 return ResolveOutcome::RegistryMissing;
             };
-            resolve_against(current_id, legacy_index, def.legacy_param_aliases, &def.param_defs)
+            resolve_against(
+                current_id,
+                legacy_index,
+                def.legacy_param_aliases,
+                &def.param_defs,
+            )
         }
 
         fn resolve_driver_id_for_effect(
             driver: &mut crate::effects::ParameterDriver,
             effect_type: &crate::EffectTypeId,
         ) {
-            let outcome = resolve_for_effect(
-                effect_type,
-                &driver.param_id,
-                driver.legacy_param_index,
+            let outcome =
+                resolve_for_effect(effect_type, &driver.param_id, driver.legacy_param_index);
+            apply_outcome(
+                outcome,
+                &mut driver.param_id,
+                &mut driver.legacy_param_index,
             );
-            apply_outcome(outcome, &mut driver.param_id, &mut driver.legacy_param_index);
         }
 
         fn resolve_driver_id_for_generator(
             driver: &mut crate::effects::ParameterDriver,
             gen_type: &crate::GeneratorTypeId,
         ) {
-            let outcome = resolve_for_generator(
-                gen_type,
-                &driver.param_id,
-                driver.legacy_param_index,
+            let outcome =
+                resolve_for_generator(gen_type, &driver.param_id, driver.legacy_param_index);
+            apply_outcome(
+                outcome,
+                &mut driver.param_id,
+                &mut driver.legacy_param_index,
             );
-            apply_outcome(outcome, &mut driver.param_id, &mut driver.legacy_param_index);
         }
 
         fn resolve_envelope_id_for_effect(env: &mut crate::effects::ParamEnvelope) {
@@ -335,8 +347,7 @@ impl Project {
             env: &mut crate::effects::ParamEnvelope,
             gen_type: &crate::GeneratorTypeId,
         ) {
-            let outcome =
-                resolve_for_generator(gen_type, &env.param_id, env.legacy_param_index);
+            let outcome = resolve_for_generator(gen_type, &env.param_id, env.legacy_param_index);
             apply_outcome(outcome, &mut env.param_id, &mut env.legacy_param_index);
         }
 
@@ -344,11 +355,8 @@ impl Project {
             mapping: &mut crate::ableton_mapping::AbletonParamMapping,
             effect_type: &crate::EffectTypeId,
         ) {
-            let outcome = resolve_for_effect(
-                effect_type,
-                &mapping.param_id,
-                mapping.legacy_param_index,
-            );
+            let outcome =
+                resolve_for_effect(effect_type, &mapping.param_id, mapping.legacy_param_index);
             apply_outcome(
                 outcome,
                 &mut mapping.param_id,
@@ -360,11 +368,8 @@ impl Project {
             mapping: &mut crate::ableton_mapping::AbletonParamMapping,
             gen_type: &crate::GeneratorTypeId,
         ) {
-            let outcome = resolve_for_generator(
-                gen_type,
-                &mapping.param_id,
-                mapping.legacy_param_index,
-            );
+            let outcome =
+                resolve_for_generator(gen_type, &mapping.param_id, mapping.legacy_param_index);
             apply_outcome(
                 outcome,
                 &mut mapping.param_id,
@@ -406,7 +411,9 @@ impl Project {
                         .find(|l| l.layer_id == *layer_id)
                         .and_then(|l| l.gen_params())
                     {
-                        Some(gp) => resolve_for_generator(gp.generator_type(), param_id, legacy_idx),
+                        Some(gp) => {
+                            resolve_for_generator(gp.generator_type(), param_id, legacy_idx)
+                        }
                         // Layer or its gen_params missing — same recovery
                         // semantics as registry-missing on effect/generator.
                         None => ResolveOutcome::RegistryMissing,
@@ -779,7 +786,10 @@ mod tests {
         p.resolve_legacy_param_ids();
 
         let d = &p.settings.master_effects[0].drivers.as_ref().unwrap()[0];
-        assert_eq!(d.param_id, "amount", "Bloom paramIndex 0 should resolve to 'amount'");
+        assert_eq!(
+            d.param_id, "amount",
+            "Bloom paramIndex 0 should resolve to 'amount'"
+        );
         assert_eq!(d.legacy_param_index, None, "legacy index must be cleared");
     }
 
@@ -884,7 +894,7 @@ mod tests {
         // registry preserves recovery information verbatim. On a
         // future load against a populated registry, the resolver fills
         // in `param_id` cleanly.
-        use crate::effects::{ParameterDriver, ParamId};
+        use crate::effects::{ParamId, ParameterDriver};
 
         // Step 1: simulate a load where the registry was missing for
         // this effect type. The driver is in the parked state.
@@ -916,8 +926,15 @@ mod tests {
 
         // Step 3: reload. Deserialize parks the index again.
         let back: ParameterDriver = serde_json::from_str(&json).expect("deserialize");
-        assert!(back.param_id.is_empty(), "param_id remains empty until resolver");
-        assert_eq!(back.legacy_param_index, Some(2), "index re-parked from wire");
+        assert!(
+            back.param_id.is_empty(),
+            "param_id remains empty until resolver"
+        );
+        assert_eq!(
+            back.legacy_param_index,
+            Some(2),
+            "index re-parked from wire"
+        );
 
         // Step 4: now imagine the registry just came online (Bloom is
         // registered in this test crate; pretend the driver was for it).
@@ -935,8 +952,14 @@ mod tests {
         // completes: param_id resolves, legacy index clears.
         p.resolve_legacy_param_ids();
         let d = &p.settings.master_effects[0].drivers.as_ref().unwrap()[0];
-        assert_eq!(d.param_id, "amount", "registry came online; resolver fills param_id");
-        assert_eq!(d.legacy_param_index, None, "legacy index cleared on successful resolve");
+        assert_eq!(
+            d.param_id, "amount",
+            "registry came online; resolver fills param_id"
+        );
+        assert_eq!(
+            d.legacy_param_index, None,
+            "legacy index cleared on successful resolve"
+        );
     }
 
     #[test]
@@ -953,7 +976,11 @@ mod tests {
         // Synthetic effect type with no registry def in this test build.
         let unregistered = crate::EffectTypeId::from_string("not-a-real-effect-id".to_string());
         let mut fx = EffectInstance::new(unregistered);
-        fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(0.5), ParamSlot::exposed(0.5)];
+        fx.param_values = vec![
+            ParamSlot::exposed(0.5),
+            ParamSlot::exposed(0.5),
+            ParamSlot::exposed(0.5),
+        ];
         fx.drivers = Some(vec![ParameterDriver {
             param_id: std::borrow::Cow::Borrowed(""),
             beat_division: BeatDivision::Quarter,
@@ -1001,7 +1028,8 @@ mod tests {
         // renames declared. The resolver must leave bindings untouched.
         let mut p = Project::default();
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
-        fx.user_param_bindings.push(build_user_binding("uv_transform"));
+        fx.user_param_bindings
+            .push(build_user_binding("uv_transform"));
         fx.user_param_bindings.push(build_user_binding("mix"));
         p.settings.master_effects.push(fx);
 
@@ -1038,13 +1066,11 @@ mod tests {
     fn user_binding_resolver_walks_layer_effects() {
         // Layer effects participate too — not just master.
         let mut p = Project::default();
-        let mut layer = crate::layer::Layer::new(
-            "L".to_string(),
-            crate::types::LayerType::Video,
-            0,
-        );
+        let mut layer =
+            crate::layer::Layer::new("L".to_string(), crate::types::LayerType::Video, 0);
         let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
-        fx.user_param_bindings.push(build_user_binding("uv_transform"));
+        fx.user_param_bindings
+            .push(build_user_binding("uv_transform"));
         layer.effects = Some(vec![fx]);
         p.timeline.layers.push(layer);
 

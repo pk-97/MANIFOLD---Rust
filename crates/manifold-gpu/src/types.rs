@@ -29,10 +29,7 @@ impl GpuTextureFormat {
         match self {
             Self::Rgba16Float => 8,
             Self::Rgba32Float => 16,
-            Self::Rgba8Unorm
-            | Self::Rgba8UnormSrgb
-            | Self::Bgra8Unorm
-            | Self::Bgra8UnormSrgb => 4,
+            Self::Rgba8Unorm | Self::Rgba8UnormSrgb | Self::Bgra8Unorm | Self::Bgra8UnormSrgb => 4,
             Self::R32Float | Self::R32Uint => 4,
             Self::Rg32Float => 8,
             Self::R16Float => 2,

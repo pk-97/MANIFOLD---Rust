@@ -9,11 +9,9 @@
 mod parity;
 
 use manifold_core::EffectTypeId;
-use manifold_renderer::node_graph::primitives::KaleidoFold;
 use manifold_renderer::node_graph::ParamValue;
-use parity::{
-    assert_bytewise_equal, default_ctx, make_default_effect, Fixture, ParityHarness,
-};
+use manifold_renderer::node_graph::primitives::KaleidoFold;
+use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
 
 const SEGMENTS: &[f32] = &[2.0, 4.0, 6.0, 10.0, 16.0];
 const AMOUNTS: &[f32] = &[0.0, 0.5, 1.0];
@@ -48,10 +46,7 @@ fn kaleido_fold_is_pixel_exact_across_fixtures_segments_amounts() {
                 );
 
                 assert_bytewise_equal(
-                    &format!(
-                        "kaleido_fold/{:?}/seg={segments}/amount={amount}",
-                        fixture
-                    ),
+                    &format!("kaleido_fold/{:?}/seg={segments}/amount={amount}", fixture),
                     &legacy,
                     &decomposed,
                 );

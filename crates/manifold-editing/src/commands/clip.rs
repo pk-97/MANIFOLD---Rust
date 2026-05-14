@@ -280,8 +280,7 @@ impl Command for AddClipCommand {
         if let Some(li) = project.timeline.layer_index_for_id(&self.layer_id)
             && let Some(layer) = project.timeline.layers.get_mut(li)
         {
-            self.overlap_actions =
-                layer.add_clip(self.clip.clone(), self.spb);
+            self.overlap_actions = layer.add_clip(self.clip.clone(), self.spb);
         }
         project.timeline.mark_clip_lookup_dirty();
     }

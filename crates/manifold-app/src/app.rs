@@ -540,7 +540,6 @@ impl Application {
         }
     }
 
-
     pub(crate) fn create_default_project() -> Project {
         let mut project = Project::default();
         project.settings.bpm = manifold_core::Bpm(120.0);
@@ -1083,7 +1082,8 @@ impl Application {
             }
             TextInputField::SearchFilter => {
                 // Update browser popup filter — no undo command
-                self.ws.ui_root
+                self.ws
+                    .ui_root
                     .browser_popup
                     .set_filter(text.trim().to_string());
                 self.needs_rebuild = true;
@@ -1630,7 +1630,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         self.gpu = Some(gpu);
 
         // Pass detected display resolutions to UI
-        self.ws.ui_root
+        self.ws
+            .ui_root
             .set_display_resolutions(self.display_resolutions.clone());
 
         // Build UI at initial window size (logical pixels)
@@ -1749,12 +1750,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         self.ws.ui_root.resize(logical_w, logical_h);
                     } else {
                         // Output window resized — update drawable.
-                        self.send_content_cmd(
-                            ContentCommand::ResizeOutputSurface(
-                                size.width.max(1),
-                                size.height.max(1),
-                            ),
-                        );
+                        self.send_content_cmd(ContentCommand::ResizeOutputSurface(
+                            size.width.max(1),
+                            size.height.max(1),
+                        ));
                     }
                 }
             }
@@ -1816,8 +1815,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         .unwrap_or((1.0, crate::graph_canvas::Rect::new(0.0, 0.0, 1.0, 1.0)));
                     let logical_x = position.x as f32 / scale as f32;
                     let logical_y = position.y as f32 / scale as f32;
-                    let sidebar_x =
-                        viewport.w - manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
+                    let sidebar_x = viewport.w - manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
                     // Always update canvas cursor — graph-space coords
                     // need it even for clicks that land in the sidebar.
                     if let Some(canvas) = self.graph_canvas.as_mut() {
@@ -1861,7 +1859,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     // Split handle drag takes highest priority
                     // From Unity PanelResizeHandle.OnDrag
                     if self.split_dragging {
-                        self.ws.ui_root
+                        self.ws
+                            .ui_root
                             .layout
                             .update_split_from_drag(self.cursor_pos.y);
                         self.cursor_manager.set(TimelineCursor::ResizeVertical);
@@ -2036,7 +2035,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                         // From Unity PanelResizeHandle.OnPointerDown.
                                         self.split_dragging = true;
                                         self.ws.ui_root.set_split_handle_drag();
-                                    } else if self.ws.ui_root.is_near_inspector_edge(self.cursor_pos) {
+                                    } else if self
+                                        .ws
+                                        .ui_root
+                                        .is_near_inspector_edge(self.cursor_pos)
+                                    {
                                         self.ws.ui_root.begin_inspector_resize(self.cursor_pos.x);
                                         self.ws.ui_root.set_inspector_handle_drag();
                                     } else {
@@ -2131,12 +2134,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                     let lx = mon_pos.x as f64 / scale;
                                     let ly = mon_pos.y as f64 / scale;
                                     ws.window.set_decorations(false);
-                                    let _ = ws.window.request_inner_size(
-                                        winit::dpi::LogicalSize::new(lw, lh),
-                                    );
-                                    ws.window.set_outer_position(
-                                        winit::dpi::LogicalPosition::new(lx, ly),
-                                    );
+                                    let _ = ws
+                                        .window
+                                        .request_inner_size(winit::dpi::LogicalSize::new(lw, lh));
+                                    ws.window
+                                        .set_outer_position(winit::dpi::LogicalPosition::new(
+                                            lx, ly,
+                                        ));
                                 }
                                 // Set window level above menu bar (NSMainMenuWindowLevel=24)
                                 // so our borderless window covers it on this
@@ -2148,14 +2152,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                 ws.window.set_decorations(true);
                                 if let Some(frame) = self.output_saved_frame.take() {
                                     ws.window.set_outer_position(
-                                        winit::dpi::PhysicalPosition::new(
-                                            frame[0], frame[1],
-                                        ),
+                                        winit::dpi::PhysicalPosition::new(frame[0], frame[1]),
                                     );
                                     let _ = ws.window.request_inner_size(
-                                        winit::dpi::PhysicalSize::new(
-                                            frame[2], frame[3],
-                                        ),
+                                        winit::dpi::PhysicalSize::new(frame[2], frame[3]),
                                     );
                                 }
                                 // Restore NSNormalWindowLevel=0 so the menu
@@ -2165,12 +2165,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             }
 
                             let new_size = ws.window.inner_size();
-                            self.send_content_cmd(
-                                ContentCommand::ResizeOutputSurface(
-                                    new_size.width.max(1),
-                                    new_size.height.max(1),
-                                ),
-                            );
+                            self.send_content_cmd(ContentCommand::ResizeOutputSurface(
+                                new_size.width.max(1),
+                                new_size.height.max(1),
+                            ));
                         }
                     } else {
                         self.output_last_click = Some(now);
@@ -2180,9 +2178,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             // ── Mouse wheel (scroll / zoom) ──────────────────────────
             WindowEvent::MouseWheel { delta, .. } => {
-                if is_graph_editor
-                    && let Some(canvas) = self.graph_canvas.as_mut()
-                {
+                if is_graph_editor && let Some(canvas) = self.graph_canvas.as_mut() {
                     const LINE_DELTA_PX: f32 = 20.0;
                     let dy = match delta {
                         winit::event::MouseScrollDelta::LineDelta(_, y) => y * LINE_DELTA_PX,
@@ -2224,7 +2220,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                 (pos.x as f32, pos.y as f32)
                             }
                         };
-                        self.ws.ui_root
+                        self.ws
+                            .ui_root
                             .input
                             .process_scroll(self.cursor_pos, Vec2::new(dx, dy));
                         return;
@@ -2313,14 +2310,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         } else {
                             // Plain scroll → vertical track scroll
                             let new_y = (self.ws.ui_root.viewport.scroll_y_px() - dy).max(0.0);
-                            if self
-                                .ws
-                                .ui_root
-                                .viewport
-                                .set_scroll(self.ws.ui_root.viewport.scroll_x_beats().as_f32(), new_y)
-                            {
+                            if self.ws.ui_root.viewport.set_scroll(
+                                self.ws.ui_root.viewport.scroll_x_beats().as_f32(),
+                                new_y,
+                            ) {
                                 // Sync layer headers with viewport vertical scroll
-                                self.ws.ui_root
+                                self.ws
+                                    .ui_root
                                     .layer_headers
                                     .set_scroll_y(self.ws.ui_root.viewport.scroll_y_px());
                                 self.scroll_dirty.scroll_y = true;
@@ -2444,7 +2440,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             && self.text_input.field
                                 == crate::text_input::TextInputField::SearchFilter
                         {
-                            self.ws.ui_root
+                            self.ws
+                                .ui_root
                                 .browser_popup
                                 .set_filter(self.text_input.text.trim().to_string());
                             self.needs_rebuild = true;
@@ -2679,9 +2676,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             self.pending_close_output = false;
             #[cfg(target_os = "macos")]
             {
-                self.send_content_cmd(
-                    crate::content_command::ContentCommand::ClearOutputSurface,
-                );
+                self.send_content_cmd(crate::content_command::ContentCommand::ClearOutputSurface);
                 self.output_saved_frame = None;
             }
             let output_ids: Vec<_> = self
@@ -2775,7 +2770,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let should_render = if in_display_transition {
             self.frame_timer.should_tick()
         } else {
-            self.ws.ui_display_link
+            self.ws
+                .ui_display_link
                 .as_ref()
                 .map_or(self.frame_timer.should_tick(), |dl| dl.vsync_ready())
         };

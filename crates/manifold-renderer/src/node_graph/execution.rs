@@ -252,13 +252,13 @@ mod tests {
 
     use manifold_core::{Beats, Seconds};
 
+    use crate::node_graph::EffectNode;
     use crate::node_graph::compile;
     use crate::node_graph::effect_node::EffectNodeType;
     use crate::node_graph::parameters::ParamDef;
     use crate::node_graph::ports::{
         NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
     };
-    use crate::node_graph::EffectNode;
 
     fn frame_time() -> FrameTime {
         FrameTime {

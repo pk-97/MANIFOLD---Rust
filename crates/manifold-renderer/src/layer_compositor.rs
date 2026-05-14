@@ -10,8 +10,7 @@ use ahash::AHashMap;
 use manifold_core::effects::{EffectGroup, EffectInstance};
 use manifold_core::{BlendMode, EffectTypeId, LayerId};
 use manifold_gpu::{
-    GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
-    GpuTextureUsage,
+    GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -518,7 +517,6 @@ fn led_group_owner_key(layer_id: &manifold_core::LayerId) -> i64 {
     (hasher.finish() | (1 << 63)) as i64
 }
 
-
 impl LayerCompositor {
     pub fn new(device: &GpuDevice, width: u32, height: u32) -> Self {
         Self {
@@ -593,7 +591,9 @@ impl LayerCompositor {
     /// Same contract as `ensure_chain_for_layer`, but for the group-effect-chain
     /// pool keyed by the group container's `LayerId`.
     fn ensure_group_chain(&mut self, group_id: &LayerId) {
-        self.group_effect_chains.entry(group_id.clone()).or_default();
+        self.group_effect_chains
+            .entry(group_id.clone())
+            .or_default();
         self.group_chain_last_used_frame
             .insert(group_id.clone(), self.frame_counter);
     }
@@ -816,7 +816,6 @@ impl LayerCompositor {
         // No-op until a graph-runtime primitive declares per-clip state.
         // See `docs/EFFECT_CHAIN_LIFECYCLE.md`.
     }
-
 
     /// Phase A: Process each layer's clips + effects into per-layer output textures.
     ///
@@ -1214,13 +1213,7 @@ impl LayerCompositor {
                     if let Some(group) = group_desc {
                         // Both pools keyed by the group's own LayerId —
                         // stable across iteration order and timeline reorders.
-                        self.ensure_led_group_buf(
-                            group.layer_id,
-                            gpu.device,
-                            gpu.pool,
-                            w,
-                            h,
-                        );
+                        self.ensure_led_group_buf(group.layer_id, gpu.device, gpu.pool, w, h);
                         self.ensure_led_group_chain(group.layer_id);
                         let group_buf_ptr = self
                             .led_group_bufs
@@ -1277,7 +1270,8 @@ impl LayerCompositor {
                         }
 
                         // Apply group effects (if any) at LED resolution.
-                        let group_source: *const GpuTexture = if has_enabled_effects(group.effects) {
+                        let group_source: *const GpuTexture = if has_enabled_effects(group.effects)
+                        {
                             let ctx = EffectContext {
                                 time: frame.time,
                                 beat: frame.beat,
@@ -1368,10 +1362,7 @@ impl LayerCompositor {
                 let (blend_mode, src_tex) = if is_l {
                     (BlendMode::Normal, layer_outputs[i].texture())
                 } else {
-                    (
-                        layer_outputs[i].blend_mode,
-                        unsafe { &*black_tex_ptr },
-                    )
+                    (layer_outputs[i].blend_mode, unsafe { &*black_tex_ptr })
                 };
                 let uniforms = BlendUniforms {
                     blend_mode: blend_mode as u32,
@@ -1443,10 +1434,8 @@ impl LayerCompositor {
             // would otherwise conflict with a live mut borrow on
             // self.group_bufs). Safety: the pool isn't resized
             // again within this iteration body.
-            let group_buf_ptr = self
-                .group_bufs
-                .get_mut(group_id)
-                .expect("ensured above") as *mut PingPong;
+            let group_buf_ptr =
+                self.group_bufs.get_mut(group_id).expect("ensured above") as *mut PingPong;
             let group_buf = unsafe { &mut *group_buf_ptr };
 
             // Clear to transparent
@@ -1473,42 +1462,39 @@ impl LayerCompositor {
             }
 
             // Apply group-level effects (if any)
-            let group_texture: *const GpuTexture =
-                if has_enabled_effects(group_desc.effects) {
-                    // Each group's chain is keyed by its own LayerId —
-                    // stable across iteration order and timeline reorders.
-                    self.ensure_group_chain(group_id);
-                    let effect_chain = self
-                        .group_effect_chains
-                        .get_mut(group_id)
-                        .expect("ensured above");
-                    let ctx = EffectContext {
-                        time: frame.time,
-                        beat: frame.beat,
-                        dt: frame.dt,
-                        width: self.main.width(),
-                        height: self.main.height(),
-                        output_width: frame.output_width,
-                        output_height: frame.output_height,
-                        owner_key: group_id_owner_key(group_id),
-                        is_clip_level: false,
-                        edge_stretch_width: 0.5625,
-                        frame_count: frame.frame_count as i64,
-                    };
-                    let result = Self::apply_effects(
-                        effect_chain,
-                        gpu,
-                        group_buf.source_texture(),
-                        group_desc.effects,
-                        group_desc.effect_groups,
-                        &ctx,
-                    );
-                    result.map_or(group_buf.source_texture() as *const _, |t| {
-                        t as *const _
-                    })
-                } else {
-                    group_buf.source_texture() as *const _
+            let group_texture: *const GpuTexture = if has_enabled_effects(group_desc.effects) {
+                // Each group's chain is keyed by its own LayerId —
+                // stable across iteration order and timeline reorders.
+                self.ensure_group_chain(group_id);
+                let effect_chain = self
+                    .group_effect_chains
+                    .get_mut(group_id)
+                    .expect("ensured above");
+                let ctx = EffectContext {
+                    time: frame.time,
+                    beat: frame.beat,
+                    dt: frame.dt,
+                    width: self.main.width(),
+                    height: self.main.height(),
+                    output_width: frame.output_width,
+                    output_height: frame.output_height,
+                    owner_key: group_id_owner_key(group_id),
+                    is_clip_level: false,
+                    edge_stretch_width: 0.5625,
+                    frame_count: frame.frame_count as i64,
                 };
+                let result = Self::apply_effects(
+                    effect_chain,
+                    gpu,
+                    group_buf.source_texture(),
+                    group_desc.effects,
+                    group_desc.effect_groups,
+                    &ctx,
+                );
+                result.map_or(group_buf.source_texture() as *const _, |t| t as *const _)
+            } else {
+                group_buf.source_texture() as *const _
+            };
 
             // Replace child outputs with a single group output.
             // Insert group output at the first child's position, remove the rest.
@@ -1539,9 +1525,8 @@ impl LayerCompositor {
         // Safety: same lifetime guarantees as the blend_layers call below.
         let pre_fold_outputs_ptr = self.layer_outputs_scratch.as_ptr();
         let pre_fold_outputs_len = self.layer_outputs_scratch.len();
-        let pre_fold_outputs = unsafe {
-            std::slice::from_raw_parts(pre_fold_outputs_ptr, pre_fold_outputs_len)
-        };
+        let pre_fold_outputs =
+            unsafe { std::slice::from_raw_parts(pre_fold_outputs_ptr, pre_fold_outputs_len) };
         self.blend_layers_to_led(gpu, pre_fold_outputs, frame);
 
         self.fold_groups(gpu, frame);
@@ -1795,9 +1780,8 @@ impl LayerCompositor {
         // Safety: same as below — outputs are valid for frame duration.
         let pre_fold_outputs_ptr = self.layer_outputs_scratch.as_ptr();
         let pre_fold_outputs_len = self.layer_outputs_scratch.len();
-        let pre_fold_outputs = unsafe {
-            std::slice::from_raw_parts(pre_fold_outputs_ptr, pre_fold_outputs_len)
-        };
+        let pre_fold_outputs =
+            unsafe { std::slice::from_raw_parts(pre_fold_outputs_ptr, pre_fold_outputs_len) };
         self.blend_layers_to_led(compositor_gpu, pre_fold_outputs, frame);
 
         // Fold group children into single outputs before blending.
@@ -1930,12 +1914,7 @@ impl Compositor for LayerCompositor {
                 // backend (not in `master_ec.ping`/`pong`, which stay None for
                 // graph-dispatched chains). `source_texture_pub()` would
                 // unwrap a None ping in that case.
-                gpu.copy_texture_to_texture(
-                    processed,
-                    &self.tonemap.output.texture,
-                    width,
-                    height,
-                );
+                gpu.copy_texture_to_texture(processed, &self.tonemap.output.texture, width, height);
             }
         }
 
@@ -1955,9 +1934,10 @@ impl Compositor for LayerCompositor {
             let height = height.max(1);
 
             // Lazy-init / resize LED tonemap pipeline.
-            let needs_new_tonemap = self.led_tonemap.as_ref().is_none_or(|t| {
-                t.output.width != width || t.output.height != height
-            });
+            let needs_new_tonemap = self
+                .led_tonemap
+                .as_ref()
+                .is_none_or(|t| t.output.width != width || t.output.height != height);
             if needs_new_tonemap {
                 self.led_tonemap = Some(TonemapPipeline::new(gpu.device, width, height));
             }
@@ -1966,10 +1946,11 @@ impl Compositor for LayerCompositor {
             let led_source_tex_ptr: *const GpuTexture = led_main.source_texture();
             // Safety: led_source_tex_ptr points to led_main.ping/pong which are not
             // reallocated between here and the apply() call below.
-            self.led_tonemap
-                .as_ref()
-                .unwrap()
-                .apply(gpu, unsafe { &*led_source_tex_ptr }, &frame.tonemap);
+            self.led_tonemap.as_ref().unwrap().apply(
+                gpu,
+                unsafe { &*led_source_tex_ptr },
+                &frame.tonemap,
+            );
 
             // Apply master FX to the LED tonemap output (distinct owner_key so
             // temporal state doesn't bleed between main and LED master chains).
@@ -2185,7 +2166,10 @@ mod chain_pool_tests {
     /// Build a minimal `CompositeLayerDescriptor` for tests that need to
     /// drive `trim_excess_buffers`. All defaults are inert (no clips,
     /// no effects, no group).
-    fn make_layer_desc<'a>(layer_id: &'a LayerId, layer_index: i32) -> CompositeLayerDescriptor<'a> {
+    fn make_layer_desc<'a>(
+        layer_id: &'a LayerId,
+        layer_index: i32,
+    ) -> CompositeLayerDescriptor<'a> {
         CompositeLayerDescriptor {
             layer_index,
             layer_id,
@@ -2303,8 +2287,7 @@ mod chain_pool_tests {
         comp.frame_counter = 1;
         comp.ensure_chain_for_layer(&any_layer);
 
-        let layer_chain_ptr =
-            comp.effect_chains.get(&any_layer).unwrap() as *const EffectChain;
+        let layer_chain_ptr = comp.effect_chains.get(&any_layer).unwrap() as *const EffectChain;
         let master_chain_ptr: *const EffectChain = &comp.master_effect_chain;
 
         assert_ne!(

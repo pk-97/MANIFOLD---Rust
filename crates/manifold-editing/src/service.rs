@@ -455,11 +455,7 @@ impl EditingService {
             let paste_layer_id = layer.layer_id.clone();
             pasted_ids.push(new_clip.id.clone());
             // AddClipCommand enforces non-overlap internally.
-            commands.push(Box::new(AddClipCommand::new(
-                new_clip,
-                paste_layer_id,
-                spb,
-            )));
+            commands.push(Box::new(AddClipCommand::new(new_clip, paste_layer_id, spb)));
         }
 
         PasteResult {
@@ -806,20 +802,19 @@ impl EditingService {
                     // this layer that overlaps the region).
                     let region_start = region.start_beat;
                     let region_end = region.end_beat;
-                    if let Some(orig) = layer.clips.iter().find(|c| {
-                        c.start_beat < region_start && c.end_beat() > region_start
-                    }) {
+                    if let Some(orig) = layer
+                        .clips
+                        .iter()
+                        .find(|c| c.start_beat < region_start && c.end_beat() > region_start)
+                    {
                         let tail_end = orig.end_beat().min(region_end);
                         let mut interior_clip = orig.clone();
                         interior_clip.id = interior_id.clone();
                         interior_clip.start_beat = region_start;
                         interior_clip.duration_beats = tail_end - region_start;
-                        if !orig.video_clip_id.is_empty()
-                            && orig.duration_beats > Beats::ZERO
-                        {
+                        if !orig.video_clip_id.is_empty() && orig.duration_beats > Beats::ZERO {
                             let offset = region_start - orig.start_beat;
-                            interior_clip.in_point =
-                                orig.in_point + Seconds(offset.0 * spb as f64);
+                            interior_clip.in_point = orig.in_point + Seconds(offset.0 * spb as f64);
                         }
                         commands.push(Box::new(DeleteClipCommand::new(interior_clip, lid)));
                     }

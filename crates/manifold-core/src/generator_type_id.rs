@@ -110,9 +110,7 @@ impl GeneratorTypeId {
             25 => Self::NESTED_CUBES,
             _ => {
                 // Check inventory-registered generators for new discriminants
-                for meta in
-                    inventory::iter::<crate::generator_registration::GeneratorMetadata>
-                {
+                for meta in inventory::iter::<crate::generator_registration::GeneratorMetadata> {
                     if meta.legacy_discriminant == Some(v) {
                         return meta.id.clone();
                     }

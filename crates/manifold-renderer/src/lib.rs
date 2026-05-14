@@ -20,11 +20,11 @@ pub mod metalfx_upscaler;
 #[cfg(target_os = "macos")]
 pub mod native_text;
 pub mod node_graph;
-#[cfg(target_os = "macos")]
-pub mod text_rasterizer;
 pub mod pq_encoder;
 pub mod render_target;
 pub mod render_target_pool;
+#[cfg(target_os = "macos")]
+pub mod text_rasterizer;
 pub mod tonemap;
 pub mod ui_cache_manager;
 pub mod ui_renderer;

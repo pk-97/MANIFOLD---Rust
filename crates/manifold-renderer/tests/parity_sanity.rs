@@ -18,9 +18,7 @@
 mod parity;
 
 use manifold_core::EffectTypeId;
-use parity::{
-    assert_bytewise_equal, default_ctx, make_default_effect, Fixture, ParityHarness,
-};
+use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
 
 /// Runs `InvertColors` twice on `Fixture::Gradient` and asserts the
 /// two readbacks are identical. InvertColors is the simplest stateless
@@ -82,9 +80,5 @@ fn legacy_invert_is_deterministic_across_harness_instances() {
         h.run_legacy(&fx, &input, &ctx)
     };
 
-    assert_bytewise_equal(
-        "invert/gradient harness1 vs harness2",
-        &bytes_a,
-        &bytes_b,
-    );
+    assert_bytewise_equal("invert/gradient harness1 vs harness2", &bytes_a, &bytes_b);
 }

@@ -13,11 +13,9 @@
 mod parity;
 
 use manifold_core::EffectTypeId;
-use manifold_renderer::node_graph::primitives::Bloom;
 use manifold_renderer::node_graph::ParamValue;
-use parity::{
-    assert_bytewise_equal, default_ctx, make_default_effect, Fixture, ParityHarness,
-};
+use manifold_renderer::node_graph::primitives::Bloom;
+use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
 
 const SETUPS: &[(f32, &str)] = &[
     (0.0, "identity"),
@@ -41,16 +39,12 @@ fn bloom_is_pixel_exact_across_fixtures_and_setups() {
             fx.param_values[0].value = amount;
 
             let legacy = h.run_legacy(&fx, &input, &ctx);
-            let decomposed = h.run_primitive_graph(
-                Box::new(Bloom::new()),
-                &input,
-                &ctx,
-                |graph, prim_id| {
+            let decomposed =
+                h.run_primitive_graph(Box::new(Bloom::new()), &input, &ctx, |graph, prim_id| {
                     graph
                         .set_param(prim_id, "amount", ParamValue::Float(amount))
                         .unwrap();
-                },
-            );
+                });
 
             assert_bytewise_equal(
                 &format!("bloom/{:?}/setup={label}", fixture),

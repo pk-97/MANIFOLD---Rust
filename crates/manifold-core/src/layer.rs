@@ -419,8 +419,7 @@ impl Layer {
         clip.layer_id = self.layer_id.clone();
         let clip_id = clip.id.clone();
         self.clips.push(clip);
-        let actions =
-            self.enforce_non_overlap_for(&clip_id, &HashSet::new(), spb);
+        let actions = self.enforce_non_overlap_for(&clip_id, &HashSet::new(), spb);
         self.mark_clips_unsorted();
         actions
     }
@@ -445,11 +444,10 @@ impl Layer {
         let mut actions = Vec::new();
 
         // Get placed clip bounds.
-        let (placed_start, placed_end) =
-            match self.clips.iter().find(|c| &c.id == clip_id) {
-                Some(c) => (c.start_beat, c.end_beat()),
-                None => return actions,
-            };
+        let (placed_start, placed_end) = match self.clips.iter().find(|c| &c.id == clip_id) {
+            Some(c) => (c.start_beat, c.end_beat()),
+            None => return actions,
+        };
         let placed_id = clip_id.clone();
 
         let mut to_delete: Vec<ClipId> = Vec::new();
@@ -506,8 +504,7 @@ impl Layer {
             // Case 4: placed inside existing → split
             if placed_start > clip_start && placed_end < clip_end {
                 let beats_elapsed = placed_end - clip_start;
-                let tail_in_point =
-                    clip.in_point + Seconds(beats_elapsed.0 * spb as f64);
+                let tail_in_point = clip.in_point + Seconds(beats_elapsed.0 * spb as f64);
 
                 let mut tail = clip.clone_with_new_id();
                 tail.start_beat = placed_end;

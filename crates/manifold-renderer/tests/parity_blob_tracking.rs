@@ -19,11 +19,9 @@
 mod parity;
 
 use manifold_core::EffectTypeId;
-use manifold_renderer::node_graph::primitives::BlobTracking;
 use manifold_renderer::node_graph::ParamValue;
-use parity::{
-    assert_bytewise_equal, default_ctx, make_default_effect, Fixture, ParityHarness,
-};
+use manifold_renderer::node_graph::primitives::BlobTracking;
+use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
 
 #[derive(Debug, Clone, Copy)]
 struct Setup {
@@ -36,11 +34,46 @@ struct Setup {
 }
 
 const SETUPS: &[Setup] = &[
-    Setup { label: "identity",       amount: 0.0, thresh: 0.65, sens: 0.85, smooth: 0.7, connect: 0.35 },
-    Setup { label: "default",        amount: 1.0, thresh: 0.65, sens: 0.85, smooth: 0.7, connect: 0.35 },
-    Setup { label: "low_thresh",     amount: 1.0, thresh: 0.05, sens: 0.85, smooth: 0.7, connect: 0.35 },
-    Setup { label: "high_thresh",    amount: 1.0, thresh: 0.9,  sens: 0.85, smooth: 0.7, connect: 0.35 },
-    Setup { label: "max_connect",    amount: 1.0, thresh: 0.65, sens: 1.0,  smooth: 0.0, connect: 1.0  },
+    Setup {
+        label: "identity",
+        amount: 0.0,
+        thresh: 0.65,
+        sens: 0.85,
+        smooth: 0.7,
+        connect: 0.35,
+    },
+    Setup {
+        label: "default",
+        amount: 1.0,
+        thresh: 0.65,
+        sens: 0.85,
+        smooth: 0.7,
+        connect: 0.35,
+    },
+    Setup {
+        label: "low_thresh",
+        amount: 1.0,
+        thresh: 0.05,
+        sens: 0.85,
+        smooth: 0.7,
+        connect: 0.35,
+    },
+    Setup {
+        label: "high_thresh",
+        amount: 1.0,
+        thresh: 0.9,
+        sens: 0.85,
+        smooth: 0.7,
+        connect: 0.35,
+    },
+    Setup {
+        label: "max_connect",
+        amount: 1.0,
+        thresh: 0.65,
+        sens: 1.0,
+        smooth: 0.0,
+        connect: 1.0,
+    },
 ];
 
 #[test]

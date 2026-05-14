@@ -4,11 +4,9 @@
 mod parity;
 
 use manifold_core::EffectTypeId;
-use manifold_renderer::node_graph::primitives::HighlightBoost;
 use manifold_renderer::node_graph::ParamValue;
-use parity::{
-    assert_bytewise_equal, default_ctx, make_default_effect, Fixture, ParityHarness,
-};
+use manifold_renderer::node_graph::primitives::HighlightBoost;
+use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
 
 #[derive(Debug, Clone, Copy)]
 struct Setup {
@@ -21,18 +19,66 @@ struct Setup {
 
 const SETUPS: &[Setup] = &[
     // Identity (amount=0).
-    Setup { label: "identity", amount: 0.0, gain: 1.5, threshold: 0.15, knee: 0.3 },
+    Setup {
+        label: "identity",
+        amount: 0.0,
+        gain: 1.5,
+        threshold: 0.15,
+        knee: 0.3,
+    },
     // Default boost.
-    Setup { label: "default", amount: 1.0, gain: 1.5, threshold: 0.15, knee: 0.3 },
+    Setup {
+        label: "default",
+        amount: 1.0,
+        gain: 1.5,
+        threshold: 0.15,
+        knee: 0.3,
+    },
     // Gain sweep.
-    Setup { label: "gain_zero", amount: 1.0, gain: 0.0, threshold: 0.15, knee: 0.3 },
-    Setup { label: "gain_max", amount: 1.0, gain: 5.0, threshold: 0.15, knee: 0.3 },
+    Setup {
+        label: "gain_zero",
+        amount: 1.0,
+        gain: 0.0,
+        threshold: 0.15,
+        knee: 0.3,
+    },
+    Setup {
+        label: "gain_max",
+        amount: 1.0,
+        gain: 5.0,
+        threshold: 0.15,
+        knee: 0.3,
+    },
     // Threshold sweep.
-    Setup { label: "thresh_low", amount: 1.0, gain: 2.0, threshold: 0.0, knee: 0.3 },
-    Setup { label: "thresh_high", amount: 1.0, gain: 2.0, threshold: 0.9, knee: 0.3 },
+    Setup {
+        label: "thresh_low",
+        amount: 1.0,
+        gain: 2.0,
+        threshold: 0.0,
+        knee: 0.3,
+    },
+    Setup {
+        label: "thresh_high",
+        amount: 1.0,
+        gain: 2.0,
+        threshold: 0.9,
+        knee: 0.3,
+    },
     // Knee sweep — controls smoothstep transition width.
-    Setup { label: "knee_zero", amount: 1.0, gain: 2.0, threshold: 0.5, knee: 0.0 },
-    Setup { label: "knee_max", amount: 1.0, gain: 2.0, threshold: 0.5, knee: 1.0 },
+    Setup {
+        label: "knee_zero",
+        amount: 1.0,
+        gain: 2.0,
+        threshold: 0.5,
+        knee: 0.0,
+    },
+    Setup {
+        label: "knee_max",
+        amount: 1.0,
+        gain: 2.0,
+        threshold: 0.5,
+        knee: 1.0,
+    },
 ];
 
 #[test]

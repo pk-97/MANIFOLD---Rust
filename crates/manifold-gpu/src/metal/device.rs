@@ -81,9 +81,7 @@ impl ClearPipelines {
             Rg32Float => Some(&self.rg32float),
             R32Uint => Some(&self.r32uint),
             // No WGSL storage texture support for these formats.
-            R16Float | Rg16Float | R8Unorm | Rgba8UnormSrgb | Bgra8UnormSrgb | Depth32Float => {
-                None
-            }
+            R16Float | Rg16Float | R8Unorm | Rgba8UnormSrgb | Bgra8UnormSrgb | Depth32Float => None,
         }
     }
 }
@@ -353,8 +351,7 @@ impl GpuDevice {
 
         let available_ns_names = unsafe { library.functionNames() };
         let available: Vec<String> = available_ns_names.iter().map(|s| s.to_string()).collect();
-        let function =
-            find_entry_function(&library, &msl_entry_name, &available, label, "compute");
+        let function = find_entry_function(&library, &msl_entry_name, &available, label, "compute");
 
         // Use descriptor-based creation when archive is available — enables
         // binary archive lookup (near-instant on cache hit) and auto-populates
@@ -368,9 +365,8 @@ impl GpuDevice {
             unsafe {
                 desc.setComputeFunction(Some(&function));
                 desc.setLabel(Some(&NSString::from_str(label)));
-                let archives = objc2_foundation::NSArray::from_retained_slice(&[
-                    arch.raw_archive().clone(),
-                ]);
+                let archives =
+                    objc2_foundation::NSArray::from_retained_slice(&[arch.raw_archive().clone()]);
                 desc.setBinaryArchives(Some(&archives));
             }
 
@@ -390,7 +386,10 @@ impl GpuDevice {
             });
 
             if !arch.was_added(hash) {
-                match unsafe { arch.raw_archive().addComputePipelineFunctionsWithDescriptor_error(&desc) } {
+                match unsafe {
+                    arch.raw_archive()
+                        .addComputePipelineFunctionsWithDescriptor_error(&desc)
+                } {
                     Ok(()) => {
                         arch.mark_added(hash);
                     }
@@ -656,8 +655,7 @@ impl GpuDevice {
                 color_attach.setAlphaBlendOperation(to_mtl_blend_op(blend.alpha_operation));
                 color_attach.setSourceRGBBlendFactor(to_mtl_blend_factor(blend.src_factor));
                 color_attach.setDestinationRGBBlendFactor(to_mtl_blend_factor(blend.dst_factor));
-                color_attach
-                    .setSourceAlphaBlendFactor(to_mtl_blend_factor(blend.src_alpha_factor));
+                color_attach.setSourceAlphaBlendFactor(to_mtl_blend_factor(blend.src_alpha_factor));
                 color_attach
                     .setDestinationAlphaBlendFactor(to_mtl_blend_factor(blend.dst_alpha_factor));
             }
@@ -667,14 +665,14 @@ impl GpuDevice {
         let mut archive_guard = self.archive.lock().unwrap();
         let state = if let Some(ref mut arch) = *archive_guard {
             unsafe {
-                let archives = objc2_foundation::NSArray::from_retained_slice(&[
-                    arch.raw_archive().clone(),
-                ]);
+                let archives =
+                    objc2_foundation::NSArray::from_retained_slice(&[arch.raw_archive().clone()]);
                 desc.setBinaryArchives(Some(&archives));
             }
 
             let state = unsafe {
-                self.device.newRenderPipelineStateWithDescriptor_error(&desc)
+                self.device
+                    .newRenderPipelineStateWithDescriptor_error(&desc)
             }
             .unwrap_or_else(|e| {
                 panic!(
@@ -684,7 +682,10 @@ impl GpuDevice {
             });
 
             if !arch.was_added(hash) {
-                match unsafe { arch.raw_archive().addRenderPipelineFunctionsWithDescriptor_error(&desc) } {
+                match unsafe {
+                    arch.raw_archive()
+                        .addRenderPipelineFunctionsWithDescriptor_error(&desc)
+                } {
                     Ok(()) => {
                         arch.mark_added(hash);
                     }
@@ -699,7 +700,8 @@ impl GpuDevice {
             state
         } else {
             unsafe {
-                self.device.newRenderPipelineStateWithDescriptor_error(&desc)
+                self.device
+                    .newRenderPipelineStateWithDescriptor_error(&desc)
             }
             .unwrap_or_else(|e| {
                 panic!(
@@ -834,7 +836,11 @@ impl GpuDevice {
                 a.setBufferIndex(VERTEX_BUFFER_INDEX);
             }
         }
-        let layout = unsafe { vtx_desc.layouts().objectAtIndexedSubscript(VERTEX_BUFFER_INDEX) };
+        let layout = unsafe {
+            vtx_desc
+                .layouts()
+                .objectAtIndexedSubscript(VERTEX_BUFFER_INDEX)
+        };
         unsafe {
             layout.setStride(vertex_layout.stride as usize);
             layout.setStepFunction(MTLVertexStepFunction::PerVertex);
@@ -852,8 +858,7 @@ impl GpuDevice {
                 color_attach.setAlphaBlendOperation(to_mtl_blend_op(blend.alpha_operation));
                 color_attach.setSourceRGBBlendFactor(to_mtl_blend_factor(blend.src_factor));
                 color_attach.setDestinationRGBBlendFactor(to_mtl_blend_factor(blend.dst_factor));
-                color_attach
-                    .setSourceAlphaBlendFactor(to_mtl_blend_factor(blend.src_alpha_factor));
+                color_attach.setSourceAlphaBlendFactor(to_mtl_blend_factor(blend.src_alpha_factor));
                 color_attach
                     .setDestinationAlphaBlendFactor(to_mtl_blend_factor(blend.dst_alpha_factor));
             }
@@ -862,14 +867,14 @@ impl GpuDevice {
         let mut archive_guard = self.archive.lock().unwrap();
         let state = if let Some(ref mut arch) = *archive_guard {
             unsafe {
-                let archives = objc2_foundation::NSArray::from_retained_slice(&[
-                    arch.raw_archive().clone(),
-                ]);
+                let archives =
+                    objc2_foundation::NSArray::from_retained_slice(&[arch.raw_archive().clone()]);
                 desc.setBinaryArchives(Some(&archives));
             }
 
             let state = unsafe {
-                self.device.newRenderPipelineStateWithDescriptor_error(&desc)
+                self.device
+                    .newRenderPipelineStateWithDescriptor_error(&desc)
             }
             .unwrap_or_else(|e| {
                 panic!(
@@ -879,7 +884,10 @@ impl GpuDevice {
             });
 
             if !arch.was_added(hash) {
-                match unsafe { arch.raw_archive().addRenderPipelineFunctionsWithDescriptor_error(&desc) } {
+                match unsafe {
+                    arch.raw_archive()
+                        .addRenderPipelineFunctionsWithDescriptor_error(&desc)
+                } {
                     Ok(()) => {
                         arch.mark_added(hash);
                     }
@@ -894,7 +902,8 @@ impl GpuDevice {
             state
         } else {
             unsafe {
-                self.device.newRenderPipelineStateWithDescriptor_error(&desc)
+                self.device
+                    .newRenderPipelineStateWithDescriptor_error(&desc)
             }
             .unwrap_or_else(|e| {
                 panic!(
@@ -1084,8 +1093,7 @@ impl GpuDevice {
                 color_attach.setAlphaBlendOperation(to_mtl_blend_op(blend.alpha_operation));
                 color_attach.setSourceRGBBlendFactor(to_mtl_blend_factor(blend.src_factor));
                 color_attach.setDestinationRGBBlendFactor(to_mtl_blend_factor(blend.dst_factor));
-                color_attach
-                    .setSourceAlphaBlendFactor(to_mtl_blend_factor(blend.src_alpha_factor));
+                color_attach.setSourceAlphaBlendFactor(to_mtl_blend_factor(blend.src_alpha_factor));
                 color_attach
                     .setDestinationAlphaBlendFactor(to_mtl_blend_factor(blend.dst_alpha_factor));
             }
@@ -1094,14 +1102,14 @@ impl GpuDevice {
         let mut archive_guard = self.archive.lock().unwrap();
         let state = if let Some(ref mut arch) = *archive_guard {
             unsafe {
-                let archives = objc2_foundation::NSArray::from_retained_slice(&[
-                    arch.raw_archive().clone(),
-                ]);
+                let archives =
+                    objc2_foundation::NSArray::from_retained_slice(&[arch.raw_archive().clone()]);
                 desc.setBinaryArchives(Some(&archives));
             }
 
             let state = unsafe {
-                self.device.newRenderPipelineStateWithDescriptor_error(&desc)
+                self.device
+                    .newRenderPipelineStateWithDescriptor_error(&desc)
             }
             .unwrap_or_else(|e| {
                 panic!(
@@ -1111,7 +1119,10 @@ impl GpuDevice {
             });
 
             if !arch.was_added(hash) {
-                match unsafe { arch.raw_archive().addRenderPipelineFunctionsWithDescriptor_error(&desc) } {
+                match unsafe {
+                    arch.raw_archive()
+                        .addRenderPipelineFunctionsWithDescriptor_error(&desc)
+                } {
                     Ok(()) => {
                         arch.mark_added(hash);
                     }
@@ -1126,7 +1137,8 @@ impl GpuDevice {
             state
         } else {
             unsafe {
-                self.device.newRenderPipelineStateWithDescriptor_error(&desc)
+                self.device
+                    .newRenderPipelineStateWithDescriptor_error(&desc)
             }
             .unwrap_or_else(|e| {
                 panic!(
@@ -1153,10 +1165,7 @@ impl GpuDevice {
 
     /// Create a shared event for CPU↔GPU synchronization.
     pub fn create_event(&self) -> GpuEvent {
-        let raw = self
-            .device
-            .newSharedEvent()
-            .expect("newSharedEvent failed");
+        let raw = self.device.newSharedEvent().expect("newSharedEvent failed");
         GpuEvent::new(raw)
     }
 
@@ -1187,9 +1196,7 @@ impl GpuDevice {
     }
 
     /// Build a Metal TextureDescriptor from GpuTextureDesc (shared helper).
-    pub(crate) fn build_mtl_texture_desc(
-        desc: &GpuTextureDesc,
-    ) -> Retained<MTLTextureDescriptor> {
+    pub(crate) fn build_mtl_texture_desc(desc: &GpuTextureDesc) -> Retained<MTLTextureDescriptor> {
         let mtl_desc = unsafe {
             use objc2::AnyThread;
             MTLTextureDescriptor::init(MTLTextureDescriptor::alloc())
@@ -1403,8 +1410,7 @@ impl GpuDevice {
             _priv: [u8; 0],
         }
         unsafe impl RefEncode for IOSurfaceOpaque {
-            const ENCODING_REF: Encoding =
-                Encoding::Pointer(&Encoding::Struct("__IOSurface", &[]));
+            const ENCODING_REF: Encoding = Encoding::Pointer(&Encoding::Struct("__IOSurface", &[]));
         }
 
         unsafe {
@@ -1442,4 +1448,3 @@ impl GpuDevice {
         }
     }
 }
-

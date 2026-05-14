@@ -274,9 +274,9 @@ pub enum PanelAction {
     GenEnvRangeCommit(usize),
 
     // Generator string params (per-clip text, etc.)
-    GenStringParamClicked(usize),              // string_param_index — open text input
-    GenStringParamDropdownClicked(usize),      // string_param_index — open dropdown selector
-    GenStringParamSelected(usize, String),     // string_param_index, selected value
+    GenStringParamClicked(usize), // string_param_index — open text input
+    GenStringParamDropdownClicked(usize), // string_param_index — open dropdown selector
+    GenStringParamSelected(usize, String), // string_param_index, selected value
 
     // Generator card actions
     GenCollapseToggle,
@@ -313,10 +313,7 @@ pub enum PanelAction {
         usize,
         manifold_core::ableton_mapping::AbletonMacroAddress,
     ), // tab, fx_idx, param_idx, address
-    MapGenParamToAbleton(
-        usize,
-        manifold_core::ableton_mapping::AbletonMacroAddress,
-    ), // param_idx, address
+    MapGenParamToAbleton(usize, manifold_core::ableton_mapping::AbletonMacroAddress), // param_idx, address
     UnmapEffectParamAbleton(InspectorTab, usize, usize), // tab, fx_idx, param_idx
     UnmapGenParamAbleton(usize),                         // param_idx
     /// Open the Ableton picker popup for an effect parameter.
@@ -329,20 +326,20 @@ pub enum PanelAction {
     OpenAbletonPickerForMacro(usize),
 
     // Ableton trim handles (range_min / range_max adjustment)
-    AbletonTrimSnapshot(usize, usize), // fx_idx, param_idx
+    AbletonTrimSnapshot(usize, usize),          // fx_idx, param_idx
     AbletonTrimChanged(usize, usize, f32, f32), // fx_idx, param_idx, min, max
-    AbletonTrimCommit(usize, usize), // fx_idx, param_idx
-    AbletonGenTrimSnapshot(usize), // param_idx
-    AbletonGenTrimChanged(usize, f32, f32), // param_idx, min, max
-    AbletonGenTrimCommit(usize), // param_idx
-    AbletonMacroTrimSnapshot(usize), // slot_idx
-    AbletonMacroTrimChanged(usize, f32, f32), // slot_idx, min, max
-    AbletonMacroTrimCommit(usize), // slot_idx
+    AbletonTrimCommit(usize, usize),            // fx_idx, param_idx
+    AbletonGenTrimSnapshot(usize),              // param_idx
+    AbletonGenTrimChanged(usize, f32, f32),     // param_idx, min, max
+    AbletonGenTrimCommit(usize),                // param_idx
+    AbletonMacroTrimSnapshot(usize),            // slot_idx
+    AbletonMacroTrimChanged(usize, f32, f32),   // slot_idx, min, max
+    AbletonMacroTrimCommit(usize),              // slot_idx
 
     // Ableton config actions
-    AbletonInvertToggle(usize, usize),    // fx_idx, param_idx
-    AbletonGenInvertToggle(usize),        // param_idx
-    AbletonMacroInvertToggle(usize),      // slot_idx
+    AbletonInvertToggle(usize, usize), // fx_idx, param_idx
+    AbletonGenInvertToggle(usize),     // param_idx
+    AbletonMacroInvertToggle(usize),   // slot_idx
 
     // Reset macro from context menu (distinct from MacroRightClick to avoid re-triggering dropdown)
     MacroReset(usize), // macro_idx — reset to 0 from context menu
@@ -381,8 +378,8 @@ pub enum PanelAction {
     CopyOscAddress(String),
 
     // Dropdown results (context-routed from UIRoot)
-    SetMidiNote(usize, i32),        // layer_index, note (0-127)
-    SetMidiChannel(usize, i32),     // layer_index, channel (0-15 internal, displayed 1-16)
+    SetMidiNote(usize, i32),              // layer_index, note (0-127)
+    SetMidiChannel(usize, i32),           // layer_index, channel (0-15 internal, displayed 1-16)
     SetMidiDevice(usize, Option<String>), // layer_index, device name (None = any)
     SetMidiTriggerMode(usize, manifold_core::types::MidiTriggerMode),
     SetResolution(usize),           // preset index

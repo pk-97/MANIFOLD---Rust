@@ -9,8 +9,8 @@ use manifold_ui::color;
 use manifold_ui::node::Color32;
 use manifold_ui::panels::effect_card::{EffectCardConfig, EffectParamInfo};
 use manifold_ui::panels::gen_param::{GenParamConfig, GenParamInfo, GenStringParamInfo};
-use manifold_ui::panels::param_slider_shared::AbletonMappingDisplay;
 use manifold_ui::panels::layer_header::LayerInfo;
+use manifold_ui::panels::param_slider_shared::AbletonMappingDisplay;
 use manifold_ui::panels::viewport::TrackInfo;
 
 use crate::app::SelectionState;
@@ -252,9 +252,8 @@ pub fn push_state(
             ui.ableton_session = Some(std::sync::Arc::clone(session));
             // If the picker is open, refresh it with the updated session data.
             if ui.ableton_picker.is_open() {
-                ui.ableton_picker.update_session(
-                    crate::ui_root::build_picker_session(session),
-                );
+                ui.ableton_picker
+                    .update_session(crate::ui_root::build_picker_session(session));
                 ui.overlay_dirty = true;
             }
         }
@@ -604,13 +603,15 @@ pub fn push_state(
         .slots
         .iter()
         .map(|slot| {
-            slot.ableton_mapping.as_ref().map(|m| AbletonMappingDisplay {
-                macro_name: m.address.macro_name.clone(),
-                track_name: m.address.track_name.clone(),
-                device_name: m.address.device_name.clone(),
-                status: m.status,
-                inverted: m.inverted,
-            })
+            slot.ableton_mapping
+                .as_ref()
+                .map(|m| AbletonMappingDisplay {
+                    macro_name: m.address.macro_name.clone(),
+                    track_name: m.address.track_name.clone(),
+                    device_name: m.address.device_name.clone(),
+                    status: m.status,
+                    inverted: m.inverted,
+                })
         })
         .collect();
     ui.inspector
@@ -621,7 +622,11 @@ pub fn push_state(
         .macro_bank
         .slots
         .iter()
-        .map(|slot| slot.ableton_mapping.as_ref().map(|m| (m.range_min, m.range_max)))
+        .map(|slot| {
+            slot.ableton_mapping
+                .as_ref()
+                .map(|m| (m.range_min, m.range_max))
+        })
         .collect();
     ui.inspector
         .macros_panel_mut()
@@ -806,15 +811,19 @@ pub fn sync_project_data(
                     is_generator: layer.layer_type == LayerType::Generator,
                     is_muted: layer.is_muted
                         || layer.parent_layer_id.as_ref().is_some_and(|pid| {
-                            project.timeline.layers.iter().any(|l| {
-                                l.layer_id == *pid && l.is_muted
-                            })
+                            project
+                                .timeline
+                                .layers
+                                .iter()
+                                .any(|l| l.layer_id == *pid && l.is_muted)
                         }),
                     is_solo: layer.is_solo
                         || layer.parent_layer_id.as_ref().is_some_and(|pid| {
-                            project.timeline.layers.iter().any(|l| {
-                                l.layer_id == *pid && l.is_solo
-                            })
+                            project
+                                .timeline
+                                .layers
+                                .iter()
+                                .any(|l| l.layer_id == *pid && l.is_solo)
                         }),
                     is_led: layer.blit_to_led,
                     parent_layer_id: layer.parent_layer_id.as_ref().map(|id| id.to_string()),
@@ -1195,17 +1204,14 @@ fn effects_to_configs(
                         }
                         mappings.iter().find(|m| m.param_id == pd.id)
                     });
-                    let ableton_display = abl_mapping.map(|mapping| {
-                        AbletonMappingDisplay {
-                            macro_name: mapping.address.macro_name.clone(),
-                            track_name: mapping.address.track_name.clone(),
-                            device_name: mapping.address.device_name.clone(),
-                            status: mapping.status,
-                            inverted: mapping.inverted,
-                        }
+                    let ableton_display = abl_mapping.map(|mapping| AbletonMappingDisplay {
+                        macro_name: mapping.address.macro_name.clone(),
+                        track_name: mapping.address.track_name.clone(),
+                        device_name: mapping.address.device_name.clone(),
+                        status: mapping.status,
+                        inverted: mapping.inverted,
                     });
-                    let ableton_range =
-                        abl_mapping.map(|m| (m.range_min, m.range_max));
+                    let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
                     EffectParamInfo {
                         name: pd.name.clone(),
                         min: pd.min,
@@ -1228,9 +1234,10 @@ fn effects_to_configs(
             // Slot index in param_values is `static_count + j`.
             for (j, ub) in fx.user_param_bindings.iter().enumerate() {
                 let slot_idx = static_count + j;
-                let abl_mapping = fx.ableton_mappings.as_ref().and_then(|mappings| {
-                    mappings.iter().find(|m| m.param_id == ub.id)
-                });
+                let abl_mapping = fx
+                    .ableton_mappings
+                    .as_ref()
+                    .and_then(|mappings| mappings.iter().find(|m| m.param_id == ub.id));
                 let ableton_display = abl_mapping.map(|mapping| AbletonMappingDisplay {
                     macro_name: mapping.address.macro_name.clone(),
                     track_name: mapping.address.track_name.clone(),
@@ -1438,14 +1445,12 @@ fn gen_params_to_config(
                 }
                 mappings.iter().find(|m| m.param_id == pd.id)
             });
-            let ableton_display = abl_mapping.map(|mapping| {
-                AbletonMappingDisplay {
-                    macro_name: mapping.address.macro_name.clone(),
-                    track_name: mapping.address.track_name.clone(),
-                    device_name: mapping.address.device_name.clone(),
-                    status: mapping.status,
-                    inverted: mapping.inverted,
-                }
+            let ableton_display = abl_mapping.map(|mapping| AbletonMappingDisplay {
+                macro_name: mapping.address.macro_name.clone(),
+                track_name: mapping.address.track_name.clone(),
+                device_name: mapping.address.device_name.clone(),
+                status: mapping.status,
+                inverted: mapping.inverted,
             });
             let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
             GenParamInfo {
@@ -1487,8 +1492,7 @@ fn gen_params_to_config(
                 driver_active[pi] = true;
                 trim_min[pi] = d.trim_min;
                 trim_max[pi] = d.trim_max;
-                driver_beat_div_idx[pi] =
-                    beat_div_to_button_index(d.beat_division.base_division());
+                driver_beat_div_idx[pi] = beat_div_to_button_index(d.beat_division.base_division());
                 driver_waveform_idx[pi] = d.waveform as i32;
                 driver_reversed[pi] = d.reversed;
                 driver_dotted[pi] = d.beat_division.is_dotted();
@@ -1504,8 +1508,7 @@ fn gen_params_to_config(
     let mut env_decay = vec![0.0f32; n];
     let mut env_sustain = vec![0.0f32; n];
     let mut env_release = vec![0.0f32; n];
-    let mut env_mode =
-        vec![manifold_core::effects::EnvelopeMode::Adsr; n];
+    let mut env_mode = vec![manifold_core::effects::EnvelopeMode::Adsr; n];
     let mut env_random_jump = vec![false; n];
     let mut env_range_min = vec![0.0f32; n];
     let mut env_range_max = vec![1.0f32; n];
@@ -1641,9 +1644,8 @@ fn describe_macro_mapping(
             let param_name = layer
                 .and_then(|l| l.gen_params())
                 .and_then(|gp| {
-                    let def = manifold_core::generator_definition_registry::try_get(
-                        gp.generator_type(),
-                    )?;
+                    let def =
+                        manifold_core::generator_definition_registry::try_get(gp.generator_type())?;
                     let idx = def.id_to_index.get(param_id.as_ref()).copied()?;
                     def.param_defs.get(idx).map(|p| p.name.clone())
                 })

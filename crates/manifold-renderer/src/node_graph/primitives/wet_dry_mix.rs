@@ -135,8 +135,8 @@ mod gpu_tests {
     use crate::node_graph::bindings::Slot;
     use crate::node_graph::execution_plan::ResourceId;
     use crate::node_graph::{
-        compile, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend,
-        NodeInstanceId, ParamValue, Source,
+        ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId,
+        ParamValue, Source, compile,
     };
     use crate::render_target::RenderTarget;
 
@@ -174,7 +174,8 @@ mod gpu_tests {
         let src_wet = g.add_node(Box::new(Source::new()));
         let mix = g.add_node(Box::new(WetDry::new()));
         let out = g.add_node(Box::new(FinalOutput::new()));
-        g.set_param(mix, "wet_dry", ParamValue::Float(wet_dry)).unwrap();
+        g.set_param(mix, "wet_dry", ParamValue::Float(wet_dry))
+            .unwrap();
         g.connect((src_dry, "out"), (mix, "dry")).unwrap();
         g.connect((src_wet, "out"), (mix, "wet")).unwrap();
         g.connect((mix, "out"), (out, "in")).unwrap();

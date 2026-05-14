@@ -130,8 +130,7 @@ impl GalacticRockGenerator {
             "GalacticRock Compute",
         );
 
-        let instance_buf =
-            device.create_buffer_shared(INSTANCE_COUNT as u64 * INSTANCE_STRIDE);
+        let instance_buf = device.create_buffer_shared(INSTANCE_COUNT as u64 * INSTANCE_STRIDE);
 
         // ── Shadow pipeline ──
         let shadow_pipeline = device.create_render_pipeline_depth(
@@ -240,12 +239,7 @@ impl GalacticRockGenerator {
         }
     }
 
-    fn ensure_depth_texture(
-        &mut self,
-        device: &manifold_gpu::GpuDevice,
-        width: u32,
-        height: u32,
-    ) {
+    fn ensure_depth_texture(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
         if self.depth_width == width && self.depth_height == height && self.depth_texture.is_some()
         {
             return;
@@ -391,11 +385,7 @@ impl Generator for GalacticRockGenerator {
         // Two point lights at steep angles for maximum shadow depth in crevices.
         let light_radius = 3.0;
         let light_height = 2.5;
-        let light0_pos = [
-            light_radius * 0.7,
-            light_height,
-            light_radius * 0.7,
-        ];
+        let light0_pos = [light_radius * 0.7, light_height, light_radius * 0.7];
         let light1_pos = [
             -light_radius * 0.7,
             -light_height * 0.4,
@@ -405,11 +395,25 @@ impl Generator for GalacticRockGenerator {
         // ── Phase 2: Shadow passes ──
         let shadow_extent = 3.0 * scale;
         let light0_view = mesh_pipeline::look_at_rh(light0_pos, target_pos, up);
-        let light0_proj = mesh_pipeline::ortho_rh(-shadow_extent, shadow_extent, -shadow_extent, shadow_extent, 0.1, 50.0);
+        let light0_proj = mesh_pipeline::ortho_rh(
+            -shadow_extent,
+            shadow_extent,
+            -shadow_extent,
+            shadow_extent,
+            0.1,
+            50.0,
+        );
         let light0_vp = mesh_pipeline::mat4_mul(light0_proj, light0_view);
 
         let light1_view = mesh_pipeline::look_at_rh(light1_pos, target_pos, up);
-        let light1_proj = mesh_pipeline::ortho_rh(-shadow_extent, shadow_extent, -shadow_extent, shadow_extent, 0.1, 50.0);
+        let light1_proj = mesh_pipeline::ortho_rh(
+            -shadow_extent,
+            shadow_extent,
+            -shadow_extent,
+            shadow_extent,
+            0.1,
+            50.0,
+        );
         let light1_vp = mesh_pipeline::mat4_mul(light1_proj, light1_view);
 
         self.render_shadow_pass(gpu.native_enc, &self.shadow_map_0, light0_vp, "Shadow0");
@@ -540,4 +544,3 @@ impl Generator for GalacticRockGenerator {
         self.ensure_depth_texture(device, width, height);
     }
 }
-

@@ -173,7 +173,11 @@ impl AbletonPickerPopup {
     pub fn open(&mut self, session: AbletonPickerSession, anchor: Vec2) {
         self.rack_tracks = session.rack_tracks;
         // Auto-select first track so right column is immediately populated.
-        self.selected_track_idx = if self.rack_tracks.is_empty() { None } else { Some(0) };
+        self.selected_track_idx = if self.rack_tracks.is_empty() {
+            None
+        } else {
+            Some(0)
+        };
         self.is_open = true;
         self.compute_layout(anchor);
     }
@@ -184,16 +188,19 @@ impl AbletonPickerPopup {
         if !self.is_open {
             return;
         }
-        let prev_track_name = self.selected_track_idx
+        let prev_track_name = self
+            .selected_track_idx
             .and_then(|i| self.rack_tracks.get(i))
             .map(|t| t.track_name.clone());
         self.rack_tracks = session.rack_tracks;
         // Try to preserve selection by matching track name.
         self.selected_track_idx = prev_track_name
-            .and_then(|name| {
-                self.rack_tracks.iter().position(|t| t.track_name == name)
-            })
-            .or(if self.rack_tracks.is_empty() { None } else { Some(0) });
+            .and_then(|name| self.rack_tracks.iter().position(|t| t.track_name == name))
+            .or(if self.rack_tracks.is_empty() {
+                None
+            } else {
+                Some(0)
+            });
     }
 
     pub fn close(&mut self) {
@@ -591,7 +598,10 @@ impl AbletonPickerPopup {
     fn compute_layout(&mut self, anchor: Vec2) {
         let left_h = (self.rack_tracks.len().max(1) as f32) * ITEM_H;
 
-        let right_h = match self.selected_track_idx.and_then(|i| self.rack_tracks.get(i)) {
+        let right_h = match self
+            .selected_track_idx
+            .and_then(|i| self.rack_tracks.get(i))
+        {
             Some(track) => {
                 let mut h = 0.0f32;
                 for (di, device) in track.devices.iter().enumerate() {
@@ -617,7 +627,11 @@ impl AbletonPickerPopup {
         }
         if y + self.popup_h > self.screen_h {
             let above = anchor.y - self.popup_h;
-            y = if above >= 0.0 { above } else { (self.screen_h - self.popup_h).max(0.0) };
+            y = if above >= 0.0 {
+                above
+            } else {
+                (self.screen_h - self.popup_h).max(0.0)
+            };
         }
         self.popup_x = x;
         self.popup_y = y;

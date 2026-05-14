@@ -192,7 +192,10 @@ mod tests {
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v.get("projectVersion").and_then(|x| x.as_str()), Some("1.3.0"));
+        assert_eq!(
+            v.get("projectVersion").and_then(|x| x.as_str()),
+            Some("1.3.0")
+        );
     }
 
     #[test]
@@ -207,7 +210,10 @@ mod tests {
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v.get("projectVersion").and_then(|x| x.as_str()), Some("1.3.0"));
+        assert_eq!(
+            v.get("projectVersion").and_then(|x| x.as_str()),
+            Some("1.3.0")
+        );
     }
 
     #[test]
@@ -221,7 +227,10 @@ mod tests {
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v.get("projectVersion").and_then(|x| x.as_str()), Some("1.3.0"));
+        assert_eq!(
+            v.get("projectVersion").and_then(|x| x.as_str()),
+            Some("1.3.0")
+        );
     }
 
     #[test]
@@ -234,6 +243,9 @@ mod tests {
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v.get("projectVersion").and_then(|x| x.as_str()), Some("1.3.0"));
+        assert_eq!(
+            v.get("projectVersion").and_then(|x| x.as_str()),
+            Some("1.3.0")
+        );
     }
 }

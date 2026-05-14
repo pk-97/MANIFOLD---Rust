@@ -23,8 +23,8 @@ struct ActiveClip {
     internal_scale: f32,
     generator_type: GeneratorTypeId,
     layer_id: LayerId,
-    layer_index: i32,  // positional cache for param lookup in render_all
-    clip_index: u32,   // positional cache for string_params lookup (avoids linear scan)
+    layer_index: i32, // positional cache for param lookup in render_all
+    clip_index: u32,  // positional cache for string_params lookup (avoids linear scan)
     anim_progress: f32,
     /// True on the first frame after acquiring a reused render target.
     /// Cleared to opaque black before the generator renders to prevent
@@ -337,8 +337,7 @@ impl GeneratorRenderer {
         if data_version != self.last_data_version {
             self.last_data_version = data_version;
             for (clip_id, active) in self.active_clips.iter_mut() {
-                if let Some(pos) = layers.iter().position(|l| l.layer_id == active.layer_id)
-                {
+                if let Some(pos) = layers.iter().position(|l| l.layer_id == active.layer_id) {
                     active.layer_index = pos as i32;
                     // Refresh clip_index within the layer (clips may reorder on edit).
                     active.clip_index = layers[pos]
@@ -462,9 +461,7 @@ impl GeneratorRenderer {
                 // If any new key is learned, mark dirty to rebuild merged cache.
                 if let Some(map) = clip_params {
                     for (k, v) in map {
-                        if !v.is_empty()
-                            && layer_state.layer_string_defaults.get(k) != Some(v)
-                        {
+                        if !v.is_empty() && layer_state.layer_string_defaults.get(k) != Some(v) {
                             layer_state
                                 .layer_string_defaults
                                 .insert(k.clone(), v.clone());
@@ -479,9 +476,9 @@ impl GeneratorRenderer {
                     layer_state.generator.set_string_params(clip_params);
                 } else {
                     if layer_state.string_params_dirty {
-                        layer_state.merged_string_params.clone_from(
-                            &layer_state.layer_string_defaults,
-                        );
+                        layer_state
+                            .merged_string_params
+                            .clone_from(&layer_state.layer_string_defaults);
                         if let Some(map) = clip_params {
                             for (k, v) in map {
                                 layer_state
@@ -701,8 +698,13 @@ impl ClipRenderer for GeneratorRenderer {
         let clip_index = layer
             .and_then(|l| l.clips.iter().position(|c| c.id == clip.id))
             .unwrap_or(0) as u32;
-        let acquired =
-            self.acquire_clip(&clip.id, gen_type, layer_id.clone(), layer_index, clip_index);
+        let acquired = self.acquire_clip(
+            &clip.id,
+            gen_type,
+            layer_id.clone(),
+            layer_index,
+            clip_index,
+        );
 
         // Populate layer string defaults by scanning ALL clips on this layer.
         // This ensures string params set on any clip (e.g. fontFamily on one clip)
@@ -714,9 +716,7 @@ impl ClipRenderer for GeneratorRenderer {
             for c in &layer.clips {
                 if let Some(map) = &c.string_params {
                     for (k, v) in map {
-                        if !v.is_empty()
-                            && !layer_state.layer_string_defaults.contains_key(k)
-                        {
+                        if !v.is_empty() && !layer_state.layer_string_defaults.contains_key(k) {
                             layer_state
                                 .layer_string_defaults
                                 .insert(k.clone(), v.clone());

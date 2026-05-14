@@ -130,14 +130,10 @@ impl DigitalPlantsGenerator {
             NOISE_COMMON,
             include_str!("shaders/digital_plants_compute.wgsl"),
         );
-        let compute_pipeline = device.create_compute_pipeline(
-            &compute_source,
-            "cs_main",
-            "DigitalPlants Compute",
-        );
+        let compute_pipeline =
+            device.create_compute_pipeline(&compute_source, "cs_main", "DigitalPlants Compute");
 
-        let instance_buf =
-            device.create_buffer_shared(INSTANCE_COUNT as u64 * INSTANCE_STRIDE);
+        let instance_buf = device.create_buffer_shared(INSTANCE_COUNT as u64 * INSTANCE_STRIDE);
 
         // ── Smooth pipeline ──
         let smooth_pipeline = device.create_compute_pipeline(
@@ -146,8 +142,7 @@ impl DigitalPlantsGenerator {
             "DigitalPlants Smooth",
         );
 
-        let smooth_buf =
-            device.create_buffer_shared(INSTANCE_COUNT as u64 * INSTANCE_STRIDE);
+        let smooth_buf = device.create_buffer_shared(INSTANCE_COUNT as u64 * INSTANCE_STRIDE);
 
         // ── Shadow pipeline ──
         let shadow_pipeline = device.create_render_pipeline_depth(
@@ -236,15 +231,8 @@ impl DigitalPlantsGenerator {
         }
     }
 
-    fn ensure_depth_texture(
-        &mut self,
-        device: &manifold_gpu::GpuDevice,
-        width: u32,
-        height: u32,
-    ) {
-        if self.depth_width == width
-            && self.depth_height == height
-            && self.depth_texture.is_some()
+    fn ensure_depth_texture(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+        if self.depth_width == width && self.depth_height == height && self.depth_texture.is_some()
         {
             return;
         }
@@ -377,8 +365,7 @@ impl Generator for DigitalPlantsGenerator {
 
         // ── Phase 3: Shadow pass ──
         let shadow_extent = 4.0;
-        let light_view =
-            mesh_pipeline::look_at_rh(light_pos, target_pos, up);
+        let light_view = mesh_pipeline::look_at_rh(light_pos, target_pos, up);
         let light_proj = mesh_pipeline::ortho_rh(
             -shadow_extent,
             shadow_extent,

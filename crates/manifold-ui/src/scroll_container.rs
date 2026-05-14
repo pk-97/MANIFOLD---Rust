@@ -105,12 +105,7 @@ impl ScrollContainer {
     /// Build scrollbar track + thumb nodes at the given X position.
     /// The scrollbar spans the full viewport height. Call after building
     /// content and setting content_height.
-    pub fn build_scrollbar(
-        &mut self,
-        tree: &mut UITree,
-        x: f32,
-        style: &ScrollbarStyle,
-    ) {
+    pub fn build_scrollbar(&mut self, tree: &mut UITree, x: f32, style: &ScrollbarStyle) {
         let vp = self.viewport;
         self.track_id = tree.add_button(
             -1,

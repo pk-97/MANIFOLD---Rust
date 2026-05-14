@@ -4,20 +4,20 @@
 //! thread. The content thread interacts with this through a minimal surface:
 //! acquire texture slot, blit, submit, stop.
 
-use std::ffi::{c_void, CString};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::ffi::{CString, c_void};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-use crossbeam_channel::{bounded, Sender};
+use crossbeam_channel::{Sender, bounded};
 use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
 
 use crate::config::{AudioCodec, LiveRecordingConfig, RecordingResult};
 use crate::ffi;
 use crate::format_converter::FormatConverter;
 use crate::recording_thread::{self, RecordingFrame};
-use crate::texture_pool::{PoolSlot, TextureRingPool, DEFAULT_POOL_SIZE};
+use crate::texture_pool::{DEFAULT_POOL_SIZE, PoolSlot, TextureRingPool};
 
 /// Live recording session. Created on the content thread, owned by ContentPipeline.
 ///
@@ -73,9 +73,9 @@ impl LiveRecordingSession {
                         let sr = capture.sample_rate();
                         let ch = capture.channels();
                         let consumer = capture.take_consumer();
-                        capture.start().map_err(|e| {
-                            format!("Failed to start audio capture: {e}")
-                        })?;
+                        capture
+                            .start()
+                            .map_err(|e| format!("Failed to start audio capture: {e}"))?;
                         (Some(capture), consumer, sr, ch)
                     }
                     Err(e) => {
@@ -91,8 +91,8 @@ impl LiveRecordingSession {
             };
 
         // -- Native encoder --
-        let c_path = CString::new(output_path.as_str())
-            .map_err(|_| "Invalid output path".to_string())?;
+        let c_path =
+            CString::new(output_path.as_str()).map_err(|_| "Invalid output path".to_string())?;
 
         let audio_codec_int = match config.audio_codec {
             AudioCodec::Aac => 0,

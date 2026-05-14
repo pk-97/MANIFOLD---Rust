@@ -16,8 +16,8 @@ use std::sync::OnceLock;
 
 use manifold_core::EffectTypeId;
 
-use crate::effects::blob_tracking::BlobTrackingFX;
 use crate::effect::PostProcessEffect;
+use crate::effects::blob_tracking::BlobTrackingFX;
 use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
@@ -99,8 +99,7 @@ const BLOB_TRACKING_PARAMS: [ParamDef; 5] = [
     },
 ];
 
-const BLOB_TRACKING_PARAM_ORDER: &[&str] =
-    &["amount", "thresh", "sens", "smooth", "connect"];
+const BLOB_TRACKING_PARAM_ORDER: &[&str] = &["amount", "thresh", "sens", "smooth", "connect"];
 
 fn cached_type_id() -> &'static EffectNodeType {
     static CELL: OnceLock<EffectNodeType> = OnceLock::new();
@@ -153,11 +152,8 @@ impl EffectNode for BlobTracking {
             _ => 0.0,
         };
 
-        let fx = build_effect_instance(
-            &EffectTypeId::BLOB_TRACKING,
-            ctx,
-            BLOB_TRACKING_PARAM_ORDER,
-        );
+        let fx =
+            build_effect_instance(&EffectTypeId::BLOB_TRACKING, ctx, BLOB_TRACKING_PARAM_ORDER);
         let eff_ctx = build_effect_context(ctx, width, height);
 
         let gpu = ctx

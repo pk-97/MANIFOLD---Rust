@@ -1186,11 +1186,7 @@ impl GpuEncoder {
     /// on Vulkan; the optimal pattern is to only insert barriers where
     /// read-after-write hazards exist between consecutive steps.
     #[allow(unused_variables)]
-    pub fn pipeline_barrier(
-        &mut self,
-        reads: &[&GpuTexture],
-        writes: &[&GpuTexture],
-    ) {
+    pub fn pipeline_barrier(&mut self, reads: &[&GpuTexture], writes: &[&GpuTexture]) {
         // Metal: no-op. Intra-queue ordering is automatic.
     }
 
@@ -1230,10 +1226,8 @@ impl GpuEncoder {
         event.counter.set(value);
         self.end_current();
         unsafe {
-            self.cmd_buf.encodeSignalEvent_value(
-                ProtocolObject::from_ref(event.raw()),
-                value,
-            );
+            self.cmd_buf
+                .encodeSignalEvent_value(ProtocolObject::from_ref(event.raw()), value);
         }
     }
 
@@ -1241,10 +1235,8 @@ impl GpuEncoder {
     pub fn signal_event_value(&mut self, event: &GpuEvent, value: u64) {
         self.end_current();
         unsafe {
-            self.cmd_buf.encodeSignalEvent_value(
-                ProtocolObject::from_ref(event.raw()),
-                value,
-            );
+            self.cmd_buf
+                .encodeSignalEvent_value(ProtocolObject::from_ref(event.raw()), value);
         }
     }
 
@@ -1253,10 +1245,8 @@ impl GpuEncoder {
     pub fn wait_event(&mut self, event: &GpuEvent, value: u64) {
         self.end_current();
         unsafe {
-            self.cmd_buf.encodeWaitForEvent_value(
-                ProtocolObject::from_ref(event.raw()),
-                value,
-            );
+            self.cmd_buf
+                .encodeWaitForEvent_value(ProtocolObject::from_ref(event.raw()), value);
         }
     }
 
@@ -1320,7 +1310,9 @@ impl GpuEncoder {
                 };
                 log::error!(
                     "[GPU] Command buffer '{}' error (code={}): {}",
-                    label, code, desc,
+                    label,
+                    code,
+                    desc,
                 );
             }
         });
@@ -1626,4 +1618,3 @@ fn bind_sizes_buffer_render(
         }
     }
 }
-

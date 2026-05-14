@@ -127,7 +127,7 @@ mod tests {
     use super::*;
     use manifold_core::{Beats, Seconds};
 
-    use crate::node_graph::{compile, validate, Executor, FrameTime, Graph, GraphError};
+    use crate::node_graph::{Executor, FrameTime, Graph, GraphError, compile, validate};
 
     fn frame_time() -> FrameTime {
         FrameTime {

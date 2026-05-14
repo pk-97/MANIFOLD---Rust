@@ -88,9 +88,7 @@ pub(super) fn validate_connection(
     let from_node = graph
         .get_node(from.0)
         .ok_or(GraphError::NodeNotFound(from.0))?;
-    let to_node = graph
-        .get_node(to.0)
-        .ok_or(GraphError::NodeNotFound(to.0))?;
+    let to_node = graph.get_node(to.0).ok_or(GraphError::NodeNotFound(to.0))?;
 
     let from_port = from_node
         .node

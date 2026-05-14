@@ -380,9 +380,7 @@ impl PlaybackEngine {
     }
 
     /// Reset the active clip window index. Call after bulk clip operations (undo/redo).
-    pub fn reset_active_clip_window(&mut self) {
-
-    }
+    pub fn reset_active_clip_window(&mut self) {}
 
     /// Update clock state for non-tick operations (Play, Stop, Seek).
     /// Port of C# PlaybackEngine.SetClock (lines 560-564).
@@ -527,7 +525,6 @@ impl PlaybackEngine {
         let old_beat = self.current_beat;
         self.set_time(Seconds(time.0.max(0.0)));
         self.sync_project_bpm_from_current_beat();
-
 
         // Clear live clips on large seek
         let beat_delta = (self.current_beat - old_beat).abs();
@@ -687,11 +684,7 @@ impl PlaybackEngine {
         //    Port of C# DriverController.Update() [ExecutionOrder 50, after PlaybackController].
         let mut timing = std::mem::take(&mut self.modulation_timing_scratch);
         let modulation_dirty = if let Some(project) = &mut self.project {
-            crate::modulation::evaluate_modulation(
-                project,
-                Beats(self.current_beat),
-                &mut timing,
-            )
+            crate::modulation::evaluate_modulation(project, Beats(self.current_beat), &mut timing)
         } else {
             false
         };
@@ -1908,11 +1901,8 @@ impl PlaybackEngine {
                 } else {
                     Seconds(entry.end_beat().0 * 0.5)
                 };
-                if self.should_exclude_recently_started(
-                    &entry.clip_id,
-                    clip_end_time,
-                    is_live_clip,
-                ) {
+                if self.should_exclude_recently_started(&entry.clip_id, clip_end_time, is_live_clip)
+                {
                     continue;
                 }
             }

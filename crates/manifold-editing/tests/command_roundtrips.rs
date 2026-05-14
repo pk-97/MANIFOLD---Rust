@@ -322,13 +322,20 @@ fn delete_group_clears_children_parent_ids() {
     cmd.execute(&mut project);
     // Children should have parent cleared
     for layer in &project.timeline.layers {
-        assert!(layer.parent_layer_id.is_none(), "child {} still has parent", layer.name);
+        assert!(
+            layer.parent_layer_id.is_none(),
+            "child {} still has parent",
+            layer.name
+        );
     }
 
     cmd.undo(&mut project);
     // Group restored, children re-parented
     assert!(project.timeline.layers[0].is_group());
-    let reparented = project.timeline.layers.iter()
+    let reparented = project
+        .timeline
+        .layers
+        .iter()
         .filter(|l| l.parent_layer_id.as_ref() == Some(&group_id))
         .count();
     assert_eq!(reparented, child_count);
@@ -660,13 +667,7 @@ fn change_effect_param_unknown_id_is_no_op() {
     fx.base_param_values = Some(vec![0.5, 0.3]);
     project.settings.master_effects.push(fx);
 
-    let mut cmd = ChangeEffectParamCommand::new(
-        EffectTarget::Master,
-        0,
-        "phantom_param",
-        0.5,
-        0.9,
-    );
+    let mut cmd = ChangeEffectParamCommand::new(EffectTarget::Master, 0, "phantom_param", 0.5, 0.9);
 
     cmd.execute(&mut project);
     // Unchanged — no slot was matched.
@@ -1387,7 +1388,10 @@ fn expose_effect_param_command_undo_roundtrip() {
     cmd.execute(&mut project);
     let fx = &project.settings.master_effects[0];
     assert_eq!(fx.user_param_bindings.len(), 1);
-    assert_eq!(fx.user_param_bindings[0].id, "user.uv_transform.translate.1");
+    assert_eq!(
+        fx.user_param_bindings[0].id,
+        "user.uv_transform.translate.1"
+    );
 }
 
 #[test]
@@ -1421,11 +1425,17 @@ fn expose_already_exposed_is_idempotent_noop() {
     );
     cmd.execute(&mut project);
     // Still 1 binding (not 2 — execute is idempotent).
-    assert_eq!(project.settings.master_effects[0].user_param_bindings.len(), 1);
+    assert_eq!(
+        project.settings.master_effects[0].user_param_bindings.len(),
+        1
+    );
     cmd.undo(&mut project);
     // Pre-existing binding is preserved (the no-op execute recorded
     // ReverseState::None, so undo did nothing).
-    assert_eq!(project.settings.master_effects[0].user_param_bindings.len(), 1);
+    assert_eq!(
+        project.settings.master_effects[0].user_param_bindings.len(),
+        1
+    );
 }
 
 #[test]
@@ -1469,7 +1479,10 @@ fn unexpose_effect_param_command_undo_roundtrip() {
     cmd.undo(&mut project);
     let fx = &project.settings.master_effects[0];
     assert_eq!(fx.user_param_bindings.len(), 1);
-    assert_eq!(fx.user_param_bindings[0].id, "user.uv_transform.translate.1");
+    assert_eq!(
+        fx.user_param_bindings[0].id,
+        "user.uv_transform.translate.1"
+    );
     // Slot value restored — including the dragged 0.42, NOT the binding default.
     assert!((fx.param_values[2].value - 0.42).abs() < f32::EPSILON);
     assert!(
@@ -1495,7 +1508,11 @@ fn unexpose_when_not_exposed_is_noop() {
     );
     cmd.execute(&mut project);
     cmd.undo(&mut project);
-    assert!(project.settings.master_effects[0].user_param_bindings.is_empty());
+    assert!(
+        project.settings.master_effects[0]
+            .user_param_bindings
+            .is_empty()
+    );
     assert_eq!(
         project.settings.master_effects[0].param_values,
         vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)]

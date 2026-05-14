@@ -20,8 +20,8 @@ use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 
 use crate::effect::EffectContext;
-use crate::effects::auto_gain::AutoGainFX;
 use crate::effect::PostProcessEffect;
+use crate::effects::auto_gain::AutoGainFX;
 use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};

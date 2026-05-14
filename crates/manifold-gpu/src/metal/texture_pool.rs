@@ -45,8 +45,8 @@ impl TexturePool {
     /// Create a new texture pool with frame-stamped recycling.
     pub fn new(device: &GpuDevice, frames_in_flight: u64) -> Self {
         let dev_ptr = device.raw_device() as *const _ as *mut ProtocolObject<dyn MTLDevice>;
-        let mtl_device = unsafe { Retained::retain(dev_ptr) }
-            .expect("MTLDevice retain returned nil");
+        let mtl_device =
+            unsafe { Retained::retain(dev_ptr) }.expect("MTLDevice retain returned nil");
         log::info!(
             "TexturePool: frame-stamped recycling, {} frames in flight",
             frames_in_flight,

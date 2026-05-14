@@ -100,11 +100,7 @@ impl Serialize for GenParamValuesSer<'_> {
     where
         S: serde::Serializer,
     {
-        crate::effects::serialize_param_values_for_generator(
-            self.values,
-            self.gen_type,
-            serializer,
-        )
+        crate::effects::serialize_param_values_for_generator(self.values, self.gen_type, serializer)
     }
 }
 
@@ -233,7 +229,10 @@ impl GeneratorParamState {
             let old = base.clone();
             let mut migrated = Vec::with_capacity(target);
             for i in 0..target {
-                let v = old.get(i).copied().unwrap_or(def.param_defs[i].default_value);
+                let v = old
+                    .get(i)
+                    .copied()
+                    .unwrap_or(def.param_defs[i].default_value);
                 migrated.push(v);
             }
             self.base_param_values = Some(migrated);
@@ -326,8 +325,8 @@ impl GeneratorParamState {
             Some(b) => b,
             None => return,
         };
-        let id_to_index = generator_definition_registry::try_get(&self.generator_type)
-            .map(|d| &d.id_to_index);
+        let id_to_index =
+            generator_definition_registry::try_get(&self.generator_type).map(|d| &d.id_to_index);
 
         if let Some(drivers) = &self.drivers {
             for driver in drivers {

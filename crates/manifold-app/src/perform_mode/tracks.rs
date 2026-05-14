@@ -16,11 +16,7 @@ use manifold_playback::ableton_bridge::TrackArrangement;
 /// `[range_start, range_end)`. Used for "what plays in the next section"
 /// — variant (a): straddlers (clips that started before `range_start` and
 /// continue into the range) count as active.
-pub(crate) fn plays_in_range(
-    track: &TrackArrangement,
-    range_start: f64,
-    range_end: f64,
-) -> bool {
+pub(crate) fn plays_in_range(track: &TrackArrangement, range_start: f64, range_end: f64) -> bool {
     if track.muted || range_end <= range_start {
         return false;
     }

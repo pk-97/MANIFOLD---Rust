@@ -9,7 +9,7 @@ use crate::color;
 use crate::input::{Modifiers, UIEvent};
 use crate::layout::ScreenLayout;
 use crate::node::*;
-use crate::scroll_container::{ScrollContainer, ScrollbarStyle, SCROLLBAR_W};
+use crate::scroll_container::{SCROLLBAR_W, ScrollContainer, ScrollbarStyle};
 use crate::tree::UITree;
 use manifold_core::EffectId;
 use manifold_core::LayerId;
@@ -1286,8 +1286,8 @@ impl InspectorCompositePanel {
                 PressedTarget::Scrollbar => {
                     self.dragging_scrollbar = true;
                     let id = node_id as i32;
-                    self.dragging_scrollbar_master = id == self.master_scroll.track_id()
-                        || id == self.master_scroll.thumb_id();
+                    self.dragging_scrollbar_master =
+                        id == self.master_scroll.track_id() || id == self.master_scroll.thumb_id();
                     Vec::new()
                 }
             };
@@ -1661,9 +1661,9 @@ mod tests {
         let layout = inspector_layout();
         panel.build(&mut tree, &layout);
         // Manually set content height to create a scrollable range.
-        panel.layer_scroll.set_content_height(
-            panel.layer_scroll.viewport().height + 100.0,
-        );
+        panel
+            .layer_scroll
+            .set_content_height(panel.layer_scroll.viewport().height + 100.0);
 
         panel.handle_scroll(-100.0); // scroll way down
         assert!(panel.layer_scroll.scroll_offset() <= panel.layer_scroll.max_scroll());

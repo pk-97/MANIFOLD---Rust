@@ -11,16 +11,10 @@ use core_foundation::{
     string::CFString,
 };
 use core_graphics::{
-    color_space::CGColorSpace,
-    context::CGContext,
-    data_provider::CGDataProvider,
-    font::CGFont,
+    color_space::CGColorSpace, context::CGContext, data_provider::CGDataProvider, font::CGFont,
     geometry::CGPoint,
 };
-use core_text::{
-    font::CTFont,
-    string_attributes::kCTFontAttributeName,
-};
+use core_text::{font::CTFont, string_attributes::kCTFontAttributeName};
 use std::sync::Arc;
 
 const MAX_BITMAP_DIM: u32 = 4096;
@@ -99,8 +93,8 @@ impl TextRasterizer {
         let ttf_bytes: &'static [u8] = include_bytes!("../assets/fonts/Inter-Regular.ttf");
         let data: Vec<u8> = ttf_bytes.to_vec();
         let provider = CGDataProvider::from_buffer(Arc::new(data));
-        let cg_font = CGFont::from_data_provider(provider)
-            .expect("Failed to create CGFont from Inter TTF");
+        let cg_font =
+            CGFont::from_data_provider(provider).expect("Failed to create CGFont from Inter TTF");
 
         // Prime the CoreText font database so that `new_from_name` resolves
         // system fonts without delay on the first render frame.
@@ -196,7 +190,11 @@ impl TextRasterizer {
                 let w = bounds.width as f32
                     + (glyphs.len().saturating_sub(1)) as f32 * letter_spacing_px;
                 max_width = max_width.max(w);
-                line_measures.push(LineMeasure { glyphs, positions, width: w });
+                line_measures.push(LineMeasure {
+                    glyphs,
+                    positions,
+                    width: w,
+                });
             } else {
                 line_measures.push(LineMeasure {
                     glyphs: Vec::new(),
@@ -214,10 +212,8 @@ impl TextRasterizer {
         // Total height: first line = base_line_height, each additional line adds
         // line_height. This way single-line text isn't padded by line_spacing.
         let content_h = base_line_height + (num_lines.saturating_sub(1)) as f32 * line_height;
-        let bitmap_w =
-            (max_width.ceil() as u32 + PADDING * 2).min(MAX_BITMAP_DIM);
-        let bitmap_h =
-            (content_h.ceil() as u32 + PADDING * 2).min(MAX_BITMAP_DIM);
+        let bitmap_w = (max_width.ceil() as u32 + PADDING * 2).min(MAX_BITMAP_DIM);
+        let bitmap_h = (content_h.ceil() as u32 + PADDING * 2).min(MAX_BITMAP_DIM);
 
         if bitmap_w == 0 || bitmap_h == 0 {
             return None;
@@ -259,8 +255,8 @@ impl TextRasterizer {
             // Lines from top: line 0 is at top of bitmap.
             // In CG coords, line 0 baseline = bitmap_h - PADDING - ascent
             // Each subsequent line shifts down by line_height.
-            let baseline_y = (bitmap_h as f32 - PADDING as f32 - ascent
-                - line_idx as f32 * line_height) as f64;
+            let baseline_y =
+                (bitmap_h as f32 - PADDING as f32 - ascent - line_idx as f32 * line_height) as f64;
 
             let draw_positions: Vec<CGPoint> = measure
                 .positions
@@ -299,9 +295,7 @@ impl TextRasterizer {
     /// Falls back to embedded Inter if the name doesn't resolve.
     fn resolve_and_cache_font(&mut self, family: &str, size: f64) -> CTFont {
         let font = core_text::font::new_from_name(family, size)
-            .unwrap_or_else(|()| {
-                core_text::font::new_from_CGFont(&self.cg_font, size)
-            });
+            .unwrap_or_else(|()| core_text::font::new_from_CGFont(&self.cg_font, size));
         self.cached_ct_font = Some((family.to_string(), size, font.clone()));
         font
     }
@@ -422,16 +416,24 @@ mod tests {
     fn test_line_spacing_taller() {
         let mut rasterizer = TextRasterizer::new();
         let tight = rasterizer
-            .rasterize("A\nB", 64.0, &RasterizeOptions {
-                line_spacing: 1.0,
-                ..Default::default()
-            })
+            .rasterize(
+                "A\nB",
+                64.0,
+                &RasterizeOptions {
+                    line_spacing: 1.0,
+                    ..Default::default()
+                },
+            )
             .unwrap();
         let loose = rasterizer
-            .rasterize("A\nB", 64.0, &RasterizeOptions {
-                line_spacing: 2.0,
-                ..Default::default()
-            })
+            .rasterize(
+                "A\nB",
+                64.0,
+                &RasterizeOptions {
+                    line_spacing: 2.0,
+                    ..Default::default()
+                },
+            )
             .unwrap();
         assert!(loose.height > tight.height);
     }
@@ -441,16 +443,24 @@ mod tests {
         let mut rasterizer = TextRasterizer::new();
         // Two lines of different widths — alignment should shift the shorter one
         let left = rasterizer
-            .rasterize("AAAA\nB", 64.0, &RasterizeOptions {
-                h_align: HAlign::Left,
-                ..Default::default()
-            })
+            .rasterize(
+                "AAAA\nB",
+                64.0,
+                &RasterizeOptions {
+                    h_align: HAlign::Left,
+                    ..Default::default()
+                },
+            )
             .unwrap();
         let right = rasterizer
-            .rasterize("AAAA\nB", 64.0, &RasterizeOptions {
-                h_align: HAlign::Right,
-                ..Default::default()
-            })
+            .rasterize(
+                "AAAA\nB",
+                64.0,
+                &RasterizeOptions {
+                    h_align: HAlign::Right,
+                    ..Default::default()
+                },
+            )
             .unwrap();
         // Bitmaps should be the same size (max_width determines width)
         assert_eq!(left.width, right.width);

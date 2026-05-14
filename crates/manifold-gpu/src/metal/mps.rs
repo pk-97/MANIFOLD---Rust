@@ -151,7 +151,11 @@ unsafe impl Send for MpsBoxBlur {}
 unsafe impl Sync for MpsBoxBlur {}
 
 impl MpsBoxBlur {
-    pub fn new(device: &ProtocolObject<dyn MTLDevice>, kernel_width: u32, kernel_height: u32) -> Self {
+    pub fn new(
+        device: &ProtocolObject<dyn MTLDevice>,
+        kernel_width: u32,
+        kernel_height: u32,
+    ) -> Self {
         let inner = unsafe {
             MPSImageBox::initWithDevice_kernelWidth_kernelHeight(
                 MPSImageBox::alloc(),
@@ -182,7 +186,11 @@ unsafe impl Send for MpsTentBlur {}
 unsafe impl Sync for MpsTentBlur {}
 
 impl MpsTentBlur {
-    pub fn new(device: &ProtocolObject<dyn MTLDevice>, kernel_width: u32, kernel_height: u32) -> Self {
+    pub fn new(
+        device: &ProtocolObject<dyn MTLDevice>,
+        kernel_width: u32,
+        kernel_height: u32,
+    ) -> Self {
         let inner = unsafe {
             MPSImageTent::initWithDevice_kernelWidth_kernelHeight(
                 MPSImageTent::alloc(),
@@ -247,10 +255,7 @@ unsafe impl Sync for MpsBilinearScale {}
 impl MpsBilinearScale {
     pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
         let inner = unsafe {
-            MPSImageBilinearScale::initWithDevice(
-                MPSImageBilinearScale::alloc(),
-                device,
-            )
+            MPSImageBilinearScale::initWithDevice(MPSImageBilinearScale::alloc(), device)
         };
         Self { inner }
     }
@@ -284,12 +289,8 @@ unsafe impl Sync for MpsLanczosScale {}
 
 impl MpsLanczosScale {
     pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
-        let inner = unsafe {
-            MPSImageLanczosScale::initWithDevice(
-                MPSImageLanczosScale::alloc(),
-                device,
-            )
-        };
+        let inner =
+            unsafe { MPSImageLanczosScale::initWithDevice(MPSImageLanczosScale::alloc(), device) };
         Self { inner }
     }
 
@@ -323,9 +324,7 @@ unsafe impl Sync for MpsSobel {}
 
 impl MpsSobel {
     pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
-        let inner = unsafe {
-            MPSImageSobel::initWithDevice(MPSImageSobel::alloc(), device)
-        };
+        let inner = unsafe { MPSImageSobel::initWithDevice(MPSImageSobel::alloc(), device) };
         Self { inner }
     }
 
@@ -349,9 +348,8 @@ unsafe impl Sync for MpsLaplacian {}
 
 impl MpsLaplacian {
     pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
-        let inner = unsafe {
-            MPSImageLaplacian::initWithDevice(MPSImageLaplacian::alloc(), device)
-        };
+        let inner =
+            unsafe { MPSImageLaplacian::initWithDevice(MPSImageLaplacian::alloc(), device) };
         Self { inner }
     }
 
@@ -617,9 +615,7 @@ unsafe impl Sync for MpsAdd {}
 
 impl MpsAdd {
     pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
-        let inner = unsafe {
-            MPSImageAdd::initWithDevice(MPSImageAdd::alloc(), device)
-        };
+        let inner = unsafe { MPSImageAdd::initWithDevice(MPSImageAdd::alloc(), device) };
         Self { inner }
     }
 
@@ -644,9 +640,7 @@ unsafe impl Sync for MpsSubtract {}
 
 impl MpsSubtract {
     pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
-        let inner = unsafe {
-            MPSImageSubtract::initWithDevice(MPSImageSubtract::alloc(), device)
-        };
+        let inner = unsafe { MPSImageSubtract::initWithDevice(MPSImageSubtract::alloc(), device) };
         Self { inner }
     }
 
@@ -671,9 +665,7 @@ unsafe impl Sync for MpsMultiply {}
 
 impl MpsMultiply {
     pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
-        let inner = unsafe {
-            MPSImageMultiply::initWithDevice(MPSImageMultiply::alloc(), device)
-        };
+        let inner = unsafe { MPSImageMultiply::initWithDevice(MPSImageMultiply::alloc(), device) };
         Self { inner }
     }
 
@@ -698,9 +690,7 @@ unsafe impl Sync for MpsDivide {}
 
 impl MpsDivide {
     pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
-        let inner = unsafe {
-            MPSImageDivide::initWithDevice(MPSImageDivide::alloc(), device)
-        };
+        let inner = unsafe { MPSImageDivide::initWithDevice(MPSImageDivide::alloc(), device) };
         Self { inner }
     }
 
@@ -756,7 +746,11 @@ unsafe impl Send for MpsAreaMax {}
 unsafe impl Sync for MpsAreaMax {}
 
 impl MpsAreaMax {
-    pub fn new(device: &ProtocolObject<dyn MTLDevice>, kernel_width: u32, kernel_height: u32) -> Self {
+    pub fn new(
+        device: &ProtocolObject<dyn MTLDevice>,
+        kernel_width: u32,
+        kernel_height: u32,
+    ) -> Self {
         let inner = unsafe {
             MPSImageAreaMax::initWithDevice_kernelWidth_kernelHeight(
                 MPSImageAreaMax::alloc(),
@@ -787,7 +781,11 @@ unsafe impl Send for MpsAreaMin {}
 unsafe impl Sync for MpsAreaMin {}
 
 impl MpsAreaMin {
-    pub fn new(device: &ProtocolObject<dyn MTLDevice>, kernel_width: u32, kernel_height: u32) -> Self {
+    pub fn new(
+        device: &ProtocolObject<dyn MTLDevice>,
+        kernel_width: u32,
+        kernel_height: u32,
+    ) -> Self {
         let inner = unsafe {
             MPSImageAreaMin::initWithDevice_kernelWidth_kernelHeight(
                 MPSImageAreaMin::alloc(),
@@ -819,9 +817,7 @@ unsafe impl Sync for MpsIntegral {}
 
 impl MpsIntegral {
     pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
-        let inner = unsafe {
-            MPSImageIntegral::initWithDevice(MPSImageIntegral::alloc(), device)
-        };
+        let inner = unsafe { MPSImageIntegral::initWithDevice(MPSImageIntegral::alloc(), device) };
         Self { inner }
     }
 
@@ -846,10 +842,7 @@ unsafe impl Sync for MpsIntegralOfSquares {}
 impl MpsIntegralOfSquares {
     pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
         let inner = unsafe {
-            MPSImageIntegralOfSquares::initWithDevice(
-                MPSImageIntegralOfSquares::alloc(),
-                device,
-            )
+            MPSImageIntegralOfSquares::initWithDevice(MPSImageIntegralOfSquares::alloc(), device)
         };
         Self { inner }
     }
@@ -909,7 +902,8 @@ unsafe impl RefEncode for MpsHistogramInfo {
 impl MpsHistogram {
     pub fn new(device: &ProtocolObject<dyn MTLDevice>, info: &MpsHistogramInfo) -> Self {
         let inner = unsafe {
-            let cls = AnyClass::get(c"MPSImageHistogram").expect("MPSImageHistogram class not found");
+            let cls =
+                AnyClass::get(c"MPSImageHistogram").expect("MPSImageHistogram class not found");
             let alloc: *mut AnyObject = msg_send![cls, alloc];
             let info_ptr: *const MpsHistogramInfo = info;
             let obj: *mut MPSImageHistogram = msg_send![
@@ -930,7 +924,6 @@ impl MpsHistogram {
         histogram_buffer: &ProtocolObject<dyn MTLBuffer>,
         histogram_offset: u64,
     ) {
-        
         unsafe {
             let _: () = msg_send![
                 &*self.inner,
@@ -982,7 +975,6 @@ impl MpsHistogramEqualization {
         histogram_buffer: &ProtocolObject<dyn MTLBuffer>,
         histogram_offset: u64,
     ) {
-        
         unsafe {
             let _: () = msg_send![
                 &*self.inner,
@@ -1039,7 +1031,6 @@ impl MpsFindKeypoints {
         keypoint_data_buffer: &ProtocolObject<dyn MTLBuffer>,
         keypoint_data_offset: u64,
     ) {
-        
         unsafe {
             let _: () = msg_send![
                 &*self.inner,
@@ -1111,7 +1102,8 @@ unsafe fn create_mtgp32(
     device: &ProtocolObject<dyn MTLDevice>,
     desc: &AnyObject,
 ) -> Retained<AnyObject> {
-    let cls = AnyClass::get(c"MPSMatrixRandomMTGP32").expect("MPSMatrixRandomMTGP32 class not found");
+    let cls =
+        AnyClass::get(c"MPSMatrixRandomMTGP32").expect("MPSMatrixRandomMTGP32 class not found");
     unsafe {
         let alloc: *mut AnyObject = msg_send![cls, alloc];
         // MPSDataTypeFloat32 = 0x10000020
@@ -1128,7 +1120,10 @@ unsafe fn create_mtgp32(
 
 impl MpsMatrixRandom {
     /// Create a random number generator.
-    pub fn new(device: &ProtocolObject<dyn MTLDevice>, distribution: MpsRandomDistribution) -> Self {
+    pub fn new(
+        device: &ProtocolObject<dyn MTLDevice>,
+        distribution: MpsRandomDistribution,
+    ) -> Self {
         let dev = unsafe { device };
         let desc = unsafe {
             match distribution {
@@ -1161,10 +1156,13 @@ impl MpsMatrixRandom {
 }
 
 /// Helper: create MPSVector wrapping an existing buffer.
-unsafe fn create_mps_vector(buffer: &ProtocolObject<dyn MTLBuffer>, length: u64) -> Retained<AnyObject> {
-    
+unsafe fn create_mps_vector(
+    buffer: &ProtocolObject<dyn MTLBuffer>,
+    length: u64,
+) -> Retained<AnyObject> {
     let vec_cls = AnyClass::get(c"MPSVector").expect("MPSVector class not found");
-    let desc_cls = AnyClass::get(c"MPSVectorDescriptor").expect("MPSVectorDescriptor class not found");
+    let desc_cls =
+        AnyClass::get(c"MPSVectorDescriptor").expect("MPSVectorDescriptor class not found");
     unsafe {
         // MPSDataTypeFloat32 = 0x10000020
         let desc: *mut AnyObject = msg_send![
@@ -1288,14 +1286,24 @@ impl super::GpuEncoder {
     }
 
     /// Encode an MPS Sobel edge detection.
-    pub fn mps_sobel(&mut self, src: &GpuTexture, dst: &GpuTexture, device: &ProtocolObject<dyn MTLDevice>) {
+    pub fn mps_sobel(
+        &mut self,
+        src: &GpuTexture,
+        dst: &GpuTexture,
+        device: &ProtocolObject<dyn MTLDevice>,
+    ) {
         let kernel = MpsSobel::new(device);
         let cmd_buf = self.raw_cmd_buf_for_mps();
         kernel.encode(cmd_buf, &src.raw, &dst.raw);
     }
 
     /// Encode an MPS Laplacian edge detection.
-    pub fn mps_laplacian(&mut self, src: &GpuTexture, dst: &GpuTexture, device: &ProtocolObject<dyn MTLDevice>) {
+    pub fn mps_laplacian(
+        &mut self,
+        src: &GpuTexture,
+        dst: &GpuTexture,
+        device: &ProtocolObject<dyn MTLDevice>,
+    ) {
         let kernel = MpsLaplacian::new(device);
         let cmd_buf = self.raw_cmd_buf_for_mps();
         kernel.encode(cmd_buf, &src.raw, &dst.raw);
@@ -1467,14 +1475,24 @@ impl super::GpuEncoder {
     }
 
     /// Encode MPS min/max statistics.
-    pub fn mps_min_max(&mut self, src: &GpuTexture, dst: &GpuTexture, device: &ProtocolObject<dyn MTLDevice>) {
+    pub fn mps_min_max(
+        &mut self,
+        src: &GpuTexture,
+        dst: &GpuTexture,
+        device: &ProtocolObject<dyn MTLDevice>,
+    ) {
         let kernel = MpsMinMax::new(device);
         let cmd_buf = self.raw_cmd_buf_for_mps();
         kernel.encode(cmd_buf, &src.raw, &dst.raw);
     }
 
     /// Encode MPS integral image (summed area table).
-    pub fn mps_integral(&mut self, src: &GpuTexture, dst: &GpuTexture, device: &ProtocolObject<dyn MTLDevice>) {
+    pub fn mps_integral(
+        &mut self,
+        src: &GpuTexture,
+        dst: &GpuTexture,
+        device: &ProtocolObject<dyn MTLDevice>,
+    ) {
         let kernel = MpsIntegral::new(device);
         let cmd_buf = self.raw_cmd_buf_for_mps();
         kernel.encode(cmd_buf, &src.raw, &dst.raw);

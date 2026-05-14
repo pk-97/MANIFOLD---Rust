@@ -27,10 +27,7 @@ unsafe impl Sync for GpuPipelineArchive {}
 
 impl GpuPipelineArchive {
     /// Load an existing archive from disk, or create a new empty one.
-    pub fn load_or_create(
-        device: &ProtocolObject<dyn MTLDevice>,
-        path: &Path,
-    ) -> Option<Self> {
+    pub fn load_or_create(device: &ProtocolObject<dyn MTLDevice>, path: &Path) -> Option<Self> {
         let url_string = format!("file://{}", path.display());
         let url_ns = NSString::from_str(&url_string);
         let url = NSURL::initWithString(NSURL::alloc(), &url_ns)
@@ -51,13 +48,14 @@ impl GpuPipelineArchive {
                 let empty_desc = unsafe {
                     MTLBinaryArchiveDescriptor::init(MTLBinaryArchiveDescriptor::alloc())
                 };
-                unsafe { device.newBinaryArchiveWithDescriptor_error(&empty_desc) }
-                    .unwrap_or_else(|e| {
+                unsafe { device.newBinaryArchiveWithDescriptor_error(&empty_desc) }.unwrap_or_else(
+                    |e| {
                         panic!(
                             "Failed to create empty binary archive: {}",
                             e.localizedDescription()
                         )
-                    })
+                    },
+                )
             }
         };
 
@@ -96,8 +94,12 @@ impl GpuPipelineArchive {
             return;
         }
         let url_ns = NSString::from_str(&self.save_url_string);
-        let url = NSURL::initWithString(NSURL::alloc(), &url_ns)
-            .unwrap_or_else(|| panic!("NSURL initWithString: returned nil for {}", self.save_url_string));
+        let url = NSURL::initWithString(NSURL::alloc(), &url_ns).unwrap_or_else(|| {
+            panic!(
+                "NSURL initWithString: returned nil for {}",
+                self.save_url_string
+            )
+        });
         match unsafe { self.archive.serializeToURL_error(&url) } {
             Ok(()) => {
                 log::info!(

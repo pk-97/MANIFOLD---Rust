@@ -374,8 +374,7 @@ fn compute_layer_row(
         let gen_midi_x = pad + MIDI_LBL_W + 2.0;
         let right_edge = w - pad - RIGHT_GUTTER;
         let mode_x = right_edge - MODE_TOGGLE_W;
-        d.midi_input =
-            Rect::new(gen_midi_x, y, (mode_x - 4.0 - gen_midi_x).max(10.0), BTN_H);
+        d.midi_input = Rect::new(gen_midi_x, y, (mode_x - 4.0 - gen_midi_x).max(10.0), BTN_H);
         d.midi_mode = Rect::new(mode_x, y, MODE_TOGGLE_W, BTN_H);
         y += ROW_STEP;
 
@@ -603,7 +602,6 @@ pub struct LayerHeaderPanel {
     // Cache tracking
     cache_first_node: usize,
     cache_node_count: usize,
-
 }
 
 impl LayerHeaderPanel {
@@ -683,7 +681,11 @@ impl LayerHeaderPanel {
         self.recording_active = active;
         if self.record_btn_id >= 0 {
             tree.set_style(self.record_btn_id as u32, self.record_btn_style());
-            let label = if active { "Stop Recording" } else { "Record Live" };
+            let label = if active {
+                "Stop Recording"
+            } else {
+                "Record Live"
+            };
             tree.set_text(self.record_btn_id as u32, label);
         }
     }
@@ -1579,11 +1581,7 @@ impl LayerHeaderPanel {
     /// Try to update layer row Y positions in-place for vertical scroll.
     /// Computes the Y delta from the new scroll offset and shifts all node
     /// positions. Returns `true` if successful, `false` if full rebuild needed.
-    pub fn try_update_vertical_scroll(
-        &mut self,
-        tree: &mut UITree,
-        layout: &ScreenLayout,
-    ) -> bool {
+    pub fn try_update_vertical_scroll(&mut self, tree: &mut UITree, layout: &ScreenLayout) -> bool {
         // Guard: must have been built
         if self.rows.is_empty() || self.rows.len() != self.layers.len() {
             return false;
@@ -1665,7 +1663,11 @@ impl Panel for LayerHeaderPanel {
                 rec_w,
                 rec_btn_h,
                 self.record_btn_style(),
-                if self.recording_active { "Stop Recording" } else { "Record Live" },
+                if self.recording_active {
+                    "Stop Recording"
+                } else {
+                    "Record Live"
+                },
             ) as i32;
 
             self.audio_device_label_id = tree.add_button(
@@ -1733,7 +1735,14 @@ impl Panel for LayerHeaderPanel {
                 layer.is_group && !layer.is_collapsed,
             );
 
-            self.build_layer_row(tree, i, layer, row, self.panel_origin, self.scroll.clip_node_id());
+            self.build_layer_row(
+                tree,
+                i,
+                layer,
+                row,
+                self.panel_origin,
+                self.scroll.clip_node_id(),
+            );
             self.cached_mute[i] = layer.is_muted;
             self.cached_solo[i] = layer.is_solo;
             self.cached_led[i] = layer.is_led;

@@ -5,8 +5,8 @@
 //! This thread does ALL encoding work — the content thread never blocks on it.
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::Receiver;
@@ -116,12 +116,14 @@ pub(crate) fn run(
             return;
         }
 
-        let elapsed = frame.wall_timestamp.duration_since(start_time).as_secs_f64();
+        let elapsed = frame
+            .wall_timestamp
+            .duration_since(start_time)
+            .as_secs_f64();
         let texture_ptr = frame.pool_slot.raw_ptr;
 
-        let result = unsafe {
-            ffi::LiveRecorder_EncodeVideoFrame(encoder_handle, texture_ptr, elapsed)
-        };
+        let result =
+            unsafe { ffi::LiveRecorder_EncodeVideoFrame(encoder_handle, texture_ptr, elapsed) };
 
         // Release the pool slot AFTER encoding.
         frame.pool_slot.release();
@@ -130,9 +132,7 @@ pub(crate) fn run(
             *frames_encoded += 1;
         } else {
             *frames_failed += 1;
-            log::warn!(
-                "[RecordingThread] Video encode failed at {elapsed:.3}s: error {result}"
-            );
+            log::warn!("[RecordingThread] Video encode failed at {elapsed:.3}s: error {result}");
         }
     }
 
@@ -165,13 +165,19 @@ pub(crate) fn run(
         // Encode the first frame, then drain any additional queued frames.
         if let Some(frame) = first_frame {
             encode_frame(
-                frame, encoder_handle, start_time,
-                &mut frames_encoded, &mut frames_failed,
+                frame,
+                encoder_handle,
+                start_time,
+                &mut frames_encoded,
+                &mut frames_failed,
             );
             while let Ok(frame) = frame_rx.try_recv() {
                 encode_frame(
-                    frame, encoder_handle, start_time,
-                    &mut frames_encoded, &mut frames_failed,
+                    frame,
+                    encoder_handle,
+                    start_time,
+                    &mut frames_encoded,
+                    &mut frames_failed,
                 );
             }
         }

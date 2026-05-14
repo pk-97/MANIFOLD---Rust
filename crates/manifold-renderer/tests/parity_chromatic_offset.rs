@@ -4,11 +4,9 @@
 mod parity;
 
 use manifold_core::EffectTypeId;
-use manifold_renderer::node_graph::primitives::ChromaticOffset;
 use manifold_renderer::node_graph::ParamValue;
-use parity::{
-    assert_bytewise_equal, default_ctx, make_default_effect, Fixture, ParityHarness,
-};
+use manifold_renderer::node_graph::primitives::ChromaticOffset;
+use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
 
 #[derive(Debug, Clone, Copy)]
 struct Setup {
@@ -22,16 +20,72 @@ struct Setup {
 
 const SETUPS: &[Setup] = &[
     // Identity (amount=0). Both paths preserve source bytes exactly.
-    Setup { label: "identity", amount: 0.0, offset: 0.01, mode: 0, angle: 0.0, falloff: 0.5 },
+    Setup {
+        label: "identity",
+        amount: 0.0,
+        offset: 0.01,
+        mode: 0,
+        angle: 0.0,
+        falloff: 0.5,
+    },
     // Radial sweep — exercises smoothstep + normalize + falloff math.
-    Setup { label: "radial_mid", amount: 0.6, offset: 0.02, mode: 0, angle: 0.0, falloff: 0.5 },
-    Setup { label: "radial_max", amount: 1.0, offset: 0.05, mode: 0, angle: 0.0, falloff: 1.0 },
-    Setup { label: "radial_no_falloff", amount: 1.0, offset: 0.03, mode: 0, angle: 0.0, falloff: 0.0 },
+    Setup {
+        label: "radial_mid",
+        amount: 0.6,
+        offset: 0.02,
+        mode: 0,
+        angle: 0.0,
+        falloff: 0.5,
+    },
+    Setup {
+        label: "radial_max",
+        amount: 1.0,
+        offset: 0.05,
+        mode: 0,
+        angle: 0.0,
+        falloff: 1.0,
+    },
+    Setup {
+        label: "radial_no_falloff",
+        amount: 1.0,
+        offset: 0.03,
+        mode: 0,
+        angle: 0.0,
+        falloff: 0.0,
+    },
     // Linear sweep — angle controls a fixed direction. 0° = +X, 90° = +Y, 45° = diagonal.
-    Setup { label: "linear_x", amount: 1.0, offset: 0.025, mode: 1, angle: 0.0, falloff: 0.5 },
-    Setup { label: "linear_y", amount: 1.0, offset: 0.025, mode: 1, angle: 90.0, falloff: 0.5 },
-    Setup { label: "linear_diag", amount: 1.0, offset: 0.025, mode: 1, angle: 45.0, falloff: 0.5 },
-    Setup { label: "linear_wrap", amount: 1.0, offset: 0.025, mode: 1, angle: 359.0, falloff: 0.5 },
+    Setup {
+        label: "linear_x",
+        amount: 1.0,
+        offset: 0.025,
+        mode: 1,
+        angle: 0.0,
+        falloff: 0.5,
+    },
+    Setup {
+        label: "linear_y",
+        amount: 1.0,
+        offset: 0.025,
+        mode: 1,
+        angle: 90.0,
+        falloff: 0.5,
+    },
+    Setup {
+        label: "linear_diag",
+        amount: 1.0,
+        offset: 0.025,
+        mode: 1,
+        angle: 45.0,
+        falloff: 0.5,
+    },
+    Setup {
+        label: "linear_wrap",
+        amount: 1.0,
+        offset: 0.025,
+        mode: 1,
+        angle: 359.0,
+        falloff: 0.5,
+    },
 ];
 
 #[test]

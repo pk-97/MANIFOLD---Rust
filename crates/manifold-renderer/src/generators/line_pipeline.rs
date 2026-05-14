@@ -288,9 +288,7 @@ impl LineGeneratorHelper {
             // order, keyed by current depths. This gives correct depth every
             // frame while preserving relative order of edges at similar
             // depths, preventing the window from jittering.
-            if self.anim_sort_dirty
-                || self.anim_sorted_idx.len() != edge_count
-            {
+            if self.anim_sort_dirty || self.anim_sorted_idx.len() != edge_count {
                 // First frame or edge count changed — seed from fresh sort
                 self.anim_sorted_idx[..edge_count]
                     .copy_from_slice(&self.edge_sorted_idx[..edge_count]);
@@ -299,10 +297,8 @@ impl LineGeneratorHelper {
                 // Re-sort the existing animation order with a stable sort,
                 // so edges at near-equal depths keep their prior positions.
                 let d = &self.edge_depth;
-                self.anim_sorted_idx[..edge_count].sort_by(|&a, &b| {
-                    d[a].partial_cmp(&d[b])
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
+                self.anim_sorted_idx[..edge_count]
+                    .sort_by(|&a, &b| d[a].partial_cmp(&d[b]).unwrap_or(std::cmp::Ordering::Equal));
             }
 
             self.anim_progress += speed * (edge_count as f32 / 100.0) * dt * 60.0;

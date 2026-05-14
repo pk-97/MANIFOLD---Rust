@@ -18,6 +18,7 @@
 
 use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
+use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
@@ -25,7 +26,6 @@ use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
-use crate::effects::registration::EffectFactory;
 
 inventory::submit! {
     EffectMetadata {
@@ -50,8 +50,7 @@ inventory::submit! {
     }
 }
 
-const WATERCOLOR_WGSL: &str =
-    include_str!("shaders/fx_watercolor_compute.wgsl");
+const WATERCOLOR_WGSL: &str = include_str!("shaders/fx_watercolor_compute.wgsl");
 
 // Uniforms — 64 bytes, 16-byte aligned. Field order matches WGSL.
 #[repr(C)]
@@ -85,13 +84,13 @@ struct WatercolorState {
 
 pub struct WatercolorFX {
     helper: ComputeDualBlitHelper,
-    pipeline_max: manifold_gpu::GpuComputePipeline,      // mode 1 (grain + max)
-    pipeline_flow_gen: manifold_gpu::GpuComputePipeline,  // mode 2
-    pipeline_displace: manifold_gpu::GpuComputePipeline,  // mode 3
-    pipeline_blur: manifold_gpu::GpuComputePipeline,      // mode 4
-    pipeline_slope: manifold_gpu::GpuComputePipeline,     // mode 5
-    pipeline_luma: manifold_gpu::GpuComputePipeline,      // mode 6
-    pipeline_blend: manifold_gpu::GpuComputePipeline,     // mode 7 (wet/dry)
+    pipeline_max: manifold_gpu::GpuComputePipeline, // mode 1 (grain + max)
+    pipeline_flow_gen: manifold_gpu::GpuComputePipeline, // mode 2
+    pipeline_displace: manifold_gpu::GpuComputePipeline, // mode 3
+    pipeline_blur: manifold_gpu::GpuComputePipeline, // mode 4
+    pipeline_slope: manifold_gpu::GpuComputePipeline, // mode 5
+    pipeline_luma: manifold_gpu::GpuComputePipeline, // mode 6
+    pipeline_blend: manifold_gpu::GpuComputePipeline, // mode 7 (wet/dry)
     states: AHashMap<i64, WatercolorState>,
     width: u32,
     height: u32,
@@ -123,11 +122,7 @@ impl WatercolorFX {
             )
         };
         Self {
-            helper: ComputeDualBlitHelper::new(
-                device,
-                WATERCOLOR_WGSL,
-                "Watercolor Compute",
-            ),
+            helper: ComputeDualBlitHelper::new(device, WATERCOLOR_WGSL, "Watercolor Compute"),
             pipeline_max: spec("1u", "WC GrainMax"),
             pipeline_flow_gen: spec("2u", "WC FlowGen"),
             pipeline_displace: spec("3u", "WC Displace"),
@@ -162,25 +157,21 @@ impl PostProcessEffect for WatercolorFX {
         if !self.states.contains_key(&ctx.owner_key) && self.width > 0 && self.height > 0 {
             let w = self.width;
             let h = self.height;
-            let feedback =
-                alloc_target(gpu.device, gpu.pool, w, h, "WC Feedback");
+            let feedback = alloc_target(gpu.device, gpu.pool, w, h, "WC Feedback");
             gpu.clear_texture(&feedback.texture, 0.0, 0.0, 0.0, 0.0);
             self.states.insert(
                 ctx.owner_key,
                 WatercolorState {
                     feedback,
                     flow_map: alloc_target(
-                        gpu.device, gpu.pool,
+                        gpu.device,
+                        gpu.pool,
                         (w / 2).max(1),
                         (h / 2).max(1),
                         "WC FlowMap",
                     ),
-                    temp_a: alloc_target(
-                        gpu.device, gpu.pool, w, h, "WC TempA",
-                    ),
-                    temp_b: alloc_target(
-                        gpu.device, gpu.pool, w, h, "WC TempB",
-                    ),
+                    temp_a: alloc_target(gpu.device, gpu.pool, w, h, "WC TempA"),
+                    temp_b: alloc_target(gpu.device, gpu.pool, w, h, "WC TempB"),
                 },
             );
         }
@@ -338,4 +329,3 @@ impl PostProcessEffect for WatercolorFX {
         self.states.remove(&owner_key);
     }
 }
-

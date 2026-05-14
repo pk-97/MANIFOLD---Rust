@@ -895,7 +895,12 @@ impl UIRenderer {
                     let y0 = ((r.y - offset_y) * sf).floor().max(0.0) as u32;
                     let x1 = ((r.x + r.width - offset_x) * sf).ceil() as u32;
                     let y1 = ((r.y + r.height - offset_y) * sf).ceil() as u32;
-                    [x0.min(pw), y0.min(ph), (x1 - x0).min(pw - x0.min(pw)), (y1 - y0).min(ph - y0.min(ph))]
+                    [
+                        x0.min(pw),
+                        y0.min(ph),
+                        (x1 - x0).min(pw - x0.min(pw)),
+                        (y1 - y0).min(ph - y0.min(ph)),
+                    ]
                 });
                 self.prepared_batches.push(PreparedBatch {
                     scissor,
@@ -910,9 +915,7 @@ impl UIRenderer {
             if line_index_count > 0 {
                 self.prepared_batches.push(PreparedBatch {
                     scissor: None,
-                    index_offset: (line_idx_offset_after_rects
-                        * std::mem::size_of::<u32>())
-                        as u64,
+                    index_offset: (line_idx_offset_after_rects * std::mem::size_of::<u32>()) as u64,
                     index_count: line_index_count as u32,
                 });
             }
@@ -1074,4 +1077,3 @@ fn intersect_rects(a: Rect, b: Rect) -> Rect {
     let y1 = a.y_max().min(b.y_max());
     Rect::new(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
 }
-

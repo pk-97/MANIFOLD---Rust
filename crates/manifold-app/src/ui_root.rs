@@ -13,7 +13,9 @@ use manifold_ui::*;
 pub(crate) fn build_picker_session(
     session: &AbletonSession,
 ) -> manifold_ui::panels::ableton_picker::AbletonPickerSession {
-    use manifold_ui::panels::ableton_picker::{AbletonPickerSession, PickerDevice, PickerMacro, PickerTrack};
+    use manifold_ui::panels::ableton_picker::{
+        AbletonPickerSession, PickerDevice, PickerMacro, PickerTrack,
+    };
 
     const RACK_CLASSES: &[&str] = &[
         "InstrumentGroupDevice",
@@ -77,7 +79,7 @@ pub enum DropdownContext {
     GenParamContext(usize, f32), // param_idx, default_val
     MacroSlotContext(usize),  // macro_index (right-click on macro slider)
     GenStringParamDropdown(usize), // string_param_index (dropdown selector)
-    AudioInputDevice, // audio input device selection for live recording
+    AudioInputDevice,         // audio input device selection for live recording
 }
 
 /// Fine-grained tracking of what scroll-related state changed.
@@ -214,8 +216,7 @@ pub struct UIRoot {
     overlay_drag_active: bool,
 
     /// Cached Ableton session for the picker popup.
-    pub ableton_session:
-        Option<std::sync::Arc<manifold_playback::ableton_bridge::AbletonSession>>,
+    pub ableton_session: Option<std::sync::Arc<manifold_playback::ableton_bridge::AbletonSession>>,
     /// Two-column Ableton macro picker popup (replaces flat dropdown Ableton section).
     pub ableton_picker: manifold_ui::panels::ableton_picker::AbletonPickerPopup,
     /// Which param triggered the picker — resolved when picker returns Selected.
@@ -409,10 +410,18 @@ impl UIRoot {
             .set_scroll_y(settings.viewport_scroll_y_px);
 
         // Restore inspector collapse states
-        self.inspector.macros_panel_mut().set_collapsed(settings.macros_collapsed);
-        self.inspector.master_chrome_mut().set_collapsed(settings.master_chrome_collapsed);
-        self.inspector.layer_chrome_mut().set_collapsed(settings.layer_chrome_collapsed);
-        self.inspector.clip_chrome_mut().set_collapsed(settings.clip_chrome_collapsed);
+        self.inspector
+            .macros_panel_mut()
+            .set_collapsed(settings.macros_collapsed);
+        self.inspector
+            .master_chrome_mut()
+            .set_collapsed(settings.master_chrome_collapsed);
+        self.inspector
+            .layer_chrome_mut()
+            .set_collapsed(settings.layer_chrome_collapsed);
+        self.inspector
+            .clip_chrome_mut()
+            .set_collapsed(settings.clip_chrome_collapsed);
     }
 
     /// Build all panels. Call once after creation and after resize.
@@ -675,7 +684,9 @@ impl UIRoot {
                 use manifold_ui::panels::ableton_picker::AbletonPickerAction;
                 let mut consumed = false;
 
-                if let UIEvent::KeyDown { key: Key::Escape, .. } = event
+                if let UIEvent::KeyDown {
+                    key: Key::Escape, ..
+                } = event
                     && self.ableton_picker.handle_escape().is_some()
                 {
                     self.overlay_dirty = true;
@@ -689,7 +700,11 @@ impl UIRoot {
                                 if let Some(ctx) = self.ableton_picker_context.take() {
                                     use manifold_ui::panels::ableton_picker::AbletonPickerContext;
                                     match ctx {
-                                        AbletonPickerContext::EffectParam { tab, fx_idx, param_idx } => {
+                                        AbletonPickerContext::EffectParam {
+                                            tab,
+                                            fx_idx,
+                                            param_idx,
+                                        } => {
                                             actions.push(PanelAction::MapEffectParamToAbleton(
                                                 tab, fx_idx, param_idx, addr,
                                             ));
@@ -1097,8 +1112,7 @@ impl UIRoot {
                         .into_iter()
                         .map(|d| d.name)
                         .collect();
-                let mut items: Vec<DropdownItem> =
-                    vec![DropdownItem::new("None (video only)")];
+                let mut items: Vec<DropdownItem> = vec![DropdownItem::new("None (video only)")];
                 items.extend(
                     self.audio_input_device_names
                         .iter()
@@ -1211,8 +1225,7 @@ impl UIRoot {
                 items.push(DropdownItem::new("Insert Generator Layer"));
                 items.push(DropdownItem::new("Duplicate Layer"));
                 // "Group" only when 2+ non-group, non-nested layers are selected
-                let can_group = self.layer_headers.layer_count() >= 2
-                    && !is_group;
+                let can_group = self.layer_headers.layer_count() >= 2 && !is_group;
                 if can_group {
                     items.push(DropdownItem::new("Group Selected Layers"));
                 }
@@ -1255,10 +1268,7 @@ impl UIRoot {
                 if let Some(last) = items.last_mut() {
                     last.separator_after = true;
                 }
-                let ableton_connected = self
-                    .ableton_session
-                    .as_ref()
-                    .is_some_and(|s| s.connected);
+                let ableton_connected = self.ableton_session.as_ref().is_some_and(|s| s.connected);
                 if ableton_connected {
                     items.push(DropdownItem::new("Map to Ableton Macro…"));
                 } else {
@@ -1295,24 +1305,17 @@ impl UIRoot {
                 if let Some(last) = items.last_mut() {
                     last.separator_after = true;
                 }
-                let ableton_connected = self
-                    .ableton_session
-                    .as_ref()
-                    .is_some_and(|s| s.connected);
+                let ableton_connected = self.ableton_session.as_ref().is_some_and(|s| s.connected);
                 if ableton_connected {
                     items.push(DropdownItem::new("Map to Ableton Macro…"));
                 } else {
                     items.push(DropdownItem::disabled("Ableton not connected"));
                 }
-                let is_ableton_mapped = self
-                    .inspector
-                    .is_gen_ableton_mapped(*param_idx);
+                let is_ableton_mapped = self.inspector.is_gen_ableton_mapped(*param_idx);
                 if is_ableton_mapped {
                     items.push(DropdownItem::new("Remove Ableton Mapping"));
                 }
-                self.dropdown_context = Some(DropdownContext::GenParamContext(
-                    *param_idx, 0.0,
-                ));
+                self.dropdown_context = Some(DropdownContext::GenParamContext(*param_idx, 0.0));
                 self.dropdown
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
@@ -1463,33 +1466,19 @@ impl UIRoot {
                 3 => Some(PanelAction::ContextAddGeneratorLayer(layer)),
                 _ => None,
             },
-            DropdownContext::LayerContext(layer_idx) => {
-                match self.dropdown.item_label(index) {
-                    Some("Paste") => Some(PanelAction::ContextPasteAtLayer(layer_idx)),
-                    Some("Import MIDI File") => {
-                        Some(PanelAction::ContextImportMidi(layer_idx))
-                    }
-                    Some("Insert Video Layer") => {
-                        Some(PanelAction::ContextAddVideoLayer(layer_idx))
-                    }
-                    Some("Insert Generator Layer") => {
-                        Some(PanelAction::ContextAddGeneratorLayer(layer_idx))
-                    }
-                    Some("Duplicate Layer") => {
-                        Some(PanelAction::ContextDuplicateLayer(layer_idx))
-                    }
-                    Some("Group Selected Layers") => {
-                        Some(PanelAction::ContextGroupSelectedLayers)
-                    }
-                    Some("Ungroup") => {
-                        Some(PanelAction::ContextUngroup(layer_idx))
-                    }
-                    Some("Delete Layer") => {
-                        Some(PanelAction::ContextDeleteLayer(layer_idx))
-                    }
-                    _ => None,
+            DropdownContext::LayerContext(layer_idx) => match self.dropdown.item_label(index) {
+                Some("Paste") => Some(PanelAction::ContextPasteAtLayer(layer_idx)),
+                Some("Import MIDI File") => Some(PanelAction::ContextImportMidi(layer_idx)),
+                Some("Insert Video Layer") => Some(PanelAction::ContextAddVideoLayer(layer_idx)),
+                Some("Insert Generator Layer") => {
+                    Some(PanelAction::ContextAddGeneratorLayer(layer_idx))
                 }
-            }
+                Some("Duplicate Layer") => Some(PanelAction::ContextDuplicateLayer(layer_idx)),
+                Some("Group Selected Layers") => Some(PanelAction::ContextGroupSelectedLayers),
+                Some("Ungroup") => Some(PanelAction::ContextUngroup(layer_idx)),
+                Some("Delete Layer") => Some(PanelAction::ContextDeleteLayer(layer_idx)),
+                _ => None,
+            },
             DropdownContext::ClkDevice => Some(PanelAction::SetMidiClockDevice(index as i32)),
             DropdownContext::AudioInputDevice => {
                 if index == 0 {
@@ -1515,7 +1504,9 @@ impl UIRoot {
                 } else if index == manifold_core::MACRO_COUNT {
                     // "Map to Ableton Macro…" (only reached if Ableton connected — item is
                     // disabled otherwise and won't fire Selected).
-                    Some(PanelAction::OpenAbletonPickerForEffect(tab, fx_idx, param_idx))
+                    Some(PanelAction::OpenAbletonPickerForEffect(
+                        tab, fx_idx, param_idx,
+                    ))
                 } else if index == manifold_core::MACRO_COUNT + 1 {
                     // "Remove Ableton Mapping" (only present when param is mapped)
                     Some(PanelAction::UnmapEffectParamAbleton(tab, fx_idx, param_idx))
@@ -1554,7 +1545,10 @@ impl UIRoot {
             }
             DropdownContext::GenStringParamDropdown(sp_idx) => {
                 let label = self.dropdown.item_label(index)?;
-                Some(PanelAction::GenStringParamSelected(sp_idx, label.to_string()))
+                Some(PanelAction::GenStringParamSelected(
+                    sp_idx,
+                    label.to_string(),
+                ))
             }
             DropdownContext::MasterExitPath => {
                 // 0 = "After All FX" → led_exit_index -1
@@ -1569,7 +1563,6 @@ impl UIRoot {
             }
         }
     }
-
 
     /// Convert a color swatch selection into the appropriate PanelAction.
     fn dropdown_color_to_action(

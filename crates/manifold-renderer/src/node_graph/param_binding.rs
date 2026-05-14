@@ -336,7 +336,7 @@ pub fn binding_value(
 mod tests {
     use super::*;
     use crate::node_graph::boundary_nodes::Source;
-    use crate::node_graph::primitives::{Feedback, FEEDBACK_TYPE_ID};
+    use crate::node_graph::primitives::{FEEDBACK_TYPE_ID, Feedback};
 
     // ---- Conversion tests ----
 
@@ -362,13 +362,22 @@ mod tests {
 
     #[test]
     fn bool_threshold_at_half() {
-        assert_eq!(ParamConvert::BoolThreshold.convert(0.0), ParamValue::Bool(false));
-        assert_eq!(ParamConvert::BoolThreshold.convert(0.5), ParamValue::Bool(false));
+        assert_eq!(
+            ParamConvert::BoolThreshold.convert(0.0),
+            ParamValue::Bool(false)
+        );
+        assert_eq!(
+            ParamConvert::BoolThreshold.convert(0.5),
+            ParamValue::Bool(false)
+        );
         assert_eq!(
             ParamConvert::BoolThreshold.convert(0.5001),
             ParamValue::Bool(true)
         );
-        assert_eq!(ParamConvert::BoolThreshold.convert(1.0), ParamValue::Bool(true));
+        assert_eq!(
+            ParamConvert::BoolThreshold.convert(1.0),
+            ParamValue::Bool(true)
+        );
         assert_eq!(
             ParamConvert::BoolThreshold.convert(-0.5),
             ParamValue::Bool(false)
@@ -584,7 +593,12 @@ mod tests {
             Some(0.5)
         );
         assert_eq!(
-            binding_value(&static_bindings, user_slice, &values, "user.feedback.zoom.1"),
+            binding_value(
+                &static_bindings,
+                user_slice,
+                &values,
+                "user.feedback.zoom.1"
+            ),
             Some(1.07)
         );
         assert_eq!(
@@ -619,13 +633,7 @@ mod tests {
         let feedback = g.add_node(Box::new(Feedback::new()));
         let binding = ParamBinding {
             id: Cow::Borrowed("mode"),
-            spec: ParamSpec::whole_labels("mode", "Mode",
-                0.0,
-                2.0,
-                0.0,
-                &["A", "B", "C"],
-                "Mode",
-            ),
+            spec: ParamSpec::whole_labels("mode", "Mode", 0.0, 2.0, 0.0, &["A", "B", "C"], "Mode"),
             target: ParamTarget::Node {
                 node: feedback,
                 param: "mode",
@@ -655,7 +663,15 @@ mod tests {
         let feedback = g.add_node(Box::new(Feedback::new()));
         let binding = ParamBinding {
             id: Cow::Borrowed("blend_strength"),
-            spec: ParamSpec::continuous("blend_strength", "Blend Strength", 0.0, 1.0, 0.5, "F2", ""),
+            spec: ParamSpec::continuous(
+                "blend_strength",
+                "Blend Strength",
+                0.0,
+                1.0,
+                0.5,
+                "F2",
+                "",
+            ),
             target: ParamTarget::Node {
                 node: feedback,
                 param: "amount",
@@ -669,12 +685,13 @@ mod tests {
             g.get_node(feedback).unwrap().params.get("amount"),
             Some(&ParamValue::Float(0.42))
         );
-        assert!(g
-            .get_node(feedback)
-            .unwrap()
-            .params
-            .get("blend_strength")
-            .is_none());
+        assert!(
+            g.get_node(feedback)
+                .unwrap()
+                .params
+                .get("blend_strength")
+                .is_none()
+        );
     }
 
     #[test]

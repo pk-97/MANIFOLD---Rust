@@ -111,8 +111,7 @@ pub struct ContentState {
 
     // ── Ableton bridge ──────────────────────────────────────────
     /// Ableton session data for UI dropdown population.
-    pub ableton_session:
-        Option<Arc<manifold_playback::ableton_bridge::AbletonSession>>,
+    pub ableton_session: Option<Arc<manifold_playback::ableton_bridge::AbletonSession>>,
     /// Whether the Ableton bridge is currently connected.
     pub ableton_connected: bool,
     pub ableton_transport_enabled: bool,
@@ -133,8 +132,7 @@ pub struct ContentState {
     /// graph, for the editor canvas. `None` when no graph-backed effect
     /// has run yet, or when the editor window isn't open. Wrapped in
     /// `Arc` so cloning the `ContentState` per snapshot is cheap.
-    pub active_graph_snapshot:
-        Option<Arc<manifold_renderer::node_graph::GraphSnapshot>>,
+    pub active_graph_snapshot: Option<Arc<manifold_renderer::node_graph::GraphSnapshot>>,
 }
 
 /// Lightweight snapshot of modulated param values.
@@ -200,12 +198,8 @@ impl ModulationSnapshot {
 
         // Per-layer: effects + optional gen params
         for layer in &project.timeline.layers {
-            let effect_count = layer
-                .effects
-                .as_ref()
-                .map_or(0, |effects| effects.len());
-            let has_gen = layer.layer_type == LayerType::Generator
-                && layer.gen_params().is_some();
+            let effect_count = layer.effects.as_ref().map_or(0, |effects| effects.len());
+            let has_gen = layer.layer_type == LayerType::Generator && layer.gen_params().is_some();
 
             if let Some(effects) = &layer.effects {
                 for fx in effects {
@@ -215,9 +209,7 @@ impl ModulationSnapshot {
                 }
             }
 
-            if has_gen
-                && let Some(gp) = layer.gen_params()
-            {
+            if has_gen && let Some(gp) = layer.gen_params() {
                 let len = gp.param_values.len();
                 self.values.extend_from_slice(&gp.param_values);
                 self.block_lens.push(len as u16);
@@ -231,7 +223,7 @@ impl ModulationSnapshot {
     /// `param_values` — no structural changes, no allocations if lengths match.
     pub fn apply(&self, project: &mut Project) {
         let mut cursor = 0usize; // position in values
-        let mut block = 0usize;  // position in block_lens
+        let mut block = 0usize; // position in block_lens
 
         // Macros (block 0)
         let macro_len = *self.block_lens.get(block).unwrap_or(&0) as usize;
@@ -263,16 +255,14 @@ impl ModulationSnapshot {
         }
 
         // Layer effects + generator params
-        for (i, &(effect_count, has_gen)) in self.layer_shapes.iter().enumerate()
-        {
+        for (i, &(effect_count, has_gen)) in self.layer_shapes.iter().enumerate() {
             // Advance cursor/block for every effect block regardless of
             // whether the layer/effect exists on the UI side. The flat buffer
             // layout is authoritative — skipping blocks without advancing
             // would desync all subsequent data.
             if let Some(layer) = project.timeline.layers.get_mut(i) {
                 for j in 0..effect_count as usize {
-                    let len =
-                        *self.block_lens.get(block).unwrap_or(&0) as usize;
+                    let len = *self.block_lens.get(block).unwrap_or(&0) as usize;
                     if let Some(effects) = &mut layer.effects
                         && let Some(fx) = effects.get_mut(j)
                         && fx.param_values.len() == len
@@ -291,14 +281,12 @@ impl ModulationSnapshot {
 
                 // Generator params (still raw f32; generators not in scope).
                 if has_gen {
-                    let len =
-                        *self.block_lens.get(block).unwrap_or(&0) as usize;
+                    let len = *self.block_lens.get(block).unwrap_or(&0) as usize;
                     if let Some(gp) = layer.gen_params_mut()
                         && gp.param_values.len() == len
                     {
-                        gp.param_values.copy_from_slice(
-                            &self.values[cursor..cursor + len],
-                        );
+                        gp.param_values
+                            .copy_from_slice(&self.values[cursor..cursor + len]);
                     }
                     cursor += len;
                     block += 1;
@@ -306,13 +294,11 @@ impl ModulationSnapshot {
             } else {
                 // Layer gone — skip its blocks
                 for _ in 0..effect_count {
-                    cursor +=
-                        *self.block_lens.get(block).unwrap_or(&0) as usize;
+                    cursor += *self.block_lens.get(block).unwrap_or(&0) as usize;
                     block += 1;
                 }
                 if has_gen {
-                    cursor +=
-                        *self.block_lens.get(block).unwrap_or(&0) as usize;
+                    cursor += *self.block_lens.get(block).unwrap_or(&0) as usize;
                     block += 1;
                 }
             }

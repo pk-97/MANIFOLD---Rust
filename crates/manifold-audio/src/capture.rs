@@ -7,13 +7,13 @@
 //! The `cpal` audio callback runs on a real-time OS thread — it must never
 //! allocate, lock, or log. Only lock-free ring buffer writes.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Stream, StreamConfig};
-use ringbuf::traits::{Producer as ProducerTrait, Split};
 use ringbuf::HeapRb;
+use ringbuf::traits::{Producer as ProducerTrait, Split};
 
 /// Information about an available audio input device.
 #[derive(Clone, Debug)]
@@ -174,9 +174,7 @@ impl AudioCaptureDevice {
     /// Enumerate available audio input devices.
     pub fn list_devices() -> Vec<AudioDeviceInfo> {
         let host = cpal::default_host();
-        let default_name = host
-            .default_input_device()
-            .and_then(|d| d.name().ok());
+        let default_name = host.default_input_device().and_then(|d| d.name().ok());
 
         let mut devices = Vec::new();
         if let Ok(inputs) = host.input_devices() {

@@ -28,8 +28,16 @@ use crate::node_graph::primitives::auto_gain::{build_effect_context, build_effec
 pub const INFRARED_TYPE_ID: &str = "node.infrared";
 
 pub const INFRARED_PALETTES: &[&str] = &[
-    "White Hot", "Black Hot", "Green NV", "Iron Bow", "Rainbow", "Lava", "Arctic", "Magenta",
-    "Electric", "Toxic",
+    "White Hot",
+    "Black Hot",
+    "Green NV",
+    "Iron Bow",
+    "Rainbow",
+    "Lava",
+    "Arctic",
+    "Magenta",
+    "Electric",
+    "Toxic",
 ];
 
 pub struct Infrared {

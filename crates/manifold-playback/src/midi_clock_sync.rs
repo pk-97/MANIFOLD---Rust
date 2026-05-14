@@ -69,12 +69,13 @@ impl AtomicClockState {
     /// Atomically update the state via a closure (CAS loop).
     /// The closure receives the current state and returns the new state.
     fn update(&self, f: impl Fn(MidiClockState) -> MidiClockState) {
-        let _ = self.0.fetch_update(Ordering::Release, Ordering::Acquire, |bits| {
-            Some(f(MidiClockState::unpack(bits)).pack())
-        });
+        let _ = self
+            .0
+            .fetch_update(Ordering::Release, Ordering::Acquire, |bits| {
+                Some(f(MidiClockState::unpack(bits)).pack())
+            });
     }
 }
-
 
 // ── MidiClockReceiver ─────────────────────────────────────────────────────────
 
@@ -195,13 +196,20 @@ impl MidiClockReceiver {
         ) {
             Ok(c) => c,
             Err(e) => {
-                log::warn!("[MidiClockSync] Failed to connect to port {}: {}", source_index, e);
+                log::warn!(
+                    "[MidiClockSync] Failed to connect to port {}: {}",
+                    source_index,
+                    e
+                );
                 return;
             }
         };
 
         self.connection = Some(connection);
-        log::info!("[MidiClockSync] midir clock receiver connected (port {})", source_index);
+        log::info!(
+            "[MidiClockSync] midir clock receiver connected (port {})",
+            source_index
+        );
     }
 
     /// Close the midir connection.
@@ -216,7 +224,12 @@ impl MidiClockReceiver {
     /// Returns (position_sixteenths, clock_tick, is_playing, has_received_clock).
     fn update_state(&self) -> (i32, i32, bool, bool) {
         let s = self.state.load();
-        (s.position_sixteenths, s.clock_tick, s.is_playing, s.has_received_clock)
+        (
+            s.position_sixteenths,
+            s.clock_tick,
+            s.is_playing,
+            s.has_received_clock,
+        )
     }
 
     /// Number of available MIDI input ports.
@@ -237,7 +250,9 @@ impl MidiClockReceiver {
         };
         let ports = midi_in.ports();
         match ports.get(index as usize) {
-            Some(p) => midi_in.port_name(p).unwrap_or_else(|_| format!("Port {}", index)),
+            Some(p) => midi_in
+                .port_name(p)
+                .unwrap_or_else(|_| format!("Port {}", index)),
             None => format!("Port {}", index),
         }
     }
@@ -331,11 +346,21 @@ impl MidiClockSyncController {
 
     // ── Public properties ────────────────────────────────────────────
 
-    pub fn is_midi_clock_enabled(&self) -> bool { self.is_midi_clock_enabled }
-    pub fn is_receiving_clock(&self) -> bool { self.is_receiving_clock }
-    pub fn is_clock_transport_playing(&self) -> bool { self.is_receiving_clock && self.last_is_playing }
-    pub fn current_position_display(&self) -> &str { &self.current_position_display }
-    pub fn current_clock_bpm(&self) -> f32 { self.current_clock_bpm }
+    pub fn is_midi_clock_enabled(&self) -> bool {
+        self.is_midi_clock_enabled
+    }
+    pub fn is_receiving_clock(&self) -> bool {
+        self.is_receiving_clock
+    }
+    pub fn is_clock_transport_playing(&self) -> bool {
+        self.is_receiving_clock && self.last_is_playing
+    }
+    pub fn current_position_display(&self) -> &str {
+        &self.current_position_display
+    }
+    pub fn current_clock_bpm(&self) -> f32 {
+        self.current_clock_bpm
+    }
 
     /// Current MIDI clock position as a beat value.
     /// Computed as (position_sixteenths + clock_tick / 6.0) / 4.0.
@@ -344,9 +369,15 @@ impl MidiClockSyncController {
         (self.last_observed_sixteenths as f32 + self.last_observed_clock_tick as f32 / 6.0) / 4.0
     }
 
-    pub fn hard_seek_count(&self) -> i32 { self.hard_seek_count }
-    pub fn last_hard_seek_delta_seconds(&self) -> f32 { self.last_hard_seek_delta_seconds }
-    pub fn selected_source_index(&self) -> i32 { self.selected_source_index }
+    pub fn hard_seek_count(&self) -> i32 {
+        self.hard_seek_count
+    }
+    pub fn last_hard_seek_delta_seconds(&self) -> f32 {
+        self.last_hard_seek_delta_seconds
+    }
+    pub fn selected_source_index(&self) -> i32 {
+        self.selected_source_index
+    }
 
     /// Number of available MIDI input ports.
     pub fn available_source_count() -> usize {
@@ -361,7 +392,9 @@ impl MidiClockSyncController {
     /// List all available MIDI input port names.
     pub fn available_source_names() -> Vec<String> {
         let count = MidiClockReceiver::source_count();
-        (0..count).map(|i| MidiClockReceiver::source_name(i as i32)).collect()
+        (0..count)
+            .map(|i| MidiClockReceiver::source_name(i as i32))
+            .collect()
     }
 
     /// Display name of the currently selected MIDI source.
@@ -375,7 +408,9 @@ impl MidiClockSyncController {
     /// Enable MIDI Clock on the given source index.
     /// Port of C# MidiClockSyncController.EnableMidiClock (lines 97-151).
     pub fn enable_midi_clock(&mut self, source_index: i32) {
-        if self.is_midi_clock_enabled { return; }
+        if self.is_midi_clock_enabled {
+            return;
+        }
 
         // Auto-select first source if none specified (port of C# lines 110-119).
         let source_index = if source_index < 0 {
@@ -404,7 +439,11 @@ impl MidiClockSyncController {
         self.last_observed_sixteenths = pos_sixteenths;
         self.last_observed_clock_tick = clock_tick;
         self.last_observed_playing = is_playing;
-        self.last_clock_activity_time = if has_received_clock { Seconds::ZERO } else { Seconds(-999.0) };
+        self.last_clock_activity_time = if has_received_clock {
+            Seconds::ZERO
+        } else {
+            Seconds(-999.0)
+        };
 
         self.last_is_playing = false;
         self.last_position_sixteenths = -1;
@@ -419,7 +458,10 @@ impl MidiClockSyncController {
         self.integrated_clock_time_seconds = Seconds::ZERO;
         self.is_midi_clock_enabled = true;
 
-        log::info!("[MidiClockSync] Enabled — source: {}", self.cached_source_name);
+        log::info!(
+            "[MidiClockSync] Enabled — source: {}",
+            self.cached_source_name
+        );
     }
 
     /// Switch to a different MIDI source. Restarts the receiver.
@@ -441,7 +483,9 @@ impl MidiClockSyncController {
     /// Disable MIDI Clock and release the receiver.
     /// Port of C# MidiClockSyncController.DisableMidiClock (lines 167-189).
     pub fn disable_midi_clock(&mut self) {
-        if !self.is_midi_clock_enabled { return; }
+        if !self.is_midi_clock_enabled {
+            return;
+        }
 
         self.is_midi_clock_enabled = false;
         self.is_receiving_clock = false;
@@ -477,7 +521,9 @@ impl MidiClockSyncController {
         sync_target: &dyn SyncTarget,
         authority: ClockAuthority,
     ) {
-        if !self.is_midi_clock_enabled || self.receiver.is_none() { return; }
+        if !self.is_midi_clock_enabled || self.receiver.is_none() {
+            return;
+        }
 
         // Poll native state. Equivalent to clock.UpdateState() + reading clock.* in Unity.
         let (pos_sixteenths, clock_tick, is_playing, has_received_clock) =
@@ -501,23 +547,34 @@ impl MidiClockSyncController {
 
         // Activity timeout check (port of C# lines 239-240).
         let was_receiving = self.is_receiving_clock;
-        let has_recent_clock_activity = (now - self.last_clock_activity_time).0 as f32 <= self.clock_signal_timeout;
+        let has_recent_clock_activity =
+            (now - self.last_clock_activity_time).0 as f32 <= self.clock_signal_timeout;
         self.is_receiving_clock = has_recent_clock_activity;
 
         // Log sync state transitions for live monitoring.
         if has_recent_clock_activity && !was_receiving {
-            log::info!("[MidiClockSync] SYNC ESTABLISHED — receiving clock from {}",
-                self.selected_source_name());
+            log::info!(
+                "[MidiClockSync] SYNC ESTABLISHED — receiving clock from {}",
+                self.selected_source_name()
+            );
         } else if !has_recent_clock_activity && was_receiving {
-            log::warn!("[MidiClockSync] SYNC LOST — no clock signal for {:.1}s",
-                self.clock_signal_timeout);
+            log::warn!(
+                "[MidiClockSync] SYNC LOST — no clock signal for {:.1}s",
+                self.clock_signal_timeout
+            );
         }
 
         // Whether MANIFOLD initiated this play session (port of C# line 245).
         let manifold_owns = arbiter.manifold_owns_playback;
 
         // BPM estimation from clock ticks (port of C# line 247).
-        self.update_bpm_from_clock(now.as_f32(), pos_sixteenths, clock_tick, has_recent_clock_activity, is_playing);
+        self.update_bpm_from_clock(
+            now.as_f32(),
+            pos_sixteenths,
+            clock_tick,
+            has_recent_clock_activity,
+            is_playing,
+        );
 
         // Suppress local deltaTime when CLK is active authority and playing.
         // Not gated on manifold_owns — MIDI Clock always drives timing when active.
@@ -527,8 +584,7 @@ impl MidiClockSyncController {
             ClockAuthority::MidiClock,
             authority,
             arb_target,
-            has_recent_clock_activity && is_playing
-                && !arbiter.is_seek_cooldown_active(now),
+            has_recent_clock_activity && is_playing && !arbiter.is_seek_cooldown_active(now),
         );
 
         // Transport sync — gated by arbiter authority check (port of C# lines 256-279).
@@ -627,7 +683,9 @@ impl MidiClockSyncController {
         self.last_tempo_sample_time = now;
         self.last_tempo_abs_tick = absolute_tick;
 
-        if dt <= 0.0 { return; }
+        if dt <= 0.0 {
+            return;
+        }
         if d_ticks < 0 {
             // Song-position jump or source reset; restart estimator window.
             self.tempo_accum_ticks = 0;
@@ -639,13 +697,17 @@ impl MidiClockSyncController {
         self.tempo_accum_time += dt;
 
         let tick_window = self.min_ticks_per_bpm_estimate.max(1);
-        if self.tempo_accum_ticks < tick_window || self.tempo_accum_time <= 0.0 { return; }
+        if self.tempo_accum_ticks < tick_window || self.tempo_accum_time <= 0.0 {
+            return;
+        }
 
         let raw_bpm = (self.tempo_accum_ticks as f32 * 60.0) / (24.0 * self.tempo_accum_time);
         self.tempo_accum_ticks = 0;
         self.tempo_accum_time = 0.0;
 
-        if !(20.0..=300.0).contains(&raw_bpm) { return; }
+        if !(20.0..=300.0).contains(&raw_bpm) {
+            return;
+        }
 
         // Port of C# line 354: Mathf.Lerp clamps t to [0,1].
         let alpha = self.bpm_ema_alpha.clamp(0.0, 1.0);
@@ -671,7 +733,9 @@ impl MidiClockSyncController {
         authority: ClockAuthority,
     ) {
         // Port of C# line 370: guard on project and arbiter.
-        if sync_target.current_project().is_none() { return; }
+        if sync_target.current_project().is_none() {
+            return;
+        }
 
         let current_sixteenths = pos_sixteenths;
         let absolute_tick = pos_sixteenths * 6 + clock_tick;
@@ -735,7 +799,9 @@ impl MidiClockSyncController {
     /// Format: bars.beats.sub (1-based).
     /// Port of C# MidiClockSyncController.UpdatePositionDisplay (lines 445-455).
     fn update_position_display(&mut self, sixteenths: i32) {
-        if sixteenths == self.cached_display_sixteenths { return; }
+        if sixteenths == self.cached_display_sixteenths {
+            return;
+        }
         self.cached_display_sixteenths = sixteenths;
 
         let bars = sixteenths / 16 + 1;
@@ -746,12 +812,22 @@ impl MidiClockSyncController {
 }
 
 impl SyncSource for MidiClockSyncController {
-    fn is_enabled(&self) -> bool { self.is_midi_clock_enabled }
-    fn display_name(&self) -> &str { "CLK" }
-    fn enable(&mut self) { self.enable_midi_clock(self.selected_source_index); }
-    fn disable(&mut self) { self.disable_midi_clock(); }
+    fn is_enabled(&self) -> bool {
+        self.is_midi_clock_enabled
+    }
+    fn display_name(&self) -> &str {
+        "CLK"
+    }
+    fn enable(&mut self) {
+        self.enable_midi_clock(self.selected_source_index);
+    }
+    fn disable(&mut self) {
+        self.disable_midi_clock();
+    }
 }
 
 impl Default for MidiClockSyncController {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }

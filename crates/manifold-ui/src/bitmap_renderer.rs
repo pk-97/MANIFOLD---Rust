@@ -648,8 +648,7 @@ fn paint_grid_lines(
         let (line_color, line_width) = if is_bar {
             // At extreme zoom-out, skip intermediate bars
             if bar_skip > 1 {
-                let bar_num =
-                    (subdiv_beat / beats_per_bar).round() as u32;
+                let bar_num = (subdiv_beat / beats_per_bar).round() as u32;
                 if !bar_num.is_multiple_of(bar_skip) {
                     subdiv_beat += step;
                     continue;

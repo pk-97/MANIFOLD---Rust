@@ -36,9 +36,7 @@ use manifold_core::effects::{ParameterDriver, UserParamConvert};
 use manifold_core::types::{BeatDivision, DriverWaveform};
 use manifold_editing::command::Command;
 use manifold_editing::commands::effect_target::EffectTarget;
-use manifold_editing::commands::effects::{
-    InnerParamMeta, ToggleEffectParamExposeCommand,
-};
+use manifold_editing::commands::effects::{InnerParamMeta, ToggleEffectParamExposeCommand};
 
 fn meta_for_uv_translate() -> InnerParamMeta {
     // UVTransform.translate is a Float param with range (-1, 1) per the
@@ -132,7 +130,9 @@ fn expose_mirror_inner_param_survives_save_reload_with_driver_and_ableton() {
             last_value: 0.0,
             status: AbletonMappingStatus::Dormant,
         };
-        fx.ableton_mappings.get_or_insert_with(Vec::new).push(mapping);
+        fx.ableton_mappings
+            .get_or_insert_with(Vec::new)
+            .push(mapping);
     }
 
     // 5. Serialize to JSON, then reload.
@@ -148,8 +148,7 @@ fn expose_mirror_inner_param_survives_save_reload_with_driver_and_ableton() {
         "user-tail slot value must be in the paramValues map (pretty-printed JSON): {json}"
     );
 
-    let reloaded: Project =
-        manifold_io::loader::load_project_from_json(&json).expect("reload");
+    let reloaded: Project = manifold_io::loader::load_project_from_json(&json).expect("reload");
 
     // 6. Verify the user binding round-trips intact.
     let fx = &reloaded.settings.master_effects[0];

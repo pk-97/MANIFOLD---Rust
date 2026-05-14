@@ -10,11 +10,9 @@
 mod parity;
 
 use manifold_core::EffectTypeId;
-use manifold_renderer::node_graph::primitives::ClampStretch;
 use manifold_renderer::node_graph::ParamValue;
-use parity::{
-    assert_bytewise_equal, default_ctx, make_default_effect, Fixture, ParityHarness,
-};
+use manifold_renderer::node_graph::primitives::ClampStretch;
+use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
 
 const MODES: &[(u32, &str)] = &[(0, "horiz"), (1, "vert"), (2, "both")];
 const WIDTHS: &[f32] = &[0.2, 0.433, 0.8];
