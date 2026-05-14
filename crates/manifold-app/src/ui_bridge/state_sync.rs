@@ -1339,6 +1339,7 @@ fn effects_to_configs(
             }
 
             let has_abl = params.iter().any(|p| p.ableton_display.is_some());
+            let has_graph_mod = fx.graph.is_some();
 
             Some(EffectCardConfig {
                 effect_index: i,
@@ -1352,6 +1353,7 @@ fn effects_to_configs(
                 has_drv,
                 has_env,
                 has_abl,
+                has_graph_mod,
                 driver_active,
                 envelope_active,
                 trim_min,
