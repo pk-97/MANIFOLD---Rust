@@ -446,33 +446,37 @@ impl Application {
                 }
                 PanelAction::OpenGraphEditor(ei) => {
                     // Resolve `ei` (effect index in the active inspector
-                    // tab) to the effect's type id, then ask the content
-                    // thread to start snapshotting that specific graph.
+                    // tab) to the effect's stable `EffectId`, then ask
+                    // the content thread to start snapshotting that
+                    // specific instance's graph. Keyed by instance id —
+                    // not type id — so two cards of the same effect type
+                    // can produce independent snapshots once Phase 3
+                    // editing lands.
                     let tab = self.ws.ui_root.inspector.last_effect_tab();
-                    let type_id = match tab {
+                    let effect_id = match tab {
                         manifold_ui::InspectorTab::Master => self
                             .local_project
                             .settings
                             .master_effects
                             .get(*ei)
-                            .map(|e| e.effect_type().clone()),
+                            .map(|e| e.id.clone()),
                         manifold_ui::InspectorTab::Layer => self
                             .active_layer_id
                             .as_ref()
                             .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
                             .and_then(|(_, l)| l.effects.as_ref())
                             .and_then(|effects| effects.get(*ei))
-                            .map(|e| e.effect_type().clone()),
+                            .map(|e| e.id.clone()),
                         manifold_ui::InspectorTab::Clip => self
                             .selection
                             .primary_selected_clip_id
                             .as_ref()
                             .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
                             .and_then(|c| c.effects.get(*ei))
-                            .map(|e| e.effect_type().clone()),
+                            .map(|e| e.id.clone()),
                     };
-                    if let Some(tid) = type_id {
-                        self.send_content_cmd(ContentCommand::WatchEffectGraph(Some(tid)));
+                    if let Some(eid) = effect_id {
+                        self.send_content_cmd(ContentCommand::WatchEffectGraph(Some(eid)));
                     }
                     // Remember which effect instance the editor is on so
                     // the right-sidebar panel can look up its user

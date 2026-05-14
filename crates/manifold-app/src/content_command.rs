@@ -4,7 +4,7 @@
 //! crossbeam channel. Each variant represents an action that must
 //! execute on the content thread where PlaybackEngine and EditingService live.
 use manifold_core::project::Project;
-use manifold_core::{Beats, ClipId, EffectTypeId, LayerId, Seconds};
+use manifold_core::{Beats, ClipId, EffectId, LayerId, Seconds};
 use manifold_editing::command::Command;
 use manifold_media::export_config::ExportConfig;
 use manifold_playback::audio_sync::PreloadedAudioData;
@@ -202,11 +202,13 @@ pub enum ContentCommand {
     SurfaceReady,
 
     // ── Editor canvas ─────────────────────────────────────────────
-    /// Tell the content thread which graph-backed effect's internal
-    /// graph to snapshot for the editor canvas. `None` clears it
-    /// (canvas goes empty). Sent when the user clicks a cog or
-    /// closes the editor.
-    WatchEffectGraph(Option<EffectTypeId>),
+    /// Tell the content thread which effect instance's internal graph
+    /// to snapshot for the editor canvas. `None` clears it (canvas
+    /// goes empty). Sent when the user clicks a cog or closes the
+    /// editor. Keyed by `EffectId` (not type id) so two cards of the
+    /// same effect type produce independent snapshots — required for
+    /// per-card graph divergence.
+    WatchEffectGraph(Option<EffectId>),
 
     // ── Shutdown ──────────────────────────────────────────────────
     Shutdown,

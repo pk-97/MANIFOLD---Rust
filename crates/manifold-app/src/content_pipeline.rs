@@ -1200,9 +1200,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         self.gpu_poll_ms
     }
 
-    /// Snapshot of a specific effect type's internal graph. Delegates
-    /// to the compositor's `graph_snapshot_for` so the editor can
-    /// target the effect the user clicked the cog on.
+    /// Snapshot of the catalog-default graph for an effect type — the
+    /// fallback path when an [`EffectInstance`] has no per-card
+    /// override (`instance.graph` is `None`). Delegates to the
+    /// compositor's `graph_snapshot_for`, which walks the live
+    /// processors and returns the first matching one's
+    /// `graph_snapshot()`. Per-card divergence is handled higher up in
+    /// [`ContentThread::active_graph_snapshot`].
     pub fn graph_snapshot_for(
         &self,
         type_id: &manifold_core::EffectTypeId,

@@ -17,7 +17,10 @@
 
 use crate::node_graph::graph::Graph;
 use crate::node_graph::parameters::{ParamType, ParamValue};
+use crate::node_graph::persistence::{EffectGraphDefExt, PrimitiveRegistry};
 use crate::node_graph::ports::{PortKind, PortType};
+
+use manifold_core::effect_graph_def::EffectGraphDef;
 
 /// Owned, `Send`able view of a graph for the editor canvas.
 #[derive(Debug, Clone)]
@@ -204,6 +207,31 @@ impl GraphSnapshot {
             .collect();
 
         Self { nodes, wires }
+    }
+
+    /// Build a snapshot from a serialized [`EffectGraphDef`]. Used by
+    /// the editor pipeline when an `EffectInstance` carries a
+    /// per-card graph override — we don't need to spin up GPU state
+    /// just to draw the editor canvas, so route through
+    /// [`EffectGraphDefExt::into_graph`] with the built-in
+    /// [`PrimitiveRegistry`] and snapshot the temporary live graph.
+    ///
+    /// Returns `None` if the def references an unknown type id or
+    /// is otherwise unloadable — the editor canvas treats `None`
+    /// like "no active graph" rather than showing a partial state.
+    pub fn from_def(def: &EffectGraphDef) -> Option<Self> {
+        let registry = PrimitiveRegistry::with_builtin();
+        match def.clone().into_graph(&registry) {
+            Ok(g) => Some(Self::from_graph(&g)),
+            Err(e) => {
+                eprintln!(
+                    "[manifold-renderer] GraphSnapshot::from_def: \
+                     failed to materialize per-instance graph: {e}. \
+                     Editor canvas will treat this as empty."
+                );
+                None
+            }
+        }
     }
 }
 
@@ -411,5 +439,76 @@ mod tests {
         assert_eq!(mode.kind, ParamSnapshotKind::Enum);
         // Enum default flattens to f32 via `as f32` cast.
         assert!((mode.default_value - 0.0).abs() < f32::EPSILON);
+    }
+
+    /// `GraphSnapshot::from_def` builds a snapshot directly from an
+    /// `EffectGraphDef`, matching the editor's per-card path.
+    #[test]
+    fn from_def_builds_snapshot_with_named_handles() {
+        use crate::node_graph::EffectGraphDefExt;
+        use manifold_core::effect_graph_def::EffectGraphDef;
+
+        // Build the catalog Mirror graph via the existing builder and
+        // serialize it to a def — the round-trip should produce the
+        // same snapshot structure end-to-end.
+        let mut g = Graph::new();
+        let src = g.add_node_named(
+            "source",
+            Box::new(crate::node_graph::boundary_nodes::Source::new()),
+        );
+        let handle = crate::node_graph::composites::build_mirror(&mut g, (src, "out"))
+            .expect("build_mirror");
+        let _out = g.add_node_named(
+            "final_output",
+            Box::new(crate::node_graph::boundary_nodes::FinalOutput::new()),
+        );
+        let final_out_id = g.node_id_by_handle("final_output").unwrap();
+        g.connect(handle.output(), (final_out_id, "in")).unwrap();
+
+        let def = EffectGraphDef::from_graph(&g);
+        let snap = GraphSnapshot::from_def(&def).expect("from_def succeeds");
+
+        // Same number of nodes + wires as the live graph.
+        // 4 nodes: Source, uv_transform, mix, FinalOutput.
+        // 4 wires: src→uv.source, src→mix.a, uv.out→mix.b, mix.out→final.in.
+        assert_eq!(snap.nodes.len(), 4);
+        assert_eq!(snap.wires.len(), 4);
+        // Named handles survive.
+        assert!(snap
+            .nodes
+            .iter()
+            .any(|n| n.node_handle.as_deref() == Some("source")));
+        assert!(snap
+            .nodes
+            .iter()
+            .any(|n| n.node_handle.as_deref() == Some("uv_transform")));
+        assert!(snap
+            .nodes
+            .iter()
+            .any(|n| n.node_handle.as_deref() == Some("mix")));
+        assert!(snap
+            .nodes
+            .iter()
+            .any(|n| n.node_handle.as_deref() == Some("final_output")));
+    }
+
+    #[test]
+    fn from_def_returns_none_on_unknown_type_id() {
+        use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EFFECT_GRAPH_VERSION};
+
+        let bad_def = EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            nodes: vec![EffectGraphNode {
+                id: 0,
+                type_id: "node.does_not_exist".to_string(),
+                handle: None,
+                params: Default::default(),
+                editor_pos: None,
+            }],
+            wires: Vec::new(),
+        };
+        assert!(GraphSnapshot::from_def(&bad_def).is_none());
     }
 }

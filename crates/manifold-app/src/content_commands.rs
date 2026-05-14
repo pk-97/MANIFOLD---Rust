@@ -61,8 +61,8 @@ impl ContentThread {
         match cmd {
             ContentCommand::Shutdown => return true,
 
-            ContentCommand::WatchEffectGraph(type_id) => {
-                self.watched_graph_effect = type_id;
+            ContentCommand::WatchEffectGraph(effect_id) => {
+                self.watched_graph_effect = effect_id;
             }
 
             // ── GPU events ─────────────────────────────────────────

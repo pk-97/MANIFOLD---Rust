@@ -95,12 +95,14 @@ pub struct ContentThread {
     // ── Cached project snapshot (Arc avoids deep clone every modulation frame) ──
     pub cached_project_snapshot: Option<std::sync::Arc<manifold_core::project::Project>>,
 
-    /// Effect type the editor canvas is currently watching. The content
-    /// thread snapshots this effect's internal graph each frame and
-    /// publishes it via `ContentState::active_graph_snapshot`. `None`
-    /// means the editor isn't focused on any effect — canvas stays
-    /// empty until the user clicks a cog.
-    pub watched_graph_effect: Option<manifold_core::EffectTypeId>,
+    /// Effect instance the editor canvas is currently watching, keyed
+    /// by stable `EffectId`. The content thread looks up the instance
+    /// in the project each frame and snapshots either its per-card
+    /// graph override (if `instance.graph.is_some()`) or the catalog
+    /// default for its type. `None` means the editor isn't focused on
+    /// any effect — canvas stays empty until the user clicks a cog.
+    /// Phase 2 of per-card divergence — see `docs/NODE_GRAPH_SYSTEM.md`.
+    pub watched_graph_effect: Option<manifold_core::EffectId>,
 
     // ── Reusable modulation scratch (flat buffer — zero alloc after first frame) ──
     pub mod_scratch: crate::content_state::ModulationSnapshot,
@@ -1117,13 +1119,40 @@ impl ContentThread {
             active_graph_snapshot: self
                 .watched_graph_effect
                 .as_ref()
-                .and_then(|tid| self.content_pipeline.graph_snapshot_for(tid))
+                .and_then(|eid| self.active_graph_snapshot(eid))
                 .map(Arc::new),
         };
 
         // Send state to UI. Unbounded channel — never drops snapshots.
         if let Err(e) = state_tx.send(state) {
             log::error!("[ContentThread] State channel disconnected: {e}");
+        }
+    }
+
+    /// Build the editor canvas's graph snapshot for the currently
+    /// watched effect instance. Two paths:
+    ///
+    /// 1. The project's `EffectInstance` has `graph: Some(def)` → build
+    ///    the snapshot directly from the def (renders what the user
+    ///    saved, not what the runtime singleton is currently doing).
+    /// 2. The instance has `graph: None` → fall through to the
+    ///    type-keyed compositor lookup, which returns the snapshot of
+    ///    the catalog-default runtime graph.
+    ///
+    /// Returns `None` if the EffectId no longer resolves (e.g., the
+    /// user deleted the effect after opening the editor) — the canvas
+    /// treats `None` as "no active graph".
+    fn active_graph_snapshot(
+        &self,
+        effect_id: &manifold_core::EffectId,
+    ) -> Option<manifold_renderer::node_graph::GraphSnapshot> {
+        let project = self.engine.project()?;
+        let instance = find_effect_by_id(project, effect_id)?;
+        if let Some(def) = instance.graph.as_ref() {
+            manifold_renderer::node_graph::GraphSnapshot::from_def(def)
+        } else {
+            self.content_pipeline
+                .graph_snapshot_for(instance.effect_type())
         }
     }
 
@@ -1486,4 +1515,38 @@ impl ContentThread {
             );
         }
     }
+}
+
+/// Locate an [`EffectInstance`] by stable [`EffectId`] anywhere in the
+/// project. Walks master effects, then every layer's effects, then
+/// every clip's effects. Linear in total effect count — used only on
+/// the editor-canvas snapshot path (i.e., when an editor window is
+/// open), so per-frame cost is bounded by "user has an editor open"
+/// rather than the per-frame hot path.
+fn find_effect_by_id<'a>(
+    project: &'a manifold_core::project::Project,
+    effect_id: &manifold_core::EffectId,
+) -> Option<&'a manifold_core::effects::EffectInstance> {
+    for fx in &project.settings.master_effects {
+        if &fx.id == effect_id {
+            return Some(fx);
+        }
+    }
+    for layer in &project.timeline.layers {
+        if let Some(effects) = layer.effects.as_ref() {
+            for fx in effects {
+                if &fx.id == effect_id {
+                    return Some(fx);
+                }
+            }
+        }
+        for clip in &layer.clips {
+            for fx in &clip.effects {
+                if &fx.id == effect_id {
+                    return Some(fx);
+                }
+            }
+        }
+    }
+    None
 }
