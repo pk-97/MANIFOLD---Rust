@@ -72,11 +72,30 @@ impl EffectRegistry {
         type_id: &EffectTypeId,
     ) -> Option<crate::node_graph::GraphSnapshot> {
         let processor = self.processors.get(type_id)?;
-        if let Some(snap) = processor.graph_snapshot() {
+        if let Some(mut snap) = processor.graph_snapshot() {
+            // Stitch on the outer→inner routing list so the editor
+            // can gray out inner rows the outer card drives every
+            // frame. The effect-author trait method is the source of
+            // truth; we just copy it onto the snapshot at the seam.
+            snap.outer_routings = processor.outer_param_routings();
             return Some(snap);
         }
         let metadata = crate::node_graph::metadata_by_id(type_id)?;
         Some(synthesized_legacy_snapshot(metadata))
+    }
+
+    /// Outer→inner routings declared by `type_id`'s registered
+    /// effect. Used by the content thread for the per-card
+    /// (`from_def`) snapshot path, where the snapshot is built off a
+    /// serialized graph and `graph_snapshot_for` isn't called.
+    pub fn outer_routings_for(
+        &self,
+        type_id: &EffectTypeId,
+    ) -> Vec<crate::node_graph::OuterParamRouting> {
+        self.processors
+            .get(type_id)
+            .map(|p| p.outer_param_routings())
+            .unwrap_or_default()
     }
 }
 
@@ -151,5 +170,10 @@ fn synthesized_legacy_snapshot(
     GraphSnapshot {
         nodes: vec![source, legacy, final_out],
         wires,
+        // Legacy-wrapped effects don't surface any outer→inner
+        // routing — their parameters live on the wrapped node and
+        // are edited from the effect card directly, not through a
+        // composite-handle indirection. Nothing to gray out.
+        outer_routings: Vec::new(),
     }
 }

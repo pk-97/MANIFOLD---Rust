@@ -105,6 +105,18 @@ pub trait PostProcessEffect: Send {
         None
     }
 
+    /// Inner-node params this effect's outer effect-card sliders
+    /// drive every frame. The editor inspector renders the affected
+    /// rows as read-only with a "Driven by '<outer>'" hint so a user
+    /// editing an inner param sees why their change doesn't stick.
+    ///
+    /// Default: empty — non-routed effects (atomic single-node FX) and
+    /// effects that haven't declared their routings to the editor
+    /// surface return nothing. Composite-shaped effects override.
+    fn outer_param_routings(&self) -> Vec<crate::node_graph::OuterParamRouting> {
+        Vec::new()
+    }
+
     /// Replace this effect's internal graph with one materialized from
     /// `def`. Default: no-op — non-graph effects ignore the call.
     /// Graph-backed effects override to rebuild their `Graph`, plan,

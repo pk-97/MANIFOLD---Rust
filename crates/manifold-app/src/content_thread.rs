@@ -1149,7 +1149,17 @@ impl ContentThread {
         let project = self.engine.project()?;
         let instance = project.find_effect_by_id(effect_id)?;
         if let Some(def) = instance.graph.as_ref() {
-            manifold_renderer::node_graph::GraphSnapshot::from_def(def)
+            // Per-card override: `from_def` constructs a snapshot
+            // from the serialized graph but has no access to the
+            // live effect, so its outer_routings come out empty.
+            // The catalog routings are still authoritative (the
+            // outer→inner mapping is static per effect type), so
+            // ask the compositor to fill them in here.
+            let mut snap = manifold_renderer::node_graph::GraphSnapshot::from_def(def)?;
+            snap.outer_routings = self
+                .content_pipeline
+                .outer_routings_for(instance.effect_type());
+            Some(snap)
         } else {
             self.content_pipeline
                 .graph_snapshot_for(instance.effect_type())

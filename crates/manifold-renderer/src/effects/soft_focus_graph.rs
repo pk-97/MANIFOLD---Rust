@@ -219,6 +219,17 @@ impl PostProcessEffect for SoftFocusGraphFX {
         Some(crate::node_graph::GraphSnapshot::from_graph(&self.graph))
     }
 
+    /// Outer sliders → inner-node params. See
+    /// [`MirrorFX::outer_param_routings`] for the editor-inspector
+    /// rationale.
+    fn outer_param_routings(&self) -> Vec<crate::node_graph::OuterParamRouting> {
+        crate::node_graph::outer_routings_from_bindings(
+            &self.bindings,
+            Some(&self.handle),
+            &self.graph,
+        )
+    }
+
     fn apply(
         &mut self,
         gpu: &mut GpuEncoder,

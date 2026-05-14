@@ -247,6 +247,14 @@ impl PostProcessEffect for StylizedFeedbackFX {
         Some(crate::node_graph::GraphSnapshot::from_graph(&self.graph))
     }
 
+    /// StylizedFeedback wraps a single `Feedback` primitive, so every
+    /// outer slider routes via `ParamTarget::Node` directly into a
+    /// named inner param. The helper handles both Composite and
+    /// Node-target bindings.
+    fn outer_param_routings(&self) -> Vec<crate::node_graph::OuterParamRouting> {
+        crate::node_graph::outer_routings_from_bindings(&self.bindings, None, &self.graph)
+    }
+
     fn apply(
         &mut self,
         gpu: &mut GpuEncoder,

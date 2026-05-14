@@ -27,6 +27,26 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 pub struct GraphSnapshot {
     pub nodes: Vec<NodeSnapshot>,
     pub wires: Vec<WireSnapshot>,
+    /// Outer effect-card params whose value is routed into an
+    /// inner-node param every frame. The editor inspector disables
+    /// those inner rows so the user can see (a) which inner param an
+    /// outer slider drives, and (b) why their inline edit doesn't
+    /// stick — the outer routing overwrites it before the next
+    /// render. Populated by the producer (effect-registry path for
+    /// catalog graphs, content-thread for per-card defs).
+    pub outer_routings: Vec<OuterParamRouting>,
+}
+
+/// One outer→inner routing entry. `outer_label` is the slider label
+/// shown on the effect card ("Amount", "Mode"). `node_handle` and
+/// `inner_param` together identify the inner-node param that gets
+/// overwritten — they match the snapshot's `NodeSnapshot.node_handle`
+/// and `ParamSnapshot.name`.
+#[derive(Debug, Clone)]
+pub struct OuterParamRouting {
+    pub outer_label: String,
+    pub node_handle: String,
+    pub inner_param: String,
 }
 
 /// One node in the snapshot.
@@ -237,7 +257,15 @@ impl GraphSnapshot {
             })
             .collect();
 
-        Self { nodes, wires }
+        Self {
+            nodes,
+            wires,
+            // `from_graph` operates on a bare graph with no effect-
+            // level context, so it can't know about outer→inner
+            // routings. The effect-registry path fills this in
+            // after calling `effect.graph_snapshot()`.
+            outer_routings: Vec::new(),
+        }
     }
 
     /// Build a snapshot from a serialized [`EffectGraphDef`]. Used by

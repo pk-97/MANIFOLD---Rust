@@ -51,7 +51,8 @@ pub use metal_backend::MetalBackend;
 pub use palette::{catalog_graph_def_for, palette_atoms, PaletteAtom};
 pub use param_binding::{
     ParamBinding, ParamConvert, ParamId, ParamTarget, UserParamBindingRuntime,
-    apply_param_bindings, binding_value, user_binding_to_runtime,
+    apply_param_bindings, binding_value, outer_routings_from_bindings,
+    user_binding_to_runtime,
 };
 pub use parameters::{ParamDef, ParamType, ParamValue};
 pub use persistence::{
@@ -61,8 +62,8 @@ pub use persistence::{
 pub use ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 pub use primitive::{Primitive, PrimitiveDescription, PrimitiveSpec};
 pub use snapshot::{
-    GraphSnapshot, NodeSnapshot, ParamSnapshot, ParamSnapshotKind, PortKindSnapshot, PortSnapshot,
-    WireSnapshot,
+    GraphSnapshot, NodeSnapshot, OuterParamRouting, ParamSnapshot, ParamSnapshotKind,
+    PortKindSnapshot, PortSnapshot, WireSnapshot,
 };
 pub use state_store::{NodeState, OwnerKey, StateStore};
 pub use validation::{GraphError, topological_sort, validate};

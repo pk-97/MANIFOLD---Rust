@@ -2125,6 +2125,13 @@ impl Compositor for LayerCompositor {
     ) -> Option<crate::node_graph::GraphSnapshot> {
         self.effect_registry.graph_snapshot_for(type_id)
     }
+
+    fn outer_routings_for(
+        &self,
+        type_id: &manifold_core::EffectTypeId,
+    ) -> Vec<crate::node_graph::OuterParamRouting> {
+        self.effect_registry.outer_routings_for(type_id)
+    }
 }
 
 #[cfg(test)]

@@ -332,6 +332,63 @@ pub fn binding_value(
     None
 }
 
+/// Walk a list of static bindings, a composite handle, and the live
+/// graph to produce the editor-facing list of
+/// [`OuterParamRouting`](crate::node_graph::OuterParamRouting) entries
+/// — one per outer slider whose value gets written into an inner-
+/// node param every frame.
+///
+/// Both routing styles are recognized:
+/// - [`ParamTarget::Composite`] — resolved via
+///   [`CompositeHandle::inner_routing_for`].
+/// - [`ParamTarget::Node`] — `(node_id, param)` is taken directly off
+///   the binding.
+///
+/// [`ParamTarget::Custom`] is skipped; it has no introspectable
+/// destination, so the editor can't surface it.
+pub fn outer_routings_from_bindings(
+    bindings: &[ParamBinding],
+    handle: Option<&crate::node_graph::composites::CompositeHandle>,
+    graph: &Graph,
+) -> Vec<crate::node_graph::OuterParamRouting> {
+    use crate::node_graph::OuterParamRouting;
+    let id_to_handle: ahash::AHashMap<u32, String> = graph
+        .handles()
+        .map(|(h, id)| (id.0, h.to_string()))
+        .collect();
+    let mut out = Vec::with_capacity(bindings.len());
+    for b in bindings {
+        let (node_id, inner_param) = match &b.target {
+            ParamTarget::Composite { outer_name } => {
+                let Some(h) = handle else {
+                    // Composite-target binding on an effect that
+                    // doesn't expose a `CompositeHandle` — can't
+                    // resolve. Skip rather than guess.
+                    continue;
+                };
+                let Some(route) = h.inner_routing_for(outer_name.as_ref()) else {
+                    continue;
+                };
+                route
+            }
+            ParamTarget::Node { node, param } => (*node, *param),
+            ParamTarget::Custom(_) => continue,
+        };
+        let Some(handle_str) = id_to_handle.get(&node_id.0) else {
+            // Inner node has no stable handle — without it the editor
+            // can't match it to a snapshot row, so the routing is
+            // un-surfaceable. Skip silently.
+            continue;
+        };
+        out.push(OuterParamRouting {
+            outer_label: b.spec.name.to_string(),
+            node_handle: handle_str.clone(),
+            inner_param: inner_param.to_string(),
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

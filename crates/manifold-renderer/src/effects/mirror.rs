@@ -34,7 +34,8 @@ use crate::node_graph::composites::{CompositeHandle, MIRROR_TYPE_ID, build_mirro
 use crate::node_graph::{
     ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId,
     ParamBinding, ParamConvert, ParamTarget, PortType, ResourceId, Slot, Source,
-    UserParamBindingRuntime, apply_param_bindings, binding_value, compile, user_binding_to_runtime,
+    UserParamBindingRuntime, apply_param_bindings, binding_value, compile,
+    outer_routings_from_bindings, user_binding_to_runtime,
 };
 use crate::render_target::RenderTarget;
 
@@ -245,6 +246,22 @@ impl PostProcessEffect for MirrorFX {
 
     fn graph_snapshot(&self) -> Option<crate::node_graph::GraphSnapshot> {
         Some(crate::node_graph::GraphSnapshot::from_graph(&self.graph))
+    }
+
+    /// The Mirror card surfaces two outer sliders (`Amount`, `Mode`)
+    /// and each routes directly into one inner-node param every
+    /// frame:
+    ///
+    /// - `Amount` → `Mix.amount`
+    /// - `Mode`   → `Transform.mode` (via the FoldX/FoldY/FoldBoth
+    ///   enum remap)
+    ///
+    /// The editor inspector uses this to disable the affected inner
+    /// rows so users can't make per-card edits that the outer routing
+    /// immediately stomps. The handle strings here MUST match the
+    /// ones `build_mirror` registers in [`build_mirror`].
+    fn outer_param_routings(&self) -> Vec<crate::node_graph::OuterParamRouting> {
+        outer_routings_from_bindings(&self.bindings, Some(&self.handle), &self.graph)
     }
 
     /// Replace this Mirror's catalog graph with one materialized from

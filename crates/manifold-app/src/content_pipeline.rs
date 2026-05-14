@@ -1213,4 +1213,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     ) -> Option<manifold_renderer::node_graph::GraphSnapshot> {
         self.compositor.graph_snapshot_for(type_id)
     }
+
+    /// Outer-card → inner-node routings for the given effect type.
+    /// Used to populate `GraphSnapshot::outer_routings` on the
+    /// per-card (`from_def`) path, where the snapshot doesn't go
+    /// through `graph_snapshot_for`.
+    pub fn outer_routings_for(
+        &self,
+        type_id: &manifold_core::EffectTypeId,
+    ) -> Vec<manifold_renderer::node_graph::OuterParamRouting> {
+        self.compositor.outer_routings_for(type_id)
+    }
 }

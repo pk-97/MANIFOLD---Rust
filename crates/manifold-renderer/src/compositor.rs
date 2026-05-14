@@ -117,4 +117,16 @@ pub trait Compositor: Send {
     ) -> Option<crate::node_graph::GraphSnapshot> {
         None
     }
+
+    /// Outer→inner routings for a specific effect type. Used by the
+    /// per-card snapshot path where the snapshot is built off a
+    /// serialized graph, so the editor still needs the static
+    /// routing info from the live effect to disable inner rows.
+    /// Default empty.
+    fn outer_routings_for(
+        &self,
+        _type_id: &manifold_core::EffectTypeId,
+    ) -> Vec<crate::node_graph::OuterParamRouting> {
+        Vec::new()
+    }
 }

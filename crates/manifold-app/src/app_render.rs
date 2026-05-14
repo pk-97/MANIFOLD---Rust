@@ -1454,12 +1454,18 @@ impl Application {
             build_exposed_keys(self.current_editor_target.as_ref(), &self.local_project);
         let static_params =
             build_static_params(self.current_editor_target.as_ref(), &self.local_project);
+        // Outer→inner routings declared by the effect (Mirror's
+        // `Amount` → `Mix.amount`, `Mode` → `Transform.mode`, etc.).
+        // The panel uses this to disable inner-param rows the outer
+        // card slider drives every frame.
+        let outer_driven = build_outer_driven_map(snap_arc.as_deref());
         let effect_index = self.current_editor_target.as_ref().map(|(_, ei)| *ei);
         self.graph_editor_panel.configure(
             effect_index,
             static_params,
             view_for_panel.as_ref(),
             exposed_keys,
+            outer_driven,
         );
 
         // Configure the left palette. Active whenever we have a
@@ -2109,6 +2115,26 @@ fn build_exposed_keys(
     fx.user_param_bindings
         .iter()
         .map(|ub| (ub.node_handle.clone(), ub.inner_param.clone()))
+        .collect()
+}
+
+/// Flatten the snapshot's outer→inner routings into a
+/// `(node_handle, inner_param) → outer_label` map. Empty when the
+/// snapshot is `None` or no effect declares outer routings.
+fn build_outer_driven_map(
+    snapshot: Option<&manifold_renderer::node_graph::GraphSnapshot>,
+) -> std::collections::HashMap<(String, String), String> {
+    let Some(snap) = snapshot else {
+        return Default::default();
+    };
+    snap.outer_routings
+        .iter()
+        .map(|r| {
+            (
+                (r.node_handle.clone(), r.inner_param.clone()),
+                r.outer_label.clone(),
+            )
+        })
         .collect()
 }
 

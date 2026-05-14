@@ -26,7 +26,7 @@
 //! convention: `new` / `configure` / `build` / `handle_click`, called
 //! by the editor-window present path.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::color;
 use crate::input::UIEvent;
@@ -231,6 +231,12 @@ pub struct GraphEditorPanel {
     /// Exposed-state lookup: `(node_handle, inner_param)` keys for
     /// every binding currently on `EffectInstance.user_param_bindings`.
     exposed_keys: HashSet<(String, String)>,
+    /// `(node_handle, inner_param) → outer slider label` for every
+    /// outer effect-card param that drives an inner-node param every
+    /// frame. Rows in this map render with the value cell disabled
+    /// and a "Driven by '<outer>'" hint — editing them from here is
+    /// pointless because the routing overwrites the edit each frame.
+    outer_driven: HashMap<(String, String), String>,
     /// Per-row state, populated during `build`.
     rows: Vec<RowState>,
     /// Root container for everything this panel owns inside the tree.
@@ -258,11 +264,13 @@ impl GraphEditorPanel {
         static_params: Vec<GraphEditorStaticParam>,
         selected_node: Option<&GraphEditorNodeView>,
         exposed_keys: HashSet<(String, String)>,
+        outer_driven: HashMap<(String, String), String>,
     ) {
         self.effect_index = effect_index;
         self.static_params = static_params;
         self.selected_node = selected_node.cloned();
         self.exposed_keys = exposed_keys;
+        self.outer_driven = outer_driven;
     }
 
     /// Build the UITree subtree at the given viewport. Idempotent
@@ -434,6 +442,17 @@ impl GraphEditorPanel {
             let is_exposed = self
                 .exposed_keys
                 .contains(&(handle.clone(), ps.name.clone()));
+            // Outer-driven: an outer effect-card slider routes into
+            // this inner param every frame, so any edit here would
+            // be stomped on the next render. The row stays visible
+            // but the value cell becomes a non-interactive label
+            // showing "Driven by '<outer>'" so the user can see why
+            // the inline editor is disabled.
+            let outer_driver = self
+                .outer_driven
+                .get(&(handle.clone(), ps.name.clone()))
+                .cloned();
+            let editable = supported && outer_driver.is_none();
 
             let cb_x = viewport.x + PADDING;
             let cb_y = y + (ROW_H - CHECKBOX_H) * 0.5;
@@ -473,14 +492,15 @@ impl GraphEditorPanel {
                     ..UIStyle::default()
                 },
             );
-            // Current-value cell. Editable params render as an
-            // interactive button so the tree's input system gives us
-            // click + drag events on it; `Other`-kind params (Vec/
-            // Color/etc.) render as a plain label since V1 has no
-            // editor for them.
+            // Current-value cell. Three rendering modes:
+            //   - editable          → button (Click/Drag flow)
+            //   - outer-driven      → label showing "↳ Outer" badge
+            //                         + current value (read-only)
+            //   - unsupported kind  → plain dimmed label (no edits
+            //                         possible in V1)
             let value_str = format_inner_param_value(ps);
             let value_x = label_x + label_w;
-            let value_cell_node_id = if supported {
+            let value_cell_node_id = if editable {
                 let id = tree.add_button(
                     bg_id,
                     value_x,
@@ -501,6 +521,27 @@ impl GraphEditorPanel {
                     &value_str,
                 );
                 Some(id)
+            } else if let Some(outer) = outer_driver.as_ref() {
+                // Read-only — show both the live value and the outer
+                // slider driving it. Truncates if the label is long
+                // (rendered text gets ellipsized at the cell edge by
+                // the tree, so no manual trimming needed).
+                let driven_str = format!("↳ {outer} = {value_str}");
+                tree.add_label(
+                    bg_id,
+                    value_x,
+                    y,
+                    value_w,
+                    ROW_H,
+                    &driven_str,
+                    UIStyle {
+                        text_color: color::TEXT_DIMMED_C32,
+                        font_size: FONT_SIZE,
+                        text_align: TextAlign::Right,
+                        ..UIStyle::default()
+                    },
+                );
+                None
             } else {
                 tree.add_label(
                     bg_id,
@@ -914,7 +955,7 @@ mod tests {
         let mut tree = UITree::new();
         let mut panel = GraphEditorPanel::new();
         let node = snap_node_with_params(Some("uv_transform"));
-        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new());
+        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new(), HashMap::new());
         panel.build(&mut tree, viewport());
         // 2 supported params → 2 inner-node rows tracked. The Color row
         // exists visually but isn't clickable.
@@ -932,7 +973,7 @@ mod tests {
     fn build_handles_no_selection_with_empty_state() {
         let mut tree = UITree::new();
         let mut panel = GraphEditorPanel::new();
-        panel.configure(Some(0), Vec::new(), None, HashSet::new());
+        panel.configure(Some(0), Vec::new(), None, HashSet::new(), HashMap::new());
         panel.build(&mut tree, viewport());
         assert!(panel.rows.is_empty());
     }
@@ -942,7 +983,7 @@ mod tests {
         let mut tree = UITree::new();
         let mut panel = GraphEditorPanel::new();
         let node = snap_node_with_params(None); // no handle
-        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new());
+        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new(), HashMap::new());
         panel.build(&mut tree, viewport());
         assert!(
             panel.rows.is_empty(),
@@ -955,7 +996,7 @@ mod tests {
         let mut tree = UITree::new();
         let mut panel = GraphEditorPanel::new();
         let node = snap_node_with_params(Some("uv_transform"));
-        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new());
+        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new(), HashMap::new());
         panel.build(&mut tree, viewport());
 
         let inner_rows: Vec<&RowState> = panel
@@ -999,7 +1040,7 @@ mod tests {
         let node = snap_node_with_params(Some("uv_transform"));
         let mut exposed = HashSet::new();
         exposed.insert(("uv_transform".to_string(), "translate".to_string()));
-        panel.configure(Some(0), Vec::new(), Some(&node), exposed);
+        panel.configure(Some(0), Vec::new(), Some(&node), exposed, HashMap::new());
         panel.build(&mut tree, viewport());
 
         let inner_rows: Vec<&RowState> = panel
@@ -1023,7 +1064,7 @@ mod tests {
         let mut tree = UITree::new();
         let mut panel = GraphEditorPanel::new();
         let node = snap_node_with_params(Some("uv_transform"));
-        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new());
+        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new(), HashMap::new());
         panel.build(&mut tree, viewport());
         // Random unrelated node id.
         assert!(panel.handle_click(99999).is_empty());
@@ -1036,7 +1077,7 @@ mod tests {
         let node = snap_node_with_params(Some("uv_transform"));
         // Configure with effect_index = None: the editor isn't open
         // on a specific effect, so clicks must NOT emit.
-        panel.configure(None, Vec::new(), Some(&node), HashSet::new());
+        panel.configure(None, Vec::new(), Some(&node), HashSet::new(), HashMap::new());
         panel.build(&mut tree, viewport());
         if let Some(row) = panel.rows.first() {
             assert!(panel.handle_click(checkbox_id_of(row)).is_empty());
@@ -1103,7 +1144,7 @@ mod tests {
         let mut tree = UITree::new();
         let mut panel = GraphEditorPanel::new();
         let node = snap_node_with_mixed_kinds();
-        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new());
+        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new(), HashMap::new());
         panel.build(&mut tree, viewport());
 
         let bool_row = panel
@@ -1135,7 +1176,7 @@ mod tests {
         let mut tree = UITree::new();
         let mut panel = GraphEditorPanel::new();
         let node = snap_node_with_mixed_kinds(); // mode current_value = 1
-        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new());
+        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new(), HashMap::new());
         panel.build(&mut tree, viewport());
 
         let mode_row = panel
@@ -1167,7 +1208,7 @@ mod tests {
         // Park on the last enum option so the cycle wraps.
         let mode = node.parameters.iter_mut().find(|p| p.name == "mode").unwrap();
         mode.current_value = 2.0;
-        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new());
+        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new(), HashMap::new());
         panel.build(&mut tree, viewport());
 
         let mode_row = panel
@@ -1192,7 +1233,7 @@ mod tests {
         let mut tree = UITree::new();
         let mut panel = GraphEditorPanel::new();
         let node = snap_node_with_mixed_kinds(); // scale: 1.0, range (0..4)
-        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new());
+        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new(), HashMap::new());
         panel.build(&mut tree, viewport());
 
         let scale_row = panel
@@ -1260,7 +1301,7 @@ mod tests {
         let mut tree = UITree::new();
         let mut panel = GraphEditorPanel::new();
         let node = snap_node_with_mixed_kinds();
-        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new());
+        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new(), HashMap::new());
         panel.build(&mut tree, viewport());
 
         let cell = panel
@@ -1300,6 +1341,67 @@ mod tests {
     }
 
     #[test]
+    fn outer_driven_inner_row_does_not_emit_set_graph_node_param() {
+        // Mark `mode` as outer-driven; clicking its row must NOT
+        // produce a SetGraphNodeParam (the row's value cell is
+        // rendered as a non-interactive label).
+        let mut tree = UITree::new();
+        let mut panel = GraphEditorPanel::new();
+        let node = snap_node_with_mixed_kinds();
+        let mut driven = HashMap::new();
+        driven.insert(
+            ("uv_transform".to_string(), "mode".to_string()),
+            "Mode".to_string(),
+        );
+        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new(), driven);
+        panel.build(&mut tree, viewport());
+
+        let mode_row = panel
+            .rows
+            .iter()
+            .find(|r| matches!(r, RowState::InnerNode { inner_param, .. } if inner_param == "mode"))
+            .expect("mode row still tracked for checkbox handling");
+        // The row exists (for its checkbox), but its value cell is
+        // disabled — `value_cell_node_id` is None.
+        match mode_row {
+            RowState::InnerNode {
+                value_cell_node_id, ..
+            } => assert!(
+                value_cell_node_id.is_none(),
+                "outer-driven row must not register a clickable value cell",
+            ),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn editable_rows_remain_when_outer_driven_set_is_unrelated() {
+        // The "scale" param is not outer-driven, so its value cell
+        // is still editable even when another row on the same node
+        // is.
+        let mut tree = UITree::new();
+        let mut panel = GraphEditorPanel::new();
+        let node = snap_node_with_mixed_kinds();
+        let mut driven = HashMap::new();
+        driven.insert(
+            ("uv_transform".to_string(), "mode".to_string()),
+            "Mode".to_string(),
+        );
+        panel.configure(Some(0), Vec::new(), Some(&node), HashSet::new(), driven);
+        panel.build(&mut tree, viewport());
+
+        let scale_cell = panel.rows.iter().find_map(|r| match r {
+            RowState::InnerNode {
+                value_cell_node_id: Some(v),
+                inner_param,
+                ..
+            } if inner_param == "scale" => Some(*v),
+            _ => None,
+        });
+        assert!(scale_cell.is_some(), "scale row remains editable");
+    }
+
+    #[test]
     fn static_block_row_emits_static_param_expose() {
         let mut tree = UITree::new();
         let mut panel = GraphEditorPanel::new();
@@ -1315,7 +1417,7 @@ mod tests {
                 exposed: true,
             },
         ];
-        panel.configure(Some(0), static_params, None, HashSet::new());
+        panel.configure(Some(0), static_params, None, HashSet::new(), HashMap::new());
         panel.build(&mut tree, viewport());
 
         let static_rows: Vec<&RowState> = panel

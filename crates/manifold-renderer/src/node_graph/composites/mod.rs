@@ -113,6 +113,17 @@ impl CompositeHandle {
         self.param_routing.keys().copied()
     }
 
+    /// Resolve an outer parameter name to its inner (node, param)
+    /// destination, or `None` if no such routing exists. Used by the
+    /// editor inspector to flag inner params that an outer effect-
+    /// card slider drives every frame.
+    pub fn inner_routing_for(
+        &self,
+        outer_name: &str,
+    ) -> Option<(NodeInstanceId, &'static str)> {
+        self.param_routing.get(outer_name).copied()
+    }
+
     /// Set an exposed parameter by its outer name. Routes through to the
     /// underlying inner node's parameter.
     pub fn set_param(
