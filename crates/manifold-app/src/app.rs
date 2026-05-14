@@ -2430,6 +2430,30 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     }
                     return;
                 }
+                // Editor window: Cmd+Z / Cmd+Shift+Z route to the
+                // content thread's undo stack so graph edits can be
+                // reverted while the editor has focus. (The primary
+                // window's InputHandler covers Cmd+Z when its focused
+                // — but the editor has its own keyboard routing that
+                // returns before InputHandler fires, so we wire the
+                // shortcut here too.)
+                if is_graph_editor
+                    && self.modifiers.command
+                    && let winit::keyboard::Key::Character(c) = &logical_key
+                    && c.eq_ignore_ascii_case("z")
+                {
+                    if let Some(tx) = self.content_tx.as_ref() {
+                        if self.modifiers.shift {
+                            crate::ui_bridge::redo(tx);
+                        } else {
+                            crate::ui_bridge::undo(tx);
+                        }
+                    }
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.offscreen_dirty = true;
+                    }
+                    return;
+                }
                 // Cmd+Shift+G — open the node-graph editor window.
                 // App-level shortcut, fires before text input or UI
                 // forwarding so it's always available regardless of

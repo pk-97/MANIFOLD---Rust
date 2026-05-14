@@ -214,13 +214,27 @@ impl GraphCanvas {
         }
         self.topology_hash = new_hash;
 
+        // Preserve positions for nodes that already existed before the
+        // topology change. Without this, every wire connection would
+        // re-run depth-based auto-layout against the new topology,
+        // shifting unrelated nodes into different columns — looked
+        // like the graph "snapping to weird positions" each time.
+        let prev_positions: ahash::AHashMap<u32, (f32, f32)> = self
+            .nodes
+            .iter()
+            .map(|n| (n.id, n.pos_graph))
+            .collect();
+
         self.nodes = snap
             .nodes
             .iter()
             .map(|n| NodeView {
                 id: n.id,
                 title: n.title.clone(),
-                pos_graph: (0.0, 0.0), // filled in by auto-layout below
+                pos_graph: prev_positions
+                    .get(&n.id)
+                    .copied()
+                    .unwrap_or((f32::NAN, f32::NAN)),
                 inputs: n
                     .inputs
                     .iter()
@@ -244,14 +258,35 @@ impl GraphCanvas {
             })
             .collect();
 
-        // Always auto-layout first so every node has a sensible
-        // default, then overlay any stored editor_pos on top. The
-        // previous "either/or" branch left nodes without a stored
-        // position stuck at (0,0) whenever *any* other node had one —
-        // which happened the instant the user added a new atom from
-        // the palette (the new node carries editor_pos, the existing
-        // ones don't), squashing the whole graph onto origin.
-        self.auto_layout();
+        // Two-step position assignment:
+        //   1. Auto-layout writes columns/rows for every node, but
+        //      we only keep its result for nodes that didn't have a
+        //      previous position (the freshly added ones).
+        //   2. Stored `editor_pos` from the def overrides on top for
+        //      any node the user has explicitly moved.
+        let unplaced_ids: Vec<u32> = self
+            .nodes
+            .iter()
+            .filter(|n| !n.pos_graph.0.is_finite())
+            .map(|n| n.id)
+            .collect();
+        if !unplaced_ids.is_empty() {
+            // Save and restore positions of already-placed nodes so
+            // auto_layout (which writes to every node) doesn't disturb
+            // them. Cheap — graphs are small.
+            let saved: Vec<((f32, f32), u32)> = self
+                .nodes
+                .iter()
+                .filter(|n| n.pos_graph.0.is_finite())
+                .map(|n| (n.pos_graph, n.id))
+                .collect();
+            self.auto_layout();
+            for (pos, id) in saved {
+                if let Some(n) = self.nodes.iter_mut().find(|n| n.id == id) {
+                    n.pos_graph = pos;
+                }
+            }
+        }
         for (view, snap_node) in self.nodes.iter_mut().zip(snap.nodes.iter()) {
             if let Some(p) = snap_node.editor_pos {
                 view.pos_graph = p;
