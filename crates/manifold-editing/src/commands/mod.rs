@@ -5,6 +5,7 @@ pub mod effect_groups;
 pub mod effect_target;
 pub mod effects;
 pub mod envelopes;
+pub mod graph;
 pub mod layer;
 pub mod marker;
 pub mod selection;

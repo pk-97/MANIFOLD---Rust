@@ -1885,6 +1885,7 @@ dependencies = [
  "inventory",
  "manifold-core",
  "manifold-io",
+ "serde_json",
 ]
 
 [[package]]

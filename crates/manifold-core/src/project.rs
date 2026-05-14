@@ -586,6 +586,70 @@ impl Project {
         self.timeline.layers.len()
     }
 
+    /// Walk every effect list in the project (master, every layer's
+    /// effects, every clip's effects) for an instance whose stable id
+    /// matches `effect_id`. Returns the first match or `None`. Linear
+    /// in total effect count; used by editor-canvas snapshotting and
+    /// graph-mutation commands — not on the per-frame hot path.
+    pub fn find_effect_by_id(
+        &self,
+        effect_id: &crate::id::EffectId,
+    ) -> Option<&crate::effects::EffectInstance> {
+        for fx in &self.settings.master_effects {
+            if &fx.id == effect_id {
+                return Some(fx);
+            }
+        }
+        for layer in &self.timeline.layers {
+            if let Some(effects) = layer.effects.as_ref() {
+                for fx in effects {
+                    if &fx.id == effect_id {
+                        return Some(fx);
+                    }
+                }
+            }
+            for clip in &layer.clips {
+                for fx in &clip.effects {
+                    if &fx.id == effect_id {
+                        return Some(fx);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Mutable variant of [`Self::find_effect_by_id`]. Used by
+    /// graph-mutation commands to apply edits to the matching
+    /// instance in place.
+    pub fn find_effect_by_id_mut(
+        &mut self,
+        effect_id: &crate::id::EffectId,
+    ) -> Option<&mut crate::effects::EffectInstance> {
+        for fx in &mut self.settings.master_effects {
+            if &fx.id == effect_id {
+                return Some(fx);
+            }
+        }
+        for layer in &mut self.timeline.layers {
+            if let Some(effects) = layer.effects.as_mut() {
+                for fx in effects {
+                    if &fx.id == effect_id {
+                        return Some(fx);
+                    }
+                }
+            }
+            for clip in &mut layer.clips {
+                for fx in &mut clip.effects {
+                    if &fx.id == effect_id {
+                        return Some(fx);
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Port of Unity Project.ImportedPercussionClipPlacements property.
     /// Returns a mutable reference to the clip placements slice inside percussion_import.
     /// Initializes percussion_import if absent (matches Unity's lazy-init pattern).

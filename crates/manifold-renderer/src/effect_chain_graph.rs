@@ -655,6 +655,13 @@ fn compute_topology_hash(
             Some(g) => g.as_str().hash(&mut h),
             None => "".hash(&mut h),
         }
+        // Phase 3: per-card graph divergence. Bumping `graph_version`
+        // when an editing command mutates `fx.graph` flips this hash,
+        // forcing a chain rebuild on the next frame so the renderer
+        // re-runs `hydrate_graph` with the new def. Primitive state is
+        // lost across the rebuild — acceptable because graph edits are
+        // editing-time events, not performance-time.
+        fx.graph_version.hash(&mut h);
     }
     for g in groups {
         g.id.as_str().hash(&mut h);

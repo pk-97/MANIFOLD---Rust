@@ -1147,7 +1147,7 @@ impl ContentThread {
         effect_id: &manifold_core::EffectId,
     ) -> Option<manifold_renderer::node_graph::GraphSnapshot> {
         let project = self.engine.project()?;
-        let instance = find_effect_by_id(project, effect_id)?;
+        let instance = project.find_effect_by_id(effect_id)?;
         if let Some(def) = instance.graph.as_ref() {
             manifold_renderer::node_graph::GraphSnapshot::from_def(def)
         } else {
@@ -1517,36 +1517,3 @@ impl ContentThread {
     }
 }
 
-/// Locate an [`EffectInstance`] by stable [`EffectId`] anywhere in the
-/// project. Walks master effects, then every layer's effects, then
-/// every clip's effects. Linear in total effect count — used only on
-/// the editor-canvas snapshot path (i.e., when an editor window is
-/// open), so per-frame cost is bounded by "user has an editor open"
-/// rather than the per-frame hot path.
-fn find_effect_by_id<'a>(
-    project: &'a manifold_core::project::Project,
-    effect_id: &manifold_core::EffectId,
-) -> Option<&'a manifold_core::effects::EffectInstance> {
-    for fx in &project.settings.master_effects {
-        if &fx.id == effect_id {
-            return Some(fx);
-        }
-    }
-    for layer in &project.timeline.layers {
-        if let Some(effects) = layer.effects.as_ref() {
-            for fx in effects {
-                if &fx.id == effect_id {
-                    return Some(fx);
-                }
-            }
-        }
-        for clip in &layer.clips {
-            for fx in &clip.effects {
-                if &fx.id == effect_id {
-                    return Some(fx);
-                }
-            }
-        }
-    }
-    None
-}
