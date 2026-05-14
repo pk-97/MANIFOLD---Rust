@@ -156,6 +156,9 @@ impl MirrorFX {
             },
         ];
 
+        let mut last_applied = crate::node_graph::LastAppliedCache::new();
+        last_applied.seed_from_bindings(&bindings);
+
         Self {
             type_id: EffectTypeId::MIRROR,
             graph,
@@ -164,7 +167,7 @@ impl MirrorFX {
             bindings,
             user_bindings: Vec::new(),
             cached_user_version: u32::MAX,
-            last_applied: crate::node_graph::LastAppliedCache::new(),
+            last_applied,
             source_resource,
             output_resource,
             state: None,
@@ -373,40 +376,13 @@ impl PostProcessEffect for MirrorFX {
         // ResourceIds in the new plan won't match the old state's
         // pre-bound textures.
         self.state = None;
-
-        // Mark each outer binding whose inner target the def
-        // explicitly overrode as "skip the next apply." Without
-        // this, the chain rebuild's fresh `LastAppliedCache` would
-        // let the first `apply_param_bindings` overwrite the
-        // hydrated value with whatever the outer slot currently
-        // says, defeating the bidirectional editor flow.
-        for (i, binding) in self.bindings.iter().enumerate() {
-            let outer_name = match &binding.target {
-                ParamTarget::Composite { outer_name } => outer_name.as_ref(),
-                _ => continue,
-            };
-            let Some((inner_node, inner_param)) =
-                self.handle.inner_routing_for(outer_name)
-            else {
-                continue;
-            };
-            let inner_handle = match inner_node {
-                id if id == uv_id => "uv_transform",
-                id if id == mix_id => "mix",
-                _ => continue,
-            };
-            // Check whether the def has this inner param explicitly
-            // set on this inner-node handle. Presence in
-            // `node.params` is what `SetGraphNodeParamCommand`
-            // toggles; catalog defaults leave params empty.
-            let overridden = def.nodes.iter().any(|n| {
-                n.handle.as_deref() == Some(inner_handle)
-                    && n.params.contains_key(inner_param)
-            });
-            if overridden {
-                self.last_applied.mark_skip_once(i);
-            }
-        }
+        // Re-seed the binding cache from the (unchanged) `bindings`
+        // list. Cache state from before the rebuild is discarded so
+        // the new graph starts with `Applied(spec.default_value)`
+        // per binding — the first apply then writes only for outer
+        // slots that already diverge from their declared default,
+        // leaving the just-hydrated inner-param values alone.
+        self.last_applied.seed_from_bindings(&self.bindings);
     }
 
     fn apply(

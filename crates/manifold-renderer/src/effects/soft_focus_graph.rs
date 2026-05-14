@@ -123,6 +123,8 @@ impl SoftFocusGraphFX {
             },
         ];
 
+        let mut last_applied = crate::node_graph::LastAppliedCache::new();
+        last_applied.seed_from_bindings(&bindings);
         Self {
             type_id: EffectTypeId::SOFT_FOCUS_GRAPH,
             graph,
@@ -131,7 +133,7 @@ impl SoftFocusGraphFX {
             bindings,
             user_bindings: Vec::new(),
             cached_user_version: u32::MAX,
-            last_applied: crate::node_graph::LastAppliedCache::new(),
+            last_applied,
             source_resource,
             output_resource,
             state: None,

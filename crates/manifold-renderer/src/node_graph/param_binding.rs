@@ -291,13 +291,6 @@ pub fn apply_param_bindings(
             .map(|p| p.value)
             .unwrap_or(binding.spec.default_value);
         match last_applied.static_outer[i] {
-            BindingCacheEntry::SkipOnce => {
-                // Post-hydrate path: the def installed an inner value
-                // we must not overwrite. Just record the current outer
-                // so next frame's compare-and-skip resumes normally.
-                last_applied.static_outer[i] = BindingCacheEntry::Applied(value);
-                continue;
-            }
             BindingCacheEntry::Applied(prev) if prev == value => {
                 continue;
             }
@@ -321,10 +314,6 @@ pub fn apply_param_bindings(
             .map(|p| p.value)
             .unwrap_or(binding.default_value);
         match last_applied.user_outer[j] {
-            BindingCacheEntry::SkipOnce => {
-                last_applied.user_outer[j] = BindingCacheEntry::Applied(value);
-                continue;
-            }
             BindingCacheEntry::Applied(prev) if prev == value => {
                 continue;
             }
@@ -364,26 +353,27 @@ pub struct LastAppliedCache {
     pub user_outer: Vec<BindingCacheEntry>,
 }
 
-/// One entry in [`LastAppliedCache`]. Tagged because the *first*
-/// apply after construction needs different semantics depending on
-/// whether the effect was just hydrated from a per-card def:
+/// One entry in [`LastAppliedCache`].
 ///
-/// - **`Unset`** — never applied. The catalog/default state for a
-///   binding: next apply writes outer → inner, then transitions to
-///   `Applied(value)`. This is what lets a freshly-constructed
-///   effect initialize the inner from the outer slot.
-/// - **`SkipOnce`** — set by `apply_graph_def` for params that the
-///   per-card def overrode. Next apply does NOT write, just records
-///   the current outer value and transitions to `Applied`. This is
-///   what makes the hydrated value survive the first frame after a
-///   chain rebuild.
-/// - **`Applied(v)`** — last value written. Subsequent applies skip
-///   when this frame's outer equals `v` and write otherwise.
+/// - **`Unset`** — never applied. Next apply unconditionally writes
+///   outer → inner, then transitions to `Applied(value)`.
+/// - **`Applied(v)`** — last value the binding propagated (or, for
+///   pre-seeded entries, the value the writer should pretend it
+///   already wrote). Subsequent applies skip when this frame's
+///   outer equals `v` and write otherwise.
+///
+/// Effect constructors pre-seed every entry via
+/// [`LastAppliedCache::seed_from_bindings`], so a freshly-constructed
+/// FX starts with `Applied(spec.default_value)` for each binding.
+/// That seeding is what lets per-card edits to outer-routed inner
+/// params survive a chain rebuild: as long as the outer slot stays
+/// at its declared default no write fires, and the hydrated value
+/// persists. The outer reclaims control the moment it diverges
+/// from `spec.default_value`.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum BindingCacheEntry {
     #[default]
     Unset,
-    SkipOnce,
     Applied(f32),
 }
 
@@ -393,29 +383,30 @@ impl LastAppliedCache {
     }
 
     /// Reset every tracked outer value so the next apply behaves as
-    /// if no value has ever been written. Called after a topology
-    /// change that may have moved bindings around (e.g.
-    /// [`MirrorFX::apply_graph_def`] rebuilds the bindings list).
+    /// if no value has ever been written.
     pub fn clear(&mut self) {
         self.static_outer.clear();
         self.user_outer.clear();
     }
 
-    /// Mark a static-binding entry as "skip the next apply, then
-    /// behave normally." Used by `apply_graph_def` impls right after
-    /// they write a per-card def value into the inner graph — the
-    /// next `apply_param_bindings` must not overwrite it, but every
-    /// apply after that should resume the normal skip-on-unchanged
-    /// behavior.
-    ///
-    /// Auto-grows the underlying vec to `index + 1` if needed; safe
-    /// to call before the first `apply_param_bindings` resizes it.
-    pub fn mark_skip_once(&mut self, index: usize) {
-        if index >= self.static_outer.len() {
+    /// Pre-seed the static-binding cache from the bindings'
+    /// declared default values. Effect constructors call this once
+    /// at build time so the cache enters the runtime with
+    /// `Applied(spec.default_value)` per entry — a freshly-built
+    /// effect's first `apply_param_bindings` then writes ONLY for
+    /// outer slots that already diverge from their declared
+    /// default, leaving everything else alone. This is the keystone
+    /// of the "inner edits survive a chain rebuild" invariant: a
+    /// rebuild caused by an inner-param edit doesn't move the outer
+    /// slot, so the cache compare matches and the binding skips
+    /// writing.
+    pub fn seed_from_bindings(&mut self, static_bindings: &[ParamBinding]) {
+        self.static_outer.clear();
+        self.static_outer.reserve(static_bindings.len());
+        for b in static_bindings {
             self.static_outer
-                .resize(index + 1, BindingCacheEntry::Unset);
+                .push(BindingCacheEntry::Applied(b.spec.default_value));
         }
-        self.static_outer[index] = BindingCacheEntry::SkipOnce;
     }
 }
 
@@ -885,25 +876,27 @@ mod tests {
         }
     }
 
-    /// `mark_skip_once` + first apply: the value the def installed
-    /// is preserved on the next frame even when the outer slot
-    /// differs from the value that would otherwise be written.
-    /// Mirrors the chain-rebuild-after-edit case end-to-end.
+    /// Pre-seeded cache + first apply: the value the def installed
+    /// is preserved on the next frame when the outer slot is at its
+    /// declared default. Mirrors the chain-rebuild-after-inner-edit
+    /// case end-to-end.
     #[test]
-    fn skip_once_preserves_hydrated_inner_against_outer_default() {
+    fn seeded_cache_preserves_hydrated_inner_against_outer_default() {
         let mut g = Graph::new();
         let feedback = g.add_node(Box::new(Feedback::new()));
         let bindings = vec![feedback_amount_binding(feedback)];
+        // Default = 0.5 from `feedback_amount_binding`. Constructor
+        // would seed cache to `Applied(0.5)` — simulate that.
         let mut cache = LastAppliedCache::new();
+        cache.seed_from_bindings(&bindings);
 
-        // Pretend hydrate just installed inner amount = 0.9 and marked
-        // binding 0 as "skip the next outer write."
+        // Pretend hydrate just installed inner amount = 0.9.
         g.set_param(feedback, "amount", ParamValue::Float(0.9))
             .unwrap();
-        cache.mark_skip_once(0);
 
-        // First apply with the catalog-default outer (0.5): must NOT
-        // overwrite the hydrated value.
+        // First apply with the catalog-default outer (0.5): cache
+        // already says we applied 0.5, so the binding skips and the
+        // hydrated value persists.
         apply_param_bindings(
             &bindings,
             &[],
@@ -915,28 +908,23 @@ mod tests {
         assert_eq!(
             g.get_node(feedback).unwrap().params.get("amount"),
             Some(&ParamValue::Float(0.9)),
-            "SkipOnce must not overwrite the hydrated value on first apply",
-        );
-        // The skip transitioned to Applied(0.5) so subsequent applies
-        // with the same outer skip too, but an outer drag reclaims.
-        assert_eq!(
-            cache.static_outer[0],
-            BindingCacheEntry::Applied(0.5),
+            "seeded cache must not overwrite the hydrated value when outer is at default",
         );
     }
 
     #[test]
-    fn skip_once_lets_outer_drag_reclaim_control() {
+    fn seeded_cache_lets_outer_drag_reclaim_control() {
         let mut g = Graph::new();
         let feedback = g.add_node(Box::new(Feedback::new()));
         let bindings = vec![feedback_amount_binding(feedback)];
         let mut cache = LastAppliedCache::new();
+        cache.seed_from_bindings(&bindings);
 
         g.set_param(feedback, "amount", ParamValue::Float(0.9))
             .unwrap();
-        cache.mark_skip_once(0);
 
-        // First apply with outer 0.5: SkipOnce → no write.
+        // First apply with outer at default — seeded cache matches,
+        // skip, hydrated value persists.
         apply_param_bindings(
             &bindings,
             &[],
@@ -945,7 +933,8 @@ mod tests {
             &[ParamSlot::exposed(0.5)],
             &mut cache,
         );
-        // Outer moves to 0.2 → write fires, inner gets stomped.
+        // Outer moves to 0.2 → cache says last applied was 0.5,
+        // values differ, write fires, inner reclaims.
         apply_param_bindings(
             &bindings,
             &[],
@@ -957,7 +946,56 @@ mod tests {
         assert_eq!(
             g.get_node(feedback).unwrap().params.get("amount"),
             Some(&ParamValue::Float(0.2)),
-            "outer-drag after a SkipOnce frame must reclaim control",
+            "outer-drag after a seeded-cache skip must reclaim control",
+        );
+    }
+
+    /// Regression for the bug the user hit: repeated chain rebuilds
+    /// (apply_graph_def firing every frame) must not stop outer-card
+    /// slider drags from propagating. Reseeding the cache from the
+    /// bindings is idempotent — first apply after each reseed only
+    /// writes when outer differs from spec default.
+    #[test]
+    fn repeated_seed_does_not_block_outer_drag() {
+        let mut g = Graph::new();
+        let feedback = g.add_node(Box::new(Feedback::new()));
+        let bindings = vec![feedback_amount_binding(feedback)];
+        let mut cache = LastAppliedCache::new();
+        cache.seed_from_bindings(&bindings);
+
+        // Frame N: chain rebuild, seed cache, apply at outer = 0.7
+        // (user has dragged outer from default).
+        cache.seed_from_bindings(&bindings); // simulate rebuild
+        apply_param_bindings(
+            &bindings,
+            &[],
+            &mut g,
+            None,
+            &[ParamSlot::exposed(0.7)],
+            &mut cache,
+        );
+        assert_eq!(
+            g.get_node(feedback).unwrap().params.get("amount"),
+            Some(&ParamValue::Float(0.7)),
+        );
+
+        // Frame N+1: another rebuild. Cache reseeded back to
+        // Applied(spec.default=0.5). Outer is still at 0.7, so the
+        // compare differs and the write fires again. Outer drag
+        // remains effective even under per-frame rebuild.
+        cache.seed_from_bindings(&bindings);
+        apply_param_bindings(
+            &bindings,
+            &[],
+            &mut g,
+            None,
+            &[ParamSlot::exposed(0.7)],
+            &mut cache,
+        );
+        assert_eq!(
+            g.get_node(feedback).unwrap().params.get("amount"),
+            Some(&ParamValue::Float(0.7)),
+            "repeated reseed must not strand the inner at the wrong value",
         );
     }
 
