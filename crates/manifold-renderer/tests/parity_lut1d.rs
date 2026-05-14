@@ -1,4 +1,4 @@
-//! Pixel-exact parity test for `primitive.lut1d` vs the legacy
+//! Pixel-exact parity test for `node.color_lut` vs the legacy
 //! `InfraredFX` effect. Eighth §6.1 migration and the first
 //! multi-input primitive parity test.
 //!
@@ -256,7 +256,7 @@ fn lut1d_is_pixel_exact_across_fixtures_palettes_setups() {
 
                 assert_bytewise_equal(
                     &format!(
-                        "lut1d/{:?}/palette={palette_label}/setup={setup_label}: legacy vs primitive.lut1d",
+                        "lut1d/{:?}/palette={palette_label}/setup={setup_label}: legacy vs node.color_lut",
                         fixture
                     ),
                     &legacy,

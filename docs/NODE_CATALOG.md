@@ -1,0 +1,164 @@
+# Node Catalog — Draft 1
+
+**Status:** Draft 1, 2026-05-14. Settled scope: atoms + effects. Generators deferred (still monolithic until they enter the node-graph world). This document is the canonical naming + categorization spec; subsequent rename PRs follow it.
+
+## 0. Design invariants
+
+These constraints make "split an Effect into atoms later" a non-event:
+
+1. **Type IDs are flat.** `node.<name>` — no category prefix. The category is metadata on the node, not part of its identity. Moving Bloom from monolithic shader to atom-composite preset keeps the same `node.bloom` ID, so old saves load unchanged.
+2. **Category is presentation, not structure.** Atoms and Effects share the same `EffectNode` trait. The split is purely how the palette groups them for users + AI agents.
+3. **Effects can be either monolithic OR composite presets.** A node entry in the save format is either a `type_id` (built-in) or a `preset_ref` (named subgraph stored alongside built-ins). Both look identical in the palette.
+4. **Atoms are pure** (no per-frame state) except `Feedback`, which is the one stateful atom by design.
+
+## 1. Atoms (11) — generic composable building blocks
+
+Single-pass operations. No artistic identity of their own. Users chain these to build custom looks; AI agents compose these to generate new visuals.
+
+| # | Display Name | Type ID | Inputs → Outputs | Params (key ones) | Purpose |
+|---|---|---|---|---|---|
+| 1 | **Mix** | `node.mix` | (a, b) → out | `amount`, `mode: Lerp/Screen/Add/Max/Multiply/Difference/Overlay` | Blend two images with one of 7 modes |
+| 2 | **Wet/Dry** | `node.wet_dry` | (dry, wet) → out | `amount [0,1]` | Crossfade a processed signal against the original |
+| 3 | **Threshold** | `node.threshold` | (in) → out | `level`, `softness`, `gain`, `mode: Hard/SoftKnee` | Keep pixels above a brightness cutoff |
+| 4 | **Gaussian Blur** | `node.gaussian_blur` | (in) → out | `kernel: 9/17/25`, `sigma`, `axis: H/V` | Separable Gaussian blur, one axis per pass |
+| 5 | **Sample** | `node.sample` | (in, uv) → rgba | `filter: Bilinear/Nearest`, `address: Clamp/Repeat/Mirror` | Read a texture at a UV coordinate |
+| 6 | **Transform** | `node.transform` | (in) → out | `translate: vec2`, `scale: vec2`, `rotate: f32`, `fold: None/X/Y/XY` | Translate, scale, rotate, optionally mirror-fold |
+| 7 | **Brightness** | `node.brightness` | (in) → out | (none) | Extract per-pixel luminance |
+| 8 | **Color Ramp** | `node.color_ramp` | (in, gradient) → out | `gradient: Texture1D` | Remap luminance through a color gradient |
+| 9 | **Channel Mix** | `node.channel_mix` | (in) → out | `matrix: mat4` | 4×4 channel matrix multiplication |
+| 10 | **Color LUT** | `node.color_lut` | (in, lut) → out | `lut: Texture1D`, `range [0,2]` | Color-correction look-up table |
+| 11 | **Feedback** | `node.feedback` | (in) → out | `decay`, `transform`, `blend: Screen/Add/Max` | Accumulate previous frames (the only stateful atom) |
+
+### Atom renames from current code
+
+| Was | Becomes | Notes |
+|---|---|---|
+| `primitive.luminance` | `node.brightness` | sounds less like a measurement |
+| `primitive.color_matrix` | `node.channel_mix` | hides the matrix math from users |
+| `primitive.gradient_map` | `node.color_ramp` | matches DAW / paint-program vocabulary |
+| `primitive.separable_gaussian` | `node.gaussian_blur` | the "separable" detail is an implementation choice |
+| `primitive.uv_transform` | `node.transform` | "UV" is GPU jargon; users just want a transform |
+| `primitive.affine_transform` | (deleted) | redundant with `node.transform` |
+| `primitive.blend` | (deleted) | redundant with `node.mix`; only the Bloom test referenced it |
+| `primitive.wet_dry_mix` | `node.wet_dry` | tighter |
+| `primitive.lut1d` | `node.color_lut` | "1D" is implementation noise |
+| `primitive.sample` | `node.sample` | already fine |
+| `primitive.mix` | `node.mix` | already fine |
+| `primitive.threshold` | `node.threshold` | already fine |
+| `primitive.feedback` | `node.feedback` | already fine |
+
+`primitive.blur` and `primitive.mip_chain` are V1 stubs that aren't wired into any chain — they get deleted during the rename pass; `node.gaussian_blur` is the real blur atom and `MipChainDown/Up` are deferred until something needs them.
+
+## 2. Effects (24) — named, recognizable visual looks
+
+Each is one node in the palette. Implementation may be monolithic, a thin preset of one atom, or a future composite of several atoms. Type IDs stay stable across implementation swaps.
+
+Implementation kinds:
+- **shader** — one WGSL kernel, no decomposition planned
+- **preset** — a thin wrap of one atom with curated defaults
+- **composite** — multi-pass kernel today, will become an atom subgraph later
+- **monolith** — custom pipeline (CPU envelope / native plugin / DNN); stays monolithic forever
+
+| # | Display Name | Type ID | Impl | Purpose |
+|---|---|---|---|---|
+| 1 | **Auto Gain** | `node.auto_gain` | monolith | Per-clip auto-leveling driven by a CPU envelope follower |
+| 2 | **Blob Track** | `node.blob_track` | monolith | Detect and track bright blobs; render overlays (native plugin) |
+| 3 | **Bloom** | `node.bloom` | composite | Soft halo glow on bright pixels (mip pyramid + blur + composite) |
+| 4 | **Chromatic Aberration** | `node.chromatic_aberration` | shader | RGB channel offset for prism / lens fringing |
+| 5 | **Color Grade** | `node.color_grade` | shader | Gain, saturation, hue, contrast, colorize |
+| 6 | **Depth of Field** | `node.depth_of_field` | monolith | Selective blur driven by geometric or DNN depth |
+| 7 | **Dither** | `node.dither` | shader | Halftone, Bayer, lines, crosshatch, noise, diamond |
+| 8 | **Edge Detect** | `node.edge_detect` | shader | Sobel / Laplacian / Frei-Chen edge extraction |
+| 9 | **Edge Stretch** | `node.edge_stretch` | shader | Stretch image edges outward (centered band) |
+| 10 | **Glitch** | `node.glitch` | shader | Scanlines, RGB shift, block displacement |
+| 11 | **Halation** | `node.halation` | composite | Warm bleed around highlights (threshold + tint + blur) |
+| 12 | **Highlight Boost** | `node.highlight_boost` | shader | Boost highlights without the soft halo of Bloom |
+| 13 | **Infrared** | `node.infrared` | shader | False-color palette mapping (10 palette LUTs) |
+| 14 | **Invert** | `node.invert` | shader | Invert RGB channels |
+| 15 | **Kaleidoscope** | `node.kaleidoscope` | shader | Radial mirror folding into N segments |
+| 16 | **Mirror** | `node.mirror` | preset | Horizontal / vertical mirror (one Transform atom) |
+| 17 | **Quad Mirror** | `node.quad_mirror` | preset | Four-way mirror fold (one Transform atom, XY fold) |
+| 18 | **Soft Focus** | `node.soft_focus` | preset | Dreamy Gaussian-blurred look (one Gaussian Blur atom) |
+| 19 | **Strobe** | `node.strobe` | shader | Beat-synced flicker / flash / gain pulse |
+| 20 | **Stylized Feedback** | `node.stylized_feedback` | preset | Trailing echo / motion smear (one Feedback atom) |
+| 21 | **Transform** | `node.transform_effect` | preset | Translate / scale / rotate (one Transform atom with `mode = Identity`) |
+| 22 | **Voronoi Prism** | `node.voronoi_prism` | shader | Voronoi-cell shatter / pop on beat |
+| 23 | **Watercolor** | `node.watercolor` | composite | Painterly bleed (flow map + displace + blur + edge + feedback) |
+| 24 | **Wireframe Depth** | `node.wireframe_depth` | monolith | Wireframe overlay from DNN depth estimation (15 passes + 3 workers) |
+
+### Effect renames from current code
+
+| Was (display name) | Becomes | Was (type ID) | Becomes |
+|---|---|---|---|
+| Blob Tracking | **Blob Track** | `primitive.blob_tracking` | `node.blob_track` |
+| HDR Boost | **Highlight Boost** | `primitive.highlight_boost` | `node.highlight_boost` (display name change only) |
+| Invert Colors | **Invert** | `primitive.invert` | `node.invert` |
+| (kaleido_fold) | **Kaleidoscope** | `primitive.kaleido_fold` | `node.kaleidoscope` |
+| (clamp_stretch) | **Edge Stretch** | `primitive.clamp_stretch` | `node.edge_stretch` |
+| (chromatic_offset) | **Chromatic Aberration** | `primitive.chromatic_offset` | `node.chromatic_aberration` |
+| (dither_pattern) | **Dither** | `primitive.dither_pattern` | `node.dither` |
+| Soft Focus (Graph) | **Soft Focus** | (effect-only) | `node.soft_focus` |
+
+`Node Graph Test` is dropped from the palette (it's a test-only fixture).
+
+### Why thin presets exist
+
+Five effects (Mirror, Quad Mirror, Transform, Soft Focus, Stylized Feedback) are conceptually just an atom with curated defaults. They are **alias presets** — separate palette entries that instantiate the same atom with different default params. Implementation is one shader; palette is five entries.
+
+| Preset effect | Atom | Curated defaults |
+|---|---|---|
+| Mirror | `node.transform` | `mode = FoldX` (matches legacy) |
+| Quad Mirror | `node.transform` | `mode = FoldBoth` |
+| Transform | `node.transform` | `mode = Identity` |
+| Soft Focus | `node.gaussian_blur` | curated sigma |
+| Stylized Feedback | `node.feedback` | curated decay / transform / blend |
+
+Why keep them as separate Effects rather than collapsing into their atom:
+
+- **Discoverability.** A user looking for "mirror" should find it by that name, not have to know it's a `node.transform` with `fold = X`.
+- **AI surface.** An agent generating a graph from a high-level intent ("add a mirror") benefits from a named entry.
+- **Zero cost.** A preset is one registry entry pointing at existing shader code — no new shader, no new EffectNode impl.
+
+## 3. Generators (23) — deferred
+
+Generators stay as-is for now. They'll enter the node-graph world in a separate pass (§6.7 of `PRIMITIVE_LIBRARY_DESIGN.md`) once effects have shipped and we've used the system in anger. Display-name pass deferred with them.
+
+## 4. The 4 monolithic effects — won't decompose
+
+Per design principle: "Monolithic remainders are first-class library members." These four stay as one node forever because their pipelines aren't blur/threshold/mix math:
+
+- **Auto Gain** — CPU envelope follower with transient detection
+- **Blob Track** — native plugin + One-Euro filter + font atlas
+- **Wireframe Depth** — 15 passes + 3 DNN workers
+- **Depth of Field** (DNN variant) — MiDaS-based selective blur
+
+The remaining 20 effects either are decomposed already (the 5 presets), are decomposable today (the 12 single-shader effects, trivial), or will decompose when the missing atoms land (Bloom, Halation, Watercolor + DoF-Geometric — composites).
+
+## 5. What's deferred
+
+- **3D infrastructure** (Camera3D, Rotation3D/4D, MeshRender, Shadow, Raymarch, LineRasterize) — only needed when generators decompose.
+- **Particle infrastructure** (ParticleScatter, ScatterResolve, ParticleSimRK2) — same.
+- **Procedural source atoms** (Plasma, StarField, ConcentricShapes, BasicShapes, ParametricSDF) — same.
+- **Atomic primitives** (Sobel3, DisplacementMap, VoronoiCells, PerlinFBM) — defer until a composite needs them.
+- **MipChainDown / MipChainUp** — defer until Bloom decomposes.
+- **BeatGate** — defer until needed for non-Strobe rhythmic effects.
+
+## 6. Migration of existing projects
+
+Every type-ID rename and every preset collapse needs a one-line entry in the V1→V2 loader's HashMap. Three shapes:
+
+1. **Trivial alias** (most renames) — `"primitive.invert" → "node.invert"`, etc. Same param schema, just a different ID string.
+2. **Preset alias with default override** — `"transform" → "node.transform"` with `mode = Identity`; `"mirror" → "node.transform"` with `mode = FoldX`; `"quad_mirror" → "node.transform"` with `mode = FoldBoth`. The atom replaces three legacy effects.
+3. **Param-shape migration** — Transform's legacy `(x, y, zoom, rot_deg)` packs into the atom's `(translate: vec2, scale: vec2, rotation: rad, mode)`. A few lines of arithmetic in the loader.
+
+The shim lives in `manifold-io`'s project loader alongside existing V1→V2 migrations.
+
+## 7. Done definition
+
+The rename pass is shipped when:
+
+- Atom type IDs match the catalog (renamed in `crates/manifold-renderer/src/node_graph/primitives/`).
+- Effect type IDs match the catalog; preset effects (Mirror, Quad Mirror, Transform, Soft Focus, Stylized Feedback) collapsed to alias-presets of their atoms.
+- Display names on atoms and effects match the catalog.
+- Migration shim loads old projects without error and produces visually identical output.
+- `cargo clippy --workspace -- -D warnings` and `cargo test --workspace` are green.

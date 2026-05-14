@@ -1,4 +1,4 @@
-// primitive.edge_detect — pixel-exact replacement for legacy
+// node.edge_detect — pixel-exact replacement for legacy
 // `effects/shaders/fx_edge_detect.wgsl`. Sobel 3×3 edge detection
 // with luminance-based gradients and a smoothstep threshold.
 // Fused composite — atomic Sobel3 + Threshold would introduce fp16

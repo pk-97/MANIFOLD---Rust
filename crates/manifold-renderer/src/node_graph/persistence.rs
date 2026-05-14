@@ -784,7 +784,7 @@ mod tests {
             description: None,
             nodes: vec![NodeDocument {
                 id: 0,
-                type_id: "primitive.does_not_exist".to_string(),
+                type_id: "node.does_not_exist".to_string(),
                 handle: None,
                 params: BTreeMap::new(),
                 editor_pos: None,
@@ -795,7 +795,7 @@ mod tests {
         match err {
             LoadError::UnknownTypeId { node_id, type_id } => {
                 assert_eq!(node_id, 0);
-                assert_eq!(type_id, "primitive.does_not_exist");
+                assert_eq!(type_id, "node.does_not_exist");
             }
             other => panic!("expected UnknownTypeId, got {other:?}"),
         }

@@ -205,7 +205,7 @@ pub fn init_cached_type_id(cell: &'static OnceLock<EffectNodeType>, id: &'static
 /// ```ignore
 /// primitive! {
 ///     name: Invert,
-///     type_id: "primitive.invert",
+///     type_id: "node.invert",
 ///     purpose: "Inverts RGB channels, blended back against the source by intensity.",
 ///     inputs: { in: Texture2D required },
 ///     outputs: { out: Texture2D },
@@ -368,7 +368,7 @@ mod tests {
 
     crate::primitive! {
         name: SmokeTestPrim,
-        type_id: "primitive.__smoke_test",
+        type_id: "node.__smoke_test",
         purpose: "Internal macro smoke-test primitive — not registered in production.",
         inputs: {
             in: Texture2D required,
@@ -397,7 +397,7 @@ mod tests {
 
     #[test]
     fn macro_emits_const_arrays_with_correct_shape() {
-        assert_eq!(SmokeTestPrim::TYPE_ID, "primitive.__smoke_test");
+        assert_eq!(SmokeTestPrim::TYPE_ID, "node.__smoke_test");
         assert_eq!(SmokeTestPrim::INPUTS.len(), 2);
         assert_eq!(SmokeTestPrim::INPUTS[0].name, "in");
         assert!(SmokeTestPrim::INPUTS[0].required);
@@ -417,7 +417,7 @@ mod tests {
         let a = SmokeTestPrim::cached_type_id();
         let b = SmokeTestPrim::cached_type_id();
         assert!(std::ptr::eq(a, b));
-        assert_eq!(a.as_str(), "primitive.__smoke_test");
+        assert_eq!(a.as_str(), "node.__smoke_test");
     }
 
     #[test]
@@ -426,7 +426,7 @@ mod tests {
         // Use `EffectNode` trait surface explicitly — proves the
         // blanket impl is what production code sees.
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "primitive.__smoke_test");
+        assert_eq!(node.type_id().as_str(), "node.__smoke_test");
         assert_eq!(node.inputs().len(), 2);
         assert_eq!(node.outputs().len(), 1);
         assert_eq!(node.parameters().len(), 1);
@@ -435,7 +435,7 @@ mod tests {
     #[test]
     fn description_bundles_metadata() {
         let d = SmokeTestPrim::description();
-        assert_eq!(d.type_id, "primitive.__smoke_test");
+        assert_eq!(d.type_id, "node.__smoke_test");
         assert!(!d.purpose.is_empty());
         assert_eq!(d.composition_notes, "Used by tests; do not reference from real code.");
         assert_eq!(d.examples, &["test.smoke_preset"]);
@@ -446,7 +446,7 @@ mod tests {
 
     crate::primitive! {
         name: SmokeTestNoExtras,
-        type_id: "primitive.__smoke_test_no_extras",
+        type_id: "node.__smoke_test_no_extras",
         purpose: "Validates the minimum-field macro path.",
         inputs: { in: Texture2D },
         outputs: { out: Texture2D },
@@ -461,7 +461,7 @@ mod tests {
     fn macro_supports_minimum_field_set() {
         // No composition_notes, no examples, no extra_fields — the
         // optional macro fields must all be truly optional.
-        assert_eq!(SmokeTestNoExtras::TYPE_ID, "primitive.__smoke_test_no_extras");
+        assert_eq!(SmokeTestNoExtras::TYPE_ID, "node.__smoke_test_no_extras");
         assert_eq!(SmokeTestNoExtras::COMPOSITION_NOTES, "");
         assert!(SmokeTestNoExtras::EXAMPLES.is_empty());
         assert!(SmokeTestNoExtras::PARAMS.is_empty());

@@ -37,7 +37,7 @@ const OUT_OUTPUT: NodeOutput = NodePort {
 // frame to produce visual trails.
 // =====================================================================
 
-pub const FEEDBACK_TYPE_ID: &str = "primitive.feedback";
+pub const FEEDBACK_TYPE_ID: &str = "node.feedback";
 
 pub const FEEDBACK_MODES: &[&str] = &["Screen", "Additive", "Max"];
 
@@ -233,7 +233,7 @@ impl EffectNode for Feedback {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/feedback.wgsl"),
                 "cs_main",
-                "primitive.feedback",
+                "node.feedback",
             )
         });
         let sampler = self
@@ -266,7 +266,7 @@ impl EffectNode for Feedback {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "primitive.feedback",
+            "node.feedback",
         );
 
         // Copy the output back into the persistent buffer for next frame.

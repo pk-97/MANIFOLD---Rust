@@ -1,4 +1,4 @@
-// primitive.separable_gaussian — single-axis Gaussian blur with one of
+// node.gaussian_blur — single-axis Gaussian blur with one of
 // three precomputed kernels (9-tap σ≈2, 17-tap σ≈4, 25-tap σ≈6).
 //
 // Kernel weights are bit-identical to `fx_depth_of_field_compute.wgsl`

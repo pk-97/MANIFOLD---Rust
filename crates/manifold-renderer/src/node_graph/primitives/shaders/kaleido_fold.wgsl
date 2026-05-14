@@ -1,4 +1,4 @@
-// primitive.kaleido_fold — pixel-exact replacement for legacy
+// node.kaleidoscope — pixel-exact replacement for legacy
 // `effects/shaders/fx_kaleidoscope.wgsl`. Polar-coordinate segment
 // mirroring around the UV center. Bindings, math, and dispatch shape
 // preserved verbatim.

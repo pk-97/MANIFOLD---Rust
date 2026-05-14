@@ -1,4 +1,4 @@
-//! `primitive.blob_tracking` — wraps the legacy
+//! `node.blob_track` — wraps the legacy
 //! [`BlobTrackingFX`](crate::effects::blob_tracking::BlobTrackingFX)
 //! effect as a monolithic primitive. The effect drives a native
 //! CPU-side blob detector (via the FFI plugin) with a One-Euro
@@ -24,7 +24,7 @@ use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortTy
 use crate::node_graph::primitive::PrimitiveDescription;
 use crate::node_graph::primitives::auto_gain::{build_effect_context, build_effect_instance};
 
-pub const BLOB_TRACKING_TYPE_ID: &str = "primitive.blob_tracking";
+pub const BLOB_TRACKING_TYPE_ID: &str = "node.blob_track";
 
 pub struct BlobTracking {
     legacy: Option<BlobTrackingFX>,
@@ -163,7 +163,7 @@ impl EffectNode for BlobTracking {
         let gpu = ctx
             .gpu
             .as_deref_mut()
-            .expect("primitive.blob_tracking requires a GpuEncoder");
+            .expect("node.blob_track requires a GpuEncoder");
 
         // Mirror the legacy's should_skip-equivalent early-return:
         // the chain would have prevented apply() from running entirely.

@@ -1,4 +1,4 @@
-//! `primitive.infrared` — wraps the legacy
+//! `node.infrared` — wraps the legacy
 //! [`InfraredFX`](crate::effects::infrared::InfraredFX) effect as a
 //! monolithic primitive.
 //!
@@ -25,7 +25,7 @@ use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortTy
 use crate::node_graph::primitive::PrimitiveDescription;
 use crate::node_graph::primitives::auto_gain::{build_effect_context, build_effect_instance};
 
-pub const INFRARED_TYPE_ID: &str = "primitive.infrared";
+pub const INFRARED_TYPE_ID: &str = "node.infrared";
 
 pub const INFRARED_PALETTES: &[&str] = &[
     "White Hot", "Black Hot", "Green NV", "Iron Bow", "Rainbow", "Lava", "Arctic", "Magenta",
@@ -101,7 +101,7 @@ impl Infrared {
         PrimitiveDescription {
             type_id: INFRARED_TYPE_ID,
             purpose: "Thermal-vision palette mapping. Pre-bakes 10 palette LUTs (White Hot, Black Hot, Green NV, Iron Bow, Rainbow, Lava, Arctic, Magenta, Electric, Toxic) at 512×1 resolution and dispatches a single compute pass that samples pixel luminance into the chosen LUT.",
-            composition_notes: "Monolithic — the 10 baked LUTs are internal state owned by this primitive. A future `BakedPalette → primitive.lut1d` decomposition would need per-slot texture resolution support in the graph runtime to preserve bit-exact parity with the legacy 512×1 LUT.",
+            composition_notes: "Monolithic — the 10 baked LUTs are internal state owned by this primitive. A future `BakedPalette → node.color_lut` decomposition would need per-slot texture resolution support in the graph runtime to preserve bit-exact parity with the legacy 512×1 LUT.",
             examples: &["preset.effect.infrared"],
             inputs: &INFRARED_INPUTS,
             outputs: &INFRARED_OUTPUTS,
@@ -143,7 +143,7 @@ impl EffectNode for Infrared {
         let gpu = ctx
             .gpu
             .as_deref_mut()
-            .expect("primitive.infrared requires a GpuEncoder");
+            .expect("node.infrared requires a GpuEncoder");
         let legacy = self
             .legacy
             .get_or_insert_with(|| InfraredFX::new(gpu.device));

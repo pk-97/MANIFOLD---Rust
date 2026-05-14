@@ -1,4 +1,4 @@
-//! `primitive.dither_pattern` — pixel-exact replacement for legacy
+//! `node.dither` — pixel-exact replacement for legacy
 //! [`DitherFX`](crate::effects::dither::DitherFX). Seventh §6.1
 //! migration.
 //!
@@ -16,7 +16,7 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: DitherPattern,
-    type_id: "primitive.dither_pattern",
+    type_id: "node.dither",
     purpose: "Dithering: quantizes luminance to 8→2 levels based on a per-pixel threshold pattern (Bayer, Halftone, Lines, CrossHatch, Noise, Diamond). Hue is preserved via per-pixel luma scaling.",
     inputs: {
         in: Texture2D required,
@@ -86,7 +86,7 @@ impl Primitive for DitherPattern {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/dither_pattern.wgsl"),
                 "cs_main",
-                "primitive.dither_pattern",
+                "node.dither",
             )
         });
         let sampler = self
@@ -121,7 +121,7 @@ impl Primitive for DitherPattern {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "primitive.dither_pattern",
+            "node.dither",
         );
     }
 }

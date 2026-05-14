@@ -1,4 +1,4 @@
-//! `primitive.lut1d` — pixel-exact replacement for legacy
+//! `node.color_lut` — pixel-exact replacement for legacy
 //! [`InfraredFX`](crate::effects::infrared::InfraredFX). Eighth §6.1
 //! migration and the first multi-input primitive in the trivial
 //! phase.
@@ -22,7 +22,7 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: Lut1d,
-    type_id: "primitive.lut1d",
+    type_id: "node.color_lut",
     purpose: "1D LUT remap: sample a W×1 LUT texture indexed by BT.601 luminance (with contrast adjust), then crossfade against the source. The Infrared preset graph supplies the LUT.",
     inputs: {
         in: Texture2D required,
@@ -89,7 +89,7 @@ impl Primitive for Lut1d {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/lut1d.wgsl"),
                 "cs_main",
-                "primitive.lut1d",
+                "node.color_lut",
             )
         });
         let sampler = self
@@ -128,7 +128,7 @@ impl Primitive for Lut1d {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "primitive.lut1d",
+            "node.color_lut",
         );
     }
 }

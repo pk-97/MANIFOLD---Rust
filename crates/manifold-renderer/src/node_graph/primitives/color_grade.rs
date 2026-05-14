@@ -1,4 +1,4 @@
-//! `primitive.color_grade` — pixel-exact replacement for legacy
+//! `node.color_grade` — pixel-exact replacement for legacy
 //! [`ColorGradeFX`](crate::effects::color_grade::ColorGradeFX). Second
 //! §6.1 migration.
 //!
@@ -18,7 +18,7 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: ColorGrade,
-    type_id: "primitive.color_grade",
+    type_id: "node.color_grade",
     purpose: "Color grading: gain, saturation (luma-based), hue rotation (HSV), contrast (pivot 0.5), and a tinted-colorize pipeline with highlight/neutral masking.",
     inputs: {
         in: Texture2D required,
@@ -146,7 +146,7 @@ impl Primitive for ColorGrade {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/color_grade.wgsl"),
                 "cs_main",
-                "primitive.color_grade",
+                "node.color_grade",
             )
         });
         let sampler = self
@@ -189,7 +189,7 @@ impl Primitive for ColorGrade {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "primitive.color_grade",
+            "node.color_grade",
         );
     }
 }

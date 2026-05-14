@@ -1,4 +1,4 @@
-//! `primitive.wireframe_depth` — wraps the legacy
+//! `node.wireframe_depth` — wraps the legacy
 //! [`WireframeDepthFX`](crate::effects::wireframe_depth::WireframeDepthFX)
 //! effect as a monolithic primitive. The effect runs a 15-pass
 //! pipeline driven by a MiDaS depth DNN worker plus optional native
@@ -22,7 +22,7 @@ use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortTy
 use crate::node_graph::primitive::PrimitiveDescription;
 use crate::node_graph::primitives::auto_gain::{build_effect_context, build_effect_instance};
 
-pub const WIREFRAME_DEPTH_TYPE_ID: &str = "primitive.wireframe_depth";
+pub const WIREFRAME_DEPTH_TYPE_ID: &str = "node.wireframe_depth";
 
 pub const WIREFRAME_DEPTH_BLEND_MODES: &[&str] = &[
     "Normal", "Add", "Multiply", "Screen", "Overlay", "Stencil", "Opaque",
@@ -235,7 +235,7 @@ impl EffectNode for WireframeDepth {
         let gpu = ctx
             .gpu
             .as_deref_mut()
-            .expect("primitive.wireframe_depth requires a GpuEncoder");
+            .expect("node.wireframe_depth requires a GpuEncoder");
 
         if amount <= 0.0 {
             gpu.copy_texture_to_texture(source, target, width, height);

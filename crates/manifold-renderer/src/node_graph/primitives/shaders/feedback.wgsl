@@ -1,4 +1,4 @@
-// primitive.feedback — Stylized feedback / trail effect.
+// node.feedback — Stylized feedback / trail effect.
 //
 // Reads the current frame from `tex_source` and the previous frame from
 // `tex_prev`, applies zoom + rotation to the previous frame's UV

@@ -1,4 +1,4 @@
-// primitive.clamp_stretch — pixel-exact replacement for legacy
+// node.edge_stretch — pixel-exact replacement for legacy
 // `effects/shaders/fx_edge_stretch.wgsl`. Clamps UVs to a center
 // strip (width × axis-dependent), stretching edge pixels. Bindings,
 // math, and dispatch shape preserved verbatim.

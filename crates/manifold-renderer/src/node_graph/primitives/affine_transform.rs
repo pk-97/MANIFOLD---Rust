@@ -1,4 +1,4 @@
-//! `primitive.affine_transform` — pixel-exact replacement for legacy
+//! `node.affine_transform` — pixel-exact replacement for legacy
 //! [`TransformFX`](crate::effects::transform::TransformFX). Fifth
 //! §6.1 migration.
 //!
@@ -23,7 +23,7 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: AffineTransform,
-    type_id: "primitive.affine_transform",
+    type_id: "node.affine_transform",
     purpose: "2D UV affine: translate, scale, rotate around the center. Aspect-correct rotation; out-of-bounds samples return transparent black.",
     inputs: {
         in: Texture2D required,
@@ -118,7 +118,7 @@ impl Primitive for AffineTransform {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/affine_transform.wgsl"),
                 "cs_main",
-                "primitive.affine_transform",
+                "node.affine_transform",
             )
         });
         let sampler = self
@@ -157,7 +157,7 @@ impl Primitive for AffineTransform {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "primitive.affine_transform",
+            "node.affine_transform",
         );
     }
 }

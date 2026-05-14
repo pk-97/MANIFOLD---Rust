@@ -26,7 +26,7 @@ const OUT_OUTPUT: NodeOutput = NodePort {
 // Luminance — RGB → grayscale via per-channel weights.
 // =====================================================================
 
-pub const LUMINANCE_TYPE_ID: &str = "primitive.luminance";
+pub const LUMINANCE_TYPE_ID: &str = "node.brightness";
 
 const LUMINANCE_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];
 const LUMINANCE_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
@@ -80,7 +80,7 @@ impl EffectNode for Luminance {
 // ColorMatrix — 4x4 RGBA transformation.
 // =====================================================================
 
-pub const COLOR_MATRIX_TYPE_ID: &str = "primitive.color_matrix";
+pub const COLOR_MATRIX_TYPE_ID: &str = "node.channel_mix";
 
 const COLOR_MATRIX_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];
 const COLOR_MATRIX_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
@@ -159,7 +159,7 @@ impl EffectNode for ColorMatrix {
 // GradientMap — luma → two-stop gradient lookup.
 // =====================================================================
 
-pub const GRADIENT_MAP_TYPE_ID: &str = "primitive.gradient_map";
+pub const GRADIENT_MAP_TYPE_ID: &str = "node.color_ramp";
 
 const GRADIENT_MAP_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];
 const GRADIENT_MAP_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];

@@ -1,4 +1,4 @@
-//! `primitive.invert` — pixel-exact replacement for the legacy
+//! `node.invert` — pixel-exact replacement for the legacy
 //! [`InvertColorsFX`](crate::effects::invert_colors::InvertColorsFX)
 //! effect. First production primitive authored via the
 //! [`primitive!`](crate::primitive) macro and the first §6.1
@@ -20,7 +20,7 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: Invert,
-    type_id: "primitive.invert",
+    type_id: "node.invert",
     purpose: "Inverts RGB channels and blends against the source by intensity. Alpha is preserved.",
     inputs: {
         in: Texture2D required,
@@ -74,7 +74,7 @@ impl Primitive for Invert {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/invert.wgsl"),
                 "cs_main",
-                "primitive.invert",
+                "node.invert",
             )
         });
         let sampler = self
@@ -107,7 +107,7 @@ impl Primitive for Invert {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "primitive.invert",
+            "node.invert",
         );
     }
 }

@@ -32,7 +32,7 @@ const OUT_OUTPUT: NodeOutput = NodePort {
 // effect catalog (those become alias presets that pre-set `mode`).
 // =====================================================================
 
-pub const UV_TRANSFORM_TYPE_ID: &str = "primitive.uv_transform";
+pub const UV_TRANSFORM_TYPE_ID: &str = "node.transform";
 
 pub const UV_TRANSFORM_MODES: &[&str] = &[
     "Identity",
@@ -166,7 +166,7 @@ impl EffectNode for UVTransform {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/uv_transform.wgsl"),
                 "cs_main",
-                "primitive.uv_transform",
+                "node.transform",
             )
         });
         let sampler = self
@@ -203,7 +203,7 @@ impl EffectNode for UVTransform {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "primitive.uv_transform",
+            "node.transform",
         );
     }
 }
@@ -216,7 +216,7 @@ impl EffectNode for UVTransform {
 // optical flow, lens distortion, custom warps.
 // =====================================================================
 
-pub const SAMPLE_TYPE_ID: &str = "primitive.sample";
+pub const SAMPLE_TYPE_ID: &str = "node.sample";
 
 pub const SAMPLE_FILTER_MODES: &[&str] = &["Nearest", "Linear"];
 pub const SAMPLE_WRAP_MODES: &[&str] = &["Clamp", "Repeat", "Mirror"];

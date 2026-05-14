@@ -1,4 +1,4 @@
-//! `primitive.halation` — pixel-exact replacement for legacy
+//! `node.halation` — pixel-exact replacement for legacy
 //! [`HalationFX`](crate::effects::halation::HalationFX). Fused
 //! composite.
 //!
@@ -28,7 +28,7 @@ use crate::render_target::RenderTarget;
 
 const HALATION_WGSL: &str = include_str!("shaders/halation.wgsl");
 
-pub const HALATION_TYPE_ID: &str = "primitive.halation";
+pub const HALATION_TYPE_ID: &str = "node.halation";
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -96,7 +96,7 @@ impl Halation {
                 HALATION_WGSL,
                 "cs_main",
                 &[("uniforms.mode", "0u")],
-                "primitive.halation.h_blur",
+                "node.halation.h_blur",
             ));
         }
         if self.pipeline_v_blur.is_none() {
@@ -104,7 +104,7 @@ impl Halation {
                 HALATION_WGSL,
                 "cs_main",
                 &[("uniforms.mode", "1u")],
-                "primitive.halation.v_blur",
+                "node.halation.v_blur",
             ));
         }
         if self.pipeline_composite.is_none() {
@@ -112,7 +112,7 @@ impl Halation {
                 HALATION_WGSL,
                 "cs_main",
                 &[("uniforms.mode", "2u")],
-                "primitive.halation.composite",
+                "node.halation.composite",
             ));
         }
         if self.sampler.is_none() {
@@ -265,7 +265,7 @@ impl EffectNode for Halation {
         let gpu = ctx
             .gpu
             .as_deref_mut()
-            .expect("primitive.halation requires a GpuEncoder");
+            .expect("node.halation requires a GpuEncoder");
         self.ensure_pipelines(gpu.device);
         self.ensure_buffers(gpu.device, width, height);
 
@@ -308,7 +308,7 @@ impl EffectNode for Halation {
             &pass0_u,
             width,
             height,
-            "primitive.halation.h_blur",
+            "node.halation.h_blur",
         );
 
         // Pass 1: V Gaussian → buf_a
@@ -328,7 +328,7 @@ impl EffectNode for Halation {
             &pass1_u,
             width,
             height,
-            "primitive.halation.v_blur",
+            "node.halation.v_blur",
         );
 
         // Pass 2: Composite source + buf_a × amount → target
@@ -350,7 +350,7 @@ impl EffectNode for Halation {
             &pass2_u,
             width,
             height,
-            "primitive.halation.composite",
+            "node.halation.composite",
         );
     }
 }

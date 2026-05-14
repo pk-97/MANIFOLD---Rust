@@ -1,4 +1,4 @@
-//! `primitive.auto_gain` — wraps the legacy
+//! `node.auto_gain` — wraps the legacy
 //! [`AutoGainFX`](crate::effects::auto_gain::AutoGainFX) effect as a
 //! monolithic primitive. The effect is a CPU envelope follower
 //! (program-dependent attack/release) driving a GPU apply pass with
@@ -27,7 +27,7 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::node_graph::primitive::PrimitiveDescription;
 
-pub const AUTO_GAIN_TYPE_ID: &str = "primitive.auto_gain";
+pub const AUTO_GAIN_TYPE_ID: &str = "node.auto_gain";
 
 pub const AUTO_GAIN_CHARACTERS: &[&str] = &["Clean", "Warm", "Film", "Vivid", "Grit"];
 
@@ -180,7 +180,7 @@ impl EffectNode for AutoGain {
         let gpu = ctx
             .gpu
             .as_deref_mut()
-            .expect("primitive.auto_gain requires a GpuEncoder");
+            .expect("node.auto_gain requires a GpuEncoder");
         let legacy = self
             .legacy
             .get_or_insert_with(|| AutoGainFX::new(gpu.device));

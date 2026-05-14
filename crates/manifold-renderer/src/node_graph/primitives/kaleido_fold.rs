@@ -1,4 +1,4 @@
-//! `primitive.kaleido_fold` — pixel-exact replacement for legacy
+//! `node.kaleidoscope` — pixel-exact replacement for legacy
 //! [`KaleidoscopeFX`](crate::effects::kaleidoscope::KaleidoscopeFX).
 //! Fourth §6.1 migration.
 //!
@@ -15,7 +15,7 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: KaleidoFold,
-    type_id: "primitive.kaleido_fold",
+    type_id: "node.kaleidoscope",
     purpose: "Polar-coordinate segment mirroring. Slices the UV plane into N wedges around the center; alternating wedges reflect their sample for a seamless kaleidoscope.",
     inputs: {
         in: Texture2D required,
@@ -81,7 +81,7 @@ impl Primitive for KaleidoFold {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/kaleido_fold.wgsl"),
                 "cs_main",
-                "primitive.kaleido_fold",
+                "node.kaleidoscope",
             )
         });
         let sampler = self
@@ -116,7 +116,7 @@ impl Primitive for KaleidoFold {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "primitive.kaleido_fold",
+            "node.kaleidoscope",
         );
     }
 }

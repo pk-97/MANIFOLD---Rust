@@ -1,18 +1,10 @@
-//! V1 primitive nodes — the building blocks of composite presets.
+//! Node implementations for the catalog defined in `docs/NODE_CATALOG.md`.
 //!
-//! Each primitive is a small reusable [`EffectNode`](crate::node_graph::EffectNode)
-//! implementation. For step 6 (this commit), `evaluate()` is a no-op: the
-//! trait surface, port shapes, and parameter definitions are validated
-//! against `MockBackend` before real GPU integration in the next step.
-//!
-//! V1 set (10 primitives):
-//! - **color**: [`Luminance`], [`ColorMatrix`], [`GradientMap`]
-//! - **compose**: [`Mix`], [`Blend`]
-//! - **filter**: [`Threshold`], [`Blur`], [`MipChain`]
-//! - **uv**: [`UVTransform`], [`Sample`]
-//!
-//! Stable type IDs (`primitive.<name>`) are exported as public constants so
-//! the save format and a future registry can resolve them.
+//! This module hosts both atoms (small generic composable building blocks
+//! like Mix, Feedback, Gaussian Blur) and the wrapped legacy effects
+//! (Bloom, Watercolor, Halation, etc.) — all as `EffectNode` impls behind
+//! flat `node.*` type IDs. The atom/effect split is presentation metadata,
+//! not a structural divide.
 
 mod affine_transform;
 mod auto_gain;
@@ -136,11 +128,11 @@ mod tests {
     }
 
     #[test]
-    fn all_v1_primitive_type_ids_have_primitive_prefix() {
+    fn all_v1_primitive_type_ids_have_node_prefix() {
         for p in all_primitives() {
             assert!(
-                p.type_id().as_str().starts_with("primitive."),
-                "primitive type IDs must start with `primitive.` — got {}",
+                p.type_id().as_str().starts_with("node."),
+                "node type IDs must start with `node.` — got {}",
                 p.type_id().as_str()
             );
         }

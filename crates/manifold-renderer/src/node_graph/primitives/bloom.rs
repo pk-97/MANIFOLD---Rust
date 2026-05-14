@@ -1,4 +1,4 @@
-//! `primitive.bloom` — pixel-exact replacement for legacy
+//! `node.bloom` — pixel-exact replacement for legacy
 //! [`BloomFX`](crate::effects::bloom::BloomFX). Fused composite.
 //!
 //! Bloom's atomic decomposition would require Unity-style Blur9 tent
@@ -39,7 +39,7 @@ const RADIUS_AT_ONE: f32 = 1.25;
 
 const BLOOM_WGSL: &str = include_str!("shaders/bloom.wgsl");
 
-pub const BLOOM_TYPE_ID: &str = "primitive.bloom";
+pub const BLOOM_TYPE_ID: &str = "node.bloom";
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -128,7 +128,7 @@ impl Bloom {
                 BLOOM_WGSL,
                 "cs_main",
                 &[("uniforms.mode", "0u")],
-                "primitive.bloom.prefilter",
+                "node.bloom.prefilter",
             ));
         }
         if self.pipeline_downsample.is_none() {
@@ -136,7 +136,7 @@ impl Bloom {
                 BLOOM_WGSL,
                 "cs_main",
                 &[("uniforms.mode", "1u")],
-                "primitive.bloom.downsample",
+                "node.bloom.downsample",
             ));
         }
         if self.pipeline_upsample.is_none() {
@@ -144,7 +144,7 @@ impl Bloom {
                 BLOOM_WGSL,
                 "cs_main",
                 &[("uniforms.mode", "2u")],
-                "primitive.bloom.upsample",
+                "node.bloom.upsample",
             ));
         }
         if self.pipeline_composite.is_none() {
@@ -152,7 +152,7 @@ impl Bloom {
                 BLOOM_WGSL,
                 "cs_main",
                 &[("uniforms.mode", "3u")],
-                "primitive.bloom.composite",
+                "node.bloom.composite",
             ));
         }
         if self.sampler.is_none() {
@@ -246,7 +246,7 @@ impl EffectNode for Bloom {
         let gpu = ctx
             .gpu
             .as_deref_mut()
-            .expect("primitive.bloom requires a GpuEncoder");
+            .expect("node.bloom requires a GpuEncoder");
         self.ensure_pipelines(gpu.device);
         self.ensure_pyramid(gpu.device, width, height);
 
@@ -285,7 +285,7 @@ impl EffectNode for Bloom {
                 &skip_u,
                 width,
                 height,
-                "primitive.bloom.skip",
+                "node.bloom.skip",
             );
             return;
         }
@@ -330,7 +330,7 @@ impl EffectNode for Bloom {
             &prefilter_u,
             mips_a[0].width,
             mips_a[0].height,
-            "primitive.bloom.prefilter",
+            "node.bloom.prefilter",
         );
 
         // Downsample chain: mips_a[i-1] → mips_a[i]
@@ -353,7 +353,7 @@ impl EffectNode for Bloom {
                 &down_u,
                 mips_a[i].width,
                 mips_a[i].height,
-                "primitive.bloom.downsample",
+                "node.bloom.downsample",
             );
         }
 
@@ -392,7 +392,7 @@ impl EffectNode for Bloom {
                 &up_u,
                 mips_b[i].width,
                 mips_b[i].height,
-                "primitive.bloom.upsample",
+                "node.bloom.upsample",
             );
         }
 
@@ -417,7 +417,7 @@ impl EffectNode for Bloom {
             &composite_u,
             width,
             height,
-            "primitive.bloom.composite",
+            "node.bloom.composite",
         );
     }
 }

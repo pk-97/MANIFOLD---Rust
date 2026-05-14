@@ -1,4 +1,4 @@
-//! `primitive.strobe` — pixel-exact replacement for legacy
+//! `node.strobe` — pixel-exact replacement for legacy
 //! [`StrobeFX`](crate::effects::strobe::StrobeFX). Eleventh §6.1
 //! migration; fused composite.
 //!
@@ -23,7 +23,7 @@ pub const NOTE_RATES: [f32; 10] = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0,
 
 crate::primitive! {
     name: Strobe,
-    type_id: "primitive.strobe",
+    type_id: "node.strobe",
     purpose: "Beat-synced square wave flash. Three modes: Opacity (flash to black), White (flash to white), Gain (3× brightness when on). Rate is strobes-per-beat.",
     inputs: {
         in: Texture2D required,
@@ -102,7 +102,7 @@ impl Primitive for Strobe {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/strobe.wgsl"),
                 "cs_main",
-                "primitive.strobe",
+                "node.strobe",
             )
         });
         let sampler = self
@@ -137,7 +137,7 @@ impl Primitive for Strobe {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "primitive.strobe",
+            "node.strobe",
         );
     }
 }

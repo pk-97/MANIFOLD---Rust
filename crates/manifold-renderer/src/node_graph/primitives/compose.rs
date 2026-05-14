@@ -48,7 +48,7 @@ pub const MIX_MODES: &[&str] = &[
 
 crate::primitive! {
     name: Mix,
-    type_id: "primitive.mix",
+    type_id: "node.mix",
     purpose: "Combine two textures with one of 7 blend modes (Lerp, Screen, Add, Max, Multiply, Difference, Overlay), crossfaded back against A by `amount`. At amount=0 returns A unchanged; at amount=1 returns the full blended result. Lerp mode is a pure linear crossfade.",
     inputs: {
         a: Texture2D required,
@@ -79,7 +79,7 @@ crate::primitive! {
     examples: ["composite.bloom", "composite.halation"],
 }
 
-pub const MIX_TYPE_ID: &str = "primitive.mix";
+pub const MIX_TYPE_ID: &str = "node.mix";
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -118,7 +118,7 @@ impl Primitive for Mix {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/mix.wgsl"),
                 "cs_main",
-                "primitive.mix",
+                "node.mix",
             )
         });
         let sampler = self
@@ -157,7 +157,7 @@ impl Primitive for Mix {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "primitive.mix",
+            "node.mix",
         );
     }
 }
@@ -166,7 +166,7 @@ impl Primitive for Mix {
 // Blend — composite two textures with a blend mode.
 // =====================================================================
 
-pub const BLEND_TYPE_ID: &str = "primitive.blend";
+pub const BLEND_TYPE_ID: &str = "node.blend";
 
 pub const BLEND_MODES: &[&str] = &[
     "Normal",

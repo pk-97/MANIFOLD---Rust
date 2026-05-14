@@ -682,6 +682,6 @@ mod tests {
         // Suppress unused-import warning for FEEDBACK_TYPE_ID; this
         // also documents that we chose Feedback as the test fixture
         // because it's the only stateful primitive currently available.
-        assert_eq!(FEEDBACK_TYPE_ID, "primitive.feedback");
+        assert_eq!(FEEDBACK_TYPE_ID, "node.feedback");
     }
 }

@@ -634,12 +634,12 @@ fn transform_legacy_value(effect_type: &str, legacy_id: &str, raw: f32) -> f32 {
     match (effect_type, legacy_id) {
         // `TransformFX` reads `rot` as degrees, applies
         // `-rot * PI / 180`, then writes the rotation uniform.
-        // `primitive.affine_transform` takes rotation straight in
+        // `node.affine_transform` takes rotation straight in
         // radians (Y-down baked in via the negation), so the bridge
         // does the same conversion at the boundary.
         ("Transform", "rot") => -(raw * std::f32::consts::PI / 180.0),
         // `StrobeFX` stores `rate` as an index into its NOTE_RATES
-        // table (0..9). `primitive.strobe` takes the raw rate value
+        // table (0..9). `node.strobe` takes the raw rate value
         // (strobes-per-beat) so the bridge indexes the table here.
         ("Strobe", "rate") => {
             let idx = raw.max(0.0).round() as usize;
@@ -724,7 +724,7 @@ fn strip_node_params(mut doc: GraphDocument, node_id: u32) -> GraphDocument {
 /// Every primitive in the legacy-effect mapping names its texture
 /// input `"in"` — both the macro-authored atomics and the
 /// hand-authored fused composites / monolithic wrappers agreed on
-/// that convention. (The early `primitive.threshold` / `primitive.blur`
+/// that convention. (The early `node.threshold` / `node.blur`
 /// generation used `"source"`, but those primitives aren't in the
 /// legacy mapping.)
 const LEGACY_PRIMITIVE_INPUT_PORT: &str = "in";
@@ -1042,7 +1042,7 @@ mod tests {
             Some("amount")
         );
         // Dropped: legacy param without a primitive counterpart.
-        // `Infrared.palette` now maps to `primitive.infrared.palette`
+        // `Infrared.palette` now maps to `node.infrared.palette`
         // (after the §6.6 #5 monolithic wrapper landed).
         assert_eq!(
             param_name_for_legacy("Infrared", "palette"),

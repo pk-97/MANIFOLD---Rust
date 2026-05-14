@@ -1,4 +1,4 @@
-// primitive.halation — pixel-exact replacement for legacy
+// node.halation — pixel-exact replacement for legacy
 // `effects/shaders/fx_halation_compute.wgsl`. Mechanically copied
 // verbatim. Splitting pass 0 (threshold + tint + H Gaussian, fused
 // per-tap) into atomic primitives would store an fp16 intermediate

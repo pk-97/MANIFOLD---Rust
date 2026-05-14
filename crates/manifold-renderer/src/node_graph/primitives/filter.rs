@@ -32,7 +32,7 @@ const OUT_OUTPUT: NodeOutput = NodePort {
 // Threshold — keep pixels above a luma cutoff (with optional softness).
 // =====================================================================
 
-pub const THRESHOLD_TYPE_ID: &str = "primitive.threshold";
+pub const THRESHOLD_TYPE_ID: &str = "node.threshold";
 
 const THRESHOLD_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];
 const THRESHOLD_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
@@ -95,7 +95,7 @@ impl EffectNode for Threshold {
 // Blur — Gaussian/Box/Radial neighborhood blur.
 // =====================================================================
 
-pub const BLUR_TYPE_ID: &str = "primitive.blur";
+pub const BLUR_TYPE_ID: &str = "node.blur";
 
 pub const BLUR_MODES: &[&str] = &["Gaussian", "Box", "Radial"];
 
@@ -197,7 +197,7 @@ impl EffectNode for Blur {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/blur.wgsl"),
                 "cs_main",
-                "primitive.blur",
+                "node.blur",
             )
         });
         let sampler = self
@@ -214,7 +214,7 @@ impl EffectNode for Blur {
                 width,
                 height,
                 BLUR_SCRATCH_FORMAT,
-                "primitive.blur scratch",
+                "node.blur scratch",
             ));
         }
         let scratch_tex = &self
@@ -250,7 +250,7 @@ impl EffectNode for Blur {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "primitive.blur (H)",
+            "node.blur (H)",
         );
 
         // Pass 2: vertical — scratch → out.
@@ -280,7 +280,7 @@ impl EffectNode for Blur {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "primitive.blur (V)",
+            "node.blur (V)",
         );
     }
 }
@@ -295,7 +295,7 @@ impl EffectNode for Blur {
 // without exploding the port count.
 // =====================================================================
 
-pub const MIP_CHAIN_TYPE_ID: &str = "primitive.mip_chain";
+pub const MIP_CHAIN_TYPE_ID: &str = "node.mip_chain";
 
 const MIP_CHAIN_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];
 const MIP_CHAIN_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];

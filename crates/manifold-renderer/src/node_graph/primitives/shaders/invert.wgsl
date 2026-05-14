@@ -1,4 +1,4 @@
-// primitive.invert — RGB invert blended against source by intensity.
+// node.invert — RGB invert blended against source by intensity.
 //
 // Pixel-exact replacement for the legacy `effects/shaders/invert_colors.wgsl`.
 // Binding indices, math, workgroup shape, and dispatch shape preserved

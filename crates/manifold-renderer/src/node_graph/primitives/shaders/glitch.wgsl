@@ -1,4 +1,4 @@
-// primitive.glitch — pixel-exact replacement for legacy
+// node.glitch — pixel-exact replacement for legacy
 // `effects/shaders/fx_glitch.wgsl`. Block-displacement + scanline-
 // jitter + RGB-shift + per-block invert in a single compute pass.
 // Fused composite — atomic Hash + BlockDisplace + Scanline +

@@ -1,4 +1,4 @@
-// primitive.uv_transform — translate / scale / rotate / mirror the input.
+// node.transform — translate / scale / rotate / mirror the input.
 //
 // Single shader covering all 9 modes:
 //   0 = Identity     — no UV change beyond translate/scale/rotation.

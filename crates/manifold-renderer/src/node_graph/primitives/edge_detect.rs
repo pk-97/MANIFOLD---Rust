@@ -1,4 +1,4 @@
-//! `primitive.edge_detect` — pixel-exact replacement for legacy
+//! `node.edge_detect` — pixel-exact replacement for legacy
 //! [`EdgeDetectFX`](crate::effects::edge_detect::EdgeDetectFX).
 //! Tenth §6.1 migration and the first **fused composite primitive**.
 //!
@@ -25,7 +25,7 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: EdgeDetect,
-    type_id: "primitive.edge_detect",
+    type_id: "node.edge_detect",
     purpose: "Sobel 3×3 edge detection with smoothstep threshold, crossfaded against the source by amount. Luminance-based; no glow — chain with Bloom or Halation for glow.",
     inputs: {
         in: Texture2D required,
@@ -92,7 +92,7 @@ impl Primitive for EdgeDetect {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/edge_detect.wgsl"),
                 "cs_main",
-                "primitive.edge_detect",
+                "node.edge_detect",
             )
         });
         let sampler = self
@@ -127,7 +127,7 @@ impl Primitive for EdgeDetect {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "primitive.edge_detect",
+            "node.edge_detect",
         );
     }
 }

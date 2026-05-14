@@ -1,4 +1,4 @@
-// primitive.wet_dry_mix — full-RGBA linear interpolation between a
+// node.wet_dry — full-RGBA linear interpolation between a
 // `dry` and `wet` texture. Pixel-exact port of legacy
 // `effects/shaders/wet_dry_lerp_compute.wgsl`. Used by every composite
 // that needs to crossfade a processed result back over its source

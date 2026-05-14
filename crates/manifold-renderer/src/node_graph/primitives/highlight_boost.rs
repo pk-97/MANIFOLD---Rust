@@ -1,4 +1,4 @@
-//! `primitive.highlight_boost` — pixel-exact replacement for legacy
+//! `node.highlight_boost` — pixel-exact replacement for legacy
 //! [`HdrBoostFX`](crate::effects::hdr_boost::HdrBoostFX). Ninth §6.1
 //! migration.
 //!
@@ -23,7 +23,7 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: HighlightBoost,
-    type_id: "primitive.highlight_boost",
+    type_id: "node.highlight_boost",
     purpose: "Boost luminance excess above a soft-knee threshold by `pow(2, gain) - 1` EV stops; preserves color ratios via per-pixel luma scaling. Final result is clamped to non-negative.",
     inputs: {
         in: Texture2D required,
@@ -98,7 +98,7 @@ impl Primitive for HighlightBoost {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/highlight_boost.wgsl"),
                 "cs_main",
-                "primitive.highlight_boost",
+                "node.highlight_boost",
             )
         });
         let sampler = self
@@ -133,7 +133,7 @@ impl Primitive for HighlightBoost {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "primitive.highlight_boost",
+            "node.highlight_boost",
         );
     }
 }

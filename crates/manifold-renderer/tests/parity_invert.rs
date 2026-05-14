@@ -61,7 +61,7 @@ fn invert_is_pixel_exact_across_fixtures_and_intensities() {
                 |graph, prim_id| {
                     graph
                         .set_param(prim_id, "intensity", ParamValue::Float(intensity))
-                        .expect("primitive.invert must accept `intensity` param");
+                        .expect("node.invert must accept `intensity` param");
                 },
             );
 

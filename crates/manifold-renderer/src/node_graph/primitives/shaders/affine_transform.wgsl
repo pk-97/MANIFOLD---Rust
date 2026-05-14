@@ -1,4 +1,4 @@
-// primitive.affine_transform — pixel-exact replacement for legacy
+// node.affine_transform — pixel-exact replacement for legacy
 // `effects/shaders/fx_transform.wgsl`. 2D affine UV transform with
 // aspect-correct rotation. Bindings, math, OOB-clamp behavior, and
 // dispatch shape preserved verbatim.

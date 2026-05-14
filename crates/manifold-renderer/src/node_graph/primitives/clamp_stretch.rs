@@ -1,4 +1,4 @@
-//! `primitive.clamp_stretch` — pixel-exact replacement for legacy
+//! `node.edge_stretch` — pixel-exact replacement for legacy
 //! [`EdgeStretchFX`](crate::effects::edge_stretch::EdgeStretchFX).
 //! Third §6.1 migration.
 //!
@@ -17,7 +17,7 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: ClampStretch,
-    type_id: "primitive.clamp_stretch",
+    type_id: "node.edge_stretch",
     purpose: "Clamps UV coordinates to a center strip (width × axis), stretching edge pixels outward. Axis modes: Horizontal, Vertical, or Both.",
     inputs: {
         in: Texture2D required,
@@ -99,7 +99,7 @@ impl Primitive for ClampStretch {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/clamp_stretch.wgsl"),
                 "cs_main",
-                "primitive.clamp_stretch",
+                "node.edge_stretch",
             )
         });
         let sampler = self
@@ -134,7 +134,7 @@ impl Primitive for ClampStretch {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "primitive.clamp_stretch",
+            "node.edge_stretch",
         );
     }
 }

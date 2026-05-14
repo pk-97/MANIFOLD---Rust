@@ -153,7 +153,7 @@ fn color_grade_is_pixel_exact_across_fixtures_and_grades() {
                                name: &'static str,
                                v: f32| {
                         g.set_param(prim_id, name, ParamValue::Float(v))
-                            .expect("primitive.color_grade must accept param");
+                            .expect("node.color_grade must accept param");
                     };
                     set(graph, "amount", grade.amount);
                     set(graph, "gain", grade.gain);

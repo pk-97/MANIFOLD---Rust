@@ -1,4 +1,4 @@
-// primitive.lut1d — pixel-exact replacement for legacy
+// node.color_lut — pixel-exact replacement for legacy
 // `effects/shaders/fx_infrared.wgsl`. Maps luminance (BT.601) through
 // a 1D LUT (stored as a Wx1 texture), with contrast adjustment and
 // crossfade against the source. Bindings, math, sampler usage, and

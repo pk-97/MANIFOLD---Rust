@@ -1,10 +1,10 @@
-//! `primitive.wet_dry_mix` — full-RGBA linear interpolation between
+//! `node.wet_dry` — full-RGBA linear interpolation between
 //! a `dry` and `wet` texture. Atomic building block extracted from
 //! legacy `wet_dry_lerp_compute.wgsl`; used by every composite that
 //! crossfades a processed result back over its source (Bloom,
 //! Halation, Watercolor).
 //!
-//! Distinct from `primitive.mix` (Lerp mode): the port names `dry`/`wet`
+//! Distinct from `node.mix` (Lerp mode): the port names `dry`/`wet`
 //! make the dataflow direction explicit for composite authors, and the
 //! shader carries only the lerp math — no mode switch overhead.
 
@@ -16,7 +16,7 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: WetDryMix,
-    type_id: "primitive.wet_dry_mix",
+    type_id: "node.wet_dry",
     purpose: "Crossfade a processed `wet` texture back over the original `dry` texture by a `wet_dry` factor [0,1]. At 0 returns dry unchanged; at 1 returns wet. RGBA-wide lerp.",
     inputs: {
         dry: Texture2D required,
@@ -39,7 +39,7 @@ crate::primitive! {
     examples: ["composite.bloom", "composite.halation", "composite.watercolor"],
 }
 
-pub const WET_DRY_MIX_TYPE_ID: &str = "primitive.wet_dry_mix";
+pub const WET_DRY_MIX_TYPE_ID: &str = "node.wet_dry";
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -73,7 +73,7 @@ impl Primitive for WetDryMix {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/wet_dry_mix.wgsl"),
                 "cs_main",
-                "primitive.wet_dry_mix",
+                "node.wet_dry",
             )
         });
         let sampler = self
@@ -112,7 +112,7 @@ impl Primitive for WetDryMix {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "primitive.wet_dry_mix",
+            "node.wet_dry",
         );
     }
 }

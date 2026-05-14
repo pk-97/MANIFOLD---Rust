@@ -1,4 +1,4 @@
-// primitive.color_grade — pixel-exact replacement for legacy
+// node.color_grade — pixel-exact replacement for legacy
 // `effects/shaders/color_grade.wgsl`. Binding indices, math
 // (K-matrix HSV, luma-based saturation, colorize pipeline), and
 // dispatch shape preserved verbatim. Changing any of this breaks the

@@ -1,4 +1,4 @@
-//! `primitive.chromatic_offset` — pixel-exact replacement for legacy
+//! `node.chromatic_aberration` — pixel-exact replacement for legacy
 //! [`ChromaticAberrationFX`](crate::effects::chromatic_aberration::ChromaticAberrationFX).
 //! Sixth §6.1 migration.
 //!
@@ -22,7 +22,7 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: ChromaticOffset,
-    type_id: "primitive.chromatic_offset",
+    type_id: "node.chromatic_aberration",
     purpose: "Radial or linear RGB channel separation: red and blue channels shift along an offset vector; green stays unshifted.",
     inputs: {
         in: Texture2D required,
@@ -112,7 +112,7 @@ impl Primitive for ChromaticOffset {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/chromatic_offset.wgsl"),
                 "cs_main",
-                "primitive.chromatic_offset",
+                "node.chromatic_aberration",
             )
         });
         let sampler = self
@@ -149,7 +149,7 @@ impl Primitive for ChromaticOffset {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "primitive.chromatic_offset",
+            "node.chromatic_aberration",
         );
     }
 }

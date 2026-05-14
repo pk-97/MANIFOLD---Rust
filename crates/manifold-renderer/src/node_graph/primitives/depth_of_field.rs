@@ -1,4 +1,4 @@
-//! `primitive.depth_of_field` — pixel-exact replacement for legacy
+//! `node.depth_of_field` — pixel-exact replacement for legacy
 //! [`DepthOfFieldFX`](crate::effects::depth_of_field::DepthOfFieldFX).
 //! Fused composite with three focus modes:
 //!
@@ -51,7 +51,7 @@ use crate::render_target::RenderTarget;
 
 const DOF_WGSL: &str = include_str!("../../effects/shaders/fx_depth_of_field_compute.wgsl");
 
-pub const DEPTH_OF_FIELD_TYPE_ID: &str = "primitive.depth_of_field";
+pub const DEPTH_OF_FIELD_TYPE_ID: &str = "node.depth_of_field";
 
 pub const DEPTH_OF_FIELD_FOCUS_MODES: &[&str] = &["Tilt-Shift", "Radial", "Depth"];
 pub const DEPTH_OF_FIELD_QUALITIES: &[&str] = &["Low", "Medium", "High"];
@@ -158,24 +158,24 @@ impl DepthOfField {
         };
         if self.pipeline_coc_tilt_shift.is_none() {
             self.pipeline_coc_tilt_shift =
-                Some(spec("0u", Some("0u"), "primitive.dof.coc.tilt_shift"));
+                Some(spec("0u", Some("0u"), "node.dof.coc.tilt_shift"));
         }
         if self.pipeline_coc_radial.is_none() {
             self.pipeline_coc_radial =
-                Some(spec("0u", Some("1u"), "primitive.dof.coc.radial"));
+                Some(spec("0u", Some("1u"), "node.dof.coc.radial"));
         }
         if self.pipeline_coc_depth.is_none() {
             self.pipeline_coc_depth =
-                Some(spec("0u", Some("2u"), "primitive.dof.coc.depth"));
+                Some(spec("0u", Some("2u"), "node.dof.coc.depth"));
         }
         if self.pipeline_blur_h.is_none() {
-            self.pipeline_blur_h = Some(spec("1u", None, "primitive.dof.blur_h"));
+            self.pipeline_blur_h = Some(spec("1u", None, "node.dof.blur_h"));
         }
         if self.pipeline_blur_v.is_none() {
-            self.pipeline_blur_v = Some(spec("2u", None, "primitive.dof.blur_v"));
+            self.pipeline_blur_v = Some(spec("2u", None, "node.dof.blur_v"));
         }
         if self.pipeline_composite.is_none() {
-            self.pipeline_composite = Some(spec("3u", None, "primitive.dof.composite"));
+            self.pipeline_composite = Some(spec("3u", None, "node.dof.composite"));
         }
         if self.sampler.is_none() {
             self.sampler = Some(device.create_sampler(&GpuSamplerDesc::default()));
@@ -190,7 +190,7 @@ impl DepthOfField {
         self.depth_worker = BackgroundWorker::try_new(|| {
             let mut estimator =
                 manifold_native::ffi::depth_ffi::FfiDepthEstimator::new_depth_only()?;
-            log::info!("[primitive.depth_of_field] Depth worker spawned (MiDaS depth-only)");
+            log::info!("[node.depth_of_field] Depth worker spawned (MiDaS depth-only)");
             Some(move |req: DofDepthRequest| -> DofDepthResponse {
                 let pc = (req.width * req.height) as usize;
                 let mut depth = vec![0f32; pc];
@@ -209,7 +209,7 @@ impl DepthOfField {
         });
         if self.depth_worker.is_none() {
             log::warn!(
-                "[primitive.depth_of_field] Depth worker unavailable — depth mode disabled"
+                "[node.depth_of_field] Depth worker unavailable — depth mode disabled"
             );
         }
     }
@@ -230,7 +230,7 @@ impl DepthOfField {
             format: GpuTextureFormat::Rgba16Float,
             dimension: GpuTextureDimension::D2,
             usage: GpuTextureUsage::RENDER_TARGET_FULL | GpuTextureUsage::CPU_UPLOAD,
-            label: "primitive.dof.depth",
+            label: "node.dof.depth",
             mip_levels: 1,
         });
 
@@ -396,7 +396,7 @@ impl EffectNode for DepthOfField {
         let gpu = ctx
             .gpu
             .as_deref_mut()
-            .expect("primitive.depth_of_field requires a GpuEncoder");
+            .expect("node.depth_of_field requires a GpuEncoder");
         self.ensure_pipelines(gpu.device);
         self.ensure_buffers(gpu.device, width, height);
 
@@ -462,7 +462,7 @@ impl EffectNode for DepthOfField {
                         format: GpuTextureFormat::Rgba16Float,
                         dimension: GpuTextureDimension::D2,
                         usage: GpuTextureUsage::RENDER_TARGET_FULL,
-                        label: "primitive.dof.depth.staging",
+                        label: "node.dof.depth.staging",
                         mip_levels: 1,
                     });
                     gpu.copy_texture_to_texture(source, &staging, aw, ah);
@@ -527,7 +527,7 @@ impl EffectNode for DepthOfField {
                     &pass0_u,
                     width,
                     height,
-                    "primitive.dof.coc.depth",
+                    "node.dof.coc.depth",
                 );
             } else {
                 dispatch_dof(
@@ -540,7 +540,7 @@ impl EffectNode for DepthOfField {
                     &pass0_u,
                     width,
                     height,
-                    "primitive.dof.coc.depth_pending",
+                    "node.dof.coc.depth_pending",
                 );
             }
         } else {
@@ -554,7 +554,7 @@ impl EffectNode for DepthOfField {
                 &pass0_u,
                 width,
                 height,
-                "primitive.dof.coc",
+                "node.dof.coc",
             );
         }
 
@@ -570,7 +570,7 @@ impl EffectNode for DepthOfField {
             &pass1_u,
             width,
             height,
-            "primitive.dof.blur_h",
+            "node.dof.blur_h",
         );
 
         // Pass 2: V blur, buf_b → buf_a
@@ -585,7 +585,7 @@ impl EffectNode for DepthOfField {
             &pass2_u,
             width,
             height,
-            "primitive.dof.blur_v",
+            "node.dof.blur_v",
         );
 
         // Pass 3: Composite source + buf_a → target
@@ -600,7 +600,7 @@ impl EffectNode for DepthOfField {
             &pass3_u,
             width,
             height,
-            "primitive.dof.composite",
+            "node.dof.composite",
         );
     }
 }

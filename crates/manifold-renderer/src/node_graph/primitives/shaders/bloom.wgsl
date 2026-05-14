@@ -1,4 +1,4 @@
-// primitive.bloom — pixel-exact replacement for legacy
+// node.bloom — pixel-exact replacement for legacy
 // `effects/shaders/bloom_compute.wgsl`. Mechanically copied verbatim
 // from the legacy shader; the only change is that the primitive's
 // host code reuses the unspecialized pipeline rather than running

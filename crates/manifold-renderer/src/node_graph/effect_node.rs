@@ -11,7 +11,7 @@ use crate::node_graph::state_store::{OwnerKey, StateStore};
 
 /// Stable string ID identifying an [`EffectNode`] kind.
 ///
-/// Examples: `"primitive.blur"`, `"effect.bloom"`, `"composite.user.<uuid>"`.
+/// Examples: `"node.blur"`, `"effect.bloom"`, `"composite.user.<uuid>"`.
 ///
 /// Treated as public API once shipped to users. Renaming in place breaks
 /// project files. Use additive deprecation (introduce `effect.bloom_v2`,

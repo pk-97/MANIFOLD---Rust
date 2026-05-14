@@ -1,4 +1,4 @@
-// primitive.voronoi_prism — pixel-exact replacement for legacy
+// node.voronoi_prism — pixel-exact replacement for legacy
 // `effects/shaders/fx_voronoi_prism.wgsl`. Per-cell UV remapping
 // with beat-synchronized pop-in and per-cell visibility hash.
 // Fused composite — atomic VoronoiCells + per-cell-hash + Mix

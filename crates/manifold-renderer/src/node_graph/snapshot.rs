@@ -36,9 +36,9 @@ pub struct NodeSnapshot {
     /// bindings to address inner nodes across renderer refactors.
     /// `None` for anonymous nodes (boundary Source/FinalOutput, etc.).
     pub node_handle: Option<String>,
-    /// `EffectNodeType` string — `primitive.mix`, `effect.bloom`, etc.
+    /// `EffectNodeType` string — `node.mix`, `effect.bloom`, etc.
     pub type_id: String,
-    /// Display title derived from `type_id` (e.g. `primitive.mix` → "Mix").
+    /// Display title derived from `type_id` (e.g. `node.mix` → "Mix").
     pub title: String,
     pub inputs: Vec<PortSnapshot>,
     pub outputs: Vec<PortSnapshot>,
@@ -207,7 +207,7 @@ impl GraphSnapshot {
     }
 }
 
-/// Convert a stable type id like `primitive.mix` or `composite.bloom` into
+/// Convert a stable type id like `node.mix` or `composite.bloom` into
 /// a short title suitable for display: "Mix", "Bloom". Falls back to the
 /// raw id when there's no dot separator.
 fn title_from_type_id(type_id: &str) -> String {
@@ -304,12 +304,12 @@ mod tests {
     fn snapshot_captures_nodes_and_wires() {
         let mut g = Graph::new();
         let a = g.add_node(Box::new(StubNode {
-            type_id: EffectNodeType::new("primitive.source"),
+            type_id: EffectNodeType::new("node.source"),
             inputs: vec![],
             outputs: vec![output("out")],
         }));
         let b = g.add_node(Box::new(StubNode {
-            type_id: EffectNodeType::new("primitive.mix"),
+            type_id: EffectNodeType::new("node.mix"),
             inputs: vec![input("a"), input("b")],
             outputs: vec![output("out")],
         }));
@@ -327,7 +327,7 @@ mod tests {
 
     #[test]
     fn title_lowercase_id_capitalizes() {
-        assert_eq!(title_from_type_id("primitive.blur"), "Blur");
+        assert_eq!(title_from_type_id("node.blur"), "Blur");
         assert_eq!(title_from_type_id("composite.bloom"), "Bloom");
         assert_eq!(title_from_type_id("oddball"), "Oddball");
     }
@@ -358,14 +358,14 @@ mod tests {
         use crate::node_graph::parameters::ParamType;
         let mut g = Graph::new();
         let _anon = g.add_node(Box::new(StubNode {
-            type_id: EffectNodeType::new("primitive.source"),
+            type_id: EffectNodeType::new("node.source"),
             inputs: vec![],
             outputs: vec![output("out")],
         }));
         let _named = g.add_node_named(
             "uv_transform",
             Box::new(ParamfulNode {
-                type_id: EffectNodeType::new("primitive.uv_transform"),
+                type_id: EffectNodeType::new("node.transform"),
                 outputs: vec![output("out")],
                 params: vec![
                     ParamDef {
@@ -396,7 +396,7 @@ mod tests {
         let named = snap
             .nodes
             .iter()
-            .find(|n| n.title == "Uv_transform")
+            .find(|n| n.title == "Transform")
             .unwrap();
         assert_eq!(named.node_handle.as_deref(), Some("uv_transform"));
         assert_eq!(named.parameters.len(), 2);

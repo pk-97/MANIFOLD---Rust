@@ -1,4 +1,4 @@
-//! `primitive.glitch` — pixel-exact replacement for legacy
+//! `node.glitch` — pixel-exact replacement for legacy
 //! [`GlitchFX`](crate::effects::glitch::GlitchFX). Thirteenth and
 //! **final** §6.1 migration; fused composite.
 //!
@@ -17,7 +17,7 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: Glitch,
-    type_id: "primitive.glitch",
+    type_id: "node.glitch",
     purpose: "Composite glitch: block displacement, scanline jitter, RGB channel split, and per-block invert. Time-driven; the `time` and `speed` inputs together set the rate at which the random hash advances.",
     inputs: {
         in: Texture2D required,
@@ -117,7 +117,7 @@ impl Primitive for Glitch {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/glitch.wgsl"),
                 "cs_main",
-                "primitive.glitch",
+                "node.glitch",
             )
         });
         let sampler = self
@@ -156,7 +156,7 @@ impl Primitive for Glitch {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "primitive.glitch",
+            "node.glitch",
         );
     }
 }

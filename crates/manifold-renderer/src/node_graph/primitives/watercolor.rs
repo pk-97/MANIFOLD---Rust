@@ -1,4 +1,4 @@
-//! `primitive.watercolor` — pixel-exact replacement for legacy
+//! `node.watercolor` — pixel-exact replacement for legacy
 //! [`WatercolorFX`](crate::effects::watercolor::WatercolorFX). Fused
 //! composite.
 //!
@@ -38,7 +38,7 @@ use crate::render_target::RenderTarget;
 const WATERCOLOR_WGSL: &str =
     include_str!("../../effects/shaders/fx_watercolor_compute.wgsl");
 
-pub const WATERCOLOR_TYPE_ID: &str = "primitive.watercolor";
+pub const WATERCOLOR_TYPE_ID: &str = "node.watercolor";
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -125,7 +125,7 @@ impl Watercolor {
                 WATERCOLOR_WGSL,
                 "cs_main",
                 &[("uniforms.mode", "1u")],
-                "primitive.watercolor.max",
+                "node.watercolor.max",
             ));
         }
         if self.pipeline_flow_gen.is_none() {
@@ -133,7 +133,7 @@ impl Watercolor {
                 WATERCOLOR_WGSL,
                 "cs_main",
                 &[("uniforms.mode", "2u")],
-                "primitive.watercolor.flow_gen",
+                "node.watercolor.flow_gen",
             ));
         }
         if self.pipeline_displace.is_none() {
@@ -141,7 +141,7 @@ impl Watercolor {
                 WATERCOLOR_WGSL,
                 "cs_main",
                 &[("uniforms.mode", "3u")],
-                "primitive.watercolor.displace",
+                "node.watercolor.displace",
             ));
         }
         if self.pipeline_blur.is_none() {
@@ -149,7 +149,7 @@ impl Watercolor {
                 WATERCOLOR_WGSL,
                 "cs_main",
                 &[("uniforms.mode", "4u")],
-                "primitive.watercolor.blur",
+                "node.watercolor.blur",
             ));
         }
         if self.pipeline_slope.is_none() {
@@ -157,7 +157,7 @@ impl Watercolor {
                 WATERCOLOR_WGSL,
                 "cs_main",
                 &[("uniforms.mode", "5u")],
-                "primitive.watercolor.slope",
+                "node.watercolor.slope",
             ));
         }
         if self.pipeline_luma.is_none() {
@@ -165,7 +165,7 @@ impl Watercolor {
                 WATERCOLOR_WGSL,
                 "cs_main",
                 &[("uniforms.mode", "6u")],
-                "primitive.watercolor.luma",
+                "node.watercolor.luma",
             ));
         }
         if self.pipeline_blend.is_none() {
@@ -173,7 +173,7 @@ impl Watercolor {
                 WATERCOLOR_WGSL,
                 "cs_main",
                 &[("uniforms.mode", "7u")],
-                "primitive.watercolor.blend",
+                "node.watercolor.blend",
             ));
         }
         if self.sampler.is_none() {
@@ -304,7 +304,7 @@ impl EffectNode for Watercolor {
         let gpu = ctx
             .gpu
             .as_deref_mut()
-            .expect("primitive.watercolor requires a GpuEncoder");
+            .expect("node.watercolor requires a GpuEncoder");
         self.ensure_pipelines(gpu.device);
         self.ensure_state(gpu.device, width, height);
 
@@ -357,7 +357,7 @@ impl EffectNode for Watercolor {
         // Pass 1: Grain + Max — source ⊕ (feedback * decay) → temp_a
         dispatch_watercolor(
             gpu, p_max, source, &feedback.texture, &temp_a.texture, sampler, ubytes, width, height,
-            "primitive.watercolor.max",
+            "node.watercolor.max",
         );
 
         // Pass 2: Flow Map (half-res)
@@ -365,37 +365,37 @@ impl EffectNode for Watercolor {
         let flow_h = flow_map.height;
         dispatch_watercolor(
             gpu, p_flow, source, source, &flow_map.texture, sampler, ubytes, flow_w, flow_h,
-            "primitive.watercolor.flow_gen",
+            "node.watercolor.flow_gen",
         );
 
         // Pass 3: Displacement — temp_a + flow_map → temp_b
         dispatch_watercolor(
             gpu, p_disp, &temp_a.texture, &flow_map.texture, &temp_b.texture, sampler, ubytes,
-            width, height, "primitive.watercolor.displace",
+            width, height, "node.watercolor.displace",
         );
 
         // Pass 4: Edge Diffusion Blur — temp_b → temp_a
         dispatch_watercolor(
             gpu, p_blur, &temp_b.texture, &temp_b.texture, &temp_a.texture, sampler, ubytes,
-            width, height, "primitive.watercolor.blur",
+            width, height, "node.watercolor.blur",
         );
 
         // Pass 5: Slope Displacement — source + temp_a → temp_b
         dispatch_watercolor(
             gpu, p_slope, source, &temp_a.texture, &temp_b.texture, sampler, ubytes, width,
-            height, "primitive.watercolor.slope",
+            height, "node.watercolor.slope",
         );
 
         // Pass 6: Luma Blur — temp_b → feedback (persistent)
         dispatch_watercolor(
             gpu, p_luma, &temp_b.texture, &temp_b.texture, &feedback.texture, sampler, ubytes,
-            width, height, "primitive.watercolor.luma",
+            width, height, "node.watercolor.luma",
         );
 
         // Pass 7: Wet/Dry Blend — feedback + source → target
         dispatch_watercolor(
             gpu, p_blend, &feedback.texture, source, target, sampler, ubytes, width, height,
-            "primitive.watercolor.blend",
+            "node.watercolor.blend",
         );
     }
 }

@@ -1,4 +1,4 @@
-//! `primitive.separable_gaussian` — single-axis Gaussian blur with
+//! `node.gaussian_blur` — single-axis Gaussian blur with
 //! 9/17/25-tap precomputed kernels. Building block for Halation,
 //! Bloom, and Watercolor decompositions; kernel weights are
 //! bit-identical to the legacy DoF / Halation shaders so reassembled
@@ -25,7 +25,7 @@ pub const SEPARABLE_GAUSSIAN_AXES: &[&str] = &["Horizontal", "Vertical"];
 
 crate::primitive! {
     name: SeparableGaussian,
-    type_id: "primitive.separable_gaussian",
+    type_id: "node.gaussian_blur",
     purpose: "Single-axis Gaussian blur. Pair an H pass with a V pass (same kernel + step) for an isotropic blur. 9-tap (σ≈2), 17-tap (σ≈4), or 25-tap (σ≈6) precomputed kernels.",
     inputs: {
         in: Texture2D required,
@@ -63,7 +63,7 @@ crate::primitive! {
     examples: ["composite.bloom", "composite.halation", "composite.watercolor"],
 }
 
-pub const SEPARABLE_GAUSSIAN_TYPE_ID: &str = "primitive.separable_gaussian";
+pub const SEPARABLE_GAUSSIAN_TYPE_ID: &str = "node.gaussian_blur";
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -110,7 +110,7 @@ impl Primitive for SeparableGaussian {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/separable_gaussian.wgsl"),
                 "cs_main",
-                "primitive.separable_gaussian",
+                "node.gaussian_blur",
             )
         });
         let sampler = self
@@ -149,7 +149,7 @@ impl Primitive for SeparableGaussian {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "primitive.separable_gaussian",
+            "node.gaussian_blur",
         );
     }
 }

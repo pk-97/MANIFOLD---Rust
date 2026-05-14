@@ -1,4 +1,4 @@
-// primitive.highlight_boost — pixel-exact replacement for legacy
+// node.highlight_boost — pixel-exact replacement for legacy
 // `effects/shaders/hdr_boost_compute.wgsl`. Excess-above-threshold
 // boost with EV-stop gain, color-ratio-preserving. Bindings, math,
 // and dispatch shape preserved verbatim.

@@ -1,4 +1,4 @@
-// primitive.mix — unified two-texture compositor with 7 blend modes.
+// node.mix — unified two-texture compositor with 7 blend modes.
 //
 // Algorithm:
 //   blended = blend(a, b, mode)

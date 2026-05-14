@@ -1,4 +1,4 @@
-// primitive.chromatic_offset — pixel-exact replacement for legacy
+// node.chromatic_aberration — pixel-exact replacement for legacy
 // `effects/shaders/fx_chromatic_aberration.wgsl`. Radial or linear
 // RGB channel separation; bindings, math, and dispatch shape
 // preserved verbatim.

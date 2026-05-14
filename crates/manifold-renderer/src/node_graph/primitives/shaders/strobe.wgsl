@@ -1,4 +1,4 @@
-// primitive.strobe — pixel-exact replacement for legacy
+// node.strobe — pixel-exact replacement for legacy
 // `effects/shaders/fx_strobe.wgsl`. Beat-synced square wave flash.
 // Fused composite — atomic BeatGate + Mix would introduce fp16
 // rounding on the gate write that breaks bit-exact parity vs the

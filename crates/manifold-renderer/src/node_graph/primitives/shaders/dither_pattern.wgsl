@@ -1,4 +1,4 @@
-// primitive.dither_pattern — pixel-exact replacement for legacy
+// node.dither — pixel-exact replacement for legacy
 // `effects/shaders/fx_dither.wgsl`. 6 dithering algorithms with
 // luminance-preserving quantization. Bindings, math, and dispatch
 // shape preserved verbatim.

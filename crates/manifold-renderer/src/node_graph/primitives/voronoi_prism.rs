@@ -1,4 +1,4 @@
-//! `primitive.voronoi_prism` — pixel-exact replacement for legacy
+//! `node.voronoi_prism` — pixel-exact replacement for legacy
 //! [`VoronoiPrismFX`](crate::effects::voronoi_prism::VoronoiPrismFX).
 //! Twelfth §6.1 migration; fused composite.
 //!
@@ -18,7 +18,7 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: VoronoiPrism,
-    type_id: "primitive.voronoi_prism",
+    type_id: "node.voronoi_prism",
     purpose: "Per-cell UV remapping with beat-synchronized pop-in. Each Voronoi cell samples a hash-offset source UV and fades on at the start of each beat; ~40% of cells go dark each beat for a flicker pattern.",
     inputs: {
         in: Texture2D required,
@@ -98,7 +98,7 @@ impl Primitive for VoronoiPrism {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/voronoi_prism.wgsl"),
                 "cs_main",
-                "primitive.voronoi_prism",
+                "node.voronoi_prism",
             )
         });
         let sampler = self
@@ -137,7 +137,7 @@ impl Primitive for VoronoiPrism {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "primitive.voronoi_prism",
+            "node.voronoi_prism",
         );
     }
 }

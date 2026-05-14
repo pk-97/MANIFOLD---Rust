@@ -1,4 +1,4 @@
-// primitive.blur — separable 1D blur (Gaussian / Box).
+// node.blur — separable 1D blur (Gaussian / Box).
 //
 // Run twice per evaluate(): once horizontally (direction = (1, 0)),
 // once vertically (direction = (0, 1)), with a scratch texture
