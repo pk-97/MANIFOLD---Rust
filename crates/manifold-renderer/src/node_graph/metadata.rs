@@ -1,18 +1,10 @@
 //! Inventory-backed `EffectMetadata` lookup.
 //!
-//! Originally this module also hosted `LegacyPostProcessNode`, the
-//! adapter that wrapped a `PostProcessEffect` so the chain graph could
-//! treat the legacy effect catalog as graph nodes. That adapter was
-//! deleted once every effect migrated to a `ChainSpec` (every chain
-//! splice is direct now — no wrappers). What survived is the
-//! [`metadata_by_id`] helper: a cached inventory scan that resolves an
-//! `EffectTypeId` to its `&'static EffectMetadata`. Used by ChainSpec
-//! routing resolution, the snapshot path, and a handful of legacy-
-//! `effect_graphs.rs` entry points that haven't been retired yet.
-//!
-//! The file keeps its `legacy_adapter` name for now because several
-//! callers still `use crate::node_graph::legacy_adapter::metadata_by_id`;
-//! renaming is mechanical cleanup for a follow-up.
+//! Resolves an `EffectTypeId` to its `&'static EffectMetadata`. Used
+//! by ChainSpec routing resolution, the snapshot path, and the editor
+//! inspector. The `inventory` collection is one-shot at startup;
+//! [`metadata_by_id`] caches the resulting map so per-frame callers
+//! don't rescan.
 
 use std::sync::OnceLock;
 

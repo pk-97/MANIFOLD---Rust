@@ -48,7 +48,7 @@ use crate::node_graph::boundary_nodes::{
 };
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::graph::Graph;
-use crate::node_graph::legacy_adapter::metadata_by_id;
+use crate::node_graph::metadata::metadata_by_id;
 use crate::node_graph::param_binding::ParamConvert;
 use crate::node_graph::persistence::{PrimitiveRegistry, SerializedParamValue};
 
