@@ -243,6 +243,9 @@ fn register_builtin(r: &mut PrimitiveRegistry) {
     r.register(primitives::INFRARED_TYPE_ID, || {
         Box::new(primitives::Infrared::new())
     });
+    r.register(primitives::QUAD_MIRROR_TYPE_ID, || {
+        Box::new(primitives::QuadMirror::new())
+    });
 
     // Remaining single-pass primitives authored via the `primitive!`
     // macro. Each declares a `TYPE_ID` constant via its `PrimitiveSpec`
@@ -656,6 +659,7 @@ mod tests {
             primitives::BLOB_TRACKING_TYPE_ID,
             primitives::WIREFRAME_DEPTH_TYPE_ID,
             primitives::INFRARED_TYPE_ID,
+            primitives::QUAD_MIRROR_TYPE_ID,
         ];
         for id in expected {
             assert!(

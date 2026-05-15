@@ -30,9 +30,10 @@ use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Feedback;
 use crate::node_graph::{
-    ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId,
-    ParamBinding, ParamConvert, ParamTarget, PortType, ResourceId, Slot, Source, StateStore,
-    UserParamBindingRuntime, apply_param_bindings, compile, user_binding_to_runtime,
+    ChainSpec, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend,
+    NodeInstanceId, ParamBinding, ParamConvert, ParamTarget, PortType, ResourceId, Routing,
+    SkipMode, Slot, Source, SpliceResult, StateStore, UserParamBindingRuntime,
+    apply_param_bindings, compile, user_binding_to_runtime,
 };
 use crate::render_target::RenderTarget;
 
@@ -57,6 +58,34 @@ inventory::submit! {
     EffectFactory {
         id: EffectTypeId::STYLIZED_FEEDBACK,
         create: |device| Box::new(StylizedFeedbackFX::new(device)),
+    }
+}
+
+fn splice_stylized_feedback(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult {
+    let node = graph.add_node(Box::new(Feedback::new()));
+    graph.connect(source, (node, "source")).expect("wire source → Feedback.source");
+    SpliceResult {
+        output: (node, "out"),
+        handles: vec![(Cow::Borrowed("feedback"), node)],
+    }
+}
+
+/// Mode remap: host slider (0=Screen / 1=Add / 2=Max) lines up 1:1
+/// with Feedback's blend enum. Kept explicit so the convention is
+/// visible at the spec, matching how Mirror documents its mode remap.
+const STYLIZED_FEEDBACK_MODE_REMAP: &[u32] = &[0, 1, 2];
+
+inventory::submit! {
+    ChainSpec {
+        type_id: EffectTypeId::STYLIZED_FEEDBACK,
+        splice: splice_stylized_feedback,
+        routings: &[
+            Routing { param_id: "amount", target_handle: "feedback", target_param: "amount", convert: ParamConvert::Float },
+            Routing { param_id: "zoom", target_handle: "feedback", target_param: "zoom", convert: ParamConvert::Float },
+            Routing { param_id: "rotate", target_handle: "feedback", target_param: "rotation", convert: ParamConvert::Float },
+            Routing { param_id: "mode", target_handle: "feedback", target_param: "mode", convert: ParamConvert::EnumRemap(Cow::Borrowed(STYLIZED_FEEDBACK_MODE_REMAP)) },
+        ],
+        skip: SkipMode::OnZero { param_id: "amount" },
     }
 }
 

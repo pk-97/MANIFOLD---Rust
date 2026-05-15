@@ -137,6 +137,7 @@ pub fn primitive_id_for_effect(effect_type: &EffectTypeId) -> Option<&'static st
         "AutoGain" => primitives::AUTO_GAIN_TYPE_ID,
         "BlobTracking" => primitives::BLOB_TRACKING_TYPE_ID,
         "WireframeDepth" => primitives::WIREFRAME_DEPTH_TYPE_ID,
+        "QuadMirror" => primitives::QUAD_MIRROR_TYPE_ID,
 
         _ => return None,
     };
@@ -969,16 +970,19 @@ mod tests {
 
     #[test]
     fn build_effect_graph_with_unsupported_type_is_clean_error() {
-        // QUAD_MIRROR is in EffectTypeId but has no primitive mapping
-        // (removed effect). Build should report it cleanly.
-        let inst = EffectInstance::new(EffectTypeId::QUAD_MIRROR);
+        // Use a fabricated effect id that no migration has touched.
+        // (QuadMirror used to be this gap, but it now ships with a
+        // primitive — see `node_graph::primitives::QuadMirror`.)
+        let inst = EffectInstance::new(EffectTypeId::from_string(
+            "DefinitelyNotAnEffectType".to_string(),
+        ));
         let err = match build_effect_graph(&inst, &registry()) {
             Ok(_) => panic!("expected UnsupportedEffectType, got Ok(Graph)"),
             Err(e) => e,
         };
         match err {
             EffectGraphError::UnsupportedEffectType { effect_type } => {
-                assert_eq!(effect_type, "QuadMirror");
+                assert_eq!(effect_type, "DefinitelyNotAnEffectType");
             }
             other => panic!("expected UnsupportedEffectType, got {other:?}"),
         }

@@ -25,10 +25,12 @@ use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::composites::{CompositeHandle, build_soft_focus};
+use crate::node_graph::primitives::{Blur, Mix};
 use crate::node_graph::{
-    ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId,
-    ParamBinding, ParamConvert, ParamTarget, PortType, ResourceId, Slot, Source,
-    UserParamBindingRuntime, apply_param_bindings, binding_value, compile, user_binding_to_runtime,
+    ChainSpec, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend,
+    NodeInstanceId, ParamBinding, ParamConvert, ParamTarget, PortType, ResourceId, Routing,
+    SkipMode, Slot, Source, SpliceResult, UserParamBindingRuntime, apply_param_bindings,
+    binding_value, compile, user_binding_to_runtime,
 };
 use crate::render_target::RenderTarget;
 
@@ -51,6 +53,32 @@ inventory::submit! {
     EffectFactory {
         id: EffectTypeId::SOFT_FOCUS_GRAPH,
         create: |device| Box::new(SoftFocusGraphFX::new(device)),
+    }
+}
+
+fn splice_soft_focus(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult {
+    let blur = graph.add_node(Box::new(Blur::new()));
+    graph.connect(source, (blur, "source")).expect("wire source → Blur.source");
+
+    let mix = graph.add_node(Box::new(Mix::new()));
+    graph.connect(source, (mix, "a")).expect("wire source → Mix.a");
+    graph.connect((blur, "out"), (mix, "b")).expect("wire Blur.out → Mix.b");
+
+    SpliceResult {
+        output: (mix, "out"),
+        handles: vec![(Cow::Borrowed("blur"), blur), (Cow::Borrowed("mix"), mix)],
+    }
+}
+
+inventory::submit! {
+    ChainSpec {
+        type_id: EffectTypeId::SOFT_FOCUS_GRAPH,
+        splice: splice_soft_focus,
+        routings: &[
+            Routing { param_id: "radius", target_handle: "blur", target_param: "radius", convert: ParamConvert::Float },
+            Routing { param_id: "amount", target_handle: "mix", target_param: "amount", convert: ParamConvert::Float },
+        ],
+        skip: SkipMode::OnZero { param_id: "amount" },
     }
 }
 

@@ -12,6 +12,8 @@
 //! `copy_texture_to_texture` into `target` is a simple full-extent
 //! blit.
 
+use std::borrow::Cow;
+
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
@@ -23,8 +25,9 @@ use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Mix;
 use crate::node_graph::{
-    ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId,
-    ParamValue, ResourceId, Slot, Source, compile,
+    ChainSpec, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend,
+    NodeInstanceId, ParamConvert, ParamValue, ResourceId, Routing, SkipMode, Slot, Source,
+    SpliceResult, compile,
 };
 use crate::render_target::RenderTarget;
 
@@ -46,6 +49,34 @@ inventory::submit! {
     EffectFactory {
         id: EffectTypeId::NODE_GRAPH_TEST,
         create: |device| Box::new(NodeGraphTestFX::new(device)),
+    }
+}
+
+/// Test fixture's spec: a single `Mix` node that lerps the chain source
+/// with itself by `amount`. Effectively a passthrough — the original
+/// `NodeGraphTestFX` predates the chain-splice path and used internal
+/// red/blue test sources, which the splice protocol can't reproduce
+/// (it always sources from the previous effect's output). Preserving
+/// the spec keeps the cog visible and the `amount` slider functional;
+/// the legacy test-pattern view is unused in the new path.
+fn splice_node_graph_test(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult {
+    let mix = graph.add_node(Box::new(Mix::new()));
+    graph.connect(source, (mix, "a")).expect("wire source → Mix.a");
+    graph.connect(source, (mix, "b")).expect("wire source → Mix.b");
+    SpliceResult {
+        output: (mix, "out"),
+        handles: vec![(Cow::Borrowed("mix"), mix)],
+    }
+}
+
+inventory::submit! {
+    ChainSpec {
+        type_id: EffectTypeId::NODE_GRAPH_TEST,
+        splice: splice_node_graph_test,
+        routings: &[
+            Routing { param_id: "amount", target_handle: "mix", target_param: "amount", convert: ParamConvert::Float },
+        ],
+        skip: SkipMode::Never,
     }
 }
 
