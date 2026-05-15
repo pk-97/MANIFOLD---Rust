@@ -613,7 +613,7 @@ pub fn apply_ctx_params_at(
     effect_type: &EffectTypeId,
     time: f32,
     beat: f32,
-    edge_stretch_width: f32,
+    _edge_stretch_width: f32,
 ) {
     let mut set = |name: &'static str, value: ParamValue| {
         // Ignore errors — a primitive that doesn't declare `name`
@@ -633,7 +633,10 @@ pub fn apply_ctx_params_at(
         }
         "VoronoiPrism" => {
             set("beat", ParamValue::Float(beat));
-            set("source_width", ParamValue::Float(edge_stretch_width));
+            // `source_width` is no longer driven by EdgeStretch's
+            // hidden cross-read — it's an explicit user slider on the
+            // VoronoiPrism card now, routed by its `ChainSpec`. See
+            // the metadata + routings in `effects/voronoi_prism.rs`.
         }
         "Watercolor" => {
             set("time", ParamValue::Float(time));

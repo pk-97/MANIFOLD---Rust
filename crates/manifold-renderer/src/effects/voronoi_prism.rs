@@ -24,6 +24,7 @@ inventory::submit! {
         params: &[
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
             ParamSpec::whole("cells", "Cells", 4.0, 64.0, 16.0, "CellCount"),
+            ParamSpec::continuous("source_width", "Cell Size", 0.1, 0.9, 0.5625, "F2", "SourceWidth"),
         ],
     }
 }
@@ -50,11 +51,15 @@ inventory::submit! {
         routings: &[
             Routing { param_id: "amount", target_handle: "voronoi", target_param: "amount", convert: ParamConvert::Float },
             Routing { param_id: "cells", target_handle: "voronoi", target_param: "cell_count", convert: ParamConvert::Float },
-            // `beat` and `source_width` are ctx-driven — populated each
-            // frame by `apply_ctx_params_at` from `EffectContext::beat`
-            // and `EffectContext::edge_stretch_width`. The latter is
-            // the legacy cross-effect read from EdgeStretch; will
-            // become an explicit input port in a follow-up commit.
+            // `source_width` was previously populated by a hidden
+            // cross-effect read from EdgeStretch's `width` slider via
+            // `EffectContext::edge_stretch_width`. Now it's an explicit
+            // user slider on the VoronoiPrism card — same default
+            // (0.5625), no invisible coupling. Existing projects that
+            // omit this slot fall back to the metadata default.
+            Routing { param_id: "source_width", target_handle: "voronoi", target_param: "source_width", convert: ParamConvert::Float },
+            // `beat` stays ctx-driven (populated by `apply_ctx_params_at`
+            // from `EffectContext::beat`).
         ],
         skip: SkipMode::OnZero { param_id: "amount" },
     }
