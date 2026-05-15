@@ -63,41 +63,19 @@ impl EffectRegistry {
         }
     }
 
-    /// Snapshot the graph of a specific registered effect type.
-    ///
-    /// Resolution order:
-    /// 1. Effect declares a [`ChainSpec`] — build its canonical graph
-    ///    via `spec.build_canonical_graph()` and return that snapshot.
-    /// 2. Effect overrides `PostProcessEffect::graph_snapshot()` —
-    ///    return that (graph-backed effects use this until migrated).
-    /// 3. Otherwise synthesize a degenerate
-    ///    `Source → \<EffectName\> → FinalOutput` snapshot from the
-    ///    effect's metadata. Lets the editor canvas show a cog-icon
-    ///    view for every effect, even ones still implemented as a
-    ///    monolithic compute shader.
-    ///
-    /// Returns `None` only if the type isn't registered at all.
+    /// Snapshot the canonical graph of a registered effect for the
+    /// editor canvas. Every shipping effect declares a `ChainSpec`,
+    /// so resolution is a single path: build the spec's standalone
+    /// graph and project its routings onto the snapshot.
     pub fn graph_snapshot_for(
         &self,
         type_id: &EffectTypeId,
     ) -> Option<crate::node_graph::GraphSnapshot> {
-        // Path 1: ChainSpec. Authoritative once an effect has migrated.
-        if let Some(spec) = crate::node_graph::chain_spec_by_id(type_id) {
-            let g = spec.build_canonical_graph();
-            let mut snap = crate::node_graph::GraphSnapshot::from_graph(&g);
-            snap.outer_routings = outer_routings_from_spec(spec, &g);
-            return Some(snap);
-        }
-        // Path 2: legacy graph-backed PostProcessEffect (un-migrated
-        // graph-backed effects like SoftFocus, StylizedFeedback).
-        let processor = self.processors.get(type_id)?;
-        if let Some(mut snap) = processor.graph_snapshot() {
-            snap.outer_routings = processor.outer_param_routings();
-            return Some(snap);
-        }
-        // Path 3: legacy single-pass effect — synthesized placeholder.
-        let metadata = crate::node_graph::metadata_by_id(type_id)?;
-        Some(synthesized_legacy_snapshot(metadata))
+        let spec = crate::node_graph::chain_spec_by_id(type_id)?;
+        let g = spec.build_canonical_graph();
+        let mut snap = crate::node_graph::GraphSnapshot::from_graph(&g);
+        snap.outer_routings = outer_routings_from_spec(spec, &g);
+        Some(snap)
     }
 
     /// Outer→inner routings declared by `type_id`'s registered
@@ -108,14 +86,11 @@ impl EffectRegistry {
         &self,
         type_id: &EffectTypeId,
     ) -> Vec<crate::node_graph::OuterParamRouting> {
-        if let Some(spec) = crate::node_graph::chain_spec_by_id(type_id) {
-            let g = spec.build_canonical_graph();
-            return outer_routings_from_spec(spec, &g);
-        }
-        self.processors
-            .get(type_id)
-            .map(|p| p.outer_param_routings())
-            .unwrap_or_default()
+        let Some(spec) = crate::node_graph::chain_spec_by_id(type_id) else {
+            return Vec::new();
+        };
+        let g = spec.build_canonical_graph();
+        outer_routings_from_spec(spec, &g)
     }
 }
 
@@ -167,81 +142,3 @@ fn outer_routings_from_spec(
     out
 }
 
-/// Build a `Source → \<legacy\> → FinalOutput` snapshot for an effect
-/// that doesn't expose its own graph. The middle node uses the
-/// `legacy.\<EffectTypeId\>` type id (matching `LegacyPostProcessNode`)
-/// so the canvas can style it differently from primitive nodes.
-fn synthesized_legacy_snapshot(
-    metadata: &'static manifold_core::effect_registration::EffectMetadata,
-) -> crate::node_graph::GraphSnapshot {
-    use crate::node_graph::{
-        FINAL_OUTPUT_TYPE_ID, GraphSnapshot, LEGACY_TYPE_ID_PREFIX, NodeSnapshot, PortKindSnapshot,
-        PortSnapshot, SOURCE_TYPE_ID, WireSnapshot,
-    };
-
-    let source = NodeSnapshot {
-        id: 0,
-        node_handle: None,
-        type_id: SOURCE_TYPE_ID.to_string(),
-        title: "Source".to_string(),
-        inputs: Vec::new(),
-        outputs: vec![PortSnapshot {
-            name: "out".to_string(),
-            kind: PortKindSnapshot::Texture2D,
-        }],
-        parameters: Vec::new(),
-        editor_pos: None,
-    };
-    let legacy = NodeSnapshot {
-        id: 1,
-        node_handle: None,
-        type_id: format!("{LEGACY_TYPE_ID_PREFIX}{}", metadata.id.as_str()),
-        title: metadata.display_name.to_string(),
-        inputs: vec![PortSnapshot {
-            name: "source".to_string(),
-            kind: PortKindSnapshot::Texture2D,
-        }],
-        outputs: vec![PortSnapshot {
-            name: "out".to_string(),
-            kind: PortKindSnapshot::Texture2D,
-        }],
-        parameters: Vec::new(),
-        editor_pos: None,
-    };
-    let final_out = NodeSnapshot {
-        id: 2,
-        node_handle: None,
-        type_id: FINAL_OUTPUT_TYPE_ID.to_string(),
-        title: "Final Output".to_string(),
-        inputs: vec![PortSnapshot {
-            name: "in".to_string(),
-            kind: PortKindSnapshot::Texture2D,
-        }],
-        outputs: Vec::new(),
-        parameters: Vec::new(),
-        editor_pos: None,
-    };
-    let wires = vec![
-        WireSnapshot {
-            from_node: 0,
-            from_port: "out".to_string(),
-            to_node: 1,
-            to_port: "source".to_string(),
-        },
-        WireSnapshot {
-            from_node: 1,
-            from_port: "out".to_string(),
-            to_node: 2,
-            to_port: "in".to_string(),
-        },
-    ];
-    GraphSnapshot {
-        nodes: vec![source, legacy, final_out],
-        wires,
-        // Legacy-wrapped effects don't surface any outer→inner
-        // routing — their parameters live on the wrapped node and
-        // are edited from the effect card directly, not through a
-        // composite-handle indirection. Nothing to gray out.
-        outer_routings: Vec::new(),
-    }
-}

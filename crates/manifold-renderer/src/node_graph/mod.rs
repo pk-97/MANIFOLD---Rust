@@ -51,7 +51,7 @@ pub use chain_spec::{
     lookup_handle, splice_def_into_chain, validate_all_specs,
 };
 pub use graph::{Graph, NodeInstance};
-pub use legacy_adapter::{LEGACY_TYPE_ID_PREFIX, LegacyPostProcessNode, metadata_by_id};
+pub use legacy_adapter::metadata_by_id;
 pub use metal_backend::MetalBackend;
 pub use palette::{catalog_graph_def_for, palette_atoms, PaletteAtom};
 pub use param_binding::{
