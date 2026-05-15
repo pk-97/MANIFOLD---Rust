@@ -49,7 +49,7 @@ inventory::submit! {
         splice: splice_kaleidoscope,
         routings: &[
             Routing { param_id: "amount", target_handle: "kaleidoscope", target_param: "amount", convert: ParamConvert::Float },
-            Routing { param_id: "segs", target_handle: "kaleidoscope", target_param: "segments", convert: ParamConvert::IntRound },
+            Routing { param_id: "segs", target_handle: "kaleidoscope", target_param: "segments", convert: ParamConvert::Float },
         ],
         skip: SkipMode::OnZero { param_id: "amount" },
     }
