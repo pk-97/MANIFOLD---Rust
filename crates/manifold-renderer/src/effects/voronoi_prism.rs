@@ -1,7 +1,13 @@
+use std::borrow::Cow;
+
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
+use crate::node_graph::primitives::VoronoiPrism;
+use crate::node_graph::{
+    ChainSpec, Graph, NodeInstanceId, ParamConvert, Routing, SkipMode, SpliceResult,
+};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
@@ -25,6 +31,32 @@ inventory::submit! {
     EffectFactory {
         id: EffectTypeId::VORONOI_PRISM,
         create: |device| Box::new(VoronoiPrismFX::new(device)),
+    }
+}
+
+fn splice_voronoi_prism(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult {
+    let node = graph.add_node(Box::new(VoronoiPrism::new()));
+    graph.connect(source, (node, "in")).expect("wire source → VoronoiPrism.in");
+    SpliceResult {
+        output: (node, "out"),
+        handles: vec![(Cow::Borrowed("voronoi"), node)],
+    }
+}
+
+inventory::submit! {
+    ChainSpec {
+        type_id: EffectTypeId::VORONOI_PRISM,
+        splice: splice_voronoi_prism,
+        routings: &[
+            Routing { param_id: "amount", target_handle: "voronoi", target_param: "amount", convert: ParamConvert::Float },
+            Routing { param_id: "cells", target_handle: "voronoi", target_param: "cell_count", convert: ParamConvert::Float },
+            // `beat` and `source_width` are ctx-driven — populated each
+            // frame by `apply_ctx_params_at` from `EffectContext::beat`
+            // and `EffectContext::edge_stretch_width`. The latter is
+            // the legacy cross-effect read from EdgeStretch; will
+            // become an explicit input port in a follow-up commit.
+        ],
+        skip: SkipMode::OnZero { param_id: "amount" },
     }
 }
 

@@ -118,6 +118,12 @@ pub enum ParamConvert {
     /// than panicking — the host might emit values briefly outside
     /// the declared range during a drag.
     EnumRemap(Cow<'static, [u32]>),
+    /// Apply an arbitrary `f32 → f32` transformation, then route as a
+    /// `Float` `ParamValue`. Used for unit conversions that the legacy
+    /// effects performed inline before encoding their uniforms:
+    /// `Transform.rot` (degrees → radians) and `Strobe.rate`
+    /// (note-rate table index → strobes-per-beat).
+    FloatTransform(fn(f32) -> f32),
 }
 
 impl ParamConvert {
@@ -143,6 +149,7 @@ impl ParamConvert {
                 });
                 ParamValue::Enum(mapped)
             }
+            Self::FloatTransform(f) => ParamValue::Float(f(value)),
         }
     }
 }

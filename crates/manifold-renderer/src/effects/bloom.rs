@@ -1,11 +1,17 @@
 // Mechanical port of Unity BloomFX.cs + BloomEffect.shader.
 // Same logic, same variables, same constants, same edge cases.
 
+use std::borrow::Cow;
+
 use super::HDR_BUFFER_DIVISOR;
 use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
+use crate::node_graph::primitives::Bloom;
+use crate::node_graph::{
+    ChainSpec, Graph, NodeInstanceId, ParamConvert, Routing, SkipMode, SpliceResult,
+};
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
@@ -30,6 +36,26 @@ inventory::submit! {
     EffectFactory {
         id: EffectTypeId::BLOOM,
         create: |device| Box::new(BloomFX::new(device)),
+    }
+}
+
+fn splice_bloom(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult {
+    let node = graph.add_node(Box::new(Bloom::new()));
+    graph.connect(source, (node, "in")).expect("wire source → Bloom.in");
+    SpliceResult {
+        output: (node, "out"),
+        handles: vec![(Cow::Borrowed("bloom"), node)],
+    }
+}
+
+inventory::submit! {
+    ChainSpec {
+        type_id: EffectTypeId::BLOOM,
+        splice: splice_bloom,
+        routings: &[
+            Routing { param_id: "amount", target_handle: "bloom", target_param: "amount", convert: ParamConvert::Float },
+        ],
+        skip: SkipMode::OnZero { param_id: "amount" },
     }
 }
 

@@ -13,10 +13,16 @@
 // This produces source→target unchanged (scale=1, translate=0, rot=0 is identity in the shader)
 // so the buffer swap in effect_chain correctly advances with unmodified content.
 
+use std::borrow::Cow;
+
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
+use crate::node_graph::primitives::AffineTransform;
+use crate::node_graph::{
+    ChainSpec, Graph, NodeInstanceId, ParamConvert, Routing, SkipMode, SpliceResult,
+};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
@@ -42,6 +48,38 @@ inventory::submit! {
     EffectFactory {
         id: EffectTypeId::TRANSFORM,
         create: |device| Box::new(TransformFX::new(device)),
+    }
+}
+
+fn splice_transform(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult {
+    let node = graph.add_node(Box::new(AffineTransform::new()));
+    graph.connect(source, (node, "source")).expect("wire source → AffineTransform.source");
+    SpliceResult {
+        output: (node, "out"),
+        handles: vec![(Cow::Borrowed("transform"), node)],
+    }
+}
+
+/// Legacy `rot` is degrees; `AffineTransform` takes radians with the
+/// Y-down negation baked in. Mirrors what `TransformFX::apply` did
+/// inline before encoding its uniform.
+fn rot_degrees_to_radians(degrees: f32) -> f32 {
+    -(degrees * std::f32::consts::PI / 180.0)
+}
+
+inventory::submit! {
+    ChainSpec {
+        type_id: EffectTypeId::TRANSFORM,
+        splice: splice_transform,
+        routings: &[
+            Routing { param_id: "x", target_handle: "transform", target_param: "translate_x", convert: ParamConvert::Float },
+            Routing { param_id: "y", target_handle: "transform", target_param: "translate_y", convert: ParamConvert::Float },
+            Routing { param_id: "zoom", target_handle: "transform", target_param: "scale", convert: ParamConvert::Float },
+            Routing { param_id: "rot", target_handle: "transform", target_param: "rotation", convert: ParamConvert::FloatTransform(rot_degrees_to_radians) },
+        ],
+        // Transform never skips — even at identity it's the chain's
+        // pass-through stage, and skip would change buffer-swap timing.
+        skip: SkipMode::Never,
     }
 }
 
