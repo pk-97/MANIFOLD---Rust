@@ -2227,9 +2227,6 @@ impl PostProcessEffect for WireframeDepthFX {
         self.owner_states.clear();
     }
 
-    fn cleanup_owner_state(&mut self, owner_key: i64) {
-        self.owner_states.remove(&owner_key);
-    }
 }
 
 /// Convert f32 to IEEE 754 half-precision (f16) stored as u16.

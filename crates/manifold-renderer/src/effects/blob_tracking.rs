@@ -1125,11 +1125,6 @@ impl PostProcessEffect for BlobTrackingFX {
         &EffectTypeId::BLOB_TRACKING
     }
 
-    // BlobTrackingFX.cs line 127: if (amount <= 0f || material == null) return;
-    fn should_skip(&self, fx: &EffectInstance) -> bool {
-        fx.param_values.first().map(|p| p.value).unwrap_or(0.0) <= 0.0
-    }
-
     fn apply(
         &mut self,
         gpu: &mut GpuEncoder,
@@ -1309,7 +1304,4 @@ impl PostProcessEffect for BlobTrackingFX {
         // "Downsample RT is fixed size, no resize needed"
     }
 
-    fn cleanup_owner_state(&mut self, owner_key: i64) {
-        self.owner_states.remove(&owner_key);
-    }
 }

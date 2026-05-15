@@ -209,19 +209,6 @@ impl PostProcessEffect for NodeGraphTestFX {
         &self.type_id
     }
 
-    /// Always run. `Amount = 0` is a valid state (pure red), not a skip
-    /// signal; the default `param[0] <= 0` heuristic would suppress it.
-    fn should_skip(&self, _fx: &EffectInstance) -> bool {
-        false
-    }
-
-    /// Snapshot the graph topology for the editor canvas. Available
-    /// immediately after construction — the graph isn't tied to GPU or
-    /// resolution, so the editor can render it before the first frame.
-    fn graph_snapshot(&self) -> Option<crate::node_graph::GraphSnapshot> {
-        Some(crate::node_graph::GraphSnapshot::from_graph(&self.graph))
-    }
-
     fn apply(
         &mut self,
         gpu: &mut GpuEncoder,

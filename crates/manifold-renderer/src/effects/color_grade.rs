@@ -72,9 +72,6 @@ inventory::submit! {
     }
 }
 
-// ColorGradeFX.cs line 11
-const EPSILON: f32 = 0.001;
-
 // ColorGradeEffect.shader Properties (lines 6-14)
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -114,27 +111,6 @@ impl ColorGradeFX {
 impl PostProcessEffect for ColorGradeFX {
     fn effect_type(&self) -> &EffectTypeId {
         &EffectTypeId::COLOR_GRADE
-    }
-
-    // ColorGradeFX.cs:13-26 — ShouldSkip: skip when amount <= 0 OR all params at identity.
-    fn should_skip(&self, fx: &EffectInstance) -> bool {
-        let p = &fx.param_values;
-        let amount = p.first().map(|pv| pv.value).unwrap_or(0.0);
-        if amount <= 0.0 {
-            return true;
-        }
-
-        let gain = p.get(1).map(|pv| pv.value).unwrap_or(1.0);
-        let saturation = p.get(2).map(|pv| pv.value).unwrap_or(1.0);
-        let hue = p.get(3).map(|pv| pv.value).unwrap_or(0.0);
-        let contrast = p.get(4).map(|pv| pv.value).unwrap_or(1.0);
-        let colorize = p.get(5).map(|pv| pv.value).unwrap_or(0.0);
-
-        (gain - 1.0).abs() < EPSILON
-            && (saturation - 1.0).abs() < EPSILON
-            && hue.abs() < EPSILON
-            && (contrast - 1.0).abs() < EPSILON
-            && colorize < EPSILON
     }
 
     fn apply(

@@ -124,10 +124,6 @@ impl PostProcessEffect for InfraredFX {
         &EffectTypeId::INFRARED
     }
 
-    fn should_skip(&self, fx: &EffectInstance) -> bool {
-        fx.param_values.first().map(|p| p.value).unwrap_or(0.0) <= 0.0
-    }
-
     fn apply(
         &mut self,
         gpu: &mut GpuEncoder,

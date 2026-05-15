@@ -362,7 +362,4 @@ impl PostProcessEffect for AutoGainFX {
         // Envelope state carries across resolution changes — no need to clear.
     }
 
-    fn cleanup_owner_state(&mut self, owner_key: i64) {
-        self.states.remove(&owner_key);
-    }
 }

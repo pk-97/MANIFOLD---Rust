@@ -85,14 +85,6 @@ inventory::submit! {
 
 const DEG2RAD: f32 = std::f32::consts::PI / 180.0;
 
-// Mathf.Approximately threshold (same as Unity's 1e-5 epsilon)
-const APPROX_EPSILON: f32 = 1e-5;
-
-#[inline]
-fn approximately(a: f32, b: f32) -> bool {
-    (a - b).abs() <= APPROX_EPSILON
-}
-
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct TransformUniforms {
@@ -129,21 +121,6 @@ impl TransformFX {
 impl PostProcessEffect for TransformFX {
     fn effect_type(&self) -> &EffectTypeId {
         &EffectTypeId::TRANSFORM
-    }
-
-    /// TransformFX.cs:15-25 — skip if all params are at identity.
-    /// Note: the is_clip_level guard is in apply() because ctx is not available here.
-    fn should_skip(&self, fx: &EffectInstance) -> bool {
-        let p = &fx.param_values;
-        let x = p.first().map(|pv| pv.value).unwrap_or(0.0);
-        let y = p.get(1).map(|pv| pv.value).unwrap_or(0.0);
-        let zoom = p.get(2).map(|pv| pv.value).unwrap_or(1.0);
-        let rot = p.get(3).map(|pv| pv.value).unwrap_or(0.0);
-
-        approximately(x, 0.0)
-            && approximately(y, 0.0)
-            && approximately(zoom, 1.0)
-            && approximately(rot, 0.0)
     }
 
     fn apply(

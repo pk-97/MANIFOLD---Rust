@@ -29,8 +29,8 @@ use crate::node_graph::primitives::{Blur, Mix};
 use crate::node_graph::{
     ChainSpec, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend,
     NodeInstanceId, ParamBinding, ParamConvert, ParamTarget, PortType, ResourceId, Routing,
-    SkipMode, Slot, Source, SpliceResult, UserParamBindingRuntime, apply_param_bindings,
-    binding_value, compile, user_binding_to_runtime,
+    SkipMode, Slot, Source, SpliceResult, UserParamBindingRuntime, apply_param_bindings, compile,
+    user_binding_to_runtime,
 };
 use crate::render_target::RenderTarget;
 
@@ -237,31 +237,6 @@ fn output_resource(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -> Re
 impl PostProcessEffect for SoftFocusGraphFX {
     fn effect_type(&self) -> &EffectTypeId {
         &self.type_id
-    }
-
-    /// Skip when amount = 0 — a fully sharp original is identity. The
-    /// default `param[0] <= 0` heuristic would kick in on radius = 0
-    /// instead, which is also a valid "skip" but slightly less
-    /// principled. Pin to the amount slot by stable id so reordering
-    /// the bindings list can't silently break the predicate. Empty
-    /// user-bindings slice — "amount" is a static binding id.
-    fn should_skip(&self, fx: &EffectInstance) -> bool {
-        binding_value(&self.bindings, &[], &fx.param_values, "amount").unwrap_or(0.0) <= 0.0
-    }
-
-    fn graph_snapshot(&self) -> Option<crate::node_graph::GraphSnapshot> {
-        Some(crate::node_graph::GraphSnapshot::from_graph(&self.graph))
-    }
-
-    /// Outer sliders → inner-node params. See
-    /// [`MirrorFX::outer_param_routings`] for the editor-inspector
-    /// rationale.
-    fn outer_param_routings(&self) -> Vec<crate::node_graph::OuterParamRouting> {
-        crate::node_graph::outer_routings_from_bindings(
-            &self.bindings,
-            Some(&self.handle),
-            &self.graph,
-        )
     }
 
     fn apply(

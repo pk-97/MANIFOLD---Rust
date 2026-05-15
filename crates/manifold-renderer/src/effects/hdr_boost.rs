@@ -63,8 +63,6 @@ inventory::submit! {
     }
 }
 
-const EPSILON: f32 = 0.001;
-
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct HdrBoostUniforms {
@@ -95,15 +93,6 @@ impl PostProcessEffect for HdrBoostFX {
         &EffectTypeId::HDR_BOOST
     }
 
-    fn should_skip(&self, fx: &EffectInstance) -> bool {
-        let p = &fx.param_values;
-        let amount = p.first().map(|pv| pv.value).unwrap_or(0.0);
-        if amount <= 0.0 {
-            return true;
-        }
-        let gain = p.get(1).map(|pv| pv.value).unwrap_or(1.5);
-        gain.abs() < EPSILON
-    }
 
     fn apply(
         &mut self,

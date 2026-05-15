@@ -640,11 +640,6 @@ impl PostProcessEffect for DepthOfFieldFX {
         self.depth_states.clear();
     }
 
-    fn cleanup_owner_state(&mut self, owner_key: i64) {
-        self.states.remove(&owner_key);
-        self.depth_states.remove(&owner_key);
-    }
-
     fn flush_background_work(&mut self) {
         if let Some(ref mut worker) = self.depth_worker {
             let _ = worker.recv_blocking();
