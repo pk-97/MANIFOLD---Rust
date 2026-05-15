@@ -55,15 +55,13 @@ use manifold_core::id::{EffectGroupId, EffectId};
 use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat, TexturePool};
 
 use crate::effect::EffectContext;
-use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Mix;
 use crate::node_graph::{
-    ChainSpec, CtxEntry, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph,
-    LegacyPostProcessNode, MetalBackend, NodeInstanceId, ParamConvert, ParamValue, PortType,
-    PrimitiveRegistry, RefreshEntry, ResourceId, Slot, Source, SpliceResult, StateStore,
-    apply_refresh_plan, build_ctx_param_plan, build_refresh_plan, chain_spec_by_id, compile,
-    metadata_by_id, primitive_id_for_effect, splice_def_into_chain,
+    ChainSpec, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend,
+    NodeInstanceId, ParamConvert, ParamValue, PortType, PrimitiveRegistry, ResourceId, Slot,
+    Source, SpliceResult, StateStore, chain_spec_by_id, compile, metadata_by_id,
+    splice_def_into_chain,
 };
 use crate::render_target::RenderTarget;
 
@@ -181,46 +179,24 @@ struct EffectSlot {
     /// 1.0 wet/dry boundary) — see [`compute_topology_hash`]. As long
     /// as the cached graph is reused, `effects[legacy_index]` is the
     /// same `EffectInstance` whose modulated `param_values` the
-    /// renderer just updated, so the per-frame refresh can read it
-    /// without rebuilding an `AHashMap<EffectId, &EffectInstance>`.
+    /// renderer just updated.
     legacy_index: usize,
-    refresh: SlotRefresh,
-}
-
-/// Per-effect per-frame refresh plan. One of two flavors depending on
-/// whether the effect declares a [`ChainSpec`] (new path, spliced into
-/// the chain graph) or falls back to the primitive / legacy-adapter
-/// route (old path, single node per effect).
-#[allow(clippy::large_enum_variant)]
-enum SlotRefresh {
-    /// Legacy / primitive single-node path. Precompiled refresh plan
-    /// walks the legacy `param_values` slice and writes via the drift
-    /// table into the wrapped node.
-    Legacy {
-        node_id: NodeInstanceId,
-        refresh: Vec<RefreshEntry>,
-        ctx_plan: Vec<CtxEntry>,
-    },
-    /// [`ChainSpec`] splice path. Multiple nodes per effect, addressed
-    /// by effect-local handle. Routings position-correlate to
-    /// `EffectMetadata.params`; entries that don't resolve at chain
-    /// build time (renamed param, etc.) are `None` and skip per-frame.
-    Spec {
-        /// Effect-local handles returned by `spec.splice` — names are
-        /// scoped to this effect. `Cow<'static, str>` so static specs
-        /// stay zero-allocation and user-edited divergent defs can
-        /// hold owned strings.
-        handles: Vec<(std::borrow::Cow<'static, str>, NodeInstanceId)>,
-        /// Position-indexed against `EffectMetadata.params`. Each
-        /// `Some` entry is one host param routed to one node param,
-        /// with the coercion + default pre-resolved.
-        resolved_routings: Vec<Option<ResolvedRouting>>,
-        /// Where to apply ctx-driven params (time / beat /
-        /// edge_stretch_width). Always the first handle for now —
-        /// composite effects with multiple ctx-driven workers will
-        /// need a richer resolution rule when we get there.
-        ctx_target_node: Option<NodeInstanceId>,
-    },
+    /// Effect-local handles returned by `spec.splice` — names are
+    /// scoped to this effect. `Cow<'static, str>` so canonical splices
+    /// stay zero-allocation and user-edited divergent defs can hold
+    /// owned strings off disk.
+    handles: Vec<(std::borrow::Cow<'static, str>, NodeInstanceId)>,
+    /// Position-indexed against `EffectMetadata.params`. Each `Some`
+    /// entry is one host param routed to one node param, with the
+    /// coercion + default pre-resolved. `None` entries are routings
+    /// that didn't resolve at chain build time (renamed handle, etc.)
+    /// and silently skip per-frame.
+    resolved_routings: Vec<Option<ResolvedRouting>>,
+    /// Where to apply ctx-driven params (time / beat /
+    /// edge_stretch_width). The first handle for now — composite
+    /// effects with multiple ctx-driven workers will need a richer
+    /// resolution rule when we get there.
+    ctx_target_node: Option<NodeInstanceId>,
 }
 
 #[derive(Clone)]
@@ -284,18 +260,11 @@ impl ChainGraph {
             return None;
         }
 
-        // Preflight: every active effect must be constructable. Spec'd
-        // effects splice directly into the chain; un-migrated effects
-        // route through the primitive or legacy-adapter path.
+        // Preflight: every active effect must declare a `ChainSpec`.
+        // Effects without one can't be spliced — fall back to the per-
+        // effect dispatch path so the chain doesn't render garbage.
         for (_, fx) in &active_effects {
-            let has_spec = chain_spec_by_id(fx.effect_type()).is_some();
-            let prim = primitive_id_for_effect(fx.effect_type())
-                .map(|tid| primitives.contains(tid))
-                .unwrap_or(false);
-            let legacy = metadata_by_id(fx.effect_type()).is_some();
-            if !has_spec && !prim && !legacy {
-                return None;
-            }
+            chain_spec_by_id(fx.effect_type())?;
         }
 
         // Build the graph: Source → [eff_1 → eff_2 → … → eff_n,
@@ -362,82 +331,52 @@ impl ChainGraph {
                 }
             }
 
-            // Dispatch on whether the effect declares a `ChainSpec`.
-            // Spec'd effects splice their workers directly into the
-            // chain graph; un-migrated effects fall back to the legacy
-            // single-node path until they're migrated.
-            if let Some(spec) = chain_spec_by_id(fx.effect_type()) {
-                if spec.is_skipped(fx) {
-                    // No workers added — previous output flows directly
-                    // to the next effect.
-                    continue;
-                }
-                // Divergent path: user-edited def replaces the canonical
-                // splice. The user's wiring is materialized directly
-                // into the chain graph the same way `spec.splice` would
-                // place the canonical layout.
-                let splice_result = if let Some(def) = &fx.graph {
-                    match splice_def_into_chain(&mut graph, (prev_node, prev_out_port), def, primitives) {
-                        Some(r) => r,
-                        None => {
-                            eprintln!(
-                                "[chain-graph] {} divergent graph failed to splice; \
-                                 falling back to canonical spec.",
-                                fx.effect_type().as_str()
-                            );
-                            (spec.splice)(&mut graph, (prev_node, prev_out_port))
-                        }
-                    }
-                } else {
-                    (spec.splice)(&mut graph, (prev_node, prev_out_port))
-                };
-                let SpliceResult { output, handles } = splice_result;
-                let resolved_routings = resolve_routings(spec, &handles);
-                let ctx_target_node = handles.first().map(|(_, id)| *id);
-                effect_nodes.push(EffectSlot {
-                    effect_id: fx.id.clone(),
-                    effect_type: fx.effect_type().clone(),
-                    legacy_index: *legacy_index,
-                    refresh: SlotRefresh::Spec {
-                        handles,
-                        resolved_routings,
-                        ctx_target_node,
-                    },
-                });
-                prev_node = output.0;
-                prev_out_port = output.1;
-            } else {
-                // Legacy / primitive single-node path.
-                let (node_id, is_primitive, input_port) =
-                    add_effect_node(&mut graph, fx, primitives, device)?;
-                graph
-                    .connect((prev_node, prev_out_port), (node_id, input_port))
-                    .ok()?;
-                let refresh = build_refresh_plan(
-                    fx.effect_type(),
-                    graph
-                        .get_node(node_id)
-                        .map(|n| n.node.parameters())
-                        .unwrap_or(&[]),
-                );
-                let ctx_plan = if is_primitive {
-                    build_ctx_param_plan(fx.effect_type())
-                } else {
-                    Vec::new()
-                };
-                effect_nodes.push(EffectSlot {
-                    effect_id: fx.id.clone(),
-                    effect_type: fx.effect_type().clone(),
-                    legacy_index: *legacy_index,
-                    refresh: SlotRefresh::Legacy {
-                        node_id,
-                        refresh,
-                        ctx_plan,
-                    },
-                });
-                prev_node = node_id;
-                prev_out_port = "out";
+            // Look up the effect's `ChainSpec` and splice its workers
+            // directly into the chain graph. Every shipping effect
+            // declares a spec — see `crates/manifold-renderer/src/effects/`.
+            let spec = chain_spec_by_id(fx.effect_type())?;
+            if spec.is_skipped(fx) {
+                // No workers added — previous output flows directly
+                // to the next effect.
+                continue;
             }
+            // Divergent path: user-edited def replaces the canonical
+            // splice. The user's wiring is materialized directly into
+            // the chain graph the same way `spec.splice` would place
+            // the canonical layout.
+            let splice_result = if let Some(def) = &fx.graph {
+                match splice_def_into_chain(
+                    &mut graph,
+                    (prev_node, prev_out_port),
+                    def,
+                    primitives,
+                ) {
+                    Some(r) => r,
+                    None => {
+                        eprintln!(
+                            "[chain-graph] {} divergent graph failed to splice; \
+                             falling back to canonical spec.",
+                            fx.effect_type().as_str()
+                        );
+                        (spec.splice)(&mut graph, (prev_node, prev_out_port))
+                    }
+                }
+            } else {
+                (spec.splice)(&mut graph, (prev_node, prev_out_port))
+            };
+            let SpliceResult { output, handles } = splice_result;
+            let resolved_routings = resolve_routings(spec, &handles);
+            let ctx_target_node = handles.first().map(|(_, id)| *id);
+            effect_nodes.push(EffectSlot {
+                effect_id: fx.id.clone(),
+                effect_type: fx.effect_type().clone(),
+                legacy_index: *legacy_index,
+                handles,
+                resolved_routings,
+                ctx_target_node,
+            });
+            prev_node = output.0;
+            prev_out_port = output.1;
         }
 
         // Close any still-open partial-wet-dry group at chain end.
@@ -578,40 +517,16 @@ impl ChainGraph {
                 // rather than panic on a live stage.
                 continue;
             };
-            match &slot.refresh {
-                SlotRefresh::Legacy {
-                    node_id,
-                    refresh,
-                    ctx_plan,
-                } => {
-                    apply_refresh_plan(
-                        &mut self.graph,
-                        *node_id,
-                        refresh,
-                        ctx_plan,
-                        fx,
-                        ctx.time,
-                        ctx.beat,
-                        ctx.edge_stretch_width,
-                    );
-                }
-                SlotRefresh::Spec {
-                    resolved_routings,
-                    ctx_target_node,
-                    ..
-                } => {
-                    apply_spec_refresh(
-                        &mut self.graph,
-                        fx,
-                        &slot.effect_type,
-                        resolved_routings,
-                        *ctx_target_node,
-                        ctx.time,
-                        ctx.beat,
-                        ctx.edge_stretch_width,
-                    );
-                }
-            }
+            apply_spec_refresh(
+                &mut self.graph,
+                fx,
+                &slot.effect_type,
+                &slot.resolved_routings,
+                slot.ctx_target_node,
+                ctx.time,
+                ctx.beat,
+                ctx.edge_stretch_width,
+            );
         }
 
         // Install the upstream input texture into the source slot —
@@ -684,13 +599,8 @@ impl ChainGraph {
         // before calling get_node_mut on each.
         let mut nodes_to_clear: Vec<NodeInstanceId> = Vec::new();
         for slot in &self.effect_nodes {
-            match &slot.refresh {
-                SlotRefresh::Legacy { node_id, .. } => nodes_to_clear.push(*node_id),
-                SlotRefresh::Spec { handles, .. } => {
-                    for (_, id) in handles {
-                        nodes_to_clear.push(*id);
-                    }
-                }
+            for (_, id) in &slot.handles {
+                nodes_to_clear.push(*id);
             }
         }
         for node_id in nodes_to_clear {
@@ -802,40 +712,6 @@ fn apply_spec_refresh(
             edge_stretch_width,
         );
     }
-}
-
-/// Construct one effect node + connect it to the chain. Returns the
-/// new node id, whether it's a primitive (vs legacy adapter), and
-/// the name of its input port (`"in"` for primitives, `"source"`
-/// for legacy adapter nodes).
-fn add_effect_node(
-    graph: &mut Graph,
-    fx: &EffectInstance,
-    primitives: &PrimitiveRegistry,
-    device: &GpuDevice,
-) -> Option<(NodeInstanceId, bool, &'static str)> {
-    if let Some(prim_id) = primitive_id_for_effect(fx.effect_type()) {
-        let node = primitives.construct(prim_id)?;
-        let node_id = graph.add_node(node);
-        return Some((node_id, true, "in"));
-    }
-    // Fall back to a `LegacyPostProcessNode` wrapping the legacy
-    // factory. Constructs a fresh `PostProcessEffect` instance per
-    // chain rebuild — state is lost on rebuild, same as primitives.
-    let metadata = metadata_by_id(fx.effect_type())?;
-    let factory = inventory::iter::<EffectFactory>
-        .into_iter()
-        .find(|f| f.id == *fx.effect_type())?;
-    let mut inner = (factory.create)(device);
-    // Phase 1 per-card-divergence: if this instance carries a graph
-    // override, hand it to the FX to replace its catalog default.
-    // Non-graph FXs ignore the call via the trait's default impl.
-    if let Some(def) = &fx.graph {
-        inner.apply_graph_def(def);
-    }
-    let adapter = LegacyPostProcessNode::new(metadata, inner);
-    let node_id = graph.add_node(Box::new(adapter));
-    Some((node_id, false, "source"))
 }
 
 /// Topology hash — captures only the layout-affecting fields of
