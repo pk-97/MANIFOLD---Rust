@@ -6,11 +6,12 @@ use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::ColorGrade;
-use crate::node_graph::{ParamConvert, Routing, SkipMode};
+use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
+use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -44,16 +45,61 @@ crate::atomic_chain_spec! {
     type_id: EffectTypeId::COLOR_GRADE,
     primitive: ColorGrade,
     handle: "color_grade",
-    routings: &[
-        Routing { param_id: "amount", target_handle: "color_grade", target_param: "amount", convert: ParamConvert::Float },
-        Routing { param_id: "gain", target_handle: "color_grade", target_param: "gain", convert: ParamConvert::Float },
-        Routing { param_id: "sat", target_handle: "color_grade", target_param: "saturation", convert: ParamConvert::Float },
-        Routing { param_id: "hue", target_handle: "color_grade", target_param: "hue", convert: ParamConvert::Float },
-        Routing { param_id: "contrast", target_handle: "color_grade", target_param: "contrast", convert: ParamConvert::Float },
-        Routing { param_id: "colorize", target_handle: "color_grade", target_param: "colorize", convert: ParamConvert::Float },
-        Routing { param_id: "tint_hue", target_handle: "color_grade", target_param: "colorize_hue", convert: ParamConvert::Float },
-        Routing { param_id: "tint_sat", target_handle: "color_grade", target_param: "colorize_saturation", convert: ParamConvert::Float },
-        Routing { param_id: "focus", target_handle: "color_grade", target_param: "colorize_focus", convert: ParamConvert::Float },
+    bindings: &[
+        ParamBinding {
+            id: Cow::Borrowed("amount"),
+            spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            target: ParamTarget::HandleNode { handle: "color_grade", param: "amount" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("gain"),
+            spec: ParamSpec::continuous("gain", "Gain", 0.0, 2.0, 1.0, "F2", "Gain"),
+            target: ParamTarget::HandleNode { handle: "color_grade", param: "gain" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("sat"),
+            spec: ParamSpec::continuous("sat", "Sat", 0.0, 2.0, 1.0, "F2", "Saturation"),
+            target: ParamTarget::HandleNode { handle: "color_grade", param: "saturation" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("hue"),
+            spec: ParamSpec::continuous("hue", "Hue", -180.0, 180.0, 0.0, "F2", "Hue"),
+            target: ParamTarget::HandleNode { handle: "color_grade", param: "hue" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("contrast"),
+            spec: ParamSpec::continuous("contrast", "Contrast", 0.0, 2.0, 1.0, "F2", "Contrast"),
+            target: ParamTarget::HandleNode { handle: "color_grade", param: "contrast" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("colorize"),
+            spec: ParamSpec::continuous("colorize", "Colorize", 0.0, 1.0, 0.0, "F2", "Colorize"),
+            target: ParamTarget::HandleNode { handle: "color_grade", param: "colorize" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("tint_hue"),
+            spec: ParamSpec::whole("tint_hue", "TintHue", 0.0, 360.0, 0.0, "TintHue"),
+            target: ParamTarget::HandleNode { handle: "color_grade", param: "colorize_hue" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("tint_sat"),
+            spec: ParamSpec::continuous("tint_sat", "TintSat", 0.0, 2.0, 1.0, "F2", "TintSaturation"),
+            target: ParamTarget::HandleNode { handle: "color_grade", param: "colorize_saturation" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("focus"),
+            spec: ParamSpec::continuous("focus", "Focus", 0.0, 1.0, 0.75, "F2", "ColorizeFocus"),
+            target: ParamTarget::HandleNode { handle: "color_grade", param: "colorize_focus" },
+            convert: ParamConvert::Float,
+        },
     ],
     skip: SkipMode::OnZero { param_id: "amount" },
 }

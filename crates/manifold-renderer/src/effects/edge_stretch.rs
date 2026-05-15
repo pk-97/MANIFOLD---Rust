@@ -3,11 +3,12 @@ use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::ClampStretch;
-use crate::node_graph::{ParamConvert, Routing, SkipMode};
+use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
+use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -35,10 +36,25 @@ crate::atomic_chain_spec! {
     type_id: EffectTypeId::EDGE_STRETCH,
     primitive: ClampStretch,
     handle: "edge_stretch",
-    routings: &[
-        Routing { param_id: "amount", target_handle: "edge_stretch", target_param: "amount", convert: ParamConvert::Float },
-        Routing { param_id: "width", target_handle: "edge_stretch", target_param: "source_width", convert: ParamConvert::Float },
-        Routing { param_id: "dir", target_handle: "edge_stretch", target_param: "mode", convert: ParamConvert::EnumRound },
+    bindings: &[
+        ParamBinding {
+            id: Cow::Borrowed("amount"),
+            spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
+            target: ParamTarget::HandleNode { handle: "edge_stretch", param: "amount" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("width"),
+            spec: ParamSpec::continuous("width", "Width", 0.1, 0.9, 0.433, "F2", "SourceWidth"),
+            target: ParamTarget::HandleNode { handle: "edge_stretch", param: "source_width" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("dir"),
+            spec: ParamSpec::whole_labels("dir", "Dir", 0.0, 2.0, 0.0, &["Horiz", "Vert", "Both"], "Direction"),
+            target: ParamTarget::HandleNode { handle: "edge_stretch", param: "mode" },
+            convert: ParamConvert::EnumRound,
+        },
     ],
     skip: SkipMode::OnZero { param_id: "amount" },
 }

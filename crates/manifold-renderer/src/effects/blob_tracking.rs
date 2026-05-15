@@ -11,13 +11,14 @@ use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
 use crate::node_graph::primitives::BlobTracking;
-use crate::node_graph::{ParamConvert, Routing, SkipMode};
+use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
+use std::borrow::Cow;
 use manifold_gpu::{
     GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer, GpuComputePipeline,
     GpuDevice, GpuFilterMode, GpuLoadAction, GpuRenderPipeline, GpuSampler, GpuSamplerDesc,
@@ -52,12 +53,37 @@ crate::atomic_chain_spec! {
     type_id: EffectTypeId::BLOB_TRACKING,
     primitive: BlobTracking,
     handle: "blob_tracking",
-    routings: &[
-        Routing { param_id: "amount", target_handle: "blob_tracking", target_param: "amount", convert: ParamConvert::Float },
-        Routing { param_id: "thresh", target_handle: "blob_tracking", target_param: "thresh", convert: ParamConvert::Float },
-        Routing { param_id: "sens", target_handle: "blob_tracking", target_param: "sens", convert: ParamConvert::Float },
-        Routing { param_id: "smooth", target_handle: "blob_tracking", target_param: "smooth", convert: ParamConvert::Float },
-        Routing { param_id: "connect", target_handle: "blob_tracking", target_param: "connect", convert: ParamConvert::Float },
+    bindings: &[
+        ParamBinding {
+            id: Cow::Borrowed("amount"),
+            spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            target: ParamTarget::HandleNode { handle: "blob_tracking", param: "amount" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("thresh"),
+            spec: ParamSpec::continuous("thresh", "Thresh", 0.05, 0.9, 0.65, "F2", "Threshold"),
+            target: ParamTarget::HandleNode { handle: "blob_tracking", param: "thresh" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("sens"),
+            spec: ParamSpec::continuous("sens", "Sens", 0.2, 1.0, 0.85, "F2", "Sensitivity"),
+            target: ParamTarget::HandleNode { handle: "blob_tracking", param: "sens" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("smooth"),
+            spec: ParamSpec::continuous("smooth", "Smooth", 0.0, 1.0, 0.7, "F2", "Smoothing"),
+            target: ParamTarget::HandleNode { handle: "blob_tracking", param: "smooth" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("connect"),
+            spec: ParamSpec::continuous("connect", "Connect", 0.0, 1.0, 0.35, "F2", "Connect"),
+            target: ParamTarget::HandleNode { handle: "blob_tracking", param: "connect" },
+            convert: ParamConvert::Float,
+        },
     ],
     skip: SkipMode::OnZero { param_id: "amount" },
 }

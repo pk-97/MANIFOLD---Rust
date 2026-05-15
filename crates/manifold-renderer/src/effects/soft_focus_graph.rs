@@ -18,7 +18,8 @@ use manifold_core::generator_registration::ParamSpec;
 
 use crate::node_graph::primitives::{Blur, Mix};
 use crate::node_graph::{
-    ChainSpec, Graph, NodeInstanceId, ParamConvert, Routing, SkipMode, SpliceResult,
+    ChainSpec, Graph, NodeInstanceId, ParamBinding, ParamConvert, ParamTarget, SkipMode,
+    SpliceResult,
 };
 
 inventory::submit! {
@@ -54,11 +55,21 @@ inventory::submit! {
     ChainSpec {
         type_id: EffectTypeId::SOFT_FOCUS_GRAPH,
         splice: splice_soft_focus,
-        bindings: &[],
-        routings: &[
-            Routing { param_id: "radius", target_handle: "blur", target_param: "radius", convert: ParamConvert::Float },
-            Routing { param_id: "amount", target_handle: "mix", target_param: "amount", convert: ParamConvert::Float },
+        bindings: &[
+            ParamBinding {
+                id: Cow::Borrowed("radius"),
+                spec: ParamSpec::continuous("radius", "Radius", 0.0, 32.0, 6.0, "F1", "px"),
+                target: ParamTarget::HandleNode { handle: "blur", param: "radius" },
+                convert: ParamConvert::Float,
+            },
+            ParamBinding {
+                id: Cow::Borrowed("amount"),
+                spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.5, "F2", ""),
+                target: ParamTarget::HandleNode { handle: "mix", param: "amount" },
+                convert: ParamConvert::Float,
+            },
         ],
+        routings: &[],
         skip: SkipMode::OnZero { param_id: "amount" },
     }
 }

@@ -18,11 +18,12 @@ use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::AffineTransform;
-use crate::node_graph::{ParamConvert, Routing, SkipMode};
+use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
+use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -58,11 +59,31 @@ crate::atomic_chain_spec! {
     type_id: EffectTypeId::TRANSFORM,
     primitive: AffineTransform,
     handle: "transform",
-    routings: &[
-        Routing { param_id: "x", target_handle: "transform", target_param: "translate_x", convert: ParamConvert::Float },
-        Routing { param_id: "y", target_handle: "transform", target_param: "translate_y", convert: ParamConvert::Float },
-        Routing { param_id: "zoom", target_handle: "transform", target_param: "scale", convert: ParamConvert::Float },
-        Routing { param_id: "rot", target_handle: "transform", target_param: "rotation", convert: ParamConvert::FloatTransform(rot_degrees_to_radians) },
+    bindings: &[
+        ParamBinding {
+            id: Cow::Borrowed("x"),
+            spec: ParamSpec::continuous("x", "X", -1.0, 1.0, 0.0, "F2", ""),
+            target: ParamTarget::HandleNode { handle: "transform", param: "translate_x" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("y"),
+            spec: ParamSpec::continuous("y", "Y", -1.0, 1.0, 0.0, "F2", ""),
+            target: ParamTarget::HandleNode { handle: "transform", param: "translate_y" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("zoom"),
+            spec: ParamSpec::continuous("zoom", "Zoom", 0.1, 5.0, 1.0, "F2", ""),
+            target: ParamTarget::HandleNode { handle: "transform", param: "scale" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("rot"),
+            spec: ParamSpec::continuous("rot", "Rot", -180.0, 180.0, 0.0, "F2", ""),
+            target: ParamTarget::HandleNode { handle: "transform", param: "rotation" },
+            convert: ParamConvert::FloatTransform(rot_degrees_to_radians),
+        },
     ],
     // Transform never skips — even at identity it's the chain's
     // pass-through stage, and skip would change buffer-swap timing.

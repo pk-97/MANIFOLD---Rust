@@ -418,17 +418,13 @@ pub fn validate_binding_spec_parity() -> Vec<BindingParityError> {
                 });
             }
         }
-        // Also flag metadata params that have no matching binding —
-        // they would be invisible to the runtime apply path.
-        for meta_param in metadata.params {
-            if !spec.bindings.iter().any(|b| b.id.as_ref() == meta_param.id) {
-                errors.push(BindingParityError {
-                    effect_id: spec.type_id.clone(),
-                    param_id: meta_param.id.to_string(),
-                    reason: "EffectMetadata.params entry has no matching binding".into(),
-                });
-            }
-        }
+        // Note: we deliberately do NOT flag metadata params that have
+        // no matching binding. Some effects intentionally leave a
+        // metadata param unrouted (e.g. edge_detect's `mode` is folded
+        // into the always-on shader path; voronoi_prism's `beat` is
+        // ctx-driven by `apply_ctx_params_at`, not by a static binding).
+        // The metadata-without-binding direction is therefore allowed;
+        // only the binding-without-metadata direction is actual drift.
     }
     errors
 }

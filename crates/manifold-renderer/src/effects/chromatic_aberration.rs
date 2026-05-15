@@ -3,11 +3,12 @@ use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::ChromaticOffset;
-use crate::node_graph::{ParamConvert, Routing, SkipMode};
+use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
+use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -37,12 +38,37 @@ crate::atomic_chain_spec! {
     type_id: EffectTypeId::CHROMATIC_ABERRATION,
     primitive: ChromaticOffset,
     handle: "chromatic",
-    routings: &[
-        Routing { param_id: "amount", target_handle: "chromatic", target_param: "amount", convert: ParamConvert::Float },
-        Routing { param_id: "offset", target_handle: "chromatic", target_param: "offset", convert: ParamConvert::Float },
-        Routing { param_id: "mode", target_handle: "chromatic", target_param: "mode", convert: ParamConvert::EnumRound },
-        Routing { param_id: "angle", target_handle: "chromatic", target_param: "angle", convert: ParamConvert::Float },
-        Routing { param_id: "falloff", target_handle: "chromatic", target_param: "falloff", convert: ParamConvert::Float },
+    bindings: &[
+        ParamBinding {
+            id: Cow::Borrowed("amount"),
+            spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            target: ParamTarget::HandleNode { handle: "chromatic", param: "amount" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("offset"),
+            spec: ParamSpec::continuous("offset", "Offset", 0.0, 0.05, 0.01, "F2", "Offset"),
+            target: ParamTarget::HandleNode { handle: "chromatic", param: "offset" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("mode"),
+            spec: ParamSpec::whole_labels("mode", "Mode", 0.0, 1.0, 0.0, &["Radial", "Linear"], "Mode"),
+            target: ParamTarget::HandleNode { handle: "chromatic", param: "mode" },
+            convert: ParamConvert::EnumRound,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("angle"),
+            spec: ParamSpec::whole("angle", "Angle", 0.0, 360.0, 0.0, "Angle"),
+            target: ParamTarget::HandleNode { handle: "chromatic", param: "angle" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("falloff"),
+            spec: ParamSpec::continuous("falloff", "Falloff", 0.0, 1.0, 0.5, "F2", "Falloff"),
+            target: ParamTarget::HandleNode { handle: "chromatic", param: "falloff" },
+            convert: ParamConvert::Float,
+        },
     ],
     skip: SkipMode::OnZero { param_id: "amount" },
 }

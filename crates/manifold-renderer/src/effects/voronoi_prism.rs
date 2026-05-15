@@ -3,11 +3,12 @@ use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::VoronoiPrism;
-use crate::node_graph::{ParamConvert, Routing, SkipMode};
+use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
+use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -35,16 +36,31 @@ crate::atomic_chain_spec! {
     type_id: EffectTypeId::VORONOI_PRISM,
     primitive: VoronoiPrism,
     handle: "voronoi",
-    routings: &[
-        Routing { param_id: "amount", target_handle: "voronoi", target_param: "amount", convert: ParamConvert::Float },
-        Routing { param_id: "cells", target_handle: "voronoi", target_param: "cell_count", convert: ParamConvert::Float },
+    bindings: &[
+        ParamBinding {
+            id: Cow::Borrowed("amount"),
+            spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            target: ParamTarget::HandleNode { handle: "voronoi", param: "amount" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("cells"),
+            spec: ParamSpec::whole("cells", "Cells", 4.0, 64.0, 16.0, "CellCount"),
+            target: ParamTarget::HandleNode { handle: "voronoi", param: "cell_count" },
+            convert: ParamConvert::Float,
+        },
         // `source_width` was previously populated by a hidden
         // cross-effect read from EdgeStretch's `width` slider via
         // `EffectContext::edge_stretch_width`. Now it's an explicit
         // user slider on the VoronoiPrism card — same default
         // (0.5625), no invisible coupling. Existing projects that
         // omit this slot fall back to the metadata default.
-        Routing { param_id: "source_width", target_handle: "voronoi", target_param: "source_width", convert: ParamConvert::Float },
+        ParamBinding {
+            id: Cow::Borrowed("source_width"),
+            spec: ParamSpec::continuous("source_width", "Cell Size", 0.1, 0.9, 0.5625, "F2", "SourceWidth"),
+            target: ParamTarget::HandleNode { handle: "voronoi", param: "source_width" },
+            convert: ParamConvert::Float,
+        },
         // `beat` stays ctx-driven (populated by `apply_ctx_params_at`
         // from `EffectContext::beat`).
     ],

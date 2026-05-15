@@ -16,7 +16,8 @@ use manifold_core::generator_registration::ParamSpec;
 
 use crate::node_graph::primitives::Mix;
 use crate::node_graph::{
-    ChainSpec, Graph, NodeInstanceId, ParamConvert, Routing, SkipMode, SpliceResult,
+    ChainSpec, Graph, NodeInstanceId, ParamBinding, ParamConvert, ParamTarget, SkipMode,
+    SpliceResult,
 };
 
 inventory::submit! {
@@ -47,10 +48,15 @@ inventory::submit! {
     ChainSpec {
         type_id: EffectTypeId::NODE_GRAPH_TEST,
         splice: splice_node_graph_test,
-        bindings: &[],
-        routings: &[
-            Routing { param_id: "amount", target_handle: "mix", target_param: "amount", convert: ParamConvert::Float },
+        bindings: &[
+            ParamBinding {
+                id: Cow::Borrowed("amount"),
+                spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.5, "F2", ""),
+                target: ParamTarget::HandleNode { handle: "mix", param: "amount" },
+                convert: ParamConvert::Float,
+            },
         ],
+        routings: &[],
         skip: SkipMode::Never,
     }
 }

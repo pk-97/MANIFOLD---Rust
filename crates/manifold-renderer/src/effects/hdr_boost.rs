@@ -7,11 +7,12 @@ use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::HighlightBoost;
-use crate::node_graph::{ParamConvert, Routing, SkipMode};
+use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
+use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -40,11 +41,31 @@ crate::atomic_chain_spec! {
     type_id: EffectTypeId::HDR_BOOST,
     primitive: HighlightBoost,
     handle: "highlight_boost",
-    routings: &[
-        Routing { param_id: "amount", target_handle: "highlight_boost", target_param: "amount", convert: ParamConvert::Float },
-        Routing { param_id: "gain", target_handle: "highlight_boost", target_param: "gain", convert: ParamConvert::Float },
-        Routing { param_id: "thresh", target_handle: "highlight_boost", target_param: "threshold", convert: ParamConvert::Float },
-        Routing { param_id: "knee", target_handle: "highlight_boost", target_param: "knee", convert: ParamConvert::Float },
+    bindings: &[
+        ParamBinding {
+            id: Cow::Borrowed("amount"),
+            spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            target: ParamTarget::HandleNode { handle: "highlight_boost", param: "amount" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("gain"),
+            spec: ParamSpec::continuous("gain", "Gain", 0.0, 5.0, 1.5, "F2", "Gain"),
+            target: ParamTarget::HandleNode { handle: "highlight_boost", param: "gain" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("thresh"),
+            spec: ParamSpec::continuous("thresh", "Thresh", 0.0, 1.0, 0.15, "F2", "Threshold"),
+            target: ParamTarget::HandleNode { handle: "highlight_boost", param: "threshold" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("knee"),
+            spec: ParamSpec::continuous("knee", "Knee", 0.0, 1.0, 0.3, "F2", "Knee"),
+            target: ParamTarget::HandleNode { handle: "highlight_boost", param: "knee" },
+            convert: ParamConvert::Float,
+        },
     ],
     skip: SkipMode::OnZero { param_id: "amount" },
 }

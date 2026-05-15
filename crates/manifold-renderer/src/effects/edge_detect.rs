@@ -3,11 +3,12 @@ use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::EdgeDetect;
-use crate::node_graph::{ParamConvert, Routing, SkipMode};
+use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
+use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -35,13 +36,24 @@ crate::atomic_chain_spec! {
     type_id: EffectTypeId::EDGE_DETECT,
     primitive: EdgeDetect,
     handle: "edge_detect",
-    routings: &[
-        Routing { param_id: "amount", target_handle: "edge_detect", target_param: "amount", convert: ParamConvert::Float },
-        Routing { param_id: "thresh", target_handle: "edge_detect", target_param: "threshold", convert: ParamConvert::Float },
+    bindings: &[
+        ParamBinding {
+            id: Cow::Borrowed("amount"),
+            spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            target: ParamTarget::HandleNode { handle: "edge_detect", param: "amount" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("thresh"),
+            spec: ParamSpec::continuous("thresh", "Thresh", 0.0, 1.0, 0.1, "F2", "Threshold"),
+            target: ParamTarget::HandleNode { handle: "edge_detect", param: "threshold" },
+            convert: ParamConvert::Float,
+        },
         // Legacy `mode` (Sobel/Laplacian/Frei-Chen) was a binary
         // toggle the primitive folded into the always-on shader
         // path. Intentionally unrouted — preserves the existing
-        // EdgeDetect parity-tested behavior.
+        // EdgeDetect parity-tested behavior. The metadata's `mode`
+        // ParamSpec is dropped; users see only Amount + Thresh.
     ],
     skip: SkipMode::OnZero { param_id: "amount" },
 }

@@ -3,11 +3,12 @@ use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::{STROBE_NOTE_RATES, Strobe};
-use crate::node_graph::{ParamConvert, Routing, SkipMode};
+use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
+use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -46,10 +47,25 @@ crate::atomic_chain_spec! {
     type_id: EffectTypeId::STROBE,
     primitive: Strobe,
     handle: "strobe",
-    routings: &[
-        Routing { param_id: "amount", target_handle: "strobe", target_param: "amount", convert: ParamConvert::Float },
-        Routing { param_id: "rate", target_handle: "strobe", target_param: "rate", convert: ParamConvert::FloatTransform(strobe_rate_from_index) },
-        Routing { param_id: "mode", target_handle: "strobe", target_param: "mode", convert: ParamConvert::EnumRound },
+    bindings: &[
+        ParamBinding {
+            id: Cow::Borrowed("amount"),
+            spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            target: ParamTarget::HandleNode { handle: "strobe", param: "amount" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("rate"),
+            spec: ParamSpec::whole_labels("rate", "Rate", 0.0, 9.0, 6.0, &["1/1", "1/2", "1/4", "1/4T", "1/8", "1/8T", "1/16", "1/16T", "1/32", "1/64"], "Rate"),
+            target: ParamTarget::HandleNode { handle: "strobe", param: "rate" },
+            convert: ParamConvert::FloatTransform(strobe_rate_from_index),
+        },
+        ParamBinding {
+            id: Cow::Borrowed("mode"),
+            spec: ParamSpec::whole_labels("mode", "Mode", 0.0, 2.0, 0.0, &["Opacity", "White", "Gain"], "Mode"),
+            target: ParamTarget::HandleNode { handle: "strobe", param: "mode" },
+            convert: ParamConvert::EnumRound,
+        },
         // `beat` is ctx-driven — populated each frame from `EffectContext::beat`.
     ],
     skip: SkipMode::OnZero { param_id: "amount" },

@@ -18,12 +18,13 @@ use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::AutoGain;
-use crate::node_graph::{ParamConvert, Routing, SkipMode};
+use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
+use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -55,14 +56,49 @@ crate::atomic_chain_spec! {
     type_id: EffectTypeId::AUTO_GAIN,
     primitive: AutoGain,
     handle: "auto_gain",
-    routings: &[
-        Routing { param_id: "amount", target_handle: "auto_gain", target_param: "amount", convert: ParamConvert::Float },
-        Routing { param_id: "ratio", target_handle: "auto_gain", target_param: "ratio", convert: ParamConvert::Float },
-        Routing { param_id: "punch", target_handle: "auto_gain", target_param: "punch", convert: ParamConvert::Float },
-        Routing { param_id: "target", target_handle: "auto_gain", target_param: "target", convert: ParamConvert::Float },
-        Routing { param_id: "hdr_ret", target_handle: "auto_gain", target_param: "hdr_ret", convert: ParamConvert::Float },
-        Routing { param_id: "color", target_handle: "auto_gain", target_param: "color", convert: ParamConvert::Float },
-        Routing { param_id: "char", target_handle: "auto_gain", target_param: "char", convert: ParamConvert::EnumRound },
+    bindings: &[
+        ParamBinding {
+            id: Cow::Borrowed("amount"),
+            spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.5, "F2", ""),
+            target: ParamTarget::HandleNode { handle: "auto_gain", param: "amount" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("ratio"),
+            spec: ParamSpec::continuous("ratio", "Ratio", 0.0, 1.0, 0.5, "F2", "Ratio"),
+            target: ParamTarget::HandleNode { handle: "auto_gain", param: "ratio" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("punch"),
+            spec: ParamSpec::continuous("punch", "Punch", 0.0, 1.0, 0.5, "F2", "Punch"),
+            target: ParamTarget::HandleNode { handle: "auto_gain", param: "punch" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("target"),
+            spec: ParamSpec::continuous("target", "Target", 0.0, 1.0, 0.5, "F2", "Target"),
+            target: ParamTarget::HandleNode { handle: "auto_gain", param: "target" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("hdr_ret"),
+            spec: ParamSpec::continuous("hdr_ret", "HDR Ret", 0.0, 1.0, 0.5, "F2", "HdrRetention"),
+            target: ParamTarget::HandleNode { handle: "auto_gain", param: "hdr_ret" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("color"),
+            spec: ParamSpec::continuous("color", "Color", -1.0, 1.0, 0.0, "F2", "ColorPush"),
+            target: ParamTarget::HandleNode { handle: "auto_gain", param: "color" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("char"),
+            spec: ParamSpec::whole_labels("char", "Char", 0.0, 4.0, 0.0, &["Clean", "Warm", "Film", "Vivid", "Grit"], "Character"),
+            target: ParamTarget::HandleNode { handle: "auto_gain", param: "char" },
+            convert: ParamConvert::EnumRound,
+        },
     ],
     skip: SkipMode::OnZero { param_id: "amount" },
 }

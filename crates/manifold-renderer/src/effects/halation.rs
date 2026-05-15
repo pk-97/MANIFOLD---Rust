@@ -13,13 +13,14 @@ use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Halation;
-use crate::node_graph::{ParamConvert, Routing, SkipMode};
+use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
+use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -49,12 +50,37 @@ crate::atomic_chain_spec! {
     type_id: EffectTypeId::HALATION,
     primitive: Halation,
     handle: "halation",
-    routings: &[
-        Routing { param_id: "amount", target_handle: "halation", target_param: "amount", convert: ParamConvert::Float },
-        Routing { param_id: "thresh", target_handle: "halation", target_param: "threshold", convert: ParamConvert::Float },
-        Routing { param_id: "spread", target_handle: "halation", target_param: "spread", convert: ParamConvert::Float },
-        Routing { param_id: "hue", target_handle: "halation", target_param: "hue", convert: ParamConvert::Float },
-        Routing { param_id: "sat", target_handle: "halation", target_param: "saturation", convert: ParamConvert::Float },
+    bindings: &[
+        ParamBinding {
+            id: Cow::Borrowed("amount"),
+            spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            target: ParamTarget::HandleNode { handle: "halation", param: "amount" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("thresh"),
+            spec: ParamSpec::continuous("thresh", "Thresh", 0.0, 1.0, 0.5, "F2", "Threshold"),
+            target: ParamTarget::HandleNode { handle: "halation", param: "threshold" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("spread"),
+            spec: ParamSpec::continuous("spread", "Spread", 0.0, 1.0, 0.5, "F2", "Spread"),
+            target: ParamTarget::HandleNode { handle: "halation", param: "spread" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("hue"),
+            spec: ParamSpec::whole("hue", "Hue", 0.0, 360.0, 20.0, "Hue"),
+            target: ParamTarget::HandleNode { handle: "halation", param: "hue" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("sat"),
+            spec: ParamSpec::continuous("sat", "Sat", 0.0, 1.0, 0.6, "F2", "Saturation"),
+            target: ParamTarget::HandleNode { handle: "halation", param: "saturation" },
+            convert: ParamConvert::Float,
+        },
     ],
     skip: SkipMode::OnZero { param_id: "amount" },
 }

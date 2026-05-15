@@ -18,7 +18,8 @@ use std::borrow::Cow;
 
 use crate::node_graph::primitives::{Mix, Transform};
 use crate::node_graph::{
-    ChainSpec, Graph, NodeInstanceId, ParamConvert, ParamValue, Routing, SkipMode, SpliceResult,
+    ChainSpec, Graph, NodeInstanceId, ParamBinding, ParamConvert, ParamTarget, ParamValue,
+    SkipMode, SpliceResult,
 };
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
@@ -83,21 +84,21 @@ inventory::submit! {
     ChainSpec {
         type_id: EffectTypeId::MIRROR,
         splice: splice_mirror,
-        bindings: &[],
-        routings: &[
-            Routing {
-                param_id: "amount",
-                target_handle: "mix",
-                target_param: "amount",
+        bindings: &[
+            ParamBinding {
+                id: Cow::Borrowed("amount"),
+                spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
+                target: ParamTarget::HandleNode { handle: "mix", param: "amount" },
                 convert: ParamConvert::Float,
             },
-            Routing {
-                param_id: "mode",
-                target_handle: "uv_transform",
-                target_param: "mode",
+            ParamBinding {
+                id: Cow::Borrowed("mode"),
+                spec: ParamSpec::whole_labels("mode", "Mode", 0.0, 2.0, 0.0, &["Horiz", "Vert", "Both"], "Mode"),
+                target: ParamTarget::HandleNode { handle: "uv_transform", param: "mode" },
                 convert: ParamConvert::EnumRemap(Cow::Borrowed(MIRROR_MODE_REMAP)),
             },
         ],
+        routings: &[],
         skip: SkipMode::OnZero { param_id: "amount" },
     }
 }

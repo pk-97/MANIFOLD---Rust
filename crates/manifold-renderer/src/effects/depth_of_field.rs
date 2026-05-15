@@ -30,9 +30,10 @@ use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
 use crate::node_graph::primitives::DepthOfField;
-use crate::node_graph::{ParamConvert, Routing, SkipMode};
+use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
+use std::borrow::Cow;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
@@ -69,15 +70,55 @@ crate::atomic_chain_spec! {
     type_id: EffectTypeId::DEPTH_OF_FIELD,
     primitive: DepthOfField,
     handle: "dof",
-    routings: &[
-        Routing { param_id: "amount", target_handle: "dof", target_param: "amount", convert: ParamConvert::Float },
-        Routing { param_id: "mode", target_handle: "dof", target_param: "mode", convert: ParamConvert::EnumRound },
-        Routing { param_id: "focus", target_handle: "dof", target_param: "focus", convert: ParamConvert::Float },
-        Routing { param_id: "focus_x", target_handle: "dof", target_param: "focus_x", convert: ParamConvert::Float },
-        Routing { param_id: "width", target_handle: "dof", target_param: "width", convert: ParamConvert::Float },
-        Routing { param_id: "blur", target_handle: "dof", target_param: "blur", convert: ParamConvert::Float },
-        Routing { param_id: "angle", target_handle: "dof", target_param: "angle", convert: ParamConvert::Float },
-        Routing { param_id: "quality", target_handle: "dof", target_param: "quality", convert: ParamConvert::EnumRound },
+    bindings: &[
+        ParamBinding {
+            id: Cow::Borrowed("amount"),
+            spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            target: ParamTarget::HandleNode { handle: "dof", param: "amount" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("mode"),
+            spec: ParamSpec::whole_labels("mode", "Mode", 0.0, 2.0, 0.0, &["Tilt-Shift", "Radial", "Depth"], "Mode"),
+            target: ParamTarget::HandleNode { handle: "dof", param: "mode" },
+            convert: ParamConvert::EnumRound,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("focus"),
+            spec: ParamSpec::continuous("focus", "Focus", 0.0, 1.0, 0.5, "F2", "FocusPosition"),
+            target: ParamTarget::HandleNode { handle: "dof", param: "focus" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("focus_x"),
+            spec: ParamSpec::continuous("focus_x", "Focus X", 0.0, 1.0, 0.5, "F2", "FocusX"),
+            target: ParamTarget::HandleNode { handle: "dof", param: "focus_x" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("width"),
+            spec: ParamSpec::continuous("width", "Width", 0.01, 0.5, 0.15, "F2", "FocusWidth"),
+            target: ParamTarget::HandleNode { handle: "dof", param: "width" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("blur"),
+            spec: ParamSpec::continuous("blur", "Blur", 0.0, 1.0, 0.5, "F2", "BlurStrength"),
+            target: ParamTarget::HandleNode { handle: "dof", param: "blur" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("angle"),
+            spec: ParamSpec::whole("angle", "Angle", 0.0, 360.0, 0.0, "TiltAngle"),
+            target: ParamTarget::HandleNode { handle: "dof", param: "angle" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("quality"),
+            spec: ParamSpec::whole_labels("quality", "Quality", 0.0, 2.0, 1.0, &["Low", "Medium", "High"], "Quality"),
+            target: ParamTarget::HandleNode { handle: "dof", param: "quality" },
+            convert: ParamConvert::EnumRound,
+        },
     ],
     skip: SkipMode::OnZero { param_id: "amount" },
 }

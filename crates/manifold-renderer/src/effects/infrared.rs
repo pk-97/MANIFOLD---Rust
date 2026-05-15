@@ -3,11 +3,12 @@ use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Infrared;
-use crate::node_graph::{ParamConvert, Routing, SkipMode};
+use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
+use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -35,10 +36,25 @@ crate::atomic_chain_spec! {
     type_id: EffectTypeId::INFRARED,
     primitive: Infrared,
     handle: "infrared",
-    routings: &[
-        Routing { param_id: "amount", target_handle: "infrared", target_param: "amount", convert: ParamConvert::Float },
-        Routing { param_id: "palette", target_handle: "infrared", target_param: "palette", convert: ParamConvert::EnumRound },
-        Routing { param_id: "contrast", target_handle: "infrared", target_param: "contrast", convert: ParamConvert::Float },
+    bindings: &[
+        ParamBinding {
+            id: Cow::Borrowed("amount"),
+            spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            target: ParamTarget::HandleNode { handle: "infrared", param: "amount" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("palette"),
+            spec: ParamSpec::whole_labels("palette", "Palette", 0.0, 9.0, 0.0, &["White Hot", "Black Hot", "Green NV", "Iron Bow", "Rainbow", "Lava", "Arctic", "Magenta", "Electric", "Toxic"], "Palette"),
+            target: ParamTarget::HandleNode { handle: "infrared", param: "palette" },
+            convert: ParamConvert::EnumRound,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("contrast"),
+            spec: ParamSpec::continuous("contrast", "Contrast", 0.5, 3.0, 1.0, "F2", "Contrast"),
+            target: ParamTarget::HandleNode { handle: "infrared", param: "contrast" },
+            convert: ParamConvert::Float,
+        },
     ],
     skip: SkipMode::OnZero { param_id: "amount" },
 }

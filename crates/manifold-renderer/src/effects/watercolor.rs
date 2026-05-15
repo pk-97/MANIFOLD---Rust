@@ -21,13 +21,14 @@ use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Watercolor;
-use crate::node_graph::{ParamConvert, Routing, SkipMode};
+use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
+use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -56,11 +57,31 @@ crate::atomic_chain_spec! {
     type_id: EffectTypeId::new("Watercolor"),
     primitive: Watercolor,
     handle: "watercolor",
-    routings: &[
-        Routing { param_id: "amount", target_handle: "watercolor", target_param: "amount", convert: ParamConvert::Float },
-        Routing { param_id: "displace", target_handle: "watercolor", target_param: "displace", convert: ParamConvert::Float },
-        Routing { param_id: "blur", target_handle: "watercolor", target_param: "blur", convert: ParamConvert::Float },
-        Routing { param_id: "decay", target_handle: "watercolor", target_param: "decay", convert: ParamConvert::Float },
+    bindings: &[
+        ParamBinding {
+            id: Cow::Borrowed("amount"),
+            spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.5, "F2", ""),
+            target: ParamTarget::HandleNode { handle: "watercolor", param: "amount" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("displace"),
+            spec: ParamSpec::continuous("displace", "Displace", 0.0001, 0.01, 0.001, "F4", "displace"),
+            target: ParamTarget::HandleNode { handle: "watercolor", param: "displace" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("blur"),
+            spec: ParamSpec::continuous("blur", "Blur", 0.5, 8.0, 2.0, "F1", "blur"),
+            target: ParamTarget::HandleNode { handle: "watercolor", param: "blur" },
+            convert: ParamConvert::Float,
+        },
+        ParamBinding {
+            id: Cow::Borrowed("decay"),
+            spec: ParamSpec::continuous("decay", "Decay", 0.9, 1.0, 0.99, "F3", "decay"),
+            target: ParamTarget::HandleNode { handle: "watercolor", param: "decay" },
+            convert: ParamConvert::Float,
+        },
         // `time` is ctx-driven, populated by `apply_ctx_params_at`.
     ],
     skip: SkipMode::OnZero { param_id: "amount" },
