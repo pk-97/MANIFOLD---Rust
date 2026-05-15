@@ -13,12 +13,11 @@ mod bindings;
 mod boundary_nodes;
 mod chain_spec;
 pub mod composites;
-mod effect_graphs;
 mod effect_node;
 mod execution;
 mod execution_plan;
 mod graph;
-mod legacy_adapter;
+mod metadata;
 mod metal_backend;
 mod palette;
 mod param_binding;
@@ -34,12 +33,6 @@ mod validation;
 pub use backend::{Backend, MockBackend};
 pub use bindings::{NodeInputs, NodeOutputs, Slot};
 pub use boundary_nodes::{FINAL_OUTPUT_TYPE_ID, FinalOutput, SOURCE_TYPE_ID, Source};
-pub use effect_graphs::{
-    CtxEntry, EffectGraphError, RefreshEntry, apply_ctx_params, apply_ctx_params_at,
-    apply_refresh_plan, build_ctx_param_plan, build_effect_graph, build_refresh_plan,
-    canonical_document_for, primitive_id_for_effect, refresh_effect_params,
-    refresh_effect_params_at,
-};
 pub use effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId, NodeRequires,
     NodeWire, ParamValues,
@@ -51,7 +44,7 @@ pub use chain_spec::{
     lookup_handle, splice_def_into_chain, validate_all_specs,
 };
 pub use graph::{Graph, NodeInstance};
-pub use legacy_adapter::metadata_by_id;
+pub use metadata::metadata_by_id;
 pub use metal_backend::MetalBackend;
 pub use palette::{catalog_graph_def_for, palette_atoms, PaletteAtom};
 pub use param_binding::{
