@@ -2,10 +2,16 @@
 // Same soft-knee threshold as bloom but without any blur passes.
 // Single pass via ComputeBlitHelper.
 
+use std::borrow::Cow;
+
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
+use crate::node_graph::primitives::HighlightBoost;
+use crate::node_graph::{
+    ChainSpec, Graph, NodeInstanceId, ParamConvert, Routing, SkipMode, SpliceResult,
+};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
@@ -31,6 +37,29 @@ inventory::submit! {
     EffectFactory {
         id: EffectTypeId::HDR_BOOST,
         create: |device| Box::new(HdrBoostFX::new(device)),
+    }
+}
+
+fn splice_hdr_boost(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult {
+    let node = graph.add_node(Box::new(HighlightBoost::new()));
+    graph.connect(source, (node, "in")).expect("wire source → HighlightBoost.in");
+    SpliceResult {
+        output: (node, "out"),
+        handles: vec![(Cow::Borrowed("highlight_boost"), node)],
+    }
+}
+
+inventory::submit! {
+    ChainSpec {
+        type_id: EffectTypeId::HDR_BOOST,
+        splice: splice_hdr_boost,
+        routings: &[
+            Routing { param_id: "amount", target_handle: "highlight_boost", target_param: "amount", convert: ParamConvert::Float },
+            Routing { param_id: "gain", target_handle: "highlight_boost", target_param: "gain", convert: ParamConvert::Float },
+            Routing { param_id: "thresh", target_handle: "highlight_boost", target_param: "threshold", convert: ParamConvert::Float },
+            Routing { param_id: "knee", target_handle: "highlight_boost", target_param: "knee", convert: ParamConvert::Float },
+        ],
+        skip: SkipMode::OnZero { param_id: "amount" },
     }
 }
 

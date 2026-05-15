@@ -33,6 +33,14 @@ impl EffectRegistry {
             processors.insert(factory.id.clone(), (factory.create)(device));
         }
 
+        // Validate every registered ChainSpec at startup — every
+        // routing must reference a handle that the spec's splice
+        // actually produces. Typos fail at process boot instead of
+        // silently dropping params at first render.
+        for err in crate::node_graph::validate_all_specs() {
+            eprintln!("[manifold-renderer] {err}");
+        }
+
         Self { processors }
     }
 
