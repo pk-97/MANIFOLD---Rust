@@ -11,7 +11,7 @@
 //! Primitive state (mip pyramids, feedback buffers, depth workers)
 //! lives inside the boxed [`EffectNode`] owned by the cached
 //! [`Graph`]. Per-frame param changes refresh in place via
-//! [`apply_spec_refresh`]; topology changes (effect added /
+//! [`apply_param_bindings`]; topology changes (effect added /
 //! removed / reordered / type-swapped, group enabled / disabled
 //! toggle, group crossing the 1.0 wet/dry boundary, render-resolution
 //! change) rebuild from scratch.
@@ -35,7 +35,7 @@
 //! ## Per-frame cost
 //!
 //! - 1 `copy_texture_to_texture` (upstream input → source slot)
-//! - N `apply_spec_refresh` calls (routings + ctx-driven params)
+//! - N `apply_param_bindings` calls (host bindings + ctx-driven params)
 //! - K `set_param` calls (one per Mix node, refreshing `amount`)
 //! - 1 `execute_frame_with_gpu` covering N + K + 2 step iterations
 //!   (Source + N effects + K Mix nodes + FinalOutput)
@@ -58,10 +58,10 @@ use crate::effect::EffectContext;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Mix;
 use crate::node_graph::{
-    ChainSpec, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, LastAppliedCache,
-    MetalBackend, NodeInstanceId, ParamBinding, ParamConvert, ParamValue, PortType,
-    PrimitiveRegistry, ResourceId, Slot, Source, SpliceResult, StateStore,
-    apply_param_bindings, chain_spec_by_id, compile, metadata_by_id, splice_def_into_chain,
+    ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, LastAppliedCache, MetalBackend,
+    NodeInstanceId, ParamBinding, ParamValue, PortType, PrimitiveRegistry, ResourceId, Slot,
+    Source, SpliceResult, StateStore, apply_param_bindings, chain_spec_by_id, compile,
+    splice_def_into_chain,
 };
 use crate::render_target::RenderTarget;
 
@@ -186,8 +186,7 @@ struct EffectSlot {
     /// stay zero-allocation and user-edited divergent defs can hold
     /// owned strings off disk.
     handles: Vec<(std::borrow::Cow<'static, str>, NodeInstanceId)>,
-    /// New-style apply path. Non-empty iff the effect's [`ChainSpec`]
-    /// declared `bindings`. Each entry has its `HandleNode` target
+    /// Resolved host bindings. Each entry has its `HandleNode` target
     /// already resolved to a runtime `Node` target via
     /// [`ParamBinding::resolve_handles`]. Paired with [`binding_cache`]
     /// so [`apply_param_bindings`] can skip writes when the outer
@@ -195,26 +194,10 @@ struct EffectSlot {
     /// survive a chain rebuild when the outer slot is at rest."
     resolved_bindings: Vec<ParamBinding>,
     binding_cache: LastAppliedCache,
-    /// Legacy apply path. Used when `resolved_bindings` is empty
-    /// (i.e. the effect still declares `routings` instead of
-    /// `bindings`). Position-indexed against `EffectMetadata.params`.
-    /// Each `Some` entry is one host param routed to one node param,
-    /// with the coercion + default pre-resolved. `None` entries are
-    /// routings that didn't resolve at chain build time (renamed
-    /// handle, etc.) and silently skip per-frame.
-    resolved_routings: Vec<Option<ResolvedRouting>>,
     /// Where to apply ctx-driven params (time / beat). The first
     /// handle for now — composite effects with multiple ctx-driven
     /// workers will need a richer resolution rule when we get there.
     ctx_target_node: Option<NodeInstanceId>,
-}
-
-#[derive(Clone)]
-struct ResolvedRouting {
-    node_id: NodeInstanceId,
-    target_param: &'static str,
-    convert: ParamConvert,
-    default_value: f32,
 }
 
 impl ChainGraph {
@@ -375,34 +358,21 @@ impl ChainGraph {
                 (spec.splice)(&mut graph, (prev_node, prev_out_port))
             };
             let SpliceResult { output, handles } = splice_result;
-            // Branch on whether this effect ships with new-style
-            // `bindings` or legacy `routings`. Exactly one is non-empty
-            // for a given spec during the migration; both are empty for
-            // effects with no host-visible params.
-            let (resolved_bindings, binding_cache, resolved_routings) = if !spec.bindings.is_empty()
-            {
-                let mut resolved: Vec<ParamBinding> = Vec::with_capacity(spec.bindings.len());
-                for b in spec.bindings {
-                    match b.resolve_handles(&handles) {
-                        Some(rb) => resolved.push(rb),
-                        None => eprintln!(
-                            "[chain-graph] {}: ParamBinding `{}` references handle that splice \
-                             did not register; this binding will not apply.",
-                            spec.type_id.as_str(),
-                            b.id,
-                        ),
-                    }
+            let mut resolved_bindings: Vec<ParamBinding> =
+                Vec::with_capacity(spec.bindings.len());
+            for b in spec.bindings {
+                match b.resolve_handles(&handles) {
+                    Some(rb) => resolved_bindings.push(rb),
+                    None => eprintln!(
+                        "[chain-graph] {}: ParamBinding `{}` references handle that splice \
+                         did not register; this binding will not apply.",
+                        spec.type_id.as_str(),
+                        b.id,
+                    ),
                 }
-                let mut cache = LastAppliedCache::new();
-                cache.seed_from_bindings(&resolved);
-                (resolved, cache, Vec::new())
-            } else {
-                (
-                    Vec::new(),
-                    LastAppliedCache::new(),
-                    resolve_routings(spec, &handles),
-                )
-            };
+            }
+            let mut binding_cache = LastAppliedCache::new();
+            binding_cache.seed_from_bindings(&resolved_bindings);
             let ctx_target_node = handles.first().map(|(_, id)| *id);
             effect_nodes.push(EffectSlot {
                 effect_id: fx.id.clone(),
@@ -411,7 +381,6 @@ impl ChainGraph {
                 handles,
                 resolved_bindings,
                 binding_cache,
-                resolved_routings,
                 ctx_target_node,
             });
             prev_node = output.0;
@@ -545,9 +514,11 @@ impl ChainGraph {
             }
         }
 
-        // Refresh per-effect params using the precompiled plans —
-        // direct `ParamValues::insert` per param, no per-frame
-        // allocation. Effects are looked up by their captured
+        // Refresh per-effect params via the binding apply path. The
+        // skip-on-unchanged invariant in `LastAppliedCache` means
+        // per-card edits to inner-node params survive when the outer
+        // slot is at rest, and the outer reclaims control as soon as
+        // it moves. Effects are looked up by their captured
         // `legacy_index` (stable across a topology-stable lifetime).
         for slot in &mut self.effect_nodes {
             let Some(fx) = effects.get(slot.legacy_index) else {
@@ -556,37 +527,19 @@ impl ChainGraph {
                 // rather than panic on a live stage.
                 continue;
             };
-            if !slot.resolved_bindings.is_empty() {
-                // New-style: skip-on-unchanged via LastAppliedCache so
-                // per-card edits to inner-node params survive when the
-                // outer slot is at rest.
-                apply_param_bindings(
-                    &slot.resolved_bindings,
-                    &[],
+            apply_param_bindings(
+                &slot.resolved_bindings,
+                &[],
+                &mut self.graph,
+                None,
+                &fx.param_values,
+                &mut slot.binding_cache,
+            );
+            if let Some(node) = slot.ctx_target_node {
+                apply_ctx_params_at(
                     &mut self.graph,
-                    None,
-                    &fx.param_values,
-                    &mut slot.binding_cache,
-                );
-                if let Some(node) = slot.ctx_target_node {
-                    apply_ctx_params_at(
-                        &mut self.graph,
-                        node,
-                        &slot.effect_type,
-                        ctx.time,
-                        ctx.beat,
-                    );
-                }
-            } else {
-                // Legacy path — unconditional per-frame outer→inner
-                // overwrite. Will be retired once every effect has
-                // migrated to `bindings`.
-                apply_spec_refresh(
-                    &mut self.graph,
-                    fx,
+                    node,
                     &slot.effect_type,
-                    &slot.resolved_routings,
-                    slot.ctx_target_node,
                     ctx.time,
                     ctx.beat,
                 );
@@ -673,99 +626,6 @@ impl ChainGraph {
             }
         }
         self.state_store.cleanup_all();
-    }
-}
-
-/// Resolve a [`ChainSpec`]'s routings against the just-spliced handle
-/// map + effect metadata. Each entry in the returned vec is position-
-/// indexed against `EffectMetadata.params`, so per-frame refresh reads
-/// `fx.param_values[i]` and applies it via `resolved[i]`.
-///
-/// Entries are `None` when the routing references a handle or metadata
-/// param that didn't resolve at build time — logged once here, then
-/// silently skipped per frame.
-fn resolve_routings(
-    spec: &'static ChainSpec,
-    handles: &[(std::borrow::Cow<'static, str>, NodeInstanceId)],
-) -> Vec<Option<ResolvedRouting>> {
-    let metadata = match metadata_by_id(&spec.type_id) {
-        Some(m) => m,
-        None => {
-            eprintln!(
-                "[chain-graph] ChainSpec[{}]: no EffectMetadata registered — \
-                 routings cannot be resolved.",
-                spec.type_id.as_str()
-            );
-            return Vec::new();
-        }
-    };
-
-    let mut by_id: ahash::AHashMap<&'static str, &'static crate::node_graph::Routing> =
-        ahash::AHashMap::default();
-    for routing in spec.routings {
-        by_id.insert(routing.param_id, routing);
-    }
-
-    let mut out = Vec::with_capacity(metadata.params.len());
-    for param_spec in metadata.params {
-        if param_spec.id.is_empty() {
-            out.push(None);
-            continue;
-        }
-        let Some(routing) = by_id.get(param_spec.id) else {
-            out.push(None);
-            continue;
-        };
-        let Some(node_id) = handles
-            .iter()
-            .find(|(h, _)| h.as_ref() == routing.target_handle)
-            .map(|(_, id)| *id)
-        else {
-            eprintln!(
-                "[chain-graph] ChainSpec[{}]: routing `{}` references handle `{}` \
-                 that splice did not register.",
-                spec.type_id.as_str(),
-                routing.param_id,
-                routing.target_handle
-            );
-            out.push(None);
-            continue;
-        };
-        out.push(Some(ResolvedRouting {
-            node_id,
-            target_param: routing.target_param,
-            convert: routing.convert.clone(),
-            default_value: param_spec.default_value,
-        }));
-    }
-    out
-}
-
-/// Per-frame param refresh for a `SlotRefresh::Spec` slot. Routes
-/// host-visible params via `resolved`, then injects ctx-driven params
-/// (time / beat) into `ctx_target_node` for the handful of effects
-/// that consume them.
-fn apply_spec_refresh(
-    graph: &mut Graph,
-    fx: &EffectInstance,
-    effect_type: &EffectTypeId,
-    resolved: &[Option<ResolvedRouting>],
-    ctx_target_node: Option<NodeInstanceId>,
-    time: f32,
-    beat: f32,
-) {
-    for (i, slot) in resolved.iter().enumerate() {
-        let Some(r) = slot else { continue };
-        let value = fx
-            .param_values
-            .get(i)
-            .map(|s| s.value)
-            .unwrap_or(r.default_value);
-        let pv = r.convert.convert(value);
-        graph.set_param_unchecked(r.node_id, r.target_param, pv);
-    }
-    if let Some(node) = ctx_target_node {
-        apply_ctx_params_at(graph, node, effect_type, time, beat);
     }
 }
 

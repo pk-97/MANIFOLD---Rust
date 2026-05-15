@@ -27,12 +27,12 @@
 //!
 //! Each effect's `splice` returns a list of internal `(handle, node_id)`
 //! pairs. These names are **local to that effect** — two effects sharing
-//! one chain can both use "mix" without conflict because routings and
+//! one chain can both use "mix" without conflict because bindings and
 //! user-bindings always resolve the handle within the effect they live
 //! on.
 //!
 //! The handles drive two things:
-//! 1. [`Routing`] — outer-card sliders writing to inner-worker params.
+//! 1. [`ParamBinding`] — outer-card sliders writing to inner-worker params.
 //! 2. User-param bindings — per-instance V2 bindings hydrated at chain
 //!    build time, addressed by handle string from the project file.
 
@@ -49,7 +49,7 @@ use crate::node_graph::boundary_nodes::{
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::graph::Graph;
 use crate::node_graph::metadata::metadata_by_id;
-use crate::node_graph::param_binding::{ParamBinding, ParamConvert};
+use crate::node_graph::param_binding::ParamBinding;
 use crate::node_graph::persistence::{PrimitiveRegistry, SerializedParamValue};
 
 /// Static spec — one per effect, registered via `inventory::submit!`.
@@ -61,11 +61,9 @@ pub struct ChainSpec {
     /// Returns the output endpoint + effect-local handle map.
     pub splice: fn(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult,
 
-    /// New-style host-visible parameter bindings. When non-empty,
-    /// these replace the legacy `routings` + matching
-    /// `EffectMetadata.params` declaration: each [`ParamBinding`]
-    /// carries both the outer slider's [`ParamSpec`] and the inner
-    /// routing target ([`ParamTarget::HandleNode`]) in one place.
+    /// Host-visible parameter bindings. Each [`ParamBinding`] carries
+    /// both the outer slider's [`ParamSpec`] and the inner routing
+    /// target ([`ParamTarget::HandleNode`]) in one place.
     ///
     /// Per-frame value flow uses
     /// [`apply_param_bindings`](crate::node_graph::apply_param_bindings)
@@ -73,18 +71,7 @@ pub struct ChainSpec {
     /// seeded from these bindings' defaults — so per-card edits to
     /// inner-node params survive when the outer slot is at rest, and
     /// the outer reclaims control as soon as it moves.
-    ///
-    /// During Phase 1 migration, an effect declares either `bindings`
-    /// (new) or `routings` (legacy) — never both. The chain runtime
-    /// branches on whichever is non-empty.
     pub bindings: &'static [ParamBinding],
-
-    /// **Legacy** outer-param → inner-worker routings. Position-
-    /// correlated with the matching `EffectMetadata.params` (the
-    /// chain looks up the metadata param's index by `param_id` and
-    /// reads `fx.param_values[idx]` per frame). Will be retired once
-    /// every shipping effect has migrated to `bindings`.
-    pub routings: &'static [Routing],
 
     /// When the chain should drop this effect entirely (no workers
     /// added, no cost). Previous output flows directly to next effect.
@@ -98,7 +85,7 @@ pub struct SpliceResult {
     pub output: (NodeInstanceId, &'static str),
 
     /// Effect-local handle map. Names are scoped to this effect;
-    /// routings + user-bindings look up nodes here, never on the chain
+    /// bindings + user-bindings look up nodes here, never on the chain
     /// graph globally.
     ///
     /// `Cow<'static, str>` so canonical splices (compile-time literals)
@@ -106,17 +93,6 @@ pub struct SpliceResult {
     /// user-edited divergent defs use `Cow::Owned(handle_string)`
     /// for names that come off disk at runtime.
     pub handles: Vec<(Cow<'static, str>, NodeInstanceId)>,
-}
-
-pub struct Routing {
-    /// Matches an `EffectMetadata.params[i].id`.
-    pub param_id: &'static str,
-    /// Handle name in this effect's [`SpliceResult::handles`] map.
-    pub target_handle: &'static str,
-    /// Parameter name on the worker resolved by `target_handle`.
-    pub target_param: &'static str,
-    /// f32 → typed `ParamValue` coercion.
-    pub convert: ParamConvert,
 }
 
 pub enum SkipMode {
@@ -200,11 +176,11 @@ inventory::collect!(ChainSpec);
 ///     type_id: EffectTypeId::INVERT_COLORS,
 ///     primitive: Invert,
 ///     handle: "invert",
-///     routings: &[
-///         Routing {
-///             param_id: "amount",
-///             target_handle: "invert",
-///             target_param: "intensity",
+///     bindings: &[
+///         ParamBinding {
+///             id: Cow::Borrowed("amount"),
+///             spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
+///             target: ParamTarget::HandleNode { handle: "invert", param: "intensity" },
 ///             convert: ParamConvert::Float,
 ///         },
 ///     ],
@@ -213,7 +189,6 @@ inventory::collect!(ChainSpec);
 /// ```
 #[macro_export]
 macro_rules! atomic_chain_spec {
-    // New-style: bindings only.
     (
         type_id: $type_id:expr,
         primitive: $prim:ty,
@@ -225,63 +200,41 @@ macro_rules! atomic_chain_spec {
         ::inventory::submit! {
             $crate::node_graph::ChainSpec {
                 type_id: $type_id,
-                splice: $crate::atomic_chain_spec!(@splice_fn $prim, $handle $(, $input)?),
+                splice: {
+                    fn splice(
+                        graph: &mut $crate::node_graph::Graph,
+                        source: (
+                            $crate::node_graph::NodeInstanceId,
+                            &'static str,
+                        ),
+                    ) -> $crate::node_graph::SpliceResult {
+                        let node = graph.add_node(::std::boxed::Box::new(<$prim>::new()));
+                        graph
+                            .connect(
+                                source,
+                                (node, $crate::atomic_chain_spec!(@port $($input)?)),
+                            )
+                            .expect(concat!(
+                                "wire source → ",
+                                stringify!($prim),
+                                ".",
+                                $crate::atomic_chain_spec!(@port $($input)?),
+                            ));
+                        $crate::node_graph::SpliceResult {
+                            output: (node, "out"),
+                            handles: ::std::vec![(
+                                ::std::borrow::Cow::Borrowed($handle),
+                                node,
+                            )],
+                        }
+                    }
+                    splice
+                },
                 bindings: $bindings,
-                routings: &[],
                 skip: $skip,
             }
         }
     };
-    // Legacy: routings only. Retire once every effect has migrated.
-    (
-        type_id: $type_id:expr,
-        primitive: $prim:ty,
-        handle: $handle:literal,
-        $(input_port: $input:literal,)?
-        routings: $routings:expr,
-        skip: $skip:expr $(,)?
-    ) => {
-        ::inventory::submit! {
-            $crate::node_graph::ChainSpec {
-                type_id: $type_id,
-                splice: $crate::atomic_chain_spec!(@splice_fn $prim, $handle $(, $input)?),
-                bindings: &[],
-                routings: $routings,
-                skip: $skip,
-            }
-        }
-    };
-    // Internal: splice closure. Same body for both arms above.
-    (@splice_fn $prim:ty, $handle:literal $(, $input:literal)?) => {{
-        fn splice(
-            graph: &mut $crate::node_graph::Graph,
-            source: (
-                $crate::node_graph::NodeInstanceId,
-                &'static str,
-            ),
-        ) -> $crate::node_graph::SpliceResult {
-            let node = graph.add_node(::std::boxed::Box::new(<$prim>::new()));
-            graph
-                .connect(
-                    source,
-                    (node, $crate::atomic_chain_spec!(@port $($input)?)),
-                )
-                .expect(concat!(
-                    "wire source → ",
-                    stringify!($prim),
-                    ".",
-                    $crate::atomic_chain_spec!(@port $($input)?),
-                ));
-            $crate::node_graph::SpliceResult {
-                output: (node, "out"),
-                handles: ::std::vec![(
-                    ::std::borrow::Cow::Borrowed($handle),
-                    node,
-                )],
-            }
-        }
-        splice
-    }};
     (@port) => { "in" };
     (@port $input:literal) => { $input };
 }
@@ -339,15 +292,6 @@ pub fn validate_all_specs() -> Vec<SpecValidationError> {
             .iter()
             .map(|(name, _)| name.as_ref())
             .collect();
-        for routing in spec.routings {
-            if !handle_set.contains(routing.target_handle) {
-                errors.push(SpecValidationError {
-                    effect_id: spec.type_id.clone(),
-                    routing_param_id: routing.param_id,
-                    missing_handle: routing.target_handle,
-                });
-            }
-        }
         for binding in spec.bindings {
             if let ParamTarget::HandleNode { handle, .. } = &binding.target
                 && !handle_set.contains(handle)

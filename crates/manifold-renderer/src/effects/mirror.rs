@@ -98,7 +98,6 @@ inventory::submit! {
                 convert: ParamConvert::EnumRemap(Cow::Borrowed(MIRROR_MODE_REMAP)),
             },
         ],
-        routings: &[],
         skip: SkipMode::OnZero { param_id: "amount" },
     }
 }

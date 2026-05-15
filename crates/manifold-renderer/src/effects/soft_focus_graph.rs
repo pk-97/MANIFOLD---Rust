@@ -69,7 +69,6 @@ inventory::submit! {
                 convert: ParamConvert::Float,
             },
         ],
-        routings: &[],
         skip: SkipMode::OnZero { param_id: "amount" },
     }
 }

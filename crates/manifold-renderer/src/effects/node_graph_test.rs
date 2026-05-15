@@ -56,7 +56,6 @@ inventory::submit! {
                 convert: ParamConvert::Float,
             },
         ],
-        routings: &[],
         skip: SkipMode::Never,
     }
 }

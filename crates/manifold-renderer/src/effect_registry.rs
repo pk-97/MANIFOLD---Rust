@@ -99,49 +99,32 @@ impl EffectRegistry {
     }
 }
 
-/// Translate a [`ChainSpec`]'s routings into [`OuterParamRouting`]s
+/// Translate a [`ChainSpec`]'s bindings into [`OuterParamRouting`]s
 /// the editor inspector consumes (which inner rows to gray out as
-/// "driven by '<outer>'"). One entry per spec routing whose target
-/// handle resolves on the just-built canonical graph.
+/// "driven by '<outer>'"). One entry per binding whose target handle
+/// is reachable.
+///
+/// Bindings carry their `HandleNode { handle, param }` directly, so
+/// no metadata lookup is needed. Composite-style bindings or
+/// `Custom(fn)` targets are skipped — the editor can't surface them.
 fn outer_routings_from_spec(
     spec: &'static crate::node_graph::ChainSpec,
-    graph: &crate::node_graph::Graph,
+    _graph: &crate::node_graph::Graph,
 ) -> Vec<crate::node_graph::OuterParamRouting> {
-    use crate::node_graph::OuterParamRouting;
-    let Some(metadata) = crate::node_graph::metadata_by_id(&spec.type_id) else {
-        return Vec::new();
-    };
-    let mut out = Vec::with_capacity(spec.routings.len());
-    for routing in spec.routings {
-        let Some(param_spec) = metadata.params.iter().find(|p| p.id == routing.param_id) else {
-            continue;
+    use crate::node_graph::{OuterParamRouting, ParamTarget};
+    let mut out = Vec::with_capacity(spec.bindings.len());
+    for binding in spec.bindings {
+        let (handle, inner_param) = match &binding.target {
+            ParamTarget::HandleNode { handle, param } => (*handle, *param),
+            // Composite / Node / Custom variants either don't surface
+            // a handle at spec-time or aren't relevant to the editor's
+            // outer→inner gray-out display.
+            _ => continue,
         };
-        // Resolve target handle into the canonical-graph node id, then
-        // recover that node's stable handle string for the editor. For
-        // canonical specs the node is added without a global handle —
-        // we have to walk the graph's handles map to find one if it
-        // was registered, or fall back to the spec's local name.
-        let canonical_handles: Vec<(String, crate::node_graph::NodeInstanceId)> = graph
-            .handles()
-            .map(|(h, id)| (h.to_string(), id))
-            .collect();
-        // The editor key for `node_handle` is whatever the canvas
-        // shows the user. Splice doesn't register global handles, so
-        // for now we surface the effect-local handle name directly —
-        // the editor uses it to look up the corresponding node in the
-        // snapshot via `NodeSnapshot.node_handle` which IS set when
-        // a graph node has a registered handle.
-        //
-        // For ChainSpec'd effects whose splice uses `add_node` (no
-        // global handle), the snapshot's node_handle is None and the
-        // editor falls back to node type id for display. The routing
-        // information here still tells the editor *which* outer name
-        // drives which inner param.
-        let _ = canonical_handles;
         out.push(OuterParamRouting {
-            outer_label: param_spec.name.to_string(),
-            node_handle: routing.target_handle.to_string(),
-            inner_param: routing.target_param.to_string(),
+            outer_label: binding.spec.name.to_string(),
+            node_handle: handle.to_string(),
+            inner_param: inner_param.to_string(),
         });
     }
     out
