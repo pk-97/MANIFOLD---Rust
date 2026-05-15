@@ -13,10 +13,16 @@
 // Character modes (Clean/Warm/Film/Vivid/Grit) are specialized via function
 // constants — Metal compiler dead-code eliminates inactive branches.
 
+use std::borrow::Cow;
+
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
+use crate::node_graph::primitives::AutoGain;
+use crate::node_graph::{
+    ChainSpec, Graph, NodeInstanceId, ParamConvert, Routing, SkipMode, SpliceResult,
+};
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
@@ -46,6 +52,32 @@ inventory::submit! {
     EffectFactory {
         id: EffectTypeId::AUTO_GAIN,
         create: |device| Box::new(AutoGainFX::new(device)),
+    }
+}
+
+fn splice_auto_gain(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult {
+    let node = graph.add_node(Box::new(AutoGain::new()));
+    graph.connect(source, (node, "in")).expect("wire source → AutoGain.in");
+    SpliceResult {
+        output: (node, "out"),
+        handles: vec![(Cow::Borrowed("auto_gain"), node)],
+    }
+}
+
+inventory::submit! {
+    ChainSpec {
+        type_id: EffectTypeId::AUTO_GAIN,
+        splice: splice_auto_gain,
+        routings: &[
+            Routing { param_id: "amount", target_handle: "auto_gain", target_param: "amount", convert: ParamConvert::Float },
+            Routing { param_id: "ratio", target_handle: "auto_gain", target_param: "ratio", convert: ParamConvert::Float },
+            Routing { param_id: "punch", target_handle: "auto_gain", target_param: "punch", convert: ParamConvert::Float },
+            Routing { param_id: "target", target_handle: "auto_gain", target_param: "target", convert: ParamConvert::Float },
+            Routing { param_id: "hdr_ret", target_handle: "auto_gain", target_param: "hdr_ret", convert: ParamConvert::Float },
+            Routing { param_id: "color", target_handle: "auto_gain", target_param: "color", convert: ParamConvert::Float },
+            Routing { param_id: "char", target_handle: "auto_gain", target_param: "char", convert: ParamConvert::EnumRound },
+        ],
+        skip: SkipMode::OnZero { param_id: "amount" },
     }
 }
 

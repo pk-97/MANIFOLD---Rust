@@ -53,7 +53,7 @@ inventory::submit! {
 
 fn splice_transform(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult {
     let node = graph.add_node(Box::new(AffineTransform::new()));
-    graph.connect(source, (node, "source")).expect("wire source → AffineTransform.source");
+    graph.connect(source, (node, "in")).expect("wire source → AffineTransform.in");
     SpliceResult {
         output: (node, "out"),
         handles: vec![(Cow::Borrowed("transform"), node)],
