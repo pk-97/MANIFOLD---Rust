@@ -58,10 +58,10 @@ use crate::effect::EffectContext;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Mix;
 use crate::node_graph::{
-    ChainSpec, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend,
-    NodeInstanceId, ParamConvert, ParamValue, PortType, PrimitiveRegistry, ResourceId, Slot,
-    Source, SpliceResult, StateStore, chain_spec_by_id, compile, metadata_by_id,
-    splice_def_into_chain,
+    ChainSpec, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, LastAppliedCache,
+    MetalBackend, NodeInstanceId, ParamBinding, ParamConvert, ParamValue, PortType,
+    PrimitiveRegistry, ResourceId, Slot, Source, SpliceResult, StateStore,
+    apply_param_bindings, chain_spec_by_id, compile, metadata_by_id, splice_def_into_chain,
 };
 use crate::render_target::RenderTarget;
 
@@ -186,11 +186,22 @@ struct EffectSlot {
     /// stay zero-allocation and user-edited divergent defs can hold
     /// owned strings off disk.
     handles: Vec<(std::borrow::Cow<'static, str>, NodeInstanceId)>,
-    /// Position-indexed against `EffectMetadata.params`. Each `Some`
-    /// entry is one host param routed to one node param, with the
-    /// coercion + default pre-resolved. `None` entries are routings
-    /// that didn't resolve at chain build time (renamed handle, etc.)
-    /// and silently skip per-frame.
+    /// New-style apply path. Non-empty iff the effect's [`ChainSpec`]
+    /// declared `bindings`. Each entry has its `HandleNode` target
+    /// already resolved to a runtime `Node` target via
+    /// [`ParamBinding::resolve_handles`]. Paired with [`binding_cache`]
+    /// so [`apply_param_bindings`] can skip writes when the outer
+    /// value hasn't changed — that's the keystone of "inner edits
+    /// survive a chain rebuild when the outer slot is at rest."
+    resolved_bindings: Vec<ParamBinding>,
+    binding_cache: LastAppliedCache,
+    /// Legacy apply path. Used when `resolved_bindings` is empty
+    /// (i.e. the effect still declares `routings` instead of
+    /// `bindings`). Position-indexed against `EffectMetadata.params`.
+    /// Each `Some` entry is one host param routed to one node param,
+    /// with the coercion + default pre-resolved. `None` entries are
+    /// routings that didn't resolve at chain build time (renamed
+    /// handle, etc.) and silently skip per-frame.
     resolved_routings: Vec<Option<ResolvedRouting>>,
     /// Where to apply ctx-driven params (time / beat). The first
     /// handle for now — composite effects with multiple ctx-driven
@@ -364,13 +375,42 @@ impl ChainGraph {
                 (spec.splice)(&mut graph, (prev_node, prev_out_port))
             };
             let SpliceResult { output, handles } = splice_result;
-            let resolved_routings = resolve_routings(spec, &handles);
+            // Branch on whether this effect ships with new-style
+            // `bindings` or legacy `routings`. Exactly one is non-empty
+            // for a given spec during the migration; both are empty for
+            // effects with no host-visible params.
+            let (resolved_bindings, binding_cache, resolved_routings) = if !spec.bindings.is_empty()
+            {
+                let mut resolved: Vec<ParamBinding> = Vec::with_capacity(spec.bindings.len());
+                for b in spec.bindings {
+                    match b.resolve_handles(&handles) {
+                        Some(rb) => resolved.push(rb),
+                        None => eprintln!(
+                            "[chain-graph] {}: ParamBinding `{}` references handle that splice \
+                             did not register; this binding will not apply.",
+                            spec.type_id.as_str(),
+                            b.id,
+                        ),
+                    }
+                }
+                let mut cache = LastAppliedCache::new();
+                cache.seed_from_bindings(&resolved);
+                (resolved, cache, Vec::new())
+            } else {
+                (
+                    Vec::new(),
+                    LastAppliedCache::new(),
+                    resolve_routings(spec, &handles),
+                )
+            };
             let ctx_target_node = handles.first().map(|(_, id)| *id);
             effect_nodes.push(EffectSlot {
                 effect_id: fx.id.clone(),
                 effect_type: fx.effect_type().clone(),
                 legacy_index: *legacy_index,
                 handles,
+                resolved_bindings,
+                binding_cache,
                 resolved_routings,
                 ctx_target_node,
             });
@@ -509,22 +549,48 @@ impl ChainGraph {
         // direct `ParamValues::insert` per param, no per-frame
         // allocation. Effects are looked up by their captured
         // `legacy_index` (stable across a topology-stable lifetime).
-        for slot in &self.effect_nodes {
+        for slot in &mut self.effect_nodes {
             let Some(fx) = effects.get(slot.legacy_index) else {
                 // Index drifted (caller mutated `effects` without
                 // letting the topology hash catch it). Tolerate
                 // rather than panic on a live stage.
                 continue;
             };
-            apply_spec_refresh(
-                &mut self.graph,
-                fx,
-                &slot.effect_type,
-                &slot.resolved_routings,
-                slot.ctx_target_node,
-                ctx.time,
-                ctx.beat,
-            );
+            if !slot.resolved_bindings.is_empty() {
+                // New-style: skip-on-unchanged via LastAppliedCache so
+                // per-card edits to inner-node params survive when the
+                // outer slot is at rest.
+                apply_param_bindings(
+                    &slot.resolved_bindings,
+                    &[],
+                    &mut self.graph,
+                    None,
+                    &fx.param_values,
+                    &mut slot.binding_cache,
+                );
+                if let Some(node) = slot.ctx_target_node {
+                    apply_ctx_params_at(
+                        &mut self.graph,
+                        node,
+                        &slot.effect_type,
+                        ctx.time,
+                        ctx.beat,
+                    );
+                }
+            } else {
+                // Legacy path — unconditional per-frame outer→inner
+                // overwrite. Will be retired once every effect has
+                // migrated to `bindings`.
+                apply_spec_refresh(
+                    &mut self.graph,
+                    fx,
+                    &slot.effect_type,
+                    &slot.resolved_routings,
+                    slot.ctx_target_node,
+                    ctx.time,
+                    ctx.beat,
+                );
+            }
         }
 
         // Install the upstream input texture into the source slot —

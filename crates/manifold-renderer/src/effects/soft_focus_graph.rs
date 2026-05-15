@@ -54,6 +54,7 @@ inventory::submit! {
     ChainSpec {
         type_id: EffectTypeId::SOFT_FOCUS_GRAPH,
         splice: splice_soft_focus,
+        bindings: &[],
         routings: &[
             Routing { param_id: "radius", target_handle: "blur", target_param: "radius", convert: ParamConvert::Float },
             Routing { param_id: "amount", target_handle: "mix", target_param: "amount", convert: ParamConvert::Float },

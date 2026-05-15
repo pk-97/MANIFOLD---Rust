@@ -83,6 +83,7 @@ inventory::submit! {
     ChainSpec {
         type_id: EffectTypeId::MIRROR,
         splice: splice_mirror,
+        bindings: &[],
         routings: &[
             Routing {
                 param_id: "amount",

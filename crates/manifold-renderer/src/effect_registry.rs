@@ -35,9 +35,14 @@ impl EffectRegistry {
 
         // Validate every registered ChainSpec at startup — every
         // routing must reference a handle that the spec's splice
-        // actually produces. Typos fail at process boot instead of
-        // silently dropping params at first render.
+        // actually produces, and every binding's spec must match
+        // its EffectMetadata.params entry. Typos and metadata drift
+        // fail at process boot instead of silently dropping params
+        // at first render.
         for err in crate::node_graph::validate_all_specs() {
+            eprintln!("[manifold-renderer] {err}");
+        }
+        for err in crate::node_graph::validate_binding_spec_parity() {
             eprintln!("[manifold-renderer] {err}");
         }
 

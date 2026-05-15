@@ -73,6 +73,15 @@ pub enum ParamTarget {
     /// where one outer name resolves to one or more inner-node
     /// parameters via the handle.
     Composite { outer_name: Cow<'static, str> },
+    /// Spec-time inner-node reference by handle name. Lives in
+    /// `&'static [ParamBinding]` arrays declared on a [`ChainSpec`]
+    /// before any graph exists. Resolved into [`ParamTarget::Node`]
+    /// at chain build time once the splice has produced its handles
+    /// map. See [`ParamBinding::resolve_handles`].
+    HandleNode {
+        handle: &'static str,
+        param: &'static str,
+    },
     /// Direct route to a single node parameter. Used by
     /// single-primitive effects (StylizedFeedback wraps just
     /// `Feedback`) or any case that doesn't need composite-level
@@ -171,11 +180,49 @@ impl ParamBinding {
             ParamTarget::Composite { outer_name } => handle
                 .expect("ParamTarget::Composite requires a CompositeHandle")
                 .set_param(graph, outer_name, pv),
+            ParamTarget::HandleNode { handle, param } => Err(GraphError::ParamNotFound {
+                node: NodeInstanceId(0),
+                param: format!(
+                    "unresolved HandleNode target (handle={handle:?}, inner_param={param:?}); \
+                     call ParamBinding::resolve_handles after splice before per-frame apply",
+                ),
+            }),
             ParamTarget::Node { node, param } => graph.set_param(*node, param, pv),
             ParamTarget::Custom(f) => {
                 f(graph, value);
                 Ok(())
             }
+        }
+    }
+
+    /// Resolve a spec-time [`ParamTarget::HandleNode`] target into a
+    /// runtime [`ParamTarget::Node`] using the handle map returned by
+    /// the chain's splice. Other target variants pass through unchanged.
+    ///
+    /// Returns `None` if the binding's handle name isn't present in the
+    /// map — caller logs and drops the binding (orphan routing,
+    /// effect refactor dropped the node, alias resolver missed it, etc.).
+    pub fn resolve_handles(
+        &self,
+        handles: &[(Cow<'static, str>, NodeInstanceId)],
+    ) -> Option<ParamBinding> {
+        match &self.target {
+            ParamTarget::HandleNode { handle, param } => {
+                let node_id = handles
+                    .iter()
+                    .find(|(h, _)| h.as_ref() == *handle)
+                    .map(|(_, id)| *id)?;
+                Some(ParamBinding {
+                    id: self.id.clone(),
+                    spec: self.spec.clone(),
+                    target: ParamTarget::Node {
+                        node: node_id,
+                        param,
+                    },
+                    convert: self.convert.clone(),
+                })
+            }
+            _ => Some(self.clone()),
         }
     }
 }
@@ -482,7 +529,7 @@ pub fn outer_routings_from_bindings(
                 route
             }
             ParamTarget::Node { node, param } => (*node, *param),
-            ParamTarget::Custom(_) => continue,
+            ParamTarget::HandleNode { .. } | ParamTarget::Custom(_) => continue,
         };
         let Some(handle_str) = id_to_handle.get(&node_id.0) else {
             // Inner node has no stable handle — without it the editor

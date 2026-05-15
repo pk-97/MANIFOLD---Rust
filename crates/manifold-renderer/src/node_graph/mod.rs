@@ -40,8 +40,9 @@ pub use effect_node::{
 pub use execution::Executor;
 pub use execution_plan::{ExecutionPlan, ExecutionStep, ResourceId, compile};
 pub use chain_spec::{
-    ChainSpec, Routing, SkipMode, SpecValidationError, SpliceResult, chain_spec_by_id,
-    lookup_handle, splice_def_into_chain, validate_all_specs,
+    BindingParityError, ChainSpec, Routing, SkipMode, SpecValidationError, SpliceResult,
+    chain_spec_by_id, lookup_handle, splice_def_into_chain, validate_all_specs,
+    validate_binding_spec_parity,
 };
 pub use graph::{Graph, NodeInstance};
 pub use metadata::metadata_by_id;

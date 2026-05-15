@@ -47,6 +47,7 @@ inventory::submit! {
     ChainSpec {
         type_id: EffectTypeId::NODE_GRAPH_TEST,
         splice: splice_node_graph_test,
+        bindings: &[],
         routings: &[
             Routing { param_id: "amount", target_handle: "mix", target_param: "amount", convert: ParamConvert::Float },
         ],

@@ -49,7 +49,7 @@ use crate::node_graph::boundary_nodes::{
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::graph::Graph;
 use crate::node_graph::metadata::metadata_by_id;
-use crate::node_graph::param_binding::ParamConvert;
+use crate::node_graph::param_binding::{ParamBinding, ParamConvert};
 use crate::node_graph::persistence::{PrimitiveRegistry, SerializedParamValue};
 
 /// Static spec — one per effect, registered via `inventory::submit!`.
@@ -61,10 +61,29 @@ pub struct ChainSpec {
     /// Returns the output endpoint + effect-local handle map.
     pub splice: fn(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult,
 
-    /// Outer-param → inner-worker routings. Position-correlated with
-    /// the matching `EffectMetadata.params` (the chain looks up the
-    /// metadata param's index by `param_id` and reads
-    /// `fx.param_values[idx]` per frame).
+    /// New-style host-visible parameter bindings. When non-empty,
+    /// these replace the legacy `routings` + matching
+    /// `EffectMetadata.params` declaration: each [`ParamBinding`]
+    /// carries both the outer slider's [`ParamSpec`] and the inner
+    /// routing target ([`ParamTarget::HandleNode`]) in one place.
+    ///
+    /// Per-frame value flow uses
+    /// [`apply_param_bindings`](crate::node_graph::apply_param_bindings)
+    /// with a [`LastAppliedCache`](crate::node_graph::LastAppliedCache)
+    /// seeded from these bindings' defaults — so per-card edits to
+    /// inner-node params survive when the outer slot is at rest, and
+    /// the outer reclaims control as soon as it moves.
+    ///
+    /// During Phase 1 migration, an effect declares either `bindings`
+    /// (new) or `routings` (legacy) — never both. The chain runtime
+    /// branches on whichever is non-empty.
+    pub bindings: &'static [ParamBinding],
+
+    /// **Legacy** outer-param → inner-worker routings. Position-
+    /// correlated with the matching `EffectMetadata.params` (the
+    /// chain looks up the metadata param's index by `param_id` and
+    /// reads `fx.param_values[idx]` per frame). Will be retired once
+    /// every shipping effect has migrated to `bindings`.
     pub routings: &'static [Routing],
 
     /// When the chain should drop this effect entirely (no workers
@@ -194,6 +213,26 @@ inventory::collect!(ChainSpec);
 /// ```
 #[macro_export]
 macro_rules! atomic_chain_spec {
+    // New-style: bindings only.
+    (
+        type_id: $type_id:expr,
+        primitive: $prim:ty,
+        handle: $handle:literal,
+        $(input_port: $input:literal,)?
+        bindings: $bindings:expr,
+        skip: $skip:expr $(,)?
+    ) => {
+        ::inventory::submit! {
+            $crate::node_graph::ChainSpec {
+                type_id: $type_id,
+                splice: $crate::atomic_chain_spec!(@splice_fn $prim, $handle $(, $input)?),
+                bindings: $bindings,
+                routings: &[],
+                skip: $skip,
+            }
+        }
+    };
+    // Legacy: routings only. Retire once every effect has migrated.
     (
         type_id: $type_id:expr,
         primitive: $prim:ty,
@@ -205,41 +244,44 @@ macro_rules! atomic_chain_spec {
         ::inventory::submit! {
             $crate::node_graph::ChainSpec {
                 type_id: $type_id,
-                splice: {
-                    fn splice(
-                        graph: &mut $crate::node_graph::Graph,
-                        source: (
-                            $crate::node_graph::NodeInstanceId,
-                            &'static str,
-                        ),
-                    ) -> $crate::node_graph::SpliceResult {
-                        let node = graph.add_node(::std::boxed::Box::new(<$prim>::new()));
-                        graph
-                            .connect(
-                                source,
-                                (node, $crate::atomic_chain_spec!(@port $($input)?)),
-                            )
-                            .expect(concat!(
-                                "wire source → ",
-                                stringify!($prim),
-                                ".",
-                                $crate::atomic_chain_spec!(@port $($input)?),
-                            ));
-                        $crate::node_graph::SpliceResult {
-                            output: (node, "out"),
-                            handles: ::std::vec![(
-                                ::std::borrow::Cow::Borrowed($handle),
-                                node,
-                            )],
-                        }
-                    }
-                    splice
-                },
+                splice: $crate::atomic_chain_spec!(@splice_fn $prim, $handle $(, $input)?),
+                bindings: &[],
                 routings: $routings,
                 skip: $skip,
             }
         }
     };
+    // Internal: splice closure. Same body for both arms above.
+    (@splice_fn $prim:ty, $handle:literal $(, $input:literal)?) => {{
+        fn splice(
+            graph: &mut $crate::node_graph::Graph,
+            source: (
+                $crate::node_graph::NodeInstanceId,
+                &'static str,
+            ),
+        ) -> $crate::node_graph::SpliceResult {
+            let node = graph.add_node(::std::boxed::Box::new(<$prim>::new()));
+            graph
+                .connect(
+                    source,
+                    (node, $crate::atomic_chain_spec!(@port $($input)?)),
+                )
+                .expect(concat!(
+                    "wire source → ",
+                    stringify!($prim),
+                    ".",
+                    $crate::atomic_chain_spec!(@port $($input)?),
+                ));
+            $crate::node_graph::SpliceResult {
+                output: (node, "out"),
+                handles: ::std::vec![(
+                    ::std::borrow::Cow::Borrowed($handle),
+                    node,
+                )],
+            }
+        }
+        splice
+    }};
     (@port) => { "in" };
     (@port $input:literal) => { $input };
 }
@@ -278,13 +320,15 @@ pub fn lookup_handle(
 
 /// Startup-time invariant check — runs every registered spec's
 /// `splice` against a throwaway graph and verifies that every
-/// routing's `target_handle` appears in the resulting handle map.
-/// Catches typos at process boot rather than at first render.
+/// routing's `target_handle` (and every binding's `HandleNode.handle`)
+/// appears in the resulting handle map. Catches typos at process boot
+/// rather than at first render.
 ///
 /// Returns the list of spec/routing pairs that failed. Empty result
 /// = every spec is internally consistent. Callers may log + skip the
 /// broken specs or panic, depending on policy.
 pub fn validate_all_specs() -> Vec<SpecValidationError> {
+    use crate::node_graph::param_binding::ParamTarget;
     let mut errors = Vec::new();
     for spec in inventory::iter::<ChainSpec> {
         let mut probe = Graph::new();
@@ -304,9 +348,127 @@ pub fn validate_all_specs() -> Vec<SpecValidationError> {
                 });
             }
         }
+        for binding in spec.bindings {
+            if let ParamTarget::HandleNode { handle, .. } = &binding.target
+                && !handle_set.contains(handle)
+            {
+                // Static bindings declared on a `ChainSpec` always carry
+                // `Cow::Borrowed` ids; owned-id bindings only flow through
+                // user-edited graphs and don't reach this validator.
+                let id: &'static str = match &binding.id {
+                    Cow::Borrowed(s) => s,
+                    Cow::Owned(_) => "<owned>",
+                };
+                errors.push(SpecValidationError {
+                    effect_id: spec.type_id.clone(),
+                    routing_param_id: id,
+                    missing_handle: handle,
+                });
+            }
+        }
     }
     errors
 }
+
+/// Parity check: when a spec declares both `bindings` and the matching
+/// effect's `EffectMetadata.params` is non-empty, every binding's
+/// `spec` must equal the corresponding `ParamSpec` in the metadata
+/// (matched by `id`). Drift here means the card UI / OSC / save path
+/// would see different metadata than the runtime apply path.
+///
+/// Empty result = no drift. During Phase 1 migration, effects flip
+/// from declaring `routings` to declaring `bindings`; this guard
+/// guarantees that flipping doesn't change the outer surface.
+///
+/// Run automatically as part of [`validate_all_specs`]; also exposed
+/// directly for fine-grained tests.
+pub fn validate_binding_spec_parity() -> Vec<BindingParityError> {
+    let mut errors = Vec::new();
+    for spec in inventory::iter::<ChainSpec> {
+        if spec.bindings.is_empty() {
+            continue;
+        }
+        let Some(metadata) = metadata_by_id(&spec.type_id) else {
+            continue;
+        };
+        if metadata.params.is_empty() {
+            continue;
+        }
+        // Match each binding to its metadata param by id; assert
+        // every metadata field matches.
+        for binding in spec.bindings {
+            let bid = binding.id.as_ref();
+            let Some(meta_param) = metadata.params.iter().find(|p| p.id == bid) else {
+                errors.push(BindingParityError {
+                    effect_id: spec.type_id.clone(),
+                    param_id: bid.to_string(),
+                    reason: "binding id has no matching EffectMetadata.params entry".into(),
+                });
+                continue;
+            };
+            if !param_specs_equal(&binding.spec, meta_param) {
+                errors.push(BindingParityError {
+                    effect_id: spec.type_id.clone(),
+                    param_id: bid.to_string(),
+                    reason: format!(
+                        "binding.spec differs from EffectMetadata.params entry: \
+                         binding={:?} metadata={:?}",
+                        binding.spec, meta_param,
+                    ),
+                });
+            }
+        }
+        // Also flag metadata params that have no matching binding —
+        // they would be invisible to the runtime apply path.
+        for meta_param in metadata.params {
+            if !spec.bindings.iter().any(|b| b.id.as_ref() == meta_param.id) {
+                errors.push(BindingParityError {
+                    effect_id: spec.type_id.clone(),
+                    param_id: meta_param.id.to_string(),
+                    reason: "EffectMetadata.params entry has no matching binding".into(),
+                });
+            }
+        }
+    }
+    errors
+}
+
+fn param_specs_equal(
+    a: &manifold_core::generator_registration::ParamSpec,
+    b: &manifold_core::generator_registration::ParamSpec,
+) -> bool {
+    a.id == b.id
+        && a.name == b.name
+        && a.min == b.min
+        && a.max == b.max
+        && a.default_value == b.default_value
+        && a.whole_numbers == b.whole_numbers
+        && a.is_toggle == b.is_toggle
+        && a.value_labels == b.value_labels
+        && a.format_string == b.format_string
+        && a.osc_suffix == b.osc_suffix
+}
+
+#[derive(Debug, Clone)]
+pub struct BindingParityError {
+    pub effect_id: EffectTypeId,
+    pub param_id: String,
+    pub reason: String,
+}
+
+impl std::fmt::Display for BindingParityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "ChainSpec[{}].bindings[{}]: {}",
+            self.effect_id.as_str(),
+            self.param_id,
+            self.reason,
+        )
+    }
+}
+
+impl std::error::Error for BindingParityError {}
 
 #[derive(Debug, Clone)]
 pub struct SpecValidationError {
@@ -478,4 +640,49 @@ fn resolve_output_port(graph: &Graph, node: NodeInstanceId, name: &str) -> Optio
         .iter()
         .map(|p| p.name)
         .find(|n| *n == name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every registered `ChainSpec` must pass `splice` validation —
+    /// every routing's `target_handle` and every binding's
+    /// `HandleNode.handle` must resolve against the splice's handle map.
+    /// Regressions here break per-frame param refresh and surface as
+    /// "the slider does nothing" in production.
+    #[test]
+    fn all_specs_validate_handles_at_startup() {
+        let errors = validate_all_specs();
+        assert!(
+            errors.is_empty(),
+            "ChainSpec handle validation failed:\n{}",
+            errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
+
+    /// For every effect that has migrated to `bindings`, the bindings'
+    /// `spec` field must equal the effect's `EffectMetadata.params`
+    /// entry of the same id, byte-for-byte. This is the gate that
+    /// catches drift during the Phase 1 migration: declaring a
+    /// binding with different metadata than the hand-written
+    /// `ParamSpec` would silently change the card UI / OSC / save
+    /// surface.
+    #[test]
+    fn migrated_effects_have_binding_spec_parity_with_metadata() {
+        let errors = validate_binding_spec_parity();
+        assert!(
+            errors.is_empty(),
+            "ParamBinding spec ↔ EffectMetadata.params parity failed:\n{}",
+            errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
 }
