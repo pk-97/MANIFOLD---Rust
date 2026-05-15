@@ -106,6 +106,17 @@ The only legitimate `cd` is if the user explicitly asks for it, or you need a tr
 - `rustfmt.toml`: `max_width = 100`, `use_field_init_shorthand = true`
 - Release: `lto = "thin"`, `codegen-units = 1`, `strip = "symbols"`, `panic = "abort"`
 
+### Search & Navigation
+
+Prefer modern tools — they're faster, gitignore-aware, and produce cleaner results:
+
+- **Text search**: `rg` (never plain `grep`)
+- **File listing**: `fd` (never plain `find`)
+- **Structural / AST queries**: `ast-grep` — use for "find all callers of fn X", "find all `impl Trait for *`", "find all uses of macro Y!", or any refactor where regex would false-positive on comments/strings. Example: `ast-grep --lang rust -p 'fn $NAME($$$) -> $RET { $$$ }'`
+- **Symbol-level (definition / references)**: the LSP tool (enabled via `ENABLE_LSP_TOOL=1`) when you have an exact identifier
+
+If you catch yourself reaching for `grep` or `find`, stop and use `rg` / `fd`. If you catch yourself writing a regex to match a code shape (function signatures, impl blocks, macro invocations), reach for `ast-grep` instead.
+
 ## EXTERNAL DEPENDENCIES
 
 ### AbletonOSC patch (perform-mode HUD)
