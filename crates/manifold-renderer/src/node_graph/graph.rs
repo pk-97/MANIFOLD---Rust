@@ -110,6 +110,23 @@ impl Graph {
         self.handles.get(handle).copied()
     }
 
+    /// Register a handle for a node that was added via plain
+    /// [`add_node`]. Used by ChainSpec snapshot construction where the
+    /// splice function adds nodes anonymously and the handle map
+    /// (effect-local, returned in `SpliceResult`) needs to be projected
+    /// onto the snapshot graph so the editor inspector can match
+    /// outer-routing handle names against `NodeSnapshot.node_handle`.
+    ///
+    /// Panics on duplicate handle, same as [`add_node_named`].
+    pub fn register_handle(&mut self, handle: &'static str, node: NodeInstanceId) {
+        if let Some(prev) = self.handles.insert(handle, node) {
+            panic!(
+                "Graph::register_handle: duplicate handle '{handle}' \
+                 (already mapped to {prev:?}, just tried to remap to {node:?})."
+            );
+        }
+    }
+
     /// Iterate the (handle, node id) pairs registered on this graph.
     pub fn handles(&self) -> impl Iterator<Item = (&'static str, NodeInstanceId)> + '_ {
         self.handles.iter().map(|(k, v)| (*k, *v))

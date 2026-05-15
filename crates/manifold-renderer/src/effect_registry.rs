@@ -58,9 +58,11 @@ impl EffectRegistry {
     /// Snapshot the graph of a specific registered effect type.
     ///
     /// Resolution order:
-    /// 1. Effect overrides `graph_snapshot()` — return that (graph-backed
-    ///    effects use this).
-    /// 2. Otherwise synthesize a degenerate
+    /// 1. Effect declares a [`ChainSpec`] — build its canonical graph
+    ///    via `spec.build_canonical_graph()` and return that snapshot.
+    /// 2. Effect overrides `PostProcessEffect::graph_snapshot()` —
+    ///    return that (graph-backed effects use this until migrated).
+    /// 3. Otherwise synthesize a degenerate
     ///    `Source → \<EffectName\> → FinalOutput` snapshot from the
     ///    effect's metadata. Lets the editor canvas show a cog-icon
     ///    view for every effect, even ones still implemented as a
@@ -71,15 +73,21 @@ impl EffectRegistry {
         &self,
         type_id: &EffectTypeId,
     ) -> Option<crate::node_graph::GraphSnapshot> {
+        // Path 1: ChainSpec. Authoritative once an effect has migrated.
+        if let Some(spec) = crate::node_graph::chain_spec_by_id(type_id) {
+            let g = spec.build_canonical_graph();
+            let mut snap = crate::node_graph::GraphSnapshot::from_graph(&g);
+            snap.outer_routings = outer_routings_from_spec(spec, &g);
+            return Some(snap);
+        }
+        // Path 2: legacy graph-backed PostProcessEffect (un-migrated
+        // graph-backed effects like SoftFocus, StylizedFeedback).
         let processor = self.processors.get(type_id)?;
         if let Some(mut snap) = processor.graph_snapshot() {
-            // Stitch on the outer→inner routing list so the editor
-            // can gray out inner rows the outer card drives every
-            // frame. The effect-author trait method is the source of
-            // truth; we just copy it onto the snapshot at the seam.
             snap.outer_routings = processor.outer_param_routings();
             return Some(snap);
         }
+        // Path 3: legacy single-pass effect — synthesized placeholder.
         let metadata = crate::node_graph::metadata_by_id(type_id)?;
         Some(synthesized_legacy_snapshot(metadata))
     }
@@ -92,11 +100,63 @@ impl EffectRegistry {
         &self,
         type_id: &EffectTypeId,
     ) -> Vec<crate::node_graph::OuterParamRouting> {
+        if let Some(spec) = crate::node_graph::chain_spec_by_id(type_id) {
+            let g = spec.build_canonical_graph();
+            return outer_routings_from_spec(spec, &g);
+        }
         self.processors
             .get(type_id)
             .map(|p| p.outer_param_routings())
             .unwrap_or_default()
     }
+}
+
+/// Translate a [`ChainSpec`]'s routings into [`OuterParamRouting`]s
+/// the editor inspector consumes (which inner rows to gray out as
+/// "driven by '<outer>'"). One entry per spec routing whose target
+/// handle resolves on the just-built canonical graph.
+fn outer_routings_from_spec(
+    spec: &'static crate::node_graph::ChainSpec,
+    graph: &crate::node_graph::Graph,
+) -> Vec<crate::node_graph::OuterParamRouting> {
+    use crate::node_graph::OuterParamRouting;
+    let Some(metadata) = crate::node_graph::metadata_by_id(&spec.type_id) else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(spec.routings.len());
+    for routing in spec.routings {
+        let Some(param_spec) = metadata.params.iter().find(|p| p.id == routing.param_id) else {
+            continue;
+        };
+        // Resolve target handle into the canonical-graph node id, then
+        // recover that node's stable handle string for the editor. For
+        // canonical specs the node is added without a global handle —
+        // we have to walk the graph's handles map to find one if it
+        // was registered, or fall back to the spec's local name.
+        let canonical_handles: Vec<(String, crate::node_graph::NodeInstanceId)> = graph
+            .handles()
+            .map(|(h, id)| (h.to_string(), id))
+            .collect();
+        // The editor key for `node_handle` is whatever the canvas
+        // shows the user. Splice doesn't register global handles, so
+        // for now we surface the effect-local handle name directly —
+        // the editor uses it to look up the corresponding node in the
+        // snapshot via `NodeSnapshot.node_handle` which IS set when
+        // a graph node has a registered handle.
+        //
+        // For ChainSpec'd effects whose splice uses `add_node` (no
+        // global handle), the snapshot's node_handle is None and the
+        // editor falls back to node type id for display. The routing
+        // information here still tells the editor *which* outer name
+        // drives which inner param.
+        let _ = canonical_handles;
+        out.push(OuterParamRouting {
+            outer_label: param_spec.name.to_string(),
+            node_handle: routing.target_handle.to_string(),
+            inner_param: routing.target_param.to_string(),
+        });
+    }
+    out
 }
 
 /// Build a `Source → \<legacy\> → FinalOutput` snapshot for an effect

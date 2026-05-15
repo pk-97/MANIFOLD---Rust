@@ -1,7 +1,13 @@
+use std::borrow::Cow;
+
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
+use crate::node_graph::primitives::DitherPattern;
+use crate::node_graph::{
+    ChainSpec, Graph, NodeInstanceId, ParamConvert, Routing, SkipMode, SpliceResult,
+};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
@@ -25,6 +31,27 @@ inventory::submit! {
     EffectFactory {
         id: EffectTypeId::DITHER,
         create: |device| Box::new(DitherFX::new(device)),
+    }
+}
+
+fn splice_dither(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult {
+    let node = graph.add_node(Box::new(DitherPattern::new()));
+    graph.connect(source, (node, "in")).expect("wire source → DitherPattern.in");
+    SpliceResult {
+        output: (node, "out"),
+        handles: vec![(Cow::Borrowed("dither"), node)],
+    }
+}
+
+inventory::submit! {
+    ChainSpec {
+        type_id: EffectTypeId::DITHER,
+        splice: splice_dither,
+        routings: &[
+            Routing { param_id: "amount", target_handle: "dither", target_param: "amount", convert: ParamConvert::Float },
+            Routing { param_id: "algo", target_handle: "dither", target_param: "algorithm", convert: ParamConvert::EnumRound },
+        ],
+        skip: SkipMode::OnZero { param_id: "amount" },
     }
 }
 

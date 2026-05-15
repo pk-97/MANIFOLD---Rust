@@ -111,10 +111,24 @@ impl ChainSpec {
     /// Build a standalone graph containing only this effect, wrapped
     /// in Source / FinalOutput boundaries. Used for the editor canvas
     /// snapshot — the chain itself never builds graphs this way.
+    ///
+    /// Effect-local handles from the splice result are also projected
+    /// onto the graph globally so the editor's outer-routing gray-out
+    /// can match `OuterParamRouting.node_handle` against the snapshot's
+    /// `NodeSnapshot.node_handle`. Canonical splices always return
+    /// `Cow::Borrowed` handles (compile-time literals), so no
+    /// allocation is required here.
     pub fn build_canonical_graph(&self) -> Graph {
         let mut graph = Graph::new();
         let src = graph.add_node_named("source", Box::new(Source::new()));
         let result = (self.splice)(&mut graph, (src, "out"));
+        for (handle, node_id) in &result.handles {
+            if let Cow::Borrowed(name) = handle {
+                graph.register_handle(name, *node_id);
+            }
+            // Owned handles only flow in via `splice_def_into_chain`,
+            // which doesn't go through this path. Defensive skip.
+        }
         let final_out = graph.add_node_named("final_output", Box::new(FinalOutput::new()));
         graph
             .connect(result.output, (final_out, "in"))

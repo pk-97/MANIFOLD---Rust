@@ -1,7 +1,13 @@
+use std::borrow::Cow;
+
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
+use crate::node_graph::primitives::ClampStretch;
+use crate::node_graph::{
+    ChainSpec, Graph, NodeInstanceId, ParamConvert, Routing, SkipMode, SpliceResult,
+};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
@@ -26,6 +32,31 @@ inventory::submit! {
     EffectFactory {
         id: EffectTypeId::EDGE_STRETCH,
         create: |device| Box::new(EdgeStretchFX::new(device)),
+    }
+}
+
+fn splice_edge_stretch(
+    graph: &mut Graph,
+    source: (NodeInstanceId, &'static str),
+) -> SpliceResult {
+    let node = graph.add_node(Box::new(ClampStretch::new()));
+    graph.connect(source, (node, "in")).expect("wire source → ClampStretch.in");
+    SpliceResult {
+        output: (node, "out"),
+        handles: vec![(Cow::Borrowed("edge_stretch"), node)],
+    }
+}
+
+inventory::submit! {
+    ChainSpec {
+        type_id: EffectTypeId::EDGE_STRETCH,
+        splice: splice_edge_stretch,
+        routings: &[
+            Routing { param_id: "amount", target_handle: "edge_stretch", target_param: "amount", convert: ParamConvert::Float },
+            Routing { param_id: "width", target_handle: "edge_stretch", target_param: "source_width", convert: ParamConvert::Float },
+            Routing { param_id: "dir", target_handle: "edge_stretch", target_param: "mode", convert: ParamConvert::EnumRound },
+        ],
+        skip: SkipMode::OnZero { param_id: "amount" },
     }
 }
 

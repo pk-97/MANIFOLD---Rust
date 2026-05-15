@@ -1,7 +1,13 @@
+use std::borrow::Cow;
+
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
+use crate::node_graph::primitives::Invert;
+use crate::node_graph::{
+    ChainSpec, Graph, NodeInstanceId, ParamConvert, Routing, SkipMode, SpliceResult,
+};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
@@ -24,6 +30,31 @@ inventory::submit! {
     EffectFactory {
         id: EffectTypeId::INVERT_COLORS,
         create: |device| Box::new(InvertColorsFX::new(device)),
+    }
+}
+
+fn splice_invert(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult {
+    let node = graph.add_node(Box::new(Invert::new()));
+    graph.connect(source, (node, "in")).expect("wire source → Invert.in");
+    SpliceResult {
+        output: (node, "out"),
+        handles: vec![(Cow::Borrowed("invert"), node)],
+    }
+}
+
+inventory::submit! {
+    ChainSpec {
+        type_id: EffectTypeId::INVERT_COLORS,
+        splice: splice_invert,
+        routings: &[
+            Routing {
+                param_id: "amount",
+                target_handle: "invert",
+                target_param: "intensity",
+                convert: ParamConvert::Float,
+            },
+        ],
+        skip: SkipMode::OnZero { param_id: "amount" },
     }
 }
 
