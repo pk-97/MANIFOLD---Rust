@@ -31,11 +31,12 @@ use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::composites::{CompositeHandle, MIRROR_TYPE_ID, build_mirror};
+use crate::node_graph::primitives::{Mix, Transform};
 use crate::node_graph::{
-    ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId,
-    ParamBinding, ParamConvert, ParamTarget, PortType, ResourceId, Slot, Source,
-    UserParamBindingRuntime, apply_param_bindings, binding_value, compile,
-    outer_routings_from_bindings, user_binding_to_runtime,
+    ChainSpec, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend,
+    NodeInstanceId, ParamBinding, ParamConvert, ParamTarget, ParamValue, PortType, ResourceId,
+    Routing, SkipMode, Slot, Source, SpliceResult, UserParamBindingRuntime, apply_param_bindings,
+    binding_value, compile, outer_routings_from_bindings, user_binding_to_runtime,
 };
 use crate::render_target::RenderTarget;
 
@@ -58,6 +59,71 @@ inventory::submit! {
     EffectFactory {
         id: EffectTypeId::MIRROR,
         create: |device| Box::new(MirrorFX::new(device)),
+    }
+}
+
+/// Transform mode index for FoldX. Matches `TRANSFORM_MODES`.
+const MIRROR_FOLD_X: u32 = 6;
+
+/// Legacy mode (0=Horiz / 1=Vert / 2=Both) → Transform mode enum
+/// (6=FoldX / 7=FoldY / 8=FoldBoth). Indexed by the host slider value.
+const MIRROR_MODE_REMAP: &[u32] = &[6, 7, 8];
+
+/// Splice Mirror's workers (`Transform` + `Mix`) directly into a chain
+/// graph. The source endpoint fans out — `Transform` reads it as
+/// `source`, `Mix` reads it as `a` (dry path). `Mix.amount` lerps
+/// between the source and the folded result.
+fn splice_mirror(
+    graph: &mut Graph,
+    source: (NodeInstanceId, &'static str),
+) -> SpliceResult {
+    let xform = graph.add_node(Box::new(Transform::new()));
+    graph
+        .set_param(xform, "mode", ParamValue::Enum(MIRROR_FOLD_X))
+        .expect("Transform exposes a `mode` enum param");
+    graph
+        .connect(source, (xform, "source"))
+        .expect("wire source → Transform.source");
+
+    let mix = graph.add_node(Box::new(Mix::new()));
+    graph
+        .connect(source, (mix, "a"))
+        .expect("wire source → Mix.a");
+    graph
+        .connect((xform, "out"), (mix, "b"))
+        .expect("wire Transform.out → Mix.b");
+    graph
+        .set_param(mix, "amount", ParamValue::Float(1.0))
+        .expect("Mix exposes an `amount` float param");
+
+    SpliceResult {
+        output: (mix, "out"),
+        handles: vec![
+            (Cow::Borrowed("uv_transform"), xform),
+            (Cow::Borrowed("mix"), mix),
+        ],
+    }
+}
+
+inventory::submit! {
+    ChainSpec {
+        type_id: EffectTypeId::MIRROR,
+        splice: splice_mirror,
+        routings: &[
+            Routing {
+                param_id: "amount",
+                target_handle: "mix",
+                target_param: "amount",
+                convert: ParamConvert::Float,
+            },
+            Routing {
+                param_id: "mode",
+                target_handle: "uv_transform",
+                target_param: "mode",
+                convert: ParamConvert::EnumRemap(Cow::Borrowed(MIRROR_MODE_REMAP)),
+            },
+        ],
+        skip: SkipMode::OnZero { param_id: "amount" },
     }
 }
 

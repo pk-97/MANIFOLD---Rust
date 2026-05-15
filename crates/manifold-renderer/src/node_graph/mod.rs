@@ -11,6 +11,7 @@ pub mod atomic;
 mod backend;
 mod bindings;
 mod boundary_nodes;
+mod chain_spec;
 pub mod composites;
 mod effect_graphs;
 mod effect_node;
@@ -45,6 +46,10 @@ pub use effect_node::{
 };
 pub use execution::Executor;
 pub use execution_plan::{ExecutionPlan, ExecutionStep, ResourceId, compile};
+pub use chain_spec::{
+    ChainSpec, Routing, SkipMode, SpecValidationError, SpliceResult, chain_spec_by_id,
+    lookup_handle, splice_def_into_chain, validate_all_specs,
+};
 pub use graph::{Graph, NodeInstance};
 pub use legacy_adapter::{LEGACY_TYPE_ID_PREFIX, LegacyPostProcessNode, metadata_by_id};
 pub use metal_backend::MetalBackend;
