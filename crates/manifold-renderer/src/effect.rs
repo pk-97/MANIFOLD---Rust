@@ -20,55 +20,30 @@ pub struct EffectContext {
     /// 0 = master, layer_index+1 = layer, hash(clip_id) = clip.
     pub owner_key: i64,
     pub is_clip_level: bool,
-    /// Precomputed cross-chain param: EdgeStretch source width.
-    /// Unity ref: EffectContext.FindChainParam(EffectType.EdgeStretch, 1, 0.5625f)
-    /// Filled by effect_chain before calling apply. Used by VoronoiPrism.
-    pub edge_stretch_width: f32,
     /// Global frame counter — equivalent to Unity's Time.frameCount.
     /// Used by BlobTrackingFX to throttle GPU readbacks.
     pub frame_count: i64,
 }
 
-/// Find a parameter value from another effect in a chain.
-/// Returns the param value if an enabled effect of the given type exists
-/// in the chain, otherwise returns the default value.
-/// Unity ref: EffectContext.cs FindChainParam()
-pub fn find_chain_param(
-    chain: &[EffectInstance],
-    effect_type: &EffectTypeId,
-    param_index: usize,
-    default: f32,
-) -> f32 {
-    chain
-        .iter()
-        .find(|fx| fx.effect_type() == effect_type && fx.enabled)
-        .and_then(|fx| fx.param_values.get(param_index).map(|p| p.value))
-        .unwrap_or(default)
-}
-
-/// Default skip check: returns true when param[0] <= 0 (effect has no amount).
-/// Unity ref: SimpleBlitEffect.cs line 37
-pub fn should_skip_default(fx: &EffectInstance) -> bool {
-    fx.param_values.first().map(|p| p.value).unwrap_or(0.0) <= 0.0
-}
-
 /// GPU-aware post-process effect processor.
-/// One singleton per EffectTypeId in the registry. Per-owner state (if any)
-/// lives inside each processor, keyed by `EffectContext::owner_key`.
+///
+/// Singleton per `EffectTypeId` in [`EffectRegistry`]. After the splice
+/// migration only a handful of methods are still load-bearing:
+///
+/// - `apply` / `clear_state` — called by the monolithic-wrapper
+///   primitives (AutoGain, BlobTracking, Infrared, WireframeDepth,
+///   QuadMirror) to drive the legacy compute path.
+/// - `resize` / `flush_background_work` — called by `EffectRegistry`
+///   on render-resolution changes and per export frame respectively.
+///
+/// Every shipping effect now wires its host params + frame-by-frame
+/// dispatch through `ChainSpec`; the trait stays only for the four
+/// methods above.
 pub trait PostProcessEffect: Send {
     fn effect_type(&self) -> &EffectTypeId;
 
-    /// Returns true when the effect should be skipped entirely (no GPU work,
-    /// no buffer swap). The chain checks this BEFORE calling apply().
-    /// Unity ref: SimpleBlitEffect.ShouldSkip() — checked by CompositorStack.
-    /// Default: skip when param[0] <= 0.
-    fn should_skip(&self, fx: &EffectInstance) -> bool {
-        should_skip_default(fx)
-    }
-
     /// Apply the effect. Reads source, writes to target.
     /// The caller swaps buffers after each effect.
-    #[allow(clippy::too_many_arguments)]
     fn apply(
         &mut self,
         gpu: &mut GpuEncoder,
@@ -88,45 +63,4 @@ pub trait PostProcessEffect: Send {
 
     /// Recreate resolution-dependent resources.
     fn resize(&mut self, _device: &manifold_gpu::GpuDevice, _width: u32, _height: u32) {}
-
-    /// Clean up per-owner GPU state for a specific owner.
-    /// No-op for non-stateful effects. Stateful effects override to release
-    /// per-owner textures/buffers (e.g., Feedback, Bloom, PixelSort).
-    /// Called when a clip stops to prevent unbounded GPU memory growth.
-    fn cleanup_owner_state(&mut self, _owner_key: i64) {}
-
-    /// Read-only snapshot of this effect's internal node graph, for the
-    /// editor UI. Default: `None` — non-graph effects have nothing to
-    /// show. Graph-backed effects override this to walk their internal
-    /// `Graph` and return a `GraphSnapshot`. Called from the content
-    /// thread once per frame while the editor window is open; cost
-    /// scales with the graph size, so keep it cheap.
-    fn graph_snapshot(&self) -> Option<crate::node_graph::GraphSnapshot> {
-        None
-    }
-
-    /// Inner-node params this effect's outer effect-card sliders
-    /// drive every frame. The editor inspector renders the affected
-    /// rows as read-only with a "Driven by '<outer>'" hint so a user
-    /// editing an inner param sees why their change doesn't stick.
-    ///
-    /// Default: empty — non-routed effects (atomic single-node FX) and
-    /// effects that haven't declared their routings to the editor
-    /// surface return nothing. Composite-shaped effects override.
-    fn outer_param_routings(&self) -> Vec<crate::node_graph::OuterParamRouting> {
-        Vec::new()
-    }
-
-    /// Replace this effect's internal graph with one materialized from
-    /// `def`. Default: no-op — non-graph effects ignore the call.
-    /// Graph-backed effects override to rebuild their `Graph`, plan,
-    /// resource lookups, and composite handle from the def, then
-    /// invalidate cached render state so the next frame re-allocates
-    /// from scratch.
-    ///
-    /// Called by the chain builder when `EffectInstance.graph` is
-    /// `Some(def)` — i.e., the user has overridden the catalog default
-    /// topology for this instance. See `docs/NODE_GRAPH_SYSTEM.md`
-    /// Phase 1 for the per-card-divergence model.
-    fn apply_graph_def(&mut self, _def: &manifold_core::effect_graph_def::EffectGraphDef) {}
 }

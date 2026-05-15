@@ -2,10 +2,9 @@
 //! legacy `VoronoiPrismFX` effect. Twelfth §6.1 migration; fused
 //! composite.
 //!
-//! The legacy effect reads `source_width` from the chain context
-//! (`EffectContext::edge_stretch_width`, populated by an upstream
-//! EdgeStretch). The parity test pins `source_width` to the
-//! harness's default ctx value (0.5625) on both paths.
+//! `source_width` is now a real slider on the effect's third param
+//! slot; the parity test pins it to the metadata default (0.5625)
+//! on both paths.
 
 mod parity;
 
@@ -52,11 +51,7 @@ fn voronoi_prism_is_pixel_exact_across_fixtures_and_setups() {
                         .set_param(prim_id, "beat", ParamValue::Float(ctx.beat))
                         .unwrap();
                     graph
-                        .set_param(
-                            prim_id,
-                            "source_width",
-                            ParamValue::Float(ctx.edge_stretch_width),
-                        )
+                        .set_param(prim_id, "source_width", ParamValue::Float(0.5625))
                         .unwrap();
                 },
             );

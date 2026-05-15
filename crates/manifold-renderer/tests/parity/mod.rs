@@ -625,7 +625,6 @@ pub fn default_ctx(width: u32, height: u32) -> EffectContext {
         output_height: height,
         owner_key: 0,
         is_clip_level: false,
-        edge_stretch_width: 0.5625,
         frame_count: 0,
     }
 }

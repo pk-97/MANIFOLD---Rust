@@ -220,12 +220,6 @@ impl EffectChain {
         let enabled_count = effects.iter().filter(|fx| fx.enabled).count() as u64;
         CHAIN_EFFECT_COUNT.fetch_add(enabled_count, Ordering::Relaxed);
 
-        // No cross-chain param scan — VoronoiPrism used to read
-        // EdgeStretch's `width` here via `find_chain_param`, but the
-        // splice migration replaced that hidden coupling with an
-        // explicit `source_width` slider on VoronoiPrism's card.
-        let chain_ctx = ctx;
-
         // Fast path: try to render the whole chain through one
         // cached `Graph`. Bails (returns `false`) for chains with
         // partial-wet-dry groups, unmapped effects, etc. — those
@@ -237,7 +231,7 @@ impl EffectChain {
         // verification (Phase 0 multi-segment Mix support eliminated
         // the only topology that reached it; every shipped effect has
         // a primitive or LegacyPostProcessNode mapping).
-        let ran = self.try_run_chain_graph(gpu, input_texture, effects, groups, chain_ctx);
+        let ran = self.try_run_chain_graph(gpu, input_texture, effects, groups, ctx);
         CHAIN_DISPATCH_NS.fetch_add(dispatch_t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
         if ran {
             self.chain_graph_output()

@@ -1015,7 +1015,6 @@ impl LayerCompositor {
                         output_height: frame.output_height,
                         owner_key: layer_id_owner_key(ld.layer_id),
                         is_clip_level: false,
-                        edge_stretch_width: 0.5625,
                         frame_count: frame.frame_count as i64,
                     };
                     Self::apply_effects(
@@ -1282,7 +1281,6 @@ impl LayerCompositor {
                                 output_height: frame.output_height,
                                 owner_key: led_group_owner_key(group.layer_id),
                                 is_clip_level: false,
-                                edge_stretch_width: 0.5625,
                                 frame_count: frame.frame_count as i64,
                             };
                             match Self::apply_effects(
@@ -1480,7 +1478,6 @@ impl LayerCompositor {
                     output_height: frame.output_height,
                     owner_key: group_id_owner_key(group_id),
                     is_clip_level: false,
-                    edge_stretch_width: 0.5625,
                     frame_count: frame.frame_count as i64,
                 };
                 let result = Self::apply_effects(
@@ -1729,7 +1726,6 @@ impl LayerCompositor {
                             output_height: frame.output_height,
                             owner_key: layer_id_owner_key(ld.layer_id),
                             is_clip_level: false,
-                            edge_stretch_width: 0.5625,
                             frame_count: frame.frame_count as i64,
                         };
                         Self::apply_effects(
@@ -1887,7 +1883,6 @@ impl Compositor for LayerCompositor {
                 output_height: frame.output_height,
                 owner_key: 0,
                 is_clip_level: false,
-                edge_stretch_width: 0.5625,
                 frame_count: frame.frame_count as i64,
             };
 
@@ -1967,7 +1962,6 @@ impl Compositor for LayerCompositor {
                     output_height: frame.output_height,
                     owner_key: LED_MASTER_OWNER_KEY,
                     is_clip_level: false,
-                    edge_stretch_width: 0.5625,
                     frame_count: frame.frame_count as i64,
                 };
 

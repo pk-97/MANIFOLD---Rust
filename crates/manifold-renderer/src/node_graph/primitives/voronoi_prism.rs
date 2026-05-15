@@ -3,12 +3,11 @@
 //! Twelfth §6.1 migration; fused composite.
 //!
 //! Per-cell UV remapping with beat-synchronized pop-in and per-cell
-//! visibility hash (~40% of cells go dark per beat). The legacy
-//! effect pulls `source_width` from the chain via
-//! `EffectContext::edge_stretch_width` (a cross-effect read from an
-//! upstream EdgeStretch); the primitive accepts that resolved width
-//! as a parameter so the contract is explicit at the graph
-//! boundary.
+//! visibility hash (~40% of cells go dark per beat). `source_width`
+//! is a regular parameter — previously this was a hidden cross-read
+//! from an upstream EdgeStretch's width slider, but the splice
+//! migration replaced that with an explicit slider on the
+//! VoronoiPrism card.
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 

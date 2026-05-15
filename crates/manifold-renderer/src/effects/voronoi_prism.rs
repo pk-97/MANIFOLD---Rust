@@ -116,7 +116,7 @@ impl PostProcessEffect for VoronoiPrismFX {
             cell_count: p.get(1).map(|pv| pv.value).unwrap_or(16.0),
             beat: ctx.beat,
             aspect_ratio: ctx.width as f32 / ctx.height as f32,
-            source_width: ctx.edge_stretch_width,
+            source_width: p.get(2).map(|pv| pv.value).unwrap_or(0.5625),
             _pad0: 0.0,
             _pad1: 0.0,
             _pad2: 0.0,

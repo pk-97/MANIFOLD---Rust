@@ -11,10 +11,10 @@
 //! Primitive state (mip pyramids, feedback buffers, depth workers)
 //! lives inside the boxed [`EffectNode`] owned by the cached
 //! [`Graph`]. Per-frame param changes refresh in place via
-//! [`refresh_effect_params_at`] / [`apply_ctx_params_at`]; topology
-//! changes (effect added/removed/reordered/type-swapped, group
-//! enabled/disabled toggle, group crossing the 1.0 wet/dry
-//! boundary, render-resolution change) rebuild from scratch.
+//! [`apply_spec_refresh`]; topology changes (effect added /
+//! removed / reordered / type-swapped, group enabled / disabled
+//! toggle, group crossing the 1.0 wet/dry boundary, render-resolution
+//! change) rebuild from scratch.
 //!
 //! ## Build-time wiring
 //!
@@ -35,7 +35,7 @@
 //! ## Per-frame cost
 //!
 //! - 1 `copy_texture_to_texture` (upstream input → source slot)
-//! - N `refresh_effect_params_at` / `apply_ctx_params_at` calls
+//! - N `apply_spec_refresh` calls (routings + ctx-driven params)
 //! - K `set_param` calls (one per Mix node, refreshing `amount`)
 //! - 1 `execute_frame_with_gpu` covering N + K + 2 step iterations
 //!   (Source + N effects + K Mix nodes + FinalOutput)
@@ -192,10 +192,9 @@ struct EffectSlot {
     /// that didn't resolve at chain build time (renamed handle, etc.)
     /// and silently skip per-frame.
     resolved_routings: Vec<Option<ResolvedRouting>>,
-    /// Where to apply ctx-driven params (time / beat /
-    /// edge_stretch_width). The first handle for now — composite
-    /// effects with multiple ctx-driven workers will need a richer
-    /// resolution rule when we get there.
+    /// Where to apply ctx-driven params (time / beat). The first
+    /// handle for now — composite effects with multiple ctx-driven
+    /// workers will need a richer resolution rule when we get there.
     ctx_target_node: Option<NodeInstanceId>,
 }
 
@@ -525,7 +524,6 @@ impl ChainGraph {
                 slot.ctx_target_node,
                 ctx.time,
                 ctx.beat,
-                ctx.edge_stretch_width,
             );
         }
 
@@ -556,7 +554,7 @@ impl ChainGraph {
             // Forward host frame counter so legacy effects (DoF /
             // WireframeDepth / BlobTracking) dispatched via the
             // ChainGraph fast path can throttle correctly. Was
-            // previously hardcoded to 0 in legacy_adapter, breaking
+            // previously hardcoded to 0 in the adapter, breaking
             // throttle gates.
             frame_count: ctx.frame_count,
         };
@@ -679,9 +677,8 @@ fn resolve_routings(
 
 /// Per-frame param refresh for a `SlotRefresh::Spec` slot. Routes
 /// host-visible params via `resolved`, then injects ctx-driven params
-/// (time / beat / edge_stretch_width) into `ctx_target_node` for the
-/// handful of effects that consume them.
-#[allow(clippy::too_many_arguments)]
+/// (time / beat) into `ctx_target_node` for the handful of effects
+/// that consume them.
 fn apply_spec_refresh(
     graph: &mut Graph,
     fx: &EffectInstance,
@@ -690,7 +687,6 @@ fn apply_spec_refresh(
     ctx_target_node: Option<NodeInstanceId>,
     time: f32,
     beat: f32,
-    edge_stretch_width: f32,
 ) {
     for (i, slot) in resolved.iter().enumerate() {
         let Some(r) = slot else { continue };
@@ -703,14 +699,29 @@ fn apply_spec_refresh(
         graph.set_param_unchecked(r.node_id, r.target_param, pv);
     }
     if let Some(node) = ctx_target_node {
-        crate::node_graph::apply_ctx_params_at(
-            graph,
-            node,
-            effect_type,
-            time,
-            beat,
-            edge_stretch_width,
-        );
+        apply_ctx_params_at(graph, node, effect_type, time, beat);
+    }
+}
+
+/// Inject ctx-derived primitive-only params (`time` / `beat`) onto the
+/// effect's `ctx_target_node`. A handful of primitives — Glitch,
+/// Strobe, VoronoiPrism, Watercolor — expose these as regular params
+/// that the splice runtime fills from the per-frame `EffectContext`
+/// each frame so their shaders see the same clock the legacy path did.
+fn apply_ctx_params_at(
+    graph: &mut Graph,
+    node_id: NodeInstanceId,
+    effect_type: &EffectTypeId,
+    time: f32,
+    beat: f32,
+) {
+    let mut set = |name: &'static str, value: ParamValue| {
+        let _ = graph.set_param(node_id, name, value);
+    };
+    match effect_type.as_str() {
+        "Glitch" | "Watercolor" => set("time", ParamValue::Float(time)),
+        "Strobe" | "VoronoiPrism" => set("beat", ParamValue::Float(beat)),
+        _ => {}
     }
 }
 
