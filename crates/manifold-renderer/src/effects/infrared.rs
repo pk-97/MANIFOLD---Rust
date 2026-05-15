@@ -1,13 +1,9 @@
-use std::borrow::Cow;
-
 use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Infrared;
-use crate::node_graph::{
-    ChainSpec, Graph, NodeInstanceId, ParamConvert, Routing, SkipMode, SpliceResult,
-};
+use crate::node_graph::{ParamConvert, Routing, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
@@ -35,26 +31,16 @@ inventory::submit! {
     }
 }
 
-fn splice_infrared(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult {
-    let node = graph.add_node(Box::new(Infrared::new()));
-    graph.connect(source, (node, "in")).expect("wire source → Infrared.in");
-    SpliceResult {
-        output: (node, "out"),
-        handles: vec![(Cow::Borrowed("infrared"), node)],
-    }
-}
-
-inventory::submit! {
-    ChainSpec {
-        type_id: EffectTypeId::INFRARED,
-        splice: splice_infrared,
-        routings: &[
-            Routing { param_id: "amount", target_handle: "infrared", target_param: "amount", convert: ParamConvert::Float },
-            Routing { param_id: "palette", target_handle: "infrared", target_param: "palette", convert: ParamConvert::EnumRound },
-            Routing { param_id: "contrast", target_handle: "infrared", target_param: "contrast", convert: ParamConvert::Float },
-        ],
-        skip: SkipMode::OnZero { param_id: "amount" },
-    }
+crate::atomic_chain_spec! {
+    type_id: EffectTypeId::INFRARED,
+    primitive: Infrared,
+    handle: "infrared",
+    routings: &[
+        Routing { param_id: "amount", target_handle: "infrared", target_param: "amount", convert: ParamConvert::Float },
+        Routing { param_id: "palette", target_handle: "infrared", target_param: "palette", convert: ParamConvert::EnumRound },
+        Routing { param_id: "contrast", target_handle: "infrared", target_param: "contrast", convert: ParamConvert::Float },
+    ],
+    skip: SkipMode::OnZero { param_id: "amount" },
 }
 
 /// LUT resolution — 512 entries covering [0, 2] range.

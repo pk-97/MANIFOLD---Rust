@@ -1,13 +1,9 @@
-use std::borrow::Cow;
-
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::VoronoiPrism;
-use crate::node_graph::{
-    ChainSpec, Graph, NodeInstanceId, ParamConvert, Routing, SkipMode, SpliceResult,
-};
+use crate::node_graph::{ParamConvert, Routing, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
@@ -35,34 +31,24 @@ inventory::submit! {
     }
 }
 
-fn splice_voronoi_prism(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult {
-    let node = graph.add_node(Box::new(VoronoiPrism::new()));
-    graph.connect(source, (node, "in")).expect("wire source → VoronoiPrism.in");
-    SpliceResult {
-        output: (node, "out"),
-        handles: vec![(Cow::Borrowed("voronoi"), node)],
-    }
-}
-
-inventory::submit! {
-    ChainSpec {
-        type_id: EffectTypeId::VORONOI_PRISM,
-        splice: splice_voronoi_prism,
-        routings: &[
-            Routing { param_id: "amount", target_handle: "voronoi", target_param: "amount", convert: ParamConvert::Float },
-            Routing { param_id: "cells", target_handle: "voronoi", target_param: "cell_count", convert: ParamConvert::Float },
-            // `source_width` was previously populated by a hidden
-            // cross-effect read from EdgeStretch's `width` slider via
-            // `EffectContext::edge_stretch_width`. Now it's an explicit
-            // user slider on the VoronoiPrism card — same default
-            // (0.5625), no invisible coupling. Existing projects that
-            // omit this slot fall back to the metadata default.
-            Routing { param_id: "source_width", target_handle: "voronoi", target_param: "source_width", convert: ParamConvert::Float },
-            // `beat` stays ctx-driven (populated by `apply_ctx_params_at`
-            // from `EffectContext::beat`).
-        ],
-        skip: SkipMode::OnZero { param_id: "amount" },
-    }
+crate::atomic_chain_spec! {
+    type_id: EffectTypeId::VORONOI_PRISM,
+    primitive: VoronoiPrism,
+    handle: "voronoi",
+    routings: &[
+        Routing { param_id: "amount", target_handle: "voronoi", target_param: "amount", convert: ParamConvert::Float },
+        Routing { param_id: "cells", target_handle: "voronoi", target_param: "cell_count", convert: ParamConvert::Float },
+        // `source_width` was previously populated by a hidden
+        // cross-effect read from EdgeStretch's `width` slider via
+        // `EffectContext::edge_stretch_width`. Now it's an explicit
+        // user slider on the VoronoiPrism card — same default
+        // (0.5625), no invisible coupling. Existing projects that
+        // omit this slot fall back to the metadata default.
+        Routing { param_id: "source_width", target_handle: "voronoi", target_param: "source_width", convert: ParamConvert::Float },
+        // `beat` stays ctx-driven (populated by `apply_ctx_params_at`
+        // from `EffectContext::beat`).
+    ],
+    skip: SkipMode::OnZero { param_id: "amount" },
 }
 
 #[repr(C)]

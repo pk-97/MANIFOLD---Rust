@@ -1,13 +1,9 @@
-use std::borrow::Cow;
-
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::ChromaticOffset;
-use crate::node_graph::{
-    ChainSpec, Graph, NodeInstanceId, ParamConvert, Routing, SkipMode, SpliceResult,
-};
+use crate::node_graph::{ParamConvert, Routing, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
@@ -37,31 +33,18 @@ inventory::submit! {
     }
 }
 
-fn splice_chromatic_aberration(
-    graph: &mut Graph,
-    source: (NodeInstanceId, &'static str),
-) -> SpliceResult {
-    let node = graph.add_node(Box::new(ChromaticOffset::new()));
-    graph.connect(source, (node, "in")).expect("wire source → ChromaticOffset.in");
-    SpliceResult {
-        output: (node, "out"),
-        handles: vec![(Cow::Borrowed("chromatic"), node)],
-    }
-}
-
-inventory::submit! {
-    ChainSpec {
-        type_id: EffectTypeId::CHROMATIC_ABERRATION,
-        splice: splice_chromatic_aberration,
-        routings: &[
-            Routing { param_id: "amount", target_handle: "chromatic", target_param: "amount", convert: ParamConvert::Float },
-            Routing { param_id: "offset", target_handle: "chromatic", target_param: "offset", convert: ParamConvert::Float },
-            Routing { param_id: "mode", target_handle: "chromatic", target_param: "mode", convert: ParamConvert::EnumRound },
-            Routing { param_id: "angle", target_handle: "chromatic", target_param: "angle", convert: ParamConvert::Float },
-            Routing { param_id: "falloff", target_handle: "chromatic", target_param: "falloff", convert: ParamConvert::Float },
-        ],
-        skip: SkipMode::OnZero { param_id: "amount" },
-    }
+crate::atomic_chain_spec! {
+    type_id: EffectTypeId::CHROMATIC_ABERRATION,
+    primitive: ChromaticOffset,
+    handle: "chromatic",
+    routings: &[
+        Routing { param_id: "amount", target_handle: "chromatic", target_param: "amount", convert: ParamConvert::Float },
+        Routing { param_id: "offset", target_handle: "chromatic", target_param: "offset", convert: ParamConvert::Float },
+        Routing { param_id: "mode", target_handle: "chromatic", target_param: "mode", convert: ParamConvert::EnumRound },
+        Routing { param_id: "angle", target_handle: "chromatic", target_param: "angle", convert: ParamConvert::Float },
+        Routing { param_id: "falloff", target_handle: "chromatic", target_param: "falloff", convert: ParamConvert::Float },
+    ],
+    skip: SkipMode::OnZero { param_id: "amount" },
 }
 
 #[repr(C)]

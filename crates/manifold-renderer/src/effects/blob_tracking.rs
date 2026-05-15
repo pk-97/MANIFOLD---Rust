@@ -5,17 +5,13 @@
 // The "frame" counter maps to an app-managed frame_count in EffectContext.
 // Unity's OnReadbackComplete callback maps to try_read() polled at apply() start.
 
-use std::borrow::Cow;
-
 use crate::background_worker::BackgroundWorker;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
 use crate::node_graph::primitives::BlobTracking;
-use crate::node_graph::{
-    ChainSpec, Graph, NodeInstanceId, ParamConvert, Routing, SkipMode, SpliceResult,
-};
+use crate::node_graph::{ParamConvert, Routing, SkipMode};
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
@@ -52,28 +48,18 @@ inventory::submit! {
     }
 }
 
-fn splice_blob_tracking(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult {
-    let node = graph.add_node(Box::new(BlobTracking::new()));
-    graph.connect(source, (node, "in")).expect("wire source → BlobTracking.in");
-    SpliceResult {
-        output: (node, "out"),
-        handles: vec![(Cow::Borrowed("blob_tracking"), node)],
-    }
-}
-
-inventory::submit! {
-    ChainSpec {
-        type_id: EffectTypeId::BLOB_TRACKING,
-        splice: splice_blob_tracking,
-        routings: &[
-            Routing { param_id: "amount", target_handle: "blob_tracking", target_param: "amount", convert: ParamConvert::Float },
-            Routing { param_id: "thresh", target_handle: "blob_tracking", target_param: "thresh", convert: ParamConvert::Float },
-            Routing { param_id: "sens", target_handle: "blob_tracking", target_param: "sens", convert: ParamConvert::Float },
-            Routing { param_id: "smooth", target_handle: "blob_tracking", target_param: "smooth", convert: ParamConvert::Float },
-            Routing { param_id: "connect", target_handle: "blob_tracking", target_param: "connect", convert: ParamConvert::Float },
-        ],
-        skip: SkipMode::OnZero { param_id: "amount" },
-    }
+crate::atomic_chain_spec! {
+    type_id: EffectTypeId::BLOB_TRACKING,
+    primitive: BlobTracking,
+    handle: "blob_tracking",
+    routings: &[
+        Routing { param_id: "amount", target_handle: "blob_tracking", target_param: "amount", convert: ParamConvert::Float },
+        Routing { param_id: "thresh", target_handle: "blob_tracking", target_param: "thresh", convert: ParamConvert::Float },
+        Routing { param_id: "sens", target_handle: "blob_tracking", target_param: "sens", convert: ParamConvert::Float },
+        Routing { param_id: "smooth", target_handle: "blob_tracking", target_param: "smooth", convert: ParamConvert::Float },
+        Routing { param_id: "connect", target_handle: "blob_tracking", target_param: "connect", convert: ParamConvert::Float },
+    ],
+    skip: SkipMode::OnZero { param_id: "amount" },
 }
 
 // Request/response types for the background blob detection worker.

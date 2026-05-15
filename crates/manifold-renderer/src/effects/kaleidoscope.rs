@@ -1,13 +1,9 @@
-use std::borrow::Cow;
-
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::KaleidoFold;
-use crate::node_graph::{
-    ChainSpec, Graph, NodeInstanceId, ParamConvert, Routing, SkipMode, SpliceResult,
-};
+use crate::node_graph::{ParamConvert, Routing, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
@@ -34,25 +30,15 @@ inventory::submit! {
     }
 }
 
-fn splice_kaleidoscope(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult {
-    let node = graph.add_node(Box::new(KaleidoFold::new()));
-    graph.connect(source, (node, "in")).expect("wire source → KaleidoFold.in");
-    SpliceResult {
-        output: (node, "out"),
-        handles: vec![(Cow::Borrowed("kaleidoscope"), node)],
-    }
-}
-
-inventory::submit! {
-    ChainSpec {
-        type_id: EffectTypeId::KALEIDOSCOPE,
-        splice: splice_kaleidoscope,
-        routings: &[
-            Routing { param_id: "amount", target_handle: "kaleidoscope", target_param: "amount", convert: ParamConvert::Float },
-            Routing { param_id: "segs", target_handle: "kaleidoscope", target_param: "segments", convert: ParamConvert::Float },
-        ],
-        skip: SkipMode::OnZero { param_id: "amount" },
-    }
+crate::atomic_chain_spec! {
+    type_id: EffectTypeId::KALEIDOSCOPE,
+    primitive: KaleidoFold,
+    handle: "kaleidoscope",
+    routings: &[
+        Routing { param_id: "amount", target_handle: "kaleidoscope", target_param: "amount", convert: ParamConvert::Float },
+        Routing { param_id: "segs", target_handle: "kaleidoscope", target_param: "segments", convert: ParamConvert::Float },
+    ],
+    skip: SkipMode::OnZero { param_id: "amount" },
 }
 
 #[repr(C)]

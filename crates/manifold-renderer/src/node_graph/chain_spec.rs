@@ -158,6 +158,93 @@ impl ChainSpec {
 
 inventory::collect!(ChainSpec);
 
+/// Compress the splice + inventory submission for an atomic effect —
+/// one primitive, one input port, one handle, one output port. About
+/// two thirds of the shipping effects fit this shape; the macro lets
+/// them declare only the host-visible information (type id, primitive
+/// type, handle name, routings, skip rule) and emits the boilerplate.
+///
+/// Composite effects (Mirror, SoftFocus, …) still hand-write their
+/// splice — the wiring between their inner workers is what gives them
+/// their shape.
+///
+/// ## Optional fields
+///
+/// - `input_port: "name"` — defaults to `"in"`. Override when a
+///   primitive declares its input under a different name (e.g.
+///   `Transform` uses `"source"`).
+///
+/// ## Example
+///
+/// ```ignore
+/// crate::atomic_chain_spec! {
+///     type_id: EffectTypeId::INVERT_COLORS,
+///     primitive: Invert,
+///     handle: "invert",
+///     routings: &[
+///         Routing {
+///             param_id: "amount",
+///             target_handle: "invert",
+///             target_param: "intensity",
+///             convert: ParamConvert::Float,
+///         },
+///     ],
+///     skip: SkipMode::OnZero { param_id: "amount" },
+/// }
+/// ```
+#[macro_export]
+macro_rules! atomic_chain_spec {
+    (
+        type_id: $type_id:expr,
+        primitive: $prim:ty,
+        handle: $handle:literal,
+        $(input_port: $input:literal,)?
+        routings: $routings:expr,
+        skip: $skip:expr $(,)?
+    ) => {
+        ::inventory::submit! {
+            $crate::node_graph::ChainSpec {
+                type_id: $type_id,
+                splice: {
+                    fn splice(
+                        graph: &mut $crate::node_graph::Graph,
+                        source: (
+                            $crate::node_graph::NodeInstanceId,
+                            &'static str,
+                        ),
+                    ) -> $crate::node_graph::SpliceResult {
+                        let node = graph.add_node(::std::boxed::Box::new(<$prim>::new()));
+                        graph
+                            .connect(
+                                source,
+                                (node, $crate::atomic_chain_spec!(@port $($input)?)),
+                            )
+                            .expect(concat!(
+                                "wire source → ",
+                                stringify!($prim),
+                                ".",
+                                $crate::atomic_chain_spec!(@port $($input)?),
+                            ));
+                        $crate::node_graph::SpliceResult {
+                            output: (node, "out"),
+                            handles: ::std::vec![(
+                                ::std::borrow::Cow::Borrowed($handle),
+                                node,
+                            )],
+                        }
+                    }
+                    splice
+                },
+                routings: $routings,
+                skip: $skip,
+            }
+        }
+    };
+    (@port) => { "in" };
+    (@port $input:literal) => { $input };
+}
+
+
 /// Look up a chain spec by effect type id. Built once at first call.
 pub fn chain_spec_by_id(id: &EffectTypeId) -> Option<&'static ChainSpec> {
     use std::sync::OnceLock;

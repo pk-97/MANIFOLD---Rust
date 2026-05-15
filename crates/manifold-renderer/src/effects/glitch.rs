@@ -1,13 +1,9 @@
-use std::borrow::Cow;
-
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Glitch;
-use crate::node_graph::{
-    ChainSpec, Graph, NodeInstanceId, ParamConvert, Routing, SkipMode, SpliceResult,
-};
+use crate::node_graph::{ParamConvert, Routing, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
@@ -37,30 +33,20 @@ inventory::submit! {
     }
 }
 
-fn splice_glitch(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult {
-    let node = graph.add_node(Box::new(Glitch::new()));
-    graph.connect(source, (node, "in")).expect("wire source → Glitch.in");
-    SpliceResult {
-        output: (node, "out"),
-        handles: vec![(Cow::Borrowed("glitch"), node)],
-    }
-}
-
-inventory::submit! {
-    ChainSpec {
-        type_id: EffectTypeId::GLITCH,
-        splice: splice_glitch,
-        routings: &[
-            Routing { param_id: "amount", target_handle: "glitch", target_param: "amount", convert: ParamConvert::Float },
-            Routing { param_id: "block", target_handle: "glitch", target_param: "block_size", convert: ParamConvert::Float },
-            Routing { param_id: "rgb_shift", target_handle: "glitch", target_param: "rgb_shift", convert: ParamConvert::Float },
-            Routing { param_id: "scanline", target_handle: "glitch", target_param: "scanline", convert: ParamConvert::Float },
-            Routing { param_id: "speed", target_handle: "glitch", target_param: "speed", convert: ParamConvert::Float },
-            // `time` is a ctx-driven param — populated by
-            // `apply_ctx_params_at` each frame from `EffectContext::time`.
-        ],
-        skip: SkipMode::OnZero { param_id: "amount" },
-    }
+crate::atomic_chain_spec! {
+    type_id: EffectTypeId::GLITCH,
+    primitive: Glitch,
+    handle: "glitch",
+    routings: &[
+        Routing { param_id: "amount", target_handle: "glitch", target_param: "amount", convert: ParamConvert::Float },
+        Routing { param_id: "block", target_handle: "glitch", target_param: "block_size", convert: ParamConvert::Float },
+        Routing { param_id: "rgb_shift", target_handle: "glitch", target_param: "rgb_shift", convert: ParamConvert::Float },
+        Routing { param_id: "scanline", target_handle: "glitch", target_param: "scanline", convert: ParamConvert::Float },
+        Routing { param_id: "speed", target_handle: "glitch", target_param: "speed", convert: ParamConvert::Float },
+        // `time` is a ctx-driven param — populated by
+        // `apply_ctx_params_at` each frame from `EffectContext::time`.
+    ],
+    skip: SkipMode::OnZero { param_id: "amount" },
 }
 
 #[repr(C)]

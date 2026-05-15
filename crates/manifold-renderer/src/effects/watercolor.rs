@@ -16,16 +16,12 @@
 //   - Grain inlined into max composite (eliminates 1 dispatch + 1 texture)
 //   - Luma blur reduced to 17 taps (2 rings) for lower texture bandwidth
 
-use std::borrow::Cow;
-
 use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Watercolor;
-use crate::node_graph::{
-    ChainSpec, Graph, NodeInstanceId, ParamConvert, Routing, SkipMode, SpliceResult,
-};
+use crate::node_graph::{ParamConvert, Routing, SkipMode};
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
@@ -56,28 +52,18 @@ inventory::submit! {
     }
 }
 
-fn splice_watercolor(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult {
-    let node = graph.add_node(Box::new(Watercolor::new()));
-    graph.connect(source, (node, "in")).expect("wire source → Watercolor.in");
-    SpliceResult {
-        output: (node, "out"),
-        handles: vec![(Cow::Borrowed("watercolor"), node)],
-    }
-}
-
-inventory::submit! {
-    ChainSpec {
-        type_id: EffectTypeId::new("Watercolor"),
-        splice: splice_watercolor,
-        routings: &[
-            Routing { param_id: "amount", target_handle: "watercolor", target_param: "amount", convert: ParamConvert::Float },
-            Routing { param_id: "displace", target_handle: "watercolor", target_param: "displace", convert: ParamConvert::Float },
-            Routing { param_id: "blur", target_handle: "watercolor", target_param: "blur", convert: ParamConvert::Float },
-            Routing { param_id: "decay", target_handle: "watercolor", target_param: "decay", convert: ParamConvert::Float },
-            // `time` is ctx-driven, populated by `apply_ctx_params_at`.
-        ],
-        skip: SkipMode::OnZero { param_id: "amount" },
-    }
+crate::atomic_chain_spec! {
+    type_id: EffectTypeId::new("Watercolor"),
+    primitive: Watercolor,
+    handle: "watercolor",
+    routings: &[
+        Routing { param_id: "amount", target_handle: "watercolor", target_param: "amount", convert: ParamConvert::Float },
+        Routing { param_id: "displace", target_handle: "watercolor", target_param: "displace", convert: ParamConvert::Float },
+        Routing { param_id: "blur", target_handle: "watercolor", target_param: "blur", convert: ParamConvert::Float },
+        Routing { param_id: "decay", target_handle: "watercolor", target_param: "decay", convert: ParamConvert::Float },
+        // `time` is ctx-driven, populated by `apply_ctx_params_at`.
+    ],
+    skip: SkipMode::OnZero { param_id: "amount" },
 }
 
 const WATERCOLOR_WGSL: &str = include_str!("shaders/fx_watercolor_compute.wgsl");

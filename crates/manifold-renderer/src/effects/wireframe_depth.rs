@@ -8,17 +8,13 @@
 // Time.frameCount → EffectContext.frame_count.
 // Graphics.Blit → compute dispatch per pass.
 
-use std::borrow::Cow;
-
 use crate::background_worker::BackgroundWorker;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
 use crate::node_graph::primitives::WireframeDepth;
-use crate::node_graph::{
-    ChainSpec, Graph, NodeInstanceId, ParamConvert, Routing, SkipMode, SpliceResult,
-};
+use crate::node_graph::{ParamConvert, Routing, SkipMode};
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
@@ -57,35 +53,25 @@ inventory::submit! {
     }
 }
 
-fn splice_wireframe_depth(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult {
-    let node = graph.add_node(Box::new(WireframeDepth::new()));
-    graph.connect(source, (node, "in")).expect("wire source → WireframeDepth.in");
-    SpliceResult {
-        output: (node, "out"),
-        handles: vec![(Cow::Borrowed("wireframe_depth"), node)],
-    }
-}
-
-inventory::submit! {
-    ChainSpec {
-        type_id: EffectTypeId::WIREFRAME_DEPTH,
-        splice: splice_wireframe_depth,
-        routings: &[
-            Routing { param_id: "amount", target_handle: "wireframe_depth", target_param: "amount", convert: ParamConvert::Float },
-            Routing { param_id: "density", target_handle: "wireframe_depth", target_param: "density", convert: ParamConvert::Float },
-            Routing { param_id: "width", target_handle: "wireframe_depth", target_param: "width", convert: ParamConvert::Float },
-            Routing { param_id: "z_scale", target_handle: "wireframe_depth", target_param: "z_scale", convert: ParamConvert::Float },
-            Routing { param_id: "smooth", target_handle: "wireframe_depth", target_param: "smooth", convert: ParamConvert::Float },
-            Routing { param_id: "subject", target_handle: "wireframe_depth", target_param: "subject", convert: ParamConvert::Float },
-            Routing { param_id: "blend", target_handle: "wireframe_depth", target_param: "blend", convert: ParamConvert::EnumRound },
-            Routing { param_id: "wire_res", target_handle: "wireframe_depth", target_param: "wire_res", convert: ParamConvert::Float },
-            Routing { param_id: "mesh_rate", target_handle: "wireframe_depth", target_param: "mesh_rate", convert: ParamConvert::EnumRound },
-            Routing { param_id: "flow", target_handle: "wireframe_depth", target_param: "flow", convert: ParamConvert::EnumRound },
-            Routing { param_id: "lock", target_handle: "wireframe_depth", target_param: "lock", convert: ParamConvert::EnumRound },
-            Routing { param_id: "edge_follow", target_handle: "wireframe_depth", target_param: "edge_follow", convert: ParamConvert::Float },
-        ],
-        skip: SkipMode::OnZero { param_id: "amount" },
-    }
+crate::atomic_chain_spec! {
+    type_id: EffectTypeId::WIREFRAME_DEPTH,
+    primitive: WireframeDepth,
+    handle: "wireframe_depth",
+    routings: &[
+        Routing { param_id: "amount", target_handle: "wireframe_depth", target_param: "amount", convert: ParamConvert::Float },
+        Routing { param_id: "density", target_handle: "wireframe_depth", target_param: "density", convert: ParamConvert::Float },
+        Routing { param_id: "width", target_handle: "wireframe_depth", target_param: "width", convert: ParamConvert::Float },
+        Routing { param_id: "z_scale", target_handle: "wireframe_depth", target_param: "z_scale", convert: ParamConvert::Float },
+        Routing { param_id: "smooth", target_handle: "wireframe_depth", target_param: "smooth", convert: ParamConvert::Float },
+        Routing { param_id: "subject", target_handle: "wireframe_depth", target_param: "subject", convert: ParamConvert::Float },
+        Routing { param_id: "blend", target_handle: "wireframe_depth", target_param: "blend", convert: ParamConvert::EnumRound },
+        Routing { param_id: "wire_res", target_handle: "wireframe_depth", target_param: "wire_res", convert: ParamConvert::Float },
+        Routing { param_id: "mesh_rate", target_handle: "wireframe_depth", target_param: "mesh_rate", convert: ParamConvert::EnumRound },
+        Routing { param_id: "flow", target_handle: "wireframe_depth", target_param: "flow", convert: ParamConvert::EnumRound },
+        Routing { param_id: "lock", target_handle: "wireframe_depth", target_param: "lock", convert: ParamConvert::EnumRound },
+        Routing { param_id: "edge_follow", target_handle: "wireframe_depth", target_param: "edge_follow", convert: ParamConvert::Float },
+    ],
+    skip: SkipMode::OnZero { param_id: "amount" },
 }
 
 // Request/response types for the background depth estimation worker.

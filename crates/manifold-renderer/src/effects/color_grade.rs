@@ -1,16 +1,12 @@
 // Mechanical port of Unity ColorGradeFX.cs.
 // 9 parameters, single pass, K-matrix HSV, colorize pipeline.
 
-use std::borrow::Cow;
-
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::ColorGrade;
-use crate::node_graph::{
-    ChainSpec, Graph, NodeInstanceId, ParamConvert, Routing, SkipMode, SpliceResult,
-};
+use crate::node_graph::{ParamConvert, Routing, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
@@ -44,32 +40,22 @@ inventory::submit! {
     }
 }
 
-fn splice_color_grade(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult {
-    let node = graph.add_node(Box::new(ColorGrade::new()));
-    graph.connect(source, (node, "in")).expect("wire source → ColorGrade.in");
-    SpliceResult {
-        output: (node, "out"),
-        handles: vec![(Cow::Borrowed("color_grade"), node)],
-    }
-}
-
-inventory::submit! {
-    ChainSpec {
-        type_id: EffectTypeId::COLOR_GRADE,
-        splice: splice_color_grade,
-        routings: &[
-            Routing { param_id: "amount", target_handle: "color_grade", target_param: "amount", convert: ParamConvert::Float },
-            Routing { param_id: "gain", target_handle: "color_grade", target_param: "gain", convert: ParamConvert::Float },
-            Routing { param_id: "sat", target_handle: "color_grade", target_param: "saturation", convert: ParamConvert::Float },
-            Routing { param_id: "hue", target_handle: "color_grade", target_param: "hue", convert: ParamConvert::Float },
-            Routing { param_id: "contrast", target_handle: "color_grade", target_param: "contrast", convert: ParamConvert::Float },
-            Routing { param_id: "colorize", target_handle: "color_grade", target_param: "colorize", convert: ParamConvert::Float },
-            Routing { param_id: "tint_hue", target_handle: "color_grade", target_param: "colorize_hue", convert: ParamConvert::Float },
-            Routing { param_id: "tint_sat", target_handle: "color_grade", target_param: "colorize_saturation", convert: ParamConvert::Float },
-            Routing { param_id: "focus", target_handle: "color_grade", target_param: "colorize_focus", convert: ParamConvert::Float },
-        ],
-        skip: SkipMode::OnZero { param_id: "amount" },
-    }
+crate::atomic_chain_spec! {
+    type_id: EffectTypeId::COLOR_GRADE,
+    primitive: ColorGrade,
+    handle: "color_grade",
+    routings: &[
+        Routing { param_id: "amount", target_handle: "color_grade", target_param: "amount", convert: ParamConvert::Float },
+        Routing { param_id: "gain", target_handle: "color_grade", target_param: "gain", convert: ParamConvert::Float },
+        Routing { param_id: "sat", target_handle: "color_grade", target_param: "saturation", convert: ParamConvert::Float },
+        Routing { param_id: "hue", target_handle: "color_grade", target_param: "hue", convert: ParamConvert::Float },
+        Routing { param_id: "contrast", target_handle: "color_grade", target_param: "contrast", convert: ParamConvert::Float },
+        Routing { param_id: "colorize", target_handle: "color_grade", target_param: "colorize", convert: ParamConvert::Float },
+        Routing { param_id: "tint_hue", target_handle: "color_grade", target_param: "colorize_hue", convert: ParamConvert::Float },
+        Routing { param_id: "tint_sat", target_handle: "color_grade", target_param: "colorize_saturation", convert: ParamConvert::Float },
+        Routing { param_id: "focus", target_handle: "color_grade", target_param: "colorize_focus", convert: ParamConvert::Float },
+    ],
+    skip: SkipMode::OnZero { param_id: "amount" },
 }
 
 // ColorGradeEffect.shader Properties (lines 6-14)

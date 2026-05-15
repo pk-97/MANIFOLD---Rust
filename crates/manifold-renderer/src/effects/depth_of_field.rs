@@ -23,8 +23,6 @@
 // Workers are shared across all owners (one estimator instance).
 // Readback → CPU inference → GPU upload, ~2-3 frame latency.
 
-use std::borrow::Cow;
-
 use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 use crate::background_worker::BackgroundWorker;
 use crate::effect::{EffectContext, PostProcessEffect};
@@ -32,9 +30,7 @@ use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
 use crate::node_graph::primitives::DepthOfField;
-use crate::node_graph::{
-    ChainSpec, Graph, NodeInstanceId, ParamConvert, Routing, SkipMode, SpliceResult,
-};
+use crate::node_graph::{ParamConvert, Routing, SkipMode};
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
@@ -69,31 +65,21 @@ inventory::submit! {
     }
 }
 
-fn splice_dof(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult {
-    let node = graph.add_node(Box::new(DepthOfField::new()));
-    graph.connect(source, (node, "in")).expect("wire source → DepthOfField.in");
-    SpliceResult {
-        output: (node, "out"),
-        handles: vec![(Cow::Borrowed("dof"), node)],
-    }
-}
-
-inventory::submit! {
-    ChainSpec {
-        type_id: EffectTypeId::DEPTH_OF_FIELD,
-        splice: splice_dof,
-        routings: &[
-            Routing { param_id: "amount", target_handle: "dof", target_param: "amount", convert: ParamConvert::Float },
-            Routing { param_id: "mode", target_handle: "dof", target_param: "mode", convert: ParamConvert::EnumRound },
-            Routing { param_id: "focus", target_handle: "dof", target_param: "focus", convert: ParamConvert::Float },
-            Routing { param_id: "focus_x", target_handle: "dof", target_param: "focus_x", convert: ParamConvert::Float },
-            Routing { param_id: "width", target_handle: "dof", target_param: "width", convert: ParamConvert::Float },
-            Routing { param_id: "blur", target_handle: "dof", target_param: "blur", convert: ParamConvert::Float },
-            Routing { param_id: "angle", target_handle: "dof", target_param: "angle", convert: ParamConvert::Float },
-            Routing { param_id: "quality", target_handle: "dof", target_param: "quality", convert: ParamConvert::EnumRound },
-        ],
-        skip: SkipMode::OnZero { param_id: "amount" },
-    }
+crate::atomic_chain_spec! {
+    type_id: EffectTypeId::DEPTH_OF_FIELD,
+    primitive: DepthOfField,
+    handle: "dof",
+    routings: &[
+        Routing { param_id: "amount", target_handle: "dof", target_param: "amount", convert: ParamConvert::Float },
+        Routing { param_id: "mode", target_handle: "dof", target_param: "mode", convert: ParamConvert::EnumRound },
+        Routing { param_id: "focus", target_handle: "dof", target_param: "focus", convert: ParamConvert::Float },
+        Routing { param_id: "focus_x", target_handle: "dof", target_param: "focus_x", convert: ParamConvert::Float },
+        Routing { param_id: "width", target_handle: "dof", target_param: "width", convert: ParamConvert::Float },
+        Routing { param_id: "blur", target_handle: "dof", target_param: "blur", convert: ParamConvert::Float },
+        Routing { param_id: "angle", target_handle: "dof", target_param: "angle", convert: ParamConvert::Float },
+        Routing { param_id: "quality", target_handle: "dof", target_param: "quality", convert: ParamConvert::EnumRound },
+    ],
+    skip: SkipMode::OnZero { param_id: "amount" },
 }
 
 // ─── Depth worker types ───────────────────────────────────────────────

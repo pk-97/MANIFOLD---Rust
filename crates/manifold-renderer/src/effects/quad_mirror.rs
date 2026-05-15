@@ -1,13 +1,9 @@
-use std::borrow::Cow;
-
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::QuadMirror;
-use crate::node_graph::{
-    ChainSpec, Graph, NodeInstanceId, ParamConvert, Routing, SkipMode, SpliceResult,
-};
+use crate::node_graph::{ParamConvert, Routing, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
@@ -33,24 +29,14 @@ inventory::submit! {
     }
 }
 
-fn splice_quad_mirror(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult {
-    let node = graph.add_node(Box::new(QuadMirror::new()));
-    graph.connect(source, (node, "in")).expect("wire source → QuadMirror.in");
-    SpliceResult {
-        output: (node, "out"),
-        handles: vec![(Cow::Borrowed("quad_mirror"), node)],
-    }
-}
-
-inventory::submit! {
-    ChainSpec {
-        type_id: EffectTypeId::QUAD_MIRROR,
-        splice: splice_quad_mirror,
-        routings: &[
-            Routing { param_id: "amount", target_handle: "quad_mirror", target_param: "amount", convert: ParamConvert::Float },
-        ],
-        skip: SkipMode::OnZero { param_id: "amount" },
-    }
+crate::atomic_chain_spec! {
+    type_id: EffectTypeId::QUAD_MIRROR,
+    primitive: QuadMirror,
+    handle: "quad_mirror",
+    routings: &[
+        Routing { param_id: "amount", target_handle: "quad_mirror", target_param: "amount", convert: ParamConvert::Float },
+    ],
+    skip: SkipMode::OnZero { param_id: "amount" },
 }
 
 #[repr(C)]

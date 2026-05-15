@@ -1,13 +1,9 @@
-use std::borrow::Cow;
-
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::{STROBE_NOTE_RATES, Strobe};
-use crate::node_graph::{
-    ChainSpec, Graph, NodeInstanceId, ParamConvert, Routing, SkipMode, SpliceResult,
-};
+use crate::node_graph::{ParamConvert, Routing, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
@@ -35,15 +31,6 @@ inventory::submit! {
     }
 }
 
-fn splice_strobe(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult {
-    let node = graph.add_node(Box::new(Strobe::new()));
-    graph.connect(source, (node, "in")).expect("wire source → Strobe.in");
-    SpliceResult {
-        output: (node, "out"),
-        handles: vec![(Cow::Borrowed("strobe"), node)],
-    }
-}
-
 /// Legacy `rate` is an index into the note-rate table (0..9);
 /// `Strobe` takes the raw strobes-per-beat float. Mirrors what
 /// `StrobeFX::apply` did inline before encoding its uniform.
@@ -55,19 +42,17 @@ fn strobe_rate_from_index(idx_f: f32) -> f32 {
         .unwrap_or(*STROBE_NOTE_RATES.last().unwrap_or(&1.0))
 }
 
-inventory::submit! {
-    ChainSpec {
-        type_id: EffectTypeId::STROBE,
-        splice: splice_strobe,
-        routings: &[
-            Routing { param_id: "amount", target_handle: "strobe", target_param: "amount", convert: ParamConvert::Float },
-            Routing { param_id: "rate", target_handle: "strobe", target_param: "rate", convert: ParamConvert::FloatTransform(strobe_rate_from_index) },
-            Routing { param_id: "mode", target_handle: "strobe", target_param: "mode", convert: ParamConvert::EnumRound },
-            // `beat` is ctx-driven — populated each frame by
-            // `apply_ctx_params_at` from `EffectContext::beat`.
-        ],
-        skip: SkipMode::OnZero { param_id: "amount" },
-    }
+crate::atomic_chain_spec! {
+    type_id: EffectTypeId::STROBE,
+    primitive: Strobe,
+    handle: "strobe",
+    routings: &[
+        Routing { param_id: "amount", target_handle: "strobe", target_param: "amount", convert: ParamConvert::Float },
+        Routing { param_id: "rate", target_handle: "strobe", target_param: "rate", convert: ParamConvert::FloatTransform(strobe_rate_from_index) },
+        Routing { param_id: "mode", target_handle: "strobe", target_param: "mode", convert: ParamConvert::EnumRound },
+        // `beat` is ctx-driven — populated each frame from `EffectContext::beat`.
+    ],
+    skip: SkipMode::OnZero { param_id: "amount" },
 }
 
 #[repr(C)]
