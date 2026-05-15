@@ -1450,10 +1450,31 @@ impl Application {
                 .and_then(|c| c.selected_node_id()),
             snap_arc.as_deref(),
         );
-        let exposed_keys =
-            build_exposed_keys(self.current_editor_target.as_ref(), &self.local_project);
-        let static_params =
-            build_static_params(self.current_editor_target.as_ref(), &self.local_project);
+        // V2 unification: the right-sidebar's top "Effect Parameters"
+        // list is a read-only summary of every inner-node param
+        // currently exposed on the effect card (static-block + user-
+        // bindings, merged); the per-node section's checkbox is the
+        // single toggle entry point.
+        //
+        // `static_block_targets` is computed once and reused by both
+        // `build_card_exposures` (for the per-node checked state) and
+        // by the panel itself (for routing the click to the right
+        // command — `EffectStaticParamExpose` vs `EffectParamExpose`).
+        let static_block_targets = build_static_block_targets(
+            self.current_editor_target.as_ref(),
+            snap_arc.as_deref(),
+            &self.local_project,
+        );
+        let exposed_keys = build_card_exposures(
+            self.current_editor_target.as_ref(),
+            &static_block_targets,
+            &self.local_project,
+        );
+        let card_entries = build_card_entries(
+            self.current_editor_target.as_ref(),
+            snap_arc.as_deref(),
+            &self.local_project,
+        );
         // Outer→inner routings declared by the effect (Mirror's
         // `Amount` → `Mix.amount`, `Mode` → `Transform.mode`, etc.).
         // The panel uses this to disable inner-param rows the outer
@@ -1462,10 +1483,11 @@ impl Application {
         let effect_index = self.current_editor_target.as_ref().map(|(_, ei)| *ei);
         self.graph_editor_panel.configure(
             effect_index,
-            static_params,
+            card_entries,
             view_for_panel.as_ref(),
             exposed_keys,
             outer_driven,
+            static_block_targets,
         );
 
         // Configure the left palette. Active whenever we have a
@@ -2088,14 +2110,26 @@ fn build_graph_editor_view(
     })
 }
 
-/// Build the `(node_handle, inner_param)` set of currently-exposed
-/// bindings for the effect identified by `target`. Used by the panel
-/// to render checkboxes in the correct (checked vs unchecked) state.
-fn build_exposed_keys(
+/// Build the unified set of `(node_handle, inner_param)` keys for every
+/// inner-node param that is currently exposed on the effect card,
+/// merging BOTH surfaces:
+///
+/// 1. All `EffectInstance.user_param_bindings` (V2 per-instance
+///    exposures).
+/// 2. Static-block routings whose slot has `param_values[i].exposed`
+///    set — resolved through `static_block_targets`.
+///
+/// Drives the per-node "Expose to card" checkbox state in the
+/// graph-editor sidebar. The set is the single source of truth for
+/// "checked vs unchecked" — the click handler picks the right
+/// command (`EffectStaticParamExpose` vs `EffectParamExpose`) by
+/// consulting `static_block_targets` separately.
+fn build_card_exposures(
     target: Option<&(
         manifold_editing::commands::effect_target::EffectTarget,
         usize,
     )>,
+    static_block_targets: &std::collections::HashMap<(String, String), usize>,
     project: &manifold_core::project::Project,
 ) -> std::collections::HashSet<(String, String)> {
     use manifold_editing::commands::effect_target::EffectTarget;
@@ -2112,15 +2146,26 @@ fn build_exposed_keys(
     let Some(fx) = effects.and_then(|e| e.get(*effect_index)) else {
         return Default::default();
     };
-    fx.user_param_bindings
+    // Start with user-bindings — they're always card-visible.
+    let mut out: std::collections::HashSet<(String, String)> = fx
+        .user_param_bindings
         .iter()
         .map(|ub| (ub.node_handle.clone(), ub.inner_param.clone()))
-        .collect()
+        .collect();
+    // Add static-block routings whose slot is currently exposed.
+    for ((handle, param), &slot_idx) in static_block_targets {
+        if fx.is_param_exposed(slot_idx) {
+            out.insert((handle.clone(), param.clone()));
+        }
+    }
+    out
 }
 
 /// Flatten the snapshot's outer→inner routings into a
 /// `(node_handle, inner_param) → outer_label` map. Empty when the
-/// snapshot is `None` or no effect declares outer routings.
+/// snapshot is `None` or no effect declares outer routings. Drives
+/// the "↳ <outer>" hint on the per-node rows so the user can see
+/// which outer slider drives each inner param.
 fn build_outer_driven_map(
     snapshot: Option<&manifold_renderer::node_graph::GraphSnapshot>,
 ) -> std::collections::HashMap<(String, String), String> {
@@ -2138,18 +2183,80 @@ fn build_outer_driven_map(
         .collect()
 }
 
-/// Build the list of static-block param entries (one per def-declared
-/// slot) used by the graph-editor sidebar to render
-/// "Effect Parameters" checkboxes. The label comes from the registry
-/// def; `exposed` comes from the live `EffectInstance.param_values[i].exposed`.
-fn build_static_params(
+/// `(node_handle, inner_param) → static-block slot index` map for the
+/// active effect. Built by resolving each snapshot
+/// `OuterParamRouting.outer_param_id` through the def's `id_to_index`
+/// table. Empty when there's no active effect or no snapshot.
+///
+/// Used by the graph-editor sidebar so the per-node "Expose to card"
+/// checkbox can route through `EffectStaticParamExpose` (flipping the
+/// slot's `exposed` flag) when the inner param is already driven by
+/// a static-block routing — instead of stacking a redundant
+/// `UserParamBinding` on top of an already-routed param.
+fn build_static_block_targets(
     target: Option<&(
         manifold_editing::commands::effect_target::EffectTarget,
         usize,
     )>,
+    snapshot: Option<&manifold_renderer::node_graph::GraphSnapshot>,
     project: &manifold_core::project::Project,
-) -> Vec<manifold_ui::panels::graph_editor::GraphEditorStaticParam> {
+) -> std::collections::HashMap<(String, String), usize> {
     use manifold_editing::commands::effect_target::EffectTarget;
+    let Some(snap) = snapshot else {
+        return Default::default();
+    };
+    let Some((effect_target, effect_index)) = target else {
+        return Default::default();
+    };
+    let effects: Option<&[manifold_core::effects::EffectInstance]> = match effect_target {
+        EffectTarget::Master => Some(&project.settings.master_effects),
+        EffectTarget::Layer { layer_id } => project
+            .timeline
+            .find_layer_by_id(layer_id)
+            .and_then(|(_, l)| l.effects.as_deref()),
+    };
+    let Some(fx) = effects.and_then(|e| e.get(*effect_index)) else {
+        return Default::default();
+    };
+    let Some(def) = manifold_core::effect_definition_registry::try_get(fx.effect_type()) else {
+        return Default::default();
+    };
+    snap.outer_routings
+        .iter()
+        .filter_map(|r| {
+            def.id_to_index
+                .get(&r.outer_param_id)
+                .copied()
+                .map(|slot| ((r.node_handle.clone(), r.inner_param.clone()), slot))
+        })
+        .collect()
+}
+
+/// Build the read-only "Effect Parameters" list for the graph-editor
+/// sidebar — every inner-node param currently exposed on the effect
+/// card. Merges:
+///
+/// 1. Static-block routings whose slot has `param_values[i].exposed`,
+///    in def-declared order. Labels come from `def.param_defs[i].name`;
+///    targets come from the snapshot's `OuterParamRouting` for the
+///    matching `outer_param_id`.
+/// 2. `EffectInstance.user_param_bindings` in insertion order. Labels
+///    come from `binding.label`; targets come from
+///    `binding.node_handle` / `binding.inner_param`.
+///
+/// User-bindings whose `(node_handle, inner_param)` is ALSO a
+/// static-block target are de-duplicated (only the static-block entry
+/// is kept). This keeps the displayed list one-row-per-card-slider.
+fn build_card_entries(
+    target: Option<&(
+        manifold_editing::commands::effect_target::EffectTarget,
+        usize,
+    )>,
+    snapshot: Option<&manifold_renderer::node_graph::GraphSnapshot>,
+    project: &manifold_core::project::Project,
+) -> Vec<manifold_ui::panels::graph_editor::GraphEditorCardEntry> {
+    use manifold_editing::commands::effect_target::EffectTarget;
+    use manifold_ui::panels::graph_editor::GraphEditorCardEntry;
     let Some((effect_target, effect_index)) = target else {
         return Vec::new();
     };
@@ -2166,16 +2273,60 @@ fn build_static_params(
     let Some(def) = manifold_core::effect_definition_registry::try_get(fx.effect_type()) else {
         return Vec::new();
     };
-    def.param_defs
-        .iter()
-        .enumerate()
-        .take(def.param_count)
-        .map(
-            |(i, pd)| manifold_ui::panels::graph_editor::GraphEditorStaticParam {
-                index: i,
-                label: pd.name.clone(),
-                exposed: fx.is_param_exposed(i),
-            },
-        )
-        .collect()
+
+    // Build outer_param_id → (node_handle, inner_param) lookup for
+    // resolving static-block targets when the snapshot is available.
+    let routing_by_id: std::collections::HashMap<&str, (&str, &str)> = snapshot
+        .map(|s| {
+            s.outer_routings
+                .iter()
+                .map(|r| {
+                    (
+                        r.outer_param_id.as_str(),
+                        (r.node_handle.as_str(), r.inner_param.as_str()),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut entries: Vec<GraphEditorCardEntry> = Vec::new();
+    let mut covered_targets: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
+
+    // Static-block surface, in def order. Skip slots that have no
+    // resolvable inner-node target — they can't be surfaced as
+    // "Label ↳ handle.param" without a target, and that's the only
+    // information the read-only list carries.
+    for (i, pd) in def.param_defs.iter().enumerate().take(def.param_count) {
+        if !fx.is_param_exposed(i) {
+            continue;
+        }
+        let Some(&(handle, inner_param)) = routing_by_id.get(pd.id.as_str()) else {
+            continue;
+        };
+        covered_targets.insert((handle.to_string(), inner_param.to_string()));
+        entries.push(GraphEditorCardEntry {
+            label: pd.name.clone(),
+            target_handle: handle.to_string(),
+            target_inner_param: inner_param.to_string(),
+        });
+    }
+
+    // User-bindings, in insertion order. Skip any whose target is
+    // already covered by a static-block entry above so the list
+    // doesn't show the same routing twice.
+    for ub in &fx.user_param_bindings {
+        let key = (ub.node_handle.clone(), ub.inner_param.clone());
+        if covered_targets.contains(&key) {
+            continue;
+        }
+        entries.push(GraphEditorCardEntry {
+            label: ub.label.clone(),
+            target_handle: ub.node_handle.clone(),
+            target_inner_param: ub.inner_param.clone(),
+        });
+    }
+
+    entries
 }

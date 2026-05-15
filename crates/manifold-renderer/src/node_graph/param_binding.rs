@@ -539,6 +539,7 @@ pub fn outer_routings_from_bindings(
         };
         out.push(OuterParamRouting {
             outer_label: b.spec.name.to_string(),
+            outer_param_id: b.id.to_string(),
             node_handle: handle_str.clone(),
             inner_param: inner_param.to_string(),
         });
