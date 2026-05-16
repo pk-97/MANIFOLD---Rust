@@ -24,7 +24,7 @@ struct EdgeExtendUniforms {
     left_edge_width: f32,
     right_edge_width: f32,
     blur_radius: f32,
-    _pad: f32,
+    led_gain: f32,
 }
 
 impl EdgeExtendBlit {
@@ -75,12 +75,13 @@ impl EdgeExtendBlit {
         left_edge_width: f32,
         right_edge_width: f32,
         blur_radius: f32,
+        led_gain: f32,
     ) {
         let uniforms = EdgeExtendUniforms {
             left_edge_width,
             right_edge_width,
             blur_radius,
-            _pad: 0.0,
+            led_gain,
         };
 
         enc.dispatch_compute(

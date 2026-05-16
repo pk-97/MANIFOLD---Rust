@@ -628,10 +628,10 @@ impl ContentThread {
         // Uses a dedicated encoder (separate from the content frame).
         if let Some(ref mut led) = self.led_controller {
             let native_device = self.content_pipeline.native_device().unwrap();
-            let brightness = self
+            let (brightness, led_gain) = self
                 .engine
                 .project()
-                .map_or(1.0, |p| p.settings.led_brightness);
+                .map_or((1.0, 1.0), |p| (p.settings.led_brightness, p.settings.led_gain));
             if let Some(source) = self.content_pipeline.led_source_texture() {
                 // Poll previous frame's readback (send DMX if ready).
                 // Only when we still have an LED source — when transitioning
@@ -644,6 +644,7 @@ impl ContentThread {
                     source,
                     tick_result.ready_clips.len(),
                     brightness,
+                    led_gain,
                 );
             } else {
                 // No layer is flagged `blit_to_led` (or none have active
@@ -654,6 +655,7 @@ impl ContentThread {
                     self.content_pipeline.export_output_texture(),
                     0,
                     brightness,
+                    led_gain,
                 );
             }
         }

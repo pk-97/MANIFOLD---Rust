@@ -69,6 +69,14 @@ pub struct ProjectSettings {
     pub led_exit_index: i32,
     #[serde(default = "default_one")]
     pub led_brightness: f32,
+    /// Linear gain on HDR scene values before the chroma-preserving clip in
+    /// the LED slicer. The LED path bypasses the screen tonemap (LEDs have far
+    /// more headroom than any TV), so this is the only place HDR peaks get
+    /// scaled before the 8-bit DMX clamp. 1.0 = scene 1.0 → LED full on (low
+    /// headroom, strobes saturate instantly). Higher values preserve more
+    /// highlight headroom at the cost of strobe punch.
+    #[serde(default = "default_one")]
+    pub led_gain: f32,
     /// Whether the LED output pipeline should be initialised when this project
     /// is loaded (and kept toggled as the user flips the master LED button).
     /// Persistent so an LED-driven show comes back ON without manual re-toggle.
@@ -252,6 +260,7 @@ impl Default for ProjectSettings {
             master_effect_groups: None,
             led_exit_index: -1,
             led_brightness: 1.0,
+            led_gain: 1.0,
             led_enabled: false,
             midi_clock_source_name: None,
             clock_authority: ClockAuthority::Internal,

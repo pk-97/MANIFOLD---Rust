@@ -154,6 +154,7 @@ impl ArtNetOutput {
         device: &GpuDevice,
         source: &GpuTexture,
         brightness: f32,
+        led_gain: f32,
         signal_value: u64,
         event: &manifold_gpu::GpuEvent,
     ) {
@@ -175,9 +176,11 @@ impl ArtNetOutput {
         // vertical-only blur is applied (along the strip, not between strips)
         // to smooth the LED distribution. Inter-tap spacing of ~1.5 texels on
         // the 5-tap binomial kernel gives a small but visible smoothing
-        // without dampening motion.
+        // without dampening motion. led_gain + chroma-preserving clip happen
+        // in the shader after the blur, in linear HDR space, before the
+        // 8-bit DMX clamp.
         const LED_VERTICAL_BLUR_RADIUS: f32 = 1.5;
-        blit.blit(&mut enc, source, 0.5, 0.5, LED_VERTICAL_BLUR_RADIUS);
+        blit.blit(&mut enc, source, 0.5, 0.5, LED_VERTICAL_BLUR_RADIUS, led_gain);
 
         // Copy tiny texture to shared-memory readback buffer.
         self.readback.submit(

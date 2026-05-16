@@ -83,6 +83,7 @@ impl LedOutputController {
         source: &GpuTexture,
         active_clip_count: usize,
         brightness: f32,
+        led_gain: f32,
     ) {
         if !self.initialized || !self.enabled {
             return;
@@ -108,6 +109,7 @@ impl LedOutputController {
             device,
             source,
             brightness.clamp(0.0, 1.0),
+            led_gain.max(0.0),
             self.signal_counter,
             self.event.as_ref().unwrap(),
         );

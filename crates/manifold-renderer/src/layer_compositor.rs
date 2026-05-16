@@ -417,12 +417,14 @@ pub struct LayerCompositor {
 
     // ── LED per-layer routing ──
     /// Accumulation buffer for layers flagged `blit_to_led`. Lazily allocated on
-    /// the first frame any LED layer is active; persistent across frames. When
-    /// no LED layers exist, this is freed along with `led_tonemap`.
+    /// the first frame any LED layer is active; persistent across frames.
+    /// The LED path runs raw HDR end-to-end — no dedicated tonemap stage. The
+    /// screen tonemap is wrong for LEDs (its peak target is the TV's display
+    /// nits, far below the LEDs' headroom) and its per-channel soft-clip
+    /// washed colored bright peaks toward white. The LED slicer applies
+    /// `led_gain` and a chroma-preserving clip in linear space before the
+    /// 8-bit DMX clamp instead.
     led_main: Option<PingPong>,
-    /// Dedicated tonemap pipeline for the LED composite. Distinct output from
-    /// the main tonemap so both can be read independently.
-    led_tonemap: Option<TonemapPipeline>,
     /// Dedicated effect chain for LED master FX. Stored as a standalone field
     /// (not in `effect_chains` Vec) so the shared resize path doesn't force it
     /// to full resolution — the LED chain auto-allocates at half-res via
@@ -546,7 +548,6 @@ impl LayerCompositor {
             group_child_indices: Vec::new(),
             group_child_positions: Vec::new(),
             led_main: None,
-            led_tonemap: None,
             led_master_ec: None,
             led_group_bufs: AHashMap::default(),
             led_group_buf_last_used_frame: AHashMap::default(),
@@ -1813,7 +1814,6 @@ impl Compositor for LayerCompositor {
             self.clear_idle_chain_state();
             // Release LED composite resources (nothing to route).
             self.led_main = None;
-            self.led_tonemap = None;
             self.led_master_ec = None;
             return &self.tonemap.output.texture;
         }
@@ -1913,96 +1913,75 @@ impl Compositor for LayerCompositor {
             }
         }
 
-        // ── LED composite: tonemap + master FX (gated by led_exit_index) ──
-        // The LED composite is built at native LED grid resolution, so master
-        // FX cost is negligible. `led_exit_index` controls whether to run them:
-        //   * `0` (pre-tonemap tap) — skip both tonemap and master FX. The raw
-        //     blended composite goes straight to the LED edge-extend pass. This
-        //     is the user's escape hatch for FX that don't translate to LEDs.
-        //   * `-1` (default, post-effects) — apply tonemap + master FX so the
-        //     LED color treatment matches the screen.
+        // ── LED composite: master FX (gated by led_exit_index) ──
+        // The LED path runs raw HDR end-to-end — no dedicated tonemap stage.
+        // The slicer applies `led_gain` + chroma-preserving clip in linear
+        // space before the 8-bit DMX clamp. `led_exit_index` still controls
+        // master FX:
+        //   * `0` (pre-tonemap tap) — skip master FX. Raw blended composite
+        //     goes straight to the LED edge-extend pass. Escape hatch for FX
+        //     that don't translate to LEDs.
+        //   * `-1` (default, post-effects) — apply master FX in HDR.
+        //
+        // The LED composite is at native LED grid resolution, so master FX
+        // cost is negligible.
         if let Some(ref led_main) = self.led_main
             && frame.led_exit_index == -1
+            && has_enabled_effects(frame.master_effects)
         {
             let (width, height) = frame.led_composite_size;
             let width = width.max(1);
             let height = height.max(1);
 
-            // Lazy-init / resize LED tonemap pipeline.
-            let needs_new_tonemap = self
-                .led_tonemap
-                .as_ref()
-                .is_none_or(|t| t.output.width != width || t.output.height != height);
-            if needs_new_tonemap {
-                self.led_tonemap = Some(TonemapPipeline::new(gpu.device, width, height));
-            }
+            let led_ec = self.led_master_ec.get_or_insert_with(EffectChain::new);
 
-            // Tonemap the LED composite (same settings as main).
-            let led_source_tex_ptr: *const GpuTexture = led_main.source_texture();
-            // Safety: led_source_tex_ptr points to led_main.ping/pong which are not
-            // reallocated between here and the apply() call below.
-            self.led_tonemap.as_ref().unwrap().apply(
+            let ctx = EffectContext {
+                time: frame.time,
+                beat: frame.beat,
+                dt: frame.dt,
+                width,
+                height,
+                output_width: frame.output_width,
+                output_height: frame.output_height,
+                owner_key: LED_MASTER_OWNER_KEY,
+                is_clip_level: false,
+                frame_count: frame.frame_count as i64,
+            };
+
+            // Run master FX directly on raw HDR `led_main`, copy result back
+            // into the same source texture so the slicer reads the post-FX
+            // composite. Mirrors the screen path's read-from / copy-back-to
+            // tonemap.output pattern.
+            let led_src_tex_ptr: *const GpuTexture = led_main.source_texture();
+            // Safety: led_src_tex_ptr points to led_main.ping/pong which are
+            // not reallocated between the apply_effects call and the copy.
+            if let Some(processed) = Self::apply_effects(
+                led_ec,
                 gpu,
-                unsafe { &*led_source_tex_ptr },
-                &frame.tonemap,
-            );
-
-            // Apply master FX to the LED tonemap output (distinct owner_key so
-            // temporal state doesn't bleed between main and LED master chains).
-            if has_enabled_effects(frame.master_effects) {
-                let led_ec = self.led_master_ec.get_or_insert_with(EffectChain::new);
-
-                let ctx = EffectContext {
-                    time: frame.time,
-                    beat: frame.beat,
-                    dt: frame.dt,
+                unsafe { &*led_src_tex_ptr },
+                frame.master_effects,
+                frame.master_effect_groups,
+                &ctx,
+            ) {
+                gpu.copy_texture_to_texture(
+                    processed,
+                    unsafe { &*led_src_tex_ptr },
                     width,
                     height,
-                    output_width: frame.output_width,
-                    output_height: frame.output_height,
-                    owner_key: LED_MASTER_OWNER_KEY,
-                    is_clip_level: false,
-                    frame_count: frame.frame_count as i64,
-                };
-
-                let led_tm_tex_ptr: *const GpuTexture =
-                    &self.led_tonemap.as_ref().unwrap().output.texture;
-                // Safety: led_tm_tex_ptr points to led_tonemap.output.texture which
-                // is not reallocated during apply_effects.
-                if let Some(processed) = Self::apply_effects(
-                    led_ec,
-                    gpu,
-                    unsafe { &*led_tm_tex_ptr },
-                    frame.master_effects,
-                    frame.master_effect_groups,
-                    &ctx,
-                ) {
-                    // Use the texture `apply_effects` returned directly — see
-                    // the master_ec path above for why `source_texture_pub`
-                    // doesn't work post-ChainGraph cutover.
-                    gpu.copy_texture_to_texture(
-                        processed,
-                        unsafe { &*led_tm_tex_ptr },
-                        width,
-                        height,
-                    );
-                }
+                );
             }
         } else if self.led_main.is_none() {
-            // No LED layers active at all — release the LED tonemap +
-            // master-FX resources. (`blend_layers_to_led` clears
-            // `led_main` when no layer is flagged.) Don't release on
-            // mere exit-path-toggle: that caused churn when live MIDI
-            // control flipped `led_exit_index` per frame, dropping
-            // and reallocating the tonemap pipeline + master FX
-            // ChainGraph (and losing its state) on every toggle.
-            // Closes audit finding C-1.
-            self.led_tonemap = None;
+            // No LED layers active at all — release the LED master-FX state.
+            // (`blend_layers_to_led` clears `led_main` when no layer is
+            // flagged.) Don't release on mere exit-path-toggle: that caused
+            // churn when live MIDI control flipped `led_exit_index` per
+            // frame, dropping the master FX ChainGraph (and its state) on
+            // every toggle. Closes audit finding C-1.
             self.led_master_ec = None;
         }
-        // If the LED path is active but exit_index == 0 (pre-tonemap
-        // tap), tonemap + master FX sit warm for the next time the
-        // user flips exit_index back to -1.
+        // If the LED path is active but exit_index == 0 (pre-tonemap tap),
+        // master FX sits warm for the next time the user flips exit_index
+        // back to -1.
 
         // Flush uniform arena (recreates buffer if capacity grew).
         // On native path, arena buffer is not read by GPU dispatches (uses inline
@@ -2103,14 +2082,11 @@ impl Compositor for LayerCompositor {
 
     fn led_composite_texture(&self) -> Option<&GpuTexture> {
         // Present only when at least one layer was flagged `blit_to_led` this
-        // frame. Returns the tonemapped + master-FX-processed result when the
-        // LED exit path applied them (exit_index == -1), otherwise the raw
-        // blended composite (exit_index == 0).
-        if let Some(tm) = self.led_tonemap.as_ref() {
-            Some(&tm.output.texture)
-        } else {
-            self.led_main.as_ref().map(|l| l.source_texture())
-        }
+        // frame. Returns the raw HDR LED composite (post-master-FX when
+        // exit_index == -1 and master FX are enabled; otherwise pre-FX).
+        // No tonemap stage — the slicer applies `led_gain` + chroma-preserving
+        // clip in linear space before the 8-bit DMX clamp.
+        self.led_main.as_ref().map(|l| l.source_texture())
     }
 
     fn graph_snapshot_for(
