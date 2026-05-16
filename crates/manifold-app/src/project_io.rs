@@ -647,7 +647,13 @@ mod tests {
             ..TimelineClip::default()
         });
 
-        let action = service.process_dropped_files(&[temp_path.clone()], 0.0, 0, &mut project, 0.5);
+        let action = service.process_dropped_files(
+            std::slice::from_ref(&temp_path),
+            0.0,
+            0,
+            &mut project,
+            0.5,
+        );
 
         assert!(action.needs_clip_sync);
         assert_eq!(project.timeline.layers[0].clips.len(), 1);

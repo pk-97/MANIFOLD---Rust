@@ -241,6 +241,9 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cmp_owned)] // intentional: this test verifies the
+    // `PartialEq<String>` impls in both directions; clippy's "drop the
+    // String::from" hint would silently delete the thing under test.
     fn partial_eq_str() {
         let id = ClipId::new("x");
         assert!(id == "x");

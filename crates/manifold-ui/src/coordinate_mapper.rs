@@ -218,10 +218,10 @@ impl CoordinateMapper {
         self.layer_y_offsets.resize(count, 0.0);
         self.layer_heights.resize(count, 0.0);
         let mut y = 0.0f32;
-        for i in 0..count {
+        for (i, &h) in heights.iter().enumerate() {
             self.layer_y_offsets[i] = y;
-            self.layer_heights[i] = heights[i];
-            y += heights[i];
+            self.layer_heights[i] = h;
+            y += h;
         }
         self.total_content_height = y;
     }

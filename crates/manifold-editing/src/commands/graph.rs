@@ -807,7 +807,7 @@ mod tests {
         cmd.undo(&mut project);
         let def = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
         let node = def.nodes.iter().find(|n| n.id == 1).unwrap();
-        assert!(node.params.get("mode").is_none(), "undo removes the key");
+        assert!(!node.params.contains_key("mode"), "undo removes the key");
     }
 
     #[test]

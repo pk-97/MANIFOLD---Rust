@@ -262,7 +262,7 @@ fn duplicate_region_shifts_forward() {
 
     let region = make_region(&project, 0.0, 4.0, 0, 0);
 
-    let cmds = EditingService::duplicate_clips(&project, &[id1.clone()], &region, 0.5);
+    let cmds = EditingService::duplicate_clips(&project, std::slice::from_ref(&id1), &region, 0.5);
     assert_eq!(cmds.len(), 1);
 
     let mut service = EditingService::new();
@@ -286,7 +286,7 @@ fn delete_clips_removes() {
     let id1 = add_clip(&mut project, 0, 0.0, 4.0);
     let _id2 = add_clip(&mut project, 0, 4.0, 4.0);
 
-    let cmds = EditingService::delete_clips(&project, &[id1.clone()], None, 0.5);
+    let cmds = EditingService::delete_clips(&project, std::slice::from_ref(&id1), None, 0.5);
     assert_eq!(cmds.len(), 1);
 
     let mut service = EditingService::new();
@@ -322,7 +322,7 @@ fn nudge_selected_clips() {
     let mut project = make_project();
     let id1 = add_clip(&mut project, 0, 2.0, 4.0);
 
-    let cmds = EditingService::nudge_clips(&project, &[id1.clone()], Beats(1.0), 0.5);
+    let cmds = EditingService::nudge_clips(&project, std::slice::from_ref(&id1), Beats(1.0), 0.5);
     assert_eq!(cmds.len(), 1);
 
     let mut service = EditingService::new();
@@ -455,14 +455,14 @@ fn extend_shrink_by_grid() {
     let id1 = add_clip(&mut project, 0, 0.0, 4.0);
 
     // Extend
-    let cmds = EditingService::extend_clips_by_grid(&project, &[id1.clone()], Beats(1.0));
+    let cmds = EditingService::extend_clips_by_grid(&project, std::slice::from_ref(&id1), Beats(1.0));
     let mut service = EditingService::new();
     service.execute_batch(cmds, "ext".into(), &mut project);
     let clip = project.timeline.find_clip_by_id(&id1).unwrap();
     assert!((clip.duration_beats - Beats(5.0)).abs() < Beats(0.001));
 
     // Shrink
-    let cmds = EditingService::shrink_clips_by_grid(&project, &[id1.clone()], Beats(1.0));
+    let cmds = EditingService::shrink_clips_by_grid(&project, std::slice::from_ref(&id1), Beats(1.0));
     service.execute_batch(cmds, "shrink".into(), &mut project);
     let clip = project.timeline.find_clip_by_id(&id1).unwrap();
     assert!((clip.duration_beats - Beats(4.0)).abs() < Beats(0.001));
@@ -606,7 +606,7 @@ fn duplicate_clips_region_mode_trims() {
 
     let region = make_region(&project, 2.0, 6.0, 0, 0);
 
-    let cmds = EditingService::duplicate_clips(&project, &[id1.clone()], &region, 0.5);
+    let cmds = EditingService::duplicate_clips(&project, std::slice::from_ref(&id1), &region, 0.5);
     // 1 command: AddClipCommand (overlap enforcement is internal)
     assert_eq!(cmds.len(), 1);
 
@@ -647,7 +647,7 @@ fn delete_region_straddles_both_boundaries() {
 
     let region = make_region(&project, 2.0, 6.0, 0, 0);
     let spb = 60.0 / project.settings.bpm.0;
-    let cmds = EditingService::delete_clips(&project, &[id1.clone()], Some(&region), spb);
+    let cmds = EditingService::delete_clips(&project, std::slice::from_ref(&id1), Some(&region), spb);
     assert!(!cmds.is_empty(), "should produce split + delete commands");
 
     let mut service = EditingService::new();
@@ -729,14 +729,14 @@ fn delete_region_undo_restores_original() {
 
     let region = make_region(&project, 2.0, 6.0, 0, 0);
     let spb = 60.0 / project.settings.bpm.0;
-    let cmds = EditingService::delete_clips(&project, &[id1.clone()], Some(&region), spb);
+    let cmds = EditingService::delete_clips(&project, std::slice::from_ref(&id1), Some(&region), spb);
 
     let mut service = EditingService::new();
     service.execute_batch(cmds, "del".into(), &mut project);
     assert_eq!(project.timeline.layers[0].clips.len(), 2);
 
     // Undo
-    service.undo(&mut project);
+    let _ = service.undo(&mut project);
 
     let clips = &project.timeline.layers[0].clips;
     assert_eq!(

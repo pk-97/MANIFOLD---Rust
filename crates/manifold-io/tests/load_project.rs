@@ -281,18 +281,18 @@ fn waypoints_gen_drivers_survive_migration() {
     let mut gen_driver_count = 0;
     let mut non_quarter_count = 0;
     for (li, layer) in project.timeline.layers.iter().enumerate() {
-        if let Some(gp) = layer.gen_params() {
-            if let Some(ref drivers) = gp.drivers {
-                for d in drivers {
-                    gen_driver_count += 1;
-                    if d.beat_division != BeatDivision::Quarter {
-                        non_quarter_count += 1;
-                    }
-                    eprintln!(
-                        "  layer[{li}].gen param={} beat_div={:?}",
-                        d.param_id, d.beat_division
-                    );
+        if let Some(gp) = layer.gen_params()
+            && let Some(drivers) = gp.drivers.as_ref()
+        {
+            for d in drivers {
+                gen_driver_count += 1;
+                if d.beat_division != BeatDivision::Quarter {
+                    non_quarter_count += 1;
                 }
+                eprintln!(
+                    "  layer[{li}].gen param={} beat_div={:?}",
+                    d.param_id, d.beat_division
+                );
             }
         }
     }

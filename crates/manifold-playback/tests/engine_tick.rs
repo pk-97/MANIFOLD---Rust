@@ -77,7 +77,7 @@ fn engine_advances_time_when_playing() {
             frame_count: i as u64,
             export_fixed_dt: Seconds(0.0),
         };
-        engine.tick(ctx);
+        let _ = engine.tick(ctx);
         realtime += dt;
     }
 

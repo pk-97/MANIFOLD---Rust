@@ -59,7 +59,7 @@ fn expose_mirror_inner_param_survives_save_reload_with_driver_and_ableton() {
     // Build a project with a Mirror master effect at well-aligned
     // static state. Mirror has 2 static params (amount, mode).
     let mut project = Project::default();
-    let mut fx = effect_definition_registry::create_default(&EffectTypeId::MIRROR);
+    let fx = effect_definition_registry::create_default(&EffectTypeId::MIRROR);
     // create_default lands param_values at registry defaults; verify.
     assert_eq!(fx.param_values.len(), 2, "Mirror has 2 static params");
     project.settings.master_effects.push(fx);

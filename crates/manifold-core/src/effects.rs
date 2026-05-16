@@ -2199,7 +2199,7 @@ mod tests {
             DriverWaveform::Random,
             0.0,
         );
-        assert!(val >= 0.0 && val <= 1.0);
+        assert!((0.0..=1.0).contains(&val));
         // Same cycle should give same value
         let val2 = ParameterDriver::evaluate(
             Beats(1.5),
@@ -2438,7 +2438,7 @@ mod tests {
         // No registry def → Serialize must emit Array form so the
         // value survives a round-trip through manifold-core's tests.
         let fx = EffectInstance {
-            id: EffectId::new("abc12345".to_string()),
+            id: EffectId::new("abc12345"),
             effect_type: EffectTypeId::from_string("UnregisteredTestEffect".to_string()),
             enabled: true,
             collapsed: false,
@@ -2492,7 +2492,7 @@ mod tests {
     fn effect_instance_serialize_emits_v13_object_form_for_hidden_params() {
         // Hidden param round-trips through positional Array{value,exposed}.
         let fx = EffectInstance {
-            id: EffectId::new("abc12345".to_string()),
+            id: EffectId::new("abc12345"),
             effect_type: EffectTypeId::from_string("UnregisteredTestEffect".to_string()),
             enabled: true,
             collapsed: false,

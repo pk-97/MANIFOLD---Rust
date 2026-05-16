@@ -329,8 +329,8 @@ mod tests {
         let c = Color32::new(255, 0, 0, 255);
         fill_rect(&mut buf, 4, 4, 1, 1, 2, 2, c);
         // Row 1: pixels 1,2 should be red
-        assert_eq!(buf[1 * 4 + 1], c);
-        assert_eq!(buf[1 * 4 + 2], c);
+        assert_eq!(buf[4 + 1], c);
+        assert_eq!(buf[4 + 2], c);
         assert_eq!(buf[2 * 4 + 1], c);
         assert_eq!(buf[2 * 4 + 2], c);
         // Corners should still be transparent
@@ -409,7 +409,7 @@ mod tests {
         draw_clip(&mut buf, 30, 10, 2, 1, 20, 8, bg, true, false, 1.0);
         // Selected border thickness = s(2,1)=2
         // Left border at x=2, should be BORDER_SELECTED
-        assert_eq!(buf[1 * 30 + 2], BORDER_SELECTED);
+        assert_eq!(buf[30 + 2], BORDER_SELECTED);
     }
 
     #[test]

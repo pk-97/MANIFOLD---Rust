@@ -1291,8 +1291,8 @@ mod tests {
             .iter()
             .map(|c| ct_font.get_glyph_with_name(&c.to_string()))
             .collect();
-        // Drop ct_font borrow before calling rasterize_glyph.
-        drop(ct_font);
+        // (`ct_font` is a &CTFont; the borrow on `fm` ends at its
+        // last use above — no explicit drop needed.)
 
         let mut rects: Vec<(f32, f32, f32, f32, u32, u32)> = Vec::new();
         for &gid in &glyph_ids {
