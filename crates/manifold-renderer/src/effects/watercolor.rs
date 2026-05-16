@@ -60,25 +60,29 @@ crate::atomic_chain_spec! {
     bindings: &[
         ParamBinding {
             id: Cow::Borrowed("amount"),
-            spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.5, "F2", ""),
+            label: "Amount",
+            default_value: 0.5,
             target: ParamTarget::HandleNode { handle: "watercolor", param: "amount" },
             convert: ParamConvert::Float,
         },
         ParamBinding {
             id: Cow::Borrowed("displace"),
-            spec: ParamSpec::continuous("displace", "Displace", 0.0001, 0.01, 0.001, "F4", "displace"),
+            label: "Displace",
+            default_value: 0.001,
             target: ParamTarget::HandleNode { handle: "watercolor", param: "displace" },
             convert: ParamConvert::Float,
         },
         ParamBinding {
             id: Cow::Borrowed("blur"),
-            spec: ParamSpec::continuous("blur", "Blur", 0.5, 8.0, 2.0, "F1", "blur"),
+            label: "Blur",
+            default_value: 2.0,
             target: ParamTarget::HandleNode { handle: "watercolor", param: "blur" },
             convert: ParamConvert::Float,
         },
         ParamBinding {
             id: Cow::Borrowed("decay"),
-            spec: ParamSpec::continuous("decay", "Decay", 0.9, 1.0, 0.99, "F3", "decay"),
+            label: "Decay",
+            default_value: 0.99,
             target: ParamTarget::HandleNode { handle: "watercolor", param: "decay" },
             convert: ParamConvert::Float,
         },

@@ -37,7 +37,8 @@ crate::atomic_chain_spec! {
     bindings: &[
         ParamBinding {
             id: Cow::Borrowed("amount"),
-            spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
+            label: "Amount",
+            default_value: 1.0,
             target: ParamTarget::HandleNode { handle: "quad_mirror", param: "amount" },
             convert: ParamConvert::Float,
         },

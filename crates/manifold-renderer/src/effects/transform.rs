@@ -55,19 +55,22 @@ crate::atomic_chain_spec! {
     bindings: &[
         ParamBinding {
             id: Cow::Borrowed("x"),
-            spec: ParamSpec::continuous("x", "X", -1.0, 1.0, 0.0, "F2", ""),
+            label: "X",
+            default_value: 0.0,
             target: ParamTarget::HandleNode { handle: "transform", param: "translate_x" },
             convert: ParamConvert::Float,
         },
         ParamBinding {
             id: Cow::Borrowed("y"),
-            spec: ParamSpec::continuous("y", "Y", -1.0, 1.0, 0.0, "F2", ""),
+            label: "Y",
+            default_value: 0.0,
             target: ParamTarget::HandleNode { handle: "transform", param: "translate_y" },
             convert: ParamConvert::Float,
         },
         ParamBinding {
             id: Cow::Borrowed("zoom"),
-            spec: ParamSpec::continuous("zoom", "Zoom", 0.1, 5.0, 1.0, "F2", ""),
+            label: "Zoom",
+            default_value: 1.0,
             target: ParamTarget::HandleNode { handle: "transform", param: "scale" },
             convert: ParamConvert::Float,
         },
@@ -77,7 +80,8 @@ crate::atomic_chain_spec! {
         // deg→rad + sign-flip lives inside the primitive.
         ParamBinding {
             id: Cow::Borrowed("rot"),
-            spec: ParamSpec::continuous("rot", "Rot", -180.0, 180.0, 0.0, "F2", ""),
+            label: "Rot",
+            default_value: 0.0,
             target: ParamTarget::HandleNode { handle: "transform", param: "rotation" },
             convert: ParamConvert::Float,
         },

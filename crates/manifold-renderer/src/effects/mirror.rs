@@ -111,21 +111,15 @@ inventory::submit! {
         bindings: &[
             ParamBinding {
                 id: Cow::Borrowed("amount"),
-                spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
+                label: "Amount",
+                default_value: 1.0,
                 target: ParamTarget::HandleNode { handle: "mix", param: "amount" },
                 convert: ParamConvert::Float,
             },
             ParamBinding {
                 id: Cow::Borrowed("mode"),
-                spec: ParamSpec::whole_labels(
-                    "mode",
-                    "Mode",
-                    0.0,
-                    (TRANSFORM_MODES.len() - 1) as f32,
-                    MIRROR_FOLD_X as f32,
-                    TRANSFORM_MODES,
-                    "Mode",
-                ),
+                label: "Mode",
+                default_value: MIRROR_FOLD_X as f32,
                 target: ParamTarget::HandleNode { handle: "uv_transform", param: "mode" },
                 convert: ParamConvert::EnumRound,
             },

@@ -39,19 +39,22 @@ crate::atomic_chain_spec! {
     bindings: &[
         ParamBinding {
             id: Cow::Borrowed("amount"),
-            spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            label: "Amount",
+            default_value: 0.0,
             target: ParamTarget::HandleNode { handle: "infrared", param: "amount" },
             convert: ParamConvert::Float,
         },
         ParamBinding {
             id: Cow::Borrowed("palette"),
-            spec: ParamSpec::whole_labels("palette", "Palette", 0.0, 9.0, 0.0, &["White Hot", "Black Hot", "Green NV", "Iron Bow", "Rainbow", "Lava", "Arctic", "Magenta", "Electric", "Toxic"], "Palette"),
+            label: "Palette",
+            default_value: 0.0,
             target: ParamTarget::HandleNode { handle: "infrared", param: "palette" },
             convert: ParamConvert::EnumRound,
         },
         ParamBinding {
             id: Cow::Borrowed("contrast"),
-            spec: ParamSpec::continuous("contrast", "Contrast", 0.5, 3.0, 1.0, "F2", "Contrast"),
+            label: "Contrast",
+            default_value: 1.0,
             target: ParamTarget::HandleNode { handle: "infrared", param: "contrast" },
             convert: ParamConvert::Float,
         },

@@ -39,13 +39,15 @@ crate::atomic_chain_spec! {
     bindings: &[
         ParamBinding {
             id: Cow::Borrowed("amount"),
-            spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            label: "Amount",
+            default_value: 0.0,
             target: ParamTarget::HandleNode { handle: "edge_detect", param: "amount" },
             convert: ParamConvert::Float,
         },
         ParamBinding {
             id: Cow::Borrowed("thresh"),
-            spec: ParamSpec::continuous("thresh", "Thresh", 0.0, 1.0, 0.1, "F2", "Threshold"),
+            label: "Thresh",
+            default_value: 0.1,
             target: ParamTarget::HandleNode { handle: "edge_detect", param: "threshold" },
             convert: ParamConvert::Float,
         },

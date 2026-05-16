@@ -38,13 +38,15 @@ crate::atomic_chain_spec! {
     bindings: &[
         ParamBinding {
             id: Cow::Borrowed("amount"),
-            spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            label: "Amount",
+            default_value: 0.0,
             target: ParamTarget::HandleNode { handle: "kaleidoscope", param: "amount" },
             convert: ParamConvert::Float,
         },
         ParamBinding {
             id: Cow::Borrowed("segs"),
-            spec: ParamSpec::whole("segs", "Segs", 2.0, 16.0, 6.0, "Segments"),
+            label: "Segs",
+            default_value: 6.0,
             target: ParamTarget::HandleNode { handle: "kaleidoscope", param: "segments" },
             convert: ParamConvert::Float,
         },

@@ -10,9 +10,13 @@
 //!    (OSC, Ableton, MIDI, modulation drivers) key on this. Renaming the
 //!    label or reorganizing the underlying graph never invalidates a
 //!    `ParamId`.
-//! 2. `spec.name` — display label on the slider. Free to edit.
-//! 3. `target` — current routing path to a graph node parameter. May
-//!    change as the effect's internals are decomposed or refactored.
+//! 2. [`ParamBinding::label`] — display string on the slider. Free to edit.
+//!    Range, type flags, enum labels, and OSC suffix live on the
+//!    effect's `EffectMetadata.params` entry of the same id — the
+//!    binding deliberately doesn't duplicate them.
+//! 3. [`ParamBinding::target`] — current routing path to a graph node
+//!    parameter. May change as the effect's internals are decomposed
+//!    or refactored.
 //!
 //! ## Why `Cow<'static, str>`
 //!
@@ -20,18 +24,10 @@
 //! strings (V2: user-exposed parameters generated at runtime) flow
 //! through the same code paths. `Cow::Borrowed` for compile-time IDs,
 //! `Cow::Owned` for user-generated. Same trick `EffectTypeId` uses.
-//!
-//! ## What this module is *not*
-//!
-//! No callers yet. Step 5 of Phase 2 in the migration plan: define the
-//! types and conversion semantics so the rest of Phase 2 has a stable
-//! target shape to build toward. Effects, drivers, Ableton mappings,
-//! and project-file serialization migrations come in subsequent steps.
 
 use std::borrow::Cow;
 
 use manifold_core::effects::ParamSlot;
-use manifold_core::generator_registration::ParamSpec;
 
 use crate::node_graph::composites::CompositeHandle;
 use crate::node_graph::effect_node::NodeInstanceId;
@@ -50,14 +46,27 @@ pub use manifold_core::effects::ParamId;
 /// storage and the graph's typed `ParamValue` parameter map. Each
 /// binding consumes one f32 from the host's `param_values` and routes
 /// the converted value to its `target`.
+///
+/// The binding deliberately carries only the *outer-specific* fields
+/// (id, display label, default value, routing, conversion). Range,
+/// type flags, enum labels, format string, and OSC suffix come from
+/// the corresponding `EffectMetadata.params[id]` entry — the single
+/// outer source of truth — which the audit verifies against the
+/// inner-node `ParamDef`. The binding used to embed a full
+/// `ParamSpec` here; that was redundant authoring policed by a parity
+/// test. After the V2 unification the redundancy is gone.
 #[derive(Debug, Clone)]
 pub struct ParamBinding {
     /// Stable identity. Forever rule: never rename, never reuse.
     pub id: ParamId,
-    /// UI metadata — slider label, range, default, format string,
-    /// enum labels. `spec.name` is the editable display string;
-    /// `id` is the stable mapping key.
-    pub spec: ParamSpec,
+    /// Display label for the outer effect-card slider and for the
+    /// editor's "Effect Parameters" read-only list. Free to edit.
+    pub label: &'static str,
+    /// Initial value the host slot lands on when the effect is
+    /// instantiated. Pre-seeds the [`LastAppliedCache`] so binding
+    /// applies skip on unchanged outer values and inner-node edits
+    /// survive across chain rebuilds.
+    pub default_value: f32,
     /// Where this parameter's value flows in the graph.
     pub target: ParamTarget,
     /// Conversion from f32 (UI/storage form) to the typed
@@ -214,7 +223,8 @@ impl ParamBinding {
                     .map(|(_, id)| *id)?;
                 Some(ParamBinding {
                     id: self.id.clone(),
-                    spec: self.spec.clone(),
+                    label: self.label,
+                    default_value: self.default_value,
                     target: ParamTarget::Node {
                         node: node_id,
                         param,
@@ -343,7 +353,7 @@ pub fn apply_param_bindings(
         let value = values
             .get(i)
             .map(|p| p.value)
-            .unwrap_or(binding.spec.default_value);
+            .unwrap_or(binding.default_value);
         match last_applied.static_outer[i] {
             BindingCacheEntry::Applied(prev) if prev == value => {
                 continue;
@@ -459,7 +469,7 @@ impl LastAppliedCache {
         self.static_outer.reserve(static_bindings.len());
         for b in static_bindings {
             self.static_outer
-                .push(BindingCacheEntry::Applied(b.spec.default_value));
+                .push(BindingCacheEntry::Applied(b.default_value));
         }
     }
 }
@@ -538,7 +548,7 @@ pub fn outer_routings_from_bindings(
             continue;
         };
         out.push(OuterParamRouting {
-            outer_label: b.spec.name.to_string(),
+            outer_label: b.label.to_string(),
             outer_param_id: b.id.to_string(),
             node_handle: handle_str.clone(),
             inner_param: inner_param.to_string(),
@@ -639,7 +649,8 @@ mod tests {
     fn feedback_amount_binding(node: NodeInstanceId) -> ParamBinding {
         ParamBinding {
             id: Cow::Borrowed("amount"),
-            spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.5, "F2", ""),
+            label: "Amount",
+            default_value: 0.5,
             target: ParamTarget::Node {
                 node,
                 param: "amount",
@@ -677,7 +688,8 @@ mod tests {
             feedback_amount_binding(feedback),
             ParamBinding {
                 id: Cow::Borrowed("zoom"),
-                spec: ParamSpec::continuous("zoom", "Zoom", 0.9, 1.1, 0.95, "F2", "Zoom"),
+                label: "Zoom",
+                default_value: 0.95,
                 target: ParamTarget::Node {
                     node: feedback,
                     param: "zoom",
@@ -1060,7 +1072,8 @@ mod tests {
         let feedback = g.add_node(Box::new(Feedback::new()));
         let binding = ParamBinding {
             id: Cow::Borrowed("nonexistent"),
-            spec: ParamSpec::continuous("nonexistent", "Nonexistent", 0.0, 1.0, 0.0, "F2", ""),
+            label: "Nonexistent",
+            default_value: 0.0,
             target: ParamTarget::Node {
                 node: feedback,
                 param: "nonexistent",
@@ -1080,7 +1093,8 @@ mod tests {
         let feedback = g.add_node(Box::new(Feedback::new()));
         let binding = ParamBinding {
             id: Cow::Borrowed("mode"),
-            spec: ParamSpec::whole_labels("mode", "Mode", 0.0, 2.0, 0.0, &["A", "B", "C"], "Mode"),
+            label: "Mode",
+            default_value: 0.0,
             target: ParamTarget::Node {
                 node: feedback,
                 param: "mode",
@@ -1110,15 +1124,8 @@ mod tests {
         let feedback = g.add_node(Box::new(Feedback::new()));
         let binding = ParamBinding {
             id: Cow::Borrowed("blend_strength"),
-            spec: ParamSpec::continuous(
-                "blend_strength",
-                "Blend Strength",
-                0.0,
-                1.0,
-                0.5,
-                "F2",
-                "",
-            ),
+            label: "Blend Strength",
+            default_value: 0.5,
             target: ParamTarget::Node {
                 node: feedback,
                 param: "amount",

@@ -39,13 +39,15 @@ crate::atomic_chain_spec! {
     bindings: &[
         ParamBinding {
             id: Cow::Borrowed("amount"),
-            spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            label: "Amount",
+            default_value: 0.0,
             target: ParamTarget::HandleNode { handle: "voronoi", param: "amount" },
             convert: ParamConvert::Float,
         },
         ParamBinding {
             id: Cow::Borrowed("cells"),
-            spec: ParamSpec::whole("cells", "Cells", 4.0, 64.0, 16.0, "CellCount"),
+            label: "Cells",
+            default_value: 16.0,
             target: ParamTarget::HandleNode { handle: "voronoi", param: "cell_count" },
             convert: ParamConvert::Float,
         },
@@ -57,7 +59,8 @@ crate::atomic_chain_spec! {
         // omit this slot fall back to the metadata default.
         ParamBinding {
             id: Cow::Borrowed("source_width"),
-            spec: ParamSpec::continuous("source_width", "Cell Size", 0.1, 1.0, 0.5625, "F2", "SourceWidth"),
+            label: "Cell Size",
+            default_value: 0.5625,
             target: ParamTarget::HandleNode { handle: "voronoi", param: "source_width" },
             convert: ParamConvert::Float,
         },

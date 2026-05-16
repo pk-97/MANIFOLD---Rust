@@ -122,7 +122,7 @@ fn outer_routings_from_spec(
             _ => continue,
         };
         out.push(OuterParamRouting {
-            outer_label: binding.spec.name.to_string(),
+            outer_label: binding.label.to_string(),
             outer_param_id: binding.id.to_string(),
             node_handle: handle.to_string(),
             inner_param: inner_param.to_string(),

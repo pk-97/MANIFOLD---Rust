@@ -314,18 +314,15 @@ pub fn validate_all_specs() -> Vec<SpecValidationError> {
     errors
 }
 
-/// Parity check: when a spec declares both `bindings` and the matching
-/// effect's `EffectMetadata.params` is non-empty, every binding's
-/// `spec` must equal the corresponding `ParamSpec` in the metadata
-/// (matched by `id`). Drift here means the card UI / OSC / save path
-/// would see different metadata than the runtime apply path.
+/// Parity check between each binding and its `EffectMetadata.params`
+/// entry. The slimmed `ParamBinding` carries `id`, `label`, and
+/// `default_value` alongside its routing; this validator guarantees
+/// those match `EffectMetadata.params[id]` so the binding stays the
+/// thin shim it's meant to be (everything else — range, type flags,
+/// enum labels, format, OSC suffix — lives on the metadata, single
+/// source of truth, audited separately against the inner ParamDef).
 ///
-/// Empty result = no drift. During Phase 1 migration, effects flip
-/// from declaring `routings` to declaring `bindings`; this guard
-/// guarantees that flipping doesn't change the outer surface.
-///
-/// Run automatically as part of [`validate_all_specs`]; also exposed
-/// directly for fine-grained tests.
+/// Empty result = no drift.
 pub fn validate_binding_spec_parity() -> Vec<BindingParityError> {
     let mut errors = Vec::new();
     for spec in inventory::iter::<ChainSpec> {
@@ -338,8 +335,6 @@ pub fn validate_binding_spec_parity() -> Vec<BindingParityError> {
         if metadata.params.is_empty() {
             continue;
         }
-        // Match each binding to its metadata param by id; assert
-        // every metadata field matches.
         for binding in spec.bindings {
             let bid = binding.id.as_ref();
             let Some(meta_param) = metadata.params.iter().find(|p| p.id == bid) else {
@@ -350,14 +345,23 @@ pub fn validate_binding_spec_parity() -> Vec<BindingParityError> {
                 });
                 continue;
             };
-            if !param_specs_equal(&binding.spec, meta_param) {
+            if binding.label != meta_param.name {
                 errors.push(BindingParityError {
                     effect_id: spec.type_id.clone(),
                     param_id: bid.to_string(),
                     reason: format!(
-                        "binding.spec differs from EffectMetadata.params entry: \
-                         binding={:?} metadata={:?}",
-                        binding.spec, meta_param,
+                        "binding.label ({:?}) differs from EffectMetadata.params.name ({:?})",
+                        binding.label, meta_param.name,
+                    ),
+                });
+            }
+            if binding.default_value != meta_param.default_value {
+                errors.push(BindingParityError {
+                    effect_id: spec.type_id.clone(),
+                    param_id: bid.to_string(),
+                    reason: format!(
+                        "binding.default_value ({}) differs from EffectMetadata.params.default_value ({})",
+                        binding.default_value, meta_param.default_value,
                     ),
                 });
             }
@@ -371,22 +375,6 @@ pub fn validate_binding_spec_parity() -> Vec<BindingParityError> {
         // only the binding-without-metadata direction is actual drift.
     }
     errors
-}
-
-fn param_specs_equal(
-    a: &manifold_core::generator_registration::ParamSpec,
-    b: &manifold_core::generator_registration::ParamSpec,
-) -> bool {
-    a.id == b.id
-        && a.name == b.name
-        && a.min == b.min
-        && a.max == b.max
-        && a.default_value == b.default_value
-        && a.whole_numbers == b.whole_numbers
-        && a.is_toggle == b.is_toggle
-        && a.value_labels == b.value_labels
-        && a.format_string == b.format_string
-        && a.osc_suffix == b.osc_suffix
 }
 
 #[derive(Debug, Clone)]
@@ -591,6 +579,14 @@ pub fn audit_outer_inner_drift() -> Vec<OuterInnerDrift> {
             .map(|(h, id)| (h.as_ref(), *id))
             .collect();
 
+        // Resolve the effect's outer ParamSpec list once per spec via
+        // the shared metadata lookup. After the binding.spec drop the
+        // metadata is the single outer source of truth — the audit
+        // compares metadata.params[id] against the inner ParamDef.
+        let Some(metadata) = metadata_by_id(&spec.type_id) else {
+            continue;
+        };
+
         for binding in spec.bindings {
             let ParamTarget::HandleNode { handle, param } = &binding.target else {
                 // Composite/Node/Custom variants don't address a single
@@ -622,6 +618,22 @@ pub fn audit_outer_inner_drift() -> Vec<OuterInnerDrift> {
                 continue;
             };
             let Some(inner_pd) = node.node.parameters().iter().find(|p| p.name == *param) else {
+                findings.push(OuterInnerDrift {
+                    effect_id: spec.type_id.clone(),
+                    outer_param_id: binding.id.to_string(),
+                    inner_handle: handle,
+                    inner_param: param,
+                    category: DriftCategory::Unresolved,
+                    diffs: Vec::new(),
+                });
+                continue;
+            };
+            // Look up the outer ParamSpec from EffectMetadata.params
+            // for this binding's id. Missing metadata entry is
+            // categorised as Unresolved — the parity validator emits
+            // its own clearer error for this case.
+            let Some(outer_spec) = metadata.params.iter().find(|p| p.id == binding.id.as_ref())
+            else {
                 findings.push(OuterInnerDrift {
                     effect_id: spec.type_id.clone(),
                     outer_param_id: binding.id.to_string(),
@@ -671,19 +683,19 @@ pub fn audit_outer_inner_drift() -> Vec<OuterInnerDrift> {
                             },
                             outer_flag_summary: format!(
                                 "whole_numbers={} is_toggle={} value_labels={}",
-                                binding.spec.whole_numbers,
-                                binding.spec.is_toggle,
-                                binding.spec.value_labels.len(),
+                                outer_spec.whole_numbers,
+                                outer_spec.is_toggle,
+                                outer_spec.value_labels.len(),
                             ),
                         }],
                     });
                     continue;
                 }
             };
-            let flags_match = binding.spec.whole_numbers == expected_whole
-                && binding.spec.is_toggle == expected_toggle
-                && (binding.spec.value_labels.is_empty() != expected_enum
-                    || (expected_enum && !binding.spec.value_labels.is_empty()));
+            let flags_match = outer_spec.whole_numbers == expected_whole
+                && outer_spec.is_toggle == expected_toggle
+                && (outer_spec.value_labels.is_empty() != expected_enum
+                    || (expected_enum && !outer_spec.value_labels.is_empty()));
             if !flags_match {
                 diffs.push(DriftField::TypeMismatch {
                     inner_ty: match inner_pd.ty {
@@ -695,9 +707,9 @@ pub fn audit_outer_inner_drift() -> Vec<OuterInnerDrift> {
                     },
                     outer_flag_summary: format!(
                         "whole_numbers={} is_toggle={} enum_labels={}",
-                        binding.spec.whole_numbers,
-                        binding.spec.is_toggle,
-                        binding.spec.value_labels.len(),
+                        outer_spec.whole_numbers,
+                        outer_spec.is_toggle,
+                        outer_spec.value_labels.len(),
                     ),
                 });
             }
@@ -707,10 +719,10 @@ pub fn audit_outer_inner_drift() -> Vec<OuterInnerDrift> {
             // ground truth — skip the diff.
             if let Some(inner_range) = inner_pd.range
                 && matches!(inner_pd.ty, ParamType::Float | ParamType::Int)
-                && (binding.spec.min != inner_range.0 || binding.spec.max != inner_range.1)
+                && (outer_spec.min != inner_range.0 || outer_spec.max != inner_range.1)
             {
                 diffs.push(DriftField::Range {
-                    outer: (binding.spec.min, binding.spec.max),
+                    outer: (outer_spec.min, outer_spec.max),
                     inner: Some(inner_range),
                 });
             }
@@ -731,7 +743,7 @@ pub fn audit_outer_inner_drift() -> Vec<OuterInnerDrift> {
             // inner's enum_values when the inner is an Enum.
             if matches!(inner_pd.ty, ParamType::Enum) {
                 let outer: Vec<String> =
-                    binding.spec.value_labels.iter().map(|s| s.to_string()).collect();
+                    outer_spec.value_labels.iter().map(|s| s.to_string()).collect();
                 let inner: Vec<String> =
                     inner_pd.enum_values.iter().map(|s| s.to_string()).collect();
                 if outer != inner {

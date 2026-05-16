@@ -43,7 +43,8 @@ crate::atomic_chain_spec! {
     bindings: &[
         ParamBinding {
             id: Cow::Borrowed("amount"),
-            spec: ParamSpec::continuous("amount", "Amount", 0.0, 5.0, 0.187, "F2", ""),
+            label: "Amount",
+            default_value: 0.187,
             target: ParamTarget::HandleNode { handle: "bloom", param: "amount" },
             convert: ParamConvert::Float,
         },

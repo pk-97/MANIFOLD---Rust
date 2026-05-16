@@ -58,13 +58,15 @@ inventory::submit! {
         bindings: &[
             ParamBinding {
                 id: Cow::Borrowed("radius"),
-                spec: ParamSpec::continuous("radius", "Radius", 0.0, 64.0, 6.0, "F1", "px"),
+                label: "Radius",
+                default_value: 6.0,
                 target: ParamTarget::HandleNode { handle: "blur", param: "radius" },
                 convert: ParamConvert::Float,
             },
             ParamBinding {
                 id: Cow::Borrowed("amount"),
-                spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.5, "F2", ""),
+                label: "Amount",
+                default_value: 0.5,
                 target: ParamTarget::HandleNode { handle: "mix", param: "amount" },
                 convert: ParamConvert::Float,
             },

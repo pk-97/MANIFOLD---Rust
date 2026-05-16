@@ -39,19 +39,22 @@ crate::atomic_chain_spec! {
     bindings: &[
         ParamBinding {
             id: Cow::Borrowed("amount"),
-            spec: ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
+            label: "Amount",
+            default_value: 1.0,
             target: ParamTarget::HandleNode { handle: "edge_stretch", param: "amount" },
             convert: ParamConvert::Float,
         },
         ParamBinding {
             id: Cow::Borrowed("width"),
-            spec: ParamSpec::continuous("width", "Width", 0.1, 0.9, 0.433, "F2", "SourceWidth"),
+            label: "Width",
+            default_value: 0.433,
             target: ParamTarget::HandleNode { handle: "edge_stretch", param: "source_width" },
             convert: ParamConvert::Float,
         },
         ParamBinding {
             id: Cow::Borrowed("dir"),
-            spec: ParamSpec::whole_labels("dir", "Dir", 0.0, 2.0, 0.0, &["Horiz", "Vert", "Both"], "Direction"),
+            label: "Dir",
+            default_value: 0.0,
             target: ParamTarget::HandleNode { handle: "edge_stretch", param: "mode" },
             convert: ParamConvert::EnumRound,
         },
