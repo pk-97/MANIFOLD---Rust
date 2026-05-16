@@ -13,12 +13,11 @@
 //! envelope + measurement-buffer state in its registry, same caveat
 //! as Watercolor (§6.3 c4) and DoF (§6.4).
 
-mod parity;
 
 use manifold_core::EffectTypeId;
 use manifold_renderer::node_graph::ParamValue;
 use manifold_renderer::node_graph::primitives::AutoGain;
-use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
+use crate::harness::{self, Fixture, assert_bytewise_equal, default_ctx, make_default_effect};
 
 #[derive(Debug, Clone, Copy)]
 struct Setup {
@@ -127,11 +126,11 @@ const SETUPS: &[Setup] = &[
 
 #[test]
 fn auto_gain_is_pixel_exact_across_fixtures_and_setups() {
-    let mut h = ParityHarness::new();
+    let h = harness::shared();
     let mut owner_key: i64 = 0;
 
     for &fixture in Fixture::all() {
-        let input = fixture.build(&h);
+        let input = fixture.build(h);
 
         for s in SETUPS {
             owner_key += 1;

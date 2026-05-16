@@ -11,12 +11,11 @@
 //! TransformFX::apply branches to identity uniforms when clip-level;
 //! that's an effect-UX concern, not a primitive concern.
 
-mod parity;
 
 use manifold_core::EffectTypeId;
 use manifold_renderer::node_graph::ParamValue;
 use manifold_renderer::node_graph::primitives::AffineTransform;
-use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
+use crate::harness::{self, Fixture, assert_bytewise_equal, default_ctx, make_default_effect};
 
 /// One transform preset. Field naming matches `TransformFX::apply`.
 #[derive(Debug, Clone, Copy)]
@@ -82,11 +81,11 @@ const XFORMS: &[Xform] = &[
 
 #[test]
 fn affine_transform_is_pixel_exact_across_fixtures_and_xforms() {
-    let mut h = ParityHarness::new();
+    let h = harness::shared();
     let ctx = default_ctx(h.width, h.height);
 
     for &fixture in Fixture::all() {
-        let input = fixture.build(&h);
+        let input = fixture.build(h);
 
         for xf in XFORMS {
             let mut fx = make_default_effect(EffectTypeId::TRANSFORM);

@@ -6,12 +6,11 @@
 //! slot; the parity test pins it to the metadata default (0.5625)
 //! on both paths.
 
-mod parity;
 
 use manifold_core::EffectTypeId;
 use manifold_renderer::node_graph::ParamValue;
 use manifold_renderer::node_graph::primitives::VoronoiPrism;
-use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
+use crate::harness::{self, Fixture, assert_bytewise_equal, default_ctx, make_default_effect};
 
 const SETUPS: &[(f32, f32, &str)] = &[
     (0.0, 16.0, "identity"),
@@ -24,11 +23,11 @@ const SETUPS: &[(f32, f32, &str)] = &[
 
 #[test]
 fn voronoi_prism_is_pixel_exact_across_fixtures_and_setups() {
-    let mut h = ParityHarness::new();
+    let h = harness::shared();
     let ctx = default_ctx(h.width, h.height);
 
     for &fixture in Fixture::all() {
-        let input = fixture.build(&h);
+        let input = fixture.build(h);
 
         for &(amount, cells, label) in SETUPS {
             let mut fx = make_default_effect(EffectTypeId::VORONOI_PRISM);

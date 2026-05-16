@@ -8,12 +8,11 @@
 //! through legacy's bit-for-bit HSV→RGB; if the implementation diverges
 //! the test fails on the colored fixtures first.
 
-mod parity;
 
 use manifold_core::EffectTypeId;
 use manifold_renderer::node_graph::ParamValue;
 use manifold_renderer::node_graph::primitives::Halation;
-use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
+use crate::harness::{self, Fixture, assert_bytewise_equal, default_ctx, make_default_effect};
 
 #[derive(Debug, Clone, Copy)]
 struct Setup {
@@ -94,11 +93,11 @@ const SETUPS: &[Setup] = &[
 
 #[test]
 fn halation_is_pixel_exact_across_fixtures_and_setups() {
-    let mut h = ParityHarness::new();
+    let h = harness::shared();
     let ctx = default_ctx(h.width, h.height);
 
     for &fixture in Fixture::all() {
-        let input = fixture.build(&h);
+        let input = fixture.build(h);
 
         for s in SETUPS {
             let mut fx = make_default_effect(EffectTypeId::HALATION);

@@ -7,23 +7,22 @@
 //! verifies the CPU-side source_width clamp ([0.1, 0.9]) matches
 //! between paths.
 
-mod parity;
 
 use manifold_core::EffectTypeId;
 use manifold_renderer::node_graph::ParamValue;
 use manifold_renderer::node_graph::primitives::ClampStretch;
-use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
+use crate::harness::{self, Fixture, assert_bytewise_equal, default_ctx, make_default_effect};
 
 const MODES: &[(u32, &str)] = &[(0, "horiz"), (1, "vert"), (2, "both")];
 const WIDTHS: &[f32] = &[0.2, 0.433, 0.8];
 
 #[test]
 fn clamp_stretch_is_pixel_exact_across_fixtures_modes_widths() {
-    let mut h = ParityHarness::new();
+    let h = harness::shared();
     let ctx = default_ctx(h.width, h.height);
 
     for &fixture in Fixture::all() {
-        let input = fixture.build(&h);
+        let input = fixture.build(h);
 
         for &(mode_u, mode_label) in MODES {
             for &width in WIDTHS {
@@ -68,8 +67,8 @@ fn clamp_stretch_is_pixel_exact_across_fixtures_modes_widths() {
 /// uniform pack; the primitive must do the same.
 #[test]
 fn clamp_stretch_clamps_out_of_range_source_width() {
-    let mut h = ParityHarness::new();
-    let input = Fixture::Gradient.build(&h);
+    let h = harness::shared();
+    let input = Fixture::Gradient.build(h);
     let ctx = default_ctx(h.width, h.height);
 
     for &width in &[-0.5f32, 0.0, 0.05, 0.95, 1.5] {

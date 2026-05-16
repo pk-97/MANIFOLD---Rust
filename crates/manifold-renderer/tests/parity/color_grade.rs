@@ -19,12 +19,11 @@
 //! grade fails, the failure message localizes which grade and which
 //! fixture diverged.
 
-mod parity;
 
 use manifold_core::EffectTypeId;
 use manifold_renderer::node_graph::ParamValue;
 use manifold_renderer::node_graph::primitives::ColorGrade;
-use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
+use crate::harness::{self, Fixture, assert_bytewise_equal, default_ctx, make_default_effect};
 
 /// One grade preset. Field order matches the legacy
 /// `ColorGradeFX::apply` mapping (`param_values[0..9]`).
@@ -119,11 +118,11 @@ const GRADES: &[Grade] = &[
 
 #[test]
 fn color_grade_is_pixel_exact_across_fixtures_and_grades() {
-    let mut h = ParityHarness::new();
+    let h = harness::shared();
     let ctx = default_ctx(h.width, h.height);
 
     for &fixture in Fixture::all() {
-        let input = fixture.build(&h);
+        let input = fixture.build(h);
 
         for grade in GRADES {
             let mut fx = make_default_effect(EffectTypeId::COLOR_GRADE);

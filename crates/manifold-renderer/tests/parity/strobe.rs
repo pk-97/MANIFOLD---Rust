@@ -7,12 +7,11 @@
 //! uniform reaches the shader. The parity test passes the same enum
 //! index on both sides.
 
-mod parity;
 
 use manifold_core::EffectTypeId;
 use manifold_renderer::node_graph::ParamValue;
 use manifold_renderer::node_graph::primitives::Strobe;
-use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
+use crate::harness::{self, Fixture, assert_bytewise_equal, default_ctx, make_default_effect};
 
 /// (rate_idx, mode, amount, label).
 const SETUPS: &[(usize, u32, f32, &str)] = &[
@@ -27,11 +26,11 @@ const SETUPS: &[(usize, u32, f32, &str)] = &[
 
 #[test]
 fn strobe_is_pixel_exact_across_fixtures_and_setups() {
-    let mut h = ParityHarness::new();
+    let h = harness::shared();
     let ctx = default_ctx(h.width, h.height);
 
     for &fixture in Fixture::all() {
-        let input = fixture.build(&h);
+        let input = fixture.build(h);
 
         for &(rate_idx, mode, amount, label) in SETUPS {
             let mut fx = make_default_effect(EffectTypeId::STROBE);

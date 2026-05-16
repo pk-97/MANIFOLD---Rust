@@ -6,23 +6,22 @@
 //! degenerate fold) and the maximum declared (16); the amount sweep
 //! includes the passthrough boundary (0), midpoint, and full (1).
 
-mod parity;
 
 use manifold_core::EffectTypeId;
 use manifold_renderer::node_graph::ParamValue;
 use manifold_renderer::node_graph::primitives::KaleidoFold;
-use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
+use crate::harness::{self, Fixture, assert_bytewise_equal, default_ctx, make_default_effect};
 
 const SEGMENTS: &[f32] = &[2.0, 4.0, 6.0, 10.0, 16.0];
 const AMOUNTS: &[f32] = &[0.0, 0.5, 1.0];
 
 #[test]
 fn kaleido_fold_is_pixel_exact_across_fixtures_segments_amounts() {
-    let mut h = ParityHarness::new();
+    let h = harness::shared();
     let ctx = default_ctx(h.width, h.height);
 
     for &fixture in Fixture::all() {
-        let input = fixture.build(&h);
+        let input = fixture.build(h);
 
         for &segments in SEGMENTS {
             for &amount in AMOUNTS {
@@ -59,8 +58,8 @@ fn kaleido_fold_is_pixel_exact_across_fixtures_segments_amounts() {
 /// paths. Legacy CPU-clamps via `.max(2.0)`; primitive must too.
 #[test]
 fn kaleido_fold_clamps_below_min_segments() {
-    let mut h = ParityHarness::new();
-    let input = Fixture::Gradient.build(&h);
+    let h = harness::shared();
+    let input = Fixture::Gradient.build(h);
     let ctx = default_ctx(h.width, h.height);
 
     for &segments in &[-1.0f32, 0.0, 1.0, 1.5] {

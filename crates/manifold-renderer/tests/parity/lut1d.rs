@@ -20,12 +20,11 @@
 //! 3. LUT upload-into-RT copy introduces drift — RGBA16F → RGBA16F
 //!    is bit-preserving.
 
-mod parity;
 
 use manifold_core::EffectTypeId;
 use manifold_renderer::node_graph::ParamValue;
 use manifold_renderer::node_graph::primitives::ColorLut;
-use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
+use crate::harness::{self, Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
 
 const LUT_SIZE: u32 = 512;
 const LUT_MAX_LUM: f32 = 2.0;
@@ -228,14 +227,14 @@ const SETUPS: &[(f32, f32, &str)] = &[
 
 #[test]
 fn lut1d_is_pixel_exact_across_fixtures_palettes_setups() {
-    let mut h = ParityHarness::new();
+    let h = harness::shared();
     let ctx = default_ctx(h.width, h.height);
 
     for &fixture in Fixture::all() {
-        let input = fixture.build(&h);
+        let input = fixture.build(h);
 
         for &(palette_idx, palette_label) in PALETTES {
-            let lut_tex = upload_lut(&h, palette_idx);
+            let lut_tex = upload_lut(h, palette_idx);
 
             for &(amount, contrast, setup_label) in SETUPS {
                 let mut fx = make_default_effect(EffectTypeId::INFRARED);

@@ -24,12 +24,11 @@
 //!    `MetalBackend::pre_bind_texture_2d` and the per-frame source
 //!    blit in `Executor::execute_frame_with_gpu`.
 
-mod parity;
 
 use manifold_core::EffectTypeId;
 use manifold_renderer::node_graph::ParamValue;
 use manifold_renderer::node_graph::primitives::Invert;
-use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
+use crate::harness::{self, Fixture, assert_bytewise_equal, default_ctx, make_default_effect};
 
 /// Six representative intensity values per fixture: min, max, default,
 /// and three mid-range values that exercise different mix coefficients.
@@ -38,11 +37,11 @@ const INTENSITY_SWEEP: &[f32] = &[0.0, 0.25, 0.5, 0.75, 1.0, 0.42];
 
 #[test]
 fn invert_is_pixel_exact_across_fixtures_and_intensities() {
-    let mut h = ParityHarness::new();
+    let h = harness::shared();
     let ctx = default_ctx(h.width, h.height);
 
     for &fixture in Fixture::all() {
-        let input = fixture.build(&h);
+        let input = fixture.build(h);
 
         for &intensity in INTENSITY_SWEEP {
             let mut fx = make_default_effect(EffectTypeId::INVERT_COLORS);
@@ -77,8 +76,8 @@ fn invert_is_pixel_exact_across_fixtures_and_intensities() {
 /// when this single case fails.
 #[test]
 fn invert_at_zero_intensity_is_passthrough() {
-    let mut h = ParityHarness::new();
-    let input = Fixture::Gradient.build(&h);
+    let h = harness::shared();
+    let input = Fixture::Gradient.build(h);
     let ctx = default_ctx(h.width, h.height);
 
     let mut fx = make_default_effect(EffectTypeId::INVERT_COLORS);
@@ -100,8 +99,8 @@ fn invert_at_zero_intensity_is_passthrough() {
 /// across paths, ruling out shader-divergence at the math extreme.
 #[test]
 fn invert_at_full_intensity_matches_legacy() {
-    let mut h = ParityHarness::new();
-    let input = Fixture::Swatches.build(&h);
+    let h = harness::shared();
+    let input = Fixture::Swatches.build(h);
     let ctx = default_ctx(h.width, h.height);
 
     let mut fx = make_default_effect(EffectTypeId::INVERT_COLORS);

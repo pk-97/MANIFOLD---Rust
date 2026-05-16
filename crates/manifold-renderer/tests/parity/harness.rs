@@ -32,7 +32,7 @@
 
 use std::ffi::c_void;
 use std::slice;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use half::f16;
 use manifold_core::effects::EffectInstance;
@@ -60,24 +60,50 @@ pub const PARITY_HEIGHT: u32 = 128;
 /// Bytes per pixel for the canonical parity format (`Rgba16Float`).
 const BYTES_PER_PIXEL: u32 = 8;
 
-/// Owns the `GpuDevice`, the populated `EffectRegistry`, and the
-/// canonical render dimensions. A single harness instance is reused
-/// across all variants for one effect's parity sweep.
+/// Owns the `GpuDevice` and the canonical render dimensions. A single
+/// harness instance is shared across every effect's parity sweep via
+/// [`shared`] — the legacy / graph dispatch paths look up effects via
+/// process-wide statics ([`effect_chain::primitive_registry`],
+/// `inventory::iter`), so the harness never needs to hold an
+/// `EffectRegistry` of its own. We still *construct* one in [`new`] for
+/// its validation side effects, then drop it.
 pub struct ParityHarness {
     pub device: Arc<GpuDevice>,
-    pub registry: EffectRegistry,
     pub width: u32,
     pub height: u32,
     pub format: GpuTextureFormat,
 }
 
+/// Process-wide cached harness. The expensive part of construction is
+/// `GpuDevice::new()` plus building every registered effect's pipelines
+/// inside `EffectRegistry::new` (~5s on M-series). Sharing across all
+/// parity submodules drops that 21× cost down to 1×. `ParityHarness`
+/// methods take `&self` and create fresh per-call encoders, textures,
+/// and `MetalBackend`s, so concurrent test threads don't race on
+/// harness state — only on the underlying Metal command queue, which
+/// is thread-safe by Apple contract.
+static SHARED: OnceLock<ParityHarness> = OnceLock::new();
+
+/// Return the process-wide cached harness. Use this in every parity
+/// submodule unless the test specifically needs an *independent*
+/// instance (only [`crate::sanity::legacy_invert_is_deterministic_across_harness_instances`]
+/// does — proving no shared mutable state leaks across `new()` calls).
+pub fn shared() -> &'static ParityHarness {
+    SHARED.get_or_init(ParityHarness::new)
+}
+
 impl ParityHarness {
     pub fn new() -> Self {
         let device = Arc::new(GpuDevice::new());
-        let registry = EffectRegistry::new(&device);
+        // Build the registry purely for its validation side effects
+        // (`validate_all_specs`, `validate_binding_spec_parity` print
+        // any drift on construction). The processors it allocates are
+        // never read by the parity dispatch path — `EffectChain` looks
+        // them up via the process-wide `primitive_registry()` static —
+        // so we drop the result rather than store it.
+        let _ = EffectRegistry::new(&device);
         Self {
             device,
-            registry,
             width: PARITY_WIDTH,
             height: PARITY_HEIGHT,
             format: GpuTextureFormat::Rgba16Float,
@@ -135,7 +161,7 @@ impl ParityHarness {
     /// time-dependent effect (Glitch, Strobe, VoronoiPrism) produces
     /// reproducible output across runs.
     pub fn run_legacy(
-        &mut self,
+        &self,
         fx: &EffectInstance,
         input: &GpuTexture,
         ctx: &EffectContext,

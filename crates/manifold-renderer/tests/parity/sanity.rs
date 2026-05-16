@@ -15,10 +15,9 @@
 //! All three are framework bugs to fix before parity-comparing any
 //! decomposed primitive — otherwise the parity tests would flap.
 
-mod parity;
 
 use manifold_core::EffectTypeId;
-use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
+use crate::harness::{self, Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
 
 /// Runs `InvertColors` twice on `Fixture::Gradient` and asserts the
 /// two readbacks are identical. InvertColors is the simplest stateless
@@ -26,8 +25,8 @@ use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_de
 /// so a failure here points at the harness, not the effect.
 #[test]
 fn legacy_invert_is_deterministic_on_gradient() {
-    let mut h = ParityHarness::new();
-    let input = Fixture::Gradient.build(&h);
+    let h = harness::shared();
+    let input = Fixture::Gradient.build(h);
     let fx = make_default_effect(EffectTypeId::INVERT_COLORS);
     let ctx = default_ctx(h.width, h.height);
 
@@ -43,12 +42,12 @@ fn legacy_invert_is_deterministic_on_gradient() {
 /// to that input shape.
 #[test]
 fn legacy_invert_is_deterministic_across_fixtures() {
-    let mut h = ParityHarness::new();
+    let h = harness::shared();
     let fx = make_default_effect(EffectTypeId::INVERT_COLORS);
     let ctx = default_ctx(h.width, h.height);
 
     for &fixture in Fixture::all() {
-        let input = fixture.build(&h);
+        let input = fixture.build(h);
         let first = h.run_legacy(&fx, &input, &ctx);
         let second = h.run_legacy(&fx, &input, &ctx);
         assert_bytewise_equal(
@@ -61,20 +60,23 @@ fn legacy_invert_is_deterministic_across_fixtures() {
 
 /// Independent harness instances must produce identical bytes — proves
 /// no shared mutable state leaks across `ParityHarness::new()` calls.
-/// Without this, parity sweeps that build one harness per effect could
-/// silently drift.
+/// Without this, the (perf-optimized) `harness::shared()` path could
+/// silently mask drift that a fresh `ParityHarness::new()` would expose.
+/// This is the only parity test that constructs harnesses directly
+/// rather than reusing the cached one — every other test goes through
+/// `harness::shared()`.
 #[test]
 fn legacy_invert_is_deterministic_across_harness_instances() {
     let fx = make_default_effect(EffectTypeId::INVERT_COLORS);
 
     let bytes_a = {
-        let mut h = ParityHarness::new();
+        let h = ParityHarness::new();
         let input = Fixture::Gradient.build(&h);
         let ctx = default_ctx(h.width, h.height);
         h.run_legacy(&fx, &input, &ctx)
     };
     let bytes_b = {
-        let mut h = ParityHarness::new();
+        let h = ParityHarness::new();
         let input = Fixture::Gradient.build(&h);
         let ctx = default_ctx(h.width, h.height);
         h.run_legacy(&fx, &input, &ctx)
