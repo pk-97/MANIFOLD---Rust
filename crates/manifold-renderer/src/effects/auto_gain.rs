@@ -107,7 +107,13 @@ crate::atomic_chain_spec! {
             convert: ParamConvert::EnumRound,
         },
     ],
-    skip: SkipMode::OnZero { param_id: "amount" },
+    // Stateful: CPU envelope follower with transient detection — the
+    // gain trajectory only converges to the right level after several
+    // frames of measurement. SkipMode::OnZero would reset the envelope
+    // on every amount → 0 drag, causing a visible gain pop on the way
+    // back. Always splice — inner composite returns source at
+    // `amount = 0`.
+    skip: SkipMode::Never,
 }
 
 // ── Uniforms for the apply pass ────────────────────────────────────────

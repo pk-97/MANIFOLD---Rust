@@ -673,6 +673,15 @@ fn apply_ctx_params_at(
 /// hashed `(wet_dry < 1.0)`; rebuilds across that boundary wiped
 /// primitive state (Bloom mip pyramids, Watercolor feedback) every
 /// time modulation drove `wet_dry` through 1.0.
+///
+/// **Skip-on-zero state is layout-affecting.** `try_build` walks
+/// active effects and drops any whose `ChainSpec::is_skipped(fx)`
+/// returns `true`, so flipping that predicate (typically by dragging
+/// `amount` off / onto 0) changes which effects appear in the graph.
+/// We hash the predicate's current result per effect so the rebuild
+/// fires when the user drags `amount` away from 0 — without it the
+/// freshly-added effect would never enter the graph until the user
+/// toggled `enabled` (which IS in the hash) to force a rebuild.
 fn compute_topology_hash(
     effects: &[EffectInstance],
     groups: &[EffectGroup],
@@ -696,6 +705,12 @@ fn compute_topology_hash(
         // lost across the rebuild — acceptable because graph edits are
         // editing-time events, not performance-time.
         fx.graph_version.hash(&mut h);
+        // Skip-on-zero predicate state — see the doc-comment above.
+        // Effects without a `ChainSpec` registered are ignored here
+        // (legacy fallback); `try_build` will short-circuit anyway.
+        if let Some(spec) = chain_spec_by_id(fx.effect_type()) {
+            spec.is_skipped(fx).hash(&mut h);
+        }
     }
     for g in groups {
         g.id.as_str().hash(&mut h);
@@ -1023,5 +1038,81 @@ mod binding_seed_tests {
              seed pass regressed and effect cards will need to be 'touched' \
              before they take their settings."
         );
+    }
+}
+
+#[cfg(test)]
+mod topology_hash_tests {
+    //! Regression: the topology hash must include each effect's
+    //! current `is_skipped` state. Without it, dragging an
+    //! `amount` slider away from 0 doesn't trigger a chain rebuild,
+    //! so a freshly-added effect (which starts at `amount = 0` for
+    //! most types) never enters the graph until the user toggles
+    //! `enabled` — visible as the "add effect → must toggle to
+    //! work" symptom.
+    use super::*;
+    use manifold_core::EffectTypeId;
+    use manifold_core::effects::EffectInstance;
+    use manifold_core::effect_definition_registry;
+
+    fn make_default(ty: EffectTypeId) -> EffectInstance {
+        effect_definition_registry::create_default(&ty)
+    }
+
+    #[test]
+    fn hash_changes_when_skip_predicate_flips() {
+        // VoronoiPrism: outer `amount` default = 0.0 → `is_skipped`
+        // returns true. Drag the slider to 0.5 and the hash MUST
+        // change so the chain rebuilds and the effect enters the
+        // graph.
+        let mut fx = make_default(EffectTypeId::VORONOI_PRISM);
+        assert_eq!(
+            fx.param_values.first().map(|p| p.value),
+            Some(0.0),
+            "test fixture relies on VoronoiPrism.amount default = 0.0",
+        );
+
+        let hash_at_zero = compute_topology_hash(&[fx.clone()], &[], 256, 256);
+
+        // Bump amount off 0 — same fingerprint as a user dragging the
+        // slider on the effect card.
+        fx.set_base_param(0, 0.5);
+        let hash_at_half = compute_topology_hash(&[fx], &[], 256, 256);
+
+        assert_ne!(
+            hash_at_zero, hash_at_half,
+            "topology hash must change when an effect's SkipMode::OnZero \
+             predicate flips — otherwise the chain doesn't rebuild and \
+             the user has to toggle enabled to bring the effect into the \
+             graph. See the doc-comment on `compute_topology_hash`."
+        );
+    }
+
+    #[test]
+    fn stateful_effects_never_skip() {
+        // Stateful effects must keep their workers alive across an
+        // `amount → 0 → up` drag so their accumulated state (Feedback
+        // prev-frame texture, Bloom mip pyramid, Watercolor ping-pong,
+        // DNN worker spool, etc.) survives the bypass moment.
+        // Tagging them `SkipMode::Never` is how we guarantee that.
+        for ty in [
+            EffectTypeId::STYLIZED_FEEDBACK,
+            EffectTypeId::BLOOM,
+            EffectTypeId::WATERCOLOR,
+            EffectTypeId::DEPTH_OF_FIELD,
+            EffectTypeId::WIREFRAME_DEPTH,
+            EffectTypeId::BLOB_TRACKING,
+            EffectTypeId::AUTO_GAIN,
+        ] {
+            let spec = chain_spec_by_id(&ty).unwrap_or_else(|| {
+                panic!("{:?}: missing ChainSpec", ty);
+            });
+            assert!(
+                matches!(spec.skip, crate::node_graph::SkipMode::Never),
+                "{:?}: stateful effects must be SkipMode::Never so their \
+                 per-instance state survives an amount → 0 → up slider drag",
+                ty,
+            );
+        }
     }
 }

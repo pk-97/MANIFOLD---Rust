@@ -128,7 +128,12 @@ crate::atomic_chain_spec! {
             convert: ParamConvert::EnumRound,
         },
     ],
-    skip: SkipMode::OnZero { param_id: "amount" },
+    // Stateful: depth-mode DoF spins up DNN inference workers and
+    // owns a depth-texture pool. SkipMode::OnZero would tear those
+    // down on every amount → 0 drag and pay the cold-start cost on
+    // the way back. Always splice — at `amount = 0` the inner DoF
+    // returns the source.
+    skip: SkipMode::Never,
 }
 
 // ─── Depth worker types ───────────────────────────────────────────────

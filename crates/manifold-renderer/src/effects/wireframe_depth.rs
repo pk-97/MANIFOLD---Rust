@@ -144,7 +144,12 @@ crate::atomic_chain_spec! {
             convert: ParamConvert::Float,
         },
     ],
-    skip: SkipMode::OnZero { param_id: "amount" },
+    // Stateful: 15-pass pipeline + 3 DNN worker threads + temporal
+    // smoothing buffers. SkipMode::OnZero would tear all of that
+    // down on every amount → 0 drag, paying many hundreds of ms of
+    // worker spin-up on the way back. Always splice — at `amount = 0`
+    // the inner composite returns the source.
+    skip: SkipMode::Never,
 }
 
 // Request/response types for the background depth estimation worker.

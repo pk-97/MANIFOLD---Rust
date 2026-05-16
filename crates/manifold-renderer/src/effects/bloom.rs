@@ -49,7 +49,11 @@ crate::atomic_chain_spec! {
             convert: ParamConvert::Float,
         },
     ],
-    skip: SkipMode::OnZero { param_id: "amount" },
+    // Stateful: Bloom owns an expensive mip pyramid. SkipMode::OnZero
+    // would tear it down on every amount → 0 drag and force a rebuild
+    // on the way back up. Always splice — at `amount = 0` the
+    // composite primitive returns the source unchanged.
+    skip: SkipMode::Never,
 }
 
 // BloomFX.cs lines 19-25 — constants

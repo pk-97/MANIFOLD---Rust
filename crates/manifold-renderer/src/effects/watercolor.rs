@@ -88,7 +88,12 @@ crate::atomic_chain_spec! {
         },
         // `time` is ctx-driven, populated by `apply_ctx_params_at`.
     ],
-    skip: SkipMode::OnZero { param_id: "amount" },
+    // Stateful: Watercolor owns ping-pong feedback textures keyed by
+    // node id. SkipMode::OnZero would wipe them on every amount → 0
+    // drag, so a quick fade-out + fade-in would lose the accumulated
+    // wash. Always splice — at `amount = 0` the inner composite
+    // returns the source.
+    skip: SkipMode::Never,
 }
 
 const WATERCOLOR_WGSL: &str = include_str!("shaders/fx_watercolor_compute.wgsl");

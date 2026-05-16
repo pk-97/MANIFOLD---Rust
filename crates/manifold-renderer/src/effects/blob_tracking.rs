@@ -90,7 +90,13 @@ crate::atomic_chain_spec! {
             convert: ParamConvert::Float,
         },
     ],
-    skip: SkipMode::OnZero { param_id: "amount" },
+    // Stateful: spawns a native blob-detection worker thread, owns
+    // an Arc<dyn BlobDetector> handle, plus per-owner One-Euro
+    // filter state and a font atlas for overlay text. SkipMode::OnZero
+    // would tear those down on every amount → 0 drag and pay worker-
+    // spin-up cost on the way back. Always splice — inner composite
+    // returns source at `amount = 0`.
+    skip: SkipMode::Never,
 }
 
 // Request/response types for the background blob detection worker.

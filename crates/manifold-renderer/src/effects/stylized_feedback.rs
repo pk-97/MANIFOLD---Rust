@@ -79,5 +79,12 @@ crate::atomic_chain_spec! {
             convert: ParamConvert::EnumRound,
         },
     ],
-    skip: SkipMode::OnZero { param_id: "amount" },
+    // Stateful: per-owner prev-frame texture lives in the chain's
+    // `StateStore`. SkipMode::OnZero would drop the Feedback node
+    // (and its state) every time `amount` crossed 0, wiping the
+    // accumulated frame the user expects to keep when dragging the
+    // slider back up. Always splice — at `amount = 0` the inner
+    // shader's `lerp(source, prev_after_transform, 0)` is `source`,
+    // i.e. identity / one extra blit.
+    skip: SkipMode::Never,
 }
