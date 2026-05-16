@@ -395,6 +395,41 @@ pub fn apply_param_bindings(
     }
 }
 
+/// Plant each binding's declared `default_value` into its inner-node
+/// target at chain build time, so a freshly-built effect actually
+/// starts at the values its bindings claim.
+///
+/// Pairs with [`LastAppliedCache::seed_from_bindings`], which pre-fills
+/// the per-frame skip cache with `Applied(default_value)`. Without
+/// this seed pass the cache's claim is a lie — the splice plants each
+/// inner-node primitive at the primitive's own `ParamDef::default`,
+/// which is often a different number than the binding's
+/// `default_value` (e.g. `Blur.radius = 4.0` vs SoftFocus's outer
+/// `radius.default_value = 6.0`). On the first frame
+/// [`apply_param_bindings`] would see `Applied(default)` in the cache,
+/// find the outer slot equal to the binding default, and skip the
+/// write — leaving the inner stuck at the primitive's default until
+/// the user touches the slider and moves the outer off the default.
+///
+/// Per-binding failures log loudly but never panic — same contract as
+/// the per-frame apply path.
+pub fn apply_binding_defaults(
+    static_bindings: &[ParamBinding],
+    graph: &mut Graph,
+    handle: Option<&CompositeHandle>,
+) {
+    for binding in static_bindings {
+        if let Err(err) = binding.apply(graph, handle, binding.default_value) {
+            eprintln!(
+                "[manifold-renderer] ParamBinding default-seed failed: id={} default={} \
+                 err={:?} — inner node will run at its primitive default until the outer \
+                 slot is moved off `default_value`.",
+                binding.id, binding.default_value, err,
+            );
+        }
+    }
+}
+
 /// Per-effect cache of "last outer value applied" parallel to a
 /// binding list. Lives on the effect instance (not on the bindings)
 /// because `ParamBinding` is `Clone`able / sharable between catalog

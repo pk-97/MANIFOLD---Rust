@@ -60,7 +60,8 @@ use crate::node_graph::primitives::Mix;
 use crate::node_graph::{
     ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, LastAppliedCache, MetalBackend,
     NodeInstanceId, ParamBinding, ParamValue, PortType, PrimitiveRegistry, ResourceId, Slot,
-    Source, SpliceResult, StateStore, apply_param_bindings, chain_spec_by_id, compile,
+    Source, SpliceResult, StateStore, apply_binding_defaults, apply_param_bindings,
+    chain_spec_by_id, compile,
     splice_def_into_chain,
 };
 use crate::render_target::RenderTarget;
@@ -373,6 +374,16 @@ impl ChainGraph {
             }
             let mut binding_cache = LastAppliedCache::new();
             binding_cache.seed_from_bindings(&resolved_bindings);
+            // Make the cache's "Applied(default_value)" claim true:
+            // plant each binding default into the inner node now, so
+            // the per-frame `apply_param_bindings` skip-on-unchanged
+            // check holds against an inner that already matches.
+            // Without this, an effect whose binding default differs
+            // from the inner primitive's `ParamDef::default` would
+            // render at the primitive default until the outer slot
+            // moves off its declared default (the "touch to update"
+            // bug).
+            apply_binding_defaults(&resolved_bindings, &mut graph, None);
             let ctx_target_node = handles.first().map(|(_, id)| *id);
             effect_nodes.push(EffectSlot {
                 effect_id: fx.id.clone(),
@@ -950,5 +961,67 @@ mod multi_segment_tests {
 
         let cg = result.expect("ChainGraph should build for three-segment group");
         assert_eq!(cg.group_mix_nodes.len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod binding_seed_tests {
+    //! Regression: a freshly-built chain must plant each binding's
+    //! declared `default_value` into its inner-node target. Otherwise
+    //! the per-frame skip cache lies about what's been written and the
+    //! card has to be "touched" to push the correct value through —
+    //! see [`apply_binding_defaults`].
+    use super::*;
+    use crate::node_graph::ParamValue;
+    use manifold_core::EffectTypeId;
+    use manifold_core::effect_definition_registry;
+    use manifold_core::effects::EffectInstance;
+    use std::sync::Arc;
+
+    fn make_default(ty: EffectTypeId) -> EffectInstance {
+        effect_definition_registry::create_default(&ty)
+    }
+
+    /// SoftFocus is the canonical reproducer: its outer `radius`
+    /// binding default is `6.0`, but the underlying `Blur` primitive's
+    /// `ParamDef::default` is `4.0`. Without the seed pass, the inner
+    /// node starts at `4.0` and the user has to touch the slider for
+    /// the cache compare to diverge and the binding to actually write.
+    #[test]
+    fn soft_focus_inner_blur_starts_at_binding_default_not_primitive_default() {
+        let device = Arc::new(GpuDevice::new());
+        let primitives = PrimitiveRegistry::with_builtin();
+        let fx = make_default(EffectTypeId::SOFT_FOCUS_GRAPH);
+
+        let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256)
+            .expect("SoftFocus chain should build");
+
+        let slot = cg
+            .effect_nodes
+            .first()
+            .expect("SoftFocus contributes one effect slot");
+        let (_, blur_id) = slot
+            .handles
+            .iter()
+            .find(|(h, _)| h.as_ref() == "blur")
+            .expect("SoftFocus splice registers a `blur` handle");
+        let blur = cg
+            .graph
+            .get_node(*blur_id)
+            .expect("blur node id resolves on the freshly-built graph");
+        let radius = blur
+            .params
+            .get("radius")
+            .copied()
+            .expect("Blur primitive exposes `radius` param");
+
+        assert_eq!(
+            radius,
+            ParamValue::Float(6.0),
+            "Blur.radius must start at the SoftFocus binding default (6.0), \
+             not the Blur primitive default (4.0). If it's 4.0 the binding-default \
+             seed pass regressed and effect cards will need to be 'touched' \
+             before they take their settings."
+        );
     }
 }
