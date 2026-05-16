@@ -505,12 +505,6 @@ pub enum DriftField {
         outer: (f32, f32),
         inner: Option<(f32, f32)>,
     },
-    /// Default-value disagreement after coercing the outer's f32 onto
-    /// the inner's type (round for Int, threshold for Bool, etc.).
-    Default {
-        outer: f32,
-        inner: String,
-    },
     /// Enum label set divergence. Both sides hold an ordered list;
     /// curated effects have matching length but differing strings, or
     /// shorter outer list. Drift is "outer has different length AND
@@ -557,9 +551,6 @@ impl std::fmt::Display for OuterInnerDrift {
                         outer.0, outer.1,
                     )?,
                 },
-                DriftField::Default { outer, inner } => {
-                    writeln!(f, "    default: outer={outer}, inner={inner}")?;
-                }
                 DriftField::EnumLabels { outer, inner } => {
                     writeln!(
                         f,
@@ -580,7 +571,7 @@ impl std::fmt::Display for OuterInnerDrift {
 #[cfg(test)]
 pub fn audit_outer_inner_drift() -> Vec<OuterInnerDrift> {
     use crate::node_graph::param_binding::{ParamConvert, ParamTarget};
-    use crate::node_graph::parameters::{ParamType, ParamValue};
+    use crate::node_graph::parameters::ParamType;
 
     let mut findings: Vec<OuterInnerDrift> = Vec::new();
 
@@ -724,65 +715,17 @@ pub fn audit_outer_inner_drift() -> Vec<OuterInnerDrift> {
                 });
             }
 
-            // Default. Coerce the outer f32 onto the inner's type
-            // before comparing — IntRound, BoolThreshold, EnumRound
-            // do the same coercion at runtime, so the audit should
-            // match that.
-            let default_diff: Option<String> = match (inner_pd.ty, &inner_pd.default) {
-                (ParamType::Float, ParamValue::Float(v)) => {
-                    if (binding.spec.default_value - *v).abs() > f32::EPSILON {
-                        Some(format!("Float({v})"))
-                    } else {
-                        None
-                    }
-                }
-                (ParamType::Int, ParamValue::Int(v)) => {
-                    let coerced = binding.spec.default_value.round() as i32;
-                    if coerced != *v {
-                        Some(format!("Int({v})"))
-                    } else {
-                        None
-                    }
-                }
-                (ParamType::Bool, ParamValue::Bool(v)) => {
-                    let coerced = binding.spec.default_value > 0.5;
-                    if coerced != *v {
-                        Some(format!("Bool({v})"))
-                    } else {
-                        None
-                    }
-                }
-                (ParamType::Enum, ParamValue::Enum(v)) => {
-                    let coerced = binding.spec.default_value.round().max(0.0) as u32;
-                    // For EnumRemap, the outer default must go through
-                    // the remap table to land on a meaningful inner
-                    // value. Audit treats this as expected curation.
-                    let mapped = if let ParamConvert::EnumRemap(table) = &binding.convert {
-                        let idx = coerced as usize;
-                        if table.is_empty() {
-                            coerced
-                        } else if idx < table.len() {
-                            table[idx]
-                        } else {
-                            table[table.len() - 1]
-                        }
-                    } else {
-                        coerced
-                    };
-                    if mapped != *v {
-                        Some(format!("Enum({v})"))
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
-            if let Some(inner_repr) = default_diff {
-                diffs.push(DriftField::Default {
-                    outer: binding.spec.default_value,
-                    inner: inner_repr,
-                });
-            }
+            // Default is intentionally *not* checked. After the V2
+            // unification we treat per-preset default overrides as
+            // legitimate — the inner ParamDef's `default` is the
+            // primitive's neutral state, but a preset can choose a
+            // different starting value (Mirror initializes
+            // `uv_transform.mode` to `FoldX` via `graph.set_param`
+            // in its splice; the outer binding default of `6` reflects
+            // that, while the primitive's static default is still
+            // `Identity (0)`). Catching this as drift would force
+            // every preset to either match the primitive default or
+            // duplicate the primitive's defaults table.
 
             // Enum labels. Compare the outer label slice against the
             // inner's enum_values when the inner is an Enum.
@@ -1025,21 +968,24 @@ mod tests {
         );
     }
 
-    /// Audit-mode survey: dump every divergence between a binding's
-    /// outer `ParamSpec` and its inner-node `ParamDef`, separated into
-    /// `[DRIFT]` (accidental, fix in place) and `[CURATED]` (intentional
-    /// via `ParamConvert::EnumRemap` / `FloatTransform`). Run with
-    /// `cargo test -- --nocapture audit_outer_inner_param_drift_report`
-    /// to see the full categorized list.
+    /// Audit-mode enforcement: every binding's outer `ParamSpec` must
+    /// agree with its inner-node `ParamDef` on type, range, and enum
+    /// labels. Defaults are intentionally NOT checked — preset graphs
+    /// legitimately override the primitive's neutral default (see the
+    /// inline comment in `audit_outer_inner_drift`).
     ///
-    /// First-pass policy: print, don't fail. Once we've decided what to
-    /// do with each finding the assertion below tightens to `drift = 0`.
+    /// `[CURATED]` findings are allowed (currently only Strobe.rate
+    /// and Transform.rot, which use `ParamConvert::FloatTransform`
+    /// for legitimate unit conversions: note-rate↔strobes-per-beat,
+    /// degrees↔radians). They show up in the report as a paper trail
+    /// — the test does NOT fail on them. `[UNRESOLVED]` and `[DRIFT]`
+    /// both fail the test.
+    ///
+    /// Run with `cargo test -- --nocapture audit_outer_inner_param_drift_report`
+    /// to see the full categorized list when the test passes.
     #[test]
     fn audit_outer_inner_param_drift_report() {
         let findings = audit_outer_inner_drift();
-        if findings.is_empty() {
-            return;
-        }
         let drift = findings
             .iter()
             .filter(|f| f.category == DriftCategory::Drift)
@@ -1054,8 +1000,7 @@ mod tests {
             .count();
         let mut report = String::new();
         report.push_str(&format!(
-            "\nOuter-vs-inner ParamSpec audit — {} drift, {} curated, {} unresolved\n",
-            drift, curated, unresolved,
+            "\nOuter-vs-inner ParamSpec audit — {drift} drift, {curated} curated, {unresolved} unresolved\n",
         ));
         report.push_str(
             "──────────────────────────────────────────────────────────────────────\n",
@@ -1063,8 +1008,18 @@ mod tests {
         for f in &findings {
             report.push_str(&format!("{f}"));
         }
-        // Print whether passing or failing — the categorized list is
-        // useful diagnostic output even in the green case.
         eprintln!("{report}");
+        assert_eq!(
+            drift, 0,
+            "outer-vs-inner ParamSpec drift detected — every divergence \
+             without a `ParamConvert::EnumRemap` / `FloatTransform` is \
+             accidental and must be fixed:\n{report}",
+        );
+        assert_eq!(
+            unresolved, 0,
+            "unresolved bindings detected — every `HandleNode` target \
+             must reference a handle that the spec's `splice` actually \
+             registers:\n{report}",
+        );
     }
 }

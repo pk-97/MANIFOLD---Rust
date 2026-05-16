@@ -37,6 +37,14 @@ pub struct EffectDef {
     /// Submitted via [`crate::effect_registration::EffectNodeAliasMetadata`]
     /// sidecar.
     pub legacy_node_aliases: &'static [crate::effect_registration::ParamAlias],
+    /// Declarative legacy **slot-value** migration table — translates
+    /// pre-migration enum / numeric values when loading old projects.
+    /// Each entry is `(param_id, &[(from, to)])`. Submitted via
+    /// [`crate::effect_registration::EffectValueAliasMetadata`]
+    /// sidecar. Walked by `Project::migrate_legacy_param_values`
+    /// during `on_after_deserialize`.
+    pub legacy_value_aliases:
+        &'static [(&'static str, &'static [crate::effect_registration::ParamValueAlias])],
 }
 
 /// Re-export for callers within this module's namespace. Canonical home
@@ -67,6 +75,14 @@ static DEFINITIONS: LazyLock<HashMap<EffectTypeId, EffectDef>> = LazyLock::new(|
     for alias_meta in inventory::iter::<crate::effect_registration::EffectNodeAliasMetadata> {
         if let Some(def) = m.get_mut(&alias_meta.id) {
             def.legacy_node_aliases = alias_meta.aliases;
+        }
+    }
+    // Same pattern for **value** aliases — slot-value migration tables
+    // applied at project load time. See
+    // `effect_registration::EffectValueAliasMetadata`.
+    for alias_meta in inventory::iter::<crate::effect_registration::EffectValueAliasMetadata> {
+        if let Some(def) = m.get_mut(&alias_meta.id) {
+            def.legacy_value_aliases = alias_meta.aliases;
         }
     }
     m

@@ -20,7 +20,7 @@ inventory::submit! {
         legacy_discriminant: Some(32),
         params: &[
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
-            ParamSpec::whole("block", "Block", 4.0, 64.0, 16.0, "BlockSize"),
+            ParamSpec::continuous("block", "Block", 4.0, 64.0, 16.0, "F2", "BlockSize"),
             ParamSpec::continuous("rgb_shift", "RGB Shift", 0.0, 0.05, 0.01, "F2", "RGBShift"),
             ParamSpec::continuous("scanline", "Scanline", 0.0, 1.0, 0.3, "F2", "Scanline"),
             ParamSpec::continuous("speed", "Speed", 0.1, 10.0, 2.0, "F2", "Speed"),
@@ -47,7 +47,7 @@ crate::atomic_chain_spec! {
         },
         ParamBinding {
             id: Cow::Borrowed("block"),
-            spec: ParamSpec::whole("block", "Block", 4.0, 64.0, 16.0, "BlockSize"),
+            spec: ParamSpec::continuous("block", "Block", 4.0, 64.0, 16.0, "F2", "BlockSize"),
             target: ParamTarget::HandleNode { handle: "glitch", param: "block_size" },
             convert: ParamConvert::Float,
         },

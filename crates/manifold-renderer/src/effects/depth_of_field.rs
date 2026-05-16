@@ -54,7 +54,7 @@ inventory::submit! {
             ParamSpec::continuous("focus_x", "Focus X", 0.0, 1.0, 0.5, "F2", "FocusX"),
             ParamSpec::continuous("width", "Width", 0.01, 0.5, 0.15, "F2", "FocusWidth"),
             ParamSpec::continuous("blur", "Blur", 0.0, 1.0, 0.5, "F2", "BlurStrength"),
-            ParamSpec::whole("angle", "Angle", 0.0, 360.0, 0.0, "TiltAngle"),
+            ParamSpec::continuous("angle", "Angle", 0.0, 360.0, 0.0, "F2", "TiltAngle"),
             ParamSpec::whole_labels("quality", "Quality", 0.0, 2.0, 1.0, &["Low", "Medium", "High"], "Quality"),
         ],
     }
@@ -109,7 +109,7 @@ crate::atomic_chain_spec! {
         },
         ParamBinding {
             id: Cow::Borrowed("angle"),
-            spec: ParamSpec::whole("angle", "Angle", 0.0, 360.0, 0.0, "TiltAngle"),
+            spec: ParamSpec::continuous("angle", "Angle", 0.0, 360.0, 0.0, "F2", "TiltAngle"),
             target: ParamTarget::HandleNode { handle: "dof", param: "angle" },
             convert: ParamConvert::Float,
         },

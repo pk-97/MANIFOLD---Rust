@@ -34,7 +34,7 @@ inventory::submit! {
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
             ParamSpec::continuous("thresh", "Thresh", 0.0, 1.0, 0.5, "F2", "Threshold"),
             ParamSpec::continuous("spread", "Spread", 0.0, 1.0, 0.5, "F2", "Spread"),
-            ParamSpec::whole("hue", "Hue", 0.0, 360.0, 20.0, "Hue"),
+            ParamSpec::continuous("hue", "Hue", 0.0, 360.0, 20.0, "F2", "Hue"),
             ParamSpec::continuous("sat", "Sat", 0.0, 1.0, 0.6, "F2", "Saturation"),
         ],
     }
@@ -71,7 +71,7 @@ crate::atomic_chain_spec! {
         },
         ParamBinding {
             id: Cow::Borrowed("hue"),
-            spec: ParamSpec::whole("hue", "Hue", 0.0, 360.0, 20.0, "Hue"),
+            spec: ParamSpec::continuous("hue", "Hue", 0.0, 360.0, 20.0, "F2", "Hue"),
             target: ParamTarget::HandleNode { handle: "halation", param: "hue" },
             convert: ParamConvert::Float,
         },

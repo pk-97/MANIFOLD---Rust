@@ -31,7 +31,7 @@ inventory::submit! {
         osc_prefix: "soft_focus_graph",
         legacy_discriminant: None,
         params: &[
-            ParamSpec::continuous("radius", "Radius", 0.0, 32.0, 6.0, "F1", "px"),
+            ParamSpec::continuous("radius", "Radius", 0.0, 64.0, 6.0, "F1", "px"),
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.5, "F2", ""),
         ],
     }
@@ -58,7 +58,7 @@ inventory::submit! {
         bindings: &[
             ParamBinding {
                 id: Cow::Borrowed("radius"),
-                spec: ParamSpec::continuous("radius", "Radius", 0.0, 32.0, 6.0, "F1", "px"),
+                spec: ParamSpec::continuous("radius", "Radius", 0.0, 64.0, 6.0, "F1", "px"),
                 target: ParamTarget::HandleNode { handle: "blur", param: "radius" },
                 convert: ParamConvert::Float,
             },

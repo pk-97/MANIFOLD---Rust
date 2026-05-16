@@ -1,29 +1,37 @@
-//! Mirror — axis-aligned UV fold (Horiz / Vert / Both).
-//!
-//! Composite of `Transform[mode=Foldᴹ]` and `Mix`:
+//! Mirror — exposes `Transform` + `Mix` as a single chain card.
 //!
 //! ```text
-//! Source ──▶ Transform[mode=Foldᴹ] ──▶ Mix.b
-//! Source ───────────────────────────────▶ Mix.a
+//! Source ──▶ Transform[mode=FoldX, …] ──▶ Mix.b
+//! Source ──────────────────────────────▶ Mix.a
 //! Mix.out ─────────────────────────────▶ next stage
 //! ```
 //!
-//! The ChainSpec routings translate the legacy mode slider (0=Horiz /
-//! 1=Vert / 2=Both) onto the Transform primitive's enum (6=FoldX /
-//! 7=FoldY / 8=FoldBoth). No GPU-side processor — the splice plants
-//! Transform + Mix workers directly in the chain graph and the
-//! per-frame renderer drives them via the routings below.
+//! Mirror's `mode` slider exposes the full `TRANSFORM_MODES` enum
+//! (9 options: Identity, Mirror, MirrorX, MirrorY, FlipY, QuadMirror,
+//! FoldX, FoldY, FoldBoth). The preset defaults to `FoldX` because
+//! that's the legacy "mirror across the X axis" behavior, but the
+//! user can switch to any other Transform mode without leaving the
+//! card. Legacy projects authored under the curated 3-mode slider
+//! (Horiz=0 / Vert=1 / Both=2) migrate at load time via
+//! `legacy_value_aliases` below: 0→6, 1→7, 2→8.
+//!
+//! No GPU-side processor — the splice plants Transform + Mix workers
+//! directly in the chain graph and the per-frame renderer drives
+//! them via the bindings below.
 
 use std::borrow::Cow;
 
-use crate::node_graph::primitives::{Mix, Transform};
+use crate::node_graph::primitives::{Mix, TRANSFORM_MODES, Transform};
 use crate::node_graph::{
     ChainSpec, Graph, NodeInstanceId, ParamBinding, ParamConvert, ParamTarget, ParamValue,
     SkipMode, SpliceResult,
 };
 use manifold_core::EffectTypeId;
-use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::effect_registration::{EffectMetadata, EffectValueAliasMetadata};
 use manifold_core::generator_registration::ParamSpec;
+
+/// Transform mode index for FoldX. Matches `TRANSFORM_MODES`.
+const MIRROR_FOLD_X: u32 = 6;
 
 inventory::submit! {
     EffectMetadata {
@@ -35,17 +43,33 @@ inventory::submit! {
         legacy_discriminant: Some(21),
         params: &[
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
-            ParamSpec::whole_labels("mode", "Mode", 0.0, 2.0, 0.0, &["Horiz", "Vert", "Both"], "Mode"),
+            ParamSpec::whole_labels(
+                "mode",
+                "Mode",
+                0.0,
+                (TRANSFORM_MODES.len() - 1) as f32,
+                MIRROR_FOLD_X as f32,
+                TRANSFORM_MODES,
+                "Mode",
+            ),
         ],
     }
 }
 
-/// Transform mode index for FoldX. Matches `TRANSFORM_MODES`.
-const MIRROR_FOLD_X: u32 = 6;
-
-/// Legacy mode (0=Horiz / 1=Vert / 2=Both) → Transform mode enum
-/// (6=FoldX / 7=FoldY / 8=FoldBoth). Indexed by the host slider value.
-const MIRROR_MODE_REMAP: &[u32] = &[6, 7, 8];
+// Legacy `Mirror.mode` migration table. Pre-unification the outer
+// slider was a curated 3-option enum (Horiz=0 / Vert=1 / Both=2)
+// translated to the inner Transform enum via
+// `ParamConvert::EnumRemap([6, 7, 8])`. After dropping the curation
+// the outer value IS the inner value, so old saves with `mode ∈
+// {0,1,2}` need a one-time rewrite to `{6,7,8}` at load.
+inventory::submit! {
+    EffectValueAliasMetadata {
+        id: EffectTypeId::MIRROR,
+        aliases: &[
+            ("mode", &[(0, 6), (1, 7), (2, 8)]),
+        ],
+    }
+}
 
 /// Splice Mirror's workers (`Transform` + `Mix`) directly into a chain
 /// graph. The source endpoint fans out — `Transform` reads it as
@@ -93,9 +117,17 @@ inventory::submit! {
             },
             ParamBinding {
                 id: Cow::Borrowed("mode"),
-                spec: ParamSpec::whole_labels("mode", "Mode", 0.0, 2.0, 0.0, &["Horiz", "Vert", "Both"], "Mode"),
+                spec: ParamSpec::whole_labels(
+                    "mode",
+                    "Mode",
+                    0.0,
+                    (TRANSFORM_MODES.len() - 1) as f32,
+                    MIRROR_FOLD_X as f32,
+                    TRANSFORM_MODES,
+                    "Mode",
+                ),
                 target: ParamTarget::HandleNode { handle: "uv_transform", param: "mode" },
-                convert: ParamConvert::EnumRemap(Cow::Borrowed(MIRROR_MODE_REMAP)),
+                convert: ParamConvert::EnumRound,
             },
         ],
         skip: SkipMode::OnZero { param_id: "amount" },

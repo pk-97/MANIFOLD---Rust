@@ -540,3 +540,50 @@ fn liveschool_macro_mappings_resolve_to_stable_param_ids() {
     );
     let _ = total;
 }
+
+#[test]
+fn liveschool_mirror_mode_values_migrate_after_curation_drop() {
+    // After the V2 unification dropped Mirror's
+    // `ParamConvert::EnumRemap([6, 7, 8])` curation, the outer slider
+    // exposes Transform.mode's full 9-option enum directly. Old saves
+    // with `mode ∈ {Horiz=0, Vert=1, Both=2}` need a one-time rewrite
+    // to `{FoldX=6, FoldY=7, FoldBoth=8}` to preserve the same
+    // visual behavior. Liveschool V6 has 6 Mirror instances; verify
+    // every one's `mode` slot lands in {6, 7, 8} after load.
+    let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
+    if !path.exists() {
+        return;
+    }
+    let project = loader::load_project(&path).expect("load Liveschool");
+
+    use manifold_core::EffectTypeId;
+    let mut mirrors = Vec::new();
+    for fx in &project.settings.master_effects {
+        if *fx.effect_type() == EffectTypeId::MIRROR {
+            mirrors.push(fx);
+        }
+    }
+    for layer in &project.timeline.layers {
+        if let Some(effects) = layer.effects.as_deref() {
+            for fx in effects {
+                if *fx.effect_type() == EffectTypeId::MIRROR {
+                    mirrors.push(fx);
+                }
+            }
+        }
+    }
+    assert!(
+        !mirrors.is_empty(),
+        "Liveschool fixture is expected to carry Mirror instances",
+    );
+    for (i, fx) in mirrors.iter().enumerate() {
+        // Mirror's binding order is [amount, mode], so slot 1 holds
+        // the mode value. After migration it must be 6, 7, or 8.
+        let mode_value = fx.param_values.get(1).map(|s| s.value).unwrap_or(0.0);
+        let coerced = mode_value.round() as i32;
+        assert!(
+            (6..=8).contains(&coerced),
+            "mirror[{i}].mode = {coerced} after load — expected 6, 7, or 8 (migrated from legacy 0/1/2)",
+        );
+    }
+}

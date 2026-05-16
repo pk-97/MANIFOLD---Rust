@@ -21,7 +21,7 @@ inventory::submit! {
         params: &[
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
             ParamSpec::whole("cells", "Cells", 4.0, 64.0, 16.0, "CellCount"),
-            ParamSpec::continuous("source_width", "Cell Size", 0.1, 0.9, 0.5625, "F2", "SourceWidth"),
+            ParamSpec::continuous("source_width", "Cell Size", 0.1, 1.0, 0.5625, "F2", "SourceWidth"),
         ],
     }
 }
@@ -57,7 +57,7 @@ crate::atomic_chain_spec! {
         // omit this slot fall back to the metadata default.
         ParamBinding {
             id: Cow::Borrowed("source_width"),
-            spec: ParamSpec::continuous("source_width", "Cell Size", 0.1, 0.9, 0.5625, "F2", "SourceWidth"),
+            spec: ParamSpec::continuous("source_width", "Cell Size", 0.1, 1.0, 0.5625, "F2", "SourceWidth"),
             target: ParamTarget::HandleNode { handle: "voronoi", param: "source_width" },
             convert: ParamConvert::Float,
         },

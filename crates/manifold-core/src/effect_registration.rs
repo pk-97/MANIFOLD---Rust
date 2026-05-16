@@ -118,6 +118,61 @@ pub struct EffectNodeAliasMetadata {
 
 inventory::collect!(EffectNodeAliasMetadata);
 
+/// One value-space migration entry for a single param: legacy slot
+/// value `from` is rewritten to `to` at project load time. Used when
+/// dropping a `ParamConvert::EnumRemap` curation — old projects have
+/// outer-indexed values that no longer correspond to inner enum
+/// indices, and they need a one-time translation on load.
+///
+/// Stored as `i32` because the values being migrated are always enum
+/// indices in practice. `f32` slot values are coerced to `i32` for
+/// the comparison; if a slot's rounded value matches `from` exactly,
+/// the slot is rewritten to `to as f32`. Other values pass through
+/// untouched.
+pub type ParamValueAlias = (i32, i32);
+
+/// Optional sidecar submission for effects whose **slot values** —
+/// not ids, not node handles — need translation when loading
+/// pre-migration project files. Companion to
+/// [`EffectAliasMetadata`] (id renames) and
+/// [`EffectNodeAliasMetadata`] (handle renames). Each entry is
+/// `(param_id, &[(legacy_value, current_value)])`.
+///
+/// Canonical use case: Mirror's `mode` param. The legacy outer slider
+/// indexed `{Horiz: 0, Vert: 1, Both: 2}` and converted to inner
+/// `Transform.mode` via a `ParamConvert::EnumRemap([6, 7, 8])`. After
+/// we drop the curation and expose `Transform.mode`'s full 9-option
+/// enum directly, the outer index *is* the inner index — but
+/// projects saved at `mode = 1` still mean "Vert" semantically, so
+/// the load path migrates them to `mode = 7` (FoldY). Submission:
+///
+/// ```ignore
+/// inventory::submit! {
+///     EffectValueAliasMetadata {
+///         id: EffectTypeId::MIRROR,
+///         aliases: &[
+///             ("mode", &[(0, 6), (1, 7), (2, 8)]),
+///         ],
+///     }
+/// }
+/// ```
+///
+/// Discovered at registry-build time and merged into
+/// [`crate::effect_definition_registry::EffectDef::legacy_value_aliases`].
+/// `Project::migrate_legacy_param_values` walks each effect
+/// instance's `param_values` and applies the table.
+///
+/// Idempotent: once a value has been migrated, the next load sees
+/// the post-migration value, which doesn't match any `from` entry
+/// (because `from` values are by definition pre-migration). Multiple
+/// passes are safe.
+pub struct EffectValueAliasMetadata {
+    pub id: EffectTypeId,
+    pub aliases: &'static [(&'static str, &'static [ParamValueAlias])],
+}
+
+inventory::collect!(EffectValueAliasMetadata);
+
 impl EffectMetadata {
     /// Convert to the existing `EffectDef` type.
     pub fn to_effect_def(&self) -> EffectDef {
@@ -140,6 +195,7 @@ impl EffectMetadata {
             param_ids,
             legacy_param_aliases: &[],
             legacy_node_aliases: &[],
+            legacy_value_aliases: &[],
         }
     }
 

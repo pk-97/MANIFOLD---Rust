@@ -16,7 +16,7 @@ use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::generator_registration::ParamSpec;
 
-use crate::node_graph::primitives::Feedback;
+use crate::node_graph::primitives::{FEEDBACK_MODES, Feedback};
 use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 
 inventory::submit! {
@@ -31,15 +31,18 @@ inventory::submit! {
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.5, "F2", ""),
             ParamSpec::continuous("zoom", "Zoom", 0.9, 1.1, 0.95, "F2", "Zoom"),
             ParamSpec::continuous("rotate", "Rotate", -10.0, 10.0, 0.0, "F2", "Rotate"),
-            ParamSpec::whole_labels("mode", "Mode", 0.0, 2.0, 0.0, &["Screen", "Add", "Max"], "Mode"),
+            ParamSpec::whole_labels(
+                "mode",
+                "Mode",
+                0.0,
+                (FEEDBACK_MODES.len() - 1) as f32,
+                0.0,
+                FEEDBACK_MODES,
+                "Mode",
+            ),
         ],
     }
 }
-
-/// Mode remap: host slider (0=Screen / 1=Add / 2=Max) lines up 1:1
-/// with Feedback's blend enum. Kept explicit so the convention is
-/// visible at the spec.
-const STYLIZED_FEEDBACK_MODE_REMAP: &[u32] = &[0, 1, 2];
 
 crate::atomic_chain_spec! {
     type_id: EffectTypeId::STYLIZED_FEEDBACK,
@@ -67,9 +70,17 @@ crate::atomic_chain_spec! {
         },
         ParamBinding {
             id: Cow::Borrowed("mode"),
-            spec: ParamSpec::whole_labels("mode", "Mode", 0.0, 2.0, 0.0, &["Screen", "Add", "Max"], "Mode"),
+            spec: ParamSpec::whole_labels(
+                "mode",
+                "Mode",
+                0.0,
+                (FEEDBACK_MODES.len() - 1) as f32,
+                0.0,
+                FEEDBACK_MODES,
+                "Mode",
+            ),
             target: ParamTarget::HandleNode { handle: "feedback", param: "mode" },
-            convert: ParamConvert::EnumRemap(Cow::Borrowed(STYLIZED_FEEDBACK_MODE_REMAP)),
+            convert: ParamConvert::EnumRound,
         },
     ],
     skip: SkipMode::OnZero { param_id: "amount" },

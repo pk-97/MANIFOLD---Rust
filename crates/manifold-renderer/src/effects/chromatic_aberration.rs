@@ -22,7 +22,7 @@ inventory::submit! {
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
             ParamSpec::continuous("offset", "Offset", 0.0, 0.05, 0.01, "F2", "Offset"),
             ParamSpec::whole_labels("mode", "Mode", 0.0, 1.0, 0.0, &["Radial", "Linear"], "Mode"),
-            ParamSpec::whole("angle", "Angle", 0.0, 360.0, 0.0, "Angle"),
+            ParamSpec::continuous("angle", "Angle", 0.0, 360.0, 0.0, "F2", "Angle"),
             ParamSpec::continuous("falloff", "Falloff", 0.0, 1.0, 0.5, "F2", "Falloff"),
         ],
     }
@@ -59,7 +59,7 @@ crate::atomic_chain_spec! {
         },
         ParamBinding {
             id: Cow::Borrowed("angle"),
-            spec: ParamSpec::whole("angle", "Angle", 0.0, 360.0, 0.0, "Angle"),
+            spec: ParamSpec::continuous("angle", "Angle", 0.0, 360.0, 0.0, "F2", "Angle"),
             target: ParamTarget::HandleNode { handle: "chromatic", param: "angle" },
             convert: ParamConvert::Float,
         },

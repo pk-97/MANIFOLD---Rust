@@ -33,7 +33,7 @@ inventory::submit! {
         legacy_discriminant: Some(29),
         params: &[
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
-            ParamSpec::whole("density", "Density", 16.0, 280.0, 260.0, "Density"),
+            ParamSpec::continuous("density", "Density", 16.0, 280.0, 260.0, "F2", "Density"),
             ParamSpec::continuous("width", "Width", 0.4, 3.0, 1.335, "F2", "Width"),
             ParamSpec::continuous("z_scale", "ZScale", 0.0, 2.5, 1.35, "F2", "ZScale"),
             ParamSpec::continuous("smooth", "Smooth", 0.0, 0.98, 0.90, "F2", "Smooth"),
@@ -67,7 +67,7 @@ crate::atomic_chain_spec! {
         },
         ParamBinding {
             id: Cow::Borrowed("density"),
-            spec: ParamSpec::whole("density", "Density", 16.0, 280.0, 260.0, "Density"),
+            spec: ParamSpec::continuous("density", "Density", 16.0, 280.0, 260.0, "F2", "Density"),
             target: ParamTarget::HandleNode { handle: "wireframe_depth", param: "density" },
             convert: ParamConvert::Float,
         },

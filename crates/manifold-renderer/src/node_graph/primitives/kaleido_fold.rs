@@ -35,8 +35,8 @@ crate::primitive! {
         ParamDef {
             name: "segments",
             label: "Segments",
-            ty: ParamType::Float,
-            default: ParamValue::Float(6.0),
+            ty: ParamType::Int,
+            default: ParamValue::Int(6),
             range: Some((2.0, 16.0)),
             enum_values: &[],
         },

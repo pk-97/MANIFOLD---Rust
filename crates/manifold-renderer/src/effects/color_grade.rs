@@ -28,7 +28,7 @@ inventory::submit! {
             ParamSpec::continuous("hue", "Hue", -180.0, 180.0, 0.0, "F2", "Hue"),
             ParamSpec::continuous("contrast", "Contrast", 0.0, 2.0, 1.0, "F2", "Contrast"),
             ParamSpec::continuous("colorize", "Colorize", 0.0, 1.0, 0.0, "F2", "Colorize"),
-            ParamSpec::whole("tint_hue", "TintHue", 0.0, 360.0, 0.0, "TintHue"),
+            ParamSpec::continuous("tint_hue", "TintHue", 0.0, 360.0, 0.0, "F2", "TintHue"),
             ParamSpec::continuous("tint_sat", "TintSat", 0.0, 2.0, 1.0, "F2", "TintSaturation"),
             ParamSpec::continuous("focus", "Focus", 0.0, 1.0, 0.75, "F2", "ColorizeFocus"),
         ],
@@ -84,7 +84,7 @@ crate::atomic_chain_spec! {
         },
         ParamBinding {
             id: Cow::Borrowed("tint_hue"),
-            spec: ParamSpec::whole("tint_hue", "TintHue", 0.0, 360.0, 0.0, "TintHue"),
+            spec: ParamSpec::continuous("tint_hue", "TintHue", 0.0, 360.0, 0.0, "F2", "TintHue"),
             target: ParamTarget::HandleNode { handle: "color_grade", param: "colorize_hue" },
             convert: ParamConvert::Float,
         },

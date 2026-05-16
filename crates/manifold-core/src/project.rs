@@ -129,6 +129,14 @@ impl Project {
         // `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 step 8.
         self.resolve_legacy_param_ids();
 
+        // Slot-value migration. Walks the per-effect
+        // `legacy_value_aliases` table and translates pre-migration
+        // enum / numeric values (e.g., Mirror.mode 0/1/2 → 6/7/8 after
+        // the TouchDesigner unification dropped the `EnumRemap`
+        // curation). Idempotent — post-migration values aren't in the
+        // alias table, so re-running is a no-op.
+        self.migrate_legacy_param_values();
+
         // V2 user-exposed binding node-handle migration. Renames declared
         // via `EffectNodeAliasMetadata` propagate to saved bindings here.
         // No-op for fixtures and effects that ship without renames.
@@ -150,6 +158,64 @@ impl Project {
             if let Some(ref mut effects) = layer.effects {
                 for fx in effects.iter_mut() {
                     fx.align_to_definition();
+                }
+            }
+        }
+    }
+
+    /// Apply per-effect `legacy_value_aliases` to every effect
+    /// instance's `param_values`. Translates pre-migration enum /
+    /// numeric values to current ones when loading old projects — the
+    /// canonical case is Mirror's `mode` after the TouchDesigner
+    /// unification dropped its `ParamConvert::EnumRemap` curation
+    /// (legacy `{0,1,2}` → `{6,7,8}`).
+    ///
+    /// Comparison is integer-coerced: `slot.value.round() as i32`
+    /// against each alias's `from`. A match rewrites the slot to
+    /// `to as f32`. Non-matching values pass through. Slots referencing
+    /// a param id not in the alias table are untouched.
+    ///
+    /// Walks master + every layer's effects.
+    fn migrate_legacy_param_values(&mut self) {
+        use crate::effect_definition_registry;
+        fn apply_to_effect(fx: &mut crate::effects::EffectInstance) {
+            let Some(def) = effect_definition_registry::try_get(fx.effect_type()) else {
+                return;
+            };
+            if def.legacy_value_aliases.is_empty() {
+                return;
+            }
+            for (param_id, value_aliases) in def.legacy_value_aliases {
+                let Some(&slot_idx) = def.id_to_index.get(*param_id) else {
+                    // Param renamed out from under the alias table —
+                    // nothing to migrate. The id-alias resolver should
+                    // have caught the rename in a prior pass.
+                    continue;
+                };
+                let Some(slot) = fx.param_values.get_mut(slot_idx) else {
+                    continue;
+                };
+                let coerced = slot.value.round() as i32;
+                if let Some(&(_, to)) = value_aliases.iter().find(|(from, _)| *from == coerced) {
+                    slot.value = to as f32;
+                    // Keep base value in sync so a later
+                    // `reset_param_effectives` doesn't wipe the
+                    // migration back to the pre-migration value.
+                    if let Some(base) = fx.base_param_values.as_mut()
+                        && let Some(b) = base.get_mut(slot_idx)
+                    {
+                        *b = to as f32;
+                    }
+                }
+            }
+        }
+        for fx in &mut self.settings.master_effects {
+            apply_to_effect(fx);
+        }
+        for layer in &mut self.timeline.layers {
+            if let Some(ref mut effects) = layer.effects {
+                for fx in effects.iter_mut() {
+                    apply_to_effect(fx);
                 }
             }
         }

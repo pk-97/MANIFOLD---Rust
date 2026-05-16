@@ -37,8 +37,8 @@ crate::primitive! {
         ParamDef {
             name: "cell_count",
             label: "Cell Count",
-            ty: ParamType::Float,
-            default: ParamValue::Float(16.0),
+            ty: ParamType::Int,
+            default: ParamValue::Int(16),
             range: Some((4.0, 64.0)),
             enum_values: &[],
         },
