@@ -48,13 +48,6 @@ inventory::submit! {
     }
 }
 
-/// Legacy `rot` is degrees; `AffineTransform` takes radians with the
-/// Y-down negation baked in. Mirrors what `TransformFX::apply` did
-/// inline before encoding its uniform.
-fn rot_degrees_to_radians(degrees: f32) -> f32 {
-    -(degrees * std::f32::consts::PI / 180.0)
-}
-
 crate::atomic_chain_spec! {
     type_id: EffectTypeId::TRANSFORM,
     primitive: AffineTransform,
@@ -78,11 +71,15 @@ crate::atomic_chain_spec! {
             target: ParamTarget::HandleNode { handle: "transform", param: "scale" },
             convert: ParamConvert::Float,
         },
+        // Rotation flows through as a plain Float passthrough — the
+        // primitive surfaces degrees + screen-CW directly, so the
+        // outer slider and the inner editor agree on units. The
+        // deg→rad + sign-flip lives inside the primitive.
         ParamBinding {
             id: Cow::Borrowed("rot"),
             spec: ParamSpec::continuous("rot", "Rot", -180.0, 180.0, 0.0, "F2", ""),
             target: ParamTarget::HandleNode { handle: "transform", param: "rotation" },
-            convert: ParamConvert::FloatTransform(rot_degrees_to_radians),
+            convert: ParamConvert::Float,
         },
     ],
     // Transform never skips — even at identity it's the chain's

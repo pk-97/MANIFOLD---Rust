@@ -2,13 +2,14 @@
 //! [`TransformFX`](crate::effects::transform::TransformFX). Fifth
 //! §6.1 migration.
 //!
-//! 2D UV affine with aspect-correct rotation. The legacy effect's
-//! Y-down rotation negation + degrees→radians conversion is **not**
-//! baked into the primitive — `rotation` here is straight radians,
-//! interpreted by the shader's cos/sin matrix. The future `Transform`
-//! preset graph that replaces `TransformFX` is responsible for that
-//! conversion at its boundary; the primitive stays a clean building
-//! block other graphs can compose without surprise.
+//! 2D UV affine with aspect-correct rotation. The primitive surfaces
+//! `rotation` in **degrees, screen-CW** (the user-facing convention
+//! every DCC tool ships) — the deg→rad conversion + Y-down sign flip
+//! happen inside `run()` before the uniform reaches the shader. This
+//! keeps the V2 outer card and the per-node editor consistent: both
+//! show the same degree value, neither surfaces a hidden conversion.
+//! Math-style consumers that want radians can wrap the primitive in
+//! their own preset graph and convert at *their* boundary.
 //!
 //! Distinct from the existing fold-mode `Transform` primitive (used
 //! by Mirror, QuadMirror, etc.). Both operate on UV coordinates but
@@ -58,14 +59,14 @@ crate::primitive! {
         },
         ParamDef {
             name: "rotation",
-            label: "Rotation (rad)",
+            label: "Rotation",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
-            range: Some((-std::f32::consts::PI, std::f32::consts::PI)),
+            range: Some((-180.0, 180.0)),
             enum_values: &[],
         },
     ],
-    composition_notes: "1:1 building block for the legacy Transform effect. Rotation is in RADIANS — the Transform preset graph converts its degree slider via deg→-rad. Distinct from Transform (fold modes for Mirror); use this for affine, that for fold.",
+    composition_notes: "1:1 building block for the legacy Transform effect. Rotation is in DEGREES, screen-CW (e.g. +90 rotates clockwise on screen) — the math conversion to radians + Y-down sign flip happens inside the primitive. Distinct from Transform (fold modes for Mirror); use this for affine, that for fold.",
     examples: ["preset.effect.transform"],
 }
 
@@ -96,10 +97,15 @@ impl Primitive for AffineTransform {
             Some(ParamValue::Float(f)) => *f,
             _ => 1.0,
         };
-        let rotation = match ctx.params.get("rotation") {
+        // Read in user-facing units (degrees, screen-CW) and convert
+        // to the shader's math frame (radians, math-CCW) inside the
+        // primitive. Matches the legacy `TransformFX::apply` inline
+        // conversion bit-for-bit.
+        let rotation_degrees = match ctx.params.get("rotation") {
             Some(ParamValue::Float(f)) => *f,
             _ => 0.0,
         };
+        let rotation = -(rotation_degrees * std::f32::consts::PI / 180.0);
 
         let Some(in_tex) = ctx.inputs.texture_2d("in") else {
             return;

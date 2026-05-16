@@ -1,11 +1,11 @@
 //! Pixel-exact parity test for `node.affine_transform` vs the
 //! legacy `TransformFX` effect. Fifth §6.1 migration.
 //!
-//! The primitive accepts rotation in radians; the legacy effect
-//! accepts it in degrees and applies a Y-down sign-flip in the CPU
-//! before packing the uniform. The parity test does the same
-//! conversion (`deg * -PI / 180`) at the primitive's parameter
-//! boundary, mirroring what a future Transform preset graph will do.
+//! Both the legacy effect and the primitive surface `rotation` in
+//! degrees, screen-CW — the deg→rad + Y-down sign-flip lives inside
+//! the primitive's `run()` so the outer card and the per-node editor
+//! agree on the same unit. The parity test sets `rotation` to the
+//! same degree value on both sides.
 //!
 //! `is_clip_level = false` for all parity runs — the legacy
 //! TransformFX::apply branches to identity uniforms when clip-level;
@@ -17,8 +17,6 @@ use manifold_core::EffectTypeId;
 use manifold_renderer::node_graph::ParamValue;
 use manifold_renderer::node_graph::primitives::AffineTransform;
 use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
-
-const DEG2RAD: f32 = std::f32::consts::PI / 180.0;
 
 /// One transform preset. Field naming matches `TransformFX::apply`.
 #[derive(Debug, Clone, Copy)]
@@ -97,10 +95,9 @@ fn affine_transform_is_pixel_exact_across_fixtures_and_xforms() {
             fx.param_values[2].value = xf.zoom;
             fx.param_values[3].value = xf.rot_deg;
 
-            // Mirror the legacy CPU conversion: deg → -rad. The Transform
-            // preset graph will do the same at its parameter boundary.
-            let rotation_rad = -(xf.rot_deg * DEG2RAD);
-
+            // Pass degrees straight through — the primitive does the
+            // deg→rad + Y-down sign-flip internally now, matching the
+            // legacy effect's pre-uniform CPU conversion bit-for-bit.
             let legacy = h.run_legacy(&fx, &input, &ctx);
             let decomposed = h.run_primitive_graph(
                 Box::new(AffineTransform::new()),
@@ -117,7 +114,7 @@ fn affine_transform_is_pixel_exact_across_fixtures_and_xforms() {
                         .set_param(prim_id, "scale", ParamValue::Float(xf.zoom))
                         .unwrap();
                     graph
-                        .set_param(prim_id, "rotation", ParamValue::Float(rotation_rad))
+                        .set_param(prim_id, "rotation", ParamValue::Float(xf.rot_deg))
                         .unwrap();
                 },
             );

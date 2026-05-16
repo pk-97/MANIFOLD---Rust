@@ -1,17 +1,17 @@
 //! Pixel-exact parity test for `primitive.strobe` vs the legacy
 //! `StrobeFX` effect. Eleventh §6.1 migration; fused composite.
 //!
-//! The legacy effect maps a rate-slider index through NOTE_RATES to
-//! get strobes-per-beat. The primitive accepts the resolved rate
-//! directly so the parity test indexes the same table inline (it
-//! also lives on the primitive as `STROBE_NOTE_RATES` for the
-//! Strobe preset graph that will replace StrobeFX).
+//! Both the legacy effect's binding apply path and the primitive
+//! itself surface `rate` as a note-rate enum index. The primitive's
+//! `run()` looks up `NOTE_RATE_VALUES[index]` internally before the
+//! uniform reaches the shader. The parity test passes the same enum
+//! index on both sides.
 
 mod parity;
 
 use manifold_core::EffectTypeId;
 use manifold_renderer::node_graph::ParamValue;
-use manifold_renderer::node_graph::primitives::{STROBE_NOTE_RATES, Strobe};
+use manifold_renderer::node_graph::primitives::Strobe;
 use parity::{Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
 
 /// (rate_idx, mode, amount, label).
@@ -34,8 +34,6 @@ fn strobe_is_pixel_exact_across_fixtures_and_setups() {
         let input = fixture.build(&h);
 
         for &(rate_idx, mode, amount, label) in SETUPS {
-            let rate = STROBE_NOTE_RATES[rate_idx];
-
             let mut fx = make_default_effect(EffectTypeId::STROBE);
             fx.param_values[0].value = amount;
             fx.param_values[1].value = rate_idx as f32;
@@ -47,8 +45,13 @@ fn strobe_is_pixel_exact_across_fixtures_and_setups() {
                     graph
                         .set_param(prim_id, "amount", ParamValue::Float(amount))
                         .unwrap();
+                    // Primitive surfaces `rate` as the note-rate enum
+                    // index — same as the binding's EnumRound convert
+                    // produces on the legacy chain path. The
+                    // index→strobes-per-beat lookup happens inside
+                    // the primitive's `run()`.
                     graph
-                        .set_param(prim_id, "rate", ParamValue::Float(rate))
+                        .set_param(prim_id, "rate", ParamValue::Enum(rate_idx as u32))
                         .unwrap();
                     graph
                         .set_param(prim_id, "mode", ParamValue::Enum(mode))

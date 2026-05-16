@@ -2,7 +2,7 @@ use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::primitives::{STROBE_NOTE_RATES, Strobe};
+use crate::node_graph::primitives::{NOTE_RATE_LABELS, Strobe};
 use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
@@ -20,7 +20,15 @@ inventory::submit! {
         legacy_discriminant: Some(19),
         params: &[
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
-            ParamSpec::whole_labels("rate", "Rate", 0.0, 9.0, 6.0, &["1/1", "1/2", "1/4", "1/4T", "1/8", "1/8T", "1/16", "1/16T", "1/32", "1/64"], "Rate"),
+            ParamSpec::whole_labels(
+                "rate",
+                "Rate",
+                0.0,
+                (NOTE_RATE_LABELS.len() - 1) as f32,
+                6.0,
+                NOTE_RATE_LABELS,
+                "Rate",
+            ),
             ParamSpec::whole_labels("mode", "Mode", 0.0, 2.0, 0.0, &["Opacity", "White", "Gain"], "Mode"),
         ],
     }
@@ -30,17 +38,6 @@ inventory::submit! {
         id: EffectTypeId::STROBE,
         create: |device| Box::new(StrobeFX::new(device)),
     }
-}
-
-/// Legacy `rate` is an index into the note-rate table (0..9);
-/// `Strobe` takes the raw strobes-per-beat float. Mirrors what
-/// `StrobeFX::apply` did inline before encoding its uniform.
-fn strobe_rate_from_index(idx_f: f32) -> f32 {
-    let idx = idx_f.max(0.0).round() as usize;
-    STROBE_NOTE_RATES
-        .get(idx)
-        .copied()
-        .unwrap_or(*STROBE_NOTE_RATES.last().unwrap_or(&1.0))
 }
 
 crate::atomic_chain_spec! {
@@ -54,11 +51,22 @@ crate::atomic_chain_spec! {
             target: ParamTarget::HandleNode { handle: "strobe", param: "amount" },
             convert: ParamConvert::Float,
         },
+        // `rate` is a note-rate enum index — the primitive converts
+        // to strobes-per-beat internally via NOTE_RATE_VALUES, so the
+        // outer slider and the inner editor agree on the same enum.
         ParamBinding {
             id: Cow::Borrowed("rate"),
-            spec: ParamSpec::whole_labels("rate", "Rate", 0.0, 9.0, 6.0, &["1/1", "1/2", "1/4", "1/4T", "1/8", "1/8T", "1/16", "1/16T", "1/32", "1/64"], "Rate"),
+            spec: ParamSpec::whole_labels(
+                "rate",
+                "Rate",
+                0.0,
+                (NOTE_RATE_LABELS.len() - 1) as f32,
+                6.0,
+                NOTE_RATE_LABELS,
+                "Rate",
+            ),
             target: ParamTarget::HandleNode { handle: "strobe", param: "rate" },
-            convert: ParamConvert::FloatTransform(strobe_rate_from_index),
+            convert: ParamConvert::EnumRound,
         },
         ParamBinding {
             id: Cow::Borrowed("mode"),
