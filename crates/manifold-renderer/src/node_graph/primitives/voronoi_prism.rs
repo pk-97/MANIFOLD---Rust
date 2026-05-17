@@ -54,7 +54,7 @@ crate::primitive! {
             name: "source_width",
             label: "Source Width",
             ty: ParamType::Float,
-            default: ParamValue::Float(0.5625),
+            default: ParamValue::Float(0.5),
             range: Some((0.1, 1.0)),
             enum_values: &[],
         },

@@ -19,7 +19,7 @@ inventory::submit! {
         osc_prefix: "kaleidoscope",
         legacy_discriminant: Some(14),
         params: &[
-            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
             ParamSpec::whole("segs", "Segments", 2.0, 16.0, 6.0, "Segments"),
         ],
     }
@@ -39,7 +39,7 @@ crate::atomic_chain_spec! {
         ParamBinding {
             id: Cow::Borrowed("amount"),
             label: "Amount",
-            default_value: 0.0,
+            default_value: 1.0,
             target: ParamTarget::HandleNode { handle: "kaleidoscope", param: "amount" },
             convert: ParamConvert::Float,
         },

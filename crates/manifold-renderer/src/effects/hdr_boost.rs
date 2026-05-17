@@ -23,7 +23,7 @@ inventory::submit! {
         osc_prefix: "hdrBoost",
         legacy_discriminant: Some(41),
         params: &[
-            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
             ParamSpec::continuous("gain", "Gain", 0.0, 5.0, 1.5, "F2", "Gain"),
             ParamSpec::continuous("thresh", "Threshold", 0.0, 1.0, 0.15, "F2", "Threshold"),
             ParamSpec::continuous("knee", "Knee", 0.0, 1.0, 0.3, "F2", "Knee"),
@@ -45,7 +45,7 @@ crate::atomic_chain_spec! {
         ParamBinding {
             id: Cow::Borrowed("amount"),
             label: "Amount",
-            default_value: 0.0,
+            default_value: 1.0,
             target: ParamTarget::HandleNode { handle: "highlight_boost", param: "amount" },
             convert: ParamConvert::Float,
         },

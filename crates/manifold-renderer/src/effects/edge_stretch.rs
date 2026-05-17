@@ -20,7 +20,7 @@ inventory::submit! {
         legacy_discriminant: Some(15),
         params: &[
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
-            ParamSpec::continuous("width", "Width", 0.1, 0.9, 0.433, "F2", "SourceWidth"),
+            ParamSpec::continuous("width", "Width", 0.1, 0.9, 0.5, "F2", "SourceWidth"),
             ParamSpec::whole_labels("dir", "Direction", 0.0, 2.0, 0.0, &["Horiz", "Vert", "Both"], "Direction"),
         ],
     }
@@ -47,7 +47,7 @@ crate::atomic_chain_spec! {
         ParamBinding {
             id: Cow::Borrowed("width"),
             label: "Width",
-            default_value: 0.433,
+            default_value: 0.5,
             target: ParamTarget::HandleNode { handle: "edge_stretch", param: "source_width" },
             convert: ParamConvert::Float,
         },

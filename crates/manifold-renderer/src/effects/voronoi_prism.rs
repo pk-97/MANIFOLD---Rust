@@ -19,9 +19,9 @@ inventory::submit! {
         osc_prefix: "voronoiPrism",
         legacy_discriminant: Some(16),
         params: &[
-            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
             ParamSpec::whole("cells", "Cells", 4.0, 64.0, 16.0, "CellCount"),
-            ParamSpec::continuous("source_width", "Cell Size", 0.1, 1.0, 0.5625, "F2", "SourceWidth"),
+            ParamSpec::continuous("source_width", "Cell Size", 0.1, 1.0, 0.5, "F2", "SourceWidth"),
         ],
     }
 }
@@ -40,7 +40,7 @@ crate::atomic_chain_spec! {
         ParamBinding {
             id: Cow::Borrowed("amount"),
             label: "Amount",
-            default_value: 0.0,
+            default_value: 1.0,
             target: ParamTarget::HandleNode { handle: "voronoi", param: "amount" },
             convert: ParamConvert::Float,
         },
@@ -60,7 +60,7 @@ crate::atomic_chain_spec! {
         ParamBinding {
             id: Cow::Borrowed("source_width"),
             label: "Cell Size",
-            default_value: 0.5625,
+            default_value: 0.5,
             target: ParamTarget::HandleNode { handle: "voronoi", param: "source_width" },
             convert: ParamConvert::Float,
         },

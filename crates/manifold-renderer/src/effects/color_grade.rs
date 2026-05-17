@@ -22,7 +22,7 @@ inventory::submit! {
         osc_prefix: "colorGrade",
         legacy_discriminant: Some(28),
         params: &[
-            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
             ParamSpec::continuous("gain", "Gain", 0.0, 2.0, 1.0, "F2", "Gain"),
             ParamSpec::continuous("sat", "Saturation", 0.0, 2.0, 1.0, "F2", "Saturation"),
             ParamSpec::continuous("hue", "Hue", -180.0, 180.0, 0.0, "F2", "Hue"),
@@ -49,7 +49,7 @@ crate::atomic_chain_spec! {
         ParamBinding {
             id: Cow::Borrowed("amount"),
             label: "Amount",
-            default_value: 0.0,
+            default_value: 1.0,
             target: ParamTarget::HandleNode { handle: "color_grade", param: "amount" },
             convert: ParamConvert::Float,
         },

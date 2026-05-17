@@ -47,11 +47,11 @@
         },
         "subject": {
           "type": "Float",
-          "value": 0.52
+          "value": 0.5
         },
         "width": {
           "type": "Float",
-          "value": 1.335
+          "value": 1.5
         },
         "wire_res": {
           "type": "Float",

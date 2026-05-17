@@ -19,7 +19,7 @@ inventory::submit! {
         osc_prefix: "infrared",
         legacy_discriminant: Some(37),
         params: &[
-            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
             ParamSpec::whole_labels("palette", "Palette", 0.0, 9.0, 0.0, &["White Hot", "Black Hot", "Green NV", "Iron Bow", "Rainbow", "Lava", "Arctic", "Magenta", "Electric", "Toxic"], "Palette"),
             ParamSpec::continuous("contrast", "Contrast", 0.5, 3.0, 1.0, "F2", "Contrast"),
         ],
@@ -40,7 +40,7 @@ crate::atomic_chain_spec! {
         ParamBinding {
             id: Cow::Borrowed("amount"),
             label: "Amount",
-            default_value: 0.0,
+            default_value: 1.0,
             target: ParamTarget::HandleNode { handle: "infrared", param: "amount" },
             convert: ParamConvert::Float,
         },

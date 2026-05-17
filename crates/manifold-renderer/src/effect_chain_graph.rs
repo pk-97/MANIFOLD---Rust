@@ -1131,21 +1131,20 @@ mod topology_hash_tests {
 
     #[test]
     fn hash_changes_when_skip_predicate_flips() {
-        // VoronoiPrism: outer `amount` default = 0.0 → `is_skipped`
-        // returns true. Drag the slider to 0.5 and the hash MUST
-        // change so the chain rebuilds and the effect enters the
-        // graph.
+        // Dragging an effect's `amount` slider across 0 must change
+        // the topology hash so the chain rebuilds — without that, the
+        // effect can't transition between "in graph" and "skipped"
+        // states without a separate enabled toggle.
+        //
+        // Set up the test scenario explicitly: amount=0 first, then
+        // amount=0.5. The §9.1.5 audit moved most effects' default
+        // amount off zero, so we can't rely on the default for this
+        // fixture.
         let mut fx = make_default(EffectTypeId::VORONOI_PRISM);
-        assert_eq!(
-            fx.param_values.first().map(|p| p.value),
-            Some(0.0),
-            "test fixture relies on VoronoiPrism.amount default = 0.0",
-        );
+        fx.set_base_param(0, 0.0);
 
         let hash_at_zero = compute_topology_hash(&[fx.clone()], &[], 256, 256);
 
-        // Bump amount off 0 — same fingerprint as a user dragging the
-        // slider on the effect card.
         fx.set_base_param(0, 0.5);
         let hash_at_half = compute_topology_hash(&[fx], &[], 256, 256);
 

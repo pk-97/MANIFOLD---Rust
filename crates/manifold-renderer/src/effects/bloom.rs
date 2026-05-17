@@ -25,7 +25,7 @@ inventory::submit! {
         osc_prefix: "bloom",
         legacy_discriminant: Some(12),
         params: &[
-            ParamSpec::continuous("amount", "Amount", 0.0, 5.0, 0.187, "F2", ""),
+            ParamSpec::continuous("amount", "Amount", 0.0, 5.0, 0.5, "F2", ""),
         ],
     }
 }
@@ -44,7 +44,7 @@ crate::atomic_chain_spec! {
         ParamBinding {
             id: Cow::Borrowed("amount"),
             label: "Amount",
-            default_value: 0.187,
+            default_value: 0.5,
             target: ParamTarget::HandleNode { handle: "bloom", param: "amount" },
             convert: ParamConvert::Float,
         },
@@ -197,7 +197,7 @@ impl PostProcessEffect for BloomFX {
         fx: &EffectInstance,
         ctx: &EffectContext,
     ) {
-        let amount = fx.param_values.first().map(|p| p.value).unwrap_or(0.187);
+        let amount = fx.param_values.first().map(|p| p.value).unwrap_or(0.5);
 
         self.width = ctx.width;
         self.height = ctx.height;

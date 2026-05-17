@@ -34,10 +34,10 @@ inventory::submit! {
         params: &[
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
             ParamSpec::continuous("density", "Density", 16.0, 280.0, 260.0, "F2", "Density"),
-            ParamSpec::continuous("width", "Width", 0.4, 3.0, 1.335, "F2", "Width"),
+            ParamSpec::continuous("width", "Width", 0.4, 3.0, 1.5, "F2", "Width"),
             ParamSpec::continuous("z_scale", "Z Scale", 0.0, 2.5, 1.35, "F2", "ZScale"),
-            ParamSpec::continuous("smooth", "Smooth", 0.0, 0.98, 0.90, "F2", "Smooth"),
-            ParamSpec::continuous("subject", "Subject", 0.0, 1.0, 0.52, "F2", "SubjectIsolation"),
+            ParamSpec::continuous("smooth", "Smooth", 0.0, 1.0, 0.90, "F2", "Smooth"),
+            ParamSpec::continuous("subject", "Subject", 0.0, 1.0, 0.5, "F2", "SubjectIsolation"),
             ParamSpec::whole_labels("blend", "Blend", 0.0, 6.0, 6.0, &["Normal", "Add", "Multiply", "Screen", "Overlay", "Stencil", "Opaque"], "BlendMode"),
             ParamSpec::continuous("wire_res", "Wire Resolution", 0.5, 1.0, 1.0, "F2", "WireRes"),
             ParamSpec::whole_labels("mesh_rate", "Mesh Rate", 1.0, 4.0, 1.0, &["Every", "Half", "Third", "Quarter"], "MeshRate"),
@@ -76,7 +76,7 @@ crate::atomic_chain_spec! {
         ParamBinding {
             id: Cow::Borrowed("width"),
             label: "Width",
-            default_value: 1.335,
+            default_value: 1.5,
             target: ParamTarget::HandleNode { handle: "wireframe_depth", param: "width" },
             convert: ParamConvert::Float,
         },
@@ -97,7 +97,7 @@ crate::atomic_chain_spec! {
         ParamBinding {
             id: Cow::Borrowed("subject"),
             label: "Subject",
-            default_value: 0.52,
+            default_value: 0.5,
             target: ParamTarget::HandleNode { handle: "wireframe_depth", param: "subject" },
             convert: ParamConvert::Float,
         },

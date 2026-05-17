@@ -15,7 +15,7 @@
       "params": {
         "amount": {
           "type": "Float",
-          "value": 0.187
+          "value": 0.5
         }
       }
     },

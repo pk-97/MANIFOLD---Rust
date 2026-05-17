@@ -497,6 +497,535 @@ RENAMES: list[Rename] = [
         new='''name: "smooth",
         label: "Smoothing",''',
     ),
+
+    # ========================================================================
+    # Phase 2 — Default-value changes (UX calls 1, 4, 5).
+    #
+    # No migration needed: defaults only affect new instances. Existing
+    # projects keep their saved values. Each default change touches the
+    # ParamSpec literal AND the ParamBinding's default_value field — must
+    # stay in sync (validated by tests).
+    # ========================================================================
+
+    # ── §9.1.5 Amount rule: 12 effects flip amount=0 → 1.0 ──────────────
+
+    # Kaleidoscope amount: 0.0 → 1.0
+    Rename(
+        desc="Kaleidoscope amount: 0.0 → 1.0 (ParamSpec)",
+        file=effect("kaleidoscope"),
+        old='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),',
+        new='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),',
+    ),
+    Rename(
+        desc="Kaleidoscope amount: 0.0 → 1.0 (ParamBinding default)",
+        file=effect("kaleidoscope"),
+        old='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 0.0,''',
+        new='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 1.0,''',
+    ),
+
+    # Edge Detect amount: 0.0 → 1.0
+    Rename(
+        desc="Edge Detect amount: 0.0 → 1.0 (ParamSpec)",
+        file=effect("edge_detect"),
+        old='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),',
+        new='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),',
+    ),
+    Rename(
+        desc="Edge Detect amount: 0.0 → 1.0 (ParamBinding default)",
+        file=effect("edge_detect"),
+        old='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 0.0,''',
+        new='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 1.0,''',
+    ),
+
+    # Dither amount: 0.0 → 1.0
+    Rename(
+        desc="Dither amount: 0.0 → 1.0 (ParamSpec)",
+        file=effect("dither"),
+        old='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),',
+        new='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),',
+    ),
+    Rename(
+        desc="Dither amount: 0.0 → 1.0 (ParamBinding default)",
+        file=effect("dither"),
+        old='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 0.0,''',
+        new='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 1.0,''',
+    ),
+
+    # Halation amount: 0.0 → 1.0
+    Rename(
+        desc="Halation amount: 0.0 → 1.0 (ParamSpec)",
+        file=effect("halation"),
+        old='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),',
+        new='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),',
+    ),
+    Rename(
+        desc="Halation amount: 0.0 → 1.0 (ParamBinding default)",
+        file=effect("halation"),
+        old='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 0.0,''',
+        new='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 1.0,''',
+    ),
+
+    # Glitch amount: 0.0 → 1.0
+    Rename(
+        desc="Glitch amount: 0.0 → 1.0 (ParamSpec)",
+        file=effect("glitch"),
+        old='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),',
+        new='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),',
+    ),
+    Rename(
+        desc="Glitch amount: 0.0 → 1.0 (ParamBinding default)",
+        file=effect("glitch"),
+        old='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 0.0,''',
+        new='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 1.0,''',
+    ),
+
+    # Strobe amount: 0.0 → 1.0
+    Rename(
+        desc="Strobe amount: 0.0 → 1.0 (ParamSpec)",
+        file=effect("strobe"),
+        old='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),',
+        new='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),',
+    ),
+    Rename(
+        desc="Strobe amount: 0.0 → 1.0 (ParamBinding default)",
+        file=effect("strobe"),
+        old='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 0.0,''',
+        new='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 1.0,''',
+    ),
+
+    # Voronoi Prism amount: 0.0 → 1.0
+    Rename(
+        desc="Voronoi Prism amount: 0.0 → 1.0 (ParamSpec)",
+        file=effect("voronoi_prism"),
+        old='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),',
+        new='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),',
+    ),
+    Rename(
+        desc="Voronoi Prism amount: 0.0 → 1.0 (ParamBinding default)",
+        file=effect("voronoi_prism"),
+        old='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 0.0,''',
+        new='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 1.0,''',
+    ),
+
+    # Chromatic Aberration amount: 0.0 → 1.0
+    Rename(
+        desc="Chromatic Aberration amount: 0.0 → 1.0 (ParamSpec)",
+        file=effect("chromatic_aberration"),
+        old='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),',
+        new='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),',
+    ),
+    Rename(
+        desc="Chromatic Aberration amount: 0.0 → 1.0 (ParamBinding default)",
+        file=effect("chromatic_aberration"),
+        old='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 0.0,''',
+        new='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 1.0,''',
+    ),
+
+    # Color Grade amount: 0.0 → 1.0
+    Rename(
+        desc="Color Grade amount: 0.0 → 1.0 (ParamSpec)",
+        file=effect("color_grade"),
+        old='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),',
+        new='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),',
+    ),
+    Rename(
+        desc="Color Grade amount: 0.0 → 1.0 (ParamBinding default)",
+        file=effect("color_grade"),
+        old='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 0.0,''',
+        new='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 1.0,''',
+    ),
+
+    # Infrared amount: 0.0 → 1.0
+    Rename(
+        desc="Infrared amount: 0.0 → 1.0 (ParamSpec)",
+        file=effect("infrared"),
+        old='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),',
+        new='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),',
+    ),
+    Rename(
+        desc="Infrared amount: 0.0 → 1.0 (ParamBinding default)",
+        file=effect("infrared"),
+        old='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 0.0,''',
+        new='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 1.0,''',
+    ),
+
+    # HDR Boost amount: 0.0 → 1.0
+    Rename(
+        desc="HDR Boost amount: 0.0 → 1.0 (ParamSpec)",
+        file=effect("hdr_boost"),
+        old='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),',
+        new='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),',
+    ),
+    Rename(
+        desc="HDR Boost amount: 0.0 → 1.0 (ParamBinding default)",
+        file=effect("hdr_boost"),
+        old='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 0.0,''',
+        new='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 1.0,''',
+    ),
+
+    # Depth of Field amount: 0.0 → 1.0
+    Rename(
+        desc="DoF amount: 0.0 → 1.0 (ParamSpec)",
+        file=effect("depth_of_field"),
+        old='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),',
+        new='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),',
+    ),
+    Rename(
+        desc="DoF amount: 0.0 → 1.0 (ParamBinding default)",
+        file=effect("depth_of_field"),
+        old='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 0.0,''',
+        new='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 1.0,''',
+    ),
+
+    # Blob Track amount: 0.0 → 0.5 (subtle continuum per §9.1.5)
+    Rename(
+        desc="Blob Track amount: 0.0 → 0.5 (ParamSpec)",
+        file=effect("blob_tracking"),
+        old='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),',
+        new='ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.5, "F2", ""),',
+    ),
+    Rename(
+        desc="Blob Track amount: 0.0 → 0.5 (ParamBinding default)",
+        file=effect("blob_tracking"),
+        old='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 0.0,''',
+        new='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 0.5,''',
+    ),
+
+    # ── §9.1.7 Magic-number defaults — round to clean values ───────────
+
+    # Edge Stretch width: 0.433 → 0.5
+    Rename(
+        desc="Edge Stretch width default: 0.433 → 0.5 (ParamSpec)",
+        file=effect("edge_stretch"),
+        old='ParamSpec::continuous("width", "Width", 0.1, 0.9, 0.433, "F2", "SourceWidth"),',
+        new='ParamSpec::continuous("width", "Width", 0.1, 0.9, 0.5, "F2", "SourceWidth"),',
+    ),
+    Rename(
+        desc="Edge Stretch width default: 0.433 → 0.5 (ParamBinding)",
+        file=effect("edge_stretch"),
+        old='''ParamBinding {
+            id: Cow::Borrowed("width"),
+            label: "Width",
+            default_value: 0.433,''',
+        new='''ParamBinding {
+            id: Cow::Borrowed("width"),
+            label: "Width",
+            default_value: 0.5,''',
+    ),
+    Rename(
+        desc="ClampStretch primitive: source_width default 0.433 → 0.5",
+        file=primitive("clamp_stretch"),
+        old='default: ParamValue::Float(0.433),',
+        new='default: ParamValue::Float(0.5),',
+    ),
+
+    # Voronoi Prism source_width: 0.5625 → 0.5
+    Rename(
+        desc="Voronoi Prism source_width default: 0.5625 → 0.5 (ParamSpec)",
+        file=effect("voronoi_prism"),
+        old='ParamSpec::continuous("source_width", "Cell Size", 0.1, 1.0, 0.5625, "F2", "SourceWidth"),',
+        new='ParamSpec::continuous("source_width", "Cell Size", 0.1, 1.0, 0.5, "F2", "SourceWidth"),',
+    ),
+    Rename(
+        desc="Voronoi Prism source_width default: 0.5625 → 0.5 (ParamBinding)",
+        file=effect("voronoi_prism"),
+        old='''ParamBinding {
+            id: Cow::Borrowed("source_width"),
+            label: "Cell Size",
+            default_value: 0.5625,''',
+        new='''ParamBinding {
+            id: Cow::Borrowed("source_width"),
+            label: "Cell Size",
+            default_value: 0.5,''',
+    ),
+    Rename(
+        desc="VoronoiPrism primitive: source_width default 0.5625 → 0.5",
+        file=primitive("voronoi_prism"),
+        old='default: ParamValue::Float(0.5625),',
+        new='default: ParamValue::Float(0.5),',
+    ),
+
+    # Bloom amount: 0.187 → 0.5
+    Rename(
+        desc="Bloom amount default: 0.187 → 0.5 (ParamSpec)",
+        file=effect("bloom"),
+        old='ParamSpec::continuous("amount", "Amount", 0.0, 5.0, 0.187, "F2", ""),',
+        new='ParamSpec::continuous("amount", "Amount", 0.0, 5.0, 0.5, "F2", ""),',
+    ),
+    Rename(
+        desc="Bloom amount default: 0.187 → 0.5 (ParamBinding)",
+        file=effect("bloom"),
+        old='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 0.187,''',
+        new='''ParamBinding {
+            id: Cow::Borrowed("amount"),
+            label: "Amount",
+            default_value: 0.5,''',
+    ),
+    Rename(
+        desc="Bloom primitive: amount default 0.187 → 0.5",
+        file=primitive("bloom"),
+        old='default: ParamValue::Float(0.187),',
+        new='default: ParamValue::Float(0.5),',
+    ),
+    Rename(
+        desc="Bloom apply(): fallback 0.187 → 0.5",
+        file=effect("bloom"),
+        old='let amount = fx.param_values.first().map(|p| p.value).unwrap_or(0.187);',
+        new='let amount = fx.param_values.first().map(|p| p.value).unwrap_or(0.5);',
+    ),
+
+    # Wireframe Depth width: 1.335 → 1.5
+    Rename(
+        desc="Wireframe Depth width default: 1.335 → 1.5 (ParamSpec)",
+        file=effect("wireframe_depth"),
+        old='ParamSpec::continuous("width", "Width", 0.4, 3.0, 1.335, "F2", "Width"),',
+        new='ParamSpec::continuous("width", "Width", 0.4, 3.0, 1.5, "F2", "Width"),',
+    ),
+    Rename(
+        desc="Wireframe Depth width default: 1.335 → 1.5 (ParamBinding)",
+        file=effect("wireframe_depth"),
+        old='''ParamBinding {
+            id: Cow::Borrowed("width"),
+            label: "Width",
+            default_value: 1.335,''',
+        new='''ParamBinding {
+            id: Cow::Borrowed("width"),
+            label: "Width",
+            default_value: 1.5,''',
+    ),
+    Rename(
+        desc="WireframeDepth primitive: width default 1.335 → 1.5",
+        file=primitive("wireframe_depth"),
+        old='''name: "width",
+        label: "Width",
+        ty: ParamType::Float,
+        default: ParamValue::Float(1.335),''',
+        new='''name: "width",
+        label: "Width",
+        ty: ParamType::Float,
+        default: ParamValue::Float(1.5),''',
+    ),
+
+    # Wireframe Depth subject: 0.52 → 0.5
+    Rename(
+        desc="Wireframe Depth subject default: 0.52 → 0.5 (ParamSpec)",
+        file=effect("wireframe_depth"),
+        old='ParamSpec::continuous("subject", "Subject", 0.0, 1.0, 0.52, "F2", "SubjectIsolation"),',
+        new='ParamSpec::continuous("subject", "Subject", 0.0, 1.0, 0.5, "F2", "SubjectIsolation"),',
+    ),
+    Rename(
+        desc="Wireframe Depth subject default: 0.52 → 0.5 (ParamBinding)",
+        file=effect("wireframe_depth"),
+        old='''ParamBinding {
+            id: Cow::Borrowed("subject"),
+            label: "Subject",
+            default_value: 0.52,''',
+        new='''ParamBinding {
+            id: Cow::Borrowed("subject"),
+            label: "Subject",
+            default_value: 0.5,''',
+    ),
+    Rename(
+        desc="WireframeDepth primitive: subject default 0.52 → 0.5",
+        file=primitive("wireframe_depth"),
+        old='''name: "subject",
+        label: "Subject",
+        ty: ParamType::Float,
+        default: ParamValue::Float(0.52),''',
+        new='''name: "subject",
+        label: "Subject",
+        ty: ParamType::Float,
+        default: ParamValue::Float(0.5),''',
+    ),
+
+    # Wireframe Depth smooth range: [0, 0.98] → [0, 1.0]
+    Rename(
+        desc="Wireframe Depth smooth range: [0, 0.98] → [0, 1.0] (ParamSpec)",
+        file=effect("wireframe_depth"),
+        old='ParamSpec::continuous("smooth", "Smooth", 0.0, 0.98, 0.90, "F2", "Smooth"),',
+        new='ParamSpec::continuous("smooth", "Smooth", 0.0, 1.0, 0.90, "F2", "Smooth"),',
+    ),
+    Rename(
+        desc="WireframeDepth primitive: smooth range [0, 0.98] → [0, 1.0]",
+        file=primitive("wireframe_depth"),
+        old='''name: "smooth",
+        label: "Smoothing",
+        ty: ParamType::Float,
+        default: ParamValue::Float(0.90),
+        range: Some((0.0, 0.98)),''',
+        new='''name: "smooth",
+        label: "Smoothing",
+        ty: ParamType::Float,
+        default: ParamValue::Float(0.90),
+        range: Some((0.0, 1.0)),''',
+    ),
+
+    # ── §9.3.3 Generator snap default rule: 4 generators flip 1.0 → 0.0 ──
+
+    Rename(
+        desc="Plasma snap default: 1.0 → 0.0",
+        file=gen_metadata(),
+        old='ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 1.0, "snap"),\n        ],\n        string_params: &[],\n    }\n}\n\n// ── Basic Shapes Snap ',
+        new='ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 0.0, "snap"),\n        ],\n        string_params: &[],\n    }\n}\n\n// ── Basic Shapes Snap ',
+    ),
+    Rename(
+        desc="Lissajous snap default: 1.0 → 0.0",
+        file=gen_metadata(),
+        old='ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 1.0, "snap"),\n        ],\n        string_params: &[],\n    }\n}\n\n// ── Wireframe Zoo ',
+        new='ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 0.0, "snap"),\n        ],\n        string_params: &[],\n    }\n}\n\n// ── Wireframe Zoo ',
+    ),
+    Rename(
+        desc="Oscilloscope XY snap default: 1.0 → 0.0",
+        file=gen_metadata(),
+        old='ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 1.0, "snap"),\n        ],\n        string_params: &[],\n    }\n}\n\n// ── Parametric Surface ',
+        new='ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 0.0, "snap"),\n        ],\n        string_params: &[],\n    }\n}\n\n// ── Parametric Surface ',
+    ),
+    Rename(
+        desc="Parametric Surface snap default: 1.0 → 0.0",
+        file=gen_metadata(),
+        old='ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 1.0, "snap"),\n        ],\n        string_params: &[],\n    }\n}\n\n// ── Mycelium ',
+        new='ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 0.0, "snap"),\n        ],\n        string_params: &[],\n    }\n}\n\n// ── Mycelium ',
+    ),
+
+    # ── §9.3.5 Generator magic-number defaults — round to clean values ──
+
+    Rename(
+        desc="Plasma contrast default: 0.63 → 0.5",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("contrast", "Contrast", 0.0, 1.0, 0.63, "F2", "contrast"),',
+        new='ParamSpec::continuous("contrast", "Contrast", 0.0, 1.0, 0.5, "F2", "contrast"),',
+    ),
+
+    # Mycelium color: 0.08 → 0.0 (subtle by default, user opts in to hue rotation)
+    Rename(
+        desc="Mycelium color default: 0.08 → 0.0",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("color", "Color", 0.0, 1.0, 0.08, "F2", "color"),',
+        new='ParamSpec::continuous("color", "Color", 0.0, 1.0, 0.0, "F2", "color"),',
+    ),
+
+    # Strange Attractor chaos: 0.0 → 0.3 (visible motion on add)
+    Rename(
+        desc="Strange Attractor chaos default: 0.0 → 0.3",
+        file=generator("strange_attractor"),
+        old='ParamSpec::continuous("chaos", "Chaos", 0.0, 1.0, 0.0, "F2", "chaos"),',
+        new='ParamSpec::continuous("chaos", "Chaos", 0.0, 1.0, 0.3, "F2", "chaos"),',
+    ),
+
+    # Lissajous magic-number cleanup (§9.3.5)
+    Rename(
+        desc="Lissajous defaults: 6 magic numbers → round values",
+        file=gen_metadata(),
+        old='''ParamSpec::continuous("freq_x", "Freq X", 0.0, 2.0, 0.13, "F2", "freqX"),
+            ParamSpec::continuous("freq_y", "Freq Y", 0.0, 2.0, 0.09, "F2", "freqY"),
+            ParamSpec::continuous("phase", "Phase", 0.0, 2.0, 0.07, "F2", "phase"),
+            ParamSpec::continuous("line", "Line", 0.0005, 0.03, 0.002, "F4", "line"),
+            ParamSpec::toggle("verts", "Verts", 0.0, 1.0, 0.0, "verts"),
+            ParamSpec::continuous("v_size", "VSize", 0.1, 4.0, 0.5, "F1", "vsize"),
+            ParamSpec::toggle("anim", "Anim", 0.0, 1.0, 1.0, "anim"),
+            ParamSpec::continuous("speed", "Speed", 0.1, 5.0, 2.67, "F1", "speed"),
+            ParamSpec::continuous("window", "Window", 0.01, 1.0, 0.74, "F2", "window"),
+            ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.55, "F2", "scale"),''',
+        new='''ParamSpec::continuous("freq_x", "Freq X", 0.0, 2.0, 0.1, "F2", "freqX"),
+            ParamSpec::continuous("freq_y", "Freq Y", 0.0, 2.0, 0.1, "F2", "freqY"),
+            ParamSpec::continuous("phase", "Phase", 0.0, 2.0, 0.0, "F2", "phase"),
+            ParamSpec::continuous("line", "Line", 0.0005, 0.03, 0.002, "F4", "line"),
+            ParamSpec::toggle("verts", "Verts", 0.0, 1.0, 0.0, "verts"),
+            ParamSpec::continuous("v_size", "VSize", 0.1, 4.0, 0.5, "F1", "vsize"),
+            ParamSpec::toggle("anim", "Anim", 0.0, 1.0, 1.0, "anim"),
+            ParamSpec::continuous("speed", "Speed", 0.1, 5.0, 1.0, "F1", "speed"),
+            ParamSpec::continuous("window", "Window", 0.01, 1.0, 0.5, "F2", "window"),
+            ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),''',
+    ),
+
+    # ── §9.3.5 Black Hole.freefall: F0 → F2 (format mismatch with [0,1] range) ──
+    Rename(
+        desc="Black Hole freefall format: F0 → F2",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("freefall", "Freefall", 0.0, 1.0, 0.0, "F0", "freefall"),',
+        new='ParamSpec::continuous("freefall", "Freefall", 0.0, 1.0, 0.0, "F2", "freefall"),',
+    ),
 ]
 
 

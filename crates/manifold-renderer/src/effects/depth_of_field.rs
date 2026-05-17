@@ -48,7 +48,7 @@ inventory::submit! {
         osc_prefix: "dof",
         legacy_discriminant: Some(40),
         params: &[
-            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
             ParamSpec::whole_labels("mode", "Mode", 0.0, 2.0, 0.0, &["Tilt-Shift", "Radial", "Depth"], "Mode"),
             ParamSpec::continuous("focus", "Focus", 0.0, 1.0, 0.5, "F2", "FocusPosition"),
             ParamSpec::continuous("focus_x", "Focus X", 0.0, 1.0, 0.5, "F2", "FocusX"),
@@ -74,7 +74,7 @@ crate::atomic_chain_spec! {
         ParamBinding {
             id: Cow::Borrowed("amount"),
             label: "Amount",
-            default_value: 0.0,
+            default_value: 1.0,
             target: ParamTarget::HandleNode { handle: "dof", param: "amount" },
             convert: ParamConvert::Float,
         },

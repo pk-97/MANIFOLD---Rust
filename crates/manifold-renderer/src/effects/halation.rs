@@ -31,7 +31,7 @@ inventory::submit! {
         osc_prefix: "halation",
         legacy_discriminant: Some(34),
         params: &[
-            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
+            ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
             ParamSpec::continuous("thresh", "Threshold", 0.0, 1.0, 0.5, "F2", "Threshold"),
             ParamSpec::continuous("spread", "Spread", 0.0, 1.0, 0.5, "F2", "Spread"),
             ParamSpec::continuous("hue", "Hue", 0.0, 360.0, 20.0, "F2", "Hue"),
@@ -54,7 +54,7 @@ crate::atomic_chain_spec! {
         ParamBinding {
             id: Cow::Borrowed("amount"),
             label: "Amount",
-            default_value: 0.0,
+            default_value: 1.0,
             target: ParamTarget::HandleNode { handle: "halation", param: "amount" },
             convert: ParamConvert::Float,
         },

@@ -178,7 +178,7 @@ const BLOOM_PARAMS: [ParamDef; 1] = [ParamDef {
     name: "amount",
     label: "Amount",
     ty: ParamType::Float,
-    default: ParamValue::Float(0.187),
+    default: ParamValue::Float(0.5),
     range: Some((0.0, 5.0)),
     enum_values: &[],
 }];
