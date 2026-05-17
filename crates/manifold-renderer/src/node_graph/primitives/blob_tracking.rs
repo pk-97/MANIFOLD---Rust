@@ -66,7 +66,7 @@ const BLOB_TRACKING_PARAMS: [ParamDef; 5] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "thresh",
+        name: "threshold",
         label: "Threshold",
         ty: ParamType::Float,
         default: ParamValue::Float(0.65),
@@ -74,7 +74,7 @@ const BLOB_TRACKING_PARAMS: [ParamDef; 5] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "sens",
+        name: "sensitivity",
         label: "Sensitivity",
         ty: ParamType::Float,
         default: ParamValue::Float(0.85),
@@ -82,7 +82,7 @@ const BLOB_TRACKING_PARAMS: [ParamDef; 5] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "smooth",
+        name: "smoothing",
         label: "Smoothing",
         ty: ParamType::Float,
         default: ParamValue::Float(0.7),
@@ -99,7 +99,7 @@ const BLOB_TRACKING_PARAMS: [ParamDef; 5] = [
     },
 ];
 
-const BLOB_TRACKING_PARAM_ORDER: &[&str] = &["amount", "thresh", "sens", "smooth", "connect"];
+const BLOB_TRACKING_PARAM_ORDER: &[&str] = &["amount", "threshold", "sensitivity", "smoothing", "connect"];
 
 fn cached_type_id() -> &'static EffectNodeType {
     static CELL: OnceLock<EffectNodeType> = OnceLock::new();

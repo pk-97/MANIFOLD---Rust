@@ -21,7 +21,7 @@ use crate::node_graph::primitives::AutoGain;
 use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
-use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
 use std::borrow::Cow;
@@ -39,9 +39,9 @@ inventory::submit! {
             ParamSpec::continuous("ratio", "Ratio", 0.0, 1.0, 0.5, "F2", "Ratio"),
             ParamSpec::continuous("punch", "Punch", 0.0, 1.0, 0.5, "F2", "Punch"),
             ParamSpec::continuous("target", "Target", 0.0, 1.0, 0.5, "F2", "Target"),
-            ParamSpec::continuous("hdr_ret", "HDR Retention", 0.0, 1.0, 0.5, "F2", "HdrRetention"),
+            ParamSpec::continuous("hdr_retention", "HDR Retention", 0.0, 1.0, 0.5, "F2", "HdrRetention"),
             ParamSpec::continuous("color", "Color", -1.0, 1.0, 0.0, "F2", "ColorPush"),
-            ParamSpec::whole_labels("char", "Character", 0.0, 4.0, 0.0, &["Clean", "Warm", "Film", "Vivid", "Grit"], "Character"),
+            ParamSpec::whole_labels("character", "Character", 0.0, 4.0, 0.0, &["Clean", "Warm", "Film", "Vivid", "Grit"], "Character"),
         ],
     }
 }
@@ -49,6 +49,16 @@ inventory::submit! {
     EffectFactory {
         id: EffectTypeId::AUTO_GAIN,
         create: |device| Box::new(AutoGainFX::new(device)),
+    }
+}
+
+inventory::submit! {
+    EffectAliasMetadata {
+        id: EffectTypeId::AUTO_GAIN,
+        aliases: &[
+            ("char", Some("character")),
+            ("hdr_ret", Some("hdr_retention")),
+        ],
     }
 }
 
@@ -86,10 +96,10 @@ crate::atomic_chain_spec! {
             convert: ParamConvert::Float,
         },
         ParamBinding {
-            id: Cow::Borrowed("hdr_ret"),
+            id: Cow::Borrowed("hdr_retention"),
             label: "HDR Retention",
             default_value: 0.5,
-            target: ParamTarget::HandleNode { handle: "auto_gain", param: "hdr_ret" },
+            target: ParamTarget::HandleNode { handle: "auto_gain", param: "hdr_retention" },
             convert: ParamConvert::Float,
         },
         ParamBinding {
@@ -100,10 +110,10 @@ crate::atomic_chain_spec! {
             convert: ParamConvert::Float,
         },
         ParamBinding {
-            id: Cow::Borrowed("char"),
+            id: Cow::Borrowed("character"),
             label: "Character",
             default_value: 0.0,
-            target: ParamTarget::HandleNode { handle: "auto_gain", param: "char" },
+            target: ParamTarget::HandleNode { handle: "auto_gain", param: "character" },
             convert: ParamConvert::EnumRound,
         },
     ],

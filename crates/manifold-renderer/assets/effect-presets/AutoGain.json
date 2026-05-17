@@ -17,7 +17,7 @@
           "type": "Float",
           "value": 0.5
         },
-        "char": {
+        "character": {
           "type": "Enum",
           "value": 0
         },
@@ -25,7 +25,7 @@
           "type": "Float",
           "value": 0.0
         },
-        "hdr_ret": {
+        "hdr_retention": {
           "type": "Float",
           "value": 0.5
         },

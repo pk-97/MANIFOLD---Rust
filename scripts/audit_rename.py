@@ -1968,6 +1968,207 @@ inventory::submit! {
         old='let mode = match ctx.params.get("mode") {',
         new='let mode = match ctx.params.get("direction") {',
     ),
+
+    # ── Auto Gain: char/hdr_ret → character/hdr_retention + primitive ──
+    Rename(
+        desc="Auto Gain: add EffectAliasMetadata import",
+        file=effect("auto_gain"),
+        old='use manifold_core::effect_registration::EffectMetadata;',
+        new='use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};',
+    ),
+    Rename(
+        desc="Auto Gain: insert EffectAliasMetadata submission",
+        file=effect("auto_gain"),
+        old='''inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::AUTO_GAIN,
+        create: |device| Box::new(AutoGainFX::new(device)),
+    }
+}''',
+        new='''inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::AUTO_GAIN,
+        create: |device| Box::new(AutoGainFX::new(device)),
+    }
+}
+
+inventory::submit! {
+    EffectAliasMetadata {
+        id: EffectTypeId::AUTO_GAIN,
+        aliases: &[
+            ("char", Some("character")),
+            ("hdr_ret", Some("hdr_retention")),
+        ],
+    }
+}''',
+    ),
+    Rename(
+        desc="Auto Gain: ParamSpec id char → character",
+        file=effect("auto_gain"),
+        old='ParamSpec::whole_labels("char", "Character", 0.0, 4.0, 0.0, &["Clean", "Warm", "Film", "Vivid", "Grit"], "Character"),',
+        new='ParamSpec::whole_labels("character", "Character", 0.0, 4.0, 0.0, &["Clean", "Warm", "Film", "Vivid", "Grit"], "Character"),',
+    ),
+    Rename(
+        desc="Auto Gain: ParamSpec id hdr_ret → hdr_retention",
+        file=effect("auto_gain"),
+        old='ParamSpec::continuous("hdr_ret", "HDR Retention", 0.0, 1.0, 0.5, "F2", "HdrRetention"),',
+        new='ParamSpec::continuous("hdr_retention", "HDR Retention", 0.0, 1.0, 0.5, "F2", "HdrRetention"),',
+    ),
+    Rename(
+        desc="Auto Gain: ParamBinding id char → character",
+        file=effect("auto_gain"),
+        old='id: Cow::Borrowed("char"),',
+        new='id: Cow::Borrowed("character"),',
+    ),
+    Rename(
+        desc="Auto Gain: ParamBinding id hdr_ret → hdr_retention",
+        file=effect("auto_gain"),
+        old='id: Cow::Borrowed("hdr_ret"),',
+        new='id: Cow::Borrowed("hdr_retention"),',
+    ),
+    Rename(
+        desc="Auto Gain: ParamBinding target.param char → character",
+        file=effect("auto_gain"),
+        old='target: ParamTarget::HandleNode { handle: "auto_gain", param: "char" },',
+        new='target: ParamTarget::HandleNode { handle: "auto_gain", param: "character" },',
+    ),
+    Rename(
+        desc="Auto Gain: ParamBinding target.param hdr_ret → hdr_retention",
+        file=effect("auto_gain"),
+        old='target: ParamTarget::HandleNode { handle: "auto_gain", param: "hdr_ret" },',
+        new='target: ParamTarget::HandleNode { handle: "auto_gain", param: "hdr_retention" },',
+    ),
+    Rename(
+        desc="AutoGain primitive: ParamDef name hdr_ret → hdr_retention",
+        file=primitive("auto_gain"),
+        old='name: "hdr_ret",\n        label: "HDR Retention",',
+        new='name: "hdr_retention",\n        label: "HDR Retention",',
+    ),
+    Rename(
+        desc="AutoGain primitive: ParamDef name char → character",
+        file=primitive("auto_gain"),
+        old='name: "char",\n        label: "Character",',
+        new='name: "character",\n        label: "Character",',
+    ),
+    Rename(
+        desc="AutoGain primitive: PARAM_ORDER update",
+        file=primitive("auto_gain"),
+        old='const AUTO_GAIN_PARAM_ORDER: &[&str] = &[\n    "amount", "ratio", "punch", "target", "hdr_ret", "color", "char",\n];',
+        new='const AUTO_GAIN_PARAM_ORDER: &[&str] = &[\n    "amount", "ratio", "punch", "target", "hdr_retention", "color", "character",\n];',
+    ),
+
+    # ── Blob Track: thresh/sens/smooth → threshold/sensitivity/smoothing + primitive ──
+    Rename(
+        desc="Blob Track: add EffectAliasMetadata import",
+        file=effect("blob_tracking"),
+        old='use manifold_core::effect_registration::EffectMetadata;',
+        new='use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};',
+    ),
+    Rename(
+        desc="Blob Track: insert EffectAliasMetadata submission",
+        file=effect("blob_tracking"),
+        old='''inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::BLOB_TRACKING,
+        create: |device| Box::new(BlobTrackingFX::new(device)),
+    }
+}''',
+        new='''inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::BLOB_TRACKING,
+        create: |device| Box::new(BlobTrackingFX::new(device)),
+    }
+}
+
+inventory::submit! {
+    EffectAliasMetadata {
+        id: EffectTypeId::BLOB_TRACKING,
+        aliases: &[
+            ("thresh", Some("threshold")),
+            ("sens", Some("sensitivity")),
+            ("smooth", Some("smoothing")),
+        ],
+    }
+}''',
+    ),
+    Rename(
+        desc="Blob Track: ParamSpec id thresh → threshold",
+        file=effect("blob_tracking"),
+        old='ParamSpec::continuous("thresh", "Threshold", 0.05, 0.9, 0.65, "F2", "Threshold"),',
+        new='ParamSpec::continuous("threshold", "Threshold", 0.05, 0.9, 0.65, "F2", "Threshold"),',
+    ),
+    Rename(
+        desc="Blob Track: ParamSpec id sens → sensitivity",
+        file=effect("blob_tracking"),
+        old='ParamSpec::continuous("sens", "Sensitivity", 0.2, 1.0, 0.85, "F2", "Sensitivity"),',
+        new='ParamSpec::continuous("sensitivity", "Sensitivity", 0.2, 1.0, 0.85, "F2", "Sensitivity"),',
+    ),
+    Rename(
+        desc="Blob Track: ParamSpec id smooth → smoothing",
+        file=effect("blob_tracking"),
+        old='ParamSpec::continuous("smooth", "Smoothing", 0.0, 1.0, 0.7, "F2", "Smoothing"),',
+        new='ParamSpec::continuous("smoothing", "Smoothing", 0.0, 1.0, 0.7, "F2", "Smoothing"),',
+    ),
+    Rename(
+        desc="Blob Track: ParamBinding id thresh → threshold",
+        file=effect("blob_tracking"),
+        old='id: Cow::Borrowed("thresh"),',
+        new='id: Cow::Borrowed("threshold"),',
+    ),
+    Rename(
+        desc="Blob Track: ParamBinding id sens → sensitivity",
+        file=effect("blob_tracking"),
+        old='id: Cow::Borrowed("sens"),',
+        new='id: Cow::Borrowed("sensitivity"),',
+    ),
+    Rename(
+        desc="Blob Track: ParamBinding id smooth → smoothing",
+        file=effect("blob_tracking"),
+        old='id: Cow::Borrowed("smooth"),',
+        new='id: Cow::Borrowed("smoothing"),',
+    ),
+    Rename(
+        desc="Blob Track: ParamBinding target.param thresh → threshold",
+        file=effect("blob_tracking"),
+        old='target: ParamTarget::HandleNode { handle: "blob_tracking", param: "thresh" },',
+        new='target: ParamTarget::HandleNode { handle: "blob_tracking", param: "threshold" },',
+    ),
+    Rename(
+        desc="Blob Track: ParamBinding target.param sens → sensitivity",
+        file=effect("blob_tracking"),
+        old='target: ParamTarget::HandleNode { handle: "blob_tracking", param: "sens" },',
+        new='target: ParamTarget::HandleNode { handle: "blob_tracking", param: "sensitivity" },',
+    ),
+    Rename(
+        desc="Blob Track: ParamBinding target.param smooth → smoothing",
+        file=effect("blob_tracking"),
+        old='target: ParamTarget::HandleNode { handle: "blob_tracking", param: "smooth" },',
+        new='target: ParamTarget::HandleNode { handle: "blob_tracking", param: "smoothing" },',
+    ),
+    Rename(
+        desc="BlobTracking primitive: ParamDef name thresh → threshold",
+        file=primitive("blob_tracking"),
+        old='name: "thresh",\n        label: "Threshold",',
+        new='name: "threshold",\n        label: "Threshold",',
+    ),
+    Rename(
+        desc="BlobTracking primitive: ParamDef name sens → sensitivity",
+        file=primitive("blob_tracking"),
+        old='name: "sens",\n        label: "Sensitivity",',
+        new='name: "sensitivity",\n        label: "Sensitivity",',
+    ),
+    Rename(
+        desc="BlobTracking primitive: ParamDef name smooth → smoothing",
+        file=primitive("blob_tracking"),
+        old='name: "smooth",\n        label: "Smoothing",',
+        new='name: "smoothing",\n        label: "Smoothing",',
+    ),
+    Rename(
+        desc="BlobTracking primitive: PARAM_ORDER update",
+        file=primitive("blob_tracking"),
+        old='const BLOB_TRACKING_PARAM_ORDER: &[&str] = &["amount", "thresh", "sens", "smooth", "connect"];',
+        new='const BLOB_TRACKING_PARAM_ORDER: &[&str] = &["amount", "threshold", "sensitivity", "smoothing", "connect"];',
+    ),
 ]
 
 

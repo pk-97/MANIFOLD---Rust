@@ -15,7 +15,7 @@ use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
-use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
 use std::borrow::Cow;
@@ -35,9 +35,9 @@ inventory::submit! {
         legacy_discriminant: Some(22),
         params: &[
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.5, "F2", ""),
-            ParamSpec::continuous("thresh", "Threshold", 0.05, 0.9, 0.65, "F2", "Threshold"),
-            ParamSpec::continuous("sens", "Sensitivity", 0.2, 1.0, 0.85, "F2", "Sensitivity"),
-            ParamSpec::continuous("smooth", "Smoothing", 0.0, 1.0, 0.7, "F2", "Smoothing"),
+            ParamSpec::continuous("threshold", "Threshold", 0.05, 0.9, 0.65, "F2", "Threshold"),
+            ParamSpec::continuous("sensitivity", "Sensitivity", 0.2, 1.0, 0.85, "F2", "Sensitivity"),
+            ParamSpec::continuous("smoothing", "Smoothing", 0.0, 1.0, 0.7, "F2", "Smoothing"),
             ParamSpec::continuous("connect", "Connect", 0.0, 1.0, 0.35, "F2", "Connect"),
         ],
     }
@@ -46,6 +46,17 @@ inventory::submit! {
     EffectFactory {
         id: EffectTypeId::BLOB_TRACKING,
         create: |device| Box::new(BlobTrackingFX::new(device)),
+    }
+}
+
+inventory::submit! {
+    EffectAliasMetadata {
+        id: EffectTypeId::BLOB_TRACKING,
+        aliases: &[
+            ("thresh", Some("threshold")),
+            ("sens", Some("sensitivity")),
+            ("smooth", Some("smoothing")),
+        ],
     }
 }
 
@@ -62,24 +73,24 @@ crate::atomic_chain_spec! {
             convert: ParamConvert::Float,
         },
         ParamBinding {
-            id: Cow::Borrowed("thresh"),
+            id: Cow::Borrowed("threshold"),
             label: "Threshold",
             default_value: 0.65,
-            target: ParamTarget::HandleNode { handle: "blob_tracking", param: "thresh" },
+            target: ParamTarget::HandleNode { handle: "blob_tracking", param: "threshold" },
             convert: ParamConvert::Float,
         },
         ParamBinding {
-            id: Cow::Borrowed("sens"),
+            id: Cow::Borrowed("sensitivity"),
             label: "Sensitivity",
             default_value: 0.85,
-            target: ParamTarget::HandleNode { handle: "blob_tracking", param: "sens" },
+            target: ParamTarget::HandleNode { handle: "blob_tracking", param: "sensitivity" },
             convert: ParamConvert::Float,
         },
         ParamBinding {
-            id: Cow::Borrowed("smooth"),
+            id: Cow::Borrowed("smoothing"),
             label: "Smoothing",
             default_value: 0.7,
-            target: ParamTarget::HandleNode { handle: "blob_tracking", param: "smooth" },
+            target: ParamTarget::HandleNode { handle: "blob_tracking", param: "smoothing" },
             convert: ParamConvert::Float,
         },
         ParamBinding {

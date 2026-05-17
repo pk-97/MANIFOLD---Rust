@@ -21,15 +21,15 @@
           "type": "Float",
           "value": 0.35
         },
-        "sens": {
+        "sensitivity": {
           "type": "Float",
           "value": 0.85
         },
-        "smooth": {
+        "smoothing": {
           "type": "Float",
           "value": 0.7
         },
-        "thresh": {
+        "threshold": {
           "type": "Float",
           "value": 0.65
         }

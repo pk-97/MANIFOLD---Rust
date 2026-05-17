@@ -95,7 +95,7 @@ const AUTO_GAIN_PARAMS: [ParamDef; 7] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "hdr_ret",
+        name: "hdr_retention",
         label: "HDR Retention",
         ty: ParamType::Float,
         default: ParamValue::Float(0.5),
@@ -111,7 +111,7 @@ const AUTO_GAIN_PARAMS: [ParamDef; 7] = [
         enum_values: &[],
     },
     ParamDef {
-        name: "char",
+        name: "character",
         label: "Character",
         ty: ParamType::Enum,
         default: ParamValue::Enum(0),
@@ -121,7 +121,7 @@ const AUTO_GAIN_PARAMS: [ParamDef; 7] = [
 ];
 
 const AUTO_GAIN_PARAM_ORDER: &[&str] = &[
-    "amount", "ratio", "punch", "target", "hdr_ret", "color", "char",
+    "amount", "ratio", "punch", "target", "hdr_retention", "color", "character",
 ];
 
 fn cached_type_id() -> &'static EffectNodeType {
