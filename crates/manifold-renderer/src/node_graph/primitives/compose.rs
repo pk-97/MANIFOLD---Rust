@@ -258,11 +258,11 @@ mod gpu_tests {
     //! pipeline compilation failures, missing usages) and prove pixel
     //! correctness — bugs that mock-backend tests can't see.
 
-    use std::sync::Arc;
+    
 
     use half::f16;
     use manifold_core::{Beats, Seconds};
-    use manifold_gpu::{GpuDevice, GpuTextureFormat};
+    use manifold_gpu::GpuTextureFormat;
 
     use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use crate::node_graph::backend::Backend;
@@ -303,7 +303,7 @@ mod gpu_tests {
     /// `GpuDevice`. No pixel check; that's `mix_pixel_correct_at_half`.
     #[test]
     fn mix_dispatches_through_metal_backend() {
-        let device = Arc::new(GpuDevice::new());
+        let device = crate::test_device();
         let (w, h) = (4u32, 4u32);
         let format = GpuTextureFormat::Rgba16Float;
 
@@ -344,7 +344,7 @@ mod gpu_tests {
     /// dispatch math are all wired correctly.
     #[test]
     fn mix_pixel_correct_at_half() {
-        let device = Arc::new(GpuDevice::new());
+        let device = crate::test_device();
         let (w, h) = (4u32, 4u32);
         let format = GpuTextureFormat::Rgba16Float;
 
@@ -427,7 +427,7 @@ mod gpu_tests {
     /// (0,0) pixel (every pixel is identical for solid-color inputs).
     /// Shared by the per-mode smoke tests below.
     fn run_mix_at(a_rgba: [f32; 4], b_rgba: [f32; 4], mode: u32, amount: f32) -> [f32; 4] {
-        let device = Arc::new(GpuDevice::new());
+        let device = crate::test_device();
         let (w, h) = (4u32, 4u32);
         let format = GpuTextureFormat::Rgba16Float;
 

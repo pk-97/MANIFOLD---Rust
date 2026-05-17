@@ -161,11 +161,11 @@ mod gpu_tests {
     //! invariants: DC preservation, axis isolation, and known
     //! kernel response on a delta-function input.
 
-    use std::sync::Arc;
+    
 
     use half::f16;
     use manifold_core::{Beats, Seconds};
-    use manifold_gpu::{GpuDevice, GpuTextureFormat};
+    use manifold_gpu::GpuTextureFormat;
 
     use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use crate::node_graph::backend::Backend;
@@ -212,7 +212,7 @@ mod gpu_tests {
         step: f32,
         fill_input: F,
     ) -> Vec<[f32; 4]> {
-        let device = Arc::new(GpuDevice::new());
+        let device = crate::test_device();
         let format = GpuTextureFormat::Rgba16Float;
 
         let mut g = Graph::new();
@@ -258,16 +258,16 @@ mod gpu_tests {
         readback_enc.commit_and_wait_completed();
 
         let ptr = readback_buf.mapped_ptr().expect("shared buffer pointer");
-        let halfs: &[u16] =
+        let halves: &[u16] =
             unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
         (0..(w * h) as usize)
             .map(|i| {
                 let o = i * 4;
                 [
-                    f16::from_bits(halfs[o]).to_f32(),
-                    f16::from_bits(halfs[o + 1]).to_f32(),
-                    f16::from_bits(halfs[o + 2]).to_f32(),
-                    f16::from_bits(halfs[o + 3]).to_f32(),
+                    f16::from_bits(halves[o]).to_f32(),
+                    f16::from_bits(halves[o + 1]).to_f32(),
+                    f16::from_bits(halves[o + 2]).to_f32(),
+                    f16::from_bits(halves[o + 3]).to_f32(),
                 ]
             })
             .collect()

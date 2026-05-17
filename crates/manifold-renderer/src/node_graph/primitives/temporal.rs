@@ -308,10 +308,10 @@ mod gpu_tests {
     //! end-to-end execute_frame_with_state pathway in place by running
     //! a minimal Source → Feedback → FinalOutput graph through it.
 
-    use std::sync::Arc;
+    
 
     use manifold_core::{Beats, Seconds};
-    use manifold_gpu::{GpuDevice, GpuTextureFormat};
+    use manifold_gpu::GpuTextureFormat;
 
     use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use crate::node_graph::{
@@ -346,7 +346,7 @@ mod gpu_tests {
 
     #[test]
     fn feedback_dispatches_through_state_store_without_panic() {
-        let device = Arc::new(GpuDevice::new());
+        let device = crate::test_device();
         let (w, h) = (4u32, 4u32);
         let format = GpuTextureFormat::Rgba16Float;
 

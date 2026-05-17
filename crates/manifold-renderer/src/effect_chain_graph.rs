@@ -928,7 +928,7 @@ mod multi_segment_tests {
     use manifold_core::effect_definition_registry;
     use manifold_core::effects::{EffectGroup, EffectInstance};
     use manifold_core::id::EffectGroupId;
-    use std::sync::Arc;
+    
 
     fn make_default(ty: EffectTypeId) -> EffectInstance {
         effect_definition_registry::create_default(&ty)
@@ -936,7 +936,7 @@ mod multi_segment_tests {
 
     #[test]
     fn non_contiguous_group_builds_multi_segment_mix() {
-        let device = Arc::new(GpuDevice::new());
+        let device = crate::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
 
         let g1_id = EffectGroupId::new("g1");
@@ -981,7 +981,7 @@ mod multi_segment_tests {
     fn contiguous_group_still_builds_single_mix() {
         // Regression guard: the contiguous case still produces exactly
         // one Mix sub-graph.
-        let device = Arc::new(GpuDevice::new());
+        let device = crate::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
 
         let g1_id = EffectGroupId::new("g1");
@@ -1012,7 +1012,7 @@ mod multi_segment_tests {
     fn three_segment_group_builds_three_mix_sub_graphs() {
         // Chain: Invert(g1) → Chroma → Invert(g1) → Chroma → Invert(g1)
         // Group g1 has three non-contiguous segments.
-        let device = Arc::new(GpuDevice::new());
+        let device = crate::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
 
         let g1_id = EffectGroupId::new("g1");
@@ -1061,7 +1061,7 @@ mod binding_seed_tests {
     use manifold_core::EffectTypeId;
     use manifold_core::effect_definition_registry;
     use manifold_core::effects::EffectInstance;
-    use std::sync::Arc;
+    
 
     fn make_default(ty: EffectTypeId) -> EffectInstance {
         effect_definition_registry::create_default(&ty)
@@ -1074,7 +1074,7 @@ mod binding_seed_tests {
     /// the cache compare to diverge and the binding to actually write.
     #[test]
     fn soft_focus_inner_blur_starts_at_binding_default_not_primitive_default() {
-        let device = Arc::new(GpuDevice::new());
+        let device = crate::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         let fx = make_default(EffectTypeId::SOFT_FOCUS_GRAPH);
 
@@ -1165,7 +1165,7 @@ mod topology_hash_tests {
         // rebuilds, and (b) exclude the effect from `active_effects` in
         // `try_build` so it stops rendering. Without these the toggle
         // appears to do nothing.
-        let device = std::sync::Arc::new(GpuDevice::new());
+        let device = crate::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
 
         let mut fx = make_default(EffectTypeId::MIRROR); // `amount` default = 1.0, so present in chain by default.
@@ -1249,7 +1249,7 @@ mod user_binding_tests {
     use manifold_core::effects::{
         EffectInstance, ParamSlot, UserParamBinding, UserParamConvert,
     };
-    use std::sync::Arc;
+    
 
     fn make_default(ty: EffectTypeId) -> EffectInstance {
         effect_definition_registry::create_default(&ty)
@@ -1290,7 +1290,7 @@ mod user_binding_tests {
     /// to the correct inner node + param.
     #[test]
     fn build_time_hydrate_resolves_user_binding_to_inner_node() {
-        let device = Arc::new(GpuDevice::new());
+        let device = crate::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         let fx = mirror_with_rotation_exposed(0.48);
 
@@ -1321,7 +1321,7 @@ mod user_binding_tests {
     /// user-tail param value to the inner Transform node.
     #[test]
     fn exposed_rotation_slider_value_reaches_inner_transform() {
-        let device = Arc::new(GpuDevice::new());
+        let device = crate::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         let fx = mirror_with_rotation_exposed(0.48);
 
@@ -1385,7 +1385,7 @@ mod user_binding_tests {
     /// "touched" to push their declared default through.
     #[test]
     fn user_binding_with_nonzero_default_seeds_inner_at_build_time() {
-        let device = Arc::new(GpuDevice::new());
+        let device = crate::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         let mut fx = make_default(EffectTypeId::MIRROR);
         fx.append_user_binding(UserParamBinding {

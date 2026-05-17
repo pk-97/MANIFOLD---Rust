@@ -468,7 +468,7 @@ mod alias_tests {
     use crate::node_graph::ports::PortType;
 
     fn make_backend() -> (Arc<GpuDevice>, MetalBackend) {
-        let device = Arc::new(GpuDevice::new());
+        let device = crate::test_device();
         let backend = MetalBackend::new(device.clone(), 16, 16, GpuTextureFormat::Rgba16Float);
         (device, backend)
     }

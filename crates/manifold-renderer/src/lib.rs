@@ -29,3 +29,22 @@ pub mod tonemap;
 pub mod ui_cache_manager;
 pub mod ui_renderer;
 pub mod uniform_arena;
+
+/// Process-wide cached `GpuDevice` for in-crate tests.
+///
+/// `GpuDevice::new()` builds Metal pipeline state objects and warms the
+/// shader cache — ~200–500ms per call. With 17+ unit tests across
+/// renderer modules historically constructing their own device, that
+/// added up to most of the renderer-lib test runtime. Callers only
+/// need *a* working device, never a fresh one; `GpuDevice` is
+/// `Send + Sync` (Metal serializes device operations internally), so
+/// sharing across parallel test threads is safe. Mirrors the
+/// `tests/parity/harness.rs::shared` pattern.
+#[cfg(test)]
+pub(crate) fn test_device() -> std::sync::Arc<manifold_gpu::GpuDevice> {
+    use std::sync::{Arc, OnceLock};
+    static SHARED: OnceLock<Arc<manifold_gpu::GpuDevice>> = OnceLock::new();
+    SHARED
+        .get_or_init(|| Arc::new(manifold_gpu::GpuDevice::new()))
+        .clone()
+}

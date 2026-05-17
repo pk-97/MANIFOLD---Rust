@@ -124,11 +124,11 @@ mod gpu_tests {
     //! boundary values (wet_dry = 0 → dry, wet_dry = 1 → wet, wet_dry
     //! = 0.5 → exact half).
 
-    use std::sync::Arc;
+    
 
     use half::f16;
     use manifold_core::{Beats, Seconds};
-    use manifold_gpu::{GpuDevice, GpuTextureFormat};
+    use manifold_gpu::GpuTextureFormat;
 
     use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use crate::node_graph::backend::Backend;
@@ -165,7 +165,7 @@ mod gpu_tests {
     }
 
     fn run_wet_dry_at(dry_rgba: [f32; 4], wet_rgba: [f32; 4], wet_dry: f32) -> [f32; 4] {
-        let device = Arc::new(GpuDevice::new());
+        let device = crate::test_device();
         let (w, h) = (4u32, 4u32);
         let format = GpuTextureFormat::Rgba16Float;
 

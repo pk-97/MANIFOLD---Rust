@@ -2127,7 +2127,7 @@ mod chain_pool_tests {
     /// Build a minimal compositor. Tiny size keeps GPU costs low; tests
     /// don't render, so resolution doesn't matter.
     fn make_compositor() -> (Arc<GpuDevice>, LayerCompositor) {
-        let device = Arc::new(GpuDevice::new());
+        let device = crate::test_device();
         let comp = LayerCompositor::new(&device, 64, 64);
         (device, comp)
     }

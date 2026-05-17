@@ -40,6 +40,7 @@ mod invert;
 mod kaleido_fold;
 mod lut1d;
 mod sanity;
+mod smoke;
 mod strobe;
 mod voronoi_prism;
 mod watercolor;
