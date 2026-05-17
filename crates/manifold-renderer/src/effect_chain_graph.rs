@@ -60,9 +60,9 @@ use crate::node_graph::primitives::Mix;
 use crate::node_graph::{
     ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, LastAppliedCache, MetalBackend,
     NodeInstanceId, ParamBinding, ParamValue, PortType, PrimitiveRegistry, ResourceId, Slot,
-    Source, SpliceResult, StateStore, apply_binding_defaults, apply_param_bindings,
-    chain_spec_by_id, compile,
-    splice_def_into_chain,
+    Source, SpliceResult, StateStore, UserParamBindingRuntime, apply_binding_defaults,
+    apply_param_bindings, chain_spec_by_id, compile, splice_def_into_chain,
+    user_binding_to_runtime_with_handles,
 };
 use crate::render_target::RenderTarget;
 
@@ -194,6 +194,18 @@ struct EffectSlot {
     /// value hasn't changed — that's the keystone of "inner edits
     /// survive a chain rebuild when the outer slot is at rest."
     resolved_bindings: Vec<ParamBinding>,
+    /// Hydrated user-exposed bindings from
+    /// `EffectInstance.user_param_bindings`. Re-hydrated lazily when
+    /// `effect.user_param_bindings_version` advances past
+    /// `user_bindings_version` below — exposing or unexposing a param
+    /// bumps the core-side version without changing chain topology,
+    /// so we don't want to force a chain rebuild for each toggle.
+    user_bindings: Vec<UserParamBindingRuntime>,
+    /// Last seen `EffectInstance.user_param_bindings_version`. When
+    /// the live effect's version differs, the per-frame apply path
+    /// re-hydrates `user_bindings` from the live binding list before
+    /// applying.
+    user_bindings_version: u32,
     binding_cache: LastAppliedCache,
     /// Where to apply ctx-driven params (time / beat). The first
     /// handle for now — composite effects with multiple ctx-driven
@@ -384,6 +396,32 @@ impl ChainGraph {
             // moves off its declared default (the "touch to update"
             // bug).
             apply_binding_defaults(&resolved_bindings, &mut graph, None);
+            // Hydrate user-exposed bindings from the live effect
+            // instance. Each user binding addresses an inner-node
+            // param by handle + name; resolution can fail if the
+            // effect's chain spec changed since the binding was
+            // saved (handle renamed, param removed). Failures log
+            // and the binding renders inert until re-bound.
+            let user_bindings: Vec<UserParamBindingRuntime> = fx
+                .user_param_bindings
+                .iter()
+                .filter_map(|core| {
+                    let hydrated = user_binding_to_runtime_with_handles(core, &graph, &handles);
+                    if hydrated.is_none() {
+                        eprintln!(
+                            "[chain-graph] {}: UserParamBinding `{}` could not resolve \
+                             (node_handle=`{}`, inner_param=`{}`); slider will not apply \
+                             until the binding re-points to a live target.",
+                            fx.effect_type().as_str(),
+                            core.id,
+                            core.node_handle,
+                            core.inner_param,
+                        );
+                    }
+                    hydrated
+                })
+                .collect();
+            let user_bindings_version = fx.user_param_bindings_version;
             let ctx_target_node = handles.first().map(|(_, id)| *id);
             effect_nodes.push(EffectSlot {
                 effect_id: fx.id.clone(),
@@ -391,6 +429,8 @@ impl ChainGraph {
                 legacy_index: *legacy_index,
                 handles,
                 resolved_bindings,
+                user_bindings,
+                user_bindings_version,
                 binding_cache,
                 ctx_target_node,
             });
@@ -538,9 +578,45 @@ impl ChainGraph {
                 // rather than panic on a live stage.
                 continue;
             };
+            // Re-hydrate user bindings if the effect's binding list
+            // moved since this slot was built. Exposing or unexposing
+            // a param bumps the core-side version without rebuilding
+            // the chain — without this catch, a freshly-exposed
+            // outer slot writes into an empty runtime list and
+            // never reaches the inner node (the symptom: exposed
+            // slider has no effect, while the same value set in the
+            // graph editor works).
+            if fx.user_param_bindings_version != slot.user_bindings_version {
+                slot.user_bindings = fx
+                    .user_param_bindings
+                    .iter()
+                    .filter_map(|core| {
+                        let hydrated = user_binding_to_runtime_with_handles(
+                            core,
+                            &self.graph,
+                            &slot.handles,
+                        );
+                        if hydrated.is_none() {
+                            eprintln!(
+                                "[chain-graph] {}: UserParamBinding `{}` could not resolve \
+                                 on rehydrate; slider will not apply until rebound.",
+                                slot.effect_type.as_str(),
+                                core.id,
+                            );
+                        }
+                        hydrated
+                    })
+                    .collect();
+                slot.user_bindings_version = fx.user_param_bindings_version;
+                // Reset the user-tail cache so the first apply after
+                // re-hydrate unconditionally writes — the previous
+                // cache entries refer to a different binding list and
+                // would skip-write on stale-prev compare.
+                slot.binding_cache.user_outer.clear();
+            }
             apply_param_bindings(
                 &slot.resolved_bindings,
-                &[],
+                &slot.user_bindings,
                 &mut self.graph,
                 None,
                 &fx.param_values,
@@ -1153,5 +1229,140 @@ mod topology_hash_tests {
                 ty,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod user_binding_tests {
+    //! Regression: a user-exposed inner-graph parameter must actually
+    //! propagate its outer slot value to the inner node every frame.
+    //!
+    //! Pre-fix: the chain's per-frame `apply_param_bindings` call
+    //! passed `&[]` for `user_bindings`, so exposing a param via the
+    //! graph editor produced a visible effect-card slider that
+    //! silently wrote into a discarded list. The user-visible symptom:
+    //! setting `Transform.rotation = 0.48` directly in the graph
+    //! editor rotated the image, but exposing the same param on the
+    //! Mirror card and dragging its slider to 0.48 did nothing.
+    use super::*;
+    use crate::node_graph::ParamValue;
+    use manifold_core::EffectTypeId;
+    use manifold_core::effect_definition_registry;
+    use manifold_core::effects::{
+        EffectInstance, ParamSlot, UserParamBinding, UserParamConvert,
+    };
+    use std::sync::Arc;
+
+    fn make_default(ty: EffectTypeId) -> EffectInstance {
+        effect_definition_registry::create_default(&ty)
+    }
+
+    fn mirror_with_rotation_exposed(rotation_value: f32) -> EffectInstance {
+        let mut fx = make_default(EffectTypeId::MIRROR);
+        // Mirror's canonical splice registers Transform under the
+        // handle `"uv_transform"` and Mix under `"mix"`. Expose the
+        // inner Transform's `rotation` param via the user-binding
+        // tail.
+        fx.append_user_binding(UserParamBinding {
+            id: "user.uv_transform.rotation.1".to_string(),
+            label: "Rotation".to_string(),
+            node_handle: "uv_transform".to_string(),
+            inner_param: "rotation".to_string(),
+            min: 0.0,
+            max: 1.0,
+            default_value: 0.0,
+            convert: UserParamConvert::Float,
+        });
+        // Drag the user-tail slider to `rotation_value`. With static
+        // count = 2 (amount, mode) the user binding's slot lives at
+        // index 2.
+        let slot_index = 2;
+        assert_eq!(
+            fx.param_values.len(),
+            3,
+            "Mirror with 2 static + 1 user-tail = 3 param slots",
+        );
+        fx.param_values[slot_index] = ParamSlot::exposed(rotation_value);
+        fx
+    }
+
+    /// Build-time hydrate: the chain's `EffectSlot.user_bindings` must
+    /// have one entry per `fx.user_param_bindings`, each addressing the
+    /// correct inner node + param.
+    #[test]
+    fn build_time_hydrate_resolves_user_binding_to_inner_node() {
+        let device = Arc::new(GpuDevice::new());
+        let primitives = PrimitiveRegistry::with_builtin();
+        let fx = mirror_with_rotation_exposed(0.48);
+
+        let cg = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256)
+            .expect("Mirror chain with one user binding builds");
+
+        let slot = cg
+            .effect_nodes
+            .first()
+            .expect("Mirror contributes one effect slot");
+        assert_eq!(
+            slot.user_bindings.len(),
+            1,
+            "user-tail binding for Transform.rotation must hydrate at build time",
+        );
+        assert_eq!(slot.user_bindings[0].target_param, "rotation");
+    }
+
+    /// Per-frame apply: after build, calling `apply_param_bindings`
+    /// with the chain's stored user-binding list must write the
+    /// user-tail param value to the inner Transform node.
+    #[test]
+    fn exposed_rotation_slider_value_reaches_inner_transform() {
+        let device = Arc::new(GpuDevice::new());
+        let primitives = PrimitiveRegistry::with_builtin();
+        let fx = mirror_with_rotation_exposed(0.48);
+
+        let mut cg = ChainGraph::try_build(
+            std::slice::from_ref(&fx),
+            &[],
+            &primitives,
+            &device,
+            None,
+            256,
+            256,
+        )
+        .expect("Mirror chain with one user binding builds");
+
+        // Mirror the per-frame apply that `run()` would execute:
+        // walk the slot, push static + user bindings through.
+        let slot = &mut cg.effect_nodes[0];
+        apply_param_bindings(
+            &slot.resolved_bindings,
+            &slot.user_bindings,
+            &mut cg.graph,
+            None,
+            &fx.param_values,
+            &mut slot.binding_cache,
+        );
+
+        // Inspect the inner Transform node's `rotation` param — it
+        // must reflect the user-tail slot's value, not its primitive
+        // default of 0.0.
+        let (_, xform_id) = slot
+            .handles
+            .iter()
+            .find(|(h, _)| h.as_ref() == "uv_transform")
+            .expect("Mirror splice registers `uv_transform` handle");
+        let rotation = cg
+            .graph
+            .get_node(*xform_id)
+            .and_then(|n| n.params.get("rotation").copied())
+            .expect("Transform exposes a `rotation` param");
+
+        assert_eq!(
+            rotation,
+            ParamValue::Float(0.48),
+            "exposed user-binding slider must propagate to the inner \
+             Transform.rotation param. If this is `Float(0.0)`, the \
+             per-frame `apply_param_bindings` call passed an empty \
+             user_bindings slice — the regression that motivated this fix.",
+        );
     }
 }

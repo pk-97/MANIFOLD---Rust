@@ -274,7 +274,30 @@ impl UserParamBindingRuntime {
 }
 
 /// Hydrate a core-side [`manifold_core::effects::UserParamBinding`]
-/// into the renderer-runtime [`UserParamBindingRuntime`] form.
+/// into the renderer-runtime [`UserParamBindingRuntime`] form using
+/// per-effect splice handles.
+///
+/// Chain-graph effects don't register their splice handles on the
+/// shared `Graph` (each effect's handles are scoped to its slot,
+/// not the chain-wide graph), so resolution walks the slice the
+/// splice returned in `SpliceResult::handles`. Returns `None` if
+/// the handle name isn't in the slice or the inner param doesn't
+/// match any `ParamDef` on the resolved node. Caller logs and skips.
+pub fn user_binding_to_runtime_with_handles(
+    core: &manifold_core::effects::UserParamBinding,
+    graph: &Graph,
+    handles: &[(Cow<'static, str>, NodeInstanceId)],
+) -> Option<UserParamBindingRuntime> {
+    let target_node = handles
+        .iter()
+        .find(|(h, _)| h.as_ref() == core.node_handle.as_str())
+        .map(|(_, id)| *id)?;
+    user_binding_to_runtime_resolved(core, graph, target_node)
+}
+
+/// Hydrate a core-side [`manifold_core::effects::UserParamBinding`]
+/// into the renderer-runtime [`UserParamBindingRuntime`] form using
+/// graph-wide handle registration.
 ///
 /// Returns `None` if the binding's `node_handle` is not registered
 /// on the graph (effect refactor dropped the node, or alias resolver
@@ -287,6 +310,14 @@ pub fn user_binding_to_runtime(
     graph: &Graph,
 ) -> Option<UserParamBindingRuntime> {
     let target_node = graph.node_id_by_handle(&core.node_handle)?;
+    user_binding_to_runtime_resolved(core, graph, target_node)
+}
+
+fn user_binding_to_runtime_resolved(
+    core: &manifold_core::effects::UserParamBinding,
+    graph: &Graph,
+    target_node: NodeInstanceId,
+) -> Option<UserParamBindingRuntime> {
     let inst = graph.get_node(target_node)?;
     // Find the &'static str on the inner node's ParamDef list that
     // matches `core.inner_param`. We pull the &'static str out of

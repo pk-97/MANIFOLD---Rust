@@ -50,7 +50,7 @@ pub use palette::{catalog_graph_def_for, palette_atoms, PaletteAtom};
 pub use param_binding::{
     BindingCacheEntry, LastAppliedCache, ParamBinding, ParamConvert, ParamId, ParamTarget,
     UserParamBindingRuntime, apply_binding_defaults, apply_param_bindings, binding_value,
-    outer_routings_from_bindings, user_binding_to_runtime,
+    outer_routings_from_bindings, user_binding_to_runtime, user_binding_to_runtime_with_handles,
 };
 pub use parameters::{ParamDef, ParamType, ParamValue};
 pub use persistence::{
