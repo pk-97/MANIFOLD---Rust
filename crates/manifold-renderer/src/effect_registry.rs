@@ -126,6 +126,9 @@ fn outer_routings_from_spec(
             outer_param_id: binding.id.to_string(),
             node_handle: handle.to_string(),
             inner_param: inner_param.to_string(),
+            // This walk operates on registry-side `ChainSpec.bindings`
+            // — every entry is a compile-time spec binding.
+            source: crate::node_graph::OuterParamSource::Static,
         });
     }
     out

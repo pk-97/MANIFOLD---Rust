@@ -47,12 +47,34 @@ pub struct GraphSnapshot {
 /// per-node "Expose to card" checkbox can toggle the matching
 /// `param_values[slot_index].exposed` directly instead of layering
 /// a redundant user-binding on top of an already-routed param.
+///
+/// `source` tags whether the entry came from a registry-declared
+/// static binding or from a per-instance user-exposed binding — the
+/// runtime apply path doesn't branch on this (Phase 1 unification),
+/// but the editor uses it to style the two tiers differently and to
+/// pick the right command (`ToggleStaticParamExposeCommand` vs
+/// `ToggleEffectParamExposeCommand`) when the user un-checks a row.
 #[derive(Debug, Clone)]
 pub struct OuterParamRouting {
     pub outer_label: String,
     pub outer_param_id: String,
     pub node_handle: String,
     pub inner_param: String,
+    pub source: OuterParamSource,
+}
+
+/// Tier marker for an [`OuterParamRouting`]. Mirrors
+/// [`crate::node_graph::BindingSource`] but lives in the snapshot
+/// (a `Send`able, allocation-only data type with no renderer types
+/// in scope) so the UI thread can read it without depending on
+/// `param_binding`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OuterParamSource {
+    /// Declared on the effect's `ChainSpec.bindings` at compile time.
+    Static,
+    /// Per-instance `EffectInstance.user_param_bindings` entry, added
+    /// by the user via the graph editor's expose checkboxes.
+    User,
 }
 
 /// One node in the snapshot.

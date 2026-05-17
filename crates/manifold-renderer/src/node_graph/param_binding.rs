@@ -578,7 +578,6 @@ pub fn outer_routings_from_bindings(
     handle: Option<&crate::node_graph::composites::CompositeHandle>,
     graph: &Graph,
 ) -> Vec<crate::node_graph::OuterParamRouting> {
-    use crate::node_graph::OuterParamRouting;
     let id_to_handle: ahash::AHashMap<u32, String> = graph
         .handles()
         .map(|(h, id)| (id.0, h.to_string()))
@@ -607,11 +606,15 @@ pub fn outer_routings_from_bindings(
             // un-surfaceable. Skip silently.
             continue;
         };
-        out.push(OuterParamRouting {
+        out.push(crate::node_graph::OuterParamRouting {
             outer_label: b.label.to_string(),
             outer_param_id: b.id.to_string(),
             node_handle: handle_str.clone(),
             inner_param: inner_param.to_string(),
+            source: match b.source {
+                BindingSource::Static => crate::node_graph::OuterParamSource::Static,
+                BindingSource::User => crate::node_graph::OuterParamSource::User,
+            },
         });
     }
     out

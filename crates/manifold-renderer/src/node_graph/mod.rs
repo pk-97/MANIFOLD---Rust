@@ -60,8 +60,8 @@ pub use persistence::{
 pub use ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 pub use primitive::{Primitive, PrimitiveDescription, PrimitiveSpec};
 pub use snapshot::{
-    GraphSnapshot, NodeSnapshot, OuterParamRouting, ParamSnapshot, ParamSnapshotKind,
-    PortKindSnapshot, PortSnapshot, WireSnapshot,
+    GraphSnapshot, NodeSnapshot, OuterParamRouting, OuterParamSource, ParamSnapshot,
+    ParamSnapshotKind, PortKindSnapshot, PortSnapshot, WireSnapshot,
 };
 pub use state_store::{NodeState, OwnerKey, StateStore};
 pub use validation::{GraphError, topological_sort, validate};
