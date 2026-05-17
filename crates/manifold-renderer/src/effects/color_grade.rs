@@ -17,7 +17,7 @@ inventory::submit! {
     EffectMetadata {
         id: EffectTypeId::COLOR_GRADE,
         display_name: "Color Grade",
-        category: "Post-Process",
+        category: "Color",
         available: true,
         osc_prefix: "colorGrade",
         legacy_discriminant: Some(28),

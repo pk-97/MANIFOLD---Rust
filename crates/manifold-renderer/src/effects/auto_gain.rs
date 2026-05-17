@@ -30,7 +30,7 @@ inventory::submit! {
     EffectMetadata {
         id: EffectTypeId::AUTO_GAIN,
         display_name: "Auto Gain",
-        category: "Post-Process",
+        category: "Stylize",
         available: true,
         osc_prefix: "autoGain",
         legacy_discriminant: Some(41),

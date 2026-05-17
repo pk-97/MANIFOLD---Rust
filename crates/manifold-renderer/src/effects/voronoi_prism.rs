@@ -14,7 +14,7 @@ inventory::submit! {
     EffectMetadata {
         id: EffectTypeId::VORONOI_PRISM,
         display_name: "Voronoi Prism",
-        category: "Post-Process",
+        category: "Stylize",
         available: true,
         osc_prefix: "voronoiPrism",
         legacy_discriminant: Some(16),

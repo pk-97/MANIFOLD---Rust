@@ -23,7 +23,7 @@ inventory::submit! {
     EffectMetadata {
         id: EffectTypeId::STYLIZED_FEEDBACK,
         display_name: "Stylized Feedback",
-        category: "Post-Process",
+        category: "Stylize",
         available: true,
         osc_prefix: "stylizedFeedback",
         legacy_discriminant: Some(20),

@@ -1026,6 +1026,145 @@ RENAMES: list[Rename] = [
         old='ParamSpec::continuous("freefall", "Freefall", 0.0, 1.0, 0.0, "F0", "freefall"),',
         new='ParamSpec::continuous("freefall", "Freefall", 0.0, 1.0, 0.0, "F2", "freefall"),',
     ),
+
+    # ========================================================================
+    # Phase 3 — Category restructure (UX call 2 / §9.1.4).
+    #
+    # Old buckets: Spatial / Post-Process / Filmic / Surveillance.
+    # New buckets: Spatial / Color / Stylize / Filmic / Diagnostic.
+    #
+    # Each effect's category field updates in its EffectMetadata block.
+    # The picker reads ALL_CATEGORIES from effect_type_registry.rs, which
+    # changes in a follow-up direct edit (not script-friendly because it's
+    # multi-line const reshuffling).
+    # ========================================================================
+
+    # ── To Color: Invert, Infrared, Dither, Color Grade ─────────────────
+    Rename(
+        desc="Invert category: Spatial → Color",
+        file=effect("invert_colors"),
+        old='category: "Spatial",',
+        new='category: "Color",',
+    ),
+    Rename(
+        desc="Infrared category: Surveillance → Color",
+        file=effect("infrared"),
+        old='category: "Surveillance",',
+        new='category: "Color",',
+    ),
+    Rename(
+        desc="Dither category: Post-Process → Color",
+        file=effect("dither"),
+        old='category: "Post-Process",',
+        new='category: "Color",',
+    ),
+    Rename(
+        desc="Color Grade category: Post-Process → Color",
+        file=effect("color_grade"),
+        old='category: "Post-Process",',
+        new='category: "Color",',
+    ),
+
+    # ── To Spatial: Mirror, Quad Mirror, Kaleidoscope, Edge Stretch ────
+    Rename(
+        desc="Mirror category: Post-Process → Spatial",
+        file=effect("mirror"),
+        old='category: "Post-Process",',
+        new='category: "Spatial",',
+    ),
+    Rename(
+        desc="Quad Mirror category: Post-Process → Spatial",
+        file=effect("quad_mirror"),
+        old='category: "Post-Process",',
+        new='category: "Spatial",',
+    ),
+    Rename(
+        desc="Kaleidoscope category: Post-Process → Spatial",
+        file=effect("kaleidoscope"),
+        old='category: "Post-Process",',
+        new='category: "Spatial",',
+    ),
+    Rename(
+        desc="Edge Stretch category: Post-Process → Spatial",
+        file=effect("edge_stretch"),
+        old='category: "Post-Process",',
+        new='category: "Spatial",',
+    ),
+
+    # ── To Stylize: Strobe, Stylized Feedback, Soft Focus, Watercolor,
+    #               Voronoi Prism, Auto Gain ──────────────────────────────
+    Rename(
+        desc="Strobe category: Post-Process → Stylize",
+        file=effect("strobe"),
+        old='category: "Post-Process",',
+        new='category: "Stylize",',
+    ),
+    Rename(
+        desc="Stylized Feedback category: Post-Process → Stylize",
+        file=effect("stylized_feedback"),
+        old='category: "Post-Process",',
+        new='category: "Stylize",',
+    ),
+    Rename(
+        desc="Soft Focus category: Post-Process → Stylize",
+        file=effect("soft_focus_graph"),
+        old='category: "Post-Process",',
+        new='category: "Stylize",',
+    ),
+    Rename(
+        desc="Watercolor category: Post-Process → Stylize",
+        file=effect("watercolor"),
+        old='category: "Post-Process",',
+        new='category: "Stylize",',
+    ),
+    Rename(
+        desc="Voronoi Prism category: Post-Process → Stylize",
+        file=effect("voronoi_prism"),
+        old='category: "Post-Process",',
+        new='category: "Stylize",',
+    ),
+    Rename(
+        desc="Auto Gain category: Post-Process → Stylize",
+        file=effect("auto_gain"),
+        old='category: "Post-Process",',
+        new='category: "Stylize",',
+    ),
+
+    # ── To Diagnostic: Edge Detect, Blob Track, Wireframe Depth,
+    #                  NodeGraphTest (the only `available: true` debug
+    #                  effect — "see the graph run") ─────────────────────
+    Rename(
+        desc="Edge Detect category: Post-Process → Diagnostic",
+        file=effect("edge_detect"),
+        old='category: "Post-Process",',
+        new='category: "Diagnostic",',
+    ),
+    Rename(
+        desc="Blob Track category: Post-Process → Diagnostic",
+        file=effect("blob_tracking"),
+        old='category: "Post-Process",',
+        new='category: "Diagnostic",',
+    ),
+    Rename(
+        desc="Wireframe Depth category: Post-Process → Diagnostic",
+        file=effect("wireframe_depth"),
+        old='category: "Post-Process",',
+        new='category: "Diagnostic",',
+    ),
+    Rename(
+        desc="Node Graph Test category: Post-Process → Diagnostic",
+        file=effect("node_graph_test"),
+        old='category: "Post-Process",',
+        new='category: "Diagnostic",',
+    ),
+
+    # ── To Filmic: Bloom ────────────────────────────────────────────────
+    Rename(
+        desc="Bloom category: Post-Process → Filmic",
+        file=effect("bloom"),
+        old='category: "Post-Process",',
+        new='category: "Filmic",',
+    ),
 ]
 
 

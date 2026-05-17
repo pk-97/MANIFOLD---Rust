@@ -20,7 +20,7 @@ inventory::submit! {
     EffectMetadata {
         id: EffectTypeId::BLOOM,
         display_name: "Bloom",
-        category: "Post-Process",
+        category: "Filmic",
         available: true,
         osc_prefix: "bloom",
         legacy_discriminant: Some(12),

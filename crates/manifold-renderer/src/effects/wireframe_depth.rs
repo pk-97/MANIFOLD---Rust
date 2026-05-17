@@ -27,7 +27,7 @@ inventory::submit! {
     EffectMetadata {
         id: EffectTypeId::WIREFRAME_DEPTH,
         display_name: "Wireframe Depth",
-        category: "Post-Process",
+        category: "Diagnostic",
         available: true,
         osc_prefix: "wireframeDepth",
         legacy_discriminant: Some(29),

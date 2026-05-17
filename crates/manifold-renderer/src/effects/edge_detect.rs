@@ -14,7 +14,7 @@ inventory::submit! {
     EffectMetadata {
         id: EffectTypeId::EDGE_DETECT,
         display_name: "Edge Detect",
-        category: "Post-Process",
+        category: "Diagnostic",
         available: true,
         osc_prefix: "edgeDetect",
         legacy_discriminant: Some(25),

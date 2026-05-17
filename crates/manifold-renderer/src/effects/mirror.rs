@@ -37,7 +37,7 @@ inventory::submit! {
     EffectMetadata {
         id: EffectTypeId::MIRROR,
         display_name: "Mirror",
-        category: "Post-Process",
+        category: "Spatial",
         available: true,
         osc_prefix: "mirror",
         legacy_discriminant: Some(21),

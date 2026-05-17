@@ -14,7 +14,7 @@ inventory::submit! {
     EffectMetadata {
         id: EffectTypeId::INFRARED,
         display_name: "Infrared",
-        category: "Surveillance",
+        category: "Color",
         available: true,
         osc_prefix: "infrared",
         legacy_discriminant: Some(37),

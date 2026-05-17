@@ -14,7 +14,7 @@ inventory::submit! {
     EffectMetadata {
         id: EffectTypeId::DITHER,
         display_name: "Dither",
-        category: "Post-Process",
+        category: "Color",
         available: true,
         osc_prefix: "dither",
         legacy_discriminant: Some(18),

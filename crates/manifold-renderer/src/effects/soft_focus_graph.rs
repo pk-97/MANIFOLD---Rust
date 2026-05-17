@@ -26,7 +26,7 @@ inventory::submit! {
     EffectMetadata {
         id: EffectTypeId::SOFT_FOCUS_GRAPH,
         display_name: "Soft Focus",
-        category: "Post-Process",
+        category: "Stylize",
         available: true,
         osc_prefix: "soft_focus_graph",
         legacy_discriminant: None,

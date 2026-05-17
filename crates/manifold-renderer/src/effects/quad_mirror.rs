@@ -14,7 +14,7 @@ inventory::submit! {
     EffectMetadata {
         id: EffectTypeId::QUAD_MIRROR,
         display_name: "Quad Mirror",
-        category: "Post-Process",
+        category: "Spatial",
         available: true,
         osc_prefix: "quadMirror",
         legacy_discriminant: Some(17),

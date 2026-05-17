@@ -24,7 +24,7 @@ inventory::submit! {
     EffectMetadata {
         id: EffectTypeId::NODE_GRAPH_TEST,
         display_name: "Node Graph Test",
-        category: "Post-Process",
+        category: "Diagnostic",
         available: true,
         osc_prefix: "node_graph_test",
         legacy_discriminant: None,

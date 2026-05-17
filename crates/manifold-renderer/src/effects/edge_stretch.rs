@@ -14,7 +14,7 @@ inventory::submit! {
     EffectMetadata {
         id: EffectTypeId::EDGE_STRETCH,
         display_name: "Edge Stretch",
-        category: "Post-Process",
+        category: "Spatial",
         available: true,
         osc_prefix: "edgeStretch",
         legacy_discriminant: Some(15),

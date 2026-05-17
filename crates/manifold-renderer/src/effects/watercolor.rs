@@ -34,7 +34,7 @@ inventory::submit! {
     EffectMetadata {
         id: EffectTypeId::new("Watercolor"),
         display_name: "Watercolor",
-        category: "Post-Process",
+        category: "Stylize",
         available: true,
         osc_prefix: "watercolor",
         legacy_discriminant: None,

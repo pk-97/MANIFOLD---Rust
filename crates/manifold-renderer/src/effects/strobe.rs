@@ -14,7 +14,7 @@ inventory::submit! {
     EffectMetadata {
         id: EffectTypeId::STROBE,
         display_name: "Strobe",
-        category: "Post-Process",
+        category: "Stylize",
         available: true,
         osc_prefix: "strobe",
         legacy_discriminant: Some(19),

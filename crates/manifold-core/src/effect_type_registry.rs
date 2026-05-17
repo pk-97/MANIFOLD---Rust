@@ -17,13 +17,35 @@ pub struct EffectTypeRegistration {
 }
 
 // ── Categories ──────────────────────────────────────────────────────────
+//
+// Five user-facing buckets after the §9.1.4 audit:
+//   - Spatial    — transforms, mirrors, kaleidoscopes (UV-space ops)
+//   - Color      — invert, color grade, infrared, dither (channel ops)
+//   - Stylize    — feedback, watercolor, soft focus, strobe, auto gain,
+//                  voronoi prism (look-developer effects)
+//   - Filmic     — bloom, halation, chromatic aberration, glitch, DoF,
+//                  HDR boost (film-style optical effects)
+//   - Diagnostic — edge detect, blob track, wireframe depth, node graph
+//                  test (overlay / debug-style effects)
+//
+// `POST_PROCESS` and `SURVEILLANCE` are retained as constants only so
+// unavailable-stub effects (Corruption, Datamosh, etc.) keep compiling
+// against their existing category strings; they don't appear in
+// `ALL_CATEGORIES` and so are excluded from the picker. Removing the
+// stubs entirely happens when those effects ship.
 
 pub const SPATIAL: &str = "Spatial";
-pub const POST_PROCESS: &str = "Post-Process";
+pub const COLOR: &str = "Color";
+pub const STYLIZE: &str = "Stylize";
 pub const FILMIC: &str = "Filmic";
+pub const DIAGNOSTIC: &str = "Diagnostic";
+
+// Legacy buckets kept alive for compiling unavailable-stub effects.
+// Not exposed in `ALL_CATEGORIES`.
+pub const POST_PROCESS: &str = "Post-Process";
 pub const SURVEILLANCE: &str = "Surveillance";
 
-pub const ALL_CATEGORIES: &[&str] = &[SPATIAL, POST_PROCESS, FILMIC, SURVEILLANCE];
+pub const ALL_CATEGORIES: &[&str] = &[SPATIAL, COLOR, STYLIZE, FILMIC, DIAGNOSTIC];
 
 // ── Registry ────────────────────────────────────────────────────────────
 

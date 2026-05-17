@@ -29,7 +29,7 @@ inventory::submit! {
     EffectMetadata {
         id: EffectTypeId::BLOB_TRACKING,
         display_name: "Blob Track",
-        category: "Post-Process",
+        category: "Diagnostic",
         available: true,
         osc_prefix: "blobTracking",
         legacy_discriminant: Some(22),

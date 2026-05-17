@@ -14,7 +14,7 @@ inventory::submit! {
     EffectMetadata {
         id: EffectTypeId::INVERT_COLORS,
         display_name: "Invert",
-        category: "Spatial",
+        category: "Color",
         available: true,
         osc_prefix: "invert",
         legacy_discriminant: Some(1),

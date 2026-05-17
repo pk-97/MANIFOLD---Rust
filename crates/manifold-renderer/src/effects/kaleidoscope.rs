@@ -14,7 +14,7 @@ inventory::submit! {
     EffectMetadata {
         id: EffectTypeId::KALEIDOSCOPE,
         display_name: "Kaleidoscope",
-        category: "Post-Process",
+        category: "Spatial",
         available: true,
         osc_prefix: "kaleidoscope",
         legacy_discriminant: Some(14),
