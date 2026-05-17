@@ -1165,6 +1165,232 @@ RENAMES: list[Rename] = [
         old='category: "Post-Process",',
         new='category: "Filmic",',
     ),
+
+    # ========================================================================
+    # Phase 4 — Layer 3 generator label renames (§9.3.1, §9.3.4).
+    #
+    # Pure cosmetic: labels appear in the generator panel. No id changes,
+    # so no migration needed. All single-site (ParamSpec.label only —
+    # generators don't have ChainSpec.bindings).
+    # ========================================================================
+
+    # ── Verts → Vertices (5 generators) ─────────────────────────────────
+    Rename(
+        desc="Tesseract: Verts → Vertices",
+        file=gen_metadata(),
+        old='ParamSpec::toggle("verts", "Verts", 0.0, 1.0, 1.0, "verts"),\n            ParamSpec::continuous("v_size", "VSize", 0.1, 4.0, 1.0, "F1", "vsize"),\n            ParamSpec::toggle("anim", "Anim", 0.0, 1.0, 0.0, "anim"),\n            ParamSpec::continuous("speed", "Speed", 0.1, 5.0, 1.0, "F1", "speed"),\n            ParamSpec::continuous("window", "Window", 0.01, 1.0, 0.1, "F2", "window"),\n            ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),\n        ],\n        string_params: &[],\n    }\n}\n\n// ── Duocylinder ',
+        new='ParamSpec::toggle("verts", "Vertices", 0.0, 1.0, 1.0, "verts"),\n            ParamSpec::continuous("v_size", "Vertex Size", 0.1, 4.0, 1.0, "F1", "vsize"),\n            ParamSpec::toggle("anim", "Animate", 0.0, 1.0, 0.0, "anim"),\n            ParamSpec::continuous("speed", "Speed", 0.1, 5.0, 1.0, "F1", "speed"),\n            ParamSpec::continuous("window", "Window", 0.01, 1.0, 0.1, "F2", "window"),\n            ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),\n        ],\n        string_params: &[],\n    }\n}\n\n// ── Duocylinder ',
+    ),
+    Rename(
+        desc="Duocylinder: Verts → Vertices",
+        file=gen_metadata(),
+        old='ParamSpec::toggle("verts", "Verts", 0.0, 1.0, 1.0, "verts"),\n            ParamSpec::continuous("v_size", "VSize", 0.1, 4.0, 1.0, "F1", "vsize"),\n            ParamSpec::toggle("anim", "Anim", 0.0, 1.0, 0.0, "anim"),\n            ParamSpec::continuous("speed", "Speed", 0.1, 5.0, 1.0, "F1", "speed"),\n            ParamSpec::continuous("window", "Window", 0.01, 1.0, 0.1, "F2", "window"),\n            ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),\n        ],\n        string_params: &[],\n    }\n}\n\n// ── Lissajous ',
+        new='ParamSpec::toggle("verts", "Vertices", 0.0, 1.0, 1.0, "verts"),\n            ParamSpec::continuous("v_size", "Vertex Size", 0.1, 4.0, 1.0, "F1", "vsize"),\n            ParamSpec::toggle("anim", "Animate", 0.0, 1.0, 0.0, "anim"),\n            ParamSpec::continuous("speed", "Speed", 0.1, 5.0, 1.0, "F1", "speed"),\n            ParamSpec::continuous("window", "Window", 0.01, 1.0, 0.1, "F2", "window"),\n            ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),\n        ],\n        string_params: &[],\n    }\n}\n\n// ── Lissajous ',
+    ),
+    Rename(
+        desc="Lissajous: Verts → Vertices, Anim → Animate (scoped after `phase` line)",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("phase", "Phase", 0.0, 2.0, 0.0, "F2", "phase"),\n            ParamSpec::continuous("line", "Line", 0.0005, 0.03, 0.002, "F4", "line"),\n            ParamSpec::toggle("verts", "Verts", 0.0, 1.0, 0.0, "verts"),\n            ParamSpec::continuous("v_size", "VSize", 0.1, 4.0, 0.5, "F1", "vsize"),\n            ParamSpec::toggle("anim", "Anim", 0.0, 1.0, 1.0, "anim"),',
+        new='ParamSpec::continuous("phase", "Phase", 0.0, 2.0, 0.0, "F2", "phase"),\n            ParamSpec::continuous("line", "Line", 0.0005, 0.03, 0.002, "F4", "line"),\n            ParamSpec::toggle("verts", "Vertices", 0.0, 1.0, 0.0, "verts"),\n            ParamSpec::continuous("v_size", "Vertex Size", 0.1, 4.0, 0.5, "F1", "vsize"),\n            ParamSpec::toggle("anim", "Animate", 0.0, 1.0, 1.0, "anim"),',
+    ),
+    Rename(
+        desc="Oscilloscope XY: Verts → Vertices, Anim → Animate (scoped after `line` line)",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("line", "Line", 0.0005, 0.03, 0.002, "F4", "line"),\n            ParamSpec::toggle("verts", "Verts", 0.0, 1.0, 0.0, "verts"),\n            ParamSpec::continuous("v_size", "VSize", 0.1, 4.0, 0.5, "F1", "vsize"),\n            ParamSpec::toggle("anim", "Anim", 0.0, 1.0, 1.0, "anim"),\n            ParamSpec::continuous("speed", "Speed", 0.1, 5.0, 1.63, "F1", "speed"),',
+        new='ParamSpec::continuous("line", "Line", 0.0005, 0.03, 0.002, "F4", "line"),\n            ParamSpec::toggle("verts", "Vertices", 0.0, 1.0, 0.0, "verts"),\n            ParamSpec::continuous("v_size", "Vertex Size", 0.1, 4.0, 0.5, "F1", "vsize"),\n            ParamSpec::toggle("anim", "Animate", 0.0, 1.0, 1.0, "anim"),\n            ParamSpec::continuous("speed", "Speed", 0.1, 5.0, 1.63, "F1", "speed"),',
+    ),
+    Rename(
+        desc="Wireframe Zoo: Verts → Vertices (scoped after `shape` line)",
+        file=gen_metadata(),
+        old='ParamSpec::whole_labels("shape", "Shape", 0.0, 4.0, 0.0, &["Tetra","Cube","Octa","Icosa","Dodeca"], "shape"),\n            ParamSpec::toggle("verts", "Verts", 0.0, 1.0, 1.0, "verts"),\n            ParamSpec::continuous("v_size", "VSize", 0.1, 4.0, 1.0, "F1", "vsize"),',
+        new='ParamSpec::whole_labels("shape", "Shape", 0.0, 4.0, 0.0, &["Tetra","Cube","Octa","Icosa","Dodeca"], "shape"),\n            ParamSpec::toggle("verts", "Vertices", 0.0, 1.0, 1.0, "verts"),\n            ParamSpec::continuous("v_size", "Vertex Size", 0.1, 4.0, 1.0, "F1", "vsize"),',
+    ),
+
+    # ── Dist → Distance (Tesseract + Duocylinder) ───────────────────────
+    # Both generators have `dist` param with same range/default; disambiguate
+    # by the unique `line` default (Tesseract 0.002, Duocylinder 0.0015).
+    Rename(
+        desc="Tesseract: Dist → Distance (scoped by Tesseract's line=0.002)",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("line", "Line", 0.0005, 0.03, 0.002, "F4", "line"),\n            ParamSpec::continuous("dist", "Dist", 1.0, 6.0, 3.0, "F1", "dist"),',
+        new='ParamSpec::continuous("line", "Line", 0.0005, 0.03, 0.002, "F4", "line"),\n            ParamSpec::continuous("dist", "Distance", 1.0, 6.0, 3.0, "F1", "dist"),',
+    ),
+    Rename(
+        desc="Duocylinder: Dist → Distance (scoped by Duocylinder's line=0.0015)",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("line", "Line", 0.0005, 0.03, 0.0015, "F4", "line"),\n            ParamSpec::continuous("dist", "Dist", 1.0, 6.0, 3.0, "F1", "dist"),',
+        new='ParamSpec::continuous("line", "Line", 0.0005, 0.03, 0.0015, "F4", "line"),\n            ParamSpec::continuous("dist", "Distance", 1.0, 6.0, 3.0, "F1", "dist"),',
+    ),
+
+    # ── Cam * → Camera * (Galactic Rock, Metallic Glass, Digital Plants — 4 params each) ─
+    Rename(
+        desc="Galactic Rock: Cam Dist/Orbit/Tilt/FOV → Camera *",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("cam_dist", "Cam Dist", 0.1, 10.0, 0.8, "F2", "camDist"),\n            ParamSpec::continuous("cam_orbit", "Cam Orbit", -180.0, 180.0, 0.0, "F0", "camOrbit"),\n            ParamSpec::continuous("cam_tilt", "Cam Tilt", -90.0, 90.0, 10.0, "F0", "camTilt"),\n            ParamSpec::continuous("cam_fov", "Cam FOV", 20.0, 120.0, 60.0, "F0", "camFov"),',
+        new='ParamSpec::continuous("cam_dist", "Camera Distance", 0.1, 10.0, 0.8, "F2", "camDist"),\n            ParamSpec::continuous("cam_orbit", "Camera Orbit", -180.0, 180.0, 0.0, "F0", "camOrbit"),\n            ParamSpec::continuous("cam_tilt", "Camera Tilt", -90.0, 90.0, 10.0, "F0", "camTilt"),\n            ParamSpec::continuous("cam_fov", "Camera FOV", 20.0, 120.0, 60.0, "F0", "camFov"),',
+    ),
+    Rename(
+        desc="Metallic Glass: Cam Dist/Orbit/Tilt/FOV → Camera *",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("cam_dist", "Cam Dist", 0.5, 10.0, 2.5, "F2", "camDist"),\n            ParamSpec::continuous("cam_orbit", "Cam Orbit", -180.0, 180.0, 0.0, "F0", "camOrbit"),\n            ParamSpec::continuous("cam_tilt", "Cam Tilt", -90.0, 90.0, -10.0, "F0", "camTilt"),\n            ParamSpec::continuous("cam_fov", "Cam FOV", 20.0, 120.0, 54.0, "F0", "camFov"),',
+        new='ParamSpec::continuous("cam_dist", "Camera Distance", 0.5, 10.0, 2.5, "F2", "camDist"),\n            ParamSpec::continuous("cam_orbit", "Camera Orbit", -180.0, 180.0, 0.0, "F0", "camOrbit"),\n            ParamSpec::continuous("cam_tilt", "Camera Tilt", -90.0, 90.0, -10.0, "F0", "camTilt"),\n            ParamSpec::continuous("cam_fov", "Camera FOV", 20.0, 120.0, 54.0, "F0", "camFov"),',
+    ),
+    Rename(
+        desc="Digital Plants: Cam Dist/Orbit/Tilt/FOV → Camera *",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("cam_dist", "Cam Dist", 0.5, 10.0, 3.5, "F1", "camDist"),\n            ParamSpec::continuous("cam_orbit", "Cam Orbit", -180.0, 180.0, 0.0, "F0", "camOrbit"),\n            ParamSpec::continuous("cam_tilt", "Cam Tilt", -90.0, 90.0, 15.0, "F0", "camTilt"),\n            ParamSpec::continuous("cam_fov", "Cam FOV", 20.0, 120.0, 50.0, "F0", "camFov"),',
+        new='ParamSpec::continuous("cam_dist", "Camera Distance", 0.5, 10.0, 3.5, "F1", "camDist"),\n            ParamSpec::continuous("cam_orbit", "Camera Orbit", -180.0, 180.0, 0.0, "F0", "camOrbit"),\n            ParamSpec::continuous("cam_tilt", "Camera Tilt", -90.0, 90.0, 15.0, "F0", "camTilt"),\n            ParamSpec::continuous("cam_fov", "Camera FOV", 20.0, 120.0, 50.0, "F0", "camFov"),',
+    ),
+
+    # ── Black Hole: Cam Dist + Cam Velocity → Camera Distance / Camera Velocity ──
+    Rename(
+        desc="Black Hole: Cam Dist → Camera Distance",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("cam_dist", "Cam Dist", 0.1, 50.0, 20.0, "F1", "camDist"),',
+        new='ParamSpec::continuous("cam_dist", "Camera Distance", 0.1, 50.0, 20.0, "F1", "camDist"),',
+    ),
+    Rename(
+        desc="Black Hole: Cam Velocity → Camera Velocity",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("cam_velocity", "Cam Velocity", 0.0, 0.99, 0.0, "F2", "camVelocity"),',
+        new='ParamSpec::continuous("cam_velocity", "Camera Velocity", 0.0, 0.99, 0.0, "F2", "camVelocity"),',
+    ),
+
+    # ── Mycelium: SensDist/SensAngle → Sensor Distance/Sensor Angle ─────
+    Rename(
+        desc="Mycelium: SensDist → Sensor Distance",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("sens_dist", "SensDist", 0.005, 0.1, 0.02, "F3", "sensdist"),',
+        new='ParamSpec::continuous("sens_dist", "Sensor Distance", 0.005, 0.1, 0.02, "F3", "sensdist"),',
+    ),
+    Rename(
+        desc="Mycelium: SensAngle → Sensor Angle",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("sens_angle", "SensAngle", 0.1, 1.5, 0.8, "F2", "sensangle"),',
+        new='ParamSpec::continuous("sens_angle", "Sensor Angle", 0.1, 1.5, 0.8, "F2", "sensangle"),',
+    ),
+
+    # ── Oily Fluid: VelDamp/VelDisp/ColDisp/Sat/Bright → full names ─────
+    Rename(
+        desc="Oily Fluid: VelDamp → Velocity Damp",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("vel_damp", "VelDamp", 0.85, 0.999, 0.98, "F3", "veldamp"),',
+        new='ParamSpec::continuous("vel_damp", "Velocity Damp", 0.85, 0.999, 0.98, "F3", "veldamp"),',
+    ),
+    Rename(
+        desc="Oily Fluid: Sat → Saturation",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("sat", "Sat", 0.0, 2.0, 1.0, "F2", "sat"),',
+        new='ParamSpec::continuous("sat", "Saturation", 0.0, 2.0, 1.0, "F2", "sat"),',
+    ),
+    Rename(
+        desc="Oily Fluid: Bright → Brightness",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("bright", "Bright", 0.0, 2.0, 1.0, "F2", "bright"),',
+        new='ParamSpec::continuous("bright", "Brightness", 0.0, 2.0, 1.0, "F2", "bright"),',
+    ),
+    Rename(
+        desc="Oily Fluid: VelDisp → Velocity Displace",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("vel_disp", "VelDisp", 0.1, 10.0, 1.0, "F2", "velDisp"),',
+        new='ParamSpec::continuous("vel_disp", "Velocity Displace", 0.1, 10.0, 1.0, "F2", "velDisp"),',
+    ),
+    Rename(
+        desc="Oily Fluid: ColDisp → Color Displace",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("col_disp", "ColDisp", 0.1, 10.0, 1.0, "F2", "colDisp"),',
+        new='ParamSpec::continuous("col_disp", "Color Displace", 0.1, 10.0, 1.0, "F2", "colDisp"),',
+    ),
+
+    # ── Galactic Rock: Wave Amp/Wave Freq → full names, Light Int → Light Intensity ──
+    Rename(
+        desc="Galactic Rock: Wave Amp → Wave Amplitude",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("wave_amp", "Wave Amp", 0.0, 0.5, 0.1, "F3", "waveAmp"),',
+        new='ParamSpec::continuous("wave_amp", "Wave Amplitude", 0.0, 0.5, 0.1, "F3", "waveAmp"),',
+    ),
+    Rename(
+        desc="Galactic Rock: Wave Freq → Wave Frequency",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("wave_freq", "Wave Freq", 0.1, 2.0, 0.5, "F2", "waveFreq"),',
+        new='ParamSpec::continuous("wave_freq", "Wave Frequency", 0.1, 2.0, 0.5, "F2", "waveFreq"),',
+    ),
+    Rename(
+        desc="Galactic Rock: Light Int → Light Intensity",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("light_int", "Light Int", 0.1, 10.0, 2.5, "F1", "lightInt"),',
+        new='ParamSpec::continuous("light_int", "Light Intensity", 0.1, 10.0, 2.5, "F1", "lightInt"),',
+    ),
+
+    # ── Metallic Glass: Light Int → Light Intensity, Edge Str → Edge Strength ──
+    Rename(
+        desc="Metallic Glass: Edge Str → Edge Strength",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("edge_str", "Edge Str", 0.5, 20.0, 5.0, "F1", "edgeStr"),',
+        new='ParamSpec::continuous("edge_str", "Edge Strength", 0.5, 20.0, 5.0, "F1", "edgeStr"),',
+    ),
+    Rename(
+        desc="Metallic Glass: Light Int → Light Intensity",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("light_int", "Light Int", 0.1, 10.0, 3.5, "F1", "lightInt"),',
+        new='ParamSpec::continuous("light_int", "Light Intensity", 0.1, 10.0, 3.5, "F1", "lightInt"),',
+    ),
+
+    # ── Fluid Sim 3D: Ctr Scale → Container Scale, Vol Res → Volume Resolution ──
+    Rename(
+        desc="Fluid Sim 3D: Ctr Scale → Container Scale",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("ctr_scale", "Ctr Scale", 0.2, 1.0, 0.8, "F2", "containerScale"),',
+        new='ParamSpec::continuous("ctr_scale", "Container Scale", 0.2, 1.0, 0.8, "F2", "containerScale"),',
+    ),
+    Rename(
+        desc="Fluid Sim 3D: Vol Res → Volume Resolution",
+        file=gen_metadata(),
+        old='ParamSpec::whole_labels("vol_res", "Vol Res", 0.0, 2.0, 0.0, &["64", "128", "256"], "volumeRes"),',
+        new='ParamSpec::whole_labels("vol_res", "Volume Resolution", 0.0, 2.0, 0.0, &["64", "128", "256"], "volumeRes"),',
+    ),
+
+    # ── Strange Attractor: Type → Attractor Type ────────────────────────
+    Rename(
+        desc="Strange Attractor: Type → Attractor Type",
+        file=generator("strange_attractor"),
+        old='ParamSpec::whole_labels("type", "Type", 0.0, 4.0, 0.0, &["Lorenz", "Rossler", "Aizawa", "Thomas", "Halvorsen"], "type"),',
+        new='ParamSpec::whole_labels("type", "Attractor Type", 0.0, 4.0, 0.0, &["Lorenz", "Rossler", "Aizawa", "Thomas", "Halvorsen"], "type"),',
+    ),
+
+    # ── Digital Plants: Anim Speed/Petal Amp/Rot Speed → full names ─────
+    Rename(
+        desc="Digital Plants: Anim Speed → Animation Speed",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("anim_speed", "Anim Speed", 0.0, 1.0, 0.5, "F2", "animSpeed"),',
+        new='ParamSpec::continuous("anim_speed", "Animation Speed", 0.0, 1.0, 0.5, "F2", "animSpeed"),',
+    ),
+    Rename(
+        desc="Digital Plants: Petal Amp → Petal Amplitude",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("petal_amp", "Petal Amp", 0.0, 80.0, 60.0, "F0", "petalAmp"),',
+        new='ParamSpec::continuous("petal_amp", "Petal Amplitude", 0.0, 80.0, 60.0, "F0", "petalAmp"),',
+    ),
+    Rename(
+        desc="Digital Plants: Rot Speed → Rotation Speed",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("rot_speed", "Rot Speed", 0.0, 3.0, 0.3, "F2", "rotSpeed"),',
+        new='ParamSpec::continuous("rot_speed", "Rotation Speed", 0.0, 3.0, 0.3, "F2", "rotSpeed"),',
+    ),
+
+    # ── Display name fixes ──────────────────────────────────────────────
+    Rename(
+        desc="Fluid Sim 3D display name: Fluid Sim 3D → Fluid Simulation 3D",
+        file=gen_metadata(),
+        old='display_name: "Fluid Sim 3D",',
+        new='display_name: "Fluid Simulation 3D",',
+    ),
+    Rename(
+        desc="Basic Shapes Snap display name: Basic Shapes Snap → Basic Shapes",
+        file=gen_metadata(),
+        old='display_name: "Basic Shapes Snap",',
+        new='display_name: "Basic Shapes",',
+    ),
 ]
 
 

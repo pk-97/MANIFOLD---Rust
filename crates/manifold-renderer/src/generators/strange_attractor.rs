@@ -25,7 +25,7 @@ inventory::submit! {
         osc_prefix: "strangeAttractor",
         legacy_discriminant: Some(18),
         params: &[
-            ParamSpec::whole_labels("type", "Type", 0.0, 4.0, 0.0, &["Lorenz", "Rossler", "Aizawa", "Thomas", "Halvorsen"], "type"),
+            ParamSpec::whole_labels("type", "Attractor Type", 0.0, 4.0, 0.0, &["Lorenz", "Rossler", "Aizawa", "Thomas", "Halvorsen"], "type"),
             ParamSpec::continuous("contrast", "Contrast", 1.0, 8.0, 3.5, "F1", "contrast"),
             ParamSpec::continuous("chaos", "Chaos", 0.0, 1.0, 0.3, "F2", "chaos"),
             ParamSpec::continuous("speed", "Speed", 0.1, 5.0, 1.0, "F1", "speed"),
