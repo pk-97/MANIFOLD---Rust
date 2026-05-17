@@ -1329,7 +1329,7 @@ fn meta_default() -> InnerParamMeta {
         min: -1.0,
         max: 1.0,
         default_value: 0.0,
-        convert: UserParamConvert::Float,
+        convert: ParamConvert::Float,
     }
 }
 
@@ -1411,7 +1411,7 @@ fn expose_already_exposed_is_idempotent_noop() {
         min: -1.0,
         max: 1.0,
         default_value: 0.0,
-        convert: UserParamConvert::Float,
+        convert: ParamConvert::Float,
     });
     project.settings.master_effects.push(fx);
 
@@ -1452,7 +1452,7 @@ fn unexpose_effect_param_command_undo_roundtrip() {
         min: -1.0,
         max: 1.0,
         default_value: 0.0,
-        convert: UserParamConvert::Float,
+        convert: ParamConvert::Float,
     });
     // Drag the slider — user-tail at index 2 (n_static=2 + j=0) changed.
     fx.param_values[2].value = 0.42;
@@ -1531,7 +1531,7 @@ fn generate_user_param_id_collision_probe() {
             min: 0.0,
             max: 1.0,
             default_value: 0.0,
-            convert: UserParamConvert::Float,
+            convert: ParamConvert::Float,
         },
         UserParamBinding {
             id: "user.uv_transform.translate.2".to_string(),
@@ -1541,7 +1541,7 @@ fn generate_user_param_id_collision_probe() {
             min: 0.0,
             max: 1.0,
             default_value: 0.0,
-            convert: UserParamConvert::Float,
+            convert: ParamConvert::Float,
         },
     ];
     let id = generate_user_param_id("uv_transform", "translate", &existing);

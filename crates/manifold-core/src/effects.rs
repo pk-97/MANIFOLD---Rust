@@ -117,9 +117,17 @@ pub trait ParamSource {
 ///
 /// Wire format: serialized as a tagged enum (`{"type": "Float"}` etc.)
 /// so future variants don't break round-trips of existing fixtures.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Phase 4 of the bindings unification plan merged this with the
+/// renderer-side `ParamConvert` (the renamed name retained — the
+/// previous `ParamConvert` name implied a user-tier-only enum).
+/// Both static spec bindings and per-instance user bindings now share
+/// this one type at every layer. The `EnumRemap` and `FloatTransform`
+/// variants that used to live on the renderer side are gone — their
+/// curation moved into the primitives.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "PascalCase")]
-pub enum UserParamConvert {
+pub enum ParamConvert {
     /// Pass-through `f32`.
     #[default]
     Float,
@@ -157,9 +165,9 @@ pub fn resolve_param_in(
         max: ub.max,
         whole_numbers: matches!(
             ub.convert,
-            UserParamConvert::IntRound
-                | UserParamConvert::EnumRound
-                | UserParamConvert::BoolThreshold
+            ParamConvert::IntRound
+                | ParamConvert::EnumRound
+                | ParamConvert::BoolThreshold
         ),
     })
 }
@@ -228,7 +236,7 @@ pub struct UserParamBinding {
     /// initial three graph-backed effects (Mirror, SoftFocus,
     /// StylizedFeedback).
     #[serde(default)]
-    pub convert: UserParamConvert,
+    pub convert: ParamConvert,
 }
 
 // ─── Param Value (per-slot state) ───
@@ -1462,9 +1470,9 @@ impl ParamSource for EffectInstance {
             if let Some(ub) = self.user_param_bindings.get(user_idx) {
                 let whole_numbers = matches!(
                     ub.convert,
-                    UserParamConvert::IntRound | UserParamConvert::EnumRound
+                    ParamConvert::IntRound | ParamConvert::EnumRound
                 );
-                let is_toggle = matches!(ub.convert, UserParamConvert::BoolThreshold);
+                let is_toggle = matches!(ub.convert, ParamConvert::BoolThreshold);
                 return ParamDef {
                     id: ub.id.clone(),
                     name: ub.label.clone(),
@@ -2609,7 +2617,7 @@ mod tests {
             min: 0.0,
             max: 1.0,
             default_value: 0.25,
-            convert: UserParamConvert::Float,
+            convert: ParamConvert::Float,
         }
     }
 
@@ -2638,7 +2646,7 @@ mod tests {
             "min": 0.0, "max": 1.0, "defaultValue": 0.5
         }"#;
         let ub: UserParamBinding = serde_json::from_str(json).unwrap();
-        assert_eq!(ub.convert, UserParamConvert::Float);
+        assert_eq!(ub.convert, ParamConvert::Float);
     }
 
     #[test]
@@ -2848,7 +2856,7 @@ mod tests {
             min: -2.0,
             max: 2.0,
             default_value: 0.0,
-            convert: UserParamConvert::Float,
+            convert: ParamConvert::Float,
         });
         let pd = ParamSource::get_param_def(&fx, 1);
         assert_eq!(pd.id, "user.uv.translate.1");

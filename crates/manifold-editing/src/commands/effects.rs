@@ -1,7 +1,7 @@
 use crate::command::Command;
 use crate::commands::effect_target::{EffectTarget, with_effects_mut};
 use manifold_core::effects::{
-    EffectInstance, ParamId, ParamSlot, UserParamBinding, UserParamConvert,
+    EffectInstance, ParamId, ParamSlot, UserParamBinding, ParamConvert,
 };
 use manifold_core::project::Project;
 
@@ -322,7 +322,7 @@ pub struct InnerParamMeta {
     pub min: f32,
     pub max: f32,
     pub default_value: f32,
-    pub convert: UserParamConvert,
+    pub convert: ParamConvert,
 }
 
 /// Generate the canonical user-binding id for a given inner-node
@@ -467,7 +467,7 @@ impl Command for ToggleEffectParamExposeCommand {
                     min: meta.min,
                     max: meta.max,
                     default_value: meta.default_value,
-                    convert: meta.convert.clone(),
+                    convert: meta.convert,
                 };
                 effect.append_user_binding(binding);
                 ReverseState::Exposed { user_param_id: id }

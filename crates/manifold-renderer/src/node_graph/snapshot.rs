@@ -135,7 +135,7 @@ pub struct ParamSnapshot {
 
 /// Coarse-grained variant of `ParamType` — the user-exposed-param
 /// surface only needs to know "is it a float / int / bool / enum"
-/// to pick the right `UserParamConvert` at expose time. Vec2/Vec3/
+/// to pick the right `ParamConvert` at expose time. Vec2/Vec3/
 /// Vec4/Color are not user-exposable in the V2 surface (they need
 /// multi-slot routing) and are flagged so the panel can skip them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

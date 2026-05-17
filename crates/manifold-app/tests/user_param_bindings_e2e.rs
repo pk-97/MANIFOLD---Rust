@@ -32,7 +32,7 @@ use manifold_core::ableton_mapping::{
     AbletonDeviceIdentity, AbletonMacroAddress, AbletonMappingStatus, AbletonParamMapping,
 };
 use manifold_core::effect_definition_registry;
-use manifold_core::effects::{ParameterDriver, UserParamConvert};
+use manifold_core::effects::{ParameterDriver, ParamConvert};
 use manifold_core::types::{BeatDivision, DriverWaveform};
 use manifold_editing::command::Command;
 use manifold_editing::commands::effect_target::EffectTarget;
@@ -48,7 +48,7 @@ fn meta_for_uv_translate() -> InnerParamMeta {
         min: -1.0,
         max: 1.0,
         default_value: 0.0,
-        convert: UserParamConvert::Float,
+        convert: ParamConvert::Float,
     }
 }
 
@@ -161,7 +161,7 @@ fn expose_mirror_inner_param_survives_save_reload_with_driver_and_ableton() {
     assert!((ub.min - -1.0).abs() < f32::EPSILON);
     assert!((ub.max - 1.0).abs() < f32::EPSILON);
     assert!((ub.default_value - 0.0).abs() < f32::EPSILON);
-    assert!(matches!(ub.convert, UserParamConvert::Float));
+    assert!(matches!(ub.convert, ParamConvert::Float));
 
     // 7. The user-tail slot is still addressable by id and still holds 0.42.
     let value_idx = fx

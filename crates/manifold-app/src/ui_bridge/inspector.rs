@@ -1616,7 +1616,7 @@ pub(super) fn dispatch_inspector(
                 min: *min,
                 max: *max,
                 default_value: *default_value,
-                convert: convert.clone(),
+                convert: *convert,
             };
             let cmd = ToggleEffectParamExposeCommand::new(
                 target,

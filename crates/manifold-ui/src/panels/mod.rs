@@ -236,7 +236,7 @@ pub enum PanelAction {
         min: f32,
         max: f32,
         default_value: f32,
-        convert: manifold_core::effects::UserParamConvert,
+        convert: manifold_core::effects::ParamConvert,
     },
     /// Toggle the `exposed` flag on a static-block param slot. Sent by
     /// the graph-editor sidebar when the user ticks/unticks a slot that

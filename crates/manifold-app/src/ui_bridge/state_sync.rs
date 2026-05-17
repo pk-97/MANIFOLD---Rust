@@ -1265,8 +1265,8 @@ fn effects_to_configs(
                     default: ub.default_value,
                     whole_numbers: matches!(
                         ub.convert,
-                        manifold_core::effects::UserParamConvert::IntRound
-                            | manifold_core::effects::UserParamConvert::EnumRound
+                        manifold_core::effects::ParamConvert::IntRound
+                            | manifold_core::effects::ParamConvert::EnumRound
                     ),
                     // User-tail bindings are exposed by definition — they
                     // exist on `user_param_bindings` because the user

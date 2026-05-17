@@ -558,7 +558,7 @@ impl std::fmt::Display for OuterInnerDrift {
 /// unresolved are informational.
 #[cfg(test)]
 pub fn audit_outer_inner_drift() -> Vec<OuterInnerDrift> {
-    use crate::node_graph::param_binding::{ParamConvert, ParamTarget};
+    use crate::node_graph::param_binding::ParamTarget;
     use crate::node_graph::parameters::ParamType;
 
     let mut findings: Vec<OuterInnerDrift> = Vec::new();
@@ -645,10 +645,11 @@ pub fn audit_outer_inner_drift() -> Vec<OuterInnerDrift> {
                 continue;
             };
 
-            let curated = matches!(
-                binding.convert,
-                ParamConvert::EnumRemap(_) | ParamConvert::FloatTransform(_),
-            );
+            // After Phase 4 there are no curation variants on
+            // `ParamConvert` — `EnumRemap` and `FloatTransform` were
+            // removed and their job moved into the primitives. Any
+            // outer↔inner divergence is now drift by construction.
+            let curated = false;
 
             // Build the expected outer shape from the inner ParamDef.
             // Walk each field and record divergences. The categoriser
@@ -986,12 +987,14 @@ mod tests {
     /// legitimately override the primitive's neutral default (see the
     /// inline comment in `audit_outer_inner_drift`).
     ///
-    /// `[CURATED]` findings are allowed (currently only Strobe.rate
-    /// and Transform.rot, which use `ParamConvert::FloatTransform`
-    /// for legitimate unit conversions: note-rate↔strobes-per-beat,
-    /// degrees↔radians). They show up in the report as a paper trail
-    /// — the test does NOT fail on them. `[UNRESOLVED]` and `[DRIFT]`
-    /// both fail the test.
+    /// After Phase 4 of the bindings unification plan there are no
+    /// `[CURATED]` findings — the `ParamConvert::EnumRemap` and
+    /// `FloatTransform` variants that produced them were removed
+    /// (their curation moved into the primitives). The test now
+    /// enforces `curated == 0` structurally: any future variant
+    /// reintroducing a curation surface would fail here and prompt
+    /// reauthorisation. `[UNRESOLVED]` and `[DRIFT]` both fail
+    /// the test as before.
     ///
     /// Run with `cargo test -- --nocapture audit_outer_inner_param_drift_report`
     /// to see the full categorized list when the test passes.
@@ -1023,9 +1026,15 @@ mod tests {
         eprintln!("{report}");
         assert_eq!(
             drift, 0,
-            "outer-vs-inner ParamSpec drift detected — every divergence \
-             without a `ParamConvert::EnumRemap` / `FloatTransform` is \
-             accidental and must be fixed:\n{report}",
+            "outer-vs-inner ParamSpec drift detected:\n{report}",
+        );
+        assert_eq!(
+            curated, 0,
+            "[CURATED] findings should be zero after Phase 4 (the \
+             curation variants were removed). Reappearance here means \
+             a new ParamConvert variant brought back a curation \
+             surface — that's a reauthorisation event, not an \
+             auto-allow:\n{report}",
         );
         assert_eq!(
             unresolved, 0,

@@ -1247,7 +1247,7 @@ mod user_binding_tests {
     use manifold_core::EffectTypeId;
     use manifold_core::effect_definition_registry;
     use manifold_core::effects::{
-        EffectInstance, ParamSlot, UserParamBinding, UserParamConvert,
+        EffectInstance, ParamSlot, UserParamBinding, ParamConvert,
     };
     
 
@@ -1269,7 +1269,7 @@ mod user_binding_tests {
             min: 0.0,
             max: 1.0,
             default_value: 0.0,
-            convert: UserParamConvert::Float,
+            convert: ParamConvert::Float,
         });
         // Drag the user-tail slider to `rotation_value`. With static
         // count = 2 (amount, mode) the user binding's slot lives at
@@ -1396,7 +1396,7 @@ mod user_binding_tests {
             min: 0.0,
             max: 1.0,
             default_value: 0.42,
-            convert: UserParamConvert::Float,
+            convert: ParamConvert::Float,
         });
         // Leave the outer slot at its declared default so the test
         // depends on the seed pass, not on the apply-with-divergent-

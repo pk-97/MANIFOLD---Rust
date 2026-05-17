@@ -134,65 +134,31 @@ pub enum ParamTarget {
 
 /// Conversion from f32 (UI / storage form) to typed [`ParamValue`].
 ///
-/// Each variant handles one common shape. Adding a new conversion is
-/// one variant + one `match` arm in [`ParamConvert::convert`]. Vec2 /
-/// Color / multi-input gathers are deferred — they'd require a
-/// different signature (read multiple slots from the values array).
-/// The six variants here cover every existing effect.
-#[derive(Debug, Clone)]
-pub enum ParamConvert {
-    /// 1:1 — `value` becomes `ParamValue::Float(value)`. The default
-    /// for any continuous parameter.
-    Float,
-    /// `value.round() as i32` → `ParamValue::Int`.
-    IntRound,
-    /// `value > 0.5` → `ParamValue::Bool`.
-    BoolThreshold,
-    /// `value.round().max(0.0) as u32` → `ParamValue::Enum`. The
-    /// straightforward "host enum index = graph enum value" case.
-    EnumRound,
-    /// Enum remap: index the legacy enum into a static table to get
-    /// the new enum value. Used by Mirror, where the legacy mode
-    /// (0=Horiz / 1=Vert / 2=Both) maps to the new Transform mode
-    /// (6=FoldX / 7=FoldY / 8=FoldBoth) — the host slider keeps its
-    /// 0/1/2 surface, the graph node receives 6/7/8.
-    ///
-    /// Out-of-range inputs clamp to the table's last entry rather
-    /// than panicking — the host might emit values briefly outside
-    /// the declared range during a drag.
-    EnumRemap(Cow<'static, [u32]>),
-    /// Apply an arbitrary `f32 → f32` transformation, then route as a
-    /// `Float` `ParamValue`. Used for unit conversions that the legacy
-    /// effects performed inline before encoding their uniforms:
-    /// `Transform.rot` (degrees → radians) and `Strobe.rate`
-    /// (note-rate table index → strobes-per-beat).
-    FloatTransform(fn(f32) -> f32),
-}
+/// One enum, shared across static spec bindings and per-instance user
+/// bindings — Phase 4 of the bindings unification plan merged the
+/// renderer-side variant set with the core-side `ParamConvert`.
+/// Re-exported from `manifold_core::effects` so the data-model layer
+/// and the renderer agree on the wire/serde form. The four variants
+/// here are the complete authoring surface; unit conversions and enum
+/// remaps that used to live as renderer-side `EnumRemap` /
+/// `FloatTransform` are now baked into the primitives themselves
+/// (Transform.rot's degrees→radians, Strobe.rate's note-table
+/// translation, Mirror.mode's id surface).
+pub use manifold_core::effects::ParamConvert;
 
-impl ParamConvert {
-    /// Convert one f32 to a `ParamValue` per this variant's rules.
-    pub fn convert(&self, value: f32) -> ParamValue {
-        match self {
-            Self::Float => ParamValue::Float(value),
-            Self::IntRound => ParamValue::Int(value.round() as i32),
-            Self::BoolThreshold => ParamValue::Bool(value > 0.5),
-            Self::EnumRound => {
-                let v = value.round().max(0.0) as u32;
-                ParamValue::Enum(v)
-            }
-            Self::EnumRemap(table) => {
-                if table.is_empty() {
-                    return ParamValue::Enum(0);
-                }
-                let idx = value.round().max(0.0) as usize;
-                let mapped = table.get(idx).copied().unwrap_or_else(|| {
-                    // Out-of-range: clamp to the last entry. unwrap_or
-                    // is safe — `table.is_empty()` was checked above.
-                    table[table.len() - 1]
-                });
-                ParamValue::Enum(mapped)
-            }
-            Self::FloatTransform(f) => ParamValue::Float(f(value)),
+/// Convert one host-side f32 to the typed [`ParamValue`] the inner
+/// graph node expects. Lives here rather than on the enum because
+/// `ParamValue` is a renderer-side type and `ParamConvert` lives in
+/// `manifold-core` (the data-model layer can't depend on the
+/// renderer).
+pub fn convert_param_value(convert: ParamConvert, value: f32) -> ParamValue {
+    match convert {
+        ParamConvert::Float => ParamValue::Float(value),
+        ParamConvert::IntRound => ParamValue::Int(value.round() as i32),
+        ParamConvert::BoolThreshold => ParamValue::Bool(value > 0.5),
+        ParamConvert::EnumRound => {
+            let v = value.round().max(0.0) as u32;
+            ParamValue::Enum(v)
         }
     }
 }
@@ -271,7 +237,7 @@ impl ResolvedBinding {
             label: Cow::Borrowed(b.label),
             default_value: b.default_value,
             target,
-            convert: b.convert.clone(),
+            convert: b.convert,
             source: BindingSource::Static,
         })
     }
@@ -304,10 +270,10 @@ impl ResolvedBinding {
             .map(|p| p.name)
             .find(|name| *name == core.inner_param.as_str())?;
         let convert = match core.convert {
-            manifold_core::effects::UserParamConvert::Float => ParamConvert::Float,
-            manifold_core::effects::UserParamConvert::IntRound => ParamConvert::IntRound,
-            manifold_core::effects::UserParamConvert::BoolThreshold => ParamConvert::BoolThreshold,
-            manifold_core::effects::UserParamConvert::EnumRound => ParamConvert::EnumRound,
+            manifold_core::effects::ParamConvert::Float => ParamConvert::Float,
+            manifold_core::effects::ParamConvert::IntRound => ParamConvert::IntRound,
+            manifold_core::effects::ParamConvert::BoolThreshold => ParamConvert::BoolThreshold,
+            manifold_core::effects::ParamConvert::EnumRound => ParamConvert::EnumRound,
         };
         Some(Self {
             id: Cow::Owned(core.id.clone()),
@@ -333,7 +299,7 @@ impl ResolvedBinding {
         handle: Option<&CompositeHandle>,
         value: f32,
     ) -> Result<(), GraphError> {
-        let pv = self.convert.convert(value);
+        let pv = convert_param_value(self.convert, value);
         match &self.target {
             ResolvedTarget::Composite { outer_name } => handle
                 .expect("ResolvedTarget::Composite requires a CompositeHandle")
@@ -630,82 +596,61 @@ mod tests {
 
     #[test]
     fn float_passes_through_unchanged() {
-        assert_eq!(ParamConvert::Float.convert(0.0), ParamValue::Float(0.0));
-        assert_eq!(ParamConvert::Float.convert(0.5), ParamValue::Float(0.5));
-        assert_eq!(ParamConvert::Float.convert(-1.5), ParamValue::Float(-1.5));
-        assert_eq!(ParamConvert::Float.convert(42.0), ParamValue::Float(42.0));
+        assert_eq!(convert_param_value(ParamConvert::Float, 0.0), ParamValue::Float(0.0));
+        assert_eq!(convert_param_value(ParamConvert::Float, 0.5), ParamValue::Float(0.5));
+        assert_eq!(convert_param_value(ParamConvert::Float, -1.5), ParamValue::Float(-1.5));
+        assert_eq!(convert_param_value(ParamConvert::Float, 42.0), ParamValue::Float(42.0));
     }
 
     #[test]
     fn int_round_uses_half_away_from_zero() {
         // f32::round is half-away-from-zero, NOT banker's rounding.
         // Document the actual behavior so it's expected.
-        assert_eq!(ParamConvert::IntRound.convert(0.0), ParamValue::Int(0));
-        assert_eq!(ParamConvert::IntRound.convert(0.4), ParamValue::Int(0));
-        assert_eq!(ParamConvert::IntRound.convert(0.5), ParamValue::Int(1));
-        assert_eq!(ParamConvert::IntRound.convert(0.6), ParamValue::Int(1));
-        assert_eq!(ParamConvert::IntRound.convert(-0.5), ParamValue::Int(-1));
-        assert_eq!(ParamConvert::IntRound.convert(2.5), ParamValue::Int(3));
+        assert_eq!(convert_param_value(ParamConvert::IntRound, 0.0), ParamValue::Int(0));
+        assert_eq!(convert_param_value(ParamConvert::IntRound, 0.4), ParamValue::Int(0));
+        assert_eq!(convert_param_value(ParamConvert::IntRound, 0.5), ParamValue::Int(1));
+        assert_eq!(convert_param_value(ParamConvert::IntRound, 0.6), ParamValue::Int(1));
+        assert_eq!(convert_param_value(ParamConvert::IntRound, -0.5), ParamValue::Int(-1));
+        assert_eq!(convert_param_value(ParamConvert::IntRound, 2.5), ParamValue::Int(3));
     }
 
     #[test]
     fn bool_threshold_at_half() {
         assert_eq!(
-            ParamConvert::BoolThreshold.convert(0.0),
+            convert_param_value(ParamConvert::BoolThreshold, 0.0),
             ParamValue::Bool(false)
         );
         assert_eq!(
-            ParamConvert::BoolThreshold.convert(0.5),
+            convert_param_value(ParamConvert::BoolThreshold, 0.5),
             ParamValue::Bool(false)
         );
         assert_eq!(
-            ParamConvert::BoolThreshold.convert(0.5001),
+            convert_param_value(ParamConvert::BoolThreshold, 0.5001),
             ParamValue::Bool(true)
         );
         assert_eq!(
-            ParamConvert::BoolThreshold.convert(1.0),
+            convert_param_value(ParamConvert::BoolThreshold, 1.0),
             ParamValue::Bool(true)
         );
         assert_eq!(
-            ParamConvert::BoolThreshold.convert(-0.5),
+            convert_param_value(ParamConvert::BoolThreshold, -0.5),
             ParamValue::Bool(false)
         );
     }
 
     #[test]
     fn enum_round_clamps_negatives_to_zero() {
-        assert_eq!(ParamConvert::EnumRound.convert(0.0), ParamValue::Enum(0));
-        assert_eq!(ParamConvert::EnumRound.convert(1.4), ParamValue::Enum(1));
-        assert_eq!(ParamConvert::EnumRound.convert(1.6), ParamValue::Enum(2));
-        assert_eq!(ParamConvert::EnumRound.convert(-1.0), ParamValue::Enum(0));
-        assert_eq!(ParamConvert::EnumRound.convert(-0.4), ParamValue::Enum(0));
+        assert_eq!(convert_param_value(ParamConvert::EnumRound, 0.0), ParamValue::Enum(0));
+        assert_eq!(convert_param_value(ParamConvert::EnumRound, 1.4), ParamValue::Enum(1));
+        assert_eq!(convert_param_value(ParamConvert::EnumRound, 1.6), ParamValue::Enum(2));
+        assert_eq!(convert_param_value(ParamConvert::EnumRound, -1.0), ParamValue::Enum(0));
+        assert_eq!(convert_param_value(ParamConvert::EnumRound, -0.4), ParamValue::Enum(0));
     }
 
-    #[test]
-    fn enum_remap_looks_up_static_table() {
-        // Mirror's case: legacy 0/1/2 → graph FoldX(6) / FoldY(7) / FoldBoth(8)
-        let convert = ParamConvert::EnumRemap(Cow::Borrowed(&[6, 7, 8]));
-        assert_eq!(convert.convert(0.0), ParamValue::Enum(6));
-        assert_eq!(convert.convert(1.0), ParamValue::Enum(7));
-        assert_eq!(convert.convert(2.0), ParamValue::Enum(8));
-    }
-
-    #[test]
-    fn enum_remap_clamps_out_of_range_to_last() {
-        let convert = ParamConvert::EnumRemap(Cow::Borrowed(&[6, 7, 8]));
-        assert_eq!(convert.convert(3.0), ParamValue::Enum(8));
-        assert_eq!(convert.convert(99.0), ParamValue::Enum(8));
-        assert_eq!(convert.convert(-1.0), ParamValue::Enum(6)); // negatives → idx 0
-    }
-
-    #[test]
-    fn enum_remap_empty_table_returns_zero() {
-        let convert = ParamConvert::EnumRemap(Cow::Borrowed(&[]));
-        // Defensive — would only happen via a buggy effect declaration,
-        // but better than panicking.
-        assert_eq!(convert.convert(0.0), ParamValue::Enum(0));
-        assert_eq!(convert.convert(5.0), ParamValue::Enum(0));
-    }
+    // EnumRemap and FloatTransform variants were removed in Phase 4
+    // of the bindings unification plan — their curation moved into
+    // the primitives. The corresponding tests were dropped with the
+    // variants.
 
     // ---- Resolution helpers ----
 
@@ -780,7 +725,7 @@ mod tests {
             min: 0.9,
             max: 1.1,
             default_value: 0.95,
-            convert: manifold_core::effects::UserParamConvert::Float,
+            convert: manifold_core::effects::ParamConvert::Float,
         };
         let rb = ResolvedBinding::from_user(&core, &g, &handles_for(feedback))
             .expect("user binding hydrates");
@@ -806,7 +751,7 @@ mod tests {
             min: 0.0,
             max: 1.0,
             default_value: 0.5,
-            convert: manifold_core::effects::UserParamConvert::Float,
+            convert: manifold_core::effects::ParamConvert::Float,
         };
         let handles: Vec<(Cow<'static, str>, NodeInstanceId)> = vec![];
         assert!(ResolvedBinding::from_user(&core, &g, &handles).is_none());
@@ -824,7 +769,7 @@ mod tests {
             min: 0.0,
             max: 1.0,
             default_value: 0.5,
-            convert: manifold_core::effects::UserParamConvert::Float,
+            convert: manifold_core::effects::ParamConvert::Float,
         };
         assert!(ResolvedBinding::from_user(&core, &g, &handles_for(feedback)).is_none());
     }
@@ -870,10 +815,10 @@ mod tests {
     }
 
     #[test]
-    fn enum_remap_routes_correctly_to_a_real_node() {
-        // Verifies the full path: f32 → EnumRemap → ParamValue::Enum →
+    fn enum_round_routes_correctly_to_a_real_node() {
+        // Verifies the full path: f32 → EnumRound → ParamValue::Enum →
         // graph.set_param. Using Feedback's mode param (Enum [Screen,
-        // Additive, Max]) and a contrived remap that swaps order.
+        // Additive, Max]).
         let mut g = Graph::new();
         let feedback = g.add_node(Box::new(Feedback::new()));
         let binding = ResolvedBinding {
@@ -884,19 +829,18 @@ mod tests {
                 node: feedback,
                 param: "mode",
             },
-            // Host idx 0 → graph idx 2, 1 → 1, 2 → 0 (reverse).
-            convert: ParamConvert::EnumRemap(Cow::Borrowed(&[2, 1, 0])),
+            convert: ParamConvert::EnumRound,
             source: BindingSource::Static,
         };
         binding.apply(&mut g, None, 0.0).unwrap();
         assert_eq!(
             g.get_node(feedback).unwrap().params.get("mode"),
-            Some(&ParamValue::Enum(2))
+            Some(&ParamValue::Enum(0))
         );
         binding.apply(&mut g, None, 2.0).unwrap();
         assert_eq!(
             g.get_node(feedback).unwrap().params.get("mode"),
-            Some(&ParamValue::Enum(0))
+            Some(&ParamValue::Enum(2))
         );
     }
 
@@ -984,7 +928,7 @@ mod tests {
             min: 0.9,
             max: 1.1,
             default_value: 0.95,
-            convert: manifold_core::effects::UserParamConvert::Float,
+            convert: manifold_core::effects::ParamConvert::Float,
         };
         let user_rb = ResolvedBinding::from_user(&core_ub, &g, &handles_for(feedback)).unwrap();
         let bindings = vec![static_rb, user_rb];
@@ -1015,7 +959,7 @@ mod tests {
             min: 0.9,
             max: 1.1,
             default_value: 0.97,
-            convert: manifold_core::effects::UserParamConvert::Float,
+            convert: manifold_core::effects::ParamConvert::Float,
         };
         let user_rb = ResolvedBinding::from_user(&core_ub, &g, &handles_for(feedback)).unwrap();
         let bindings = vec![static_rb, user_rb];
@@ -1046,7 +990,7 @@ mod tests {
             min: 0.9,
             max: 1.1,
             default_value: 0.95,
-            convert: manifold_core::effects::UserParamConvert::Float,
+            convert: manifold_core::effects::ParamConvert::Float,
         };
         let user_rb = ResolvedBinding::from_user(&core_ub, &g, &handles_for(feedback)).unwrap();
         let bindings = vec![static_rb, user_rb];

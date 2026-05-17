@@ -33,7 +33,7 @@ use crate::input::UIEvent;
 use crate::node::*;
 use crate::tree::UITree;
 use manifold_core::effect_graph_def::SerializedParamValue;
-use manifold_core::effects::UserParamConvert;
+use manifold_core::effects::ParamConvert;
 
 use super::PanelAction;
 
@@ -158,7 +158,7 @@ enum RowState {
         /// Enum option count, snapshot from the live ParamDef. Click-
         /// cycle on an enum cell wraps modulo this count.
         enum_labels_count: usize,
-        convert: UserParamConvert,
+        convert: ParamConvert,
         currently_exposed: bool,
         /// Slot index when this inner-param is the target of a
         /// static-block binding. `Some(i)` routes the expose toggle
@@ -584,11 +584,11 @@ impl GraphEditorPanel {
 
             if supported {
                 let convert = match ps.kind {
-                    GraphEditorParamKind::Float => UserParamConvert::Float,
-                    GraphEditorParamKind::Int => UserParamConvert::IntRound,
-                    GraphEditorParamKind::Bool => UserParamConvert::BoolThreshold,
-                    GraphEditorParamKind::Enum => UserParamConvert::EnumRound,
-                    GraphEditorParamKind::Other => UserParamConvert::Float, // unreachable
+                    GraphEditorParamKind::Float => ParamConvert::Float,
+                    GraphEditorParamKind::Int => ParamConvert::IntRound,
+                    GraphEditorParamKind::Bool => ParamConvert::BoolThreshold,
+                    GraphEditorParamKind::Enum => ParamConvert::EnumRound,
+                    GraphEditorParamKind::Other => ParamConvert::Float, // unreachable
                 };
                 let (min, max) = ps.range.unwrap_or((0.0, 1.0));
                 let static_block_slot = self
@@ -710,7 +710,7 @@ impl GraphEditorPanel {
                             min: *min,
                             max: *max,
                             default_value: *default_value,
-                            convert: convert.clone(),
+                            convert: *convert,
                         }];
                     }
                     if value_cell_node_id.map(|v| v == node_id).unwrap_or(false) {
@@ -1074,7 +1074,7 @@ mod tests {
                 assert!((*min - -1.0).abs() < f32::EPSILON);
                 assert!((*max - 1.0).abs() < f32::EPSILON);
                 assert!((*default_value - 0.0).abs() < f32::EPSILON);
-                assert!(matches!(convert, UserParamConvert::Float));
+                assert!(matches!(convert, ParamConvert::Float));
             }
             other => panic!("unexpected action: {other:?}"),
         }

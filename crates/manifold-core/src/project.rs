@@ -1148,7 +1148,7 @@ mod tests {
             min: 0.0,
             max: 1.0,
             default_value: 0.0,
-            convert: crate::effects::UserParamConvert::Float,
+            convert: crate::effects::ParamConvert::Float,
         }
     }
 
