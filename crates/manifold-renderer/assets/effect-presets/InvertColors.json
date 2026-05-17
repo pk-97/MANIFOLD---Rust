@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "name": "InvertColors",
+  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.source",
+      "handle": "source"
+    },
+    {
+      "id": 1,
+      "typeId": "node.invert",
+      "handle": "invert",
+      "params": {
+        "intensity": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "in"
+    }
+  ]
+}

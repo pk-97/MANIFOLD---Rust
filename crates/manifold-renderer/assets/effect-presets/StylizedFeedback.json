@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "name": "StylizedFeedback",
+  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.source",
+      "handle": "source"
+    },
+    {
+      "id": 1,
+      "typeId": "node.feedback",
+      "handle": "feedback",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "rotation": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "zoom": {
+          "type": "Float",
+          "value": 0.95
+        }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "in"
+    }
+  ]
+}

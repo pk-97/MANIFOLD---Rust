@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "name": "WireframeDepth",
+  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.source",
+      "handle": "source"
+    },
+    {
+      "id": 1,
+      "typeId": "node.wireframe_depth",
+      "handle": "wireframe_depth",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "blend": {
+          "type": "Enum",
+          "value": 6
+        },
+        "density": {
+          "type": "Float",
+          "value": 260.0
+        },
+        "edge_follow": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "flow": {
+          "type": "Enum",
+          "value": 1
+        },
+        "lock": {
+          "type": "Enum",
+          "value": 1
+        },
+        "mesh_rate": {
+          "type": "Enum",
+          "value": 0
+        },
+        "smooth": {
+          "type": "Float",
+          "value": 0.9
+        },
+        "subject": {
+          "type": "Float",
+          "value": 0.52
+        },
+        "width": {
+          "type": "Float",
+          "value": 1.335
+        },
+        "wire_res": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "z_scale": {
+          "type": "Float",
+          "value": 1.35
+        }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "in"
+    }
+  ]
+}

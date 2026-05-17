@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "name": "Halation",
+  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.source",
+      "handle": "source"
+    },
+    {
+      "id": 1,
+      "typeId": "node.halation",
+      "handle": "halation",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "hue": {
+          "type": "Float",
+          "value": 20.0
+        },
+        "saturation": {
+          "type": "Float",
+          "value": 0.6
+        },
+        "spread": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "threshold": {
+          "type": "Float",
+          "value": 0.5
+        }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "in"
+    }
+  ]
+}

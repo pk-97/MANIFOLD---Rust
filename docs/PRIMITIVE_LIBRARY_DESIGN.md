@@ -314,7 +314,7 @@ All three ship as fused composite primitives (same pattern as Glitch, Strobe, Ed
 
 **Strategy decision (2026-05-11): cut over effects first, defer generator decomposition to a separate pass.** Effects sit downstream of generators (texture → chain), so the chain side can be swapped without touching generator code. Smaller cutover batch, real-usage feedback informs the harder generator work that follows.
 
-26. Graph-JSON preset schema + loader. Bundled presets ship in `assets/effect-presets/*.json`; user-authored graphs save into the project file (`.manifold` archive) with an optional export-to-standalone-JSON path. One schema, one loader, one validator — built-in vs user graphs differ only in storage location.
+26. **[shipped]** Graph-JSON preset schema + loader. Bundled presets ship in `crates/manifold-renderer/assets/effect-presets/*.json` (embedded via `include_str!`); user-authored graphs save into the project file (`.manifold` archive) with an optional export-to-standalone-JSON path. One schema, one loader, one validator — built-in vs user graphs differ only in storage location. Drift detection + regenerator live in `tests/bundled_presets_drift.rs`.
 27. Effect save-file refactor: `EffectInstance` carries a graph payload (or a reference to a bundled preset) instead of a flat `effect_type` + `param_values` list. V1 → V2 migration in `manifold-io`.
 28. Replace `EffectChain::apply_chain` with graph-runtime execution; static elision, dynamic bypass, wet/dry sub-graphs.
 29. Wire the existing read-only `GraphCanvas` into editing affordances (add node, wire, delete) and save-on-change.

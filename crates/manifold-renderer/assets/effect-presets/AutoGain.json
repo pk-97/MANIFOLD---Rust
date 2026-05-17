@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "name": "AutoGain",
+  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.source",
+      "handle": "source"
+    },
+    {
+      "id": 1,
+      "typeId": "node.auto_gain",
+      "handle": "auto_gain",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "char": {
+          "type": "Enum",
+          "value": 0
+        },
+        "color": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "hdr_ret": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "punch": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "ratio": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "target": {
+          "type": "Float",
+          "value": 0.5
+        }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "in"
+    }
+  ]
+}

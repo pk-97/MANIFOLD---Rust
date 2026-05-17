@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "name": "ColorGrade",
+  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.source",
+      "handle": "source"
+    },
+    {
+      "id": 1,
+      "typeId": "node.color_grade",
+      "handle": "color_grade",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "colorize": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "colorize_focus": {
+          "type": "Float",
+          "value": 0.75
+        },
+        "colorize_hue": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "colorize_saturation": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "contrast": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "gain": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "hue": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "saturation": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "in"
+    }
+  ]
+}

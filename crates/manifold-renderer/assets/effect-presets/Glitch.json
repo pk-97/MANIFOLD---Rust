@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "name": "Glitch",
+  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.source",
+      "handle": "source"
+    },
+    {
+      "id": 1,
+      "typeId": "node.glitch",
+      "handle": "glitch",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "block_size": {
+          "type": "Float",
+          "value": 16.0
+        },
+        "rgb_shift": {
+          "type": "Float",
+          "value": 0.01
+        },
+        "scanline": {
+          "type": "Float",
+          "value": 0.3
+        },
+        "speed": {
+          "type": "Float",
+          "value": 2.0
+        },
+        "time": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "in"
+    }
+  ]
+}

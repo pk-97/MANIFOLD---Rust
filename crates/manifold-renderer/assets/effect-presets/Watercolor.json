@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "name": "Watercolor",
+  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.source",
+      "handle": "source"
+    },
+    {
+      "id": 1,
+      "typeId": "node.watercolor",
+      "handle": "watercolor",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "blur": {
+          "type": "Float",
+          "value": 2.0
+        },
+        "decay": {
+          "type": "Float",
+          "value": 0.99
+        },
+        "displace": {
+          "type": "Float",
+          "value": 0.001
+        },
+        "time": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "in"
+    }
+  ]
+}

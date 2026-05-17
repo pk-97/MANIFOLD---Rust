@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "name": "BlobTracking",
+  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.source",
+      "handle": "source"
+    },
+    {
+      "id": 1,
+      "typeId": "node.blob_track",
+      "handle": "blob_tracking",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "connect": {
+          "type": "Float",
+          "value": 0.35
+        },
+        "sens": {
+          "type": "Float",
+          "value": 0.85
+        },
+        "smooth": {
+          "type": "Float",
+          "value": 0.7
+        },
+        "thresh": {
+          "type": "Float",
+          "value": 0.65
+        }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "in"
+    }
+  ]
+}

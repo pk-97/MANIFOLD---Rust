@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "name": "Mirror",
+  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.source",
+      "handle": "source"
+    },
+    {
+      "id": 1,
+      "typeId": "node.transform",
+      "handle": "uv_transform",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": 6
+        },
+        "rotation": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "scale": {
+          "type": "Vec2",
+          "value": [
+            1.0,
+            1.0
+          ]
+        },
+        "translate": {
+          "type": "Vec2",
+          "value": [
+            0.0,
+            0.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "node.mix",
+      "handle": "mix",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        }
+      }
+    },
+    {
+      "id": 3,
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "in"
+    }
+  ]
+}

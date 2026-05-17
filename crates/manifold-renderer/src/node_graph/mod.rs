@@ -11,6 +11,7 @@ pub mod atomic;
 mod backend;
 mod bindings;
 mod boundary_nodes;
+mod bundled_presets;
 mod chain_spec;
 pub mod composites;
 mod effect_node;
@@ -33,6 +34,9 @@ mod validation;
 pub use backend::{Backend, MockBackend};
 pub use bindings::{NodeInputs, NodeOutputs, Slot};
 pub use boundary_nodes::{FINAL_OUTPUT_TYPE_ID, FinalOutput, SOURCE_TYPE_ID, Source};
+pub use bundled_presets::{
+    bundled_preset_def, bundled_preset_json, bundled_preset_type_ids,
+};
 pub use effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId, NodeRequires,
     NodeWire, ParamValues,

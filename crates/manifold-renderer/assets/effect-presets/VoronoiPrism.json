@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "name": "VoronoiPrism",
+  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.source",
+      "handle": "source"
+    },
+    {
+      "id": 1,
+      "typeId": "node.voronoi_prism",
+      "handle": "voronoi",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "beat": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "cell_count": {
+          "type": "Int",
+          "value": 16
+        },
+        "source_width": {
+          "type": "Float",
+          "value": 0.5625
+        }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "in"
+    }
+  ]
+}
