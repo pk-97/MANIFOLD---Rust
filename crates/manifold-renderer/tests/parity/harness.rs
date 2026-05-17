@@ -40,8 +40,9 @@ use manifold_core::{Beats, EffectTypeId, Seconds};
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
+use manifold_renderer::chain_dispatch::dispatch_chain;
 use manifold_renderer::effect::EffectContext;
-use manifold_renderer::effect_chain::EffectChain;
+use manifold_renderer::effect_chain_graph::ChainGraph;
 use manifold_renderer::effect_registry::EffectRegistry;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::node_graph::{
@@ -171,11 +172,11 @@ impl ParityHarness {
         // ping-pong buffers.
         let dest = self.make_target("parity-legacy-dest");
 
-        let mut chain = EffectChain::new();
+        let mut chain: Option<ChainGraph> = None;
         let mut render_enc = self.device.create_encoder("parity-legacy-render");
         {
             let mut gpu = RendererGpuEncoder::new(&mut render_enc, &self.device);
-            let result = chain.apply_chain(&mut gpu, input, slice::from_ref(fx), &[], ctx);
+            let result = dispatch_chain(&mut chain, &mut gpu, input, slice::from_ref(fx), &[], ctx);
             // `result == None` means the chain skipped (disabled / no
             // registered processor / amount==0). Parity-test contract:
             // the "effect output" in that case equals the input. Same

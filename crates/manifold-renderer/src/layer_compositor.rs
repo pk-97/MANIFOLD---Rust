@@ -1,6 +1,7 @@
+use crate::chain_dispatch::{clear_chain_state, dispatch_chain};
 use crate::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
 use crate::effect::EffectContext;
-use crate::effect_chain::EffectChain;
+use crate::effect_chain_graph::ChainGraph;
 use crate::effect_registry::EffectRegistry;
 use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
@@ -346,7 +347,7 @@ pub struct LayerCompositor {
     /// layers' chains are dropped after `CHAIN_GRACE_FRAMES` of disuse.
     /// Type-level invariant: the key is `LayerId`, not `usize`, so
     /// iteration-counter indexing won't compile.
-    effect_chains: AHashMap<LayerId, EffectChain>,
+    effect_chains: AHashMap<LayerId, Option<ChainGraph>>,
     /// Per-chain last-used frame counter. Parallel to `effect_chains`;
     /// updated each frame the chain is touched. Trimmed once stale.
     chain_last_used_frame: AHashMap<LayerId, u64>,
@@ -369,7 +370,7 @@ pub struct LayerCompositor {
     /// so master FX and layer FX cannot share a chain. Costs ~56
     /// bytes of idle struct space when unused and zero CPU when
     /// no master effects are present.
-    master_effect_chain: EffectChain,
+    master_effect_chain: Option<ChainGraph>,
     /// Registry of all effect processors. Retained post-legacy-
     /// dispatch removal for editor snapshot lookup
     /// (`graph_snapshot_for`) and background-worker flushing on
@@ -407,7 +408,7 @@ pub struct LayerCompositor {
     /// Per-group effect chains, keyed by the group container's
     /// `LayerId`. Same structural invariant as `effect_chains`:
     /// the key is stable, iteration-counter indexing won't compile.
-    group_effect_chains: AHashMap<LayerId, EffectChain>,
+    group_effect_chains: AHashMap<LayerId, Option<ChainGraph>>,
     /// Per-group-chain last-used frame counter for time-based pruning.
     group_chain_last_used_frame: AHashMap<LayerId, u64>,
     /// Pre-allocated scratch for child layer indices during group folding.
@@ -431,7 +432,7 @@ pub struct LayerCompositor {
     /// `ensure_buffers` driven by the LED EffectContext.
     /// Uses owner_key `LED_MASTER_OWNER_KEY` to keep temporal state separate
     /// from the main master chain.
-    led_master_ec: Option<EffectChain>,
+    led_master_ec: Option<Option<ChainGraph>>,
 
     /// Per-group LED scratch buffers at LED grid resolution, keyed
     /// by the group container's `LayerId`. One per group whose
@@ -448,7 +449,7 @@ pub struct LayerCompositor {
     /// are different fields, even though both use `LayerId` keys.
     /// Lazy-allocates at LED grid resolution via the `EffectContext`
     /// passed to `apply_effects`.
-    led_group_effect_chains: AHashMap<LayerId, EffectChain>,
+    led_group_effect_chains: AHashMap<LayerId, Option<ChainGraph>>,
     /// Per-LED-group-chain last-used frame counter for time-based pruning.
     led_group_chain_last_used_frame: AHashMap<LayerId, u64>,
 
@@ -532,7 +533,7 @@ impl LayerCompositor {
             frame_counter: 0,
             active_layer_ids_scratch: Vec::new(),
             active_layer_buf_ids_scratch: Vec::new(),
-            master_effect_chain: EffectChain::new(),
+            master_effect_chain: None,
             effect_registry: EffectRegistry::new(device),
             tonemap: TonemapPipeline::new(device, width, height),
             led_tap: None,
@@ -770,7 +771,7 @@ impl LayerCompositor {
         let last_used = &self.chain_last_used_frame;
         for (id, chain) in self.effect_chains.iter_mut() {
             if last_used.get(id) != Some(&now) {
-                chain.clear_graph_runner_state();
+                clear_chain_state(chain);
             }
         }
 
@@ -778,7 +779,7 @@ impl LayerCompositor {
         let last_used = &self.group_chain_last_used_frame;
         for (id, chain) in self.group_effect_chains.iter_mut() {
             if last_used.get(id) != Some(&now) {
-                chain.clear_graph_runner_state();
+                clear_chain_state(chain);
             }
         }
 
@@ -787,7 +788,7 @@ impl LayerCompositor {
         let last_used = &self.led_group_chain_last_used_frame;
         for (id, chain) in self.led_group_effect_chains.iter_mut() {
             if last_used.get(id) != Some(&now) {
-                chain.clear_graph_runner_state();
+                clear_chain_state(chain);
             }
         }
     }
@@ -795,14 +796,14 @@ impl LayerCompositor {
     /// Apply effect chain to the given input texture, returning the processed texture
     /// if any effects were applied, or None if the input should be used as-is.
     fn apply_effects<'a>(
-        effect_chain: &'a mut EffectChain,
+        effect_chain: &'a mut Option<ChainGraph>,
         gpu: &mut GpuEncoder,
         input_texture: &'a GpuTexture,
         effects: &[EffectInstance],
         groups: &[EffectGroup],
         ctx: &EffectContext,
     ) -> Option<&'a GpuTexture> {
-        effect_chain.apply_chain(gpu, input_texture, effects, groups, ctx)
+        dispatch_chain(effect_chain, gpu, input_texture, effects, groups, ctx)
     }
 
     /// Clean up per-owner effect state for a stopped clip.
@@ -1224,7 +1225,7 @@ impl LayerCompositor {
                             .led_group_effect_chains
                             .get_mut(group.layer_id)
                             .expect("ensured above")
-                            as *mut EffectChain;
+                            as *mut Option<ChainGraph>;
                         let group_buf = unsafe { &mut *group_buf_ptr };
                         let group_ec = unsafe { &mut *group_ec_ptr };
 
@@ -1933,7 +1934,7 @@ impl Compositor for LayerCompositor {
             let width = width.max(1);
             let height = height.max(1);
 
-            let led_ec = self.led_master_ec.get_or_insert_with(EffectChain::new);
+            let led_ec = self.led_master_ec.get_or_insert_with(Option::<ChainGraph>::default);
 
             let ctx = EffectContext {
                 time: frame.time,
@@ -2010,17 +2011,19 @@ impl Compositor for LayerCompositor {
             lb.resize(device, width, height);
         }
         self.blend.resize(width, height);
+        // Drop cached chain graphs so they rebuild at the new resolution
+        // next frame (the underlying graph holds width/height-sized slots).
         for ec in self.effect_chains.values_mut() {
-            ec.resize(device, width, height);
+            *ec = None;
         }
-        self.master_effect_chain.resize(device, width, height);
+        self.master_effect_chain = None;
         self.effect_registry.resize_all(device, width, height);
         self.tonemap.resize(device, width, height);
         for gb in self.group_bufs.values_mut() {
             gb.resize(device, width, height);
         }
         for ec in self.group_effect_chains.values_mut() {
-            ec.resize(device, width, height);
+            *ec = None;
         }
         // LED tap will be recreated at new size on next frame if needed.
         // The per-layer LED composite size comes from `frame.led_composite_size`
@@ -2058,17 +2061,17 @@ impl Compositor for LayerCompositor {
         //
         // See `docs/EFFECT_CHAIN_LIFECYCLE.md`.
         for chain in self.effect_chains.values_mut() {
-            chain.clear_graph_runner_state();
+            clear_chain_state(chain);
         }
         for chain in self.group_effect_chains.values_mut() {
-            chain.clear_graph_runner_state();
+            clear_chain_state(chain);
         }
         for chain in self.led_group_effect_chains.values_mut() {
-            chain.clear_graph_runner_state();
+            clear_chain_state(chain);
         }
-        self.master_effect_chain.clear_graph_runner_state();
+        clear_chain_state(&mut self.master_effect_chain);
         if let Some(led_ec) = self.led_master_ec.as_mut() {
-            led_ec.clear_graph_runner_state();
+            clear_chain_state(led_ec);
         }
     }
 
@@ -2178,8 +2181,8 @@ mod chain_pool_tests {
         comp.frame_counter = 1;
         comp.ensure_chain_for_layer(&a);
         comp.ensure_chain_for_layer(&b);
-        let a_ptr = comp.effect_chains.get(&a).unwrap() as *const EffectChain;
-        let b_ptr = comp.effect_chains.get(&b).unwrap() as *const EffectChain;
+        let a_ptr = comp.effect_chains.get(&a).unwrap() as *const Option<ChainGraph>;
+        let b_ptr = comp.effect_chains.get(&b).unwrap() as *const Option<ChainGraph>;
 
         // Frame 2: B + C active (A goes quiet, C new).
         comp.frame_counter = 2;
@@ -2189,13 +2192,13 @@ mod chain_pool_tests {
         // B is the same instance — its chain_graph, primitive state,
         // and all internal buffers are preserved.
         assert_eq!(
-            comp.effect_chains.get(&b).unwrap() as *const EffectChain,
+            comp.effect_chains.get(&b).unwrap() as *const Option<ChainGraph>,
             b_ptr,
             "B's chain instance must be identical across frame transition",
         );
         // A is still in the pool (within grace period).
         assert_eq!(
-            comp.effect_chains.get(&a).unwrap() as *const EffectChain,
+            comp.effect_chains.get(&a).unwrap() as *const Option<ChainGraph>,
             a_ptr,
             "A's chain instance must persist within CHAIN_GRACE_FRAMES",
         );
@@ -2230,7 +2233,7 @@ mod chain_pool_tests {
         let x = LayerId::from("X");
         comp.frame_counter = 1;
         comp.ensure_chain_for_layer(&x);
-        let x_ptr = comp.effect_chains.get(&x).unwrap() as *const EffectChain;
+        let x_ptr = comp.effect_chains.get(&x).unwrap() as *const Option<ChainGraph>;
 
         // Simulate many frames of reorder activity: ensure many other
         // layers come/go but X stays present.
@@ -2245,7 +2248,7 @@ mod chain_pool_tests {
 
         // X's chain is still the same instance.
         assert_eq!(
-            comp.effect_chains.get(&x).unwrap() as *const EffectChain,
+            comp.effect_chains.get(&x).unwrap() as *const Option<ChainGraph>,
             x_ptr,
             "X's chain instance must survive arbitrary other-layer churn",
         );
@@ -2264,8 +2267,8 @@ mod chain_pool_tests {
         comp.frame_counter = 1;
         comp.ensure_chain_for_layer(&any_layer);
 
-        let layer_chain_ptr = comp.effect_chains.get(&any_layer).unwrap() as *const EffectChain;
-        let master_chain_ptr: *const EffectChain = &comp.master_effect_chain;
+        let layer_chain_ptr = comp.effect_chains.get(&any_layer).unwrap() as *const Option<ChainGraph>;
+        let master_chain_ptr: *const Option<ChainGraph> = &comp.master_effect_chain;
 
         assert_ne!(
             layer_chain_ptr, master_chain_ptr,
@@ -2362,7 +2365,7 @@ mod chain_pool_tests {
 
         comp.frame_counter = 1;
         comp.ensure_chain_for_layer(&idle);
-        let initial_ptr = comp.effect_chains.get(&idle).unwrap() as *const EffectChain;
+        let initial_ptr = comp.effect_chains.get(&idle).unwrap() as *const Option<ChainGraph>;
 
         // Many frames pass without `idle` being touched, but the layer
         // is still in the project (typical mute / clip-gap scenario).

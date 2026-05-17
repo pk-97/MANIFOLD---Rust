@@ -671,7 +671,7 @@ impl ContentThread {
         // env var so production builds stay silent.
         if std::env::var("MANIFOLD_LOG_CHAIN_STATS").is_ok() && self.frame_count.is_multiple_of(60)
         {
-            let s = manifold_renderer::effect_chain::take_chain_dispatch_stats();
+            let s = manifold_renderer::chain_dispatch::take_chain_dispatch_stats();
             if s.dispatches > 0 {
                 let avg_effects = s.effects as f64 / s.dispatches.max(1) as f64;
                 let avg_dispatch_us = (s.dispatch_ns as f64 / 1000.0) / s.dispatches.max(1) as f64;
