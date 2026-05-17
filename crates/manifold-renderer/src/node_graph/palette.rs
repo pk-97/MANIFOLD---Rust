@@ -9,20 +9,17 @@
 //! 2. [`catalog_graph_def_for`] — the catalog-default
 //!    [`EffectGraphDef`] for an [`EffectTypeId`]. Editing commands
 //!    need this to lift `EffectInstance.graph` from `None` on first
-//!    edit. Only graph-backed effects (Mirror, SoftFocus,
-//!    StylizedFeedback, NodeGraphTest) return `Some`.
+//!    edit. Sourced from the bundled-preset registry (§6.6 #26), so
+//!    every shipping effect returns `Some` — per-card divergence is
+//!    available on every card, not just the original Mirror /
+//!    SoftFocus pair.
 //!
 //! Phase 4 of per-card divergence in `docs/NODE_GRAPH_SYSTEM.md`.
 
 use manifold_core::EffectTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 
-use crate::node_graph::boundary_nodes::{FinalOutput, Source};
-use crate::node_graph::composites::{
-    build_mirror, build_soft_focus, MIRROR_TYPE_ID, SOFT_FOCUS_TYPE_ID,
-};
-use crate::node_graph::graph::Graph;
-use crate::node_graph::persistence::EffectGraphDefExt;
+use crate::node_graph::bundled_presets::bundled_preset_def;
 use crate::node_graph::primitives;
 
 /// One entry in the editor's palette: a node type the user can drop
@@ -103,53 +100,16 @@ pub fn palette_atoms() -> Vec<PaletteAtom> {
     atoms
 }
 
-/// Build the catalog-default [`EffectGraphDef`] for a graph-backed
-/// effect type. Editing commands clone this into
-/// `EffectInstance.graph` on first edit so subsequent mutations have
-/// a topology to manipulate.
+/// Build the catalog-default [`EffectGraphDef`] for `effect_type`.
+/// Editing commands clone this into `EffectInstance.graph` on first
+/// edit so subsequent mutations have a topology to manipulate.
 ///
-/// Returns `None` for effect types that aren't graph-backed (Bloom,
-/// AutoGain, etc.) — those run a single monolithic primitive without
-/// an editable sub-graph.
+/// Backed by the bundled-preset registry (`bundled_presets.rs`), so
+/// every shipping effect returns `Some`. Returns `None` only for
+/// effect types that aren't registered at all (unknown ids from
+/// future-version save files).
 pub fn catalog_graph_def_for(effect_type: &EffectTypeId) -> Option<EffectGraphDef> {
-    match effect_type {
-        t if t == &EffectTypeId::MIRROR => Some(build_mirror_default()),
-        t if t == &EffectTypeId::SOFT_FOCUS_GRAPH => Some(build_soft_focus_default()),
-        // StylizedFeedback and NodeGraphTest are graph-backed too, but
-        // their catalog graphs aren't promoted to named handles yet —
-        // they'd need the same "source"/"final_output" handle pass that
-        // Mirror went through in Phase 1. Deferred until those FXs
-        // implement `apply_graph_def` end-to-end.
-        _ => None,
-    }
-}
-
-fn build_mirror_default() -> EffectGraphDef {
-    let mut graph = Graph::new();
-    let src = graph.add_node_named("source", Box::new(Source::new()));
-    let handle = build_mirror(&mut graph, (src, "out"))
-        .expect("build_mirror should never fail with a valid source");
-    let final_out = graph.add_node_named("final_output", Box::new(FinalOutput::new()));
-    graph
-        .connect(handle.output(), (final_out, "in"))
-        .expect("wire Mix.out → FinalOutput.in");
-    let mut def = EffectGraphDef::from_graph(&graph);
-    def.name = Some(MIRROR_TYPE_ID.to_string());
-    def
-}
-
-fn build_soft_focus_default() -> EffectGraphDef {
-    let mut graph = Graph::new();
-    let src = graph.add_node_named("source", Box::new(Source::new()));
-    let handle = build_soft_focus(&mut graph, (src, "out"))
-        .expect("build_soft_focus should never fail with a valid source");
-    let final_out = graph.add_node_named("final_output", Box::new(FinalOutput::new()));
-    graph
-        .connect(handle.output(), (final_out, "in"))
-        .expect("wire Mix.out → FinalOutput.in");
-    let mut def = EffectGraphDef::from_graph(&graph);
-    def.name = Some(SOFT_FOCUS_TYPE_ID.to_string());
-    def
+    bundled_preset_def(effect_type).cloned()
 }
 
 #[cfg(test)]
@@ -187,8 +147,23 @@ mod tests {
     }
 
     #[test]
-    fn catalog_default_returns_none_for_non_graph_effects() {
-        assert!(catalog_graph_def_for(&EffectTypeId::BLOOM).is_none());
+    fn catalog_default_is_available_for_every_shipping_effect() {
+        // Previously only Mirror + SoftFocusGraph had catalog graphs;
+        // the bundled-preset registry now covers every ChainSpec, so
+        // per-card divergence works on every effect.
+        for type_id in crate::node_graph::bundled_preset_type_ids() {
+            assert!(
+                catalog_graph_def_for(&type_id).is_some(),
+                "missing catalog default for shipping effect {}",
+                type_id.as_str(),
+            );
+        }
+    }
+
+    #[test]
+    fn catalog_default_returns_none_for_unregistered_effects() {
+        // EffectTypeId::UNKNOWN is the placeholder for forward-version
+        // ids that didn't exist when this binary was built.
         assert!(catalog_graph_def_for(&EffectTypeId::UNKNOWN).is_none());
     }
 }

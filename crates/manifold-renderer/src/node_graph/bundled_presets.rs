@@ -261,4 +261,31 @@ mod tests {
         assert!(bundled_preset_def(&unknown).is_none());
         assert!(bundled_preset_json(&unknown).is_none());
     }
+
+    /// Splicing a bundled preset into a chain via
+    /// `splice_def_into_chain` is the path the runtime takes when
+    /// `EffectInstance.graph = Some(def)`. Verifies every shipping
+    /// preset survives that round-trip — the same data the drift test
+    /// covers at the standalone-graph level, exercised against the
+    /// chain-grafting code that the runtime actually calls.
+    #[test]
+    fn every_bundled_preset_splices_into_a_chain() {
+        use crate::node_graph::boundary_nodes::Source;
+        use crate::node_graph::chain_spec::splice_def_into_chain;
+        use crate::node_graph::graph::Graph;
+
+        let registry = PrimitiveRegistry::with_builtin();
+        for type_id in bundled_preset_type_ids() {
+            let def = bundled_preset_def(&type_id).expect("registered");
+            let mut chain = Graph::new();
+            let src = chain.add_node(Box::new(Source::new()));
+            let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry);
+            assert!(
+                result.is_some(),
+                "bundled preset {} failed to splice into a chain — preset and chain runtime have \
+                 drifted apart",
+                type_id.as_str(),
+            );
+        }
+    }
 }
