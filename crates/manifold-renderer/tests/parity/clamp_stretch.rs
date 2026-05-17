@@ -44,7 +44,7 @@ fn clamp_stretch_is_pixel_exact_across_fixtures_modes_widths() {
                             .set_param(prim_id, "source_width", ParamValue::Float(width))
                             .unwrap();
                         graph
-                            .set_param(prim_id, "mode", ParamValue::Enum(mode_u))
+                            .set_param(prim_id, "direction", ParamValue::Enum(mode_u))
                             .unwrap();
                     },
                 );
@@ -90,7 +90,7 @@ fn clamp_stretch_clamps_out_of_range_source_width() {
                     .set_param(prim_id, "source_width", ParamValue::Float(width))
                     .unwrap();
                 graph
-                    .set_param(prim_id, "mode", ParamValue::Enum(2))
+                    .set_param(prim_id, "direction", ParamValue::Enum(2))
                     .unwrap();
             },
         );

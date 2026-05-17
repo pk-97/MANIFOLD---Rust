@@ -164,13 +164,13 @@ fn auto_gain_is_pixel_exact_across_fixtures_and_setups() {
                         .set_param(prim_id, "target", ParamValue::Float(s.target))
                         .unwrap();
                     graph
-                        .set_param(prim_id, "hdr_ret", ParamValue::Float(s.hdr_ret))
+                        .set_param(prim_id, "hdr_retention", ParamValue::Float(s.hdr_ret))
                         .unwrap();
                     graph
                         .set_param(prim_id, "color", ParamValue::Float(s.color))
                         .unwrap();
                     graph
-                        .set_param(prim_id, "char", ParamValue::Enum(s.character))
+                        .set_param(prim_id, "character", ParamValue::Enum(s.character))
                         .unwrap();
                 });
 

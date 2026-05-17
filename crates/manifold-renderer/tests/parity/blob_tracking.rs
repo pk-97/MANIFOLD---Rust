@@ -107,13 +107,13 @@ fn blob_tracking_is_pixel_exact_across_fixtures_and_setups() {
                         .set_param(prim_id, "amount", ParamValue::Float(s.amount))
                         .unwrap();
                     graph
-                        .set_param(prim_id, "thresh", ParamValue::Float(s.thresh))
+                        .set_param(prim_id, "threshold", ParamValue::Float(s.thresh))
                         .unwrap();
                     graph
-                        .set_param(prim_id, "sens", ParamValue::Float(s.sens))
+                        .set_param(prim_id, "sensitivity", ParamValue::Float(s.sens))
                         .unwrap();
                     graph
-                        .set_param(prim_id, "smooth", ParamValue::Float(s.smooth))
+                        .set_param(prim_id, "smoothing", ParamValue::Float(s.smooth))
                         .unwrap();
                     graph
                         .set_param(prim_id, "connect", ParamValue::Float(s.connect))
