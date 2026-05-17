@@ -106,7 +106,7 @@ plan must preserve all of them.
   lifetimes and persistence stories.
 - **UI tier distinction stays.** The effect card distinguishes
   "registry-exposed params" (always visible per the spec) from
-  "user-exposed inner-graph params" (togglable via the graph editor's expose
+  "user-exposed inner-graph params" (toggleable via the graph editor's expose
   checkboxes). That affects right-click menus and the
   `ToggleEffectParamExposeCommand` logic. UI surface ≠ runtime storage.
 - **`ParamSlot { value, exposed }` stays uniform.** Both tiers use the same

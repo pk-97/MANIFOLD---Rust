@@ -922,7 +922,7 @@ impl WireframeDepthFX {
         let count = (state.analysis_width * state.analysis_height) as usize;
         // Convert f32 flow data → f16 for Rgba16Float upload
         let floats = &state.native_flow_buffer[..count * 4];
-        let mut f16_bytes: Vec<u8> = Vec::with_capacity(count * 8); // 4 halfs × 2 bytes
+        let mut f16_bytes: Vec<u8> = Vec::with_capacity(count * 8); // 4 halves × 2 bytes
         for &f in floats {
             f16_bytes.extend_from_slice(&f32_to_f16(f).to_le_bytes());
         }
