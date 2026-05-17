@@ -2591,32 +2591,15 @@ pub(super) fn dispatch_inspector(
             {
                 let effect_type = fx.effect_type().clone();
 
-                // Param range: prefer the static-tier registry; fall back to
-                // a user-tail binding's metadata (which carries its own
-                // min/max). Either resolution path yields a ParamId-keyed
-                // mapping that survives reorder / def updates.
-                let (min, max) = if let Some(slot) =
-                    fx.param_id_to_value_index(param_id.as_ref())
-                {
-                    let static_count =
-                        manifold_core::effect_definition_registry::try_get(&effect_type)
-                            .map(|def| def.param_defs.len())
-                            .unwrap_or(0);
-                    if slot < static_count {
-                        manifold_core::effect_definition_registry::try_get(&effect_type)
-                            .and_then(|def| def.param_defs.get(slot))
-                            .map(|pd| (pd.min, pd.max))
-                            .unwrap_or((0.0, 1.0))
-                    } else {
-                        fx.user_param_bindings
-                            .iter()
-                            .find(|ub| ub.id == *param_id)
-                            .map(|ub| (ub.min, ub.max))
-                            .unwrap_or((0.0, 1.0))
-                    }
-                } else {
-                    (0.0, 1.0)
-                };
+                // Param range. `resolve_param` walks both tiers
+                // (static registry + user-tail bindings) and returns
+                // the matching (min, max). Falls back to (0, 1) when
+                // the id doesn't resolve — same as the previous
+                // open-coded form.
+                let (min, max) = fx
+                    .resolve_param(param_id.as_ref())
+                    .map(|r| (r.min, r.max))
+                    .unwrap_or((0.0, 1.0));
 
                 let mapping_target = match tab {
                     InspectorTab::Master => MacroMappingTarget::MasterEffect {

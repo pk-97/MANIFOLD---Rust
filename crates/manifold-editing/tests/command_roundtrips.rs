@@ -1550,3 +1550,234 @@ fn generate_user_param_id_collision_probe() {
     let id2 = generate_user_param_id("uv_transform", "scale", &existing);
     assert_eq!(id2, "user.uv_transform.scale.1");
 }
+
+/// Regression for the post-Phase-5 follow-up: un-exposing a
+/// user-bound param must prune any drivers / Ableton mappings /
+/// layer envelopes that referenced that binding's `param_id`. The
+/// old behaviour left them sitting on the data model forever — never
+/// matched by `find_driver` / the modulation evaluators / the Ableton
+/// router, never applied, never editable. The fix captures them on
+/// the reverse state so re-exposing restores every modulation
+/// surface verbatim.
+#[test]
+fn unexpose_prunes_orphan_drivers_and_undo_restores_them() {
+    let mut project = make_test_project();
+    let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+    fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)];
+    fx.append_user_binding(UserParamBinding {
+        id: "user.uv_transform.translate.1".to_string(),
+        label: "Translate".to_string(),
+        node_handle: "uv_transform".to_string(),
+        inner_param: "translate".to_string(),
+        min: -1.0,
+        max: 1.0,
+        default_value: 0.0,
+        convert: ParamConvert::Float,
+    });
+    // Attach a driver keyed to the user binding's id. Plus a driver
+    // for the static `amount` param — that one must survive the
+    // un-expose untouched.
+    fx.drivers = Some(vec![
+        ParameterDriver {
+            param_id: std::borrow::Cow::Owned("user.uv_transform.translate.1".to_string()),
+            beat_division: BeatDivision::Quarter,
+            waveform: DriverWaveform::Sine,
+            enabled: true,
+            phase: 0.0,
+            base_value: 0.0,
+            trim_min: 0.0,
+            trim_max: 1.0,
+            reversed: false,
+            legacy_param_index: None,
+            is_paused_by_user: false,
+        },
+        ParameterDriver {
+            param_id: std::borrow::Cow::Borrowed("amount"),
+            beat_division: BeatDivision::Eighth,
+            waveform: DriverWaveform::Triangle,
+            enabled: true,
+            phase: 0.0,
+            base_value: 0.0,
+            trim_min: 0.0,
+            trim_max: 1.0,
+            reversed: false,
+            legacy_param_index: None,
+            is_paused_by_user: false,
+        },
+    ]);
+    project.settings.master_effects.push(fx);
+
+    let mut cmd = ToggleEffectParamExposeCommand::new(
+        EffectTarget::Master,
+        0,
+        "uv_transform".to_string(),
+        "translate".to_string(),
+        false, // unexpose
+        meta_default(),
+    );
+    cmd.execute(&mut project);
+
+    let fx = &project.settings.master_effects[0];
+    let drivers = fx.drivers.as_ref().expect("drivers still present");
+    assert_eq!(
+        drivers.len(),
+        1,
+        "the orphan driver targeting the unexposed binding must be pruned",
+    );
+    assert_eq!(
+        drivers[0].param_id, "amount",
+        "the static-param driver must survive untouched",
+    );
+
+    cmd.undo(&mut project);
+    let fx = &project.settings.master_effects[0];
+    let drivers = fx.drivers.as_ref().expect("drivers vec restored");
+    assert_eq!(drivers.len(), 2, "undo must restore the pruned driver");
+    assert!(
+        drivers
+            .iter()
+            .any(|d| d.param_id == "user.uv_transform.translate.1"),
+        "the previously pruned driver must come back with its original param_id",
+    );
+    // Re-execute: prune + restore is idempotent across redo.
+    cmd.execute(&mut project);
+    let drivers = &project.settings.master_effects[0]
+        .drivers
+        .as_ref()
+        .expect("drivers vec retained for static row");
+    assert_eq!(drivers.len(), 1);
+}
+
+#[test]
+fn unexpose_prunes_orphan_ableton_mappings_and_undo_restores_them() {
+    use manifold_core::ableton_mapping::{
+        AbletonDeviceIdentity, AbletonMacroAddress, AbletonMappingStatus, AbletonParamMapping,
+    };
+    let mut project = make_test_project();
+    let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+    fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)];
+    fx.append_user_binding(UserParamBinding {
+        id: "user.uv_transform.translate.1".to_string(),
+        label: "Translate".to_string(),
+        node_handle: "uv_transform".to_string(),
+        inner_param: "translate".to_string(),
+        min: -1.0,
+        max: 1.0,
+        default_value: 0.0,
+        convert: ParamConvert::Float,
+    });
+    let address = AbletonMacroAddress {
+        track_id: 0,
+        device_id: 0,
+        param_id: 0,
+        device_identity: AbletonDeviceIdentity {
+            device_class_name: "InstrumentGroupDevice".to_string(),
+        },
+        track_name: "Bass".into(),
+        device_name: "Rack".into(),
+        macro_name: "Macro 1".into(),
+    };
+    fx.ableton_mappings = Some(vec![AbletonParamMapping {
+        param_id: std::borrow::Cow::Owned("user.uv_transform.translate.1".to_string()),
+        address: address.clone(),
+        range_min: 0.0,
+        range_max: 1.0,
+        inverted: false,
+        legacy_param_index: None,
+        last_value: 0.0,
+        status: AbletonMappingStatus::Active,
+    }]);
+    project.settings.master_effects.push(fx);
+
+    let mut cmd = ToggleEffectParamExposeCommand::new(
+        EffectTarget::Master,
+        0,
+        "uv_transform".to_string(),
+        "translate".to_string(),
+        false,
+        meta_default(),
+    );
+    cmd.execute(&mut project);
+    let fx = &project.settings.master_effects[0];
+    assert!(
+        fx.ableton_mappings.is_none(),
+        "the only mapping targeted the unexposed binding — vec should collapse to None",
+    );
+
+    cmd.undo(&mut project);
+    let mappings = project.settings.master_effects[0]
+        .ableton_mappings
+        .as_ref()
+        .expect("ableton mappings restored");
+    assert_eq!(mappings.len(), 1);
+    assert_eq!(
+        mappings[0].param_id,
+        "user.uv_transform.translate.1",
+        "undo must reinstate the pruned mapping with its original param_id",
+    );
+}
+
+#[test]
+fn unexpose_prunes_orphan_layer_envelopes_and_undo_restores_them() {
+    let mut project = make_test_project();
+    let layer_id = project.timeline.layers[0].layer_id.clone();
+    let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+    fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(1.0)];
+    fx.append_user_binding(UserParamBinding {
+        id: "user.uv_transform.translate.1".to_string(),
+        label: "Translate".to_string(),
+        node_handle: "uv_transform".to_string(),
+        inner_param: "translate".to_string(),
+        min: -1.0,
+        max: 1.0,
+        default_value: 0.0,
+        convert: ParamConvert::Float,
+    });
+    // Layer envelopes are keyed by (target_effect_type, param_id).
+    // Plant one targeting our binding and one targeting an unrelated
+    // param on a different effect type so the second survives.
+    let envs = project.timeline.layers[0].envelopes_mut();
+    envs.push(ParamEnvelope::new_for_effect(
+        EffectTypeId::BLOOM,
+        std::borrow::Cow::Owned("user.uv_transform.translate.1".to_string()),
+    ));
+    envs.push(ParamEnvelope::new_for_effect(
+        EffectTypeId::MIRROR,
+        std::borrow::Cow::Borrowed("amount"),
+    ));
+    project.timeline.layers[0].effects = Some(vec![fx]);
+
+    let mut cmd = ToggleEffectParamExposeCommand::new(
+        EffectTarget::Layer {
+            layer_id: layer_id.clone(),
+        },
+        0,
+        "uv_transform".to_string(),
+        "translate".to_string(),
+        false,
+        meta_default(),
+    );
+    cmd.execute(&mut project);
+    let envs = project.timeline.layers[0]
+        .envelopes
+        .as_ref()
+        .expect("layer envelopes vec retained");
+    assert_eq!(
+        envs.len(),
+        1,
+        "the orphan envelope must be pruned; the unrelated one survives",
+    );
+    assert_eq!(envs[0].param_id, "amount");
+
+    cmd.undo(&mut project);
+    let envs = project.timeline.layers[0]
+        .envelopes
+        .as_ref()
+        .expect("layer envelopes vec restored");
+    assert_eq!(envs.len(), 2);
+    assert!(
+        envs.iter().any(|e| e.target_effect_type == EffectTypeId::BLOOM
+            && e.param_id == "user.uv_transform.translate.1"),
+        "undo must reinstate the pruned envelope",
+    );
+}

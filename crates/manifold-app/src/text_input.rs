@@ -11,6 +11,12 @@
 /// What kind of field is being edited.
 // FIXME(dead-code-audit): EffectParam/GroupRename/GenParam are matched on in app.rs
 // but no path constructs them — begin() callers don't reach these branches.
+//
+// Phase 2 wire-format rule (see `docs/BINDINGS_UNIFICATION_PLAN.md`): when
+// these variants are revived, the per-param identifier must be `ParamId`,
+// not positional `usize`. Today these arms still carry `usize` because
+// they're dead; the handler in `app.rs` was left untouched. Converting
+// in place will require dropping `Copy` from the enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub enum TextInputField {
@@ -19,11 +25,14 @@ pub enum TextInputField {
     LayerName(usize),
     ClipBpm,
     MacroLabel(usize),
-    /// Effect parameter: (effect_index, param_index).
+    /// Effect parameter: (effect_index, param_index). DEAD. On revival,
+    /// switch to `(effect_index, ParamId)` per the Phase 2 contract or
+    /// the user-tier slots will silently no-op on commit.
     EffectParam(usize, usize),
     /// Effect group rename: group index.
     GroupRename(usize),
-    /// Generator parameter: param_index.
+    /// Generator parameter: param_index. DEAD. On revival, switch to
+    /// `ParamId` per the Phase 2 contract.
     GenParam(usize),
     /// Generator string parameter: (string_param_index).
     GenStringParam(usize),

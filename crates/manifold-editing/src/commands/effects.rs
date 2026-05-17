@@ -1,7 +1,8 @@
 use crate::command::Command;
 use crate::commands::effect_target::{EffectTarget, with_effects_mut};
 use manifold_core::effects::{
-    EffectInstance, ParamId, ParamSlot, UserParamBinding, ParamConvert,
+    EffectInstance, ParamConvert, ParamEnvelope, ParamId, ParamSlot, ParameterDriver,
+    UserParamBinding,
 };
 use manifold_core::project::Project;
 
@@ -402,12 +403,30 @@ enum ReverseState {
     /// binding, the same id is regenerated cleanly).
     Exposed { user_param_id: String },
     /// execute() unexposed: removed this binding from this position
-    /// with these values. undo() reinserts at the same position.
+    /// with these values, plus any drivers / envelopes / Ableton
+    /// mappings that referenced the binding's `param_id`. Those
+    /// references would otherwise become orphans — still in their
+    /// vec, never matched by `find_driver` / envelope evaluator /
+    /// Ableton router, never applied. Pruning at un-expose makes the
+    /// data model honest; capturing the pruned entries here lets
+    /// undo restore them verbatim so re-exposing reinstates every
+    /// modulation surface the user had configured.
     Unexposed {
         binding: UserParamBinding,
         slot_value: ParamSlot,
         slot_base_value: Option<f32>,
         position: usize,
+        /// Drivers pruned from `EffectInstance.drivers` because their
+        /// `param_id` matched the removed binding's id.
+        removed_drivers: Vec<ParameterDriver>,
+        /// Ableton mappings pruned from
+        /// `EffectInstance.ableton_mappings` for the same reason.
+        removed_ableton_mappings: Vec<manifold_core::ableton_mapping::AbletonParamMapping>,
+        /// Envelopes pruned from the host (Layer for layer-targeted
+        /// effects; Master has no envelope storage). `target_effect_type`
+        /// must also match the effect's type id, since envelopes live
+        /// on the layer and are addressed by `(effect_type, param_id)`.
+        removed_envelopes: Vec<ParamEnvelope>,
     },
 }
 
@@ -489,6 +508,45 @@ impl Command for ToggleEffectParamExposeCommand {
                         .as_ref()
                         .and_then(|b| b.get(i).copied())
                 });
+                // Prune effect-local modulation references that targeted
+                // this binding. After the binding goes away its id stops
+                // resolving anywhere, so the driver / Ableton row would
+                // just be an orphan — visible in the project file, never
+                // applied, never editable. Capture pruned entries on
+                // the reverse state so undo restores them verbatim.
+                let removed_drivers = if let Some(ds) = effect.drivers.as_mut() {
+                    let mut taken = Vec::new();
+                    ds.retain(|d| {
+                        let keep = d.param_id != user_param_id;
+                        if !keep {
+                            taken.push(d.clone());
+                        }
+                        keep
+                    });
+                    if ds.is_empty() {
+                        effect.drivers = None;
+                    }
+                    taken
+                } else {
+                    Vec::new()
+                };
+                let removed_ableton_mappings =
+                    if let Some(ms) = effect.ableton_mappings.as_mut() {
+                        let mut taken = Vec::new();
+                        ms.retain(|m| {
+                            let keep = m.param_id != user_param_id;
+                            if !keep {
+                                taken.push(m.clone());
+                            }
+                            keep
+                        });
+                        if ms.is_empty() {
+                            effect.ableton_mappings = None;
+                        }
+                        taken
+                    } else {
+                        Vec::new()
+                    };
                 let binding = effect
                     .remove_user_binding_by_id(&user_param_id)
                     .expect("position checked above");
@@ -497,15 +555,67 @@ impl Command for ToggleEffectParamExposeCommand {
                     slot_value,
                     slot_base_value,
                     position,
+                    removed_drivers,
+                    removed_ableton_mappings,
+                    // Envelope storage lives on the layer, not the
+                    // effect — populated below outside the
+                    // `with_effects_mut` closure.
+                    removed_envelopes: Vec::new(),
                 }
             }
         });
         self.reverse = reverse_out.unwrap_or_default();
+
+        // Envelope cleanup happens outside `with_effects_mut` because
+        // envelopes are stored on the host (Layer for layer-targeted
+        // effects; Master has no envelope storage). We need the layer
+        // borrow, not the effect borrow. Only runs in the
+        // `Unexposed` branch — Exposed and None leave envelopes alone.
+        if let ReverseState::Unexposed {
+            ref binding,
+            ref mut removed_envelopes,
+            ..
+        } = self.reverse
+        {
+            let removed_id = binding.id.clone();
+            // Capture the effect type here so the envelope match below
+            // can key on `(target_effect_type, param_id)` — envelopes
+            // address an effect by its type id within the layer's
+            // chain, not by index.
+            let effect_type = with_effects_mut(project, &self.target, |effects, _| {
+                effects.get(eidx).map(|fx| fx.effect_type().clone())
+            })
+            .flatten();
+            if let (Some(effect_type), EffectTarget::Layer { layer_id }) = (effect_type, &self.target)
+                && let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id)
+            {
+                let envs = layer.envelopes_mut();
+                let mut taken = Vec::new();
+                envs.retain(|e| {
+                    let keep = !(e.target_effect_type == effect_type && e.param_id == removed_id);
+                    if !keep {
+                        taken.push(e.clone());
+                    }
+                    keep
+                });
+                *removed_envelopes = taken;
+            }
+        }
     }
 
     fn undo(&mut self, project: &mut Project) {
         let eidx = self.effect_index;
         let reverse = std::mem::take(&mut self.reverse);
+        // Pull the envelope tail off the reverse state up-front;
+        // restoring them happens against the layer, not the effect,
+        // and we want the value before `reverse` is moved into the
+        // match below.
+        let envelopes_to_restore: Vec<ParamEnvelope> = match &reverse {
+            ReverseState::Unexposed {
+                removed_envelopes, ..
+            } => removed_envelopes.clone(),
+            _ => Vec::new(),
+        };
         with_effects_mut(project, &self.target, |effects, _groups| {
             let Some(effect) = effects.get_mut(eidx) else {
                 return;
@@ -520,6 +630,9 @@ impl Command for ToggleEffectParamExposeCommand {
                     slot_value,
                     slot_base_value,
                     position,
+                    removed_drivers,
+                    removed_ableton_mappings,
+                    removed_envelopes: _,
                 } => {
                     // Re-insert at original position so the user-tail
                     // slot positions stay stable for any other addressing
@@ -547,9 +660,31 @@ impl Command for ToggleEffectParamExposeCommand {
                             base.insert(value_idx, base_v);
                         }
                     }
+                    // Restore the drivers / Ableton mappings that
+                    // execute() pruned. Their `param_id` still points
+                    // at the just-reinserted binding's id, so they'll
+                    // match again on the next modulation pass.
+                    if !removed_drivers.is_empty() {
+                        effect.drivers.get_or_insert_with(Vec::new).extend(removed_drivers);
+                    }
+                    if !removed_ableton_mappings.is_empty() {
+                        effect
+                            .ableton_mappings
+                            .get_or_insert_with(Vec::new)
+                            .extend(removed_ableton_mappings);
+                    }
                 }
             }
         });
+        // Envelope restore — same Layer-vs-Master split as the prune
+        // path. Master targets had nothing to capture, so this branch
+        // no-ops uniformly there.
+        if !envelopes_to_restore.is_empty()
+            && let EffectTarget::Layer { layer_id } = &self.target
+            && let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id)
+        {
+            layer.envelopes_mut().extend(envelopes_to_restore);
+        }
     }
 
     fn description(&self) -> &str {
