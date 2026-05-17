@@ -24,13 +24,13 @@ inventory::submit! {
         params: &[
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
             ParamSpec::continuous("gain", "Gain", 0.0, 2.0, 1.0, "F2", "Gain"),
-            ParamSpec::continuous("sat", "Sat", 0.0, 2.0, 1.0, "F2", "Saturation"),
+            ParamSpec::continuous("sat", "Saturation", 0.0, 2.0, 1.0, "F2", "Saturation"),
             ParamSpec::continuous("hue", "Hue", -180.0, 180.0, 0.0, "F2", "Hue"),
             ParamSpec::continuous("contrast", "Contrast", 0.0, 2.0, 1.0, "F2", "Contrast"),
             ParamSpec::continuous("colorize", "Colorize", 0.0, 1.0, 0.0, "F2", "Colorize"),
-            ParamSpec::continuous("tint_hue", "TintHue", 0.0, 360.0, 0.0, "F2", "TintHue"),
-            ParamSpec::continuous("tint_sat", "TintSat", 0.0, 2.0, 1.0, "F2", "TintSaturation"),
-            ParamSpec::continuous("focus", "Focus", 0.0, 1.0, 0.75, "F2", "ColorizeFocus"),
+            ParamSpec::continuous("tint_hue", "Tint Hue", 0.0, 360.0, 0.0, "F2", "TintHue"),
+            ParamSpec::continuous("tint_sat", "Tint Saturation", 0.0, 2.0, 1.0, "F2", "TintSaturation"),
+            ParamSpec::continuous("focus", "Tint Focus", 0.0, 1.0, 0.75, "F2", "ColorizeFocus"),
         ],
     }
 }
@@ -62,7 +62,7 @@ crate::atomic_chain_spec! {
         },
         ParamBinding {
             id: Cow::Borrowed("sat"),
-            label: "Sat",
+            label: "Saturation",
             default_value: 1.0,
             target: ParamTarget::HandleNode { handle: "color_grade", param: "saturation" },
             convert: ParamConvert::Float,
@@ -90,21 +90,21 @@ crate::atomic_chain_spec! {
         },
         ParamBinding {
             id: Cow::Borrowed("tint_hue"),
-            label: "TintHue",
+            label: "Tint Hue",
             default_value: 0.0,
             target: ParamTarget::HandleNode { handle: "color_grade", param: "colorize_hue" },
             convert: ParamConvert::Float,
         },
         ParamBinding {
             id: Cow::Borrowed("tint_sat"),
-            label: "TintSat",
+            label: "Tint Saturation",
             default_value: 1.0,
             target: ParamTarget::HandleNode { handle: "color_grade", param: "colorize_saturation" },
             convert: ParamConvert::Float,
         },
         ParamBinding {
             id: Cow::Borrowed("focus"),
-            label: "Focus",
+            label: "Tint Focus",
             default_value: 0.75,
             target: ParamTarget::HandleNode { handle: "color_grade", param: "colorize_focus" },
             convert: ParamConvert::Float,

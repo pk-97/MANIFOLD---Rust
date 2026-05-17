@@ -35,9 +35,9 @@ inventory::submit! {
         legacy_discriminant: Some(22),
         params: &[
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
-            ParamSpec::continuous("thresh", "Thresh", 0.05, 0.9, 0.65, "F2", "Threshold"),
-            ParamSpec::continuous("sens", "Sens", 0.2, 1.0, 0.85, "F2", "Sensitivity"),
-            ParamSpec::continuous("smooth", "Smooth", 0.0, 1.0, 0.7, "F2", "Smoothing"),
+            ParamSpec::continuous("thresh", "Threshold", 0.05, 0.9, 0.65, "F2", "Threshold"),
+            ParamSpec::continuous("sens", "Sensitivity", 0.2, 1.0, 0.85, "F2", "Sensitivity"),
+            ParamSpec::continuous("smooth", "Smoothing", 0.0, 1.0, 0.7, "F2", "Smoothing"),
             ParamSpec::continuous("connect", "Connect", 0.0, 1.0, 0.35, "F2", "Connect"),
         ],
     }
@@ -63,21 +63,21 @@ crate::atomic_chain_spec! {
         },
         ParamBinding {
             id: Cow::Borrowed("thresh"),
-            label: "Thresh",
+            label: "Threshold",
             default_value: 0.65,
             target: ParamTarget::HandleNode { handle: "blob_tracking", param: "thresh" },
             convert: ParamConvert::Float,
         },
         ParamBinding {
             id: Cow::Borrowed("sens"),
-            label: "Sens",
+            label: "Sensitivity",
             default_value: 0.85,
             target: ParamTarget::HandleNode { handle: "blob_tracking", param: "sens" },
             convert: ParamConvert::Float,
         },
         ParamBinding {
             id: Cow::Borrowed("smooth"),
-            label: "Smooth",
+            label: "Smoothing",
             default_value: 0.7,
             target: ParamTarget::HandleNode { handle: "blob_tracking", param: "smooth" },
             convert: ParamConvert::Float,

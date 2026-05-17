@@ -57,7 +57,7 @@ crate::primitive! {
         },
         ParamDef {
             name: "angle",
-            label: "Angle (deg)",
+            label: "Angle",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
             range: Some((0.0, 360.0)),

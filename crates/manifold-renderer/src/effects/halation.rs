@@ -32,10 +32,10 @@ inventory::submit! {
         legacy_discriminant: Some(34),
         params: &[
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
-            ParamSpec::continuous("thresh", "Thresh", 0.0, 1.0, 0.5, "F2", "Threshold"),
+            ParamSpec::continuous("thresh", "Threshold", 0.0, 1.0, 0.5, "F2", "Threshold"),
             ParamSpec::continuous("spread", "Spread", 0.0, 1.0, 0.5, "F2", "Spread"),
             ParamSpec::continuous("hue", "Hue", 0.0, 360.0, 20.0, "F2", "Hue"),
-            ParamSpec::continuous("sat", "Sat", 0.0, 1.0, 0.6, "F2", "Saturation"),
+            ParamSpec::continuous("sat", "Saturation", 0.0, 1.0, 0.6, "F2", "Saturation"),
         ],
     }
 }
@@ -60,7 +60,7 @@ crate::atomic_chain_spec! {
         },
         ParamBinding {
             id: Cow::Borrowed("thresh"),
-            label: "Thresh",
+            label: "Threshold",
             default_value: 0.5,
             target: ParamTarget::HandleNode { handle: "halation", param: "threshold" },
             convert: ParamConvert::Float,
@@ -81,7 +81,7 @@ crate::atomic_chain_spec! {
         },
         ParamBinding {
             id: Cow::Borrowed("sat"),
-            label: "Sat",
+            label: "Saturation",
             default_value: 0.6,
             target: ParamTarget::HandleNode { handle: "halation", param: "saturation" },
             convert: ParamConvert::Float,

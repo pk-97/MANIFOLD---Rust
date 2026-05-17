@@ -28,7 +28,7 @@ crate::primitive! {
     params: [
         ParamDef {
             name: "wet_dry",
-            label: "Wet / Dry",
+            label: "Wet/Dry",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
             range: Some((0.0, 1.0)),

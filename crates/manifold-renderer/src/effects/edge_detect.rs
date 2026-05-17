@@ -20,7 +20,7 @@ inventory::submit! {
         legacy_discriminant: Some(25),
         params: &[
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
-            ParamSpec::continuous("thresh", "Thresh", 0.0, 1.0, 0.1, "F2", "Threshold"),
+            ParamSpec::continuous("thresh", "Threshold", 0.0, 1.0, 0.1, "F2", "Threshold"),
             ParamSpec::whole_labels("mode", "Mode", 0.0, 2.0, 0.0, &["Sobel", "Laplacian", "Frei-Chen"], "Mode"),
         ],
     }
@@ -46,7 +46,7 @@ crate::atomic_chain_spec! {
         },
         ParamBinding {
             id: Cow::Borrowed("thresh"),
-            label: "Thresh",
+            label: "Threshold",
             default_value: 0.1,
             target: ParamTarget::HandleNode { handle: "edge_detect", param: "threshold" },
             convert: ParamConvert::Float,

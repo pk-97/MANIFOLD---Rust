@@ -39,9 +39,9 @@ inventory::submit! {
             ParamSpec::continuous("ratio", "Ratio", 0.0, 1.0, 0.5, "F2", "Ratio"),
             ParamSpec::continuous("punch", "Punch", 0.0, 1.0, 0.5, "F2", "Punch"),
             ParamSpec::continuous("target", "Target", 0.0, 1.0, 0.5, "F2", "Target"),
-            ParamSpec::continuous("hdr_ret", "HDR Ret", 0.0, 1.0, 0.5, "F2", "HdrRetention"),
+            ParamSpec::continuous("hdr_ret", "HDR Retention", 0.0, 1.0, 0.5, "F2", "HdrRetention"),
             ParamSpec::continuous("color", "Color", -1.0, 1.0, 0.0, "F2", "ColorPush"),
-            ParamSpec::whole_labels("char", "Char", 0.0, 4.0, 0.0, &["Clean", "Warm", "Film", "Vivid", "Grit"], "Character"),
+            ParamSpec::whole_labels("char", "Character", 0.0, 4.0, 0.0, &["Clean", "Warm", "Film", "Vivid", "Grit"], "Character"),
         ],
     }
 }
@@ -87,7 +87,7 @@ crate::atomic_chain_spec! {
         },
         ParamBinding {
             id: Cow::Borrowed("hdr_ret"),
-            label: "HDR Ret",
+            label: "HDR Retention",
             default_value: 0.5,
             target: ParamTarget::HandleNode { handle: "auto_gain", param: "hdr_ret" },
             convert: ParamConvert::Float,
@@ -101,7 +101,7 @@ crate::atomic_chain_spec! {
         },
         ParamBinding {
             id: Cow::Borrowed("char"),
-            label: "Char",
+            label: "Character",
             default_value: 0.0,
             target: ParamTarget::HandleNode { handle: "auto_gain", param: "char" },
             convert: ParamConvert::EnumRound,

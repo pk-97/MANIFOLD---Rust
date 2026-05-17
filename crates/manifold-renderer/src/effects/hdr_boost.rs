@@ -25,7 +25,7 @@ inventory::submit! {
         params: &[
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.0, "F2", ""),
             ParamSpec::continuous("gain", "Gain", 0.0, 5.0, 1.5, "F2", "Gain"),
-            ParamSpec::continuous("thresh", "Thresh", 0.0, 1.0, 0.15, "F2", "Threshold"),
+            ParamSpec::continuous("thresh", "Threshold", 0.0, 1.0, 0.15, "F2", "Threshold"),
             ParamSpec::continuous("knee", "Knee", 0.0, 1.0, 0.3, "F2", "Knee"),
         ],
     }
@@ -58,7 +58,7 @@ crate::atomic_chain_spec! {
         },
         ParamBinding {
             id: Cow::Borrowed("thresh"),
-            label: "Thresh",
+            label: "Threshold",
             default_value: 0.15,
             target: ParamTarget::HandleNode { handle: "highlight_boost", param: "threshold" },
             convert: ParamConvert::Float,

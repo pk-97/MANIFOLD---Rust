@@ -37,7 +37,7 @@ inventory::submit! {
             ParamSpec::continuous("x", "X", -1.0, 1.0, 0.0, "F2", ""),
             ParamSpec::continuous("y", "Y", -1.0, 1.0, 0.0, "F2", ""),
             ParamSpec::continuous("zoom", "Zoom", 0.1, 5.0, 1.0, "F2", ""),
-            ParamSpec::continuous("rot", "Rot", -180.0, 180.0, 0.0, "F2", ""),
+            ParamSpec::continuous("rot", "Rotation", -180.0, 180.0, 0.0, "F2", ""),
         ],
     }
 }
@@ -80,7 +80,7 @@ crate::atomic_chain_spec! {
         // deg→rad + sign-flip lives inside the primitive.
         ParamBinding {
             id: Cow::Borrowed("rot"),
-            label: "Rot",
+            label: "Rotation",
             default_value: 0.0,
             target: ParamTarget::HandleNode { handle: "transform", param: "rotation" },
             convert: ParamConvert::Float,

@@ -744,6 +744,44 @@ Add a `category: &'static str` field to `GeneratorMetadata` mirroring `EffectMet
 - **Grouped picker UI.** Today both the "Add Effect" and "Add Generator" pickers are flat alphabetical. Once categories land (§9.1.4, §9.3.6), the picker should group by category with collapsible sections. UX call: scope this into the rename pass, or defer?
 - **Camera primitive.** `Cam Dist`/`Cam Orbit`/`Cam Tilt`/`Cam FOV`/`Look Y` repeats across 4 generators. Tempting to factor into a shared `Camera3D` primitive (which §6.7 G1 already plans). Don't do it now — wait for the generator decomposition pass. Just align the names today so the future primitive lands without further migration.
 
+### 9.5 Rotation / angular slider loop convention
+
+**Rule:** any parameter whose semantic is "an absolute rotation angle" must have its range chosen so the slider's min position is visually identical to its max position. Driving the slider from one extreme to the other (e.g. with an LFO) then produces a clean continuous rotation rather than a "rotate then snap back" discontinuity.
+
+Two acceptable ranges satisfy this:
+
+- **`[-180, 180]`** with units in degrees, default `0`. `-180°` and `+180°` are the same orientation (pointing opposite the +X axis).
+- **`[0, 360]`** with units in degrees. `0°` and `360°` are the same orientation.
+- **`[0, 1]`** with the param scaled to one full turn internally. `0` and `1` are both "no rotation" / "full rotation back to start".
+
+**Audit result — all current rotation params already satisfy the rule:**
+
+| Param | Range | OK |
+|---|---|---|
+| `Transform.rot` | `[-180, 180]` | ✅ |
+| `ColorGrade.hue` | `[-180, 180]` | ✅ |
+| `Halation.hue` | `[0, 360]` | ✅ |
+| `ChromaticAberration.angle` | `[0, 360]` | ✅ |
+| `DepthOfField.angle` | `[0, 360]` | ✅ |
+| `Black Hole.rotate` | `[-180, 180]` | ✅ |
+| `Galactic Rock.cam_orbit` | `[-180, 180]` | ✅ |
+| `Metallic Glass.cam_orbit` | `[-180, 180]` | ✅ |
+| `Digital Plants.cam_orbit` | `[-180, 180]` | ✅ |
+| `Oily Fluid.hue` | `[0, 1]` | ✅ (normalized; ×360° internally) |
+| `ColorGrade.colorize_hue` | `[0, 360]` | ✅ |
+
+**Excluded — not absolute angles, do not apply the rule:**
+
+- `Stylized Feedback.rotate` (`[-10, 10]`) — rotation **rate** in units per frame, not an angle. `-10` and `+10` are opposite spin directions, visually different.
+- Any `*_tilt` (e.g., `cam_tilt [-90, 90]`) — partial elevation angle, not a full rotation.
+- Metallic Glass `mirror [0, 90]` — half-rotation symmetry parameter, not a full rotation.
+
+**Where this lives in code:** the rule applies at the `ParamSpec` declaration site. No runtime enforcement — convention only, validated by this audit. New rotation params added in future should follow the same rule.
+
+---
+
+**End of §9.** Next action: build the rename tool, apply the change tables in §9.1.8 / §9.2.7 / §9.3.7.
+
 ### 9.4 Open questions
 
 - **Param `id` casing convention.** Most current ids are `snake_case` (`tint_hue`, `block_size`). Some are single words (`amount`, `gain`). Confirm `snake_case` everywhere as the rule.

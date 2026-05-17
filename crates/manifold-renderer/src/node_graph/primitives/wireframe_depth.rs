@@ -95,7 +95,7 @@ const WIREFRAME_DEPTH_PARAMS: [ParamDef; 12] = [
     },
     ParamDef {
         name: "smooth",
-        label: "Smooth",
+        label: "Smoothing",
         ty: ParamType::Float,
         default: ParamValue::Float(0.90),
         range: Some((0.0, 0.98)),

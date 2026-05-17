@@ -36,7 +36,7 @@ crate::primitive! {
     params: [
         ParamDef {
             name: "kernel_size",
-            label: "Kernel",
+            label: "Kernel Size",
             ty: ParamType::Enum,
             default: ParamValue::Enum(1),
             range: Some((0.0, 2.0)),
