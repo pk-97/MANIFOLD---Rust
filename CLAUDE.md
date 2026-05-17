@@ -91,7 +91,7 @@ No per-frame allocations on hot paths (engine tick, sync, rendering). Use pre-al
 
 ## Tooling
 
-- Search with `rg` not `grep`, `fd` not `find`, `ast-grep` for code-shape queries (signatures, impl blocks, macro invocations). LSP for symbol-level lookups when `ENABLE_LSP_TOOL=1`.
+- Search with `rg` not `grep`, `fd` not `find`, `ast-grep` for code-shape queries (signatures, impl blocks, macro invocations). For symbol-level questions on Rust code — "where is this defined", "what calls this", "what implements this trait" — prefer the LSP tool (`goToDefinition`, `findReferences`, `incomingCalls`, `goToImplementation`) over `rg`; it catches trait dispatch and qualified paths that text search misses.
 - Runtime bugs (callbacks, event ordering, timing): add `println!`/`eprintln!`, reproduce, read logs. Static analysis is for compile errors only.
 - Pre-commit: `cargo clippy --workspace -- -D warnings` && `cargo test --workspace`.
 
