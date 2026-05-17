@@ -2,28 +2,56 @@
 //! UI sliders / OSC paths / Ableton macros and the inner graph nodes
 //! that actually consume the values.
 //!
-//! See `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 for the full design.
+//! See `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 and
+//! `docs/BINDINGS_UNIFICATION_PLAN.md` for the full design.
+//!
+//! ## Two layers, one runtime
+//!
+//! Source declarations are still tiered — that's a load-bearing
+//! property of the editor (registry-exposed vs user-exposed sliders),
+//! the file format (`ChainSpec.bindings` vs
+//! `EffectInstance.user_param_bindings`), and external addressing
+//! semantics (`ParamId` namespace shared across both). What used to be
+//! tiered at *runtime* is now collapsed:
+//!
+//! - **Source side.** [`ParamBinding`] declared in `inventory::submit!`
+//!   blocks for compile-time spec bindings;
+//!   `manifold_core::effects::UserParamBinding` lives on
+//!   `EffectInstance` for per-instance user bindings.
+//! - **Runtime side.** One [`ResolvedBinding`] type — both flavours
+//!   flow through [`ResolvedBinding::from_static`] /
+//!   [`ResolvedBinding::from_user`] into the same resolved shape and
+//!   the same [`apply_bindings`] loop. Effect slots store a single
+//!   `Vec<ResolvedBinding>` of length `n_static + n_user`. Cache
+//!   entries, default-seed walks, and audit walks all see one list.
+//!
+//! The `[]` second-slice bug class — passing an empty slice for a tier
+//! that has live data — is unrepresentable after this collapse because
+//! there is no second slice.
 //!
 //! ## Three layers of identity
 //!
-//! 1. [`ParamId`] — stable string forever once shipped. External mappings
-//!    (OSC, Ableton, MIDI, modulation drivers) key on this. Renaming the
-//!    label or reorganizing the underlying graph never invalidates a
-//!    `ParamId`.
-//! 2. [`ParamBinding::label`] — display string on the slider. Free to edit.
-//!    Range, type flags, enum labels, and OSC suffix live on the
-//!    effect's `EffectMetadata.params` entry of the same id — the
+//! 1. [`ParamId`] — stable string forever once shipped. External
+//!    mappings (OSC, Ableton, MIDI, modulation drivers) key on this.
+//!    Renaming the label or reorganising the underlying graph never
+//!    invalidates a `ParamId`. The id namespace is shared between
+//!    static and user bindings; lookup helpers walk both.
+//! 2. [`ResolvedBinding::label`] — display string on the slider. Free
+//!    to edit. Range, type flags, enum labels, and OSC suffix live on
+//!    the effect's `EffectMetadata.params` entry of the same id — the
 //!    binding deliberately doesn't duplicate them.
-//! 3. [`ParamBinding::target`] — current routing path to a graph node
+//! 3. [`ResolvedBinding::target`] — runtime routing to a graph node
 //!    parameter. May change as the effect's internals are decomposed
-//!    or refactored.
+//!    or refactored. `HandleNode` is resolved away at chain-build
+//!    time; what's left is `Node` / `Composite` / `Custom`.
 //!
 //! ## Why `Cow<'static, str>`
 //!
-//! Static strings (V1: developer-defined effects compiled in) and owned
-//! strings (V2: user-exposed parameters generated at runtime) flow
-//! through the same code paths. `Cow::Borrowed` for compile-time IDs,
-//! `Cow::Owned` for user-generated. Same trick `EffectTypeId` uses.
+//! Static strings (V1: developer-defined effects compiled in) and
+//! owned strings (V2: user-exposed parameters generated at runtime)
+//! flow through the same code paths. `Cow::Borrowed` for compile-time
+//! IDs, `Cow::Owned` for user-generated. Same trick `EffectTypeId`
+//! uses.
 
 use std::borrow::Cow;
 
@@ -40,21 +68,15 @@ use crate::node_graph::validation::GraphError;
 // same type. Re-exported here for renderer-internal call sites.
 pub use manifold_core::effects::ParamId;
 
-/// Maps a single host-visible parameter to a graph-side route.
+// ─── Source declaration (compile-time spec bindings) ─────────────────
+
+/// Compile-time spec binding declared in an effect's `inventory::submit!`
+/// `ChainSpec.bindings` array.
 ///
-/// Lives at the boundary between the host's `Vec<f32>` parameter
-/// storage and the graph's typed `ParamValue` parameter map. Each
-/// binding consumes one f32 from the host's `param_values` and routes
-/// the converted value to its `target`.
-///
-/// The binding deliberately carries only the *outer-specific* fields
-/// (id, display label, default value, routing, conversion). Range,
-/// type flags, enum labels, format string, and OSC suffix come from
-/// the corresponding `EffectMetadata.params[id]` entry — the single
-/// outer source of truth — which the audit verifies against the
-/// inner-node `ParamDef`. The binding used to embed a full
-/// `ParamSpec` here; that was redundant authoring policed by a parity
-/// test. After the V2 unification the redundancy is gone.
+/// Source-side type only — the runtime never iterates `ParamBinding`
+/// directly. At chain-build time each entry flows through
+/// [`ResolvedBinding::from_static`] into a [`ResolvedBinding`] in
+/// `EffectSlot.bindings[0..n_static]`.
 #[derive(Debug, Clone)]
 pub struct ParamBinding {
     /// Stable identity. Forever rule: never rename, never reuse.
@@ -63,9 +85,10 @@ pub struct ParamBinding {
     /// editor's "Effect Parameters" read-only list. Free to edit.
     pub label: &'static str,
     /// Initial value the host slot lands on when the effect is
-    /// instantiated. Pre-seeds the [`LastAppliedCache`] so binding
-    /// applies skip on unchanged outer values and inner-node edits
-    /// survive across chain rebuilds.
+    /// instantiated. Planted onto the inner-node target at chain build
+    /// time via [`apply_binding_defaults`] so the per-frame
+    /// skip-on-unchanged check in [`LastAppliedCache`] holds against
+    /// an inner that already matches.
     pub default_value: f32,
     /// Where this parameter's value flows in the graph.
     pub target: ParamTarget,
@@ -74,7 +97,11 @@ pub struct ParamBinding {
     pub convert: ParamConvert,
 }
 
-/// Routing destination for a [`ParamBinding`].
+/// Routing destination declared on a spec [`ParamBinding`].
+///
+/// Source-side only. The runtime variant is [`ResolvedTarget`], which
+/// strips `HandleNode` (always resolved at build time) and keeps
+/// `Node | Composite | Custom`.
 #[derive(Debug, Clone)]
 pub enum ParamTarget {
     /// Routed through a [`CompositeHandle`]'s exposed-param map.
@@ -84,18 +111,16 @@ pub enum ParamTarget {
     Composite { outer_name: Cow<'static, str> },
     /// Spec-time inner-node reference by handle name. Lives in
     /// `&'static [ParamBinding]` arrays declared on a [`ChainSpec`]
-    /// before any graph exists. Resolved into [`ParamTarget::Node`]
+    /// before any graph exists. Resolved into [`ResolvedTarget::Node`]
     /// at chain build time once the splice has produced its handles
-    /// map. See [`ParamBinding::resolve_handles`].
+    /// map. See [`ResolvedBinding::from_static`].
     HandleNode {
         handle: &'static str,
         param: &'static str,
     },
-    /// Direct route to a single node parameter. Used by
-    /// single-primitive effects (StylizedFeedback wraps just
-    /// `Feedback`) or any case that doesn't need composite-level
-    /// indirection. `node` is captured at effect construction; `param`
-    /// is the inner node's compile-time parameter name.
+    /// Direct route to a single node parameter — used when the
+    /// `node_id` is known at spec authoring time (rare in practice;
+    /// most static bindings declare `HandleNode` instead).
     Node {
         node: NodeInstanceId,
         param: &'static str,
@@ -113,7 +138,7 @@ pub enum ParamTarget {
 /// one variant + one `match` arm in [`ParamConvert::convert`]. Vec2 /
 /// Color / multi-input gathers are deferred — they'd require a
 /// different signature (read multiple slots from the values array).
-/// The five variants here cover every existing effect.
+/// The six variants here cover every existing effect.
 #[derive(Debug, Clone)]
 pub enum ParamConvert {
     /// 1:1 — `value` becomes `ParamValue::Float(value)`. The default
@@ -172,10 +197,134 @@ impl ParamConvert {
     }
 }
 
-impl ParamBinding {
+// ─── Resolved runtime binding ────────────────────────────────────────
+
+/// Where a [`ResolvedBinding`] came from, for editor surfacing and
+/// audit reports. The apply path does NOT branch on this — both
+/// sources walk the same loop, hit the same cache, share the same
+/// id namespace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindingSource {
+    /// Compile-time spec binding from `ChainSpec.bindings`.
+    Static,
+    /// Per-instance user binding from `EffectInstance.user_param_bindings`.
+    User,
+}
+
+/// Runtime routing destination. The build-time-only `HandleNode`
+/// variant is resolved away into `Node` before this enum is
+/// constructed.
+#[derive(Debug, Clone)]
+pub enum ResolvedTarget {
+    Composite { outer_name: Cow<'static, str> },
+    Node {
+        node: NodeInstanceId,
+        param: &'static str,
+    },
+    Custom(fn(&mut Graph, f32)),
+}
+
+/// Fully-resolved per-effect binding. One per outer-card slider
+/// (static or user-exposed) on the slot's effect.
+///
+/// Stored in `EffectSlot.bindings` as a single positional vector of
+/// length `n_static + n_user` — same order as `EffectInstance.param_values`,
+/// so the per-frame apply loop walks both in lockstep.
+#[derive(Debug, Clone)]
+pub struct ResolvedBinding {
+    pub id: ParamId,
+    pub label: Cow<'static, str>,
+    pub default_value: f32,
+    pub target: ResolvedTarget,
+    pub convert: ParamConvert,
+    pub source: BindingSource,
+}
+
+impl ResolvedBinding {
+    /// Resolve a spec [`ParamBinding`] against the splice's handle
+    /// map. `HandleNode` targets become `Node`; other variants pass
+    /// through. Returns `None` when the binding's handle name isn't
+    /// in `handles` — caller logs and drops the orphan binding.
+    pub fn from_static(
+        b: &ParamBinding,
+        handles: &[(Cow<'static, str>, NodeInstanceId)],
+    ) -> Option<Self> {
+        let target = match &b.target {
+            ParamTarget::Composite { outer_name } => ResolvedTarget::Composite {
+                outer_name: outer_name.clone(),
+            },
+            ParamTarget::HandleNode { handle, param } => {
+                let node = handles
+                    .iter()
+                    .find(|(h, _)| h.as_ref() == *handle)
+                    .map(|(_, id)| *id)?;
+                ResolvedTarget::Node { node, param }
+            }
+            ParamTarget::Node { node, param } => ResolvedTarget::Node {
+                node: *node,
+                param,
+            },
+            ParamTarget::Custom(f) => ResolvedTarget::Custom(*f),
+        };
+        Some(Self {
+            id: b.id.clone(),
+            label: Cow::Borrowed(b.label),
+            default_value: b.default_value,
+            target,
+            convert: b.convert.clone(),
+            source: BindingSource::Static,
+        })
+    }
+
+    /// Resolve a per-instance user binding against the splice's
+    /// handle map. Returns `None` if the binding's `node_handle`
+    /// isn't in `handles` (effect refactor dropped the node, or alias
+    /// resolver didn't catch the rename) or the binding's
+    /// `inner_param` doesn't match any [`crate::node_graph::ParamDef`]
+    /// on the resolved node. Caller logs and skips — orphan bindings
+    /// remain in the project file but render inert until they re-bind.
+    pub fn from_user(
+        core: &manifold_core::effects::UserParamBinding,
+        graph: &Graph,
+        handles: &[(Cow<'static, str>, NodeInstanceId)],
+    ) -> Option<Self> {
+        let target_node = handles
+            .iter()
+            .find(|(h, _)| h.as_ref() == core.node_handle.as_str())
+            .map(|(_, id)| *id)?;
+        let inst = graph.get_node(target_node)?;
+        // Pull the `&'static str` off the inner node's `ParamDef`
+        // list so the resolved target carries a stable, allocation-free
+        // param name (instead of leaking the user binding's owned
+        // string).
+        let target_param = inst
+            .node
+            .parameters()
+            .iter()
+            .map(|p| p.name)
+            .find(|name| *name == core.inner_param.as_str())?;
+        let convert = match core.convert {
+            manifold_core::effects::UserParamConvert::Float => ParamConvert::Float,
+            manifold_core::effects::UserParamConvert::IntRound => ParamConvert::IntRound,
+            manifold_core::effects::UserParamConvert::BoolThreshold => ParamConvert::BoolThreshold,
+            manifold_core::effects::UserParamConvert::EnumRound => ParamConvert::EnumRound,
+        };
+        Some(Self {
+            id: Cow::Owned(core.id.clone()),
+            label: Cow::Owned(core.label.clone()),
+            default_value: core.default_value,
+            target: ResolvedTarget::Node {
+                node: target_node,
+                param: target_param,
+            },
+            convert,
+            source: BindingSource::User,
+        })
+    }
+
     /// Apply this binding's value to the graph.
     ///
-    /// `handle` is required iff `target` is [`ParamTarget::Composite`].
+    /// `handle` is required iff `target` is [`ResolvedTarget::Composite`].
     /// Passing `None` for a `Composite` target panics — the caller is
     /// expected to know whether their effect uses composite routing.
     pub fn apply(
@@ -186,249 +335,78 @@ impl ParamBinding {
     ) -> Result<(), GraphError> {
         let pv = self.convert.convert(value);
         match &self.target {
-            ParamTarget::Composite { outer_name } => handle
-                .expect("ParamTarget::Composite requires a CompositeHandle")
+            ResolvedTarget::Composite { outer_name } => handle
+                .expect("ResolvedTarget::Composite requires a CompositeHandle")
                 .set_param(graph, outer_name, pv),
-            ParamTarget::HandleNode { handle, param } => Err(GraphError::ParamNotFound {
-                node: NodeInstanceId(0),
-                param: format!(
-                    "unresolved HandleNode target (handle={handle:?}, inner_param={param:?}); \
-                     call ParamBinding::resolve_handles after splice before per-frame apply",
-                ),
-            }),
-            ParamTarget::Node { node, param } => graph.set_param(*node, param, pv),
-            ParamTarget::Custom(f) => {
+            ResolvedTarget::Node { node, param } => graph.set_param(*node, param, pv),
+            ResolvedTarget::Custom(f) => {
                 f(graph, value);
                 Ok(())
             }
         }
     }
-
-    /// Resolve a spec-time [`ParamTarget::HandleNode`] target into a
-    /// runtime [`ParamTarget::Node`] using the handle map returned by
-    /// the chain's splice. Other target variants pass through unchanged.
-    ///
-    /// Returns `None` if the binding's handle name isn't present in the
-    /// map — caller logs and drops the binding (orphan routing,
-    /// effect refactor dropped the node, alias resolver missed it, etc.).
-    pub fn resolve_handles(
-        &self,
-        handles: &[(Cow<'static, str>, NodeInstanceId)],
-    ) -> Option<ParamBinding> {
-        match &self.target {
-            ParamTarget::HandleNode { handle, param } => {
-                let node_id = handles
-                    .iter()
-                    .find(|(h, _)| h.as_ref() == *handle)
-                    .map(|(_, id)| *id)?;
-                Some(ParamBinding {
-                    id: self.id.clone(),
-                    label: self.label,
-                    default_value: self.default_value,
-                    target: ParamTarget::Node {
-                        node: node_id,
-                        param,
-                    },
-                    convert: self.convert.clone(),
-                })
-            }
-            _ => Some(self.clone()),
-        }
-    }
 }
 
-/// Per-instance user-exposed binding in its renderer-runtime form.
-///
-/// Sibling to [`ParamBinding`]: same role at apply time, different
-/// identity story. Static bindings carry compile-time
-/// [`ParamSpec`]s (everything `&'static str`); user bindings come
-/// from the project file with owned [`String`]s in their
-/// [`manifold_core::effects::UserParamBinding`] form, and we
-/// hydrate them into this runtime shape once whenever
-/// `EffectInstance.user_param_bindings_version` changes.
-///
-/// Targeting is always [`ParamTarget::Node`] — user bindings can
-/// only address a single inner-node parameter (composites and custom
-/// fns are static-only).
-#[derive(Debug, Clone)]
-pub struct UserParamBindingRuntime {
-    /// Stable identity. Same ParamId namespace as static bindings;
-    /// always `Cow::Owned(String)` here because the source data is
-    /// owned. Drivers / Ableton / OSC reference this string.
-    pub id: ParamId,
-    /// Resolved inner-node id (looked up from the effect's graph
-    /// at hydration time via `graph.node_id_by_handle(node_handle)`).
-    pub target_node: NodeInstanceId,
-    /// Compile-time inner-node parameter name (looked up from
-    /// `node.parameters()` at hydration time).
-    pub target_param: &'static str,
-    pub convert: ParamConvert,
-    pub default_value: f32,
-}
+// ─── Apply loop + cache ──────────────────────────────────────────────
 
-impl UserParamBindingRuntime {
-    pub fn apply(&self, graph: &mut Graph, value: f32) -> Result<(), GraphError> {
-        let pv = self.convert.convert(value);
-        graph.set_param(self.target_node, self.target_param, pv)
-    }
-}
-
-/// Hydrate a core-side [`manifold_core::effects::UserParamBinding`]
-/// into the renderer-runtime [`UserParamBindingRuntime`] form using
-/// per-effect splice handles.
+/// Apply every binding in the unified slice against the corresponding
+/// `values` slot. **One walk, one slice, one cache.** Static bindings
+/// live in `bindings[0..n_static]`, user bindings in
+/// `bindings[n_static..]` — the apply loop doesn't care which is
+/// which, it just walks index-for-index against `values`.
 ///
-/// Chain-graph effects don't register their splice handles on the
-/// shared `Graph` (each effect's handles are scoped to its slot,
-/// not the chain-wide graph), so resolution walks the slice the
-/// splice returned in `SpliceResult::handles`. Returns `None` if
-/// the handle name isn't in the slice or the inner param doesn't
-/// match any `ParamDef` on the resolved node. Caller logs and skips.
-pub fn user_binding_to_runtime_with_handles(
-    core: &manifold_core::effects::UserParamBinding,
-    graph: &Graph,
-    handles: &[(Cow<'static, str>, NodeInstanceId)],
-) -> Option<UserParamBindingRuntime> {
-    let target_node = handles
-        .iter()
-        .find(|(h, _)| h.as_ref() == core.node_handle.as_str())
-        .map(|(_, id)| *id)?;
-    user_binding_to_runtime_resolved(core, graph, target_node)
-}
-
-/// Hydrate a core-side [`manifold_core::effects::UserParamBinding`]
-/// into the renderer-runtime [`UserParamBindingRuntime`] form using
-/// graph-wide handle registration.
+/// If `values` is shorter than `bindings`, missing slots fall back to
+/// the binding's own `default_value`.
 ///
-/// Returns `None` if the binding's `node_handle` is not registered
-/// on the graph (effect refactor dropped the node, or alias resolver
-/// didn't catch the rename) or the binding's `inner_param` doesn't
-/// match any param on the resolved node. Caller logs and skips —
-/// orphan bindings remain in the project file but render inert until
-/// they re-bind.
-pub fn user_binding_to_runtime(
-    core: &manifold_core::effects::UserParamBinding,
-    graph: &Graph,
-) -> Option<UserParamBindingRuntime> {
-    let target_node = graph.node_id_by_handle(&core.node_handle)?;
-    user_binding_to_runtime_resolved(core, graph, target_node)
-}
-
-fn user_binding_to_runtime_resolved(
-    core: &manifold_core::effects::UserParamBinding,
-    graph: &Graph,
-    target_node: NodeInstanceId,
-) -> Option<UserParamBindingRuntime> {
-    let inst = graph.get_node(target_node)?;
-    // Find the &'static str on the inner node's ParamDef list that
-    // matches `core.inner_param`. We pull the &'static str out of
-    // the node's own param list rather than leaking a String —
-    // user-exposable params are always declared on shipping nodes,
-    // so a matching &'static will always be available when the
-    // resolution succeeds.
-    let target_param = inst
-        .node
-        .parameters()
-        .iter()
-        .map(|p| p.name)
-        .find(|name| *name == core.inner_param.as_str())?;
-    let convert = match core.convert {
-        manifold_core::effects::UserParamConvert::Float => ParamConvert::Float,
-        manifold_core::effects::UserParamConvert::IntRound => ParamConvert::IntRound,
-        manifold_core::effects::UserParamConvert::BoolThreshold => ParamConvert::BoolThreshold,
-        manifold_core::effects::UserParamConvert::EnumRound => ParamConvert::EnumRound,
-    };
-    Some(UserParamBindingRuntime {
-        id: Cow::Owned(core.id.clone()),
-        target_node,
-        target_param,
-        convert,
-        default_value: core.default_value,
-    })
-}
-
-/// Apply static + user bindings against a values slice.
-///
-/// Static bindings consume `values[0..static_bindings.len()]`. User
-/// bindings consume `values[static_bindings.len()..]`. If `values`
-/// is shorter than the combined binding count, missing slots fall
-/// back to the binding's own default.
-///
-/// **Per-binding failures are logged, not fatal.** The bindings are
-/// built (or hydrated) once at effect construction / version-bump
-/// and target a graph that's owned by the same effect — a routing
-/// error means the graph has been mutated out from under the binding
-/// (target node deleted, param renamed, etc.). That's a developer
-/// bug, but it MUST NOT panic the content thread mid-frame: the host
-/// runs at production FPS for live performance, and a panic = channel
+/// **Per-binding failures are logged, not fatal.** A routing error
+/// means the graph has been mutated out from under the binding (target
+/// node deleted, param renamed, etc.). That's a developer bug, but it
+/// MUST NOT panic the content thread mid-frame: the host runs at
+/// production FPS for live performance, and a panic = channel
 /// disconnect = entire pipeline stops. Log loudly, skip the broken
 /// binding, keep going.
-///
-/// This is the per-frame routing shim that migrated effects call from
-/// their `apply()` implementations.
-pub fn apply_param_bindings(
-    static_bindings: &[ParamBinding],
-    user_bindings: &[UserParamBindingRuntime],
+pub fn apply_bindings(
+    bindings: &[ResolvedBinding],
     graph: &mut Graph,
     handle: Option<&CompositeHandle>,
     values: &[ParamSlot],
     last_applied: &mut LastAppliedCache,
 ) {
     last_applied
-        .static_outer
-        .resize(static_bindings.len(), BindingCacheEntry::Unset);
-    last_applied
-        .user_outer
-        .resize(user_bindings.len(), BindingCacheEntry::Unset);
-
-    for (i, binding) in static_bindings.iter().enumerate() {
+        .entries
+        .resize(bindings.len(), BindingCacheEntry::Unset);
+    for (i, binding) in bindings.iter().enumerate() {
         let value = values
             .get(i)
             .map(|p| p.value)
             .unwrap_or(binding.default_value);
-        match last_applied.static_outer[i] {
+        match last_applied.entries[i] {
             BindingCacheEntry::Applied(prev) if prev == value => {
                 continue;
             }
             BindingCacheEntry::Unset | BindingCacheEntry::Applied(_) => {}
         }
         if let Err(err) = binding.apply(graph, handle, value) {
+            let tag = match binding.source {
+                BindingSource::Static => "ParamBinding",
+                BindingSource::User => "UserParamBinding",
+            };
             eprintln!(
-                "[manifold-renderer] ParamBinding apply failed: id={} value={} err={:?} — \
+                "[manifold-renderer] {tag} apply failed: id={} value={} err={:?} — \
                  skipping this binding for the current frame. The graph topology likely \
                  changed without rebuilding the bindings list.",
                 binding.id, value, err,
             );
             continue;
         }
-        last_applied.static_outer[i] = BindingCacheEntry::Applied(value);
-    }
-    let n = static_bindings.len();
-    for (j, binding) in user_bindings.iter().enumerate() {
-        let value = values
-            .get(n + j)
-            .map(|p| p.value)
-            .unwrap_or(binding.default_value);
-        match last_applied.user_outer[j] {
-            BindingCacheEntry::Applied(prev) if prev == value => {
-                continue;
-            }
-            BindingCacheEntry::Unset | BindingCacheEntry::Applied(_) => {}
-        }
-        if let Err(err) = binding.apply(graph, value) {
-            eprintln!(
-                "[manifold-renderer] UserParamBinding apply failed: id={} value={} err={:?} — \
-                 skipping this user binding for the current frame.",
-                binding.id, value, err,
-            );
-            continue;
-        }
-        last_applied.user_outer[j] = BindingCacheEntry::Applied(value);
+        last_applied.entries[i] = BindingCacheEntry::Applied(value);
     }
 }
 
 /// Plant each binding's declared `default_value` into its inner-node
-/// target at chain build time, so a freshly-built effect actually
-/// starts at the values its bindings claim.
+/// target at chain build time (or after a user-binding rehydrate), so
+/// a freshly-built effect actually starts at the values its bindings
+/// claim.
 ///
 /// Pairs with [`LastAppliedCache::seed_from_bindings`], which pre-fills
 /// the per-frame skip cache with `Applied(default_value)`. Without
@@ -436,23 +414,33 @@ pub fn apply_param_bindings(
 /// inner-node primitive at the primitive's own `ParamDef::default`,
 /// which is often a different number than the binding's
 /// `default_value` (e.g. `Blur.radius = 4.0` vs SoftFocus's outer
-/// `radius.default_value = 6.0`). On the first frame
-/// [`apply_param_bindings`] would see `Applied(default)` in the cache,
-/// find the outer slot equal to the binding default, and skip the
-/// write — leaving the inner stuck at the primitive's default until
-/// the user touches the slider and moves the outer off the default.
+/// `radius.default_value = 6.0`). On the first frame [`apply_bindings`]
+/// would see `Applied(default)` in the cache, find the outer slot
+/// equal to the binding default, and skip the write — leaving the
+/// inner stuck at the primitive's default until the user touches the
+/// slider and moves the outer off the default.
+///
+/// Walks the unified `&[ResolvedBinding]` slice so static AND user
+/// bindings both get their declared defaults planted. The latent
+/// symmetric bug for user bindings (a freshly-exposed param whose
+/// binding default differs from the live inner state) is closed by
+/// the same call.
 ///
 /// Per-binding failures log loudly but never panic — same contract as
 /// the per-frame apply path.
 pub fn apply_binding_defaults(
-    static_bindings: &[ParamBinding],
+    bindings: &[ResolvedBinding],
     graph: &mut Graph,
     handle: Option<&CompositeHandle>,
 ) {
-    for binding in static_bindings {
+    for binding in bindings {
         if let Err(err) = binding.apply(graph, handle, binding.default_value) {
+            let tag = match binding.source {
+                BindingSource::Static => "ParamBinding",
+                BindingSource::User => "UserParamBinding",
+            };
             eprintln!(
-                "[manifold-renderer] ParamBinding default-seed failed: id={} default={} \
+                "[manifold-renderer] {tag} default-seed failed: id={} default={} \
                  err={:?} — inner node will run at its primitive default until the outer \
                  slot is moved off `default_value`.",
                 binding.id, binding.default_value, err,
@@ -461,11 +449,12 @@ pub fn apply_binding_defaults(
     }
 }
 
-/// Per-effect cache of "last outer value applied" parallel to a
-/// binding list. Lives on the effect instance (not on the bindings)
-/// because `ParamBinding` is `Clone`able / sharable between catalog
-/// constructors and tests — adding mutable cache state would force
-/// every caller to wrap it in an interior-mutability cell.
+/// Per-effect cache of "last outer value applied" parallel to the
+/// unified bindings list. Lives on the effect instance (not on the
+/// bindings) because [`ResolvedBinding`] is `Clone`able / sharable
+/// between catalog constructors and tests — adding mutable cache
+/// state would force every caller to wrap it in an interior-mutability
+/// cell.
 ///
 /// **Why this exists.** The binding apply path runs every frame to
 /// power drivers / envelopes / Ableton mappings. Without skip-on-
@@ -475,12 +464,11 @@ pub fn apply_binding_defaults(
 /// survive when the outer is at rest, and the outer reclaims control
 /// the moment it moves.
 ///
-/// Both lists auto-grow on first `apply_param_bindings`; constructors
-/// can leave them empty.
+/// `entries` auto-grows on first [`apply_bindings`]; constructors can
+/// leave it empty.
 #[derive(Debug, Clone, Default)]
 pub struct LastAppliedCache {
-    pub static_outer: Vec<BindingCacheEntry>,
-    pub user_outer: Vec<BindingCacheEntry>,
+    pub entries: Vec<BindingCacheEntry>,
 }
 
 /// One entry in [`LastAppliedCache`].
@@ -494,12 +482,12 @@ pub struct LastAppliedCache {
 ///
 /// Effect constructors pre-seed every entry via
 /// [`LastAppliedCache::seed_from_bindings`], so a freshly-constructed
-/// FX starts with `Applied(spec.default_value)` for each binding.
+/// FX starts with `Applied(binding.default_value)` for each entry.
 /// That seeding is what lets per-card edits to outer-routed inner
 /// params survive a chain rebuild: as long as the outer slot stays
 /// at its declared default no write fires, and the hydrated value
-/// persists. The outer reclaims control the moment it diverges
-/// from `spec.default_value`.
+/// persists. The outer reclaims control the moment it diverges from
+/// `binding.default_value`.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum BindingCacheEntry {
     #[default]
@@ -515,72 +503,78 @@ impl LastAppliedCache {
     /// Reset every tracked outer value so the next apply behaves as
     /// if no value has ever been written.
     pub fn clear(&mut self) {
-        self.static_outer.clear();
-        self.user_outer.clear();
+        self.entries.clear();
     }
 
-    /// Pre-seed the static-binding cache from the bindings'
-    /// declared default values. Effect constructors call this once
-    /// at build time so the cache enters the runtime with
-    /// `Applied(spec.default_value)` per entry — a freshly-built
-    /// effect's first `apply_param_bindings` then writes ONLY for
-    /// outer slots that already diverge from their declared
-    /// default, leaving everything else alone. This is the keystone
-    /// of the "inner edits survive a chain rebuild" invariant: a
-    /// rebuild caused by an inner-param edit doesn't move the outer
-    /// slot, so the cache compare matches and the binding skips
-    /// writing.
-    pub fn seed_from_bindings(&mut self, static_bindings: &[ParamBinding]) {
-        self.static_outer.clear();
-        self.static_outer.reserve(static_bindings.len());
-        for b in static_bindings {
-            self.static_outer
+    /// Truncate the cache to its static prefix so the user-tail is
+    /// re-evaluated from scratch on the next apply. Called on
+    /// `EffectInstance.user_param_bindings_version` bumps — exposing
+    /// or unexposing an inner-graph param rebuilds the user-tail of
+    /// `slot.bindings`, and the old cache entries refer to a
+    /// different binding list and would skip-write on stale-prev
+    /// compare otherwise.
+    pub fn clear_tail(&mut self, n_static: usize) {
+        if n_static < self.entries.len() {
+            self.entries.truncate(n_static);
+        }
+    }
+
+    /// Pre-seed each entry from the bindings' declared default
+    /// values. Effect constructors call this once at build time so
+    /// the cache enters the runtime with `Applied(binding.default_value)`
+    /// per entry — a freshly-built effect's first [`apply_bindings`]
+    /// then writes ONLY for outer slots that already diverge from
+    /// their declared default, leaving everything else alone. This is
+    /// the keystone of the "inner edits survive a chain rebuild"
+    /// invariant: a rebuild caused by an inner-param edit doesn't
+    /// move the outer slot, so the cache compare matches and the
+    /// binding skips writing.
+    pub fn seed_from_bindings(&mut self, bindings: &[ResolvedBinding]) {
+        self.entries.clear();
+        self.entries.reserve(bindings.len());
+        for b in bindings {
+            self.entries
                 .push(BindingCacheEntry::Applied(b.default_value));
         }
     }
 }
 
-/// Read a host-visible parameter's current value by stable id,
-/// scanning both static and user binding lists. O(n) over the
-/// slices — n is typically <10, so the scan is faster than an
-/// `AHashMap` lookup at this scale and avoids per-effect allocation.
+// ─── Lookups + editor projections ────────────────────────────────────
+
+/// Read a host-visible parameter's current value by stable id. O(n)
+/// over the unified slice — n is typically <10, so the scan is faster
+/// than an `AHashMap` lookup at this scale and avoids per-effect
+/// allocation.
 ///
 /// Used by effects that need to inspect a param value outside the
-/// normal `apply_param_bindings` flow (e.g. `should_skip` predicates).
+/// normal [`apply_bindings`] flow (e.g. `should_skip` predicates).
 /// Returns `None` if the id matches nothing or the values slice is
 /// shorter than the resolved index.
 pub fn binding_value(
-    static_bindings: &[ParamBinding],
-    user_bindings: &[UserParamBindingRuntime],
+    bindings: &[ResolvedBinding],
     values: &[ParamSlot],
     id: &str,
 ) -> Option<f32> {
-    if let Some(idx) = static_bindings.iter().position(|b| b.id == id) {
-        return values.get(idx).map(|p| p.value);
-    }
-    let n = static_bindings.len();
-    if let Some(j) = user_bindings.iter().position(|b| b.id == id) {
-        return values.get(n + j).map(|p| p.value);
-    }
-    None
+    let idx = bindings.iter().position(|b| b.id == id)?;
+    values.get(idx).map(|p| p.value)
 }
 
-/// Walk a list of static bindings, a composite handle, and the live
+/// Walk the slot's unified bindings, a composite handle, and the live
 /// graph to produce the editor-facing list of
 /// [`OuterParamRouting`](crate::node_graph::OuterParamRouting) entries
-/// — one per outer slider whose value gets written into an inner-
-/// node param every frame.
+/// — one per outer slider whose value gets written into an inner-node
+/// param every frame. Static and user bindings both surface.
 ///
-/// Both routing styles are recognized:
-/// - [`ParamTarget::Composite`] — resolved via
+/// Both runtime routing styles are recognized:
+/// - [`ResolvedTarget::Composite`] — resolved via
 ///   [`CompositeHandle::inner_routing_for`].
-/// - [`ParamTarget::Node`] — `(node_id, param)` is taken directly off
-///   the binding.
+/// - [`ResolvedTarget::Node`] — `(node_id, param)` is taken directly
+///   off the binding.
 ///
-/// [`ParamTarget::Custom`] is skipped; it has no introspectable
+/// [`ResolvedTarget::Custom`] is skipped; it has no introspectable
 /// destination, so the editor can't surface it.
 pub fn outer_routings_from_bindings(
-    bindings: &[ParamBinding],
+    bindings: &[ResolvedBinding],
     handle: Option<&crate::node_graph::composites::CompositeHandle>,
     graph: &Graph,
 ) -> Vec<crate::node_graph::OuterParamRouting> {
@@ -592,7 +586,7 @@ pub fn outer_routings_from_bindings(
     let mut out = Vec::with_capacity(bindings.len());
     for b in bindings {
         let (node_id, inner_param) = match &b.target {
-            ParamTarget::Composite { outer_name } => {
+            ResolvedTarget::Composite { outer_name } => {
                 let Some(h) = handle else {
                     // Composite-target binding on an effect that
                     // doesn't expose a `CompositeHandle` — can't
@@ -604,8 +598,8 @@ pub fn outer_routings_from_bindings(
                 };
                 route
             }
-            ParamTarget::Node { node, param } => (*node, *param),
-            ParamTarget::HandleNode { .. } | ParamTarget::Custom(_) => continue,
+            ResolvedTarget::Node { node, param } => (*node, *param),
+            ResolvedTarget::Custom(_) => continue,
         };
         let Some(handle_str) = id_to_handle.get(&node_id.0) else {
             // Inner node has no stable handle — without it the editor
@@ -640,7 +634,7 @@ mod tests {
     }
 
     #[test]
-    fn int_round_uses_banker_rounding() {
+    fn int_round_uses_half_away_from_zero() {
         // f32::round is half-away-from-zero, NOT banker's rounding.
         // Document the actual behavior so it's expected.
         assert_eq!(ParamConvert::IntRound.convert(0.0), ParamValue::Int(0));
@@ -710,28 +704,135 @@ mod tests {
         assert_eq!(convert.convert(5.0), ParamValue::Enum(0));
     }
 
-    // ---- apply() routing tests ----
+    // ---- Resolution helpers ----
 
-    fn feedback_amount_binding(node: NodeInstanceId) -> ParamBinding {
+    fn static_amount_binding() -> ParamBinding {
         ParamBinding {
             id: Cow::Borrowed("amount"),
             label: "Amount",
             default_value: 0.5,
-            target: ParamTarget::Node {
-                node,
+            target: ParamTarget::HandleNode {
+                handle: "feedback",
                 param: "amount",
             },
             convert: ParamConvert::Float,
         }
     }
 
+    fn handles_for(feedback: NodeInstanceId) -> Vec<(Cow<'static, str>, NodeInstanceId)> {
+        vec![(Cow::Borrowed("feedback"), feedback)]
+    }
+
+    fn resolved_feedback_amount(feedback: NodeInstanceId) -> ResolvedBinding {
+        ResolvedBinding {
+            id: Cow::Borrowed("amount"),
+            label: Cow::Borrowed("Amount"),
+            default_value: 0.5,
+            target: ResolvedTarget::Node {
+                node: feedback,
+                param: "amount",
+            },
+            convert: ParamConvert::Float,
+            source: BindingSource::Static,
+        }
+    }
+
     #[test]
-    fn apply_node_target_writes_param_to_graph() {
+    fn from_static_resolves_handlenode_to_node() {
         let mut g = Graph::new();
         let _src = g.add_node(Box::new(Source::new()));
         let feedback = g.add_node(Box::new(Feedback::new()));
-        let binding = feedback_amount_binding(feedback);
+        let rb = ResolvedBinding::from_static(&static_amount_binding(), &handles_for(feedback))
+            .expect("handle present");
+        match rb.target {
+            ResolvedTarget::Node { node, param } => {
+                assert_eq!(node, feedback);
+                assert_eq!(param, "amount");
+            }
+            _ => panic!("expected Node target after resolution"),
+        }
+        assert_eq!(rb.source, BindingSource::Static);
+        assert_eq!(rb.default_value, 0.5);
+    }
 
+    #[test]
+    fn from_static_returns_none_when_handle_missing() {
+        // Missing handle in the splice map → orphan binding, dropped
+        // at chain build time.
+        let mut g = Graph::new();
+        let _feedback = g.add_node_named("feedback", Box::new(Feedback::new()));
+        let nope: Vec<(Cow<'static, str>, NodeInstanceId)> = vec![];
+        assert!(ResolvedBinding::from_static(&static_amount_binding(), &nope).is_none());
+    }
+
+    #[test]
+    fn from_user_resolves_handle_and_pulls_static_param_name() {
+        let mut g = Graph::new();
+        let feedback = g.add_node_named("feedback", Box::new(Feedback::new()));
+        let core = manifold_core::effects::UserParamBinding {
+            id: "user.feedback.zoom.1".to_string(),
+            label: "User Zoom".to_string(),
+            node_handle: "feedback".to_string(),
+            inner_param: "zoom".to_string(),
+            min: 0.9,
+            max: 1.1,
+            default_value: 0.95,
+            convert: manifold_core::effects::UserParamConvert::Float,
+        };
+        let rb = ResolvedBinding::from_user(&core, &g, &handles_for(feedback))
+            .expect("user binding hydrates");
+        match rb.target {
+            ResolvedTarget::Node { node, param } => {
+                assert_eq!(node, feedback);
+                assert_eq!(param, "zoom"); // pulled off Feedback's ParamDef list as a &'static str
+            }
+            _ => panic!("user bindings always resolve to Node target"),
+        }
+        assert_eq!(rb.source, BindingSource::User);
+    }
+
+    #[test]
+    fn from_user_returns_none_for_unknown_handle() {
+        let mut g = Graph::new();
+        let _feedback = g.add_node_named("feedback", Box::new(Feedback::new()));
+        let core = manifold_core::effects::UserParamBinding {
+            id: "user.nope".to_string(),
+            label: "Nope".to_string(),
+            node_handle: "no_such_node".to_string(),
+            inner_param: "zoom".to_string(),
+            min: 0.0,
+            max: 1.0,
+            default_value: 0.5,
+            convert: manifold_core::effects::UserParamConvert::Float,
+        };
+        let handles: Vec<(Cow<'static, str>, NodeInstanceId)> = vec![];
+        assert!(ResolvedBinding::from_user(&core, &g, &handles).is_none());
+    }
+
+    #[test]
+    fn from_user_returns_none_for_unknown_inner_param() {
+        let mut g = Graph::new();
+        let feedback = g.add_node_named("feedback", Box::new(Feedback::new()));
+        let core = manifold_core::effects::UserParamBinding {
+            id: "user.feedback.bogus.1".to_string(),
+            label: "Bogus".to_string(),
+            node_handle: "feedback".to_string(),
+            inner_param: "bogus_param".to_string(),
+            min: 0.0,
+            max: 1.0,
+            default_value: 0.5,
+            convert: manifold_core::effects::UserParamConvert::Float,
+        };
+        assert!(ResolvedBinding::from_user(&core, &g, &handles_for(feedback)).is_none());
+    }
+
+    // ---- apply() routing tests ----
+
+    #[test]
+    fn apply_node_target_writes_param_to_graph() {
+        let mut g = Graph::new();
+        let feedback = g.add_node(Box::new(Feedback::new()));
+        let binding = resolved_feedback_amount(feedback);
         binding.apply(&mut g, None, 0.75).unwrap();
         let inst = g.get_node(feedback).unwrap();
         assert_eq!(inst.params.get("amount"), Some(&ParamValue::Float(0.75)));
@@ -741,33 +842,118 @@ mod tests {
     fn apply_node_target_doesnt_need_handle() {
         let mut g = Graph::new();
         let feedback = g.add_node(Box::new(Feedback::new()));
-        let binding = feedback_amount_binding(feedback);
+        let binding = resolved_feedback_amount(feedback);
         // None handle should be fine for Node target.
         assert!(binding.apply(&mut g, None, 0.5).is_ok());
     }
 
     #[test]
-    fn apply_param_bindings_iterates_with_default_fallback() {
+    fn apply_to_unknown_param_returns_graph_error() {
+        let mut g = Graph::new();
+        let feedback = g.add_node(Box::new(Feedback::new()));
+        let binding = ResolvedBinding {
+            id: Cow::Borrowed("nonexistent"),
+            label: Cow::Borrowed("Nonexistent"),
+            default_value: 0.0,
+            target: ResolvedTarget::Node {
+                node: feedback,
+                param: "nonexistent",
+            },
+            convert: ParamConvert::Float,
+            source: BindingSource::Static,
+        };
+        let err = binding.apply(&mut g, None, 0.5).unwrap_err();
+        assert!(matches!(err, GraphError::ParamNotFound { .. }));
+    }
+
+    #[test]
+    fn enum_remap_routes_correctly_to_a_real_node() {
+        // Verifies the full path: f32 → EnumRemap → ParamValue::Enum →
+        // graph.set_param. Using Feedback's mode param (Enum [Screen,
+        // Additive, Max]) and a contrived remap that swaps order.
+        let mut g = Graph::new();
+        let feedback = g.add_node(Box::new(Feedback::new()));
+        let binding = ResolvedBinding {
+            id: Cow::Borrowed("mode"),
+            label: Cow::Borrowed("Mode"),
+            default_value: 0.0,
+            target: ResolvedTarget::Node {
+                node: feedback,
+                param: "mode",
+            },
+            // Host idx 0 → graph idx 2, 1 → 1, 2 → 0 (reverse).
+            convert: ParamConvert::EnumRemap(Cow::Borrowed(&[2, 1, 0])),
+            source: BindingSource::Static,
+        };
+        binding.apply(&mut g, None, 0.0).unwrap();
+        assert_eq!(
+            g.get_node(feedback).unwrap().params.get("mode"),
+            Some(&ParamValue::Enum(2))
+        );
+        binding.apply(&mut g, None, 2.0).unwrap();
+        assert_eq!(
+            g.get_node(feedback).unwrap().params.get("mode"),
+            Some(&ParamValue::Enum(0))
+        );
+    }
+
+    #[test]
+    fn binding_id_is_independent_of_label_and_target_param() {
+        // The ID is the stable mapping key. It's allowed (and expected
+        // in some cases) to differ from both the slider label and the
+        // inner-node param name. Test confirms nothing in the routing
+        // code conflates the three.
+        let mut g = Graph::new();
+        let feedback = g.add_node(Box::new(Feedback::new()));
+        let binding = ResolvedBinding {
+            id: Cow::Borrowed("blend_strength"),
+            label: Cow::Borrowed("Blend Strength"),
+            default_value: 0.5,
+            target: ResolvedTarget::Node {
+                node: feedback,
+                param: "amount",
+            },
+            convert: ParamConvert::Float,
+            source: BindingSource::Static,
+        };
+        binding.apply(&mut g, None, 0.42).unwrap();
+        assert_eq!(
+            g.get_node(feedback).unwrap().params.get("amount"),
+            Some(&ParamValue::Float(0.42))
+        );
+        assert!(
+            g.get_node(feedback)
+                .unwrap()
+                .params
+                .get("blend_strength")
+                .is_none()
+        );
+    }
+
+    // ---- apply_bindings + cache tests ----
+
+    #[test]
+    fn apply_bindings_iterates_with_default_fallback() {
         let mut g = Graph::new();
         let feedback = g.add_node(Box::new(Feedback::new()));
         let bindings = vec![
-            feedback_amount_binding(feedback),
-            ParamBinding {
+            resolved_feedback_amount(feedback),
+            ResolvedBinding {
                 id: Cow::Borrowed("zoom"),
-                label: "Zoom",
+                label: Cow::Borrowed("Zoom"),
                 default_value: 0.95,
-                target: ParamTarget::Node {
+                target: ResolvedTarget::Node {
                     node: feedback,
                     param: "zoom",
                 },
                 convert: ParamConvert::Float,
+                source: BindingSource::Static,
             },
         ];
 
-        // Provide only one value — second falls back to spec default 0.95.
-        apply_param_bindings(
+        // Provide only one value — second falls back to default 0.95.
+        apply_bindings(
             &bindings,
-            &[],
             &mut g,
             None,
             &[ParamSlot::exposed(0.5)],
@@ -778,12 +964,15 @@ mod tests {
         assert_eq!(inst.params.get("zoom"), Some(&ParamValue::Float(0.95)));
     }
 
+    /// Combined static + user bindings in one slice. Both halves
+    /// apply on a single `apply_bindings` call. After Phase 1 there is
+    /// no second slice to forget.
     #[test]
-    fn apply_param_bindings_routes_user_bindings_after_static() {
+    fn apply_bindings_walks_static_then_user_in_one_slice() {
         let mut g = Graph::new();
         let feedback = g.add_node_named("feedback", Box::new(Feedback::new()));
-        let static_bindings = vec![feedback_amount_binding(feedback)];
-        // Hydrate a user binding via user_binding_to_runtime.
+
+        let static_rb = resolved_feedback_amount(feedback);
         let core_ub = manifold_core::effects::UserParamBinding {
             id: "user.feedback.zoom.1".to_string(),
             label: "User Zoom".to_string(),
@@ -794,11 +983,12 @@ mod tests {
             default_value: 0.95,
             convert: manifold_core::effects::UserParamConvert::Float,
         };
-        let user_runtime = user_binding_to_runtime(&core_ub, &g).expect("hydrate succeeds");
+        let user_rb = ResolvedBinding::from_user(&core_ub, &g, &handles_for(feedback)).unwrap();
+        let bindings = vec![static_rb, user_rb];
+
         // values slice: [static.amount, user.zoom] = [0.5, 1.05]
-        apply_param_bindings(
-            &static_bindings,
-            std::slice::from_ref(&user_runtime),
+        apply_bindings(
+            &bindings,
             &mut g,
             None,
             &[ParamSlot::exposed(0.5), ParamSlot::exposed(1.05)],
@@ -810,10 +1000,10 @@ mod tests {
     }
 
     #[test]
-    fn apply_param_bindings_user_default_fallback_when_values_short() {
+    fn apply_bindings_user_tail_falls_back_to_binding_default() {
         let mut g = Graph::new();
         let feedback = g.add_node_named("feedback", Box::new(Feedback::new()));
-        let static_bindings = vec![feedback_amount_binding(feedback)];
+        let static_rb = resolved_feedback_amount(feedback);
         let core_ub = manifold_core::effects::UserParamBinding {
             id: "user.feedback.zoom.1".to_string(),
             label: "User Zoom".to_string(),
@@ -824,11 +1014,13 @@ mod tests {
             default_value: 0.97,
             convert: manifold_core::effects::UserParamConvert::Float,
         };
-        let user_runtime = user_binding_to_runtime(&core_ub, &g).unwrap();
-        // values shorter than static + user: user falls back to default_value.
-        apply_param_bindings(
-            &static_bindings,
-            std::slice::from_ref(&user_runtime),
+        let user_rb = ResolvedBinding::from_user(&core_ub, &g, &handles_for(feedback)).unwrap();
+        let bindings = vec![static_rb, user_rb];
+
+        // values shorter than bindings: user tail falls back to
+        // binding's `default_value` (0.97).
+        apply_bindings(
+            &bindings,
             &mut g,
             None,
             &[ParamSlot::exposed(0.5)],
@@ -839,44 +1031,10 @@ mod tests {
     }
 
     #[test]
-    fn user_binding_to_runtime_returns_none_for_unknown_handle() {
-        let mut g = Graph::new();
-        let _feedback = g.add_node_named("feedback", Box::new(Feedback::new()));
-        let core_ub = manifold_core::effects::UserParamBinding {
-            id: "user.nope.zoom.1".to_string(),
-            label: "Nope".to_string(),
-            node_handle: "no_such_node".to_string(),
-            inner_param: "zoom".to_string(),
-            min: 0.0,
-            max: 1.0,
-            default_value: 0.5,
-            convert: manifold_core::effects::UserParamConvert::Float,
-        };
-        assert!(user_binding_to_runtime(&core_ub, &g).is_none());
-    }
-
-    #[test]
-    fn user_binding_to_runtime_returns_none_for_unknown_inner_param() {
-        let mut g = Graph::new();
-        let _feedback = g.add_node_named("feedback", Box::new(Feedback::new()));
-        let core_ub = manifold_core::effects::UserParamBinding {
-            id: "user.feedback.bogus.1".to_string(),
-            label: "Bogus".to_string(),
-            node_handle: "feedback".to_string(),
-            inner_param: "bogus_param".to_string(),
-            min: 0.0,
-            max: 1.0,
-            default_value: 0.5,
-            convert: manifold_core::effects::UserParamConvert::Float,
-        };
-        assert!(user_binding_to_runtime(&core_ub, &g).is_none());
-    }
-
-    #[test]
-    fn binding_value_finds_user_binding_id() {
+    fn binding_value_finds_id_in_either_tier() {
         let mut g = Graph::new();
         let feedback = g.add_node_named("feedback", Box::new(Feedback::new()));
-        let static_bindings = vec![feedback_amount_binding(feedback)];
+        let static_rb = resolved_feedback_amount(feedback);
         let core_ub = manifold_core::effects::UserParamBinding {
             id: "user.feedback.zoom.1".to_string(),
             label: "User Zoom".to_string(),
@@ -887,47 +1045,36 @@ mod tests {
             default_value: 0.95,
             convert: manifold_core::effects::UserParamConvert::Float,
         };
-        let user_runtime = user_binding_to_runtime(&core_ub, &g).unwrap();
-        let user_slice = std::slice::from_ref(&user_runtime);
+        let user_rb = ResolvedBinding::from_user(&core_ub, &g, &handles_for(feedback)).unwrap();
+        let bindings = vec![static_rb, user_rb];
         let values = [ParamSlot::exposed(0.5), ParamSlot::exposed(1.07)];
+        assert_eq!(binding_value(&bindings, &values, "amount"), Some(0.5));
         assert_eq!(
-            binding_value(&static_bindings, user_slice, &values, "amount"),
-            Some(0.5)
-        );
-        assert_eq!(
-            binding_value(
-                &static_bindings,
-                user_slice,
-                &values,
-                "user.feedback.zoom.1"
-            ),
+            binding_value(&bindings, &values, "user.feedback.zoom.1"),
             Some(1.07)
         );
-        assert_eq!(
-            binding_value(&static_bindings, user_slice, &values, "nope"),
-            None
-        );
+        assert_eq!(binding_value(&bindings, &values, "nope"), None);
     }
 
     /// First apply writes; second apply with the same outer value
     /// skips. Validates the per-frame no-op invariant that lets inner
     /// edits survive against an unchanging outer routing.
     #[test]
-    fn apply_param_bindings_skips_when_outer_value_unchanged() {
+    fn apply_bindings_skips_when_outer_value_unchanged() {
         let mut g = Graph::new();
         let feedback = g.add_node(Box::new(Feedback::new()));
-        let bindings = vec![feedback_amount_binding(feedback)];
+        let bindings = vec![resolved_feedback_amount(feedback)];
         let values = [ParamSlot::exposed(0.5)];
         let mut cache = LastAppliedCache::new();
 
         // 1st apply: write should land — amount goes from 0.0 default
         // → 0.5.
-        apply_param_bindings(&bindings, &[], &mut g, None, &values, &mut cache);
+        apply_bindings(&bindings, &mut g, None, &values, &mut cache);
         assert_eq!(
             g.get_node(feedback).unwrap().params.get("amount"),
             Some(&ParamValue::Float(0.5)),
         );
-        assert_eq!(cache.static_outer[0], BindingCacheEntry::Applied(0.5));
+        assert_eq!(cache.entries[0], BindingCacheEntry::Applied(0.5));
 
         // Simulate the inspector editing the inner directly while
         // the outer slot is at rest.
@@ -936,7 +1083,7 @@ mod tests {
 
         // 2nd apply with the same outer value: skip — inner edit
         // must survive.
-        apply_param_bindings(&bindings, &[], &mut g, None, &values, &mut cache);
+        apply_bindings(&bindings, &mut g, None, &values, &mut cache);
         assert_eq!(
             g.get_node(feedback).unwrap().params.get("amount"),
             Some(&ParamValue::Float(0.9)),
@@ -948,15 +1095,14 @@ mod tests {
     /// binding writes again and overwrites any inner edit. Confirms
     /// the outer reclaims control as soon as it moves.
     #[test]
-    fn apply_param_bindings_writes_when_outer_value_changes() {
+    fn apply_bindings_writes_when_outer_value_changes() {
         let mut g = Graph::new();
         let feedback = g.add_node(Box::new(Feedback::new()));
-        let bindings = vec![feedback_amount_binding(feedback)];
+        let bindings = vec![resolved_feedback_amount(feedback)];
         let mut cache = LastAppliedCache::new();
 
-        apply_param_bindings(
+        apply_bindings(
             &bindings,
-            &[],
             &mut g,
             None,
             &[ParamSlot::exposed(0.5)],
@@ -966,9 +1112,8 @@ mod tests {
         g.set_param(feedback, "amount", ParamValue::Float(0.9))
             .unwrap();
         // Outer slot moves: 0.5 → 0.25. Binding writes.
-        apply_param_bindings(
+        apply_bindings(
             &bindings,
-            &[],
             &mut g,
             None,
             &[ParamSlot::exposed(0.25)],
@@ -979,23 +1124,22 @@ mod tests {
             Some(&ParamValue::Float(0.25)),
             "outer change must overwrite the inner edit",
         );
-        assert_eq!(cache.static_outer[0], BindingCacheEntry::Applied(0.25));
+        assert_eq!(cache.entries[0], BindingCacheEntry::Applied(0.25));
     }
 
     /// Per-frame outer animation (envelope / driver) writes every
     /// frame the value advances. Confirms the cache doesn't trap
     /// active automation.
     #[test]
-    fn apply_param_bindings_keeps_writing_under_continuous_automation() {
+    fn apply_bindings_keeps_writing_under_continuous_automation() {
         let mut g = Graph::new();
         let feedback = g.add_node(Box::new(Feedback::new()));
-        let bindings = vec![feedback_amount_binding(feedback)];
+        let bindings = vec![resolved_feedback_amount(feedback)];
         let mut cache = LastAppliedCache::new();
 
         for (i, v) in [0.10_f32, 0.20, 0.30, 0.40].iter().enumerate() {
-            apply_param_bindings(
+            apply_bindings(
                 &bindings,
-                &[],
                 &mut g,
                 None,
                 &[ParamSlot::exposed(*v)],
@@ -1017,8 +1161,8 @@ mod tests {
     fn seeded_cache_preserves_hydrated_inner_against_outer_default() {
         let mut g = Graph::new();
         let feedback = g.add_node(Box::new(Feedback::new()));
-        let bindings = vec![feedback_amount_binding(feedback)];
-        // Default = 0.5 from `feedback_amount_binding`. Constructor
+        let bindings = vec![resolved_feedback_amount(feedback)];
+        // Default = 0.5 from `resolved_feedback_amount`. Constructor
         // would seed cache to `Applied(0.5)` — simulate that.
         let mut cache = LastAppliedCache::new();
         cache.seed_from_bindings(&bindings);
@@ -1030,9 +1174,8 @@ mod tests {
         // First apply with the catalog-default outer (0.5): cache
         // already says we applied 0.5, so the binding skips and the
         // hydrated value persists.
-        apply_param_bindings(
+        apply_bindings(
             &bindings,
-            &[],
             &mut g,
             None,
             &[ParamSlot::exposed(0.5)],
@@ -1049,7 +1192,7 @@ mod tests {
     fn seeded_cache_lets_outer_drag_reclaim_control() {
         let mut g = Graph::new();
         let feedback = g.add_node(Box::new(Feedback::new()));
-        let bindings = vec![feedback_amount_binding(feedback)];
+        let bindings = vec![resolved_feedback_amount(feedback)];
         let mut cache = LastAppliedCache::new();
         cache.seed_from_bindings(&bindings);
 
@@ -1058,9 +1201,8 @@ mod tests {
 
         // First apply with outer at default — seeded cache matches,
         // skip, hydrated value persists.
-        apply_param_bindings(
+        apply_bindings(
             &bindings,
-            &[],
             &mut g,
             None,
             &[ParamSlot::exposed(0.5)],
@@ -1068,9 +1210,8 @@ mod tests {
         );
         // Outer moves to 0.2 → cache says last applied was 0.5,
         // values differ, write fires, inner reclaims.
-        apply_param_bindings(
+        apply_bindings(
             &bindings,
-            &[],
             &mut g,
             None,
             &[ParamSlot::exposed(0.2)],
@@ -1083,25 +1224,22 @@ mod tests {
         );
     }
 
-    /// Regression for the bug the user hit: repeated chain rebuilds
-    /// (apply_graph_def firing every frame) must not stop outer-card
-    /// slider drags from propagating. Reseeding the cache from the
-    /// bindings is idempotent — first apply after each reseed only
-    /// writes when outer differs from spec default.
+    /// Regression: repeated chain rebuilds (apply_graph_def firing every
+    /// frame) must not stop outer-card slider drags from propagating.
+    /// Reseeding the cache from the bindings is idempotent — first
+    /// apply after each reseed only writes when outer differs from
+    /// declared default.
     #[test]
     fn repeated_seed_does_not_block_outer_drag() {
         let mut g = Graph::new();
         let feedback = g.add_node(Box::new(Feedback::new()));
-        let bindings = vec![feedback_amount_binding(feedback)];
+        let bindings = vec![resolved_feedback_amount(feedback)];
         let mut cache = LastAppliedCache::new();
         cache.seed_from_bindings(&bindings);
 
-        // Frame N: chain rebuild, seed cache, apply at outer = 0.7
-        // (user has dragged outer from default).
         cache.seed_from_bindings(&bindings); // simulate rebuild
-        apply_param_bindings(
+        apply_bindings(
             &bindings,
-            &[],
             &mut g,
             None,
             &[ParamSlot::exposed(0.7)],
@@ -1112,14 +1250,9 @@ mod tests {
             Some(&ParamValue::Float(0.7)),
         );
 
-        // Frame N+1: another rebuild. Cache reseeded back to
-        // Applied(spec.default=0.5). Outer is still at 0.7, so the
-        // compare differs and the write fires again. Outer drag
-        // remains effective even under per-frame rebuild.
         cache.seed_from_bindings(&bindings);
-        apply_param_bindings(
+        apply_bindings(
             &bindings,
-            &[],
             &mut g,
             None,
             &[ParamSlot::exposed(0.7)],
@@ -1132,86 +1265,19 @@ mod tests {
         );
     }
 
+    /// `clear_tail` drops only the user-tail entries — the static
+    /// prefix's cache entries (and their skip-on-unchanged claim) must
+    /// survive a user-binding rehydrate.
     #[test]
-    fn apply_to_unknown_param_returns_graph_error() {
-        let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(Feedback::new()));
-        let binding = ParamBinding {
-            id: Cow::Borrowed("nonexistent"),
-            label: "Nonexistent",
-            default_value: 0.0,
-            target: ParamTarget::Node {
-                node: feedback,
-                param: "nonexistent",
-            },
-            convert: ParamConvert::Float,
-        };
-        let err = binding.apply(&mut g, None, 0.5).unwrap_err();
-        assert!(matches!(err, GraphError::ParamNotFound { .. }));
-    }
-
-    #[test]
-    fn enum_remap_routes_correctly_to_a_real_node() {
-        // Verifies the full path: f32 → EnumRemap → ParamValue::Enum →
-        // graph.set_param. Using Feedback's mode param (Enum [Screen,
-        // Additive, Max]) and a contrived remap that swaps order.
-        let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(Feedback::new()));
-        let binding = ParamBinding {
-            id: Cow::Borrowed("mode"),
-            label: "Mode",
-            default_value: 0.0,
-            target: ParamTarget::Node {
-                node: feedback,
-                param: "mode",
-            },
-            // Host idx 0 → graph idx 2, 1 → 1, 2 → 0 (reverse).
-            convert: ParamConvert::EnumRemap(Cow::Borrowed(&[2, 1, 0])),
-        };
-        binding.apply(&mut g, None, 0.0).unwrap();
-        assert_eq!(
-            g.get_node(feedback).unwrap().params.get("mode"),
-            Some(&ParamValue::Enum(2))
-        );
-        binding.apply(&mut g, None, 2.0).unwrap();
-        assert_eq!(
-            g.get_node(feedback).unwrap().params.get("mode"),
-            Some(&ParamValue::Enum(0))
-        );
-    }
-
-    #[test]
-    fn binding_id_is_independent_of_spec_name_and_target_param() {
-        // The ID is the stable mapping key. It's allowed (and expected
-        // in some cases) to differ from both the slider label
-        // (`spec.name`) and the inner-node param name. Test confirms
-        // nothing in the routing code conflates the three.
-        let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(Feedback::new()));
-        let binding = ParamBinding {
-            id: Cow::Borrowed("blend_strength"),
-            label: "Blend Strength",
-            default_value: 0.5,
-            target: ParamTarget::Node {
-                node: feedback,
-                param: "amount",
-            },
-            convert: ParamConvert::Float,
-        };
-        binding.apply(&mut g, None, 0.42).unwrap();
-        // Routed to Feedback's "amount" param (the target.param), not
-        // anything keyed off the binding's id or spec.name.
-        assert_eq!(
-            g.get_node(feedback).unwrap().params.get("amount"),
-            Some(&ParamValue::Float(0.42))
-        );
-        assert!(
-            g.get_node(feedback)
-                .unwrap()
-                .params
-                .get("blend_strength")
-                .is_none()
-        );
+    fn clear_tail_preserves_static_prefix_cache_entries() {
+        let mut cache = LastAppliedCache::new();
+        cache.entries = vec![
+            BindingCacheEntry::Applied(0.5),
+            BindingCacheEntry::Applied(0.7),
+            BindingCacheEntry::Applied(0.9),
+        ];
+        cache.clear_tail(1); // n_static = 1
+        assert_eq!(cache.entries, vec![BindingCacheEntry::Applied(0.5)]);
     }
 
     #[test]

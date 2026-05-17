@@ -48,9 +48,9 @@ pub use metadata::metadata_by_id;
 pub use metal_backend::MetalBackend;
 pub use palette::{catalog_graph_def_for, palette_atoms, PaletteAtom};
 pub use param_binding::{
-    BindingCacheEntry, LastAppliedCache, ParamBinding, ParamConvert, ParamId, ParamTarget,
-    UserParamBindingRuntime, apply_binding_defaults, apply_param_bindings, binding_value,
-    outer_routings_from_bindings, user_binding_to_runtime, user_binding_to_runtime_with_handles,
+    BindingCacheEntry, BindingSource, LastAppliedCache, ParamBinding, ParamConvert, ParamId,
+    ParamTarget, ResolvedBinding, ResolvedTarget, apply_binding_defaults, apply_bindings,
+    binding_value, outer_routings_from_bindings,
 };
 pub use parameters::{ParamDef, ParamType, ParamValue};
 pub use persistence::{

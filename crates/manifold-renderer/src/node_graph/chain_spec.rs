@@ -66,7 +66,7 @@ pub struct ChainSpec {
     /// target ([`ParamTarget::HandleNode`]) in one place.
     ///
     /// Per-frame value flow uses
-    /// [`apply_param_bindings`](crate::node_graph::apply_param_bindings)
+    /// [`apply_bindings`](crate::node_graph::apply_bindings)
     /// with a [`LastAppliedCache`](crate::node_graph::LastAppliedCache)
     /// seeded from these bindings' defaults — so per-card edits to
     /// inner-node params survive when the outer slot is at rest, and
