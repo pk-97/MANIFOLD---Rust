@@ -391,6 +391,17 @@ pub struct EffectInstance {
     effect_type: EffectTypeId,
     pub enabled: bool,
     pub collapsed: bool,
+    /// Positional parameter storage. The first
+    /// `effect_definition_registry::get(&effect_type).param_count`
+    /// slots correspond to the effect's static-spec bindings in
+    /// declaration order; the remaining slots correspond to
+    /// [`Self::user_param_bindings`] in declaration order. After the
+    /// bindings unification (Phases 1–4 of
+    /// `docs/BINDINGS_UNIFICATION_PLAN.md`) this layout maps directly
+    /// onto the renderer's `EffectSlot.bindings[i]` — no parallel
+    /// structure to keep in sync. Resolve `ParamId → index` via
+    /// [`Self::param_id_to_value_index`]; that helper is the single
+    /// tier-aware lookup the rest of the codebase relies on.
     pub param_values: Vec<ParamSlot>,
     pub base_param_values: Option<Vec<f32>>,
     pub drivers: Option<Vec<ParameterDriver>>,

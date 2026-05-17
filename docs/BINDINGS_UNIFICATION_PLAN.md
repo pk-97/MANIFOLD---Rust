@@ -1,10 +1,10 @@
 # Bindings Unification Plan
 
-**Status:** Draft 2, 2026-05-17. Phase 1 shipped (`1decd1a4`). Phase 2 added
-after the user reproduced a second instance of the same parallel-tier smell
-— this time at the UI ↔ bridge wire-format boundary: drivers and envelopes
-can't be attached to user-exposed params because the bridge's positional
-`pi → ParamId` lookup only consults the static registry.
+**Status:** All 5 phases shipped 2026-05-17 (`1decd1a4` → `9073daa9`).
+This document is now the historical record of the work. See
+`docs/EFFECT_RUNTIME_UNIFICATION.md` §7.11 for the closure summary
+and `MEMORY.md → project_bindings_unified_2026_05.md` for the
+agent-readable invariants future contributors should preserve.
 
 **Goal:** Collapse every parallel-tier path between "static spec bindings"
 and "per-instance user bindings" so that one source serves both at every
@@ -232,7 +232,7 @@ or external API change, so a revert is safe at any point.
 
 ---
 
-### Phase 2 — UI ↔ bridge wire-format collapse
+### Phase 2 — UI ↔ bridge wire-format collapse — `[completed 2026-05-17, dfbeb1f1]`
 
 **Goal:** Eliminate the positional `pi → ParamId` translation step at the
 UI ↔ bridge boundary. `PanelAction` variants that address a single
@@ -371,7 +371,7 @@ at any point.
 
 ---
 
-### Phase 3 — Outer routing + handle-resolution cleanup
+### Phase 3 — Outer routing + handle-resolution cleanup — `[completed 2026-05-17, 6070031e]`
 
 **Goal:** The graph editor's "Effect Parameters" panel and the outer-card
 routing display walk one list. `ParamTarget::HandleNode` becomes a parse-time
@@ -427,7 +427,7 @@ construct only.
 
 ---
 
-### Phase 4 — Convert simplification
+### Phase 4 — Convert simplification — `[completed 2026-05-17, 9073daa9]`
 
 **Goal:** Eliminate dead `ParamConvert` variants and unify the
 core-side `UserParamConvert` with the renderer-side `ParamConvert`.
@@ -480,7 +480,7 @@ for review, each is independently revertable.
 
 ---
 
-### Phase 5 — Documentation + closure
+### Phase 5 — Documentation + closure — `[completed 2026-05-17]`
 
 **Goal:** Capture the new invariants in code comments and reference docs.
 No behaviour change.

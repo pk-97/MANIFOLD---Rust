@@ -642,6 +642,91 @@ Generator-specific concerns:
 
 `MacroSlot::ableton_mapping: Option<AbletonParamMapping>` references its own `param_index` for the macro's own value (a macro is itself a parameter that Ableton can map). The pattern recurses cleanly: macros become identifiable by their ID just like effects.
 
+### 7.11 Bindings unification (Phases 1–4, May 2026)
+
+The earlier sections of §7 describe the *first* shape of the binding
+system, where a renderer-side `ParamBinding` (static spec) and a
+core-side `UserParamBinding` (per-instance) lived as parallel
+structures. That parallel split survived for months before a user-
+visible bug (an exposed slider that silently no-op'd) made it clear
+the duality was load-bearing in only one direction — the runtime did
+not need it. Phases 1–4 of `docs/BINDINGS_UNIFICATION_PLAN.md`
+collapsed every parallel-tier path. The end-state matters for anyone
+extending the binding system later, so it's captured here.
+
+**Runtime (Phase 1, `1decd1a4`).** One `ResolvedBinding` type per
+effect slot — a `Vec<ResolvedBinding>` of length `n_static + n_user`,
+with `bindings[0..n_static]` hydrated from `ChainSpec.bindings` via
+`ResolvedBinding::from_static` and `bindings[n_static..]` hydrated
+from `EffectInstance.user_param_bindings` via
+`ResolvedBinding::from_user`. The apply path walks one slice through
+one loop, hitting one `LastAppliedCache.entries` parallel vec.
+`apply_binding_defaults` walks the unified slice so the cache's
+`Applied(default)` claim holds for both tiers. The runtime
+resolved-target enum has only `Node | Composite | Custom` —
+`HandleNode` is parse-time only and resolves at chain build.
+Acceptance: the `&[]` second-slice bug class is unrepresentable
+because there is no second slice.
+
+**UI ↔ bridge wire format (Phase 2, `dfbeb1f1`).** Per-param
+`PanelAction` variants carry `manifold_core::effects::ParamId`, not
+positional `pi: usize`. `EffectParamInfo` / `GenParamInfo` carry
+`param_id` populated at `state_sync.rs`. `AbletonPickerContext::*Param`
+and `DropdownContext::*ParamContext` likewise. `ActiveInspectorDrag::
+{EffectParam, GenParam}` records carry `param_id`. The bridge
+handlers in `crates/manifold-app/src/ui_bridge/inspector.rs` consume
+`ParamId` directly; no `pi → ParamId` translation, no
+`effect_param_id`/`generator_param_id` helpers (deleted).
+Acceptance: every modulation surface (drivers, envelopes, Ableton
+macro mapping, "Map to Macro", expose toggles) works on user-
+exposed sliders the same way it works on registry params, because
+the wire format gives the bridge a `ParamId` directly. A future
+handler can't reintroduce the bug — there's no positional index
+step to misroute.
+
+**Outer routing source tag (Phase 3, `6070031e`).** The snapshot's
+`OuterParamRouting` carries `source: OuterParamSource`
+(`Static | User`). `outer_routings_from_bindings` (runtime walk
+over `Vec<ResolvedBinding>`) translates the binding's tier source
+to the snapshot's tier marker. The registry walk in
+`effect_registry::outer_routings_from_spec` always emits `Static`
+(it operates on compile-time `ChainSpec.bindings` only). UI
+consumers no longer re-derive the static-vs-user split from
+external context.
+
+**Convert enum merge (Phase 4, `9073daa9`).** The renderer-side
+`ParamConvert` and core-side `UserParamConvert` were two enums with
+overlapping shape. The Phase 4 collapse: deleted the renderer-
+exclusive `EnumRemap(Cow<'static, [u32]>)` and `FloatTransform(fn)`
+variants (both callerless — their curation moved into the
+primitives), renamed core's `UserParamConvert` to `ParamConvert`,
+deleted the renderer-side enum, exposed it via `pub use
+manifold_core::effects::ParamConvert`. The `ParamValue` conversion
+moved to a free function `convert_param_value(c, value)` in the
+renderer because `ParamValue` can't cross into core. `ParamConvert`
+is now `Copy`. The serde wire form is unchanged
+(`{"type": "Float"|"IntRound"|"BoolThreshold"|"EnumRound"}` tagged
+enum). The audit's `[CURATED]` row is structurally zero — a future
+curation variant would fail the audit test as a reauthorisation
+gate.
+
+**Net architecture after Phase 5.** Three layers, one model:
+
+1. **Source side.** Two tiers persist — registry-declared static
+   bindings in `inventory::submit!` blocks and per-instance user
+   bindings in `EffectInstance.user_param_bindings`. Different
+   lifetimes, different persistence stories.
+2. **Runtime side.** One `Vec<ResolvedBinding>` per slot. One apply
+   loop. One cache. The runtime is tier-blind.
+3. **External addressing.** One `ParamId` namespace shared by both
+   tiers. OSC, MIDI, Ableton macros, drivers, envelopes,
+   modulation evaluators, UI ↔ bridge wire — every external surface
+   addresses by string id and walks both tiers transparently.
+
+This is the end-state. The plan documents the rationale, the bugs
+that motivated each phase, and the acceptance criteria in detail:
+`docs/BINDINGS_UNIFICATION_PLAN.md`.
+
 ---
 
 ## 8. Stateful effects inventory
