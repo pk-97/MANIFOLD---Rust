@@ -825,3 +825,132 @@ Whoever picks this up: the rename script (`scripts/audit_rename.py`) is *not* th
 - **Display label casing.** Current mix: `Title Case` (`Edge Detect`, `Block Size`), `PascalCase` (`TintHue`, `ZScale`), abbreviations (`HDR Ret`). Confirm `Title Case With Spaces` as the rule.
 - **Type id rename migration shape.** `EffectValueAliasMetadata` exists for enum-value remaps. For type id renames we need a sibling: `EffectTypeAliasMetadata` mapping old type id strings to new. Stamp this once; reuse for the HDR Boost and Edge Detect renames.
 
+---
+
+## 10. Toward a real composition surface (2026-05-17)
+
+The §9 audit finished the cosmetic and structural cleanup. This section is about what the catalog needs *next* — the substantive expressiveness work that turns the graph editor from "fancy serial chain of fused effects" into a real composition surface where new aesthetic operators can emerge.
+
+### 10.1 The diagnosis
+
+The current "primitive library" is two strata that have been collapsed:
+
+- **Aesthetic operators** (~18 nodes): `bloom`, `watercolor`, `glitch`, `halation`, `voronoi_prism`, `infrared`, `color_grade`, `kaleido_fold`, `quad_mirror`, `chromatic_offset`, `auto_gain`, `blob_track`, `wireframe_depth`, `highlight_boost`, `depth_of_field`, `clamp_stretch`, `strobe`, `dither_pattern`. Each is a full shader effect with one or two opinionated knobs. They carry an *aesthetic stance* — `watercolor` isn't "small kernel blur + noise + edge enhance," it's *watercolor*. Internal composition doesn't matter to the user; the look does.
+- **Atomic operators** (~13 nodes): `mix`, `blend`, `wet_dry`, `blur`, `gaussian_blur`, `mip_chain`, `threshold`, `edge_detect`, `transform`, `sample`, `affine_transform`, `feedback`, `brightness`, `channel_mix`, `color_ramp`, `color_lut`, `invert`. The building blocks. Mostly scalar-uniform, single-texture-in single-texture-out.
+
+The aesthetic layer is the differentiator from TouchDesigner — TD has overwhelmingly atomic catalogs, so user compositions converge on a recognizable "TD look" (feedback + bloom + chromatic + raymarched SDFs + particles). MANIFOLD's aesthetic operators carry taste that prevents that convergence *as long as the catalog keeps growing*. If it stagnates, users either accept Peter's taste as a ceiling or descend to the atomic layer — at which point the TD look returns.
+
+The atomic layer, meanwhile, is too thin to compose interesting new effects without writing shaders. There's no per-pixel masking (`mix` / `blend` only take scalar amounts), no displacement, no per-pixel math, no procedural mask generation. The graph editor is currently a fancy way to wire pre-built effects together, not a real composition surface.
+
+### 10.2 The vision
+
+Two stratification rules:
+
+1. **Aesthetic operators are the default surface.** Picker shows them front-and-center. Most users live here — drag onto a card, twiddle one or two knobs, done. Catalog grows by deliberate authoring (Peter, AI agents, eventually community), each new operator carrying a distinct stylistic stance (riso, ink-bleed, thermal, oil-on-water, halftone, lo-fi broadcast, photocopier, etc.).
+2. **Atomic operators are the extensibility layer.** Behind an "Advanced" disclosure. For authoring new aesthetic operators, for power users who want TouchDesigner-class composition, and most importantly *for Peter and Claude to compose new shipping aesthetic operators faster than writing one-off shaders.*
+
+The graph editor is the **TouchDesigner / Resolume Wire layer** of MANIFOLD. The effect cards + timeline are the live-performance layer. Both surfaces draw on the same primitive library; they just expose it differently. Complexity in the graph editor is the point, not a cost — that's the surface where users build new aesthetic operators that get saved as presets and appear as cards on the timeline.
+
+The wedge against TouchDesigner: **the in-MANIFOLD graph editor's only defensible reason to exist is its live-performance integration.** Beat/bar/phase as native node types. Presets that are clips on a timeline. MIDI mappings that work the same in the graph and on the cards. Edits that go through the same undo stack as everything else. The ability to fix a buggy graph mid-show without leaving the app. If the graph editor's narrative is "compose effects that are beat-aware and arrangement-integrated" — *not* "general visual programming environment" — it's a genuinely different product than TD, even where the surface looks similar.
+
+### 10.3 The plan — five phases
+
+#### Phase A — Texture primitives (~1-2 weeks, low risk)
+
+Six new atomic primitives. Pure additive to the existing catalog, no architectural change. Each = WGSL shader + Rust wrapper + `primitive!` macro + smoke test + one hand-authored preset that uses it.
+
+| Primitive | Signature | What it unlocks |
+|---|---|---|
+| `masked_mix` | `(a: T2D, b: T2D, mask: T2D, amount: f32) → T2D` | Per-pixel mask compositing. Single biggest unlock. Enables luma-keyed grades, edge-gated effects, threshold-bloom-in-shadows. |
+| `displacement_map` | `(source: T2D, displace: T2D, strength: f32) → T2D` | Sample source at `uv + displace.rg * strength`. Heat haze, refraction, organic warping, displacement-mapped feedback. |
+| `math_op` | `(a: T2D, b: T2D, op: enum) → T2D` | Per-pixel add/sub/mul/div/min/max. Difference imaging (motion detection), additive light passes, multiplicative tinting. |
+| `luma_key` | `(source: T2D, range: vec2, softness: f32) → mask` | Texture → mask. The "where do I want to apply this" generator. |
+| `noise` | `(scale: vec2, octaves: int, time: f32, type: enum) → T2D` | Perlin / Simplex / Worley / value noise. Generative masks, organic distortion maps (feed into displacement_map), procedural dither. |
+| `sdf_shape` | `(shape: enum, size: vec2, smoothness: f32) → T2D` | Procedural geometric masks. Circles, boxes, lines, radial gradients. Vignettes, spotlights, beat-synced reveals. |
+
+*Validation*: each gets a smoke test (runs without panic) and a determinism test (same input + params = same output bytes). No legacy parity test possible — these are new shaders.
+
+*Phase A is the validation that the primitive surface is the right shape before any architectural work begins.* If one of the six is awkward in practice or needs an extra port, that's cheaper to discover in week 1 than in week 6.
+
+#### Phase B — Control wire architecture (~3-4 weeks, high risk, design-heavy)
+
+The architectural lift. Where almost all the design risk lives.
+
+- **B1: Port type extension.** Add `PortType::Float / Vec2 / Vec4` alongside `Texture2D`. Validation rules. Float→VecN broadcast (replicate Float across components, by default).
+- **B2: Two-pass per-frame runtime.** Control signals evaluate in topological order *before* texture nodes. Results stored in a frame-local `ControlValues` map keyed by `(node_id, port_name)`, pre-allocated at chain-build time, reused per frame (hot-path discipline — no per-frame allocation).
+- **B3: `ParamSource::Wire(node, port)` alongside `ParamSource::Constant`.** Per-parameter wire support. Wired parameters pull from the frame's `ControlValues` map; unwired parameters use their `Constant` value as today.
+- **B4: StateStore extension for stateful control nodes.** LFO phase accumulator, smoothing's previous value, sequencer position — same pattern as `Feedback`'s state today.
+- **B5: EffectGraphDef v1 → v2 schema bump.** Wire records added. Existing v1 presets keep loading; new fields default-empty; upgrade on first save.
+
+*What it unlocks for the instrument*: effects whose parameters react to their own content, to audio, to MIDI, to other layers in the project. This is the actual transition from "image pipeline" to "responsive instrument." Combined with Phase A's six texture primitives, this is the full TouchDesigner-class composition surface.
+
+#### Phase C — Control-rate node catalog (~6-8 weeks, batched)
+
+Each batch ships independently. Each subsequent batch builds on what came before.
+
+- **C1 Foundation** (5 nodes): `constant`, `lfo`, `math`, `smoothing`, `range_map`. Smallest set that validates the architecture end-to-end. Ship and live with this before C2-C5.
+- **C2 Sources** (6 nodes): `time`, `beat`, `phase`, `midi_cc`, `midi_note`, `osc`, `random`. The "outside world into the graph" set.
+- **C3 Generators** (5 nodes): `envelope`, `step_sequencer`, `ramp`, `math_expression`, `sample_hold`.
+- **C4 Operators** (~8 nodes): `trig`, `curve`, `clamp`, `compare`, `select`, `logic`, `mux`/`demux`, `quantize`.
+- **C5 Bridges** (5 nodes): `brightness`, `peak`, `centroid`, `motion_energy`, `color_sample`. Texture→Control measurements. New infrastructure — these read a texture and produce a scalar/vec2/vec4. Internal frame buffer for `motion_energy` (same pattern as `feedback`).
+- **C6 Audio** (3 nodes): `audio_band`, `audio_amplitude`, `audio_onset`. *Requires `manifold-audio` to become real (currently stub).* Separate sub-project — don't gate the rest of C on it.
+
+*Wire type discipline* (kept minimal):
+- `Texture2D` (existing)
+- `Float`
+- `Vec2`
+- `Vec4` — skip `Vec3` (color is usually rgba; pack into Vec4 with unused alpha if needed)
+
+*Gates* are convention-on-Float (`0 = off, >0 = on`), not a distinct type. Permits free type compatibility — you can multiply a gate by anything, smooth it, average it. The cost is zero compile-time enforcement that you wired a gate where one was expected; mitigated by lint, not by type system. TouchDesigner does this — all CHOP signals are floats; "gate" is purely semantic.
+
+#### Phase D — Editor surface updates (~2-3 weeks, interleaved with C)
+
+- Type-aware pin rendering. Texture pins thick/curved; control pins thin/colored by type.
+- Wired-parameter indicator on sliders. **Both** in the graph editor and on the effect cards on the timeline — so on stage you can see which knobs are being driven from inside the graph and won't respond to MIDI / cards.
+- Right-click to disconnect a wire from a parameter.
+- Picker organization: aesthetic primitives front-and-center, atomic primitives behind "Advanced" disclosure (or via search). Category headers (Stylize, Color, Spatial, Filmic, Diagnostic + new Generative for noise/sdf).
+- Type-mismatch warnings before connection commit.
+
+Interleaves with Phase C rather than landing all at once — each new node category surfaces its own UI gaps to fill.
+
+#### Phase E — Aesthetic operator authoring practice (ongoing, no end date)
+
+- Commit to ~3 new aesthetic operators per release cycle.
+- Each carries a deliberate stylistic stance — riso print, ink-bleed, thermal scan, oil-on-water, halftone, lo-fi broadcast, photocopier, datamosh, oxidation, etc. Different lineages (printmaking, broadcast video, photographic, painterly) rather than all-shader-aesthetic.
+- Tag by stylistic family in the catalog so users browse by lineage rather than alphabetically.
+- AI-authoring infrastructure (primitive-metadata export tool, LLM composition workflow, generated-preset preview loop) joins this phase when Phase B/C/D are stable. The §7 primitive metadata schema is the LLM-readable foundation; the open question is the generation tool itself.
+
+The catalog *must* keep growing or the design philosophy collapses — users exhaust the aesthetic catalog, descend to atomic, the TD look returns. This isn't a phase that completes; it's a practice that has to become routine.
+
+### 10.4 Cross-cutting
+
+- **EffectGraphDef v1 → v2 migration** when Phase B lands. Existing presets keep loading; new fields default-empty; upgrade on first save.
+- **Documentation**: every primitive needs a one-paragraph picker card (purpose, ports, params, example presets). Every aesthetic operator gets an "example presets that use this" cross-reference.
+- **Hot-path discipline**: the per-frame two-pass evaluator (Phase B.2) can't allocate. Pre-allocate the `ControlValues` map at chain-build time, reuse each frame. Same rule as today.
+- **Testing**: parity tests for Phase A texture primitives stay smoke + determinism (no legacy baseline). Control nodes (Phase C) get unit tests for math correctness — control evaluation is CPU-side, doesn't need GPU harness.
+
+### 10.5 Open design questions (resolve before Phase B starts)
+
+1. **Gates as a distinct type or convention-on-Float?** Lean convention. Lint, don't enforce.
+2. **Float→VecN auto-coercion by replication?** Lean yes; permissive wiring.
+3. **Bridge synchrony.** Does this frame's brightness measurement drive this frame's render (synchronous, two-pass evaluator) or last frame's (one-frame-delayed, simpler runtime)? Lean synchronous despite the cost — one frame of lag is perceptible on stage and breaks the "responsive" promise.
+4. **Audio scope.** C6 in the first wave or punted? Lean punt; the rest of C is large enough already and audio DSP is its own beast.
+5. **Picker UI for aesthetic/atomic split.** Tabs, disclosure toggle, or search-only? Lean search-first with category headers in results, plus an explicit "show atomic primitives" toggle.
+6. **Project compatibility.** Clean v2 break or maintain v1 forever? Lean v1 keeps loading read-only, upgrades on first save.
+
+### 10.6 First concrete step
+
+**Phase A.1: build `masked_mix`.** Single shader, two texture inputs + one mask + one scalar amount. Smoke test + determinism test + one hand-authored preset that demos it ("Bloom Only In Shadows" — `Bloom` output as one input, `Source` as the other, `luma_key(threshold=0.5, inverted)` as the mask). About a day of work. If it composes cleanly with existing primitives in the editor, the rest of Phase A is the same template six times and the plan above is validated against reality.
+
+### 10.7 Where this points
+
+The endpoint isn't a TouchDesigner clone. It's a system where:
+
+- Users drag opinionated aesthetic operators onto clips on a timeline and play them like an instrument.
+- The aesthetic catalog grows continuously through deliberate authoring (Peter + AI).
+- Power users who want to build their own effects open the graph editor and compose at either layer — usually aesthetic operators with control wires between them; occasionally atomic primitives for the genuinely novel.
+- New presets save as cards. The user's personal library grows. The aesthetic catalog is the *toolbox*; the preset library is the *instrument*.
+- Beat / bar / phase / MIDI / OSC / audio flow as control signals through the graph the same way they flow through the timeline's perform-mode bindings. Same musical model, two surfaces.
+
+That's the wedge nobody else is building. The graph editor convergence with TouchDesigner is fine — the *integration* with arrangement and live performance is the part that's genuinely MANIFOLD's.
+
