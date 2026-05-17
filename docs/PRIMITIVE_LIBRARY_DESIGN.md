@@ -778,9 +778,46 @@ Two acceptable ranges satisfy this:
 
 **Where this lives in code:** the rule applies at the `ParamSpec` declaration site. No runtime enforcement — convention only, validated by this audit. New rotation params added in future should follow the same rule.
 
+### 9.6 Deferred — type-id renames + future migration tool
+
+**Decision (2026-05-17):** the three internal type-id renames called for in §9.1.3 / §9.2.2 / §9.3.4 — `HdrBoost → HighlightBoost`, `EdgeGlow → EdgeDetect`, `ComputeStrangeAttractor → StrangeAttractor` — are **deferred indefinitely**. Not killed; revisit only when there's a real reason to (a confusing debugging session, a related refactor, etc.).
+
+**Why deferred.** The type-id string is internal-only. The user-facing display names ("Highlight Boost", "Edge Detect", "Strange Attractor") are already correct after this audit. The legacy strings appear in three places only:
+- `.manifold` save files, where users never look.
+- The renderer's `EffectTypeId::HDR_BOOST` etc. constants, whose value happens to be `"HdrBoost"` — a code-readability mismatch, not a behavior bug.
+- Bundled-preset filenames under `assets/effect-presets/` (e.g., `HdrBoost.json`).
+
+The cost of the rename is asymmetric to its value: three string changes, plus a new project-file migration mechanism, plus a bundled-preset filename shuffle, plus migration tests against `Liveschool Live Show V6 LEDS.manifold` to make sure the show still loads. The risk of getting the migration wrong is silent effect-instance loss on load — same failure mode as a timing bug in the engine. Not worth it for a code-cleanup-grade win.
+
+**The right tool to build, when this comes back.** The Phase 7 `EffectAliasMetadata` infrastructure works for *param-id renames within one effect*. Type-id renames need a different shape because the type-id is itself the dispatch key — the loader needs to translate `"HdrBoost"` → `"HighlightBoost"` *before* deciding which effect's deserializer to call. Sketch:
+
+```rust
+// crates/manifold-core/src/effect_type_id_aliases.rs (new)
+pub struct EffectTypeAliasMetadata {
+    pub from: &'static str,   // legacy on-disk string
+    pub to: EffectTypeId,     // current const-mapped EffectTypeId
+}
+inventory::collect!(EffectTypeAliasMetadata);
+
+// Hooked into manifold-io/src/migrate.rs as a JSON-rewrite pass
+// that runs before EffectInstance deserialization. Walks every
+// "effectType": "..." occurrence in the JSON document; if the
+// string matches a registered legacy alias, rewrite to the new
+// type-id string.
+```
+
+Plus the bundled-preset registry in `bundled_presets.rs` needs a parallel alias table so `bundled_preset_def(&EffectTypeId::new("HdrBoost"))` still works for old saves that haven't been resaved yet.
+
+**When to revisit.** Most likely triggers:
+- A bug surfaces where the internal/external name mismatch causes confusion (a colleague asks "why does the code say HdrBoost when the card says Highlight Boost?").
+- We need to add `EffectTypeAliasMetadata` for a different reason (e.g., genuinely renaming an effect because its function changed), and the infrastructure becomes free to apply to these three too.
+- An LLM-driven refactor pass on the codebase keeps tripping on the inconsistency.
+
+Whoever picks this up: the rename script (`scripts/audit_rename.py`) is *not* the right tool — it does source-code find/replace, not project-file migration. Build the alias metadata + JSON-rewrite pass first, then the source-code changes ride alongside as a single coherent commit gated by a Liveschool round-trip test.
+
 ---
 
-**End of §9.** Next action: build the rename tool, apply the change tables in §9.1.8 / §9.2.7 / §9.3.7.
+**End of §9.** Audit applied across 7 phases (1, 2, 3, 4, 6, 7a, 7b, 7c); ~237 source edits + tooling. Phase 5 deferred per above.
 
 ### 9.4 Open questions
 
