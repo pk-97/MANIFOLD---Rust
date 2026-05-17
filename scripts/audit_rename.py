@@ -1448,6 +1448,149 @@ RENAMES: list[Rename] = [
         old='ParamSpec::continuous("count_m", "Count (M)", 0.1, 2.0, 0.5, "F1", "count"),',
         new='ParamSpec::continuous("count_m", "Particle Count", 0.1, 2.0, 0.5, "F1", "M"),',
     ),
+
+    # ========================================================================
+    # Phase 7a — Param id renames where outer and inner already align.
+    #
+    # Each id rename touches 4 sites per effect:
+    #   1. Import: `EffectMetadata` → `{EffectAliasMetadata, EffectMetadata}`
+    #   2. New inventory submission for `EffectAliasMetadata` with the rename
+    #      mapping. Saved projects with the old id keep loading.
+    #   3. ParamSpec id (in EffectMetadata.params).
+    #   4. ParamBinding id (in atomic_chain_spec! bindings).
+    #
+    # The OSC suffix (last ParamSpec arg) is separate from the id — OSC
+    # paths use the suffix, not the id, so this rename is OSC-safe.
+    # ========================================================================
+
+    # ── Kaleidoscope: segs → segments ──────────────────────────────────
+    Rename(
+        desc="Kaleidoscope: add EffectAliasMetadata import",
+        file=effect("kaleidoscope"),
+        old='use manifold_core::effect_registration::EffectMetadata;',
+        new='use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};',
+    ),
+    Rename(
+        desc="Kaleidoscope: insert EffectAliasMetadata submission",
+        file=effect("kaleidoscope"),
+        old='''inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::KALEIDOSCOPE,
+        create: |device| Box::new(KaleidoscopeFX::new(device)),
+    }
+}''',
+        new='''inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::KALEIDOSCOPE,
+        create: |device| Box::new(KaleidoscopeFX::new(device)),
+    }
+}
+
+inventory::submit! {
+    EffectAliasMetadata {
+        id: EffectTypeId::KALEIDOSCOPE,
+        aliases: &[("segs", Some("segments"))],
+    }
+}''',
+    ),
+    Rename(
+        desc="Kaleidoscope: ParamSpec id segs → segments",
+        file=effect("kaleidoscope"),
+        old='ParamSpec::whole("segs", "Segments", 2.0, 16.0, 6.0, "Segments"),',
+        new='ParamSpec::whole("segments", "Segments", 2.0, 16.0, 6.0, "Segments"),',
+    ),
+    Rename(
+        desc="Kaleidoscope: ParamBinding id segs → segments",
+        file=effect("kaleidoscope"),
+        old='id: Cow::Borrowed("segs"),',
+        new='id: Cow::Borrowed("segments"),',
+    ),
+
+    # ── Glitch: block → block_size ─────────────────────────────────────
+    Rename(
+        desc="Glitch: add EffectAliasMetadata import",
+        file=effect("glitch"),
+        old='use manifold_core::effect_registration::EffectMetadata;',
+        new='use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};',
+    ),
+    Rename(
+        desc="Glitch: insert EffectAliasMetadata submission",
+        file=effect("glitch"),
+        old='''inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::GLITCH,
+        create: |device| Box::new(GlitchFX::new(device)),
+    }
+}''',
+        new='''inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::GLITCH,
+        create: |device| Box::new(GlitchFX::new(device)),
+    }
+}
+
+inventory::submit! {
+    EffectAliasMetadata {
+        id: EffectTypeId::GLITCH,
+        aliases: &[("block", Some("block_size"))],
+    }
+}''',
+    ),
+    Rename(
+        desc="Glitch: ParamSpec id block → block_size",
+        file=effect("glitch"),
+        old='ParamSpec::continuous("block", "Block Size", 4.0, 64.0, 16.0, "F2", "BlockSize"),',
+        new='ParamSpec::continuous("block_size", "Block Size", 4.0, 64.0, 16.0, "F2", "BlockSize"),',
+    ),
+    Rename(
+        desc="Glitch: ParamBinding id block → block_size",
+        file=effect("glitch"),
+        old='id: Cow::Borrowed("block"),',
+        new='id: Cow::Borrowed("block_size"),',
+    ),
+
+    # ── Transform: rot → rotation ──────────────────────────────────────
+    Rename(
+        desc="Transform: add EffectAliasMetadata import",
+        file=effect("transform"),
+        old='use manifold_core::effect_registration::EffectMetadata;',
+        new='use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};',
+    ),
+    Rename(
+        desc="Transform: insert EffectAliasMetadata submission",
+        file=effect("transform"),
+        old='''inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::TRANSFORM,
+        create: |device| Box::new(TransformFX::new(device)),
+    }
+}''',
+        new='''inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::TRANSFORM,
+        create: |device| Box::new(TransformFX::new(device)),
+    }
+}
+
+inventory::submit! {
+    EffectAliasMetadata {
+        id: EffectTypeId::TRANSFORM,
+        aliases: &[("rot", Some("rotation"))],
+    }
+}''',
+    ),
+    Rename(
+        desc="Transform: ParamSpec id rot → rotation",
+        file=effect("transform"),
+        old='ParamSpec::continuous("rot", "Rotation", -180.0, 180.0, 0.0, "F2", ""),',
+        new='ParamSpec::continuous("rotation", "Rotation", -180.0, 180.0, 0.0, "F2", ""),',
+    ),
+    Rename(
+        desc="Transform: ParamBinding id rot → rotation",
+        file=effect("transform"),
+        old='id: Cow::Borrowed("rot"),',
+        new='id: Cow::Borrowed("rotation"),',
+    ),
 ]
 
 

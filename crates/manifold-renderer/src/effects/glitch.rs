@@ -5,7 +5,7 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::Glitch;
 use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
-use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
 use std::borrow::Cow;
@@ -20,7 +20,7 @@ inventory::submit! {
         legacy_discriminant: Some(32),
         params: &[
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
-            ParamSpec::continuous("block", "Block Size", 4.0, 64.0, 16.0, "F2", "BlockSize"),
+            ParamSpec::continuous("block_size", "Block Size", 4.0, 64.0, 16.0, "F2", "BlockSize"),
             ParamSpec::continuous("rgb_shift", "RGB Shift", 0.0, 0.05, 0.01, "F2", "RGBShift"),
             ParamSpec::continuous("scanline", "Scanline", 0.0, 1.0, 0.3, "F2", "Scanline"),
             ParamSpec::continuous("speed", "Speed", 0.1, 10.0, 2.0, "F2", "Speed"),
@@ -31,6 +31,13 @@ inventory::submit! {
     EffectFactory {
         id: EffectTypeId::GLITCH,
         create: |device| Box::new(GlitchFX::new(device)),
+    }
+}
+
+inventory::submit! {
+    EffectAliasMetadata {
+        id: EffectTypeId::GLITCH,
+        aliases: &[("block", Some("block_size"))],
     }
 }
 
@@ -47,7 +54,7 @@ crate::atomic_chain_spec! {
             convert: ParamConvert::Float,
         },
         ParamBinding {
-            id: Cow::Borrowed("block"),
+            id: Cow::Borrowed("block_size"),
             label: "Block Size",
             default_value: 16.0,
             target: ParamTarget::HandleNode { handle: "glitch", param: "block_size" },

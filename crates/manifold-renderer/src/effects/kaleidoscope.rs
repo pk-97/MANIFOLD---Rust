@@ -5,7 +5,7 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::KaleidoFold;
 use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
-use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
 use std::borrow::Cow;
@@ -20,7 +20,7 @@ inventory::submit! {
         legacy_discriminant: Some(14),
         params: &[
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
-            ParamSpec::whole("segs", "Segments", 2.0, 16.0, 6.0, "Segments"),
+            ParamSpec::whole("segments", "Segments", 2.0, 16.0, 6.0, "Segments"),
         ],
     }
 }
@@ -28,6 +28,13 @@ inventory::submit! {
     EffectFactory {
         id: EffectTypeId::KALEIDOSCOPE,
         create: |device| Box::new(KaleidoscopeFX::new(device)),
+    }
+}
+
+inventory::submit! {
+    EffectAliasMetadata {
+        id: EffectTypeId::KALEIDOSCOPE,
+        aliases: &[("segs", Some("segments"))],
     }
 }
 
@@ -44,7 +51,7 @@ crate::atomic_chain_spec! {
             convert: ParamConvert::Float,
         },
         ParamBinding {
-            id: Cow::Borrowed("segs"),
+            id: Cow::Borrowed("segments"),
             label: "Segments",
             default_value: 6.0,
             target: ParamTarget::HandleNode { handle: "kaleidoscope", param: "segments" },
