@@ -360,3 +360,200 @@ This is the JSON shape an AI agent reads to learn what's available. The composit
 ---
 
 **Next concrete step:** §6.0 — build the parity test framework. Without it nothing downstream is verifiable.
+
+---
+
+## 9. Naming + UX audit (2026-05-17, ongoing)
+
+**Goal:** before the next round of authoring on top of the graph-editor work, sweep the user-facing names, ranges, and defaults so the surface reads coherently. Carried out one layer at a time; audit findings here drive a per-effect / per-primitive rename pass executed through the rename script (built once we know the rename volume).
+
+### 9.1 Layer 1 — Outer-card slider surface (25 effects)
+
+The card UI surface comes from two sources that must agree:
+
+- `EffectMetadata.params: &[ParamSpec]` — the slider definition (id, label, range, default, format, unit string). Drives the card render and OSC.
+- `ChainSpec.bindings: &[ParamBinding]` — the routing from each outer slider to an inner-node param. Has its own `id` + `label` (must match `EffectMetadata.params`) and `target.param` (the inner-node param name).
+
+Inventory captured (raw): every shipping effect's outer-card surface. Findings below; per-effect change table in §9.1.4.
+
+#### 9.1.1 Truncated labels — drop the abbreviation tax
+
+Most labels still wear the Unity ~12-pixel-column budget. We no longer have that constraint; the card lays out flexibly. Worth restoring full English everywhere:
+
+| Effect | Current label | Proposed label |
+|---|---|---|
+| Kaleidoscope | `Segs` | `Segments` |
+| Edge Stretch | `Dir` | `Direction` |
+| Dither | `Algo` | `Pattern` (more honest than `Algorithm`) |
+| HDR Boost | `Thresh` | `Threshold` |
+| Edge Detect | `Thresh` | `Threshold` |
+| Halation | `Thresh` | `Threshold` |
+| Color Grade | `Sat` | `Saturation` |
+| Color Grade | `TintHue` | `Tint Hue` |
+| Color Grade | `TintSat` | `Tint Saturation` |
+| Color Grade | `Focus` | `Tint Focus` (clarifies which "focus" — confusion with DoF.Focus) |
+| Halation | `Sat` | `Saturation` |
+| Transform | `Rot` | `Rotation` |
+| Auto Gain | `Char` | `Character` |
+| Auto Gain | `HDR Ret` | `HDR Retention` |
+| Blob Track | `Sens` | `Sensitivity` |
+| Blob Track | `Smooth` | `Smoothing` |
+| Wireframe Depth | `ZScale` | `Z Scale` |
+| Wireframe Depth | `WireRes` | `Wire Resolution` |
+| Wireframe Depth | `MeshRate` | `Mesh Rate` |
+| Wireframe Depth | `EdgeFollow` | `Edge Follow` |
+| Glitch | `RGB Shift` | (keep — RGB is canonical) |
+| Glitch | `Block` | `Block Size` |
+
+Param **id**s on the wire follow snake_case English: `segments`, `direction`, `pattern`, `threshold`, `saturation`, `tint_hue`, `tint_saturation`, `tint_focus`, `rotation`, `character`, `hdr_retention`, `sensitivity`, `smoothing`, `z_scale`, `wire_resolution`, `mesh_rate`, `edge_follow`, `block_size`.
+
+#### 9.1.2 Outer ↔ inner param name divergence
+
+Today the outer slider has a short id (`thresh`, `algo`, `dir`, `sens`, `rot`) but the binding routes to an inner-node param with the full word (`threshold`, `algorithm`, `mode`, `sens`, `rotation`). The label-rename in §9.1.1 naturally collapses this — the outer id becomes the inner id, and the `target.param` mapping in the binding is a no-op:
+
+```rust
+// Before
+ParamBinding { id: "thresh", target: HandleNode { param: "threshold" } }
+
+// After
+ParamBinding { id: "threshold", target: HandleNode { param: "threshold" } }
+```
+
+The remaining intentional divergences (where the outer name is genuinely different from the inner) are few:
+
+- `EdgeStretch.dir` → `ClampStretch.mode` — the outer asks "which direction does this stretch?", the inner is named "mode" because the primitive is a generic clamp-stretch with 3 modes. Either keep this divergence (outer label = "Direction", inner param = `mode`), or rename the inner `mode` → `direction`. Recommended: rename the primitive's param. Inner naming should describe what the param means, not what it is.
+
+#### 9.1.3 Display name ↔ type id mismatches
+
+- `EffectTypeId::HDR_BOOST` (file `hdr_boost.rs`, on-disk string `HdrBoost`) but display name is `"Highlight Boost"`. The internal name and the user-facing name disagree. **Recommendation:** rename internally to `HighlightBoost`. The save file gets a `legacy_value_aliases`-style migration: old `"HdrBoost"` → new `"HighlightBoost"`.
+- `EffectTypeId::EDGE_DETECT` value is `"EdgeGlow"` but the const is `EDGE_DETECT` and the display name is `"Edge Detect"`. The string is from a long-ago rename. **Recommendation:** migrate the on-disk type id from `"EdgeGlow"` to `"EdgeDetect"` (matches display + const).
+- `EffectTypeId::new("Watercolor")` (file `watercolor.rs`) uses raw `EffectTypeId::new` rather than a `pub const WATERCOLOR`. Minor — add the const for consistency with every other effect.
+
+#### 9.1.4 Categories — small, mostly OK
+
+Current categories: `Spatial`, `Post-Process`, `Filmic`, `Surveillance`. Findings:
+
+- `Spatial` has only Transform and InvertColors. **Invert is a color operation, not a spatial one.** Move it to a new `Color` category — joined by ColorGrade, Infrared, Dither (which is technically Color+Spatial but renders as a color-quantization pass).
+- `Surveillance` has only Infrared, plus Blob Track is `Post-Process` despite the surveillance-y aesthetic. Either rename `Surveillance` → `Scientific` and pull Blob Track + Wireframe Depth into it, or fold Infrared into `Color`. Recommendation: **fold Infrared into Color**, **rename Surveillance → Diagnostic**, **move Blob Track + Wireframe Depth into Diagnostic** (they both annotate the image with overlays, that's the genre).
+- `Filmic` (Bloom, Halation, Chromatic Aberration, HDR Boost / Highlight Boost, DoF, Glitch) reads consistently — keep.
+- `Post-Process` is the dump-everything-else category. Consider splitting:
+  - `Stylize` (Watercolor, Stylized Feedback, Soft Focus, Kaleidoscope, Mirror, Quad Mirror, Edge Stretch, Voronoi Prism, Strobe, Auto Gain)
+  - `Color` (Color Grade, Invert, Infrared, Dither)
+  - `Spatial` (Transform — alone, but it's load-bearing)
+  - `Diagnostic` (Edge Detect, Blob Track, Wireframe Depth)
+- `Edge Detect` is currently `Post-Process` — recommend `Diagnostic` (it's a "see the structure" tool, not a stylize).
+
+Proposed final categories: **Spatial**, **Color**, **Stylize**, **Filmic**, **Diagnostic**. Five buckets, each populated.
+
+#### 9.1.5 Default `amount` — pick a rule
+
+Today inconsistent. About half default to 0 (so adding does nothing visible), half default to non-zero:
+
+| Default | Effects |
+|---|---|
+| `amount = 0` (effect invisible on add) | Kaleidoscope, Edge Detect, Dither, Halation, Glitch, Strobe, Voronoi Prism, Chromatic Aberration, Color Grade, Infrared, HDR Boost, DoF, Blob Track |
+| `amount = 1.0` (effect at full strength on add) | Invert, Edge Stretch, Mirror, Quad Mirror, Wireframe Depth |
+| `amount = 0.5` (subtle/strong continuum) | Stylized Feedback, Soft Focus, Auto Gain, Watercolor |
+| Other | Bloom (`0.187`) |
+| No `amount` slider | Transform (4 params: x, y, zoom, rotation — each at identity default) |
+
+The principle worth picking: **"Adding an effect should produce a visible result."** Otherwise the user has to drag a slider just to confirm the effect is wired. Recommend:
+
+- Default `amount = 1.0` for effects with a binary "off / on at full strength" reading (Invert, Edge Stretch, Mirror, Quad Mirror, Wireframe Depth, Kaleidoscope, Strobe, Voronoi Prism, Color Grade, Infrared, Edge Detect, Chromatic Aberration, Glitch, HDR Boost, DoF, Dither, Halation).
+- Default `amount = 0.5` for effects with subtle/strong continuum where 1.0 would visually overwhelm (Bloom — currently 0.187, but 0.5 reads better; Stylized Feedback, Soft Focus, Auto Gain, Watercolor, Blob Track).
+
+This is **the largest UX win** in the audit — every effect becomes self-demonstrating on add.
+
+#### 9.1.6 Unit strings — inconsistent
+
+The 6th `ParamSpec::continuous` field is the unit string. Today it's a mess:
+
+- Empty strings: most `amount` params, Invert's everything.
+- Pascal-case English: `"Threshold"`, `"Knee"`, `"BlockSize"`, `"FocusPosition"`, `"BlurStrength"`, `"TiltAngle"` — these read as documentation labels, not units.
+- Domain units: `"px"` (Soft Focus's radius — the only effect using actual unit notation).
+- Repeated names: most are just the param's own label repeated (`"Gain"`, `"Saturation"`, `"Speed"` — informational, not unit).
+
+The field is meant to be a unit (`Hz`, `px`, `°`, `dB`). **Recommendation:** drop unit strings that aren't actual units. Audit each: keep `"px"`, `"°"`, `"Hz"`, `"dB"`; clear everything else. Maybe add `"°"` to Transform.rotation, ColorGrade.hue, Halation.hue, DoF.angle.
+
+#### 9.1.7 Range oddities
+
+A few values worth questioning:
+
+- Edge Stretch `Width` range `[0.1, 0.9]`, default `0.433` — why not `0.5`? Random-looking number, probably ported from a Unity asset's saved value. **Recommend default 0.5.**
+- Voronoi Prism `Cell Size` (source_width) range `[0.1, 1.0]`, default `0.5625` — same as above. **Recommend default 0.5.**
+- Bloom `amount` default `0.187` — looks like a saved value, not a designed default. **Recommend default 0.5** (per §9.1.5).
+- Wireframe Depth `width` default `1.335` — same family. **Recommend default 1.0 or 1.5.**
+- Wireframe Depth `subject` default `0.52` — same. **Recommend default 0.5.**
+- Wireframe Depth `smooth` default `0.90` upper bound `0.98` — that's a strange ceiling. If the param is bounded `[0, 1]` everywhere else, allow the full range. **Recommend `[0, 1]` with default `0.9`.**
+- Watercolor `displace` range `[0.0001, 0.01]` — tiny range, requires F4 format. Consider scaling: range `[0, 1]` internally with a `0.0001 + value * 0.0099` transform inside the primitive. Removes a magic-number "where do I set this slider" question.
+- Watercolor `decay` range `[0.9, 1.0]` — same, narrow range. Consider scaling.
+
+#### 9.1.8 Per-effect change table (preview)
+
+This is the **action list** the rename script consumes. Fields: effect, change-kind, old, new.
+
+| Effect | Kind | Old | New |
+|---|---|---|---|
+| Kaleidoscope | label+id | `segs` / `Segs` | `segments` / `Segments` |
+| Edge Stretch | label+id | `dir` / `Dir` | `direction` / `Direction` |
+| Edge Stretch | default | `width=0.433` | `width=0.5` |
+| Edge Stretch | category | `Post-Process` | `Spatial` |
+| Dither | label+id | `algo` / `Algo` | `pattern` / `Pattern` |
+| Dither | category | `Post-Process` | `Color` |
+| HDR Boost | rename | type_id `HdrBoost` | type_id `HighlightBoost` (with alias) |
+| HDR Boost | label+id | `thresh` / `Thresh` | `threshold` / `Threshold` |
+| Edge Detect | label+id | `thresh` / `Thresh` | `threshold` / `Threshold` |
+| Edge Detect | type_id-rename | `EdgeGlow` | `EdgeDetect` (with alias) |
+| Edge Detect | category | `Post-Process` | `Diagnostic` |
+| Halation | label+id | `thresh` / `Thresh` | `threshold` / `Threshold` |
+| Halation | label+id | `sat` / `Sat` | `saturation` / `Saturation` |
+| Color Grade | label+id | `sat` / `Sat` | `saturation` / `Saturation` |
+| Color Grade | label+id | `tint_hue` / `TintHue` | (keep id, label → `Tint Hue`) |
+| Color Grade | label+id | `tint_sat` / `TintSat` | `tint_saturation` / `Tint Saturation` |
+| Color Grade | label+id | `focus` / `Focus` | `tint_focus` / `Tint Focus` |
+| Color Grade | category | `Post-Process` | `Color` |
+| Transform | label+id | `rot` / `Rot` | `rotation` / `Rotation` |
+| Auto Gain | label+id | `char` / `Char` | `character` / `Character` |
+| Auto Gain | label+id | `hdr_ret` / `HDR Ret` | `hdr_retention` / `HDR Retention` |
+| Blob Track | label+id | `sens` / `Sens` | `sensitivity` / `Sensitivity` |
+| Blob Track | label+id | `smooth` / `Smooth` | `smoothing` / `Smoothing` |
+| Blob Track | category | `Post-Process` | `Diagnostic` |
+| Wireframe Depth | label+id | `z_scale` / `ZScale` | (keep id, label → `Z Scale`) |
+| Wireframe Depth | label+id | `wire_res` / `WireRes` | `wire_resolution` / `Wire Resolution` |
+| Wireframe Depth | label+id | `mesh_rate` / `MeshRate` | (keep id, label → `Mesh Rate`) |
+| Wireframe Depth | label+id | `edge_follow` / `EdgeFollow` | (keep id, label → `Edge Follow`) |
+| Wireframe Depth | default | `width=1.335` | `width=1.5` |
+| Wireframe Depth | default | `subject=0.52` | `subject=0.5` |
+| Wireframe Depth | range | `smooth=[0,0.98]` | `smooth=[0,1]` |
+| Wireframe Depth | category | `Post-Process` | `Diagnostic` |
+| Glitch | label+id | `block` / `Block` | `block_size` / `Block Size` |
+| Voronoi Prism | default | `source_width=0.5625` | `source_width=0.5` |
+| Voronoi Prism | category | `Post-Process` | `Stylize` |
+| Bloom | default | `amount=0.187` | `amount=0.5` |
+| Invert | category | `Spatial` | `Color` |
+| Infrared | category | `Surveillance` | `Color` |
+| Mirror | category | `Post-Process` | `Spatial` |
+| Quad Mirror | category | `Post-Process` | `Spatial` |
+| Kaleidoscope | category | `Post-Process` | `Spatial` |
+| Strobe | category | `Post-Process` | `Stylize` |
+| Stylized Feedback | category | `Post-Process` | `Stylize` |
+| Soft Focus | category | `Post-Process` | `Stylize` |
+| Watercolor | category | `Post-Process` | `Stylize` |
+| (13 effects with `amount=0`) | default | `amount=0` | `amount=1.0` or `0.5` per §9.1.5 |
+
+**Rename volume preview:** ~40 label+id renames, ~12 category moves, ~17 default changes, 2 type_id renames. Estimated ~70 mechanical edits — worth a script.
+
+### 9.2 Layer 2 — Inner primitive params (pending)
+
+[deferred — pending checkpoint]
+
+### 9.3 Layer 3 — Generator params (pending)
+
+[deferred — pending checkpoint]
+
+### 9.4 Open questions
+
+- **Param `id` casing convention.** Most current ids are `snake_case` (`tint_hue`, `block_size`). Some are single words (`amount`, `gain`). Confirm `snake_case` everywhere as the rule.
+- **Display label casing.** Current mix: `Title Case` (`Edge Detect`, `Block Size`), `PascalCase` (`TintHue`, `ZScale`), abbreviations (`HDR Ret`). Confirm `Title Case With Spaces` as the rule.
+- **Type id rename migration shape.** `EffectValueAliasMetadata` exists for enum-value remaps. For type id renames we need a sibling: `EffectTypeAliasMetadata` mapping old type id strings to new. Stamp this once; reuse for the HDR Boost and Edge Detect renames.
+
