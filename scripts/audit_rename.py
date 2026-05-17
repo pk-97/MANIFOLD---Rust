@@ -993,30 +993,47 @@ RENAMES: list[Rename] = [
         new='ParamSpec::continuous("chaos", "Chaos", 0.0, 1.0, 0.3, "F2", "chaos"),',
     ),
 
-    # Lissajous magic-number cleanup (§9.3.5)
+    # Lissajous magic-number cleanup (§9.3.5).
+    # Narrow scope: only the 3 lines that actually change defaults.
+    # (Original entry included verts/anim lines for unique anchoring,
+    # but Phase 4's Verts→Vertices rename invalidated that context.
+    # These freq_x/freq_y/phase magic numbers are unique to Lissajous,
+    # so no further scoping needed.)
     Rename(
-        desc="Lissajous defaults: 6 magic numbers → round values",
+        desc="Lissajous freq_x default: 0.13 → 0.1",
         file=gen_metadata(),
-        old='''ParamSpec::continuous("freq_x", "Freq X", 0.0, 2.0, 0.13, "F2", "freqX"),
-            ParamSpec::continuous("freq_y", "Freq Y", 0.0, 2.0, 0.09, "F2", "freqY"),
-            ParamSpec::continuous("phase", "Phase", 0.0, 2.0, 0.07, "F2", "phase"),
-            ParamSpec::continuous("line", "Line", 0.0005, 0.03, 0.002, "F4", "line"),
-            ParamSpec::toggle("verts", "Verts", 0.0, 1.0, 0.0, "verts"),
-            ParamSpec::continuous("v_size", "VSize", 0.1, 4.0, 0.5, "F1", "vsize"),
-            ParamSpec::toggle("anim", "Anim", 0.0, 1.0, 1.0, "anim"),
-            ParamSpec::continuous("speed", "Speed", 0.1, 5.0, 2.67, "F1", "speed"),
-            ParamSpec::continuous("window", "Window", 0.01, 1.0, 0.74, "F2", "window"),
-            ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.55, "F2", "scale"),''',
-        new='''ParamSpec::continuous("freq_x", "Freq X", 0.0, 2.0, 0.1, "F2", "freqX"),
-            ParamSpec::continuous("freq_y", "Freq Y", 0.0, 2.0, 0.1, "F2", "freqY"),
-            ParamSpec::continuous("phase", "Phase", 0.0, 2.0, 0.0, "F2", "phase"),
-            ParamSpec::continuous("line", "Line", 0.0005, 0.03, 0.002, "F4", "line"),
-            ParamSpec::toggle("verts", "Verts", 0.0, 1.0, 0.0, "verts"),
-            ParamSpec::continuous("v_size", "VSize", 0.1, 4.0, 0.5, "F1", "vsize"),
-            ParamSpec::toggle("anim", "Anim", 0.0, 1.0, 1.0, "anim"),
-            ParamSpec::continuous("speed", "Speed", 0.1, 5.0, 1.0, "F1", "speed"),
-            ParamSpec::continuous("window", "Window", 0.01, 1.0, 0.5, "F2", "window"),
-            ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),''',
+        old='ParamSpec::continuous("freq_x", "Freq X", 0.0, 2.0, 0.13, "F2", "freqX"),',
+        new='ParamSpec::continuous("freq_x", "Freq X", 0.0, 2.0, 0.1, "F2", "freqX"),',
+    ),
+    Rename(
+        desc="Lissajous freq_y default: 0.09 → 0.1",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("freq_y", "Freq Y", 0.0, 2.0, 0.09, "F2", "freqY"),',
+        new='ParamSpec::continuous("freq_y", "Freq Y", 0.0, 2.0, 0.1, "F2", "freqY"),',
+    ),
+    Rename(
+        desc="Lissajous phase default: 0.07 → 0.0",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("phase", "Phase", 0.0, 2.0, 0.07, "F2", "phase"),',
+        new='ParamSpec::continuous("phase", "Phase", 0.0, 2.0, 0.0, "F2", "phase"),',
+    ),
+    Rename(
+        desc="Lissajous speed default: 2.67 → 1.0",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("speed", "Speed", 0.1, 5.0, 2.67, "F1", "speed"),',
+        new='ParamSpec::continuous("speed", "Speed", 0.1, 5.0, 1.0, "F1", "speed"),',
+    ),
+    Rename(
+        desc="Lissajous window default: 0.74 → 0.5",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("window", "Window", 0.01, 1.0, 0.74, "F2", "window"),',
+        new='ParamSpec::continuous("window", "Window", 0.01, 1.0, 0.5, "F2", "window"),',
+    ),
+    Rename(
+        desc="Lissajous scale default: 1.55 → 1.0",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.55, "F2", "scale"),',
+        new='ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),',
     ),
 
     # ── §9.3.5 Black Hole.freefall: F0 → F2 (format mismatch with [0,1] range) ──
@@ -1390,6 +1407,46 @@ RENAMES: list[Rename] = [
         file=gen_metadata(),
         old='display_name: "Basic Shapes Snap",',
         new='display_name: "Basic Shapes",',
+    ),
+
+    # ========================================================================
+    # Phase 6 — `Count (M)` redesign (§9.3.2 / UX call 6).
+    #
+    # 4 generators have a slider labeled `Count (M)` where `(M)` is a fake
+    # unit smuggled into the label, meaning "value × 1e6 particles". The
+    # value semantic doesn't change (still 0.1–8.0 = 0.1M–8M particles);
+    # we just stop pretending the parens are part of the name and put `M`
+    # in the actual unit field where the slider can render it cleanly.
+    #
+    # Param id stays `count_m` to avoid an alias migration. The label is
+    # what the user reads; id is internal.
+    # ========================================================================
+
+    # Three generators in gen_metadata.rs share the same count_m line;
+    # disambiguate by the unique trailing param of each block.
+    Rename(
+        desc="Fluid Simulation: Count (M) → Particle Count (scoped by trailing `fill` param)",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("count_m", "Count (M)", 0.1, 8.0, 2.0, "F1", "count"),\n            ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 0.0, "snap"),\n            ParamSpec::whole_labels("snap_mode", "Snap Mode", 0.0, 4.0, 0.0, &["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"], "snapMode"),\n            ParamSpec::continuous("size", "Size", 1.0, 8.0, 3.0, "F1", "size"),\n            ParamSpec::continuous("anti_clump", "Anti-Clump", 0.0, 60.0, 20.0, "F0", "antiClump"),\n            ParamSpec::continuous("force", "Force", 0.0, 0.1, 0.005, "F3", "force"),\n            ParamSpec::continuous("fill", "Fill", 0.0, 1.0, 1.0, "F2", "fill"),',
+        new='ParamSpec::continuous("count_m", "Particle Count", 0.1, 8.0, 2.0, "F1", "M"),\n            ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 0.0, "snap"),\n            ParamSpec::whole_labels("snap_mode", "Snap Mode", 0.0, 4.0, 0.0, &["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"], "snapMode"),\n            ParamSpec::continuous("size", "Size", 1.0, 8.0, 3.0, "F1", "size"),\n            ParamSpec::continuous("anti_clump", "Anti-Clump", 0.0, 60.0, 20.0, "F0", "antiClump"),\n            ParamSpec::continuous("force", "Force", 0.0, 0.1, 0.005, "F3", "force"),\n            ParamSpec::continuous("fill", "Fill", 0.0, 1.0, 1.0, "F2", "fill"),',
+    ),
+    Rename(
+        desc="Fluid Simulation 3D: Count (M) → Particle Count (scoped by trailing `container` param)",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("count_m", "Count (M)", 0.1, 8.0, 2.0, "F1", "count"),\n            ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 0.0, "snap"),\n            ParamSpec::whole_labels("snap_mode", "Snap Mode", 0.0, 4.0, 0.0, &["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"], "snapMode"),\n            ParamSpec::continuous("size", "Size", 1.0, 8.0, 3.0, "F1", "size"),\n            ParamSpec::continuous("anti_clump", "Anti-Clump", 0.0, 60.0, 20.0, "F0", "antiClump"),\n            ParamSpec::continuous("force", "Force", 0.0, 0.1, 0.005, "F3", "force"),\n            ParamSpec::whole_labels("container", "Container", 0.0, 3.0, 0.0, &["None", "Cube", "Sphere", "Torus"], "container"),',
+        new='ParamSpec::continuous("count_m", "Particle Count", 0.1, 8.0, 2.0, "F1", "M"),\n            ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 0.0, "snap"),\n            ParamSpec::whole_labels("snap_mode", "Snap Mode", 0.0, 4.0, 0.0, &["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"], "snapMode"),\n            ParamSpec::continuous("size", "Size", 1.0, 8.0, 3.0, "F1", "size"),\n            ParamSpec::continuous("anti_clump", "Anti-Clump", 0.0, 60.0, 20.0, "F0", "antiClump"),\n            ParamSpec::continuous("force", "Force", 0.0, 0.1, 0.005, "F3", "force"),\n            ParamSpec::whole_labels("container", "Container", 0.0, 3.0, 0.0, &["None", "Cube", "Sphere", "Torus"], "container"),',
+    ),
+    Rename(
+        desc="Particle Text: Count (M) → Particle Count (scoped by trailing `text_size` param)",
+        file=gen_metadata(),
+        old='ParamSpec::continuous("count_m", "Count (M)", 0.1, 8.0, 2.0, "F1", "count"),\n            ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 0.0, "snap"),\n            ParamSpec::whole_labels("snap_mode", "Snap Mode", 0.0, 4.0, 0.0, &["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"], "snapMode"),\n            ParamSpec::continuous("size", "Size", 1.0, 8.0, 3.0, "F1", "size"),\n            ParamSpec::continuous("anti_clump", "Anti-Clump", 0.0, 60.0, 20.0, "F0", "antiClump"),\n            ParamSpec::continuous("force", "Force", 0.0, 0.1, 0.005, "F3", "force"),\n            ParamSpec::continuous("text_size", "Text Size", 0.05, 1.0, 0.25, "F2", "textSize"),',
+        new='ParamSpec::continuous("count_m", "Particle Count", 0.1, 8.0, 2.0, "F1", "M"),\n            ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 0.0, "snap"),\n            ParamSpec::whole_labels("snap_mode", "Snap Mode", 0.0, 4.0, 0.0, &["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"], "snapMode"),\n            ParamSpec::continuous("size", "Size", 1.0, 8.0, 3.0, "F1", "size"),\n            ParamSpec::continuous("anti_clump", "Anti-Clump", 0.0, 60.0, 20.0, "F0", "antiClump"),\n            ParamSpec::continuous("force", "Force", 0.0, 0.1, 0.005, "F3", "force"),\n            ParamSpec::continuous("text_size", "Text Size", 0.05, 1.0, 0.25, "F2", "textSize"),',
+    ),
+    Rename(
+        desc="Strange Attractor: Count (M) → Particle Count, unit M",
+        file=generator("strange_attractor"),
+        old='ParamSpec::continuous("count_m", "Count (M)", 0.1, 2.0, 0.5, "F1", "count"),',
+        new='ParamSpec::continuous("count_m", "Particle Count", 0.1, 2.0, 0.5, "F1", "M"),',
     ),
 ]
 

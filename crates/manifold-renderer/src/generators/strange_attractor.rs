@@ -31,7 +31,7 @@ inventory::submit! {
             ParamSpec::continuous("speed", "Speed", 0.1, 5.0, 1.0, "F1", "speed"),
             ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),
             ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 0.0, "snap"),
-            ParamSpec::continuous("count_m", "Count (M)", 0.1, 2.0, 0.5, "F1", "count"),
+            ParamSpec::continuous("count_m", "Particle Count", 0.1, 2.0, 0.5, "F1", "M"),
             ParamSpec::continuous("diffusion", "Diffusion", 0.0, 0.05, 0.0, "F3", "diffusion"),
             ParamSpec::continuous("tilt", "Tilt", -1.0, 1.0, 0.3, "F2", "tilt"),
             ParamSpec::continuous("size", "Size", 1.0, 8.0, 3.0, "F1", "size"),
