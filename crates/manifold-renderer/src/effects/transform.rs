@@ -55,6 +55,13 @@ inventory::submit! {
     }
 }
 
+inventory::submit! {
+    EffectAliasMetadata {
+        id: EffectTypeId::TRANSFORM,
+        aliases: &[("rot", Some("rotation"))],
+    }
+}
+
 crate::atomic_chain_spec! {
     type_id: EffectTypeId::TRANSFORM,
     primitive: AffineTransform,

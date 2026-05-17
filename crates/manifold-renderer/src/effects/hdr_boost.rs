@@ -9,7 +9,7 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::HighlightBoost;
 use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
-use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
 use std::borrow::Cow;
@@ -25,7 +25,7 @@ inventory::submit! {
         params: &[
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
             ParamSpec::continuous("gain", "Gain", 0.0, 5.0, 1.5, "F2", "Gain"),
-            ParamSpec::continuous("thresh", "Threshold", 0.0, 1.0, 0.15, "F2", "Threshold"),
+            ParamSpec::continuous("threshold", "Threshold", 0.0, 1.0, 0.15, "F2", "Threshold"),
             ParamSpec::continuous("knee", "Knee", 0.0, 1.0, 0.3, "F2", "Knee"),
         ],
     }
@@ -34,6 +34,13 @@ inventory::submit! {
     EffectFactory {
         id: EffectTypeId::HDR_BOOST,
         create: |device| Box::new(HdrBoostFX::new(device)),
+    }
+}
+
+inventory::submit! {
+    EffectAliasMetadata {
+        id: EffectTypeId::HDR_BOOST,
+        aliases: &[("thresh", Some("threshold"))],
     }
 }
 
@@ -57,7 +64,7 @@ crate::atomic_chain_spec! {
             convert: ParamConvert::Float,
         },
         ParamBinding {
-            id: Cow::Borrowed("thresh"),
+            id: Cow::Borrowed("threshold"),
             label: "Threshold",
             default_value: 0.15,
             target: ParamTarget::HandleNode { handle: "highlight_boost", param: "threshold" },

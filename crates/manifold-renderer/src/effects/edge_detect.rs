@@ -5,7 +5,7 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::EdgeDetect;
 use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
-use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
 use std::borrow::Cow;
@@ -20,7 +20,7 @@ inventory::submit! {
         legacy_discriminant: Some(25),
         params: &[
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
-            ParamSpec::continuous("thresh", "Threshold", 0.0, 1.0, 0.1, "F2", "Threshold"),
+            ParamSpec::continuous("threshold", "Threshold", 0.0, 1.0, 0.1, "F2", "Threshold"),
             ParamSpec::whole_labels("mode", "Mode", 0.0, 2.0, 0.0, &["Sobel", "Laplacian", "Frei-Chen"], "Mode"),
         ],
     }
@@ -29,6 +29,13 @@ inventory::submit! {
     EffectFactory {
         id: EffectTypeId::EDGE_DETECT,
         create: |device| Box::new(EdgeDetectFX::new(device)),
+    }
+}
+
+inventory::submit! {
+    EffectAliasMetadata {
+        id: EffectTypeId::EDGE_DETECT,
+        aliases: &[("thresh", Some("threshold"))],
     }
 }
 
@@ -45,7 +52,7 @@ crate::atomic_chain_spec! {
             convert: ParamConvert::Float,
         },
         ParamBinding {
-            id: Cow::Borrowed("thresh"),
+            id: Cow::Borrowed("threshold"),
             label: "Threshold",
             default_value: 0.1,
             target: ParamTarget::HandleNode { handle: "edge_detect", param: "threshold" },

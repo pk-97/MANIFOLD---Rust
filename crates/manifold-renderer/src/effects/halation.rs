@@ -17,7 +17,7 @@ use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
-use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
 use std::borrow::Cow;
@@ -32,10 +32,10 @@ inventory::submit! {
         legacy_discriminant: Some(34),
         params: &[
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
-            ParamSpec::continuous("thresh", "Threshold", 0.0, 1.0, 0.5, "F2", "Threshold"),
+            ParamSpec::continuous("threshold", "Threshold", 0.0, 1.0, 0.5, "F2", "Threshold"),
             ParamSpec::continuous("spread", "Spread", 0.0, 1.0, 0.5, "F2", "Spread"),
             ParamSpec::continuous("hue", "Hue", 0.0, 360.0, 20.0, "F2", "Hue"),
-            ParamSpec::continuous("sat", "Saturation", 0.0, 1.0, 0.6, "F2", "Saturation"),
+            ParamSpec::continuous("saturation", "Saturation", 0.0, 1.0, 0.6, "F2", "Saturation"),
         ],
     }
 }
@@ -43,6 +43,16 @@ inventory::submit! {
     EffectFactory {
         id: EffectTypeId::HALATION,
         create: |device| Box::new(HalationFX::new(device)),
+    }
+}
+
+inventory::submit! {
+    EffectAliasMetadata {
+        id: EffectTypeId::HALATION,
+        aliases: &[
+            ("thresh", Some("threshold")),
+            ("sat", Some("saturation")),
+        ],
     }
 }
 
@@ -59,7 +69,7 @@ crate::atomic_chain_spec! {
             convert: ParamConvert::Float,
         },
         ParamBinding {
-            id: Cow::Borrowed("thresh"),
+            id: Cow::Borrowed("threshold"),
             label: "Threshold",
             default_value: 0.5,
             target: ParamTarget::HandleNode { handle: "halation", param: "threshold" },
@@ -80,7 +90,7 @@ crate::atomic_chain_spec! {
             convert: ParamConvert::Float,
         },
         ParamBinding {
-            id: Cow::Borrowed("sat"),
+            id: Cow::Borrowed("saturation"),
             label: "Saturation",
             default_value: 0.6,
             target: ParamTarget::HandleNode { handle: "halation", param: "saturation" },

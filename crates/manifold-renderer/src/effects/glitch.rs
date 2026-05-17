@@ -41,6 +41,13 @@ inventory::submit! {
     }
 }
 
+inventory::submit! {
+    EffectAliasMetadata {
+        id: EffectTypeId::GLITCH,
+        aliases: &[("block", Some("block_size"))],
+    }
+}
+
 crate::atomic_chain_spec! {
     type_id: EffectTypeId::GLITCH,
     primitive: Glitch,

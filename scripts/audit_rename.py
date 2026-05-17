@@ -1591,6 +1591,313 @@ inventory::submit! {
         old='id: Cow::Borrowed("rot"),',
         new='id: Cow::Borrowed("rotation"),',
     ),
+
+    # ========================================================================
+    # Phase 7b — Param id renames with no inner-primitive impact.
+    # Same 4-edit pattern as 7a per effect. Multi-param renames bundle their
+    # aliases into one EffectAliasMetadata submission.
+    # ========================================================================
+
+    # ── Dither: algo → pattern ─────────────────────────────────────────
+    Rename(
+        desc="Dither: add EffectAliasMetadata import",
+        file=effect("dither"),
+        old='use manifold_core::effect_registration::EffectMetadata;',
+        new='use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};',
+    ),
+    Rename(
+        desc="Dither: insert EffectAliasMetadata submission",
+        file=effect("dither"),
+        old='''inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::DITHER,
+        create: |device| Box::new(DitherFX::new(device)),
+    }
+}''',
+        new='''inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::DITHER,
+        create: |device| Box::new(DitherFX::new(device)),
+    }
+}
+
+inventory::submit! {
+    EffectAliasMetadata {
+        id: EffectTypeId::DITHER,
+        aliases: &[("algo", Some("pattern"))],
+    }
+}''',
+    ),
+    Rename(
+        desc="Dither: ParamSpec id algo → pattern",
+        file=effect("dither"),
+        old='ParamSpec::whole_labels("algo", "Pattern", 0.0, 5.0, 0.0, &["Bayer", "Halftone", "Lines", "X-Hatch", "Noise", "Diamond"], "Algorithm"),',
+        new='ParamSpec::whole_labels("pattern", "Pattern", 0.0, 5.0, 0.0, &["Bayer", "Halftone", "Lines", "X-Hatch", "Noise", "Diamond"], "Algorithm"),',
+    ),
+    Rename(
+        desc="Dither: ParamBinding id algo → pattern",
+        file=effect("dither"),
+        old='id: Cow::Borrowed("algo"),',
+        new='id: Cow::Borrowed("pattern"),',
+    ),
+
+    # ── HDR Boost: thresh → threshold ──────────────────────────────────
+    Rename(
+        desc="HDR Boost: add EffectAliasMetadata import",
+        file=effect("hdr_boost"),
+        old='use manifold_core::effect_registration::EffectMetadata;',
+        new='use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};',
+    ),
+    Rename(
+        desc="HDR Boost: insert EffectAliasMetadata submission",
+        file=effect("hdr_boost"),
+        old='''inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::HDR_BOOST,
+        create: |device| Box::new(HdrBoostFX::new(device)),
+    }
+}''',
+        new='''inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::HDR_BOOST,
+        create: |device| Box::new(HdrBoostFX::new(device)),
+    }
+}
+
+inventory::submit! {
+    EffectAliasMetadata {
+        id: EffectTypeId::HDR_BOOST,
+        aliases: &[("thresh", Some("threshold"))],
+    }
+}''',
+    ),
+    Rename(
+        desc="HDR Boost: ParamSpec id thresh → threshold",
+        file=effect("hdr_boost"),
+        old='ParamSpec::continuous("thresh", "Threshold", 0.0, 1.0, 0.15, "F2", "Threshold"),',
+        new='ParamSpec::continuous("threshold", "Threshold", 0.0, 1.0, 0.15, "F2", "Threshold"),',
+    ),
+    Rename(
+        desc="HDR Boost: ParamBinding id thresh → threshold",
+        file=effect("hdr_boost"),
+        old='id: Cow::Borrowed("thresh"),',
+        new='id: Cow::Borrowed("threshold"),',
+    ),
+
+    # ── Edge Detect: thresh → threshold ─────────────────────────────────
+    Rename(
+        desc="Edge Detect: add EffectAliasMetadata import",
+        file=effect("edge_detect"),
+        old='use manifold_core::effect_registration::EffectMetadata;',
+        new='use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};',
+    ),
+    Rename(
+        desc="Edge Detect: insert EffectAliasMetadata submission",
+        file=effect("edge_detect"),
+        old='''inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::EDGE_DETECT,
+        create: |device| Box::new(EdgeDetectFX::new(device)),
+    }
+}''',
+        new='''inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::EDGE_DETECT,
+        create: |device| Box::new(EdgeDetectFX::new(device)),
+    }
+}
+
+inventory::submit! {
+    EffectAliasMetadata {
+        id: EffectTypeId::EDGE_DETECT,
+        aliases: &[("thresh", Some("threshold"))],
+    }
+}''',
+    ),
+    Rename(
+        desc="Edge Detect: ParamSpec id thresh → threshold",
+        file=effect("edge_detect"),
+        old='ParamSpec::continuous("thresh", "Threshold", 0.0, 1.0, 0.1, "F2", "Threshold"),',
+        new='ParamSpec::continuous("threshold", "Threshold", 0.0, 1.0, 0.1, "F2", "Threshold"),',
+    ),
+    Rename(
+        desc="Edge Detect: ParamBinding id thresh → threshold",
+        file=effect("edge_detect"),
+        old='id: Cow::Borrowed("thresh"),',
+        new='id: Cow::Borrowed("threshold"),',
+    ),
+
+    # ── Halation: thresh → threshold, sat → saturation ──────────────────
+    Rename(
+        desc="Halation: add EffectAliasMetadata import",
+        file=effect("halation"),
+        old='use manifold_core::effect_registration::EffectMetadata;',
+        new='use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};',
+    ),
+    Rename(
+        desc="Halation: insert EffectAliasMetadata submission",
+        file=effect("halation"),
+        old='''inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::HALATION,
+        create: |device| Box::new(HalationFX::new(device)),
+    }
+}''',
+        new='''inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::HALATION,
+        create: |device| Box::new(HalationFX::new(device)),
+    }
+}
+
+inventory::submit! {
+    EffectAliasMetadata {
+        id: EffectTypeId::HALATION,
+        aliases: &[
+            ("thresh", Some("threshold")),
+            ("sat", Some("saturation")),
+        ],
+    }
+}''',
+    ),
+    Rename(
+        desc="Halation: ParamSpec id thresh → threshold",
+        file=effect("halation"),
+        old='ParamSpec::continuous("thresh", "Threshold", 0.0, 1.0, 0.5, "F2", "Threshold"),',
+        new='ParamSpec::continuous("threshold", "Threshold", 0.0, 1.0, 0.5, "F2", "Threshold"),',
+    ),
+    Rename(
+        desc="Halation: ParamSpec id sat → saturation",
+        file=effect("halation"),
+        old='ParamSpec::continuous("sat", "Saturation", 0.0, 1.0, 0.6, "F2", "Saturation"),',
+        new='ParamSpec::continuous("saturation", "Saturation", 0.0, 1.0, 0.6, "F2", "Saturation"),',
+    ),
+    Rename(
+        desc="Halation: ParamBinding id thresh → threshold",
+        file=effect("halation"),
+        old='id: Cow::Borrowed("thresh"),',
+        new='id: Cow::Borrowed("threshold"),',
+    ),
+    Rename(
+        desc="Halation: ParamBinding id sat → saturation",
+        file=effect("halation"),
+        old='id: Cow::Borrowed("sat"),',
+        new='id: Cow::Borrowed("saturation"),',
+    ),
+
+    # ── Color Grade: sat → saturation, tint_sat → tint_saturation, focus → tint_focus ──
+    Rename(
+        desc="Color Grade: add EffectAliasMetadata import",
+        file=effect("color_grade"),
+        old='use manifold_core::effect_registration::EffectMetadata;',
+        new='use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};',
+    ),
+    Rename(
+        desc="Color Grade: insert EffectAliasMetadata submission",
+        file=effect("color_grade"),
+        old='''inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::COLOR_GRADE,
+        create: |device| Box::new(ColorGradeFX::new(device)),
+    }
+}''',
+        new='''inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::COLOR_GRADE,
+        create: |device| Box::new(ColorGradeFX::new(device)),
+    }
+}
+
+inventory::submit! {
+    EffectAliasMetadata {
+        id: EffectTypeId::COLOR_GRADE,
+        aliases: &[
+            ("sat", Some("saturation")),
+            ("tint_sat", Some("tint_saturation")),
+            ("focus", Some("tint_focus")),
+        ],
+    }
+}''',
+    ),
+    Rename(
+        desc="Color Grade: ParamSpec id sat → saturation",
+        file=effect("color_grade"),
+        old='ParamSpec::continuous("sat", "Saturation", 0.0, 2.0, 1.0, "F2", "Saturation"),',
+        new='ParamSpec::continuous("saturation", "Saturation", 0.0, 2.0, 1.0, "F2", "Saturation"),',
+    ),
+    Rename(
+        desc="Color Grade: ParamSpec id tint_sat → tint_saturation",
+        file=effect("color_grade"),
+        old='ParamSpec::continuous("tint_sat", "Tint Saturation", 0.0, 2.0, 1.0, "F2", "TintSaturation"),',
+        new='ParamSpec::continuous("tint_saturation", "Tint Saturation", 0.0, 2.0, 1.0, "F2", "TintSaturation"),',
+    ),
+    Rename(
+        desc="Color Grade: ParamSpec id focus → tint_focus",
+        file=effect("color_grade"),
+        old='ParamSpec::continuous("focus", "Tint Focus", 0.0, 1.0, 0.75, "F2", "ColorizeFocus"),',
+        new='ParamSpec::continuous("tint_focus", "Tint Focus", 0.0, 1.0, 0.75, "F2", "ColorizeFocus"),',
+    ),
+    Rename(
+        desc="Color Grade: ParamBinding id sat → saturation",
+        file=effect("color_grade"),
+        old='id: Cow::Borrowed("sat"),',
+        new='id: Cow::Borrowed("saturation"),',
+    ),
+    Rename(
+        desc="Color Grade: ParamBinding id tint_sat → tint_saturation",
+        file=effect("color_grade"),
+        old='id: Cow::Borrowed("tint_sat"),',
+        new='id: Cow::Borrowed("tint_saturation"),',
+    ),
+    Rename(
+        desc="Color Grade: ParamBinding id focus → tint_focus",
+        file=effect("color_grade"),
+        old='id: Cow::Borrowed("focus"),',
+        new='id: Cow::Borrowed("tint_focus"),',
+    ),
+
+    # ── Wireframe Depth: wire_res → wire_resolution ─────────────────────
+    Rename(
+        desc="Wireframe Depth: add EffectAliasMetadata import",
+        file=effect("wireframe_depth"),
+        old='use manifold_core::effect_registration::EffectMetadata;',
+        new='use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};',
+    ),
+    Rename(
+        desc="Wireframe Depth: insert EffectAliasMetadata submission",
+        file=effect("wireframe_depth"),
+        old='''inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::WIREFRAME_DEPTH,
+        create: |device| Box::new(WireframeDepthFX::new(device)),
+    }
+}''',
+        new='''inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::WIREFRAME_DEPTH,
+        create: |device| Box::new(WireframeDepthFX::new(device)),
+    }
+}
+
+inventory::submit! {
+    EffectAliasMetadata {
+        id: EffectTypeId::WIREFRAME_DEPTH,
+        aliases: &[("wire_res", Some("wire_resolution"))],
+    }
+}''',
+    ),
+    Rename(
+        desc="Wireframe Depth: ParamSpec id wire_res → wire_resolution",
+        file=effect("wireframe_depth"),
+        old='ParamSpec::continuous("wire_res", "Wire Resolution", 0.5, 1.0, 1.0, "F2", "WireRes"),',
+        new='ParamSpec::continuous("wire_resolution", "Wire Resolution", 0.5, 1.0, 1.0, "F2", "WireRes"),',
+    ),
+    Rename(
+        desc="Wireframe Depth: ParamBinding id wire_res → wire_resolution",
+        file=effect("wireframe_depth"),
+        old='id: Cow::Borrowed("wire_res"),',
+        new='id: Cow::Borrowed("wire_resolution"),',
+    ),
 ]
 
 

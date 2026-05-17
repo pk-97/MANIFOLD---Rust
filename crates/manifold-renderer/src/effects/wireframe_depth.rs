@@ -18,7 +18,7 @@ use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
-use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
 use std::borrow::Cow;
@@ -39,7 +39,7 @@ inventory::submit! {
             ParamSpec::continuous("smooth", "Smooth", 0.0, 1.0, 0.90, "F2", "Smooth"),
             ParamSpec::continuous("subject", "Subject", 0.0, 1.0, 0.5, "F2", "SubjectIsolation"),
             ParamSpec::whole_labels("blend", "Blend", 0.0, 6.0, 6.0, &["Normal", "Add", "Multiply", "Screen", "Overlay", "Stencil", "Opaque"], "BlendMode"),
-            ParamSpec::continuous("wire_res", "Wire Resolution", 0.5, 1.0, 1.0, "F2", "WireRes"),
+            ParamSpec::continuous("wire_resolution", "Wire Resolution", 0.5, 1.0, 1.0, "F2", "WireRes"),
             ParamSpec::whole_labels("mesh_rate", "Mesh Rate", 1.0, 4.0, 1.0, &["Every", "Half", "Third", "Quarter"], "MeshRate"),
             ParamSpec::whole_labels("flow", "Flow", 0.0, 1.0, 1.0, &["Off", "On"], "NativeFlow"),
             ParamSpec::whole_labels("lock", "Lock", 0.0, 1.0, 1.0, &["Off", "On"], "FlowLock"),
@@ -51,6 +51,13 @@ inventory::submit! {
     EffectFactory {
         id: EffectTypeId::WIREFRAME_DEPTH,
         create: |device| Box::new(WireframeDepthFX::new(device)),
+    }
+}
+
+inventory::submit! {
+    EffectAliasMetadata {
+        id: EffectTypeId::WIREFRAME_DEPTH,
+        aliases: &[("wire_res", Some("wire_resolution"))],
     }
 }
 
@@ -109,7 +116,7 @@ crate::atomic_chain_spec! {
             convert: ParamConvert::EnumRound,
         },
         ParamBinding {
-            id: Cow::Borrowed("wire_res"),
+            id: Cow::Borrowed("wire_resolution"),
             label: "Wire Resolution",
             default_value: 1.0,
             target: ParamTarget::HandleNode { handle: "wireframe_depth", param: "wire_res" },

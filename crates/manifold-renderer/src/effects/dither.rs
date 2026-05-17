@@ -5,7 +5,7 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::DitherPattern;
 use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
-use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
 use std::borrow::Cow;
@@ -20,7 +20,7 @@ inventory::submit! {
         legacy_discriminant: Some(18),
         params: &[
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
-            ParamSpec::whole_labels("algo", "Pattern", 0.0, 5.0, 0.0, &["Bayer", "Halftone", "Lines", "X-Hatch", "Noise", "Diamond"], "Algorithm"),
+            ParamSpec::whole_labels("pattern", "Pattern", 0.0, 5.0, 0.0, &["Bayer", "Halftone", "Lines", "X-Hatch", "Noise", "Diamond"], "Algorithm"),
         ],
     }
 }
@@ -28,6 +28,13 @@ inventory::submit! {
     EffectFactory {
         id: EffectTypeId::DITHER,
         create: |device| Box::new(DitherFX::new(device)),
+    }
+}
+
+inventory::submit! {
+    EffectAliasMetadata {
+        id: EffectTypeId::DITHER,
+        aliases: &[("algo", Some("pattern"))],
     }
 }
 
@@ -44,7 +51,7 @@ crate::atomic_chain_spec! {
             convert: ParamConvert::Float,
         },
         ParamBinding {
-            id: Cow::Borrowed("algo"),
+            id: Cow::Borrowed("pattern"),
             label: "Pattern",
             default_value: 0.0,
             target: ParamTarget::HandleNode { handle: "dither", param: "algorithm" },
