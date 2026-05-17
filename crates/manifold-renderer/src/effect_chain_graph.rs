@@ -1089,6 +1089,45 @@ mod topology_hash_tests {
     }
 
     #[test]
+    fn disabled_effects_are_excluded_from_active_set_and_change_hash() {
+        // The user-facing invariant for the on/off toggle: setting
+        // `enabled = false` MUST (a) flip the topology hash so the chain
+        // rebuilds, and (b) exclude the effect from `active_effects` in
+        // `try_build` so it stops rendering. Without these the toggle
+        // appears to do nothing.
+        let device = std::sync::Arc::new(GpuDevice::new());
+        let primitives = PrimitiveRegistry::with_builtin();
+
+        let mut fx = make_default(EffectTypeId::MIRROR); // `amount` default = 1.0, so present in chain by default.
+        assert!(fx.enabled, "EffectInstance::new defaults enabled = true");
+
+        let hash_on = compute_topology_hash(&[fx.clone()], &[], 256, 256);
+        let cg_on = ChainGraph::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256)
+            .expect("Mirror chain builds at enabled = true");
+        assert_eq!(
+            cg_on.effect_nodes.len(),
+            1,
+            "Mirror should contribute one effect slot when enabled",
+        );
+
+        fx.enabled = false;
+        let hash_off = compute_topology_hash(&[fx.clone()], &[], 256, 256);
+        assert_ne!(
+            hash_on, hash_off,
+            "Toggling `enabled` MUST change the topology hash — otherwise the \
+             chain caches the previous topology and the toggle appears dead.",
+        );
+
+        // With this as the only effect, the chain should refuse to build
+        // (no active effects → None) — equivalent to "the chain becomes empty".
+        let cg_off = ChainGraph::try_build(&[fx], &[], &primitives, &device, None, 256, 256);
+        assert!(
+            cg_off.is_none(),
+            "Disabled effect must be filtered out of active_effects — got a chain with effects when it should be empty",
+        );
+    }
+
+    #[test]
     fn stateful_effects_never_skip() {
         // Stateful effects must keep their workers alive across an
         // `amount → 0 → up` drag so their accumulated state (Feedback
