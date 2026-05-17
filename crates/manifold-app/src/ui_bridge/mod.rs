@@ -377,7 +377,8 @@ pub fn dispatch(
         | PanelAction::DisconnectPorts { .. }
         | PanelAction::RemoveGraphNode { .. }
         | PanelAction::MoveGraphNode { .. }
-        | PanelAction::SetGraphNodeParam { .. } => DispatchResult::handled(),
+        | PanelAction::SetGraphNodeParam { .. }
+        | PanelAction::RevertEffectGraph => DispatchResult::handled(),
     }
 }
 

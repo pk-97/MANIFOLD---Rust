@@ -276,6 +276,13 @@ pub enum PanelAction {
     /// at most one incoming wire. Emitted by clicking on an already-
     /// connected input port on the canvas.
     DisconnectPorts { to_node: u32, to_port: String },
+    /// Revert the watched effect's graph to the bundled preset
+    /// (`instance.graph = None`). Emitted by the "Reset to Default"
+    /// button in the graph editor header when the card is diverged
+    /// from the bundle. The "library picker" affordance from §6.6 #30
+    /// — bundled presets are the only "library" today; user-saved
+    /// named presets will plug into the same dispatch path when added.
+    RevertEffectGraph,
     /// Update a node's editor position. Emitted by the canvas's
     /// node-drag completion path.
     MoveGraphNode { node_id: u32, new_pos: (f32, f32) },

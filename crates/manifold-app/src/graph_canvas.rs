@@ -50,6 +50,14 @@ const WIRE_COLOR: [f32; 4] = [0.50, 0.78, 1.00, 0.85];
 const TEXT_PRIMARY: [u8; 4] = [220, 220, 230, 255];
 const TEXT_SECONDARY: [u8; 4] = [150, 150, 165, 255];
 const TEXT_HEADER: [u8; 4] = [240, 240, 250, 255];
+/// Pink chip behind the "Reset to Default" header button —
+/// same family as the MOD badge on the effect card so the
+/// "you are diverged" cue is consistent across surfaces.
+const RESET_BUTTON_BG: [f32; 4] = [0.78, 0.27, 0.45, 0.90];
+const RESET_BUTTON_W: f32 = 124.0;
+const RESET_BUTTON_H: f32 = 18.0;
+/// Gap between the reset button and the zoom indicator on its right.
+const RESET_BUTTON_RIGHT_GAP: f32 = 96.0;
 
 #[derive(Debug, Clone)]
 struct PortView {
@@ -220,6 +228,10 @@ pub struct GraphCanvas {
     drag_pan_start: (f32, f32),
     hovered: Option<u32>,
     selected: Option<u32>,
+    /// `instance.graph.is_some()` for the watched effect. Drives the
+    /// "Reset to Default" affordance in the header — only shown when
+    /// the user has diverged from the bundled preset.
+    has_graph_mod: bool,
     /// Actions accumulated this frame from canvas interactions.
     /// Drained by the editor window's input loop after each event.
     pending_actions: Vec<PanelAction>,
@@ -239,8 +251,18 @@ impl GraphCanvas {
             drag_pan_start: (0.0, 0.0),
             hovered: None,
             selected: None,
+            has_graph_mod: false,
             pending_actions: Vec::new(),
         }
+    }
+
+    /// Tell the canvas whether the watched effect is currently on its
+    /// bundled-preset default (`false`) or carries a per-card graph
+    /// override (`true`). When `true`, the header surfaces a
+    /// "Reset to Default" button. Called once per frame by the editor
+    /// window's present path.
+    pub fn set_has_graph_mod(&mut self, has_mod: bool) {
+        self.has_graph_mod = has_mod;
     }
 
     /// Drain editor actions queued by canvas interactions. Called
@@ -547,15 +569,25 @@ impl GraphCanvas {
     }
 
     /// Left-mouse button down. Priority order:
-    /// 1. Output port → start wire-drag.
-    /// 2. Input port already wired → emit `DisconnectPorts` for the
+    /// 1. "Reset to Default" header button (when graph is diverged).
+    /// 2. Output port → start wire-drag.
+    /// 3. Input port already wired → emit `DisconnectPorts` for the
     ///    incoming wire (one click breaks the connection).
-    /// 3. Input port unwired → swallow (no action — wires only enter
+    /// 4. Input port unwired → swallow (no action — wires only enter
     ///    inputs via drag-from-output).
-    /// 4. Node header → start node-move drag.
-    /// 5. Node body → select.
-    /// 6. Empty canvas → clear selection, start pan.
+    /// 5. Node header → start node-move drag.
+    /// 6. Node body → select.
+    /// 7. Empty canvas → clear selection, start pan.
     pub fn on_left_button_down(&mut self, viewport: Rect, sx: f32, sy: f32) {
+        // Header button has priority over everything else — it sits in
+        // the chrome above the canvas surface.
+        if self.has_graph_mod {
+            let rect = self.reset_button_rect(viewport);
+            if sx >= rect.x && sx <= rect.x + rect.w && sy >= rect.y && sy <= rect.y + rect.h {
+                self.pending_actions.push(PanelAction::RevertEffectGraph);
+                return;
+            }
+        }
         if let Some(hit) = self.port_under(viewport, sx, sy) {
             if hit.is_output {
                 self.drag_mode = DragMode::WireFrom {
@@ -647,6 +679,20 @@ impl GraphCanvas {
             .position(|w| w.to_node == to_node && w.to_port == to_port)
     }
 
+    /// Bounding rect of the "Reset to Default" header button. Single
+    /// source of truth so render-side and click-hit-test use the same
+    /// geometry.
+    fn reset_button_rect(&self, viewport: Rect) -> Rect {
+        let y = viewport.y + (HEADER_HEIGHT - RESET_BUTTON_H) * 0.5;
+        let x = viewport.x + viewport.w - RESET_BUTTON_RIGHT_GAP - RESET_BUTTON_W;
+        Rect {
+            x,
+            y,
+            w: RESET_BUTTON_W,
+            h: RESET_BUTTON_H,
+        }
+    }
+
     /// Currently-selected node id within the graph the canvas is
     /// viewing. Set by `on_left_button_down` when the click lands on
     /// a node. Read by the editor's right-sidebar panel to figure out
@@ -673,6 +719,8 @@ impl GraphCanvas {
         ui.draw_rect(viewport.x, viewport.y, viewport.w, HEADER_HEIGHT, HEADER_BG);
         let header_label = if self.nodes.is_empty() {
             "No active graph — open an effect card"
+        } else if self.has_graph_mod {
+            "Live Graph — MODIFIED"
         } else {
             "Live Graph"
         };
@@ -691,6 +739,19 @@ impl GraphCanvas {
             11.0,
             TEXT_SECONDARY,
         );
+
+        // "Reset to Default" pill — only when the graph is diverged.
+        if self.has_graph_mod {
+            let rect = self.reset_button_rect(viewport);
+            ui.draw_rect(rect.x, rect.y, rect.w, rect.h, RESET_BUTTON_BG);
+            ui.draw_text(
+                rect.x + 8.0,
+                rect.y + (rect.h - 11.0) * 0.5,
+                "Reset to Default",
+                11.0,
+                TEXT_HEADER,
+            );
+        }
 
         let canvas = Rect {
             x: viewport.x,

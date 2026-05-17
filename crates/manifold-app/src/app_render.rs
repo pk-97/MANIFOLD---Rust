@@ -199,6 +199,16 @@ impl Application {
             self.content_state.active_graph_snapshot.as_ref(),
         ) {
             canvas.set_snapshot(snap);
+            // Tell the canvas whether the watched effect is diverged
+            // from its bundled preset so the "Reset to Default" pill
+            // appears in the header only when there's something to
+            // revert. Polled each frame off `local_project`.
+            let has_mod = self
+                .watched_effect_id
+                .as_ref()
+                .and_then(|eid| self.local_project.find_effect_by_id(eid))
+                .is_some_and(|fx| fx.graph.is_some());
+            canvas.set_has_graph_mod(has_mod);
             if let Some(ed) = self.graph_editor.as_mut() {
                 ed.offscreen_dirty = true;
             }
@@ -557,6 +567,16 @@ impl Application {
                             to_port.clone(),
                             default.clone(),
                         );
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                PanelAction::RevertEffectGraph => {
+                    if let Some(eid) = self.watched_effect_id.as_ref() {
+                        let cmd =
+                            manifold_editing::commands::graph::RevertEffectGraphCommand::new(
+                                eid.clone(),
+                            );
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                     }
                     continue;

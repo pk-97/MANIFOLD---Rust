@@ -530,6 +530,68 @@ impl Command for SetGraphNodeParamCommand {
 }
 
 // ---------------------------------------------------------------------------
+// Revert Effect Graph
+// ---------------------------------------------------------------------------
+
+/// Clear an [`EffectInstance`](manifold_core::effects::EffectInstance)'s
+/// per-card graph override, reverting the effect to the bundled
+/// preset. The next chain rebuild reads the catalog default instead of
+/// the saved-in-place graph.
+///
+/// Idempotent on execute: if `instance.graph` is already `None`, the
+/// command stores `None` for undo and does nothing else. On undo,
+/// restores the previous `Some(def)` if there was one.
+///
+/// The "library picker" in §6.6 #30 surfaces this command as the user-
+/// facing "Reset to Default Preset" action on a diverged effect.
+#[derive(Debug)]
+pub struct RevertEffectGraphCommand {
+    effect_id: EffectId,
+    /// Pre-execute snapshot of `instance.graph`. `None` if the effect
+    /// was already on the catalog default, `Some(def)` if it had a
+    /// per-card override that this command cleared.
+    previous: Option<Option<EffectGraphDef>>,
+}
+
+impl RevertEffectGraphCommand {
+    pub fn new(effect_id: EffectId) -> Self {
+        Self {
+            effect_id,
+            previous: None,
+        }
+    }
+}
+
+impl Command for RevertEffectGraphCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let Some(instance) = project.find_effect_by_id_mut(&self.effect_id) else {
+            return;
+        };
+        if self.previous.is_none() {
+            self.previous = Some(instance.graph.take());
+        } else {
+            instance.graph = None;
+        }
+        bump_version(instance);
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let Some(prev) = self.previous.take() else {
+            return;
+        };
+        let Some(instance) = project.find_effect_by_id_mut(&self.effect_id) else {
+            return;
+        };
+        instance.graph = prev;
+        bump_version(instance);
+    }
+
+    fn description(&self) -> &str {
+        "Revert Effect Graph"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -839,6 +901,50 @@ mod tests {
             node.params.get("mode"),
             Some(&SerializedParamValue::Enum { value: 3 }),
         );
+    }
+
+    #[test]
+    fn revert_clears_graph_and_undo_restores_it() {
+        let (mut project, id) = project_with_one_master_effect();
+        // Diverge by adding a Blur — graph now Some(...).
+        let mut add = AddGraphNodeCommand::new(
+            id.clone(),
+            "node.blur".to_string(),
+            None,
+            mirror_catalog_default(),
+        );
+        add.execute(&mut project);
+        assert!(project.find_effect_by_id(&id).unwrap().graph.is_some());
+
+        let mut revert = RevertEffectGraphCommand::new(id.clone());
+        revert.execute(&mut project);
+        assert!(
+            project.find_effect_by_id(&id).unwrap().graph.is_none(),
+            "revert clears the per-card override"
+        );
+
+        revert.undo(&mut project);
+        assert!(
+            project.find_effect_by_id(&id).unwrap().graph.is_some(),
+            "undo restores the per-card override"
+        );
+        let def = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
+        assert!(def.nodes.iter().any(|n| n.type_id == "node.blur"));
+    }
+
+    #[test]
+    fn revert_on_already_default_is_a_no_op() {
+        // graph: None to start. Revert should be silent (no panic, no
+        // change), and undo should also be silent.
+        let (mut project, id) = project_with_one_master_effect();
+        assert!(project.find_effect_by_id(&id).unwrap().graph.is_none());
+
+        let mut revert = RevertEffectGraphCommand::new(id.clone());
+        revert.execute(&mut project);
+        assert!(project.find_effect_by_id(&id).unwrap().graph.is_none());
+
+        revert.undo(&mut project);
+        assert!(project.find_effect_by_id(&id).unwrap().graph.is_none());
     }
 
     /// End-to-end: lift via AddGraphNode, save to JSON, reload, verify
