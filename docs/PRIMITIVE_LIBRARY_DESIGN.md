@@ -543,9 +543,88 @@ This is the **action list** the rename script consumes. Fields: effect, change-k
 
 **Rename volume preview:** ~40 label+id renames, ~12 category moves, ~17 default changes, 2 type_id renames. Estimated ~70 mechanical edits — worth a script.
 
-### 9.2 Layer 2 — Inner primitive params (pending)
+### 9.2 Layer 2 — Inner primitive params (26 primitives)
 
-[deferred — pending checkpoint]
+The inner-node surface is what the user sees in the graph editor's right-sidebar panel when they click a node. Most primitives mirror the outer-card param shape 1:1 (since the bundled preset wires outer ↔ inner directly), but a handful have their own param names that diverge from the outer card. Plus there are non-card-backed primitives (Mix, Blend, Threshold, Blur, GaussianBlur, Sample, MipChain, WetDry, Brightness, ChannelMix, ColorRamp, MipChain, Feedback, Transform — these are pure building blocks the AI/user composes with).
+
+#### 9.2.1 Inner names that lag behind §9.1's outer renames
+
+After Layer 1 lifts every outer abbreviation to full English, four primitives still have inner-name abbreviations that need to follow:
+
+| Primitive | Current inner param | Proposed |
+|---|---|---|
+| `node.blob_track` | `thresh`, `sens`, `smooth` | `threshold`, `sensitivity`, `smoothing` |
+| `node.auto_gain` | `hdr_ret`, `char` | `hdr_retention`, `character` |
+| `node.wireframe_depth` | `smooth` | `smoothing` |
+| `node.clamp_stretch` | `mode` (enum: Horiz/Vert/Both) | `direction` (matches outer "Direction" label) |
+
+Once renamed, the binding's `target.param` field collapses to a no-op identity (outer id = inner param name).
+
+#### 9.2.2 Primitive type-id / struct-name / file-name inconsistencies
+
+- `lut1d.rs` defines a struct named `ColorLut` with type id `node.color_lut`. Three different names for the same thing. **Recommendation:** rename the file to `color_lut.rs`, keep struct `ColorLut`, type id `node.color_lut`. (`lut1d` was an early atomic-primitive name; the only consumer is Infrared, which is barely "1D LUT" — `color_lut` reads better.)
+- `blob_tracking.rs` has type id `node.blob_track` — singular vs. file's `tracking`. **Recommendation:** rename type id to `node.blob_tracking` (or rename file). The user never sees the type id; the inconsistency is internal-only, but worth fixing once during this pass.
+
+#### 9.2.3 Building-block primitive labels — small fixes
+
+- `node.threshold` has param `level` with label `"Threshold"`. The id and label disagree. **Recommendation:** rename param `level` → `threshold` (then the label is just the title-cased id).
+- `node.wet_dry` has param label `"Wet / Dry"` — the space-slash-space is unusual. **Recommendation:** `"Wet/Dry"`.
+- `node.chromatic_aberration` (the ChromaticOffset primitive) has label `"Angle (deg)"` — only primitive with the unit baked into the label. Inconsistent with everything else. **Recommendation:** drop `(deg)`, add `°` to the unit field instead (see §9.1.6).
+- `node.gaussian_blur` enum param `kernel_size` has label `"Kernel"` — the primitive's label is shorter than the id. Either expand label to `"Kernel Size"` or shorten id to `kernel`. **Recommendation:** label → `"Kernel Size"`.
+- `node.affine_transform`'s params `translate_x`, `translate_y` are split because the outer card wires them as two scalars. The standalone primitive `node.transform` uses `translate: Vec2`. Two parallel primitives doing similar work. **Open question:** is this duplication load-bearing, or should we collapse to one `Transform` primitive with Vec2 params? Today the outer card can't drive Vec2 sliders (only scalars + enums), so the split exists for the binding shim. Defer until the binding shim grows Vec2 support.
+
+#### 9.2.4 Defaults in primitives that mirror outer-card magic numbers
+
+These need to flip in lockstep with the outer-card defaults (§9.1.7) so the bundled preset's "no override" path produces the same value the user sees:
+
+| Primitive | Param | Current default | Proposed |
+|---|---|---|---|
+| `node.clamp_stretch` | `source_width` | `0.433` | `0.5` |
+| `node.voronoi_prism` | `source_width` | `0.5625` | `0.5` |
+| `node.bloom` | `amount` | `0.187` | `0.5` |
+| `node.wireframe_depth` | `width` | `1.335` | `1.5` |
+| `node.wireframe_depth` | `subject` | `0.52` | `0.5` |
+| `node.wireframe_depth` | `smooth` (range upper bound) | `0.98` | `1.0` |
+
+The bundled preset JSON files also need to re-emit these — the regenerator (`tests/bundled_presets_drift.rs --ignored`) does this in one pass once the primitive defaults change.
+
+#### 9.2.5 Inner labels with weird casing / abbreviations
+
+- `node.auto_gain` param `hdr_ret` has label `"HDR Retention"` — the label is right; the id is what's wrong (lifted in §9.2.1).
+- `node.auto_gain` param `char` has label `"Character"` — same.
+- `node.wireframe_depth` param `z_scale` has label `"Z Scale"` — looks fine.
+
+After §9.2.1 renames, all primitive labels are full English. Nothing else to clean up.
+
+#### 9.2.6 Param `id` casing convention — confirmed `snake_case`
+
+Every primitive that uses multi-word ids uses `snake_case` (`block_size`, `rgb_shift`, `cell_count`, `kernel_size`, `source_width`). Adopt this as the rule for any new ids introduced by the rename.
+
+#### 9.2.7 Layer 2 change table
+
+| Primitive | Kind | Old | New |
+|---|---|---|---|
+| `node.blob_track` | id+label | `thresh` / `Threshold` | `threshold` / `Threshold` |
+| `node.blob_track` | id+label | `sens` / `Sensitivity` | `sensitivity` / `Sensitivity` |
+| `node.blob_track` | id+label | `smooth` / `Smoothing` | `smoothing` / `Smoothing` |
+| `node.auto_gain` | id+label | `hdr_ret` / `HDR Retention` | `hdr_retention` / `HDR Retention` |
+| `node.auto_gain` | id+label | `char` / `Character` | `character` / `Character` |
+| `node.wireframe_depth` | id+label | `smooth` / `Smooth` | `smoothing` / `Smoothing` |
+| `node.clamp_stretch` | id+label | `mode` / `Direction` | `direction` / `Direction` |
+| `node.threshold` | id+label | `level` / `Threshold` | `threshold` / `Threshold` |
+| `node.wet_dry` | label | `Wet / Dry` | `Wet/Dry` |
+| `node.chromatic_aberration` | label | `Angle (deg)` | `Angle` + unit `°` |
+| `node.gaussian_blur` | label | `Kernel` | `Kernel Size` |
+| `node.color_lut` | type-id-rename | `node.color_lut` | (keep — but rename file `lut1d.rs` → `color_lut.rs`) |
+| `node.blob_track` | type-id-rename | `node.blob_track` | `node.blob_tracking` (internal only) |
+| `node.clamp_stretch` | default | `source_width=0.433` | `source_width=0.5` |
+| `node.voronoi_prism` | default | `source_width=0.5625` | `source_width=0.5` |
+| `node.bloom` | default | `amount=0.187` | `amount=0.5` |
+| `node.wireframe_depth` | default | `width=1.335` | `width=1.5` |
+| `node.wireframe_depth` | default | `subject=0.52` | `subject=0.5` |
+| `node.wireframe_depth` | range | `smooth=[0,0.98]` | `smoothing=[0,1]` |
+
+**Rename volume:** ~12 inner id+label renames, 2 primitive type-id / file renames, 6 default/range changes. Smaller than Layer 1 because most primitive params already use the long English forms.
 
 ### 9.3 Layer 3 — Generator params (pending)
 
