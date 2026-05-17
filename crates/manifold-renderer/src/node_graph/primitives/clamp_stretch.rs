@@ -43,7 +43,7 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: "mode",
+            name: "direction",
             label: "Direction",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0),
@@ -80,7 +80,7 @@ impl Primitive for ClampStretch {
         // Legacy: round-and-cap to u32. Primitive accepts ParamValue::Enum
         // (already u32). Fall through to Float for tests that pass
         // raw floats matching the legacy data shape.
-        let mode = match ctx.params.get("mode") {
+        let mode = match ctx.params.get("direction") {
             Some(ParamValue::Enum(v)) => (*v).min(2),
             Some(ParamValue::Float(f)) => (f.round() as u32).min(2),
             _ => 0,

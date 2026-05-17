@@ -17,7 +17,7 @@
           "type": "Float",
           "value": 1.0
         },
-        "mode": {
+        "direction": {
           "type": "Enum",
           "value": 0
         },

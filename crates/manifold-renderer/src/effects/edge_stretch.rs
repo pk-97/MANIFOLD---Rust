@@ -5,7 +5,7 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::ClampStretch;
 use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
-use manifold_core::effect_registration::EffectMetadata;
+use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
 use std::borrow::Cow;
@@ -21,7 +21,7 @@ inventory::submit! {
         params: &[
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
             ParamSpec::continuous("width", "Width", 0.1, 0.9, 0.5, "F2", "SourceWidth"),
-            ParamSpec::whole_labels("dir", "Direction", 0.0, 2.0, 0.0, &["Horiz", "Vert", "Both"], "Direction"),
+            ParamSpec::whole_labels("direction", "Direction", 0.0, 2.0, 0.0, &["Horiz", "Vert", "Both"], "Direction"),
         ],
     }
 }
@@ -29,6 +29,13 @@ inventory::submit! {
     EffectFactory {
         id: EffectTypeId::EDGE_STRETCH,
         create: |device| Box::new(EdgeStretchFX::new(device)),
+    }
+}
+
+inventory::submit! {
+    EffectAliasMetadata {
+        id: EffectTypeId::EDGE_STRETCH,
+        aliases: &[("dir", Some("direction"))],
     }
 }
 
@@ -52,10 +59,10 @@ crate::atomic_chain_spec! {
             convert: ParamConvert::Float,
         },
         ParamBinding {
-            id: Cow::Borrowed("dir"),
+            id: Cow::Borrowed("direction"),
             label: "Direction",
             default_value: 0.0,
-            target: ParamTarget::HandleNode { handle: "edge_stretch", param: "mode" },
+            target: ParamTarget::HandleNode { handle: "edge_stretch", param: "direction" },
             convert: ParamConvert::EnumRound,
         },
     ],

@@ -1898,6 +1898,76 @@ inventory::submit! {
         old='id: Cow::Borrowed("wire_res"),',
         new='id: Cow::Borrowed("wire_resolution"),',
     ),
+
+    # ========================================================================
+    # Phase 7c — Param id renames with matching inner-primitive changes.
+    # Per effect: same 4 outer-side edits as 7a/7b, PLUS:
+    #   - binding `target.param` updates (the inner-node param name)
+    #   - primitive ParamDef name(s)
+    #   - primitive PARAM_ORDER constants (for wrapper primitives)
+    #   - primitive ctx.params.get(...) lookups
+    # ========================================================================
+
+    # ── Edge Stretch: dir → direction + ClampStretch.mode → direction ──
+    Rename(
+        desc="Edge Stretch: add EffectAliasMetadata import",
+        file=effect("edge_stretch"),
+        old='use manifold_core::effect_registration::EffectMetadata;',
+        new='use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};',
+    ),
+    Rename(
+        desc="Edge Stretch: insert EffectAliasMetadata submission",
+        file=effect("edge_stretch"),
+        old='''inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::EDGE_STRETCH,
+        create: |device| Box::new(EdgeStretchFX::new(device)),
+    }
+}''',
+        new='''inventory::submit! {
+    EffectFactory {
+        id: EffectTypeId::EDGE_STRETCH,
+        create: |device| Box::new(EdgeStretchFX::new(device)),
+    }
+}
+
+inventory::submit! {
+    EffectAliasMetadata {
+        id: EffectTypeId::EDGE_STRETCH,
+        aliases: &[("dir", Some("direction"))],
+    }
+}''',
+    ),
+    Rename(
+        desc="Edge Stretch: ParamSpec id dir → direction",
+        file=effect("edge_stretch"),
+        old='ParamSpec::whole_labels("dir", "Direction", 0.0, 2.0, 0.0, &["Horiz", "Vert", "Both"], "Direction"),',
+        new='ParamSpec::whole_labels("direction", "Direction", 0.0, 2.0, 0.0, &["Horiz", "Vert", "Both"], "Direction"),',
+    ),
+    Rename(
+        desc="Edge Stretch: ParamBinding id dir → direction",
+        file=effect("edge_stretch"),
+        old='id: Cow::Borrowed("dir"),',
+        new='id: Cow::Borrowed("direction"),',
+    ),
+    Rename(
+        desc="Edge Stretch: ParamBinding target.param mode → direction",
+        file=effect("edge_stretch"),
+        old='target: ParamTarget::HandleNode { handle: "edge_stretch", param: "mode" },',
+        new='target: ParamTarget::HandleNode { handle: "edge_stretch", param: "direction" },',
+    ),
+    Rename(
+        desc="ClampStretch primitive: ParamDef name mode → direction",
+        file=primitive("clamp_stretch"),
+        old='name: "mode",\n            label: "Direction",',
+        new='name: "direction",\n            label: "Direction",',
+    ),
+    Rename(
+        desc="ClampStretch primitive: ctx.params.get(\"mode\") → \"direction\"",
+        file=primitive("clamp_stretch"),
+        old='let mode = match ctx.params.get("mode") {',
+        new='let mode = match ctx.params.get("direction") {',
+    ),
 ]
 
 
@@ -1909,11 +1979,14 @@ inventory::submit! {
 def apply_one(r: Rename) -> str:
     """Return 'applied' | 'skip-applied' | 'error'."""
     text = r.file.read_text()
+    # Idempotency-first check: if the post-rename state is already present in
+    # the file, treat as already-applied. Handles insertion-style edits where
+    # the new string CONTAINS the old (so old would still match after apply,
+    # double-inserting on re-run).
+    if r.new and r.new in text:
+        return "skip-applied"
     count = text.count(r.old)
     if count == 0:
-        # Either already applied (idempotent) or the find string never matched.
-        if r.new and r.new in text:
-            return "skip-applied"
         return "error-not-found"
     if count > 1:
         return f"error-multiple-{count}"

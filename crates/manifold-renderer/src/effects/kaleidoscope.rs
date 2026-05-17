@@ -38,13 +38,6 @@ inventory::submit! {
     }
 }
 
-inventory::submit! {
-    EffectAliasMetadata {
-        id: EffectTypeId::KALEIDOSCOPE,
-        aliases: &[("segs", Some("segments"))],
-    }
-}
-
 crate::atomic_chain_spec! {
     type_id: EffectTypeId::KALEIDOSCOPE,
     primitive: KaleidoFold,
