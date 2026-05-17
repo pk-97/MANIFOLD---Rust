@@ -548,11 +548,13 @@ impl GraphCanvas {
 
     /// Left-mouse button down. Priority order:
     /// 1. Output port → start wire-drag.
-    /// 2. Input port → swallow (no action for V1 — disconnect lives
-    ///    elsewhere later).
-    /// 3. Node header → start node-move drag.
-    /// 4. Node body → select.
-    /// 5. Empty canvas → clear selection, start pan.
+    /// 2. Input port already wired → emit `DisconnectPorts` for the
+    ///    incoming wire (one click breaks the connection).
+    /// 3. Input port unwired → swallow (no action — wires only enter
+    ///    inputs via drag-from-output).
+    /// 4. Node header → start node-move drag.
+    /// 5. Node body → select.
+    /// 6. Empty canvas → clear selection, start pan.
     pub fn on_left_button_down(&mut self, viewport: Rect, sx: f32, sy: f32) {
         if let Some(hit) = self.port_under(viewport, sx, sy) {
             if hit.is_output {
@@ -562,9 +564,14 @@ impl GraphCanvas {
                 };
                 return;
             }
-            // Click on input port — V1 swallows the click (don't
-            // accidentally start a pan). Disconnect-by-click is a
-            // future polish item.
+            // Input port — if a wire feeds this port, breaking it on
+            // click. Otherwise swallow so the click doesn't start a pan.
+            if self.wire_into(hit.node_id, &hit.port_name).is_some() {
+                self.pending_actions.push(PanelAction::DisconnectPorts {
+                    to_node: hit.node_id,
+                    to_port: hit.port_name,
+                });
+            }
             return;
         }
         if let Some(node_id) = self.header_under(viewport, sx, sy) {
@@ -628,6 +635,16 @@ impl GraphCanvas {
 
     pub fn cursor(&self) -> (f32, f32) {
         self.cursor
+    }
+
+    /// Find the wire whose destination is `(to_node, to_port)`. Returns
+    /// the wire's index in `self.wires`. Each input port has at most
+    /// one incoming wire (enforced at graph-validate time), so this is
+    /// unambiguous.
+    fn wire_into(&self, to_node: u32, to_port: &str) -> Option<usize> {
+        self.wires
+            .iter()
+            .position(|w| w.to_node == to_node && w.to_port == to_port)
     }
 
     /// Currently-selected node id within the graph the canvas is

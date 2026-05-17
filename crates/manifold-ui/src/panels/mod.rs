@@ -271,6 +271,11 @@ pub enum PanelAction {
     /// Remove a node from the watched graph plus every wire that
     /// touches it. Emitted by the canvas's delete-key handler.
     RemoveGraphNode { node_id: u32 },
+    /// Disconnect the wire feeding `(to_node, to_port)`. The input
+    /// side uniquely identifies the wire because each input port has
+    /// at most one incoming wire. Emitted by clicking on an already-
+    /// connected input port on the canvas.
+    DisconnectPorts { to_node: u32, to_port: String },
     /// Update a node's editor position. Emitted by the canvas's
     /// node-drag completion path.
     MoveGraphNode { node_id: u32, new_pos: (f32, f32) },

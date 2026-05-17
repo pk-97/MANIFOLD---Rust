@@ -561,6 +561,21 @@ impl Application {
                     }
                     continue;
                 }
+                PanelAction::DisconnectPorts { to_node, to_port } => {
+                    if let (Some(eid), Some(default)) = (
+                        self.watched_effect_id.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd = manifold_editing::commands::graph::DisconnectPortsCommand::new(
+                            eid.clone(),
+                            *to_node,
+                            to_port.clone(),
+                            default.clone(),
+                        );
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
                 PanelAction::RemoveGraphNode { node_id } => {
                     if let (Some(eid), Some(default)) = (
                         self.watched_effect_id.as_ref(),
