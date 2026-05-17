@@ -626,9 +626,123 @@ Every primitive that uses multi-word ids uses `snake_case` (`block_size`, `rgb_s
 
 **Rename volume:** ~12 inner id+label renames, 2 primitive type-id / file renames, 6 default/range changes. Smaller than Layer 1 because most primitive params already use the long English forms.
 
-### 9.3 Layer 3 — Generator params (pending)
+### 9.3 Layer 3 — Generator params (23 generators)
 
-[deferred — pending checkpoint]
+22 generators register `GeneratorMetadata` in `manifold-core/src/generator_metadata_submissions.rs`; Strange Attractor registers from its own file. All use the same `ParamSpec` shape as effects, so the audit lens is identical: label clarity, id casing, range correctness, default sensibility.
+
+#### 9.3.1 Truncated labels — same Unity-era abbreviation tax
+
+| Generator | Current label | Proposed |
+|---|---|---|
+| Tesseract / Duocylinder / Lissajous / Oscilloscope XY / Wireframe Zoo | `Verts` | `Vertices` |
+| Tesseract / Duocylinder / Lissajous / Oscilloscope XY / Wireframe Zoo | `VSize` | `Vertex Size` |
+| Tesseract / Duocylinder | `Dist` | `Distance` |
+| Tesseract / Duocylinder / Lissajous / Oscilloscope XY | `Anim` | `Animate` |
+| Mycelium | `SensDist` | `Sensor Distance` |
+| Mycelium | `SensAngle` | `Sensor Angle` |
+| Galactic Rock / Metallic Glass / Black Hole / Digital Plants | `Cam Dist`, `Cam Orbit`, `Cam Tilt`, `Cam FOV` | `Camera Distance`, `Camera Orbit`, `Camera Tilt`, `Camera FOV` |
+| Galactic Rock / Metallic Glass / Digital Plants | `Light Int` | `Light Intensity` |
+| Metallic Glass | `Edge Str` | `Edge Strength` |
+| Metallic Glass | `Noise Scale` / `Noise Speed` | (keep — already full) |
+| Oily Fluid | `VelDamp`, `VelDisp`, `ColDisp` | `Velocity Damp`, `Velocity Displace`, `Color Displace` |
+| Oily Fluid | `Sat`, `Bright` | `Saturation`, `Brightness` |
+| Black Hole | `Disk Inner`, `Disk Outer`, `Disk Glow` | (keep — `Disk` is the right scoping prefix) |
+| Black Hole | `Cam Velocity` | `Camera Velocity` |
+| Fluid Sim 3D | `Ctr Scale` | `Container Scale` |
+| Fluid Sim 3D | `Vol Res` | `Volume Resolution` |
+| Galactic Rock | `Wave Amp` / `Wave Freq` | `Wave Amplitude` / `Wave Frequency` |
+| Star Field | `Drift Speed`, `Drift X`, `Drift Y` | (keep — already full Title Case) |
+| Strange Attractor | `Type` | `Attractor Type` (the param means a choice between 5 named attractors) |
+| Plasma | `Pattern` | (keep — clear) |
+| Digital Plants | `Anim Speed`, `Petal Amp`, `Rot Speed`, `Base Radius`, `Torus Radius`, `Box Scale` | (drop the `Amp` / `Rot` abbreviations: `Animation Speed`, `Petal Amplitude`, `Rotation Speed`. Rest keep) |
+| Tesseract / Duocylinder / Wireframe Zoo | `XY`, `ZW`, `XW` | (keep — well-known 4D plane labels) |
+
+Multi-generator pattern: **`Cam *` → `Camera *`**. This appears on 4 generators; renaming once gets all of them.
+
+#### 9.3.2 `Count (M)` — the millions-unit hack
+
+Four generators (Fluid Simulation, Fluid Simulation 3D, Strange Attractor, Particle Text) carry a `Count (M)` slider that means "particle count in millions" (so `2.0` = 2 million). The `(M)` is jammed into the label as a fake unit.
+
+**Recommendation:** rename id `count_m` → `particle_count_m` (clearer), label → `Particle Count`, add a real unit string `"M"`. Or — better — translate inside the generator (param value is `0.1..8.0`, multiply by 1e6 internally) and label as `Particle Count` with unit `"M"`. The user sees `Particle Count: 2.0 M`, not `Count (M): 2.0`.
+
+#### 9.3.3 `Snap` default inconsistency
+
+Most generators with a `snap` toggle default it `0.0` (disabled): Basic Shapes Snap, Concentric Tunnel, Fluid Sim, Fluid Sim 3D, Nested Cubes, MRI Volume, Particle Text, Strange Attractor. But **Plasma**, **Lissajous**, **Oscilloscope XY**, **Parametric Surface** default it `1.0` (enabled). Probably an artifact — beat-snap looks impressive in the demo but is intrusive when you're shaping a base look.
+
+**Recommendation:** default `snap = 0.0` everywhere. User enables it intentionally; matches the "subtle defaults" principle.
+
+#### 9.3.4 Display name vs file/id mismatches
+
+- `GeneratorTypeId::COMPUTE_STRANGE_ATTRACTOR` value `"ComputeStrangeAttractor"`. The `Compute` prefix is internal-only ("the compute-shader implementation of") — confusing to see in save files. **Recommendation:** rename the on-disk type id `"ComputeStrangeAttractor"` → `"StrangeAttractor"` with alias.
+- `Fluid Simulation` (2D) vs `Fluid Sim 3D` — abbreviated for the 3D but not the 2D. **Recommendation:** rename display name to `Fluid Simulation 3D` for consistency.
+- `Basic Shapes Snap` — `Snap` here means "snap to beat" (an option) but the name suggests it's an inherent property of the generator. The generator itself is just "Basic Shapes" with an optional `snap` param. **Recommendation:** rename display name to `Basic Shapes`. The `snap` toggle remains a param.
+
+#### 9.3.5 Range / default oddities
+
+- **Plasma.contrast** default `0.63` — looks like a saved magic number. Range `[0, 1]`. Try `0.5`.
+- **Lissajous.freq_x = 0.13`, `freq_y = 0.09`, `phase = 0.07`, `speed = 2.67`, `window = 0.74`, `scale = 1.55`** — every default is a saved magic number. The Liveschool show probably has a Lissajous instance saved with these values; the defaults match. **Recommendation:** round to clean values (`freq_x=0.1`, `freq_y=0.1`, `phase=0.0`, `speed=1.0`, `window=0.5`, `scale=1.0`). Less-impressive on add but more learnable.
+- **Mycelium.color** default `0.08` — same magic-number pattern. Try `0.5` or `0.0`.
+- **Fluid Simulation.flow** range `[-0.1, -0.001]` — negative-only with no zero. **Recommendation:** either rename `flow` → `decay` (semantics match a decay coefficient), or change range to `[0, 0.1]` and invert sign inside the generator. Today asking the user to dial in a negative value with no zero point reads strange.
+- **Fluid Simulation.curl** range `[30, 90]` default `85` — narrow upper range, very specific defaults. Probably angle in degrees. Add unit `"°"`.
+- **Oily Fluid.feedback** range `[0.95, 0.9999]` — same narrow-range pattern as Watercolor. Consider rescaling to `[0, 1]` internally.
+- **Black Hole.freefall** format `"F0"` but range `[0, 1]` — F0 means 0 decimal places, which makes 0.5 render as "0" or "1". Should be `"F2"`.
+- **Black Hole.steps** range `[50, 500]` default `150` — clear.
+- **Strange Attractor.chaos** default `0.0` — does nothing on add. Try `0.3`.
+- **Tesseract / Duocylinder** default `xy / zw / xw` look like saved magic numbers. Try `0.5 / 0.3 / 0.2`.
+- **Oily Fluid.hue** default `0.0` is fine if hue is normalized [0, 1]; the F2 format suggests yes.
+
+#### 9.3.6 Generator categories
+
+Generators have no `category` field in their metadata today. They're listed flat in the picker. Worth grouping (5–6 buckets — similar to the effect category split):
+
+| Category | Generators |
+|---|---|
+| **Procedural** | Plasma, Basic Shapes, Concentric Tunnel, Star Field |
+| **3D** | Tesseract, Duocylinder, Wireframe Zoo, Nested Cubes, Parametric Surface, Galactic Rock, Metallic Glass, Black Hole, Digital Plants |
+| **Lines** | Lissajous, Oscilloscope XY |
+| **Particles** | Mycelium, Fluid Simulation, Fluid Simulation 3D, Strange Attractor, Oily Fluid, Particle Text |
+| **Volumetric** | MRI Volume |
+| **Text** | Text, Particle Text (already in Particles too — assign primary) |
+
+Add a `category: &'static str` field to `GeneratorMetadata` mirroring `EffectMetadata.category`, then populate. The picker UI groups by category. (Today the picker is flat — see open question §9.4 about grouped pickers.)
+
+#### 9.3.7 Layer 3 change table (summary)
+
+| Generator | Kind | Change |
+|---|---|---|
+| 5 generators | label | `Verts` → `Vertices`, `VSize` → `Vertex Size` |
+| 4 generators | label | `Cam Dist`/`Cam Orbit`/`Cam Tilt`/`Cam FOV` → `Camera *` |
+| 2 generators | label | `Dist` → `Distance`, `Anim` → `Animate` |
+| Mycelium | label | `SensDist`/`SensAngle` → `Sensor Distance`/`Sensor Angle` |
+| Oily Fluid | label | `VelDamp`/`VelDisp`/`ColDisp`/`Sat`/`Bright` → full names |
+| 3 generators | label | `Light Int` → `Light Intensity`, `Edge Str` → `Edge Strength` |
+| Black Hole | label | `Cam Velocity` → `Camera Velocity` |
+| Fluid Sim 3D | label | `Ctr Scale` → `Container Scale`, `Vol Res` → `Volume Resolution` |
+| Galactic Rock | label | `Wave Amp`/`Wave Freq` → `Wave Amplitude`/`Wave Frequency` |
+| 4 generators | id+label | `count_m` / `Count (M)` → `particle_count_m` / `Particle Count` (with `M` unit) |
+| Strange Attractor | type-id-rename | `ComputeStrangeAttractor` → `StrangeAttractor` (with alias) |
+| Strange Attractor | label | `Type` → `Attractor Type` |
+| Fluid Simulation 3D | display | `Fluid Sim 3D` → `Fluid Simulation 3D` |
+| Basic Shapes Snap | display | `Basic Shapes Snap` → `Basic Shapes` |
+| 4 generators | default | `snap = 1.0` → `snap = 0.0` (Plasma, Lissajous, Oscilloscope XY, Parametric Surface) |
+| Plasma | default | `contrast = 0.63` → `0.5` |
+| Lissajous | default | `freq_x=0.13`, `freq_y=0.09`, `phase=0.07`, `speed=2.67`, `window=0.74`, `scale=1.55` → round numbers |
+| Mycelium | default | `color = 0.08` → `0.5` |
+| Fluid Simulation / 3D | param | `flow` range `[-0.1, -0.001]` → either rename to `decay` or invert sign |
+| Fluid Simulation / 3D | unit | `curl` add `"°"` unit |
+| Black Hole | format | `freefall` format `F0` → `F2` |
+| Strange Attractor | default | `chaos = 0.0` → `chaos = 0.3` |
+| All generators | new field | add `category: &'static str` to `GeneratorMetadata` |
+
+**Rename volume:** ~30 label renames, ~10 default changes, 3 display-name fixes, 1 type-id rename, 1 metadata-shape change. Comparable to Layer 1 in scale.
+
+### 9.4 Open questions
+
+- **Param `id` casing convention.** Most current ids are `snake_case` (`tint_hue`, `block_size`). Some are single words (`amount`, `gain`). Confirm `snake_case` everywhere as the rule.
+- **Display label casing.** Current mix: `Title Case` (`Edge Detect`, `Block Size`), `PascalCase` (`TintHue`, `ZScale`), abbreviations (`HDR Ret`). Confirm `Title Case With Spaces` as the rule.
+- **Type id rename migration shape.** `EffectValueAliasMetadata` exists for enum-value remaps. For type id renames we need a sibling: `EffectTypeAliasMetadata` mapping old type id strings to new. Stamp this once; reuse for the HDR Boost / Edge Detect / Strange Attractor renames.
+- **Grouped picker UI.** Today both the "Add Effect" and "Add Generator" pickers are flat alphabetical. Once categories land (§9.1.4, §9.3.6), the picker should group by category with collapsible sections. UX call: scope this into the rename pass, or defer?
+- **Camera primitive.** `Cam Dist`/`Cam Orbit`/`Cam Tilt`/`Cam FOV`/`Look Y` repeats across 4 generators. Tempting to factor into a shared `Camera3D` primitive (which §6.7 G1 already plans). Don't do it now — wait for the generator decomposition pass. Just align the names today so the future primitive lands without further migration.
 
 ### 9.4 Open questions
 
