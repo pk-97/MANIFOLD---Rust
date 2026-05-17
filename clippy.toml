@@ -1,1 +1,16 @@
 too-many-arguments-threshold = 20
+
+# `disallowed-types` is intentionally NOT used to ban std::sync::Mutex /
+# RwLock today: `manifold-gpu::metal::device` has six legitimate uses
+# (pipeline / MSL / archive caches — see `feedback_no_dummy_encoder.md`)
+# and `manifold-recording` has one. Grandfathering via per-line attrs
+# would scatter `#[allow]` markers across hot code. The "no NEW shared
+# state without approval" rule from CLAUDE.md is reviewer-enforced.
+#
+# The two crates we DO ban — `wgpu` and `metal` — live in `deny.toml`
+# as cargo-deny bans (catches them at the dependency-graph level
+# rather than at use-site, which is stronger).
+#
+# Per-CLAUDE.md "Use Beats / Seconds / Bpm newtypes, never raw f32/f64
+# in time-related function signatures": no clippy lint matches that
+# contract; relies on review until a custom dylint earns its keep.

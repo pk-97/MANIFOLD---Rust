@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! MANIFOLD profiler — structured performance capture for analysis.
 //!
 //! Records per-frame timing data from the content thread during real execution.

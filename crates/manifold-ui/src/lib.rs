@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 pub mod bitmap_painter;
 pub mod bitmap_renderer;
 pub mod clip_hit_tester;
