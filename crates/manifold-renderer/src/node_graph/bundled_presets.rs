@@ -102,6 +102,10 @@ const BUNDLED_PRESETS: &[(&str, &str)] = &[
         include_str!("../../assets/effect-presets/Kaleidoscope.json"),
     ),
     (
+        "Mandala",
+        include_str!("../../assets/effect-presets/Mandala.json"),
+    ),
+    (
         "Mirror",
         include_str!("../../assets/effect-presets/Mirror.json"),
     ),

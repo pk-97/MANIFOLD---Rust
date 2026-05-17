@@ -1,0 +1,108 @@
+{
+  "version": 1,
+  "name": "Mandala",
+  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.source",
+      "handle": "source"
+    },
+    {
+      "id": 1,
+      "typeId": "node.kaleidoscope",
+      "handle": "kaleidoscope",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "segments": {
+          "type": "Int",
+          "value": 6
+        }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "node.feedback",
+      "handle": "feedback",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "rotation": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "zoom": {
+          "type": "Float",
+          "value": 0.95
+        }
+      }
+    },
+    {
+      "id": 3,
+      "typeId": "node.chromatic_aberration",
+      "handle": "chromatic",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "angle": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "falloff": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "offset": {
+          "type": "Float",
+          "value": 0.01
+        }
+      }
+    },
+    {
+      "id": 4,
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "in"
+    }
+  ]
+}

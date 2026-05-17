@@ -19,6 +19,7 @@ pub mod hdr_boost;
 pub mod infrared;
 pub mod invert_colors;
 pub mod kaleidoscope;
+pub mod mandala;
 pub mod mirror;
 pub mod node_graph_test;
 pub mod quad_mirror;
