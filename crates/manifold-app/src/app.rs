@@ -70,13 +70,13 @@ pub(crate) enum ActiveInspectorDrag {
         tab: manifold_ui::InspectorTab,
         layer_id: LayerId,
         effect_idx: usize,
-        param_idx: usize,
+        param_id: manifold_core::effects::ParamId,
         value: f32,
         clip_id: Option<manifold_core::ClipId>,
     },
     GenParam {
         layer_id: LayerId,
-        param_idx: usize,
+        param_id: manifold_core::effects::ParamId,
         value: f32,
     },
 }
@@ -110,7 +110,7 @@ impl ActiveInspectorDrag {
                 tab,
                 layer_id,
                 effect_idx,
-                param_idx,
+                param_id,
                 value,
                 clip_id,
             } => {
@@ -129,21 +129,27 @@ impl ActiveInspectorDrag {
                 };
                 if let Some(effects) = effects
                     && let Some(effect) = effects.get_mut(*effect_idx)
-                    && *param_idx < effect.param_values.len()
+                    && let Some(slot) = effect.param_id_to_value_index(param_id.as_ref())
+                    && slot < effect.param_values.len()
                 {
-                    effect.param_values[*param_idx].value = *value;
+                    effect.param_values[slot].value = *value;
                 }
             }
             Self::GenParam {
                 layer_id,
-                param_idx,
+                param_id,
                 value,
             } => {
                 if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id)
                     && let Some(gp) = layer.gen_params_mut()
-                    && *param_idx < gp.param_values.len()
+                    && let Some(slot) =
+                        manifold_core::generator_definition_registry::param_id_to_index(
+                            gp.generator_type(),
+                            param_id.as_ref(),
+                        )
+                    && slot < gp.param_values.len()
                 {
-                    gp.param_values[*param_idx] = *value;
+                    gp.param_values[slot] = *value;
                 }
             }
         }

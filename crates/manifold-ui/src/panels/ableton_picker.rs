@@ -96,15 +96,20 @@ pub enum AbletonPickerAction {
 
 /// Context stored by the caller so it knows which param to map when
 /// the picker resolves.
-#[derive(Debug, Clone, Copy)]
+///
+/// Phase 2 of the bindings unification plan keys per-param contexts
+/// by [`ParamId`], not positional `param_idx`. `fx_idx` (effect's
+/// chain position) and `slot_idx` (macro bank slot) stay positional
+/// because those identities ARE structural positions.
+#[derive(Debug, Clone)]
 pub enum AbletonPickerContext {
     EffectParam {
         tab: super::InspectorTab,
         fx_idx: usize,
-        param_idx: usize,
+        param_id: manifold_core::effects::ParamId,
     },
     GenParam {
-        param_idx: usize,
+        param_id: manifold_core::effects::ParamId,
     },
     MacroSlot {
         slot_idx: usize,

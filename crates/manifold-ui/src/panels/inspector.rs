@@ -295,14 +295,15 @@ impl InspectorCompositePanel {
         self.gen_params.as_mut()
     }
 
-    /// Returns true if the effect param at `fx_idx`, `param_idx` has an Ableton mapping.
-    /// `tab` disambiguates master vs layer effect lookups — both lists use 0-based
-    /// indexing, so falling back from one to the other returns the wrong card.
+    /// Returns true if the effect param at `(fx_idx, param_id)` has an
+    /// Ableton mapping. Keyed by stable id (Phase 2): `fx_idx` is
+    /// structural (chain position), `param_id` is the unified id
+    /// namespace shared across static + user-exposed bindings.
     pub fn is_effect_ableton_mapped(
         &self,
         tab: InspectorTab,
         fx_idx: usize,
-        param_idx: usize,
+        param_id: &str,
     ) -> bool {
         let cards = match tab {
             InspectorTab::Master => &self.master_effects,
@@ -310,14 +311,15 @@ impl InspectorCompositePanel {
         };
         cards
             .get(fx_idx)
-            .is_some_and(|card| card.param_has_ableton_mapping(param_idx))
+            .is_some_and(|card| card.param_has_ableton_mapping(param_id))
     }
 
-    /// Returns true if the gen param at `param_idx` has an Ableton mapping.
-    pub fn is_gen_ableton_mapped(&self, param_idx: usize) -> bool {
+    /// Returns true if the gen param identified by `param_id` has an
+    /// Ableton mapping.
+    pub fn is_gen_ableton_mapped(&self, param_id: &str) -> bool {
         self.gen_params
             .as_ref()
-            .is_some_and(|gp| gp.param_has_ableton_mapping(param_idx))
+            .is_some_and(|gp| gp.param_has_ableton_mapping(param_id))
     }
 
     pub fn master_effect_mut(&mut self, idx: usize) -> Option<&mut EffectCardPanel> {

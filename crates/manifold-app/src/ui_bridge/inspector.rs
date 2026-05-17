@@ -4,24 +4,7 @@
 use manifold_core::effects::{EffectInstance, ParamEnvelope, ParameterDriver};
 use manifold_core::project::Project;
 use manifold_core::types::{BeatDivision, DriverWaveform};
-use manifold_core::{Beats, EffectTypeId, GeneratorTypeId, LayerId, Seconds};
-
-/// Look up the stable `ParamSpec::id` for an effect's positional param
-/// index. Returns `None` if the effect or index is unknown.
-///
-/// PanelActions still carry positional `pi: usize`; the data model
-/// keys drivers/envelopes by `param_id`. Every site that needs to
-/// match a UI-supplied index against a stored driver/envelope routes
-/// through this helper.
-fn effect_param_id(effect_type: &EffectTypeId, pi: usize) -> Option<&'static str> {
-    manifold_core::effect_definition_registry::param_index_to_id(effect_type, pi)
-}
-
-/// Same as [`effect_param_id`] but for layer-generator params
-/// (`layer.gen_params().drivers / .envelopes`).
-fn generator_param_id(gen_type: &GeneratorTypeId, pi: usize) -> Option<&'static str> {
-    manifold_core::generator_definition_registry::param_index_to_id(gen_type, pi)
-}
+use manifold_core::{Beats, LayerId, Seconds};
 use manifold_editing::commands::clip::{ChangeClipLoopCommand, SlipClipCommand};
 use manifold_editing::commands::drivers::{
     AddDriverCommand, ChangeDriverBeatDivCommand, ChangeDriverWaveformCommand, ChangeTrimCommand,
@@ -625,41 +608,42 @@ pub(super) fn dispatch_inspector(
             inspector.apply_selection_visuals(tree);
             DispatchResult::handled()
         }
-        PanelAction::EffectParamRightClick(fx_idx, param_idx, default_val) => {
+        PanelAction::EffectParamRightClick(fx_idx, param_id, default_val) => {
             let tab = ui.inspector.last_effect_tab();
             let (effects_mut, target) = resolve_effects_mut(tab, project, active_layer, selection);
             if let Some(effects) = effects_mut
                 && let Some(fx) = effects.get_mut(*fx_idx)
+                && let Some(slot) = fx.param_id_to_value_index(param_id.as_ref())
             {
-                let old = fx.get_base_param(*param_idx);
+                let old = fx.get_base_param(slot);
                 if (old - *default_val).abs() > f32::EPSILON {
-                    fx.set_base_param(*param_idx, *default_val);
-                    if let Some(param_id) = effect_param_id(fx.effect_type(), *param_idx) {
-                        let cmd = ChangeEffectParamCommand::new(
-                            target,
-                            *fx_idx,
-                            param_id,
-                            old,
-                            *default_val,
-                        );
-                        ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                    }
+                    fx.set_base_param(slot, *default_val);
+                    let cmd = ChangeEffectParamCommand::new(
+                        target,
+                        *fx_idx,
+                        param_id.clone(),
+                        old,
+                        *default_val,
+                    );
+                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
-        PanelAction::EffectParamSnapshot(fx_idx, param_idx) => {
+        PanelAction::EffectParamSnapshot(fx_idx, param_id) => {
             let tab = ui.inspector.last_effect_tab();
             let effects = resolve_effects_ref(tab, project, active_layer, selection);
-            if let Some(fx) = effects.and_then(|e| e.get(*fx_idx)) {
-                let val = fx.get_base_param(*param_idx);
+            if let Some(fx) = effects.and_then(|e| e.get(*fx_idx))
+                && let Some(slot) = fx.param_id_to_value_index(param_id.as_ref())
+            {
+                let val = fx.get_base_param(slot);
                 *drag_snapshot = Some(val);
                 *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::EffectParam {
                     tab,
                     layer_id: active_layer.clone().unwrap_or_default(),
                     effect_idx: *fx_idx,
-                    param_idx: *param_idx,
+                    param_id: param_id.clone(),
                     value: val,
                     clip_id: if tab == InspectorTab::Clip {
                         selection.primary_selected_clip_id.clone()
@@ -670,15 +654,16 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::EffectParamChanged(fx_idx, param_idx, val) => {
+        PanelAction::EffectParamChanged(fx_idx, param_id, val) => {
             let tab = ui.inspector.last_effect_tab();
             {
                 let (effects_mut, _target) =
                     resolve_effects_mut(tab, project, active_layer, selection);
                 if let Some(effects) = effects_mut
                     && let Some(fx) = effects.get_mut(*fx_idx)
+                    && let Some(slot) = fx.param_id_to_value_index(param_id.as_ref())
                 {
-                    fx.set_base_param(*param_idx, *val);
+                    fx.set_base_param(slot, *val);
                 }
                 if let Some(crate::app::ActiveInspectorDrag::EffectParam { value, .. }) =
                     active_inspector_drag
@@ -686,7 +671,7 @@ pub(super) fn dispatch_inspector(
                     *value = *val;
                 }
                 let fi = *fx_idx;
-                let pi = *param_idx;
+                let pid = param_id.clone();
                 let v = *val;
                 let layer_id = active_layer.clone().unwrap_or_default();
                 let clip_id = selection.primary_selected_clip_id.clone();
@@ -705,26 +690,31 @@ pub(super) fn dispatch_inspector(
                         };
                         if let Some(effects) = effects
                             && let Some(fx) = effects.get_mut(fi)
+                            && let Some(slot) = fx.param_id_to_value_index(pid.as_ref())
                         {
-                            fx.set_base_param(pi, v);
+                            fx.set_base_param(slot, v);
                         }
                     })),
                 );
             }
             DispatchResult::handled()
         }
-        PanelAction::EffectParamCommit(fx_idx, param_idx) => {
+        PanelAction::EffectParamCommit(fx_idx, param_id) => {
             if let Some(old_val) = drag_snapshot.take() {
                 let tab = ui.inspector.last_effect_tab();
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                if let Some(fx) = effects.and_then(|e| e.get(*fx_idx)) {
-                    let new_val = fx.get_base_param(*param_idx);
-                    if (old_val - new_val).abs() > f32::EPSILON
-                        && let Some(param_id) = effect_param_id(fx.effect_type(), *param_idx)
-                    {
+                if let Some(fx) = effects.and_then(|e| e.get(*fx_idx))
+                    && let Some(slot) = fx.param_id_to_value_index(param_id.as_ref())
+                {
+                    let new_val = fx.get_base_param(slot);
+                    if (old_val - new_val).abs() > f32::EPSILON {
                         let target = super::resolve_effect_target(tab, active_layer, project);
                         let cmd = ChangeEffectParamCommand::new(
-                            target, *fx_idx, param_id, old_val, new_val,
+                            target,
+                            *fx_idx,
+                            param_id.clone(),
+                            old_val,
+                            new_val,
                         );
                         ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                     }
@@ -735,7 +725,7 @@ pub(super) fn dispatch_inspector(
         }
 
         // ── Effect modulation ──────────────────────────────────────
-        PanelAction::EffectDriverToggle(ei, pi) => {
+        PanelAction::EffectDriverToggle(ei, param_id) => {
             let tab = ui.inspector.last_effect_tab();
             let effect_target = super::resolve_effect_target(tab, active_layer, project);
             let (effects_ref, _) = resolve_effects_read(tab, project, active_layer, selection);
@@ -746,11 +736,8 @@ pub(super) fn dispatch_inspector(
                     effect_target,
                     effect_index: *ei,
                 };
-                let pid = effect_param_id(fx.effect_type(), *pi);
-                let driver_idx = pid.and_then(|pid| {
-                    fx.drivers
-                        .as_ref()
-                        .and_then(|ds| ds.iter().position(|d| d.param_id == pid))
+                let driver_idx = fx.drivers.as_ref().and_then(|ds| {
+                    ds.iter().position(|d| d.param_id == *param_id)
                 });
                 if let Some(di) = driver_idx {
                     let old = fx.drivers.as_ref().unwrap()[di].enabled;
@@ -761,14 +748,19 @@ pub(super) fn dispatch_inspector(
                         boxed.execute(project);
                         ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
                     }
-                } else if let Some(pid) = pid {
+                } else {
+                    let base_value = fx
+                        .param_id_to_value_index(param_id.as_ref())
+                        .and_then(|slot| fx.param_values.get(slot))
+                        .map(|p| p.value)
+                        .unwrap_or(0.0);
                     let driver = ParameterDriver {
-                        param_id: std::borrow::Cow::Borrowed(pid),
+                        param_id: param_id.clone(),
                         beat_division: BeatDivision::Quarter,
                         waveform: DriverWaveform::Sine,
                         enabled: true,
                         phase: 0.0,
-                        base_value: fx.param_values.get(*pi).map(|p| p.value).unwrap_or(0.0),
+                        base_value,
                         trim_min: 0.0,
                         trim_max: 1.0,
                         reversed: false,
@@ -786,7 +778,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::structural()
         }
-        PanelAction::EffectEnvelopeToggle(ei, pi) => {
+        PanelAction::EffectEnvelopeToggle(ei, param_id) => {
             let tab = ui.inspector.last_effect_tab();
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
@@ -794,11 +786,7 @@ pub(super) fn dispatch_inspector(
                     .and_then(|e| e.get(*ei))
                     .map(|fx| fx.effect_type().clone())
             };
-            if let Some(et) = effect_type
-                && let Some(pid) = effect_param_id(&et, *pi)
-            {
-                let et_content = et.clone();
-                let pid_owned: std::borrow::Cow<'static, str> = std::borrow::Cow::Borrowed(pid);
+            if let Some(et) = effect_type {
                 let layer_idx = super::resolve_active_layer_index(active_layer, project);
                 let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
                     InspectorTab::Layer => layer_idx.and_then(|idx| {
@@ -811,18 +799,18 @@ pub(super) fn dispatch_inspector(
                     InspectorTab::Clip | InspectorTab::Master => None,
                 };
                 if let Some(envs) = envs {
-                    let env_idx = envs
-                        .iter()
-                        .position(|e| e.target_effect_type == et && e.param_id == pid);
+                    let env_idx = envs.iter().position(|e| {
+                        e.target_effect_type == et && e.param_id == *param_id
+                    });
                     if let Some(idx) = env_idx {
                         envs[idx].enabled = !envs[idx].enabled;
                     } else {
-                        envs.push(ParamEnvelope::new_for_effect(et, pid_owned.clone()));
+                        envs.push(ParamEnvelope::new_for_effect(et.clone(), param_id.clone()));
                     }
                 }
                 // Sync to content thread so the next snapshot doesn't overwrite
-                let et2 = et_content;
-                let pid_for_content = pid_owned;
+                let et2 = et;
+                let pid_for_content = param_id.clone();
                 let layer_id = active_layer.clone().unwrap_or_default();
                 ContentCommand::send(
                     content_tx,
@@ -843,7 +831,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::structural()
         }
-        PanelAction::EffectDriverConfig(ei, pi, cfg) => {
+        PanelAction::EffectDriverConfig(ei, param_id, cfg) => {
             let tab = ui.inspector.last_effect_tab();
             let effect_target = super::resolve_effect_target(tab, active_layer, project);
             let target = DriverTarget::Effect {
@@ -852,11 +840,10 @@ pub(super) fn dispatch_inspector(
             };
             let effects = resolve_effects_ref(tab, project, active_layer, selection);
             if let Some(fx) = effects.and_then(|e| e.get(*ei))
-                && let Some(pid) = effect_param_id(fx.effect_type(), *pi)
                 && let Some(di) = fx
                     .drivers
                     .as_ref()
-                    .and_then(|ds| ds.iter().position(|d| d.param_id == pid))
+                    .and_then(|ds| ds.iter().position(|d| d.param_id == *param_id))
             {
                 let driver = &fx.drivers.as_ref().unwrap()[di];
                 match cfg {
@@ -942,7 +929,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::structural()
         }
-        PanelAction::EffectEnvParamChanged(ei, pi, param, val) => {
+        PanelAction::EffectEnvParamChanged(ei, param_id, param, val) => {
             let tab = ui.inspector.last_effect_tab();
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
@@ -951,9 +938,7 @@ pub(super) fn dispatch_inspector(
                     .and_then(|e| e.get(*ei))
                     .map(|fx| fx.effect_type().clone())
             };
-            if let Some(ref et) = effect_type
-                && let Some(pid) = effect_param_id(et, *pi)
-            {
+            if let Some(ref et) = effect_type {
                 let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
                     InspectorTab::Layer => layer_idx.and_then(|idx| {
                         project
@@ -967,7 +952,7 @@ pub(super) fn dispatch_inspector(
                 if let Some(envs) = envs
                     && let Some(env) = envs
                         .iter_mut()
-                        .find(|e| e.target_effect_type == *et && e.param_id == pid)
+                        .find(|e| e.target_effect_type == *et && e.param_id == *param_id)
                 {
                     match param {
                         manifold_ui::EnvelopeParam::Attack => env.attack_beats = *val,
@@ -978,11 +963,8 @@ pub(super) fn dispatch_inspector(
                 }
             }
             // Sync to content thread
-            if let Some(et) = effect_type
-                && let Some(pid) = effect_param_id(&et, *pi)
-            {
-                let pid_for_content: std::borrow::Cow<'static, str> =
-                    std::borrow::Cow::Borrowed(pid);
+            if let Some(et) = effect_type {
+                let pid_for_content = param_id.clone();
                 let p = *param;
                 let v = *val;
                 let layer_id = active_layer.clone().unwrap_or_default();
@@ -1013,20 +995,22 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::EffectTrimChanged(ei, pi, min, max) => {
+        PanelAction::EffectTrimChanged(ei, param_id, min, max) => {
             let tab = ui.inspector.last_effect_tab();
             {
                 let (effects_mut, _) = resolve_effects_mut(tab, project, active_layer, selection);
                 if let Some(effects) = effects_mut
                     && let Some(fx) = effects.get_mut(*ei)
-                    && let Some(pid) = effect_param_id(fx.effect_type(), *pi)
-                    && let Some(driver) = fx.drivers_mut().iter_mut().find(|d| d.param_id == pid)
+                    && let Some(driver) = fx
+                        .drivers_mut()
+                        .iter_mut()
+                        .find(|d| d.param_id == *param_id)
                 {
                     driver.trim_min = *min;
                     driver.trim_max = *max;
                 }
                 let fi = *ei;
-                let param_i = *pi as i32;
+                let pid = param_id.clone();
                 let mn = *min;
                 let mx = *max;
                 let layer_id = active_layer.clone().unwrap_or_default();
@@ -1046,7 +1030,6 @@ pub(super) fn dispatch_inspector(
                         };
                         if let Some(effects) = effects
                             && let Some(fx) = effects.get_mut(fi)
-                            && let Some(pid) = effect_param_id(fx.effect_type(), param_i as usize)
                             && let Some(driver) =
                                 fx.drivers_mut().iter_mut().find(|d| d.param_id == pid)
                         {
@@ -1058,7 +1041,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::EffectTargetChanged(ei, pi, norm) => {
+        PanelAction::EffectTargetChanged(ei, param_id, norm) => {
             let tab = ui.inspector.last_effect_tab();
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
@@ -1067,9 +1050,7 @@ pub(super) fn dispatch_inspector(
                     .and_then(|e| e.get(*ei))
                     .map(|fx| fx.effect_type().clone())
             };
-            if let Some(ref et) = effect_type
-                && let Some(pid) = effect_param_id(et, *pi)
-            {
+            if let Some(ref et) = effect_type {
                 let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
                     InspectorTab::Layer => layer_idx.and_then(|idx| {
                         project
@@ -1083,16 +1064,13 @@ pub(super) fn dispatch_inspector(
                 if let Some(envs) = envs
                     && let Some(env) = envs
                         .iter_mut()
-                        .find(|e| e.target_effect_type == *et && e.param_id == pid)
+                        .find(|e| e.target_effect_type == *et && e.param_id == *param_id)
                 {
                     env.target_normalized = *norm;
                 }
             }
-            if let Some(et) = effect_type
-                && let Some(pid) = effect_param_id(&et, *pi)
-            {
-                let pid_for_content: std::borrow::Cow<'static, str> =
-                    std::borrow::Cow::Borrowed(pid);
+            if let Some(et) = effect_type {
+                let pid_for_content = param_id.clone();
                 let n = *norm;
                 let layer_id = active_layer.clone().unwrap_or_default();
                 ContentCommand::send(
@@ -1119,31 +1097,29 @@ pub(super) fn dispatch_inspector(
         }
 
         // ── Modulation undo: snapshot/commit ────────────────────────
-        PanelAction::EffectTrimSnapshot(ei, pi) => {
+        PanelAction::EffectTrimSnapshot(ei, param_id) => {
             let tab = ui.inspector.last_effect_tab();
             let effects = resolve_effects_ref(tab, project, active_layer, selection);
             if let Some(fx) = effects.and_then(|e| e.get(*ei))
-                && let Some(pid) = effect_param_id(fx.effect_type(), *pi)
                 && let Some(driver) = fx
                     .drivers
                     .as_ref()
-                    .and_then(|ds| ds.iter().find(|d| d.param_id == pid))
+                    .and_then(|ds| ds.iter().find(|d| d.param_id == *param_id))
             {
                 *trim_snapshot = Some((driver.trim_min, driver.trim_max));
             }
             DispatchResult::handled()
         }
-        PanelAction::EffectTrimCommit(ei, pi) => {
+        PanelAction::EffectTrimCommit(ei, param_id) => {
             if let Some((old_min, old_max)) = trim_snapshot.take() {
                 let tab = ui.inspector.last_effect_tab();
                 let effect_target = super::resolve_effect_target(tab, active_layer, project);
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
                 if let Some(fx) = effects.and_then(|e| e.get(*ei))
-                    && let Some(pid) = effect_param_id(fx.effect_type(), *pi)
                     && let Some(di) = fx
                         .drivers
                         .as_ref()
-                        .and_then(|ds| ds.iter().position(|d| d.param_id == pid))
+                        .and_then(|ds| ds.iter().position(|d| d.param_id == *param_id))
                 {
                     let driver = &fx.drivers.as_ref().unwrap()[di];
                     let new_min = driver.trim_min;
@@ -1164,7 +1140,7 @@ pub(super) fn dispatch_inspector(
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
-        PanelAction::EffectTargetSnapshot(ei, pi) => {
+        PanelAction::EffectTargetSnapshot(ei, param_id) => {
             let tab = ui.inspector.last_effect_tab();
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
@@ -1173,9 +1149,7 @@ pub(super) fn dispatch_inspector(
                     .and_then(|e| e.get(*ei))
                     .map(|fx| fx.effect_type().clone())
             };
-            if let Some(et) = effect_type
-                && let Some(pid) = effect_param_id(&et, *pi)
-            {
+            if let Some(et) = effect_type {
                 let envs: Option<&[ParamEnvelope]> = match tab {
                     InspectorTab::Layer => layer_idx.and_then(|idx| {
                         project
@@ -1200,14 +1174,14 @@ pub(super) fn dispatch_inspector(
                 if let Some(envs) = envs
                     && let Some(env) = envs
                         .iter()
-                        .find(|e| e.target_effect_type == et && e.param_id == pid)
+                        .find(|e| e.target_effect_type == et && e.param_id == *param_id)
                 {
                     *target_snapshot = Some(env.target_normalized);
                 }
             }
             DispatchResult::handled()
         }
-        PanelAction::EffectTargetCommit(ei, pi) => {
+        PanelAction::EffectTargetCommit(ei, param_id) => {
             if let Some(old_target) = target_snapshot.take() {
                 let tab = ui.inspector.last_effect_tab();
                 let layer_idx = super::resolve_active_layer_index(active_layer, project);
@@ -1217,9 +1191,7 @@ pub(super) fn dispatch_inspector(
                         .and_then(|e| e.get(*ei))
                         .map(|fx| fx.effect_type().clone())
                 };
-                if let Some(et) = effect_type
-                    && let Some(pid) = effect_param_id(&et, *pi)
-                {
+                if let Some(et) = effect_type {
                     match tab {
                         InspectorTab::Layer => {
                             if let Some(idx) = layer_idx
@@ -1227,11 +1199,11 @@ pub(super) fn dispatch_inspector(
                             {
                                 let layer_id = layer.layer_id.clone();
                                 let envs = layer.envelopes.as_deref().unwrap_or(&[]);
-                                if let Some((env_idx, env)) = envs
-                                    .iter()
-                                    .enumerate()
-                                    .find(|(_, e)| e.target_effect_type == et && e.param_id == pid)
-                                    && (old_target - env.target_normalized).abs() > f32::EPSILON
+                                if let Some((env_idx, env)) = envs.iter().enumerate().find(
+                                    |(_, e)| {
+                                        e.target_effect_type == et && e.param_id == *param_id
+                                    },
+                                ) && (old_target - env.target_normalized).abs() > f32::EPSILON
                                 {
                                     let cmd = ChangeLayerEnvelopeTargetCommand::new(
                                         layer_id,
@@ -1253,7 +1225,7 @@ pub(super) fn dispatch_inspector(
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
-        PanelAction::EffectEnvRangeChanged(ei, pi, rmin, rmax) => {
+        PanelAction::EffectEnvRangeChanged(ei, param_id, rmin, rmax) => {
             let tab = ui.inspector.last_effect_tab();
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
@@ -1262,9 +1234,7 @@ pub(super) fn dispatch_inspector(
                     .and_then(|e| e.get(*ei))
                     .map(|fx| fx.effect_type().clone())
             };
-            if let Some(ref et) = effect_type
-                && let Some(pid) = effect_param_id(et, *pi)
-            {
+            if let Some(ref et) = effect_type {
                 let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
                     InspectorTab::Layer => layer_idx.and_then(|idx| {
                         project
@@ -1278,17 +1248,14 @@ pub(super) fn dispatch_inspector(
                 if let Some(envs) = envs
                     && let Some(env) = envs
                         .iter_mut()
-                        .find(|e| e.target_effect_type == *et && e.param_id == pid)
+                        .find(|e| e.target_effect_type == *et && e.param_id == *param_id)
                 {
                     env.range_min = *rmin;
                     env.range_max = *rmax;
                 }
             }
-            if let Some(et) = effect_type
-                && let Some(pid) = effect_param_id(&et, *pi)
-            {
-                let pid_for_content: std::borrow::Cow<'static, str> =
-                    std::borrow::Cow::Borrowed(pid);
+            if let Some(et) = effect_type {
+                let pid_for_content = param_id.clone();
                 let rm = *rmin;
                 let rx = *rmax;
                 let layer_id = active_layer.clone().unwrap_or_default();
@@ -1315,7 +1282,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::EffectEnvRangeSnapshot(ei, pi) => {
+        PanelAction::EffectEnvRangeSnapshot(ei, param_id) => {
             let tab = ui.inspector.last_effect_tab();
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
@@ -1324,9 +1291,7 @@ pub(super) fn dispatch_inspector(
                     .and_then(|e| e.get(*ei))
                     .map(|fx| fx.effect_type().clone())
             };
-            if let Some(et) = effect_type
-                && let Some(pid) = effect_param_id(&et, *pi)
-            {
+            if let Some(et) = effect_type {
                 let envs: Option<&[ParamEnvelope]> = match tab {
                     InspectorTab::Layer => layer_idx.and_then(|idx| {
                         project
@@ -1340,14 +1305,14 @@ pub(super) fn dispatch_inspector(
                 if let Some(envs) = envs
                     && let Some(env) = envs
                         .iter()
-                        .find(|e| e.target_effect_type == et && e.param_id == pid)
+                        .find(|e| e.target_effect_type == et && e.param_id == *param_id)
                 {
                     *range_snapshot = Some((env.range_min, env.range_max));
                 }
             }
             DispatchResult::handled()
         }
-        PanelAction::EffectEnvRangeCommit(ei, pi) => {
+        PanelAction::EffectEnvRangeCommit(ei, param_id) => {
             if let Some((old_min, old_max)) = range_snapshot.take() {
                 let tab = ui.inspector.last_effect_tab();
                 let layer_idx = super::resolve_active_layer_index(active_layer, project);
@@ -1357,9 +1322,7 @@ pub(super) fn dispatch_inspector(
                         .and_then(|e| e.get(*ei))
                         .map(|fx| fx.effect_type().clone())
                 };
-                if let Some(et) = effect_type
-                    && let Some(pid) = effect_param_id(&et, *pi)
-                {
+                if let Some(et) = effect_type {
                     match tab {
                         InspectorTab::Layer => {
                             if let Some(idx) = layer_idx
@@ -1367,12 +1330,12 @@ pub(super) fn dispatch_inspector(
                             {
                                 let layer_id = layer.layer_id.clone();
                                 let envs = layer.envelopes.as_deref().unwrap_or(&[]);
-                                if let Some((env_idx, env)) = envs
-                                    .iter()
-                                    .enumerate()
-                                    .find(|(_, e)| e.target_effect_type == et && e.param_id == pid)
-                                    && ((old_min - env.range_min).abs() > f32::EPSILON
-                                        || (old_max - env.range_max).abs() > f32::EPSILON)
+                                if let Some((env_idx, env)) = envs.iter().enumerate().find(
+                                    |(_, e)| {
+                                        e.target_effect_type == et && e.param_id == *param_id
+                                    },
+                                ) && ((old_min - env.range_min).abs() > f32::EPSILON
+                                    || (old_max - env.range_max).abs() > f32::EPSILON)
                                 {
                                     let cmd = ChangeLayerEnvelopeRangeCommand::new(
                                         layer_id,
@@ -1396,7 +1359,7 @@ pub(super) fn dispatch_inspector(
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
-        PanelAction::EffectEnvParamSnapshot(ei, pi) => {
+        PanelAction::EffectEnvParamSnapshot(ei, param_id) => {
             let tab = ui.inspector.last_effect_tab();
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
@@ -1405,9 +1368,7 @@ pub(super) fn dispatch_inspector(
                     .and_then(|e| e.get(*ei))
                     .map(|fx| fx.effect_type().clone())
             };
-            if let Some(et) = effect_type
-                && let Some(pid) = effect_param_id(&et, *pi)
-            {
+            if let Some(et) = effect_type {
                 let envs: Option<&[ParamEnvelope]> = match tab {
                     InspectorTab::Layer => layer_idx.and_then(|idx| {
                         project
@@ -1432,7 +1393,7 @@ pub(super) fn dispatch_inspector(
                 if let Some(envs) = envs
                     && let Some(env) = envs
                         .iter()
-                        .find(|e| e.target_effect_type == et && e.param_id == pid)
+                        .find(|e| e.target_effect_type == et && e.param_id == *param_id)
                 {
                     *adsr_snapshot = Some((
                         env.attack_beats,
@@ -1444,7 +1405,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::EffectEnvParamCommit(ei, pi) => {
+        PanelAction::EffectEnvParamCommit(ei, param_id) => {
             if let Some((old_a, old_d, old_s, old_r)) = adsr_snapshot.take() {
                 let tab = ui.inspector.last_effect_tab();
                 let layer_idx = super::resolve_active_layer_index(active_layer, project);
@@ -1454,9 +1415,7 @@ pub(super) fn dispatch_inspector(
                         .and_then(|e| e.get(*ei))
                         .map(|fx| fx.effect_type().clone())
                 };
-                if let Some(et) = effect_type
-                    && let Some(pid) = effect_param_id(&et, *pi)
-                {
+                if let Some(et) = effect_type {
                     match tab {
                         InspectorTab::Layer => {
                             if let Some(idx) = layer_idx
@@ -1464,11 +1423,11 @@ pub(super) fn dispatch_inspector(
                             {
                                 let layer_id = layer.layer_id.clone();
                                 let envs = layer.envelopes.as_deref().unwrap_or(&[]);
-                                if let Some((env_idx, env)) = envs
-                                    .iter()
-                                    .enumerate()
-                                    .find(|(_, e)| e.target_effect_type == et && e.param_id == pid)
-                                {
+                                if let Some((env_idx, env)) = envs.iter().enumerate().find(
+                                    |(_, e)| {
+                                        e.target_effect_type == et && e.param_id == *param_id
+                                    },
+                                ) {
                                     let (na, nd, ns, nr) = (
                                         env.attack_beats,
                                         env.decay_beats,
@@ -1501,7 +1460,7 @@ pub(super) fn dispatch_inspector(
         }
 
         // ── Envelope mode toggles ──────────────────────────────────
-        PanelAction::EffectEnvModeToggle(ei, pi) => {
+        PanelAction::EffectEnvModeToggle(ei, param_id) => {
             let tab = ui.inspector.last_effect_tab();
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
@@ -1509,9 +1468,7 @@ pub(super) fn dispatch_inspector(
                     .and_then(|e| e.get(*ei))
                     .map(|fx| fx.effect_type().clone())
             };
-            if let Some(ref et) = effect_type
-                && let Some(pid) = effect_param_id(et, *pi)
-            {
+            if let Some(ref et) = effect_type {
                 let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
                     InspectorTab::Layer => super::resolve_active_layer_index(active_layer, project)
                         .and_then(|idx| {
@@ -1526,7 +1483,7 @@ pub(super) fn dispatch_inspector(
                 if let Some(envs) = envs
                     && let Some(env) = envs
                         .iter_mut()
-                        .find(|e| e.target_effect_type == *et && e.param_id == pid)
+                        .find(|e| e.target_effect_type == *et && e.param_id == *param_id)
                 {
                     use manifold_core::effects::EnvelopeMode;
                     env.mode = match env.mode {
@@ -1540,8 +1497,7 @@ pub(super) fn dispatch_inspector(
                     let new_mode = env.mode;
                     // Sync to content thread
                     let et2 = et.clone();
-                    let pid_for_content: std::borrow::Cow<'static, str> =
-                        std::borrow::Cow::Borrowed(pid);
+                    let pid_for_content = param_id.clone();
                     let layer_id = active_layer.clone().unwrap_or_default();
                     ContentCommand::send(
                         content_tx,
@@ -1563,7 +1519,7 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::structural()
         }
-        PanelAction::EffectEnvRandomJumpToggle(ei, pi) => {
+        PanelAction::EffectEnvRandomJumpToggle(ei, param_id) => {
             let tab = ui.inspector.last_effect_tab();
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
@@ -1571,9 +1527,7 @@ pub(super) fn dispatch_inspector(
                     .and_then(|e| e.get(*ei))
                     .map(|fx| fx.effect_type().clone())
             };
-            if let Some(ref et) = effect_type
-                && let Some(pid) = effect_param_id(et, *pi)
-            {
+            if let Some(ref et) = effect_type {
                 let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
                     InspectorTab::Layer => super::resolve_active_layer_index(active_layer, project)
                         .and_then(|idx| {
@@ -1588,13 +1542,12 @@ pub(super) fn dispatch_inspector(
                 if let Some(envs) = envs
                     && let Some(env) = envs
                         .iter_mut()
-                        .find(|e| e.target_effect_type == *et && e.param_id == pid)
+                        .find(|e| e.target_effect_type == *et && e.param_id == *param_id)
                 {
                     env.random_jump = !env.random_jump;
                     let new_jump = env.random_jump;
                     let et2 = et.clone();
-                    let pid_for_content: std::borrow::Cow<'static, str> =
-                        std::borrow::Cow::Borrowed(pid);
+                    let pid_for_content = param_id.clone();
                     let layer_id = active_layer.clone().unwrap_or_default();
                     ContentCommand::send(
                         content_tx,
@@ -1841,36 +1794,45 @@ pub(super) fn dispatch_inspector(
 
         // ── Generator params ───────────────────────────────────────
         PanelAction::GenTypeClicked(_) => DispatchResult::handled(),
-        PanelAction::GenParamSnapshot(param_idx) => {
+        PanelAction::GenParamSnapshot(param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
                 && let Some(gp) = layer.gen_params()
+                && let Some(slot) = manifold_core::generator_definition_registry::param_id_to_index(
+                    gp.generator_type(),
+                    param_id.as_ref(),
+                )
             {
-                let val = gp.get_param_base(*param_idx);
+                let val = gp.get_param_base(slot);
                 *drag_snapshot = Some(val);
                 *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::GenParam {
                     layer_id: layer.layer_id.clone(),
-                    param_idx: *param_idx,
+                    param_id: param_id.clone(),
                     value: val,
                 });
             }
             DispatchResult::handled()
         }
-        PanelAction::GenParamChanged(param_idx, val) => {
+        PanelAction::GenParamChanged(param_id, val) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx {
                 if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
                     && let Some(gp) = layer.gen_params_mut()
+                    && let Some(slot) =
+                        manifold_core::generator_definition_registry::param_id_to_index(
+                            gp.generator_type(),
+                            param_id.as_ref(),
+                        )
                 {
-                    gp.set_param_base(*param_idx, *val);
+                    gp.set_param_base(slot, *val);
                 }
                 if let Some(crate::app::ActiveInspectorDrag::GenParam { value, .. }) =
                     active_inspector_drag
                 {
                     *value = *val;
                 }
-                let pi = *param_idx;
+                let pid = param_id.clone();
                 let v = *val;
                 let layer_id = active_layer.clone().unwrap_or_default();
                 ContentCommand::send(
@@ -1878,28 +1840,37 @@ pub(super) fn dispatch_inspector(
                     ContentCommand::MutateProject(Box::new(move |p| {
                         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
                             && let Some(gp) = layer.gen_params_mut()
+                            && let Some(slot) =
+                                manifold_core::generator_definition_registry::param_id_to_index(
+                                    gp.generator_type(),
+                                    pid.as_ref(),
+                                )
                         {
-                            gp.set_param_base(pi, v);
+                            gp.set_param_base(slot, v);
                         }
                     })),
                 );
             }
             DispatchResult::handled()
         }
-        PanelAction::GenParamCommit(param_idx) => {
+        PanelAction::GenParamCommit(param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(old_val) = drag_snapshot.take()
                 && let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
                 && let Some(gp) = layer.gen_params()
+                && let Some(slot) = manifold_core::generator_definition_registry::param_id_to_index(
+                    gp.generator_type(),
+                    param_id.as_ref(),
+                )
             {
-                let new_val = gp.get_param_base(*param_idx);
+                let new_val = gp.get_param_base(slot);
                 if (old_val - new_val).abs() > f32::EPSILON {
                     let layer_id = layer.layer_id.clone();
                     let base = gp.base_param_values.as_ref().unwrap_or(&gp.param_values);
                     let mut old_params = base.clone();
-                    if *param_idx < old_params.len() {
-                        old_params[*param_idx] = old_val;
+                    if slot < old_params.len() {
+                        old_params[slot] = old_val;
                     }
                     let new_params = base.clone();
                     let cmd = ChangeGeneratorParamsCommand::new(layer_id, old_params, new_params);
@@ -1909,18 +1880,24 @@ pub(super) fn dispatch_inspector(
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
-        PanelAction::GenParamToggle(param_idx) => {
+        PanelAction::GenParamToggle(param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
             {
                 let layer_id = layer.layer_id.clone();
-                if let Some(gp) = layer.gen_params_mut() {
-                    let old_val = gp.get_param_base(*param_idx);
+                if let Some(gp) = layer.gen_params_mut()
+                    && let Some(slot) =
+                        manifold_core::generator_definition_registry::param_id_to_index(
+                            gp.generator_type(),
+                            param_id.as_ref(),
+                        )
+                {
+                    let old_val = gp.get_param_base(slot);
                     let new_val = if old_val > 0.5 { 0.0 } else { 1.0 };
                     let base = gp.base_param_values.as_ref().unwrap_or(&gp.param_values);
                     let old_params = base.clone();
-                    gp.set_param_base(*param_idx, new_val);
+                    gp.set_param_base(slot, new_val);
                     let new_params = gp
                         .base_param_values
                         .as_ref()
@@ -1932,18 +1909,24 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::GenParamRightClick(param_idx, default_val) => {
+        PanelAction::GenParamRightClick(param_id, default_val) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
             {
                 let layer_id = layer.layer_id.clone();
-                if let Some(gp) = layer.gen_params_mut() {
-                    let old = gp.get_param_base(*param_idx);
+                if let Some(gp) = layer.gen_params_mut()
+                    && let Some(slot) =
+                        manifold_core::generator_definition_registry::param_id_to_index(
+                            gp.generator_type(),
+                            param_id.as_ref(),
+                        )
+                {
+                    let old = gp.get_param_base(slot);
                     if (old - *default_val).abs() > f32::EPSILON {
                         let base = gp.base_param_values.as_ref().unwrap_or(&gp.param_values);
                         let old_params = base.clone();
-                        gp.set_param_base(*param_idx, *default_val);
+                        gp.set_param_base(slot, *default_val);
                         let new_params = gp
                             .base_param_values
                             .as_ref()
@@ -1960,7 +1943,7 @@ pub(super) fn dispatch_inspector(
         }
 
         // ── Gen modulation ─────────────────────────────────────────
-        PanelAction::GenDriverToggle(pi) => {
+        PanelAction::GenDriverToggle(param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx {
                 let layer_id = active_layer.clone().unwrap_or_default();
@@ -1968,11 +1951,8 @@ pub(super) fn dispatch_inspector(
                 if let Some(layer) = project.timeline.layers.get(layer_idx)
                     && let Some(gp) = layer.gen_params()
                 {
-                    let pid = generator_param_id(gp.generator_type(), *pi);
-                    let driver_idx = pid.and_then(|pid| {
-                        gp.drivers
-                            .as_ref()
-                            .and_then(|ds| ds.iter().position(|d| d.param_id == pid))
+                    let driver_idx = gp.drivers.as_ref().and_then(|ds| {
+                        ds.iter().position(|d| d.param_id == *param_id)
                     });
                     if let Some(di) = driver_idx {
                         let old = gp.drivers.as_ref().unwrap()[di].enabled;
@@ -1983,14 +1963,21 @@ pub(super) fn dispatch_inspector(
                             boxed.execute(project);
                             ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
                         }
-                    } else if let Some(pid) = pid {
+                    } else {
+                        let base_value =
+                            manifold_core::generator_definition_registry::param_id_to_index(
+                                gp.generator_type(),
+                                param_id.as_ref(),
+                            )
+                            .and_then(|slot| gp.param_values.get(slot).copied())
+                            .unwrap_or(0.0);
                         let driver = ParameterDriver {
-                            param_id: std::borrow::Cow::Borrowed(pid),
+                            param_id: param_id.clone(),
                             beat_division: BeatDivision::Quarter,
                             waveform: DriverWaveform::Sine,
                             enabled: true,
                             phase: 0.0,
-                            base_value: gp.param_values.get(*pi).copied().unwrap_or(0.0),
+                            base_value,
                             trim_min: 0.0,
                             trim_max: 1.0,
                             reversed: false,
@@ -2009,32 +1996,27 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::structural()
         }
-        PanelAction::GenEnvelopeToggle(pi) => {
+        PanelAction::GenEnvelopeToggle(param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
                 && let Some(gp) = layer.gen_params_mut()
-                && let Some(pid) = generator_param_id(gp.generator_type(), *pi)
             {
                 let envs = gp.envelopes.get_or_insert_with(Vec::new);
-                let env_idx = envs.iter().position(|e| e.param_id == pid);
+                let env_idx = envs.iter().position(|e| e.param_id == *param_id);
                 if let Some(idx) = env_idx {
                     envs[idx].enabled = !envs[idx].enabled;
                 } else {
-                    envs.push(ParamEnvelope::new_for_gen(pid));
+                    envs.push(ParamEnvelope::new_for_gen(param_id.clone()));
                 }
             }
-            // Sync to content thread so the next snapshot doesn't overwrite.
-            // Re-resolve `pid` in the closure since `gen_params_mut()` is
-            // a content-thread state read.
-            let pi2 = *pi;
+            let pid = param_id.clone();
             let layer_id = active_layer.clone().unwrap_or_default();
             ContentCommand::send(
                 content_tx,
                 ContentCommand::MutateProject(Box::new(move |p| {
                     if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
                         && let Some(gp) = layer.gen_params_mut()
-                        && let Some(pid) = generator_param_id(gp.generator_type(), pi2)
                     {
                         let envs = gp.envelopes.get_or_insert_with(Vec::new);
                         let env_idx = envs.iter().position(|e| e.param_id == pid);
@@ -2048,18 +2030,17 @@ pub(super) fn dispatch_inspector(
             );
             DispatchResult::structural()
         }
-        PanelAction::GenDriverConfig(pi, cfg) => {
+        PanelAction::GenDriverConfig(param_id, cfg) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx {
                 let layer_id = active_layer.clone().unwrap_or_default();
                 let target = DriverTarget::GeneratorParam { layer_id };
                 if let Some(layer) = project.timeline.layers.get(layer_idx)
                     && let Some(gp) = layer.gen_params()
-                    && let Some(pid) = generator_param_id(gp.generator_type(), *pi)
                     && let Some(di) = gp
                         .drivers
                         .as_ref()
-                        .and_then(|ds| ds.iter().position(|d| d.param_id == pid))
+                        .and_then(|ds| ds.iter().position(|d| d.param_id == *param_id))
                 {
                     let driver = &gp.drivers.as_ref().unwrap()[di];
                     match cfg {
@@ -2162,26 +2143,22 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::structural()
         }
-        PanelAction::GenEnvParamChanged(pi, param, val) => {
+        PanelAction::GenEnvParamChanged(param_id, param, val) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx {
                 if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
                     && let Some(gp) = layer.gen_params_mut()
+                    && let Some(envs) = &mut gp.envelopes
+                    && let Some(env) = envs.iter_mut().find(|e| e.param_id == *param_id)
                 {
-                    let pid = generator_param_id(gp.generator_type(), *pi);
-                    if let Some(pid) = pid
-                        && let Some(envs) = &mut gp.envelopes
-                        && let Some(env) = envs.iter_mut().find(|e| e.param_id == pid)
-                    {
-                        match param {
-                            manifold_ui::EnvelopeParam::Attack => env.attack_beats = *val,
-                            manifold_ui::EnvelopeParam::Decay => env.decay_beats = *val,
-                            manifold_ui::EnvelopeParam::Sustain => env.sustain_level = *val,
-                            manifold_ui::EnvelopeParam::Release => env.release_beats = *val,
-                        }
+                    match param {
+                        manifold_ui::EnvelopeParam::Attack => env.attack_beats = *val,
+                        manifold_ui::EnvelopeParam::Decay => env.decay_beats = *val,
+                        manifold_ui::EnvelopeParam::Sustain => env.sustain_level = *val,
+                        manifold_ui::EnvelopeParam::Release => env.release_beats = *val,
                     }
                 }
-                let param_i = *pi;
+                let pid = param_id.clone();
                 let p = *param;
                 let v = *val;
                 let layer_id = active_layer.clone().unwrap_or_default();
@@ -2190,18 +2167,14 @@ pub(super) fn dispatch_inspector(
                     ContentCommand::MutateProject(Box::new(move |proj| {
                         if let Some((_, layer)) = proj.timeline.find_layer_by_id_mut(&layer_id)
                             && let Some(gp) = layer.gen_params_mut()
+                            && let Some(envs) = &mut gp.envelopes
+                            && let Some(env) = envs.iter_mut().find(|e| e.param_id == pid)
                         {
-                            let pid = generator_param_id(gp.generator_type(), param_i);
-                            if let Some(pid) = pid
-                                && let Some(envs) = &mut gp.envelopes
-                                && let Some(env) = envs.iter_mut().find(|e| e.param_id == pid)
-                            {
-                                match p {
-                                    manifold_ui::EnvelopeParam::Attack => env.attack_beats = v,
-                                    manifold_ui::EnvelopeParam::Decay => env.decay_beats = v,
-                                    manifold_ui::EnvelopeParam::Sustain => env.sustain_level = v,
-                                    manifold_ui::EnvelopeParam::Release => env.release_beats = v,
-                                }
+                            match p {
+                                manifold_ui::EnvelopeParam::Attack => env.attack_beats = v,
+                                manifold_ui::EnvelopeParam::Decay => env.decay_beats = v,
+                                manifold_ui::EnvelopeParam::Sustain => env.sustain_level = v,
+                                manifold_ui::EnvelopeParam::Release => env.release_beats = v,
                             }
                         }
                     })),
@@ -2209,22 +2182,18 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::GenTrimChanged(pi, min, max) => {
+        PanelAction::GenTrimChanged(param_id, min, max) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx {
                 if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
                     && let Some(gp) = layer.gen_params_mut()
+                    && let Some(drivers) = &mut gp.drivers
+                    && let Some(driver) = drivers.iter_mut().find(|d| d.param_id == *param_id)
                 {
-                    let pid = generator_param_id(gp.generator_type(), *pi);
-                    if let Some(pid) = pid
-                        && let Some(drivers) = &mut gp.drivers
-                        && let Some(driver) = drivers.iter_mut().find(|d| d.param_id == pid)
-                    {
-                        driver.trim_min = *min;
-                        driver.trim_max = *max;
-                    }
+                    driver.trim_min = *min;
+                    driver.trim_max = *max;
                 }
-                let param_i = *pi;
+                let pid = param_id.clone();
                 let mn = *min;
                 let mx = *max;
                 let layer_id = active_layer.clone().unwrap_or_default();
@@ -2233,36 +2202,28 @@ pub(super) fn dispatch_inspector(
                     ContentCommand::MutateProject(Box::new(move |p| {
                         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
                             && let Some(gp) = layer.gen_params_mut()
+                            && let Some(drivers) = &mut gp.drivers
+                            && let Some(driver) = drivers.iter_mut().find(|d| d.param_id == pid)
                         {
-                            let pid = generator_param_id(gp.generator_type(), param_i);
-                            if let Some(pid) = pid
-                                && let Some(drivers) = &mut gp.drivers
-                                && let Some(driver) = drivers.iter_mut().find(|d| d.param_id == pid)
-                            {
-                                driver.trim_min = mn;
-                                driver.trim_max = mx;
-                            }
+                            driver.trim_min = mn;
+                            driver.trim_max = mx;
                         }
                     })),
                 );
             }
             DispatchResult::handled()
         }
-        PanelAction::GenTargetChanged(pi, norm) => {
+        PanelAction::GenTargetChanged(param_id, norm) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx {
                 if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
                     && let Some(gp) = layer.gen_params_mut()
+                    && let Some(envs) = &mut gp.envelopes
+                    && let Some(env) = envs.iter_mut().find(|e| e.param_id == *param_id)
                 {
-                    let pid = generator_param_id(gp.generator_type(), *pi);
-                    if let Some(pid) = pid
-                        && let Some(envs) = &mut gp.envelopes
-                        && let Some(env) = envs.iter_mut().find(|e| e.param_id == pid)
-                    {
-                        env.target_normalized = *norm;
-                    }
+                    env.target_normalized = *norm;
                 }
-                let param_i = *pi;
+                let pid = param_id.clone();
                 let n = *norm;
                 let layer_id = active_layer.clone().unwrap_or_default();
                 ContentCommand::send(
@@ -2270,14 +2231,10 @@ pub(super) fn dispatch_inspector(
                     ContentCommand::MutateProject(Box::new(move |p| {
                         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
                             && let Some(gp) = layer.gen_params_mut()
+                            && let Some(envs) = &mut gp.envelopes
+                            && let Some(env) = envs.iter_mut().find(|e| e.param_id == pid)
                         {
-                            let pid = generator_param_id(gp.generator_type(), param_i);
-                            if let Some(pid) = pid
-                                && let Some(envs) = &mut gp.envelopes
-                                && let Some(env) = envs.iter_mut().find(|e| e.param_id == pid)
-                            {
-                                env.target_normalized = n;
-                            }
+                            env.target_normalized = n;
                         }
                     })),
                 );
@@ -2286,32 +2243,30 @@ pub(super) fn dispatch_inspector(
         }
 
         // ── Generator modulation undo: snapshot/commit ──────────────
-        PanelAction::GenTrimSnapshot(pi) => {
+        PanelAction::GenTrimSnapshot(param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
                 && let Some(gp) = layer.gen_params()
-                && let Some(pid) = generator_param_id(gp.generator_type(), *pi)
                 && let Some(driver) = gp
                     .drivers
                     .as_ref()
-                    .and_then(|ds| ds.iter().find(|d| d.param_id == pid))
+                    .and_then(|ds| ds.iter().find(|d| d.param_id == *param_id))
             {
                 *trim_snapshot = Some((driver.trim_min, driver.trim_max));
             }
             DispatchResult::handled()
         }
-        PanelAction::GenTrimCommit(pi) => {
+        PanelAction::GenTrimCommit(param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some((old_min, old_max)) = trim_snapshot.take()
                 && let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
                 && let Some(gp) = layer.gen_params()
-                && let Some(pid) = generator_param_id(gp.generator_type(), *pi)
                 && let Some(di) = gp
                     .drivers
                     .as_ref()
-                    .and_then(|ds| ds.iter().position(|d| d.param_id == pid))
+                    .and_then(|ds| ds.iter().position(|d| d.param_id == *param_id))
             {
                 let driver = &gp.drivers.as_ref().unwrap()[di];
                 let new_min = driver.trim_min;
@@ -2329,28 +2284,26 @@ pub(super) fn dispatch_inspector(
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
-        PanelAction::GenTargetSnapshot(pi) => {
+        PanelAction::GenTargetSnapshot(param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
                 && let Some(gp) = layer.gen_params()
-                && let Some(pid) = generator_param_id(gp.generator_type(), *pi)
                 && let Some(envs) = &gp.envelopes
-                && let Some(env) = envs.iter().find(|e| e.param_id == pid)
+                && let Some(env) = envs.iter().find(|e| e.param_id == *param_id)
             {
                 *target_snapshot = Some(env.target_normalized);
             }
             DispatchResult::handled()
         }
-        PanelAction::GenTargetCommit(pi) => {
+        PanelAction::GenTargetCommit(param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(old_target) = target_snapshot.take()
                 && let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
                 && let Some(gp) = layer.gen_params()
-                && let Some(pid) = generator_param_id(gp.generator_type(), *pi)
                 && let Some(envs) = &gp.envelopes
-                && let Some(env_idx) = envs.iter().position(|e| e.param_id == pid)
+                && let Some(env_idx) = envs.iter().position(|e| e.param_id == *param_id)
             {
                 let env = &envs[env_idx];
                 if (old_target - env.target_normalized).abs() > f32::EPSILON {
@@ -2367,22 +2320,18 @@ pub(super) fn dispatch_inspector(
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
-        PanelAction::GenEnvRangeChanged(pi, rmin, rmax) => {
+        PanelAction::GenEnvRangeChanged(param_id, rmin, rmax) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx {
                 if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
                     && let Some(gp) = layer.gen_params_mut()
+                    && let Some(envs) = &mut gp.envelopes
+                    && let Some(env) = envs.iter_mut().find(|e| e.param_id == *param_id)
                 {
-                    let pid = generator_param_id(gp.generator_type(), *pi);
-                    if let Some(pid) = pid
-                        && let Some(envs) = &mut gp.envelopes
-                        && let Some(env) = envs.iter_mut().find(|e| e.param_id == pid)
-                    {
-                        env.range_min = *rmin;
-                        env.range_max = *rmax;
-                    }
+                    env.range_min = *rmin;
+                    env.range_max = *rmax;
                 }
-                let param_i = *pi;
+                let pid = param_id.clone();
                 let rm = *rmin;
                 let rx = *rmax;
                 let layer_id = active_layer.clone().unwrap_or_default();
@@ -2391,43 +2340,37 @@ pub(super) fn dispatch_inspector(
                     ContentCommand::MutateProject(Box::new(move |p| {
                         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
                             && let Some(gp) = layer.gen_params_mut()
+                            && let Some(envs) = &mut gp.envelopes
+                            && let Some(env) = envs.iter_mut().find(|e| e.param_id == pid)
                         {
-                            let pid = generator_param_id(gp.generator_type(), param_i);
-                            if let Some(pid) = pid
-                                && let Some(envs) = &mut gp.envelopes
-                                && let Some(env) = envs.iter_mut().find(|e| e.param_id == pid)
-                            {
-                                env.range_min = rm;
-                                env.range_max = rx;
-                            }
+                            env.range_min = rm;
+                            env.range_max = rx;
                         }
                     })),
                 );
             }
             DispatchResult::handled()
         }
-        PanelAction::GenEnvRangeSnapshot(pi) => {
+        PanelAction::GenEnvRangeSnapshot(param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
                 && let Some(gp) = layer.gen_params()
-                && let Some(pid) = generator_param_id(gp.generator_type(), *pi)
                 && let Some(envs) = &gp.envelopes
-                && let Some(env) = envs.iter().find(|e| e.param_id == pid)
+                && let Some(env) = envs.iter().find(|e| e.param_id == *param_id)
             {
                 *range_snapshot = Some((env.range_min, env.range_max));
             }
             DispatchResult::handled()
         }
-        PanelAction::GenEnvRangeCommit(pi) => {
+        PanelAction::GenEnvRangeCommit(param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some((old_min, old_max)) = range_snapshot.take()
                 && let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
                 && let Some(gp) = layer.gen_params()
-                && let Some(pid) = generator_param_id(gp.generator_type(), *pi)
                 && let Some(envs) = &gp.envelopes
-                && let Some(env_idx) = envs.iter().position(|e| e.param_id == pid)
+                && let Some(env_idx) = envs.iter().position(|e| e.param_id == *param_id)
             {
                 let env = &envs[env_idx];
                 if (old_min - env.range_min).abs() > f32::EPSILON
@@ -2448,14 +2391,13 @@ pub(super) fn dispatch_inspector(
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
-        PanelAction::GenEnvParamSnapshot(pi) => {
+        PanelAction::GenEnvParamSnapshot(param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
                 && let Some(gp) = layer.gen_params()
-                && let Some(pid) = generator_param_id(gp.generator_type(), *pi)
                 && let Some(envs) = &gp.envelopes
-                && let Some(env) = envs.iter().find(|e| e.param_id == pid)
+                && let Some(env) = envs.iter().find(|e| e.param_id == *param_id)
             {
                 *adsr_snapshot = Some((
                     env.attack_beats,
@@ -2466,15 +2408,14 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::GenEnvParamCommit(pi) => {
+        PanelAction::GenEnvParamCommit(param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some((old_a, old_d, old_s, old_r)) = adsr_snapshot.take()
                 && let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
                 && let Some(gp) = layer.gen_params()
-                && let Some(pid) = generator_param_id(gp.generator_type(), *pi)
                 && let Some(envs) = &gp.envelopes
-                && let Some(env_idx) = envs.iter().position(|e| e.param_id == pid)
+                && let Some(env_idx) = envs.iter().position(|e| e.param_id == *param_id)
             {
                 let env = &envs[env_idx];
                 let changed = (old_a - env.attack_beats).abs() > f32::EPSILON
@@ -2502,14 +2443,15 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
 
-        PanelAction::GenEnvModeToggle(pi) => {
+        PanelAction::GenEnvModeToggle(param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get_mut(idx)
                 && let Some(gp) = layer.gen_params_mut()
-                && let Some(pid) = generator_param_id(gp.generator_type(), *pi)
                 && let Some(envs) = &mut gp.envelopes
-                && let Some(env) = envs.iter_mut().find(|e| e.param_id == pid && e.enabled)
+                && let Some(env) = envs
+                    .iter_mut()
+                    .find(|e| e.param_id == *param_id && e.enabled)
             {
                 use manifold_core::effects::EnvelopeMode;
                 env.mode = match env.mode {
@@ -2519,17 +2461,17 @@ pub(super) fn dispatch_inspector(
                 env.was_clip_active = false;
                 env.walk_value = -1.0;
                 let new_mode = env.mode;
-                let pi2 = *pi;
+                let pid = param_id.clone();
                 let layer_id = active_layer.clone().unwrap_or_default();
                 ContentCommand::send(
                     content_tx,
                     ContentCommand::MutateProject(Box::new(move |p| {
                         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
                             && let Some(gp) = layer.gen_params_mut()
-                            && let Some(pid) = generator_param_id(gp.generator_type(), pi2)
                             && let Some(envs) = &mut gp.envelopes
-                            && let Some(env) =
-                                envs.iter_mut().find(|e| e.param_id == pid && e.enabled)
+                            && let Some(env) = envs
+                                .iter_mut()
+                                .find(|e| e.param_id == pid && e.enabled)
                         {
                             env.mode = new_mode;
                             env.was_clip_active = false;
@@ -2541,28 +2483,29 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::structural()
         }
-        PanelAction::GenEnvRandomJumpToggle(pi) => {
+        PanelAction::GenEnvRandomJumpToggle(param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get_mut(idx)
                 && let Some(gp) = layer.gen_params_mut()
-                && let Some(pid) = generator_param_id(gp.generator_type(), *pi)
                 && let Some(envs) = &mut gp.envelopes
-                && let Some(env) = envs.iter_mut().find(|e| e.param_id == pid && e.enabled)
+                && let Some(env) = envs
+                    .iter_mut()
+                    .find(|e| e.param_id == *param_id && e.enabled)
             {
                 env.random_jump = !env.random_jump;
                 let new_jump = env.random_jump;
-                let pi2 = *pi;
+                let pid = param_id.clone();
                 let layer_id = active_layer.clone().unwrap_or_default();
                 ContentCommand::send(
                     content_tx,
                     ContentCommand::MutateProject(Box::new(move |p| {
                         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
                             && let Some(gp) = layer.gen_params_mut()
-                            && let Some(pid) = generator_param_id(gp.generator_type(), pi2)
                             && let Some(envs) = &mut gp.envelopes
-                            && let Some(env) =
-                                envs.iter_mut().find(|e| e.param_id == pid && e.enabled)
+                            && let Some(env) = envs
+                                .iter_mut()
+                                .find(|e| e.param_id == pid && e.enabled)
                         {
                             env.random_jump = new_jump;
                         }
@@ -2634,11 +2577,10 @@ pub(super) fn dispatch_inspector(
         }
 
         // ── Macro mapping ─────────────────────────────────────────
-        PanelAction::MapEffectParamToMacro(tab, fx_idx, param_idx, macro_idx) => {
+        PanelAction::MapEffectParamToMacro(tab, fx_idx, param_id, macro_idx) => {
             use manifold_core::{MacroCurve, MacroMapping, MacroMappingTarget};
             let tab = *tab;
             let fx_idx = *fx_idx;
-            let param_idx = *param_idx;
             let macro_idx = *macro_idx;
 
             // Resolve effect type and build mapping target
@@ -2649,30 +2591,37 @@ pub(super) fn dispatch_inspector(
             {
                 let effect_type = fx.effect_type().clone();
 
-                // Get param range from definition
-                let (min, max) = manifold_core::effect_definition_registry::try_get(&effect_type)
-                    .and_then(|def| def.param_defs.get(param_idx))
-                    .map(|pd| (pd.min, pd.max))
-                    .unwrap_or((0.0, 1.0));
-
-                // Resolve the param_id from the registry. If it can't be
-                // resolved (out-of-range index) we skip the mapping —
-                // a UI-driven action against a current effect should
-                // always resolve, but we degrade gracefully if not.
-                let Some(param_id_str) =
-                    manifold_core::effect_definition_registry::param_index_to_id(
-                        &effect_type,
-                        param_idx,
-                    )
-                else {
-                    return DispatchResult::handled();
+                // Param range: prefer the static-tier registry; fall back to
+                // a user-tail binding's metadata (which carries its own
+                // min/max). Either resolution path yields a ParamId-keyed
+                // mapping that survives reorder / def updates.
+                let (min, max) = if let Some(slot) =
+                    fx.param_id_to_value_index(param_id.as_ref())
+                {
+                    let static_count =
+                        manifold_core::effect_definition_registry::try_get(&effect_type)
+                            .map(|def| def.param_defs.len())
+                            .unwrap_or(0);
+                    if slot < static_count {
+                        manifold_core::effect_definition_registry::try_get(&effect_type)
+                            .and_then(|def| def.param_defs.get(slot))
+                            .map(|pd| (pd.min, pd.max))
+                            .unwrap_or((0.0, 1.0))
+                    } else {
+                        fx.user_param_bindings
+                            .iter()
+                            .find(|ub| ub.id == *param_id)
+                            .map(|ub| (ub.min, ub.max))
+                            .unwrap_or((0.0, 1.0))
+                    }
+                } else {
+                    (0.0, 1.0)
                 };
-                let param_id = std::borrow::Cow::Borrowed(param_id_str);
 
                 let mapping_target = match tab {
                     InspectorTab::Master => MacroMappingTarget::MasterEffect {
                         effect_type,
-                        param_id,
+                        param_id: param_id.clone(),
                     },
                     InspectorTab::Layer | InspectorTab::Clip => {
                         let layer_id = active_layer.clone().unwrap_or_else(|| {
@@ -2686,7 +2635,7 @@ pub(super) fn dispatch_inspector(
                         MacroMappingTarget::LayerEffect {
                             layer_id,
                             effect_type,
-                            param_id,
+                            param_id: param_id.clone(),
                         }
                     }
                 };
@@ -2712,9 +2661,8 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::MapGenParamToMacro(param_idx, macro_idx) => {
+        PanelAction::MapGenParamToMacro(param_id, macro_idx) => {
             use manifold_core::{MacroCurve, MacroMapping, MacroMappingTarget};
-            let param_idx = *param_idx;
             let macro_idx = *macro_idx;
 
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
@@ -2724,25 +2672,21 @@ pub(super) fn dispatch_inspector(
             {
                 let layer_id = layer.layer_id.clone();
 
-                // Get param range from definition
-                let (min, max) =
+                let (min, max) = manifold_core::generator_definition_registry::param_id_to_index(
+                    gp.generator_type(),
+                    param_id.as_ref(),
+                )
+                .and_then(|slot| {
                     manifold_core::generator_definition_registry::try_get(gp.generator_type())
-                        .and_then(|def| def.param_defs.get(param_idx))
+                        .and_then(|def| def.param_defs.get(slot))
                         .map(|pd| (pd.min, pd.max))
-                        .unwrap_or((0.0, 1.0));
+                })
+                .unwrap_or((0.0, 1.0));
 
-                let Some(param_id_str) =
-                    manifold_core::generator_definition_registry::param_index_to_id(
-                        gp.generator_type(),
-                        param_idx,
-                    )
-                else {
-                    return DispatchResult::handled();
-                };
                 let mapping = MacroMapping {
                     target: MacroMappingTarget::GenParam {
                         layer_id,
-                        param_id: std::borrow::Cow::Borrowed(param_id_str),
+                        param_id: param_id.clone(),
                     },
                     range_min: min,
                     range_max: max,
@@ -2803,24 +2747,21 @@ pub(super) fn dispatch_inspector(
         }
 
         // ── Ableton mapping ────────────────────────────────────────
-        PanelAction::MapEffectParamToAbleton(tab, fx_idx, param_idx, address) => {
+        PanelAction::MapEffectParamToAbleton(tab, fx_idx, param_id, address) => {
             use manifold_core::ableton_mapping::AbletonMappingTarget;
             let tab = *tab;
             let fx_idx = *fx_idx;
-            let param_idx = *param_idx;
             let address = address.clone();
 
             let (effects_ref, _) = resolve_effects_read(tab, project, active_layer, selection);
             if let Some(effects) = effects_ref
                 && let Some(fx) = effects.get(fx_idx)
-                && let Some(pid) = effect_param_id(fx.effect_type(), param_idx)
             {
                 let effect_type = fx.effect_type().clone();
-                let pid_owned: std::borrow::Cow<'static, str> = std::borrow::Cow::Borrowed(pid);
                 let target = match tab {
                     InspectorTab::Master => AbletonMappingTarget::MasterEffect {
                         effect_type,
-                        param_id: pid_owned,
+                        param_id: param_id.clone(),
                     },
                     InspectorTab::Layer | InspectorTab::Clip => {
                         let layer_id = active_layer.clone().unwrap_or_else(|| {
@@ -2834,7 +2775,7 @@ pub(super) fn dispatch_inspector(
                         AbletonMappingTarget::LayerEffect {
                             layer_id,
                             effect_type,
-                            param_id: pid_owned,
+                            param_id: param_id.clone(),
                         }
                     }
                 };
@@ -2845,19 +2786,17 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::MapGenParamToAbleton(param_idx, address) => {
+        PanelAction::MapGenParamToAbleton(param_id, address) => {
             use manifold_core::ableton_mapping::AbletonMappingTarget;
-            let param_idx = *param_idx;
             let address = address.clone();
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
-                && let Some(gp) = layer.gen_params()
-                && let Some(pid) = generator_param_id(gp.generator_type(), param_idx)
+                && layer.gen_params().is_some()
             {
                 let target = AbletonMappingTarget::GenParam {
                     layer_id: layer.layer_id.clone(),
-                    param_id: std::borrow::Cow::Borrowed(pid),
+                    param_id: param_id.clone(),
                 };
                 ContentCommand::send(
                     content_tx,
@@ -2866,22 +2805,19 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::UnmapEffectParamAbleton(tab, fx_idx, param_idx) => {
+        PanelAction::UnmapEffectParamAbleton(tab, fx_idx, param_id) => {
             use manifold_core::ableton_mapping::AbletonMappingTarget;
             let tab = *tab;
             let fx_idx = *fx_idx;
-            let param_idx = *param_idx;
             let (effects_ref, _) = resolve_effects_read(tab, project, active_layer, selection);
             if let Some(effects) = effects_ref
                 && let Some(fx) = effects.get(fx_idx)
-                && let Some(pid) = effect_param_id(fx.effect_type(), param_idx)
             {
                 let effect_type = fx.effect_type().clone();
-                let pid_owned: std::borrow::Cow<'static, str> = std::borrow::Cow::Borrowed(pid);
                 let target = match tab {
                     InspectorTab::Master => AbletonMappingTarget::MasterEffect {
                         effect_type,
-                        param_id: pid_owned,
+                        param_id: param_id.clone(),
                     },
                     InspectorTab::Layer | InspectorTab::Clip => {
                         let layer_id = active_layer.clone().unwrap_or_else(|| {
@@ -2895,7 +2831,7 @@ pub(super) fn dispatch_inspector(
                         AbletonMappingTarget::LayerEffect {
                             layer_id,
                             effect_type,
-                            param_id: pid_owned,
+                            param_id: param_id.clone(),
                         }
                     }
                 };
@@ -2903,18 +2839,16 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::UnmapGenParamAbleton(param_idx) => {
+        PanelAction::UnmapGenParamAbleton(param_id) => {
             use manifold_core::ableton_mapping::AbletonMappingTarget;
-            let param_idx = *param_idx;
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
-                && let Some(gp) = layer.gen_params()
-                && let Some(pid) = generator_param_id(gp.generator_type(), param_idx)
+                && layer.gen_params().is_some()
             {
                 let target = AbletonMappingTarget::GenParam {
                     layer_id: layer.layer_id.clone(),
-                    param_id: std::borrow::Cow::Borrowed(pid),
+                    param_id: param_id.clone(),
                 };
                 ContentCommand::send(content_tx, ContentCommand::AbletonUnmapParam { target });
             }
@@ -2947,9 +2881,8 @@ pub(super) fn dispatch_inspector(
         PanelAction::OpenAbletonPickerForMacro(_) => DispatchResult::handled(),
 
         // Ableton trim handles — update range_min/range_max on the mapping.
-        PanelAction::AbletonTrimChanged(fx_idx, param_idx, min, max) => {
+        PanelAction::AbletonTrimChanged(fx_idx, param_id, min, max) => {
             let tab = ui.inspector.last_effect_tab();
-            let param_idx = *param_idx;
             let min = *min;
             let max = *max;
             let fx_idx = *fx_idx;
@@ -2958,9 +2891,8 @@ pub(super) fn dispatch_inspector(
                 InspectorTab::Master => {
                     let fx = project.settings.master_effects.get_mut(fx_idx);
                     if let Some(fx) = fx
-                        && let Some(pid) = effect_param_id(fx.effect_type(), param_idx)
                         && let Some(ms) = &mut fx.ableton_mappings
-                        && let Some(m) = ms.iter_mut().find(|m| m.param_id == pid)
+                        && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
                     {
                         m.range_min = min;
                         m.range_max = max;
@@ -2977,9 +2909,8 @@ pub(super) fn dispatch_inspector(
                         && let Some(layer) = project.timeline.layers.get_mut(li)
                         && let Some(effects) = &mut layer.effects
                         && let Some(fx) = effects.get_mut(fx_idx)
-                        && let Some(pid) = effect_param_id(fx.effect_type(), param_idx)
                         && let Some(ms) = &mut fx.ableton_mappings
-                        && let Some(m) = ms.iter_mut().find(|m| m.param_id == pid)
+                        && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
                     {
                         m.range_min = min;
                         m.range_max = max;
@@ -2994,11 +2925,8 @@ pub(super) fn dispatch_inspector(
             };
             // Sync to content thread
             let layer_id = active_layer.clone();
-            if let Some(et) = effect_type
-                && let Some(pid) = effect_param_id(&et, param_idx)
-            {
-                let pid_for_content: std::borrow::Cow<'static, str> =
-                    std::borrow::Cow::Borrowed(pid);
+            if let Some(et) = effect_type {
+                let pid_for_content = param_id.clone();
                 ContentCommand::send(
                     content_tx,
                     ContentCommand::MutateProject(Box::new(move |p| {
@@ -3029,23 +2957,20 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
 
-        PanelAction::AbletonGenTrimChanged(param_idx, min, max) => {
-            let param_idx = *param_idx;
+        PanelAction::AbletonGenTrimChanged(param_id, min, max) => {
             let min = *min;
             let max = *max;
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
                 && let Some(gp) = layer.gen_params_mut()
-                && let Some(pid) = generator_param_id(gp.generator_type(), param_idx)
                 && let Some(mappings) = &mut gp.ableton_mappings
-                && let Some(m) = mappings.iter_mut().find(|m| m.param_id == pid)
+                && let Some(m) = mappings.iter_mut().find(|m| m.param_id == *param_id)
             {
                 m.range_min = min;
                 m.range_max = max;
                 let layer_id = layer.layer_id.clone();
-                let pid_for_content: std::borrow::Cow<'static, str> =
-                    std::borrow::Cow::Borrowed(pid);
+                let pid_for_content = param_id.clone();
                 ContentCommand::send(
                     content_tx,
                     ContentCommand::MutateProject(Box::new(move |p| {
@@ -3093,17 +3018,15 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
 
-        PanelAction::AbletonInvertToggle(fx_idx, param_idx) => {
+        PanelAction::AbletonInvertToggle(fx_idx, param_id) => {
             let tab = ui.inspector.last_effect_tab();
-            let param_idx = *param_idx;
             let fx_idx = *fx_idx;
             let effect_type = match tab {
                 InspectorTab::Master => {
                     let fx = project.settings.master_effects.get_mut(fx_idx);
                     if let Some(fx) = fx
-                        && let Some(pid) = effect_param_id(fx.effect_type(), param_idx)
                         && let Some(ms) = &mut fx.ableton_mappings
-                        && let Some(m) = ms.iter_mut().find(|m| m.param_id == pid)
+                        && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
                     {
                         m.inverted = !m.inverted;
                     }
@@ -3119,9 +3042,8 @@ pub(super) fn dispatch_inspector(
                         && let Some(layer) = project.timeline.layers.get_mut(li)
                         && let Some(effects) = &mut layer.effects
                         && let Some(fx) = effects.get_mut(fx_idx)
-                        && let Some(pid) = effect_param_id(fx.effect_type(), param_idx)
                         && let Some(ms) = &mut fx.ableton_mappings
-                        && let Some(m) = ms.iter_mut().find(|m| m.param_id == pid)
+                        && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
                     {
                         m.inverted = !m.inverted;
                     }
@@ -3134,11 +3056,8 @@ pub(super) fn dispatch_inspector(
                 InspectorTab::Clip => None,
             };
             let layer_id = active_layer.clone();
-            if let Some(et) = effect_type
-                && let Some(pid) = effect_param_id(&et, param_idx)
-            {
-                let pid_for_content: std::borrow::Cow<'static, str> =
-                    std::borrow::Cow::Borrowed(pid);
+            if let Some(et) = effect_type {
+                let pid_for_content = param_id.clone();
                 ContentCommand::send(
                     content_tx,
                     ContentCommand::MutateProject(Box::new(move |p| {
@@ -3164,19 +3083,18 @@ pub(super) fn dispatch_inspector(
             DispatchResult::structural()
         }
 
-        PanelAction::AbletonGenInvertToggle(param_idx) => {
-            let param_idx = *param_idx;
+        PanelAction::AbletonGenInvertToggle(param_id) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
                 && let Some(gp) = layer.gen_params_mut()
-                && let Some(pid) = generator_param_id(gp.generator_type(), param_idx)
                 && let Some(mappings) = &mut gp.ableton_mappings
-                && let Some(m) = mappings.iter_mut().find(|m| m.param_id == pid)
+                && let Some(m) = mappings.iter_mut().find(|m| m.param_id == *param_id)
             {
                 m.inverted = !m.inverted;
             }
             let layer_id = active_layer.clone();
+            let pid = param_id.clone();
             ContentCommand::send(
                 content_tx,
                 ContentCommand::MutateProject(Box::new(move |p| {
@@ -3184,7 +3102,6 @@ pub(super) fn dispatch_inspector(
                         .as_ref()
                         .and_then(|lid| p.timeline.find_layer_by_id_mut(lid.as_str()))
                         && let Some(gp) = layer.gen_params_mut()
-                        && let Some(pid) = generator_param_id(gp.generator_type(), param_idx)
                         && let Some(mappings) = &mut gp.ableton_mappings
                         && let Some(m) = mappings.iter_mut().find(|m| m.param_id == pid)
                     {

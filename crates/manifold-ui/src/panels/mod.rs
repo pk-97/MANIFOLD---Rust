@@ -165,38 +165,51 @@ pub enum PanelAction {
     /// Currently shows a hardcoded test graph regardless of which effect
     /// triggered it; live data sync lands in a future phase.
     OpenGraphEditor(usize),
-    EffectParamSnapshot(usize, usize),
-    EffectParamChanged(usize, usize, f32),
-    EffectParamCommit(usize, usize),
-    EffectParamRightClick(usize, usize, f32), // fx_idx, param_idx, default_value
-    EffectDriverToggle(usize, usize),
-    EffectEnvelopeToggle(usize, usize),
-    EffectDriverConfig(usize, usize, DriverConfigAction),
-    EffectEnvParamChanged(usize, usize, EnvelopeParam, f32),
+    // ── Per-effect-param actions ────────────────────────────────────
+    //
+    // Every variant in this block carries `(fx_idx: usize, param_id: ParamId)`
+    // — `fx_idx` is the chain-positional effect index (structural), and
+    // `param_id` identifies the parameter by its stable id, never by
+    // positional `pi`. The `ParamId` namespace is shared between
+    // registry-declared static params and per-instance user-exposed
+    // bindings (`EffectInstance.user_param_bindings[].id`), so the
+    // bridge handler walks both tiers transparently without a
+    // tier-aware lookup. Pre-Phase-2 these variants carried `pi: usize`
+    // and the bridge resolved via the static-tier-only
+    // `param_index_to_id` — the bug class that left user-exposed
+    // sliders dead for drivers / envelopes / Ableton mapping.
+    EffectParamSnapshot(usize, manifold_core::effects::ParamId),
+    EffectParamChanged(usize, manifold_core::effects::ParamId, f32),
+    EffectParamCommit(usize, manifold_core::effects::ParamId),
+    EffectParamRightClick(usize, manifold_core::effects::ParamId, f32), // fx_idx, param_id, default_value
+    EffectDriverToggle(usize, manifold_core::effects::ParamId),
+    EffectEnvelopeToggle(usize, manifold_core::effects::ParamId),
+    EffectDriverConfig(usize, manifold_core::effects::ParamId, DriverConfigAction),
+    EffectEnvParamChanged(usize, manifold_core::effects::ParamId, EnvelopeParam, f32),
     /// Snapshot ADSR state before drag (for undo). Unity: onEnvConfigSnapshot.
-    EffectEnvParamSnapshot(usize, usize),
+    EffectEnvParamSnapshot(usize, manifold_core::effects::ParamId),
     /// Commit ADSR drag (record undo command). Unity: onEnvConfigCommit.
-    EffectEnvParamCommit(usize, usize),
+    EffectEnvParamCommit(usize, manifold_core::effects::ParamId),
     /// Toggle envelope mode between ADSR and Random.
-    EffectEnvModeToggle(usize, usize),
+    EffectEnvModeToggle(usize, manifold_core::effects::ParamId),
     /// Toggle random_jump flag on a Random-mode envelope.
-    EffectEnvRandomJumpToggle(usize, usize),
-    EffectTrimChanged(usize, usize, f32, f32),
+    EffectEnvRandomJumpToggle(usize, manifold_core::effects::ParamId),
+    EffectTrimChanged(usize, manifold_core::effects::ParamId, f32, f32),
     /// Snapshot trim state before drag (for undo). Unity: onTrimSnapshot.
-    EffectTrimSnapshot(usize, usize),
+    EffectTrimSnapshot(usize, manifold_core::effects::ParamId),
     /// Commit trim drag (record undo command). Unity: onTrimCommit.
-    EffectTrimCommit(usize, usize),
-    EffectTargetChanged(usize, usize, f32),
+    EffectTrimCommit(usize, manifold_core::effects::ParamId),
+    EffectTargetChanged(usize, manifold_core::effects::ParamId, f32),
     /// Snapshot target state before drag (for undo). Unity: onTargetSnapshot.
-    EffectTargetSnapshot(usize, usize),
+    EffectTargetSnapshot(usize, manifold_core::effects::ParamId),
     /// Commit target drag (record undo command). Unity: onTargetCommit.
-    EffectTargetCommit(usize, usize),
-    /// Envelope range changed: fx_idx, param_idx, range_min, range_max.
-    EffectEnvRangeChanged(usize, usize, f32, f32),
+    EffectTargetCommit(usize, manifold_core::effects::ParamId),
+    /// Envelope range changed: fx_idx, param_id, range_min, range_max.
+    EffectEnvRangeChanged(usize, manifold_core::effects::ParamId, f32, f32),
     /// Snapshot envelope range before drag (for undo).
-    EffectEnvRangeSnapshot(usize, usize),
+    EffectEnvRangeSnapshot(usize, manifold_core::effects::ParamId),
     /// Commit envelope range drag (record undo command).
-    EffectEnvRangeCommit(usize, usize),
+    EffectEnvRangeCommit(usize, manifold_core::effects::ParamId),
     /// Reorder effect card: move from_index to to_index.
     /// Unity: EffectsListBitmapPanel.onCardReorder.
     EffectReorder(usize, usize),
@@ -274,41 +287,47 @@ pub enum PanelAction {
         new_value: manifold_core::effect_graph_def::SerializedParamValue,
     },
 
-    // Generator params
+    // ── Per-generator-param actions ────────────────────────────────
+    //
+    // Mirror of the effect-side block but without `fx_idx` — a layer
+    // owns at most one generator. `param_id` is always a static-tier
+    // id today (generators don't expose user-tier bindings yet) but
+    // the wire format matches the effect side for symmetry and future
+    // extension.
     GenTypeClicked(Option<LayerId>), // layer_id
-    GenParamSnapshot(usize),
-    GenParamChanged(usize, f32),
-    GenParamCommit(usize),
-    GenParamRightClick(usize, f32), // param_idx, default_value
-    GenParamToggle(usize),
-    GenDriverToggle(usize),
-    GenEnvelopeToggle(usize),
-    GenDriverConfig(usize, DriverConfigAction),
-    GenEnvParamChanged(usize, EnvelopeParam, f32),
+    GenParamSnapshot(manifold_core::effects::ParamId),
+    GenParamChanged(manifold_core::effects::ParamId, f32),
+    GenParamCommit(manifold_core::effects::ParamId),
+    GenParamRightClick(manifold_core::effects::ParamId, f32), // param_id, default_value
+    GenParamToggle(manifold_core::effects::ParamId),
+    GenDriverToggle(manifold_core::effects::ParamId),
+    GenEnvelopeToggle(manifold_core::effects::ParamId),
+    GenDriverConfig(manifold_core::effects::ParamId, DriverConfigAction),
+    GenEnvParamChanged(manifold_core::effects::ParamId, EnvelopeParam, f32),
     /// Snapshot ADSR state before drag (for undo). Unity: onEnvConfigSnapshot.
-    GenEnvParamSnapshot(usize),
+    GenEnvParamSnapshot(manifold_core::effects::ParamId),
     /// Commit ADSR drag (record undo command). Unity: onEnvConfigCommit.
-    GenEnvParamCommit(usize),
+    GenEnvParamCommit(manifold_core::effects::ParamId),
     /// Toggle envelope mode between ADSR and Random.
-    GenEnvModeToggle(usize),
+    GenEnvModeToggle(manifold_core::effects::ParamId),
     /// Toggle random_jump flag on a Random-mode envelope.
-    GenEnvRandomJumpToggle(usize),
-    GenTrimChanged(usize, f32, f32),
+    GenEnvRandomJumpToggle(manifold_core::effects::ParamId),
+    GenTrimChanged(manifold_core::effects::ParamId, f32, f32),
     /// Snapshot trim state before drag (for undo). Unity: onTrimSnapshot.
-    GenTrimSnapshot(usize),
+    GenTrimSnapshot(manifold_core::effects::ParamId),
     /// Commit trim drag (record undo command). Unity: onTrimCommit.
-    GenTrimCommit(usize),
-    GenTargetChanged(usize, f32),
+    GenTrimCommit(manifold_core::effects::ParamId),
+    GenTargetChanged(manifold_core::effects::ParamId, f32),
     /// Snapshot target state before drag (for undo). Unity: onTargetSnapshot.
-    GenTargetSnapshot(usize),
+    GenTargetSnapshot(manifold_core::effects::ParamId),
     /// Commit target drag (record undo command). Unity: onTargetCommit.
-    GenTargetCommit(usize),
-    /// Envelope range changed: param_idx, range_min, range_max.
-    GenEnvRangeChanged(usize, f32, f32),
+    GenTargetCommit(manifold_core::effects::ParamId),
+    /// Envelope range changed: param_id, range_min, range_max.
+    GenEnvRangeChanged(manifold_core::effects::ParamId, f32, f32),
     /// Snapshot envelope range before drag (for undo).
-    GenEnvRangeSnapshot(usize),
+    GenEnvRangeSnapshot(manifold_core::effects::ParamId),
     /// Commit envelope range drag (record undo command).
-    GenEnvRangeCommit(usize),
+    GenEnvRangeCommit(manifold_core::effects::ParamId),
 
     // Generator string params (per-clip text, etc.)
     GenStringParamClicked(usize), // string_param_index — open text input
@@ -333,50 +352,60 @@ pub enum PanelAction {
     MacroLabelRightClick(usize), // macro_index — opens mappings dropdown
     MacroLabelRename(usize),     // macro_index — opens inline rename input
 
-    // Macro mapping (from context menu on param right-click)
-    MapEffectParamToMacro(InspectorTab, usize, usize, usize), // tab, fx_idx, param_idx, macro_idx
-    MapGenParamToMacro(usize, usize),                         // param_idx, macro_idx
-    UnmapMacro(usize, usize),                                 // macro_idx, mapping_idx
-    ClearMacroMappings(usize),                                // macro_idx
+    // Macro mapping (from context menu on param right-click). Param
+    // is addressed by `ParamId`, macro slot by positional index
+    // (macros are a fixed 8-slot bank).
+    MapEffectParamToMacro(InspectorTab, usize, manifold_core::effects::ParamId, usize), // tab, fx_idx, param_id, macro_idx
+    MapGenParamToMacro(manifold_core::effects::ParamId, usize), // param_id, macro_idx
+    UnmapMacro(usize, usize),                                   // macro_idx, mapping_idx
+    ClearMacroMappings(usize),                                  // macro_idx
 
     // Param label right-click → opens "Map to Macro" / "Map from Ableton" context menu
-    EffectParamLabelRightClick(usize, usize), // fx_idx, param_idx
-    GenParamLabelRightClick(usize),           // param_idx
+    EffectParamLabelRightClick(usize, manifold_core::effects::ParamId), // fx_idx, param_id
+    GenParamLabelRightClick(manifold_core::effects::ParamId),           // param_id
 
     // Ableton mapping (from context menu on param right-click)
     MapEffectParamToAbleton(
         InspectorTab,
         usize,
-        usize,
+        manifold_core::effects::ParamId,
         manifold_core::ableton_mapping::AbletonMacroAddress,
-    ), // tab, fx_idx, param_idx, address
-    MapGenParamToAbleton(usize, manifold_core::ableton_mapping::AbletonMacroAddress), // param_idx, address
-    UnmapEffectParamAbleton(InspectorTab, usize, usize), // tab, fx_idx, param_idx
-    UnmapGenParamAbleton(usize),                         // param_idx
+    ), // tab, fx_idx, param_id, address
+    MapGenParamToAbleton(
+        manifold_core::effects::ParamId,
+        manifold_core::ableton_mapping::AbletonMacroAddress,
+    ), // param_id, address
+    UnmapEffectParamAbleton(InspectorTab, usize, manifold_core::effects::ParamId), // tab, fx_idx, param_id
+    UnmapGenParamAbleton(manifold_core::effects::ParamId),                         // param_id
     /// Open the Ableton picker popup for an effect parameter.
-    OpenAbletonPickerForEffect(InspectorTab, usize, usize), // tab, fx_idx, param_idx
+    OpenAbletonPickerForEffect(InspectorTab, usize, manifold_core::effects::ParamId), // tab, fx_idx, param_id
     /// Open the Ableton picker popup for a generator parameter.
-    OpenAbletonPickerForGen(usize), // param_idx
+    OpenAbletonPickerForGen(manifold_core::effects::ParamId), // param_id
     /// Ableton mapping for macro slots.
     MapMacroToAbleton(usize, manifold_core::ableton_mapping::AbletonMacroAddress),
     UnmapMacroAbleton(usize),
     OpenAbletonPickerForMacro(usize),
 
-    // Ableton trim handles (range_min / range_max adjustment)
-    AbletonTrimSnapshot(usize, usize),          // fx_idx, param_idx
-    AbletonTrimChanged(usize, usize, f32, f32), // fx_idx, param_idx, min, max
-    AbletonTrimCommit(usize, usize),            // fx_idx, param_idx
-    AbletonGenTrimSnapshot(usize),              // param_idx
-    AbletonGenTrimChanged(usize, f32, f32),     // param_idx, min, max
-    AbletonGenTrimCommit(usize),                // param_idx
-    AbletonMacroTrimSnapshot(usize),            // slot_idx
-    AbletonMacroTrimChanged(usize, f32, f32),   // slot_idx, min, max
-    AbletonMacroTrimCommit(usize),              // slot_idx
+    // Ableton trim handles (range_min / range_max adjustment).
+    // Effect-side variants carry `param_id` (Phase 2 — see the per-param
+    // action block above for the rationale). Gen-side and macro-side
+    // keep their positional indices: generators have a single static
+    // tier with no user-exposed extensions, and macro slots are
+    // structurally positional in the 8-slot macro bank.
+    AbletonTrimSnapshot(usize, manifold_core::effects::ParamId), // fx_idx, param_id
+    AbletonTrimChanged(usize, manifold_core::effects::ParamId, f32, f32), // fx_idx, param_id, min, max
+    AbletonTrimCommit(usize, manifold_core::effects::ParamId),   // fx_idx, param_id
+    AbletonGenTrimSnapshot(manifold_core::effects::ParamId),     // param_id
+    AbletonGenTrimChanged(manifold_core::effects::ParamId, f32, f32), // param_id, min, max
+    AbletonGenTrimCommit(manifold_core::effects::ParamId),       // param_id
+    AbletonMacroTrimSnapshot(usize),                             // slot_idx
+    AbletonMacroTrimChanged(usize, f32, f32),                    // slot_idx, min, max
+    AbletonMacroTrimCommit(usize),                               // slot_idx
 
     // Ableton config actions
-    AbletonInvertToggle(usize, usize), // fx_idx, param_idx
-    AbletonGenInvertToggle(usize),     // param_idx
-    AbletonMacroInvertToggle(usize),   // slot_idx
+    AbletonInvertToggle(usize, manifold_core::effects::ParamId), // fx_idx, param_id
+    AbletonGenInvertToggle(manifold_core::effects::ParamId),     // param_id
+    AbletonMacroInvertToggle(usize),                             // slot_idx
 
     // Reset macro from context menu (distinct from MacroRightClick to avoid re-triggering dropdown)
     MacroReset(usize), // macro_idx — reset to 0 from context menu

@@ -1213,6 +1213,13 @@ fn effects_to_configs(
                     });
                     let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
                     EffectParamInfo {
+                        // Static-tier `ParamId`. The registry's
+                        // `ParamDef.id` is a runtime-owned `String`
+                        // (V1 deserialisation history), so we clone
+                        // into `Cow::Owned`. Cost is one alloc per
+                        // panel rebuild, paid at editing-time only —
+                        // not in the per-frame state-sync hot loop.
+                        param_id: std::borrow::Cow::Owned(pd.id.clone()),
                         name: pd.name.clone(),
                         min: pd.min,
                         max: pd.max,
@@ -1247,6 +1254,11 @@ fn effects_to_configs(
                 });
                 let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
                 params.push(EffectParamInfo {
+                    // User-tier `ParamId`: owned string from the
+                    // per-instance binding. Same id namespace as the
+                    // static-tier prefix above; `param_id_to_value_index`
+                    // resolves both transparently.
+                    param_id: std::borrow::Cow::Owned(ub.id.clone()),
                     name: ub.label.clone(),
                     min: ub.min,
                     max: ub.max,
@@ -1456,6 +1468,11 @@ fn gen_params_to_config(
             });
             let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
             GenParamInfo {
+                // Generator params are static-tier only today
+                // (no per-instance user binding on generators).
+                // Same `Cow::Owned` policy as the effect side for
+                // shape consistency.
+                param_id: std::borrow::Cow::Owned(pd.id.clone()),
                 name: pd.name.clone(),
                 min: pd.min,
                 max: pd.max,

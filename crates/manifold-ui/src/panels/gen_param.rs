@@ -25,6 +25,11 @@ const CARD_BOTTOM_MARGIN: f32 = 6.0;
 
 #[derive(Debug, Clone)]
 pub struct GenParamInfo {
+    /// Stable [`ParamId`] for this slot — see the equivalent field on
+    /// [`crate::panels::effect_card::EffectParamInfo`] for the
+    /// `Cow<'static, str>` rationale. Carried on the wire so the
+    /// bridge never does a positional `pi → ParamId` lookup.
+    pub param_id: manifold_core::effects::ParamId,
     pub name: String,
     pub min: f32,
     pub max: f32,
@@ -331,10 +336,13 @@ impl GenParamPanel {
         self.is_collapsed
     }
 
-    /// Returns the Ableton label for `param_idx`, if that param is currently mapped.
-    pub fn param_has_ableton_mapping(&self, param_idx: usize) -> bool {
+    /// Returns true if the gen param identified by `param_id` has an
+    /// Ableton mapping. Keyed by stable id for symmetry with the
+    /// effect side.
+    pub fn param_has_ableton_mapping(&self, param_id: &str) -> bool {
         self.param_info
-            .get(param_idx)
+            .iter()
+            .find(|p| p.param_id == param_id)
             .is_some_and(|p| p.ableton_display.is_some())
     }
     pub fn set_collapsed(&mut self, v: bool) {
@@ -909,6 +917,15 @@ impl GenParamPanel {
 
     // ── Event handling ───────────────────────────────────────────
 
+    /// Resolve the panel-local positional `pi` back to its stable
+    /// [`ParamId`] for outbound [`PanelAction`] emission. Mirror of
+    /// `EffectCardPanel::pid_at`; see that doc for the Phase 2
+    /// rationale.
+    #[inline]
+    fn pid_at(&self, pi: usize) -> manifold_core::effects::ParamId {
+        self.param_info[pi].param_id.clone()
+    }
+
     pub fn handle_click(&mut self, node_id: u32) -> Vec<PanelAction> {
         let id = node_id as i32;
 
@@ -932,7 +949,7 @@ impl GenParamPanel {
             if let Some(t) = toggle
                 && id == t.button_id
             {
-                return vec![PanelAction::GenParamToggle(pi)];
+                return vec![PanelAction::GenParamToggle(self.pid_at(pi))];
             }
         }
 
@@ -947,7 +964,7 @@ impl GenParamPanel {
                 continue;
             }
             if id == btn_id {
-                return vec![PanelAction::GenDriverToggle(pi)];
+                return vec![PanelAction::GenDriverToggle(self.pid_at(pi))];
             }
         }
         for (pi, &btn_id) in self.envelope_btn_ids.iter().enumerate() {
@@ -960,7 +977,7 @@ impl GenParamPanel {
                 continue;
             }
             if id == btn_id {
-                return vec![PanelAction::GenEnvelopeToggle(pi)];
+                return vec![PanelAction::GenEnvelopeToggle(self.pid_at(pi))];
             }
         }
 
@@ -997,17 +1014,17 @@ impl GenParamPanel {
                 DriverClickResult::Wave(j) => DriverConfigAction::Wave(j),
                 DriverClickResult::Reverse => DriverConfigAction::Reverse,
             };
-            return vec![PanelAction::GenDriverConfig(pi, action)];
+            return vec![PanelAction::GenDriverConfig(self.pid_at(pi), action)];
         }
 
         // Envelope random config buttons (mode toggle, jump toggle)
         for (pi, cfg) in self.envelope_random_config_ids.iter().enumerate() {
             if let Some(c) = cfg {
                 if id == c.mode_btn_id {
-                    return vec![PanelAction::GenEnvModeToggle(pi)];
+                    return vec![PanelAction::GenEnvModeToggle(self.pid_at(pi))];
                 }
                 if id == c.jump_btn_id {
-                    return vec![PanelAction::GenEnvRandomJumpToggle(pi)];
+                    return vec![PanelAction::GenEnvRandomJumpToggle(self.pid_at(pi))];
                 }
             }
         }
@@ -1016,7 +1033,7 @@ impl GenParamPanel {
         if let Some((pi, AbletonConfigClick::Invert)) =
             check_ableton_config_click(id, &self.ableton_config_ids)
         {
-            return vec![PanelAction::AbletonGenInvertToggle(pi)];
+            return vec![PanelAction::AbletonGenInvertToggle(self.pid_at(pi))];
         }
 
         // String param buttons → open text input or dropdown
@@ -1043,12 +1060,12 @@ impl GenParamPanel {
                 if node_id as i32 == t.min_bar_id {
                     self.drag.dragging_range_param = pi as i32;
                     self.drag.dragging_range_is_min = true;
-                    return vec![PanelAction::GenEnvRangeSnapshot(pi)];
+                    return vec![PanelAction::GenEnvRangeSnapshot(self.pid_at(pi))];
                 }
                 if node_id as i32 == t.max_bar_id {
                     self.drag.dragging_range_param = pi as i32;
                     self.drag.dragging_range_is_min = false;
-                    return vec![PanelAction::GenEnvRangeSnapshot(pi)];
+                    return vec![PanelAction::GenEnvRangeSnapshot(self.pid_at(pi))];
                 }
             }
         }
@@ -1059,7 +1076,7 @@ impl GenParamPanel {
                 && node_id as i32 == t.target_bar_id
             {
                 self.drag.dragging_target_param = pi as i32;
-                return vec![PanelAction::GenTargetSnapshot(pi)];
+                return vec![PanelAction::GenTargetSnapshot(self.pid_at(pi))];
             }
         }
 
@@ -1069,12 +1086,12 @@ impl GenParamPanel {
                 if node_id as i32 == t.min_bar_id {
                     self.drag.dragging_trim_param = pi as i32;
                     self.drag.dragging_trim_is_min = true;
-                    return vec![PanelAction::GenTrimSnapshot(pi)];
+                    return vec![PanelAction::GenTrimSnapshot(self.pid_at(pi))];
                 }
                 if node_id as i32 == t.max_bar_id {
                     self.drag.dragging_trim_param = pi as i32;
                     self.drag.dragging_trim_is_min = false;
-                    return vec![PanelAction::GenTrimSnapshot(pi)];
+                    return vec![PanelAction::GenTrimSnapshot(self.pid_at(pi))];
                 }
             }
         }
@@ -1085,12 +1102,12 @@ impl GenParamPanel {
                 if node_id as i32 == t.min_bar_id {
                     self.drag.dragging_ableton_trim_param = pi as i32;
                     self.drag.dragging_ableton_trim_is_min = true;
-                    return vec![PanelAction::AbletonGenTrimSnapshot(pi)];
+                    return vec![PanelAction::AbletonGenTrimSnapshot(self.pid_at(pi))];
                 }
                 if node_id as i32 == t.max_bar_id {
                     self.drag.dragging_ableton_trim_param = pi as i32;
                     self.drag.dragging_ableton_trim_is_min = false;
-                    return vec![PanelAction::AbletonGenTrimSnapshot(pi)];
+                    return vec![PanelAction::AbletonGenTrimSnapshot(self.pid_at(pi))];
                 }
             }
         }
@@ -1110,8 +1127,8 @@ impl GenParamPanel {
                         self.drag.dragging_env_slot = slot;
                         let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
                         return vec![
-                            PanelAction::GenEnvParamSnapshot(pi),
-                            PanelAction::GenEnvParamChanged(pi, *param, norm * max),
+                            PanelAction::GenEnvParamSnapshot(self.pid_at(pi)),
+                            PanelAction::GenEnvParamChanged(self.pid_at(pi), *param, norm * max),
                         ];
                     }
                 }
@@ -1137,8 +1154,8 @@ impl GenParamPanel {
                 let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
                 let val = if info.whole_numbers { val.round() } else { val };
                 return vec![
-                    PanelAction::GenParamSnapshot(pi),
-                    PanelAction::GenParamChanged(pi, val),
+                    PanelAction::GenParamSnapshot(self.pid_at(pi)),
+                    PanelAction::GenParamChanged(self.pid_at(pi), val),
                 ];
             }
         }
@@ -1208,7 +1225,7 @@ impl GenParamPanel {
                     );
                 }
 
-                return vec![PanelAction::GenEnvRangeChanged(pi, new_min, new_max)];
+                return vec![PanelAction::GenEnvRangeChanged(self.pid_at(pi), new_min, new_max)];
             }
         }
 
@@ -1234,7 +1251,7 @@ impl GenParamPanel {
                     );
                 }
 
-                return vec![PanelAction::GenTargetChanged(pi, norm)];
+                return vec![PanelAction::GenTargetChanged(self.pid_at(pi), norm)];
             }
         }
 
@@ -1300,7 +1317,7 @@ impl GenParamPanel {
                     );
                 }
 
-                return vec![PanelAction::GenTrimChanged(pi, new_min, new_max)];
+                return vec![PanelAction::GenTrimChanged(self.pid_at(pi), new_min, new_max)];
             }
         }
 
@@ -1348,7 +1365,7 @@ impl GenParamPanel {
                     );
                 }
 
-                return vec![PanelAction::AbletonGenTrimChanged(pi, new_min, new_max)];
+                return vec![PanelAction::AbletonGenTrimChanged(self.pid_at(pi), new_min, new_max)];
             }
         }
 
@@ -1366,7 +1383,7 @@ impl GenParamPanel {
                 let val = norm * max;
                 let text = format!("{:.2}", val);
                 BitmapSlider::update_value(tree, slider, norm, &text);
-                return vec![PanelAction::GenEnvParamChanged(pi, param, val)];
+                return vec![PanelAction::GenEnvParamChanged(self.pid_at(pi), param, val)];
             }
         }
 
@@ -1387,7 +1404,7 @@ impl GenParamPanel {
                 );
                 BitmapSlider::update_value(tree, ids, display_norm, &text);
                 self.param_cache[pi] = val;
-                return vec![PanelAction::GenParamChanged(pi, val)];
+                return vec![PanelAction::GenParamChanged(self.pid_at(pi), val)];
             }
         }
 
@@ -1398,32 +1415,32 @@ impl GenParamPanel {
         if self.drag.dragging_range_param >= 0 {
             let pi = self.drag.dragging_range_param as usize;
             self.drag.dragging_range_param = -1;
-            return vec![PanelAction::GenEnvRangeCommit(pi)];
+            return vec![PanelAction::GenEnvRangeCommit(self.pid_at(pi))];
         }
         if self.drag.dragging_target_param >= 0 {
             let pi = self.drag.dragging_target_param as usize;
             self.drag.dragging_target_param = -1;
-            return vec![PanelAction::GenTargetCommit(pi)];
+            return vec![PanelAction::GenTargetCommit(self.pid_at(pi))];
         }
         if self.drag.dragging_trim_param >= 0 {
             let pi = self.drag.dragging_trim_param as usize;
             self.drag.dragging_trim_param = -1;
-            return vec![PanelAction::GenTrimCommit(pi)];
+            return vec![PanelAction::GenTrimCommit(self.pid_at(pi))];
         }
         if self.drag.dragging_ableton_trim_param >= 0 {
             let pi = self.drag.dragging_ableton_trim_param as usize;
             self.drag.dragging_ableton_trim_param = -1;
-            return vec![PanelAction::AbletonGenTrimCommit(pi)];
+            return vec![PanelAction::AbletonGenTrimCommit(self.pid_at(pi))];
         }
         if self.drag.dragging_env_param >= 0 {
             let pi = self.drag.dragging_env_param as usize;
             self.drag.dragging_env_param = -1;
-            return vec![PanelAction::GenEnvParamCommit(pi)];
+            return vec![PanelAction::GenEnvParamCommit(self.pid_at(pi))];
         }
         if self.drag.dragging_param >= 0 {
             let pi = self.drag.dragging_param as usize;
             self.drag.dragging_param = -1;
-            return vec![PanelAction::GenParamCommit(pi)];
+            return vec![PanelAction::GenParamCommit(self.pid_at(pi))];
         }
         Vec::new()
     }
@@ -1453,11 +1470,11 @@ impl GenParamPanel {
                 // Right-click slider track → reset to default
                 if node_id == ids.track {
                     let default = self.param_info.get(pi).map(|i| i.default).unwrap_or(0.0);
-                    return vec![PanelAction::GenParamRightClick(pi, default)];
+                    return vec![PanelAction::GenParamRightClick(self.pid_at(pi), default)];
                 }
                 // Right-click label → map to macro
                 if ids.label >= 0 && node_id == ids.label as u32 {
-                    return vec![PanelAction::GenParamLabelRightClick(pi)];
+                    return vec![PanelAction::GenParamLabelRightClick(self.pid_at(pi))];
                 }
             }
         }
@@ -1481,6 +1498,7 @@ mod tests {
             gen_type_name: "Plasma".into(),
             params: vec![
                 GenParamInfo {
+                    param_id: std::borrow::Cow::Borrowed("speed"),
                     name: "Speed".into(),
                     min: 0.0,
                     max: 10.0,
@@ -1493,6 +1511,7 @@ mod tests {
                     ableton_range: None,
                 },
                 GenParamInfo {
+                    param_id: std::borrow::Cow::Borrowed("invert"),
                     name: "Invert".into(),
                     min: 0.0,
                     max: 1.0,
@@ -1505,6 +1524,7 @@ mod tests {
                     ableton_range: None,
                 },
                 GenParamInfo {
+                    param_id: std::borrow::Cow::Borrowed("scale"),
                     name: "Scale".into(),
                     min: 0.1,
                     max: 5.0,
@@ -1583,7 +1603,13 @@ mod tests {
         let toggle = panel.toggle_ids[1].as_ref().unwrap();
         let actions = panel.handle_click(toggle.button_id as u32);
         assert_eq!(actions.len(), 1);
-        assert!(matches!(actions[0], PanelAction::GenParamToggle(1)));
+        match &actions[0] {
+            PanelAction::GenParamToggle(param_id) => {
+                // Slot 1 in `test_config` carries the "invert" id.
+                assert_eq!(param_id.as_ref(), "invert");
+            }
+            other => panic!("expected GenParamToggle, got {:?}", other),
+        }
     }
 
     #[test]

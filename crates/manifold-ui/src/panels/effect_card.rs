@@ -30,6 +30,14 @@ const CONFIG_BTN_FONT_SIZE: u16 = color::FONT_CAPTION;
 /// Per-parameter configuration info provided by the app layer.
 #[derive(Debug, Clone)]
 pub struct EffectParamInfo {
+    /// Stable [`ParamId`] for this slot — for static-tier params this is
+    /// the `&'static str` declared in the effect's `ParamSpec`; for
+    /// user-tier (graph-editor-exposed) params it's the owned id from
+    /// `EffectInstance.user_param_bindings[j].id`. Carried on the wire
+    /// when this widget emits a [`PanelAction`] so the bridge never has
+    /// to do a `pi → ParamId` lookup (the bug class Phase 2 of the
+    /// bindings unification plan eliminates).
+    pub param_id: manifold_core::effects::ParamId,
     pub name: String,
     pub min: f32,
     pub max: f32,
@@ -457,10 +465,14 @@ impl EffectCardPanel {
         self.drag_icon_id
     }
 
-    /// Returns true if the param at `param_idx` has an Ableton mapping.
-    pub fn param_has_ableton_mapping(&self, param_idx: usize) -> bool {
+    /// Returns true if the param identified by `param_id` has an
+    /// Ableton mapping. Keyed by stable id so user-exposed inner-graph
+    /// params resolve transparently (no positional `pi` lookup that
+    /// would miss the user tail).
+    pub fn param_has_ableton_mapping(&self, param_id: &str) -> bool {
         self.param_info
-            .get(param_idx)
+            .iter()
+            .find(|p| p.param_id == param_id)
             .is_some_and(|p| p.ableton_display.is_some())
     }
 
@@ -1212,6 +1224,18 @@ impl EffectCardPanel {
 
     // ── Event handling ───────────────────────────────────────────
 
+    /// Resolve the panel-local positional `pi` back to its stable
+    /// [`ParamId`] for outbound [`PanelAction`] emission. Phase 2 of
+    /// the bindings unification plan replaces positional `pi` on the
+    /// wire with `ParamId`; this is the one helper that every emit
+    /// site uses so the panel's per-widget bookkeeping (which is
+    /// legitimately positional — it indexes `param_info`,
+    /// `driver_btn_ids`, etc.) doesn't leak into the wire format.
+    #[inline]
+    fn pid_at(&self, pi: usize) -> manifold_core::effects::ParamId {
+        self.param_info[pi].param_id.clone()
+    }
+
     pub fn handle_click(&mut self, node_id: u32) -> Vec<PanelAction> {
         let id = node_id as i32;
         let ei = self.effect_index;
@@ -1230,12 +1254,12 @@ impl EffectCardPanel {
         // D/E buttons
         for (pi, &btn_id) in self.driver_btn_ids.iter().enumerate() {
             if id == btn_id {
-                return vec![PanelAction::EffectDriverToggle(ei, pi)];
+                return vec![PanelAction::EffectDriverToggle(ei, self.pid_at(pi))];
             }
         }
         for (pi, &btn_id) in self.envelope_btn_ids.iter().enumerate() {
             if id == btn_id {
-                return vec![PanelAction::EffectEnvelopeToggle(ei, pi)];
+                return vec![PanelAction::EffectEnvelopeToggle(ei, self.pid_at(pi))];
             }
         }
 
@@ -1248,17 +1272,17 @@ impl EffectCardPanel {
                 DriverClickResult::Wave(j) => DriverConfigAction::Wave(j),
                 DriverClickResult::Reverse => DriverConfigAction::Reverse,
             };
-            return vec![PanelAction::EffectDriverConfig(ei, pi, action)];
+            return vec![PanelAction::EffectDriverConfig(ei, self.pid_at(pi), action)];
         }
 
         // Envelope random config buttons (mode toggle, jump toggle)
         for (pi, cfg) in self.envelope_random_config_ids.iter().enumerate() {
             if let Some(c) = cfg {
                 if id == c.mode_btn_id {
-                    return vec![PanelAction::EffectEnvModeToggle(ei, pi)];
+                    return vec![PanelAction::EffectEnvModeToggle(ei, self.pid_at(pi))];
                 }
                 if id == c.jump_btn_id {
-                    return vec![PanelAction::EffectEnvRandomJumpToggle(ei, pi)];
+                    return vec![PanelAction::EffectEnvRandomJumpToggle(ei, self.pid_at(pi))];
                 }
             }
         }
@@ -1267,7 +1291,7 @@ impl EffectCardPanel {
         if let Some((pi, AbletonConfigClick::Invert)) =
             check_ableton_config_click(id, &self.ableton_config_ids)
         {
-            return vec![PanelAction::AbletonInvertToggle(ei, pi)];
+            return vec![PanelAction::AbletonInvertToggle(ei, self.pid_at(pi))];
         }
 
         // Param label click → copy OSC address to clipboard
@@ -1304,12 +1328,12 @@ impl EffectCardPanel {
                 if node_id as i32 == t.min_bar_id {
                     self.drag.dragging_range_param = pi as i32;
                     self.drag.dragging_range_is_min = true;
-                    return vec![PanelAction::EffectEnvRangeSnapshot(ei, pi)];
+                    return vec![PanelAction::EffectEnvRangeSnapshot(ei, self.pid_at(pi))];
                 }
                 if node_id as i32 == t.max_bar_id {
                     self.drag.dragging_range_param = pi as i32;
                     self.drag.dragging_range_is_min = false;
-                    return vec![PanelAction::EffectEnvRangeSnapshot(ei, pi)];
+                    return vec![PanelAction::EffectEnvRangeSnapshot(ei, self.pid_at(pi))];
                 }
             }
         }
@@ -1320,7 +1344,7 @@ impl EffectCardPanel {
                 && node_id as i32 == t.target_bar_id
             {
                 self.drag.dragging_target_param = pi as i32;
-                return vec![PanelAction::EffectTargetSnapshot(ei, pi)];
+                return vec![PanelAction::EffectTargetSnapshot(ei, self.pid_at(pi))];
             }
         }
 
@@ -1330,12 +1354,12 @@ impl EffectCardPanel {
                 if node_id as i32 == t.min_bar_id {
                     self.drag.dragging_trim_param = pi as i32;
                     self.drag.dragging_trim_is_min = true;
-                    return vec![PanelAction::EffectTrimSnapshot(ei, pi)];
+                    return vec![PanelAction::EffectTrimSnapshot(ei, self.pid_at(pi))];
                 }
                 if node_id as i32 == t.max_bar_id {
                     self.drag.dragging_trim_param = pi as i32;
                     self.drag.dragging_trim_is_min = false;
-                    return vec![PanelAction::EffectTrimSnapshot(ei, pi)];
+                    return vec![PanelAction::EffectTrimSnapshot(ei, self.pid_at(pi))];
                 }
             }
         }
@@ -1346,12 +1370,12 @@ impl EffectCardPanel {
                 if node_id as i32 == t.min_bar_id {
                     self.drag.dragging_ableton_trim_param = pi as i32;
                     self.drag.dragging_ableton_trim_is_min = true;
-                    return vec![PanelAction::AbletonTrimSnapshot(ei, pi)];
+                    return vec![PanelAction::AbletonTrimSnapshot(ei, self.pid_at(pi))];
                 }
                 if node_id as i32 == t.max_bar_id {
                     self.drag.dragging_ableton_trim_param = pi as i32;
                     self.drag.dragging_ableton_trim_is_min = false;
-                    return vec![PanelAction::AbletonTrimSnapshot(ei, pi)];
+                    return vec![PanelAction::AbletonTrimSnapshot(ei, self.pid_at(pi))];
                 }
             }
         }
@@ -1364,10 +1388,10 @@ impl EffectCardPanel {
                     self.drag.dragging_env_slot = 0;
                     let norm = BitmapSlider::x_to_normalized(c.attack_slider.track_rect, pos.x);
                     return vec![
-                        PanelAction::EffectEnvParamSnapshot(ei, pi),
+                        PanelAction::EffectEnvParamSnapshot(ei, self.pid_at(pi)),
                         PanelAction::EffectEnvParamChanged(
                             ei,
-                            pi,
+                            self.pid_at(pi),
                             EnvelopeParam::Attack,
                             norm * ENV_ADR_MAX,
                         ),
@@ -1378,10 +1402,10 @@ impl EffectCardPanel {
                     self.drag.dragging_env_slot = 1;
                     let norm = BitmapSlider::x_to_normalized(c.decay_slider.track_rect, pos.x);
                     return vec![
-                        PanelAction::EffectEnvParamSnapshot(ei, pi),
+                        PanelAction::EffectEnvParamSnapshot(ei, self.pid_at(pi)),
                         PanelAction::EffectEnvParamChanged(
                             ei,
-                            pi,
+                            self.pid_at(pi),
                             EnvelopeParam::Decay,
                             norm * ENV_ADR_MAX,
                         ),
@@ -1392,10 +1416,10 @@ impl EffectCardPanel {
                     self.drag.dragging_env_slot = 2;
                     let norm = BitmapSlider::x_to_normalized(c.sustain_slider.track_rect, pos.x);
                     return vec![
-                        PanelAction::EffectEnvParamSnapshot(ei, pi),
+                        PanelAction::EffectEnvParamSnapshot(ei, self.pid_at(pi)),
                         PanelAction::EffectEnvParamChanged(
                             ei,
-                            pi,
+                            self.pid_at(pi),
                             EnvelopeParam::Sustain,
                             norm * ENV_S_MAX,
                         ),
@@ -1406,10 +1430,10 @@ impl EffectCardPanel {
                     self.drag.dragging_env_slot = 3;
                     let norm = BitmapSlider::x_to_normalized(c.release_slider.track_rect, pos.x);
                     return vec![
-                        PanelAction::EffectEnvParamSnapshot(ei, pi),
+                        PanelAction::EffectEnvParamSnapshot(ei, self.pid_at(pi)),
                         PanelAction::EffectEnvParamChanged(
                             ei,
-                            pi,
+                            self.pid_at(pi),
                             EnvelopeParam::Release,
                             norm * ENV_ADR_MAX,
                         ),
@@ -1488,12 +1512,12 @@ impl EffectCardPanel {
                         self.drag.dragging_trim_param = pi as i32;
                         self.drag.dragging_trim_is_min = true;
                         let _ = trim;
-                        return vec![PanelAction::EffectTrimSnapshot(ei, pi)];
+                        return vec![PanelAction::EffectTrimSnapshot(ei, self.pid_at(pi))];
                     }
                     if dist_max < hit_zone {
                         self.drag.dragging_trim_param = pi as i32;
                         self.drag.dragging_trim_is_min = false;
-                        return vec![PanelAction::EffectTrimSnapshot(ei, pi)];
+                        return vec![PanelAction::EffectTrimSnapshot(ei, self.pid_at(pi))];
                     }
                 }
 
@@ -1540,12 +1564,12 @@ impl EffectCardPanel {
                         if dist_min < hit_zone && dist_min <= dist_max {
                             self.drag.dragging_range_param = pi as i32;
                             self.drag.dragging_range_is_min = true;
-                            return vec![PanelAction::EffectEnvRangeSnapshot(ei, pi)];
+                            return vec![PanelAction::EffectEnvRangeSnapshot(ei, self.pid_at(pi))];
                         }
                         if dist_max < hit_zone {
                             self.drag.dragging_range_param = pi as i32;
                             self.drag.dragging_range_is_min = false;
-                            return vec![PanelAction::EffectEnvRangeSnapshot(ei, pi)];
+                            return vec![PanelAction::EffectEnvRangeSnapshot(ei, self.pid_at(pi))];
                         }
                     } else {
                         let tgt = self
@@ -1559,7 +1583,7 @@ impl EffectCardPanel {
 
                         if (pos.x - target_center).abs() < hit_zone {
                             self.drag.dragging_target_param = pi as i32;
-                            return vec![PanelAction::EffectTargetSnapshot(ei, pi)];
+                            return vec![PanelAction::EffectTargetSnapshot(ei, self.pid_at(pi))];
                         }
                     }
                 }
@@ -1571,8 +1595,8 @@ impl EffectCardPanel {
                 let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
                 let val = if info.whole_numbers { val.round() } else { val };
                 return vec![
-                    PanelAction::EffectParamSnapshot(ei, pi),
-                    PanelAction::EffectParamChanged(ei, pi, val),
+                    PanelAction::EffectParamSnapshot(ei, self.pid_at(pi)),
+                    PanelAction::EffectParamChanged(ei, self.pid_at(pi), val),
                 ];
             }
         }
@@ -1644,7 +1668,7 @@ impl EffectCardPanel {
                     );
                 }
 
-                return vec![PanelAction::EffectEnvRangeChanged(ei, pi, new_min, new_max)];
+                return vec![PanelAction::EffectEnvRangeChanged(ei, self.pid_at(pi), new_min, new_max)];
             }
         }
 
@@ -1670,7 +1694,7 @@ impl EffectCardPanel {
                     );
                 }
 
-                return vec![PanelAction::EffectTargetChanged(ei, pi, norm)];
+                return vec![PanelAction::EffectTargetChanged(ei, self.pid_at(pi), norm)];
             }
         }
 
@@ -1736,7 +1760,7 @@ impl EffectCardPanel {
                     );
                 }
 
-                return vec![PanelAction::EffectTrimChanged(ei, pi, new_min, new_max)];
+                return vec![PanelAction::EffectTrimChanged(ei, self.pid_at(pi), new_min, new_max)];
             }
         }
 
@@ -1784,7 +1808,7 @@ impl EffectCardPanel {
                     );
                 }
 
-                return vec![PanelAction::AbletonTrimChanged(ei, pi, new_min, new_max)];
+                return vec![PanelAction::AbletonTrimChanged(ei, self.pid_at(pi), new_min, new_max)];
             }
         }
 
@@ -1802,7 +1826,7 @@ impl EffectCardPanel {
                 let val = norm * max;
                 let text = format!("{:.2}", val);
                 BitmapSlider::update_value(tree, slider, norm, &text);
-                return vec![PanelAction::EffectEnvParamChanged(ei, pi, param, val)];
+                return vec![PanelAction::EffectEnvParamChanged(ei, self.pid_at(pi), param, val)];
             }
         }
 
@@ -1823,7 +1847,7 @@ impl EffectCardPanel {
                 );
                 BitmapSlider::update_value(tree, ids, display_norm, &text);
                 self.param_cache[pi] = val;
-                return vec![PanelAction::EffectParamChanged(ei, pi, val)];
+                return vec![PanelAction::EffectParamChanged(ei, self.pid_at(pi), val)];
             }
         }
 
@@ -1836,32 +1860,32 @@ impl EffectCardPanel {
         if self.drag.dragging_range_param >= 0 {
             let pi = self.drag.dragging_range_param as usize;
             self.drag.dragging_range_param = -1;
-            return vec![PanelAction::EffectEnvRangeCommit(ei, pi)];
+            return vec![PanelAction::EffectEnvRangeCommit(ei, self.pid_at(pi))];
         }
         if self.drag.dragging_target_param >= 0 {
             let pi = self.drag.dragging_target_param as usize;
             self.drag.dragging_target_param = -1;
-            return vec![PanelAction::EffectTargetCommit(ei, pi)];
+            return vec![PanelAction::EffectTargetCommit(ei, self.pid_at(pi))];
         }
         if self.drag.dragging_trim_param >= 0 {
             let pi = self.drag.dragging_trim_param as usize;
             self.drag.dragging_trim_param = -1;
-            return vec![PanelAction::EffectTrimCommit(ei, pi)];
+            return vec![PanelAction::EffectTrimCommit(ei, self.pid_at(pi))];
         }
         if self.drag.dragging_ableton_trim_param >= 0 {
             let pi = self.drag.dragging_ableton_trim_param as usize;
             self.drag.dragging_ableton_trim_param = -1;
-            return vec![PanelAction::AbletonTrimCommit(ei, pi)];
+            return vec![PanelAction::AbletonTrimCommit(ei, self.pid_at(pi))];
         }
         if self.drag.dragging_env_param >= 0 {
             let pi = self.drag.dragging_env_param as usize;
             self.drag.dragging_env_param = -1;
-            return vec![PanelAction::EffectEnvParamCommit(ei, pi)];
+            return vec![PanelAction::EffectEnvParamCommit(ei, self.pid_at(pi))];
         }
         if self.drag.dragging_param >= 0 {
             let pi = self.drag.dragging_param as usize;
             self.drag.dragging_param = -1;
-            return vec![PanelAction::EffectParamCommit(ei, pi)];
+            return vec![PanelAction::EffectParamCommit(ei, self.pid_at(pi))];
         }
 
         Vec::new()
@@ -1874,11 +1898,11 @@ impl EffectCardPanel {
                 // Right-click slider track → reset to default
                 if node_id == ids.track {
                     let default = self.param_info.get(pi).map(|i| i.default).unwrap_or(0.0);
-                    return vec![PanelAction::EffectParamRightClick(ei, pi, default)];
+                    return vec![PanelAction::EffectParamRightClick(ei, self.pid_at(pi), default)];
                 }
                 // Right-click label → map to macro
                 if ids.label >= 0 && node_id == ids.label as u32 {
-                    return vec![PanelAction::EffectParamLabelRightClick(ei, pi)];
+                    return vec![PanelAction::EffectParamLabelRightClick(ei, self.pid_at(pi))];
                 }
             }
         }
@@ -1908,6 +1932,7 @@ mod tests {
             supports_envelopes: true,
             params: vec![
                 EffectParamInfo {
+                    param_id: std::borrow::Cow::Borrowed("radius"),
                     name: "Radius".into(),
                     min: 0.0,
                     max: 100.0,
@@ -1920,6 +1945,7 @@ mod tests {
                     ableton_range: None,
                 },
                 EffectParamInfo {
+                    param_id: std::borrow::Cow::Borrowed("strength"),
                     name: "Strength".into(),
                     min: 0.0,
                     max: 1.0,
@@ -2010,7 +2036,15 @@ mod tests {
 
         let actions = panel.handle_click(panel.driver_btn_ids[0] as u32);
         assert_eq!(actions.len(), 1);
-        assert!(matches!(actions[0], PanelAction::EffectDriverToggle(0, 0)));
+        match &actions[0] {
+            PanelAction::EffectDriverToggle(ei, param_id) => {
+                assert_eq!(*ei, 0);
+                // Test config seeds `param_id: "radius"` for slot 0 —
+                // see `test_config` above.
+                assert_eq!(param_id.as_ref(), "radius");
+            }
+            other => panic!("expected EffectDriverToggle, got {:?}", other),
+        }
     }
 
     #[test]
