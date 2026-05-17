@@ -2,6 +2,7 @@
 name = "manifold-gpu"
 version = "0.1.0"
 edition = "2024"
+publish = false
 
 [features]
 # Backend selection is explicit via feature flag. With no features, the crate
@@ -16,7 +17,6 @@ vulkan = ["dep:ash"]
 [dependencies]
 # WGSL parsing + validation + MSL output + SPIR-V output
 naga = { version = "28", features = ["wgsl-in", "msl-out", "spv-out"] }
-bytemuck = { version = "1", features = ["derive"] }
 log = "0.4"
 
 # SPIR-V optimization (wraps Google SPIRV-Tools C++)
@@ -109,3 +109,9 @@ objc2-metal-performance-shaders-graph = { version = "0.3", features = [
 
 [lints]
 workspace = true
+
+# `ash` is gated behind the `vulkan` feature (see [features] above).
+# cargo-machete doesn't enable optional features when scanning, so it
+# correctly reports `ash` as unused under the default Metal config.
+[package.metadata.cargo-machete]
+ignored = ["ash"]

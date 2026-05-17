@@ -1,0 +1,81 @@
+# Supply-chain config for cargo-deny.
+# Run: `cargo deny check` (subcommands: licenses, bans, sources, advisories).
+#
+# Goal: baseline the current dep graph as the green floor, so any *new*
+# CVE / banned-license / banned-crate / duplicate gets flagged in the
+# pre-commit/CI gate. Existing accepted state is documented inline; when
+# a transitive dep is fixed upstream, remove the corresponding ignore.
+
+[graph]
+# Match host platform only — we ship a native Mac app.
+all-features = false
+no-default-features = false
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+    # `paste` is unmaintained (RUSTSEC-2024-0436). Pulled in transitively
+    # by `kira` → manifold-playback. No safe upgrade available; the
+    # crate itself is functional and has no known security impact. Drop
+    # this ignore when `kira` migrates off `paste`.
+    "RUSTSEC-2024-0436",
+]
+
+[licenses]
+version = 2
+# Standard permissive set. Matches what every dep in the current tree
+# actually uses (Apache-2.0, MIT, BSD-*, ISC, Zlib, MPL-2.0, Unicode,
+# BSL-1.0). Plus GPL-2.0-or-later, which the codebase tolerates
+# *only* because `rusty_link` (Ableton Link bindings) ships under it
+# and we plan to obtain a proprietary Ableton license before shipping
+# (see memory: project_ableton_link_license.md). Drop GPL from this
+# list the moment that license is in hand.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "0BSD",
+    "BSL-1.0",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "OpenSSL",
+    "Unlicense",
+    "GPL-2.0-or-later", # rusty_link only; remove once Ableton license is signed
+]
+confidence-threshold = 0.9
+
+# Workspace crates are private (publish = false); don't fail on their
+# missing top-level `license =` field.
+private = { ignore = true }
+
+[bans]
+# Multiple versions of the same crate silently bloat binary size and
+# slow compile. `warn` for now (workspace has many — fix incrementally);
+# flip to `deny` once the tree is clean.
+multiple-versions = "warn"
+wildcards = "warn"
+# Hard architectural bans from CLAUDE.md. These crates must never enter
+# the workspace, on any thread, transitively or directly. Replacements:
+#   - `wgpu` → native Metal via `manifold-gpu` (objc2-metal bindings)
+#   - `metal` → same; the old `metal` crate is the previous-gen wrapper
+deny = [
+    { name = "wgpu", reason = "CLAUDE.md hard rule: native Metal only via manifold-gpu" },
+    { name = "metal", reason = "CLAUDE.md hard rule: use objc2-metal via manifold-gpu" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "warn"
+allow-git = [
+    # Plugin vendor source: nih-plug + nih-plug-derive (sibling workspace).
+    # Tracked at known revisions.
+]

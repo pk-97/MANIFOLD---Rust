@@ -1,0 +1,56 @@
+# Spell-check config for `typos` (https://github.com/crate-ci/typos).
+# Run: `typos` (read-only) or `typos --write-changes` (auto-fix).
+#
+# Goal: catch real typos in identifiers, comments, and docs — without
+# fighting against domain terminology or third-party vendor code we
+# don't control.
+
+[default]
+# Don't check binary or bulky files.
+extend-ignore-re = [
+    # Per-line escape: `// typos: ignore` at end of any line.
+    "(?Rm)^.*//\\s*typos:\\s*ignore$",
+]
+
+[default.extend-words]
+# Audio DSP terms — not typos.
+formant = "formant"       # spectral envelope, used across percussion + analyzer crates
+formants = "formants"
+# Hardware/graphics acronyms.
+LOD = "LOD"               # level-of-detail (textures, mesh decimation)
+LODs = "LODs"
+# Ableton abbreviation used across the bridge + UI.
+abl = "abl"
+Abl = "Abl"
+ABL = "ABL"
+# Conventional in media APIs (AVFoundation's `seeked` event, etc.).
+Seeked = "Seeked"
+seeked = "seeked"
+# Common Rust convention (`writeable` exists in many APIs alongside `writable`).
+writeable = "writeable"
+# `mis-` prefix used in compound words like "mis-resolve".
+mis = "mis"
+# Numerator / denominator domain shorthand in frame timer rational math.
+numer = "numer"
+# ADSR envelope shorthand: (na, nd, ns, nr) = (new attack, decay, sustain, release).
+nd = "nd"
+# Musical note duration shorthand: "8ths", "16ths" (eighth-note, sixteenth-note).
+ths = "ths"
+# `iy` = insertion-y / integer-y coordinate, common in inspector layout math.
+iy = "iy"
+
+[files]
+# Vendor + generated trees we don't own, plus shader files (shader code
+# uses 1–2 letter variable names like `iy`, `iz`, `ba`, `ix`, `nd` —
+# false-positive central; the math is checked by `wgsl_validation`).
+extend-exclude = [
+    "plugins/vendor/",
+    "assets/",
+    "target/",
+    "**/*.lock",
+    "**/*.manifold",       # binary/JSON project fixtures
+    "**/*.wgsl",
+    "**/*.metal",
+    "**/*.msl",
+    "tests/fixtures/",
+]

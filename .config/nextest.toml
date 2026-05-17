@@ -1,0 +1,34 @@
+# nextest config — see https://nexte.st/book/configuration.html
+#
+# Use `cargo nextest run --workspace` instead of `cargo test --workspace`.
+# nextest runs tests across binaries with a single shared thread pool
+# (cargo's stock runner only parallelizes within a binary), and reports
+# per-test timing + slow-test detection without extra flags.
+
+[profile.default]
+# Show output even on passing tests for the few that print useful
+# diagnostics; suppress on a per-test basis with `--no-capture` flags
+# when iterating locally.
+failure-output = "immediate-final"
+status-level = "pass"
+final-status-level = "slow"
+
+# Flag any test slower than this so we notice perf creep before it
+# dominates the suite. Warn-only — GPU tests can legitimately exceed
+# this when contending for the shared Metal device under nextest's
+# cross-binary parallelism. Bump or fork the `ci` profile if killing
+# stuck tests becomes more important than letting slow ones complete.
+slow-timeout = "30s"
+
+[profile.default.junit]
+# Emit JUnit XML for future CI integration. Currently unused (CI is
+# `workflow_dispatch`-only per .github/workflows/ci.yml); when CI flips
+# to PR-triggered, dashboards can ingest this directly.
+path = "junit.xml"
+
+# CI profile: stricter, retries flaky GPU tests once before failing.
+# Activate via `cargo nextest run --profile ci`.
+[profile.ci]
+retries = { backoff = "fixed", count = 1, delay = "1s" }
+fail-fast = false
+slow-timeout = { period = "30s", terminate-after = 2 }

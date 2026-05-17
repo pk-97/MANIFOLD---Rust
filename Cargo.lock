@@ -1849,7 +1849,6 @@ dependencies = [
  "parking_lot",
  "raw-window-handle",
  "rfd",
- "serde",
  "serde_json",
  "winit",
 ]
@@ -1894,7 +1893,6 @@ version = "0.1.0"
 dependencies = [
  "ash",
  "block2 0.6.2",
- "bytemuck",
  "log",
  "naga",
  "objc2 0.6.4",
@@ -2011,7 +2009,6 @@ dependencies = [
  "manifold-playback",
  "manifold-ui",
  "naga",
- "serde",
  "serde_json",
  "tiff 0.9.1",
 ]
