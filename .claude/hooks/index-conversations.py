@@ -19,7 +19,7 @@ Signals extracted:
 import json
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 PROJECT_DIR = Path.home() / ".claude/projects/-Users-peterkiemann-MANIFOLD---Rust"
@@ -28,6 +28,12 @@ DIGEST_DIR = PROJECT_DIR / "digests"
 INDEX_FILE = DIGEST_DIR / "INDEX.md"
 
 PROJECT_ROOT = "MANIFOLD - Rust"
+
+# Cap corpus growth: digests older than this are pruned on every indexer run.
+# The searcher only looks at the last 14 days for matching, so older digests
+# are inert as context — they only matter for manual "have we discussed X?"
+# greps, and 30 days of history is plenty for that.
+DIGEST_RETENTION_DAYS = 30
 
 # --- Sentiment keywords ---
 #
@@ -399,9 +405,51 @@ def build_index(digests):
     return "\n".join(lines)
 
 
+def cleanup_old_digests(days_to_keep=DIGEST_RETENTION_DAYS):
+    """Prune digests whose frontmatter `date:` field is older than days_to_keep.
+
+    Uses the conversation date from frontmatter, not file mtime — mtime tracks
+    when the digest was last (re)indexed, which is unrelated to when the
+    conversation happened. Skips files we can't parse: better to keep a digest
+    than risk losing one to a parse error.
+    """
+    cutoff = (datetime.now() - timedelta(days=days_to_keep)).strftime("%Y-%m-%d")
+    removed = 0
+    for f in DIGEST_DIR.glob("*.md"):
+        if f.name == "INDEX.md":
+            continue
+        try:
+            text = f.read_text()
+        except OSError:
+            continue
+        digest_date = None
+        in_frontmatter = False
+        for line in text.split("\n"):
+            stripped = line.strip()
+            if stripped == "---":
+                if not in_frontmatter:
+                    in_frontmatter = True
+                    continue
+                break
+            if in_frontmatter and line.startswith("date:"):
+                digest_date = line.split(":", 1)[1].strip()
+                break
+        if digest_date and digest_date != "unknown" and digest_date < cutoff:
+            try:
+                f.unlink()
+                removed += 1
+            except OSError:
+                pass
+    return removed
+
+
 def main():
     force = "--force" in sys.argv
     DIGEST_DIR.mkdir(parents=True, exist_ok=True)
+
+    removed = cleanup_old_digests()
+    if removed:
+        print(f"Pruned {removed} digests older than {DIGEST_RETENTION_DAYS} days")
 
     jsonl_files = sorted(JSONL_DIR.glob("*.jsonl"))
 
