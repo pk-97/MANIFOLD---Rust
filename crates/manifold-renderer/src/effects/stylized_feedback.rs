@@ -10,14 +10,11 @@
 //! - `rotate` → `Feedback.rotation`
 //! - `mode`   → `Feedback.mode` (Screen / Add / Max)
 
-use std::borrow::Cow;
-
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::generator_registration::ParamSpec;
 
-use crate::node_graph::primitives::{FEEDBACK_MODES, Feedback};
-use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
+use crate::node_graph::primitives::FEEDBACK_MODES;
 
 inventory::submit! {
     EffectMetadata {
@@ -44,47 +41,3 @@ inventory::submit! {
     }
 }
 
-crate::atomic_chain_spec! {
-    type_id: EffectTypeId::STYLIZED_FEEDBACK,
-    primitive: Feedback,
-    handle: "feedback",
-    input_port: "source",
-    bindings: &[
-        ParamBinding {
-            id: Cow::Borrowed("amount"),
-            label: "Amount",
-            default_value: 0.5,
-            target: ParamTarget::HandleNode { handle: "feedback", param: "amount" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("zoom"),
-            label: "Zoom",
-            default_value: 0.95,
-            target: ParamTarget::HandleNode { handle: "feedback", param: "zoom" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("rotate"),
-            label: "Rotate",
-            default_value: 0.0,
-            target: ParamTarget::HandleNode { handle: "feedback", param: "rotation" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("mode"),
-            label: "Mode",
-            default_value: 0.0,
-            target: ParamTarget::HandleNode { handle: "feedback", param: "mode" },
-            convert: ParamConvert::EnumRound,
-        },
-    ],
-    // Stateful: per-owner prev-frame texture lives in the chain's
-    // `StateStore`. SkipMode::OnZero would drop the Feedback node
-    // (and its state) every time `amount` crossed 0, wiping the
-    // accumulated frame the user expects to keep when dragging the
-    // slider back up. Always splice — at `amount = 0` the inner
-    // shader's `lerp(source, prev_after_transform, 0)` is `source`,
-    // i.e. identity / one extra blit.
-    skip: SkipMode::Never,
-}

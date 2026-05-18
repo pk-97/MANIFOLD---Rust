@@ -2,13 +2,10 @@ use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::primitives::Invert;
-use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
-use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -28,22 +25,6 @@ inventory::submit! {
         id: EffectTypeId::INVERT_COLORS,
         create: |device| Box::new(InvertColorsFX::new(device)),
     }
-}
-
-crate::atomic_chain_spec! {
-    type_id: EffectTypeId::INVERT_COLORS,
-    primitive: Invert,
-    handle: "invert",
-    bindings: &[
-        ParamBinding {
-            id: Cow::Borrowed("amount"),
-            label: "Amount",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "invert", param: "intensity" },
-            convert: ParamConvert::Float,
-        },
-    ],
-    skip: SkipMode::OnZero { param_id: "amount" },
 }
 
 #[repr(C)]

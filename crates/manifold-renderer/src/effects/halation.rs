@@ -12,15 +12,12 @@ use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::primitives::Halation;
-use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
-use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -54,50 +51,6 @@ inventory::submit! {
             ("sat", Some("saturation")),
         ],
     }
-}
-
-crate::atomic_chain_spec! {
-    type_id: EffectTypeId::HALATION,
-    primitive: Halation,
-    handle: "halation",
-    bindings: &[
-        ParamBinding {
-            id: Cow::Borrowed("amount"),
-            label: "Amount",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "halation", param: "amount" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("threshold"),
-            label: "Threshold",
-            default_value: 0.5,
-            target: ParamTarget::HandleNode { handle: "halation", param: "threshold" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("spread"),
-            label: "Spread",
-            default_value: 0.5,
-            target: ParamTarget::HandleNode { handle: "halation", param: "spread" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("hue"),
-            label: "Hue",
-            default_value: 20.0,
-            target: ParamTarget::HandleNode { handle: "halation", param: "hue" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("saturation"),
-            label: "Saturation",
-            default_value: 0.6,
-            target: ParamTarget::HandleNode { handle: "halation", param: "saturation" },
-            convert: ParamConvert::Float,
-        },
-    ],
-    skip: SkipMode::OnZero { param_id: "amount" },
 }
 
 #[repr(C)]

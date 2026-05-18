@@ -13,15 +13,12 @@ use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
-use crate::node_graph::primitives::WireframeDepth;
-use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
-use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -69,103 +66,6 @@ inventory::submit! {
     }
 }
 
-crate::atomic_chain_spec! {
-    type_id: EffectTypeId::WIREFRAME_DEPTH,
-    primitive: WireframeDepth,
-    handle: "wireframe_depth",
-    bindings: &[
-        ParamBinding {
-            id: Cow::Borrowed("amount"),
-            label: "Amount",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "wireframe_depth", param: "amount" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("density"),
-            label: "Density",
-            default_value: 260.0,
-            target: ParamTarget::HandleNode { handle: "wireframe_depth", param: "density" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("width"),
-            label: "Width",
-            default_value: 1.5,
-            target: ParamTarget::HandleNode { handle: "wireframe_depth", param: "width" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("z_scale"),
-            label: "Z Scale",
-            default_value: 1.35,
-            target: ParamTarget::HandleNode { handle: "wireframe_depth", param: "z_scale" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("smooth"),
-            label: "Smooth",
-            default_value: 0.90,
-            target: ParamTarget::HandleNode { handle: "wireframe_depth", param: "smooth" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("subject"),
-            label: "Subject",
-            default_value: 0.5,
-            target: ParamTarget::HandleNode { handle: "wireframe_depth", param: "subject" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("blend"),
-            label: "Blend",
-            default_value: 6.0,
-            target: ParamTarget::HandleNode { handle: "wireframe_depth", param: "blend" },
-            convert: ParamConvert::EnumRound,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("wire_resolution"),
-            label: "Wire Resolution",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "wireframe_depth", param: "wire_res" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("mesh_rate"),
-            label: "Mesh Rate",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "wireframe_depth", param: "mesh_rate" },
-            convert: ParamConvert::EnumRound,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("flow"),
-            label: "Flow",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "wireframe_depth", param: "flow" },
-            convert: ParamConvert::EnumRound,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("lock"),
-            label: "Lock",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "wireframe_depth", param: "lock" },
-            convert: ParamConvert::EnumRound,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("edge_follow"),
-            label: "Edge Follow",
-            default_value: 0.5,
-            target: ParamTarget::HandleNode { handle: "wireframe_depth", param: "edge_follow" },
-            convert: ParamConvert::Float,
-        },
-    ],
-    // Stateful: 15-pass pipeline + 3 DNN worker threads + temporal
-    // smoothing buffers. SkipMode::OnZero would tear all of that
-    // down on every amount → 0 drag, paying many hundreds of ms of
-    // worker spin-up on the way back. Always splice — at `amount = 0`
-    // the inner composite returns the source.
-    skip: SkipMode::Never,
-}
 
 // Request/response types for the background depth estimation worker.
 struct DepthRequest {

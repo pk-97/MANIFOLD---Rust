@@ -2,13 +2,10 @@ use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::primitives::VoronoiPrism;
-use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
-use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -30,44 +27,6 @@ inventory::submit! {
         id: EffectTypeId::VORONOI_PRISM,
         create: |device| Box::new(VoronoiPrismFX::new(device)),
     }
-}
-
-crate::atomic_chain_spec! {
-    type_id: EffectTypeId::VORONOI_PRISM,
-    primitive: VoronoiPrism,
-    handle: "voronoi",
-    bindings: &[
-        ParamBinding {
-            id: Cow::Borrowed("amount"),
-            label: "Amount",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "voronoi", param: "amount" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("cells"),
-            label: "Cells",
-            default_value: 16.0,
-            target: ParamTarget::HandleNode { handle: "voronoi", param: "cell_count" },
-            convert: ParamConvert::Float,
-        },
-        // `source_width` was previously populated by a hidden
-        // cross-effect read from EdgeStretch's `width` slider via
-        // `EffectContext::edge_stretch_width`. Now it's an explicit
-        // user slider on the VoronoiPrism card — same default
-        // (0.5625), no invisible coupling. Existing projects that
-        // omit this slot fall back to the metadata default.
-        ParamBinding {
-            id: Cow::Borrowed("source_width"),
-            label: "Cell Size",
-            default_value: 0.5,
-            target: ParamTarget::HandleNode { handle: "voronoi", param: "source_width" },
-            convert: ParamConvert::Float,
-        },
-        // `beat` stays ctx-driven (populated by `apply_ctx_params_at`
-        // from `EffectContext::beat`).
-    ],
-    skip: SkipMode::OnZero { param_id: "amount" },
 }
 
 #[repr(C)]

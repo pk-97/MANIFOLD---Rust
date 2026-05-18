@@ -2,13 +2,10 @@ use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::primitives::ChromaticOffset;
-use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
-use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -32,50 +29,6 @@ inventory::submit! {
         id: EffectTypeId::CHROMATIC_ABERRATION,
         create: |device| Box::new(ChromaticAberrationFX::new(device)),
     }
-}
-
-crate::atomic_chain_spec! {
-    type_id: EffectTypeId::CHROMATIC_ABERRATION,
-    primitive: ChromaticOffset,
-    handle: "chromatic",
-    bindings: &[
-        ParamBinding {
-            id: Cow::Borrowed("amount"),
-            label: "Amount",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "chromatic", param: "amount" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("offset"),
-            label: "Offset",
-            default_value: 0.01,
-            target: ParamTarget::HandleNode { handle: "chromatic", param: "offset" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("mode"),
-            label: "Mode",
-            default_value: 0.0,
-            target: ParamTarget::HandleNode { handle: "chromatic", param: "mode" },
-            convert: ParamConvert::EnumRound,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("angle"),
-            label: "Angle",
-            default_value: 0.0,
-            target: ParamTarget::HandleNode { handle: "chromatic", param: "angle" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("falloff"),
-            label: "Falloff",
-            default_value: 0.5,
-            target: ParamTarget::HandleNode { handle: "chromatic", param: "falloff" },
-            convert: ParamConvert::Float,
-        },
-    ],
-    skip: SkipMode::OnZero { param_id: "amount" },
 }
 
 #[repr(C)]

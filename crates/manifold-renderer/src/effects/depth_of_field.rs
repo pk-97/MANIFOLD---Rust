@@ -29,11 +29,8 @@ use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
-use crate::node_graph::primitives::DepthOfField;
-use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
-use std::borrow::Cow;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
@@ -72,76 +69,6 @@ inventory::submit! {
         id: EffectTypeId::DEPTH_OF_FIELD,
         prewarm: |device| Box::new(DepthOfFieldFX::new(device)),
     }
-}
-
-crate::atomic_chain_spec! {
-    type_id: EffectTypeId::DEPTH_OF_FIELD,
-    primitive: DepthOfField,
-    handle: "dof",
-    bindings: &[
-        ParamBinding {
-            id: Cow::Borrowed("amount"),
-            label: "Amount",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "dof", param: "amount" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("mode"),
-            label: "Mode",
-            default_value: 0.0,
-            target: ParamTarget::HandleNode { handle: "dof", param: "mode" },
-            convert: ParamConvert::EnumRound,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("focus"),
-            label: "Focus",
-            default_value: 0.5,
-            target: ParamTarget::HandleNode { handle: "dof", param: "focus" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("focus_x"),
-            label: "Focus X",
-            default_value: 0.5,
-            target: ParamTarget::HandleNode { handle: "dof", param: "focus_x" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("width"),
-            label: "Width",
-            default_value: 0.15,
-            target: ParamTarget::HandleNode { handle: "dof", param: "width" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("blur"),
-            label: "Blur",
-            default_value: 0.5,
-            target: ParamTarget::HandleNode { handle: "dof", param: "blur" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("angle"),
-            label: "Angle",
-            default_value: 0.0,
-            target: ParamTarget::HandleNode { handle: "dof", param: "angle" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("quality"),
-            label: "Quality",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "dof", param: "quality" },
-            convert: ParamConvert::EnumRound,
-        },
-    ],
-    // Stateful: depth-mode DoF spins up DNN inference workers and
-    // owns a depth-texture pool. SkipMode::OnZero would tear those
-    // down on every amount → 0 drag and pay the cold-start cost on
-    // the way back. Always splice — at `amount = 0` the inner DoF
-    // returns the source.
-    skip: SkipMode::Never,
 }
 
 // ─── Depth worker types ───────────────────────────────────────────────

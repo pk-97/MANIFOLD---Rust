@@ -2,13 +2,10 @@ use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::primitives::Infrared;
-use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
-use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -30,36 +27,6 @@ inventory::submit! {
         id: EffectTypeId::INFRARED,
         create: |device| Box::new(InfraredFX::new(device)),
     }
-}
-
-crate::atomic_chain_spec! {
-    type_id: EffectTypeId::INFRARED,
-    primitive: Infrared,
-    handle: "infrared",
-    bindings: &[
-        ParamBinding {
-            id: Cow::Borrowed("amount"),
-            label: "Amount",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "infrared", param: "amount" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("palette"),
-            label: "Palette",
-            default_value: 0.0,
-            target: ParamTarget::HandleNode { handle: "infrared", param: "palette" },
-            convert: ParamConvert::EnumRound,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("contrast"),
-            label: "Contrast",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "infrared", param: "contrast" },
-            convert: ParamConvert::Float,
-        },
-    ],
-    skip: SkipMode::OnZero { param_id: "amount" },
 }
 
 /// LUT resolution — 512 entries covering [0, 2] range.

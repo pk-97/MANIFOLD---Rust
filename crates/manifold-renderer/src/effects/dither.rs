@@ -2,13 +2,10 @@ use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::primitives::DitherPattern;
-use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
-use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -36,29 +33,6 @@ inventory::submit! {
         id: EffectTypeId::DITHER,
         aliases: &[("algo", Some("pattern"))],
     }
-}
-
-crate::atomic_chain_spec! {
-    type_id: EffectTypeId::DITHER,
-    primitive: DitherPattern,
-    handle: "dither",
-    bindings: &[
-        ParamBinding {
-            id: Cow::Borrowed("amount"),
-            label: "Amount",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "dither", param: "amount" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("pattern"),
-            label: "Pattern",
-            default_value: 0.0,
-            target: ParamTarget::HandleNode { handle: "dither", param: "algorithm" },
-            convert: ParamConvert::EnumRound,
-        },
-    ],
-    skip: SkipMode::OnZero { param_id: "amount" },
 }
 
 #[repr(C)]

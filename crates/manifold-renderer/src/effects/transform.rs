@@ -17,13 +17,10 @@ use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::primitives::AffineTransform;
-use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
-use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -53,49 +50,6 @@ inventory::submit! {
         id: EffectTypeId::TRANSFORM,
         aliases: &[("rot", Some("rotation"))],
     }
-}
-
-crate::atomic_chain_spec! {
-    type_id: EffectTypeId::TRANSFORM,
-    primitive: AffineTransform,
-    handle: "transform",
-    bindings: &[
-        ParamBinding {
-            id: Cow::Borrowed("x"),
-            label: "X",
-            default_value: 0.0,
-            target: ParamTarget::HandleNode { handle: "transform", param: "translate_x" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("y"),
-            label: "Y",
-            default_value: 0.0,
-            target: ParamTarget::HandleNode { handle: "transform", param: "translate_y" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("zoom"),
-            label: "Zoom",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "transform", param: "scale" },
-            convert: ParamConvert::Float,
-        },
-        // Rotation flows through as a plain Float passthrough — the
-        // primitive surfaces degrees + screen-CW directly, so the
-        // outer slider and the inner editor agree on units. The
-        // deg→rad + sign-flip lives inside the primitive.
-        ParamBinding {
-            id: Cow::Borrowed("rotation"),
-            label: "Rotation",
-            default_value: 0.0,
-            target: ParamTarget::HandleNode { handle: "transform", param: "rotation" },
-            convert: ParamConvert::Float,
-        },
-    ],
-    // Transform never skips — even at identity it's the chain's
-    // pass-through stage, and skip would change buffer-swap timing.
-    skip: SkipMode::Never,
 }
 
 const DEG2RAD: f32 = std::f32::consts::PI / 180.0;

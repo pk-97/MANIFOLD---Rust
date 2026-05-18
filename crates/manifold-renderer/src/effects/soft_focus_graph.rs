@@ -10,17 +10,9 @@
 //! - `radius` → `Blur.radius` (0..32, shader caps internally)
 //! - `amount` → `Mix.amount` (0 = sharp original, 1 = full blur)
 
-use std::borrow::Cow;
-
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::generator_registration::ParamSpec;
-
-use crate::node_graph::primitives::{Blur, Mix};
-use crate::node_graph::{
-    ChainSpec, Graph, NodeInstanceId, ParamBinding, ParamConvert, ParamTarget, SkipMode,
-    SpliceResult,
-};
 
 inventory::submit! {
     EffectMetadata {
@@ -37,40 +29,3 @@ inventory::submit! {
     }
 }
 
-fn splice_soft_focus(graph: &mut Graph, source: (NodeInstanceId, &'static str)) -> SpliceResult {
-    let blur = graph.add_node(Box::new(Blur::new()));
-    graph.connect(source, (blur, "source")).expect("wire source → Blur.source");
-
-    let mix = graph.add_node(Box::new(Mix::new()));
-    graph.connect(source, (mix, "a")).expect("wire source → Mix.a");
-    graph.connect((blur, "out"), (mix, "b")).expect("wire Blur.out → Mix.b");
-
-    SpliceResult {
-        output: (mix, "out"),
-        handles: vec![(Cow::Borrowed("blur"), blur), (Cow::Borrowed("mix"), mix)],
-    }
-}
-
-inventory::submit! {
-    ChainSpec {
-        type_id: EffectTypeId::SOFT_FOCUS_GRAPH,
-        splice: splice_soft_focus,
-        bindings: &[
-            ParamBinding {
-                id: Cow::Borrowed("radius"),
-                label: "Radius",
-                default_value: 6.0,
-                target: ParamTarget::HandleNode { handle: "blur", param: "radius" },
-                convert: ParamConvert::Float,
-            },
-            ParamBinding {
-                id: Cow::Borrowed("amount"),
-                label: "Amount",
-                default_value: 0.5,
-                target: ParamTarget::HandleNode { handle: "mix", param: "amount" },
-                convert: ParamConvert::Float,
-            },
-        ],
-        skip: SkipMode::OnZero { param_id: "amount" },
-    }
-}

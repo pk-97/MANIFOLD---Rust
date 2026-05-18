@@ -20,15 +20,12 @@ use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::primitives::Watercolor;
-use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
-use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -51,49 +48,6 @@ inventory::submit! {
         id: EffectTypeId::new("Watercolor"),
         create: |device| Box::new(WatercolorFX::new(device)),
     }
-}
-
-crate::atomic_chain_spec! {
-    type_id: EffectTypeId::new("Watercolor"),
-    primitive: Watercolor,
-    handle: "watercolor",
-    bindings: &[
-        ParamBinding {
-            id: Cow::Borrowed("amount"),
-            label: "Amount",
-            default_value: 0.5,
-            target: ParamTarget::HandleNode { handle: "watercolor", param: "amount" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("displace"),
-            label: "Displace",
-            default_value: 0.001,
-            target: ParamTarget::HandleNode { handle: "watercolor", param: "displace" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("blur"),
-            label: "Blur",
-            default_value: 2.0,
-            target: ParamTarget::HandleNode { handle: "watercolor", param: "blur" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("decay"),
-            label: "Decay",
-            default_value: 0.99,
-            target: ParamTarget::HandleNode { handle: "watercolor", param: "decay" },
-            convert: ParamConvert::Float,
-        },
-        // `time` is ctx-driven, populated by `apply_ctx_params_at`.
-    ],
-    // Stateful: Watercolor owns ping-pong feedback textures keyed by
-    // node id. SkipMode::OnZero would wipe them on every amount → 0
-    // drag, so a quick fade-out + fade-in would lose the accumulated
-    // wash. Always splice — at `amount = 0` the inner composite
-    // returns the source.
-    skip: SkipMode::Never,
 }
 
 const WATERCOLOR_WGSL: &str = include_str!("shaders/fx_watercolor_compute.wgsl");

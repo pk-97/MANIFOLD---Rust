@@ -2,13 +2,10 @@ use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::primitives::EdgeDetect;
-use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
-use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -37,34 +34,6 @@ inventory::submit! {
         id: EffectTypeId::EDGE_DETECT,
         aliases: &[("thresh", Some("threshold"))],
     }
-}
-
-crate::atomic_chain_spec! {
-    type_id: EffectTypeId::EDGE_DETECT,
-    primitive: EdgeDetect,
-    handle: "edge_detect",
-    bindings: &[
-        ParamBinding {
-            id: Cow::Borrowed("amount"),
-            label: "Amount",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "edge_detect", param: "amount" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("threshold"),
-            label: "Threshold",
-            default_value: 0.1,
-            target: ParamTarget::HandleNode { handle: "edge_detect", param: "threshold" },
-            convert: ParamConvert::Float,
-        },
-        // Legacy `mode` (Sobel/Laplacian/Frei-Chen) was a binary
-        // toggle the primitive folded into the always-on shader
-        // path. Intentionally unrouted — preserves the existing
-        // EdgeDetect parity-tested behavior. The metadata's `mode`
-        // ParamSpec is dropped; users see only Amount + Thresh.
-    ],
-    skip: SkipMode::OnZero { param_id: "amount" },
 }
 
 #[repr(C)]

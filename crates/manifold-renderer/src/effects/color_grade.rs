@@ -5,13 +5,10 @@ use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::primitives::ColorGrade;
-use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
-use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -50,78 +47,6 @@ inventory::submit! {
             ("focus", Some("tint_focus")),
         ],
     }
-}
-
-crate::atomic_chain_spec! {
-    type_id: EffectTypeId::COLOR_GRADE,
-    primitive: ColorGrade,
-    handle: "color_grade",
-    bindings: &[
-        ParamBinding {
-            id: Cow::Borrowed("amount"),
-            label: "Amount",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "color_grade", param: "amount" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("gain"),
-            label: "Gain",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "color_grade", param: "gain" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("saturation"),
-            label: "Saturation",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "color_grade", param: "saturation" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("hue"),
-            label: "Hue",
-            default_value: 0.0,
-            target: ParamTarget::HandleNode { handle: "color_grade", param: "hue" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("contrast"),
-            label: "Contrast",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "color_grade", param: "contrast" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("colorize"),
-            label: "Colorize",
-            default_value: 0.0,
-            target: ParamTarget::HandleNode { handle: "color_grade", param: "colorize" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("tint_hue"),
-            label: "Tint Hue",
-            default_value: 0.0,
-            target: ParamTarget::HandleNode { handle: "color_grade", param: "colorize_hue" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("tint_saturation"),
-            label: "Tint Saturation",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "color_grade", param: "colorize_saturation" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("tint_focus"),
-            label: "Tint Focus",
-            default_value: 0.75,
-            target: ParamTarget::HandleNode { handle: "color_grade", param: "colorize_focus" },
-            convert: ParamConvert::Float,
-        },
-    ],
-    skip: SkipMode::OnZero { param_id: "amount" },
 }
 
 // ColorGradeEffect.shader Properties (lines 6-14)

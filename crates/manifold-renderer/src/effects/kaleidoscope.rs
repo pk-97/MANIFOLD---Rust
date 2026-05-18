@@ -2,13 +2,10 @@ use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::primitives::KaleidoFold;
-use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
-use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -36,29 +33,6 @@ inventory::submit! {
         id: EffectTypeId::KALEIDOSCOPE,
         aliases: &[("segs", Some("segments"))],
     }
-}
-
-crate::atomic_chain_spec! {
-    type_id: EffectTypeId::KALEIDOSCOPE,
-    primitive: KaleidoFold,
-    handle: "kaleidoscope",
-    bindings: &[
-        ParamBinding {
-            id: Cow::Borrowed("amount"),
-            label: "Amount",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "kaleidoscope", param: "amount" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("segments"),
-            label: "Segments",
-            default_value: 6.0,
-            target: ParamTarget::HandleNode { handle: "kaleidoscope", param: "segments" },
-            convert: ParamConvert::Float,
-        },
-    ],
-    skip: SkipMode::OnZero { param_id: "amount" },
 }
 
 #[repr(C)]

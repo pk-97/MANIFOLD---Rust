@@ -17,14 +17,11 @@ use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::primitives::AutoGain;
-use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
-use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -60,70 +57,6 @@ inventory::submit! {
             ("hdr_ret", Some("hdr_retention")),
         ],
     }
-}
-
-crate::atomic_chain_spec! {
-    type_id: EffectTypeId::AUTO_GAIN,
-    primitive: AutoGain,
-    handle: "auto_gain",
-    bindings: &[
-        ParamBinding {
-            id: Cow::Borrowed("amount"),
-            label: "Amount",
-            default_value: 0.5,
-            target: ParamTarget::HandleNode { handle: "auto_gain", param: "amount" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("ratio"),
-            label: "Ratio",
-            default_value: 0.5,
-            target: ParamTarget::HandleNode { handle: "auto_gain", param: "ratio" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("punch"),
-            label: "Punch",
-            default_value: 0.5,
-            target: ParamTarget::HandleNode { handle: "auto_gain", param: "punch" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("target"),
-            label: "Target",
-            default_value: 0.5,
-            target: ParamTarget::HandleNode { handle: "auto_gain", param: "target" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("hdr_retention"),
-            label: "HDR Retention",
-            default_value: 0.5,
-            target: ParamTarget::HandleNode { handle: "auto_gain", param: "hdr_retention" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("color"),
-            label: "Color",
-            default_value: 0.0,
-            target: ParamTarget::HandleNode { handle: "auto_gain", param: "color" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("character"),
-            label: "Character",
-            default_value: 0.0,
-            target: ParamTarget::HandleNode { handle: "auto_gain", param: "character" },
-            convert: ParamConvert::EnumRound,
-        },
-    ],
-    // Stateful: CPU envelope follower with transient detection — the
-    // gain trajectory only converges to the right level after several
-    // frames of measurement. SkipMode::OnZero would reset the envelope
-    // on every amount → 0 drag, causing a visible gain pop on the way
-    // back. Always splice — inner composite returns source at
-    // `amount = 0`.
-    skip: SkipMode::Never,
 }
 
 // ── Uniforms for the apply pass ────────────────────────────────────────

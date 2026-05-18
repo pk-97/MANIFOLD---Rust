@@ -26,17 +26,9 @@
 //! for advanced composition: card = curated performance surface,
 //! canvas = full control.
 
-use std::borrow::Cow;
-
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::generator_registration::ParamSpec;
-
-use crate::node_graph::primitives::{ChromaKey, ClampStretch, MaskedMix};
-use crate::node_graph::{
-    ChainSpec, Graph, NodeInstanceId, ParamBinding, ParamConvert, ParamTarget, SkipMode,
-    SpliceResult,
-};
 
 inventory::submit! {
     EffectMetadata {
@@ -55,80 +47,3 @@ inventory::submit! {
     }
 }
 
-fn splice_edge_stretch_by_color(
-    graph: &mut Graph,
-    source: (NodeInstanceId, &'static str),
-) -> SpliceResult {
-    // Mask path: source → chroma_key
-    let chroma = graph.add_node(Box::new(ChromaKey::new()));
-    graph
-        .connect(source, (chroma, "in"))
-        .expect("wire source → ChromaKey.in");
-
-    // Effect path: source → clamp_stretch
-    let stretch = graph.add_node(Box::new(ClampStretch::new()));
-    graph
-        .connect(source, (stretch, "in"))
-        .expect("wire source → ClampStretch.in");
-
-    // Masked composite: a=source (pass-through), b=stretched, mask=chroma
-    let mm = graph.add_node(Box::new(MaskedMix::new()));
-    graph
-        .connect(source, (mm, "a"))
-        .expect("wire source → MaskedMix.a");
-    graph
-        .connect((stretch, "out"), (mm, "b"))
-        .expect("wire ClampStretch.out → MaskedMix.b");
-    graph
-        .connect((chroma, "out"), (mm, "mask"))
-        .expect("wire ChromaKey.out → MaskedMix.mask");
-
-    SpliceResult {
-        output: (mm, "out"),
-        handles: vec![
-            (Cow::Borrowed("chroma_key"), chroma),
-            (Cow::Borrowed("clamp_stretch"), stretch),
-            (Cow::Borrowed("masked_mix"), mm),
-        ],
-    }
-}
-
-inventory::submit! {
-    ChainSpec {
-        type_id: EffectTypeId::EDGE_STRETCH_BY_COLOR,
-        splice: splice_edge_stretch_by_color,
-        bindings: &[
-            ParamBinding {
-                id: Cow::Borrowed("amount"),
-                label: "Amount",
-                default_value: 1.0,
-                target: ParamTarget::HandleNode { handle: "masked_mix", param: "amount" },
-                convert: ParamConvert::Float,
-            },
-            ParamBinding {
-                id: Cow::Borrowed("tolerance"),
-                label: "Tolerance",
-                default_value: 0.3,
-                target: ParamTarget::HandleNode { handle: "chroma_key", param: "tolerance" },
-                convert: ParamConvert::Float,
-            },
-            ParamBinding {
-                id: Cow::Borrowed("softness"),
-                label: "Softness",
-                default_value: 0.1,
-                target: ParamTarget::HandleNode { handle: "chroma_key", param: "softness" },
-                convert: ParamConvert::Float,
-            },
-            ParamBinding {
-                id: Cow::Borrowed("stretch"),
-                label: "Stretch",
-                default_value: 0.5,
-                target: ParamTarget::HandleNode { handle: "clamp_stretch", param: "source_width" },
-                convert: ParamConvert::Float,
-            },
-        ],
-        // Skip when the masked-mix gate is off — saves the chroma-key
-        // and clamp-stretch passes when the user pulls amount to 0.
-        skip: SkipMode::OnZero { param_id: "amount" },
-    }
-}

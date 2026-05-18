@@ -6,15 +6,12 @@ use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::primitives::Bloom;
-use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
-use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -34,26 +31,6 @@ inventory::submit! {
         id: EffectTypeId::BLOOM,
         create: |device| Box::new(BloomFX::new(device)),
     }
-}
-
-crate::atomic_chain_spec! {
-    type_id: EffectTypeId::BLOOM,
-    primitive: Bloom,
-    handle: "bloom",
-    bindings: &[
-        ParamBinding {
-            id: Cow::Borrowed("amount"),
-            label: "Amount",
-            default_value: 0.5,
-            target: ParamTarget::HandleNode { handle: "bloom", param: "amount" },
-            convert: ParamConvert::Float,
-        },
-    ],
-    // Stateful: Bloom owns an expensive mip pyramid. SkipMode::OnZero
-    // would tear it down on every amount → 0 drag and force a rebuild
-    // on the way back up. Always splice — at `amount = 0` the
-    // composite primitive returns the source unchanged.
-    skip: SkipMode::Never,
 }
 
 // BloomFX.cs lines 19-25 — constants

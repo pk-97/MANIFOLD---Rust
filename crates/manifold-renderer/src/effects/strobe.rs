@@ -2,13 +2,11 @@ use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::primitives::{NOTE_RATE_LABELS, Strobe};
-use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
+use crate::node_graph::primitives::NOTE_RATE_LABELS;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
-use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -38,40 +36,6 @@ inventory::submit! {
         id: EffectTypeId::STROBE,
         create: |device| Box::new(StrobeFX::new(device)),
     }
-}
-
-crate::atomic_chain_spec! {
-    type_id: EffectTypeId::STROBE,
-    primitive: Strobe,
-    handle: "strobe",
-    bindings: &[
-        ParamBinding {
-            id: Cow::Borrowed("amount"),
-            label: "Amount",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "strobe", param: "amount" },
-            convert: ParamConvert::Float,
-        },
-        // `rate` is a note-rate enum index — the primitive converts
-        // to strobes-per-beat internally via NOTE_RATE_VALUES, so the
-        // outer slider and the inner editor agree on the same enum.
-        ParamBinding {
-            id: Cow::Borrowed("rate"),
-            label: "Rate",
-            default_value: 6.0,
-            target: ParamTarget::HandleNode { handle: "strobe", param: "rate" },
-            convert: ParamConvert::EnumRound,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("mode"),
-            label: "Mode",
-            default_value: 0.0,
-            target: ParamTarget::HandleNode { handle: "strobe", param: "mode" },
-            convert: ParamConvert::EnumRound,
-        },
-        // `beat` is ctx-driven — populated each frame from `EffectContext::beat`.
-    ],
-    skip: SkipMode::OnZero { param_id: "amount" },
 }
 
 #[repr(C)]

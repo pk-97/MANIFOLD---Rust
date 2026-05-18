@@ -10,15 +10,12 @@ use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
-use crate::node_graph::primitives::BlobTracking;
-use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
-use std::borrow::Cow;
 use manifold_gpu::{
     GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer, GpuComputePipeline,
     GpuDevice, GpuFilterMode, GpuLoadAction, GpuRenderPipeline, GpuSampler, GpuSamplerDesc,
@@ -69,56 +66,6 @@ inventory::submit! {
             ("smooth", Some("smoothing")),
         ],
     }
-}
-
-crate::atomic_chain_spec! {
-    type_id: EffectTypeId::BLOB_TRACKING,
-    primitive: BlobTracking,
-    handle: "blob_tracking",
-    bindings: &[
-        ParamBinding {
-            id: Cow::Borrowed("amount"),
-            label: "Amount",
-            default_value: 0.5,
-            target: ParamTarget::HandleNode { handle: "blob_tracking", param: "amount" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("threshold"),
-            label: "Threshold",
-            default_value: 0.65,
-            target: ParamTarget::HandleNode { handle: "blob_tracking", param: "threshold" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("sensitivity"),
-            label: "Sensitivity",
-            default_value: 0.85,
-            target: ParamTarget::HandleNode { handle: "blob_tracking", param: "sensitivity" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("smoothing"),
-            label: "Smoothing",
-            default_value: 0.7,
-            target: ParamTarget::HandleNode { handle: "blob_tracking", param: "smoothing" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("connect"),
-            label: "Connect",
-            default_value: 0.35,
-            target: ParamTarget::HandleNode { handle: "blob_tracking", param: "connect" },
-            convert: ParamConvert::Float,
-        },
-    ],
-    // Stateful: spawns a native blob-detection worker thread, owns
-    // an Arc<dyn BlobDetector> handle, plus per-owner One-Euro
-    // filter state and a font atlas for overlay text. SkipMode::OnZero
-    // would tear those down on every amount → 0 drag and pay worker-
-    // spin-up cost on the way back. Always splice — inner composite
-    // returns source at `amount = 0`.
-    skip: SkipMode::Never,
 }
 
 // Request/response types for the background blob detection worker.

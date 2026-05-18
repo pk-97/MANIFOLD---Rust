@@ -2,13 +2,10 @@ use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::primitives::Glitch;
-use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
-use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -39,52 +36,6 @@ inventory::submit! {
         id: EffectTypeId::GLITCH,
         aliases: &[("block", Some("block_size"))],
     }
-}
-
-crate::atomic_chain_spec! {
-    type_id: EffectTypeId::GLITCH,
-    primitive: Glitch,
-    handle: "glitch",
-    bindings: &[
-        ParamBinding {
-            id: Cow::Borrowed("amount"),
-            label: "Amount",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "glitch", param: "amount" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("block_size"),
-            label: "Block Size",
-            default_value: 16.0,
-            target: ParamTarget::HandleNode { handle: "glitch", param: "block_size" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("rgb_shift"),
-            label: "RGB Shift",
-            default_value: 0.01,
-            target: ParamTarget::HandleNode { handle: "glitch", param: "rgb_shift" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("scanline"),
-            label: "Scanline",
-            default_value: 0.3,
-            target: ParamTarget::HandleNode { handle: "glitch", param: "scanline" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("speed"),
-            label: "Speed",
-            default_value: 2.0,
-            target: ParamTarget::HandleNode { handle: "glitch", param: "speed" },
-            convert: ParamConvert::Float,
-        },
-        // `time` is a ctx-driven param — populated by
-        // `apply_ctx_params_at` each frame from `EffectContext::time`.
-    ],
-    skip: SkipMode::OnZero { param_id: "amount" },
 }
 
 #[repr(C)]

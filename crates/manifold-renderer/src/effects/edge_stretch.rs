@@ -2,13 +2,10 @@ use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::primitives::ClampStretch;
-use crate::node_graph::{ParamBinding, ParamConvert, ParamTarget, SkipMode};
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
 use manifold_core::effects::EffectInstance;
 use manifold_core::generator_registration::ParamSpec;
-use std::borrow::Cow;
 
 inventory::submit! {
     EffectMetadata {
@@ -37,36 +34,6 @@ inventory::submit! {
         id: EffectTypeId::EDGE_STRETCH,
         aliases: &[("dir", Some("direction"))],
     }
-}
-
-crate::atomic_chain_spec! {
-    type_id: EffectTypeId::EDGE_STRETCH,
-    primitive: ClampStretch,
-    handle: "edge_stretch",
-    bindings: &[
-        ParamBinding {
-            id: Cow::Borrowed("amount"),
-            label: "Amount",
-            default_value: 1.0,
-            target: ParamTarget::HandleNode { handle: "edge_stretch", param: "amount" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("width"),
-            label: "Width",
-            default_value: 0.5,
-            target: ParamTarget::HandleNode { handle: "edge_stretch", param: "source_width" },
-            convert: ParamConvert::Float,
-        },
-        ParamBinding {
-            id: Cow::Borrowed("direction"),
-            label: "Direction",
-            default_value: 0.0,
-            target: ParamTarget::HandleNode { handle: "edge_stretch", param: "direction" },
-            convert: ParamConvert::EnumRound,
-        },
-    ],
-    skip: SkipMode::OnZero { param_id: "amount" },
 }
 
 #[repr(C)]

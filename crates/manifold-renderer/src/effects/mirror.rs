@@ -19,13 +19,7 @@
 //! directly in the chain graph and the per-frame renderer drives
 //! them via the bindings below.
 
-use std::borrow::Cow;
-
-use crate::node_graph::primitives::{Mix, TRANSFORM_MODES, Transform};
-use crate::node_graph::{
-    ChainSpec, Graph, NodeInstanceId, ParamBinding, ParamConvert, ParamTarget, ParamValue,
-    SkipMode, SpliceResult,
-};
+use crate::node_graph::primitives::TRANSFORM_MODES;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::{EffectMetadata, EffectValueAliasMetadata};
 use manifold_core::generator_registration::ParamSpec;
@@ -71,59 +65,3 @@ inventory::submit! {
     }
 }
 
-/// Splice Mirror's workers (`Transform` + `Mix`) directly into a chain
-/// graph. The source endpoint fans out — `Transform` reads it as
-/// `source`, `Mix` reads it as `a` (dry path). `Mix.amount` lerps
-/// between the source and the folded result.
-fn splice_mirror(
-    graph: &mut Graph,
-    source: (NodeInstanceId, &'static str),
-) -> SpliceResult {
-    let xform = graph.add_node(Box::new(Transform::new()));
-    graph
-        .set_param(xform, "mode", ParamValue::Enum(MIRROR_FOLD_X))
-        .expect("Transform exposes a `mode` enum param");
-    graph
-        .connect(source, (xform, "source"))
-        .expect("wire source → Transform.source");
-
-    let mix = graph.add_node(Box::new(Mix::new()));
-    graph
-        .connect(source, (mix, "a"))
-        .expect("wire source → Mix.a");
-    graph
-        .connect((xform, "out"), (mix, "b"))
-        .expect("wire Transform.out → Mix.b");
-
-    SpliceResult {
-        output: (mix, "out"),
-        handles: vec![
-            (Cow::Borrowed("uv_transform"), xform),
-            (Cow::Borrowed("mix"), mix),
-        ],
-    }
-}
-
-inventory::submit! {
-    ChainSpec {
-        type_id: EffectTypeId::MIRROR,
-        splice: splice_mirror,
-        bindings: &[
-            ParamBinding {
-                id: Cow::Borrowed("amount"),
-                label: "Amount",
-                default_value: 1.0,
-                target: ParamTarget::HandleNode { handle: "mix", param: "amount" },
-                convert: ParamConvert::Float,
-            },
-            ParamBinding {
-                id: Cow::Borrowed("mode"),
-                label: "Mode",
-                default_value: MIRROR_FOLD_X as f32,
-                target: ParamTarget::HandleNode { handle: "uv_transform", param: "mode" },
-                convert: ParamConvert::EnumRound,
-            },
-        ],
-        skip: SkipMode::OnZero { param_id: "amount" },
-    }
-}
