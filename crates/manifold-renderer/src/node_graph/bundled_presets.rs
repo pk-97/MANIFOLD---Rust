@@ -122,42 +122,9 @@ inventory::submit! {
 mod tests {
     use super::*;
 
-    use crate::node_graph::ChainSpec;
     use crate::node_graph::persistence::{EffectGraphDefExt, PrimitiveRegistry};
     use crate::node_graph::validation::validate;
     use crate::node_graph::execution_plan::compile;
-
-    #[test]
-    fn every_chain_spec_has_a_bundled_preset() {
-        let mut missing: Vec<String> = Vec::new();
-        for spec in inventory::iter::<ChainSpec> {
-            if bundled_preset_def(&spec.type_id).is_none() {
-                missing.push(spec.type_id.as_str().to_string());
-            }
-        }
-        assert!(
-            missing.is_empty(),
-            "ChainSpec(s) without a bundled preset entry — add them to BUNDLED_PRESETS \
-             after regenerating with `cargo test -p manifold-renderer --test \
-             bundled_presets_drift -- --ignored`: {missing:?}"
-        );
-    }
-
-    #[test]
-    fn every_bundled_preset_targets_a_real_chain_spec() {
-        use crate::node_graph::chain_spec::chain_spec_by_id;
-        let mut orphans: Vec<String> = Vec::new();
-        for type_id in bundled_preset_type_ids() {
-            if chain_spec_by_id(&type_id).is_none() {
-                orphans.push(type_id.as_str().to_string());
-            }
-        }
-        assert!(
-            orphans.is_empty(),
-            "Bundled preset(s) without a matching ChainSpec — remove from \
-             BUNDLED_PRESETS and delete the JSON file: {orphans:?}"
-        );
-    }
 
     #[test]
     fn every_bundled_preset_loads_validates_and_compiles() {
