@@ -8,6 +8,7 @@
 
 mod affine_transform;
 mod auto_gain;
+mod beat_gate;
 mod blob_tracking;
 mod bloom;
 mod chroma_key;
@@ -43,6 +44,7 @@ mod wireframe_depth;
 
 pub use affine_transform::AffineTransform;
 pub use auto_gain::{AUTO_GAIN_CHARACTERS, AUTO_GAIN_TYPE_ID, AutoGain};
+pub use beat_gate::{BEAT_GATE_RATE_LABELS, BeatGate};
 pub use blob_tracking::{BLOB_TRACKING_TYPE_ID, BlobTracking};
 pub use bloom::{BLOOM_TYPE_ID, Bloom};
 pub use chroma_key::{CHROMA_KEY_MODES, ChromaKey};
