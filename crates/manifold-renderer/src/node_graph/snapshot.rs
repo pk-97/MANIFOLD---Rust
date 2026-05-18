@@ -635,6 +635,7 @@ mod tests {
             version: EFFECT_GRAPH_VERSION,
             name: None,
             description: None,
+            preset_metadata: None,
             nodes: vec![EffectGraphNode {
                 id: 0,
                 type_id: "node.does_not_exist".to_string(),

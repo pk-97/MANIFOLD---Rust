@@ -610,6 +610,7 @@ mod tests {
             version: EFFECT_GRAPH_VERSION,
             name: None,
             description: None,
+            preset_metadata: None,
             nodes: vec![
                 EffectGraphNode {
                     id: 0,

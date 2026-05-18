@@ -38,7 +38,8 @@ use std::collections::BTreeMap;
 use ahash::AHashMap;
 
 use manifold_core::effect_graph_def::{
-    EFFECT_GRAPH_VERSION, EffectGraphDef, EffectGraphNode, EffectGraphWire,
+    EFFECT_GRAPH_VERSION, EFFECT_GRAPH_VERSION_WITH_METADATA, EffectGraphDef, EffectGraphNode,
+    EffectGraphWire,
 };
 
 use crate::node_graph::boundary_nodes::{
@@ -450,16 +451,17 @@ impl EffectGraphDefExt for EffectGraphDef {
             version: EFFECT_GRAPH_VERSION,
             name: None,
             description: None,
+            preset_metadata: None,
             nodes,
             wires,
         }
     }
 
     fn into_graph(self, registry: &PrimitiveRegistry) -> Result<Graph, LoadError> {
-        if self.version > EFFECT_GRAPH_VERSION {
+        if self.version > EFFECT_GRAPH_VERSION_WITH_METADATA {
             return Err(LoadError::UnsupportedVersion {
                 found: self.version,
-                max: EFFECT_GRAPH_VERSION,
+                max: EFFECT_GRAPH_VERSION_WITH_METADATA,
             });
         }
 
@@ -724,6 +726,7 @@ mod tests {
             version: 1,
             name: None,
             description: None,
+            preset_metadata: None,
             nodes: vec![NodeDocument {
                 id: 0,
                 type_id: "node.does_not_exist".to_string(),
@@ -759,6 +762,7 @@ mod tests {
             version: 1,
             name: None,
             description: None,
+            preset_metadata: None,
             nodes: vec![
                 NodeDocument {
                     id: 0,
@@ -797,6 +801,7 @@ mod tests {
             version: 1,
             name: None,
             description: None,
+            preset_metadata: None,
             nodes: vec![NodeDocument {
                 id: 0,
                 type_id: primitives::THRESHOLD_TYPE_ID.to_string(),
@@ -822,6 +827,7 @@ mod tests {
             version: 1,
             name: None,
             description: None,
+            preset_metadata: None,
             nodes: vec![NodeDocument {
                 id: 0,
                 type_id: primitives::THRESHOLD_TYPE_ID.to_string(),
@@ -844,14 +850,47 @@ mod tests {
     #[test]
     fn future_version_is_rejected() {
         let doc = GraphDocument {
-            version: GRAPH_DOCUMENT_VERSION + 1,
+            version: EFFECT_GRAPH_VERSION_WITH_METADATA + 1,
             name: None,
             description: None,
+            preset_metadata: None,
             nodes: vec![],
             wires: vec![],
         };
         let err = expect_err(doc.into_graph(&registry()));
         assert!(matches!(err, LoadError::UnsupportedVersion { .. }));
+    }
+
+    #[test]
+    fn v1_document_is_accepted() {
+        // V1 documents on disk (no presetMetadata) must keep loading
+        // after the v2 schema bump. The 25 shipping bundled-preset
+        // JSON files all live at v1 until the §11 migration populates
+        // their metadata.
+        let doc = GraphDocument {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![],
+            wires: vec![],
+        };
+        let result = doc.into_graph(&registry());
+        assert!(result.is_ok(), "v1 doc should load: {:?}", result.err());
+    }
+
+    #[test]
+    fn v2_document_is_accepted() {
+        let doc = GraphDocument {
+            version: EFFECT_GRAPH_VERSION_WITH_METADATA,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![],
+            wires: vec![],
+        };
+        let result = doc.into_graph(&registry());
+        assert!(result.is_ok(), "v2 doc should load: {:?}", result.err());
     }
 
     #[test]
