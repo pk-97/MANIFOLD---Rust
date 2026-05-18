@@ -954,3 +954,174 @@ The endpoint isn't a TouchDesigner clone. It's a system where:
 
 That's the wedge nobody else is building. The graph editor convergence with TouchDesigner is fine — the *integration* with arrangement and live performance is the part that's genuinely MANIFOLD's.
 
+---
+
+## 11. Unified authoring registry — pre-implementation research (2026-05-18)
+
+Before starting the JSON-authoritative migration sketched at the end of §10, this section captures an audit of the existing registries and consumers, with refinements to the original plan. The architectural target stays the same — *one source of truth per category, no hand-maintained lists* — but the migration is more nuanced than first stated.
+
+### 11.1 What "registry" currently means — three overlapping systems
+
+There are **three** effect registries in `manifold-core`, all populated from the same `inventory::submit!(EffectMetadata)` source, each consumed by a different layer:
+
+- **`EffectMetadata`** (`effect_registration.rs`) — the raw `inventory::collect!` shape. Fields: `id`, `display_name`, `category`, `available`, `osc_prefix`, `legacy_discriminant`, `params: &[ParamSpec]`. Plus three sidecar submissions: `EffectAliasMetadata` (param renames), `EffectNodeAliasMetadata` (node-handle renames), `EffectValueAliasMetadata` (enum-value remaps). Cached via `metadata.rs::metadata_by_id()` in the renderer.
+
+- **`EffectDef`** (`effect_definition_registry.rs`) — computed view built from each `EffectMetadata` via `to_effect_def()`. Adds `id_to_index: AHashMap<String, usize>` (the addressing table for OSC / Ableton / driver / project storage), `param_ids: Vec<&'static str>`, and merged `legacy_*_aliases` slices. This is the **load-bearing registry** for the rest of the codebase — almost every consumer in `effects.rs` and `project.rs` goes through `effect_definition_registry::try_get(&id)`.
+
+- **`EffectTypeRegistration`** (`effect_type_registry.rs`) — the picker/UI surface. `display_name`, `category`, `available`. Consumed by `manifold-app/ui_bridge` (state sync, inspector, picker), `ui_root` (effect browser popup).
+
+Plus a **legacy fourth** registry (`effect_category_registry.rs`) — hand-maintained `HashMap<EffectTypeId, &str>`. Largely superseded by `effect_type_registry` but still compiled in.
+
+**Renderer-side** there are two more pieces:
+
+- **`ChainSpec`** (`node_graph/chain_spec.rs`) — the splice fn that builds the canonical graph, plus `bindings`, plus `skip` mode. Consumed in `effect_chain_graph.rs` (5 callsites — the load-bearing chain runtime), `effect_registry.rs` (legacy snapshot path), `bundled_presets.rs` (drift check).
+
+- **`EffectFactory`** (`effects/registration.rs`) — `(id, create: fn(&GpuDevice) -> Box<dyn PostProcessEffect>)`. Consumed by `effect_registry.rs` for two surviving roles: **editor snapshot lookup** (`graph_snapshot_for`, used by `layer_compositor::graph_snapshot_for`) and **plugin warmup** (`flush_all_background_work` — pre-export drain of background workers in DepthEstimator / BlobDetector).
+
+### 11.2 The per-effect Rust audit — what migrates cleanly, what doesn't
+
+Audit of all 25 effect files in `crates/manifold-renderer/src/effects/`:
+
+**20 of 25 migrate cleanly to JSON-authoritative:**
+
+- **16 STANDARD** (template-shaped, `atomic_chain_spec!` macro, one primitive): `chromatic_aberration`, `color_grade`, `dither`, `edge_detect`, `edge_stretch`, `glitch`, `hdr_boost`, `invert_colors`, `kaleidoscope`, `quad_mirror`, `strobe`, `transform`, `voronoi_prism`, `bloom`, `halation`, `infrared`. Each compiles down to: metadata → JSON fields, single-primitive splice → graph node, bindings → JSON binding list. Their corresponding **primitives stay in Rust** (where stateful machinery lives — Bloom's mip pyramid, Halation's blur chain, Infrared's LUT cache). The effect file gets deleted; the JSON carries metadata + the one-node canonical graph.
+
+- **4 COMPOSITE** (hand-written splice fns wiring 2-3 primitives): `mandala`, `edge_stretch_by_color`, `mirror`, `soft_focus_graph`. Migrate just as cleanly — their canonical JSON snapshot already contains the full multi-node topology; the JSON IS the splice's output. `mirror` carries `EffectValueAliasMetadata` for legacy mode remaps; those move into a JSON `valueAliases` field.
+
+**5 effects need attention:**
+
+- **`auto_gain`** — Per-owner CPU envelope state (`AutoGainOwnerState`: measure buffer + EMA state + frame count). *But* the matching `AutoGain` primitive in `node_graph/primitives/` already owns the per-owner state via `StateStore`. The legacy effect file's state is **dead code** in the post-cutover render path (ChainGraph → primitives doesn't call `PostProcessEffect::apply()`). Effect file can be deleted; primitive carries state forward.
+
+- **`blob_tracking`** — Spawns native `BlobDetector` plugin as background worker, owns font atlas texture, 512-quad overlay instance buffer, One-Euro smoothing state, blob matching. *Worker creation happens in the legacy effect's `new(device)`.* For migration: either move worker init into the primitive's lazy first-run, or keep a small `PluginPrewarm` inventory specifically for the plugin-using effects (see §11.5).
+
+- **`depth_of_field`** — Spawns MiDaS depth-estimation worker, manages readback→inference→upload pipeline, 3 focus modes. Same shape as blob_tracking — worker init is in the effect file; needs preserving via prewarm path.
+
+- **`watercolor`** — 7-pass feedback pipeline with intermediate textures. *State lives in the primitive*, not in the legacy effect file. Effect file deletion is fine; primitive carries the multi-pass machinery.
+
+- **`wireframe_depth`** — Massive multi-worker pipeline (3+ DNN workers, optical flow buffers, cut-score temporal coherence). State in the primitive. Workers initialized in the effect file's `new(device)` — same prewarm question as blob_tracking and depth_of_field.
+
+- **`stylized_feedback`** — Boundary case flagged by the audit. Uses `atomic_chain_spec!` with the `Feedback` primitive directly; state lives in the primitive. Migrates as STANDARD, no special handling.
+
+- **`node_graph_test`** — Diagnostic test composition, no real GPU work. Can probably delete entirely or convert to a test-only JSON if it's still useful.
+
+**Bottom line:** 24 of 25 effect files delete cleanly. The 25th — node_graph_test — is a test artifact. **Three** effects (blob_tracking, depth_of_field, wireframe_depth) need their worker initialization preserved through a separate mechanism, because workers need to start at process boot, not at first chain dispatch.
+
+### 11.3 The composite effects make the splice abstraction unnecessary
+
+In the JSON-authoritative model, the distinction between "atomic" (one primitive) and "composite" (multiple primitives) collapses. Both are just: load JSON → instantiate listed nodes via `PrimitiveRegistry::create()` → wire listed edges. The `atomic_chain_spec!` macro and the hand-written `splice` fn become the same code path — `EffectGraphDef::instantiate(&primitive_registry)`, which already exists.
+
+That means `ChainSpec` as a type can disappear entirely. Its three fields:
+- `splice: fn` → JSON's `nodes` + `wires`
+- `bindings: &[ParamBinding]` → JSON's `bindings` field
+- `skip: SkipMode` → JSON's `skipMode` field
+
+…all live in the JSON. The `chain_spec_by_id()` function gets replaced by `loaded_preset_by_id()`. Same 5 callsites in `effect_chain_graph.rs` rewire mechanically.
+
+### 11.4 `EffectGraphDef` already exists and is close to ready
+
+The current schema (v1) carries `version`, `name`, `description`, `nodes`, `wires`. To absorb everything from `EffectMetadata` + `ChainSpec` + the three alias sidecars, it needs new top-level fields:
+
+```rust
+pub struct EffectGraphDef {
+    pub version: u32,                    // bump to 2
+    pub id: EffectTypeId,                // was implicit (filename); make explicit
+    pub display_name: String,
+    pub category: String,
+    pub osc_prefix: String,
+    pub legacy_discriminant: Option<i32>,
+    pub available: bool,
+    pub params: Vec<ParamSpec>,          // outer-card slider list
+    pub bindings: Vec<ParamBinding>,     // outer→inner routing
+    pub skip_mode: SkipMode,
+    pub param_aliases: Vec<ParamAlias>,
+    pub node_aliases: Vec<ParamAlias>,
+    pub value_aliases: Vec<ValueAliasEntry>,
+    pub name: Option<String>,            // existing
+    pub description: Option<String>,     // existing
+    pub nodes: Vec<EffectGraphNode>,     // existing
+    pub wires: Vec<EffectGraphWire>,     // existing
+}
+```
+
+All the new types (`ParamSpec`, `ParamBinding`, `SkipMode`, `ParamAlias`, `ValueAliasEntry`) already exist with serde derives or are trivially serializable. V1 documents (the existing 25 JSON snapshots) lack the new fields; serde defaults handle them at load time. Existing per-instance graph overrides on `EffectInstance` (which are also `EffectGraphDef`) just don't populate the new fields — they're not preset definitions, they're override deltas.
+
+### 11.5 Plugin warmup needs a separate inventory channel
+
+Three effects (`blob_tracking`, `depth_of_field`, `wireframe_depth`) create background workers in their `new(device)`. The workers must:
+- Start at process boot (so first render isn't blocked on plugin initialization)
+- Be drained before each export frame (so export is deterministic)
+
+These needs survive the deletion of the effect Rust files only if we either:
+
+**(a) Move worker init into the primitive's lazy `run()`** — first dispatch triggers worker creation. Pros: kills the EffectFactory cleanly. Cons: first-frame stutter when a clip with one of these effects starts; uneven warmup across primitives.
+
+**(b) Keep a minimal `PluginPrewarm` inventory** — a new `inventory::collect!`-able struct `{ id: EffectTypeId, prewarm: fn(&GpuDevice) }` that the renderer runs at startup. Only the three plugin-using effects submit one. The rest of the EffectFactory pattern dies.
+
+I lean (b). Cleaner separation: plugin warmup is its own concern, doesn't pollute the primitive's `run()` with init-time-only code. The inventory list is tiny (3 entries) and explicit. A new `crates/manifold-renderer/src/plugin_prewarm.rs` or similar lives alongside the primitive registry; `LayerCompositor::new()` iterates the prewarm submissions during construction.
+
+### 11.6 Editor snapshot — does it still need `EffectFactory`?
+
+The other surviving role of `EffectFactory` is `graph_snapshot_for(type_id) -> Snapshot` (`layer_compositor::graph_snapshot_for`, called from `compositor.rs:114`). Today: every legacy effect can render a `Source → Effect → FinalOutput` preview for the editor canvas. Implemented by holding singleton `Box<dyn PostProcessEffect>` instances in `EffectRegistry` and calling their `apply()`.
+
+**In the JSON-authoritative world this is replaced by `ChainGraph::build_and_render(loaded_preset.graph_def)`.** The canonical graph is what the chain runs anyway; rendering a snapshot is one frame of that graph against the editor's preview input. `EffectFactory` doesn't need to exist for this purpose. The snapshot path migrates to use the same code path that the live chain uses.
+
+That fully eliminates `EffectFactory`. The `PluginPrewarm` channel from §11.5 covers the only remaining startup-time concern. `EffectRegistry` itself can be deleted.
+
+### 11.7 `EffectDef` is the right shape for the unified loaded preset
+
+The original §10.5 proposal sketched a `LoadedPreset` struct with all the metadata. Looking at the actual codebase, `EffectDef` in `effect_definition_registry.rs` is already 90% that struct — `display_name`, `param_count`, `param_defs`, `osc_prefix`, `id_to_index`, `param_ids`, `legacy_param_aliases`, `legacy_node_aliases`, `legacy_value_aliases`. It just needs to absorb the graph topology fields (the existing `EffectGraphDef::nodes` + `wires`), the bindings, the skip mode, and the category. Then `EffectDef` becomes the unified runtime view of a loaded preset.
+
+This is a happy finding — the load-bearing addressing infrastructure (`id_to_index` map walked by every OSC / driver / project-storage lookup) doesn't need to be rebuilt. It already exists with the right shape; it just changes its data source from `EffectMetadata::to_effect_def()` to `LoadedPreset::to_effect_def()`. The 50+ callsites in `effects.rs` and `project.rs` that go through `effect_definition_registry::try_get()` continue to work unchanged.
+
+### 11.8 Build.rs precedent
+
+The workspace already uses build.rs in `manifold-media` and `manifold-recording`. Adding one to `manifold-renderer` (or `manifold-core`, depending on where the codegen target lives) is precedented. The build.rs will:
+
+1. Scan `crates/manifold-renderer/assets/effect-presets/*.json`
+2. For each, parse into `EffectGraphDef` and validate
+3. Validate that every `typeId` referenced in `nodes` corresponds to a registered primitive (via inventory iteration at build time — but build.rs runs *before* the crate compiles, so this check happens at runtime startup instead; build.rs only does schema-shape validation)
+4. Emit `target/<crate>/generated/effect_type_constants.rs` with `pub const FOO: EffectTypeId = EffectTypeId::new("Foo");` for each preset
+5. Emit a `bundled_presets!` macro invocation or const slice with `include_str!`-embedded JSON for runtime loading
+
+The "every typeId references a registered primitive" check has to happen at runtime startup because build.rs can't iterate `inventory::*` (the inventory crate works at link time, after build.rs). That's fine — runtime startup fail is acceptable, and the build.rs schema check catches most authoring errors earlier.
+
+### 11.9 Legacy discriminant — JSON-resident
+
+Each preset's JSON gets a `legacyDiscriminant: Option<i32>` field (already in `EffectMetadata::legacy_discriminant`, just moves into JSON). At startup, after loading all presets, `EffectTypeId::from_legacy_discriminant(v)` builds a reverse map `i32 → EffectTypeId` from the loaded set. The hand-coded `match v { 0 => Self::TRANSFORM, 1 => Self::INVERT_COLORS, ... }` table in `effect_type_id.rs` deletes entirely.
+
+`GeneratorTypeId::from_legacy_discriminant` follows the same pattern but is out of scope for this migration (generators aren't presets, they're standalone procedural sources).
+
+### 11.10 Refined scope
+
+Original §10.5 estimate: 1-2 weeks. Adjusted with these findings: **~2 weeks**, in this order:
+
+1. **`EffectGraphDef` v2 schema** (1d). Add new fields with serde defaults so v1 documents still parse. Bump version constant. Migration tests.
+2. **JSON loader → `EffectDef`** (1d). New `loaded_preset_to_effect_def()` builder that takes a parsed `EffectGraphDef` and produces an `EffectDef`. Update `effect_definition_registry::build_definitions()` to iterate loaded presets instead of `inventory::iter::<EffectMetadata>()`. All consumers via `effect_definition_registry::try_get()` keep working unchanged.
+3. **`build.rs` codegen** (1d). Schema validation + constant generation + embedded JSON table.
+4. **Migrate 25 effect JSON files** (2-3d). For each, populate the new metadata fields from the soon-to-be-deleted Rust file. Most are mechanical; the four composite effects keep their existing multi-node graphs. A per-effect test confirms the loaded preset behaves identically to what the splice fn used to produce.
+5. **`PluginPrewarm` channel** (0.5d). New inventory type, three submissions (blob_tracking, depth_of_field, wireframe_depth), startup hook.
+6. **Rewire `effect_chain_graph.rs`** (0.5d). Replace `chain_spec_by_id()` callsites with `loaded_preset_by_id()`. Delete the splice-fn invocation in favor of `EffectGraphDef::instantiate()`.
+7. **Rewire snapshot path** (0.5d). `graph_snapshot_for()` uses the same `ChainGraph` path as live render.
+8. **Delete legacy code** (1d). All 25 effect Rust files (after their JSON is verified). `ChainSpec` type. `EffectFactory`. `EffectRegistry`. `effect_category_registry.rs`. The `BUNDLED_PRESETS` table. The drift test. The `register_via_spec!` macro. `from_legacy_discriminant` const tables.
+9. **Primitive auto-registration via inventory** (1d). Each `primitive!` macro emits a `PrimitiveFactoryEntry` submission. Hand-written primitives get one-line additions. `PrimitiveRegistry::with_builtin()` iterates inventory. Delete the manual list.
+10. **Verification pass** (1d). Full workspace tests, parity tests, real Liveschool project load, picker walkthrough, MIDI mapping smoke test.
+
+### 11.11 Decisions to settle before starting
+
+The audit changes nothing about the architectural target. But three implementation-level choices are worth making explicit:
+
+1. **Plugin warmup mechanism — (b) `PluginPrewarm` inventory.** Lazy-init in primitive `run()` causes uneven first-frame stutter; a separate channel is cleaner.
+
+2. **Snapshot rendering — through ChainGraph, not EffectFactory.** Same path as live chain. Delete `EffectFactory` and `EffectRegistry` entirely.
+
+3. **`EffectDef` stays as the runtime view.** It's the unified consumer-facing shape; only its data source changes (loaded presets instead of inventory). All 50+ consumers in `effects.rs` / `project.rs` keep working unchanged.
+
+After this migration the system has *one source of truth per category*:
+
+- **Primitives** — Rust+WGSL files in `primitives/`, auto-registered via inventory.
+- **Presets** — JSON files in `assets/effect-presets/` (bundled) or `Project.preset_library` (user-saved), loaded into `EffectDef`s at startup, consumed identically regardless of origin.
+- **Plugin warmup** — `inventory::submit!(PluginPrewarm)` from the 3 plugin-using primitives, period.
+
+No hand-maintained lists. No drift tests. No "did you remember to update X." Adding a primitive = drop 2 files + 1 `mod` line. Adding a preset = drop 1 JSON file. Same shape whether it's authored by Peter, Claude, an AI agent, or eventually a user via the graph editor's "Save Preset" affordance.
+
+
