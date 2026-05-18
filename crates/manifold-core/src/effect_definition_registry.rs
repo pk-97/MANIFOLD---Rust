@@ -314,6 +314,23 @@ inventory::collect!(LoadedPresetSource);
 /// `LoadedPresetView` (post-§11) which pairs the [`PresetMetadata`]
 /// with the [`crate::effect_graph_def::EffectGraphDef`]'s `nodes` and
 /// `wires`.
+/// Convert a parsed [`PresetMetadata`] (JSON wire shape) into the
+/// picker-side [`crate::effect_type_registry::EffectTypeRegistration`].
+///
+/// String fields move from owned to `&'static str` via `Box::leak`,
+/// same pattern as [`preset_metadata_to_effect_def`]. Bounded by the
+/// shipping preset count.
+pub fn preset_metadata_to_type_registration(
+    meta: &PresetMetadata,
+) -> crate::effect_type_registry::EffectTypeRegistration {
+    crate::effect_type_registry::EffectTypeRegistration {
+        id: meta.id.clone(),
+        display_name: Box::leak(meta.display_name.clone().into_boxed_str()),
+        category: Box::leak(meta.category.clone().into_boxed_str()),
+        available: meta.available,
+    }
+}
+
 pub fn preset_metadata_to_effect_def(meta: &PresetMetadata) -> EffectDef {
     let param_defs: Vec<ParamDef> = meta.params.iter().map(param_spec_def_to_param_def).collect();
     let param_count = param_defs.len();

@@ -123,6 +123,38 @@ mod tests {
     use crate::node_graph::validation::validate;
     use crate::node_graph::execution_plan::compile;
 
+    /// Regression guard: every bundled preset must surface in the
+    /// picker via `effect_type_registry`. The picker's data source
+    /// (`effect_type_registry::REGISTRY`) is a separate `LazyLock` from
+    /// `effect_definition_registry::DEFINITIONS`; both must iterate
+    /// the JSON-loaded preset metadata or the dual-source migration
+    /// silently strands shipping effects.
+    ///
+    /// Failure mode caught: the "Add Effect" popup shows only the
+    /// 6 plugin-bridge effects (AutoGain, BlobTracking, DoF,
+    /// Infrared, QuadMirror, WireframeDepth) — the rest live in JSON
+    /// but the picker registry never reads JSON.
+    #[test]
+    fn every_bundled_preset_appears_in_effect_type_registry() {
+        use manifold_core::effect_type_registry;
+        for type_id in bundled_preset_type_ids() {
+            let Some(def) = bundled_preset_def(&type_id) else {
+                continue;
+            };
+            if def.preset_metadata.is_none() {
+                continue; // v1 entry — no display metadata to project
+            }
+            assert!(
+                effect_type_registry::is_registered(&type_id),
+                "{}: bundled preset has presetMetadata but isn't in \
+                 effect_type_registry::REGISTRY — the picker won't \
+                 show it. The REGISTRY LazyLock probably skipped the \
+                 JSON dual-source loop.",
+                type_id.as_str(),
+            );
+        }
+    }
+
     #[test]
     fn every_bundled_preset_loads_validates_and_compiles() {
         let registry = PrimitiveRegistry::with_builtin();
