@@ -51,7 +51,11 @@ crate::primitive! {
             label: "Tolerance",
             ty: ParamType::Float,
             default: ParamValue::Float(0.3),
-            range: Some((0.0, 1.732)),
+            // Practical useful range. The RGB Euclidean distance can
+            // technically reach √3 ≈ 1.732 (white↔black diagonal), but
+            // any tolerance above 1.0 already selects ~all of typical
+            // imagery; outer cards and the drift audit live in [0, 1].
+            range: Some((0.0, 1.0)),
             enum_values: &[],
         },
         ParamDef {
@@ -71,7 +75,7 @@ crate::primitive! {
             enum_values: CHROMA_KEY_MODES,
         },
     ],
-    composition_notes: "Output mask is written to all RGB channels so it's visible as grayscale in the editor; downstream `masked_mix` reads only `.r`. `tolerance` max is √3 (the diagonal of the RGB unit cube — the largest possible distance between two normalised colours), but in practice values above ~0.5 select most of the image.",
+    composition_notes: "Output mask is written to all RGB channels so it's visible as grayscale in the editor; downstream `masked_mix` reads only `.r`. Tolerance is the RGB Euclidean distance threshold — values above ~0.5 already select most of typical imagery.",
     examples: ["preset.effect.edge_stretch_by_color"],
 }
 

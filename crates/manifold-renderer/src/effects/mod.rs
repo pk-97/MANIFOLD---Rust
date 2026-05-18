@@ -13,6 +13,7 @@ pub mod depth_of_field;
 pub mod dither;
 pub mod edge_detect;
 pub mod edge_stretch;
+pub mod edge_stretch_by_color;
 pub mod glitch;
 pub mod halation;
 pub mod hdr_boost;

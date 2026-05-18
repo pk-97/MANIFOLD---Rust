@@ -78,6 +78,10 @@ const BUNDLED_PRESETS: &[(&str, &str)] = &[
         include_str!("../../assets/effect-presets/EdgeStretch.json"),
     ),
     (
+        "EdgeStretchByColor",
+        include_str!("../../assets/effect-presets/EdgeStretchByColor.json"),
+    ),
+    (
         "Glitch",
         include_str!("../../assets/effect-presets/Glitch.json"),
     ),
