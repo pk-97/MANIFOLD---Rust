@@ -20,6 +20,7 @@ use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
 use crate::node_graph::effect_node::{EffectNodeContext, FrameTime};
 use crate::node_graph::execution_plan::ExecutionPlan;
 use crate::node_graph::graph::Graph;
+use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::state_store::{OwnerKey, StateStore};
 
 /// Runs a graph against a precompiled plan, one frame per call.
@@ -34,6 +35,10 @@ pub struct Executor {
     /// (Per-frame allocation in tight loops is forbidden by CLAUDE.md.)
     input_scratch: Vec<(&'static str, Slot)>,
     output_scratch: Vec<(&'static str, Slot)>,
+    /// Per-step scratch the executor hands to [`NodeOutputs`] so control-rate
+    /// nodes can queue scalar writes. Drained back into the backend after
+    /// each node's `evaluate` returns.
+    scalar_write_scratch: Vec<(Slot, ParamValue)>,
 }
 
 impl Executor {
@@ -43,6 +48,7 @@ impl Executor {
             backend,
             input_scratch: Vec::new(),
             output_scratch: Vec::new(),
+            scalar_write_scratch: Vec::new(),
         }
     }
 
@@ -211,20 +217,35 @@ impl Executor {
                 }
 
                 if !performed_alias {
-                    let backend_ref: &dyn Backend = &*self.backend;
-                    let inputs = NodeInputs::new(&self.input_scratch, backend_ref);
-                    let outputs = NodeOutputs::new(&self.output_scratch, backend_ref);
-                    let mut ctx = EffectNodeContext::with_state(
-                        time,
-                        &inst.params,
-                        inputs,
-                        outputs,
-                        gpu.as_deref_mut(),
-                        state.as_deref_mut(),
-                        step.node,
-                        owner_key,
-                    );
-                    inst.node.evaluate(&mut ctx);
+                    self.scalar_write_scratch.clear();
+                    {
+                        let backend_ref: &dyn Backend = &*self.backend;
+                        let inputs = NodeInputs::new(&self.input_scratch, backend_ref);
+                        let outputs = NodeOutputs::new(
+                            &self.output_scratch,
+                            backend_ref,
+                            &mut self.scalar_write_scratch,
+                        );
+                        let mut ctx = EffectNodeContext::with_state(
+                            time,
+                            &inst.params,
+                            inputs,
+                            outputs,
+                            gpu.as_deref_mut(),
+                            state.as_deref_mut(),
+                            step.node,
+                            owner_key,
+                        );
+                        inst.node.evaluate(&mut ctx);
+                    }
+                    // Drain scalar writes back into the backend so
+                    // downstream readers in the same frame see them via
+                    // `NodeInputs::scalar`. Synchronous — control wires
+                    // evaluate in topological order, so producers always
+                    // precede consumers.
+                    for (slot, value) in self.scalar_write_scratch.drain(..) {
+                        self.backend.set_scalar(slot, value);
+                    }
                 }
             }
 

@@ -284,12 +284,6 @@ impl MetalBackend {
         self.textures_2d.get(&slot)
     }
 
-    /// Set a scalar value for a slot (e.g. driven by an upstream scalar
-    /// output port).
-    pub fn set_scalar(&mut self, slot: Slot, value: ParamValue) {
-        self.scalars.insert(slot, value);
-    }
-
     /// Return all retained textures and scalars to their pools and drop
     /// the high-water mark. Call on graph topology change or shutdown.
     ///
@@ -390,6 +384,10 @@ impl Backend for MetalBackend {
 
     fn scalar(&self, slot: Slot) -> Option<ParamValue> {
         self.scalars.get(&slot).copied()
+    }
+
+    fn set_scalar(&mut self, slot: Slot, value: ParamValue) {
+        self.scalars.insert(slot, value);
     }
 
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {

@@ -261,7 +261,7 @@ macro_rules! primitive {
                 $(
                     $crate::node_graph::ports::NodePort {
                         name: stringify!($in_name),
-                        ty: $crate::node_graph::ports::PortType::$in_ty,
+                        ty: $crate::__primitive_port_type!($in_ty),
                         kind: $crate::node_graph::ports::PortKind::Input,
                         required: $crate::__primitive_required!($($in_req)?),
                     },
@@ -272,7 +272,7 @@ macro_rules! primitive {
                 $(
                     $crate::node_graph::ports::NodePort {
                         name: stringify!($out_name),
-                        ty: $crate::node_graph::ports::PortType::$out_ty,
+                        ty: $crate::__primitive_port_type!($out_ty),
                         kind: $crate::node_graph::ports::PortKind::Output,
                         required: false,
                     },
@@ -359,6 +359,38 @@ macro_rules! __primitive_required {
     };
     (optional) => {
         false
+    };
+}
+
+/// Internal helper: map a port-type ident in the `primitive!`
+/// declaration onto a [`PortType`](crate::node_graph::ports::PortType)
+/// expression. Texture sub-variants are flat idents; scalar
+/// sub-variants use a `Scalar` prefix (`ScalarF32`, `ScalarVec2`, etc.)
+/// since `Scalar(F32)` isn't a single ident the surrounding macro can
+/// match.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __primitive_port_type {
+    (Texture2D) => {
+        $crate::node_graph::ports::PortType::Texture2D
+    };
+    (Texture3D) => {
+        $crate::node_graph::ports::PortType::Texture3D
+    };
+    (ScalarF32) => {
+        $crate::node_graph::ports::PortType::Scalar($crate::node_graph::ports::ScalarType::F32)
+    };
+    (ScalarVec2) => {
+        $crate::node_graph::ports::PortType::Scalar($crate::node_graph::ports::ScalarType::Vec2)
+    };
+    (ScalarVec3) => {
+        $crate::node_graph::ports::PortType::Scalar($crate::node_graph::ports::ScalarType::Vec3)
+    };
+    (ScalarVec4) => {
+        $crate::node_graph::ports::PortType::Scalar($crate::node_graph::ports::ScalarType::Vec4)
+    };
+    (ScalarColor) => {
+        $crate::node_graph::ports::PortType::Scalar($crate::node_graph::ports::ScalarType::Color)
     };
 }
 

@@ -59,6 +59,15 @@ pub trait Backend: Send {
     /// Mock backends return `None`; real backends look up an inline value.
     fn scalar(&self, slot: Slot) -> Option<ParamValue>;
 
+    /// Write a scalar value into a slot. The runtime invokes this after
+    /// a control-rate node's `evaluate` returns, draining the
+    /// per-step scratch buffer populated via
+    /// [`NodeOutputs::set_scalar`](crate::node_graph::NodeOutputs::set_scalar).
+    /// Downstream nodes read the value through
+    /// [`Backend::scalar`] in the same frame — control wires evaluate
+    /// synchronously in topological order.
+    fn set_scalar(&mut self, slot: Slot, value: ParamValue);
+
     /// Backend-specific downcast hook. Default implementation returns
     /// `None`. Real backends override to expose themselves for
     /// implementation-specific calls (e.g., the chain's swap-based
@@ -106,6 +115,10 @@ pub struct MockBackend {
     free_by_type: AHashMap<PortType, Vec<Slot>>,
     bound: AHashMap<ResourceId, Slot>,
     next_slot: u32,
+    /// Scalar values written via [`Backend::set_scalar`]. Mock has no
+    /// real GPU resources, but the scalar map is needed so tests can
+    /// observe control-wire dataflow without a Metal device.
+    scalars: AHashMap<Slot, ParamValue>,
 }
 
 impl MockBackend {
@@ -114,6 +127,7 @@ impl MockBackend {
             free_by_type: AHashMap::default(),
             bound: AHashMap::default(),
             next_slot: 0,
+            scalars: AHashMap::default(),
         }
     }
 }
@@ -167,8 +181,12 @@ impl Backend for MockBackend {
         None
     }
 
-    fn scalar(&self, _slot: Slot) -> Option<ParamValue> {
-        None
+    fn scalar(&self, slot: Slot) -> Option<ParamValue> {
+        self.scalars.get(&slot).copied()
+    }
+
+    fn set_scalar(&mut self, slot: Slot, value: ParamValue) {
+        self.scalars.insert(slot, value);
     }
 }
 

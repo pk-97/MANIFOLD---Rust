@@ -79,15 +79,36 @@ impl<'a> NodeInputs<'a> {
 
 /// View of an [`EffectNode`](crate::node_graph::EffectNode)'s output port
 /// bindings for one frame.
-#[derive(Clone, Copy)]
+///
+/// Texture writes happen through the backend's shared mutable state
+/// (Metal's `MTLTexture` is interior-mutable via the GPU command
+/// buffer), so the backend reference here can stay shared. Scalar
+/// writes, however, need to land in the backend's CPU-side scalar
+/// map — and the backend can't be borrowed mutably here without
+/// fighting the `NodeInputs` borrow active in the same evaluate call.
+/// The scratch buffer pattern threads writes out through
+/// [`Self::set_scalar`]: nodes push, the executor drains and applies
+/// them via [`Backend::set_scalar`] after `evaluate` returns. Synchronous
+/// — downstream readers in the same frame see the value.
 pub struct NodeOutputs<'a> {
     bindings: &'a [(&'static str, Slot)],
     backend: &'a dyn Backend,
+    /// Per-step scratch the executor hands to every node so scalar
+    /// writes can be drained back into the backend after `evaluate`.
+    pending_scalar_writes: &'a mut Vec<(Slot, ParamValue)>,
 }
 
 impl<'a> NodeOutputs<'a> {
-    pub(crate) fn new(bindings: &'a [(&'static str, Slot)], backend: &'a dyn Backend) -> Self {
-        Self { bindings, backend }
+    pub(crate) fn new(
+        bindings: &'a [(&'static str, Slot)],
+        backend: &'a dyn Backend,
+        pending_scalar_writes: &'a mut Vec<(Slot, ParamValue)>,
+    ) -> Self {
+        Self {
+            bindings,
+            backend,
+            pending_scalar_writes,
+        }
     }
 
     pub fn slot(&self, port: &str) -> Option<Slot> {
@@ -107,6 +128,18 @@ impl<'a> NodeOutputs<'a> {
     /// borrow.
     pub fn texture_2d(&self, port: &str) -> Option<&'a GpuTexture> {
         self.backend.texture_2d(self.slot(port)?)
+    }
+
+    /// Queue a scalar write to the named output port. The executor
+    /// applies the write through [`Backend::set_scalar`] after the
+    /// node's `evaluate` returns; downstream readers in the same
+    /// frame see the value via [`NodeInputs::scalar`]. A no-op when
+    /// `port` isn't a declared output on this node (debug-builds
+    /// could assert; production silently drops).
+    pub fn set_scalar(&mut self, port: &str, value: ParamValue) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_scalar_writes.push((slot, value));
+        }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&'static str, Slot)> + '_ {

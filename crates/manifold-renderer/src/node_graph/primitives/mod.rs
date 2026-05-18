@@ -33,6 +33,7 @@ mod separable_gaussian;
 mod strobe;
 mod temporal;
 mod uv;
+mod value;
 mod voronoi_prism;
 mod watercolor;
 mod wet_dry_mix;
@@ -78,6 +79,7 @@ pub use uv::{
     SAMPLE_FILTER_MODES, SAMPLE_TYPE_ID, SAMPLE_WRAP_MODES, Sample, TRANSFORM_MODES,
     TRANSFORM_TYPE_ID, Transform,
 };
+pub use value::Value;
 pub use voronoi_prism::VoronoiPrism;
 pub use watercolor::{WATERCOLOR_TYPE_ID, Watercolor};
 pub use wet_dry_mix::{WET_DRY_TYPE_ID, WetDry};

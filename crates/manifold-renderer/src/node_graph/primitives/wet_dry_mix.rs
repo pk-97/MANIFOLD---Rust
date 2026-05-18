@@ -21,6 +21,7 @@ crate::primitive! {
     inputs: {
         dry: Texture2D required,
         wet: Texture2D required,
+        wet_dry: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -35,7 +36,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Prefer over Mix(Lerp) when wiring a processed branch back over an unprocessed source — the named ports make the intent self-documenting in composite graphs.",
+    composition_notes: "Prefer over Mix(Lerp) when wiring a processed branch back over an unprocessed source — the named ports make the intent self-documenting in composite graphs. The `wet_dry` input is an optional control wire: when wired, the scalar value overrides the same-named param for that frame.",
     examples: ["composite.bloom", "composite.halation", "composite.watercolor"],
 }
 
@@ -52,9 +53,17 @@ struct WetDryMixUniforms {
 
 impl Primitive for WetDry {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let wet_dry = match ctx.params.get("wet_dry") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 1.0,
+        // Wire wins, param is the fallback. Same convention as
+        // FluidSim's `dye_color` port: an upstream scalar producer
+        // (LFO, audio bridge, etc.) drives the knob continuously; the
+        // declared param is the static value used when nothing is
+        // wired.
+        let wet_dry = match ctx.inputs.scalar("wet_dry") {
+            Some(ParamValue::Float(f)) => f,
+            _ => match ctx.params.get("wet_dry") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => 1.0,
+            },
         };
 
         let Some(dry_tex) = ctx.inputs.texture_2d("dry") else {
@@ -268,6 +277,109 @@ mod gpu_tests {
                 "channel {c}: {} != wet={} at wet_dry=1",
                 out[c],
                 wet[c]
+            );
+        }
+    }
+
+    /// Drive `wet_dry` through a control wire (Value → WetDry.wet_dry)
+    /// and assert the output matches the param-driven case at the same
+    /// value. The param is deliberately set to 0.0 to prove the wire
+    /// overrides — if the wire path weren't honoured, the output would
+    /// be the pure `dry` colour.
+    #[test]
+    fn wet_dry_wired_scalar_overrides_param() {
+        use super::super::Value as ValuePrimitive;
+
+        let device = crate::test_device();
+        let (w, h) = (4u32, 4u32);
+        let format = GpuTextureFormat::Rgba16Float;
+        let dry = [0.2_f32, 0.4, 0.6, 0.8];
+        let wet = [0.8_f32, 0.0, 0.2, 1.0];
+
+        let mut g = Graph::new();
+        let src_dry = g.add_node(Box::new(Source::new()));
+        let src_wet = g.add_node(Box::new(Source::new()));
+        let amount = g.add_node(Box::new(ValuePrimitive::new()));
+        let mix = g.add_node(Box::new(WetDry::new()));
+        let out = g.add_node(Box::new(FinalOutput::new()));
+
+        // Param says 0.0 (pure dry) — the wire from Value(0.5) must win.
+        g.set_param(mix, "wet_dry", ParamValue::Float(0.0)).unwrap();
+        g.set_param(amount, "value", ParamValue::Float(0.5)).unwrap();
+        g.connect((src_dry, "out"), (mix, "dry")).unwrap();
+        g.connect((src_wet, "out"), (mix, "wet")).unwrap();
+        g.connect((amount, "out"), (mix, "wet_dry")).unwrap();
+        g.connect((mix, "out"), (out, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+
+        let r_dry = output_resource(&plan, src_dry, "out");
+        let r_wet = output_resource(&plan, src_wet, "out");
+        let r_mix_out = output_resource(&plan, mix, "out");
+
+        let dry_target = RenderTarget::new(&device, w, h, format, "test-dry");
+        let wet_target = RenderTarget::new(&device, w, h, format, "test-wet");
+        let mut native_enc = device.create_encoder("wet-dry-wire");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+            gpu.clear_texture(
+                &dry_target.texture,
+                dry[0] as f64, dry[1] as f64, dry[2] as f64, dry[3] as f64,
+            );
+            gpu.clear_texture(
+                &wet_target.texture,
+                wet[0] as f64, wet[1] as f64, wet[2] as f64, wet[3] as f64,
+            );
+        }
+
+        let out_target = RenderTarget::new(&device, w, h, format, "test-mix-out");
+        let mut backend = MetalBackend::new(device.clone(), w, h, format);
+        backend.pre_bind_texture_2d(r_dry, dry_target);
+        backend.pre_bind_texture_2d(r_wet, wet_target);
+        // Pin the mix output slot so it survives the executor's
+        // post-step `release` — mirrors how the live renderer pre-binds
+        // a chain output. `slot_for(r_mix_out)` after the frame would
+        // return None otherwise.
+        let mix_slot = backend.pre_bind_texture_2d(r_mix_out, out_target);
+
+        let mut exec = Executor::new(Box::new(backend));
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+            exec.execute_frame_with_gpu(&mut g, &plan, frame_time(), &mut gpu);
+        }
+        native_enc.commit_and_wait_completed();
+
+        let tex = exec
+            .backend()
+            .texture_2d(mix_slot)
+            .expect("wet_dry output texture retained on backend");
+
+        let bytes_per_row = w * 8;
+        let total_bytes = u64::from(h * bytes_per_row);
+        let readback_buf = device.create_buffer_shared(total_bytes);
+        let mut readback_enc = device.create_encoder("wet-dry-wire-readback");
+        readback_enc.copy_texture_to_buffer(tex, &readback_buf, w, h, bytes_per_row);
+        readback_enc.commit_and_wait_completed();
+
+        let ptr = readback_buf
+            .mapped_ptr()
+            .expect("shared buffer should expose mapped pointer");
+        let pixels: &[u16] =
+            unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+        let out_rgba = [
+            f16::from_bits(pixels[0]).to_f32(),
+            f16::from_bits(pixels[1]).to_f32(),
+            f16::from_bits(pixels[2]).to_f32(),
+            f16::from_bits(pixels[3]).to_f32(),
+        ];
+
+        // 0.5 wire-driven lerp = exact half.
+        let tol = 0.01;
+        for c in 0..4 {
+            let expected = 0.5 * (dry[c] + wet[c]);
+            assert!(
+                (out_rgba[c] - expected).abs() < tol,
+                "channel {c}: {} != avg={} (wire 0.5 should override param 0.0)",
+                out_rgba[c], expected
             );
         }
     }
