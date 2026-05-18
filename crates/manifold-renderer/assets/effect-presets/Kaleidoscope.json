@@ -1,7 +1,75 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "Kaleidoscope",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "Kaleidoscope",
+    "displayName": "Kaleidoscope",
+    "category": "Spatial",
+    "oscPrefix": "kaleidoscope",
+    "legacyDiscriminant": 14,
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "segments",
+        "name": "Segments",
+        "min": 2.0,
+        "max": 16.0,
+        "defaultValue": 6.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "oscSuffix": "Segments"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "kaleidoscope",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "segments",
+        "label": "Segments",
+        "defaultValue": 6.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "kaleidoscope",
+          "param": "segments"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "onZero",
+      "paramId": "amount"
+    },
+    "paramAliases": [
+      {
+        "old": "segs",
+        "new": "segments"
+      }
+    ]
+  },
   "nodes": [
     {
       "id": 0,

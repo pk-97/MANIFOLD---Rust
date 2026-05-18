@@ -1,7 +1,105 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "Infrared",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "Infrared",
+    "displayName": "Infrared",
+    "category": "Color",
+    "oscPrefix": "infrared",
+    "legacyDiscriminant": 37,
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "palette",
+        "name": "Palette",
+        "min": 0.0,
+        "max": 9.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "valueLabels": [
+          "White Hot",
+          "Black Hot",
+          "Green NV",
+          "Iron Bow",
+          "Rainbow",
+          "Lava",
+          "Arctic",
+          "Magenta",
+          "Electric",
+          "Toxic"
+        ],
+        "oscSuffix": "Palette"
+      },
+      {
+        "id": "contrast",
+        "name": "Contrast",
+        "min": 0.5,
+        "max": 3.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Contrast"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "infrared",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "palette",
+        "label": "Palette",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "infrared",
+          "param": "palette"
+        },
+        "convert": {
+          "type": "EnumRound"
+        }
+      },
+      {
+        "id": "contrast",
+        "label": "Contrast",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "infrared",
+          "param": "contrast"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "onZero",
+      "paramId": "amount"
+    }
+  },
   "nodes": [
     {
       "id": 0,

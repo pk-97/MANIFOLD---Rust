@@ -1,7 +1,46 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "InvertColors",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "InvertColors",
+    "displayName": "Invert",
+    "category": "Color",
+    "oscPrefix": "invert",
+    "legacyDiscriminant": 1,
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "invert",
+          "param": "intensity"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "onZero",
+      "paramId": "amount"
+    }
+  },
   "nodes": [
     {
       "id": 0,

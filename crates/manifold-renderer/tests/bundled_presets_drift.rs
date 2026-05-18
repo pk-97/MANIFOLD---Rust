@@ -24,8 +24,14 @@
 use std::fs;
 use std::path::PathBuf;
 
-use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_renderer::node_graph::{ChainSpec, EffectGraphDefExt};
+use manifold_core::effect_graph_def::{
+    AliasEntry, BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef, PresetMetadata,
+    SkipModeDef, ValueAliasEntry,
+};
+use manifold_core::effect_registration::{
+    EffectAliasMetadata, EffectMetadata, EffectValueAliasMetadata,
+};
+use manifold_renderer::node_graph::{ChainSpec, EffectGraphDefExt, ParamTarget, SkipMode};
 
 fn presets_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -107,6 +113,174 @@ fn bundled_presets_match_canonical_splices() {
         }
         panic!("{msg}");
     }
+}
+
+/// §11 block 4 one-shot migration helper. Walks every shipping
+/// effect's inventory submissions (`EffectMetadata`, `ChainSpec`,
+/// `EffectAliasMetadata`, `EffectValueAliasMetadata`) and writes the
+/// equivalent `presetMetadata` into the matching JSON file in
+/// `assets/effect-presets/`.
+///
+/// Run once via:
+///   cargo test -p manifold-renderer --test bundled_presets_drift \
+///     regenerate_preset_metadata_from_inventory -- --ignored
+///
+/// After this lands, the JSON-derived `EffectDef` overrides the
+/// inventory-derived one in `DEFINITIONS`. The
+/// `json_metadata_matches_inventory_for_every_migrated_effect` test
+/// asserts the two paths produce equivalent results. Block 8 deletes
+/// the inventory submissions once `effect_chain_graph.rs` is rewired
+/// to use loaded presets instead of `chain_spec_by_id`.
+#[test]
+#[ignore = "destructive: writes preset_metadata into assets/effect-presets/*.json"]
+fn regenerate_preset_metadata_from_inventory() {
+    // Build lookup maps for sidecar alias submissions.
+    let mut param_aliases_by_id: std::collections::HashMap<
+        manifold_core::EffectTypeId,
+        Vec<AliasEntry>,
+    > = std::collections::HashMap::new();
+    for sidecar in inventory::iter::<EffectAliasMetadata> {
+        param_aliases_by_id.insert(
+            sidecar.id.clone(),
+            sidecar
+                .aliases
+                .iter()
+                .map(|(old, new)| AliasEntry {
+                    old: (*old).to_string(),
+                    new: new.map(|s| s.to_string()),
+                })
+                .collect(),
+        );
+    }
+    let mut value_aliases_by_id: std::collections::HashMap<
+        manifold_core::EffectTypeId,
+        Vec<ValueAliasEntry>,
+    > = std::collections::HashMap::new();
+    for sidecar in inventory::iter::<EffectValueAliasMetadata> {
+        let entries: Vec<ValueAliasEntry> = sidecar
+            .aliases
+            .iter()
+            .map(|(param_id, mapping)| ValueAliasEntry {
+                param_id: (*param_id).to_string(),
+                mapping: mapping.iter().copied().collect(),
+            })
+            .collect();
+        value_aliases_by_id.insert(sidecar.id.clone(), entries);
+    }
+
+    // Index ChainSpecs by id so we can pair each EffectMetadata with
+    // its matching bindings + skip_mode.
+    let mut specs_by_id: std::collections::HashMap<manifold_core::EffectTypeId, &'static ChainSpec> =
+        std::collections::HashMap::new();
+    for spec in inventory::iter::<ChainSpec> {
+        specs_by_id.insert(spec.type_id.clone(), spec);
+    }
+
+    let mut written = 0usize;
+    for meta in inventory::iter::<EffectMetadata> {
+        let path = preset_path(meta.id.as_str());
+        if !path.exists() {
+            eprintln!(
+                "skip {} — no JSON file at {}",
+                meta.id.as_str(),
+                path.display()
+            );
+            continue;
+        }
+
+        let spec = specs_by_id.get(&meta.id).unwrap_or_else(|| {
+            panic!(
+                "EffectMetadata for {} has no matching ChainSpec — \
+                 can't migrate bindings/skip_mode",
+                meta.id.as_str()
+            )
+        });
+
+        let params: Vec<ParamSpecDef> = meta
+            .params
+            .iter()
+            .map(|p| ParamSpecDef {
+                id: p.id.to_string(),
+                name: p.name.to_string(),
+                min: p.min,
+                max: p.max,
+                default_value: p.default_value,
+                whole_numbers: p.whole_numbers,
+                is_toggle: p.is_toggle,
+                value_labels: p.value_labels.iter().map(|s| s.to_string()).collect(),
+                format_string: p.format_string.map(|s| s.to_string()),
+                osc_suffix: p.osc_suffix.to_string(),
+            })
+            .collect();
+
+        let bindings: Vec<BindingDef> = spec
+            .bindings
+            .iter()
+            .map(|b| BindingDef {
+                id: b.id.to_string(),
+                label: b.label.to_string(),
+                default_value: b.default_value,
+                target: match &b.target {
+                    ParamTarget::HandleNode { handle, param } => BindingTarget::HandleNode {
+                        handle: (*handle).to_string(),
+                        param: (*param).to_string(),
+                    },
+                    ParamTarget::Composite { outer_name } => BindingTarget::Composite {
+                        outer_name: outer_name.to_string(),
+                    },
+                    other => panic!(
+                        "{}: binding {:?} uses {:?} variant which has no JSON form",
+                        meta.id.as_str(),
+                        b.id,
+                        other
+                    ),
+                },
+                convert: b.convert,
+            })
+            .collect();
+
+        let skip_mode = match spec.skip {
+            SkipMode::Never => SkipModeDef::Never,
+            SkipMode::OnZero { param_id } => SkipModeDef::OnZero {
+                param_id: param_id.to_string(),
+            },
+        };
+
+        let preset_metadata = PresetMetadata {
+            id: meta.id.clone(),
+            display_name: meta.display_name.to_string(),
+            category: meta.category.to_string(),
+            osc_prefix: meta.osc_prefix.to_string(),
+            legacy_discriminant: meta.legacy_discriminant,
+            available: meta.available,
+            params,
+            bindings,
+            skip_mode,
+            param_aliases: param_aliases_by_id
+                .get(&meta.id)
+                .cloned()
+                .unwrap_or_default(),
+            node_aliases: Vec::new(),
+            value_aliases: value_aliases_by_id
+                .get(&meta.id)
+                .cloned()
+                .unwrap_or_default(),
+        };
+
+        // Read the existing JSON to preserve topology, then attach
+        // (or replace) preset_metadata.
+        let raw = fs::read_to_string(&path).expect("read existing preset");
+        let existing: EffectGraphDef =
+            serde_json::from_str(&raw).expect("parse existing preset");
+        let merged = existing.with_preset_metadata(preset_metadata);
+
+        let json = serde_json::to_string_pretty(&merged).expect("serialize") + "\n";
+        fs::write(&path, json).unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
+        println!("migrated {}", meta.id.as_str());
+        written += 1;
+    }
+
+    println!("regenerate_preset_metadata_from_inventory: wrote {written} files");
 }
 
 #[test]

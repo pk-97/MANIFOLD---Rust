@@ -1,7 +1,46 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "QuadMirror",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "QuadMirror",
+    "displayName": "Quad Mirror",
+    "category": "Spatial",
+    "oscPrefix": "quadMirror",
+    "legacyDiscriminant": 17,
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "quad_mirror",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "onZero",
+      "paramId": "amount"
+    }
+  },
   "nodes": [
     {
       "id": 0,

@@ -1,7 +1,160 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "Mandala",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "Mandala",
+    "displayName": "Mandala",
+    "category": "Stylize",
+    "oscPrefix": "mandala",
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "segments",
+        "name": "Segments",
+        "min": 2.0,
+        "max": 16.0,
+        "defaultValue": 6.0,
+        "wholeNumbers": true,
+        "isToggle": false
+      },
+      {
+        "id": "persistence",
+        "name": "Persistence",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.7,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "zoom",
+        "name": "Zoom",
+        "min": 0.9,
+        "max": 1.1,
+        "defaultValue": 0.99,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F3"
+      },
+      {
+        "id": "drift",
+        "name": "Drift",
+        "min": -10.0,
+        "max": 10.0,
+        "defaultValue": 1.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F1",
+        "oscSuffix": "°/f"
+      },
+      {
+        "id": "spectrum",
+        "name": "Spectrum",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.4,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "kaleidoscope",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "segments",
+        "label": "Segments",
+        "defaultValue": 6.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "kaleidoscope",
+          "param": "segments"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "persistence",
+        "label": "Persistence",
+        "defaultValue": 0.7,
+        "target": {
+          "kind": "handleNode",
+          "handle": "feedback",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "zoom",
+        "label": "Zoom",
+        "defaultValue": 0.99,
+        "target": {
+          "kind": "handleNode",
+          "handle": "feedback",
+          "param": "zoom"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "drift",
+        "label": "Drift",
+        "defaultValue": 1.5,
+        "target": {
+          "kind": "handleNode",
+          "handle": "feedback",
+          "param": "rotation"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "spectrum",
+        "label": "Spectrum",
+        "defaultValue": 0.4,
+        "target": {
+          "kind": "handleNode",
+          "handle": "chromatic",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "onZero",
+      "paramId": "amount"
+    }
+  },
   "nodes": [
     {
       "id": 0,

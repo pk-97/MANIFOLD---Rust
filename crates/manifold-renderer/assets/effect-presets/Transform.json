@@ -1,7 +1,120 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "Transform",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "Transform",
+    "displayName": "Transform",
+    "category": "Spatial",
+    "oscPrefix": "transform",
+    "legacyDiscriminant": 0,
+    "available": true,
+    "params": [
+      {
+        "id": "x",
+        "name": "X",
+        "min": -1.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "y",
+        "name": "Y",
+        "min": -1.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "zoom",
+        "name": "Zoom",
+        "min": 0.1,
+        "max": 5.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "rotation",
+        "name": "Rotation",
+        "min": -180.0,
+        "max": 180.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "x",
+        "label": "X",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "transform",
+          "param": "translate_x"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "y",
+        "label": "Y",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "transform",
+          "param": "translate_y"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "zoom",
+        "label": "Zoom",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "transform",
+          "param": "scale"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "rotation",
+        "label": "Rotation",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "transform",
+          "param": "rotation"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "never"
+    },
+    "paramAliases": [
+      {
+        "old": "rot",
+        "new": "rotation"
+      }
+    ]
+  },
   "nodes": [
     {
       "id": 0,

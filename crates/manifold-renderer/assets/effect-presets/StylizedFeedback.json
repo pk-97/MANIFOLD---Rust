@@ -1,7 +1,121 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "StylizedFeedback",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "StylizedFeedback",
+    "displayName": "Stylized Feedback",
+    "category": "Stylize",
+    "oscPrefix": "stylizedFeedback",
+    "legacyDiscriminant": 20,
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "zoom",
+        "name": "Zoom",
+        "min": 0.9,
+        "max": 1.1,
+        "defaultValue": 0.95,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Zoom"
+      },
+      {
+        "id": "rotate",
+        "name": "Rotate",
+        "min": -10.0,
+        "max": 10.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Rotate"
+      },
+      {
+        "id": "mode",
+        "name": "Mode",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "valueLabels": [
+          "Screen",
+          "Additive",
+          "Max"
+        ],
+        "oscSuffix": "Mode"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "handleNode",
+          "handle": "feedback",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "zoom",
+        "label": "Zoom",
+        "defaultValue": 0.95,
+        "target": {
+          "kind": "handleNode",
+          "handle": "feedback",
+          "param": "zoom"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "rotate",
+        "label": "Rotate",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "feedback",
+          "param": "rotation"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "mode",
+        "label": "Mode",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "feedback",
+          "param": "mode"
+        },
+        "convert": {
+          "type": "EnumRound"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "never"
+    }
+  },
   "nodes": [
     {
       "id": 0,

@@ -16,6 +16,8 @@
         "min": 0.0,
         "max": 5.0,
         "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
         "formatString": "F2"
       }
     ],
@@ -24,11 +26,19 @@
         "id": "amount",
         "label": "Amount",
         "defaultValue": 0.5,
-        "target": { "kind": "handleNode", "handle": "bloom", "param": "amount" },
-        "convert": { "type": "Float" }
+        "target": {
+          "kind": "handleNode",
+          "handle": "bloom",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
       }
     ],
-    "skipMode": { "kind": "never" }
+    "skipMode": {
+      "kind": "never"
+    }
   },
   "nodes": [
     {

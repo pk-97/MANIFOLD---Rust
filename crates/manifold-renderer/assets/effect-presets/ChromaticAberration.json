@@ -1,7 +1,145 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "ChromaticAberration",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "ChromaticAberration",
+    "displayName": "Chromatic Aberration",
+    "category": "Filmic",
+    "oscPrefix": "chromAb",
+    "legacyDiscriminant": 30,
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "offset",
+        "name": "Offset",
+        "min": 0.0,
+        "max": 0.05,
+        "defaultValue": 0.01,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Offset"
+      },
+      {
+        "id": "mode",
+        "name": "Mode",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "valueLabels": [
+          "Radial",
+          "Linear"
+        ],
+        "oscSuffix": "Mode"
+      },
+      {
+        "id": "angle",
+        "name": "Angle",
+        "min": 0.0,
+        "max": 360.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Angle"
+      },
+      {
+        "id": "falloff",
+        "name": "Falloff",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Falloff"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "chromatic",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "offset",
+        "label": "Offset",
+        "defaultValue": 0.01,
+        "target": {
+          "kind": "handleNode",
+          "handle": "chromatic",
+          "param": "offset"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "mode",
+        "label": "Mode",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "chromatic",
+          "param": "mode"
+        },
+        "convert": {
+          "type": "EnumRound"
+        }
+      },
+      {
+        "id": "angle",
+        "label": "Angle",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "chromatic",
+          "param": "angle"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "falloff",
+        "label": "Falloff",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "handleNode",
+          "handle": "chromatic",
+          "param": "falloff"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "onZero",
+      "paramId": "amount"
+    }
+  },
   "nodes": [
     {
       "id": 0,

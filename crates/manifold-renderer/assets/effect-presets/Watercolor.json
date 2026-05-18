@@ -1,7 +1,116 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "Watercolor",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "Watercolor",
+    "displayName": "Watercolor",
+    "category": "Stylize",
+    "oscPrefix": "watercolor",
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "displace",
+        "name": "Displace",
+        "min": 0.0001,
+        "max": 0.01,
+        "defaultValue": 0.001,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F4",
+        "oscSuffix": "displace"
+      },
+      {
+        "id": "blur",
+        "name": "Blur",
+        "min": 0.5,
+        "max": 8.0,
+        "defaultValue": 2.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F1",
+        "oscSuffix": "blur"
+      },
+      {
+        "id": "decay",
+        "name": "Decay",
+        "min": 0.9,
+        "max": 1.0,
+        "defaultValue": 0.99,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F3",
+        "oscSuffix": "decay"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "handleNode",
+          "handle": "watercolor",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "displace",
+        "label": "Displace",
+        "defaultValue": 0.001,
+        "target": {
+          "kind": "handleNode",
+          "handle": "watercolor",
+          "param": "displace"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "blur",
+        "label": "Blur",
+        "defaultValue": 2.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "watercolor",
+          "param": "blur"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "decay",
+        "label": "Decay",
+        "defaultValue": 0.99,
+        "target": {
+          "kind": "handleNode",
+          "handle": "watercolor",
+          "param": "decay"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "never"
+    }
+  },
   "nodes": [
     {
       "id": 0,

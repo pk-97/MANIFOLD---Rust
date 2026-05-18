@@ -1,7 +1,221 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "DepthOfField",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "DepthOfField",
+    "displayName": "Depth of Field",
+    "category": "Filmic",
+    "oscPrefix": "dof",
+    "legacyDiscriminant": 40,
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "mode",
+        "name": "Mode",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "valueLabels": [
+          "Tilt-Shift",
+          "Radial",
+          "Depth"
+        ],
+        "oscSuffix": "Mode"
+      },
+      {
+        "id": "focus",
+        "name": "Focus",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "FocusPosition"
+      },
+      {
+        "id": "focus_x",
+        "name": "Focus X",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "FocusX"
+      },
+      {
+        "id": "width",
+        "name": "Width",
+        "min": 0.01,
+        "max": 0.5,
+        "defaultValue": 0.15,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "FocusWidth"
+      },
+      {
+        "id": "blur",
+        "name": "Blur",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "BlurStrength"
+      },
+      {
+        "id": "angle",
+        "name": "Angle",
+        "min": 0.0,
+        "max": 360.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "TiltAngle"
+      },
+      {
+        "id": "quality",
+        "name": "Quality",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "valueLabels": [
+          "Low",
+          "Medium",
+          "High"
+        ],
+        "oscSuffix": "Quality"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "dof",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "mode",
+        "label": "Mode",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "dof",
+          "param": "mode"
+        },
+        "convert": {
+          "type": "EnumRound"
+        }
+      },
+      {
+        "id": "focus",
+        "label": "Focus",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "handleNode",
+          "handle": "dof",
+          "param": "focus"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "focus_x",
+        "label": "Focus X",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "handleNode",
+          "handle": "dof",
+          "param": "focus_x"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "width",
+        "label": "Width",
+        "defaultValue": 0.15,
+        "target": {
+          "kind": "handleNode",
+          "handle": "dof",
+          "param": "width"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "blur",
+        "label": "Blur",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "handleNode",
+          "handle": "dof",
+          "param": "blur"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "angle",
+        "label": "Angle",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "dof",
+          "param": "angle"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "quality",
+        "label": "Quality",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "dof",
+          "param": "quality"
+        },
+        "convert": {
+          "type": "EnumRound"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "never"
+    }
+  },
   "nodes": [
     {
       "id": 0,

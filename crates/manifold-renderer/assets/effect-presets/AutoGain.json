@@ -1,7 +1,205 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "AutoGain",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "AutoGain",
+    "displayName": "Auto Gain",
+    "category": "Stylize",
+    "oscPrefix": "autoGain",
+    "legacyDiscriminant": 41,
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "ratio",
+        "name": "Ratio",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Ratio"
+      },
+      {
+        "id": "punch",
+        "name": "Punch",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Punch"
+      },
+      {
+        "id": "target",
+        "name": "Target",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Target"
+      },
+      {
+        "id": "hdr_retention",
+        "name": "HDR Retention",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "HdrRetention"
+      },
+      {
+        "id": "color",
+        "name": "Color",
+        "min": -1.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "ColorPush"
+      },
+      {
+        "id": "character",
+        "name": "Character",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "valueLabels": [
+          "Clean",
+          "Warm",
+          "Film",
+          "Vivid",
+          "Grit"
+        ],
+        "oscSuffix": "Character"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "handleNode",
+          "handle": "auto_gain",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "ratio",
+        "label": "Ratio",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "handleNode",
+          "handle": "auto_gain",
+          "param": "ratio"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "punch",
+        "label": "Punch",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "handleNode",
+          "handle": "auto_gain",
+          "param": "punch"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "target",
+        "label": "Target",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "handleNode",
+          "handle": "auto_gain",
+          "param": "target"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "hdr_retention",
+        "label": "HDR Retention",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "handleNode",
+          "handle": "auto_gain",
+          "param": "hdr_retention"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "color",
+        "label": "Color",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "auto_gain",
+          "param": "color"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "character",
+        "label": "Character",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "auto_gain",
+          "param": "character"
+        },
+        "convert": {
+          "type": "EnumRound"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "never"
+    },
+    "paramAliases": [
+      {
+        "old": "char",
+        "new": "character"
+      },
+      {
+        "old": "hdr_ret",
+        "new": "hdr_retention"
+      }
+    ]
+  },
   "nodes": [
     {
       "id": 0,

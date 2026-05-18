@@ -1,7 +1,99 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "Mirror",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "Mirror",
+    "displayName": "Mirror",
+    "category": "Spatial",
+    "oscPrefix": "mirror",
+    "legacyDiscriminant": 21,
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "mode",
+        "name": "Mode",
+        "min": 0.0,
+        "max": 8.0,
+        "defaultValue": 6.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "valueLabels": [
+          "Identity",
+          "Mirror",
+          "MirrorX",
+          "MirrorY",
+          "FlipY",
+          "QuadMirror",
+          "FoldX",
+          "FoldY",
+          "FoldBoth"
+        ],
+        "oscSuffix": "Mode"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "mix",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "mode",
+        "label": "Mode",
+        "defaultValue": 6.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "uv_transform",
+          "param": "mode"
+        },
+        "convert": {
+          "type": "EnumRound"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "onZero",
+      "paramId": "amount"
+    },
+    "valueAliases": [
+      {
+        "paramId": "mode",
+        "mapping": [
+          [
+            0,
+            6
+          ],
+          [
+            1,
+            7
+          ],
+          [
+            2,
+            8
+          ]
+        ]
+      }
+    ]
+  },
   "nodes": [
     {
       "id": 0,

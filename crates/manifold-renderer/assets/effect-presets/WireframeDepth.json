@@ -1,7 +1,334 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "WireframeDepth",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "WireframeDepth",
+    "displayName": "Wireframe Depth",
+    "category": "Diagnostic",
+    "oscPrefix": "wireframeDepth",
+    "legacyDiscriminant": 29,
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "density",
+        "name": "Density",
+        "min": 16.0,
+        "max": 280.0,
+        "defaultValue": 260.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Density"
+      },
+      {
+        "id": "width",
+        "name": "Width",
+        "min": 0.4,
+        "max": 3.0,
+        "defaultValue": 1.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Width"
+      },
+      {
+        "id": "z_scale",
+        "name": "Z Scale",
+        "min": 0.0,
+        "max": 2.5,
+        "defaultValue": 1.35,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "ZScale"
+      },
+      {
+        "id": "smooth",
+        "name": "Smooth",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.9,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Smooth"
+      },
+      {
+        "id": "subject",
+        "name": "Subject",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "SubjectIsolation"
+      },
+      {
+        "id": "blend",
+        "name": "Blend",
+        "min": 0.0,
+        "max": 6.0,
+        "defaultValue": 6.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "valueLabels": [
+          "Normal",
+          "Add",
+          "Multiply",
+          "Screen",
+          "Overlay",
+          "Stencil",
+          "Opaque"
+        ],
+        "oscSuffix": "BlendMode"
+      },
+      {
+        "id": "wire_resolution",
+        "name": "Wire Resolution",
+        "min": 0.5,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "WireRes"
+      },
+      {
+        "id": "mesh_rate",
+        "name": "Mesh Rate",
+        "min": 1.0,
+        "max": 4.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "valueLabels": [
+          "Every",
+          "Half",
+          "Third",
+          "Quarter"
+        ],
+        "oscSuffix": "MeshRate"
+      },
+      {
+        "id": "flow",
+        "name": "Flow",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "valueLabels": [
+          "Off",
+          "On"
+        ],
+        "oscSuffix": "NativeFlow"
+      },
+      {
+        "id": "lock",
+        "name": "Lock",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "valueLabels": [
+          "Off",
+          "On"
+        ],
+        "oscSuffix": "FlowLock"
+      },
+      {
+        "id": "edge_follow",
+        "name": "Edge Follow",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "EdgeFollow"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "wireframe_depth",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "density",
+        "label": "Density",
+        "defaultValue": 260.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "wireframe_depth",
+          "param": "density"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "width",
+        "label": "Width",
+        "defaultValue": 1.5,
+        "target": {
+          "kind": "handleNode",
+          "handle": "wireframe_depth",
+          "param": "width"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "z_scale",
+        "label": "Z Scale",
+        "defaultValue": 1.35,
+        "target": {
+          "kind": "handleNode",
+          "handle": "wireframe_depth",
+          "param": "z_scale"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "smooth",
+        "label": "Smooth",
+        "defaultValue": 0.9,
+        "target": {
+          "kind": "handleNode",
+          "handle": "wireframe_depth",
+          "param": "smooth"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "subject",
+        "label": "Subject",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "handleNode",
+          "handle": "wireframe_depth",
+          "param": "subject"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "blend",
+        "label": "Blend",
+        "defaultValue": 6.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "wireframe_depth",
+          "param": "blend"
+        },
+        "convert": {
+          "type": "EnumRound"
+        }
+      },
+      {
+        "id": "wire_resolution",
+        "label": "Wire Resolution",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "wireframe_depth",
+          "param": "wire_res"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "mesh_rate",
+        "label": "Mesh Rate",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "wireframe_depth",
+          "param": "mesh_rate"
+        },
+        "convert": {
+          "type": "EnumRound"
+        }
+      },
+      {
+        "id": "flow",
+        "label": "Flow",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "wireframe_depth",
+          "param": "flow"
+        },
+        "convert": {
+          "type": "EnumRound"
+        }
+      },
+      {
+        "id": "lock",
+        "label": "Lock",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "wireframe_depth",
+          "param": "lock"
+        },
+        "convert": {
+          "type": "EnumRound"
+        }
+      },
+      {
+        "id": "edge_follow",
+        "label": "Edge Follow",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "handleNode",
+          "handle": "wireframe_depth",
+          "param": "edge_follow"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "never"
+    },
+    "paramAliases": [
+      {
+        "old": "wire_res",
+        "new": "wire_resolution"
+      }
+    ]
+  },
   "nodes": [
     {
       "id": 0,

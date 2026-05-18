@@ -1,7 +1,44 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "NodeGraphTest",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "NodeGraphTest",
+    "displayName": "Node Graph Test",
+    "category": "Diagnostic",
+    "oscPrefix": "node_graph_test",
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "handleNode",
+          "handle": "mix",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "never"
+    }
+  },
   "nodes": [
     {
       "id": 0,

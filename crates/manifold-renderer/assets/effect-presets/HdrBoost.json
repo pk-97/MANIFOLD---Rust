@@ -1,7 +1,124 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "HdrBoost",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "HdrBoost",
+    "displayName": "Highlight Boost",
+    "category": "Filmic",
+    "oscPrefix": "hdrBoost",
+    "legacyDiscriminant": 41,
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "gain",
+        "name": "Gain",
+        "min": 0.0,
+        "max": 5.0,
+        "defaultValue": 1.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Gain"
+      },
+      {
+        "id": "threshold",
+        "name": "Threshold",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.15,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Threshold"
+      },
+      {
+        "id": "knee",
+        "name": "Knee",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.3,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Knee"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "highlight_boost",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "gain",
+        "label": "Gain",
+        "defaultValue": 1.5,
+        "target": {
+          "kind": "handleNode",
+          "handle": "highlight_boost",
+          "param": "gain"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "threshold",
+        "label": "Threshold",
+        "defaultValue": 0.15,
+        "target": {
+          "kind": "handleNode",
+          "handle": "highlight_boost",
+          "param": "threshold"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "knee",
+        "label": "Knee",
+        "defaultValue": 0.3,
+        "target": {
+          "kind": "handleNode",
+          "handle": "highlight_boost",
+          "param": "knee"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "onZero",
+      "paramId": "amount"
+    },
+    "paramAliases": [
+      {
+        "old": "thresh",
+        "new": "threshold"
+      }
+    ]
+  },
   "nodes": [
     {
       "id": 0,

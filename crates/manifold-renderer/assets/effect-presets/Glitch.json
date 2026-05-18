@@ -1,7 +1,148 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "Glitch",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "Glitch",
+    "displayName": "Glitch",
+    "category": "Filmic",
+    "oscPrefix": "glitch",
+    "legacyDiscriminant": 32,
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "block_size",
+        "name": "Block Size",
+        "min": 4.0,
+        "max": 64.0,
+        "defaultValue": 16.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "BlockSize"
+      },
+      {
+        "id": "rgb_shift",
+        "name": "RGB Shift",
+        "min": 0.0,
+        "max": 0.05,
+        "defaultValue": 0.01,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "RGBShift"
+      },
+      {
+        "id": "scanline",
+        "name": "Scanline",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.3,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Scanline"
+      },
+      {
+        "id": "speed",
+        "name": "Speed",
+        "min": 0.1,
+        "max": 10.0,
+        "defaultValue": 2.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Speed"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "glitch",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "block_size",
+        "label": "Block Size",
+        "defaultValue": 16.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "glitch",
+          "param": "block_size"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "rgb_shift",
+        "label": "RGB Shift",
+        "defaultValue": 0.01,
+        "target": {
+          "kind": "handleNode",
+          "handle": "glitch",
+          "param": "rgb_shift"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "scanline",
+        "label": "Scanline",
+        "defaultValue": 0.3,
+        "target": {
+          "kind": "handleNode",
+          "handle": "glitch",
+          "param": "scanline"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "speed",
+        "label": "Speed",
+        "defaultValue": 2.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "glitch",
+          "param": "speed"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "onZero",
+      "paramId": "amount"
+    },
+    "paramAliases": [
+      {
+        "old": "block",
+        "new": "block_size"
+      }
+    ]
+  },
   "nodes": [
     {
       "id": 0,

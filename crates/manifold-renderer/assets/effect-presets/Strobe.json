@@ -1,7 +1,109 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "Strobe",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "Strobe",
+    "displayName": "Strobe",
+    "category": "Stylize",
+    "oscPrefix": "strobe",
+    "legacyDiscriminant": 19,
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "rate",
+        "name": "Rate",
+        "min": 0.0,
+        "max": 9.0,
+        "defaultValue": 6.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "valueLabels": [
+          "1/1",
+          "1/2",
+          "1/4",
+          "1/4T",
+          "1/8",
+          "1/8T",
+          "1/16",
+          "1/16T",
+          "1/32",
+          "1/64"
+        ],
+        "oscSuffix": "Rate"
+      },
+      {
+        "id": "mode",
+        "name": "Mode",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "valueLabels": [
+          "Opacity",
+          "White",
+          "Gain"
+        ],
+        "oscSuffix": "Mode"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "strobe",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "rate",
+        "label": "Rate",
+        "defaultValue": 6.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "strobe",
+          "param": "rate"
+        },
+        "convert": {
+          "type": "EnumRound"
+        }
+      },
+      {
+        "id": "mode",
+        "label": "Mode",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "strobe",
+          "param": "mode"
+        },
+        "convert": {
+          "type": "EnumRound"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "onZero",
+      "paramId": "amount"
+    }
+  },
   "nodes": [
     {
       "id": 0,

@@ -1,7 +1,252 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "ColorGrade",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "ColorGrade",
+    "displayName": "Color Grade",
+    "category": "Color",
+    "oscPrefix": "colorGrade",
+    "legacyDiscriminant": 28,
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "gain",
+        "name": "Gain",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Gain"
+      },
+      {
+        "id": "saturation",
+        "name": "Saturation",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Saturation"
+      },
+      {
+        "id": "hue",
+        "name": "Hue",
+        "min": -180.0,
+        "max": 180.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Hue"
+      },
+      {
+        "id": "contrast",
+        "name": "Contrast",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Contrast"
+      },
+      {
+        "id": "colorize",
+        "name": "Colorize",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Colorize"
+      },
+      {
+        "id": "tint_hue",
+        "name": "Tint Hue",
+        "min": 0.0,
+        "max": 360.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "TintHue"
+      },
+      {
+        "id": "tint_saturation",
+        "name": "Tint Saturation",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "TintSaturation"
+      },
+      {
+        "id": "tint_focus",
+        "name": "Tint Focus",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.75,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "ColorizeFocus"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "color_grade",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "gain",
+        "label": "Gain",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "color_grade",
+          "param": "gain"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "saturation",
+        "label": "Saturation",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "color_grade",
+          "param": "saturation"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "hue",
+        "label": "Hue",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "color_grade",
+          "param": "hue"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "contrast",
+        "label": "Contrast",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "color_grade",
+          "param": "contrast"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "colorize",
+        "label": "Colorize",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "color_grade",
+          "param": "colorize"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "tint_hue",
+        "label": "Tint Hue",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "color_grade",
+          "param": "colorize_hue"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "tint_saturation",
+        "label": "Tint Saturation",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "color_grade",
+          "param": "colorize_saturation"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "tint_focus",
+        "label": "Tint Focus",
+        "defaultValue": 0.75,
+        "target": {
+          "kind": "handleNode",
+          "handle": "color_grade",
+          "param": "colorize_focus"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "onZero",
+      "paramId": "amount"
+    },
+    "paramAliases": [
+      {
+        "old": "sat",
+        "new": "saturation"
+      },
+      {
+        "old": "tint_sat",
+        "new": "tint_saturation"
+      },
+      {
+        "old": "focus",
+        "new": "tint_focus"
+      }
+    ]
+  },
   "nodes": [
     {
       "id": 0,

@@ -1,7 +1,152 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "Halation",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "Halation",
+    "displayName": "Halation",
+    "category": "Filmic",
+    "oscPrefix": "halation",
+    "legacyDiscriminant": 34,
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "threshold",
+        "name": "Threshold",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Threshold"
+      },
+      {
+        "id": "spread",
+        "name": "Spread",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Spread"
+      },
+      {
+        "id": "hue",
+        "name": "Hue",
+        "min": 0.0,
+        "max": 360.0,
+        "defaultValue": 20.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Hue"
+      },
+      {
+        "id": "saturation",
+        "name": "Saturation",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.6,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Saturation"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "halation",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "threshold",
+        "label": "Threshold",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "handleNode",
+          "handle": "halation",
+          "param": "threshold"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "spread",
+        "label": "Spread",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "handleNode",
+          "handle": "halation",
+          "param": "spread"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "hue",
+        "label": "Hue",
+        "defaultValue": 20.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "halation",
+          "param": "hue"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "saturation",
+        "label": "Saturation",
+        "defaultValue": 0.6,
+        "target": {
+          "kind": "handleNode",
+          "handle": "halation",
+          "param": "saturation"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "onZero",
+      "paramId": "amount"
+    },
+    "paramAliases": [
+      {
+        "old": "thresh",
+        "new": "threshold"
+      },
+      {
+        "old": "sat",
+        "new": "saturation"
+      }
+    ]
+  },
   "nodes": [
     {
       "id": 0,

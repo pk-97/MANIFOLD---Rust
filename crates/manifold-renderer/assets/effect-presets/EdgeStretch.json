@@ -1,7 +1,104 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "EdgeStretch",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "EdgeStretch",
+    "displayName": "Edge Stretch",
+    "category": "Spatial",
+    "oscPrefix": "edgeStretch",
+    "legacyDiscriminant": 15,
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "width",
+        "name": "Width",
+        "min": 0.1,
+        "max": 0.9,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "SourceWidth"
+      },
+      {
+        "id": "direction",
+        "name": "Direction",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "valueLabels": [
+          "Horiz",
+          "Vert",
+          "Both"
+        ],
+        "oscSuffix": "Direction"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "edge_stretch",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "width",
+        "label": "Width",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "handleNode",
+          "handle": "edge_stretch",
+          "param": "source_width"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "direction",
+        "label": "Direction",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "edge_stretch",
+          "param": "direction"
+        },
+        "convert": {
+          "type": "EnumRound"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "onZero",
+      "paramId": "amount"
+    },
+    "paramAliases": [
+      {
+        "old": "dir",
+        "new": "direction"
+      }
+    ]
+  },
   "nodes": [
     {
       "id": 0,

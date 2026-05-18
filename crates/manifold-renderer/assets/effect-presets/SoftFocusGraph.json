@@ -1,7 +1,69 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "SoftFocusGraph",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "SoftFocusGraph",
+    "displayName": "Soft Focus",
+    "category": "Stylize",
+    "oscPrefix": "soft_focus_graph",
+    "available": true,
+    "params": [
+      {
+        "id": "radius",
+        "name": "Radius",
+        "min": 0.0,
+        "max": 64.0,
+        "defaultValue": 6.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F1",
+        "oscSuffix": "px"
+      },
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "radius",
+        "label": "Radius",
+        "defaultValue": 6.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "blur",
+          "param": "radius"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "handleNode",
+          "handle": "mix",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "onZero",
+      "paramId": "amount"
+    }
+  },
   "nodes": [
     {
       "id": 0,

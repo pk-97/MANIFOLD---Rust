@@ -1,7 +1,83 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "Dither",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "Dither",
+    "displayName": "Dither",
+    "category": "Color",
+    "oscPrefix": "dither",
+    "legacyDiscriminant": 18,
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "pattern",
+        "name": "Pattern",
+        "min": 0.0,
+        "max": 5.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "valueLabels": [
+          "Bayer",
+          "Halftone",
+          "Lines",
+          "X-Hatch",
+          "Noise",
+          "Diamond"
+        ],
+        "oscSuffix": "Algorithm"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "dither",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "pattern",
+        "label": "Pattern",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "dither",
+          "param": "algorithm"
+        },
+        "convert": {
+          "type": "EnumRound"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "onZero",
+      "paramId": "amount"
+    },
+    "paramAliases": [
+      {
+        "old": "algo",
+        "new": "pattern"
+      }
+    ]
+  },
   "nodes": [
     {
       "id": 0,

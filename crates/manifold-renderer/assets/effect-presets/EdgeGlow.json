@@ -1,7 +1,91 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "EdgeGlow",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "EdgeGlow",
+    "displayName": "Edge Detect",
+    "category": "Diagnostic",
+    "oscPrefix": "edgeDetect",
+    "legacyDiscriminant": 25,
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "threshold",
+        "name": "Threshold",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.1,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Threshold"
+      },
+      {
+        "id": "mode",
+        "name": "Mode",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "valueLabels": [
+          "Sobel",
+          "Laplacian",
+          "Frei-Chen"
+        ],
+        "oscSuffix": "Mode"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "edge_detect",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "threshold",
+        "label": "Threshold",
+        "defaultValue": 0.1,
+        "target": {
+          "kind": "handleNode",
+          "handle": "edge_detect",
+          "param": "threshold"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "onZero",
+      "paramId": "amount"
+    },
+    "paramAliases": [
+      {
+        "old": "thresh",
+        "new": "threshold"
+      }
+    ]
+  },
   "nodes": [
     {
       "id": 0,

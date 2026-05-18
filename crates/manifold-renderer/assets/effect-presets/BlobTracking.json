@@ -1,7 +1,155 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "BlobTracking",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "BlobTracking",
+    "displayName": "Blob Track",
+    "category": "Diagnostic",
+    "oscPrefix": "blobTracking",
+    "legacyDiscriminant": 22,
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "threshold",
+        "name": "Threshold",
+        "min": 0.05,
+        "max": 0.9,
+        "defaultValue": 0.65,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Threshold"
+      },
+      {
+        "id": "sensitivity",
+        "name": "Sensitivity",
+        "min": 0.2,
+        "max": 1.0,
+        "defaultValue": 0.85,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Sensitivity"
+      },
+      {
+        "id": "smoothing",
+        "name": "Smoothing",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.7,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Smoothing"
+      },
+      {
+        "id": "connect",
+        "name": "Connect",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.35,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Connect"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "handleNode",
+          "handle": "blob_tracking",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "threshold",
+        "label": "Threshold",
+        "defaultValue": 0.65,
+        "target": {
+          "kind": "handleNode",
+          "handle": "blob_tracking",
+          "param": "threshold"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "sensitivity",
+        "label": "Sensitivity",
+        "defaultValue": 0.85,
+        "target": {
+          "kind": "handleNode",
+          "handle": "blob_tracking",
+          "param": "sensitivity"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "smoothing",
+        "label": "Smoothing",
+        "defaultValue": 0.7,
+        "target": {
+          "kind": "handleNode",
+          "handle": "blob_tracking",
+          "param": "smoothing"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "connect",
+        "label": "Connect",
+        "defaultValue": 0.35,
+        "target": {
+          "kind": "handleNode",
+          "handle": "blob_tracking",
+          "param": "connect"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "never"
+    },
+    "paramAliases": [
+      {
+        "old": "thresh",
+        "new": "threshold"
+      },
+      {
+        "old": "sens",
+        "new": "sensitivity"
+      },
+      {
+        "old": "smooth",
+        "new": "smoothing"
+      }
+    ]
+  },
   "nodes": [
     {
       "id": 0,
