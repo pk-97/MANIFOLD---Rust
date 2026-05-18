@@ -1147,21 +1147,33 @@ Five categories round out the V1 surface. Combined with the texture and scalar/m
 
 **Stateful control nodes.** The scalar equivalent of `Feedback`. Smoothing (one-pole filter with a time-constant param), Sample-and-Hold (latch value on trigger), Envelope (attack/decay/sustain/release, triggered on a gate scalar), Step Sequencer (N values, advance on a beat input). All use the existing `StateStore` pattern Feedback uses today — same indexing by `node_id + owner_key`, same `clear_state` for seek/pause.
 
-**Convolution with kernel-as-input.** One atomic primitive whose kernel weights are an editable input (1D for separable axes, 2D for general). Gaussian Blur, Box Blur, Sharpen, Edge Detect, Sobel all become "Convolution + a different kernel." Users open the node and see the actual weights; can edit them. Replaces today's hand-coded kernel constants inside `node.gaussian_blur` with a generic primitive plus a kernel-weights input. The KernelInput widget is its own UI piece — a small float-grid editor with optional preset kernels.
+**Named convolution-family primitives** (`Blur`, `Sharpen`, `EdgeDetect`, `Emboss`, `Sobel`, …). The user-facing surface is a primitive per *operation*, not one generic Convolution node — distinct named nodes are the user-friendly answer ("I want to blur this" → drop `Blur`, never think about kernels). Internally these share the same convolution shader fragment with different kernel-weights constants, so it's still code dedup at the implementation level — but the picker shows distinct nodes with operation-specific names, not one `Convolution` with a preset selector.
+
+The exception: ship a separate `Convolution` primitive as a **power-user node** with editable kernel weights, for the rare user who wants to author a novel 5×5 kernel or grab one from a paper. Most users never touch it; the named primitives cover what they actually want. The decision rule for whether something gets a named primitive vs. living only inside `Convolution` is the same as for Shader leaves: if the operation has a distinct name and meaning in the user's head (`Blur`, `Sharpen`), it earns a named primitive. If it's just "convolve with these arbitrary weights," it lives in `Convolution`.
 
 **WGSL Shader escape hatch.** A `node.shader` primitive that takes a small WGSL fragment as a string param. The graph language can never fully match WGSL's expressiveness (per-pixel runtime-varying kernel sizes like DoF, iterative state, gather from computed offsets — what shaders exist to express), so eventually some leaf needs to drop to WGSL. Houdini does this with VEX snippets; Substance Designer with the Pixel Processor node. This is the bottom of the ladder; below it is the GPU. Open UX problems: how does the editor surface compile errors (probably inline indicator + passthrough on failure), and what's the input/output port shape — fixed `(in: Texture2D, params: scalars, out: Texture2D)` is probably the V1 shape; multi-input/multi-output is a future extension.
 
-### 12.3 V2-deferred axes
+### 12.3 Array (Buffer) data — promoted to V1
 
-Three categories of node intentionally outside the V1 scope. Each is a real gap; each has a tractable workaround for V1 (usually via the WGSL Shader node).
+The original §10 port-type discussion deferred a `Buffer` port type to V2. The case studies in §12.8 (Black Hole and FluidSim) walk through why that should flip: both ship-critical generators have particle systems internally, and without an array-data wire type their entire particle pipelines collapse into one opaque Shader-with-internal-state node. With it, particles flow on a wire and `SeedParticles → SimulateParticles → ScatterToTexture` become first-class primitives a user can rearrange or replace. Promoting to V1.
 
-**Buffer / array data.** Particle positions, audio sample buffers, mesh vertex arrays. Today these live inside opaque atomic generators (OscilloscopeXY's audio buffer, ParametricSurface's vertex array, Mycelium's particle list). The V1 port types can't carry array data — they're scalars or textures. Encoding arrays as 1×N textures works for audio waveforms but is ugly for mesh data with multiple per-vertex attributes. A `Buffer` port type is the missing axis. Listed as V2 in the original §10 port-type discussion.
+**Naming.** "Buffer" is the Metal term (`MTLBuffer`) but it's a generic word in graphics — could mean vertex buffer, command buffer, framebuffer, audio buffer, ring buffer. User-facing, the port type carries an **array of structured items** indexed by position (not spatial coordinates). Lean toward calling it `Array` in the user-facing port-type vocabulary; keep "buffer" as the internal Metal layer term. The macro would expose this as e.g. `ArrayOfParticles`, `ArrayOfVertices` — parameterised by item type. Open question: does the type system carry the item layout (`Array<Particle>` with a Particle struct definition somewhere), or is it generic bytes with the item layout being shader-side knowledge?
 
-**Loop / subgraph iteration.** Some effects iterate per frame — fluid sim runs ~20 pressure-projection passes per frame, multi-bounce refraction iterates the lens equation. Today only the WGSL Shader node can express that. A `SubgraphIterate(N)` primitive that runs a subgraph N times with output feedback would let those effects fully decompose, but it's a graph-runtime feature (the executor needs to support running a subgraph as one step with internal state), not just a new primitive.
+**What it carries.** A flat list of N items, each item a fixed-layout struct. Examples: 1M particles × (position, velocity, life, color), N mesh vertices × (position, normal, uv), audio sample buffer of M samples. Read/written by index, not by `(u, v)`. Backed by `MTLBuffer` in storage-buffer mode.
 
-**3D volume primitives.** `PortType::Texture3D` exists, `FluidSim3D` uses it, but no primitives operate on volumes today (no `Sample3D`, no `SliceVolume → Texture2D`, no per-voxel math). If volumetric effects are ever on the roadmap, that's a parallel family of texture primitives — mirror of the existing 2D set but on volumes.
+**Distinguishing from Texture.** Both are bytes in VRAM. The differences are *access pattern* and *shape*. Textures fit a 2D grid (or 3D), get sampled with filters, are keyed by coordinates. Arrays are flat lists of structured items, accessed by index, no filtering.
 
-### 12.4 Decomposition + fusion-on-compile
+**Feedback applies to Arrays too.** Today `node.feedback` is texture-only. FluidSim's particle buffer needs the same pattern — written and read in the same frame, persistent across frames. An `ArrayFeedback` is a natural extension of the existing `StateStore` pattern, same indexing by `node_id + owner_key`.
+
+### 12.4 Remaining V2-deferred axes
+
+After promoting Array to V1, two categories remain genuinely V2:
+
+**Loop / subgraph iteration.** Some effects iterate per frame — pressure-projection in a proper Navier-Stokes solver, multi-bounce refraction, fractal generators. (Note: MANIFOLD's existing FluidSim is *not* this — it's a Serum-style density-displacement trick that doesn't iterate inside a frame. The pressure-projection case is hypothetical for the current catalog.) Today only the WGSL Shader node can express per-frame iteration. A `SubgraphIterate(N)` primitive that runs a subgraph N times with output feedback would let those effects fully decompose, but it's a graph-runtime feature (the executor needs to support running a subgraph as one step with internal state), not just a new primitive.
+
+**3D volume primitives.** `PortType::Texture3D` exists, `FluidSim3D` uses it, but no primitives operate on volumes today (no `Sample3D`, no `SliceVolume → Texture2D`, no per-voxel math). Genuinely matters for at least one shipping generator (`FluidSim3D`) and any future volumetric work. A parallel family of texture primitives — mirror of the existing 2D set but on volumes.
+
+### 12.5 Decomposition + fusion-on-compile
 
 The architectural stance the §10 plan was implicitly aiming at, now explicit:
 
@@ -1173,13 +1185,70 @@ The architectural stance the §10 plan was implicitly aiming at, now explicit:
 
 The §10.4 "EffectGraphDef v1→v2 migration" cross-cutting note is the entry point for fusion: once the v2 schema is in place, the compile pass takes a v2 graph + a fusion ruleset and emits either a sequence of dispatches or a fused shader per fusable chain.
 
-### 12.5 The fp16-as-blocker myth (correcting §6.1)
+### 12.6 The fp16-as-blocker myth (correcting §6.1)
 
-§6.1's parity-migration notes mention that some effects (Strobe specifically) had to ship as fused composites because decomposing them broke pixel-exact parity through fp16 intermediate textures. That framing assumed all wires were `Rgba16Float` texture wires. With scalar wires (`PortType::Scalar(F32)`, `ParamValue::Float(f32)`) the constraint dissolves for scalar data: BeatGate's amount flows through an f32 scalar wire, never touches an fp16 texture, and reaches Mix at full precision. Pixel-exact parity is achievable without fusion-on-compile *for any decomposition where the inter-primitive value is scalar*.
+§6.1's parity-migration notes mention that some effects (Strobe specifically) had to ship as fused composites because decomposing them broke pixel-exact parity through fp16 intermediate textures. That framing assumed all wires were `Rgba16Float` texture wires. With scalar wires (`PortType::Scalar(F32)`, `ParamValue::Float(f32)`) the constraint dissolves for scalar data: the producer's value flows through an f32 scalar wire, never touches an fp16 texture, and reaches the consumer at full precision. Pixel-exact parity is achievable without fusion-on-compile *for any decomposition where the inter-primitive value is scalar*.
+
+**Worked example: Strobe.** Legacy Strobe shader does `amount = beatGate(rate, beat, mode); output = mix(in, gated_color, amount)` all in one shader with `amount` staying in an f32 register. The §6.1 attempt to split this into separate `BeatGate` + `Mix` primitives wired through an `Rgba16Float` intermediate texture quantised `amount` near numerical edges (0.49998 vs 0.5) and broke parity. Post-scalar-wires the correct decomposition is `node.beat_gate` (no inputs, scalar output, params for rate/mode) → `node.mix(amount=scalar-wire)`. The amount never materialises in a texture; it flows scalar-to-scalar. Result is bit-identical to the legacy fused shader.
 
 The remaining fp16 case — where one primitive's *texture* output feeds another's *texture* input — is real and intrinsic: textures are `Rgba16Float` and the round-trip quantises. But every effect with gather-based texture intermediates (Bloom, Halation, Watercolor — the MipChain/Blur composites) already pays this cost today and the parity tests already cover them. fp16 isn't a fundamental decomposition blocker; it's an artifact of using texture wires for scalar data, which scalar wires now fix.
 
-### 12.6 What we deliberately avoid
+### 12.7 Decomposition seams: when to bundle vs split
+
+The temptation when shipping Shader-leaf nodes is to bundle large WGSL fragments into one node. That sneakily reintroduces the "opaque shader" problem at a smaller scale — a user can't dramatically modify a 50-line fused-gradient-rotate by editing line 23, the way they could by unwiring `Gradient` and wiring `CurlNoise` instead.
+
+The rule for Shader-leaf granularity:
+
+**Bundle only when the chunk is truly one conceptual operation.** Geodesic raymarching is one operation (~100 lines of Verlet steps + force terms; nobody'd swap "just the Verlet" for "just the Euler"). A fluid sim's `Splat` is one operation (atomic scatter into accumulator). A particle `Advect` step is one operation (sample field, integrate, wrap).
+
+**Split when the chunk is two operations users might want to swap independently.** Gradient + Rotate2D is two operations: gradient computation + 90° rotation to produce a perpendicular vector field. A user might want to replace the gradient with a curl-noise generator while keeping the rotation, or vice versa. So they ship as two nodes, even though they're always used together in the canonical recipe.
+
+**Practical sizing target for Shader leaves: 30-100 lines of substantive WGSL** (after stripping uniform boilerplate and helper functions). Bigger → look for a seam. Smaller → probably should just be a regular primitive (`Math`, `Sample`, named convolution-family) rather than a Shader node.
+
+The cost of finer splits is dispatch count + intermediate texture allocations. That's where fusion-on-compile (§12.5) earns its keep: editor sees small chunks, GPU runs fused dispatches for per-pixel chains. The architectural stance commits us to "decompose at authoring time, fuse at compile time" — the seams are for human understanding, not for the GPU.
+
+### 12.8 Worked examples — decomposed catalog generators
+
+Two case studies from this design session demonstrating the taxonomy against real shipping generators. Both are among the more complex things in the catalog; both decompose to ~10-15 visible nodes.
+
+**Black Hole** (today: 13 GPU dispatches across 6 hand-written WGSL shaders, ~2200 lines total).
+
+Decomposes to ~12-15 nodes:
+- 3-4 Shader leaves: `GeodesicIntegrator` (~100 lines, Verlet loop with Schwarzschild + Kerr force terms), `DiskCrossingDetector` (~50 lines, disk hit detection + volumetric density), `ParticleAdvect` (depends on Array port — see below), `DisplayCompose` (split into `DeflectionSampler` + `DiskEmission` + `SkySampler` + `Compose` per the seams rule, each 40-80 lines).
+- 4 named-convolution `Blur` primitives covering the 10 separable-Gaussian dispatches in the original (deflection-map blur ×3 textures × H+V, plus polar-density blur ×2 × H+V).
+- Scalar wire harness for the camera/disk params (`cam_dist`, `tilt`, `rotate`, `spin`, `disk_inner`, `disk_outer`, `disk_glow`, `cam_velocity`). Each is a wireable input; an LFO on `disk_glow` makes the disk pulse on the beat; audio bass on `cam_velocity` makes the camera dive on kicks.
+
+What gets exposed for modification: kernel weights on the blurs, scalar drivers on the params, individual sub-stages of the display compose. The 100-line geodesic integrator stays bundled because nobody'd dramatically rewrite Verlet+Kerr — but its parameters become wireable, which is most of the modification value anyway.
+
+What stays hidden (V1 limitation): the particle pipeline (sim + scatter + resolve) collapses into one Shader-with-internal-state node until Array port lands. Post-Array it splits into `SimulateParticles → ScatterToTexture → ResolveAccumulator`, each operating on an `Array<Particle>` wire.
+
+**FluidSim 2D** (today: ~10 dispatches across 7 shaders, ~700 lines total).
+
+Decomposes to ~14 nodes:
+- 4 Shader leaves: `Splat` (~30 lines, atomic scatter), `Resolve` (~20 lines, fixed-point→float), `Gradient` (~25 lines, finite differences), `Rotate2D` (~10 lines, 2×2 rotation matrix — possibly small enough to be a regular primitive rather than a Shader node), `ParticleAdvect` (~80 lines, split into `SampleField → AddNoise → Integrate → ToroidalWrap` per the seams rule).
+- 4 named `Blur` primitives for the two-stage Gaussian blur applied to density + vector field.
+- 1 `DensityRemap` primitive (contrast/intensity — small enough to be a Math primitive chain).
+- Array-of-particles feedback loop (the persistent particle buffer carries state between frames).
+
+What the decomposition reveals: FluidSim's "fluid" is misleading naming. It's not a Navier-Stokes solver — it's a density-displacement trick (particles → density texture → blur → gradient → rotate = vector field → advect → loop). Once decomposed, a user can replace the vector-field generation step (rotated-gradient → curl-noise → camera-motion-energy → audio-band-driven flow) without touching seed/scatter/advect. The recipe is more interesting than the result.
+
+What both case studies surface that wasn't fully captured in the original §12 V1 scope:
+
+- **Array port type is V1, not V2.** Both signature generators have particle systems internally. Without it, those pipelines stay opaque. (Handled in §12.3 above.)
+- **3D-volume primitives genuinely matter** for `FluidSim3D`. (Handled in §12.4.)
+- **Rebake-on-change scheduler caching.** Black Hole's deflection map only rebuilds when camera params change — a major perf win. In a decomposed graph, the executor needs to track "this node's inputs haven't changed since last frame, skip evaluation, reuse output." Similar to skip-passthrough but for content rather than topology. Not a primitive; a scheduler feature. Parked in §12.9.
+
+### 12.9 Open questions parked
+
+Three items surfaced during this session that need owners but aren't blocking the V1 surface:
+
+**Mid-show preset editing safety.** If presets are M4L-style devices and the graph editor is the depth, editing during a live performance is a real possibility. Does the change apply live? Is there an undo? What happens if a user removes a node mid-render — does the chain rebuild, skip the frame, fall back to passthrough? Real production-safety concern for the "live performance instrument" framing. Future problem; needs design once the graph editor becomes a routine performer surface.
+
+**Rebake-on-change scheduler caching.** Black Hole today caches its expensive deflection-map raymarch and only rebuilds when camera params change. In a decomposed graph this needs to be a scheduler feature: track input-parameter dirty bits per node, skip evaluation when nothing's changed, reuse the previous frame's output. Same conceptual pattern as skip-passthrough but for content rather than topology. Load-bearing for any heavy-compute primitive's perf — when ParametricSurface ships as a decomposed graph it'll need this too.
+
+**When to build fusion-on-compile.** §12.5 commits us to the architectural stance but explicitly defers the implementation until perf demands it. The question is what "demands it" means — measured frame budget pressure on a real show file, not theoretical dispatch-count anxiety. Profile a fully-decomposed FluidSim or Black Hole on the Liveschool fixture before committing to the fusion infrastructure.
+
+### 12.10 What we deliberately avoid
 
 The temptation to ship a "purpose-built" primitive every time something feels slightly awkward. The whole pitch only works if the primitive set stays small and composable. Every time we're tempted to add `node.special_thing_for_one_effect`, the right question is: *could this be Convolution + a kernel? Math + an LFO? a WGSL Shader fragment?* If yes, ship it that way. If we end up with 80 primitives, we've just rebuilt the flat catalog one level lower.
 
