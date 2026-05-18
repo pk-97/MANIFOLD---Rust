@@ -1,6 +1,5 @@
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
-use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
@@ -20,12 +19,6 @@ inventory::submit! {
             ParamSpec::continuous("width", "Width", 0.1, 0.9, 0.5, "F2", "SourceWidth"),
             ParamSpec::whole_labels("direction", "Direction", 0.0, 2.0, 0.0, &["Horiz", "Vert", "Both"], "Direction"),
         ],
-    }
-}
-inventory::submit! {
-    EffectFactory {
-        id: EffectTypeId::EDGE_STRETCH,
-        create: |device| Box::new(EdgeStretchFX::new(device)),
     }
 }
 

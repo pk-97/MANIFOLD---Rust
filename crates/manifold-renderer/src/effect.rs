@@ -27,18 +27,19 @@ pub struct EffectContext {
 
 /// GPU-aware post-process effect processor.
 ///
-/// Singleton per `EffectTypeId` in [`EffectRegistry`]. After the splice
-/// migration only a handful of methods are still load-bearing:
+/// Held by [`crate::plugin_prewarm::PluginPrewarm`] for the three
+/// plugin-using effects (BlobTracking, DepthOfField, WireframeDepth).
+/// The chain runtime no longer calls `apply` on these handles — chain
+/// dispatch goes through the primitive registry — but the
+/// `resize` + `flush_background_work` methods are still load-bearing:
+/// `LayerCompositor` forwards through every plugin warmup so FFI
+/// workers stay in sync with render resolution and finish in-flight
+/// work between export frames.
 ///
-/// - `apply` / `clear_state` — called by the monolithic-wrapper
-///   primitives (AutoGain, BlobTracking, Infrared, WireframeDepth,
-///   QuadMirror) to drive the legacy compute path.
-/// - `resize` / `flush_background_work` — called by `EffectRegistry`
-///   on render-resolution changes and per export frame respectively.
-///
-/// Every shipping effect now wires its host params + frame-by-frame
-/// dispatch through `ChainSpec`; the trait stays only for the four
-/// methods above.
+/// The monolithic-wrapper primitives (AutoGain, BlobTracking,
+/// Infrared, WireframeDepth, QuadMirror) also invoke `apply` /
+/// `clear_state` on their held `Box<dyn PostProcessEffect>` to drive
+/// the legacy compute path one block at a time.
 pub trait PostProcessEffect: Send {
     fn effect_type(&self) -> &EffectTypeId;
 

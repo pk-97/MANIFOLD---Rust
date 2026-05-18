@@ -1,6 +1,5 @@
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
-use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
@@ -19,12 +18,6 @@ inventory::submit! {
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
             ParamSpec::whole("segments", "Segments", 2.0, 16.0, 6.0, "Segments"),
         ],
-    }
-}
-inventory::submit! {
-    EffectFactory {
-        id: EffectTypeId::KALEIDOSCOPE,
-        create: |device| Box::new(KaleidoscopeFX::new(device)),
     }
 }
 

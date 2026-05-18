@@ -18,7 +18,6 @@
 
 use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
-use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
@@ -41,12 +40,6 @@ inventory::submit! {
             ParamSpec::continuous("blur", "Blur", 0.5, 8.0, 2.0, "F1", "blur"),
             ParamSpec::continuous("decay", "Decay", 0.9, 1.0, 0.99, "F3", "decay"),
         ],
-    }
-}
-inventory::submit! {
-    EffectFactory {
-        id: EffectTypeId::new("Watercolor"),
-        create: |device| Box::new(WatercolorFX::new(device)),
     }
 }
 

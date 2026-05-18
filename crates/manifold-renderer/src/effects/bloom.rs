@@ -4,7 +4,6 @@
 use super::HDR_BUFFER_DIVISOR;
 use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
-use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use ahash::AHashMap;
@@ -24,12 +23,6 @@ inventory::submit! {
         params: &[
             ParamSpec::continuous("amount", "Amount", 0.0, 5.0, 0.5, "F2", ""),
         ],
-    }
-}
-inventory::submit! {
-    EffectFactory {
-        id: EffectTypeId::BLOOM,
-        create: |device| Box::new(BloomFX::new(device)),
     }
 }
 

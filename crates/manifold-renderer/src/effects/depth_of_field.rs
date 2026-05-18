@@ -26,7 +26,6 @@
 use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 use crate::background_worker::BackgroundWorker;
 use crate::effect::{EffectContext, PostProcessEffect};
-use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
 use crate::render_target::RenderTarget;
@@ -54,12 +53,6 @@ inventory::submit! {
             ParamSpec::continuous("angle", "Angle", 0.0, 360.0, 0.0, "F2", "TiltAngle"),
             ParamSpec::whole_labels("quality", "Quality", 0.0, 2.0, 1.0, &["Low", "Medium", "High"], "Quality"),
         ],
-    }
-}
-inventory::submit! {
-    EffectFactory {
-        id: EffectTypeId::DEPTH_OF_FIELD,
-        create: |device| Box::new(DepthOfFieldFX::new(device)),
     }
 }
 

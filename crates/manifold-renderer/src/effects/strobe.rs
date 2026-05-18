@@ -1,6 +1,5 @@
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
-use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::primitives::NOTE_RATE_LABELS;
 use manifold_core::EffectTypeId;
@@ -29,12 +28,6 @@ inventory::submit! {
             ),
             ParamSpec::whole_labels("mode", "Mode", 0.0, 2.0, 0.0, &["Opacity", "White", "Gain"], "Mode"),
         ],
-    }
-}
-inventory::submit! {
-    EffectFactory {
-        id: EffectTypeId::STROBE,
-        create: |device| Box::new(StrobeFX::new(device)),
     }
 }
 

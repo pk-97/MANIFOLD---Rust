@@ -4,7 +4,6 @@
 
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
-use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
@@ -25,12 +24,6 @@ inventory::submit! {
             ParamSpec::continuous("threshold", "Threshold", 0.0, 1.0, 0.15, "F2", "Threshold"),
             ParamSpec::continuous("knee", "Knee", 0.0, 1.0, 0.3, "F2", "Knee"),
         ],
-    }
-}
-inventory::submit! {
-    EffectFactory {
-        id: EffectTypeId::HDR_BOOST,
-        create: |device| Box::new(HdrBoostFX::new(device)),
     }
 }
 

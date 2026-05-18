@@ -7,7 +7,6 @@
 
 use crate::background_worker::BackgroundWorker;
 use crate::effect::{EffectContext, PostProcessEffect};
-use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
 use crate::render_target::RenderTarget;
@@ -37,12 +36,6 @@ inventory::submit! {
             ParamSpec::continuous("smoothing", "Smoothing", 0.0, 1.0, 0.7, "F2", "Smoothing"),
             ParamSpec::continuous("connect", "Connect", 0.0, 1.0, 0.35, "F2", "Connect"),
         ],
-    }
-}
-inventory::submit! {
-    EffectFactory {
-        id: EffectTypeId::BLOB_TRACKING,
-        create: |device| Box::new(BlobTrackingFX::new(device)),
     }
 }
 

@@ -1,6 +1,5 @@
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
-use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
@@ -20,12 +19,6 @@ inventory::submit! {
             ParamSpec::whole("cells", "Cells", 4.0, 64.0, 16.0, "CellCount"),
             ParamSpec::continuous("source_width", "Cell Size", 0.1, 1.0, 0.5, "F2", "SourceWidth"),
         ],
-    }
-}
-inventory::submit! {
-    EffectFactory {
-        id: EffectTypeId::VORONOI_PRISM,
-        create: |device| Box::new(VoronoiPrismFX::new(device)),
     }
 }
 

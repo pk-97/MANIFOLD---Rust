@@ -1,6 +1,5 @@
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
-use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
@@ -22,12 +21,6 @@ inventory::submit! {
             ParamSpec::continuous("angle", "Angle", 0.0, 360.0, 0.0, "F2", "Angle"),
             ParamSpec::continuous("falloff", "Falloff", 0.0, 1.0, 0.5, "F2", "Falloff"),
         ],
-    }
-}
-inventory::submit! {
-    EffectFactory {
-        id: EffectTypeId::CHROMATIC_ABERRATION,
-        create: |device| Box::new(ChromaticAberrationFX::new(device)),
     }
 }
 

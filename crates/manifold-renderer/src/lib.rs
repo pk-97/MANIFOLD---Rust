@@ -3,7 +3,6 @@ pub mod chain_dispatch;
 pub mod compositor;
 pub mod effect;
 pub mod effect_chain_graph;
-pub mod effect_registry;
 pub mod effects;
 pub mod fsr1;
 pub mod generator;

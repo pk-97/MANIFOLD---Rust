@@ -1,8 +1,7 @@
 use crate::chain_dispatch::{clear_chain_state, dispatch_chain};
 use crate::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
-use crate::effect::EffectContext;
+use crate::effect::{EffectContext, PostProcessEffect};
 use crate::effect_chain_graph::ChainGraph;
-use crate::effect_registry::EffectRegistry;
 use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use crate::tonemap::TonemapPipeline;
@@ -371,12 +370,13 @@ pub struct LayerCompositor {
     /// bytes of idle struct space when unused and zero CPU when
     /// no master effects are present.
     master_effect_chain: Option<ChainGraph>,
-    /// Registry of all effect processors. Retained post-legacy-
-    /// dispatch removal for editor snapshot lookup
-    /// (`graph_snapshot_for`) and background-worker flushing on
-    /// export warmup (`flush_all_background_work`). The per-effect
-    /// dispatch / state-storage roles are gone.
-    effect_registry: EffectRegistry,
+    /// Plugin warmup processors — held for the process lifetime so
+    /// background FFI workers (BlobDetector, DepthEstimator,
+    /// WireframeDepth) stay alive. The compositor forwards `resize`
+    /// and `flush_background_work` through them; chain dispatch goes
+    /// through the primitive registry, not these handles. See
+    /// [`crate::plugin_prewarm`].
+    plugin_warmups: Vec<Box<dyn PostProcessEffect>>,
     /// ACES tonemapping pipeline. Matches Unity's CompositorStack.tonemapMaterial +
     /// tonemappedOutput. Applied as the final step after master effects.
     tonemap: TonemapPipeline,
@@ -534,7 +534,7 @@ impl LayerCompositor {
             active_layer_ids_scratch: Vec::new(),
             active_layer_buf_ids_scratch: Vec::new(),
             master_effect_chain: None,
-            effect_registry: EffectRegistry::new(device),
+            plugin_warmups: crate::plugin_prewarm::prewarm_all(device),
             tonemap: TonemapPipeline::new(device, width, height),
             led_tap: None,
             layer_outputs_scratch: Vec::new(),
@@ -2017,7 +2017,9 @@ impl Compositor for LayerCompositor {
             *ec = None;
         }
         self.master_effect_chain = None;
-        self.effect_registry.resize_all(device, width, height);
+        for processor in self.plugin_warmups.iter_mut() {
+            processor.resize(device, width, height);
+        }
         self.tonemap.resize(device, width, height);
         for gb in self.group_bufs.values_mut() {
             gb.resize(device, width, height);
@@ -2076,7 +2078,9 @@ impl Compositor for LayerCompositor {
     }
 
     fn flush_all_background_work(&mut self) {
-        self.effect_registry.flush_all_background_work();
+        for processor in self.plugin_warmups.iter_mut() {
+            processor.flush_background_work();
+        }
     }
 
     fn led_tap_texture(&self) -> Option<&GpuTexture> {
@@ -2096,14 +2100,18 @@ impl Compositor for LayerCompositor {
         &self,
         type_id: &manifold_core::EffectTypeId,
     ) -> Option<crate::node_graph::GraphSnapshot> {
-        self.effect_registry.graph_snapshot_for(type_id)
+        let view = crate::node_graph::loaded_preset_view_by_id(type_id)?;
+        crate::node_graph::snapshot_for_view(view)
     }
 
     fn outer_routings_for(
         &self,
         type_id: &manifold_core::EffectTypeId,
     ) -> Vec<crate::node_graph::OuterParamRouting> {
-        self.effect_registry.outer_routings_for(type_id)
+        let Some(view) = crate::node_graph::loaded_preset_view_by_id(type_id) else {
+            return Vec::new();
+        };
+        crate::node_graph::outer_routings_from_view(view)
     }
 }
 

@@ -1,13 +1,12 @@
-//! Inventory smoke test — every registered effect + generator must
-//! instantiate and run one frame without panicking or producing NaN /
-//! Inf pixels.
+//! Inventory smoke test — every registered generator must instantiate
+//! and run one frame without panicking or producing NaN / Inf pixels.
 //!
-//! The parity tests cover effects that have been decomposed into
-//! primitives (Phase-4a migration). Effects added *before* a parity
-//! test exists for them, and every generator, get their only
-//! end-to-end check from this file. Catches the class of bug where a
-//! newly-added effect's `apply()` panics on default params, or a
-//! shader produces `0.0 / 0.0` at a corner of the input space.
+//! The legacy per-effect smoke test that iterated `EffectFactory` is
+//! gone with §11 block 8 — effects no longer run through singletons.
+//! Per-effect runtime correctness is covered by the parity tests
+//! (against fixtures) and `every_bundled_preset_loads_validates_and_compiles`
+//! (chain-buildable). Generators are still inventory-based and remain
+//! covered here until the equivalent generator JSON migration lands.
 //!
 //! Lives in the parity binary because it reuses the same
 //! `harness::shared()` device + readback machinery — adding a third
@@ -16,57 +15,18 @@
 //!
 //! If this test ever flakes:
 //!
-//! 1. A registered effect's `apply()` panicked → check the effect's
-//!    parameter validation against the registry defaults
-//!    (`align_to_definition` should land it in a valid state).
-//! 2. NaN / Inf detected → a shader divides-by-zero or computes
-//!    `log(0)` / `1.0 / 0.0` for default-parameter inputs. The error
-//!    message names the effect / generator so you can grep its WGSL.
+//! - A generator's `render()` panicked → check parameter validation
+//!   against the registry defaults.
+//! - NaN / Inf detected → a shader divides-by-zero or computes
+//!   `log(0)` / `1.0 / 0.0` for default-parameter inputs. The error
+//!   message names the generator so you can grep its WGSL.
 
 use half::f16;
-use manifold_core::effects::EffectInstance;
-use manifold_renderer::effect::EffectContext;
-use manifold_renderer::effects::registration::EffectFactory;
 use manifold_renderer::generator_context::{GeneratorContext, MAX_GEN_PARAMS};
 use manifold_renderer::generators::registration::GeneratorFactory;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 
-use crate::harness::{self, Fixture, default_ctx};
-
-/// Every registered `EffectFactory` instantiates, runs `apply()` once
-/// against a gradient fixture, and produces a finite Rgba16Float
-/// output. Any new effect added via `inventory::submit!` lands here
-/// automatically — no per-effect test scaffolding required.
-#[test]
-fn every_registered_effect_runs_without_panicking_or_nans() {
-    let h = harness::shared();
-    let input = Fixture::Gradient.build(h);
-    let ctx = default_ctx(h.width, h.height);
-
-    let mut count = 0_usize;
-    for factory in inventory::iter::<EffectFactory> {
-        let id = factory.id.clone();
-        let mut effect = (factory.create)(&h.device);
-
-        let mut fx = EffectInstance::new(id.clone());
-        fx.align_to_definition();
-        fx.enabled = true;
-
-        let target = h.make_target(&format!("smoke-effect-{}", id.as_str()));
-        let mut enc = h.device.create_encoder(&format!("smoke-{}-enc", id.as_str()));
-        {
-            let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-            effect.apply(&mut gpu, &input, &target.texture, &fx, &ctx);
-        }
-        enc.commit_and_wait_completed();
-
-        let bytes = h.readback(&target.texture);
-        assert_finite_rgba16f(&format!("effect/{}", id.as_str()), &bytes);
-        count += 1;
-    }
-    assert!(count > 0, "expected inventory::iter to yield ≥1 EffectFactory");
-    eprintln!("smoke-tested {count} effects");
-}
+use crate::harness;
 
 /// Every registered `GeneratorFactory` instantiates and renders one
 /// frame into a fresh target with default parameters; output must be
@@ -150,7 +110,3 @@ fn assert_finite_rgba16f(label: &str, bytes: &[u8]) {
     }
 }
 
-// EffectContext import is required by the call site even though we
-// build it via `default_ctx`.
-#[allow(dead_code)]
-fn _ensure_ctx_import(_: &EffectContext) {}

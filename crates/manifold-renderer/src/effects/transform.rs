@@ -15,7 +15,6 @@
 
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
-use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
@@ -36,12 +35,6 @@ inventory::submit! {
             ParamSpec::continuous("zoom", "Zoom", 0.1, 5.0, 1.0, "F2", ""),
             ParamSpec::continuous("rotation", "Rotation", -180.0, 180.0, 0.0, "F2", ""),
         ],
-    }
-}
-inventory::submit! {
-    EffectFactory {
-        id: EffectTypeId::TRANSFORM,
-        create: |device| Box::new(TransformFX::new(device)),
     }
 }
 

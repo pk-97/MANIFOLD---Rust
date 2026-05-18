@@ -3,7 +3,6 @@
 
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
-use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
@@ -29,12 +28,6 @@ inventory::submit! {
             ParamSpec::continuous("tint_saturation", "Tint Saturation", 0.0, 2.0, 1.0, "F2", "TintSaturation"),
             ParamSpec::continuous("tint_focus", "Tint Focus", 0.0, 1.0, 0.75, "F2", "ColorizeFocus"),
         ],
-    }
-}
-inventory::submit! {
-    EffectFactory {
-        id: EffectTypeId::COLOR_GRADE,
-        create: |device| Box::new(ColorGradeFX::new(device)),
     }
 }
 

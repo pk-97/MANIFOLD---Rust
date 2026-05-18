@@ -24,7 +24,6 @@ pub mod mandala;
 pub mod mirror;
 pub mod node_graph_test;
 pub mod quad_mirror;
-pub mod registration;
 pub mod soft_focus_graph;
 pub mod strobe;
 pub mod stylized_feedback;

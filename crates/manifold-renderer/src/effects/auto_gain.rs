@@ -15,7 +15,6 @@
 
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
-use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
@@ -40,12 +39,6 @@ inventory::submit! {
             ParamSpec::continuous("color", "Color", -1.0, 1.0, 0.0, "F2", "ColorPush"),
             ParamSpec::whole_labels("character", "Character", 0.0, 4.0, 0.0, &["Clean", "Warm", "Film", "Vivid", "Grit"], "Character"),
         ],
-    }
-}
-inventory::submit! {
-    EffectFactory {
-        id: EffectTypeId::AUTO_GAIN,
-        create: |device| Box::new(AutoGainFX::new(device)),
     }
 }
 

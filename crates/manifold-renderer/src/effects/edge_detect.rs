@@ -1,6 +1,5 @@
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
-use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
@@ -20,12 +19,6 @@ inventory::submit! {
             ParamSpec::continuous("threshold", "Threshold", 0.0, 1.0, 0.1, "F2", "Threshold"),
             ParamSpec::whole_labels("mode", "Mode", 0.0, 2.0, 0.0, &["Sobel", "Laplacian", "Frei-Chen"], "Mode"),
         ],
-    }
-}
-inventory::submit! {
-    EffectFactory {
-        id: EffectTypeId::EDGE_DETECT,
-        create: |device| Box::new(EdgeDetectFX::new(device)),
     }
 }
 

@@ -6,35 +6,25 @@
 //! Those workers must be running before the first frame renders so
 //! the first chain dispatch doesn't block on plugin initialisation.
 //!
-//! Today (pre-§11-cutover): worker init happens as a side effect of
-//! [`EffectRegistry::new`](crate::EffectRegistry::new) constructing
-//! every legacy `Box<dyn PostProcessEffect>` singleton.
-//!
-//! Post-§11 (when [`EffectRegistry`] and [`EffectFactory`] are
-//! deleted in block 8): worker init flows through this channel.
-//! Each plugin-using primitive submits one [`PluginPrewarm`] entry;
-//! [`prewarm_all`] iterates the inventory once at startup, holding
-//! the returned handles in a process-wide static so the workers stay
-//! alive for the process lifetime.
-//!
-//! This module defines the channel + submissions today. The
-//! consumer (`prewarm_all` invocation from app startup) wires up in
-//! block 8 alongside the [`EffectRegistry`] deletion. Until then it's
-//! pure infrastructure — parallel to but unused by the existing
-//! warmup path.
+//! Each plugin-using effect submits one [`PluginPrewarm`] entry;
+//! [`prewarm_all`] iterates the inventory once at startup, returning
+//! the constructed processors. [`LayerCompositor`] holds the result
+//! for the process lifetime so workers stay alive, and forwards
+//! `resize` / `flush_background_work` through them.
 
+use crate::effect::PostProcessEffect;
 use manifold_core::EffectTypeId;
 use manifold_gpu::GpuDevice;
 
 /// One plugin-using effect's warmup contribution.
 ///
-/// `prewarm` is a function pointer (const-compatible) that the
-/// renderer invokes once at startup with the live [`GpuDevice`]. The
-/// returned `Box<dyn Any + Send + Sync>` carries any state the
-/// warmup created — typically the constructed legacy effect or a
-/// worker handle — and is held by the renderer's process-wide
-/// warmup store for the process lifetime so background workers stay
-/// alive.
+/// `prewarm` constructs a [`PostProcessEffect`] (today, the legacy
+/// effect struct that owns the background worker handle). The
+/// renderer holds the returned `Box<dyn PostProcessEffect>` for the
+/// process lifetime and dispatches `resize` / `flush_background_work`
+/// to it; the trait's `apply` method is never called on prewarm
+/// processors — chain dispatch goes through the primitive registry,
+/// not these handles.
 ///
 /// Submitted via `inventory::submit!`:
 ///
@@ -42,31 +32,23 @@ use manifold_gpu::GpuDevice;
 /// inventory::submit! {
 ///     PluginPrewarm {
 ///         id: EffectTypeId::BLOB_TRACKING,
-///         prewarm: prewarm_blob_tracking,
+///         prewarm: |device| Box::new(BlobTrackingFX::new(device)),
 ///     }
-/// }
-///
-/// fn prewarm_blob_tracking(device: &GpuDevice) -> Box<dyn Any + Send + Sync> {
-///     Box::new(BlobTrackingFX::new(device))
 /// }
 /// ```
 pub struct PluginPrewarm {
     pub id: EffectTypeId,
-    pub prewarm: fn(&GpuDevice) -> Box<dyn std::any::Any + Send>,
+    pub prewarm: fn(&GpuDevice) -> Box<dyn PostProcessEffect>,
 }
 
 inventory::collect!(PluginPrewarm);
 
 /// Run every registered [`PluginPrewarm`] submission, returning the
-/// vector of opaque state handles. The caller (renderer's compositor)
-/// must hold the returned `Vec` for the process lifetime so the
-/// background workers stay alive.
-///
-/// Currently unused — the existing [`EffectRegistry`] handles this
-/// path. Block 8 of the §11 migration switches the renderer's
-/// compositor to call this at startup and delete `EffectRegistry`.
+/// vector of constructed processors. The caller (renderer's
+/// compositor) must hold the returned `Vec` for the process lifetime
+/// so the background workers stay alive.
 #[must_use = "the returned Vec holds worker state; drop it and workers die"]
-pub fn prewarm_all(device: &GpuDevice) -> Vec<Box<dyn std::any::Any + Send>> {
+pub fn prewarm_all(device: &GpuDevice) -> Vec<Box<dyn PostProcessEffect>> {
     inventory::iter::<PluginPrewarm>
         .into_iter()
         .map(|entry| (entry.prewarm)(device))

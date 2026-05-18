@@ -1,6 +1,5 @@
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
-use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
@@ -18,12 +17,6 @@ inventory::submit! {
         params: &[
             ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 1.0, "F2", ""),
         ],
-    }
-}
-inventory::submit! {
-    EffectFactory {
-        id: EffectTypeId::QUAD_MIRROR,
-        create: |device| Box::new(QuadMirrorFX::new(device)),
     }
 }
 

@@ -1,6 +1,5 @@
 use super::compute_blit_helper::ComputeBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
-use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::{EffectAliasMetadata, EffectMetadata};
@@ -22,12 +21,6 @@ inventory::submit! {
             ParamSpec::continuous("scanline", "Scanline", 0.0, 1.0, 0.3, "F2", "Scanline"),
             ParamSpec::continuous("speed", "Speed", 0.1, 10.0, 2.0, "F2", "Speed"),
         ],
-    }
-}
-inventory::submit! {
-    EffectFactory {
-        id: EffectTypeId::GLITCH,
-        create: |device| Box::new(GlitchFX::new(device)),
     }
 }
 

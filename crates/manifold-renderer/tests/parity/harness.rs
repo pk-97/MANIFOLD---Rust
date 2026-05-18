@@ -43,7 +43,6 @@ use manifold_gpu::{
 use manifold_renderer::chain_dispatch::dispatch_chain;
 use manifold_renderer::effect::EffectContext;
 use manifold_renderer::effect_chain_graph::ChainGraph;
-use manifold_renderer::effect_registry::EffectRegistry;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::node_graph::{
     Backend, EffectNode, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend,
@@ -63,11 +62,9 @@ const BYTES_PER_PIXEL: u32 = 8;
 
 /// Owns the `GpuDevice` and the canonical render dimensions. A single
 /// harness instance is shared across every effect's parity sweep via
-/// [`shared`] — the legacy / graph dispatch paths look up effects via
-/// process-wide statics ([`effect_chain::primitive_registry`],
-/// `inventory::iter`), so the harness never needs to hold an
-/// `EffectRegistry` of its own. We still *construct* one in [`new`] for
-/// its validation side effects, then drop it.
+/// [`shared`] — the chain dispatch path looks effects up via
+/// process-wide statics (`primitive_registry()`, `inventory::iter`),
+/// so the harness holds no per-effect state.
 pub struct ParityHarness {
     pub device: Arc<GpuDevice>,
     pub width: u32,
@@ -76,13 +73,9 @@ pub struct ParityHarness {
 }
 
 /// Process-wide cached harness. The expensive part of construction is
-/// `GpuDevice::new()` plus building every registered effect's pipelines
-/// inside `EffectRegistry::new` (~5s on M-series). Sharing across all
-/// parity submodules drops that 21× cost down to 1×. `ParityHarness`
-/// methods take `&self` and create fresh per-call encoders, textures,
-/// and `MetalBackend`s, so concurrent test threads don't race on
-/// harness state — only on the underlying Metal command queue, which
-/// is thread-safe by Apple contract.
+/// `GpuDevice::new()` plus building each plugin-using effect's
+/// background worker (~5s on M-series). Sharing across all parity
+/// submodules drops that 21× cost down to 1×.
 static SHARED: OnceLock<ParityHarness> = OnceLock::new();
 
 /// Return the process-wide cached harness. Use this in every parity
@@ -96,11 +89,15 @@ pub fn shared() -> &'static ParityHarness {
 impl ParityHarness {
     pub fn new() -> Self {
         let device = Arc::new(GpuDevice::new());
-        // Build the registry so its legacy processor singletons
-        // initialize. The parity dispatch path itself doesn't read
-        // them — `EffectChain` looks primitives up via the process-wide
-        // `primitive_registry()` static — so we drop the result.
-        let _ = EffectRegistry::new(&device);
+        // Prewarm the plugin-using effects so background FFI workers
+        // (BlobDetector, DepthEstimator, WireframeDepth) are running
+        // before the first parity sweep. The dispatch path itself
+        // looks primitives up via `primitive_registry()`, so we never
+        // touch the returned processors again — `mem::forget` keeps
+        // them alive without storing them in `ParityHarness` (which
+        // lives in a `OnceLock` and would need `Sync`, but
+        // `PostProcessEffect` is only `Send`).
+        std::mem::forget(manifold_renderer::plugin_prewarm::prewarm_all(&device));
         Self {
             device,
             width: PARITY_WIDTH,

@@ -1,6 +1,5 @@
 use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 use crate::effect::{EffectContext, PostProcessEffect};
-use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_registration::EffectMetadata;
@@ -20,12 +19,6 @@ inventory::submit! {
             ParamSpec::whole_labels("palette", "Palette", 0.0, 9.0, 0.0, &["White Hot", "Black Hot", "Green NV", "Iron Bow", "Rainbow", "Lava", "Arctic", "Magenta", "Electric", "Toxic"], "Palette"),
             ParamSpec::continuous("contrast", "Contrast", 0.5, 3.0, 1.0, "F2", "Contrast"),
         ],
-    }
-}
-inventory::submit! {
-    EffectFactory {
-        id: EffectTypeId::INFRARED,
-        create: |device| Box::new(InfraredFX::new(device)),
     }
 }
 

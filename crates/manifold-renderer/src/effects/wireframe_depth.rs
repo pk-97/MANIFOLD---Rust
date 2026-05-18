@@ -10,7 +10,6 @@
 
 use crate::background_worker::BackgroundWorker;
 use crate::effect::{EffectContext, PostProcessEffect};
-use crate::effects::registration::EffectFactory;
 use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
 use crate::render_target::RenderTarget;
@@ -42,12 +41,6 @@ inventory::submit! {
             ParamSpec::whole_labels("lock", "Lock", 0.0, 1.0, 1.0, &["Off", "On"], "FlowLock"),
             ParamSpec::continuous("edge_follow", "Edge Follow", 0.0, 1.0, 0.5, "F2", "EdgeFollow"),
         ],
-    }
-}
-inventory::submit! {
-    EffectFactory {
-        id: EffectTypeId::WIREFRAME_DEPTH,
-        create: |device| Box::new(WireframeDepthFX::new(device)),
     }
 }
 
