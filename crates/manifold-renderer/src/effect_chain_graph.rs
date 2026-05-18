@@ -272,11 +272,9 @@ impl ChainGraph {
         }
 
         // Preflight: every active effect must have a `LoadedPresetView`
-        // (JSON-loaded preset metadata). Block 6c (§11) switched the
-        // chain runtime off `ChainSpec` to the JSON-authoritative path;
-        // ChainSpec submissions still exist as a safety net but the
-        // chain build loop reads everything from the view. Block 8
-        // deletes the inventory ChainSpec submissions.
+        // (JSON-loaded preset metadata). The chain build loop reads
+        // bindings, skip mode, and the canonical splice all off the
+        // view; an effect without one is unrunnable.
         for (_, fx) in &active_effects {
             loaded_preset_view_by_id(fx.effect_type())?;
         }
@@ -345,11 +343,10 @@ impl ChainGraph {
                 }
             }
 
-            // Look up the JSON-loaded view (§11 block 6c: chain
-            // runtime is off ChainSpec entirely). Every shipping
-            // effect has presetMetadata + bindings + skip_mode in
-            // its JSON file — see `assets/effect-presets/`. The
-            // preflight above guarantees the view exists.
+            // Look up the JSON-loaded view. Every shipping effect has
+            // presetMetadata + bindings + skip_mode in its JSON file —
+            // see `assets/effect-presets/`. The preflight above
+            // guarantees the view exists.
             let view = loaded_preset_view_by_id(fx.effect_type())?;
             if is_skipped_for(view.skip_mode, &view.type_id, fx) {
                 // No workers added — previous output flows directly
@@ -762,7 +759,7 @@ fn apply_ctx_params_at(
 /// time modulation drove `wet_dry` through 1.0.
 ///
 /// **Skip-on-zero state is layout-affecting.** `try_build` walks
-/// active effects and drops any whose `ChainSpec::is_skipped(fx)`
+/// active effects and drops any whose `is_skipped_for(view.skip_mode, …, fx)`
 /// returns `true`, so flipping that predicate (typically by dragging
 /// `amount` off / onto 0) changes which effects appear in the graph.
 /// We hash the predicate's current result per effect so the rebuild

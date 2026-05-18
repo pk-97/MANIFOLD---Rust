@@ -96,12 +96,10 @@ pub fn shared() -> &'static ParityHarness {
 impl ParityHarness {
     pub fn new() -> Self {
         let device = Arc::new(GpuDevice::new());
-        // Build the registry purely for its validation side effects
-        // (`validate_all_specs`, `validate_binding_spec_parity` print
-        // any drift on construction). The processors it allocates are
-        // never read by the parity dispatch path — `EffectChain` looks
-        // them up via the process-wide `primitive_registry()` static —
-        // so we drop the result rather than store it.
+        // Build the registry so its legacy processor singletons
+        // initialize. The parity dispatch path itself doesn't read
+        // them — `EffectChain` looks primitives up via the process-wide
+        // `primitive_registry()` static — so we drop the result.
         let _ = EffectRegistry::new(&device);
         Self {
             device,
