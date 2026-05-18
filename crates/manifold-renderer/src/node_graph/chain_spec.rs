@@ -134,20 +134,32 @@ impl ChainSpec {
 
     /// Should the chain drop this effect for this instance?
     pub fn is_skipped(&self, fx: &EffectInstance) -> bool {
-        match self.skip {
-            SkipMode::Never => false,
-            SkipMode::OnZero { param_id } => {
-                let Some(metadata) = metadata_by_id(&self.type_id) else {
-                    return false;
-                };
-                let Some(idx) = metadata.params.iter().position(|p| p.id == param_id) else {
-                    return false;
-                };
-                fx.param_values
-                    .get(idx)
-                    .map(|s| s.value <= 0.0)
-                    .unwrap_or(false)
-            }
+        is_skipped_for(self.skip, &self.type_id, fx)
+    }
+}
+
+/// Standalone skip check shared between [`ChainSpec::is_skipped`] and
+/// the JSON-loaded preset path (`LoadedPresetView`). The lookup goes
+/// through `effect_definition_registry::param_id_to_index` which is
+/// dual-source aware — works for both inventory-submitted
+/// `EffectMetadata` and JSON-loaded `PresetMetadata`.
+pub fn is_skipped_for(
+    skip: SkipMode,
+    type_id: &EffectTypeId,
+    fx: &EffectInstance,
+) -> bool {
+    match skip {
+        SkipMode::Never => false,
+        SkipMode::OnZero { param_id } => {
+            let Some(idx) =
+                manifold_core::effect_definition_registry::param_id_to_index(type_id, param_id)
+            else {
+                return false;
+            };
+            fx.param_values
+                .get(idx)
+                .map(|s| s.value <= 0.0)
+                .unwrap_or(false)
         }
     }
 }
