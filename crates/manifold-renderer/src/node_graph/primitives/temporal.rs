@@ -299,6 +299,7 @@ inventory::submit! {
     crate::node_graph::persistence::PrimitiveFactory {
         type_id: FEEDBACK_TYPE_ID,
         create: || Box::new(Feedback::new()),
+        picker: Some(crate::node_graph::palette::PickerInfo { label: "Feedback", category: crate::node_graph::palette::PaletteCategory::Atom }),
     }
 }
 

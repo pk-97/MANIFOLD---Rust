@@ -126,6 +126,7 @@ inventory::submit! {
     crate::node_graph::persistence::PrimitiveFactory {
         type_id: SOURCE_TYPE_ID,
         create: || Box::new(Source::new()),
+        picker: None,
     }
 }
 
@@ -133,6 +134,7 @@ inventory::submit! {
     crate::node_graph::persistence::PrimitiveFactory {
         type_id: FINAL_OUTPUT_TYPE_ID,
         create: || Box::new(FinalOutput::new()),
+        picker: None,
     }
 }
 

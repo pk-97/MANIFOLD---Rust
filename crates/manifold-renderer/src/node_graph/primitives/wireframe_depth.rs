@@ -253,5 +253,6 @@ inventory::submit! {
     crate::node_graph::persistence::PrimitiveFactory {
         type_id: WIREFRAME_DEPTH_TYPE_ID,
         create: || Box::new(WireframeDepth::new()),
+        picker: None,
     }
 }

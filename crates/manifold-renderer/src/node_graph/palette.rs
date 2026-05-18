@@ -20,7 +20,53 @@ use manifold_core::EffectTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 
 use crate::node_graph::bundled_presets::bundled_preset_def;
-use crate::node_graph::primitives;
+use crate::node_graph::persistence::PrimitiveFactory;
+
+/// Picker section. Texture-domain building blocks group under
+/// [`PaletteCategory::Atom`]; control-rate / scalar producers group
+/// under [`PaletteCategory::Driver`]. The two strata are mentally
+/// distinct (compose images vs. shape values), so the editor draws
+/// them as separate sections — a flat list buries an LFO between
+/// Blur and Brightness.
+///
+/// Variants are listed in display order; the palette renders one
+/// header per non-empty category, ordered by enum declaration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PaletteCategory {
+    Atom,
+    Driver,
+}
+
+impl PaletteCategory {
+    /// Header text shown above each section in the picker.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Atom => "Atoms",
+            Self::Driver => "Drivers",
+        }
+    }
+
+    /// Section render order. Cheaper to bake into the enum than to
+    /// thread a comparator through the UI layer.
+    pub const ORDER: &'static [Self] = &[Self::Atom, Self::Driver];
+}
+
+/// Static picker metadata a primitive declares at its definition
+/// site (via the `primitive!` macro's `picker:` field, or directly on
+/// the [`PrimitiveFactory`] inventory entry for hand-written
+/// primitives). When `Some`, the primitive appears in the editor
+/// palette under [`Self::category`] with [`Self::label`] as the
+/// clickable row. When `None`, the primitive is registered (loadable
+/// from JSON) but doesn't appear in the picker — used for boundary
+/// nodes, aesthetic effects shipped as whole cards, and any primitive
+/// authored as an internal building block of a composite.
+///
+/// [`PrimitiveFactory`]: super::persistence::PrimitiveFactory
+#[derive(Debug, Clone, Copy)]
+pub struct PickerInfo {
+    pub label: &'static str,
+    pub category: PaletteCategory,
+}
 
 /// One entry in the editor's palette: a node type the user can drop
 /// into the graph. Owned strings so the list can be cloned across the
@@ -33,6 +79,8 @@ pub struct PaletteAtom {
     /// recognizes — passed verbatim to
     /// `AddGraphNodeCommand::new_node_type_id`.
     pub type_id: String,
+    /// Which picker section this entry belongs to.
+    pub category: PaletteCategory,
 }
 
 /// The flat alphabetical list of atoms shown in the editor palette.
@@ -42,61 +90,34 @@ pub struct PaletteAtom {
 /// excluded — those are whole effects shipped as cards, not authoring
 /// building blocks.
 pub fn palette_atoms() -> Vec<PaletteAtom> {
-    let mut atoms = vec![
-        PaletteAtom {
-            label: "Blend".to_string(),
-            type_id: primitives::BLEND_TYPE_ID.to_string(),
-        },
-        PaletteAtom {
-            label: "Blur".to_string(),
-            type_id: primitives::BLUR_TYPE_ID.to_string(),
-        },
-        PaletteAtom {
-            label: "Brightness".to_string(),
-            type_id: primitives::BRIGHTNESS_TYPE_ID.to_string(),
-        },
-        PaletteAtom {
-            label: "Channel Mix".to_string(),
-            type_id: primitives::CHANNEL_MIX_TYPE_ID.to_string(),
-        },
-        PaletteAtom {
-            label: "Color Ramp".to_string(),
-            type_id: primitives::COLOR_RAMP_TYPE_ID.to_string(),
-        },
-        PaletteAtom {
-            label: "Feedback".to_string(),
-            type_id: primitives::FEEDBACK_TYPE_ID.to_string(),
-        },
-        PaletteAtom {
-            label: "Gaussian Blur".to_string(),
-            type_id: primitives::GAUSSIAN_BLUR_TYPE_ID.to_string(),
-        },
-        PaletteAtom {
-            label: "Mip Chain".to_string(),
-            type_id: primitives::MIP_CHAIN_TYPE_ID.to_string(),
-        },
-        PaletteAtom {
-            label: "Mix".to_string(),
-            type_id: primitives::MIX_TYPE_ID.to_string(),
-        },
-        PaletteAtom {
-            label: "Sample".to_string(),
-            type_id: primitives::SAMPLE_TYPE_ID.to_string(),
-        },
-        PaletteAtom {
-            label: "Threshold".to_string(),
-            type_id: primitives::THRESHOLD_TYPE_ID.to_string(),
-        },
-        PaletteAtom {
-            label: "Transform".to_string(),
-            type_id: primitives::TRANSFORM_TYPE_ID.to_string(),
-        },
-        PaletteAtom {
-            label: "Wet/Dry".to_string(),
-            type_id: primitives::WET_DRY_TYPE_ID.to_string(),
-        },
-    ];
-    atoms.sort_by(|a, b| a.label.cmp(&b.label));
+    // Auto-populated from the `PrimitiveFactory` inventory channel —
+    // every shipping primitive that declared `picker: ...` at its
+    // definition site lands here automatically. Adding a node never
+    // requires touching this function. Aesthetic effects, system
+    // boundary nodes, and internal composite building blocks omit
+    // the field and so stay hidden.
+    let mut atoms: Vec<PaletteAtom> = inventory::iter::<PrimitiveFactory>
+        .into_iter()
+        .filter_map(|f| {
+            let info = f.picker?;
+            Some(PaletteAtom {
+                label: info.label.to_string(),
+                type_id: f.type_id.to_string(),
+                category: info.category,
+            })
+        })
+        .collect();
+    atoms.sort_by(|a, b| {
+        let cat_order = |c: PaletteCategory| {
+            PaletteCategory::ORDER
+                .iter()
+                .position(|&v| v == c)
+                .unwrap_or(usize::MAX)
+        };
+        cat_order(a.category)
+            .cmp(&cat_order(b.category))
+            .then_with(|| a.label.cmp(&b.label))
+    });
     atoms
 }
 
@@ -117,19 +138,54 @@ mod tests {
     use super::*;
 
     #[test]
-    fn palette_atoms_are_unique_and_alphabetical() {
+    fn palette_atoms_are_unique_and_grouped() {
         let atoms = palette_atoms();
         assert!(!atoms.is_empty());
-        for w in atoms.windows(2) {
-            assert!(
-                w[0].label <= w[1].label,
-                "atoms must be alphabetically sorted: {:?} > {:?}",
-                w[0].label,
-                w[1].label,
-            );
+
+        // Category groups appear in `PaletteCategory::ORDER`; entries
+        // within each group are alphabetical by label.
+        let mut last_cat_idx: Option<usize> = None;
+        let mut last_label_in_cat: Option<&str> = None;
+        for atom in &atoms {
+            let cat_idx = PaletteCategory::ORDER
+                .iter()
+                .position(|&c| c == atom.category)
+                .expect("category in ORDER");
+            match last_cat_idx {
+                None => {}
+                Some(prev_idx) if prev_idx == cat_idx => {
+                    let prev_label = last_label_in_cat.expect("had prior label in same cat");
+                    assert!(
+                        prev_label <= atom.label.as_str(),
+                        "{:?} > {:?} within {:?}",
+                        prev_label,
+                        atom.label,
+                        atom.category,
+                    );
+                }
+                Some(prev_idx) => {
+                    assert!(
+                        prev_idx < cat_idx,
+                        "categories must appear in ORDER, got {:?} after {:?}",
+                        atom.category,
+                        atoms[0].category,
+                    );
+                }
+            }
+            last_cat_idx = Some(cat_idx);
+            last_label_in_cat = Some(atom.label.as_str());
         }
+
         let ids: std::collections::HashSet<_> = atoms.iter().map(|a| &a.type_id).collect();
         assert_eq!(ids.len(), atoms.len(), "duplicate type ids in palette");
+
+        // The first driver slice ships Value + LFO + Math.
+        let drivers: Vec<_> = atoms
+            .iter()
+            .filter(|a| a.category == PaletteCategory::Driver)
+            .map(|a| a.label.as_str())
+            .collect();
+        assert_eq!(drivers, &["LFO", "Math", "Value"]);
     }
 
     #[test]

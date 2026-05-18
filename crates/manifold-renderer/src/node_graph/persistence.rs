@@ -110,6 +110,13 @@ pub type NodeConstructor = Box<dyn Fn() -> Box<dyn EffectNode> + Send + Sync>;
 pub struct PrimitiveFactory {
     pub type_id: &'static str,
     pub create: fn() -> Box<dyn EffectNode>,
+    /// Static picker metadata. `Some(_)` opts the primitive into the
+    /// editor palette under the declared category and label; `None`
+    /// hides it (boundary nodes, aesthetic effects shipped as cards,
+    /// internal composite building blocks). The editor's
+    /// `palette_atoms()` walks this inventory and surfaces every
+    /// entry that opted in.
+    pub picker: Option<crate::node_graph::palette::PickerInfo>,
 }
 
 inventory::collect!(PrimitiveFactory);

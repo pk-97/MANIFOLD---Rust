@@ -244,6 +244,7 @@ macro_rules! primitive {
         params: [ $($params:tt)* ] $(,)?
         $( composition_notes: $notes:literal, )?
         $( examples: [ $($ex:literal),* $(,)? ], )?
+        $( picker: { label: $picker_label:literal, category: $picker_cat:ident $(,)? }, )?
         $( extra_fields: { $($field_name:ident : $field_ty:ty = $field_init:expr),* $(,)? }, )?
     ) => {
         $crate::__primitive_struct! {
@@ -290,11 +291,15 @@ macro_rules! primitive {
 
         // Auto-register this primitive in the `PrimitiveFactory`
         // inventory channel so `PrimitiveRegistry::with_builtin()`
-        // discovers it at startup without any central list.
+        // discovers it at startup without any central list. The
+        // optional `picker:` field also opts the primitive into the
+        // editor palette via `palette_atoms()` — same inventory walk,
+        // filtered to entries with `picker: Some(_)`.
         ::inventory::submit! {
             $crate::node_graph::persistence::PrimitiveFactory {
                 type_id: $type_id,
                 create: || ::std::boxed::Box::new(<$struct_name>::new()),
+                picker: $crate::__primitive_picker!($( $picker_label, $picker_cat )?),
             }
         }
     };
@@ -343,6 +348,25 @@ macro_rules! __primitive_struct {
                 Self::new()
             }
         }
+    };
+}
+
+/// Internal helper: emit the optional `picker:` field on the
+/// generated [`PrimitiveFactory`] inventory entry. Missing →
+/// `None` (the primitive doesn't appear in the editor palette).
+/// Present → `Some(PickerInfo { ... })` with the declared label
+/// and category.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __primitive_picker {
+    () => {
+        ::std::option::Option::None
+    };
+    ($label:literal, $cat:ident) => {
+        ::std::option::Option::Some($crate::node_graph::palette::PickerInfo {
+            label: $label,
+            category: $crate::node_graph::palette::PaletteCategory::$cat,
+        })
     };
 }
 

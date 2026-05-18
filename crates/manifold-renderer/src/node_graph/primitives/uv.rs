@@ -212,6 +212,7 @@ inventory::submit! {
     crate::node_graph::persistence::PrimitiveFactory {
         type_id: TRANSFORM_TYPE_ID,
         create: || Box::new(Transform::new()),
+        picker: Some(crate::node_graph::palette::PickerInfo { label: "Transform", category: crate::node_graph::palette::PaletteCategory::Atom }),
     }
 }
 
@@ -298,5 +299,6 @@ inventory::submit! {
     crate::node_graph::persistence::PrimitiveFactory {
         type_id: SAMPLE_TYPE_ID,
         create: || Box::new(Sample::new()),
+        picker: Some(crate::node_graph::palette::PickerInfo { label: "Sample", category: crate::node_graph::palette::PaletteCategory::Atom }),
     }
 }

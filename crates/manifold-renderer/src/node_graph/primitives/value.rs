@@ -35,6 +35,7 @@ crate::primitive! {
     ],
     composition_notes: "First-class building block of the control-wire surface. Future LFO / Math / Beat primitives slot in next to this with the same Scalar(F32) output shape.",
     examples: [],
+    picker: { label: "Value", category: Driver },
 }
 
 impl Primitive for Value {

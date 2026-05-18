@@ -192,6 +192,7 @@ inventory::submit! {
     crate::node_graph::persistence::PrimitiveFactory {
         type_id: AUTO_GAIN_TYPE_ID,
         create: || Box::new(AutoGain::new()),
+        picker: None,
     }
 }
 

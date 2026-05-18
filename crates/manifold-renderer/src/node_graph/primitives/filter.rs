@@ -93,6 +93,7 @@ inventory::submit! {
     crate::node_graph::persistence::PrimitiveFactory {
         type_id: THRESHOLD_TYPE_ID,
         create: || Box::new(Threshold::new()),
+        picker: Some(crate::node_graph::palette::PickerInfo { label: "Threshold", category: crate::node_graph::palette::PaletteCategory::Atom }),
     }
 }
 
@@ -294,6 +295,7 @@ inventory::submit! {
     crate::node_graph::persistence::PrimitiveFactory {
         type_id: BLUR_TYPE_ID,
         create: || Box::new(Blur::new()),
+        picker: Some(crate::node_graph::palette::PickerInfo { label: "Blur", category: crate::node_graph::palette::PaletteCategory::Atom }),
     }
 }
 
@@ -360,5 +362,6 @@ inventory::submit! {
     crate::node_graph::persistence::PrimitiveFactory {
         type_id: MIP_CHAIN_TYPE_ID,
         create: || Box::new(MipChain::new()),
+        picker: Some(crate::node_graph::palette::PickerInfo { label: "Mip Chain", category: crate::node_graph::palette::PaletteCategory::Atom }),
     }
 }

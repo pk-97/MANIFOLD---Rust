@@ -360,6 +360,7 @@ inventory::submit! {
     crate::node_graph::persistence::PrimitiveFactory {
         type_id: HALATION_TYPE_ID,
         create: || Box::new(Halation::new()),
+        picker: None,
     }
 }
 

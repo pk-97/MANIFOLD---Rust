@@ -419,6 +419,7 @@ inventory::submit! {
     crate::node_graph::persistence::PrimitiveFactory {
         type_id: BLOOM_TYPE_ID,
         create: || Box::new(Bloom::new()),
+        picker: None,
     }
 }
 

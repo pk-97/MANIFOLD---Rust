@@ -80,6 +80,7 @@ inventory::submit! {
     crate::node_graph::persistence::PrimitiveFactory {
         type_id: BRIGHTNESS_TYPE_ID,
         create: || Box::new(Brightness::new()),
+        picker: Some(crate::node_graph::palette::PickerInfo { label: "Brightness", category: crate::node_graph::palette::PaletteCategory::Atom }),
     }
 }
 
@@ -166,6 +167,7 @@ inventory::submit! {
     crate::node_graph::persistence::PrimitiveFactory {
         type_id: CHANNEL_MIX_TYPE_ID,
         create: || Box::new(ChannelMix::new()),
+        picker: Some(crate::node_graph::palette::PickerInfo { label: "Channel Mix", category: crate::node_graph::palette::PaletteCategory::Atom }),
     }
 }
 
@@ -236,5 +238,6 @@ inventory::submit! {
     crate::node_graph::persistence::PrimitiveFactory {
         type_id: COLOR_RAMP_TYPE_ID,
         create: || Box::new(ColorRamp::new()),
+        picker: Some(crate::node_graph::palette::PickerInfo { label: "Color Ramp", category: crate::node_graph::palette::PaletteCategory::Atom }),
     }
 }

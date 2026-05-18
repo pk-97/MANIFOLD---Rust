@@ -66,6 +66,7 @@ crate::primitive! {
     ],
     composition_notes: "Output range is unipolar [0, 1]. For depth/offset or bipolar shaping, wire the output through `node.math`. For free-running (non-beat-locked) rate, use `node.value` or a future `node.time` source through math.",
     examples: [],
+    picker: { label: "LFO", category: Driver },
 }
 
 impl Primitive for Lfo {

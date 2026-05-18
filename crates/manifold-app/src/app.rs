@@ -463,6 +463,7 @@ impl Application {
                 .map(|a| manifold_ui::panels::graph_palette::GraphPaletteAtom {
                     label: a.label,
                     type_id: a.type_id,
+                    category: a.category.label().to_string(),
                 })
                 .collect(),
             current_editor_target: None,

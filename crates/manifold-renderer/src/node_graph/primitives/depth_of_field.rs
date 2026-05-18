@@ -602,6 +602,7 @@ inventory::submit! {
     crate::node_graph::persistence::PrimitiveFactory {
         type_id: DEPTH_OF_FIELD_TYPE_ID,
         create: || Box::new(DepthOfField::new()),
+        picker: None,
     }
 }
 

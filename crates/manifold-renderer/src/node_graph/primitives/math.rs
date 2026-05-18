@@ -36,6 +36,7 @@ crate::primitive! {
     ],
     composition_notes: "Divide by ~0 clamps to 0 — control signals must never produce NaN/Inf that downstream shaders could propagate.",
     examples: [],
+    picker: { label: "Math", category: Driver },
 }
 
 impl Primitive for Math {

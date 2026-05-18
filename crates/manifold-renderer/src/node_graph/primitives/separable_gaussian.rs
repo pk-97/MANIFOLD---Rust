@@ -61,6 +61,7 @@ crate::primitive! {
     ],
     composition_notes: "Use the same `kernel_size` and `step` on both H and V passes for a separable isotropic blur. The kernels are normalized — DC gain = 1. Variable per-pixel width (DoF's CoC-modulated Gaussian) needs a different primitive.",
     examples: ["composite.bloom", "composite.halation", "composite.watercolor"],
+    picker: { label: "Gaussian Blur", category: Atom },
 }
 
 pub const GAUSSIAN_BLUR_TYPE_ID: &str = "node.gaussian_blur";

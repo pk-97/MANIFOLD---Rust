@@ -458,6 +458,7 @@ inventory::submit! {
     crate::node_graph::persistence::PrimitiveFactory {
         type_id: WATERCOLOR_TYPE_ID,
         create: || Box::new(Watercolor::new()),
+        picker: None,
     }
 }
 

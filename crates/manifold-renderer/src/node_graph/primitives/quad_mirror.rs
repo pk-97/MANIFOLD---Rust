@@ -130,5 +130,6 @@ inventory::submit! {
     crate::node_graph::persistence::PrimitiveFactory {
         type_id: QUAD_MIRROR_TYPE_ID,
         create: || Box::new(QuadMirror::new()),
+        picker: None,
     }
 }

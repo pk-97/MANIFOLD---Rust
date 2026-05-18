@@ -77,6 +77,7 @@ crate::primitive! {
     ],
     composition_notes: "Use Lerp for pure crossfades; Add/Screen for additive bloom-style merges; Multiply for darkening masks; Max for tonemap-safe brightening; Overlay for contrast-preserving combines.",
     examples: ["composite.bloom", "composite.halation"],
+    picker: { label: "Mix", category: Atom },
 }
 
 pub const MIX_TYPE_ID: &str = "node.mix";
@@ -252,6 +253,7 @@ inventory::submit! {
     crate::node_graph::persistence::PrimitiveFactory {
         type_id: BLEND_TYPE_ID,
         create: || Box::new(Blend::new()),
+        picker: Some(crate::node_graph::palette::PickerInfo { label: "Blend", category: crate::node_graph::palette::PaletteCategory::Atom }),
     }
 }
 

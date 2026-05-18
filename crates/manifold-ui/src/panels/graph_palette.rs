@@ -25,6 +25,11 @@ pub struct GraphPaletteAtom {
     /// Stable `type_id` for the node — passed verbatim to
     /// `AddGraphNodeCommand`.
     pub type_id: String,
+    /// Stable section identifier. UI groups entries with the same
+    /// `category` under one header. Matches `PaletteCategory::label()`
+    /// on the renderer side. Plain string here so this crate stays
+    /// independent of `manifold-renderer`.
+    pub category: String,
 }
 
 /// Left-sidebar width inside the graph-editor window. Mirrors the
@@ -90,23 +95,22 @@ impl GraphPalette {
 
         let mut y = viewport.y + PADDING;
 
-        tree.add_label(
-            bg_id,
-            viewport.x + PADDING,
-            y,
-            viewport.width - 2.0 * PADDING,
-            HEADER_H - PADDING,
-            "Atoms",
-            UIStyle {
-                text_color: color::TEXT_WHITE_C32,
-                font_size: HEADER_FONT_SIZE,
-                text_align: TextAlign::Left,
-                ..UIStyle::default()
-            },
-        );
-        y += HEADER_H;
-
         if !self.active {
+            tree.add_label(
+                bg_id,
+                viewport.x + PADDING,
+                y,
+                viewport.width - 2.0 * PADDING,
+                HEADER_H - PADDING,
+                "Atoms",
+                UIStyle {
+                    text_color: color::TEXT_WHITE_C32,
+                    font_size: HEADER_FONT_SIZE,
+                    text_align: TextAlign::Left,
+                    ..UIStyle::default()
+                },
+            );
+            y += HEADER_H;
             tree.add_label(
                 bg_id,
                 viewport.x + PADDING,
@@ -124,7 +128,30 @@ impl GraphPalette {
             return;
         }
 
+        // Render each contiguous run of same-category atoms under one
+        // header. The atom list arrives pre-grouped from the renderer
+        // (palette.rs sorts by category then label) so we just watch
+        // for category changes as we walk it.
+        let mut current_category: Option<&str> = None;
         for atom in &self.atoms {
+            if Some(atom.category.as_str()) != current_category {
+                tree.add_label(
+                    bg_id,
+                    viewport.x + PADDING,
+                    y,
+                    viewport.width - 2.0 * PADDING,
+                    HEADER_H - PADDING,
+                    &atom.category,
+                    UIStyle {
+                        text_color: color::TEXT_WHITE_C32,
+                        font_size: HEADER_FONT_SIZE,
+                        text_align: TextAlign::Left,
+                        ..UIStyle::default()
+                    },
+                );
+                y += HEADER_H;
+                current_category = Some(atom.category.as_str());
+            }
             let btn_id = tree.add_button(
                 bg_id,
                 viewport.x + PADDING,
@@ -180,10 +207,12 @@ mod tests {
             GraphPaletteAtom {
                 label: "Blur".to_string(),
                 type_id: "node.blur".to_string(),
+                category: "Atoms".to_string(),
             },
             GraphPaletteAtom {
                 label: "Mix".to_string(),
                 type_id: "node.mix".to_string(),
+                category: "Atoms".to_string(),
             },
         ]
     }

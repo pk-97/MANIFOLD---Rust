@@ -163,5 +163,6 @@ inventory::submit! {
     crate::node_graph::persistence::PrimitiveFactory {
         type_id: INFRARED_TYPE_ID,
         create: || Box::new(Infrared::new()),
+        picker: None,
     }
 }
