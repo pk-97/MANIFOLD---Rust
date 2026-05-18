@@ -1,8 +1,12 @@
+use crate::effect_graph_def::{
+    AliasEntry, BindingDef, ParamSpecDef, PresetMetadata, SkipModeDef, ValueAliasEntry,
+};
+use crate::effect_registration::{ParamAlias, ParamValueAlias};
 use crate::effect_type_id::EffectTypeId;
 use crate::effects::{EffectInstance, ParamDef};
 use ahash::AHashMap;
 use std::collections::HashMap;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
 
 // ─── Effect Definition ───
 
@@ -84,6 +88,15 @@ static DEFINITIONS: LazyLock<HashMap<EffectTypeId, EffectDef>> = LazyLock::new(|
         if let Some(def) = m.get_mut(&alias_meta.id) {
             def.legacy_value_aliases = alias_meta.aliases;
         }
+    }
+    // JSON-loaded presets (§11 unified-registry migration). Each
+    // entry in `loaded_preset_metadata()` is converted to an
+    // [`EffectDef`] the same way `EffectMetadata` is, then inserted —
+    // a JSON-loaded preset wins over an inventory submission for the
+    // same id. Today this slice is empty; block 3 (build.rs codegen)
+    // and block 4 (per-effect JSON migration) populate it.
+    for preset in loaded_preset_metadata() {
+        m.insert(preset.id.clone(), preset_metadata_to_effect_def(preset));
     }
     m
 });
@@ -229,6 +242,126 @@ fn build_definitions() -> HashMap<EffectTypeId, EffectDef> {
     // implementation files (manifold-renderer/src/effects/*.rs).
     HashMap::new()
 }
+
+// ─── JSON-loaded preset registry ───
+//
+// §11 of `docs/PRIMITIVE_LIBRARY_DESIGN.md` describes the migration
+// from inventory-submitted `EffectMetadata` to JSON-authoritative
+// preset files. This block (block 2) wires up the consumer side: a
+// stable `loaded_preset_metadata()` API that the `DEFINITIONS`
+// registry now also iterates. Today the slice is empty; block 3
+// (build.rs codegen) hands the loader a populated array, and block 4
+// migrates each shipping effect's metadata into its JSON file.
+
+/// JSON-loaded preset metadata for inclusion in the
+/// [`DEFINITIONS`](DEFINITIONS) registry. Returns an empty slice
+/// until the build.rs codegen + per-effect migration land (blocks 3-4
+/// of the §11 migration). Replacing this stub does not change the
+/// registry's consumer-facing API — every caller goes through
+/// [`try_get`] / [`get`] regardless of the data source.
+pub fn loaded_preset_metadata() -> &'static [PresetMetadata] {
+    static EMPTY: OnceLock<Vec<PresetMetadata>> = OnceLock::new();
+    EMPTY.get_or_init(Vec::new)
+}
+
+/// Convert a parsed [`PresetMetadata`] (JSON wire shape) into the
+/// existing [`EffectDef`] consumed by the rest of the codebase.
+///
+/// String fields move from owned to `&'static str` via `Box::leak`.
+/// The leak is bounded by the (finite) number of shipping presets and
+/// happens once at startup when the `DEFINITIONS` `LazyLock`
+/// initialises — in practice it's the same lifetime as the existing
+/// `inventory::iter::<EffectMetadata>` data, just sourced differently.
+///
+/// `bindings` and `skip_mode` are renderer-side concerns and are NOT
+/// projected into [`EffectDef`]; they live separately on the
+/// renderer's `ChainSpec` (today) or, post-§11-migration, on a
+/// renderer-side `LoadedPreset` view that pairs the [`PresetMetadata`]
+/// with the [`crate::effect_graph_def::EffectGraphDef`]'s `nodes` and
+/// `wires`.
+pub fn preset_metadata_to_effect_def(meta: &PresetMetadata) -> EffectDef {
+    let param_defs: Vec<ParamDef> = meta.params.iter().map(param_spec_def_to_param_def).collect();
+    let param_count = param_defs.len();
+    let id_to_index: AHashMap<String, usize> = meta
+        .params
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| !p.id.is_empty())
+        .map(|(i, p)| (p.id.clone(), i))
+        .collect();
+    let param_ids: Vec<&'static str> = meta.params.iter().map(|p| leak_str(&p.id)).collect();
+    EffectDef {
+        display_name: leak_str(&meta.display_name),
+        param_count,
+        param_defs,
+        osc_prefix: Some(leak_str(&meta.osc_prefix)),
+        id_to_index,
+        param_ids,
+        legacy_param_aliases: leak_alias_table(&meta.param_aliases),
+        legacy_node_aliases: leak_alias_table(&meta.node_aliases),
+        legacy_value_aliases: leak_value_alias_table(&meta.value_aliases),
+    }
+}
+
+fn param_spec_def_to_param_def(p: &ParamSpecDef) -> ParamDef {
+    ParamDef {
+        id: p.id.clone(),
+        name: p.name.clone(),
+        min: p.min,
+        max: p.max,
+        default_value: p.default_value,
+        whole_numbers: p.whole_numbers,
+        is_toggle: p.is_toggle,
+        value_labels: if p.value_labels.is_empty() {
+            None
+        } else {
+            Some(p.value_labels.clone())
+        },
+        format_string: p.format_string.clone(),
+        osc_suffix: if p.osc_suffix.is_empty() {
+            None
+        } else {
+            Some(p.osc_suffix.clone())
+        },
+    }
+}
+
+fn leak_str(s: &str) -> &'static str {
+    Box::leak(s.to_string().into_boxed_str())
+}
+
+fn leak_alias_table(entries: &[AliasEntry]) -> &'static [ParamAlias] {
+    let v: Vec<ParamAlias> = entries
+        .iter()
+        .map(|e| {
+            let old: &'static str = leak_str(&e.old);
+            let new: Option<&'static str> = e.new.as_deref().map(leak_str);
+            (old, new)
+        })
+        .collect();
+    Box::leak(v.into_boxed_slice())
+}
+
+fn leak_value_alias_table(
+    entries: &[ValueAliasEntry],
+) -> &'static [(&'static str, &'static [ParamValueAlias])] {
+    let v: Vec<(&'static str, &'static [ParamValueAlias])> = entries
+        .iter()
+        .map(|e| {
+            let param_id: &'static str = leak_str(&e.param_id);
+            let mapping: &'static [ParamValueAlias] =
+                Box::leak(e.mapping.clone().into_boxed_slice());
+            (param_id, mapping)
+        })
+        .collect();
+    Box::leak(v.into_boxed_slice())
+}
+
+// Silence unused-warnings for items still in plumbing — block 3-4
+// populate these. The `#[allow]` is removed once the items are wired
+// to a non-test consumer.
+#[allow(dead_code)]
+fn _phase_b_keepalive(_: &BindingDef, _: &SkipModeDef) {}
 
 #[cfg(test)]
 mod tests {
@@ -534,5 +667,164 @@ mod tests {
                 def.legacy_param_aliases
             );
         }
+    }
+
+    // ── §11 block 2: PresetMetadata → EffectDef converter ──────────
+
+    use crate::effect_graph_def::{
+        AliasEntry, BindingDef, BindingTarget, ParamSpecDef, PresetMetadata, SkipModeDef,
+        ValueAliasEntry,
+    };
+    use crate::effects::ParamConvert;
+
+    fn bloom_preset_metadata() -> PresetMetadata {
+        PresetMetadata {
+            id: EffectTypeId::new("BloomFromJson"),
+            display_name: "Bloom (from JSON)".to_string(),
+            category: "Filmic".to_string(),
+            osc_prefix: "bloom_from_json".to_string(),
+            legacy_discriminant: Some(12),
+            available: true,
+            params: vec![ParamSpecDef {
+                id: "amount".to_string(),
+                name: "Amount".to_string(),
+                min: 0.0,
+                max: 5.0,
+                default_value: 0.5,
+                whole_numbers: false,
+                is_toggle: false,
+                value_labels: Vec::new(),
+                format_string: Some("F2".to_string()),
+                osc_suffix: String::new(),
+            }],
+            bindings: vec![BindingDef {
+                id: "amount".to_string(),
+                label: "Amount".to_string(),
+                default_value: 0.5,
+                target: BindingTarget::HandleNode {
+                    handle: "bloom".to_string(),
+                    param: "amount".to_string(),
+                },
+                convert: ParamConvert::Float,
+            }],
+            skip_mode: SkipModeDef::OnZero {
+                param_id: "amount".to_string(),
+            },
+            param_aliases: vec![AliasEntry {
+                old: "intensity".to_string(),
+                new: Some("amount".to_string()),
+            }],
+            node_aliases: Vec::new(),
+            value_aliases: vec![ValueAliasEntry {
+                param_id: "amount".to_string(),
+                mapping: vec![(0, 1)],
+            }],
+        }
+    }
+
+    #[test]
+    fn preset_metadata_converts_to_effect_def() {
+        let meta = bloom_preset_metadata();
+        let def = preset_metadata_to_effect_def(&meta);
+
+        assert_eq!(def.display_name, "Bloom (from JSON)");
+        assert_eq!(def.osc_prefix, Some("bloom_from_json"));
+        assert_eq!(def.param_count, 1);
+        assert_eq!(def.param_defs.len(), 1);
+        assert_eq!(def.param_defs[0].id, "amount");
+        assert_eq!(def.param_defs[0].name, "Amount");
+        assert!((def.param_defs[0].default_value - 0.5).abs() < 1e-6);
+        assert_eq!(def.id_to_index.get("amount"), Some(&0));
+        assert_eq!(def.param_ids, vec!["amount"]);
+
+        assert_eq!(def.legacy_param_aliases.len(), 1);
+        assert_eq!(def.legacy_param_aliases[0].0, "intensity");
+        assert_eq!(def.legacy_param_aliases[0].1, Some("amount"));
+
+        assert_eq!(def.legacy_value_aliases.len(), 1);
+        assert_eq!(def.legacy_value_aliases[0].0, "amount");
+        assert_eq!(def.legacy_value_aliases[0].1, &[(0, 1)]);
+    }
+
+    /// The JSON converter and the inventory converter must produce
+    /// equivalent `EffectDef`s for the same effect shape. This is the
+    /// invariant block 4's per-effect migration relies on: a JSON
+    /// `PresetMetadata` exactly reproducing an `EffectMetadata`
+    /// inventory submission is observably identical at the
+    /// `EffectDef` consumer surface.
+    #[test]
+    fn preset_metadata_and_effect_metadata_produce_equivalent_def() {
+        // Construct an EffectMetadata and a matching PresetMetadata
+        // describing the "same" effect, then compare their resulting
+        // EffectDefs field-by-field at the consumer-facing surface.
+        //
+        // `params` needs a `'static` slice — declared as a static so
+        // it's not a temporary.
+        static INV_PARAMS: [ParamSpec; 1] =
+            [ParamSpec::continuous("amount", "Amount", 0.0, 1.0, 0.5, "F2", "")];
+        let inv_meta = EffectMetadata {
+            id: EffectTypeId::new("ParityCheck"),
+            display_name: "Parity Check",
+            category: "Filmic",
+            available: true,
+            osc_prefix: "parity_check",
+            legacy_discriminant: None,
+            params: &INV_PARAMS,
+        };
+        let inv_def = inv_meta.to_effect_def();
+
+        let json_meta = PresetMetadata {
+            id: EffectTypeId::new("ParityCheck"),
+            display_name: "Parity Check".to_string(),
+            category: "Filmic".to_string(),
+            osc_prefix: "parity_check".to_string(),
+            legacy_discriminant: None,
+            available: true,
+            params: vec![ParamSpecDef {
+                id: "amount".to_string(),
+                name: "Amount".to_string(),
+                min: 0.0,
+                max: 1.0,
+                default_value: 0.5,
+                whole_numbers: false,
+                is_toggle: false,
+                value_labels: Vec::new(),
+                format_string: Some("F2".to_string()),
+                osc_suffix: String::new(),
+            }],
+            bindings: Vec::new(),
+            skip_mode: SkipModeDef::default(),
+            param_aliases: Vec::new(),
+            node_aliases: Vec::new(),
+            value_aliases: Vec::new(),
+        };
+        let json_def = preset_metadata_to_effect_def(&json_meta);
+
+        assert_eq!(inv_def.display_name, json_def.display_name);
+        assert_eq!(inv_def.param_count, json_def.param_count);
+        assert_eq!(inv_def.osc_prefix, json_def.osc_prefix);
+        // ParamDef Strings → compare values.
+        assert_eq!(inv_def.param_defs.len(), json_def.param_defs.len());
+        for (a, b) in inv_def.param_defs.iter().zip(json_def.param_defs.iter()) {
+            assert_eq!(a.id, b.id);
+            assert_eq!(a.name, b.name);
+            assert!((a.min - b.min).abs() < 1e-6);
+            assert!((a.max - b.max).abs() < 1e-6);
+            assert!((a.default_value - b.default_value).abs() < 1e-6);
+            assert_eq!(a.whole_numbers, b.whole_numbers);
+            assert_eq!(a.is_toggle, b.is_toggle);
+            assert_eq!(a.format_string, b.format_string);
+            assert_eq!(a.osc_suffix, b.osc_suffix);
+        }
+        assert_eq!(inv_def.id_to_index, json_def.id_to_index);
+        assert_eq!(inv_def.param_ids, json_def.param_ids);
+    }
+
+    #[test]
+    fn loaded_preset_metadata_returns_empty_initially() {
+        // Block 2 ships with no JSON loader populated. Confirms the
+        // dual-source registry doesn't accidentally start consuming
+        // something before blocks 3-4 land.
+        assert!(loaded_preset_metadata().is_empty());
     }
 }

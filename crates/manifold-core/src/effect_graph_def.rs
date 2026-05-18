@@ -298,6 +298,9 @@ pub struct AliasEntry {
 /// One entry in a value-remap alias table — applies to a single
 /// param's stored value at load time. Used when an effect's enum
 /// value indices shift across a refactor.
+///
+/// Matches the renderer-side `ParamValueAlias = (i32, i32)` shape
+/// for `(from, to)` pairs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ValueAliasEntry {
@@ -305,7 +308,7 @@ pub struct ValueAliasEntry {
     pub param_id: String,
     /// Pairs of `(stored_value, new_value)` — when the loader sees a
     /// param value matching the first, it rewrites to the second.
-    pub mapping: Vec<(f32, f32)>,
+    pub mapping: Vec<(i32, i32)>,
 }
 
 #[cfg(test)]
