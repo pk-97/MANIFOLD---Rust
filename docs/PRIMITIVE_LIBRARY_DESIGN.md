@@ -1127,3 +1127,59 @@ After this migration the system has *one source of truth per category*:
 No hand-maintained lists. No drift tests. No "did you remember to update X." Adding a primitive = drop 2 files + 1 `mod` line. Adding a preset = drop 1 JSON file. Same shape whether it's authored by Peter, Claude, an AI agent, or eventually a user via the graph editor's "Save Preset" affordance.
 
 
+## 12. Node-type taxonomy (2026-05-18)
+
+The §10 plan organised work into phases (A–E). This section is the orthogonal cut — **what kinds of nodes exist in the graph language**, in the shape they need to converge to so users can decompose every effect down to a small set of composable primitives. Reference for future authoring decisions.
+
+### 12.1 What shipped post-Phase B kickoff
+
+- **Control wire plumbing** (`cc6d0856`) — `PortType::Scalar(ScalarType)`, `Backend::set_scalar`, `NodeOutputs::set_scalar` with per-step scratch drain. Macro learned `ScalarF32`/`ScalarVec2`/etc. port types. Convention: when a primitive declares an optional `Scalar` input port with the same name as a same-named `ParamDef`, the wire shadows the param when present (FluidSim pattern). First wired consumer: `wet_dry_mix.wet_dry`.
+- **Control producers** (`239877fb`) — `node.value` (constant scalar), `node.lfo` (beat-locked oscillator, sine/triangle/saw/square, stateless), `node.math` (binary op, divide-by-zero clamps to 0).
+- **Auto-populated palette** (`3de11521`) — `PrimitiveFactory` carries `picker: Option<PickerInfo>`; macro accepts `picker: { label, category }`; `palette_atoms()` walks inventory. New nodes appear in the editor by declaring picker info at their definition site, not by editing a central list.
+
+### 12.2 Remaining V1 node categories
+
+Five categories round out the V1 surface. Combined with the texture and scalar/math primitives already shipped, these cover the bulk of 2D-image + control-rate effect authoring.
+
+**Texture→Scalar bridges.** Read a texture, emit a scalar. Brightness/peak/centroid measurement, motion energy from frame-to-frame difference, color sample at a UV, FFT band extraction from an audio spectrum texture. New flow direction (image → control). Without these, control wires can only carry external/time signals, never anything derived from the image stream — and "this effect reacts to its own content" is half the responsive-instrument promise.
+
+**External source nodes.** Driver nodes wrapping MIDI CC, OSC, Ableton macros, audio FFT bands, and beat/bar/phase as scalar outputs. The plumbing already exists in the renderer's modulation/binding system; surfacing them as first-class driver nodes means external inputs flow through the same graph language as everything else instead of being a special-case slider mapping. Beat/bar/phase deserve dedicated nodes (`node.beat`, `node.phase`, `node.bar`) rather than being implicit via `ctx.time` — same musical model, same graph language.
+
+**Stateful control nodes.** The scalar equivalent of `Feedback`. Smoothing (one-pole filter with a time-constant param), Sample-and-Hold (latch value on trigger), Envelope (attack/decay/sustain/release, triggered on a gate scalar), Step Sequencer (N values, advance on a beat input). All use the existing `StateStore` pattern Feedback uses today — same indexing by `node_id + owner_key`, same `clear_state` for seek/pause.
+
+**Convolution with kernel-as-input.** One atomic primitive whose kernel weights are an editable input (1D for separable axes, 2D for general). Gaussian Blur, Box Blur, Sharpen, Edge Detect, Sobel all become "Convolution + a different kernel." Users open the node and see the actual weights; can edit them. Replaces today's hand-coded kernel constants inside `node.gaussian_blur` with a generic primitive plus a kernel-weights input. The KernelInput widget is its own UI piece — a small float-grid editor with optional preset kernels.
+
+**WGSL Shader escape hatch.** A `node.shader` primitive that takes a small WGSL fragment as a string param. The graph language can never fully match WGSL's expressiveness (per-pixel runtime-varying kernel sizes like DoF, iterative state, gather from computed offsets — what shaders exist to express), so eventually some leaf needs to drop to WGSL. Houdini does this with VEX snippets; Substance Designer with the Pixel Processor node. This is the bottom of the ladder; below it is the GPU. Open UX problems: how does the editor surface compile errors (probably inline indicator + passthrough on failure), and what's the input/output port shape — fixed `(in: Texture2D, params: scalars, out: Texture2D)` is probably the V1 shape; multi-input/multi-output is a future extension.
+
+### 12.3 V2-deferred axes
+
+Three categories of node intentionally outside the V1 scope. Each is a real gap; each has a tractable workaround for V1 (usually via the WGSL Shader node).
+
+**Buffer / array data.** Particle positions, audio sample buffers, mesh vertex arrays. Today these live inside opaque atomic generators (OscilloscopeXY's audio buffer, ParametricSurface's vertex array, Mycelium's particle list). The V1 port types can't carry array data — they're scalars or textures. Encoding arrays as 1×N textures works for audio waveforms but is ugly for mesh data with multiple per-vertex attributes. A `Buffer` port type is the missing axis. Listed as V2 in the original §10 port-type discussion.
+
+**Loop / subgraph iteration.** Some effects iterate per frame — fluid sim runs ~20 pressure-projection passes per frame, multi-bounce refraction iterates the lens equation. Today only the WGSL Shader node can express that. A `SubgraphIterate(N)` primitive that runs a subgraph N times with output feedback would let those effects fully decompose, but it's a graph-runtime feature (the executor needs to support running a subgraph as one step with internal state), not just a new primitive.
+
+**3D volume primitives.** `PortType::Texture3D` exists, `FluidSim3D` uses it, but no primitives operate on volumes today (no `Sample3D`, no `SliceVolume → Texture2D`, no per-voxel math). If volumetric effects are ever on the roadmap, that's a parallel family of texture primitives — mirror of the existing 2D set but on volumes.
+
+### 12.4 Decomposition + fusion-on-compile
+
+The architectural stance the §10 plan was implicitly aiming at, now explicit:
+
+**Decompose everything authored from now on into the smallest primitives that compose cleanly.** The graph editor is the teaching surface — users learn how effects work by opening them up. Aesthetic operators get authored as visible compositions of primitives + kernel inputs + occasional WGSL Shader nodes at the leaves. No new effect should ship as a single opaque shader if it can be expressed as a graph of existing primitives.
+
+**Accept the per-dispatch overhead during authoring.** Each primitive is a separate GPU dispatch with its own encoder boundary and intermediate texture. For the V1 catalog this is fine — the chain runtime is fast enough that single-primitive overhead doesn't dominate. Measure before pre-optimising.
+
+**Add a fusion-on-compile pass when perf demands it.** Recognise common atomic chains (per-pixel ops with no gather between them) and emit a single fused shader for the hot path. The editor still sees small primitives; the GPU runs fused. Gather chains (Blur, MipChain, anything with a non-trivial neighbourhood read) stay as real intermediate textures because the producer has to materialise — those effects are already composites anyway.
+
+The §10.4 "EffectGraphDef v1→v2 migration" cross-cutting note is the entry point for fusion: once the v2 schema is in place, the compile pass takes a v2 graph + a fusion ruleset and emits either a sequence of dispatches or a fused shader per fusable chain.
+
+### 12.5 The fp16-as-blocker myth (correcting §6.1)
+
+§6.1's parity-migration notes mention that some effects (Strobe specifically) had to ship as fused composites because decomposing them broke pixel-exact parity through fp16 intermediate textures. That framing assumed all wires were `Rgba16Float` texture wires. With scalar wires (`PortType::Scalar(F32)`, `ParamValue::Float(f32)`) the constraint dissolves for scalar data: BeatGate's amount flows through an f32 scalar wire, never touches an fp16 texture, and reaches Mix at full precision. Pixel-exact parity is achievable without fusion-on-compile *for any decomposition where the inter-primitive value is scalar*.
+
+The remaining fp16 case — where one primitive's *texture* output feeds another's *texture* input — is real and intrinsic: textures are `Rgba16Float` and the round-trip quantises. But every effect with gather-based texture intermediates (Bloom, Halation, Watercolor — the MipChain/Blur composites) already pays this cost today and the parity tests already cover them. fp16 isn't a fundamental decomposition blocker; it's an artifact of using texture wires for scalar data, which scalar wires now fix.
+
+### 12.6 What we deliberately avoid
+
+The temptation to ship a "purpose-built" primitive every time something feels slightly awkward. The whole pitch only works if the primitive set stays small and composable. Every time we're tempted to add `node.special_thing_for_one_effect`, the right question is: *could this be Convolution + a kernel? Math + an LFO? a WGSL Shader fragment?* If yes, ship it that way. If we end up with 80 primitives, we've just rebuilt the flat catalog one level lower.
+
