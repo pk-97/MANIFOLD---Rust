@@ -11,12 +11,11 @@
 //! no central registration to forget.
 //!
 //! The bundled preset for `EffectTypeId::X` is the canonical default
-//! graph for that effect. Today it equals the output of
-//! `chain_spec_by_id(X).build_canonical_graph()` (verified by the
-//! `bundled_presets_match_canonical_splices` test in
-//! `tests/bundled_presets_drift.rs`); after the §11 cutover (full
-//! plan in `docs/PRIMITIVE_LIBRARY_DESIGN.md`) the JSON file becomes
-//! authoritative and the splice fn-pointer is deleted.
+//! graph for that effect. Post-§11 the JSON file is authoritative —
+//! the chain runtime and editor snapshot both source bindings,
+//! skip-mode, and topology from the embedded
+//! [`PresetMetadata`](manifold_core::effect_graph_def::PresetMetadata)
+//! block via [`crate::node_graph::LoadedPresetView`].
 //!
 //! User-authored per-instance graphs are stored separately on the
 //! [`EffectInstance`](manifold_core::effects::EffectInstance). Both
@@ -25,13 +24,10 @@
 //!
 //! ## Add a new preset
 //!
-//! 1. Drop a JSON file at `assets/effect-presets/<TypeId>.json`.
-//! 2. (Until §11 block 4 lands) Add the matching
-//!    [`ChainSpec`](crate::node_graph::ChainSpec) submission via
-//!    `inventory::submit!` and run
-//!    `cargo test -p manifold-renderer --test bundled_presets_drift -- --ignored`
-//!    to regenerate the canonical JSON.
-//! 3. Build — `build.rs` picks up the new file automatically.
+//! 1. Drop a JSON file at `assets/effect-presets/<TypeId>.json` with
+//!    a populated `presetMetadata` block (display name, params,
+//!    bindings, skip mode).
+//! 2. Build — `build.rs` picks up the new file automatically.
 
 use std::sync::OnceLock;
 
@@ -95,9 +91,10 @@ pub fn bundled_preset_type_ids() -> impl Iterator<Item = EffectTypeId> {
 /// Loader function for the core's [`LoadedPresetSource`] inventory.
 /// Walks the bundled preset table, parses each JSON document, and
 /// returns the `preset_metadata` field from every entry that carries
-/// one (v2 schema). v1 entries (the 27 shipping presets prior to the
-/// §11 block-4 migration) yield nothing — block 4 populates metadata
-/// one effect at a time, and this iterator widens as those land.
+/// one (v2 schema). Every shipping bundled preset is v2 post-§11;
+/// the `Option`-returning shape is retained so test-only or
+/// hand-authored v1 fixtures stay loadable as graphs without
+/// breaking the metadata projection.
 ///
 /// Cached at the `loaded_preset_metadata()` callsite — invoked once
 /// per process.

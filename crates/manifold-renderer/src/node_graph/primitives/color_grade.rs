@@ -1,5 +1,5 @@
 //! `node.color_grade` — pixel-exact replacement for legacy
-//! [`ColorGradeFX`](crate::effects::color_grade::ColorGradeFX). Second
+//! Originally `ColorGradeFX`. Second
 //! §6.1 migration.
 //!
 //! Single compute pass with 9 parameters covering gain (exposure),

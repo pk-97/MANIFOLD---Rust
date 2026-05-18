@@ -1,5 +1,5 @@
 //! `node.glitch` — pixel-exact replacement for legacy
-//! [`GlitchFX`](crate::effects::glitch::GlitchFX). Thirteenth and
+//! Originally `GlitchFX`. Thirteenth and
 //! **final** §6.1 migration; fused composite.
 //!
 //! Block displacement + scanline jitter + RGB channel split +

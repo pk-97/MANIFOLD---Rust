@@ -1,5 +1,5 @@
 //! `node.highlight_boost` — pixel-exact replacement for legacy
-//! [`HdrBoostFX`](crate::effects::hdr_boost::HdrBoostFX). Ninth §6.1
+//! Originally `HdrBoostFX`. Ninth §6.1
 //! migration.
 //!
 //! Soft-knee threshold selects bright areas; the luminance excess

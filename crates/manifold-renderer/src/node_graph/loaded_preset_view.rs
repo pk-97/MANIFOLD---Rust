@@ -43,9 +43,11 @@ use crate::node_graph::chain_spec::SkipMode;
 use crate::node_graph::param_binding::{ParamBinding, ParamId, ParamTarget};
 use crate::node_graph::snapshot::{GraphSnapshot, OuterParamRouting, OuterParamSource};
 
-/// Runtime view assembled from a JSON-loaded preset. Same field shape
-/// as [`crate::node_graph::ChainSpec`] minus the static `splice` fn —
-/// the chain builder uses
+/// Runtime view assembled from a JSON-loaded preset. Replaces the
+/// inventory-submitted `ChainSpec` that used to ship as a static
+/// `splice` fn plus a canonical graph builder; this view keeps the
+/// same effective shape but sources `canonical_def` and `bindings`
+/// from JSON. The chain builder uses
 /// [`crate::node_graph::splice_def_into_chain`] with `canonical_def`
 /// to produce equivalent worker nodes.
 pub struct LoadedPresetView {

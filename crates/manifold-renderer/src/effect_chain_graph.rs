@@ -114,9 +114,10 @@ fn output_resource(
 ///
 /// [`ChainGraph::try_build`] returns `Some` whenever every enabled
 /// effect has either a primitive mapping (via
-/// [`primitive_id_for_effect`]) or registered legacy metadata (via
-/// [`metadata_by_id`]) so it can be wrapped as a
-/// [`LegacyPostProcessNode`]. Disabled groups skip their effects
+/// [`primitive_id_for_effect`]) or registered legacy metadata (the
+/// `EffectMetadata` catalog used to live in `node_graph::metadata`)
+/// so it can be wrapped as a [`LegacyPostProcessNode`]. Disabled
+/// groups skip their effects
 /// (the effects are omitted from the chain graph entirely).
 ///
 /// Effect groups with `wet_dry` ≠ 1.0 are handled via Mix

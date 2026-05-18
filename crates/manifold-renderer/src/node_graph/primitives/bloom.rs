@@ -1,5 +1,5 @@
 //! `node.bloom` — pixel-exact replacement for legacy
-//! [`BloomFX`](crate::effects::bloom::BloomFX). Fused composite.
+//! Originally `BloomFX`. Fused composite.
 //!
 //! Bloom's atomic decomposition would require Unity-style Blur9 tent
 //! and Blur13 filmic kernels plus a ping-ponging dual mip chain — a

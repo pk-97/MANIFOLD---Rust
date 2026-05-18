@@ -1,5 +1,5 @@
 //! `node.dither` — pixel-exact replacement for legacy
-//! [`DitherFX`](crate::effects::dither::DitherFX). Seventh §6.1
+//! Originally `DitherFX`. Seventh §6.1
 //! migration.
 //!
 //! 6 dithering algorithms (Bayer 8×8, Halftone dots, Lines,

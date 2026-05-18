@@ -1,5 +1,5 @@
 //! `node.invert` — pixel-exact replacement for the legacy
-//! [`InvertColorsFX`](crate::effects::invert_colors::InvertColorsFX)
+//! Originally `InvertColorsFX`
 //! effect. First production primitive authored via the
 //! [`primitive!`](crate::primitive) macro and the first §6.1
 //! migration from the Phase 4a primitive library design.

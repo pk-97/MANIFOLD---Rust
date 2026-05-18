@@ -773,9 +773,9 @@ mod tests {
     #[test]
     fn v1_document_is_accepted() {
         // V1 documents on disk (no presetMetadata) must keep loading
-        // after the v2 schema bump. The 25 shipping bundled-preset
-        // JSON files all live at v1 until the §11 migration populates
-        // their metadata.
+        // after the v2 schema bump. Every shipping bundled preset is
+        // v2 post-§11, but user projects + test fixtures saved before
+        // the migration must still round-trip.
         let doc = GraphDocument {
             version: 1,
             name: None,

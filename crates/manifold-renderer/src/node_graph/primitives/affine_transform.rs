@@ -1,5 +1,5 @@
 //! `node.affine_transform` — pixel-exact replacement for legacy
-//! [`TransformFX`](crate::effects::transform::TransformFX). Fifth
+//! Originally `TransformFX`. Fifth
 //! §6.1 migration.
 //!
 //! 2D UV affine with aspect-correct rotation. The primitive surfaces

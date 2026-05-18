@@ -1,5 +1,5 @@
 //! `node.chromatic_aberration` — pixel-exact replacement for legacy
-//! [`ChromaticAberrationFX`](crate::effects::chromatic_aberration::ChromaticAberrationFX).
+//! Originally `ChromaticAberrationFX`.
 //! Sixth §6.1 migration.
 //!
 //! Splits the red and blue channels along a direction vector and

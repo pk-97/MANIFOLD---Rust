@@ -1,5 +1,5 @@
 //! `node.kaleidoscope` — pixel-exact replacement for legacy
-//! [`KaleidoscopeFX`](crate::effects::kaleidoscope::KaleidoscopeFX).
+//! Originally `KaleidoscopeFX`.
 //! Fourth §6.1 migration.
 //!
 //! Polar-coordinate segment mirroring: slices the UV plane into N

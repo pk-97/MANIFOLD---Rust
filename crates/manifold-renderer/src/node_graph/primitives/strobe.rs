@@ -1,5 +1,5 @@
 //! `node.strobe` — pixel-exact replacement for legacy
-//! [`StrobeFX`](crate::effects::strobe::StrobeFX). Eleventh §6.1
+//! Originally `StrobeFX`. Eleventh §6.1
 //! migration; fused composite.
 //!
 //! Beat-synced square wave flash with three modes (Opacity → black,

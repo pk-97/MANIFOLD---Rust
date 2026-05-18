@@ -1,5 +1,5 @@
 //! `node.watercolor` — pixel-exact replacement for legacy
-//! [`WatercolorFX`](crate::effects::watercolor::WatercolorFX). Fused
+//! Originally `WatercolorFX`. Fused
 //! composite.
 //!
 //! Seven sequential passes: grain+max → flow generation → displacement

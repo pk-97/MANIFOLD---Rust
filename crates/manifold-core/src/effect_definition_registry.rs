@@ -93,8 +93,9 @@ static DEFINITIONS: LazyLock<HashMap<EffectTypeId, EffectDef>> = LazyLock::new(|
     // entry in `loaded_preset_metadata()` is converted to an
     // [`EffectDef`] the same way `EffectMetadata` is, then inserted —
     // a JSON-loaded preset wins over an inventory submission for the
-    // same id. Today this slice is empty; block 3 (build.rs codegen)
-    // and block 4 (per-effect JSON migration) populate it.
+    // same id. Post-§11 every shipping effect lives in JSON; the
+    // inventory loop above only fires for tests that submit
+    // synthetic `EffectMetadata` entries.
     for preset in loaded_preset_metadata() {
         m.insert(preset.id.clone(), preset_metadata_to_effect_def(preset));
     }
@@ -247,11 +248,10 @@ fn build_definitions() -> HashMap<EffectTypeId, EffectDef> {
 //
 // §11 of `docs/PRIMITIVE_LIBRARY_DESIGN.md` describes the migration
 // from inventory-submitted `EffectMetadata` to JSON-authoritative
-// preset files. This block (block 2) wires up the consumer side: a
-// stable `loaded_preset_metadata()` API that the `DEFINITIONS`
-// registry now also iterates. Today the slice is empty; block 3
-// (build.rs codegen) hands the loader a populated array, and block 4
-// migrates each shipping effect's metadata into its JSON file.
+// preset files. `loaded_preset_metadata()` walks every
+// [`LoadedPresetSource`] submission (today: one from the renderer
+// crate covering all shipping bundled presets) and feeds its results
+// into `DEFINITIONS` above.
 
 /// JSON-loaded preset metadata for inclusion in the
 /// [`DEFINITIONS`](DEFINITIONS) registry.
@@ -310,9 +310,8 @@ inventory::collect!(LoadedPresetSource);
 /// `inventory::iter::<EffectMetadata>` data, just sourced differently.
 ///
 /// `bindings` and `skip_mode` are renderer-side concerns and are NOT
-/// projected into [`EffectDef`]; they live separately on the
-/// renderer's `ChainSpec` (today) or, post-§11-migration, on a
-/// renderer-side `LoadedPreset` view that pairs the [`PresetMetadata`]
+/// projected into [`EffectDef`]; they live on the renderer's
+/// `LoadedPresetView` (post-§11) which pairs the [`PresetMetadata`]
 /// with the [`crate::effect_graph_def::EffectGraphDef`]'s `nodes` and
 /// `wires`.
 pub fn preset_metadata_to_effect_def(meta: &PresetMetadata) -> EffectDef {

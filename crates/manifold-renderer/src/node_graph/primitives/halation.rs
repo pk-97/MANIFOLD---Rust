@@ -1,5 +1,5 @@
 //! `node.halation` — pixel-exact replacement for legacy
-//! [`HalationFX`](crate::effects::halation::HalationFX). Fused
+//! Originally `HalationFX`. Fused
 //! composite.
 //!
 //! Three passes: Pass 0 fuses threshold, tint, and H Gaussian

@@ -109,11 +109,12 @@ pub enum ParamTarget {
     /// where one outer name resolves to one or more inner-node
     /// parameters via the handle.
     Composite { outer_name: Cow<'static, str> },
-    /// Spec-time inner-node reference by handle name. Lives in
-    /// `&'static [ParamBinding]` arrays declared on a [`ChainSpec`]
-    /// before any graph exists. Resolved into [`ResolvedTarget::Node`]
-    /// at chain build time once the splice has produced its handles
-    /// map. See [`ResolvedBinding::from_static`].
+    /// Spec-time inner-node reference by handle name. Lives in the
+    /// `&'static [ParamBinding]` arrays carried by a
+    /// [`LoadedPresetView`] before any graph exists. Resolved into
+    /// [`ResolvedTarget::Node`] at chain build time once the splice
+    /// has produced its handles map. See
+    /// [`ResolvedBinding::from_static`].
     HandleNode {
         handle: &'static str,
         param: &'static str,

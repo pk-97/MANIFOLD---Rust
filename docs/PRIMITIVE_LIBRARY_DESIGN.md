@@ -958,6 +958,8 @@ That's the wedge nobody else is building. The graph editor convergence with Touc
 
 ## 11. Unified authoring registry — pre-implementation research (2026-05-18)
 
+> **Status: complete, 2026-05-18.** Landed across 14 commits over two sessions. Chain runtime, editor snapshot, and primitive registry are all single-path; ~4500 lines of legacy deleted; every shipping effect's metadata + canonical graph lives in `assets/effect-presets/*.json` with `presetMetadata` populated. Adding a new effect is now a JSON drop. Manual UI walkthrough (picker, MIDI mapping on Liveschool fixture) is the one remaining check.
+
 Before starting the JSON-authoritative migration sketched at the end of §10, this section captures an audit of the existing registries and consumers, with refinements to the original plan. The architectural target stays the same — *one source of truth per category, no hand-maintained lists* — but the migration is more nuanced than first stated.
 
 ### 11.1 What "registry" currently means — three overlapping systems

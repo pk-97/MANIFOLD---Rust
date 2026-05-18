@@ -1,5 +1,5 @@
 //! `node.edge_stretch` — pixel-exact replacement for legacy
-//! [`EdgeStretchFX`](crate::effects::edge_stretch::EdgeStretchFX).
+//! Originally `EdgeStretchFX`.
 //! Third §6.1 migration.
 //!
 //! Clamps UV coordinates to a center strip (width-controlled,

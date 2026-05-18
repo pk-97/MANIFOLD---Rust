@@ -1,5 +1,5 @@
 //! `node.edge_detect` — pixel-exact replacement for legacy
-//! [`EdgeDetectFX`](crate::effects::edge_detect::EdgeDetectFX).
+//! Originally `EdgeDetectFX`.
 //! Tenth §6.1 migration and the first **fused composite primitive**.
 //!
 //! Sobel 3×3 + smoothstep-threshold in a single compute pass. The

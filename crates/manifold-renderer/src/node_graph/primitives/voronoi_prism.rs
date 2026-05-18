@@ -1,5 +1,5 @@
 //! `node.voronoi_prism` — pixel-exact replacement for legacy
-//! [`VoronoiPrismFX`](crate::effects::voronoi_prism::VoronoiPrismFX).
+//! Originally `VoronoiPrismFX`.
 //! Twelfth §6.1 migration; fused composite.
 //!
 //! Per-cell UV remapping with beat-synchronized pop-in and per-cell
