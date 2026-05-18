@@ -92,6 +92,32 @@ pub fn bundled_preset_type_ids() -> impl Iterator<Item = EffectTypeId> {
         .map(|(id, _)| EffectTypeId::new(id))
 }
 
+/// Loader function for the core's [`LoadedPresetSource`] inventory.
+/// Walks the bundled preset table, parses each JSON document, and
+/// returns the `preset_metadata` field from every entry that carries
+/// one (v2 schema). v1 entries (the 27 shipping presets prior to the
+/// §11 block-4 migration) yield nothing — block 4 populates metadata
+/// one effect at a time, and this iterator widens as those land.
+///
+/// Cached at the `loaded_preset_metadata()` callsite — invoked once
+/// per process.
+pub fn loaded_presets_from_bundled() -> Vec<manifold_core::effect_graph_def::PresetMetadata> {
+    BUNDLED_PRESETS
+        .iter()
+        .filter_map(|(id, json)| {
+            let def: EffectGraphDef = serde_json::from_str(json)
+                .unwrap_or_else(|e| panic!("bundled preset {id}: parse failed: {e}"));
+            def.preset_metadata
+        })
+        .collect()
+}
+
+inventory::submit! {
+    manifold_core::effect_definition_registry::LoadedPresetSource {
+        load: loaded_presets_from_bundled,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,6 +191,100 @@ mod tests {
         let unknown = EffectTypeId::new("DefinitelyNotARealEffect");
         assert!(bundled_preset_def(&unknown).is_none());
         assert!(bundled_preset_json(&unknown).is_none());
+    }
+
+    /// §11 block 4 parity invariant: for every effect whose JSON file
+    /// carries `presetMetadata`, the EffectDef built from that
+    /// metadata must match the EffectDef built from the same effect's
+    /// `inventory::submit!(EffectMetadata)` block. This is the test
+    /// that catches drift during per-effect migration — if any
+    /// metadata field gets transcribed wrong from Rust to JSON, the
+    /// dual-source registry would silently start serving different
+    /// answers to OSC/MIDI/UI consumers.
+    ///
+    /// As blocks 4b-4z migrate each effect, this test's coverage
+    /// widens automatically (it walks every JSON file with metadata).
+    #[test]
+    fn json_metadata_matches_inventory_for_every_migrated_effect() {
+        use manifold_core::effect_definition_registry::preset_metadata_to_effect_def;
+        use manifold_core::effect_registration::EffectMetadata;
+
+        // Build a map of inventory-submitted EffectMetadata by id so
+        // we can compare each migrated JSON against its peer.
+        let mut inventory_by_id: AHashMap<&'static str, &'static EffectMetadata> =
+            AHashMap::default();
+        for meta in inventory::iter::<EffectMetadata> {
+            inventory_by_id.insert(meta.id.as_str(), meta);
+        }
+
+        let mut compared = 0usize;
+        for (id, json) in BUNDLED_PRESETS {
+            let def: EffectGraphDef = serde_json::from_str(json)
+                .unwrap_or_else(|e| panic!("preset {id}: parse failed: {e}"));
+            let Some(preset_meta) = def.preset_metadata else {
+                continue; // v1 entry — not yet migrated
+            };
+
+            let inv_meta = inventory_by_id.get(id).unwrap_or_else(|| {
+                panic!(
+                    "preset {id} has presetMetadata in JSON but no matching \
+                     inventory::submit!(EffectMetadata) — either migrate now or \
+                     remove the JSON metadata until block 8 deletes the inventory entry"
+                )
+            });
+            let inv_def = inv_meta.to_effect_def();
+            let json_def = preset_metadata_to_effect_def(&preset_meta);
+
+            assert_eq!(
+                inv_def.display_name, json_def.display_name,
+                "{id}: display_name drift"
+            );
+            assert_eq!(inv_def.osc_prefix, json_def.osc_prefix, "{id}: osc_prefix drift");
+            assert_eq!(
+                inv_def.param_count, json_def.param_count,
+                "{id}: param_count drift"
+            );
+            assert_eq!(
+                inv_def.param_defs.len(),
+                json_def.param_defs.len(),
+                "{id}: param_defs.len drift"
+            );
+            for (i, (a, b)) in inv_def
+                .param_defs
+                .iter()
+                .zip(json_def.param_defs.iter())
+                .enumerate()
+            {
+                assert_eq!(a.id, b.id, "{id}.params[{i}].id");
+                assert_eq!(a.name, b.name, "{id}.params[{i}].name");
+                assert!((a.min - b.min).abs() < 1e-6, "{id}.params[{i}].min");
+                assert!((a.max - b.max).abs() < 1e-6, "{id}.params[{i}].max");
+                assert!(
+                    (a.default_value - b.default_value).abs() < 1e-6,
+                    "{id}.params[{i}].default_value"
+                );
+                assert_eq!(a.whole_numbers, b.whole_numbers, "{id}.params[{i}].whole_numbers");
+                assert_eq!(a.is_toggle, b.is_toggle, "{id}.params[{i}].is_toggle");
+                assert_eq!(a.format_string, b.format_string, "{id}.params[{i}].format_string");
+                assert_eq!(a.osc_suffix, b.osc_suffix, "{id}.params[{i}].osc_suffix");
+            }
+            assert_eq!(
+                inv_def.id_to_index, json_def.id_to_index,
+                "{id}: id_to_index drift"
+            );
+            assert_eq!(inv_def.param_ids, json_def.param_ids, "{id}: param_ids drift");
+
+            compared += 1;
+        }
+
+        // Sanity: at least one effect has been migrated. After block
+        // 4b (Bloom) lands, this is > 0; after block 4z, it's the
+        // full shipping count.
+        assert!(
+            compared > 0,
+            "no migrated effects found — block 4 should have at least one JSON \
+             file with presetMetadata"
+        );
     }
 
     /// Splicing a bundled preset into a chain via

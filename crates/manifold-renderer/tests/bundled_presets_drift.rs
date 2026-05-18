@@ -44,6 +44,17 @@ fn canonical_def_for(spec: &ChainSpec) -> EffectGraphDef {
         .with_description("Canonical default graph generated from ChainSpec::splice.")
 }
 
+/// Drift comparison strips `preset_metadata` and normalises `version`
+/// — both fields move with the metadata payload (v2 documents have
+/// metadata, v1 don't). The splice fn is the source of truth for the
+/// graph topology only; metadata is JSON-authoritative (§11). We
+/// compare nodes + wires + name + description.
+fn graph_topology_only(mut def: EffectGraphDef) -> EffectGraphDef {
+    def.preset_metadata = None;
+    def.version = 0; // sentinel — version varies between v1 and v2 with metadata
+    def
+}
+
 #[test]
 fn bundled_presets_match_canonical_splices() {
     let mut mismatches: Vec<String> = Vec::new();
@@ -52,9 +63,6 @@ fn bundled_presets_match_canonical_splices() {
     for spec in inventory::iter::<ChainSpec> {
         let path = preset_path(spec.type_id.as_str());
         let live = canonical_def_for(spec);
-        let live_json = serde_json::to_string_pretty(&live)
-            .expect("EffectGraphDef serializes")
-            + "\n";
 
         if !path.exists() {
             missing.push(format!(
@@ -65,8 +73,16 @@ fn bundled_presets_match_canonical_splices() {
             continue;
         }
 
-        let on_disk = fs::read_to_string(&path).expect("read bundled preset file");
-        if on_disk != live_json {
+        let on_disk_raw = fs::read_to_string(&path).expect("read bundled preset file");
+        let on_disk: EffectGraphDef = serde_json::from_str(&on_disk_raw)
+            .unwrap_or_else(|e| panic!("on-disk preset {} parse: {e}", path.display()));
+
+        // Compare graph topology only — preset_metadata is JSON-
+        // authoritative and lives outside the splice fn's responsibility.
+        let live_topology = graph_topology_only(live);
+        let on_disk_topology = graph_topology_only(on_disk);
+
+        if live_topology != on_disk_topology {
             mismatches.push(format!(
                 "  drift: {} ({})",
                 spec.type_id.as_str(),
@@ -100,9 +116,23 @@ fn regenerate_bundled_presets() {
     fs::create_dir_all(&dir).expect("create assets/effect-presets dir");
 
     for spec in inventory::iter::<ChainSpec> {
-        let def = canonical_def_for(spec);
-        let json = serde_json::to_string_pretty(&def).expect("EffectGraphDef serializes") + "\n";
+        let mut def = canonical_def_for(spec);
+
+        // Preserve any existing preset_metadata — that field is JSON-
+        // authoritative and the splice fn doesn't produce it.
+        // Regeneration should refresh the graph topology without
+        // clobbering metadata that block 4 has migrated in.
         let path = preset_path(spec.type_id.as_str());
+        if path.exists() {
+            let existing_raw = fs::read_to_string(&path).expect("read existing preset");
+            if let Ok(existing) = serde_json::from_str::<EffectGraphDef>(&existing_raw) {
+                if let Some(metadata) = existing.preset_metadata {
+                    def = def.with_preset_metadata(metadata);
+                }
+            }
+        }
+
+        let json = serde_json::to_string_pretty(&def).expect("EffectGraphDef serializes") + "\n";
         fs::write(&path, json).unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
         println!("wrote {}", path.display());
     }

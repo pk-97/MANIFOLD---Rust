@@ -254,15 +254,51 @@ fn build_definitions() -> HashMap<EffectTypeId, EffectDef> {
 // migrates each shipping effect's metadata into its JSON file.
 
 /// JSON-loaded preset metadata for inclusion in the
-/// [`DEFINITIONS`](DEFINITIONS) registry. Returns an empty slice
-/// until the build.rs codegen + per-effect migration land (blocks 3-4
-/// of the §11 migration). Replacing this stub does not change the
-/// registry's consumer-facing API — every caller goes through
-/// [`try_get`] / [`get`] regardless of the data source.
+/// [`DEFINITIONS`](DEFINITIONS) registry.
+///
+/// Each [`LoadedPresetSource`] submission in the inventory contributes
+/// a function pointer that produces a `Vec<PresetMetadata>` when
+/// called. The renderer crate submits one source pointing at
+/// `loaded_presets_from_bundled` — which parses
+/// `assets/effect-presets/*.json` (via the `BUNDLED_PRESETS_GENERATED`
+/// table from `build.rs`) and returns every entry whose `version`
+/// makes it carry [`PresetMetadata`].
+///
+/// Sources are invoked once on first access and cached for the
+/// process lifetime. The submission is a `fn()` pointer (const-
+/// compatible), so registration sits inside the standard
+/// `inventory::submit!` pattern — no manual startup hook required.
 pub fn loaded_preset_metadata() -> &'static [PresetMetadata] {
-    static EMPTY: OnceLock<Vec<PresetMetadata>> = OnceLock::new();
-    EMPTY.get_or_init(Vec::new)
+    static CACHE: OnceLock<Vec<PresetMetadata>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let mut all = Vec::new();
+        for source in inventory::iter::<LoadedPresetSource> {
+            all.extend((source.load)());
+        }
+        all
+    })
 }
+
+/// Inventory submission point for JSON-loaded preset metadata. Each
+/// submission contributes the result of `load()` to
+/// [`loaded_preset_metadata`].
+///
+/// Pattern:
+/// ```ignore
+/// inventory::submit! {
+///     manifold_core::effect_definition_registry::LoadedPresetSource {
+///         load: my_loader_function,
+///     }
+/// }
+/// ```
+///
+/// The renderer crate submits exactly one source; other crates can
+/// submit more if they ever ship their own preset libraries.
+pub struct LoadedPresetSource {
+    pub load: fn() -> Vec<PresetMetadata>,
+}
+
+inventory::collect!(LoadedPresetSource);
 
 /// Convert a parsed [`PresetMetadata`] (JSON wire shape) into the
 /// existing [`EffectDef`] consumed by the rest of the codebase.

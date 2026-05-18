@@ -1,7 +1,35 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "Bloom",
   "description": "Canonical default graph generated from ChainSpec::splice.",
+  "presetMetadata": {
+    "id": "Bloom",
+    "displayName": "Bloom",
+    "category": "Filmic",
+    "oscPrefix": "bloom",
+    "legacyDiscriminant": 12,
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0,
+        "max": 5.0,
+        "defaultValue": 0.5,
+        "formatString": "F2"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 0.5,
+        "target": { "kind": "handleNode", "handle": "bloom", "param": "amount" },
+        "convert": { "type": "Float" }
+      }
+    ],
+    "skipMode": { "kind": "never" }
+  },
   "nodes": [
     {
       "id": 0,
