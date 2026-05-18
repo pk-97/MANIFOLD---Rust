@@ -20,6 +20,7 @@ pub mod metalfx_upscaler;
 #[cfg(target_os = "macos")]
 pub mod native_text;
 pub mod node_graph;
+pub mod plugin_prewarm;
 pub mod pq_encoder;
 pub mod render_target;
 pub mod render_target_pool;

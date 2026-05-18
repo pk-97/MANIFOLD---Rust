@@ -66,6 +66,14 @@ inventory::submit! {
     }
 }
 
+// §11 block 5: MiDaS depth-DNN worker prewarm.
+inventory::submit! {
+    crate::plugin_prewarm::PluginPrewarm {
+        id: EffectTypeId::DEPTH_OF_FIELD,
+        prewarm: |device| Box::new(DepthOfFieldFX::new(device)),
+    }
+}
+
 crate::atomic_chain_spec! {
     type_id: EffectTypeId::DEPTH_OF_FIELD,
     primitive: DepthOfField,

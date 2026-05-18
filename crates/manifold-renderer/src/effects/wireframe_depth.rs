@@ -54,6 +54,14 @@ inventory::submit! {
     }
 }
 
+// §11 block 5: 3+ depth/flow/subject DNN workers prewarm.
+inventory::submit! {
+    crate::plugin_prewarm::PluginPrewarm {
+        id: EffectTypeId::WIREFRAME_DEPTH,
+        prewarm: |device| Box::new(WireframeDepthFX::new(device)),
+    }
+}
+
 inventory::submit! {
     EffectAliasMetadata {
         id: EffectTypeId::WIREFRAME_DEPTH,

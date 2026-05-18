@@ -49,6 +49,17 @@ inventory::submit! {
     }
 }
 
+// §11 block 5: background-worker prewarm channel. The legacy effect's
+// `new(device)` spawns the BlobDetector FFI plugin on a background
+// thread; we keep the constructed effect alive in the renderer's
+// prewarm store so the worker survives for the process lifetime.
+inventory::submit! {
+    crate::plugin_prewarm::PluginPrewarm {
+        id: EffectTypeId::BLOB_TRACKING,
+        prewarm: |device| Box::new(BlobTrackingFX::new(device)),
+    }
+}
+
 inventory::submit! {
     EffectAliasMetadata {
         id: EffectTypeId::BLOB_TRACKING,
