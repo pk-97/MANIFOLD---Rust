@@ -208,6 +208,13 @@ impl EffectNode for Transform {
     }
 }
 
+inventory::submit! {
+    crate::node_graph::persistence::PrimitiveFactory {
+        type_id: TRANSFORM_TYPE_ID,
+        create: || Box::new(Transform::new()),
+    }
+}
+
 // =====================================================================
 // Sample — read source at UV taken from another texture's RG channels.
 //
@@ -285,4 +292,11 @@ impl EffectNode for Sample {
         &SAMPLE_PARAMS
     }
     fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+}
+
+inventory::submit! {
+    crate::node_graph::persistence::PrimitiveFactory {
+        type_id: SAMPLE_TYPE_ID,
+        create: || Box::new(Sample::new()),
+    }
 }

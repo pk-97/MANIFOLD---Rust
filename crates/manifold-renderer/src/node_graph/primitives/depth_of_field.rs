@@ -598,6 +598,13 @@ impl EffectNode for DepthOfField {
     }
 }
 
+inventory::submit! {
+    crate::node_graph::persistence::PrimitiveFactory {
+        type_id: DEPTH_OF_FIELD_TYPE_ID,
+        create: || Box::new(DepthOfField::new()),
+    }
+}
+
 fn read_f32(ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32) -> f32 {
     match ctx.params.get(name) {
         Some(ParamValue::Float(f)) => *f,

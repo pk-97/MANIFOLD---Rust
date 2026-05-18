@@ -76,6 +76,13 @@ impl EffectNode for Brightness {
     fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
 }
 
+inventory::submit! {
+    crate::node_graph::persistence::PrimitiveFactory {
+        type_id: BRIGHTNESS_TYPE_ID,
+        create: || Box::new(Brightness::new()),
+    }
+}
+
 // =====================================================================
 // ChannelMix — 4x4 RGBA transformation.
 // =====================================================================
@@ -155,6 +162,13 @@ impl EffectNode for ChannelMix {
     fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
 }
 
+inventory::submit! {
+    crate::node_graph::persistence::PrimitiveFactory {
+        type_id: CHANNEL_MIX_TYPE_ID,
+        create: || Box::new(ChannelMix::new()),
+    }
+}
+
 // =====================================================================
 // ColorRamp — luma → two-stop gradient lookup.
 // =====================================================================
@@ -216,4 +230,11 @@ impl EffectNode for ColorRamp {
         &COLOR_RAMP_PARAMS
     }
     fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+}
+
+inventory::submit! {
+    crate::node_graph::persistence::PrimitiveFactory {
+        type_id: COLOR_RAMP_TYPE_ID,
+        create: || Box::new(ColorRamp::new()),
+    }
 }

@@ -89,6 +89,13 @@ impl EffectNode for Threshold {
     fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
 }
 
+inventory::submit! {
+    crate::node_graph::persistence::PrimitiveFactory {
+        type_id: THRESHOLD_TYPE_ID,
+        create: || Box::new(Threshold::new()),
+    }
+}
+
 // =====================================================================
 // Blur — Gaussian/Box/Radial neighborhood blur.
 // =====================================================================
@@ -283,6 +290,13 @@ impl EffectNode for Blur {
     }
 }
 
+inventory::submit! {
+    crate::node_graph::persistence::PrimitiveFactory {
+        type_id: BLUR_TYPE_ID,
+        create: || Box::new(Blur::new()),
+    }
+}
+
 // =====================================================================
 // MipChain — emit progressively-downsampled mip levels in a single texture.
 //
@@ -340,4 +354,11 @@ impl EffectNode for MipChain {
         &MIP_CHAIN_PARAMS
     }
     fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+}
+
+inventory::submit! {
+    crate::node_graph::persistence::PrimitiveFactory {
+        type_id: MIP_CHAIN_TYPE_ID,
+        create: || Box::new(MipChain::new()),
+    }
 }

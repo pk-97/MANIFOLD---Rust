@@ -454,6 +454,13 @@ impl EffectNode for Watercolor {
     }
 }
 
+inventory::submit! {
+    crate::node_graph::persistence::PrimitiveFactory {
+        type_id: WATERCOLOR_TYPE_ID,
+        create: || Box::new(Watercolor::new()),
+    }
+}
+
 fn read_f32(ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32) -> f32 {
     match ctx.params.get(name) {
         Some(ParamValue::Float(f)) => *f,

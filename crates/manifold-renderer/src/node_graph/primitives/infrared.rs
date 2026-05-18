@@ -158,3 +158,10 @@ impl EffectNode for Infrared {
         legacy.apply(gpu, source, target, &fx, &eff_ctx);
     }
 }
+
+inventory::submit! {
+    crate::node_graph::persistence::PrimitiveFactory {
+        type_id: INFRARED_TYPE_ID,
+        create: || Box::new(Infrared::new()),
+    }
+}

@@ -287,6 +287,16 @@ macro_rules! primitive {
                 $crate::node_graph::primitive::init_cached_type_id(&CELL, $type_id)
             }
         }
+
+        // Auto-register this primitive in the `PrimitiveFactory`
+        // inventory channel so `PrimitiveRegistry::with_builtin()`
+        // discovers it at startup without any central list.
+        ::inventory::submit! {
+            $crate::node_graph::persistence::PrimitiveFactory {
+                type_id: $type_id,
+                create: || ::std::boxed::Box::new(<$struct_name>::new()),
+            }
+        }
     };
 }
 

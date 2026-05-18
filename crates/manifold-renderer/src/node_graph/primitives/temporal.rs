@@ -295,6 +295,13 @@ impl EffectNode for Feedback {
     }
 }
 
+inventory::submit! {
+    crate::node_graph::persistence::PrimitiveFactory {
+        type_id: FEEDBACK_TYPE_ID,
+        create: || Box::new(Feedback::new()),
+    }
+}
+
 #[cfg(test)]
 mod gpu_tests {
     //! Real-GPU regression test guarding the `temporal::Feedback`

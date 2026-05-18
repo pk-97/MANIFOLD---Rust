@@ -174,3 +174,10 @@ impl EffectNode for BlobTracking {
         legacy.apply(gpu, source, target, &fx, &eff_ctx);
     }
 }
+
+inventory::submit! {
+    crate::node_graph::persistence::PrimitiveFactory {
+        type_id: BLOB_TRACKING_TYPE_ID,
+        create: || Box::new(BlobTracking::new()),
+    }
+}

@@ -248,6 +248,13 @@ impl EffectNode for Blend {
     fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
 }
 
+inventory::submit! {
+    crate::node_graph::persistence::PrimitiveFactory {
+        type_id: BLEND_TYPE_ID,
+        create: || Box::new(Blend::new()),
+    }
+}
+
 #[cfg(test)]
 mod gpu_tests {
     //! Real-GPU integration tests. These spin up a `manifold_gpu::GpuDevice`,

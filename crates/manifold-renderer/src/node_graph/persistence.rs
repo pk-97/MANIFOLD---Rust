@@ -42,13 +42,9 @@ use manifold_core::effect_graph_def::{
     EffectGraphWire,
 };
 
-use crate::node_graph::boundary_nodes::{
-    FINAL_OUTPUT_TYPE_ID, FinalOutput, SOURCE_TYPE_ID, Source,
-};
 use crate::node_graph::effect_node::{EffectNode, NodeInstanceId};
 use crate::node_graph::graph::Graph;
 use crate::node_graph::parameters::ParamValue;
-use crate::node_graph::primitives;
 
 // Re-export the core schema under the legacy renderer-side names so
 // existing call sites keep compiling. New code should prefer the
@@ -98,6 +94,25 @@ impl From<SerializedParamValue> for ParamValue {
 /// Constructor closure for one node kind. Returns a fresh boxed
 /// [`EffectNode`] with default parameter values.
 pub type NodeConstructor = Box<dyn Fn() -> Box<dyn EffectNode> + Send + Sync>;
+
+/// Inventory entry for one primitive's factory.
+///
+/// Every shipping primitive submits exactly one of these via
+/// `inventory::submit!`. [`register_builtin`] iterates the inventory
+/// at startup to populate the [`PrimitiveRegistry`]; adding a new
+/// primitive is a one-line `inventory::submit!` block in its own
+/// file, no central list to update.
+///
+/// The `primitive!` macro emits this submission automatically — only
+/// the hand-written primitives (multi-primitive files like
+/// `primitives/color.rs`, plus the system boundary nodes and the
+/// monolithic legacy wrappers) hand-write the submit block.
+pub struct PrimitiveFactory {
+    pub type_id: &'static str,
+    pub create: fn() -> Box<dyn EffectNode>,
+}
+
+inventory::collect!(PrimitiveFactory);
 
 /// Registry mapping stable `type_id` strings to constructors. Built
 /// once at startup via [`PrimitiveRegistry::with_builtin`] (covers
@@ -161,125 +176,16 @@ impl Default for PrimitiveRegistry {
 
 /// Populate `r` with every shipping primitive + system boundaries.
 ///
-/// Adding a new primitive: append one `r.register(...)` line here. The
-/// `primitive_registry_covers_every_shipped_primitive` test asserts
-/// each declared `*_TYPE_ID` constant is present, so forgetting to
-/// register a new primitive is a compile-time + test-time miss.
+/// Walks the [`PrimitiveFactory`] inventory channel. Every primitive
+/// — macro-authored or hand-written — registers itself via a one-line
+/// `inventory::submit!` block, so adding a new primitive needs no
+/// edits here. The `primitive!` macro emits the submission
+/// automatically; multi-primitive files and the system boundaries
+/// hand-write theirs alongside the struct definition.
 fn register_builtin(r: &mut PrimitiveRegistry) {
-    // System boundaries.
-    r.register(SOURCE_TYPE_ID, || Box::new(Source::new()));
-    r.register(FINAL_OUTPUT_TYPE_ID, || Box::new(FinalOutput::new()));
-
-    // Color primitives.
-    r.register(primitives::BRIGHTNESS_TYPE_ID, || {
-        Box::new(primitives::Brightness::new())
-    });
-    r.register(primitives::CHANNEL_MIX_TYPE_ID, || {
-        Box::new(primitives::ChannelMix::new())
-    });
-    r.register(primitives::COLOR_RAMP_TYPE_ID, || {
-        Box::new(primitives::ColorRamp::new())
-    });
-
-    // Compose primitives.
-    r.register(primitives::MIX_TYPE_ID, || Box::new(primitives::Mix::new()));
-    r.register(primitives::BLEND_TYPE_ID, || {
-        Box::new(primitives::Blend::new())
-    });
-
-    // Filter primitives.
-    r.register(primitives::THRESHOLD_TYPE_ID, || {
-        Box::new(primitives::Threshold::new())
-    });
-    r.register(primitives::BLUR_TYPE_ID, || {
-        Box::new(primitives::Blur::new())
-    });
-    r.register(primitives::MIP_CHAIN_TYPE_ID, || {
-        Box::new(primitives::MipChain::new())
-    });
-    r.register(primitives::GAUSSIAN_BLUR_TYPE_ID, || {
-        Box::new(primitives::GaussianBlur::new())
-    });
-
-    // UV primitives.
-    r.register(primitives::TRANSFORM_TYPE_ID, || {
-        Box::new(primitives::Transform::new())
-    });
-    r.register(primitives::SAMPLE_TYPE_ID, || {
-        Box::new(primitives::Sample::new())
-    });
-
-    // Temporal / mixing primitives.
-    r.register(primitives::FEEDBACK_TYPE_ID, || {
-        Box::new(primitives::Feedback::new())
-    });
-    r.register(primitives::WET_DRY_TYPE_ID, || {
-        Box::new(primitives::WetDry::new())
-    });
-
-    // Composite-as-primitive (fused) effects.
-    r.register(primitives::BLOOM_TYPE_ID, || {
-        Box::new(primitives::Bloom::new())
-    });
-    r.register(primitives::HALATION_TYPE_ID, || {
-        Box::new(primitives::Halation::new())
-    });
-    r.register(primitives::WATERCOLOR_TYPE_ID, || {
-        Box::new(primitives::Watercolor::new())
-    });
-    r.register(primitives::DEPTH_OF_FIELD_TYPE_ID, || {
-        Box::new(primitives::DepthOfField::new())
-    });
-
-    // Monolithic-wrapper primitives.
-    r.register(primitives::AUTO_GAIN_TYPE_ID, || {
-        Box::new(primitives::AutoGain::new())
-    });
-    r.register(primitives::BLOB_TRACKING_TYPE_ID, || {
-        Box::new(primitives::BlobTracking::new())
-    });
-    r.register(primitives::WIREFRAME_DEPTH_TYPE_ID, || {
-        Box::new(primitives::WireframeDepth::new())
-    });
-    r.register(primitives::INFRARED_TYPE_ID, || {
-        Box::new(primitives::Infrared::new())
-    });
-    r.register(primitives::QUAD_MIRROR_TYPE_ID, || {
-        Box::new(primitives::QuadMirror::new())
-    });
-
-    // Remaining single-pass primitives authored via the `primitive!`
-    // macro. Each declares a `TYPE_ID` constant via its `PrimitiveSpec`
-    // impl; we use the runtime `description().type_id` to register so
-    // we don't have to also export a separate const per file.
-    macro_rules! register_via_spec {
-        ($($ty:path),* $(,)?) => {
-            $(
-                {
-                    use crate::node_graph::primitive::PrimitiveSpec;
-                    let id = <$ty as PrimitiveSpec>::TYPE_ID;
-                    r.register(id, || Box::new(<$ty>::new()));
-                }
-            )*
-        };
+    for factory in inventory::iter::<PrimitiveFactory> {
+        r.register(factory.type_id, factory.create);
     }
-    register_via_spec!(
-        primitives::AffineTransform,
-        primitives::ChromaKey,
-        primitives::ChromaticOffset,
-        primitives::ClampStretch,
-        primitives::ColorGrade,
-        primitives::DitherPattern,
-        primitives::EdgeDetect,
-        primitives::Glitch,
-        primitives::HighlightBoost,
-        primitives::Invert,
-        primitives::KaleidoFold,
-        primitives::ColorLut,
-        primitives::MaskedMix,
-        primitives::Strobe,
-        primitives::VoronoiPrism,
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -626,7 +532,10 @@ fn leak_port_name(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::primitives::{Blur, MipChain, Threshold};
+    use crate::node_graph::boundary_nodes::{
+        FINAL_OUTPUT_TYPE_ID, FinalOutput, SOURCE_TYPE_ID, Source,
+    };
+    use crate::node_graph::primitives::{self, Blur, MipChain, Threshold};
     use crate::node_graph::{compile, validate};
 
     fn registry() -> PrimitiveRegistry {

@@ -122,6 +122,20 @@ impl EffectNode for FinalOutput {
     }
 }
 
+inventory::submit! {
+    crate::node_graph::persistence::PrimitiveFactory {
+        type_id: SOURCE_TYPE_ID,
+        create: || Box::new(Source::new()),
+    }
+}
+
+inventory::submit! {
+    crate::node_graph::persistence::PrimitiveFactory {
+        type_id: FINAL_OUTPUT_TYPE_ID,
+        create: || Box::new(FinalOutput::new()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

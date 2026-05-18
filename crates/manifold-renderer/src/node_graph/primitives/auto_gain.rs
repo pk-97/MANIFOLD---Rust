@@ -188,6 +188,13 @@ impl EffectNode for AutoGain {
     }
 }
 
+inventory::submit! {
+    crate::node_graph::persistence::PrimitiveFactory {
+        type_id: AUTO_GAIN_TYPE_ID,
+        create: || Box::new(AutoGain::new()),
+    }
+}
+
 /// Build a legacy `EffectInstance` from the primitive's named params.
 /// Mirrors the positional param layout the legacy `EffectMetadata`
 /// declares — `param_order` must list names in the registered order.

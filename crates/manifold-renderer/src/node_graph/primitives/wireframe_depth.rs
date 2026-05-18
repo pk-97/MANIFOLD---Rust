@@ -248,3 +248,10 @@ impl EffectNode for WireframeDepth {
         legacy.apply(gpu, source, target, &fx, &eff_ctx);
     }
 }
+
+inventory::submit! {
+    crate::node_graph::persistence::PrimitiveFactory {
+        type_id: WIREFRAME_DEPTH_TYPE_ID,
+        create: || Box::new(WireframeDepth::new()),
+    }
+}

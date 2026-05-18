@@ -415,6 +415,13 @@ impl EffectNode for Bloom {
     }
 }
 
+inventory::submit! {
+    crate::node_graph::persistence::PrimitiveFactory {
+        type_id: BLOOM_TYPE_ID,
+        create: || Box::new(Bloom::new()),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn dispatch_bloom(
     gpu: &mut crate::gpu_encoder::GpuEncoder<'_>,

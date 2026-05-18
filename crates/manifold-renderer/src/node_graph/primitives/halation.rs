@@ -356,6 +356,13 @@ impl EffectNode for Halation {
     }
 }
 
+inventory::submit! {
+    crate::node_graph::persistence::PrimitiveFactory {
+        type_id: HALATION_TYPE_ID,
+        create: || Box::new(Halation::new()),
+    }
+}
+
 fn read_f32(ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32) -> f32 {
     match ctx.params.get(name) {
         Some(ParamValue::Float(f)) => *f,
