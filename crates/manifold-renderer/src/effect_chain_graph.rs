@@ -60,9 +60,10 @@ use crate::node_graph::primitives::Mix;
 use crate::node_graph::{
     ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, LastAppliedCache, MetalBackend,
     NodeInstanceId, ParamValue, PortType, PrimitiveRegistry, ResolvedBinding, ResourceId, Slot,
-    Source, SpliceResult, StateStore, apply_binding_defaults, apply_bindings, chain_spec_by_id,
-    compile, splice_def_into_chain,
+    Source, SpliceResult, StateStore, apply_binding_defaults, apply_bindings, compile,
+    splice_def_into_chain,
 };
+use crate::node_graph::{is_skipped_for, loaded_preset_view_by_id};
 use crate::render_target::RenderTarget;
 
 const GRAPH_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
@@ -270,11 +271,14 @@ impl ChainGraph {
             return None;
         }
 
-        // Preflight: every active effect must declare a `ChainSpec`.
-        // Effects without one can't be spliced — fall back to the per-
-        // effect dispatch path so the chain doesn't render garbage.
+        // Preflight: every active effect must have a `LoadedPresetView`
+        // (JSON-loaded preset metadata). Block 6c (§11) switched the
+        // chain runtime off `ChainSpec` to the JSON-authoritative path;
+        // ChainSpec submissions still exist as a safety net but the
+        // chain build loop reads everything from the view. Block 8
+        // deletes the inventory ChainSpec submissions.
         for (_, fx) in &active_effects {
-            chain_spec_by_id(fx.effect_type())?;
+            loaded_preset_view_by_id(fx.effect_type())?;
         }
 
         // Build the graph: Source → [eff_1 → eff_2 → … → eff_n,
@@ -341,19 +345,22 @@ impl ChainGraph {
                 }
             }
 
-            // Look up the effect's `ChainSpec` and splice its workers
-            // directly into the chain graph. Every shipping effect
-            // declares a spec — see `crates/manifold-renderer/src/effects/`.
-            let spec = chain_spec_by_id(fx.effect_type())?;
-            if spec.is_skipped(fx) {
+            // Look up the JSON-loaded view (§11 block 6c: chain
+            // runtime is off ChainSpec entirely). Every shipping
+            // effect has presetMetadata + bindings + skip_mode in
+            // its JSON file — see `assets/effect-presets/`. The
+            // preflight above guarantees the view exists.
+            let view = loaded_preset_view_by_id(fx.effect_type())?;
+            if is_skipped_for(view.skip_mode, &view.type_id, fx) {
                 // No workers added — previous output flows directly
                 // to the next effect.
                 continue;
             }
             // Divergent path: user-edited def replaces the canonical
-            // splice. The user's wiring is materialized directly into
-            // the chain graph the same way `spec.splice` would place
-            // the canonical layout.
+            // graph. The user's wiring is materialized directly into
+            // the chain graph the same way the canonical def's
+            // splice would place the canonical layout.
+            let canonical_def = view.canonical_def;
             let splice_result = if let Some(def) = &fx.graph {
                 match splice_def_into_chain(
                     &mut graph,
@@ -365,31 +372,41 @@ impl ChainGraph {
                     None => {
                         eprintln!(
                             "[chain-graph] {} divergent graph failed to splice; \
-                             falling back to canonical spec.",
+                             falling back to canonical preset.",
                             fx.effect_type().as_str()
                         );
-                        (spec.splice)(&mut graph, (prev_node, prev_out_port))
+                        splice_def_into_chain(
+                            &mut graph,
+                            (prev_node, prev_out_port),
+                            canonical_def,
+                            primitives,
+                        )?
                     }
                 }
             } else {
-                (spec.splice)(&mut graph, (prev_node, prev_out_port))
+                splice_def_into_chain(
+                    &mut graph,
+                    (prev_node, prev_out_port),
+                    canonical_def,
+                    primitives,
+                )?
             };
             let SpliceResult { output, handles } = splice_result;
             // Build the unified resolved-binding list: static prefix
-            // first (spec bindings → ResolvedBinding::from_static),
+            // first (view.bindings → ResolvedBinding::from_static),
             // then user tail (per-instance UserParamBinding →
             // ResolvedBinding::from_user). Same positional order as
             // `EffectInstance.param_values`, so the per-frame apply
             // walks both in lockstep.
             let mut bindings: Vec<ResolvedBinding> =
-                Vec::with_capacity(spec.bindings.len() + fx.user_param_bindings.len());
-            for b in spec.bindings {
+                Vec::with_capacity(view.bindings.len() + fx.user_param_bindings.len());
+            for b in view.bindings {
                 match ResolvedBinding::from_static(b, &handles) {
                     Some(rb) => bindings.push(rb),
                     None => eprintln!(
                         "[chain-graph] {}: ParamBinding `{}` references handle that splice \
                          did not register; this binding will not apply.",
-                        spec.type_id.as_str(),
+                        view.type_id.as_str(),
                         b.id,
                     ),
                 }
@@ -776,10 +793,10 @@ fn compute_topology_hash(
         // editing-time events, not performance-time.
         fx.graph_version.hash(&mut h);
         // Skip-on-zero predicate state — see the doc-comment above.
-        // Effects without a `ChainSpec` registered are ignored here
+        // Effects without a `LoadedPresetView` are ignored here
         // (legacy fallback); `try_build` will short-circuit anyway.
-        if let Some(spec) = chain_spec_by_id(fx.effect_type()) {
-            spec.is_skipped(fx).hash(&mut h);
+        if let Some(view) = loaded_preset_view_by_id(fx.effect_type()) {
+            is_skipped_for(view.skip_mode, &view.type_id, fx).hash(&mut h);
         }
     }
     for g in groups {
@@ -1212,11 +1229,11 @@ mod topology_hash_tests {
             EffectTypeId::BLOB_TRACKING,
             EffectTypeId::AUTO_GAIN,
         ] {
-            let spec = chain_spec_by_id(&ty).unwrap_or_else(|| {
-                panic!("{:?}: missing ChainSpec", ty);
+            let view = loaded_preset_view_by_id(&ty).unwrap_or_else(|| {
+                panic!("{:?}: missing LoadedPresetView", ty);
             });
             assert!(
-                matches!(spec.skip, crate::node_graph::SkipMode::Never),
+                matches!(view.skip_mode, crate::node_graph::SkipMode::Never),
                 "{:?}: stateful effects must be SkipMode::Never so their \
                  per-instance state survives an amount → 0 → up slider drag",
                 ty,

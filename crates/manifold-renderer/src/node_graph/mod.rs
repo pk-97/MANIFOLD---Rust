@@ -46,9 +46,11 @@ pub use execution::Executor;
 pub use execution_plan::{ExecutionPlan, ExecutionStep, ResourceId, compile};
 pub use chain_spec::{
     BindingParityError, ChainSpec, SkipMode, SpecValidationError, SpliceResult, chain_spec_by_id,
-    lookup_handle, splice_def_into_chain, validate_all_specs, validate_binding_spec_parity,
+    is_skipped_for, lookup_handle, splice_def_into_chain, validate_all_specs,
+    validate_binding_spec_parity,
 };
 pub use graph::{Graph, NodeInstance};
+pub use loaded_preset_view::{LoadedPresetView, loaded_preset_view_by_id};
 pub use metadata::metadata_by_id;
 pub use metal_backend::MetalBackend;
 pub use palette::{catalog_graph_def_for, palette_atoms, PaletteAtom};
