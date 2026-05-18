@@ -95,6 +95,7 @@ pub struct SpliceResult {
     pub handles: Vec<(Cow<'static, str>, NodeInstanceId)>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkipMode {
     /// Effect always contributes its workers.
     Never,

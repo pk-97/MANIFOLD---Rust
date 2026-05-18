@@ -18,6 +18,7 @@ mod effect_node;
 mod execution;
 mod execution_plan;
 mod graph;
+mod loaded_preset_view;
 mod metadata;
 mod metal_backend;
 mod palette;
