@@ -69,18 +69,16 @@ impl EffectRegistry {
     }
 
     /// Snapshot the canonical graph of a registered effect for the
-    /// editor canvas. Every shipping effect declares a `ChainSpec`,
-    /// so resolution is a single path: build the spec's standalone
-    /// graph and project its routings onto the snapshot.
+    /// editor canvas. Sourced from the JSON-loaded
+    /// [`crate::node_graph::LoadedPresetView`] — block 7 rewired this
+    /// off the legacy `ChainSpec` path so editor previews share the
+    /// same authoritative metadata the chain runtime reads.
     pub fn graph_snapshot_for(
         &self,
         type_id: &EffectTypeId,
     ) -> Option<crate::node_graph::GraphSnapshot> {
-        let spec = crate::node_graph::chain_spec_by_id(type_id)?;
-        let g = spec.build_canonical_graph();
-        let mut snap = crate::node_graph::GraphSnapshot::from_graph(&g);
-        snap.outer_routings = outer_routings_from_spec(spec, &g);
-        Some(snap)
+        let view = crate::node_graph::loaded_preset_view_by_id(type_id)?;
+        crate::node_graph::snapshot_for_view(view)
     }
 
     /// Outer→inner routings declared by `type_id`'s registered
@@ -91,46 +89,10 @@ impl EffectRegistry {
         &self,
         type_id: &EffectTypeId,
     ) -> Vec<crate::node_graph::OuterParamRouting> {
-        let Some(spec) = crate::node_graph::chain_spec_by_id(type_id) else {
+        let Some(view) = crate::node_graph::loaded_preset_view_by_id(type_id) else {
             return Vec::new();
         };
-        let g = spec.build_canonical_graph();
-        outer_routings_from_spec(spec, &g)
+        crate::node_graph::outer_routings_from_view(view)
     }
-}
-
-/// Translate a [`ChainSpec`]'s bindings into [`OuterParamRouting`]s
-/// the editor inspector consumes (which inner rows to gray out as
-/// "driven by '<outer>'"). One entry per binding whose target handle
-/// is reachable.
-///
-/// Bindings carry their `HandleNode { handle, param }` directly, so
-/// no metadata lookup is needed. Composite-style bindings or
-/// `Custom(fn)` targets are skipped — the editor can't surface them.
-fn outer_routings_from_spec(
-    spec: &'static crate::node_graph::ChainSpec,
-    _graph: &crate::node_graph::Graph,
-) -> Vec<crate::node_graph::OuterParamRouting> {
-    use crate::node_graph::{OuterParamRouting, ParamTarget};
-    let mut out = Vec::with_capacity(spec.bindings.len());
-    for binding in spec.bindings {
-        let (handle, inner_param) = match &binding.target {
-            ParamTarget::HandleNode { handle, param } => (*handle, *param),
-            // Composite / Node / Custom variants either don't surface
-            // a handle at spec-time or aren't relevant to the editor's
-            // outer→inner gray-out display.
-            _ => continue,
-        };
-        out.push(OuterParamRouting {
-            outer_label: binding.label.to_string(),
-            outer_param_id: binding.id.to_string(),
-            node_handle: handle.to_string(),
-            inner_param: inner_param.to_string(),
-            // This walk operates on registry-side `ChainSpec.bindings`
-            // — every entry is a compile-time spec binding.
-            source: crate::node_graph::OuterParamSource::Static,
-        });
-    }
-    out
 }
 

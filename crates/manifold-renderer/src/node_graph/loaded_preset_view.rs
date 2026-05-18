@@ -41,13 +41,13 @@ use manifold_core::effects::ParamConvert;
 use crate::node_graph::bundled_presets::bundled_preset_def;
 use crate::node_graph::chain_spec::SkipMode;
 use crate::node_graph::param_binding::{ParamBinding, ParamId, ParamTarget};
+use crate::node_graph::snapshot::{GraphSnapshot, OuterParamRouting, OuterParamSource};
 
 /// Runtime view assembled from a JSON-loaded preset. Same field shape
 /// as [`crate::node_graph::ChainSpec`] minus the static `splice` fn —
 /// the chain builder uses
 /// [`crate::node_graph::splice_def_into_chain`] with `canonical_def`
 /// to produce equivalent worker nodes.
-#[allow(dead_code)] // §11 block 6a: parallel infrastructure, consumer wired in 6c.
 pub struct LoadedPresetView {
     pub type_id: EffectTypeId,
     /// The canonical default graph for this effect, loaded from
@@ -66,7 +66,6 @@ pub struct LoadedPresetView {
 /// first call and caching for the process lifetime. Returns `None`
 /// for effects whose JSON file doesn't carry `presetMetadata` (i.e.,
 /// v1 entries — not yet migrated by §11 block 4).
-#[allow(dead_code)] // §11 block 6a: parallel infrastructure, consumer wired in 6c.
 pub fn loaded_preset_view_by_id(id: &EffectTypeId) -> Option<&'static LoadedPresetView> {
     static MAP: OnceLock<AHashMap<EffectTypeId, &'static LoadedPresetView>> = OnceLock::new();
     let map = MAP.get_or_init(build_view_map);
@@ -138,6 +137,44 @@ fn skip_mode_from_def(def: &SkipModeDef) -> SkipMode {
 // param_binding module but isn't yet consumed by an external caller.
 #[allow(dead_code)]
 fn _phase_keepalive(_: ParamConvert) {}
+
+/// Build the editor-canvas snapshot for a loaded preset. Reconstructs
+/// a temporary `Graph` from the JSON's canonical def via
+/// [`GraphSnapshot::from_def`] (same path the per-card-override
+/// snapshot already uses) and overlays the outer→inner routings the
+/// inspector needs to gray out driven rows. Returns `None` if the
+/// canonical def fails to materialize (mismatched primitives,
+/// unsupported version) — caller treats that as "no active graph".
+pub fn snapshot_for_view(view: &LoadedPresetView) -> Option<GraphSnapshot> {
+    let mut snap = GraphSnapshot::from_def(view.canonical_def)?;
+    snap.outer_routings = outer_routings_from_view(view);
+    Some(snap)
+}
+
+/// Translate a [`LoadedPresetView`]'s bindings into editor
+/// [`OuterParamRouting`]s — same projection
+/// `EffectRegistry::outer_routings_for` used to perform off a
+/// `ChainSpec`, sourced from the JSON-loaded bindings instead. One
+/// entry per binding whose target is a named-handle inner node
+/// (composite/custom variants don't surface a handle and are
+/// skipped).
+pub fn outer_routings_from_view(view: &LoadedPresetView) -> Vec<OuterParamRouting> {
+    let mut out = Vec::with_capacity(view.bindings.len());
+    for binding in view.bindings {
+        let (handle, inner_param) = match &binding.target {
+            ParamTarget::HandleNode { handle, param } => (*handle, *param),
+            _ => continue,
+        };
+        out.push(OuterParamRouting {
+            outer_label: binding.label.to_string(),
+            outer_param_id: binding.id.to_string(),
+            node_handle: handle.to_string(),
+            inner_param: inner_param.to_string(),
+            source: OuterParamSource::Static,
+        });
+    }
+    out
+}
 
 #[cfg(test)]
 mod tests {
