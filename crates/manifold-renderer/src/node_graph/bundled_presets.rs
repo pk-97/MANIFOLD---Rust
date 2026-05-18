@@ -3,31 +3,35 @@
 //! Each shipping effect ships with one **bundled preset** — a JSON
 //! [`EffectGraphDef`] living in
 //! `crates/manifold-renderer/assets/effect-presets/<EffectTypeId>.json`.
-//! The file is the on-disk source of truth; this module embeds the bytes
-//! at compile time via [`include_str!`] and parses lazily on first
-//! lookup.
+//! The file is the on-disk source of truth; `build.rs` scans the
+//! directory at compile time and emits the
+//! [`BUNDLED_PRESETS`](BUNDLED_PRESETS) array of
+//! `(type_id, include_str!(json))` pairs. Adding a preset is just
+//! dropping a JSON file in the directory — no hand-maintained table,
+//! no central registration to forget.
 //!
 //! The bundled preset for `EffectTypeId::X` is the canonical default
 //! graph for that effect. Today it equals the output of
 //! `chain_spec_by_id(X).build_canonical_graph()` (verified by the
 //! `bundled_presets_match_canonical_splices` test in
-//! `tests/bundled_presets_drift.rs`); after the §6.6 cutover the JSON
-//! file becomes authoritative and the splice fn-pointer is deleted.
+//! `tests/bundled_presets_drift.rs`); after the §11 cutover (full
+//! plan in `docs/PRIMITIVE_LIBRARY_DESIGN.md`) the JSON file becomes
+//! authoritative and the splice fn-pointer is deleted.
 //!
 //! User-authored per-instance graphs are stored separately on the
-//! [`EffectInstance`](manifold_core::effects::EffectInstance) (landing
-//! in §6.6 item #27). Both shapes use the same [`EffectGraphDef`]
-//! schema and the same [`PrimitiveRegistry`] loader; they differ only
-//! in storage location.
+//! [`EffectInstance`](manifold_core::effects::EffectInstance). Both
+//! shapes use the same [`EffectGraphDef`] schema and the same
+//! [`PrimitiveRegistry`] loader; they differ only in storage location.
 //!
 //! ## Add a new preset
 //!
-//! 1. Add a [`ChainSpec`](crate::node_graph::ChainSpec) submission via
-//!    `inventory::submit!` (existing pattern).
-//! 2. Regenerate the JSON file:
-//!    `cargo test -p manifold-renderer --test bundled_presets_drift -- --ignored`.
-//! 3. Add the new entry to [`BUNDLED_PRESETS`] below; without it the
-//!    `every_chain_spec_has_a_bundled_preset` test fails.
+//! 1. Drop a JSON file at `assets/effect-presets/<TypeId>.json`.
+//! 2. (Until §11 block 4 lands) Add the matching
+//!    [`ChainSpec`](crate::node_graph::ChainSpec) submission via
+//!    `inventory::submit!` and run
+//!    `cargo test -p manifold-renderer --test bundled_presets_drift -- --ignored`
+//!    to regenerate the canonical JSON.
+//! 3. Build — `build.rs` picks up the new file automatically.
 
 use std::sync::OnceLock;
 
@@ -35,121 +39,14 @@ use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 
-/// Compile-time table: each shipping [`EffectTypeId`] mapped to the
-/// embedded JSON for its bundled preset.
-///
-/// Order doesn't matter — the runtime cache is an [`AHashMap`]. Keep
-/// entries alphabetical by `EffectTypeId.as_str()` for diff hygiene.
-const BUNDLED_PRESETS: &[(&str, &str)] = &[
-    (
-        "AutoGain",
-        include_str!("../../assets/effect-presets/AutoGain.json"),
-    ),
-    (
-        "BlobTracking",
-        include_str!("../../assets/effect-presets/BlobTracking.json"),
-    ),
-    (
-        "Bloom",
-        include_str!("../../assets/effect-presets/Bloom.json"),
-    ),
-    (
-        "ChromaticAberration",
-        include_str!("../../assets/effect-presets/ChromaticAberration.json"),
-    ),
-    (
-        "ColorGrade",
-        include_str!("../../assets/effect-presets/ColorGrade.json"),
-    ),
-    (
-        "DepthOfField",
-        include_str!("../../assets/effect-presets/DepthOfField.json"),
-    ),
-    (
-        "Dither",
-        include_str!("../../assets/effect-presets/Dither.json"),
-    ),
-    (
-        "EdgeGlow",
-        include_str!("../../assets/effect-presets/EdgeGlow.json"),
-    ),
-    (
-        "EdgeStretch",
-        include_str!("../../assets/effect-presets/EdgeStretch.json"),
-    ),
-    (
-        "EdgeStretchByColor",
-        include_str!("../../assets/effect-presets/EdgeStretchByColor.json"),
-    ),
-    (
-        "Glitch",
-        include_str!("../../assets/effect-presets/Glitch.json"),
-    ),
-    (
-        "Halation",
-        include_str!("../../assets/effect-presets/Halation.json"),
-    ),
-    (
-        "HdrBoost",
-        include_str!("../../assets/effect-presets/HdrBoost.json"),
-    ),
-    (
-        "Infrared",
-        include_str!("../../assets/effect-presets/Infrared.json"),
-    ),
-    (
-        "InvertColors",
-        include_str!("../../assets/effect-presets/InvertColors.json"),
-    ),
-    (
-        "Kaleidoscope",
-        include_str!("../../assets/effect-presets/Kaleidoscope.json"),
-    ),
-    (
-        "Mandala",
-        include_str!("../../assets/effect-presets/Mandala.json"),
-    ),
-    (
-        "Mirror",
-        include_str!("../../assets/effect-presets/Mirror.json"),
-    ),
-    (
-        "NodeGraphTest",
-        include_str!("../../assets/effect-presets/NodeGraphTest.json"),
-    ),
-    (
-        "QuadMirror",
-        include_str!("../../assets/effect-presets/QuadMirror.json"),
-    ),
-    (
-        "SoftFocusGraph",
-        include_str!("../../assets/effect-presets/SoftFocusGraph.json"),
-    ),
-    (
-        "Strobe",
-        include_str!("../../assets/effect-presets/Strobe.json"),
-    ),
-    (
-        "StylizedFeedback",
-        include_str!("../../assets/effect-presets/StylizedFeedback.json"),
-    ),
-    (
-        "Transform",
-        include_str!("../../assets/effect-presets/Transform.json"),
-    ),
-    (
-        "VoronoiPrism",
-        include_str!("../../assets/effect-presets/VoronoiPrism.json"),
-    ),
-    (
-        "Watercolor",
-        include_str!("../../assets/effect-presets/Watercolor.json"),
-    ),
-    (
-        "WireframeDepth",
-        include_str!("../../assets/effect-presets/WireframeDepth.json"),
-    ),
-];
+// build.rs emits the `BUNDLED_PRESETS_GENERATED` array — one entry
+// per `assets/effect-presets/*.json`, sorted alphabetically, with each
+// JSON embedded via `include_str!`.
+include!(concat!(env!("OUT_DIR"), "/bundled_presets_generated.rs"));
+
+/// Bundled preset table — alias for the build.rs-generated array.
+/// Stable name kept for the existing test/consumer code.
+const BUNDLED_PRESETS: &[(&str, &str)] = BUNDLED_PRESETS_GENERATED;
 
 /// Raw embedded JSON for the bundled preset of `effect_type`, or
 /// `None` if no preset is registered.
