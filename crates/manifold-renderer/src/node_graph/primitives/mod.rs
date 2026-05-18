@@ -26,6 +26,7 @@ mod infrared;
 mod invert;
 mod kaleido_fold;
 mod lut1d;
+mod masked_mix;
 mod quad_mirror;
 mod separable_gaussian;
 mod strobe;
@@ -62,6 +63,7 @@ pub use infrared::{INFRARED_PALETTES, INFRARED_TYPE_ID, Infrared};
 pub use invert::Invert;
 pub use kaleido_fold::KaleidoFold;
 pub use lut1d::ColorLut;
+pub use masked_mix::MaskedMix;
 pub use quad_mirror::{QUAD_MIRROR_TYPE_ID, QuadMirror};
 pub use separable_gaussian::{
     GAUSSIAN_BLUR_AXES, GAUSSIAN_BLUR_KERNELS, GAUSSIAN_BLUR_TYPE_ID, GaussianBlur,

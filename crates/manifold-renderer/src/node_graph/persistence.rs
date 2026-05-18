@@ -274,6 +274,7 @@ fn register_builtin(r: &mut PrimitiveRegistry) {
         primitives::Invert,
         primitives::KaleidoFold,
         primitives::ColorLut,
+        primitives::MaskedMix,
         primitives::Strobe,
         primitives::VoronoiPrism,
     );
