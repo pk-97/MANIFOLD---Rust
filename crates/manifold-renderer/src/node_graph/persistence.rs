@@ -264,6 +264,7 @@ fn register_builtin(r: &mut PrimitiveRegistry) {
     }
     register_via_spec!(
         primitives::AffineTransform,
+        primitives::ChromaKey,
         primitives::ChromaticOffset,
         primitives::ClampStretch,
         primitives::ColorGrade,
