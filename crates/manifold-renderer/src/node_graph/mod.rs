@@ -19,7 +19,6 @@ mod execution;
 mod execution_plan;
 mod graph;
 mod loaded_preset_view;
-mod metadata;
 mod metal_backend;
 mod palette;
 mod param_binding;
@@ -49,7 +48,6 @@ pub use graph::{Graph, NodeInstance};
 pub use loaded_preset_view::{
     LoadedPresetView, loaded_preset_view_by_id, outer_routings_from_view, snapshot_for_view,
 };
-pub use metadata::metadata_by_id;
 pub use metal_backend::MetalBackend;
 pub use palette::{catalog_graph_def_for, palette_atoms, PaletteAtom};
 pub use param_binding::{
