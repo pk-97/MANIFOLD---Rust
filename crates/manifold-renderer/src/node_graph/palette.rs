@@ -191,7 +191,16 @@ mod tests {
         // today so unintended drops show up.
         assert_eq!(
             drivers,
-            &["BeatGate", "ColorSample", "LFO", "Luminance", "Math", "Peak", "Value"],
+            &[
+                "BeatGate",
+                "ColorSample",
+                "LFO",
+                "Luminance",
+                "Math",
+                "Peak",
+                "Smoothing",
+                "Value",
+            ],
         );
     }
 

@@ -37,6 +37,7 @@ mod math;
 mod peak;
 mod quad_mirror;
 mod separable_gaussian;
+mod smoothing;
 mod strobe;
 mod temporal;
 mod uv;
@@ -85,6 +86,7 @@ pub use quad_mirror::{QUAD_MIRROR_TYPE_ID, QuadMirror};
 pub use separable_gaussian::{
     GAUSSIAN_BLUR_AXES, GAUSSIAN_BLUR_KERNELS, GAUSSIAN_BLUR_TYPE_ID, GaussianBlur,
 };
+pub use smoothing::{SMOOTHING_TYPE_ID, Smoothing};
 pub use strobe::{
     NOTE_RATE_LABELS, NOTE_RATE_VALUES, NOTE_RATES as STROBE_NOTE_RATES, Strobe,
 };
