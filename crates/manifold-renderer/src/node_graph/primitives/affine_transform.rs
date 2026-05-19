@@ -184,3 +184,40 @@ impl Primitive for AffineTransform {
         );
     }
 }
+
+#[cfg(test)]
+mod port_shadow_tests {
+    //! Sanity that the new `translate_x` / `translate_y` / `rotation`
+    //! port-shadows are actually present after macro expansion and
+    //! accept a wire from a scalar producer. If either of these
+    //! fails the JSON loader silently drops the wire at runtime —
+    //! which is the failure mode we want to catch here.
+
+    use super::*;
+    use crate::node_graph::effect_node::EffectNode;
+    use crate::node_graph::graph::Graph;
+    use crate::node_graph::primitives::Value;
+
+    #[test]
+    fn affine_transform_declares_all_three_scalar_input_ports() {
+        let affine = AffineTransform::new();
+        let port_names: Vec<_> = affine.inputs().iter().map(|p| p.name).collect();
+        for needed in ["in", "translate_x", "translate_y", "rotation"] {
+            assert!(
+                port_names.contains(&needed),
+                "missing port `{needed}` — actual ports = {port_names:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn can_connect_value_into_each_scalar_input_port() {
+        for port in ["translate_x", "translate_y", "rotation"] {
+            let mut g = Graph::new();
+            let val = g.add_node(Box::new(Value::new()));
+            let aff = g.add_node(Box::new(AffineTransform::new()));
+            g.connect((val, "out"), (aff, port))
+                .unwrap_or_else(|e| panic!("connect to AffineTransform.{port}: {e:?}"));
+        }
+    }
+}

@@ -215,4 +215,76 @@ mod tests {
             );
         }
     }
+
+    /// Color Compass specifically: every wire the JSON declares must
+    /// land in the chain-spliced graph. Catches the case where the
+    /// JSON wires up `translate_x` / `translate_y` / `time_constant`
+    /// port-shadows but `splice_def_into_chain` silently drops them
+    /// (because the port lookup fails, or the destination handle
+    /// doesn't resolve, etc.).
+    #[test]
+    fn color_compass_splice_preserves_translate_and_time_constant_wires() {
+        use crate::node_graph::boundary_nodes::Source;
+        use crate::node_graph::chain_spec::splice_def_into_chain;
+        use crate::node_graph::graph::Graph;
+
+        let registry = PrimitiveRegistry::with_builtin();
+        let id = EffectTypeId::new("ColorCompass");
+        let def = bundled_preset_def(&id).expect("ColorCompass preset registered");
+
+        let mut chain = Graph::new();
+        let src = chain.add_node(Box::new(Source::new()));
+        let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry)
+            .expect("Color Compass splices");
+
+        // Resolve handle → chain-node-id map for the inner nodes the
+        // assertions need.
+        let mut handle_map = ahash::AHashMap::<&str, crate::node_graph::effect_node::NodeInstanceId>::default();
+        for (name, id) in &result.handles {
+            handle_map.insert(name.as_ref(), *id);
+        }
+        let affine = *handle_map
+            .get("affine")
+            .expect("affine handle exists in compass splice");
+        let smoothing_x = *handle_map
+            .get("smoothing_x")
+            .expect("smoothing_x handle exists");
+        let smoothing_y = *handle_map
+            .get("smoothing_y")
+            .expect("smoothing_y handle exists");
+        let reactivity_value = *handle_map
+            .get("reactivity_value")
+            .expect("reactivity_value handle exists");
+
+        // The post-splice graph must contain wires that target
+        // AffineTransform's translate_x and translate_y, sourced from
+        // the two smoothing nodes. If the splice silently dropped them
+        // (port-shadow not recognised) the user sees no compass
+        // response despite the JSON declaring it.
+        let wire_exists = |from_node, from_port: &str, to_node, to_port: &str| -> bool {
+            chain.wires().iter().any(|w| {
+                w.from.0 == from_node && w.from.1 == from_port
+                    && w.to.0 == to_node && w.to.1 == to_port
+            })
+        };
+        assert!(
+            wire_exists(smoothing_x, "out", affine, "translate_x"),
+            "smoothing_x.out → affine.translate_x wire missing — likely splice dropped it",
+        );
+        assert!(
+            wire_exists(smoothing_y, "out", affine, "translate_y"),
+            "smoothing_y.out → affine.translate_y wire missing — likely splice dropped it",
+        );
+        // Both smoothings have to receive time_constant from the
+        // shared reactivity_value node — otherwise the card's
+        // reactivity slider only governs one axis.
+        assert!(
+            wire_exists(reactivity_value, "out", smoothing_x, "time_constant"),
+            "reactivity_value → smoothing_x.time_constant wire missing",
+        );
+        assert!(
+            wire_exists(reactivity_value, "out", smoothing_y, "time_constant"),
+            "reactivity_value → smoothing_y.time_constant wire missing",
+        );
+    }
 }
