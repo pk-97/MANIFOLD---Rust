@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "ColorCompass",
-  "description": "Image self-organises around its own brightness. Four ColorSamples read N/E/S/W luma, atan2 converts asymmetry to angle, smoothing tames jitter, the smoothed angle rotates the source upstream of KaleidoFold so the mirror axis tracks wherever the brightest patch lives. Feedback-free; uses the texture→scalar bridge.",
+  "description": "Image rotates toward its own brightest direction. Four ColorSamples read N/E/S/W luma, atan2 converts the asymmetry to an angle, smoothing tames jitter, an intensity multiplier scales the angle, the result drives AffineTransform's rotation. Feedback-free; the loop closes through the one-frame texture→scalar bridge.",
   "presetMetadata": {
     "id": "ColorCompass",
     "displayName": "Color Compass",
@@ -14,20 +14,10 @@
         "name": "Intensity",
         "min": 0.0,
         "max": 1.0,
-        "defaultValue": 0.6,
+        "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
         "formatString": "F2"
-      },
-      {
-        "id": "segments",
-        "name": "Segments",
-        "min": 2.0,
-        "max": 16.0,
-        "defaultValue": 6.0,
-        "wholeNumbers": true,
-        "isToggle": false,
-        "formatString": "F0"
       },
       {
         "id": "reactivity",
@@ -44,27 +34,14 @@
       {
         "id": "intensity",
         "label": "Intensity",
-        "defaultValue": 0.6,
+        "defaultValue": 1.0,
         "target": {
           "kind": "handleNode",
-          "handle": "kaleido",
-          "param": "amount"
+          "handle": "intensity_value",
+          "param": "value"
         },
         "convert": {
           "type": "Float"
-        }
-      },
-      {
-        "id": "segments",
-        "label": "Segments",
-        "defaultValue": 6.0,
-        "target": {
-          "kind": "handleNode",
-          "handle": "kaleido",
-          "param": "segments"
-        },
-        "convert": {
-          "type": "IntRound"
         }
       },
       {
@@ -204,26 +181,33 @@
     },
     {
       "id": 11,
-      "typeId": "node.affine_transform",
-      "handle": "affine"
+      "typeId": "node.value",
+      "handle": "intensity_value",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
     },
     {
       "id": 12,
-      "typeId": "node.kaleidoscope",
-      "handle": "kaleido",
+      "typeId": "node.math",
+      "handle": "math_intensity",
       "params": {
-        "amount": {
-          "type": "Float",
-          "value": 0.6
-        },
-        "segments": {
-          "type": "Int",
-          "value": 6
+        "op": {
+          "type": "Enum",
+          "value": 2
         }
       }
     },
     {
       "id": 13,
+      "typeId": "node.affine_transform",
+      "handle": "affine"
+    },
+    {
+      "id": 14,
       "typeId": "system.final_output",
       "handle": "final_output"
     }
@@ -233,7 +217,7 @@
     { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "in" },
     { "fromNode": 0, "fromPort": "out", "toNode": 3, "toPort": "in" },
     { "fromNode": 0, "fromPort": "out", "toNode": 4, "toPort": "in" },
-    { "fromNode": 0, "fromPort": "out", "toNode": 11, "toPort": "in" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 13, "toPort": "in" },
     { "fromNode": 1, "fromPort": "luma", "toNode": 5, "toPort": "a" },
     { "fromNode": 2, "fromPort": "luma", "toNode": 5, "toPort": "b" },
     { "fromNode": 3, "fromPort": "luma", "toNode": 6, "toPort": "a" },
@@ -243,8 +227,9 @@
     { "fromNode": 7, "fromPort": "out", "toNode": 9, "toPort": "a" },
     { "fromNode": 8, "fromPort": "out", "toNode": 9, "toPort": "b" },
     { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "in" },
-    { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "rotation" },
-    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "in" },
-    { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "in" }
+    { "fromNode": 10, "fromPort": "out", "toNode": 12, "toPort": "a" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "b" },
+    { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "rotation" },
+    { "fromNode": 13, "fromPort": "out", "toNode": 14, "toPort": "in" }
   ]
 }
