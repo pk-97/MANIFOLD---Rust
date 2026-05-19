@@ -231,20 +231,6 @@ fn generator_param_count_oscilloscope_xy() {
     );
 }
 #[test]
-fn generator_param_count_parametric_surface() {
-    assert_eq!(
-        generator_definition_registry::get(&GeneratorTypeId::PARAMETRIC_SURFACE).param_count,
-        5
-    );
-}
-#[test]
-fn generator_param_count_mycelium() {
-    assert_eq!(
-        generator_definition_registry::get(&GeneratorTypeId::MYCELIUM).param_count,
-        12
-    );
-}
-#[test]
 fn generator_param_count_fluid_sim() {
     assert_eq!(
         generator_definition_registry::get(&GeneratorTypeId::FLUID_SIMULATION).param_count,

@@ -185,7 +185,7 @@ pub struct BassSettings {
 impl Default for BassSettings {
     fn default() -> Self {
         Self {
-            generator: GeneratorTypeId::PARAMETRIC_SURFACE,
+            generator: GeneratorTypeId::PLASMA,
             layer_index: 8,
             min_confidence: 0.0,
             duration_threshold_sec: Seconds(1.7144),
@@ -203,7 +203,7 @@ pub struct BassSustainedSettings {
 impl Default for BassSustainedSettings {
     fn default() -> Self {
         Self {
-            generator: GeneratorTypeId::PARAMETRIC_SURFACE,
+            generator: GeneratorTypeId::PLASMA,
             layer_index: 9,
             min_confidence: 0.0,
         }
@@ -749,7 +749,7 @@ impl PercussionImportOptionsFactory {
             PercussionTriggerType::Bass,
             8,
             None,
-            GeneratorTypeId::PARAMETRIC_SURFACE,
+            GeneratorTypeId::PLASMA,
             Beats::ZERO,
             0.0,
         ));

@@ -10,13 +10,6 @@ struct Particle {
     color: vec4<f32>,       // RGBA
 };
 
-// ── Physarum agent struct (16 bytes) ────────────────────────────────
-struct PhysarumAgent {
-    pos: vec2<f32>,         // UV-space (0-1)
-    angle: f32,             // heading in radians
-    _pad: f32,
-};
-
 // ── Hashing (Wang hash — deterministic, fast, no sin()) ────────────
 
 fn wang_hash(seed_in: u32) -> u32 {

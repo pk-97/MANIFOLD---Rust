@@ -201,55 +201,6 @@ inventory::submit! {
     }
 }
 
-// ── Parametric Surface ─────────────────────────────────────────────────
-
-inventory::submit! {
-    GeneratorMetadata {
-        id: GeneratorTypeId::PARAMETRIC_SURFACE,
-        display_name: "Parametric Surface",
-        is_line_based: false,
-        available: true,
-        osc_prefix: "parametricSurface",
-        legacy_discriminant: Some(13),
-        params: &[
-            ParamSpec::whole_labels("shape", "Shape", 0.0, 4.0, 0.0, &["Gyroid","Schwarz P","Schwarz D","Torus Knot","Klein"], "shape"),
-            ParamSpec::continuous("morph", "Morph", 0.0, 1.0, 0.0, "F2", "morph"),
-            ParamSpec::continuous("speed", "Speed", 0.1, 5.0, 1.0, "F1", "speed"),
-            ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),
-            ParamSpec::toggle("snap", "Snap", 0.0, 1.0, 0.0, "snap"),
-        ],
-        string_params: &[],
-    }
-}
-
-// ── Mycelium ───────────────────────────────────────────────────────────
-
-inventory::submit! {
-    GeneratorMetadata {
-        id: GeneratorTypeId::MYCELIUM,
-        display_name: "Mycelium",
-        is_line_based: false,
-        available: true,
-        osc_prefix: "mycelium",
-        legacy_discriminant: Some(17),
-        params: &[
-            ParamSpec::continuous("sens_dist", "Sensor Distance", 0.005, 0.1, 0.02, "F3", "sensdist"),
-            ParamSpec::continuous("sens_angle", "Sensor Angle", 0.1, 1.5, 0.8, "F2", "sensangle"),
-            ParamSpec::continuous("turn", "Turn", 0.05, 1.5, 0.4, "F2", "turn"),
-            ParamSpec::continuous("step", "Step", 0.0002, 0.005, 0.001, "F4", "step"),
-            ParamSpec::continuous("deposit", "Deposit", 0.1, 5.0, 1.5, "F1", "deposit"),
-            ParamSpec::continuous("decay", "Decay", 0.85, 1.0, 0.98, "F3", "decay"),
-            ParamSpec::continuous("color", "Color", 0.0, 1.0, 0.0, "F2", "color"),
-            ParamSpec::continuous("glow", "Glow", 0.0, 3.0, 1.0, "F1", "glow"),
-            ParamSpec::continuous("reactivity", "Reactivity", 0.0, 1.0, 0.5, "F2", "reactivity"),
-            ParamSpec::whole("agents", "Agents", 10.0, 500.0, 200.0, "agents"),
-            ParamSpec::continuous("scale", "Scale", 0.1, 2.0, 1.0, "F2", "scale"),
-            ParamSpec::whole("seeds", "Seeds", 1.0, 5.0, 1.0, "seeds"),
-        ],
-        string_params: &[],
-    }
-}
-
 // ── Fluid Simulation ──────────────────────────────────────────────────
 
 inventory::submit! {
@@ -337,36 +288,6 @@ inventory::submit! {
                 &["Envelope", "Pose"],
                 "snapMode",
             ),
-        ],
-        string_params: &[],
-    }
-}
-
-// ── Galactic Rock ──────────────────────────────────────────────────────
-
-inventory::submit! {
-    GeneratorMetadata {
-        id: GeneratorTypeId::GALACTIC_ROCK,
-        display_name: "Galactic Rock",
-        is_line_based: false,
-        available: true,
-        osc_prefix: "galacticRock",
-        legacy_discriminant: Some(22),
-        params: &[
-            ParamSpec::continuous("speed", "Speed", 0.0, 5.0, 1.0, "F2", "speed"),
-            ParamSpec::continuous("wave_amp", "Wave Amplitude", 0.0, 0.5, 0.1, "F3", "waveAmp"),
-            ParamSpec::continuous("wave_freq", "Wave Frequency", 0.1, 2.0, 0.5, "F2", "waveFreq"),
-            ParamSpec::continuous("twist", "Twist", 0.0, 20.0, 10.0, "F1", "twist"),
-            ParamSpec::continuous("grain", "Grain", 0.0, 0.01, 0.001, "F4", "grain"),
-            ParamSpec::continuous("roughness", "Roughness", 0.0, 1.0, 0.5, "F2", "roughness"),
-            ParamSpec::continuous("light_int", "Light Intensity", 0.1, 10.0, 2.5, "F1", "lightInt"),
-            ParamSpec::continuous("blur", "Blur", 0.0, 20.0, 10.0, "F0", "blur"),
-            ParamSpec::continuous("cam_dist", "Camera Distance", 0.1, 10.0, 0.8, "F2", "camDist"),
-            ParamSpec::continuous("cam_orbit", "Camera Orbit", -180.0, 180.0, 0.0, "F0", "camOrbit"),
-            ParamSpec::continuous("cam_tilt", "Camera Tilt", -90.0, 90.0, 10.0, "F0", "camTilt"),
-            ParamSpec::continuous("cam_fov", "Camera FOV", 20.0, 120.0, 60.0, "F0", "camFov"),
-            ParamSpec::continuous("look_y", "Look Y", -2.0, 2.0, 0.0, "F2", "lookY"),
-            ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),
         ],
         string_params: &[],
     }

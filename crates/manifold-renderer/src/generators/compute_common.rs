@@ -18,19 +18,9 @@ pub struct Particle {
     pub color: [f32; 4],    // RGBA
 }
 
-/// Mycelium agent struct (16 bytes = 4 floats).
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct PhysarumAgent {
-    pub pos: [f32; 2], // UV-space position (0-1 range)
-    pub angle: f32,    // heading angle in radians
-    pub _pad: f32,
-}
-
 // Compile-time layout assertions — must match WGSL struct sizes exactly.
 // If these fail, you've changed a field without updating the WGSL counterpart (or vice versa).
 const _: () = assert!(std::mem::size_of::<Particle>() == 64);
-const _: () = assert!(std::mem::size_of::<PhysarumAgent>() == 16);
 
 /// Fixed-point scale factor for atomic scatter operations.
 /// Energy values are multiplied by this before atomicAdd, divided after resolve.
