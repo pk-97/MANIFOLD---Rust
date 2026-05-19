@@ -24,6 +24,7 @@ mod dither_pattern;
 mod edge_detect;
 mod filter;
 mod gain;
+mod generate_grid_mesh;
 mod glitch;
 mod halation;
 mod highlight_boost;
@@ -76,6 +77,7 @@ pub use filter::{
     BLUR_MODES, BLUR_TYPE_ID, Blur, MIP_CHAIN_TYPE_ID, MipChain, THRESHOLD_TYPE_ID, Threshold,
 };
 pub use gain::Gain;
+pub use generate_grid_mesh::GenerateGridMesh;
 pub use glitch::Glitch;
 pub use halation::{HALATION_TYPE_ID, Halation};
 pub use highlight_boost::HighlightBoost;
