@@ -46,7 +46,6 @@ const NODE_BORDER_SELECTED: [f32; 4] = [0.50, 0.78, 1.00, 1.0];
 const PORT_TEXTURE2D_COLOR: [f32; 4] = [0.50, 0.78, 1.00, 1.0];
 const PORT_TEXTURE3D_COLOR: [f32; 4] = [0.78, 0.50, 1.00, 1.0];
 const PORT_SCALAR_COLOR: [f32; 4] = [1.00, 0.78, 0.40, 1.0];
-const WIRE_COLOR: [f32; 4] = [0.50, 0.78, 1.00, 0.85];
 const TEXT_PRIMARY: [u8; 4] = [220, 220, 230, 255];
 const TEXT_SECONDARY: [u8; 4] = [150, 150, 165, 255];
 const TEXT_HEADER: [u8; 4] = [240, 240, 250, 255];
@@ -813,7 +812,12 @@ impl GraphCanvas {
         let approx_len = ((sx1 - sx0).abs() + (sy1 - sy0).abs() + 2.0 * dx).max(40.0);
         let steps = (approx_len / 12.0).clamp(16.0, 64.0) as i32;
         let thickness = (1.4 * self.zoom).clamp(1.0, 2.2);
-        let ghost_color = [WIRE_COLOR[0], WIRE_COLOR[1], WIRE_COLOR[2], 0.55];
+        // Ghost takes its colour from the from-port's kind so users
+        // can tell what *kind* of wire they're about to make at a
+        // glance — drag from a scalar output, drag a warm-orange
+        // ghost. 0.55 alpha keeps it readable as "in flight".
+        let port_color = node.outputs[idx].color;
+        let ghost_color = [port_color[0], port_color[1], port_color[2], 0.55];
         let mut prev = cubic_bezier(0.0, sx0, sy0, cx0, cy0, cx1, cy1, sx1, sy1);
         for i in 1..=steps {
             let t = i as f32 / steps as f32;
@@ -1009,6 +1013,13 @@ impl GraphCanvas {
         let cx1 = sx1 - dx;
         let cy1 = sy1 + skip_bump;
 
+        // Wire takes its colour from the from-port's kind (matching
+        // the port circles) so scalar wires read warm-orange and
+        // texture wires read sky-blue at a glance. 0.85 alpha keeps
+        // wires distinct without competing with the node chrome.
+        let port_color = from.outputs[from_idx].color;
+        let wire_color = [port_color[0], port_color[1], port_color[2], 0.85];
+
         // Sample the bezier into ~30 short line segments. Step count
         // scales with screen-space length so close-up curves stay smooth.
         let approx_len = ((sx1 - sx0).abs() + (sy1 - sy0).abs() + 2.0 * dx).max(40.0);
@@ -1018,7 +1029,7 @@ impl GraphCanvas {
         for i in 1..=steps {
             let t = i as f32 / steps as f32;
             let curr = cubic_bezier(t, sx0, sy0, cx0, cy0, cx1, cy1, sx1, sy1);
-            ui.draw_line(prev.0, prev.1, curr.0, curr.1, thickness, WIRE_COLOR);
+            ui.draw_line(prev.0, prev.1, curr.0, curr.1, thickness, wire_color);
             prev = curr;
         }
     }
