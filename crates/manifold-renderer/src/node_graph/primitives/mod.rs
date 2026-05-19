@@ -32,6 +32,7 @@ mod luminance;
 mod lut1d;
 mod masked_mix;
 mod math;
+mod peak;
 mod quad_mirror;
 mod separable_gaussian;
 mod strobe;
@@ -75,6 +76,7 @@ pub use luminance::Luminance;
 pub use lut1d::ColorLut;
 pub use math::{MATH_OPS, Math};
 pub use masked_mix::MaskedMix;
+pub use peak::Peak;
 pub use quad_mirror::{QUAD_MIRROR_TYPE_ID, QuadMirror};
 pub use separable_gaussian::{
     GAUSSIAN_BLUR_AXES, GAUSSIAN_BLUR_KERNELS, GAUSSIAN_BLUR_TYPE_ID, GaussianBlur,
