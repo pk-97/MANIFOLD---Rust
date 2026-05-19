@@ -24,6 +24,7 @@ mod dither_pattern;
 mod edge_detect;
 mod filter;
 mod fluid_gradient_rotate;
+mod fluid_seed;
 mod gain;
 mod generate_grid_mesh;
 mod generate_instance_transforms;
@@ -86,6 +87,7 @@ pub use filter::{
     BLUR_MODES, BLUR_TYPE_ID, Blur, MIP_CHAIN_TYPE_ID, MipChain, THRESHOLD_TYPE_ID, Threshold,
 };
 pub use fluid_gradient_rotate::FluidGradientRotate;
+pub use fluid_seed::{FLUID_SEED_PATTERNS, FluidSeed};
 pub use gain::Gain;
 pub use generate_grid_mesh::GenerateGridMesh;
 pub use generate_instance_transforms::{
