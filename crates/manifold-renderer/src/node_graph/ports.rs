@@ -8,14 +8,17 @@
 
 /// What kind of data flows through a port.
 ///
-/// The V1 set is intentionally small. `Buffer` ports (particle positions, mesh
-/// data, audio waveforms) defer to V2 — adding a port type later requires every
-/// existing node to potentially understand it, so the V1 set stays tight.
+/// `Array` is the storage-buffer wire type used by particle, mesh, line, and
+/// audio primitives — the underlying `MTLBuffer` carries `count` items of a
+/// fixed-layout struct, accessed by index. Connection validation matches on
+/// `(item_size, item_align)`; the shader owns the per-byte interpretation.
+/// See `docs/BUFFER_PORT_PLAN.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PortType {
     Texture2D,
     Texture3D,
     Scalar(ScalarType),
+    Array(ArrayType),
 }
 
 /// Sub-types for [`PortType::Scalar`].
@@ -26,6 +29,31 @@ pub enum ScalarType {
     Vec3,
     Vec4,
     Color,
+}
+
+/// Layout descriptor for [`PortType::Array`] wires.
+///
+/// Two `Array` ports can connect iff their `(item_size, item_align)` pairs
+/// match. The shader on either side owns the per-byte interpretation —
+/// canonical struct layouts live in
+/// [`crate::generators::compute_common`](../generators/compute_common/index.html)
+/// (`Particle`, etc.) with `#[repr(C)]` and `bytemuck::Pod`. The `primitive!`
+/// macro provides `Array<Particle>` syntactic sugar that expands to
+/// `ArrayType { item_size: size_of::<Particle>(), item_align: align_of::<Particle>() }`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ArrayType {
+    pub item_size: u32,
+    pub item_align: u32,
+}
+
+impl ArrayType {
+    /// Construct an `ArrayType` from a struct's compile-time layout.
+    pub const fn of<T: bytemuck::Pod>() -> Self {
+        Self {
+            item_size: std::mem::size_of::<T>() as u32,
+            item_align: std::mem::align_of::<T>() as u32,
+        }
+    }
 }
 
 /// Whether a port consumes data or produces it.
