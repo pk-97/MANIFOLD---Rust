@@ -52,6 +52,7 @@ mod render_lines;
 mod resolve_accumulator;
 mod rotate_4d;
 mod scatter_particles;
+mod scatter_particles_3d;
 mod seed_particles;
 mod separable_gaussian;
 mod smoothing;
@@ -119,6 +120,7 @@ pub use render_lines::RenderLines;
 pub use resolve_accumulator::ResolveAccumulator;
 pub use rotate_4d::Rotate4D;
 pub use scatter_particles::ScatterParticles;
+pub use scatter_particles_3d::ScatterParticles3D;
 pub use seed_particles::SeedParticles;
 pub use separable_gaussian::{
     GAUSSIAN_BLUR_AXES, GAUSSIAN_BLUR_KERNELS, GAUSSIAN_BLUR_TYPE_ID, GaussianBlur,
