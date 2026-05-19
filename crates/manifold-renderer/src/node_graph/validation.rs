@@ -357,6 +357,66 @@ mod tests {
     }
 
     #[test]
+    fn connects_array_ports_when_item_layout_matches() {
+        // Two Array ports declared with the same item_size/item_align
+        // connect cleanly. The wire validator compares PortType via
+        // derived Eq, so equivalent ArrayType descriptors match
+        // regardless of the macro-side type-name origin.
+        use crate::node_graph::ports::ArrayType;
+        let layout = ArrayType {
+            item_size: 64,
+            item_align: 16,
+        };
+        let mut g = Graph::new();
+        let a = g.add_node(Box::new(TestNode::new(
+            "producer",
+            vec![],
+            vec![output("particles", PortType::Array(layout))],
+        )));
+        let b = g.add_node(Box::new(TestNode::new(
+            "consumer",
+            vec![input("particles", PortType::Array(layout), true)],
+            vec![],
+        )));
+        g.connect((a, "particles"), (b, "particles"))
+            .expect("matching-layout Array ports should connect");
+    }
+
+    #[test]
+    fn rejects_array_ports_with_mismatched_item_layout() {
+        // Two Array ports with different item_size are different
+        // PortType values — validate must reject the connection
+        // rather than let mismatched layouts flow downstream.
+        use crate::node_graph::ports::ArrayType;
+        let mut g = Graph::new();
+        let a = g.add_node(Box::new(TestNode::new(
+            "particle_producer",
+            vec![],
+            vec![output(
+                "out",
+                PortType::Array(ArrayType {
+                    item_size: 64,
+                    item_align: 16,
+                }),
+            )],
+        )));
+        let b = g.add_node(Box::new(TestNode::new(
+            "vertex_consumer",
+            vec![input(
+                "in",
+                PortType::Array(ArrayType {
+                    item_size: 32,
+                    item_align: 8,
+                }),
+                true,
+            )],
+            vec![],
+        )));
+        let r = g.connect((a, "out"), (b, "in"));
+        assert!(matches!(r, Err(GraphError::PortTypeMismatch { .. })));
+    }
+
+    #[test]
     fn rejects_unknown_port_name() {
         let mut g = Graph::new();
         let a = g.add_node(Box::new(TestNode::new(
