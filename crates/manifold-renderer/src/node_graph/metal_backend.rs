@@ -31,7 +31,7 @@
 use std::sync::Arc;
 
 use ahash::{AHashMap, AHashSet};
-use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat, TexturePool};
+use manifold_gpu::{GpuBuffer, GpuDevice, GpuTexture, GpuTextureFormat, TexturePool};
 
 use crate::node_graph::backend::Backend;
 use crate::node_graph::bindings::Slot;
@@ -110,6 +110,11 @@ pub struct MetalBackend {
     /// here, so `clear_skip_aliases` leaves them alone.
     skip_aliased_slots: Vec<Slot>,
     scalars: AHashMap<Slot, ParamValue>,
+    /// Real `GpuBuffer` backing for [`PortType::Array`] slots. Pre-bound
+    /// by the chain-build code at sizes computed from each producing
+    /// primitive's `max_capacity` param. No lazy-alloc path for arrays
+    /// — capacity is per-instance data, not a port-static property.
+    buffers_array: AHashMap<Slot, GpuBuffer>,
 }
 
 impl MetalBackend {
@@ -131,6 +136,7 @@ impl MetalBackend {
             borrowed_2d: AHashMap::default(),
             skip_aliased_slots: Vec::new(),
             scalars: AHashMap::default(),
+            buffers_array: AHashMap::default(),
         }
     }
 
@@ -155,6 +161,7 @@ impl MetalBackend {
             borrowed_2d: AHashMap::default(),
             skip_aliased_slots: Vec::new(),
             scalars: AHashMap::default(),
+            buffers_array: AHashMap::default(),
         }
     }
 
@@ -284,6 +291,35 @@ impl MetalBackend {
         self.textures_2d.get(&slot)
     }
 
+    /// Pin a [`ResourceId`] to a host-supplied [`GpuBuffer`] for an
+    /// [`PortType::Array`] wire. The chain-build code allocates the
+    /// buffer at `(item_size × max_capacity)` bytes — reading
+    /// `max_capacity` from the producing primitive's params — and
+    /// hands it off to the backend here.
+    ///
+    /// Same lifecycle as [`Self::pre_bind_texture_2d`]: the resource
+    /// is `pinned`, so [`Backend::release`] is a no-op for it. The
+    /// buffer is dropped when [`Self::drop_all_resources`] runs (chain
+    /// rebuild) or the backend itself drops. There is no lazy-alloc
+    /// path for arrays — capacity is per-instance data the chain
+    /// build must know, so the host always pre-binds.
+    pub fn pre_bind_array(&mut self, id: ResourceId, buffer: GpuBuffer) -> Slot {
+        let slot = Slot(self.next_slot);
+        self.next_slot += 1;
+        self.buffers_array.insert(slot, buffer);
+        self.bound.insert(id, slot);
+        self.pinned.insert(id);
+        slot
+    }
+
+    /// Borrow the `GpuBuffer` bound to an [`PortType::Array`] slot, if
+    /// any. Mirrors [`Self::render_target_2d`]. Primitives read this
+    /// through the [`Backend::array_buffer`] trait method via the
+    /// effect-node context.
+    pub fn array_buffer(&self, slot: Slot) -> Option<&GpuBuffer> {
+        self.buffers_array.get(&slot)
+    }
+
     /// Return all retained textures and scalars to their pools and drop
     /// the high-water mark. Call on graph topology change or shutdown.
     ///
@@ -292,6 +328,11 @@ impl MetalBackend {
     /// holds its own `Retained`; pool-releasing would alias the
     /// underlying `MTLTexture` into a future allocation that some
     /// other chain would then write through.
+    ///
+    /// Array buffers are dropped directly (no pool yet — fresh
+    /// allocations on chain rebuild). When buffer-allocation cost
+    /// shows up in profiles, add a [`GpuBuffer`] pool keyed by
+    /// `(item_size, item_align, capacity_bucket)`.
     pub fn drop_all_resources(&mut self) {
         for (_, rt) in self.textures_2d.drain() {
             self.pool.release(rt);
@@ -299,6 +340,7 @@ impl MetalBackend {
         self.borrowed_2d.clear();
         self.skip_aliased_slots.clear();
         self.scalars.clear();
+        self.buffers_array.clear();
         self.bound.clear();
         self.free_by_type.clear();
         self.pinned.clear();
@@ -390,6 +432,10 @@ impl Backend for MetalBackend {
         self.scalars.insert(slot, value);
     }
 
+    fn array_buffer(&self, slot: Slot) -> Option<&GpuBuffer> {
+        self.buffers_array.get(&slot)
+    }
+
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
         Some(self)
     }
@@ -445,6 +491,116 @@ impl Backend for MetalBackend {
 impl Drop for MetalBackend {
     fn drop(&mut self) {
         self.drop_all_resources();
+    }
+}
+
+#[cfg(test)]
+mod array_buffer_tests {
+    //! Phase A.4 of `BUFFER_PORT_PLAN`. Covers `pre_bind_array` →
+    //! `array_buffer` round-trip, idempotency of acquire on a
+    //! pre-bound slot, no-op release for pinned arrays, and
+    //! `drop_all_resources` cleanup.
+
+    use std::sync::Arc;
+
+    use manifold_gpu::{GpuDevice, GpuTextureFormat};
+
+    use super::*;
+    use crate::node_graph::backend::Backend;
+    use crate::node_graph::execution_plan::ResourceId;
+    use crate::node_graph::ports::{ArrayType, PortType};
+
+    fn make_backend() -> (Arc<GpuDevice>, MetalBackend) {
+        let device = crate::test_device();
+        let backend = MetalBackend::new(device.clone(), 16, 16, GpuTextureFormat::Rgba16Float);
+        (device, backend)
+    }
+
+    fn particle_layout() -> ArrayType {
+        // Match the canonical Particle layout in generators/compute_common.rs
+        // without depending on it — these numbers exercise a typical
+        // 64-byte / 16-aligned particle struct.
+        ArrayType {
+            item_size: 64,
+            item_align: 16,
+        }
+    }
+
+    #[test]
+    fn pre_bind_array_makes_buffer_readable_through_array_buffer() {
+        let (device, mut b) = make_backend();
+        let layout = particle_layout();
+        let capacity = 1024u32;
+        let buffer = device.create_buffer(u64::from(layout.item_size) * u64::from(capacity));
+        let buf_size = buffer.size;
+
+        let slot = b.pre_bind_array(ResourceId(0), buffer);
+
+        let read = b.array_buffer(slot).expect("array buffer should be bound");
+        assert_eq!(read.size, buf_size);
+        // Also through the trait method — that's what primitive code calls.
+        let trait_read = Backend::array_buffer(&b, slot).expect("trait reads same slot");
+        assert_eq!(trait_read.size, buf_size);
+    }
+
+    #[test]
+    fn acquire_array_after_pre_bind_is_idempotent() {
+        // The chain build pre-binds an Array resource, then the
+        // executor's first acquire for the same ResourceId must hand
+        // back the pinned slot — not allocate a fresh one.
+        let (device, mut b) = make_backend();
+        let layout = particle_layout();
+        let buffer = device.create_buffer(u64::from(layout.item_size) * 256);
+
+        let pinned = b.pre_bind_array(ResourceId(0), buffer);
+        let acquired = b.acquire(ResourceId(0), PortType::Array(layout));
+        assert_eq!(
+            pinned, acquired,
+            "acquire on a pre-bound resource must return the pinned slot",
+        );
+    }
+
+    #[test]
+    fn release_is_a_noop_for_pinned_array_resources() {
+        // Same lifecycle as pre_bind_texture_2d: the host owns the
+        // buffer lifetime; the executor's per-frame release must not
+        // unpin it.
+        let (device, mut b) = make_backend();
+        let layout = particle_layout();
+        let buffer = device.create_buffer(u64::from(layout.item_size) * 64);
+
+        let slot = b.pre_bind_array(ResourceId(0), buffer);
+        b.release(ResourceId(0), PortType::Array(layout));
+
+        assert_eq!(
+            b.slot_for(ResourceId(0)),
+            Some(slot),
+            "pinned array binding should survive a release",
+        );
+        assert!(
+            b.array_buffer(slot).is_some(),
+            "underlying buffer should still be reachable",
+        );
+    }
+
+    #[test]
+    fn drop_all_resources_clears_array_buffers() {
+        let (device, mut b) = make_backend();
+        let layout = particle_layout();
+        let buffer = device.create_buffer(u64::from(layout.item_size) * 32);
+        let slot = b.pre_bind_array(ResourceId(0), buffer);
+        assert!(b.array_buffer(slot).is_some());
+
+        b.drop_all_resources();
+
+        assert!(
+            b.array_buffer(slot).is_none(),
+            "array buffer should be dropped",
+        );
+        assert!(
+            b.slot_for(ResourceId(0)).is_none(),
+            "binding should be cleared",
+        );
     }
 }
 

@@ -15,7 +15,7 @@
 //! implementation are designed together.
 
 use ahash::AHashMap;
-use manifold_gpu::GpuTexture;
+use manifold_gpu::{GpuBuffer, GpuTexture};
 
 use crate::node_graph::bindings::Slot;
 use crate::node_graph::execution_plan::ResourceId;
@@ -58,6 +58,16 @@ pub trait Backend: Send {
     /// scalar outputs (e.g. an audio-level → bloom-intensity wire).
     /// Mock backends return `None`; real backends look up an inline value.
     fn scalar(&self, slot: Slot) -> Option<ParamValue>;
+
+    /// `GpuBuffer` bound to a slot, if this backend tracks Array resources
+    /// and the slot was pre-bound as an [`PortType::Array`]. Mock backends
+    /// return `None`. The buffer's capacity (max items) was set at
+    /// pre-bind time by the chain-build code reading the producing
+    /// primitive's `max_capacity` param; primitives observe both the
+    /// buffer and the dynamic active-count via the runtime context.
+    fn array_buffer(&self, _slot: Slot) -> Option<&GpuBuffer> {
+        None
+    }
 
     /// Write a scalar value into a slot. The runtime invokes this after
     /// a control-rate node's `evaluate` returns, draining the
