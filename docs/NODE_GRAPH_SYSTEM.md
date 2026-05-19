@@ -1,510 +1,229 @@
 # Node-Based Effect & Generator System
 
-**Status:** Design phase. Not yet implemented. This document captures the architecture, V1 scope, and phased roadmap agreed during design discussion.
+**Status:** Shipped. The legacy linear-effect-chain dispatcher was deleted in May 2026; every shipping effect now runs through the node graph. This doc captures the current architecture and what remains parked. Design rationale for individual sub-systems lives in sibling docs (linked inline).
 
-**Last updated:** 2026-04-30
+**Last updated:** 2026-05-19
 
 ---
 
 ## 1. Overview
 
-Replace MANIFOLD's linear effect-chain model with a **node graph** at the per-effect level. Each effect/generator can be cracked open via a cog icon (UX deferred) to reveal an internal graph of high-level nodes the user can rewire, modify, and recombine.
+MANIFOLD's effects and generators run as **node graphs**. Each preset is a graph of small typed nodes (primitives) wired together; the graph editor lets users (and AI agents) crack open any preset, see the internal structure, modify it, and save the result.
 
-The motivating use case: a user clicks a cog on Bloom and sees its internal multi-pass structure (Threshold → MipChain → Blur → Add) as wired nodes. They can tweak each pass, reorder, drop in additional nodes, and save the result as a new custom effect (`MyBloom`). For complex atomic kernels like FluidSim, the user can't crack open the simulation itself, but they can wire its internal data (density, velocity) into other nodes, enabling visuals that aren't possible today.
+The unit of authoring is the **primitive** — a single GPU dispatch with a fixed port shape (e.g. `Threshold`, `Gain`, `Feedback`, `ColorSample`). The unit of distribution is the **preset** — a JSON file under `assets/effect-presets/` describing the graph topology + parameter bindings + card-UI metadata. The runtime is a single dispatcher (`ChainGraph`) that walks the graph and emits Metal dispatches.
 
-The system is **intuitive by default** — drag a node, it works — and exposes power-user depth (rich port surfaces, custom composites, sub-graphs) only when reached for.
+The system is intuitive by default — drop a preset, it works — and exposes power-user depth (rewiring, exposing internal params, scalar-driven modulation) only when reached for.
 
 ---
 
 ## 2. Design Principles
 
-1. **Decomposition is opt-in, not required.** A user shouldn't need to understand how a fluid sim works to use one. Single-node atomic effects are first-class.
+1. **Decomposition is opt-in, not required.** A user shouldn't need to understand how a fluid sim works to use one. Single-node atomic primitives are first-class.
 2. **Clip-agnostic.** The graph runtime doesn't know about clips, layers, or any host concept. State lives in graph instances.
 3. **Stable IDs are forever.** Once shipped to a real user, type IDs and parameter names are public API. Additive evolution only.
-4. **Bundle wins.** When a project's bundled composite differs from the user's library version, the bundle is canonical for that project. Predictability over convenience.
-5. **Phase aggressively.** Every phase ships independently and is independently useful. No "we built half a thing."
-6. **Generator/effect distinction collapses.** A graph is a graph. Whether it acts as a generator or an effect is determined by its boundary port shape.
+4. **Bundle wins.** When a project's bundled composite differs from a future user-library version, the bundle is canonical for that project.
+5. **Generator/effect distinction collapses.** A graph is a graph. Whether it acts as a generator or an effect is determined by its boundary port shape (`Source` → it's an effect; no `Source` → it's a generator).
+6. **JSON is the source of truth for presets.** Rust composite builders (`build_bloom`, `build_strobe_opacity`, …) survive only as dev fixtures for parity tests against legacy fused shaders. New presets ship as JSON only.
 
 ---
 
 ## 3. Core Concepts
 
-### 3.1 The `EffectNode` abstraction
+### 3.1 Primitives
 
-Every effect, generator, primitive, boundary node, and user-saved composite is an `EffectNode`. Each `EffectNode` has:
+Every node in the graph is an instance of a [`Primitive`](../crates/manifold-renderer/src/node_graph/primitive.rs). A primitive declares (via the `primitive!` macro):
 
-- A **type identity** (`EffectNodeType`) — stable string ID (`primitive.blur`, `effect.bloom`, `composite.user.<uuid>`)
-- A set of **`NodeInput`s** — each with a name, type, and required/optional flag
-- A set of **`NodeOutput`s** — each with a name and type, including one designated **default output**
-- A set of **parameters** — typed, named, rangeable, with per-parameter expose flag
-- A per-frame **evaluate** step — runs once per frame given inputs, parameters, and a place to write outputs
-- Optional **per-instance state** — held by the node's instance, not by the graph or host
+- A stable **`type_id`** — e.g. `"node.gain"`, `"node.chromatic_aberration"`. Treated as public API once shipped.
+- **`inputs`** — named typed ports (Texture2D, Texture3D, Scalar(F32/V2/V3)). Each is required or optional.
+- **`outputs`** — named typed ports.
+- **`params`** — typed scalar parameters with default + range + optional enum labels.
+- A **`run`** method — executes one frame given an `EffectNodeContext` with bound inputs, outputs, params, GPU encoder, and optional `StateStore` for stateful primitives.
 
-`NodeInput` and `NodeOutput` are aliases for the underlying `NodePort` struct, distinguished by `PortKind`. Connections between nodes are `NodeWire`s, each binding one node's output port to another node's input port.
+Primitives are registered via `inventory::submit!` so adding a new file under `crates/manifold-renderer/src/node_graph/primitives/` is the only step required — no central registry edit. See [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md).
 
-The **default output** convention keeps simple connections one-click: dragging a `NodeWire` from A to B connects `A.default → B.default` unless the user explicitly picks a different port.
+### 3.2 Graphs
 
-### 3.2 Two flavors, same trait
+A `Graph` is a topologically-sorted DAG of `NodeInstance`s connected by `NodeWire`s. Connection legality is enforced at `connect` time (port types must match). Boundary nodes (`Source`, `FinalOutput`) mark the graph's external interface.
 
-- **Atomic `EffectNode`s** — implemented in Rust + Metal, opaque internals. FluidSim, Plasma, Glitch, Voronoi, Kaleidoscope, mesh generators, etc.
-- **Composite `EffectNode`s** — defined as a sub-graph of other `EffectNode`s. Bloom-rebuilt-from-primitives, user-built customs, alias presets like Mirror.
+At runtime, an `ExecutionPlan` (compiled by `execution_plan.rs`) carries the topo-sorted step list, the texture-lifetime plan, and the resource bindings table. The `ChainGraph` runs this plan once per frame.
 
-Both implement the same `EffectNode` trait. The graph engine doesn't distinguish them.
+### 3.3 Presets
 
-### 3.3 Mix and match is free
+A **preset** is a `LoadedPresetView` over a JSON file. `assets/effect-presets/<TypeId>.json` is scanned at build time by `build.rs`, which emits `BUNDLED_PRESETS_GENERATED` into the crate. Each preset carries:
 
-Once everything is a node, "generator" and "effect" stop being categories of node. They become properties of a graph's port shape:
+- `nodes` + `wires` (the graph topology)
+- `presetMetadata.params` (the effect-card slider list)
+- `presetMetadata.bindings` (how card sliders route to inner-node params or wires)
+- `presetMetadata.skipMode` (the optimisation hint — see §6.2 of [EFFECT_RUNTIME_UNIFICATION.md](EFFECT_RUNTIME_UNIFICATION.md))
 
-- A graph with no Source input = generator-shaped
-- A graph with a Source input = effect-shaped
-
-Inside any graph, any node can be used regardless of how it's typically labelled. A generator graph can use Blur. An effect graph can use Plasma. A FluidSim's `spawn_mask` input can be driven by another clip's pixels, turning the fluid sim from a generator into an effect.
-
-### 3.4 Boundary nodes — Source and FinalOutput
-
-Every composite graph has explicit boundary `EffectNode`s:
-
-- **`Source`** nodes have no `NodeInput`s, only `NodeOutput`s. They represent data coming in from outside the graph (the clip's pixels, depth buffer, audio buffer, etc.).
-- **`FinalOutput`** nodes have only `NodeInput`s. They represent data leaving the graph for the host — the finished result.
-
-`Source` and `FinalOutput` are always present in composites and cannot be deleted. They are inserted automatically when a new graph is created.
-
-**V1 constraint:** composites have at most one `Source` (Texture2D) and exactly one `FinalOutput` (Texture2D). Multi-Source / multi-FinalOutput composites — which would let users build their own rich-ports nodes — defer to a later phase.
+Composite Rust builders under `composites/` still exist (Bloom, Halation, Infrared, Mirror, SoftFocus, StrobeOpacity) but are used only for parity tests against legacy fused shaders. Shipping artifacts are the JSON files.
 
 ---
 
 ## 4. Port Types
 
-V1 supports three port types:
+Three kinds of wire live in the graph today:
 
-- **Texture2D** — the bread and butter. RGBA color buffer.
-- **Texture3D** — for volume rendering (MRI, 3D fluid sim density/velocity).
-- **Scalar** — Float, Vec2, Vec3, Vec4, Color. Allows parameter-as-wire (e.g. audio level → bloom intensity).
+- **Texture2D** — the bread-and-butter colour buffer. `Rgba16Float` for intermediates, `Rgba32Float` on demand.
+- **Texture3D** — used by FluidSim3D and any future volume primitive.
+- **Scalar** — `F32`, `Vec2`, `Vec3`. Allows parameter-as-wire: an LFO node's `out` (Scalar(F32)) wires into a Bloom node's `threshold` (Scalar(F32) input port).
 
-**Buffer** ports (particle positions, mesh data, audio waveforms, blob lists) defer to V2. This means several existing generators (oscilloscope, particle systems, mesh generators) keep their Buffer-shaped data fully internal in V1.
+**Buffer** ports (particles, mesh data, audio waveforms, blob lists) remain V2 — generators with internal Buffer state (oscilloscope, particle systems, mesh generators) still keep that state opaque inside the primitive.
 
-Adding a port type later is a real cost — every existing node has to potentially understand the new type. Keep the V1 set tight.
+### 4.1 Port-shadows-param convention
+
+When a primitive declares a scalar input port with the same name as one of its `ParamDef`s, the wire wins when present and the param is the fallback. This is the standard pattern for control-rate modulation — used by `node.gain`, `node.wet_dry`, `node.affine_transform.rotation/translate_x/translate_y`, `node.smoothing.time_constant`, `node.feedback.amount`, `node.chromatic_aberration.amount`.
+
+In the editor: rows whose param is currently driven by a wire show `← wired` and disable the expose checkbox + value cell, so users can't double-bind the same parameter.
+
+### 4.2 Texture→Scalar bridges
+
+A small family of primitives reduce a texture to a scalar via shared-mode `MTLBuffer` readback (one-frame latency):
+
+- **`node.luminance`** — average luma.
+- **`node.peak`** — max luma.
+- **`node.color_sample`** — region-averaged RGB at a configurable UV, plus a `luma` aux output.
+
+These close the loop between image content and scalar modulation. ColorCompass uses four `color_sample`s arranged at cardinal UVs to drive `affine_transform.translate_x / translate_y`; SmearMosh uses `edge_detect → luminance → smoothing` to drive `chromatic_aberration.amount` based on per-frame edge density.
 
 ---
 
-## 5. Node Catalog
+## 5. Catalog
 
-### 5.1 Categorization
+Live registries beat hand-maintained tables — the inventory channels populate the catalog at compile time, and the JSON preset directory is browsable directly.
 
-| Category | Description | V1 count |
-|---|---|---|
-| **Primitives** | Small reusable building blocks. The vocabulary of the graph editor. | 10 |
-| **Boundary nodes** | Source, FinalOutput. Graph boundaries. | 2 |
-| **Atomic complex** | Irreducibly one thing — sims, simulations, complex kernels. | 3 |
-| **Composite presets** | Built-in graphs that compose primitives. Cog opens them. | 5 |
-| **Wrapped legacy** | Existing effects/generators implementing the new trait, no decomposition. | ~35 |
-
-### 5.2 Effect classification (full catalog)
-
-| Name | Kind (target) | Optional Inputs | Aux Outputs | Notes |
-|---|---|---|---|---|
-| auto_gain | Atomic+Ports | — | `current_gain` | Histogram-driven |
-| blob_tracking | Atomic+Ports | — | `blobs` (Buffer, V2) | Plugin-backed |
-| **bloom** | **Composite** | — | `bright_pass`, `blur_chain` | Threshold → MipChain → Blur×N → Add |
-| chromatic_aberration | Atomic | — | — | ChannelOffset is conceptual primitive |
-| **color_grade** | **Composite (V2)** | — | — | Needs Curves+LiftGammaGain primitives |
-| depth_of_field | Atomic+Ports | `depth` | `coc_mask` | |
-| dither | Atomic | `pattern` | — | |
-| edge_detect | Atomic | — | `edge_mask` | Also a primitive in palette |
-| edge_stretch | Atomic+Ports | — | `edge_mask` | |
-| glitch | Atomic | — | — | V1 atomic node example |
-| **halation** | **Composite** | — | — | Reuses Bloom's chain with tint |
-| hdr_boost | Atomic | — | — | |
-| **infrared** | **Composite** | — | — | Luminance → GradientMap |
-| invert_colors | Atomic | — | — | |
-| kaleidoscope | Atomic | — | — | |
-| mirror | **Alias preset** | — | — | UVTransform[mirror mode] |
-| quad_mirror | Alias preset | — | — | UVTransform with different mode |
-| strobe | Atomic | — | — | |
-| **stylized_feedback** | **Composite (V2)** | `modifier` | `history` | Feedback → Transform → Blend |
-| transform | Alias preset | — | — | UVTransform itself |
-| voronoi_prism | Atomic | — | — | |
-| watercolor | Atomic+Ports | — | `pigment_density` | |
-| wireframe_depth | Atomic+Ports | `depth` | — | |
-
-### 5.3 Generator classification (full catalog)
-
-| Name | Kind (target) | Optional Inputs | Aux Outputs | Notes |
-|---|---|---|---|---|
-| basic_shapes_snap | Atomic | — | — | |
-| black_hole | Atomic+Ports | — | `lens_field` | |
-| concentric_tunnel | Atomic | — | — | |
-| digital_plants | Atomic+Ports | — | `branches` (Buffer, V2) | |
-| duocylinder | Atomic+Ports | — | `mesh` (Buffer, V2) | |
-| **fluid_simulation** | **Atomic+Ports** | `force_field`, `spawn_mask`, `dye_color` | `density`, `velocity`, `pressure` | V1 hero example |
-| fluid_simulation_3d | Atomic+Ports | `force_field` (3D), `spawn_mask` (3D) | `density` (3D), `velocity` (3D) | |
-| galactic_rock | Atomic+Ports | — | `mesh` (Buffer, V2) | |
-| lissajous | Atomic+Ports | — | `points` (Buffer, V2) | |
-| metallic_glass | Atomic | — | — | |
-| mri_volume | Atomic+Ports | — | `volume` (3D) | |
-| mycelium | Atomic+Ports | — | `branches` (Buffer, V2) | |
-| nested_cubes | Atomic+Ports | — | `mesh` (Buffer, V2) | |
-| oily_fluid | Atomic | — | — | |
-| oscilloscope_xy | Atomic+Ports | `audio` (Buffer, V2) | — | |
-| parametric_surface | Atomic+Ports | — | `mesh` (Buffer, V2) | |
-| particle_text | Atomic+Ports | — | `particles` (Buffer, V2) | |
-| plasma | Atomic | — | — | V1 atomic example |
-| star_field | Atomic+Ports | — | `positions` (Buffer, V2) | |
-| strange_attractor | Atomic+Ports | — | `points` (Buffer, V2) | |
-| tesseract | Atomic+Ports | — | `mesh` (Buffer, V2) | |
-| text | Atomic+Ports | — | `text_mask` | |
-| wireframe_zoo | Atomic+Ports | — | `mesh` (Buffer, V2) | |
-
-### 5.4 Primitive palette (target ~30, V1 = 10)
-
-Bolded primitives are required by V1 composite presets. Italics are V1.
-
-| Category | Primitives |
-|---|---|
-| Sources | SolidColor, Gradient, Noise (FBM/Perlin/Worley) |
-| UV | *UVTransform* (translate/scale/rotate/mirror modes), Polar |
-| Filter | *Blur* (modes), Sharpen, ***Threshold***, EdgeDetect, Pixelate, Posterize |
-| Color | ***Luminance***, *ColorMatrix*, Curves, LiftGammaGain, HueSat, ***GradientMap***, ColorMath (invert/multiply) |
-| Channel | ChannelOffset, ChannelSplit, ChannelCombine |
-| Spatial | Downsample, Upsample, ***MipChain*** |
-| Temporal | Feedback, FrameDelay, Trail |
-| Compose | ***Blend*** (modes), *Mix*, Mask |
-| Shape | Circle, Box, Vignette |
-| Sampling | *Sample* (with explicit UV input) |
-
-V1 list (10): UVTransform, Threshold, Blur, MipChain, Mix, Blend, Luminance, GradientMap, Sample, ColorMatrix.
+- **Primitives** — 30+ shipping in `crates/manifold-renderer/src/node_graph/primitives/`. See [NODE_CATALOG.md](NODE_CATALOG.md) for the curated naming + categorisation spec, [PRIMITIVE_LIBRARY_DESIGN.md](PRIMITIVE_LIBRARY_DESIGN.md) for the design rationale and decomposition recipes.
+- **Atomic complex primitives** — `crates/manifold-renderer/src/node_graph/atomic/` holds the three irreducible kernels (Plasma, FluidSim2D, Glitch); FluidSim3D lives alongside the primitives. These don't decompose to atoms without losing what they are.
+- **Composite Rust builders** — `crates/manifold-renderer/src/node_graph/composites/` (Bloom, Halation, Infrared, Mirror, SoftFocus, StrobeOpacity). Dev fixtures for parity tests; new composites ship as JSON.
+- **Shipping presets** — `crates/manifold-renderer/assets/effect-presets/` (29 as of 2026-05-19). Each is one JSON file; the build script codegens the bundled table.
 
 ---
 
 ## 6. State and Lifecycle
 
-- **Graphs are clip-agnostic.** Runtime knows nothing about clips, layers, or hosts.
-- **State lives in graph instances**, keyed by `node_instance_id` within the graph.
-- One Bloom-graph used on three clips = three independent graph instances = three independent state maps. No cross-contamination.
-- **Lifecycle is RAII.** State is born when the graph instance is constructed, dies when dropped. The host (clip today, anything else tomorrow) owns the instance lifetime; the graph code doesn't model that.
+- **Graphs are clip-agnostic.** The runtime knows nothing about clips, layers, or hosts.
+- **State lives in a `StateStore`** keyed by `(owner_key, node_id)`. One Bloom-preset used on three clips = three independent state entries.
+- **Lifecycle is RAII.** State entries are seeded when the chain is built, cleared when the chain is rebuilt, evicted when the chain is freed.
 
 State-impacting operations:
 
-- **Seek** — calls `clear_state` on every stateful node in the graph.
-- **Clip removed** — graph instance dropped, all state freed.
-- **Clip duplicated** — new graph instance with fresh state. State is not copied across instances.
-- **Graph topology edited (V2 live editing)** — see Section 9.
+- **Seek / project load** → `clear_all_effect_state` walks every `ChainGraph` and every primitive instance.
+- **Layer goes idle** → that layer's chain `clear_state` fires.
+- **Clip removed** → chain freed, state evicted.
+
+Stateful primitives today: `Feedback` (`prev: RenderTarget`), `Smoothing` (`previous: f32`), `BlobTracking` (background worker handle), `DepthOfField` depth mode (MiDaS worker), `Watercolor` (pigment ping-pong). Lifecycle hooks live in [EFFECT_CHAIN_LIFECYCLE.md](EFFECT_CHAIN_LIFECYCLE.md).
 
 ---
 
 ## 7. Parameter System
 
-### 7.1 External interface — unchanged
+### 7.1 Card UI — unchanged
 
-A graph instance presents itself externally exactly like a current effect — flat list of named, typed parameters with ranges. The card UI, MIDI/OSC mapping, and modulation envelope system work unchanged. The outside world doesn't know whether a given effect is hand-written Rust or a graph under the hood.
+Effect cards present a flat list of named, typed parameters. MIDI/OSC mapping, modulation envelopes, and Ableton mapping route to card slots by `ParamId`. The outside world doesn't know whether an effect is a JSON-defined graph or a Rust-defined composite.
 
-### 7.2 Internal — per-parameter expose flag
+### 7.2 Bindings — unified (May 2026)
 
-Inside the graph editor (V2+), each node parameter has an **expose** checkbox. When checked, the parameter appears on the effect card. The graph maintains a routing table from `exposed_param_slot` to `(node_id, param_name)` and forwards writes through it.
+A card-slider write resolves through a single `Vec<ResolvedBinding>` on each effect slot. The binding can target an inner-node param, a control-wire scalar source, a composite-Rust handle, or a custom slot. See [BINDINGS_UNIFICATION_PLAN.md](BINDINGS_UNIFICATION_PLAN.md) (the closed historical record) and §7.11 of [EFFECT_RUNTIME_UNIFICATION.md](EFFECT_RUNTIME_UNIFICATION.md).
 
-The expose mechanism is purely a graph-internal concern. It introduces zero changes to the parameter/modulation infrastructure outside the graph.
+The bug class that motivated unification — passing `&[]` for the user-bindings slice — is now structurally unrepresentable. Wire format carries `ParamId` directly; no `pi: usize → ParamId` translation layer remains.
 
-### 7.3 Address scheme
+### 7.3 Expose flow
 
-Existing modulation bindings target effect-card parameter slots by name/index. This continues unchanged for graph-backed effects. No new address scheme is introduced.
+Inside the graph editor, every inner-node param row has an expose checkbox. Checking it adds a `bindings` entry to the effect's `EffectInstance.user_param_bindings`, which routes through the same `ResolvedBinding` pipeline as static spec bindings. Wire-driven rows are checkbox-disabled (see §4.1).
 
 ---
 
 ## 8. Shader Fusion (Graph Compiler)
 
-### 8.1 Why fusion exists
+**Status:** Architecturally committed, implementation deferred.
 
-Without fusion, a 5-node ColorGrade composite runs as 5 dispatches where today it runs as 1. At 4K60 this is the difference between smooth and skipping frames. Fusion compiles chains of fuseable nodes into single shaders so decomposition is roughly free for pixel-local chains.
+[PRIMITIVE_LIBRARY_DESIGN.md §12.5](PRIMITIVE_LIBRARY_DESIGN.md) commits the stance: *decompose at authoring time, fuse at compile time.* The editor sees small primitives; the GPU runs fused dispatches for per-pixel chains.
 
-### 8.2 Fusion categories
+The fusion classification (pixel-local / UV-rewriting / neighborhood / reduction / multi-pass / stateful), partition algorithm, and `naga_oil`-based toolchain are designed in detail at §8.2–§8.4 of this doc's predecessor and still apply.
 
-The graph compiler classifies each node by what it reads:
-
-| Category | Behavior | Examples |
-|---|---|---|
-| **Pixel-local** | Output pixel = f(same pixel input, params) | ColorMatrix, Curves, Saturation, Threshold, Mix, Blend, Luminance, GradientMap, Invert |
-| **UV-rewriting** | Transforms where to sample, not pixel value | UVTransform, Mirror, Polar |
-| **Neighborhood** | Reads multiple input pixels per output pixel | Blur, EdgeDetect, Sharpen, DOF |
-| **Reduction** | Reads whole image to produce small result | AutoGain (luminance), Histogram |
-| **Multi-pass** | Internally several passes | Bloom mip chain, fluid sim pressure projection |
-| **Stateful / temporal** | Reads from previous frame state | Feedback, Trail, FrameDelay |
-
-**Fusion rules:**
-
-- Pixel-local nodes fuse with adjacent pixel-local and UV-rewriting nodes into one shader.
-- Neighborhood nodes break fusion with their input but can fuse with subsequent pixel-local nodes (tail fusion).
-- Reduction nodes break fusion entirely; they need their own pass.
-- Stateful nodes break fusion with their input; can fuse with subsequent pixel-local.
-- Multi-pass nodes treat each internal pass as its own pass.
-
-### 8.3 Toolchain
-
-- **Custom graph compiler** — partitions the graph into fusion groups, generates WGSL source per group.
-- **naga_oil** — handles WGSL composition (imports, namespacing, identifier collision avoidance, binding remapping).
-- **naga** (already in stack) — compiles generated WGSL → SPIR-V → MSL.
-- **Pipeline cache** — keyed by topology hash; only recompile when graph topology changes.
-
-Custom code estimate: 700-1000 lines of Rust + WGSL templating. Bounded, well-understood work.
-
-### 8.4 Phased rollout
-
-- **Phase 0 (V1):** No fusion. Every node = one dispatch. ColorGrade-as-composite stays atomic in code (don't decompose yet) until fusion exists. Bloom-as-composite ships because it's already multi-pass anyway.
-- **Phase 1:** Pixel-local fusion. Most performance-sensitive composites become decomposable.
-- **Phase 2:** UV-rewriting fusion. Chains of UV transforms collapse into one combined transform.
-- **Phase 3:** Neighborhood→pixel-local tail fusion. Diminishing returns; do if profiling demands.
-
-### 8.5 Reference implementations to study
-
-- **Godot Engine VisualShader** (open, MIT, C++) — closest analogue. Smaller and more readable than Blender. Recommended starting reference.
-- **Blender shader nodes** (open, GPL, C++) — battle-tested, larger.
-- **Bevy shader system** (open, MIT, Rust) — closest tech stack match. Heavy WGSL composition with naga_oil.
-- **Unity ShaderGraph** (partial source on GitHub) — best UX of the bunch.
-
-### 8.6 Risks and discipline
-
-- **Category misclassification** — primitive marked pixel-local that actually reads neighborhood = silent wrong output. Tests must diff fused-vs-unfused output for every primitive.
-- **Identifier collisions in concatenated WGSL** — handled by naga_oil module system, but primitive authors must follow a naming convention.
-- **Pipeline cache memory** — every unique fusion group compiles a unique pipeline. Cache must survive editing without bloat.
+**Why deferred:** §12.5 / §12.9 of PRIMITIVE_LIBRARY_DESIGN explicitly defers until measured frame-budget pressure on a real show file demands it (Profile a fully-decomposed FluidSim or Black Hole on the Liveschool fixture before committing to the fusion infrastructure). §12.6 also softened the urgency — scalar wires removed the fp16-quantisation motivation, so the remaining pressure is purely dispatch overhead, which is fine at current scale.
 
 ---
 
 ## 9. Live Editing
 
-### 9.1 V1 — parameters only
+**V1 (current):** Parameter tweaks during playback are free. Topology edits (adding nodes, rewiring) trigger a synchronous chain rebuild on the content thread; rebuilds are rare enough post-chain-pool-refactor that the cost is invisible in practice.
 
-- Parameter tweaks during playback: free, no recompile.
-- Topology edits during playback: disallowed. User must pause/stop to rewire.
-
-This sidesteps every state-continuity question and ships sooner.
-
-### 9.2 V2 — atomic ExecutionPlan swap
-
-`Arc<ExecutionPlan>` on the content thread. Editor edits stage onto a new plan; background thread compiles new pipelines; once ready, content thread swaps the Arc on the next frame boundary.
-
-State-continuity rules (V2 commitments):
-
-- **Node persists across edit (same `node_instance_id`):** state carries over.
-- **Node added to running graph:** state initialized to default, applied at next frame boundary.
-- **Node removed from running graph:** state freed immediately on swap.
-- **Whole graph replaced:** no state carries over (treated as new instance).
+**V2 (parked):** Atomic `Arc<ExecutionPlan>` swap with state-continuity rules. The compile thread is designed but not built — see §10. The trigger for building it is editing during a live show becoming a routine performer surface (see §12.9 "Mid-show preset editing safety" in PRIMITIVE_LIBRARY_DESIGN.md).
 
 ---
 
 ## 10. Background Compilation
 
-- Graph compilation (WGSL emission + naga + Metal pipeline build) is **never** on the content thread or any vsync callback.
-- Compile thread: dedicated background thread. Picks up a new ExecutionPlan when topology changes, builds pipelines, hands compiled plan back via channel.
-- Content thread: continues running with the previous (old) ExecutionPlan until the new one is delivered. Atomic swap on next iteration.
-- Parameter tweaks bypass the compile thread entirely.
+**Status:** Not started. Today's flow is synchronous on the content thread.
+
+When topology changes (chain rebuild), `ChainGraph::new` walks the new graph, allocates render targets via the pool, and builds Metal pipelines via `naga`. Rebuilds are rare in steady state — typically only on clip activation, layer reorder, or preset swap — so the synchronous path doesn't hurt frame pacing today.
+
+If live topology editing during playback ships, this becomes load-bearing: compilation moves off the content thread, the executor swaps the ExecutionPlan Arc atomically on the next frame boundary.
 
 ---
 
-## 11. Migration
+## 11. Migration (Done)
 
-The current ~58 effects/generators map onto the new system as follows:
+The May 2026 migration ran in two coordinated arcs:
 
-- **Thin effects** (Mirror, QuadMirror, Transform, Invert) → rebuilt as one-node alias presets of primitives.
-- **Decomposable composites** (Bloom, Halation, Infrared, ColorGrade, StylizedFeedback) → rebuilt as composite graphs from primitives. Each requires that the necessary primitives exist; some defer to V2 (ColorGrade needs Curves and LiftGammaGain).
-- **Irreducibly atomic** (FluidSim, Plasma, Glitch, Voronoi, Kaleidoscope, Watercolor, EdgeStretch, mesh generators, particle systems, etc.) → reimplemented as atomic Nodes. Same Rust + Metal kernel as today, new trait wrapper.
+- **§11 Preset migration** (blocks 4–9): every shipping effect moved from `inventory::submit! { EffectMetadata, EffectFactory }` to `assets/effect-presets/<TypeId>.json` + `build.rs` codegen. `EffectRegistry`, `EffectFactory`, `metadata_by_id`, `effect_category_registry`, and 21 orphan `.rs` files were deleted. The graph runtime is the only dispatcher.
+- **Bindings unification** (Phases 1–5): static + user binding paths collapsed onto one `ResolvedBinding` walk, one cache, one `ParamConvert` enum, `ParamId` on the wire.
 
-Existing projects open and play **unchanged**. No migration UI required. Users can opt into rebuilding a clip's effect chain as a graph when they want to; until then, the linear chain runs as a degenerate graph (a straight line of wrapped atomic nodes).
-
-The current `PostProcessEffect` and `Generator` traits eventually retire once the new `EffectNode` trait covers all cases, but both can coexist for the migration period.
+Projects from before the migration load unchanged. The legacy `PostProcessEffect` and `Generator` traits are gone — there is no coexistence period any longer; the trait-wrapped path was always a migration scaffold.
 
 ---
 
-## 12. Library and Sharing
+## 12. Library and Sharing (V2)
 
-### 12.1 Composite identity
+User-saved composites are not yet shipped. The shipping presets in `assets/effect-presets/` are the only graph artifacts a user encounters today.
 
-- **UUID** — stable across edits. Identifies the composite as a concept.
-- **Content hash** — bumped on every edit. Identifies the snapshot.
-- **Library copies are immutable by default.** To "edit someone else's" composite, fork it (new UUID, new identity). Your own composites edit freely.
+Designed but parked:
 
-### 12.2 Storage tiers
+- **UUID + content hash** for composite identity.
+- **App-scoped library** at `~/Library/Application Support/Manifold/library/`.
+- **Project bundling** of custom composites into the V2 ZIP under `graphs/custom_composites/`.
+- **Bundle wins** on identity-collision with the user's library.
 
-- **Built-in primitives, atomic nodes, composite presets** — compiled into the binary. Stable type IDs (`primitive.blur`, `effect.bloom`). Not serialized.
-- **App-scoped library** (V2) — `~/Library/Application Support/Manifold/library/`. One file per composite. Drag-and-drop installable.
-- **Project bundle** (V2) — every composite a project uses is snapshot into the project ZIP under `graphs/custom_composites/`. Self-contained.
-
-### 12.3 Collision resolution
-
-When the project bundle and user's library have the same UUID but different content hashes:
-
-- **Bundle wins.** Project always loads its bundled version.
-- UI shows a one-line notice: "This project includes custom effects that differ from your library version." Options: install bundled to library, fork bundled as new variant, dismiss.
-
-### 12.4 V1 scope
-
-V1 ships **project-scoped composites only**. App-scoped library and project bundling are V2 features.
+The mid-show editing safety question (§12.9 of PRIMITIVE_LIBRARY_DESIGN) is upstream of shipping user composites — it dictates whether mid-show edits apply live, undo cleanly, and handle node-removal without breaking a render.
 
 ---
 
 ## 13. Save Format
 
-- New `graphs/` directory in V2 ZIP — additive, no V2→V3 bump needed.
-- **Schema version field** at the top of each graph file.
-- **Stable type IDs** as `domain.name` strings. Treated as public API once shipped.
-- **Parameters stored as typed map by name** (additive evolution).
-- **Per-clip graph instances** inlined into `project.json` for V1; can be split out later if file size demands.
-- **Forward compatibility rules:** additive only. New optional fields/ports/parameters with defaults, fine. Renames and semantic changes, never — make a new type ID.
-- **Custom composites in `graphs/custom_composites/<id>.json`** (V2 only).
+Preset JSON schema lives in [`crates/manifold-core/src/effect_definition_registry.rs`](../crates/manifold-core/src/effect_definition_registry.rs) and the structures it points at. Key invariants:
 
-Graph file structure (sketch):
+- `version: 2` is the current schema.
+- `nodes` carry stable `typeId` (`"node.gain"`, `"node.feedback"`, …) — treated as public API.
+- `params` are a typed map by name; additive evolution only (new optional fields with defaults are fine; renames and semantic changes require a new type ID).
+- `presetMetadata.bindings` carry `ParamId` (not positional index).
+- `presetMetadata.skipMode` is the optimisation hint for the zero-cost skip-passthrough path.
 
-```json
-{
-  "schema_version": 1,
-  "id": "composite.user.<uuid>",
-  "content_hash": "<sha256>",
-  "name": "MyBloom",
-  "nodes": [
-    { "id": "n1", "type": "primitive.threshold", "params": { "level": 0.8 }, "exposed": ["level"], "editor_pos": [120, 200] }
-  ],
-  "wires": [
-    { "from": ["n1", "out"], "to": ["n2", "in"] }
-  ],
-  "exposed_parameters": [
-    { "label": "Threshold", "node": "n1", "param": "level" }
-  ]
-}
-```
+User-saved composites (V2) will land under `graphs/custom_composites/<id>.json` inside the project ZIP.
 
 ---
 
-## 14. V1 Scope (Concrete)
+## 14. Open Questions
 
-### Port types (3)
-Texture2D, Texture3D, Scalar. Buffer ports defer to V2.
+Real ones, parked. Not the "(none yet)" placeholder from V0.
 
-### Boundary nodes (2)
-Source, FinalOutput. Always present in composites, can't be deleted.
-
-**Constraint:** V1 composites have at most one Source (Texture2D) and exactly one FinalOutput (Texture2D).
-
-### Primitives (10)
-UVTransform, Threshold, Blur, MipChain, Mix, Blend, Luminance, GradientMap, Sample, ColorMatrix.
-
-### Atomic effects/generators (3)
-Plasma, FluidSim 2D (with `density` and `velocity` Texture2D outputs), Glitch.
-
-### Composite presets (5)
-Bloom, Halation, Infrared, Mirror (alias), SoftFocus.
-
-### Wrapped legacy nodes (~35)
-Every other existing effect/generator wrapped as an atomic Node. Same Rust + Metal kernel, new trait.
-
-### Runtime
-Graph data model, topological sort, execution plan, texture lifetime planner, per-instance state per stateful node. **No fusion.** One dispatch per node.
-
-### Compilation
-WGSL emission for composites runs on background thread. naga + Metal compile. Atomic Arc swap. Parameter tweaks bypass compilation.
-
-### Editing
-Parameter changes only during playback. Topology edits require pause.
-
-### Editor
-**None in V1.** Validation through:
-- Code-built graphs (Rust constructs a graph in tests, runs frames, snapshot diffs against expected output).
-- One hardcoded debug graph for visual sanity check.
-
-### Library
-Project-scoped only. App-scoped library and bundling defer to V2.
-
-### Estimated effort
-4-6 weeks of focused work for runtime + new node implementations + adapter pass for the ~35 legacy nodes. Editor work begins separately after V1 lands.
+- **Mid-show preset editing safety.** If presets become M4L-style devices and the graph editor is the depth, editing during a live performance is a real possibility. What gets undo? What happens if a user removes a node mid-render? See §12.9 of PRIMITIVE_LIBRARY_DESIGN.md.
+- **Rebake-on-change scheduler caching.** Heavy generators (Black Hole's deflection map, ParametricSurface mesh build) need per-node dirty bits so the executor can skip re-evaluation when inputs haven't changed. Similar pattern to skip-passthrough but content-based. See §12.9 of PRIMITIVE_LIBRARY_DESIGN.md.
+- **When to build fusion-on-compile.** Pending a measured profile on a fully-decomposed Black Hole or FluidSim on the Liveschool fixture. See §8 above and §12.5 / §12.9 of PRIMITIVE_LIBRARY_DESIGN.md.
+- **Chain pool rekey by semantic ID.** [CHAIN_POOL_REFACTOR_PLAN.md](CHAIN_POOL_REFACTOR_PLAN.md) is audited and designed but not started. Layer reorder still hits the positional-indexing bug class.
+- **Array port / Buffer port.** §12.3 of PRIMITIVE_LIBRARY_DESIGN.md promotes Array (particle pipelines) to V1. Buffer (audio waveforms) and 3D-volume primitives remain V2.
 
 ---
 
-## 15. Phased Roadmap
+## 15. References
 
-| Phase | Adds | Why |
-|---|---|---|
-| **V1** | Runtime, ~20 new nodes, ~35 wrapped legacy, no editor, no fusion | Validate the abstraction before committing to UI |
-| **V2** | Editor UI, app-scoped library, project bundling, live topology edits, more composites | Ship the actual product |
-| **V3** | Pixel-local fusion compiler, Buffer ports, particle/mesh integration, more primitives | Performance and expressiveness |
-| **V4** | UV-rewriting fusion, sub-graphs of sub-graphs, plugin-style sharing | Polish the platform |
-
----
-
-## 16. Decisions Log
-
-Track key architectural decisions and the reasoning behind them. Append-only.
-
-| Date | Decision | Rationale |
-|---|---|---|
-| 2026-04-30 | Use coarse-grained "TouchDesigner TOP-level" granularity, not fine-grained shader-math nodes | Single-node atomic effects are first-class. Decomposition opt-in. |
-| 2026-04-30 | Mix and match between effect and generator nodes is unrestricted | Generator/effect distinction collapses to graph port shape. |
-| 2026-04-30 | FluidSim and similar simulations stay atomic with rich port surface | Simulation kernels can't decompose to primitives without losing what they are. Rich ports expose internals. |
-| 2026-04-30 | Old effects ship as composite presets where decomposable, atomic Nodes otherwise | Reference implementations for users; no rewrite of working code. |
-| 2026-04-30 | Thin effects (Mirror, Transform) stay as themselves via alias presets | Discoverability beats theoretical elegance. |
-| 2026-04-30 | Graph runtime is clip-agnostic; state lives per graph instance | Decouples graph from host. State key is `node_instance_id`. |
-| 2026-04-30 | Parameter system requires zero external changes | Graph adapts to existing effect-card interface internally. |
-| 2026-04-30 | Per-parameter expose checkbox is graph-internal only | Modulation/MIDI/OSC unchanged. |
-| 2026-04-30 | Custom graph compiler + naga_oil + naga; no off-the-shelf solution | None exists. Custom layer is bounded (~1000 lines). |
-| 2026-04-30 | Phase 0 ships with no fusion | Validate abstraction first. Fusion is Phase 1+. |
-| 2026-04-30 | App-scoped library + project bundle, bundle wins on collision | Predictability + portability. Like font embedding in PDFs. |
-| 2026-04-30 | UUID + content hash for composite identity | Stable concept ID + edit-tracking snapshot ID. |
-| 2026-04-30 | Live topology editing during playback deferred to V2 | Sidesteps state-continuity questions for V1. |
-| 2026-04-30 | V1 has no editor; validate through code | Editor is months of work; abstraction must be right first. |
-| 2026-04-30 | Source and FinalOutput boundary nodes mark graph edges | Self-documenting, supports future multi-port composites. |
-| 2026-04-30 | Naming: `EffectNode`, `NodeInput`/`NodeOutput`/`NodePort`, `NodeWire`, `Source`, `FinalOutput` | Domain-prefixed names disambiguate from UI tree nodes / network ports. Boundary nodes (Source, FinalOutput) stay un-prefixed since they're standalone graph concepts, not port mechanics. |
-| 2026-04-30 | Step 1 lands as a module inside `manifold-renderer` (not a new crate) | Smallest commitment; split into `manifold-graph` later if it earns it. |
-
----
-
-## 17. Open Questions
-
-Things that need answering during implementation. Append as discovered, resolve inline with date and answer.
-
-- *(none yet — open as work begins)*
-
----
-
-## 18. Progress Tracking
-
-### V1 Milestones
-
-| Milestone | Status | Notes |
-|---|---|---|
-| `EffectNode` trait designed and reviewed | Done (2026-04-30) | Core abstraction in `crates/manifold-renderer/src/node_graph/`. |
-| Port type system (Texture2D, Texture3D, Scalar) | Done (2026-04-30) | `node_graph/ports.rs`. |
-| Graph data model (`Graph`, `NodeWire`, `NodeInstance`) | Done (2026-04-30) | `node_graph/graph.rs`. Connection legality enforced at `connect` time. |
-| Topological sort + cycle detection | Done (2026-04-30) | `node_graph/validation.rs`. DAG-only for V1; explicit feedback edges deferred. |
-| Execution plan compiler (no fusion) | Done (2026-04-30) | `node_graph/execution_plan.rs`. `compile()` produces ordered steps with resource bindings. |
-| Texture lifetime planner | Done (2026-04-30) | Same module. Last-reader tracking; unread outputs freed immediately at producing step. |
-| Mock executor + resource pool (per-frame) | Done (2026-04-30) | `node_graph/execution.rs`, `node_graph/bindings.rs`. Slot-based pool with per-PortType reuse. |
-| Background compile thread + Arc swap | Not started | |
-| Source/FinalOutput boundary nodes | Done (2026-04-30) | `node_graph/boundary_nodes.rs`. Trivial no-op nodes; host pre/post-binds the boundary slots. |
-| Backend abstraction (mock + real seam) | Done (2026-04-30) | `node_graph/backend.rs`. `Backend` trait + `MockBackend`. |
-| Typed accessors + `MetalBackend` skeleton | Done (2026-04-30) | `Backend` trait grew `texture_2d` / `scalar`. `NodeInputs`/`NodeOutputs` resolve typed handles via the backend. `MetalBackend` allocates real `RenderTarget`s via `RenderTargetPool`. Not yet wired into a host. |
-| 10 V1 primitives | Stubs done (2026-04-30) | `node_graph/primitives/`. All 10 declared with proper port shapes + parameters. `evaluate()` is a no-op until Metal backend lands. |
-| 3 V1 atomic nodes | Stubs done (2026-04-30) | `node_graph/atomic/`. Plasma (zero-input generator), FluidSim2D (rich ports + scalar input + 4 outputs), Glitch (single-shader effect). Hero test wires FluidSim's `density` aux output through downstream nodes. |
-| 5 V1 composite presets | Done (2026-04-30) | `node_graph/composites/`. Function-based builders return `CompositeHandle` with parameter routing. Mirror, Infrared, SoftFocus, Bloom, Halation all compile + execute. |
-| Wrapped legacy nodes (~35) | Not started | One Node trait wrapper per existing effect/generator. |
-| Project save/load (graphs in V2 ZIP) | Not started | Schema v1, additive design. |
-| Code-driven validation harness | Not started | Build graphs in tests, snapshot diff. |
-| Hardcoded debug graph (visual sanity) | Not started | |
-
-### V2+ (parking lot)
-
-- Editor UI (canvas, palette, parameter inspector, port hit-testing)
-- Live topology editing with state-continuity rules
-- App-scoped library
-- Project bundling + collision UI
-- Phase 1 fusion compiler
-- Buffer ports (particle systems, mesh, audio)
-- More composite presets (ColorGrade, StylizedFeedback)
-- Curves and LiftGammaGain primitives
-
----
-
-## 19. References
-
-- `crates/manifold-renderer/src/effect.rs` — current `PostProcessEffect` trait
-- `crates/manifold-renderer/src/generator.rs` — current `Generator` trait
-- `crates/manifold-renderer/src/effect_chain.rs` — current linear-chain runtime
-- `crates/manifold-renderer/src/render_target_pool.rs` — current texture pool (will need extension for graph lifetime planner)
-- `crates/manifold-gpu/src/metal/shader_compiler.rs` — naga toolchain entry point
-- `docs/MANIFOLD_GPU_ARCHITECTURE.md` — overall GPU architecture
-- `docs/ADDING_EFFECTS_AND_GENERATORS.md` — current effect/generator authoring guide (to be updated for nodes)
+- [PRIMITIVE_LIBRARY_DESIGN.md](PRIMITIVE_LIBRARY_DESIGN.md) — primitive catalog, decomposition recipes, parity tests, design rationale
+- [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) — authoring a new primitive
+- [ADDING_EFFECTS_AND_GENERATORS.md](ADDING_EFFECTS_AND_GENERATORS.md) — authoring a new preset (JSON workflow)
+- [NODE_CATALOG.md](NODE_CATALOG.md) — naming + categorisation spec
+- [EFFECT_RUNTIME_UNIFICATION.md](EFFECT_RUNTIME_UNIFICATION.md) — runtime design, bindings, skip-passthrough, IR
+- [BINDINGS_UNIFICATION_PLAN.md](BINDINGS_UNIFICATION_PLAN.md) — historical record of Phases 1–5
+- [EFFECT_CHAIN_LIFECYCLE.md](EFFECT_CHAIN_LIFECYCLE.md) — chain pool, state-cache eviction, feedback bleed-through
+- [MANIFOLD_GPU_ARCHITECTURE.md](MANIFOLD_GPU_ARCHITECTURE.md) — Metal backend, texture formats, uniform layout
+- `crates/manifold-renderer/src/node_graph/` — module structure for the runtime
+- `crates/manifold-renderer/assets/effect-presets/` — shipping presets

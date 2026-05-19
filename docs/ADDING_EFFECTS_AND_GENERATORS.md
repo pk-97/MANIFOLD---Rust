@@ -1,50 +1,129 @@
 # Adding Effects and Generators
 
-Registration uses the `inventory` crate for distributed self-registration.
-Each processor declares its metadata and factory in its implementation file.
-No central registry editing required.
+Effects and generators ship through two different paths today. Effects went through the May 2026 JSON migration; generators are still on the original `inventory::submit!` workflow until their parallel migration lands.
 
-## New Effect — 2 files
+---
 
-1. **`manifold-renderer/src/effects/my_effect.rs`** — NEW FILE: implement `PostProcessEffect` trait + add two `inventory::submit!` blocks (EffectMetadata + EffectFactory)
-2. **`manifold-renderer/src/effects/mod.rs`** — Add `pub mod my_effect;`
+## Adding an Effect — drop a JSON file
 
-```rust
-// At the top of my_effect.rs, after imports:
-use manifold_core::EffectTypeId;
-use manifold_core::effect_registration::EffectMetadata;
-use manifold_core::generator_registration::ParamSpec;
-use crate::effects::registration::EffectFactory;
+A new effect is one file: `crates/manifold-renderer/assets/effect-presets/<TypeId>.json`. The build script (`build.rs`) scans the directory at compile time and codegens the `BUNDLED_PRESETS_GENERATED` table — no central registry edit, no Rust to write.
 
-inventory::submit! {
-    EffectMetadata {
-        id: EffectTypeId::new("MyEffect"),
-        display_name: "My Effect",
-        category: "Post-Process",  // "Spatial", "Post-Process", "Filmic", "Surveillance"
-        available: true,
-        osc_prefix: "myEffect",
-        legacy_discriminant: None,
-        params: &[
-            ParamSpec::continuous("Amount", 0.0, 1.0, 0.5, "F2", ""),
-        ],
-    }
-}
+If your effect can be expressed by composing primitives that already exist, that's the whole step. If it needs a new atomic operation (new shader, new shape of compute work), add a primitive first ([ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md)) and then reference it from your JSON.
 
-inventory::submit! {
-    EffectFactory {
-        id: EffectTypeId::new("MyEffect"),
-        create: |device| Box::new(MyEffectFX::new(device)),
-    }
+### Minimal preset JSON
+
+```json
+{
+  "version": 2,
+  "name": "InvertColors",
+  "description": "Per-pixel colour invert.",
+  "presetMetadata": {
+    "id": "InvertColors",
+    "displayName": "Invert",
+    "category": "Color",
+    "oscPrefix": "invert",
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Amount",
+        "min": 0.0, "max": 1.0, "defaultValue": 1.0,
+        "wholeNumbers": false, "isToggle": false,
+        "formatString": "F2"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Amount",
+        "defaultValue": 1.0,
+        "target": { "kind": "handleNode", "handle": "invert", "param": "intensity" },
+        "convert": { "type": "Float" }
+      }
+    ],
+    "skipMode": { "kind": "onZero", "paramId": "amount" }
+  },
+  "nodes": [
+    { "id": 0, "typeId": "system.source", "handle": "source" },
+    { "id": 1, "typeId": "node.invert", "handle": "invert",
+      "params": { "intensity": { "type": "Float", "value": 1.0 } } },
+    { "id": 2, "typeId": "system.final_output", "handle": "final_output" }
+  ],
+  "wires": [
+    { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" }
+  ]
 }
 ```
 
-## New Generator — 2 files
+### Schema cheat sheet
 
-1. **`manifold-renderer/src/generators/my_gen.rs`** — NEW FILE: implement `Generator` trait + add two `inventory::submit!` blocks (GeneratorMetadata + GeneratorFactory)
-2. **`manifold-renderer/src/generators/mod.rs`** — Add `pub mod my_gen;`
+- **`version`** — `2` for current schema.
+- **`name`** — internal name, kebab/PascalCase. Match the filename stem.
+- **`presetMetadata.id`** — the `EffectTypeId` (must equal the filename stem).
+- **`presetMetadata.category`** — one of `Spatial | Color | Stylize | Filmic | Diagnostic`. Drives the effect-browser grouping.
+- **`presetMetadata.oscPrefix`** — kebab/snake-case prefix for OSC routing (`/manifold/<oscPrefix>/<paramId>`).
+- **`presetMetadata.available`** — set `false` to hide from the picker but still load saved projects.
+- **`presetMetadata.params`** — the card-UI slider list. Each entry is one effect-card slider.
+- **`presetMetadata.bindings`** — how each slider routes to inner state. `target.kind: "handleNode"` is the common case; `handle` is the inner node's `handle` string and `param` is the param name on that primitive.
+- **`presetMetadata.skipMode`** — optimisation hint. `{"kind": "onZero", "paramId": "..."}` enables zero-cost skip-passthrough when that slider is at zero. Omit if every slider is load-bearing.
+- **`nodes[].typeId`** — must reference a registered primitive (browseable at `crates/manifold-renderer/src/node_graph/primitives/`) or one of the system nodes (`system.source`, `system.final_output`).
+- **`nodes[].handle`** — a string label used by bindings and wires. Must be unique within the preset.
+- **`nodes[].params`** — initial param values for this instance. Format is the same tagged-enum used everywhere: `{"type": "Float", "value": 0.5}`, `{"type": "Enum", "value": 2}`, `{"type": "Int", "value": 24}`, `{"type": "Vec2", "value": [0.5, 0.2]}`.
+- **`wires`** — connections between ports. `fromPort` / `toPort` must exist on the referenced primitive's port list.
+
+### ParamConvert variants
+
+The `convert` field on each binding tells the runtime how to map the card-slider float into the inner-node param value. Four variants:
+
+- **`Float`** — direct passthrough (slider 0.5 → param 0.5).
+- **`IntRound`** — round-to-int (slider 4.7 → param 5).
+- **`EnumRound`** — round-to-int into an enum index (same wire shape, separate variant for typed clarity).
+- **`BoolThreshold`** — `value >= 0.5 → 1`, else `0`.
+
+Static (registry) and user (per-instance exposed) bindings both run through the same enum — see §7.11 of [EFFECT_RUNTIME_UNIFICATION.md](EFFECT_RUNTIME_UNIFICATION.md).
+
+### Validation
+
+The build script does structural checks only — every file must parse and carry a `version`. Deeper validation runs at runtime in the preset loader:
+
+- Every `typeId` in `nodes` references a registered primitive.
+- Every `bindings.target.handle` resolves to a node in the graph.
+- Every `wires` endpoint references a valid `(node, port)` pair with matching types.
+- The graph is a DAG (no cycles).
+
+The test `every_bundled_preset_loads_validates_and_compiles` in `bundled_presets.rs` runs all bundled presets through `validate(&graph)` and the Metal pipeline build — if you add a preset that's structurally broken, that test catches it before any user sees it.
+
+### Tests
+
+- **Cheap:** `cargo test -p manifold-renderer --lib bundled_preset` — loads + validates + compiles every preset.
+- **Per-preset GPU parity** (optional): the `composites/` Rust builders carry pixel-exact parity tests against legacy fused shaders for the 6 grandfathered presets. New JSON presets don't need this unless they're replacing a legacy fused shader.
+
+### Real examples to crib from
+
+| File | Pattern |
+|---|---|
+| `InvertColors.json` | Minimal one-primitive preset |
+| `ChromaticAberration.json` | Single-primitive, multi-slider with `EnumRound` for the mode |
+| `EdgeGlow.json` | Two-stage chain: EdgeDetect → Threshold → Mix |
+| `SmearMosh.json` | Stateful (Feedback) + scalar-wire-driven control (EdgeDetect → Luminance → Smoothing → Math drives ChromaticOffset.amount) |
+| `ColorCompass.json` | Four texture→scalar bridges driving AffineTransform translate ports |
+| `Strobe.json` | `node.strobe` fused composite — kept as a single atomic primitive |
+
+---
+
+## Adding a Generator — inventory::submit! (legacy path)
+
+Generators have **not** yet migrated to the JSON workflow. They still ship through the original `inventory::submit!` pattern, with one `.rs` file per generator plus a `pub mod` line in `generators/mod.rs`.
+
+### Two files
+
+1. **`crates/manifold-renderer/src/generators/<name>.rs`** — implement the `Generator` trait + two `inventory::submit!` blocks (`GeneratorMetadata` + `GeneratorFactory`).
+2. **`crates/manifold-renderer/src/generators/mod.rs`** — `pub mod <name>;` so the file is part of the crate.
+
+### Template
 
 ```rust
-// At the top of my_gen.rs, after imports:
 use manifold_core::GeneratorTypeId;
 use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
 use crate::generators::registration::GeneratorFactory;
@@ -74,32 +153,40 @@ inventory::submit! {
 }
 ```
 
-## ParamSpec Helpers
+### ParamSpec helpers
 
 All `const fn`, usable in static contexts:
+
 - `ParamSpec::continuous(name, min, max, default, fmt, osc_suffix)` — float slider
 - `ParamSpec::toggle(name, min, max, default, osc_suffix)` — on/off
 - `ParamSpec::whole(name, min, max, default, osc_suffix)` — integer
 - `ParamSpec::whole_labels(name, min, max, default, &labels, osc_suffix)` — integer with named values
 
-## Optional: Type ID Constants
+### Optional: type ID constants
 
-If other code needs to reference the type ID (e.g., compositor, project loading),
-add a const to the appropriate type ID file:
+If other code needs to reference the type ID (e.g., compositor branching, project loading), add a `const` in `generator_type_id.rs`:
 
 ```rust
-// generator_type_id.rs
 pub const MY_GEN: Self = Self(Cow::Borrowed("MyGen"));
-
-// effect_type_id.rs
-pub const MY_EFFECT: Self = Self(Cow::Borrowed("MyEffect"));
 ```
 
-This is optional — new processors can use `GeneratorTypeId::new("MyGen")` inline.
+Optional — new generators can use `GeneratorTypeId::new("MyGen")` inline.
 
-## How It Works
+### How it works
 
-The `inventory` crate collects all `submit!` blocks across the entire binary at link time.
-At startup, the registries in `manifold-core` iterate `inventory::iter::<GeneratorMetadata>`
-to build the definition and type registration maps. The factories in `manifold-renderer`
-do the same with `GeneratorFactory`/`EffectFactory` to build the creation maps.
+The `inventory` crate collects all `submit!` blocks across the entire binary at link time. At startup, `manifold-core` iterates `inventory::iter::<GeneratorMetadata>` to build the definition map. The `manifold-renderer` factory registry does the same with `GeneratorFactory` to build the creation map.
+
+### Future migration
+
+Generators will eventually follow effects onto a JSON-authoritative workflow under `assets/generator-presets/` once the per-frame state shapes and Buffer-port story are finalised. Don't pre-architect for that — write generators using today's pattern; the migration will be a coordinated sweep, not a per-generator burden.
+
+---
+
+## References
+
+- [NODE_GRAPH_SYSTEM.md](NODE_GRAPH_SYSTEM.md) — graph runtime and preset architecture
+- [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) — authoring a new primitive (the atoms JSON presets reference)
+- [PRIMITIVE_LIBRARY_DESIGN.md](PRIMITIVE_LIBRARY_DESIGN.md) — primitive catalog, decomposition recipes
+- [EFFECT_RUNTIME_UNIFICATION.md](EFFECT_RUNTIME_UNIFICATION.md) §7.11 — bindings unification (one ResolvedBinding, one ParamConvert)
+- `crates/manifold-renderer/build.rs` — preset scan + codegen
+- `crates/manifold-renderer/src/node_graph/bundled_presets.rs` — runtime loader + the `every_bundled_preset_loads_validates_and_compiles` test
