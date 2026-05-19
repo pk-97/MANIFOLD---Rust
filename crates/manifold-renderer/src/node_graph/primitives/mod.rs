@@ -25,6 +25,7 @@ mod edge_detect;
 mod filter;
 mod fluid_gradient_rotate;
 mod fluid_seed;
+mod fluid_simulate;
 mod gain;
 mod generate_grid_mesh;
 mod generate_instance_transforms;
@@ -88,6 +89,7 @@ pub use filter::{
 };
 pub use fluid_gradient_rotate::FluidGradientRotate;
 pub use fluid_seed::{FLUID_SEED_PATTERNS, FluidSeed};
+pub use fluid_simulate::FluidSimulate;
 pub use gain::Gain;
 pub use generate_grid_mesh::GenerateGridMesh;
 pub use generate_instance_transforms::{
