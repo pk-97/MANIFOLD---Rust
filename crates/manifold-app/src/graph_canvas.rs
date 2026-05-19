@@ -46,6 +46,7 @@ const NODE_BORDER_SELECTED: [f32; 4] = [0.50, 0.78, 1.00, 1.0];
 const PORT_TEXTURE2D_COLOR: [f32; 4] = [0.50, 0.78, 1.00, 1.0];
 const PORT_TEXTURE3D_COLOR: [f32; 4] = [0.78, 0.50, 1.00, 1.0];
 const PORT_SCALAR_COLOR: [f32; 4] = [1.00, 0.78, 0.40, 1.0];
+const PORT_ARRAY_COLOR: [f32; 4] = [0.50, 1.00, 0.62, 1.0];
 const TEXT_PRIMARY: [u8; 4] = [220, 220, 230, 255];
 const TEXT_SECONDARY: [u8; 4] = [150, 150, 165, 255];
 const TEXT_HEADER: [u8; 4] = [240, 240, 250, 255];
@@ -70,6 +71,7 @@ impl PortView {
             PortKindSnapshot::Texture2D => PORT_TEXTURE2D_COLOR,
             PortKindSnapshot::Texture3D => PORT_TEXTURE3D_COLOR,
             PortKindSnapshot::Scalar => PORT_SCALAR_COLOR,
+            PortKindSnapshot::Array => PORT_ARRAY_COLOR,
         };
         Self { name, color }
     }

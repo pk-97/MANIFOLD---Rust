@@ -239,8 +239,16 @@ macro_rules! primitive {
         name: $struct_name:ident,
         type_id: $type_id:literal,
         purpose: $purpose:literal,
-        inputs: { $( $in_name:ident : $in_ty:ident $($in_req:tt)? ),* $(,)? },
-        outputs: { $( $out_name:ident : $out_ty:ident ),* $(,)? },
+        inputs: {
+            $(
+                $in_name:ident : $in_ty:ident $(( $in_param:ty ))? $($in_req:ident)?
+            ),* $(,)?
+        },
+        outputs: {
+            $(
+                $out_name:ident : $out_ty:ident $(( $out_param:ty ))?
+            ),* $(,)?
+        },
         params: [ $($params:tt)* ] $(,)?
         $( composition_notes: $notes:literal, )?
         $( examples: [ $($ex:literal),* $(,)? ], )?
@@ -262,7 +270,7 @@ macro_rules! primitive {
                 $(
                     $crate::node_graph::ports::NodePort {
                         name: stringify!($in_name),
-                        ty: $crate::__primitive_port_type!($in_ty),
+                        ty: $crate::__primitive_port_type!($in_ty $(, $in_param)?),
                         kind: $crate::node_graph::ports::PortKind::Input,
                         required: $crate::__primitive_required!($($in_req)?),
                     },
@@ -273,7 +281,7 @@ macro_rules! primitive {
                 $(
                     $crate::node_graph::ports::NodePort {
                         name: stringify!($out_name),
-                        ty: $crate::__primitive_port_type!($out_ty),
+                        ty: $crate::__primitive_port_type!($out_ty $(, $out_param)?),
                         kind: $crate::node_graph::ports::PortKind::Output,
                         required: false,
                     },
@@ -391,7 +399,9 @@ macro_rules! __primitive_required {
 /// expression. Texture sub-variants are flat idents; scalar
 /// sub-variants use a `Scalar` prefix (`ScalarF32`, `ScalarVec2`, etc.)
 /// since `Scalar(F32)` isn't a single ident the surrounding macro can
-/// match.
+/// match. `Array` carries the item layout via a paren'd type — e.g.
+/// `Array(Particle)` expands to an [`ArrayType`](crate::node_graph::ports::ArrayType)
+/// computed from the struct's `size_of` / `align_of`.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __primitive_port_type {
@@ -415,6 +425,11 @@ macro_rules! __primitive_port_type {
     };
     (ScalarColor) => {
         $crate::node_graph::ports::PortType::Scalar($crate::node_graph::ports::ScalarType::Color)
+    };
+    (Array, $T:ty) => {
+        $crate::node_graph::ports::PortType::Array(
+            $crate::node_graph::ports::ArrayType::of::<$T>()
+        )
     };
 }
 
@@ -537,5 +552,60 @@ mod tests {
         assert_eq!(SmokeTestNoExtras::COMPOSITION_NOTES, "");
         assert!(SmokeTestNoExtras::EXAMPLES.is_empty());
         assert!(SmokeTestNoExtras::PARAMS.is_empty());
+    }
+
+    // Test fixture struct used to exercise the `Array(T)` macro syntax.
+    // 16 bytes / 4-byte aligned — keeps the size/align numbers simple
+    // for the assertions below without forcing the test to depend on
+    // the production `Particle` layout (which lives in `generators/`).
+    #[repr(C)]
+    #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+    struct ArraySmokeItem {
+        pub pos: [f32; 2],
+        pub vel: [f32; 2],
+    }
+
+    crate::primitive! {
+        name: SmokeTestArrayPorts,
+        type_id: "node.__smoke_test_array",
+        purpose: "Validates Array(T) macro syntax expands to PortType::Array with the right layout.",
+        inputs: {
+            items_in: Array(ArraySmokeItem) required,
+            opt_items: Array(ArraySmokeItem) optional,
+        },
+        outputs: {
+            items_out: Array(ArraySmokeItem),
+        },
+        params: [],
+    }
+
+    impl Primitive for SmokeTestArrayPorts {
+        fn run(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
+    }
+
+    #[test]
+    fn macro_array_ports_expand_with_item_layout() {
+        use crate::node_graph::ports::{ArrayType, PortType};
+
+        let expected = ArrayType {
+            item_size: std::mem::size_of::<ArraySmokeItem>() as u32,
+            item_align: std::mem::align_of::<ArraySmokeItem>() as u32,
+        };
+
+        assert_eq!(SmokeTestArrayPorts::INPUTS.len(), 2);
+        assert_eq!(SmokeTestArrayPorts::INPUTS[0].name, "items_in");
+        assert!(SmokeTestArrayPorts::INPUTS[0].required);
+        assert_eq!(
+            SmokeTestArrayPorts::INPUTS[0].ty,
+            PortType::Array(expected)
+        );
+        assert_eq!(SmokeTestArrayPorts::INPUTS[1].name, "opt_items");
+        assert!(!SmokeTestArrayPorts::INPUTS[1].required);
+        assert_eq!(SmokeTestArrayPorts::OUTPUTS.len(), 1);
+        assert_eq!(SmokeTestArrayPorts::OUTPUTS[0].name, "items_out");
+        assert_eq!(
+            SmokeTestArrayPorts::OUTPUTS[0].ty,
+            PortType::Array(expected)
+        );
     }
 }
