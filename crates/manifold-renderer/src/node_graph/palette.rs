@@ -185,7 +185,14 @@ mod tests {
             .filter(|a| a.category == PaletteCategory::Driver)
             .map(|a| a.label.as_str())
             .collect();
-        assert_eq!(drivers, &["LFO", "Math", "Value"]);
+        // Sanity-check Driver section keeps growing as the catalog
+        // gains scalar sources/operators. New entries should land in
+        // alphabetical order; this assertion enumerates what's shipped
+        // today so unintended drops show up.
+        assert_eq!(
+            drivers,
+            &["BeatGate", "LFO", "Luminance", "Math", "Value"],
+        );
     }
 
     #[test]
