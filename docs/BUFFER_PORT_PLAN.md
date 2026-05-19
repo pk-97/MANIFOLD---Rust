@@ -1,6 +1,12 @@
 # Buffer / Array Port Plan
 
-**Status:** Phase A shipped 2026-05-19 (commits `ed619184` → particle pipeline integration). Phases B (mesh family), C (line family), D (3D volume family) parked. Full pixel-exact FluidSim parity needs additional blur + gradient atoms and the 7-pattern seed shader port — both follow-up sessions on top of this foundation.
+**Status:**
+- **Phase A** — shipped 2026-05-19. Five particle primitives + topology integration test.
+- **Phase B** — shipped 2026-05-20. Five mesh primitives (GenerateGridMesh, GenerateInstanceTransforms, Rotate4D, Render3DMesh, RenderInstanced3DMesh). First render-pass primitives in node_graph.
+- **Phase C** — partial 2026-05-20. GenerateParametricCurve + RenderLines shipped. **AudioInput deferred** — needs an audio sample channel through `EffectNodeContext` that doesn't exist yet; building it now would be a synth stub, not a real input.
+- **Phase D** — parked. The four 3D-volume primitives need `MetalBackend` Texture3D resource backing (today only Texture2D allocates real GPU resources; Texture3D falls back to mock semantics). Implementing primitives now would compile but be runtime no-ops.
+
+Full pixel-exact FluidSim parity needs additional blur + gradient atoms and the 7-pattern seed shader port — both follow-up sessions on top of this foundation.
 
 **Why this exists:** Today's particle / mesh / line generators (FluidSim, BlackHole, MetallicGlass, Tesseract, Lissajous, etc.) are opaque atomic primitives because their internal state lives in `MTLBuffer`s that have no externally-visible wire type. To decompose them into a creative surface — the §0 "primitive library is the product" promise — graph wires need to carry not just textures and scalars but also **arrays of structured items** (particles, vertices, line points, audio samples).
 
@@ -96,19 +102,30 @@ The Array port + the particle family. Worked out in detail at [PRIMITIVE_LIBRARY
    - `node.resolve_accumulator` — Array(u32) → Texture2D, divide by fixed-point scale
 7. ✅ Integration test validates the topology builds + connects: `SeedParticles → ArrayFeedback → IntegrateParticles → ScatterParticles → ResolveAccumulator` wires cleanly through the new port-type system, validation rejects type mismatches between Array(Particle) and Array(u32), and Integrate's required `velocity` Texture2D input is enforced. Full pixel-exact FluidSim parity needs additional blur + gradient atoms — separate follow-up.
 
-**Phase B — mesh family (~3-4 sessions)**
+**Phase B — mesh family (shipped 2026-05-20)**
 
-After A lands and is proven on FluidSim. Five primitives: `GenerateGridMesh`, `GenerateInstanceTransforms`, `Render3DMesh`, `RenderInstanced3DMesh`, `Rotate4D`. Unlocks MetallicGlass (the heaviest user) plus the 4D wireframe trio (Tesseract / Duocylinder / WireframeZoo) and the instanced pair (NestedCubes / DigitalPlants).
+Five primitives shipped:
+- `node.generate_grid_mesh` — NxM grid of `MeshVertex` in XZ plane
+- `node.generate_instance_transforms` — N InstanceTransforms in Grid / Ring / Spiral / Random layouts
+- `node.rotate_4d` — 3-plane (XY, ZW, XW) rotation on `Array<Vec4Vertex>`
+- `node.render_3d_mesh` — depth-tested triangle-list renderer (first render-pass primitive in node_graph)
+- `node.render_instanced_3d_mesh` — instanced triangle-list renderer with per-instance Euler rotation
 
-**Phase C — line family (~1-2 sessions)**
+Plus the canonical `Array<T>` item layouts in `generators::mesh_common`: `MeshVertex` (32 bytes), `Vec4Vertex` (16), `InstanceTransform` (32), `LinePoint` (8). Unlocks MetallicGlass, the 4D wireframe trio (Tesseract / Duocylinder / WireframeZoo), and the instanced pair (NestedCubes / DigitalPlants) once the legacy generators get rewired through these primitives.
 
-Three primitives: `GenerateParametricCurve`, `RenderLines`, `AudioInput`. Smallest family, mostly mechanical. Unlocks Lissajous and OscilloscopeXY.
+Triangle-list topology means the producer is responsible for emitting triangle-order vertices. `GenerateGridMesh` currently emits positions-only — a future `Triangulate` adapter primitive converts grid topology to triangle list.
 
-**Phase D — 3D volume family (~3-4 sessions, deferred)**
+**Phase C — line family (partial, shipped 2026-05-20)**
 
-`Sample3D`, `SliceVolume`, `Volume3DSplat`, `Volume3DAdvect`. Per [PRIMITIVE_LIBRARY_DESIGN.md §12.4](PRIMITIVE_LIBRARY_DESIGN.md), these were V2-deferred and the case for promoting them is weaker — only FluidSim3D and MriVolume need them, and both can stay atomic-with-internal-state until there's a real reason to crack them open. Worth marking as parked, not actively scoped.
+Two of three shipped:
+- `node.generate_parametric_curve` — Lissajous / Hypocycloid / Rose / Circle into `Array<LinePoint>`
+- `node.render_lines` — capsule-line renderer with 4x MSAA + additive blending, `closed_loop` toggle
 
-Total scope through Phase C: ~10-14 sessions for full decomposition of 13 of the 15 buffer-using generators.
+`AudioInput` is deferred. The plan calls for "host writes audio samples to a `create_buffer_shared` buffer", but `EffectNodeContext` has no audio sample channel today and adding one is a runtime/executor change, not a primitive change. Land the audio path through executor first; then `AudioInput` is a one-day primitive.
+
+**Phase D — 3D volume family (parked)**
+
+`Sample3D`, `SliceVolume`, `Volume3DSplat`, `Volume3DAdvect`. Per [PRIMITIVE_LIBRARY_DESIGN.md §12.4](PRIMITIVE_LIBRARY_DESIGN.md), these were V2-deferred. The case for promoting is still weaker — only FluidSim3D and MriVolume need them, both can stay atomic-with-internal-state, and the prerequisite infrastructure isn't there: `MetalBackend` only allocates real Texture2D resources today; Texture3D falls back to mock semantics. Build the Texture3D backend first, then primitives.
 
 ---
 
