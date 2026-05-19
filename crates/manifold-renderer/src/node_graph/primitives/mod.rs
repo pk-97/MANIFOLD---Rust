@@ -41,6 +41,7 @@ mod math;
 mod peak;
 mod quad_mirror;
 mod resolve_accumulator;
+mod rotate_4d;
 mod scatter_particles;
 mod seed_particles;
 mod separable_gaussian;
@@ -97,6 +98,7 @@ pub use masked_mix::MaskedMix;
 pub use peak::Peak;
 pub use quad_mirror::{QUAD_MIRROR_TYPE_ID, QuadMirror};
 pub use resolve_accumulator::ResolveAccumulator;
+pub use rotate_4d::Rotate4D;
 pub use scatter_particles::ScatterParticles;
 pub use seed_particles::SeedParticles;
 pub use separable_gaussian::{
