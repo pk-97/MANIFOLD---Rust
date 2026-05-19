@@ -2063,7 +2063,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                     let inspector_rect = self.ws.ui_root.layout.inspector();
                                     let in_inspector = inspector_rect.contains(self.cursor_pos);
                                     if !in_inspector && self.input_handler.inspector_has_focus {
-                                        self.ws.ui_root.inspector.clear_effect_selection();
+                                        let ui = &mut self.ws.ui_root;
+                                        ui.inspector.clear_effect_selection(&mut ui.tree);
                                     }
                                     self.input_handler.inspector_has_focus = in_inspector;
 

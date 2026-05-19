@@ -149,7 +149,7 @@ pub(super) fn dispatch_layer(
             *active_layer = Some(layer_id.clone());
 
             // Clear effect selection when switching focus to layer headers
-            ui.inspector.clear_effect_selection();
+            ui.inspector.clear_effect_selection(&mut ui.tree);
 
             {
                 if modifiers.shift {

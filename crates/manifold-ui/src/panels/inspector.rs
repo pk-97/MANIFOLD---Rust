@@ -566,9 +566,16 @@ impl InspectorCompositePanel {
         // Keep lastClickedIndex as anchor — do not update (Unity line 138)
     }
 
-    /// Clear all effect selection across all tabs.
-    /// Unity EffectSelectionManager.ClearSelection (lines 141-146)
-    pub fn clear_effect_selection(&mut self) {
+    /// Clear all effect selection across all tabs and repaint card borders.
+    ///
+    /// Takes `&mut UITree` so the card's `is_selected` flag and the tree's
+    /// border style stay in lockstep. Decoupling them (set the flag now,
+    /// hope a rebuild lands later) silently breaks any caller that doesn't
+    /// trigger `needs_rebuild` — the cards keep their highlighted borders
+    /// even though the selection set is empty, and the early-return in
+    /// `update_selection_visual` then prevents future repaints from
+    /// noticing the mismatch.
+    pub fn clear_effect_selection(&mut self, tree: &mut UITree) {
         for tab in [
             InspectorTab::Master,
             InspectorTab::Layer,
@@ -577,13 +584,12 @@ impl InspectorCompositePanel {
             self.selection_set_mut(tab).clear();
             self.set_last_clicked_for_tab(tab, None);
         }
-        // Reset is_selected on all cards (visuals deferred to rebuild)
         for card in self
             .master_effects
             .iter_mut()
             .chain(self.layer_effects.iter_mut())
         {
-            card.set_selected(false);
+            card.update_selection_visual(tree, false);
         }
     }
 

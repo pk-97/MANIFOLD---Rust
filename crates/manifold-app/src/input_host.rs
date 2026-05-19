@@ -120,7 +120,8 @@ impl TimelineInputHost for AppInputHost<'_> {
         //   InvalidateAllLayerBitmaps();
         //   ResetAllInspectors();
         //   masterInspector?.Show();
-        self.ui_root.inspector.clear_effect_selection();
+        let ui = &mut self.ui_root;
+        ui.inspector.clear_effect_selection(&mut ui.tree);
         *self.needs_rebuild = true;
         *self.needs_structural_sync = true;
         self.scroll_dirty.visual = true;
@@ -233,7 +234,8 @@ impl TimelineInputHost for AppInputHost<'_> {
             }
         }
 
-        self.ui_root.inspector.clear_effect_selection();
+        let ui = &mut self.ui_root;
+        ui.inspector.clear_effect_selection(&mut ui.tree);
         *self.needs_structural_sync = true;
         *self.needs_rebuild = true;
         true
@@ -309,7 +311,8 @@ impl TimelineInputHost for AppInputHost<'_> {
             );
         }
 
-        self.ui_root.inspector.clear_effect_selection();
+        let ui = &mut self.ui_root;
+        ui.inspector.clear_effect_selection(&mut ui.tree);
         *self.needs_structural_sync = true;
         *self.needs_rebuild = true;
         true
@@ -367,10 +370,8 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn clear_effect_selection(&mut self) {
-        self.ui_root.inspector.clear_effect_selection();
-        // Visual update deferred — the caller sets needs_rebuild or the next
-        // frame's sync_project_data will rebuild the inspector with the
-        // updated is_selected state.
+        let ui = &mut self.ui_root;
+        ui.inspector.clear_effect_selection(&mut ui.tree);
         *self.needs_rebuild = true;
     }
 

@@ -1742,7 +1742,7 @@ pub(super) fn dispatch_inspector(
                 gp.update_selection_visual(&mut ui.tree, true);
             }
             // Deselect all effect cards
-            ui.inspector.clear_effect_selection();
+            ui.inspector.clear_effect_selection(&mut ui.tree);
             DispatchResult::handled()
         }
         PanelAction::GenCardRightClicked => {
