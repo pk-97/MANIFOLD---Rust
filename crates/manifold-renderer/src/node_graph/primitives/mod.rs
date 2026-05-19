@@ -26,6 +26,7 @@ mod filter;
 mod gain;
 mod generate_grid_mesh;
 mod generate_instance_transforms;
+mod generate_parametric_curve;
 mod glitch;
 mod halation;
 mod highlight_boost;
@@ -85,6 +86,7 @@ pub use generate_grid_mesh::GenerateGridMesh;
 pub use generate_instance_transforms::{
     GenerateInstanceTransforms, INSTANCE_LAYOUTS,
 };
+pub use generate_parametric_curve::{CURVE_TYPES, GenerateParametricCurve};
 pub use glitch::Glitch;
 pub use halation::{HALATION_TYPE_ID, Halation};
 pub use highlight_boost::HighlightBoost;

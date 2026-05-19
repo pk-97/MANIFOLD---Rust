@@ -51,3 +51,17 @@ pub struct InstanceTransform {
 }
 
 const _: () = assert!(std::mem::size_of::<InstanceTransform>() == 32);
+
+/// A 2D screen-space line point — the canonical item type for the
+/// line family of primitives (Lissajous curves, oscilloscope traces,
+/// audio waveforms). 8 bytes.
+///
+/// Coordinates are in [0, 1] screen space (aspect-corrected by the
+/// renderer). Out-of-range values are clamped at render time.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct LinePoint {
+    pub xy: [f32; 2],
+}
+
+const _: () = assert!(std::mem::size_of::<LinePoint>() == 8);
