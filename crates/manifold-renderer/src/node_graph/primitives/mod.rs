@@ -57,6 +57,7 @@ mod separable_gaussian;
 mod smoothing;
 mod strobe;
 mod temporal;
+mod tone_map;
 mod uv;
 mod value;
 mod voronoi_prism;
@@ -127,6 +128,7 @@ pub use strobe::{
     NOTE_RATE_LABELS, NOTE_RATE_VALUES, NOTE_RATES as STROBE_NOTE_RATES, Strobe,
 };
 pub use temporal::{FEEDBACK_MODES, FEEDBACK_TYPE_ID, Feedback};
+pub use tone_map::{TONE_MAP_CURVES, TONE_MAP_MODES, ToneMap};
 pub use uv::{
     SAMPLE_FILTER_MODES, SAMPLE_TYPE_ID, SAMPLE_WRAP_MODES, Sample, TRANSFORM_MODES,
     TRANSFORM_TYPE_ID, Transform,
