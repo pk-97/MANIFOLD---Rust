@@ -21,7 +21,14 @@ use crate::node_graph::primitive::Primitive;
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct UvUniform {
     uv: [f32; 2],
-    _pad0: f32,
+    /// Half-extent of the region averaged around `uv`, in *pixels*.
+    /// `radius=0` reads a single pixel (the historical behaviour);
+    /// larger radii average a (2r+1)² window so high-frequency
+    /// content doesn't pin the reading on whatever lone pixel happens
+    /// to be at the UV. Color Compass sets this to ~16 so its
+    /// cardinal samples reflect *region* brightness, not single-pixel
+    /// noise.
+    radius_px: f32,
     _pad1: f32,
 }
 
@@ -43,6 +50,18 @@ crate::primitive! {
             ty: ParamType::Vec2,
             default: ParamValue::Vec2([0.5, 0.5]),
             range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: "radius_px",
+            label: "Region Radius (px)",
+            ty: ParamType::Int,
+            // 0 = single-pixel read (backward compatible). Larger
+            // radii average a (2r+1)² window — drop high-frequency
+            // noise so a "region brightness" wire reflects the eye's
+            // perception, not whatever lone texel lives at the UV.
+            default: ParamValue::Int(0),
+            range: Some((0.0, 64.0)),
             enum_values: &[],
         },
     ],
@@ -88,6 +107,11 @@ impl Primitive for ColorSample {
             Some(ParamValue::Vec2(v)) => *v,
             _ => [0.5, 0.5],
         };
+        let radius_px = match ctx.params.get("radius_px") {
+            Some(ParamValue::Int(v)) => (*v).clamp(0, 64) as f32,
+            Some(ParamValue::Float(v)) => v.clamp(0.0, 64.0).round(),
+            _ => 0.0,
+        };
 
         let gpu = ctx.gpu_encoder();
         // 16 bytes — 3 floats for RGB plus one for alignment padding,
@@ -106,7 +130,7 @@ impl Primitive for ColorSample {
 
         let uniforms = UvUniform {
             uv,
-            _pad0: 0.0,
+            radius_px,
             _pad1: 0.0,
         };
 

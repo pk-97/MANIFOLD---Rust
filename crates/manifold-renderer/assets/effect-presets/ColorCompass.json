@@ -13,8 +13,8 @@
         "id": "intensity",
         "name": "Intensity",
         "min": 0.0,
-        "max": 5.0,
-        "defaultValue": 2.0,
+        "max": 20.0,
+        "defaultValue": 5.0,
         "wholeNumbers": false,
         "isToggle": false,
         "formatString": "F2"
@@ -24,7 +24,7 @@
         "name": "Reactivity",
         "min": 0.01,
         "max": 2.0,
-        "defaultValue": 0.1,
+        "defaultValue": 0.05,
         "wholeNumbers": false,
         "isToggle": false,
         "formatString": "F2"
@@ -34,7 +34,7 @@
       {
         "id": "intensity",
         "label": "Intensity",
-        "defaultValue": 2.0,
+        "defaultValue": 5.0,
         "target": {
           "kind": "handleNode",
           "handle": "intensity_value",
@@ -47,7 +47,7 @@
       {
         "id": "reactivity",
         "label": "Reactivity",
-        "defaultValue": 0.1,
+        "defaultValue": 0.05,
         "target": {
           "kind": "handleNode",
           "handle": "reactivity_value",
@@ -77,6 +77,10 @@
         "uv": {
           "type": "Vec2",
           "value": [0.5, 0.2]
+        },
+        "radius_px": {
+          "type": "Int",
+          "value": 24
         }
       }
     },
@@ -88,6 +92,10 @@
         "uv": {
           "type": "Vec2",
           "value": [0.5, 0.8]
+        },
+        "radius_px": {
+          "type": "Int",
+          "value": 24
         }
       }
     },
@@ -99,6 +107,10 @@
         "uv": {
           "type": "Vec2",
           "value": [0.8, 0.5]
+        },
+        "radius_px": {
+          "type": "Int",
+          "value": 24
         }
       }
     },
@@ -110,6 +122,10 @@
         "uv": {
           "type": "Vec2",
           "value": [0.2, 0.5]
+        },
+        "radius_px": {
+          "type": "Int",
+          "value": 24
         }
       }
     },
@@ -142,7 +158,7 @@
       "params": {
         "value": {
           "type": "Float",
-          "value": 2.0
+          "value": 5.0
         }
       }
     },
@@ -175,7 +191,7 @@
       "params": {
         "value": {
           "type": "Float",
-          "value": 0.1
+          "value": 0.05
         }
       }
     },
