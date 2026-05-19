@@ -12,7 +12,7 @@
 //!   can bind in shader dispatches. With a mock backend the typed lookups
 //!   return `None`, which is fine for tests that don't dispatch GPU work.
 
-use manifold_gpu::GpuTexture;
+use manifold_gpu::{GpuBuffer, GpuTexture};
 
 use crate::node_graph::backend::Backend;
 use crate::node_graph::parameters::ParamValue;
@@ -62,6 +62,16 @@ impl<'a> NodeInputs<'a> {
     /// scalar output upstream).
     pub fn scalar(&self, port: &str) -> Option<ParamValue> {
         self.backend.scalar(self.slot(port)?)
+    }
+
+    /// `&GpuBuffer` bound to the named [`PortType::Array`] input port.
+    /// `None` if unwired or if the backend doesn't track Array
+    /// resources (mock backends). The buffer was sized by the chain
+    /// build at `(item_size × max_capacity)` bytes; primitives read
+    /// items 0..active_count from it. Active-count plumbing lands in
+    /// Phase A.7 alongside the particle primitives that need it.
+    pub fn array(&self, port: &str) -> Option<&'a GpuBuffer> {
+        self.backend.array_buffer(self.slot(port)?)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&'static str, Slot)> + '_ {
@@ -130,6 +140,15 @@ impl<'a> NodeOutputs<'a> {
         self.backend.texture_2d(self.slot(port)?)
     }
 
+    /// `&GpuBuffer` an EffectNode should *write to* for the named
+    /// [`PortType::Array`] output port. Pre-bound by chain build at
+    /// `(item_size × max_capacity)` bytes — the primitive fills items
+    /// 0..active_count via compute shader stores. Same lifetime
+    /// semantics as `texture_2d`.
+    pub fn array(&self, port: &str) -> Option<&'a GpuBuffer> {
+        self.backend.array_buffer(self.slot(port)?)
+    }
+
     /// Queue a scalar write to the named output port. The executor
     /// applies the write through [`Backend::set_scalar`] after the
     /// node's `evaluate` returns; downstream readers in the same
@@ -152,5 +171,51 @@ impl<'a> NodeOutputs<'a> {
 
     pub fn is_empty(&self) -> bool {
         self.bindings.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod array_accessor_tests {
+    //! Phase A.5 of `BUFFER_PORT_PLAN`. Verifies the
+    //! [`NodeInputs::array`] / [`NodeOutputs::array`] accessors
+    //! resolve port names through the backend's [`PortType::Array`]
+    //! storage end-to-end.
+
+    use manifold_gpu::GpuTextureFormat;
+
+    use super::*;
+    use crate::node_graph::MetalBackend;
+    use crate::node_graph::execution_plan::ResourceId;
+
+    #[test]
+    fn inputs_array_resolves_pre_bound_buffer_by_port_name() {
+        let device = crate::test_device();
+        let mut backend = MetalBackend::new(device.clone(), 16, 16, GpuTextureFormat::Rgba16Float);
+        let buffer = device.create_buffer(2048);
+        let expected_size = buffer.size;
+
+        let slot = backend.pre_bind_array(ResourceId(0), buffer);
+        let bindings: &[(&'static str, Slot)] = &[("particles", slot)];
+        let inputs = NodeInputs::new(bindings, &backend);
+
+        let got = inputs.array("particles").expect("should resolve");
+        assert_eq!(got.size, expected_size);
+        assert!(inputs.array("missing_port").is_none());
+    }
+
+    #[test]
+    fn outputs_array_resolves_pre_bound_buffer_by_port_name() {
+        let device = crate::test_device();
+        let mut backend = MetalBackend::new(device.clone(), 16, 16, GpuTextureFormat::Rgba16Float);
+        let buffer = device.create_buffer(4096);
+        let expected_size = buffer.size;
+
+        let slot = backend.pre_bind_array(ResourceId(0), buffer);
+        let bindings: &[(&'static str, Slot)] = &[("particles_out", slot)];
+        let mut scratch = Vec::new();
+        let outputs = NodeOutputs::new(bindings, &backend, &mut scratch);
+
+        let got = outputs.array("particles_out").expect("should resolve");
+        assert_eq!(got.size, expected_size);
     }
 }
