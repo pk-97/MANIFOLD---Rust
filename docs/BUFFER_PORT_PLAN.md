@@ -1,6 +1,6 @@
 # Buffer / Array Port Plan
 
-**Status:** Planned, Phase A starting 2026-05-19. Authored after the May 2026 generator audit removed ParametricSurface / Mycelium / GalacticRock (commit `1a812c24`) — the remaining 15 buffer-using generators are the migration target.
+**Status:** Phase A shipped 2026-05-19 (commits `ed619184` → particle pipeline integration). Phases B (mesh family), C (line family), D (3D volume family) parked. Full pixel-exact FluidSim parity needs additional blur + gradient atoms and the 7-pattern seed shader port — both follow-up sessions on top of this foundation.
 
 **Why this exists:** Today's particle / mesh / line generators (FluidSim, BlackHole, MetallicGlass, Tesseract, Lissajous, etc.) are opaque atomic primitives because their internal state lives in `MTLBuffer`s that have no externally-visible wire type. To decompose them into a creative surface — the §0 "primitive library is the product" promise — graph wires need to carry not just textures and scalars but also **arrays of structured items** (particles, vertices, line points, audio samples).
 
@@ -79,17 +79,22 @@ SeedParticles ─┐
 
 ## Phasing
 
-**Phase A — foundational (~6-8 sessions)**
+**Phase A — foundational (shipped)**
 
-The Array port + the particle family. Validated end-to-end by decomposing FluidSim 2D, which is already worked out in detail at [PRIMITIVE_LIBRARY_DESIGN.md §12.8](PRIMITIVE_LIBRARY_DESIGN.md). Deliverables:
+The Array port + the particle family. Worked out in detail at [PRIMITIVE_LIBRARY_DESIGN.md §12.8](PRIMITIVE_LIBRARY_DESIGN.md). Delivered:
 
-1. `PortType::Array { item_size, item_align }` variant + `primitive!` macro support for `Array<T> capacity N` syntax.
-2. Wire format in `EffectGraphDef` JSON (Array wires alongside texture/scalar wires).
-3. Runtime `BufferPool` (analog to `RenderTargetPool` but for `GpuBuffer`).
-4. `ExecutionPlan` lifetime planning for Array resources.
-5. Primitive context accessor: `ctx.inputs.array("particles")` returns `(GpuBuffer, item_count)`.
-6. Five particle primitives: `SeedParticles`, `IntegrateParticles`, `ScatterParticles`, `ResolveAccumulator`, `ArrayFeedback<Particle>`.
-7. FluidSim 2D decomposed as a JSON preset wiring the above, parity-tested pixel-exact against the legacy fused shader.
+1. ✅ `PortType::Array(ArrayType)` variant + `primitive!` macro support for `Array(T)` syntax (paren syntax — `<>` doesn't parse cleanly in macros).
+2. ✅ Wire format: validated through the existing `EffectGraphDef` schema; wires reference ports by name, port-type matching uses `PortType` derived Eq on the new variant.
+3. ✅ Runtime: `MetalBackend::pre_bind_array` + `array_buffer` accessor + `GpuEncoder::copy_buffer_to_buffer`. No buffer pool yet — each chain build allocates fresh; pool comes when allocation cost shows up in profiles.
+4. ✅ `ExecutionPlan` lifetime planning works unchanged — `ResourceId` is port-type-agnostic.
+5. ✅ Primitive context accessors: `ctx.inputs.array("port")` and `ctx.outputs.array("port")` return `Option<&GpuBuffer>`. Active-count plumbing is per-primitive uniform data, not a runtime concept.
+6. ✅ Five particle primitives shipped:
+   - `node.array_feedback` — one-frame delay holding Array(Particle) in StateStore
+   - `node.seed_particles` — uniform-random spawn into Array(Particle), `active_count` slider + `max_capacity` ceiling
+   - `node.integrate_particles` — bilinear-sample velocity field, Euler step, toroidal wrap
+   - `node.scatter_particles` — clear + atomic-add splat into Array(u32) accumulator
+   - `node.resolve_accumulator` — Array(u32) → Texture2D, divide by fixed-point scale
+7. ✅ Integration test validates the topology builds + connects: `SeedParticles → ArrayFeedback → IntegrateParticles → ScatterParticles → ResolveAccumulator` wires cleanly through the new port-type system, validation rejects type mismatches between Array(Particle) and Array(u32), and Integrate's required `velocity` Texture2D input is enforced. Full pixel-exact FluidSim parity needs additional blur + gradient atoms — separate follow-up.
 
 **Phase B — mesh family (~3-4 sessions)**
 
