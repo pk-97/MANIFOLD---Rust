@@ -30,16 +30,19 @@
 //! - [`build_halation`]: `Threshold → MipChain → Blur → ChannelMix(tint) → Blend(Add)`,
 //!   with the source fanning to the blend base.
 //! - [`build_bloom`]: same shape as Halation minus the tint.
-//! - [`build_color_compass`]: image self-organises around its own
-//!   brightness. Four `ColorSample`s read N/E/S/W brightness, atan2
-//!   converts the asymmetry into an angle, smoothing tames jitter,
-//!   the angle drives an `AffineTransform` rotation upstream of
-//!   `KaleidoFold`. The kaleidoscope's effective mirror axis tracks
-//!   wherever the brightest patch lives. Uses the texture→scalar
-//!   bridge — couldn't be expressed as a single fused shader.
+//!
+//! ## Why no `build_color_compass` here
+//!
+//! New post-§11 effects ship as JSON-only — the `composite.color_compass`
+//! preset lives at `assets/effect-presets/ColorCompass.json` and is
+//! loaded into the registry through the standard `LoadedPresetSource`
+//! path. The Rust builders above predate the JSON-authoritative
+//! migration; they're kept because their parity tests (e.g.
+//! [`build_strobe_opacity`] vs the legacy fused `node.strobe`) need
+//! both graphs constructable in the same test. Effects with no legacy
+//! to compare against don't need a Rust builder.
 
 mod bloom;
-mod color_compass;
 mod halation;
 mod infrared;
 mod mirror;
@@ -47,7 +50,6 @@ mod soft_focus;
 mod strobe_opacity;
 
 pub use bloom::{BLOOM_TYPE_ID, build_bloom};
-pub use color_compass::{COLOR_COMPASS_TYPE_ID, build_color_compass};
 pub use halation::{HALATION_TYPE_ID, build_halation};
 pub use infrared::{INFRARED_TYPE_ID, build_infrared};
 pub use mirror::{MIRROR_TYPE_ID, build_mirror, legacy_mirror_mode_to_uv};

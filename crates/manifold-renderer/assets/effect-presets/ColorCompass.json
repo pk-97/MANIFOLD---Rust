@@ -1,0 +1,250 @@
+{
+  "version": 2,
+  "name": "ColorCompass",
+  "description": "Image self-organises around its own brightness. Four ColorSamples read N/E/S/W luma, atan2 converts asymmetry to angle, smoothing tames jitter, the smoothed angle rotates the source upstream of KaleidoFold so the mirror axis tracks wherever the brightest patch lives. Feedback-free; uses the texture→scalar bridge.",
+  "presetMetadata": {
+    "id": "ColorCompass",
+    "displayName": "Color Compass",
+    "category": "Spatial",
+    "oscPrefix": "color_compass",
+    "available": true,
+    "params": [
+      {
+        "id": "intensity",
+        "name": "Intensity",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.6,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "segments",
+        "name": "Segments",
+        "min": 2.0,
+        "max": 16.0,
+        "defaultValue": 6.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "formatString": "F0"
+      },
+      {
+        "id": "reactivity",
+        "name": "Reactivity",
+        "min": 0.01,
+        "max": 2.0,
+        "defaultValue": 0.1,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "intensity",
+        "label": "Intensity",
+        "defaultValue": 0.6,
+        "target": {
+          "kind": "handleNode",
+          "handle": "kaleido",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "segments",
+        "label": "Segments",
+        "defaultValue": 6.0,
+        "target": {
+          "kind": "handleNode",
+          "handle": "kaleido",
+          "param": "segments"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "reactivity",
+        "label": "Reactivity",
+        "defaultValue": 0.1,
+        "target": {
+          "kind": "handleNode",
+          "handle": "smoothing",
+          "param": "time_constant"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "onZero",
+      "paramId": "intensity"
+    }
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.source",
+      "handle": "source"
+    },
+    {
+      "id": 1,
+      "typeId": "node.color_sample",
+      "handle": "sample_n",
+      "params": {
+        "uv": {
+          "type": "Vec2",
+          "value": [0.5, 0.2]
+        }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "node.color_sample",
+      "handle": "sample_s",
+      "params": {
+        "uv": {
+          "type": "Vec2",
+          "value": [0.5, 0.8]
+        }
+      }
+    },
+    {
+      "id": 3,
+      "typeId": "node.color_sample",
+      "handle": "sample_e",
+      "params": {
+        "uv": {
+          "type": "Vec2",
+          "value": [0.8, 0.5]
+        }
+      }
+    },
+    {
+      "id": 4,
+      "typeId": "node.color_sample",
+      "handle": "sample_w",
+      "params": {
+        "uv": {
+          "type": "Vec2",
+          "value": [0.2, 0.5]
+        }
+      }
+    },
+    {
+      "id": 5,
+      "typeId": "node.math",
+      "handle": "math_dy",
+      "params": {
+        "op": {
+          "type": "Enum",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": 6,
+      "typeId": "node.math",
+      "handle": "math_dx",
+      "params": {
+        "op": {
+          "type": "Enum",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": 7,
+      "typeId": "node.math",
+      "handle": "math_atan2",
+      "params": {
+        "op": {
+          "type": "Enum",
+          "value": 6
+        }
+      }
+    },
+    {
+      "id": 8,
+      "typeId": "node.value",
+      "handle": "rad_to_deg",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 57.295776
+        }
+      }
+    },
+    {
+      "id": 9,
+      "typeId": "node.math",
+      "handle": "math_deg",
+      "params": {
+        "op": {
+          "type": "Enum",
+          "value": 2
+        }
+      }
+    },
+    {
+      "id": 10,
+      "typeId": "node.smoothing",
+      "handle": "smoothing",
+      "params": {
+        "time_constant": {
+          "type": "Float",
+          "value": 0.1
+        }
+      }
+    },
+    {
+      "id": 11,
+      "typeId": "node.affine_transform",
+      "handle": "affine"
+    },
+    {
+      "id": 12,
+      "typeId": "node.kaleidoscope",
+      "handle": "kaleido",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 0.6
+        },
+        "segments": {
+          "type": "Int",
+          "value": 6
+        }
+      }
+    },
+    {
+      "id": 13,
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "in" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 3, "toPort": "in" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 4, "toPort": "in" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 11, "toPort": "in" },
+    { "fromNode": 1, "fromPort": "luma", "toNode": 5, "toPort": "a" },
+    { "fromNode": 2, "fromPort": "luma", "toNode": 5, "toPort": "b" },
+    { "fromNode": 3, "fromPort": "luma", "toNode": 6, "toPort": "a" },
+    { "fromNode": 4, "fromPort": "luma", "toNode": 6, "toPort": "b" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 7, "toPort": "a" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "b" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 9, "toPort": "a" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 9, "toPort": "b" },
+    { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "in" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "rotation" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "in" },
+    { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "in" }
+  ]
+}
