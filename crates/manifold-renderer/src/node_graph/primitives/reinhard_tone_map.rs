@@ -1,0 +1,158 @@
+//! `node.reinhard_tone_map` — extended Reinhard tone mapping on
+//! an HDR Texture2D.
+//!
+//! Extracted from `generators/shaders/fluid_display_compute.wgsl`.
+//! Per-channel curve `x*(1 + x/9) / (1 + x)` matching the FluidSim
+//! display path bit-for-bit. SDR-only.
+//!
+//! For multi-curve / HDR-aware tone mapping (ACES, AgX, Khronos
+//! PBR, PQ / EDR output), use `node.tone_map` instead.
+
+use manifold_gpu::{GpuBinding, GpuSamplerDesc};
+
+use crate::node_graph::effect_node::EffectNodeContext;
+use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
+use crate::node_graph::primitive::Primitive;
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ReinhardUniforms {
+    intensity: f32,
+    contrast: f32,
+    _pad0: f32,
+    _pad1: f32,
+}
+
+crate::primitive! {
+    name: ReinhardToneMap,
+    type_id: "node.reinhard_tone_map",
+    purpose: "Extended Reinhard tone mapping for HDR display: per-channel curve x*(1+x/9)/(1+x) with intensity + contrast pre-multipliers. Matches the FluidSim display path bit-for-bit. SDR-only — for HDR-aware (PQ / EDR) or alternate curves (ACES / AgX / Khronos PBR Neutral), use `node.tone_map`.",
+    inputs: {
+        in: Texture2D required,
+    },
+    outputs: {
+        out: Texture2D,
+    },
+    params: [
+        ParamDef {
+            name: "intensity",
+            label: "Intensity",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 16.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: "contrast",
+            label: "Contrast",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 8.0)),
+            enum_values: &[],
+        },
+    ],
+    composition_notes: "intensity scales the pre-tonemap signal; contrast is a second multiplier. White-point fixed at 3.0 (the FluidSim default). Output alpha = source alpha. For HDR pipelines that need parameterised white-point or alternate curves, swap in `node.tone_map`.",
+    examples: [],
+    picker: { label: "Reinhard Tone Map", category: Atom },
+}
+
+impl Primitive for ReinhardToneMap {
+    fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let intensity = match ctx.params.get("intensity") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 1.0,
+        };
+        let contrast = match ctx.params.get("contrast") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 1.0,
+        };
+
+        let Some(src) = ctx.inputs.texture_2d("in") else {
+            return;
+        };
+        let Some(target) = ctx.outputs.texture_2d("out") else {
+            return;
+        };
+        let width = target.width;
+        let height = target.height;
+        if width == 0 || height == 0 {
+            return;
+        }
+
+        let gpu = ctx.gpu_encoder();
+        let pipeline = self.pipeline.get_or_insert_with(|| {
+            gpu.device.create_compute_pipeline(
+                include_str!("shaders/reinhard_tone_map.wgsl"),
+                "cs_main",
+                "node.reinhard_tone_map",
+            )
+        });
+        let sampler = self
+            .sampler
+            .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
+
+        let uniforms = ReinhardUniforms {
+            intensity,
+            contrast,
+            _pad0: 0.0,
+            _pad1: 0.0,
+        };
+
+        gpu.native_enc.dispatch_compute(
+            pipeline,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: src,
+                },
+                GpuBinding::Sampler {
+                    binding: 2,
+                    sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: target,
+                },
+            ],
+            [width.div_ceil(16), height.div_ceil(16), 1],
+            "node.reinhard_tone_map",
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::node_graph::EffectNode;
+    use crate::node_graph::primitive::PrimitiveSpec;
+
+    #[test]
+    fn reinhard_declares_texture_in_and_out() {
+        use crate::node_graph::ports::PortType;
+        assert_eq!(ReinhardToneMap::TYPE_ID, "node.reinhard_tone_map");
+        assert_eq!(ReinhardToneMap::INPUTS.len(), 1);
+        assert_eq!(ReinhardToneMap::INPUTS[0].name, "in");
+        assert_eq!(ReinhardToneMap::INPUTS[0].ty, PortType::Texture2D);
+        assert!(ReinhardToneMap::INPUTS[0].required);
+        assert_eq!(ReinhardToneMap::OUTPUTS.len(), 1);
+        assert_eq!(ReinhardToneMap::OUTPUTS[0].name, "out");
+        assert_eq!(ReinhardToneMap::OUTPUTS[0].ty, PortType::Texture2D);
+    }
+
+    #[test]
+    fn reinhard_has_intensity_and_contrast_params() {
+        let names: Vec<&str> = ReinhardToneMap::PARAMS.iter().map(|p| p.name).collect();
+        assert_eq!(names, vec!["intensity", "contrast"]);
+    }
+
+    #[test]
+    fn primitive_registers_as_palette_atom() {
+        let prim = ReinhardToneMap::new();
+        let node: &dyn EffectNode = &prim;
+        assert_eq!(node.type_id().as_str(), "node.reinhard_tone_map");
+    }
+}
