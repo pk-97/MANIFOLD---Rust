@@ -290,12 +290,12 @@ mod gpu_tests {
             let r_src = output_resource(&plan, src, "out");
             let src_target =
                 RenderTarget::new(&device, w, h, format, "test-lum-bw-src");
-            let mut clear_enc = device.create_encoder("luminance-bw-clear");
-            {
-                let mut gpu = RendererGpuEncoder::new(&mut clear_enc, &device);
-                gpu.clear_texture(&src_target.texture, rgb[0], rgb[1], rgb[2], 1.0);
-            }
-            clear_enc.commit_and_wait_completed();
+            crate::clear_texture_committed(
+                &device,
+                &src_target.texture,
+                [rgb[0], rgb[1], rgb[2], 1.0],
+                "luminance-bw-clear",
+            );
 
             let mut backend =
                 MetalBackend::new(device.clone(), w, h, format);
