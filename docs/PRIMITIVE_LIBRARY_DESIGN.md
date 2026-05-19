@@ -1189,7 +1189,22 @@ The §10.4 "EffectGraphDef v1→v2 migration" cross-cutting note is the entry po
 
 §6.1's parity-migration notes mention that some effects (Strobe specifically) had to ship as fused composites because decomposing them broke pixel-exact parity through fp16 intermediate textures. That framing assumed all wires were `Rgba16Float` texture wires. With scalar wires (`PortType::Scalar(F32)`, `ParamValue::Float(f32)`) the constraint dissolves for scalar data: the producer's value flows through an f32 scalar wire, never touches an fp16 texture, and reaches the consumer at full precision. Pixel-exact parity is achievable without fusion-on-compile *for any decomposition where the inter-primitive value is scalar*.
 
-**Worked example: Strobe.** Legacy Strobe shader does `amount = beatGate(rate, beat, mode); output = mix(in, gated_color, amount)` all in one shader with `amount` staying in an f32 register. The §6.1 attempt to split this into separate `BeatGate` + `Mix` primitives wired through an `Rgba16Float` intermediate texture quantised `amount` near numerical edges (0.49998 vs 0.5) and broke parity. Post-scalar-wires the correct decomposition is `node.beat_gate` (no inputs, scalar output, params for rate/mode) → `node.mix(amount=scalar-wire)`. The amount never materialises in a texture; it flows scalar-to-scalar. Result is bit-identical to the legacy fused shader.
+**Worked example: Strobe (Opacity mode).** Legacy Strobe shader does `phase = fract(beat*rate); on = step(0.5, phase); strobe = amount * on; col *= (1 - strobe)` all in one shader with `strobe` staying in an f32 register. The §6.1 attempt to split this into separate primitives wired through an `Rgba16Float` intermediate texture would have quantised `strobe` near numerical edges (0.49998 vs 0.5) and broken parity. Post-scalar-wires the correct decomposition is:
+
+```text
+Source ──→ Gain(in, gain=wire) ──→ output
+                  ↑
+           Math(Subtract, a=1.0, b=wire)
+                  ↑
+           Value(1.0) ─→ Math.a
+           BeatGate(rate, amount) ─→ Math.b
+```
+
+Four inner nodes (BeatGate, Value, Math, Gain) plus the Source / FinalOutput boundaries. The strobe value flows scalar-to-scalar through the whole chain — `BeatGate.out` (scalar) → `Math.b` (scalar input) → `Math.out` (scalar) → `Gain.gain` (scalar input). Nothing materialises in a texture until the final `Gain` writes the per-pixel result.
+
+Implemented in `crates/manifold-renderer/src/node_graph/composites/strobe_opacity.rs` with three GPU parity tests: off-phase (passthrough), on-phase at amount=1.0 (output is black, alpha preserved), on-phase at amount=0.5 (output is 0.5×source). All three match the legacy fused `node.strobe` shader at the same beat positions within fp16 tolerance — the f32 register path of the legacy and the f32 scalar-wire path of the decomposed graph produce equivalent results.
+
+White-mode and Gain-mode follow the same pattern but need additional primitives (`ConstantColor` for Mix-to-white, `Math(Add, 1.0, Math(Multiply, 2.0, strobe))` for the brightening factor). Deferred until the V0 proof-point — Opacity-mode parity — landed.
 
 The remaining fp16 case — where one primitive's *texture* output feeds another's *texture* input — is real and intrinsic: textures are `Rgba16Float` and the round-trip quantises. But every effect with gather-based texture intermediates (Bloom, Halation, Watercolor — the MipChain/Blur composites) already pays this cost today and the parity tests already cover them. fp16 isn't a fundamental decomposition blocker; it's an artifact of using texture wires for scalar data, which scalar wires now fix.
 

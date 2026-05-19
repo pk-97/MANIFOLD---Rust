@@ -36,12 +36,14 @@ mod halation;
 mod infrared;
 mod mirror;
 mod soft_focus;
+mod strobe_opacity;
 
 pub use bloom::{BLOOM_TYPE_ID, build_bloom};
 pub use halation::{HALATION_TYPE_ID, build_halation};
 pub use infrared::{INFRARED_TYPE_ID, build_infrared};
 pub use mirror::{MIRROR_TYPE_ID, build_mirror, legacy_mirror_mode_to_uv};
 pub use soft_focus::{SOFT_FOCUS_TYPE_ID, build_soft_focus};
+pub use strobe_opacity::{STROBE_OPACITY_TYPE_ID, build_strobe_opacity};
 
 use ahash::AHashMap;
 
