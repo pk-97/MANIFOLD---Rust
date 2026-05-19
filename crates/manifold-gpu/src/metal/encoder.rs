@@ -1250,33 +1250,6 @@ impl GpuEncoder {
         }
     }
 
-    /// Encode a MetalFX spatial upscale (src → dst).
-    pub fn encode_metalfx_upscale(
-        &mut self,
-        scaler: &metalfx::MetalFxSpatialScaler,
-        src: &GpuTexture,
-        dst: &GpuTexture,
-    ) {
-        self.end_current();
-        scaler.encode(&self.cmd_buf, src, dst);
-    }
-
-    /// Encode an MPS Lanczos upscale (src → dst).
-    pub fn encode_mps_upscale(
-        &mut self,
-        scaler: &mps::MpsLanczosScale,
-        src: &GpuTexture,
-        dst: &GpuTexture,
-    ) {
-        self.end_current();
-        scaler.set_transform(&mps::MpsScaleTransform {
-            scale_x: dst.width as f64 / src.width as f64,
-            scale_y: dst.height as f64 / src.height as f64,
-            translate_x: 0.0,
-            translate_y: 0.0,
-        });
-        scaler.encode(&self.cmd_buf, &src.raw, &dst.raw);
-    }
 
     /// Register a callback to run when the GPU finishes executing this command buffer.
     pub fn add_completed_handler<F: Fn() + Send + 'static>(&self, callback: F) {

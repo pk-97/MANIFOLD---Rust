@@ -990,24 +990,6 @@ impl TryFrom<i32> for MarkerColor {
     }
 }
 
-// ─── Upscale Mode ───
-
-/// Controls how reduced-resolution generator output is upscaled to full output resolution.
-/// Generators with `internal_resolution_scale < 1.0` (organic/particle types) render at
-/// reduced resolution for performance, then are upscaled before effects and compositing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum UpscaleMode {
-    /// MetalFX Spatial (ML-based upscaling). Reduces generator GPU work at the
-    /// cost of some visual quality on organic content.
-    MetalFxSpatial = 0,
-    /// MPS Lanczos resampling (always available on Apple Silicon).
-    MpsLanczos = 1,
-    /// No scaling — all generators render at full output resolution.
-    #[default]
-    Native = 2,
-}
-
 // ─── Tonemap Curve ───
 
 /// Tonemapping curve applied as the final step before display output.

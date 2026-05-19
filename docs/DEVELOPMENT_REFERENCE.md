@@ -46,8 +46,6 @@ Primitives use compute dispatches via the `Primitive` trait (each primitive's `r
 
 ## Resolution Scaling
 
-Controlled by `project.settings.upscale_mode` (`UpscaleMode` enum). Default is `Native`.
+All generators render at full output resolution. The per-generator `internal_resolution_scale()` trait method and the `UpscaleMode` enum were removed (the infrastructure was wired but the default `Native` mode disabled it, so it was dead code in practice). If a specific generator needs internal downscaling for performance, it allocates its own reduced-resolution intermediate inside `render()` and stretches to the output — same pattern Bloom uses for its mip chain.
 
-- `Native` — all generators render at full resolution
-- `MetalFxSpatial` / `MpsLanczos` — generators with `internal_resolution_scale() < 1.0` render reduced, upscaled
-- Sub-1.0 overrides (non-Native only): FluidSimulation (0.5x), FluidSimulation3D (0.5x), Mycelium (0.5x), ParametricSurface (0.75x)
+The pipeline-wide `render_scale` setting (FSR / MetalFX full-frame upscaling) is separate and still active.

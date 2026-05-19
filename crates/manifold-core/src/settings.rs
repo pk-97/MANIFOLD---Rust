@@ -1,7 +1,7 @@
 use crate::effects::{EffectGroup, EffectInstance};
 use crate::macro_bank::MacroBank;
 use crate::types::{
-    ClockAuthority, OscSyncMode, QuantizeMode, ResolutionPreset, TonemapCurve, UpscaleMode,
+    ClockAuthority, OscSyncMode, QuantizeMode, ResolutionPreset, TonemapCurve,
 };
 use crate::units::{Beats, Bpm};
 use serde::{Deserialize, Serialize};
@@ -44,11 +44,6 @@ pub struct ProjectSettings {
     pub quantize_mode: QuantizeMode,
     #[serde(default)]
     pub resolution_preset: ResolutionPreset,
-    /// How reduced-resolution generator output is upscaled to full output resolution.
-    /// Organic/particle generators render internally at 0.5× for performance, then
-    /// are upscaled via this method before effects and compositing.
-    #[serde(default)]
-    pub upscale_mode: UpscaleMode,
     /// FSR 1.0 render scale: the pipeline renders at (output × render_scale) and
     /// FSR upscales back to full output resolution. 1.0 = native (FSR disabled).
     /// Valid notched values: 1.0 (native), 0.75 (quality), 0.5 (performance).
@@ -252,7 +247,6 @@ impl Default for ProjectSettings {
             time_signature_denominator: 4,
             quantize_mode: QuantizeMode::Off,
             resolution_preset: ResolutionPreset::FHD1080p,
-            upscale_mode: UpscaleMode::Native,
             render_scale: 1.0,
             tonemap_curve: TonemapCurve::AcesNarkowicz,
             master_opacity: 1.0,

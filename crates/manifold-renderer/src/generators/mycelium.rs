@@ -541,10 +541,6 @@ impl Generator for MyceliumGenerator {
         self.initialized = false;
     }
 
-    fn internal_resolution_scale(&self) -> f32 {
-        1.0
-    }
-
     fn reset_state(&mut self, _device: &manifold_gpu::GpuDevice) {
         self.initialized = false;
         self.frame_count = 0;

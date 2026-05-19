@@ -27,15 +27,6 @@ pub trait Generator: Send {
     /// Recreate resolution-dependent resources.
     fn resize(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32);
 
-    /// Internal resolution scale factor for this generator type.
-    /// Generators render at (output_width * scale, output_height * scale) and are
-    /// upscaled to full output resolution afterward. Organic/particle generators
-    /// use 0.5 (matching Unity), geometric generators use 1.0 (no scaling).
-    /// Clamped to [0.125, 1.0]. Default: 1.0 (full resolution).
-    fn internal_resolution_scale(&self) -> f32 {
-        1.0
-    }
-
     /// Reset all simulation state to initial conditions.
     /// Called after export warmup re-seek to avoid stale particle/density state.
     /// Default: no-op (stateless generators don't need this).

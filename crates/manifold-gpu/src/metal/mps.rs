@@ -20,7 +20,7 @@ use objc2_metal_performance_shaders::{
     MPSBinaryImageKernel, MPSImageAdd, MPSImageAreaMax, MPSImageAreaMin, MPSImageBilinearScale,
     MPSImageBox, MPSImageConvolution, MPSImageDilate, MPSImageDivide, MPSImageErode,
     MPSImageFindKeypoints, MPSImageGaussianBlur, MPSImageHistogram, MPSImageHistogramEqualization,
-    MPSImageIntegral, MPSImageIntegralOfSquares, MPSImageKeypointRangeInfo, MPSImageLanczosScale,
+    MPSImageIntegral, MPSImageIntegralOfSquares, MPSImageKeypointRangeInfo,
     MPSImageLaplacian, MPSImageMedian, MPSImageMultiply, MPSImageSobel,
     MPSImageStatisticsMinAndMax, MPSImageSubtract, MPSImageTent, MPSImageThresholdBinary,
     MPSImageThresholdToZero, MPSImageThresholdTruncate, MPSScaleTransform, MPSUnaryImageKernel,
@@ -264,39 +264,6 @@ impl MpsBilinearScale {
         let xform = transform.as_mps();
         unsafe {
             // setScaleTransform takes a nullable pointer to MPSScaleTransform.
-            let ptr: *const MPSScaleTransform = &xform;
-            let _: () = msg_send![&*self.inner, setScaleTransform: ptr];
-        }
-    }
-
-    pub fn encode(
-        &self,
-        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
-        src: &ProtocolObject<dyn MTLTexture>,
-        dst: &ProtocolObject<dyn MTLTexture>,
-    ) {
-        unsafe { encode_unary_typed(&*self.inner, cmd_buf, src, dst) }
-    }
-}
-
-/// MPSImageLanczosScale — high-quality Lanczos texture scaling.
-pub struct MpsLanczosScale {
-    inner: Retained<MPSImageLanczosScale>,
-}
-
-unsafe impl Send for MpsLanczosScale {}
-unsafe impl Sync for MpsLanczosScale {}
-
-impl MpsLanczosScale {
-    pub fn new(device: &ProtocolObject<dyn MTLDevice>) -> Self {
-        let inner =
-            unsafe { MPSImageLanczosScale::initWithDevice(MPSImageLanczosScale::alloc(), device) };
-        Self { inner }
-    }
-
-    pub fn set_transform(&self, transform: &MpsScaleTransform) {
-        let xform = transform.as_mps();
-        unsafe {
             let ptr: *const MPSScaleTransform = &xform;
             let _: () = msg_send![&*self.inner, setScaleTransform: ptr];
         }
@@ -1255,26 +1222,6 @@ impl super::GpuEncoder {
         let scale_x = dst.width as f64 / src.width as f64;
         let scale_y = dst.height as f64 / src.height as f64;
         let kernel = MpsBilinearScale::new(device);
-        kernel.set_transform(&MpsScaleTransform {
-            scale_x,
-            scale_y,
-            translate_x: 0.0,
-            translate_y: 0.0,
-        });
-        let cmd_buf = self.raw_cmd_buf_for_mps();
-        kernel.encode(cmd_buf, &src.raw, &dst.raw);
-    }
-
-    /// Encode an MPS Lanczos scale.
-    pub fn mps_lanczos_scale(
-        &mut self,
-        src: &GpuTexture,
-        dst: &GpuTexture,
-        device: &ProtocolObject<dyn MTLDevice>,
-    ) {
-        let scale_x = dst.width as f64 / src.width as f64;
-        let scale_y = dst.height as f64 / src.height as f64;
-        let kernel = MpsLanczosScale::new(device);
         kernel.set_transform(&MpsScaleTransform {
             scale_x,
             scale_y,

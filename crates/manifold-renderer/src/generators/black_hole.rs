@@ -803,8 +803,4 @@ impl Generator for BlackHoleGenerator {
     fn resize(&mut self, _device: &manifold_gpu::GpuDevice, _width: u32, _height: u32) {
         // Deflection maps at half res — recreated in ensure_deflection_maps
     }
-
-    fn internal_resolution_scale(&self) -> f32 {
-        0.75
-    }
 }
