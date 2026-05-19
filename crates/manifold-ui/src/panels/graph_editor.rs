@@ -168,6 +168,14 @@ enum RowState {
         /// static-block routing — the toggle adds / removes a
         /// user-binding through `EffectParamExpose`.
         static_block_slot: Option<usize>,
+        /// `true` when this inner param is shadowed by a wire on the
+        /// node's same-named scalar input port (port-shadows-param
+        /// convention). The wire drives the param every frame, so the
+        /// expose checkbox and the value cell are visually disabled
+        /// and the click handler short-circuits to `Vec::new()` for
+        /// both targets. Removing the wire is the only way to reclaim
+        /// local control or expose the param on the card.
+        wire_driven: bool,
     },
 }
 
@@ -277,6 +285,13 @@ pub struct GraphEditorPanel {
     /// `exposed` flag) instead of stacking a redundant
     /// `UserParamBinding` on an already-routed inner param.
     static_block_targets: HashMap<(String, String), usize>,
+    /// `(node_handle, inner_param)` keys for every inner param
+    /// shadowed by a wire on the same-named scalar input port. Rows
+    /// matching a key render the expose checkbox and value cell as
+    /// disabled with a "← wired" hint after the label; the click
+    /// handler short-circuits on the disabled targets. Built from
+    /// the live `EffectGraphDef.wires` by `app_render`.
+    wire_driven_keys: HashSet<(String, String)>,
     /// Per-row state, populated during `build`.
     rows: Vec<RowState>,
     /// Root container for everything this panel owns inside the tree.
@@ -306,6 +321,7 @@ impl GraphEditorPanel {
         exposed_keys: HashSet<(String, String)>,
         outer_driven: HashMap<(String, String), String>,
         static_block_targets: HashMap<(String, String), usize>,
+        wire_driven_keys: HashSet<(String, String)>,
     ) {
         self.effect_index = effect_index;
         self.card_entries = card_entries;
@@ -313,6 +329,7 @@ impl GraphEditorPanel {
         self.exposed_keys = exposed_keys;
         self.outer_driven = outer_driven;
         self.static_block_targets = static_block_targets;
+        self.wire_driven_keys = wire_driven_keys;
     }
 
     /// Build the UITree subtree at the given viewport. Idempotent
@@ -487,11 +504,20 @@ impl GraphEditorPanel {
                 .outer_driven
                 .get(&(handle.clone(), ps.name.clone()))
                 .cloned();
-            let editable = supported;
+            // Wire-driven: the node's same-named scalar input port
+            // has an incoming wire that shadows this param every
+            // frame (port-shadows-param). The checkbox and value cell
+            // become read-only — local edits and exposure toggles
+            // would lie about what controls the param. Removing the
+            // wire is the only way to reclaim either.
+            let is_wire_driven = self
+                .wire_driven_keys
+                .contains(&(handle.clone(), ps.name.clone()));
+            let editable = supported && !is_wire_driven;
 
             let cb_x = viewport.x + PADDING;
             let cb_y = y + (ROW_H - CHECKBOX_H) * 0.5;
-            let cb_style = checkbox_style(is_exposed, supported);
+            let cb_style = checkbox_style(is_exposed, supported && !is_wire_driven);
             let cb_id = tree.add_button(
                 bg_id,
                 cb_x,
@@ -509,10 +535,15 @@ impl GraphEditorPanel {
             let row_remaining = (viewport.x + viewport.width - PADDING - label_x).max(10.0);
             let value_w = (row_remaining * 0.45).max(60.0);
             let label_w = (row_remaining - value_w).max(10.0);
-            // Label + optional "↳ Outer" hint inline so the user can
-            // see at a glance which outer slider will overwrite this
-            // value if it moves.
-            let label_str = if let Some(outer) = outer_driver.as_ref() {
+            // Label + optional driver hint inline so the user can
+            // see at a glance which surface controls this param:
+            // "↳ Outer" for an outer card slider routing in every
+            // frame, "← wired" for a same-name scalar input wire.
+            // Wire wins when both are present (the wire short-circuits
+            // the binding apply path), so we surface it first.
+            let label_str = if is_wire_driven {
+                format!("{}  ← wired", ps.label)
+            } else if let Some(outer) = outer_driver.as_ref() {
                 format!("{}  ↳ {outer}", ps.label)
             } else {
                 ps.label.clone()
@@ -615,6 +646,7 @@ impl GraphEditorPanel {
                     convert,
                     currently_exposed: is_exposed,
                     static_block_slot,
+                    wire_driven: is_wire_driven,
                 });
             }
 
@@ -692,7 +724,17 @@ impl GraphEditorPanel {
                     convert,
                     currently_exposed,
                     static_block_slot,
+                    wire_driven,
                 } => {
+                    // Wire-driven rows: clicks on either target are
+                    // dead. Local edits and exposure changes through
+                    // here would lie — the wire wins each frame.
+                    if *wire_driven
+                        && (*checkbox_node_id == node_id
+                            || value_cell_node_id.map(|v| v == node_id).unwrap_or(false))
+                    {
+                        return Vec::new();
+                    }
                     if *checkbox_node_id == node_id {
                         if let Some(slot) = static_block_slot {
                             return vec![PanelAction::EffectStaticParamExpose {
@@ -735,7 +777,9 @@ impl GraphEditorPanel {
 
     fn handle_drag_begin(&mut self, node_id: u32, origin_x: f32) -> Vec<PanelAction> {
         // Numeric-value-cell drag opens a scrub anchor. Bool / Enum
-        // edits happen on click, so drag on them is a no-op.
+        // edits happen on click, so drag on them is a no-op. Wire-
+        // driven rows are also a no-op: the wire wins each frame,
+        // so a scrub would be silently overwritten.
         for row in &self.rows {
             if let RowState::InnerNode {
                 value_cell_node_id: Some(cell),
@@ -744,9 +788,11 @@ impl GraphEditorPanel {
                 min,
                 max,
                 current_value,
+                wire_driven,
                 ..
             } = row
                 && *cell == node_id
+                && !*wire_driven
                 && matches!(
                     kind,
                     GraphEditorParamKind::Float | GraphEditorParamKind::Int
@@ -981,6 +1027,7 @@ mod tests {
             HashSet::new(),
             HashMap::new(),
             HashMap::new(),
+            HashSet::new(),
         );
         panel.build(&mut tree, viewport());
         // 2 supported params → 2 inner-node rows tracked. The Color row
@@ -1006,6 +1053,7 @@ mod tests {
             HashSet::new(),
             HashMap::new(),
             HashMap::new(),
+            HashSet::new(),
         );
         panel.build(&mut tree, viewport());
         assert!(panel.rows.is_empty());
@@ -1023,6 +1071,7 @@ mod tests {
             HashSet::new(),
             HashMap::new(),
             HashMap::new(),
+            HashSet::new(),
         );
         panel.build(&mut tree, viewport());
         assert!(
@@ -1043,6 +1092,7 @@ mod tests {
             HashSet::new(),
             HashMap::new(),
             HashMap::new(),
+            HashSet::new(),
         );
         panel.build(&mut tree, viewport());
 
@@ -1094,6 +1144,7 @@ mod tests {
             exposed,
             HashMap::new(),
             HashMap::new(),
+            HashSet::new(),
         );
         panel.build(&mut tree, viewport());
 
@@ -1125,6 +1176,7 @@ mod tests {
             HashSet::new(),
             HashMap::new(),
             HashMap::new(),
+            HashSet::new(),
         );
         panel.build(&mut tree, viewport());
         // Random unrelated node id.
@@ -1145,6 +1197,7 @@ mod tests {
             HashSet::new(),
             HashMap::new(),
             HashMap::new(),
+            HashSet::new(),
         );
         panel.build(&mut tree, viewport());
         if let Some(row) = panel.rows.first() {
@@ -1217,6 +1270,7 @@ mod tests {
             HashSet::new(),
             HashMap::new(),
             HashMap::new(),
+            HashSet::new(),
         );
         panel.build(&mut tree, viewport());
 
@@ -1256,6 +1310,7 @@ mod tests {
             HashSet::new(),
             HashMap::new(),
             HashMap::new(),
+            HashSet::new(),
         );
         panel.build(&mut tree, viewport());
 
@@ -1295,6 +1350,7 @@ mod tests {
             HashSet::new(),
             HashMap::new(),
             HashMap::new(),
+            HashSet::new(),
         );
         panel.build(&mut tree, viewport());
 
@@ -1327,6 +1383,7 @@ mod tests {
             HashSet::new(),
             HashMap::new(),
             HashMap::new(),
+            HashSet::new(),
         );
         panel.build(&mut tree, viewport());
 
@@ -1402,6 +1459,7 @@ mod tests {
             HashSet::new(),
             HashMap::new(),
             HashMap::new(),
+            HashSet::new(),
         );
         panel.build(&mut tree, viewport());
 
@@ -1462,6 +1520,7 @@ mod tests {
             HashSet::new(),
             driven,
             HashMap::new(),
+            HashSet::new(),
         );
         panel.build(&mut tree, viewport());
 
@@ -1515,6 +1574,7 @@ mod tests {
             HashSet::new(),
             HashMap::new(),
             HashMap::new(),
+            HashSet::new(),
         );
         panel.build(&mut tree, viewport());
         // No clickable rows tracked for the top section.
@@ -1552,6 +1612,7 @@ mod tests {
             exposed_keys,
             HashMap::new(),
             static_block_targets,
+            HashSet::new(),
         );
         panel.build(&mut tree, viewport());
 
@@ -1597,6 +1658,7 @@ mod tests {
             HashSet::new(),
             HashMap::new(),
             HashMap::new(),
+            HashSet::new(),
         );
         panel.build(&mut tree, viewport());
 
@@ -1623,5 +1685,85 @@ mod tests {
             }
             other => panic!("expected EffectParamExpose, got {other:?}"),
         }
+    }
+
+    /// Port-shadows-param: when a wire targets a node's same-named
+    /// scalar input port, the row's checkbox click short-circuits to
+    /// no-op and the value cell is rendered as a static label (no
+    /// tracked tree id) — so neither the exposure nor a local edit
+    /// can lie about what controls the param every frame. The user
+    /// must disconnect the wire to reclaim either.
+    #[test]
+    fn wire_driven_row_disables_checkbox_and_value_cell() {
+        let mut tree = UITree::new();
+        let mut panel = GraphEditorPanel::new();
+        let node = snap_node_with_params(Some("uv_transform"));
+        let mut wire_driven = HashSet::new();
+        wire_driven.insert(("uv_transform".to_string(), "translate".to_string()));
+        panel.configure(
+            Some(0),
+            Vec::new(),
+            Some(&node),
+            HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            wire_driven,
+        );
+        panel.build(&mut tree, viewport());
+
+        let translate_row = panel
+            .rows
+            .iter()
+            .find(
+                |r| matches!(r, RowState::InnerNode { inner_param, .. } if inner_param == "translate"),
+            )
+            .expect("translate row stays visible even when wire-driven");
+
+        // Value cell is rendered as a read-only label rather than a
+        // button — non-interactive both visually and at the tree level.
+        assert!(
+            value_cell_id_of(translate_row).is_none(),
+            "wire-driven row drops the editable value-cell button in favour of a label",
+        );
+
+        // Checkbox click is a defensive no-op even though the style is
+        // already disabled. Belt-and-braces in case the styling drifts.
+        let cb_id = checkbox_id_of(translate_row);
+        assert!(
+            panel.handle_click(cb_id).is_empty(),
+            "checkbox click on a wire-driven row must not emit any action",
+        );
+    }
+
+    /// The non-wired sibling row stays interactive — wire-driven is a
+    /// per-row gate, not a per-node one.
+    #[test]
+    fn wire_driven_row_does_not_disable_unrelated_rows() {
+        let mut tree = UITree::new();
+        let mut panel = GraphEditorPanel::new();
+        let node = snap_node_with_params(Some("uv_transform"));
+        let mut wire_driven = HashSet::new();
+        wire_driven.insert(("uv_transform".to_string(), "translate".to_string()));
+        panel.configure(
+            Some(0),
+            Vec::new(),
+            Some(&node),
+            HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            wire_driven,
+        );
+        panel.build(&mut tree, viewport());
+
+        let scale_row = panel
+            .rows
+            .iter()
+            .find(
+                |r| matches!(r, RowState::InnerNode { inner_param, .. } if inner_param == "scale"),
+            )
+            .expect("scale row exists");
+        let cb_id = checkbox_id_of(scale_row);
+        let actions = panel.handle_click(cb_id);
+        assert_eq!(actions.len(), 1, "non-wired sibling stays interactive");
     }
 }

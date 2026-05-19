@@ -1515,6 +1515,11 @@ impl Application {
         // The panel uses this to disable inner-param rows the outer
         // card slider drives every frame.
         let outer_driven = build_outer_driven_map(snap_arc.as_deref());
+        // Wire-driven set: (handle, inner_param) for every inner param
+        // shadowed by an incoming wire on the same-named scalar input
+        // port. The panel disables the checkbox + value cell for these
+        // rows; clicks on either short-circuit to no-op.
+        let wire_driven_keys = build_wire_driven_keys(snap_arc.as_deref());
         let effect_index = self.current_editor_target.as_ref().map(|(_, ei)| *ei);
         self.graph_editor_panel.configure(
             effect_index,
@@ -1523,6 +1528,7 @@ impl Application {
             exposed_keys,
             outer_driven,
             static_block_targets,
+            wire_driven_keys,
         );
 
         // Configure the left palette. Active whenever we have a
@@ -2215,6 +2221,33 @@ fn build_outer_driven_map(
                 r.outer_label.clone(),
             )
         })
+        .collect()
+}
+
+/// `(node_handle, inner_param)` keys for every inner param shadowed
+/// by a wire on the node's same-named scalar input port (port-
+/// shadows-param convention). Built by walking the snapshot's live
+/// `wires` and joining each `to_node` to its `node_handle` via the
+/// snapshot's node table. Empty when the snapshot is `None`, when
+/// the graph has no wires, or when no wire lands on a handled node.
+///
+/// Drives the graph-editor sidebar's "← wired" hint and disables the
+/// per-row checkbox + value cell so local edits and card-exposure
+/// toggles can't lie about what controls a wire-driven param.
+fn build_wire_driven_keys(
+    snapshot: Option<&manifold_renderer::node_graph::GraphSnapshot>,
+) -> std::collections::HashSet<(String, String)> {
+    let Some(snap) = snapshot else {
+        return Default::default();
+    };
+    let handles: std::collections::HashMap<u32, &str> = snap
+        .nodes
+        .iter()
+        .filter_map(|n| n.node_handle.as_deref().map(|h| (n.id, h)))
+        .collect();
+    snap.wires
+        .iter()
+        .filter_map(|w| handles.get(&w.to_node).map(|h| ((*h).to_string(), w.to_port.clone())))
         .collect()
 }
 
