@@ -58,6 +58,15 @@ impl<'a> NodeInputs<'a> {
         self.backend.texture_2d(self.slot(port)?)
     }
 
+    /// 3D `&GpuTexture` bound to the named [`PortType::Texture3D`]
+    /// input port. `None` if unwired or the backend doesn't track 3D
+    /// textures (mock). The volume was pre-bound by the chain build at
+    /// dimensions sized for the producing primitive's volume-resolution
+    /// param.
+    pub fn texture_3d(&self, port: &str) -> Option<&'a GpuTexture> {
+        self.backend.texture_3d(self.slot(port)?)
+    }
+
     /// Scalar value bound to the named input port (when wired through a
     /// scalar output upstream).
     pub fn scalar(&self, port: &str) -> Option<ParamValue> {
@@ -138,6 +147,14 @@ impl<'a> NodeOutputs<'a> {
     /// borrow.
     pub fn texture_2d(&self, port: &str) -> Option<&'a GpuTexture> {
         self.backend.texture_2d(self.slot(port)?)
+    }
+
+    /// 3D `&GpuTexture` an EffectNode should *write to* for the named
+    /// [`PortType::Texture3D`] output port. Pre-bound by chain build at
+    /// dimensions sized for the producing primitive's volume-resolution
+    /// param. Same lifetime semantics as `texture_2d`.
+    pub fn texture_3d(&self, port: &str) -> Option<&'a GpuTexture> {
+        self.backend.texture_3d(self.slot(port)?)
     }
 
     /// `&GpuBuffer` an EffectNode should *write to* for the named

@@ -54,6 +54,20 @@ pub trait Backend: Send {
     /// `&GpuTexture` an EffectNode's evaluate needs to dispatch GPU work.
     fn texture_2d(&self, slot: Slot) -> Option<&GpuTexture>;
 
+    /// Real 3D `GpuTexture` bound to a slot, if this backend tracks 3D
+    /// textures and the slot was allocated as a `Texture3D`. Mock
+    /// backends return `None`.
+    ///
+    /// Unlike `texture_2d`, there is no lazy-alloc path: the host
+    /// pre-binds every Texture3D resource via
+    /// [`MetalBackend::pre_bind_texture_3d`] before the chain runs.
+    /// Volume dimensions vary per use case (volume resolution, depth
+    /// thickness), so the pool can't fabricate one without per-primitive
+    /// metadata that doesn't exist yet.
+    fn texture_3d(&self, _slot: Slot) -> Option<&GpuTexture> {
+        None
+    }
+
     /// Scalar value bound to a slot. Set by upstream nodes that produce
     /// scalar outputs (e.g. an audio-level → bloom-intensity wire).
     /// Mock backends return `None`; real backends look up an inline value.

@@ -22,8 +22,13 @@
 //!
 //! ## What's not yet integrated
 //!
-//! - `Texture3D` and `Scalar` resource backing. Only `Texture2D` allocates
-//!   real GPU resources; the rest fall back to mock semantics.
+//! - `Texture3D` resources are pre-bind-only (mirror of `pre_bind_array`).
+//!   No lazy-alloc — the host pre-binds every volume via
+//!   [`MetalBackend::pre_bind_texture_3d`] before the chain runs.
+//!   `manifold-gpu`'s `GpuDevice::create_texture` supports 3D fully (used
+//!   by the existing FluidSim3D atomic generator); the gap was just at
+//!   the graph-runtime layer, now closed.
+//! - `Scalar` resource backing falls back to mock semantics today.
 //! - The host wiring that pre-binds the input frame to `Source`'s output
 //!   slot before each frame and reads `FinalOutput`'s input slot afterward.
 //!   That comes in the next step alongside the `GpuEncoder` plumbing.
@@ -115,6 +120,13 @@ pub struct MetalBackend {
     /// primitive's `max_capacity` param. No lazy-alloc path for arrays
     /// — capacity is per-instance data, not a port-static property.
     buffers_array: AHashMap<Slot, GpuBuffer>,
+
+    /// Real `GpuTexture` backing for [`PortType::Texture3D`] slots.
+    /// Pre-bound by the chain build at dimensions computed from each
+    /// producing primitive's volume-resolution params. No lazy-alloc —
+    /// volume size is per-instance data, not a port-static property
+    /// (same reasoning as `buffers_array`).
+    textures_3d: AHashMap<Slot, GpuTexture>,
 }
 
 impl MetalBackend {
@@ -137,6 +149,7 @@ impl MetalBackend {
             skip_aliased_slots: Vec::new(),
             scalars: AHashMap::default(),
             buffers_array: AHashMap::default(),
+            textures_3d: AHashMap::default(),
         }
     }
 
@@ -162,6 +175,7 @@ impl MetalBackend {
             skip_aliased_slots: Vec::new(),
             scalars: AHashMap::default(),
             buffers_array: AHashMap::default(),
+            textures_3d: AHashMap::default(),
         }
     }
 
@@ -320,6 +334,32 @@ impl MetalBackend {
         self.buffers_array.get(&slot)
     }
 
+    /// Pin a [`ResourceId`] to a host-supplied 3D [`GpuTexture`] for a
+    /// [`PortType::Texture3D`] wire. The chain-build code creates the
+    /// volume at dimensions computed from the producing primitive's
+    /// volume-resolution params, then hands it off here.
+    ///
+    /// Same lifecycle as [`Self::pre_bind_array`]: the resource is
+    /// `pinned`, so [`Backend::release`] is a no-op for it. The texture
+    /// is dropped when [`Self::drop_all_resources`] runs or the backend
+    /// itself drops. There is no lazy-alloc path — volume size is
+    /// per-instance data, so the host always pre-binds.
+    pub fn pre_bind_texture_3d(&mut self, id: ResourceId, texture: GpuTexture) -> Slot {
+        let slot = Slot(self.next_slot);
+        self.next_slot += 1;
+        self.textures_3d.insert(slot, texture);
+        self.bound.insert(id, slot);
+        self.pinned.insert(id);
+        slot
+    }
+
+    /// Borrow the 3D `GpuTexture` bound to a slot, if any. Mirrors
+    /// [`Self::array_buffer`]. Primitives read this through the
+    /// [`Backend::texture_3d`] trait method via the effect-node context.
+    pub fn texture_3d(&self, slot: Slot) -> Option<&GpuTexture> {
+        self.textures_3d.get(&slot)
+    }
+
     /// Return all retained textures and scalars to their pools and drop
     /// the high-water mark. Call on graph topology change or shutdown.
     ///
@@ -341,6 +381,7 @@ impl MetalBackend {
         self.skip_aliased_slots.clear();
         self.scalars.clear();
         self.buffers_array.clear();
+        self.textures_3d.clear();
         self.bound.clear();
         self.free_by_type.clear();
         self.pinned.clear();
@@ -434,6 +475,10 @@ impl Backend for MetalBackend {
 
     fn array_buffer(&self, slot: Slot) -> Option<&GpuBuffer> {
         self.buffers_array.get(&slot)
+    }
+
+    fn texture_3d(&self, slot: Slot) -> Option<&GpuTexture> {
+        self.textures_3d.get(&slot)
     }
 
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
@@ -580,6 +625,112 @@ mod array_buffer_tests {
         assert!(
             b.array_buffer(slot).is_some(),
             "underlying buffer should still be reachable",
+        );
+    }
+
+    #[test]
+    fn pre_bind_texture_3d_makes_volume_readable_through_texture_3d() {
+        let (device, mut b) = make_backend();
+        let volume = device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width: 16,
+            height: 16,
+            depth: 16,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: manifold_gpu::GpuTextureDimension::D3,
+            usage: manifold_gpu::GpuTextureUsage::SHADER_READ
+                | manifold_gpu::GpuTextureUsage::SHADER_WRITE,
+            label: "test_3d",
+            mip_levels: 1,
+        });
+
+        let slot = b.pre_bind_texture_3d(ResourceId(0), volume);
+
+        assert!(
+            b.texture_3d(slot).is_some(),
+            "pre-bound 3D texture should be readable",
+        );
+        assert!(
+            Backend::texture_3d(&b, slot).is_some(),
+            "trait reads same slot",
+        );
+        // 2D accessor must NOT return the 3D texture — separate storage.
+        assert!(
+            b.texture_2d(slot).is_none(),
+            "texture_2d accessor must not see 3D textures",
+        );
+    }
+
+    #[test]
+    fn acquire_texture_3d_after_pre_bind_is_idempotent() {
+        let (device, mut b) = make_backend();
+        let volume = device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width: 8,
+            height: 8,
+            depth: 8,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: manifold_gpu::GpuTextureDimension::D3,
+            usage: manifold_gpu::GpuTextureUsage::SHADER_READ,
+            label: "test_3d_idempotent",
+            mip_levels: 1,
+        });
+
+        let pinned = b.pre_bind_texture_3d(ResourceId(0), volume);
+        let acquired = b.acquire(ResourceId(0), PortType::Texture3D);
+        assert_eq!(
+            pinned, acquired,
+            "acquire on a pre-bound 3D resource must return the pinned slot",
+        );
+    }
+
+    #[test]
+    fn release_is_a_noop_for_pinned_texture_3d() {
+        let (device, mut b) = make_backend();
+        let volume = device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width: 4,
+            height: 4,
+            depth: 4,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: manifold_gpu::GpuTextureDimension::D3,
+            usage: manifold_gpu::GpuTextureUsage::SHADER_READ,
+            label: "test_3d_pin",
+            mip_levels: 1,
+        });
+
+        let slot = b.pre_bind_texture_3d(ResourceId(0), volume);
+        b.release(ResourceId(0), PortType::Texture3D);
+
+        assert_eq!(
+            b.slot_for(ResourceId(0)),
+            Some(slot),
+            "pinned 3D binding should survive a release",
+        );
+        assert!(
+            b.texture_3d(slot).is_some(),
+            "underlying 3D texture should still be reachable",
+        );
+    }
+
+    #[test]
+    fn drop_all_resources_clears_texture_3d() {
+        let (device, mut b) = make_backend();
+        let volume = device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width: 4,
+            height: 4,
+            depth: 4,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: manifold_gpu::GpuTextureDimension::D3,
+            usage: manifold_gpu::GpuTextureUsage::SHADER_READ,
+            label: "test_3d_drop",
+            mip_levels: 1,
+        });
+        let slot = b.pre_bind_texture_3d(ResourceId(0), volume);
+        assert!(b.texture_3d(slot).is_some());
+
+        b.drop_all_resources();
+
+        assert!(
+            b.texture_3d(slot).is_none(),
+            "3D texture should be dropped",
         );
     }
 
