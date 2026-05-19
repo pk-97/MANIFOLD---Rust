@@ -37,6 +37,7 @@ mod masked_mix;
 mod math;
 mod peak;
 mod quad_mirror;
+mod seed_particles;
 mod separable_gaussian;
 mod smoothing;
 mod strobe;
@@ -85,6 +86,7 @@ pub use math::{MATH_OPS, Math};
 pub use masked_mix::MaskedMix;
 pub use peak::Peak;
 pub use quad_mirror::{QUAD_MIRROR_TYPE_ID, QuadMirror};
+pub use seed_particles::SeedParticles;
 pub use separable_gaussian::{
     GAUSSIAN_BLUR_AXES, GAUSSIAN_BLUR_KERNELS, GAUSSIAN_BLUR_TYPE_ID, GaussianBlur,
 };
