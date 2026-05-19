@@ -12,7 +12,7 @@ use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc, G
 
 use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
+use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 use crate::node_graph::state_store::NodeState;
 use crate::render_target::RenderTarget;
 
@@ -39,7 +39,18 @@ pub const FEEDBACK_TYPE_ID: &str = "node.feedback";
 
 pub const FEEDBACK_MODES: &[&str] = &["Screen", "Additive", "Max"];
 
-const FEEDBACK_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];
+const FEEDBACK_INPUTS: [NodeInput; 2] = [
+    SOURCE_INPUT,
+    // Port-shadows-param for `amount` — wire any scalar producer
+    // (Luminance, Smoothing, BeatGate, …) to drive the blend amount
+    // each frame. When unwired, the static `amount` param applies.
+    NodePort {
+        name: "amount",
+        ty: PortType::Scalar(ScalarType::F32),
+        kind: PortKind::Input,
+        required: false,
+    },
+];
 const FEEDBACK_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
 
 const FEEDBACK_PARAMS: [ParamDef; 4] = [
@@ -161,10 +172,14 @@ impl EffectNode for Feedback {
         }
 
         // Read params with the same clamping the legacy effect did,
-        // so output is bit-identical to StylizedFeedbackFX.
-        let amount = match ctx.params.get("amount") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.5,
+        // so output is bit-identical to StylizedFeedbackFX. Wire-
+        // driven `amount` shadows the param when present.
+        let amount = match ctx.inputs.scalar("amount") {
+            Some(ParamValue::Float(f)) => f,
+            _ => match ctx.params.get("amount") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => 0.5,
+            },
         }
         .min(0.98);
         let zoom = match ctx.params.get("zoom") {

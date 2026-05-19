@@ -1,0 +1,174 @@
+{
+  "version": 2,
+  "name": "SmearMosh",
+  "description": "Datamosh-style smear with edge-density-driven chromatic shear. The image's own bright regions read live; dark regions blend with a slow-decaying feedback history. In parallel, EdgeDetect → Luminance → Smoothing measures how busy the frame is and drives ChromaticOffset's amount: frames packed with edges get aggressive RGB shear, calm frames pass cleanly. Pixels are genuinely transformed every frame — color shifts, ghost trails, channel separation — not just translated.",
+  "presetMetadata": {
+    "id": "SmearMosh",
+    "displayName": "Smear Mosh",
+    "category": "Stylize",
+    "oscPrefix": "smear_mosh",
+    "available": true,
+    "params": [
+      {
+        "id": "smear",
+        "name": "Smear",
+        "min": 0.0,
+        "max": 0.98,
+        "defaultValue": 0.6,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "shear",
+        "name": "Shear",
+        "min": 0.0,
+        "max": 3.0,
+        "defaultValue": 0.35,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "reactivity",
+        "name": "Reactivity",
+        "min": 0.01,
+        "max": 2.0,
+        "defaultValue": 0.15,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "smear",
+        "label": "Smear",
+        "defaultValue": 0.6,
+        "target": {
+          "kind": "handleNode",
+          "handle": "feedback",
+          "param": "amount"
+        },
+        "convert": { "type": "Float" }
+      },
+      {
+        "id": "shear",
+        "label": "Shear",
+        "defaultValue": 0.35,
+        "target": {
+          "kind": "handleNode",
+          "handle": "shear_value",
+          "param": "value"
+        },
+        "convert": { "type": "Float" }
+      },
+      {
+        "id": "reactivity",
+        "label": "Reactivity",
+        "defaultValue": 0.15,
+        "target": {
+          "kind": "handleNode",
+          "handle": "smoothing",
+          "param": "time_constant"
+        },
+        "convert": { "type": "Float" }
+      }
+    ],
+    "skipMode": {
+      "kind": "onZero",
+      "paramId": "smear"
+    }
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "typeId": "system.source",
+      "handle": "source"
+    },
+    {
+      "id": 1,
+      "typeId": "node.feedback",
+      "handle": "feedback",
+      "params": {
+        "amount": { "type": "Float", "value": 0.6 },
+        "zoom": { "type": "Float", "value": 1.0 },
+        "rotation": { "type": "Float", "value": 0.0 },
+        "mode": { "type": "Enum", "value": 0 }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "node.masked_mix",
+      "handle": "masked_mix",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 }
+      }
+    },
+    {
+      "id": 3,
+      "typeId": "node.edge_detect",
+      "handle": "edge_detect"
+    },
+    {
+      "id": 4,
+      "typeId": "node.luminance",
+      "handle": "luminance"
+    },
+    {
+      "id": 5,
+      "typeId": "node.smoothing",
+      "handle": "smoothing",
+      "params": {
+        "time_constant": { "type": "Float", "value": 0.15 }
+      }
+    },
+    {
+      "id": 6,
+      "typeId": "node.value",
+      "handle": "shear_value",
+      "params": {
+        "value": { "type": "Float", "value": 0.35 }
+      }
+    },
+    {
+      "id": 7,
+      "typeId": "node.math",
+      "handle": "math_shear",
+      "params": {
+        "op": { "type": "Enum", "value": 2 }
+      }
+    },
+    {
+      "id": 8,
+      "typeId": "node.chromatic_aberration",
+      "handle": "chromatic",
+      "params": {
+        "amount": { "type": "Float", "value": 0.0 },
+        "offset": { "type": "Float", "value": 0.012 },
+        "mode": { "type": "Enum", "value": 1 },
+        "angle": { "type": "Float", "value": 0.0 },
+        "falloff": { "type": "Float", "value": 0.5 }
+      }
+    },
+    {
+      "id": 9,
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "source" },
+    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "a" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "b" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "mask" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 3, "toPort": "in" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 7, "toPort": "a" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "b" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 8, "toPort": "amount" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 8, "toPort": "in" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 9, "toPort": "in" }
+  ]
+}

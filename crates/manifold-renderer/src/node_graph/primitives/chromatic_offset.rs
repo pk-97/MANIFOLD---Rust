@@ -23,9 +23,10 @@ use crate::node_graph::primitive::Primitive;
 crate::primitive! {
     name: ChromaticOffset,
     type_id: "node.chromatic_aberration",
-    purpose: "Radial or linear RGB channel separation: red and blue channels shift along an offset vector; green stays unshifted.",
+    purpose: "Radial or linear RGB channel separation: red and blue channels shift along an offset vector; green stays unshifted. The `amount` input port is the standard port-shadow — wire any scalar producer to drive the channel-shift magnitude each frame.",
     inputs: {
         in: Texture2D required,
+        amount: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -155,6 +156,14 @@ impl Primitive for ChromaticOffset {
 }
 
 fn read_f32(ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32) -> f32 {
+    // Wire-driven shadow first — if a scalar input port with this
+    // name is declared and wired, the upstream value overrides the
+    // static param. For params whose primitive doesn't declare a
+    // matching scalar input the lookup returns None and we fall
+    // straight through to the param read.
+    if let Some(ParamValue::Float(f)) = ctx.inputs.scalar(name) {
+        return f;
+    }
     match ctx.params.get(name) {
         Some(ParamValue::Float(f)) => *f,
         _ => default,
