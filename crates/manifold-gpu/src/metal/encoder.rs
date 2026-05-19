@@ -1129,6 +1129,31 @@ impl GpuEncoder {
         enc.endEncoding();
     }
 
+    /// Copy `size` bytes from `src` buffer to `dst` buffer via blit
+    /// encoder. Used by `ArrayFeedback` to snapshot a graph wire's
+    /// buffer contents into a state-store-held persistent buffer (and
+    /// vice versa, for the per-frame swap).
+    ///
+    /// Both buffers must have at least `size` bytes; the call doesn't
+    /// validate.
+    pub fn copy_buffer_to_buffer(&mut self, src: &GpuBuffer, dst: &GpuBuffer, size: u64) {
+        self.end_current();
+        let enc = self
+            .cmd_buf
+            .blitCommandEncoder()
+            .expect("blitCommandEncoder failed");
+        unsafe {
+            enc.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(
+                &src.raw,
+                0,
+                &dst.raw,
+                0,
+                size as usize,
+            );
+        }
+        enc.endEncoding();
+    }
+
     /// Copy texture to buffer via blit encoder (for readback).
     pub fn copy_texture_to_buffer(
         &mut self,

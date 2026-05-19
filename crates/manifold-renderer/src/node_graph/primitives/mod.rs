@@ -7,6 +7,7 @@
 //! not a structural divide.
 
 mod affine_transform;
+mod array_feedback;
 mod auto_gain;
 mod beat_gate;
 mod blob_tracking;
@@ -48,6 +49,7 @@ mod wet_dry_mix;
 mod wireframe_depth;
 
 pub use affine_transform::AffineTransform;
+pub use array_feedback::ArrayFeedback;
 pub use auto_gain::{AUTO_GAIN_CHARACTERS, AUTO_GAIN_TYPE_ID, AutoGain};
 pub use beat_gate::{BEAT_GATE_RATE_LABELS, BeatGate};
 pub use blob_tracking::{BLOB_TRACKING_TYPE_ID, BlobTracking};
