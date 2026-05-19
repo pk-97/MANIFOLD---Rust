@@ -16,6 +16,7 @@ mod chromatic_offset;
 mod clamp_stretch;
 mod color;
 mod color_grade;
+mod color_sample;
 mod compose;
 mod depth_of_field;
 mod dither_pattern;
@@ -56,6 +57,7 @@ pub use color::{
     BRIGHTNESS_TYPE_ID, Brightness, CHANNEL_MIX_TYPE_ID, COLOR_RAMP_TYPE_ID, ChannelMix, ColorRamp,
 };
 pub use color_grade::ColorGrade;
+pub use color_sample::ColorSample;
 pub use compose::{BLEND_MODES, BLEND_TYPE_ID, Blend, MIX_MODES, MIX_TYPE_ID, Mix};
 pub use depth_of_field::{
     DEPTH_OF_FIELD_FOCUS_MODES, DEPTH_OF_FIELD_QUALITIES, DEPTH_OF_FIELD_TYPE_ID, DepthOfField,
