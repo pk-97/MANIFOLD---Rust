@@ -278,10 +278,7 @@ impl Command for ChangeEffectParamCommand {
         let val = self.new_value;
         with_effects_mut(project, &self.target, |effects, _groups| {
             if let Some(effect) = effects.get_mut(eidx)
-                && let Some(idx) = manifold_core::effect_definition_registry::param_id_to_index(
-                    effect.effect_type(),
-                    id.as_ref(),
-                )
+                && let Some(idx) = effect.param_id_to_value_index(id.as_ref())
             {
                 effect.set_base_param(idx, val);
             }
@@ -294,10 +291,7 @@ impl Command for ChangeEffectParamCommand {
         let val = self.old_value;
         with_effects_mut(project, &self.target, |effects, _groups| {
             if let Some(effect) = effects.get_mut(eidx)
-                && let Some(idx) = manifold_core::effect_definition_registry::param_id_to_index(
-                    effect.effect_type(),
-                    id.as_ref(),
-                )
+                && let Some(idx) = effect.param_id_to_value_index(id.as_ref())
             {
                 effect.set_base_param(idx, val);
             }

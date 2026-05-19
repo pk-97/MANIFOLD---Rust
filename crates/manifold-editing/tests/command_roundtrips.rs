@@ -683,6 +683,48 @@ fn change_effect_param_unknown_id_is_no_op() {
 }
 
 #[test]
+fn change_effect_param_undo_roundtrip_on_user_tail_binding() {
+    // Regression: a user-exposed inner-node param lives at the tail of
+    // `param_values` (past the static prefix) and is addressed by an
+    // id like `user.<handle>.<param>.<n>`. The command must resolve
+    // that through the *instance*'s `param_id_to_value_index`, which
+    // consults both the static registry and the per-instance user
+    // bindings. The earlier registry-only lookup returned `None` for
+    // user-tail ids, making undo/redo a silent no-op for any slider
+    // exposed from an inner node.
+    let mut project = make_test_project();
+    let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
+    fx.param_values = vec![ParamSlot::exposed(0.5), ParamSlot::exposed(0.3)];
+    fx.base_param_values = Some(vec![0.5, 0.3]);
+    fx.append_user_binding(UserParamBinding {
+        id: "user.uv.translate.1".to_string(),
+        label: "Translate".to_string(),
+        node_handle: "uv".to_string(),
+        inner_param: "translate".to_string(),
+        min: -1.0,
+        max: 1.0,
+        default_value: 0.0,
+        convert: ParamConvert::Float,
+    });
+    project.settings.master_effects.push(fx);
+
+    let user_id = "user.uv.translate.1";
+    let tail_idx = project.settings.master_effects[0]
+        .param_id_to_value_index(user_id)
+        .expect("user binding resolves to a slot");
+    assert_eq!(tail_idx, 2, "user binding lands past the 2-param static prefix");
+
+    let mut cmd = ChangeEffectParamCommand::new(EffectTarget::Master, 0, user_id, 0.0, 0.42);
+    cmd.execute(&mut project);
+    let v = project.settings.master_effects[0].param_values[tail_idx].value;
+    assert!((v - 0.42).abs() < 0.001, "execute writes the user-tail slot");
+
+    cmd.undo(&mut project);
+    let v = project.settings.master_effects[0].param_values[tail_idx].value;
+    assert!((v - 0.0).abs() < 0.001, "undo restores the user-tail slot");
+}
+
+#[test]
 fn reorder_effect_undo_roundtrip() {
     let mut project = make_test_project();
     project
