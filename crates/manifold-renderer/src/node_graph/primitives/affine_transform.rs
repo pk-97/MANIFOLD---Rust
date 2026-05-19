@@ -25,9 +25,10 @@ use crate::node_graph::primitive::Primitive;
 crate::primitive! {
     name: AffineTransform,
     type_id: "node.affine_transform",
-    purpose: "2D UV affine: translate, scale, rotate around the center. Aspect-correct rotation; out-of-bounds samples return transparent black.",
+    purpose: "2D UV affine: translate, scale, rotate around the center. Aspect-correct rotation; out-of-bounds samples return transparent black. The `rotation` input port is the standard control-wire shadow of the `rotation` param — wire any scalar source (LFO, Color Compass, Math, …) to spin the image at runtime.",
     inputs: {
         in: Texture2D required,
+        rotation: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -100,10 +101,14 @@ impl Primitive for AffineTransform {
         // Read in user-facing units (degrees, screen-CW) and convert
         // to the shader's math frame (radians, math-CCW) inside the
         // primitive. Matches the legacy `TransformFX::apply` inline
-        // conversion bit-for-bit.
-        let rotation_degrees = match ctx.params.get("rotation") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
+        // conversion bit-for-bit. Wire-driven `rotation` shadows the
+        // param when present — port-shadows-param convention.
+        let rotation_degrees = match ctx.inputs.scalar("rotation") {
+            Some(ParamValue::Float(f)) => f,
+            _ => match ctx.params.get("rotation") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => 0.0,
+            },
         };
         let rotation = -(rotation_degrees * std::f32::consts::PI / 180.0);
 

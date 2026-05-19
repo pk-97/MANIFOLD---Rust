@@ -11,12 +11,13 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
-pub const MATH_OPS: &[&str] = &["Add", "Subtract", "Multiply", "Divide", "Min", "Max"];
+pub const MATH_OPS: &[&str] =
+    &["Add", "Subtract", "Multiply", "Divide", "Min", "Max", "Atan2"];
 
 crate::primitive! {
     name: Math,
     type_id: "node.math",
-    purpose: "Binary scalar arithmetic. Combines two control signals into one with the selected op (add / subtract / multiply / min / max / divide). Composition glue for control wires.",
+    purpose: "Binary scalar arithmetic. Combines two control signals into one with the selected op (add / subtract / multiply / min / max / divide / atan2). Composition glue for control wires.",
     inputs: {
         a: ScalarF32 required,
         b: ScalarF32 required,
@@ -66,7 +67,19 @@ impl Primitive for Math {
                 }
             }
             4 => a.min(b),
-            _ => a.max(b),
+            5 => a.max(b),
+            // Atan2(a, b) → angle of the (b, a) → (x, y) vector in
+            // radians. Convention: input `a` is y, input `b` is x —
+            // matches Rust / WGSL / std-library `atan2(y, x)`.
+            // Returns 0 when both inputs are zero rather than letting
+            // the platform pick a value the renderer might propagate.
+            _ => {
+                if a == 0.0 && b == 0.0 {
+                    0.0
+                } else {
+                    a.atan2(b)
+                }
+            }
         };
         ctx.outputs.set_scalar("out", ParamValue::Float(out));
     }
@@ -173,5 +186,47 @@ mod tests {
     #[test]
     fn max() {
         assert!((run_math(0.3, 0.7, 5) - 0.7).abs() < 1e-5);
+    }
+
+    /// `Atan2(a, b)` follows the std / WGSL convention of `atan2(y, x)`.
+    /// `atan2(1, 0) = π/2`, `atan2(0, 1) = 0`, `atan2(0, -1) = π`,
+    /// `atan2(-1, 0) = -π/2`. These four cardinal cases cover sign
+    /// conventions in all four quadrants — wires the Color Compass
+    /// builds on top of this op.
+    #[test]
+    fn atan2_north_is_half_pi() {
+        let got = run_math(1.0, 0.0, 6);
+        assert!(
+            (got - std::f32::consts::FRAC_PI_2).abs() < 1e-5,
+            "atan2(1, 0) = π/2, got {got}",
+        );
+    }
+    #[test]
+    fn atan2_east_is_zero() {
+        assert!((run_math(0.0, 1.0, 6)).abs() < 1e-5);
+    }
+    #[test]
+    fn atan2_west_is_pi() {
+        let got = run_math(0.0, -1.0, 6);
+        assert!(
+            (got - std::f32::consts::PI).abs() < 1e-5,
+            "atan2(0, -1) = π, got {got}",
+        );
+    }
+    #[test]
+    fn atan2_south_is_negative_half_pi() {
+        let got = run_math(-1.0, 0.0, 6);
+        assert!(
+            (got + std::f32::consts::FRAC_PI_2).abs() < 1e-5,
+            "atan2(-1, 0) = -π/2, got {got}",
+        );
+    }
+    /// Both inputs zero → 0.0 explicit (not whatever the platform's
+    /// undefined `atan2(0, 0)` returns). Prevents NaN-propagation
+    /// into downstream parameters when the compass has no asymmetry
+    /// at all (e.g. uniform brightness across all four cardinals).
+    #[test]
+    fn atan2_zero_zero_clamps_to_zero() {
+        assert_eq!(run_math(0.0, 0.0, 6), 0.0);
     }
 }

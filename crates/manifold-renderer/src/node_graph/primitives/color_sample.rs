@@ -1,12 +1,13 @@
 //! `node.color_sample` — Texture→Scalar bridge. Reads a single pixel
 //! from the input texture at a configurable normalised UV and emits
-//! the RGB triple on a `Scalar(Vec3)` output port.
+//! two scalar wires: `out` (the RGB triple as a `Scalar(Vec3)`) and
+//! `luma` (Rec.709-weighted brightness as `Scalar(F32)`).
 //!
 //! Simplest possible bridge — no reduction, no atomics, just one
-//! `textureLoad`. Use to pick a representative colour out of an
-//! image and feed it into anything wanting a Vec3 control signal:
-//! tint params, dye colours on particle systems, palette extraction
-//! for AI-driven aesthetic operators.
+//! `textureLoad`. Use the Vec3 `out` for palette / tint sampling and
+//! the `luma` scalar for region-brightness modulation (e.g. a Color
+//! Compass picks four cardinal `luma` readings and steers a downstream
+//! transformation toward the brightest patch).
 //!
 //! One frame of latency on the readback, same as the other bridges.
 
@@ -27,12 +28,13 @@ struct UvUniform {
 crate::primitive! {
     name: ColorSample,
     type_id: "node.color_sample",
-    purpose: "Read a single pixel from the input texture at the configured `uv` and emit its RGB on the `out` Vec3 scalar port. Bridge for pulling representative colours out of an image — palette extraction, tint sampling, dye-colour automation. One frame of latency.",
+    purpose: "Read a single pixel from the input texture at the configured `uv`. Emits `out` (Vec3 RGB) and `luma` (Rec.709-weighted brightness scalar). Bridge for pulling representative colours or per-region brightness out of an image. One frame of latency.",
     inputs: {
         in: Texture2D required,
     },
     outputs: {
         out: ScalarVec3,
+        luma: ScalarF32,
     },
     params: [
         ParamDef {
@@ -44,12 +46,13 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Single-pixel read at the configured UV (clamped to [0, 1]). Pair upstream with a `MipChain` to sample a *region* average instead of a single texel — sampling mip N reads the box-filtered 2^N×2^N neighbourhood.",
+    composition_notes: "Single-pixel read at the configured UV (clamped to [0, 1]). Pair upstream with a `MipChain` to sample a *region* average instead of a single texel — sampling mip N reads the box-filtered 2^N×2^N neighbourhood. Use the `luma` port directly when you only need brightness — it's the same Rec.709 weighting Luminance applies frame-wide.",
     examples: [],
     picker: { label: "ColorSample", category: Driver },
     extra_fields: {
         measure_buffer: Option<GpuBuffer> = None,
         previous_value: [f32; 3] = [0.0, 0.0, 0.0],
+        previous_luma: f32 = 0.0,
     },
 }
 
@@ -58,20 +61,25 @@ impl Primitive for ColorSample {
         if let Some(ref buf) = self.measure_buffer
             && let Some(ptr) = buf.mapped_ptr()
         {
-            // Three contiguous f32s for R, G, B (the trailing
-            // padding word in the buffer is the GPU's; we don't
-            // touch it).
+            // Four contiguous f32s: R, G, B, luma. Shader computes
+            // luma once on the GPU side so the CPU emits both wires
+            // off a single readback rather than re-deriving brightness
+            // from the RGB triple in Rust.
             let p = ptr as *const f32;
             let r = unsafe { std::ptr::read(p) };
             let g = unsafe { std::ptr::read(p.add(1)) };
             let b = unsafe { std::ptr::read(p.add(2)) };
-            if [r, g, b].iter().all(|c| c.is_finite()) {
+            let luma = unsafe { std::ptr::read(p.add(3)) };
+            if [r, g, b, luma].iter().all(|c| c.is_finite()) {
                 self.previous_value = [r, g, b];
+                self.previous_luma = luma;
             }
         }
 
         ctx.outputs
             .set_scalar("out", ParamValue::Vec3(self.previous_value));
+        ctx.outputs
+            .set_scalar("luma", ParamValue::Float(self.previous_luma));
 
         let Some(in_tex) = ctx.inputs.texture_2d("in") else {
             return;
@@ -203,6 +211,36 @@ mod gpu_tests {
         }
     }
 
+    struct CaptureFloat {
+        type_id: EffectNodeType,
+        seen: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
+    }
+    impl EffectNode for CaptureFloat {
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            static INPUTS: [NodeInput; 1] = [NodePort {
+                name: "in",
+                ty: PortType::Scalar(ScalarType::F32),
+                kind: PortKind::Input,
+                required: true,
+            }];
+            &INPUTS
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            &[]
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+            if let Some(ParamValue::Float(v)) = ctx.inputs.scalar("in") {
+                *self.seen.lock().unwrap() = Some(v);
+            }
+        }
+    }
+
     /// A solid colour input should round-trip exactly through the
     /// sampling shader → buffer → scalar wire path. Tests that the
     /// Vec3 wire actually carries Vec3 values end-to-end through the
@@ -263,5 +301,62 @@ mod gpu_tests {
                 v[c],
             );
         }
+    }
+
+    /// `luma` port emits Rec.709-weighted brightness of the sampled
+    /// pixel. Same weights as the frame-wide `Luminance` primitive,
+    /// so a region brightness reading and a global one share a
+    /// single definition of "brightness".
+    #[test]
+    fn luma_port_emits_rec709_brightness() {
+        let device = crate::test_device();
+        let (w, h) = (16u32, 16u32);
+        let format = GpuTextureFormat::Rgba16Float;
+        // Rec.709 luma of a deeply saturated green is dominated by the
+        // green weight (0.7152). Pick a colour whose channels don't
+        // collide so a mis-applied weight (e.g. R vs B swap) shows up
+        // in the assertion.
+        let color = [0.2_f32, 0.8, 0.4];
+        let expected_luma = 0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2];
+
+        let mut g = Graph::new();
+        let src = g.add_node(Box::new(Source::new()));
+        let sample = g.add_node(Box::new(ColorSample::new()));
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let sink = g.add_node(Box::new(CaptureFloat {
+            type_id: EffectNodeType::new("test.capture_float"),
+            seen: seen.clone(),
+        }));
+        g.connect((src, "out"), (sample, "in")).unwrap();
+        g.connect((sample, "luma"), (sink, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+
+        let r_src = output_resource(&plan, src, "out");
+        let src_target = RenderTarget::new(&device, w, h, format, "test-cs-luma-src");
+        crate::clear_texture_committed(
+            &device,
+            &src_target.texture,
+            [color[0] as f64, color[1] as f64, color[2] as f64, 1.0],
+            "color-sample-luma-clear",
+        );
+
+        let mut backend = MetalBackend::new(device.clone(), w, h, format);
+        backend.pre_bind_texture_2d(r_src, src_target);
+        let mut exec = Executor::new(Box::new(backend));
+
+        for _ in 0..2 {
+            let mut enc = device.create_encoder("color-sample-luma-frame");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+                exec.execute_frame_with_gpu(&mut g, &plan, frame_time(), &mut gpu);
+            }
+            enc.commit_and_wait_completed();
+        }
+
+        let v = seen.lock().unwrap().expect("luma readback by frame 2");
+        assert!(
+            (v - expected_luma).abs() < 0.005,
+            "expected Rec.709 luma {expected_luma}, got {v}",
+        );
     }
 }

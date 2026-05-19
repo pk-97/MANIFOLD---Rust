@@ -1,9 +1,10 @@
 // node.color_sample — Texture→Scalar bridge.
 //
 // Single-thread textureLoad at a configurable normalised UV; writes
-// the RGB triple to a shared-mode storage buffer for one-frame-
-// latency CPU readback. Trivially small dispatch (workgroup [1,1])
-// since there's no reduction — exactly one pixel sampled.
+// R, G, B, and a Rec.709-weighted luma into a shared-mode storage
+// buffer for one-frame-latency CPU readback. Trivially small
+// dispatch (workgroup [1,1]) since there's no reduction — exactly
+// one pixel sampled.
 
 struct UvParam {
     uv: vec2<f32>,
@@ -28,7 +29,12 @@ fn cs_main() {
         i32(v * f32(dims.y - 1u)),
     );
     let color = textureLoad(source_tex, coord, 0);
+    // Rec.709 luma weights — matches the framewide `Luminance`
+    // primitive so a `luma`-driven region reading and a frame-mean
+    // brightness sample share the same definition of "brightness".
+    let luma = dot(color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
     result[0] = color.r;
     result[1] = color.g;
     result[2] = color.b;
+    result[3] = luma;
 }
