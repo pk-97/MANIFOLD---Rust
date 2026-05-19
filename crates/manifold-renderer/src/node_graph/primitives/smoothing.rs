@@ -23,12 +23,24 @@ use crate::node_graph::state_store::NodeState;
 
 pub const SMOOTHING_TYPE_ID: &str = "node.smoothing";
 
-const SMOOTHING_INPUTS: [NodeInput; 1] = [NodePort {
-    name: "in",
-    ty: PortType::Scalar(ScalarType::F32),
-    kind: PortKind::Input,
-    required: true,
-}];
+const SMOOTHING_INPUTS: [NodeInput; 2] = [
+    NodePort {
+        name: "in",
+        ty: PortType::Scalar(ScalarType::F32),
+        kind: PortKind::Input,
+        required: true,
+    },
+    // Port-shadows-param for `time_constant`: when wired, the
+    // upstream scalar overrides the param every frame. Lets one
+    // shared Value node feed several Smoothings (e.g. two compass
+    // axes that have to share a "reactivity" handle on the card).
+    NodePort {
+        name: "time_constant",
+        ty: PortType::Scalar(ScalarType::F32),
+        kind: PortKind::Input,
+        required: false,
+    },
+];
 
 const SMOOTHING_OUTPUTS: [NodeOutput; 1] = [NodePort {
     name: "out",
@@ -93,9 +105,15 @@ impl EffectNode for Smoothing {
             Some(ParamValue::Float(f)) => f,
             _ => 0.0,
         };
-        let time_constant = match ctx.params.get("time_constant") {
+        // Wire-driven `time_constant` shadows the param when present.
+        // Same port-shadows-param convention Gain / AffineTransform
+        // use. Floor at 0.001 to keep `1 - exp(-dt/tau)` finite.
+        let time_constant = match ctx.inputs.scalar("time_constant") {
             Some(ParamValue::Float(f)) => f.max(0.001),
-            _ => 0.1,
+            _ => match ctx.params.get("time_constant") {
+                Some(ParamValue::Float(f)) => f.max(0.001),
+                _ => 0.1,
+            },
         };
         let dt = ctx.time.delta.0 as f32;
 

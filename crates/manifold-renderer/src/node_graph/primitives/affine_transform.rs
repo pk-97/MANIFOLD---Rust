@@ -25,9 +25,11 @@ use crate::node_graph::primitive::Primitive;
 crate::primitive! {
     name: AffineTransform,
     type_id: "node.affine_transform",
-    purpose: "2D UV affine: translate, scale, rotate around the center. Aspect-correct rotation; out-of-bounds samples return transparent black. The `rotation` input port is the standard control-wire shadow of the `rotation` param — wire any scalar source (LFO, Color Compass, Math, …) to spin the image at runtime.",
+    purpose: "2D UV affine: translate, scale, rotate around the center. Aspect-correct rotation; out-of-bounds samples return transparent black. Every affine param has a same-named scalar input port (port-shadows-param) — wire `translate_x`, `translate_y`, or `rotation` to drive the transform from a control producer (LFO, Color Compass, Math, …).",
     inputs: {
         in: Texture2D required,
+        translate_x: ScalarF32 optional,
+        translate_y: ScalarF32 optional,
         rotation: ScalarF32 optional,
     },
     outputs: {
@@ -86,13 +88,23 @@ struct AffineTransformUniforms {
 
 impl Primitive for AffineTransform {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let translate_x = match ctx.params.get("translate_x") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
+        // Wire-driven `translate_x` / `translate_y` shadow the params
+        // when present — port-shadows-param. Same convention rotation
+        // uses below; lets a control producer (Color Compass, LFO,
+        // Math, …) drive the affine each frame.
+        let translate_x = match ctx.inputs.scalar("translate_x") {
+            Some(ParamValue::Float(f)) => f,
+            _ => match ctx.params.get("translate_x") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => 0.0,
+            },
         };
-        let translate_y = match ctx.params.get("translate_y") {
-            Some(ParamValue::Float(f)) => *f,
-            _ => 0.0,
+        let translate_y = match ctx.inputs.scalar("translate_y") {
+            Some(ParamValue::Float(f)) => f,
+            _ => match ctx.params.get("translate_y") {
+                Some(ParamValue::Float(f)) => *f,
+                _ => 0.0,
+            },
         };
         let scale = match ctx.params.get("scale") {
             Some(ParamValue::Float(f)) => *f,

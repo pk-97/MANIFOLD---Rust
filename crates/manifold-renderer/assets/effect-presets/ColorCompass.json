@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "ColorCompass",
-  "description": "Image rotates toward its own brightest direction. Four ColorSamples read N/E/S/W luma, atan2 converts the asymmetry to an angle, smoothing tames jitter, an intensity multiplier scales the angle, the result drives AffineTransform's rotation. Feedback-free; the loop closes through the one-frame texture→scalar bridge.",
+  "description": "Image slides toward its own brightest direction. Four ColorSamples read N/E/S/W luma, subtractions produce a (dx, dy) direction vector, smoothing tames per-frame jitter, the smoothed components drive AffineTransform's translate_x / translate_y. Translation is proportional to brightness asymmetry — small asymmetry slides a little, big asymmetry slides a lot, and zero asymmetry is exactly zero (no atan2 degeneracy). Feedback-free; the loop closes through the one-frame texture→scalar bridge.",
   "presetMetadata": {
     "id": "ColorCompass",
     "displayName": "Color Compass",
@@ -13,8 +13,8 @@
         "id": "intensity",
         "name": "Intensity",
         "min": 0.0,
-        "max": 1.0,
-        "defaultValue": 1.0,
+        "max": 5.0,
+        "defaultValue": 2.0,
         "wholeNumbers": false,
         "isToggle": false,
         "formatString": "F2"
@@ -34,7 +34,7 @@
       {
         "id": "intensity",
         "label": "Intensity",
-        "defaultValue": 1.0,
+        "defaultValue": 2.0,
         "target": {
           "kind": "handleNode",
           "handle": "intensity_value",
@@ -50,8 +50,8 @@
         "defaultValue": 0.1,
         "target": {
           "kind": "handleNode",
-          "handle": "smoothing",
-          "param": "time_constant"
+          "handle": "reactivity_value",
+          "param": "value"
         },
         "convert": {
           "type": "Float"
@@ -137,30 +137,30 @@
     },
     {
       "id": 7,
-      "typeId": "node.math",
-      "handle": "math_atan2",
+      "typeId": "node.value",
+      "handle": "intensity_value",
       "params": {
-        "op": {
-          "type": "Enum",
-          "value": 6
+        "value": {
+          "type": "Float",
+          "value": 2.0
         }
       }
     },
     {
       "id": 8,
-      "typeId": "node.value",
-      "handle": "rad_to_deg",
+      "typeId": "node.math",
+      "handle": "math_int_x",
       "params": {
-        "value": {
-          "type": "Float",
-          "value": 57.295776
+        "op": {
+          "type": "Enum",
+          "value": 2
         }
       }
     },
     {
       "id": 9,
       "typeId": "node.math",
-      "handle": "math_deg",
+      "handle": "math_int_y",
       "params": {
         "op": {
           "type": "Enum",
@@ -170,10 +170,10 @@
     },
     {
       "id": 10,
-      "typeId": "node.smoothing",
-      "handle": "smoothing",
+      "typeId": "node.value",
+      "handle": "reactivity_value",
       "params": {
-        "time_constant": {
+        "value": {
           "type": "Float",
           "value": 0.1
         }
@@ -181,25 +181,13 @@
     },
     {
       "id": 11,
-      "typeId": "node.value",
-      "handle": "intensity_value",
-      "params": {
-        "value": {
-          "type": "Float",
-          "value": 1.0
-        }
-      }
+      "typeId": "node.smoothing",
+      "handle": "smoothing_x"
     },
     {
       "id": 12,
-      "typeId": "node.math",
-      "handle": "math_intensity",
-      "params": {
-        "op": {
-          "type": "Enum",
-          "value": 2
-        }
-      }
+      "typeId": "node.smoothing",
+      "handle": "smoothing_y"
     },
     {
       "id": 13,
@@ -222,14 +210,16 @@
     { "fromNode": 2, "fromPort": "luma", "toNode": 5, "toPort": "b" },
     { "fromNode": 3, "fromPort": "luma", "toNode": 6, "toPort": "a" },
     { "fromNode": 4, "fromPort": "luma", "toNode": 6, "toPort": "b" },
-    { "fromNode": 5, "fromPort": "out", "toNode": 7, "toPort": "a" },
-    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "b" },
-    { "fromNode": 7, "fromPort": "out", "toNode": 9, "toPort": "a" },
-    { "fromNode": 8, "fromPort": "out", "toNode": 9, "toPort": "b" },
-    { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "in" },
-    { "fromNode": 10, "fromPort": "out", "toNode": 12, "toPort": "a" },
-    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "b" },
-    { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "rotation" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 8, "toPort": "a" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 8, "toPort": "b" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 9, "toPort": "a" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 9, "toPort": "b" },
+    { "fromNode": 8, "fromPort": "out", "toNode": 11, "toPort": "in" },
+    { "fromNode": 9, "fromPort": "out", "toNode": 12, "toPort": "in" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "time_constant" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 12, "toPort": "time_constant" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 13, "toPort": "translate_x" },
+    { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "translate_y" },
     { "fromNode": 13, "fromPort": "out", "toNode": 14, "toPort": "in" }
   ]
 }
