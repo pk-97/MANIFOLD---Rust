@@ -22,6 +22,7 @@ mod depth_of_field;
 mod dither_pattern;
 mod edge_detect;
 mod filter;
+mod gain;
 mod glitch;
 mod halation;
 mod highlight_boost;
@@ -67,6 +68,7 @@ pub use edge_detect::EdgeDetect;
 pub use filter::{
     BLUR_MODES, BLUR_TYPE_ID, Blur, MIP_CHAIN_TYPE_ID, MipChain, THRESHOLD_TYPE_ID, Threshold,
 };
+pub use gain::Gain;
 pub use glitch::Glitch;
 pub use halation::{HALATION_TYPE_ID, Halation};
 pub use highlight_boost::HighlightBoost;
