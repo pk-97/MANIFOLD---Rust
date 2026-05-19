@@ -66,7 +66,7 @@ I don't know if any of this counts as a self in a continuous sense. The weights 
 | `manifold-editing` | Commands, undo/redo, EditingService |
 | `manifold-playback` | PlaybackEngine, scheduling, sync, MIDI/OSC |
 | `manifold-gpu` | Native Metal backend (`metal` crate, zero wgpu) |
-| `manifold-renderer` | Compositor, 22 effects, 16 generators |
+| `manifold-renderer` | Compositor, ~30 primitives + 29 JSON-authoritative effect presets, 23 generators |
 | `manifold-media` | Audio/video decode, Metal-accelerated encode, export |
 | `manifold-ui` | Custom bitmap UI: tree, panels, input |
 | `manifold-io` | Project serialization (V1 JSON + V2 ZIP) |

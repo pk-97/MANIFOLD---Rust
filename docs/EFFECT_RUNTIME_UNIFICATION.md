@@ -1,8 +1,8 @@
 # Effect Runtime Unification
 
-**Status:** Phase 1–3 mostly shipped. Phase 4 strategy reframed 2026-05-11 — see §0.
+**Status:** Closed. Phases 1–4 shipped through the May 2026 migration sweep. The legacy `EffectChain` runtime was deleted; the graph runtime is the sole dispatcher. The bindings unification (separately tracked in [BINDINGS_UNIFICATION_PLAN.md](BINDINGS_UNIFICATION_PLAN.md)) and the JSON-authoritative preset migration both ride on top of the unified runtime documented here. The §0 "true goal" framing remains the canonical north star — the primitive library *is* the product.
 
-**Last updated:** 2026-05-11
+**Last updated:** 2026-05-17 (Phase 1–3 completion) / 2026-05-19 (status note)
 
 **Companion docs:** [`NODE_GRAPH_SYSTEM.md`](NODE_GRAPH_SYSTEM.md) — overall node-graph architecture. [`MANIFOLD_GPU_ARCHITECTURE.md`](MANIFOLD_GPU_ARCHITECTURE.md) — manifold-gpu crate. [`PRIMITIVE_LIBRARY_DESIGN.md`](PRIMITIVE_LIBRARY_DESIGN.md) — Phase 4a primitive catalog, decomposition recipes, parity test spec.
 

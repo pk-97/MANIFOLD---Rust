@@ -8,20 +8,17 @@ How per-layer / per-group effect chains are created, preserved, and dropped — 
 
 ## Where effect state actually lives
 
-Three separate caches, easy to confuse:
+Three layers of storage to understand:
 
-| Cache | Owned by | Keyed by | Holds |
+| Layer | Owned by | Keyed by | Holds |
 |---|---|---|---|
-| `LayerCompositor::effect_chains` (and the group / LED group variants) | The compositor | `LayerId` | `EffectChain` instances, which own a cached `chain_graph: Option<ChainGraph>` |
-| `chain_graph.executor.backend()` textures | A specific `ChainGraph` inside a specific chain | Slot ids inside that graph | Compiled `Graph` + primitive instances (e.g. `primitives::Watercolor`) |
-| Inside each primitive instance | The primitive (e.g. `Watercolor.feedback: Option<RenderTarget>`) | n/a — single field | The actual feedback texture for that effect |
-| `EffectRegistry.processors[type].states[owner_key]` | The compositor | Effect type + `owner_key` (hash of `LayerId`, `ClipId`, etc.) | Legacy per-owner state for effects dispatched via the per-effect fallback path |
+| `LayerCompositor::effect_chains` (and the group / LED group variants) | The compositor | `LayerId` | `AHashMap<LayerId, Option<ChainGraph>>` — one chain per layer |
+| Primitive instances inside a `ChainGraph` | A specific `ChainGraph` | `node_id` within the graph | The runtime `Primitive` impls (e.g. `primitives::Watercolor`) |
+| `StateStore` entries | The compositor | `(owner_key, node_id)` | StateStore-backed per-frame state (`Feedback.prev`, `Smoothing.previous`, `Watercolor` pigment buffers, …) |
 
-The hot path is **ChainGraph fast path** — Watercolor's feedback texture lives inside the primitive instance, which lives inside that chain's `chain_graph`. When the `chain_graph` is rebuilt, the primitive is recreated and the feedback texture is dropped + reallocated. Stale feedback is lost.
+The legacy `EffectRegistry` parallel state cache was deleted in the May 2026 migration (block 8d). There is no longer a dual-state-cache class to keep in sync — `StateStore` is the single store, and `clear_all_effect_state` walks one path.
 
-The legacy `EffectRegistry` path is the fallback (partial-wet-dry groups with non-contiguous positions, etc.). When a chain falls back, the `EffectRegistry`'s separately-keyed state is used.
-
-These two state caches **do not synchronize automatically**. If you reset one without the other, you'll see inconsistent behavior. See [`clear_all_effect_state` in `layer_compositor.rs`](../crates/manifold-renderer/src/layer_compositor.rs) — it must walk both.
+Watercolor's feedback texture lives inside its primitive instance, which the `StateStore` references via `(owner_key, "watercolor")`. When the `ChainGraph` is rebuilt (topology change), the primitive instance is recreated and the StateStore entry is dropped. Stale feedback is lost.
 
 ---
 
@@ -61,9 +58,9 @@ If you want a layer's look to fade naturally during silence rather than freeze, 
 | Layer has an active clip dispatching effects this frame | **No** | Effect runs, state evolves normally per `amount`/`decay` parameters. |
 | Layer has no active clip this frame (idle / muted / soloed-out) | **YES** | `clear_idle_chain_state` fires `clear_state` on the chain. Per-primitive state (Watercolor feedback, Bloom mips, Halation buffers) wiped. Chain instance stays in the pool — reactivation has no rebuild cost. |
 | Layer is deleted from the project | **Yes** | Chain instance dropped immediately on next `trim_excess_buffers`. |
-| Project is loaded (different `.manifold` file) | **Yes** | `clear_all_effect_state` clears legacy registry AND walks every chain to clear `chain_graph` state. |
-| Compositor resizes (resolution change, render scale change) | **Yes** | `EffectChain::resize` sets `chain_graph = None` → next frame rebuilds with fresh primitives. |
-| Seek (jumping playback head to a different time) | **Partial — currently only clears legacy** | `clear_all_effect_state` is also called on seek paths. After the 2026-05-13 fix, both caches clear consistently. |
+| Project is loaded (different `.manifold` file) | **Yes** | `clear_all_effect_state` walks every chain and clears the `StateStore` entries. |
+| Compositor resizes (resolution change, render scale change) | **Yes** | Resize sets `chain_graph = None` for the affected chains → next frame rebuilds with fresh primitives. |
+| Seek (jumping playback head to a different time) | **Yes** | `clear_all_effect_state` fires on seek paths. Single StateStore now (no parallel cache), so the clear is consistent. |
 | Topology change (effect added/removed, enabled toggled, group changed) | **Yes** | `is_compatible` returns false → chain_graph rebuilds. Stateful primitives lose their cached state. |
 
 The "no active clip this frame" trigger is the key live-performance behavior: feedback effects start fresh on every clip retrigger after the layer goes idle, but feedback stays continuous *within* a clip and across rapid clip-to-clip transitions where the layer is never truly idle. Matches the operator intuition "if I muted this layer and unmuted it later, I want it to start fresh."

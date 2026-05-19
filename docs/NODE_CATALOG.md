@@ -1,33 +1,63 @@
-# Node Catalog — Draft 1
+# Node Catalog
 
-**Status:** Draft 1, 2026-05-14. Settled scope: atoms + effects. Generators deferred (still monolithic until they enter the node-graph world). This document is the canonical naming + categorization spec; subsequent rename PRs follow it.
+**Status:** Settled spec. Last sweep 2026-05-19. The May 14 rename pass is closed (§7); the May 18-19 additions added the texture→scalar bridge family and the control-rate primitive family, which now live as their own subsections under atoms.
 
 ## 0. Design invariants
 
 These constraints make "split an Effect into atoms later" a non-event:
 
 1. **Type IDs are flat.** `node.<name>` — no category prefix. The category is metadata on the node, not part of its identity. Moving Bloom from monolithic shader to atom-composite preset keeps the same `node.bloom` ID, so old saves load unchanged.
-2. **Category is presentation, not structure.** Atoms and Effects share the same `EffectNode` trait. The split is purely how the palette groups them for users + AI agents.
-3. **Effects can be either monolithic OR composite presets.** A node entry in the save format is either a `type_id` (built-in) or a `preset_ref` (named subgraph stored alongside built-ins). Both look identical in the palette.
-4. **Atoms are pure** (no per-frame state) except `Feedback`, which is the one stateful atom by design.
+2. **Category is presentation, not structure.** Atoms and Effects share the same `Primitive` trait. The split is purely how the palette groups them for users + AI agents.
+3. **Effects can be either monolithic OR composite presets.** Today's shipping presets are JSON files under `assets/effect-presets/`; future user-saved composites land at `graphs/custom_composites/<id>.json` inside the project ZIP. Both look identical in the palette.
+4. **Most atoms are pure.** Stateful atoms today: `Feedback` (previous frame texture), `Smoothing` (previous scalar value), `BlobTracking` (background worker), `Watercolor` (pigment ping-pong), `DepthOfField` depth mode (MiDaS worker). State is keyed by `(owner_key, node_id)` in the `StateStore`.
+5. **Port-shadows-param.** When a primitive declares a scalar input port with the same name as a `ParamDef`, the wire wins when present; the param is the fallback. Standard pattern for control-rate modulation on `gain`, `wet_dry`, `feedback.amount`, `affine_transform.{rotation,translate_x,translate_y}`, `smoothing.time_constant`, `chromatic_aberration.amount`. The graph editor disables the expose checkbox + value cell on wire-driven rows so users can't double-bind the same param.
 
-## 1. Atoms (11) — generic composable building blocks
+## 1. Atoms — generic composable building blocks
 
-Single-pass operations. No artistic identity of their own. Users chain these to build custom looks; AI agents compose these to generate new visuals.
+Small primitives users (and AI agents) chain to build custom looks. Sub-grouped by what they operate on:
 
-| # | Display Name | Type ID | Inputs → Outputs | Params (key ones) | Purpose |
-|---|---|---|---|---|---|
-| 1 | **Mix** | `node.mix` | (a, b) → out | `amount`, `mode: Lerp/Screen/Add/Max/Multiply/Difference/Overlay` | Blend two images with one of 7 modes |
-| 2 | **Wet/Dry** | `node.wet_dry` | (dry, wet) → out | `amount [0,1]` | Crossfade a processed signal against the original |
-| 3 | **Threshold** | `node.threshold` | (in) → out | `level`, `softness`, `gain`, `mode: Hard/SoftKnee` | Keep pixels above a brightness cutoff |
-| 4 | **Gaussian Blur** | `node.gaussian_blur` | (in) → out | `kernel: 9/17/25`, `sigma`, `axis: H/V` | Separable Gaussian blur, one axis per pass |
-| 5 | **Sample** | `node.sample` | (in, uv) → rgba | `filter: Bilinear/Nearest`, `address: Clamp/Repeat/Mirror` | Read a texture at a UV coordinate |
-| 6 | **Transform** | `node.transform` | (in) → out | `translate: vec2`, `scale: vec2`, `rotate: f32`, `fold: None/X/Y/XY` | Translate, scale, rotate, optionally mirror-fold |
-| 7 | **Brightness** | `node.brightness` | (in) → out | (none) | Extract per-pixel luminance |
-| 8 | **Color Ramp** | `node.color_ramp` | (in, gradient) → out | `gradient: Texture1D` | Remap luminance through a color gradient |
-| 9 | **Channel Mix** | `node.channel_mix` | (in) → out | `matrix: mat4` | 4×4 channel matrix multiplication |
-| 10 | **Color LUT** | `node.color_lut` | (in, lut) → out | `lut: Texture1D`, `range [0,2]` | Color-correction look-up table |
-| 11 | **Feedback** | `node.feedback` | (in) → out | `decay`, `transform`, `blend: Screen/Add/Max` | Accumulate previous frames (the only stateful atom) |
+### 1.1 Image atoms
+
+| Display Name | Type ID | Inputs → Outputs | Params (key ones) | Purpose |
+|---|---|---|---|---|
+| **Mix** | `node.mix` | (a, b) → out | `amount`, `mode: Lerp/Screen/Add/Max/Multiply/Difference/Overlay` | Blend two images with one of 7 modes |
+| **Masked Mix** | `node.masked_mix` | (a, b, mask) → out | `amount` | Per-pixel weighted blend; `mask.r * amount` drives the lerp |
+| **Wet/Dry** | `node.wet_dry` | (dry, wet) → out | `amount [0,1]` (port-shadow) | Crossfade a processed signal against the original |
+| **Threshold** | `node.threshold` | (in) → out | `level`, `softness`, `gain`, `mode: Hard/SoftKnee` | Keep pixels above a brightness cutoff |
+| **Gaussian Blur** | `node.gaussian_blur` | (in) → out | `kernel: 9/17/25`, `sigma`, `axis: H/V` | Separable Gaussian blur, one axis per pass |
+| **Sample** | `node.sample` | (in, uv) → rgba | `filter: Bilinear/Nearest`, `address: Clamp/Repeat/Mirror` | Read a texture at a UV coordinate |
+| **Transform** | `node.transform` | (in) → out | `translate: vec2`, `scale: vec2`, `rotate: f32`, `fold: None/X/Y/XY` | Translate, scale, rotate, optionally mirror-fold |
+| **Affine Transform** | `node.affine_transform` | (in) → out | `translate_x`, `translate_y`, `rotation` (all port-shadow) | UV-space affine with three scalar input ports — the canonical port-shadow demo |
+| **Brightness** | `node.brightness` | (in) → out | (none) | Extract per-pixel luminance to RGB |
+| **Color Ramp** | `node.color_ramp` | (in, gradient) → out | `gradient: Texture1D` | Remap luminance through a color gradient |
+| **Channel Mix** | `node.channel_mix` | (in) → out | `matrix: mat4` | 4×4 channel matrix multiplication |
+| **Color LUT** | `node.color_lut` | (in, lut) → out | `lut: Texture1D`, `range [0,2]` | Color-correction look-up table |
+| **Chroma Key** | `node.chroma_key` | (in) → mask | `key_color: vec3`, `tolerance`, `softness` | Per-pixel colour-proximity mask (R channel = match strength) |
+| **Gain** | `node.gain` | (in) → out | `gain` (port-shadow) | Scalar-driven RGB multiplier — pairs with control-rate sources |
+| **Feedback** | `node.feedback` | (in) → out | `amount` (port-shadow), `zoom`, `rotation`, `mode: Screen/Add/Max` | Accumulate previous frames (stateful) |
+| **Smoothing** (image-side) | — | — | — | (none today — Smoothing operates on scalars; see §1.3) |
+
+### 1.2 Texture→Scalar bridges
+
+A small family that closes the loop between image content and scalar modulation via a shared-mode `MTLBuffer` readback. One-frame latency. Use these to drive `Gain`, `Math`, `Feedback.amount`, or any other scalar input port.
+
+| Display Name | Type ID | Inputs → Outputs | Params | Purpose |
+|---|---|---|---|---|
+| **Luminance (scalar)** | `node.luminance` | (in: Texture2D) → (out: Scalar(F32)) | (none) | Average Rec.709 luma of the whole image |
+| **Peak** | `node.peak` | (in: Texture2D) → (out: Scalar(F32)) | (none) | Maximum luma across the image |
+| **Color Sample** | `node.color_sample` | (in: Texture2D) → (out: Vec3, luma: Scalar(F32)) | `uv: vec2`, `radius_px: int` | Region-averaged RGB at a configurable UV plus its luma |
+
+### 1.3 Control-rate primitives
+
+Scalar-only primitives that don't touch textures. The graph runtime walks these the same way as image primitives, but their evaluation is essentially free (no GPU dispatch).
+
+| Display Name | Type ID | Inputs → Outputs | Params | Purpose |
+|---|---|---|---|---|
+| **Value** | `node.value` | () → (out: Scalar(F32)) | `value` | Constant scalar source — exposed via card sliders as the standard parameter wire |
+| **Math** | `node.math` | (a: Scalar, b: Scalar) → (out: Scalar) | `op: Add/Subtract/Multiply/Divide/Min/Max/Atan2` | Two-input scalar math |
+| **LFO** | `node.lfo` | () → (out: Scalar) | `rate`, `phase`, `amount`, `waveform: Sine/Tri/Saw/Square/SH` | Low-frequency oscillator |
+| **Beat Gate** | `node.beat_gate` | () → (out: Scalar) | `rate`, `amount` | Beat-synced 0/amount gate (drives Strobe Opacity) |
+| **Smoothing** | `node.smoothing` | (in: Scalar) → (out: Scalar) | `time_constant` (port-shadow) | One-pole low-pass filter (stateful) |
 
 ### Atom renames from current code
 
@@ -137,11 +167,17 @@ The remaining 20 effects either are decomposed already (Mirror, Soft Focus, Styl
 ## 5. What's deferred
 
 - **3D infrastructure** (Camera3D, Rotation3D/4D, MeshRender, Shadow, Raymarch, LineRasterize) — only needed when generators decompose.
-- **Particle infrastructure** (ParticleScatter, ScatterResolve, ParticleSimRK2) — same.
-- **Procedural source atoms** (Plasma, StarField, ConcentricShapes, BasicShapes, ParametricSDF) — same.
+- **Particle / Array port** (ParticleScatter, ScatterResolve, ParticleSimRK2 + the `Array<T>` port type) — promoted to V1 per [PRIMITIVE_LIBRARY_DESIGN.md §12.3](PRIMITIVE_LIBRARY_DESIGN.md) but not yet built. Both signature generators (Black Hole, FluidSim 2D) want this.
+- **Procedural source atoms** (Plasma, StarField, ConcentricShapes, BasicShapes, ParametricSDF) — Plasma exists as an atomic complex in `atomic/`; the rest defer until generators decompose.
 - **Atomic primitives** (Sobel3, DisplacementMap, VoronoiCells, PerlinFBM) — defer until a composite needs them.
-- **MipChainDown / MipChainUp** — defer until Bloom decomposes.
-- **BeatGate** — defer until needed for non-Strobe rhythmic effects.
+- **MipChainDown / MipChainUp** — defer until Bloom decomposes from its current composite shader.
+- **3D volume primitives** (Sample3D, SliceVolume → Texture2D, per-voxel math) — needed by FluidSim3D and any future volumetric work.
+- **Buffer ports** (audio waveforms, particle positions outside the Array story) — deferred to V2.
+
+Notes on items that *did* ship since the original deferred list:
+- **BeatGate** shipped (`node.beat_gate`) — drives the decomposed Strobe Opacity composite.
+- **Texture→Scalar bridges** shipped (`luminance`, `peak`, `color_sample`) — see §1.2.
+- **Control-rate primitives** shipped (`value`, `math`, `lfo`, `beat_gate`, `smoothing`) — see §1.3.
 
 ## 6. Migration of existing projects
 

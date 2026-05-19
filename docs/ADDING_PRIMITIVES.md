@@ -1,6 +1,8 @@
 # Adding a primitive
 
-Phase 4a authoring guide. Companion to [`PRIMITIVE_LIBRARY_DESIGN.md`](PRIMITIVE_LIBRARY_DESIGN.md).
+Authoring guide for the `primitive!` macro. Companion to [PRIMITIVE_LIBRARY_DESIGN.md](PRIMITIVE_LIBRARY_DESIGN.md) (design rationale + decomposition recipes) and [NODE_CATALOG.md](NODE_CATALOG.md) (the catalog of what's shipping today).
+
+Primitives auto-register via `inventory::submit!` from inside the macro — dropping a file under `crates/manifold-renderer/src/node_graph/primitives/` is the only step required. Nothing else has to be edited to register a new primitive; `cargo build` picks it up and the palette + bundled-preset loader see it on next startup.
 
 ## When to add one
 
@@ -13,12 +15,12 @@ The `≥2-use` filter applies (design doc §1.2):
 
 | File | Why |
 |---|---|
-| `crates/manifold-renderer/src/node_graph/primitives/<bucket>.rs` | The `primitive!` declaration + `Primitive::run` body |
-| `crates/manifold-renderer/src/node_graph/primitives/shaders/<name>.wgsl` | Compute shader |
-| `crates/manifold-renderer/src/node_graph/primitives/mod.rs` | Public re-export |
-| `crates/manifold-renderer/tests/parity_<effect>.rs` | Parity test vs the legacy effect this replaces (only when replacing an effect) |
+| `crates/manifold-renderer/src/node_graph/primitives/<name>.rs` | The `primitive!` declaration + `Primitive::run` body |
+| `crates/manifold-renderer/src/node_graph/primitives/shaders/<name>.wgsl` | Compute shader (only if your primitive runs GPU work — control-rate primitives like `value`/`math`/`lfo` don't need shaders) |
+| `crates/manifold-renderer/src/node_graph/primitives/mod.rs` | `pub mod <name>;` to include the file |
+| `crates/manifold-renderer/tests/parity_<effect>.rs` | Parity test vs the legacy effect this replaces (only when replacing a legacy fused shader) |
 
-That's it. The macro generates the `EffectNode` impl, type-id constants, `PrimitiveSpec` metadata, and the AI-surface `PrimitiveDescription`.
+That's it. The macro generates the `EffectNode` impl, type-id constants, `PrimitiveSpec` metadata, the AI-surface `PrimitiveDescription`, and the `inventory::submit!` registration for the auto-populated palette.
 
 ## Skeleton
 
@@ -31,10 +33,11 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: Invert,
-    type_id: "primitive.invert",
-    purpose: "Inverts RGB channels, blended against the source by intensity.",
+    type_id: "node.invert",
+    purpose: "Invert RGB channels, blended against the source by intensity. The `intensity` input port is the standard port-shadow — wire any scalar producer to drive the blend in real time.",
     inputs: {
         in: Texture2D required,
+        intensity: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -49,8 +52,9 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "1:1 replacement for legacy InvertColors effect.",
+    composition_notes: "1:1 replacement for the legacy InvertColors effect.",
     examples: ["preset.effect.invert"],
+    picker: { label: "Invert", category: Color },
 }
 
 #[repr(C)]
@@ -109,7 +113,7 @@ The `primitive!` declaration generates:
 ```text
 primitive! {
     name: <StructName>,                 // PascalCase struct identifier
-    type_id: "primitive.<name>",        // stable string; renaming breaks saved graphs
+    type_id: "node.<name>",             // stable string; renaming breaks saved graphs
     purpose: "<one sentence>",          // shown in editor + AI surface
     inputs: {
         <port_name>: <PortType> [required|optional],
@@ -125,6 +129,7 @@ primitive! {
     ],
     composition_notes: "<optional>",    // when to choose this over alternatives
     examples: [ "<preset_id>", ... ],   // preset graphs that use this primitive
+    picker: { label: "<Display>", category: <Color|Spatial|Stylize|Filmic|Driver|Math|Source|Diagnostic> },
     extra_fields: {
         <field>: <type> = <init expr>,  // additional struct fields beyond pipeline/sampler
         ...
@@ -132,9 +137,20 @@ primitive! {
 }
 ```
 
-- `<PortType>` is one of `Texture2D`, `Texture3D`. Scalar ports use the `Scalar(<sub>)` variant — write them via a manual `ParamDef` for now.
+- `<PortType>` is one of `Texture2D`, `Texture3D`, `ScalarF32`, `ScalarV2`, `ScalarV3`. Scalar input ports are first-class — use them directly in the macro (no manual `ParamDef` workaround needed).
 - Inputs default to `required`; mark optional with the `optional` keyword.
-- `composition_notes`, `examples`, and `extra_fields` are all optional. Omit the keyword entirely if you don't need it.
+- **Port-shadows-param convention.** If you declare a scalar input port with the same name as a `ParamDef` (e.g. `gain` in both `inputs:` and `params:`), the wire wins when present, the param is the fallback. Standard pattern for any control-rate modulation. The graph editor disables the expose checkbox + value cell on wire-driven rows automatically.
+- `picker: { label, category }` declares how the palette and effect-card UI surface this primitive. Categories used today: `Color`, `Spatial`, `Stylize`, `Filmic`, `Driver` (texture→scalar bridges), `Math` (scalar arithmetic / LFO / BeatGate), `Source` (constants / generators), `Diagnostic`.
+- `composition_notes`, `examples`, `picker`, and `extra_fields` are optional. Omit the keyword entirely if you don't need it.
+
+### Stateful primitives
+
+Per-frame state (a previous frame's texture, a one-pole filter's running value, a background worker handle) lives in the `StateStore` keyed by `(owner_key, node_id)`. Two patterns:
+
+- **Single-instance state on the primitive struct** — use `extra_fields:` to add fields. Fine for state that doesn't survive an effect-chain rebuild. `Feedback`'s pipeline / sampler caches use this.
+- **StateStore-backed state** — implement `run` with `EffectNodeContext::state_mut::<MyState>()`. State survives chain rebuilds as long as `owner_key` is stable. `Feedback`'s `prev: RenderTarget` and `Smoothing`'s `previous: f32` use this. The chain runtime threads the `StateStore` through `execute_frame_with_state`.
+
+Stateful primitives must also wire up `clear_state` so seek / layer-idle resets clear properly — see [EFFECT_CHAIN_LIFECYCLE.md](EFFECT_CHAIN_LIFECYCLE.md).
 
 ## Parity test (only if you're replacing a legacy effect)
 

@@ -1,6 +1,14 @@
 # Graph-Runtime Integration Audit — Bug Families & Candidate Targets
 
-**Status**: handoff before compaction. Next session: discuss → audit.
+**Status**: Partial closure. Several of the candidate targets listed below referenced systems that were deleted in the May 2026 migration sweep — the legacy `EffectChain` and `EffectRegistry` structs no longer exist, the trait-wrapped legacy dispatcher is gone, and the chain pool was rekeyed by `LayerId` (see [CHAIN_POOL_REFACTOR_PLAN.md](CHAIN_POOL_REFACTOR_PLAN.md)). The 7-pattern taxonomy is still useful as a lens; specific call-outs need re-verification against current code before someone takes them on.
+
+**What's verifiably closed:**
+- Pattern 1 (hardcoded sentinels) — `frame_count: 0` and `owner_key: 0` defaults were fixed in the cited commits.
+- Pattern 2 (parallel state caches) — the legacy `EffectRegistry` was deleted entirely (block 8d), so the dual-storage state-cache class is structurally gone. The new `StateStore` is the single store; `clear_all_effect_state` walks one path.
+- Pattern 6 (interaction effects) — most unmasking happened during the migration; new ones could exist but no specific reports outstanding.
+
+**What's still relevant:**
+- Patterns 3, 4, 5, 7 still apply to today's code. The audit targets need rewriting against the current `ChainGraph` / primitives surface.
 
 This session (May 12-13, 2026) found a recurring family of bugs at the boundary between the legacy effect dispatcher and the chain-graph fast path. Each fix tightened one specific contract; the meta-pattern is that **the graph-runtime was layered on top of legacy code, inheriting the API surface but not all the implicit semantics**.
 

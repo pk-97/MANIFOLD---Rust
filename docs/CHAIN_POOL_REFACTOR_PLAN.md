@@ -1,8 +1,12 @@
 # Chain & Buffer Pool Refactor — Rekey by Semantic ID
 
-**Status**: planned, not started. Audit complete, design agreed with user.
-**Goal**: Make positional-indexing bug class **provably impossible** at the type level.
-**Branch**: `node-graph-system`. Last committed: `5b77de38` (master_effect_chain fix).
+**Status**: Shipped. All chain and buffer pools in `LayerCompositor` are now `AHashMap<LayerId, ...>`. The positional-indexing bug class is structurally impossible at the type level — `effect_chains[idx]` no longer exists.
+
+**Goal**: Make positional-indexing bug class **provably impossible** at the type level. ✅ Met.
+
+**Branch**: `node-graph-system`. Original audit ref: `5b77de38` (master_effect_chain fix); the rekey landed across the node-graph migration sweep.
+
+This document now stands as the historical record of the audit and design. The "Target design" section below matches what was built.
 
 ## Background — what triggered this
 
