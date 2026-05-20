@@ -645,6 +645,50 @@ mod tests {
         assert!(!plan.steps().is_empty());
     }
 
+    /// WGSL escape-hatch primitives round-trip their `wgsl_source` field
+    /// through the JSON document — the field is identity-level config of
+    /// the node (alongside `editor_pos`), NOT a parameter. Confirms that
+    /// `from_graph` reads it via `EffectNode::wgsl_source()` and
+    /// `into_graph` re-installs it via `Graph::set_wgsl_source`.
+    #[test]
+    fn wgsl_compute_source_field_round_trips_through_json() {
+        use crate::node_graph::primitives::{
+            DEFAULT_WGSL_1TEX_1TEX, WgslCompute1Tex1Tex,
+        };
+
+        let mut g = Graph::new();
+        let src = g.add_node(Box::new(Source::new()));
+        let wgsl = g.add_node_named("kernel", Box::new(WgslCompute1Tex1Tex::new()));
+        let out = g.add_node(Box::new(FinalOutput::new()));
+        g.connect((src, "out"), (wgsl, "in")).unwrap();
+        g.connect((wgsl, "out"), (out, "in")).unwrap();
+
+        // Install a custom source. (Any valid WGSL kernel matching the
+        // 1tex_1tex contract.)
+        let custom_source = "// agent-authored kernel\n".to_string()
+            + DEFAULT_WGSL_1TEX_1TEX;
+        g.set_wgsl_source(wgsl, &custom_source).unwrap();
+
+        // Round-trip through JSON.
+        let doc = GraphDocument::from_graph(&g);
+        let json = serde_json::to_string(&doc).unwrap();
+        assert!(
+            json.contains("wgslSource"),
+            "JSON must carry the wgslSource field; got: {json}"
+        );
+        let parsed: GraphDocument = serde_json::from_str(&json).unwrap();
+        let g2 = parsed.into_graph(&registry()).unwrap();
+
+        // Source survives the round trip.
+        let kernel_id = g2.node_id_by_handle("kernel").expect("handle survived");
+        let inst = g2.get_node(kernel_id).unwrap();
+        assert_eq!(
+            inst.node.wgsl_source(),
+            Some(custom_source.as_str()),
+            "wgsl_source must round-trip through into_graph",
+        );
+    }
+
     #[test]
     fn unknown_type_id_is_a_clean_error() {
         let doc = GraphDocument {

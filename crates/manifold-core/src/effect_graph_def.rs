@@ -398,6 +398,7 @@ mod tests {
                 handle: Some("thresh".to_string()),
                 params,
                 editor_pos: Some((100.0, 200.0)),
+                wgsl_source: None,
             }],
             wires: Vec::new(),
         };

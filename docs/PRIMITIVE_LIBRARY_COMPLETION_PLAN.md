@@ -158,15 +158,17 @@ Two real design questions worth a decision before building:
 
 Recommendation: (c) for now — the existing feedback primitives already handle state cleanly, and the WGSL kernel stays stateless. Revisit if patterns emerge that need (b).
 
-| Variant | Shape | Est |
+| Variant | Shape | Status |
 |---|---|---|
-| `node.wgsl_compute_0in_1tex` | Pure generator: WGSL writes to one Texture2D output | 1h |
-| `node.wgsl_compute_1tex_1tex` | Texture-to-texture filter | 1h |
-| `node.wgsl_compute_2tex_1tex` | Two-input composite | 1h |
-| `node.wgsl_compute_1arr_1arr` | Array-to-array (particle-style) | 1h |
-| `node.wgsl_compute_1arr_1tex` | Array → Texture (custom resolvers) | 1h |
-| `node.wgsl_compute_1tex_1arr` | Texture → Array (custom samplers) | 1h |
-| Naga error-to-string formatting for LLM consumption | shared infra | 1.5h |
+| `node.wgsl_compute_0in_1tex` | Pure generator: WGSL writes to one Texture2D output | **shipped** |
+| `node.wgsl_compute_1tex_1tex` | Texture-to-texture filter | **shipped** |
+| `node.wgsl_compute_2tex_1tex` | Two-input composite | **shipped** |
+| `node.wgsl_compute_1arr_1arr` | Array-to-array (particle-style) | **deferred** — item-layout design question |
+| `node.wgsl_compute_1arr_1tex` | Array → Texture (custom resolvers) | **deferred** — item-layout design question |
+| `node.wgsl_compute_1tex_1arr` | Texture → Array (custom samplers) | **deferred** — item-layout design question |
+| Naga error-to-string formatting for LLM consumption | shared infra | Basic — `emit_to_string` already wired; richer LLM-friendly summary is a follow-up |
+
+**Array-variant deferral.** The 3 array variants need a decision on what `ArrayType { item_size, item_align }` they declare. The existing array primitives speak specific layouts (`Particle = 64`, `MeshVertex = 32`, `Vec4Vertex = 16`, `LinePoint = 8`, `Blob = 16`). An escape-hatch variant locked to one layout is only wire-compatible with primitives sharing that exact size/align. The genuinely escape-hatch behaviour — "raw bytes, the WGSL author interprets the buffer however they want" — would need a separate `ArrayType::Raw` variant in the port-validation code so two `wgsl_compute_1arr_*` nodes can connect without size-matching constraints. Settle that design before shipping. The 3 texture variants cover the vast majority of agent kernels in shader-toy practice; array kernels are a smaller surface.
 
 **Per-variant interface (uniform across all six):**
 - `wgsl_source: String` — the kernel source (entry point: `fn cs_main`)
