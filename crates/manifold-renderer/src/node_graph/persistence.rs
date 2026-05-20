@@ -612,28 +612,29 @@ impl EffectGraphDefExt for EffectGraphDef {
 
         // Step 6 (exposure unification): seed `exposed_params` on the
         // live graph from `preset_metadata.bindings`. Each binding's
-        // target param becomes exposed by default — this is how the
-        // "preset binding == shows on outer card" rule lands at the
-        // graph level, replacing the legacy
-        // `EffectInstance.param_values[i].exposed = true` initialiser.
+        // target param becomes exposed by default.
         //
-        // Runs after all nodes are added (handle resolution must work)
-        // and after `exposed_params` from the document itself has been
-        // applied (this is the seed for cases where the document
-        // didn't carry an explicit `exposedParams` set — primarily
-        // fresh-from-disk presets where the bindings are the source of
-        // truth). Idempotent: re-applying a binding's seed when the
-        // doc already exposed the same param is a no-op.
-        if let Some(meta) = self.preset_metadata.as_ref() {
+        // This is the implicit-default path: it ONLY fires when the
+        // document carries NO explicit `exposed_params` entries on
+        // any node. Once the user toggles an exposure via
+        // `ToggleNodeParamExposeCommand`, the command materialises
+        // the full preset-driven defaults into the def
+        // (`materialize_binding_exposures`) and the def becomes its
+        // own source of truth. At that point this backfill becomes a
+        // no-op (the explicit set wins), so a user's UNCHECK on a
+        // preset-bound param sticks across save/reload.
+        let has_explicit_exposures = self
+            .nodes
+            .iter()
+            .any(|n| !n.exposed_params.is_empty());
+        if !has_explicit_exposures
+            && let Some(meta) = self.preset_metadata.as_ref()
+        {
             use manifold_core::effect_graph_def::BindingTarget;
             for binding in &meta.bindings {
                 if let BindingTarget::HandleNode { handle, param } = &binding.target
                     && let Some(node_id) = graph.node_id_by_handle(handle)
                 {
-                    // Resolve `param` to the &'static str the node
-                    // declared. Skip if the node doesn't have a param
-                    // with that name — a stale preset shouldn't refuse
-                    // to load.
                     let static_name = graph.get_node(node_id).and_then(|inst| {
                         inst.node
                             .parameters()

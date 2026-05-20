@@ -801,6 +801,16 @@ fn flip_graph_exposed(
     inner_param: &str,
     expose: bool,
 ) -> Option<bool> {
+    // First materialise the preset-binding-driven exposure defaults
+    // into the def. This converts the def from "implicit (use preset
+    // bindings as the default exposure set)" into "explicit (the set
+    // IS the exposure state)". After this call, absence from
+    // `exposed_params` means "user explicitly unset" — which is what
+    // the persistence + snapshot path needs for unchecks to stick.
+    // Idempotent: re-running adds nothing new because the bindings
+    // map to the same handle/param pairs every time.
+    materialize_binding_exposures(def);
+
     let node = def
         .nodes
         .iter_mut()
@@ -812,6 +822,41 @@ fn flip_graph_exposed(
         node.exposed_params.remove(inner_param);
     }
     Some(was)
+}
+
+/// Walk every binding in `def.preset_metadata.bindings` and ensure
+/// the matching node's `exposed_params` set contains the target param.
+/// Used by [`flip_graph_exposed`] to materialise the implicit
+/// preset-driven defaults before applying a user toggle. After the
+/// first materialisation, `into_graph`'s binding backfill becomes a
+/// no-op (it short-circuits when the def already carries explicit
+/// exposure entries), so unchecks stick across save/reload.
+fn materialize_binding_exposures(def: &mut EffectGraphDef) {
+    use manifold_core::effect_graph_def::BindingTarget;
+    let Some(meta) = def.preset_metadata.as_ref() else {
+        return;
+    };
+    // Collect the (handle, param) pairs first; we can't borrow meta
+    // immutably while mutating nodes.
+    let pairs: Vec<(String, String)> = meta
+        .bindings
+        .iter()
+        .filter_map(|b| match &b.target {
+            BindingTarget::HandleNode { handle, param } => {
+                Some((handle.clone(), param.clone()))
+            }
+            BindingTarget::Composite { .. } => None,
+        })
+        .collect();
+    for (handle, param) in pairs {
+        if let Some(node) = def
+            .nodes
+            .iter_mut()
+            .find(|n| n.handle.as_deref() == Some(handle.as_str()))
+        {
+            node.exposed_params.insert(param);
+        }
+    }
 }
 
 /// Restore `inner_param` membership in the matching node's
@@ -1627,6 +1672,134 @@ mod tests {
         assert!(
             !node.exposed_params.contains("rotation"),
             "undo restores prior exposed_params state"
+        );
+    }
+
+    #[test]
+    fn unchecking_a_preset_bound_param_sticks_across_persistence() {
+        // Regression: when the user UNCHECKS a preset-bound param,
+        // the next snapshot must reflect the uncheck. Previously the
+        // `into_graph` binding backfill ran unconditionally and
+        // re-set the exposure, masking the user's intent.
+        use manifold_core::effect_graph_def::{
+            BindingDef, BindingTarget, ParamSpecDef, PresetMetadata,
+            EFFECT_GRAPH_VERSION_WITH_METADATA,
+        };
+        use manifold_core::effects::ParamConvert;
+
+        // Build a tiny preset def: one node (`gen` with a `pattern`
+        // param) with a single binding (outer "Pattern" → gen.pattern).
+        let preset_def_with_pattern_binding = || EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION_WITH_METADATA,
+            name: Some("test-preset".into()),
+            description: None,
+            preset_metadata: Some(PresetMetadata {
+                id: EffectTypeId::new("test.plasma"),
+                display_name: "Test".into(),
+                category: "Procedural".into(),
+                osc_prefix: "test".into(),
+                legacy_discriminant: None,
+                available: true,
+                params: vec![ParamSpecDef {
+                    id: "pattern".into(),
+                    name: "Pattern".into(),
+                    min: 0.0,
+                    max: 7.0,
+                    default_value: 0.0,
+                    whole_numbers: true,
+                    is_toggle: false,
+                    value_labels: vec![],
+                    format_string: None,
+                    osc_suffix: String::new(),
+                }],
+                bindings: vec![BindingDef {
+                    id: "pattern".into(),
+                    label: "Pattern".into(),
+                    default_value: 0.0,
+                    target: BindingTarget::HandleNode {
+                        handle: "gen".into(),
+                        param: "pattern".into(),
+                    },
+                    convert: ParamConvert::EnumRound,
+                }],
+                skip_mode: Default::default(),
+                param_aliases: vec![],
+                node_aliases: vec![],
+                value_aliases: vec![],
+            }),
+            nodes: vec![EffectGraphNode {
+                id: 0,
+                type_id: "node.plasma_pattern_2d".to_string(),
+                handle: Some("gen".to_string()),
+                params: BTreeMap::new(),
+                exposed_params: Default::default(),
+                editor_pos: None,
+                wgsl_source: None,
+                output_formats: BTreeMap::new(),
+            }],
+            wires: vec![],
+        };
+
+        // Use a generator target so we don't drag in the effect-side
+        // mirror. Same exposure semantics apply for both.
+        let (mut project, lid) = project_with_one_generator_layer();
+
+        // Pre-populate the layer's override with the preset def
+        // (simulates "graph has been touched once already" — needed
+        // because `with_target_graph_mut` would otherwise clone the
+        // catalog_default, and we want a deterministic starting state).
+        project
+            .timeline
+            .find_layer_by_id_mut(&lid)
+            .unwrap()
+            .1
+            .generator_graph = Some(preset_def_with_pattern_binding());
+
+        // UNCHECK Pattern.
+        let mut cmd = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Generator(lid.clone()),
+            "gen".to_string(),
+            "pattern".to_string(),
+            false,
+            preset_def_with_pattern_binding(),
+            "Pattern".to_string(),
+            0.0,
+            7.0,
+            0.0,
+            ParamConvert::EnumRound,
+        );
+        cmd.execute(&mut project);
+
+        // The def must NOT contain "pattern" in exposed_params for
+        // the "gen" node.
+        let (_, layer) = project.timeline.find_layer_by_id(&lid).unwrap();
+        let def = layer.generator_graph.as_ref().unwrap();
+        let node = def
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("gen"))
+            .unwrap();
+        assert!(
+            !node.exposed_params.contains("pattern"),
+            "uncheck removes pattern from exposed_params"
+        );
+
+        // Now persist + reload: serde JSON round-trip simulating a
+        // save/reload cycle.
+        let json = serde_json::to_string(def).unwrap();
+        let reloaded: EffectGraphDef = serde_json::from_str(&json).unwrap();
+        // The reloaded def must STILL not have pattern exposed. The
+        // semantics: an empty exposed_params set on a node coexists
+        // with other nodes having non-empty sets, so the implicit
+        // backfill at `into_graph` time must respect explicit state.
+        let reloaded_node = reloaded
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("gen"))
+            .unwrap();
+        assert!(
+            !reloaded_node.exposed_params.contains("pattern"),
+            "uncheck survives serde round-trip"
         );
     }
 
