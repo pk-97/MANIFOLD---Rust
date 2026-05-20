@@ -336,6 +336,7 @@ impl EffectGraphDefExt for EffectGraphDef {
                     handle: id_to_handle.get(&inst.id.0).cloned(),
                     params,
                     editor_pos: None,
+                    wgsl_source: inst.node.wgsl_source().map(|s| s.to_string()),
                 }
             })
             .collect();
@@ -443,6 +444,14 @@ impl EffectGraphDefExt for EffectGraphDef {
                 graph
                     .set_param(runtime_id, name_static, pv)
                     .expect("validated above");
+            }
+
+            // Install the WGSL kernel source if the document carries one.
+            // No-op for every node whose shader is fixed at compile time.
+            if let Some(source) = node_doc.wgsl_source.as_deref() {
+                graph
+                    .set_wgsl_source(runtime_id, source)
+                    .expect("node was just added");
             }
         }
 
@@ -649,6 +658,7 @@ mod tests {
                 handle: None,
                 params: BTreeMap::new(),
                 editor_pos: None,
+                wgsl_source: None,
             }],
             wires: vec![],
         };
@@ -686,6 +696,7 @@ mod tests {
                     handle: None,
                     params: BTreeMap::new(),
                     editor_pos: None,
+                    wgsl_source: None,
                 },
                 NodeDocument {
                     id: 1,
@@ -693,6 +704,7 @@ mod tests {
                     handle: None,
                     params: BTreeMap::new(),
                     editor_pos: None,
+                    wgsl_source: None,
                 },
             ],
             wires: vec![WireDocument {
@@ -724,6 +736,7 @@ mod tests {
                 handle: None,
                 params,
                 editor_pos: None,
+                wgsl_source: None,
             }],
             wires: vec![],
         };
@@ -750,6 +763,7 @@ mod tests {
                 handle: None,
                 params,
                 editor_pos: None,
+                wgsl_source: None,
             }],
             wires: vec![],
         };

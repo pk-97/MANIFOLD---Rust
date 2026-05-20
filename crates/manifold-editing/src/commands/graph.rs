@@ -111,6 +111,7 @@ impl Command for AddGraphNodeCommand {
             handle: None,
             params: BTreeMap::new(),
             editor_pos: self.pos,
+            wgsl_source: None,
         });
         self.minted_id = Some(id);
         bump_version(instance);
@@ -618,6 +619,7 @@ mod tests {
                     handle: Some("source".to_string()),
                     params: BTreeMap::new(),
                     editor_pos: None,
+                    wgsl_source: None,
                 },
                 EffectGraphNode {
                     id: 1,
@@ -625,6 +627,7 @@ mod tests {
                     handle: Some("uv_transform".to_string()),
                     params: BTreeMap::new(),
                     editor_pos: None,
+                    wgsl_source: None,
                 },
                 EffectGraphNode {
                     id: 2,
@@ -632,6 +635,7 @@ mod tests {
                     handle: Some("mix".to_string()),
                     params: BTreeMap::new(),
                     editor_pos: None,
+                    wgsl_source: None,
                 },
                 EffectGraphNode {
                     id: 3,
@@ -639,6 +643,7 @@ mod tests {
                     handle: Some("final_output".to_string()),
                     params: BTreeMap::new(),
                     editor_pos: None,
+                    wgsl_source: None,
                 },
             ],
             wires: vec![

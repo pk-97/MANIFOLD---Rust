@@ -195,6 +195,23 @@ impl Graph {
         Ok(())
     }
 
+    /// Install a WGSL kernel source on a node. Used by persistence
+    /// after a `node.wgsl_compute_*` node is constructed so the kernel
+    /// is in place before the first `evaluate`. No-op on nodes whose
+    /// shader is fixed at compile time via `include_str!`.
+    pub fn set_wgsl_source(
+        &mut self,
+        id: NodeInstanceId,
+        source: &str,
+    ) -> Result<(), GraphError> {
+        let inst = self
+            .nodes
+            .get_mut(&id)
+            .ok_or(GraphError::NodeNotFound(id))?;
+        inst.node.set_wgsl_source(source);
+        Ok(())
+    }
+
     /// Fast-path variant of [`Self::set_param`] for callers that
     /// constructed the node themselves and know `name` is valid.
     /// Skips the linear scan over `parameters()`. Silently no-ops on

@@ -130,6 +130,18 @@ pub trait Primitive: PrimitiveSpec {
     /// (Feedback, MipChain when state-backed) override to drop their
     /// previous-frame textures on seek.
     fn clear_state(&mut self) {}
+
+    /// Optional WGSL kernel source — mirror of
+    /// [`EffectNode::wgsl_source`](crate::node_graph::effect_node::EffectNode::wgsl_source).
+    /// Override only on `node.wgsl_compute_*` primitives.
+    fn wgsl_source(&self) -> Option<&str> {
+        None
+    }
+
+    /// Optional WGSL kernel source setter — mirror of
+    /// [`EffectNode::set_wgsl_source`](crate::node_graph::effect_node::EffectNode::set_wgsl_source).
+    /// Override only on `node.wgsl_compute_*` primitives.
+    fn set_wgsl_source(&mut self, _source: &str) {}
 }
 
 /// Blanket `EffectNode` impl for any `Primitive`. Reads all surface
@@ -155,6 +167,12 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn clear_state(&mut self) {
         Primitive::clear_state(self);
+    }
+    fn wgsl_source(&self) -> Option<&str> {
+        Primitive::wgsl_source(self)
+    }
+    fn set_wgsl_source(&mut self, source: &str) {
+        Primitive::set_wgsl_source(self, source);
     }
 }
 

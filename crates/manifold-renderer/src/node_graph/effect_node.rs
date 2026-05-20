@@ -328,4 +328,24 @@ pub trait EffectNode: Send {
     /// See `docs/EFFECT_CHAIN_LIFECYCLE.md` for the full lifecycle
     /// and the symptom → cause table when feedback effects misbehave.
     fn clear_state(&mut self) {}
+
+    /// Optional WGSL kernel source for the WGSL-escape-hatch primitive
+    /// family (`node.wgsl_compute_*`). Returns the source string the
+    /// node was constructed with; `None` for every node whose shader
+    /// is fixed at compile time via `include_str!`.
+    ///
+    /// Persistence calls this on `from_graph` to write the kernel into
+    /// the saved JSON, alongside the other per-node fields like
+    /// `editor_pos`. Not a parameter — agents/users can't drive it
+    /// from an LFO, expose it on the outer card, or modulate it.
+    /// It's identity-level config of the node, set once.
+    fn wgsl_source(&self) -> Option<&str> {
+        None
+    }
+
+    /// Optional setter for [`wgsl_source`](Self::wgsl_source). Called
+    /// by `into_graph` after `new()` constructs the node so the kernel
+    /// is in place before the first `evaluate`. No-op for every node
+    /// whose shader is fixed at compile time.
+    fn set_wgsl_source(&mut self, _source: &str) {}
 }

@@ -2960,6 +2960,7 @@ mod tests {
                     handle: Some("source".to_string()),
                     params: Default::default(),
                     editor_pos: None,
+                    wgsl_source: None,
                 },
                 EffectGraphNode {
                     id: 1,
@@ -2967,6 +2968,7 @@ mod tests {
                     handle: Some("uv_transform".to_string()),
                     params,
                     editor_pos: Some((100.0, 200.0)),
+                    wgsl_source: None,
                 },
             ],
             wires: vec![EffectGraphWire {

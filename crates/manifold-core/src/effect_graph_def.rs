@@ -101,6 +101,15 @@ pub struct EffectGraphNode {
     /// authored without an editor (hand-rolled bundled presets).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub editor_pos: Option<(f32, f32)>,
+    /// Per-node WGSL kernel source. `Some` only for `node.wgsl_compute_*`
+    /// primitives — the escape hatch lets an agent embed raw shader code
+    /// when no compositional primitive expresses what they want. The
+    /// kernel reads its sliders from a `struct U { f0..f7: f32 }` uniform;
+    /// inputs/outputs follow the variant's fixed shape. `None` for every
+    /// node where source is fixed at compile time via `include_str!`
+    /// (i.e. nearly every shipping primitive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wgsl_source: Option<String>,
 }
 
 /// One wire inside an [`EffectGraphDef`]. Endpoint ids reference
