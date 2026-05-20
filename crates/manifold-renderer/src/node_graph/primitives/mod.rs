@@ -84,6 +84,7 @@ mod tone_map;
 mod triangulate_grid;
 mod uv;
 mod uv_displace_by_flow;
+mod uv_field;
 mod value;
 mod voronoi_prism;
 mod watercolor;
@@ -185,6 +186,7 @@ pub use uv::{
     TRANSFORM_TYPE_ID, Transform,
 };
 pub use uv_displace_by_flow::UvDisplaceByFlow;
+pub use uv_field::UvField;
 pub use value::Value;
 pub use voronoi_prism::VoronoiPrism;
 pub use watercolor::{WATERCOLOR_TYPE_ID, Watercolor};
