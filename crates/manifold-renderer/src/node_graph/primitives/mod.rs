@@ -34,6 +34,7 @@ mod fluid_project_scatter_2d;
 mod fluid_seed;
 mod fluid_simulate;
 mod gain;
+mod gaussian_blur_variable_width;
 mod generate_cube_mesh;
 mod generate_grid_mesh;
 mod generate_instance_transforms;
@@ -120,6 +121,7 @@ pub use fluid_project_scatter_2d::{FLUID_PROJECT_MODES, FluidProjectScatter2D};
 pub use fluid_seed::{FLUID_SEED_PATTERNS, FluidSeed};
 pub use fluid_simulate::FluidSimulate;
 pub use gain::Gain;
+pub use gaussian_blur_variable_width::{BLUR_VARIABLE_AXES, GaussianBlurVariableWidth};
 pub use generate_cube_mesh::{CUBE_VERTEX_COUNT, GenerateCubeMesh};
 pub use generate_grid_mesh::GenerateGridMesh;
 pub use generate_instance_transforms::{
