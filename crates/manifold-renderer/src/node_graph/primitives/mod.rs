@@ -26,6 +26,7 @@ mod edge_detect;
 mod filter;
 mod fluid_gradient_curl_3d;
 mod fluid_gradient_rotate;
+mod fluid_project_scatter_2d;
 mod fluid_seed;
 mod fluid_simulate;
 mod gain;
@@ -95,6 +96,7 @@ pub use filter::{
 };
 pub use fluid_gradient_curl_3d::FluidGradientCurl3D;
 pub use fluid_gradient_rotate::FluidGradientRotate;
+pub use fluid_project_scatter_2d::{FLUID_PROJECT_MODES, FluidProjectScatter2D};
 pub use fluid_seed::{FLUID_SEED_PATTERNS, FluidSeed};
 pub use fluid_simulate::FluidSimulate;
 pub use gain::Gain;
